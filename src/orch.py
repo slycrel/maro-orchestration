@@ -704,6 +704,27 @@ def _merge_notes(*notes: Optional[str]) -> Optional[str]:
     return "; ".join(chunks)
 
 
+def _write_validation_summary(run: RunRecord, execution: ExecutionResult, validation: ValidationResult) -> Optional[str]:
+    artifact_root = orch_root()
+    if run.artifact_path:
+        artifact_root = orch_root() / run.artifact_path
+    if not artifact_root.exists() or not artifact_root.is_dir():
+        return None
+
+    summary_path = artifact_root / "validation-summary.json"
+    summary = {
+        "generated_at": now_utc_iso(),
+        "run_id": run.run_id,
+        "project": run.project,
+        "index": run.index,
+        "text": run.text,
+        "execution": asdict(execution),
+        "validation": asdict(validation),
+    }
+    summary_path.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
+    return str(summary_path.relative_to(orch_root()))
+
+
 def run_tick(
     project: Optional[str] = None,
     *,
@@ -726,14 +747,16 @@ def run_tick(
         outcome = ExecutionResult(status="blocked", note=str(exc), artifact_path=run.artifact_path)
     result = validate(run, outcome)
 
-    update_note = _merge_notes(run.note, outcome.note)
-    if update_note and update_note != run.note:
-        run.note = update_note
+    if outcome.artifact_path:
+        run.artifact_path = outcome.artifact_path
         run.updated_at = now_utc_iso()
         write_run_record(run)
 
-    if outcome.artifact_path:
-        run.artifact_path = outcome.artifact_path
+    summary_path = _write_validation_summary(run, outcome, result)
+
+    update_note = _merge_notes(run.note, outcome.note, result.note, f"validation_summary={summary_path}" if summary_path else None)
+    if update_note and update_note != run.note:
+        run.note = update_note
         run.updated_at = now_utc_iso()
         write_run_record(run)
 

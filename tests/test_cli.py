@@ -149,3 +149,4 @@ def test_cli_tick_review_cmd(tmp_path):
     run_dirs = [p for p in runs_dir.iterdir() if p.is_dir()]
     assert len(run_dirs) == 1
     assert (run_dirs[0] / "review" / "verdict.txt").read_text(encoding="utf-8") == "pass"
+    assert (run_dirs[0] / "validation-summary.json").exists()

@@ -151,6 +151,9 @@ def test_command_execution_bridge_success(monkeypatch, tmp_path):
     assert (artifact_dir / "result.txt").read_text(encoding="utf-8") == "first"
     assert (artifact_dir / "stdout.log").exists()
     assert (artifact_dir / "stderr.log").exists()
+    summary = artifact_dir / "validation-summary.json"
+    assert summary.exists()
+    assert '"status": "done"' in summary.read_text(encoding="utf-8")
 
 
 
