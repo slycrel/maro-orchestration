@@ -91,6 +91,38 @@ def test_cli_tick_exec_cmd(tmp_path):
 
 
 
+def test_cli_tick_session_cmd(tmp_path):
+    r = _run(tmp_path, "init", "demo", "Session", "bridge", "--priority", "1")
+    assert r.returncode == 0
+    r = _run(
+        tmp_path,
+        "tick",
+        "--project",
+        "demo",
+        "--session-cmd",
+        'cat > "$ORCH_SESSION_RESULT_PATH" <<EOF\n'
+        '{"status":"done","note":"session complete","artifact_path":"output/runs/$ORCH_RUN_ID"}\n'
+        "EOF",
+    )
+    assert r.returncode == 0
+    assert "execution=done validation=done" in r.stdout
+
+
+def test_cli_tick_session_cmd_markers_trigger_retries(tmp_path):
+    r = _run(tmp_path, "init", "demo", "Session", "salvage", "--priority", "1")
+    assert r.returncode == 0
+    r = _run(
+        tmp_path,
+        "tick",
+        "--project",
+        "demo",
+        "--session-cmd",
+        'echo "This page isn’t working for now"',
+    )
+    assert r.returncode == 0
+    assert "execution=done validation=retry" in r.stdout
+
+
 def test_cli_tick_require_artifact(tmp_path):
     r = _run(tmp_path, "init", "demo", "Validator", "bridge", "--priority", "1")
     assert r.returncode == 0

@@ -134,6 +134,111 @@ def test_validation_hook_can_block_or_retry(monkeypatch, tmp_path):
     assert still.status == "running"
 
 
+def test_run_loop_continue_on_retry_creates_new_attempts(monkeypatch, tmp_path):
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    _mkproj(tmp_path, "demo", "- [ ] first\n", priority=3)
+
+    seen = []
+    def validator(run, execution):
+        seen.append(run.attempt)
+        if run.attempt < 3:
+            return orch.ValidationResult(status="retry", passed=False, note=f"retry attempt {run.attempt}")
+        return orch.ValidationResult(status="done", passed=True, note="allow complete")
+
+    loop = orch.run_loop(
+        "demo",
+        worker="tester",
+        execution=lambda run: orch.ExecutionResult(status="done", note=f"ok {run.attempt}"),
+        validation=validator,
+        max_runs=4,
+        continue_on_retry=True,
+    )
+    assert seen == [1, 2, 3]
+    assert len(loop) == 3
+    assert loop[-1].validation.status == "done"
+    assert loop[-1].run.status == "done"
+
+
+def test_artifact_progress_validation_bridge_detects_stale_artifacts(monkeypatch, tmp_path):
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    _mkproj(tmp_path, "demo", "- [ ] first\n", priority=3)
+
+    run1 = orch.start_item("demo", worker="tester", source="unit")
+    artifact_root = orch._run_artifact_root(run1)
+    (artifact_root / "result.txt").write_text("same", encoding="utf-8")
+
+    run2 = orch.start_item("demo", run1.index, worker="tester", source="unit", allow_running=True)
+    artifact_root = orch._run_artifact_root(run2)
+    (artifact_root / "result.txt").write_text("same", encoding="utf-8")
+
+    run3 = orch.start_item("demo", run1.index, worker="tester", source="unit", allow_running=True)
+    artifact_root = orch._run_artifact_root(run3)
+    (artifact_root / "result.txt").write_text("same", encoding="utf-8")
+
+    validator = orch.artifact_progress_validation_bridge(history_size=2, max_retry_attempts=3)
+    result2 = validator(run2, orch.ExecutionResult(status="done", note="ok", artifact_path=run2.artifact_path))
+    assert result2.status == "retry"
+
+    result3 = validator(run3, orch.ExecutionResult(status="done", note="ok", artifact_path=run3.artifact_path))
+    assert result3.status == "blocked"
+
+
+def test_session_execution_bridge_parses_result_file(monkeypatch, tmp_path):
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    _mkproj(tmp_path, "demo", "- [ ] first\n", priority=3)
+
+    tick = orch.run_tick(
+        "demo",
+        worker="tester",
+        execution=orch.session_execution_bridge(
+            'cat > "$ORCH_SESSION_RESULT_PATH" <<EOF\n'
+            '{"status":"done","note":"session complete","artifact_path":"output/runs/$ORCH_RUN_ID"}\n'
+            "EOF\n"
+        ),
+    )
+
+    assert tick is not None
+    assert tick.validation.status == "done"
+    assert tick.run.status == "done"
+
+
+def test_session_execution_bridge_parses_result_from_stdout(monkeypatch, tmp_path):
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    _mkproj(tmp_path, "demo", "- [ ] first\n", priority=3)
+
+    tick = orch.run_tick(
+        "demo",
+        worker="tester",
+        execution=orch.session_execution_bridge(
+            'printf \'{"status":"done","note":"stdout result","artifact_path":"output/runs/$ORCH_RUN_ID"}\'',
+        ),
+    )
+
+    assert tick is not None
+    assert tick.validation.status == "done"
+    assert tick.run.status == "done"
+
+
+def test_session_execution_bridge_blocks_invalid_artifact_path(monkeypatch, tmp_path):
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    _mkproj(tmp_path, "demo", "- [ ] first\n", priority=3)
+
+    tick = orch.run_tick(
+        "demo",
+        worker="tester",
+        execution=orch.session_execution_bridge(
+            'cat > "$ORCH_SESSION_RESULT_PATH" <<EOF\n'
+            '{"status":"done","note":"bad artifact","artifact_path":"../../outside"}\n'
+            "EOF\n",
+        ),
+    )
+
+    assert tick is not None
+    assert tick.validation.status == "blocked"
+    assert tick.run.status == "blocked"
+    assert "under orchestration root" in (tick.run.note or "")
+
+
 def test_command_execution_bridge_success(monkeypatch, tmp_path):
     monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
     _mkproj(tmp_path, "demo", "- [ ] first\n", priority=3)

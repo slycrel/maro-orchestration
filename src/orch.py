@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import re
 import subprocess
@@ -19,6 +20,15 @@ STATE_DONE = "x"
 STATE_BLOCKED = "!"
 VALID_STATES = {STATE_TODO, STATE_DOING, STATE_DONE, STATE_BLOCKED}
 RUN_OUTCOMES = {"done", "blocked", "retry"}
+X_CAPTURE_AUTH_MARKERS = [
+    "this page isn't working",
+    "this page isn’t working",
+    "captcha",
+    "consent",
+    "login",
+    "sign in",
+]
+X_CAPTURE_RATE_LIMIT_MARKERS = ["429", "rate limit", "too many requests", "quota exceeded"]
 
 ITEM_RE = re.compile(r"^(?P<indent>\s*)-\s*\[(?P<state>[ xX~!])\]\s*(?P<text>.+?)\s*$")
 
@@ -54,6 +64,7 @@ class RunRecord:
     worker: str
     started_at: str
     updated_at: str
+    attempt: int = 1
     finished_at: Optional[str] = None
     note: Optional[str] = None
     artifact_path: Optional[str] = None
@@ -94,6 +105,97 @@ ValidationBridge = Callable[[RunRecord, ExecutionResult], ValidationResult]
 
 class ExecutionBridgeError(RuntimeError):
     """Raised when a concrete execution backend fails."""
+
+
+def _load_run_records() -> List[RunRecord]:
+    out: List[RunRecord] = []
+    root = runs_root()
+    if not root.exists():
+        return out
+    for path in root.glob("*.json"):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                continue
+            if "attempt" not in data:
+                data["attempt"] = 1
+            data.setdefault("artifact_path", None)
+            try:
+                data["attempt"] = int(data["attempt"])
+            except (TypeError, ValueError):
+                data["attempt"] = 1
+            out.append(RunRecord(**data))
+        except Exception:
+            continue
+    return out
+
+
+def _next_attempt(project: str, item_index: int) -> int:
+    attempts = [r.attempt for r in _load_run_records() if r.project == project and r.index == item_index]
+    return max(attempts, default=0) + 1
+
+
+def _run_artifact_root(run: RunRecord) -> Path:
+    root = orch_root()
+    if run.artifact_path:
+        path = root / run.artifact_path
+    else:
+        path = runs_root() / run.run_id
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _coerce_artifact_path(raw: Optional[str], *, default: Optional[str]) -> str:
+    if raw is None:
+        if default is None:
+            raise ExecutionBridgeError("session result must include a valid artifact_path")
+        return default
+
+    artifact = str(raw).strip()
+    if not artifact:
+        if default is None:
+            raise ExecutionBridgeError("session result must include a valid artifact_path")
+        return default
+
+    root = orch_root().resolve()
+    candidate = Path(artifact)
+    if candidate.is_absolute():
+        candidate = candidate.resolve()
+    else:
+        candidate = (root / candidate).resolve()
+
+    try:
+        relative = candidate.relative_to(root)
+    except ValueError as exc:
+        raise ExecutionBridgeError(f"session result artifact_path must be under orchestration root: {candidate}") from exc
+
+    relative_str = str(relative)
+    if relative_str in {"", "."}:
+        raise ExecutionBridgeError(f"session result artifact_path must be under orchestration root, not root: {candidate}")
+    return relative_str
+
+
+def _extract_session_result_from_text(raw: str) -> Optional[dict]:
+    lines = [part.strip() for part in (raw or "").splitlines() if part.strip()]
+    for line in reversed(lines):
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict):
+            return payload
+    return None
+
+
+def _mark_stale_running_attempts(project: str, item_index: int) -> None:
+    stale_note = "superseded by a new attempt"
+    for record in _load_run_records():
+        if record.project == project and record.index == item_index and record.status == "running":
+            record.status = "blocked"
+            record.updated_at = now_utc_iso()
+            record.finished_at = record.updated_at
+            record.note = _merge_notes(record.note, stale_note)
+            write_run_record(record)
 
 
 def ws_root() -> Path:
@@ -337,6 +439,42 @@ def select_global_next() -> Optional[Tuple[str, NextItem]]:
     return None
 
 
+def select_global_running_next() -> Optional[Tuple[str, NextItem]]:
+    candidates: List[Tuple[int, str, str, NextItem]] = []
+    for record in _load_run_records():
+        if record.status != "running":
+            continue
+        try:
+            item = get_item(record.project, record.index)
+        except ValueError:
+            continue
+        if item.state != STATE_DOING:
+            continue
+        candidates.append((project_priority(record.project), record.updated_at, record.project, item))
+
+    for _priority, _updated_at, project, item in sorted(candidates, key=lambda row: (row[0], row[1]), reverse=True):
+        return project, item
+    return None
+
+
+def select_running_item(slug: str) -> Optional[NextItem]:
+    candidates: List[Tuple[str, NextItem]] = []
+    for record in _load_run_records():
+        if record.project != slug or record.status != "running":
+            continue
+        try:
+            item = get_item(record.project, record.index)
+        except ValueError:
+            continue
+        if item.state != STATE_DOING:
+            continue
+        candidates.append((record.updated_at, item))
+
+    for _updated_at, item in sorted(candidates, key=lambda row: row[0], reverse=True):
+        return item
+    return None
+
+
 def list_blocked_projects() -> List[ProjectStatus]:
     out: List[ProjectStatus] = []
     for slug in list_projects():
@@ -451,32 +589,44 @@ def write_operator_status() -> dict:
     return payload
 
 
-def start_item(slug: str, item_index: Optional[int] = None, *, source: str = "manual", worker: str = "handle", note: Optional[str] = None) -> RunRecord:
+def start_item(
+    slug: str,
+    item_index: Optional[int] = None,
+    *,
+    source: str = "manual",
+    worker: str = "handle",
+    note: Optional[str] = None,
+    allow_running: bool = False,
+) -> RunRecord:
     if item_index is None:
         item = select_next_item(slug)
         if not item:
             raise ValueError(f"no TODO item found for {slug}")
     else:
         item = get_item(slug, item_index)
-        if item.state != STATE_TODO:
+        if item.state == STATE_TODO:
+            mark_item(slug, item.index, STATE_DOING)
+        elif item.state == STATE_DOING and allow_running:
+            pass
+        else:
             raise ValueError(f"item_index {item_index} for {slug} is not TODO")
-    mark_item(slug, item.index, STATE_DOING)
     started_at = now_utc_iso()
+    run_id = new_run_id()
     run = RunRecord(
-        run_id=new_run_id(),
+        run_id=run_id,
         project=slug,
         index=item.index,
         text=item.text,
         status="running",
+        artifact_path=str((runs_root() / run_id).relative_to(orch_root())),
+        attempt=_next_attempt(slug, item.index),
         source=source,
         worker=worker,
         started_at=started_at,
         updated_at=started_at,
         note=note,
     )
-    artifact = write_run_record(run)
-    run.artifact_path = str(artifact.relative_to(orch_root()))
-    artifact = write_run_record(run)
+    write_run_record(run)
     append_provenance(slug, [f"Started `{run.text}` via {source}/{worker} ({run.run_id}).", f"Artifact: `{run.artifact_path}`"])
     write_operator_status()
     return run
@@ -516,11 +666,36 @@ def finalize_run(run_id: str, status: str, *, note: Optional[str] = None) -> Run
 def run_once(project: Optional[str] = None, *, worker: str = "handle", source: str = "run-once", note: Optional[str] = None) -> Optional[RunRecord]:
     if project:
         item = select_next_item(project)
-        if not item:
-            return None
-        return start_item(project, item.index, source=source, worker=worker, note=note)
+        if item:
+            return start_item(project, item.index, source=source, worker=worker, note=note)
+
+        running = select_running_item(project)
+        if running:
+            _mark_stale_running_attempts(project, running.index)
+            return start_item(
+                project,
+                running.index,
+                source=source,
+                worker=worker,
+                note=note,
+                allow_running=True,
+            )
+        return None
+
     selected = select_global_next()
     if not selected:
+        selected_running = select_global_running_next()
+        if selected_running:
+            running_project, running_item = selected_running
+            _mark_stale_running_attempts(running_project, running_item.index)
+            return start_item(
+                running_project,
+                running_item.index,
+                source=source,
+                worker=worker,
+                note=note,
+                allow_running=True,
+            )
         write_operator_status()
         return None
     slug, item = selected
@@ -532,8 +707,7 @@ def command_execution_bridge(command: str) -> ExecutionBridge:
         raise ValueError("command cannot be empty")
 
     def _execute(run: RunRecord) -> ExecutionResult:
-        artifact_dir = runs_root() / run.run_id
-        artifact_dir.mkdir(parents=True, exist_ok=True)
+        artifact_dir = _run_artifact_root(run)
         stdout_path = artifact_dir / "stdout.log"
         stderr_path = artifact_dir / "stderr.log"
 
@@ -577,11 +751,275 @@ def command_execution_bridge(command: str) -> ExecutionBridge:
     return _execute
 
 
+def session_execution_bridge(
+    session_command: str,
+    *,
+    timeout_seconds: Optional[float] = None,
+    payload_name: str = "session-payload.json",
+    result_name: str = "session-result.json",
+) -> ExecutionBridge:
+    if not session_command or not session_command.strip():
+        raise ValueError("session_command cannot be empty")
+
+    def _coerce_result_payload(raw: dict, *, default_artifact_path: str, run_id: str) -> ExecutionResult:
+        status = (raw.get("status") or "").lower().strip()
+        if status not in RUN_OUTCOMES:
+            raise ExecutionBridgeError(f"invalid session result status: {status}")
+
+        artifact_path = _coerce_artifact_path(
+            raw.get("artifact_path"),
+            default=default_artifact_path,
+        )
+
+        return ExecutionResult(
+            status=status,
+            note=raw.get("note") or f"session result for {run_id}",
+            artifact_path=artifact_path,
+        )
+
+    def _read_result_payload(raw_text: str, *, default_artifact_path: str, run_id: str) -> Optional[ExecutionResult]:
+        if not raw_text.strip():
+            return None
+        try:
+            raw = json.loads(raw_text)
+        except json.JSONDecodeError:
+            raw = _extract_session_result_from_text(raw_text)
+        if raw is None:
+            return None
+        if not isinstance(raw, dict):
+            raise ExecutionBridgeError("session result payload must be an object")
+        return _coerce_result_payload(raw, default_artifact_path=default_artifact_path, run_id=run_id)
+
+    def _parse_result_file_payload(run: RunRecord, artifact_dir: Path, artifact_path: str) -> Optional[ExecutionResult]:
+        result_path = artifact_dir / result_name
+        if not result_path.exists():
+            return None
+        result_raw = result_path.read_text(encoding="utf-8")
+        try:
+            parsed = json.loads(result_raw)
+        except json.JSONDecodeError as exc:
+            raise ExecutionBridgeError(f"invalid session result json: {result_path}") from exc
+        if not isinstance(parsed, dict):
+            raise ExecutionBridgeError(f"session result payload must be an object: {result_path}")
+        return _coerce_result_payload(parsed, default_artifact_path=artifact_path, run_id=run.run_id)
+
+    def _execute(run: RunRecord) -> ExecutionResult:
+        artifact_dir = _run_artifact_root(run)
+        stdout_path = artifact_dir / "session-stdout.log"
+        stderr_path = artifact_dir / "session-stderr.log"
+
+        payload_path = artifact_dir / payload_name
+        result_path = artifact_dir / result_name
+        payload_path.write_text(
+            json.dumps(
+                {
+                    "run_id": run.run_id,
+                    "attempt": run.attempt,
+                    "project": run.project,
+                    "index": run.index,
+                    "text": run.text,
+                    "status": run.status,
+                    "source": run.source,
+                    "worker": run.worker,
+                    "artifact_path": str(artifact_dir.relative_to(orch_root())),
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        default_artifact_path = str(artifact_dir.relative_to(orch_root()))
+        env = os.environ.copy()
+        env.update(
+            {
+                "ORCH_RUN_ID": run.run_id,
+                "ORCH_PROJECT": run.project,
+                "ORCH_ITEM_INDEX": str(run.index),
+                "ORCH_ITEM_TEXT": run.text,
+                "ORCH_WORKER": run.worker,
+                "ORCH_ATTEMPT": str(run.attempt),
+                "ORCH_SOURCE": run.source,
+                "ORCH_ROOT": str(orch_root()),
+                "ORCH_RUN_ARTIFACT_DIR": str(artifact_dir),
+                "ORCH_RUN_ARTIFACT_PATH": default_artifact_path,
+                "ORCH_SESSION_PAYLOAD": str(payload_path),
+                "ORCH_SESSION_RESULT_PATH": str(result_path),
+            }
+        )
+
+        try:
+            proc = subprocess.run(
+                session_command,
+                shell=True,
+                cwd=orch_root(),
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=timeout_seconds,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise ExecutionBridgeError(f"session timed out after {timeout_seconds}s: {session_command}") from exc
+        except Exception as exc:
+            raise ExecutionBridgeError(f"session execution failed: {session_command}: {exc}") from exc
+
+        stdout_path.write_text(proc.stdout or "", encoding="utf-8")
+        stderr_path.write_text(proc.stderr or "", encoding="utf-8")
+
+        payload_result = _parse_result_file_payload(run, artifact_dir, default_artifact_path)
+        if payload_result:
+            return payload_result
+        stdout_result = _read_result_payload(proc.stdout or "", default_artifact_path=default_artifact_path, run_id=run.run_id)
+        if stdout_result:
+            return stdout_result
+
+        if proc.returncode == 0:
+            note = f"session succeeded: {session_command}"
+            if proc.stdout.strip():
+                note = f"{note}; stdout={proc.stdout.strip().splitlines()[-1]}"
+            return ExecutionResult(status="done", note=note, artifact_path=default_artifact_path)
+
+        note = f"session failed ({proc.returncode}): {session_command}"
+        if proc.stderr.strip():
+            note = f"{note}; stderr={proc.stderr.strip().splitlines()[-1]}"
+        raise ExecutionBridgeError(note)
+
+    return _execute
+
+
 def _default_execution_bridge(run: RunRecord) -> ExecutionResult:
     return ExecutionResult(
         status="done",
         note=run.note or "No execution bridge configured; marking as complete for test/sync flow.",
     )
+
+
+def _run_artifact_signature(run: RunRecord) -> Optional[List[Tuple[str, int, str]]]:
+    base = _run_artifact_root(run)
+    if not base.exists() or not base.is_dir():
+        return None
+
+    entries: List[Tuple[str, int, str]] = []
+    for path in sorted(base.rglob("*")):
+        if not path.is_file():
+            continue
+        rel = str(path.relative_to(base))
+        if rel in {"stdout.log", "stderr.log", "session-stdout.log", "session-stderr.log", "validation-summary.json"}:
+            continue
+        data = path.read_bytes()
+        digest = hashlib.sha256(data).hexdigest() if data else ""
+        entries.append((rel, path.stat().st_size, digest))
+    return sorted(entries)
+
+
+def _matching_attempt_signatures(run: RunRecord, *, max_attempts: int = 4) -> List[Tuple[int, List[Tuple[str, int, str]]]]:
+    signatures = []
+    for previous in _load_run_records():
+        if previous.project != run.project:
+            continue
+        if previous.index != run.index:
+            continue
+        if previous.attempt >= run.attempt:
+            continue
+        if previous.status not in {"done", "blocked", "running"}:
+            continue
+        sig = _run_artifact_signature(previous)
+        signatures.append((previous.attempt, sig))
+
+    signatures.sort(key=lambda row: row[0], reverse=True)
+    return signatures[:max_attempts]
+
+
+def artifact_progress_validation_bridge(
+    *,
+    history_size: int = 2,
+    max_retry_attempts: int = 3,
+) -> ValidationBridge:
+    if history_size < 1:
+        raise ValueError("history_size must be >= 1")
+
+    def _validate(run: RunRecord, execution: ExecutionResult) -> ValidationResult:
+        status = execution.status.lower().strip()
+        if status not in RUN_OUTCOMES:
+            raise ValueError(f"invalid execution status: {execution.status}")
+        if status != "done":
+            return ValidationResult(status=status, passed=False, note=execution.note or "execution did not complete")
+
+        current_signature = _run_artifact_signature(run)
+        previous = _matching_attempt_signatures(run, max_attempts=history_size - 1)
+        if not previous:
+            return ValidationResult(status="done", passed=True, note=execution.note)
+
+        stale_count = 1
+        for _attempt, signature in previous:
+            if signature == current_signature:
+                stale_count += 1
+            else:
+                break
+
+        if stale_count >= history_size:
+            if run.attempt < max_retry_attempts:
+                return ValidationResult(
+                    status="retry",
+                    passed=False,
+                    note=f"no artifact progress detected across {stale_count} attempts for {run.project}:{run.index}",
+                )
+            return ValidationResult(
+                status="blocked",
+                passed=False,
+                note=f"blocked for repeated no-progress attempts on {run.project}:{run.index}",
+            )
+
+        return ValidationResult(status="done", passed=True, note=execution.note)
+
+    return _validate
+
+
+def x_capture_salvage_validation_bridge() -> ValidationBridge:
+    auth_markers = [marker.lower() for marker in X_CAPTURE_AUTH_MARKERS]
+    rate_markers = [marker.lower() for marker in X_CAPTURE_RATE_LIMIT_MARKERS]
+
+    def _classify(message: str) -> Optional[Tuple[str, str]]:
+        lower = message.lower()
+        if any(marker in lower for marker in rate_markers):
+            return "retry", "rate-limit or quota marker detected"
+        if any(marker in lower for marker in auth_markers):
+            return "retry", "auth/session marker detected"
+        return None
+
+    def _validate(run: RunRecord, execution: ExecutionResult) -> ValidationResult:
+        if execution.status != "done":
+            return ValidationResult(status=execution.status, passed=False, note=execution.note or "execution did not complete")
+
+        messages: List[str] = []
+        artifact_root = orch_root()
+        if execution.artifact_path:
+            artifact_root = orch_root() / execution.artifact_path
+        for candidate in [
+            artifact_root / "stdout.log",
+            artifact_root / "stderr.log",
+            artifact_root / "session-stdout.log",
+            artifact_root / "session-stderr.log",
+            artifact_root / "review" / "stdout.log",
+            artifact_root / "review" / "stderr.log",
+        ]:
+            if not candidate.exists() or not candidate.is_file():
+                continue
+            messages.append(candidate.read_text(encoding="utf-8", errors="ignore").lower())
+
+        for msg in messages:
+            found = _classify(msg)
+            if found:
+                status, detail = found
+                return ValidationResult(
+                    status=status,
+                    passed=False,
+                    note=f"x capture salvage hint: {detail}",
+                )
+
+        return ValidationResult(status="done", passed=True, note=execution.note)
+
+    return _validate
 
 
 def artifact_validation_bridge(required_paths: List[str], *, nonempty: bool = False) -> ValidationBridge:
@@ -767,7 +1205,11 @@ def run_tick(
         outcome = execute(run)
     except ExecutionBridgeError as exc:
         outcome = ExecutionResult(status="blocked", note=str(exc), artifact_path=run.artifact_path)
+    if outcome.status.lower().strip() not in RUN_OUTCOMES:
+        outcome = ExecutionResult(status="blocked", note=f"invalid execution status: {outcome.status}", artifact_path=outcome.artifact_path or run.artifact_path)
     result = validate(run, outcome)
+    if result.status not in RUN_OUTCOMES:
+        result = ValidationResult(status="blocked", passed=False, note=f"invalid validation status: {result.status}")
 
     if outcome.artifact_path:
         run.artifact_path = outcome.artifact_path
@@ -796,6 +1238,7 @@ def run_loop(
     max_runs: int = 10,
     execution: Optional[ExecutionBridge] = None,
     validation: Optional[ValidationBridge] = None,
+    continue_on_retry: bool = False,
 ) -> List[TickResult]:
     if max_runs <= 0:
         raise ValueError("max_runs must be greater than zero")
@@ -812,7 +1255,7 @@ def run_loop(
         if not tick:
             break
         out.append(tick)
-        if tick.validation.status == "retry":
+        if tick.validation.status == "retry" and not continue_on_retry:
             break
     return out
 

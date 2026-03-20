@@ -13,11 +13,13 @@ from orch import (
     command_execution_bridge,
     ensure_project,
     finalize_run,
+    run_loop,
+    session_execution_bridge,
+    x_capture_salvage_validation_bridge,
     load_run_record,
     load_validation_summary,
     list_blocked_projects,
     review_command_validation_bridge,
-    run_loop,
     mark_first_todo_done,
     mark_item,
     operator_status_path,
@@ -62,11 +64,26 @@ def _build_validation(args):
         bridges.append(artifact_validation_bridge(args.require_artifact, nonempty=args.require_nonempty))
     if getattr(args, "review_cmd", None):
         bridges.append(review_command_validation_bridge(args.review_cmd))
+    if getattr(args, "session_cmd", None) and not getattr(args, "disable_x_capture", False):
+        bridges.append(x_capture_salvage_validation_bridge())
     if not bridges:
         return None
     if len(bridges) == 1:
         return bridges[0]
     return chain_validation_bridges(*bridges)
+
+
+def _build_execution(args):
+    if args.exec_cmd and args.session_cmd:
+        raise ValueError("only one of --exec-cmd or --session-cmd can be set")
+    if args.session_cmd:
+        return session_execution_bridge(
+            args.session_cmd,
+            timeout_seconds=args.session_timeout,
+        )
+    if args.exec_cmd:
+        return command_execution_bridge(args.exec_cmd)
+    return None
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -131,6 +148,9 @@ def main(argv: list[str] | None = None) -> int:
     p_tick.add_argument("--source", default="tick")
     p_tick.add_argument("--note")
     p_tick.add_argument("--exec-cmd", help="Shell command execution bridge for the claimed task")
+    p_tick.add_argument("--session-cmd", help="Session command execution bridge for the claimed task")
+    p_tick.add_argument("--session-timeout", type=float, default=None, help="Timeout in seconds for session command")
+    p_tick.add_argument("--disable-x-capture", action="store_true", help="Disable X capture/rate-limit salvage classification")
     p_tick.add_argument("--require-artifact", action="append", default=[], help="Artifact path relative to the run artifact dir that must exist")
     p_tick.add_argument("--require-nonempty", action="store_true", help="Require listed artifacts to be non-empty files")
     p_tick.add_argument("--review-cmd", help="Shell command reviewer run after execution succeeds")
@@ -142,9 +162,13 @@ def main(argv: list[str] | None = None) -> int:
     p_loop.add_argument("--note")
     p_loop.add_argument("--max-runs", type=int, default=10)
     p_loop.add_argument("--exec-cmd", help="Shell command execution bridge for each claimed task")
+    p_loop.add_argument("--session-cmd", help="Session command execution bridge for each claimed task")
+    p_loop.add_argument("--session-timeout", type=float, default=None, help="Timeout in seconds for session command")
+    p_loop.add_argument("--disable-x-capture", action="store_true", help="Disable X capture/rate-limit salvage classification")
     p_loop.add_argument("--require-artifact", action="append", default=[], help="Artifact path relative to the run artifact dir that must exist")
     p_loop.add_argument("--require-nonempty", action="store_true", help="Require listed artifacts to be non-empty files")
     p_loop.add_argument("--review-cmd", help="Shell command reviewer run after execution succeeds")
+    p_loop.add_argument("--continue-on-retry", action="store_true", help="Continue loop when validation status is retry")
 
     p_status = sub.add_parser("status", help="Write/read operator status")
     p_status.add_argument("--format", choices=["json", "path"], default="json")
@@ -299,7 +323,10 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.cmd == "tick":
-        execution = command_execution_bridge(args.exec_cmd) if args.exec_cmd else None
+        try:
+            execution = _build_execution(args)
+        except ValueError as exc:
+            return fail("E_TICK_EXEC", str(exc))
         validation = _build_validation(args)
         try:
             tick = run_tick(project=args.project, worker=args.worker, source=args.source, note=args.note, execution=execution, validation=validation)
@@ -315,10 +342,22 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "loop":
         if args.max_runs <= 0:
             return fail("E_LOOP_BAD_LIMIT", "max-runs must be greater than zero")
-        execution = command_execution_bridge(args.exec_cmd) if args.exec_cmd else None
+        try:
+            execution = _build_execution(args)
+        except ValueError as exc:
+            return fail("E_LOOP_EXEC", str(exc))
         validation = _build_validation(args)
         try:
-            ticks = run_loop(project=args.project, worker=args.worker, source=args.source, note=args.note, max_runs=args.max_runs, execution=execution, validation=validation)
+            ticks = run_loop(
+                project=args.project,
+                worker=args.worker,
+                source=args.source,
+                note=args.note,
+                max_runs=args.max_runs,
+                execution=execution,
+                validation=validation,
+                continue_on_retry=args.continue_on_retry,
+            )
         except ValueError as exc:
             return fail("E_LOOP_FAILED", str(exc))
         if not ticks:
