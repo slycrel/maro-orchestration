@@ -150,3 +150,13 @@ def test_cli_tick_review_cmd(tmp_path):
     assert len(run_dirs) == 1
     assert (run_dirs[0] / "review" / "verdict.txt").read_text(encoding="utf-8") == "pass"
     assert (run_dirs[0] / "validation-summary.json").exists()
+
+
+
+def test_cli_smoke_script(tmp_path):
+    env = os.environ.copy()
+    env["TMPDIR"] = str(tmp_path)
+    r = subprocess.run(["bash", "scripts/smoke.sh"], cwd=ROOT, env=env, capture_output=True, text=True)
+    assert r.returncode == 0
+    assert "smoke=ok" in r.stdout
+    assert "tick_run_id=" in r.stdout
