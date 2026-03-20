@@ -10,7 +10,7 @@ import re
 import subprocess
 import time
 import uuid
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Callable, Iterable, List, Optional, Tuple
 
@@ -113,11 +113,37 @@ class WorkerSessionSpec:
     command: str
     payload_name: str = "worker-payload.json"
     result_name: str = "worker-result.json"
+    environment: dict = field(default_factory=dict)
 
 
 def _ensure_nonempty_artifact_name(raw: object, default: str) -> str:
     value = str(raw or "").strip()
     return value if value else default
+
+
+def _coerce_session_file_name(raw: object, *, default: str, field_name: str) -> str:
+    value = _ensure_nonempty_artifact_name(raw, default)
+    path = Path(value)
+    if path.is_absolute():
+        raise ValueError(f"{field_name} must be a relative path: {value}")
+    normalized = path.as_posix()
+    if any(part == ".." for part in normalized.split("/")):
+        raise ValueError(f"{field_name} must not contain path traversal: {value}")
+    return normalized
+
+
+def _coerce_env_map(raw: object, *, worker: str) -> dict:
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise ValueError(f"worker session env for {worker} must be an object")
+    out: dict = {}
+    for key, value in raw.items():
+        key_text = str(key).strip()
+        if not key_text:
+            raise ValueError(f"worker session env for {worker} must use non-empty keys")
+        out[key_text] = str(value)
+    return out
 
 
 def _load_worker_session_manifest(path: Path) -> WorkerSessionSpec:
@@ -134,9 +160,24 @@ def _load_worker_session_manifest(path: Path) -> WorkerSessionSpec:
     if not command:
         raise ValueError(f"invalid worker session manifest format in {path}: missing 'command'")
 
-    payload_name = _ensure_nonempty_artifact_name(data.get("payload_name"), "worker-payload.json")
-    result_name = _ensure_nonempty_artifact_name(data.get("result_name"), "worker-result.json")
-    return WorkerSessionSpec(command=command, payload_name=payload_name, result_name=result_name)
+    payload_name = _coerce_session_file_name(
+        data.get("payload_name"),
+        default="worker-payload.json",
+        field_name="payload_name",
+    )
+    result_name = _coerce_session_file_name(
+        data.get("result_name"),
+        default="worker-result.json",
+        field_name="result_name",
+    )
+    worker_name = path.stem if path.name else "worker_session"
+    environment = _coerce_env_map(data.get("environment"), worker=worker_name)
+    return WorkerSessionSpec(
+        command=command,
+        payload_name=payload_name,
+        result_name=result_name,
+        environment=environment,
+    )
 
 
 def _load_run_records() -> List[RunRecord]:
@@ -243,6 +284,43 @@ def _coerce_validation_payload(raw: dict, *, run: RunRecord, execution: Executio
         note_text = f"review result for {run.run_id}"
     passed = status == "done"
     return ValidationResult(status=status, passed=passed, note=note_text)
+
+
+def _run_status_summary_record_path() -> Path:
+    p = output_root() / "x-capture"
+    p.mkdir(parents=True, exist_ok=True)
+    return p / "salvage-index.jsonl"
+
+
+def _append_jsonl_record(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(payload, sort_keys=True) + "\n")
+
+
+def _read_jsonl_records(path: Path) -> List[dict]:
+    if not path.exists():
+        return []
+    out = []
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict):
+            out.append(payload)
+    return out
+
+
+def _resolve_review_artifact_root(run: RunRecord, artifact_path: Optional[str]) -> Path:
+    if not artifact_path:
+        return _run_artifact_root(run)
+    relative = _coerce_artifact_path(artifact_path, default=str(_run_artifact_root(run).relative_to(orch_root())))
+    return orch_root() / relative
+
 
 
 def _mark_stale_running_attempts(project: str, item_index: int) -> None:
@@ -753,9 +831,12 @@ def write_operator_status() -> dict:
         "salvage": {
             "active_runs": _active_salvage_runs(),
             "active_count": 0,
+            "pending_count": 0,
+            "index_path": str(_run_status_summary_record_path().relative_to(orch_root())),
         },
     }
     payload["salvage"]["active_count"] = len(payload["salvage"]["active_runs"])
+    payload["salvage"]["pending_count"] = len(_read_jsonl_records(_run_status_summary_record_path()))
     operator_status_path().write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     return payload
 
@@ -953,6 +1034,7 @@ def worker_session_bridge(
         timeout_seconds=timeout_seconds,
         payload_name=resolved_payload_name,
         result_name=resolved_result_name,
+        extra_env=spec.environment,
     )
 
 
@@ -962,9 +1044,21 @@ def session_execution_bridge(
     timeout_seconds: Optional[float] = None,
     payload_name: str = "session-payload.json",
     result_name: str = "session-result.json",
+    extra_env: Optional[dict] = None,
 ) -> ExecutionBridge:
     if not session_command or not session_command.strip():
         raise ValueError("session_command cannot be empty")
+
+    resolved_payload_name = _coerce_session_file_name(
+        payload_name,
+        default="session-payload.json",
+        field_name="payload_name",
+    )
+    resolved_result_name = _coerce_session_file_name(
+        result_name,
+        default="session-result.json",
+        field_name="result_name",
+    )
 
     def _coerce_result_payload(raw: dict, *, default_artifact_path: str, run_id: str) -> ExecutionResult:
         status = (raw.get("status") or "").lower().strip()
@@ -996,7 +1090,7 @@ def session_execution_bridge(
         return _coerce_result_payload(raw, default_artifact_path=default_artifact_path, run_id=run_id)
 
     def _parse_result_file_payload(run: RunRecord, artifact_dir: Path, artifact_path: str) -> Optional[ExecutionResult]:
-        result_path = artifact_dir / result_name
+        result_path = artifact_dir / resolved_result_name
         if not result_path.exists():
             return None
         result_raw = result_path.read_text(encoding="utf-8")
@@ -1013,8 +1107,10 @@ def session_execution_bridge(
         stdout_path = artifact_dir / "session-stdout.log"
         stderr_path = artifact_dir / "session-stderr.log"
 
-        payload_path = artifact_dir / payload_name
-        result_path = artifact_dir / result_name
+        payload_path = artifact_dir / resolved_payload_name
+        payload_path.parent.mkdir(parents=True, exist_ok=True)
+        result_path = artifact_dir / resolved_result_name
+        result_path.parent.mkdir(parents=True, exist_ok=True)
         payload_path.write_text(
             json.dumps(
                 {
@@ -1052,6 +1148,8 @@ def session_execution_bridge(
                 "ORCH_SESSION_RESULT_PATH": str(result_path),
             }
         )
+        if extra_env:
+            env.update({str(k): str(v) for k, v in extra_env.items()})
 
         try:
             proc = subprocess.run(
@@ -1222,6 +1320,19 @@ def x_capture_salvage_validation_bridge() -> ValidationBridge:
         if artifact_path:
             salvage_path = (orch_root() / artifact_path) / "x-capture-salvage.json"
             salvage_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+            _append_jsonl_record(
+                _run_status_summary_record_path(),
+                {
+                    "generated_at": payload["generated_at"],
+                    "run_id": payload["run_id"],
+                    "project": payload["project"],
+                    "index": payload["index"],
+                    "status": payload["status"],
+                    "artifact_path": payload["artifact_path"],
+                    "matches": payload["matches"],
+                    "note": payload["note"],
+                },
+            )
             detail = payload["matches"][0]["detail"] if payload["matches"] else first_detail
             return ValidationResult(
                 status=first_status,
@@ -1238,12 +1349,10 @@ def x_capture_salvage_validation_bridge() -> ValidationBridge:
         if execution.status != "done":
             return ValidationResult(status=execution.status, passed=False, note=execution.note or "execution did not complete")
 
-        artifact_root = orch_root()
-        artifact_rel = run.artifact_path
-        if execution.artifact_path:
-            artifact_rel = execution.artifact_path
-        if artifact_rel:
-            artifact_root = orch_root() / artifact_rel
+        try:
+            artifact_root = _resolve_review_artifact_root(run, execution.artifact_path)
+        except Exception:
+            artifact_root = _run_artifact_root(run)
 
         candidates = [
             artifact_root / "stdout.log",
@@ -1282,9 +1391,12 @@ def artifact_validation_bridge(required_paths: List[str], *, nonempty: bool = Fa
                 note=execution.note or "execution did not complete successfully",
             )
 
-        artifact_root = orch_root()
+        artifact_root = _run_artifact_root(run)
         if execution.artifact_path:
-            artifact_root = orch_root() / execution.artifact_path
+            try:
+                artifact_root = _resolve_review_artifact_root(run, execution.artifact_path)
+            except Exception:
+                return ValidationResult(status="blocked", passed=False, note="invalid artifact_path in execution result")
 
         missing = []
         empty = []
@@ -1325,9 +1437,10 @@ def review_command_validation_bridge(command: str, *, timeout_seconds: Optional[
                 note=execution.note or "execution did not complete successfully",
             )
 
-        artifact_root = orch_root()
-        if execution.artifact_path:
-            artifact_root = orch_root() / execution.artifact_path
+        try:
+            artifact_root = _resolve_review_artifact_root(run, execution.artifact_path)
+        except Exception:
+            return ValidationResult(status="blocked", passed=False, note="invalid artifact_path in execution result")
         review_dir = artifact_root / "review"
         review_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1361,7 +1474,29 @@ def review_command_validation_bridge(command: str, *, timeout_seconds: Optional[
         (review_dir / "stdout.log").write_text(proc.stdout or "", encoding="utf-8")
         (review_dir / "stderr.log").write_text(proc.stderr or "", encoding="utf-8")
 
+        verdict_paths = [
+            review_dir / "result.json",
+            review_dir / "review.json",
+            review_dir / "verdict.json",
+        ]
+        for verdict_path in verdict_paths:
+            if not verdict_path.exists():
+                continue
+            payload = _extract_json_result(verdict_path.read_text(encoding="utf-8", errors="ignore"))
+            if payload is not None:
+                try:
+                    return _coerce_validation_payload(payload, run=run, execution=execution)
+                except Exception as exc:
+                    return ValidationResult(status="blocked", passed=False, note=f"invalid review payload: {exc}")
+
         payload = _extract_json_result(proc.stdout or "")
+        if payload is not None:
+            try:
+                return _coerce_validation_payload(payload, run=run, execution=execution)
+            except Exception as exc:
+                return ValidationResult(status="blocked", passed=False, note=f"invalid review payload: {exc}")
+
+        payload = _extract_json_result(proc.stderr or "")
         if payload is not None:
             try:
                 return _coerce_validation_payload(payload, run=run, execution=execution)
@@ -1520,6 +1655,7 @@ def run_loop(
     execution: Optional[ExecutionBridge] = None,
     validation: Optional[ValidationBridge] = None,
     continue_on_retry: bool = False,
+    continue_on_blocked: bool = False,
 ) -> List[TickResult]:
     if max_runs <= 0:
         raise ValueError("max_runs must be greater than zero")
@@ -1539,6 +1675,8 @@ def run_loop(
         if tick.validation.status not in {"done", "blocked", "retry"}:
             break
         if tick.validation.status == "retry" and not continue_on_retry:
+            break
+        if tick.validation.status == "blocked" and not continue_on_blocked:
             break
     return out
 

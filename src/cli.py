@@ -178,6 +178,7 @@ def main(argv: list[str] | None = None) -> int:
     p_loop.add_argument("--require-nonempty", action="store_true", help="Require listed artifacts to be non-empty files")
     p_loop.add_argument("--review-cmd", help="Shell command reviewer run after execution succeeds")
     p_loop.add_argument("--continue-on-retry", action="store_true", help="Continue loop when validation status is retry")
+    p_loop.add_argument("--continue-on-blocked", action="store_true", help="Continue loop when validation status is blocked")
 
     p_status = sub.add_parser("status", help="Write/read operator status")
     p_status.add_argument("--format", choices=["json", "path"], default="json")
@@ -368,6 +369,7 @@ def main(argv: list[str] | None = None) -> int:
                 execution=execution,
                 validation=validation,
                 continue_on_retry=args.continue_on_retry,
+                continue_on_blocked=args.continue_on_blocked,
             )
         except ValueError as exc:
             return fail("E_LOOP_FAILED", str(exc))

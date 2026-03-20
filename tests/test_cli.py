@@ -70,6 +70,46 @@ def test_cli_plan_and_loop(tmp_path):
 
 
 
+def test_cli_loop_continue_on_blocked_option(tmp_path):
+    r = _run(tmp_path, "init", "demo", "Block", "continue", "--priority", "1")
+    assert r.returncode == 0
+    r = _run(tmp_path, "plan", "demo", "First, then second", "--max-steps", "2")
+    assert r.returncode == 0
+
+    default = _run(
+        tmp_path,
+        "loop",
+        "--project",
+        "demo",
+        "--max-runs",
+        "3",
+        "--exec-cmd",
+        "true",
+        "--require-artifact",
+        "result.txt",
+        "--require-nonempty",
+    )
+    assert default.returncode == 0
+    assert "runs=1" in default.stdout
+
+    continued = _run(
+        tmp_path,
+        "loop",
+        "--project",
+        "demo",
+        "--max-runs",
+        "2",
+        "--exec-cmd",
+        "true",
+        "--require-artifact",
+        "result.txt",
+        "--require-nonempty",
+        "--continue-on-blocked",
+    )
+    assert continued.returncode == 0
+    assert "runs=2" in continued.stdout
+
+
 def test_cli_tick_exec_cmd(tmp_path):
     r = _run(tmp_path, "init", "demo", "Exec", "bridge", "--priority", "1")
     assert r.returncode == 0
