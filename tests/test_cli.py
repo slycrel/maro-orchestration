@@ -189,3 +189,30 @@ def test_cli_inspect_run(tmp_path):
     payload = json.loads(json_view.stdout)
     assert payload["run"]["run_id"] == run_id
     assert payload["validation_summary"]["validation"]["status"] == "done"
+
+
+
+def test_cli_empty_paths(tmp_path):
+    r = _run(tmp_path, "init", "demo", "Empty", "paths", "--priority", "1")
+    assert r.returncode == 0
+
+    # Drain the default checklist.
+    for _ in range(3):
+        done = _run(tmp_path, "done", "demo")
+        assert done.returncode == 0
+
+    next_r = _run(tmp_path, "next", "--project", "demo")
+    assert next_r.returncode == 1
+    assert "next=(none)" in next_r.stdout
+
+    run_r = _run(tmp_path, "run", "--project", "demo")
+    assert run_r.returncode == 1
+    assert "run=(none)" in run_r.stdout
+
+    tick_r = _run(tmp_path, "tick", "--project", "demo")
+    assert tick_r.returncode == 1
+    assert "tick=(none)" in tick_r.stdout
+
+    loop_r = _run(tmp_path, "loop", "--project", "demo", "--max-runs", "2")
+    assert loop_r.returncode == 1
+    assert "loop=(none)" in loop_r.stdout
