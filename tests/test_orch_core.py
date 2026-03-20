@@ -168,3 +168,38 @@ def test_command_execution_bridge_failure_blocks(monkeypatch, tmp_path):
     assert tick.validation.status == "blocked"
     assert tick.run.status == "blocked"
     assert "command failed (7)" in (tick.run.note or "")
+
+
+
+def test_artifact_validation_bridge_accepts_present_artifacts(monkeypatch, tmp_path):
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    _mkproj(tmp_path, "demo", "- [ ] first\n", priority=3)
+
+    tick = orch.run_tick(
+        "demo",
+        worker="tester",
+        execution=orch.command_execution_bridge('printf ok > "$ORCH_RUN_ARTIFACT_DIR/result.txt"'),
+        validation=orch.artifact_validation_bridge(["result.txt"], nonempty=True),
+    )
+
+    assert tick is not None
+    assert tick.validation.status == "done"
+    assert tick.run.status == "done"
+
+
+
+def test_artifact_validation_bridge_blocks_missing_artifacts(monkeypatch, tmp_path):
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    _mkproj(tmp_path, "demo", "- [ ] first\n", priority=3)
+
+    tick = orch.run_tick(
+        "demo",
+        worker="tester",
+        execution=orch.command_execution_bridge('true'),
+        validation=orch.artifact_validation_bridge(["result.txt"], nonempty=True),
+    )
+
+    assert tick is not None
+    assert tick.validation.status == "blocked"
+    assert tick.run.status == "blocked"
+    assert "missing artifacts: result.txt" in (tick.run.note or "")

@@ -562,6 +562,50 @@ def _default_execution_bridge(run: RunRecord) -> ExecutionResult:
     )
 
 
+def artifact_validation_bridge(required_paths: List[str], *, nonempty: bool = False) -> ValidationBridge:
+    cleaned = [p.strip() for p in required_paths if p and p.strip()]
+    if not cleaned:
+        raise ValueError("required_paths cannot be empty")
+
+    def _validate(run: RunRecord, execution: ExecutionResult) -> ValidationResult:
+        status = execution.status.lower().strip()
+        if status not in RUN_OUTCOMES:
+            raise ValueError(f"invalid execution status: {execution.status}")
+        if status != "done":
+            return ValidationResult(
+                status=status,
+                passed=False,
+                note=execution.note or "execution did not complete successfully",
+            )
+
+        artifact_root = orch_root()
+        if execution.artifact_path:
+            artifact_root = orch_root() / execution.artifact_path
+
+        missing = []
+        empty = []
+        for rel in cleaned:
+            target = artifact_root / rel
+            if not target.exists():
+                missing.append(rel)
+                continue
+            if nonempty and target.is_file() and target.stat().st_size == 0:
+                empty.append(rel)
+
+        if missing or empty:
+            parts = []
+            if missing:
+                parts.append(f"missing artifacts: {', '.join(missing)}")
+            if empty:
+                parts.append(f"empty artifacts: {', '.join(empty)}")
+            return ValidationResult(status="blocked", passed=False, note="; ".join(parts))
+
+        note = execution.note or f"validated artifacts: {', '.join(cleaned)}"
+        return ValidationResult(status="done", passed=True, note=note)
+
+    return _validate
+
+
 def _default_validation_bridge(run: RunRecord, execution: ExecutionResult) -> ValidationResult:
     status = execution.status.lower().strip()
     if status not in RUN_OUTCOMES:

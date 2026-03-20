@@ -8,6 +8,7 @@ from pathlib import Path
 
 from orch import (
     append_decision,
+    artifact_validation_bridge,
     command_execution_bridge,
     ensure_project,
     finalize_run,
@@ -110,6 +111,8 @@ def main(argv: list[str] | None = None) -> int:
     p_tick.add_argument("--source", default="tick")
     p_tick.add_argument("--note")
     p_tick.add_argument("--exec-cmd", help="Shell command execution bridge for the claimed task")
+    p_tick.add_argument("--require-artifact", action="append", default=[], help="Artifact path relative to the run artifact dir that must exist")
+    p_tick.add_argument("--require-nonempty", action="store_true", help="Require listed artifacts to be non-empty files")
 
     p_loop = sub.add_parser("loop", help="Run a bounded automation loop")
     p_loop.add_argument("--project")
@@ -118,6 +121,8 @@ def main(argv: list[str] | None = None) -> int:
     p_loop.add_argument("--note")
     p_loop.add_argument("--max-runs", type=int, default=10)
     p_loop.add_argument("--exec-cmd", help="Shell command execution bridge for each claimed task")
+    p_loop.add_argument("--require-artifact", action="append", default=[], help="Artifact path relative to the run artifact dir that must exist")
+    p_loop.add_argument("--require-nonempty", action="store_true", help="Require listed artifacts to be non-empty files")
 
     p_status = sub.add_parser("status", help="Write/read operator status")
     p_status.add_argument("--format", choices=["json", "path"], default="json")
@@ -249,8 +254,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.cmd == "tick":
         execution = command_execution_bridge(args.exec_cmd) if args.exec_cmd else None
+        validation = artifact_validation_bridge(args.require_artifact, nonempty=args.require_nonempty) if args.require_artifact else None
         try:
-            tick = run_tick(project=args.project, worker=args.worker, source=args.source, note=args.note, execution=execution)
+            tick = run_tick(project=args.project, worker=args.worker, source=args.source, note=args.note, execution=execution, validation=validation)
         except ValueError as exc:
             return fail("E_TICK_FAILED", str(exc))
         if not tick:
@@ -264,8 +270,9 @@ def main(argv: list[str] | None = None) -> int:
         if args.max_runs <= 0:
             return fail("E_LOOP_BAD_LIMIT", "max-runs must be greater than zero")
         execution = command_execution_bridge(args.exec_cmd) if args.exec_cmd else None
+        validation = artifact_validation_bridge(args.require_artifact, nonempty=args.require_nonempty) if args.require_artifact else None
         try:
-            ticks = run_loop(project=args.project, worker=args.worker, source=args.source, note=args.note, max_runs=args.max_runs, execution=execution)
+            ticks = run_loop(project=args.project, worker=args.worker, source=args.source, note=args.note, max_runs=args.max_runs, execution=execution, validation=validation)
         except ValueError as exc:
             return fail("E_LOOP_FAILED", str(exc))
         if not ticks:
