@@ -10,13 +10,14 @@ import time
 import uuid
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Iterable, List, Optional, Tuple
+from typing import Callable, Iterable, List, Optional, Tuple
 
 STATE_TODO = " "
 STATE_DOING = "~"
 STATE_DONE = "x"
 STATE_BLOCKED = "!"
 VALID_STATES = {STATE_TODO, STATE_DOING, STATE_DONE, STATE_BLOCKED}
+RUN_OUTCOMES = {"done", "blocked", "retry"}
 
 ITEM_RE = re.compile(r"^(?P<indent>\s*)-\s*\[(?P<state>[ xX~!])\]\s*(?P<text>.+?)\s*$")
 
@@ -55,6 +56,39 @@ class RunRecord:
     finished_at: Optional[str] = None
     note: Optional[str] = None
     artifact_path: Optional[str] = None
+
+
+@dataclass
+class ExecutionResult:
+    status: str
+    note: Optional[str] = None
+    artifact_path: Optional[str] = None
+
+
+@dataclass
+class ValidationResult:
+    status: str
+    passed: bool
+    note: Optional[str] = None
+
+
+@dataclass
+class TickResult:
+    run: RunRecord
+    execution: ExecutionResult
+    validation: ValidationResult
+
+
+@dataclass
+class PlanResult:
+    project: str
+    goal: str
+    steps: List[str]
+    item_indices: List[int]
+
+
+ExecutionBridge = Callable[[RunRecord], ExecutionResult]
+ValidationBridge = Callable[[RunRecord, ExecutionResult], ValidationResult]
 
 
 def ws_root() -> Path:
@@ -183,12 +217,58 @@ def mark_item(slug: str, item_index: int, new_state: str) -> None:
     write_next_lines(slug, lines)
 
 
+def append_next_items(slug: str, items: List[str]) -> List[int]:
+    if not items:
+        return []
+    p = next_path(slug)
+    lines = p.read_text(encoding="utf-8").splitlines()
+    start = len(lines)
+    next_lines = [f"- [ ] {i}" for i in items]
+    lines.extend(next_lines)
+    write_next_lines(slug, lines)
+    return list(range(start, start + len(next_lines)))
+
+
 def get_item(slug: str, item_index: int) -> NextItem:
     _lines, items = parse_next(slug)
     item = next((it for it in items if it.index == item_index), None)
     if item is None:
         raise ValueError(f"item_index {item_index} not found in NEXT.md for {slug}")
     return item
+
+
+def decompose_goal(goal: str, *, max_steps: int = 4) -> List[str]:
+    if max_steps <= 0:
+        raise ValueError("max_steps must be greater than zero")
+    normalized = re.sub(r"\s+", " ", goal.strip())
+    if not normalized:
+        raise ValueError("goal cannot be empty")
+
+    # Conservative heuristic decomposition, useful for now and deterministic for
+    # tests and local automation.
+    pieces = [part.strip() for part in re.split(r"[.;]|\b(?:and then|then)\b", normalized, flags=re.IGNORECASE)]
+    pieces = [p for p in pieces if p and p.lower() != "and"]
+    if len(pieces) == 1 and "," in normalized:
+        if "," in normalized:
+            pieces = [p.strip() for p in normalized.split(",") if p.strip()]
+    if len(pieces) == 1 and len(normalized.split()) > 12:
+        words = normalized.split()
+        chunk = max(1, len(words) // max_steps + 1)
+        pieces = [" ".join(words[i : i + chunk]).strip() for i in range(0, len(words), chunk)]
+
+    cleaned = [p for p in pieces if p]
+    if not cleaned:
+        raise ValueError(f"could not decompose goal: {goal}")
+    return cleaned[:max_steps]
+
+
+def plan_project(slug: str, goal: str, *, max_steps: int = 4) -> PlanResult:
+    if not project_dir(slug).exists():
+        raise ValueError(f"project {slug} does not exist")
+    steps = decompose_goal(goal, max_steps=max_steps)
+    item_indices = append_next_items(slug, steps)
+    append_decision(slug, [f"Planned work from goal: {goal}", *[f"- step: {s}" for s in steps]])
+    return PlanResult(project=slug, goal=goal, steps=steps, item_indices=item_indices)
 
 
 def mark_first_todo_done(slug: str) -> Optional[NextItem]:
@@ -418,6 +498,96 @@ def run_once(project: Optional[str] = None, *, worker: str = "handle", source: s
         return None
     slug, item = selected
     return start_item(slug, item.index, source=source, worker=worker, note=note)
+
+
+def _default_execution_bridge(run: RunRecord) -> ExecutionResult:
+    return ExecutionResult(
+        status="done",
+        note=run.note or "No execution bridge configured; marking as complete for test/sync flow.",
+    )
+
+
+def _default_validation_bridge(run: RunRecord, execution: ExecutionResult) -> ValidationResult:
+    status = execution.status.lower().strip()
+    if status not in RUN_OUTCOMES:
+        raise ValueError(f"invalid execution status: {execution.status}")
+    return ValidationResult(
+        status=status,
+        passed=status == "done",
+        note=execution.note or ("execution accepted" if status == "done" else "execution blocked"),
+    )
+
+
+def _merge_notes(*notes: Optional[str]) -> Optional[str]:
+    chunks = [n.strip() for n in notes if n and n.strip()]
+    if not chunks:
+        return None
+    return "; ".join(chunks)
+
+
+def run_tick(
+    project: Optional[str] = None,
+    *,
+    worker: str = "handle",
+    source: str = "tick",
+    note: Optional[str] = None,
+    execution: Optional[ExecutionBridge] = None,
+    validation: Optional[ValidationBridge] = None,
+) -> Optional[TickResult]:
+    run = run_once(project=project, worker=worker, source=source, note=note)
+    if not run:
+        write_operator_status()
+        return None
+
+    execute = execution or _default_execution_bridge
+    validate = validation or _default_validation_bridge
+    outcome = execute(run)
+    result = validate(run, outcome)
+
+    update_note = _merge_notes(run.note, outcome.note)
+    if update_note and update_note != run.note:
+        run.note = update_note
+        run.updated_at = now_utc_iso()
+        write_run_record(run)
+
+    if outcome.artifact_path:
+        run.artifact_path = outcome.artifact_path
+        run.updated_at = now_utc_iso()
+        write_run_record(run)
+
+    if result.status in {"done", "blocked"}:
+        run = finalize_run(run.run_id, result.status, note=result.note)
+    return TickResult(run=run, execution=outcome, validation=result)
+
+
+def run_loop(
+    project: Optional[str] = None,
+    *,
+    worker: str = "handle",
+    source: str = "loop",
+    note: Optional[str] = None,
+    max_runs: int = 10,
+    execution: Optional[ExecutionBridge] = None,
+    validation: Optional[ValidationBridge] = None,
+) -> List[TickResult]:
+    if max_runs <= 0:
+        raise ValueError("max_runs must be greater than zero")
+    out: List[TickResult] = []
+    for _ in range(max_runs):
+        tick = run_tick(
+            project=project,
+            worker=worker,
+            source=source,
+            note=note,
+            execution=execution,
+            validation=validation,
+        )
+        if not tick:
+            break
+        out.append(tick)
+        if tick.validation.status == "retry":
+            break
+    return out
 
 
 def status_report(project: Optional[str] = None) -> dict:

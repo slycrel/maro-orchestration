@@ -10,13 +10,16 @@ from orch import (
     append_decision,
     ensure_project,
     finalize_run,
-    list_blocked_projects,
     load_run_record,
+    list_blocked_projects,
+    run_loop,
     mark_first_todo_done,
     mark_item,
     operator_status_path,
     project_dir,
     run_once,
+    plan_project,
+    run_tick,
     select_global_next,
     select_next_item,
     start_item,
@@ -94,6 +97,24 @@ def main(argv: list[str] | None = None) -> int:
     p_run.add_argument("--note")
     p_run.add_argument("--finish", choices=["done", "blocked"], help="Immediately finalize the claimed item")
     p_run.add_argument("--finish-note")
+
+    p_plan = sub.add_parser("plan", help="Split a goal into NEXT tasks")
+    p_plan.add_argument("project")
+    p_plan.add_argument("goal", nargs="+")
+    p_plan.add_argument("--max-steps", type=int, default=4)
+
+    p_tick = sub.add_parser("tick", help="Claim a task and execute one automation tick")
+    p_tick.add_argument("--project")
+    p_tick.add_argument("--worker", default="handle")
+    p_tick.add_argument("--source", default="tick")
+    p_tick.add_argument("--note")
+
+    p_loop = sub.add_parser("loop", help="Run a bounded automation loop")
+    p_loop.add_argument("--project")
+    p_loop.add_argument("--worker", default="handle")
+    p_loop.add_argument("--source", default="loop")
+    p_loop.add_argument("--note")
+    p_loop.add_argument("--max-runs", type=int, default=10)
 
     p_status = sub.add_parser("status", help="Write/read operator status")
     p_status.add_argument("--format", choices=["json", "path"], default="json")
@@ -213,6 +234,43 @@ def main(argv: list[str] | None = None) -> int:
             except ValueError as exc:
                 return fail("E_RUN_FINISH_FAILED", str(exc))
             _print_run("finished", run)
+        return 0
+
+    if args.cmd == "plan":
+        try:
+            result = plan_project(args.project, " ".join(args.goal), max_steps=args.max_steps)
+        except ValueError as exc:
+            return fail("E_PLAN_FAILED", str(exc))
+        print(f"project={result.project} steps={len(result.steps)} added={len(result.item_indices)} first={result.item_indices[0] if result.item_indices else -1}")
+        return 0
+
+    if args.cmd == "tick":
+        try:
+            tick = run_tick(project=args.project, worker=args.worker, source=args.source, note=args.note)
+        except ValueError as exc:
+            return fail("E_TICK_FAILED", str(exc))
+        if not tick:
+            print("tick=(none)")
+            return 1
+        _print_run("tick-start", tick.run)
+        print(f"execution={tick.execution.status} validation={tick.validation.status}")
+        return 0
+
+    if args.cmd == "loop":
+        if args.max_runs <= 0:
+            return fail("E_LOOP_BAD_LIMIT", "max-runs must be greater than zero")
+        try:
+            ticks = run_loop(project=args.project, worker=args.worker, source=args.source, note=args.note, max_runs=args.max_runs)
+        except ValueError as exc:
+            return fail("E_LOOP_FAILED", str(exc))
+        if not ticks:
+            print("loop=(none)")
+            return 1
+        print(f"runs={len(ticks)}")
+        for idx, tick in enumerate(ticks, start=1):
+            print(
+                f"iteration={idx} project={tick.run.project} run_id={tick.run.run_id} status={tick.validation.status} item={tick.run.index}"
+            )
         return 0
 
     if args.cmd == "status":

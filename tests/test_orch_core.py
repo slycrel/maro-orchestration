@@ -61,3 +61,43 @@ def test_start_and_finalize_run(monkeypatch, tmp_path):
     status = orch.write_operator_status()
     assert status["queue"]["doing"] == 0
     assert status["queue"]["done"] == 1
+
+
+def test_plan_project_and_next_items(monkeypatch, tmp_path):
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    _mkproj(tmp_path, "demo", "- [ ] first\n- [ ] second\n", priority=3)
+
+    plan = orch.plan_project("demo", "Add docs. Then wire smoke test. Then ship it.", max_steps=3)
+    assert len(plan.steps) == 3
+    assert plan.item_indices == [2, 3, 4]
+    _, items = orch.parse_next("demo")
+    assert items[2].text == plan.steps[0]
+    assert items[-1].text == plan.steps[-1]
+
+
+def test_run_tick_and_run_loop(monkeypatch, tmp_path):
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    _mkproj(tmp_path, "demo", "- [ ] first\n- [ ] second\n", priority=3)
+
+    seen = []
+
+    def executor(run):
+        seen.append(run.index)
+        return orch.ExecutionResult(status="done", note=f"executed {run.index}")
+
+    def validator(run, execution):
+        return orch.ValidationResult(status="done", passed=True, note=execution.note)
+
+    tick = orch.run_tick("demo", execution=executor, validation=validator, worker="tester")
+    assert tick is not None
+    assert tick.validation.status == "done"
+    assert tick.run.status == "done"
+    assert tick.run.index == 0
+    assert seen == [0]
+
+    loop = orch.run_loop("demo", execution=executor, validation=validator, max_runs=3, worker="tester")
+    assert len(loop) == 1
+    assert loop[0].run.index == 1
+    _, items = orch.parse_next("demo")
+    assert items[0].state == orch.STATE_DONE
+    assert items[1].state == orch.STATE_DONE

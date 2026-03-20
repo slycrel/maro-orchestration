@@ -55,3 +55,15 @@ def test_cli_run_start_finish_status(tmp_path):
     status = json.loads(r.stdout)
     assert status["queue"]["doing"] == 0
     assert status["queue"]["done"] >= 1
+
+
+def test_cli_plan_and_loop(tmp_path):
+    r = _run(tmp_path, "init", "demo", "Autonomy", "lane", "--priority", "1")
+    assert r.returncode == 0
+    r = _run(tmp_path, "plan", "demo", "Draft a plan. Execute the first patch. Verify it.", "--max-steps", "3")
+    assert r.returncode == 0
+    assert "steps=" in r.stdout
+
+    r = _run(tmp_path, "loop", "--project", "demo", "--max-runs", "3", "--source", "cli-loop", "--worker", "director")
+    assert r.returncode == 0
+    assert "runs=" in r.stdout
