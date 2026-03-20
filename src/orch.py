@@ -20,6 +20,7 @@ STATE_DONE = "x"
 STATE_BLOCKED = "!"
 VALID_STATES = {STATE_TODO, STATE_DOING, STATE_DONE, STATE_BLOCKED}
 RUN_OUTCOMES = {"done", "blocked", "retry"}
+WORKER_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 X_CAPTURE_AUTH_MARKERS = [
     "this page isn't working",
     "this page isn’t working",
@@ -223,6 +224,44 @@ def runs_root() -> Path:
     p = output_root() / "runs"
     p.mkdir(parents=True, exist_ok=True)
     return p
+
+
+def workers_root() -> Path:
+    return orch_root() / "workers"
+
+
+def resolve_worker_session_script(
+    worker: str,
+    *,
+    worker_root: Optional[Path] = None,
+) -> Optional[Path]:
+    if not worker or not worker.strip():
+        return None
+
+    raw = worker.strip()
+    root = (worker_root or workers_root()).resolve()
+
+    candidate = Path(raw).expanduser()
+    if candidate.is_absolute():
+        candidate_path = candidate
+    else:
+        candidate_path = orch_root() / candidate
+    if candidate_path.exists():
+        if not candidate_path.is_file():
+            raise ExecutionBridgeError(f"worker session source must be a file: {candidate_path}")
+        return candidate_path.resolve()
+
+    if not WORKER_NAME_RE.match(raw):
+        return None
+
+    for spec in (raw, f"{raw}.sh"):
+        script = root / spec
+        if script.exists():
+            if not script.is_file():
+                raise ExecutionBridgeError(f"worker session source must be a file: {script}")
+            return script.resolve()
+
+    return None
 
 
 def operator_status_path() -> Path:
@@ -751,6 +790,29 @@ def command_execution_bridge(command: str) -> ExecutionBridge:
     return _execute
 
 
+def worker_session_bridge(
+    worker: str,
+    *,
+    worker_root: Optional[Path] = None,
+    timeout_seconds: Optional[float] = None,
+    payload_name: str = "worker-payload.json",
+    result_name: str = "worker-result.json",
+) -> ExecutionBridge:
+    if not worker or not worker.strip():
+        raise ValueError("worker cannot be empty")
+
+    script = resolve_worker_session_script(worker, worker_root=worker_root)
+    if script is None:
+        raise ValueError(f"no worker session script found for {worker!r}")
+
+    return session_execution_bridge(
+        str(script),
+        timeout_seconds=timeout_seconds,
+        payload_name=payload_name,
+        result_name=result_name,
+    )
+
+
 def session_execution_bridge(
     session_command: str,
     *,
@@ -979,45 +1041,84 @@ def x_capture_salvage_validation_bridge() -> ValidationBridge:
     auth_markers = [marker.lower() for marker in X_CAPTURE_AUTH_MARKERS]
     rate_markers = [marker.lower() for marker in X_CAPTURE_RATE_LIMIT_MARKERS]
 
-    def _classify(message: str) -> Optional[Tuple[str, str]]:
+    def _scan_message(message: str) -> List[Tuple[str, str, str]]:
         lower = message.lower()
+        findings = []
         if any(marker in lower for marker in rate_markers):
-            return "retry", "rate-limit or quota marker detected"
+            findings.append(("retry", "rate-limit or quota marker detected", "rate-limit"))
         if any(marker in lower for marker in auth_markers):
-            return "retry", "auth/session marker detected"
-        return None
+            findings.append(("retry", "auth/session marker detected", "auth"))
+        return findings
+
+    def _find_hit(
+        run: RunRecord,
+        execution: ExecutionResult,
+        messages: List[Tuple[str, str, str]],
+    ) -> ValidationResult:
+        if not messages:
+            return ValidationResult(status="done", passed=True, note=execution.note)
+
+        first_status, first_detail, _first_kind = messages[0]
+        artifact_path = run.artifact_path
+        if execution.artifact_path:
+            artifact_path = execution.artifact_path
+
+        payload = {
+            "run_id": run.run_id,
+            "project": run.project,
+            "index": run.index,
+            "artifact_path": artifact_path,
+            "status": execution.status,
+            "matches": [
+                {"status": status, "detail": detail, "kind": kind}
+                for status, detail, kind in messages
+            ],
+            "note": execution.note,
+            "generated_at": now_utc_iso(),
+        }
+        if artifact_path:
+            salvage_path = (orch_root() / artifact_path) / "x-capture-salvage.json"
+            salvage_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+            detail = payload["matches"][0]["detail"] if payload["matches"] else first_detail
+            return ValidationResult(
+                status=first_status,
+                passed=False,
+                note=f"x capture salvage hint: {detail}; evidence={salvage_path.relative_to(orch_root())}",
+            )
+        return ValidationResult(
+            status=first_status,
+            passed=False,
+            note=f"x capture salvage hint: {first_detail}",
+        )
 
     def _validate(run: RunRecord, execution: ExecutionResult) -> ValidationResult:
         if execution.status != "done":
             return ValidationResult(status=execution.status, passed=False, note=execution.note or "execution did not complete")
 
-        messages: List[str] = []
         artifact_root = orch_root()
+        artifact_rel = run.artifact_path
         if execution.artifact_path:
-            artifact_root = orch_root() / execution.artifact_path
-        for candidate in [
+            artifact_rel = execution.artifact_path
+        if artifact_rel:
+            artifact_root = orch_root() / artifact_rel
+
+        candidates = [
             artifact_root / "stdout.log",
             artifact_root / "stderr.log",
             artifact_root / "session-stdout.log",
             artifact_root / "session-stderr.log",
             artifact_root / "review" / "stdout.log",
             artifact_root / "review" / "stderr.log",
-        ]:
+        ]
+
+        matches: List[Tuple[str, str, str]] = []
+        for candidate in candidates:
             if not candidate.exists() or not candidate.is_file():
                 continue
-            messages.append(candidate.read_text(encoding="utf-8", errors="ignore").lower())
+            matches.extend(_scan_message(candidate.read_text(encoding="utf-8", errors="ignore")))
 
-        for msg in messages:
-            found = _classify(msg)
-            if found:
-                status, detail = found
-                return ValidationResult(
-                    status=status,
-                    passed=False,
-                    note=f"x capture salvage hint: {detail}",
-                )
-
-        return ValidationResult(status="done", passed=True, note=execution.note)
+        matches.extend(_scan_message(execution.note or ""))
+        return _find_hit(run, execution, messages=matches)
 
     return _validate
 
@@ -1066,7 +1167,7 @@ def artifact_validation_bridge(required_paths: List[str], *, nonempty: bool = Fa
     return _validate
 
 
-def review_command_validation_bridge(command: str) -> ValidationBridge:
+def review_command_validation_bridge(command: str, *, timeout_seconds: Optional[float] = None) -> ValidationBridge:
     if not command or not command.strip():
         raise ValueError("command cannot be empty")
 
@@ -1102,14 +1203,18 @@ def review_command_validation_bridge(command: str) -> ValidationBridge:
             }
         )
 
-        proc = subprocess.run(
-            command,
-            shell=True,
-            cwd=orch_root(),
-            env=env,
-            capture_output=True,
-            text=True,
-        )
+        try:
+            proc = subprocess.run(
+                command,
+                shell=True,
+                cwd=orch_root(),
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=timeout_seconds,
+            )
+        except subprocess.TimeoutExpired as exc:
+            return ValidationResult(status="blocked", passed=False, note=f"review timed out after {timeout_seconds}s: {command}: {exc}")
         (review_dir / "stdout.log").write_text(proc.stdout or "", encoding="utf-8")
         (review_dir / "stderr.log").write_text(proc.stderr or "", encoding="utf-8")
         if proc.returncode == 0:
@@ -1123,6 +1228,7 @@ def review_command_validation_bridge(command: str) -> ValidationBridge:
             note = f"{note}; stderr={proc.stderr.strip().splitlines()[-1]}"
         return ValidationResult(status="blocked", passed=False, note=note)
 
+
     return _validate
 
 
@@ -1135,7 +1241,12 @@ def chain_validation_bridges(*bridges: ValidationBridge) -> ValidationBridge:
         notes = []
         final_status = "done"
         for bridge in cleaned:
-            result = bridge(run, execution)
+            try:
+                result = bridge(run, execution)
+            except Exception as exc:
+                failure_note = f"validation bridge failed: {exc}"
+                return ValidationResult(status="blocked", passed=False, note=failure_note)
+
             if result.note:
                 notes.append(result.note)
             final_status = result.status
@@ -1205,9 +1316,14 @@ def run_tick(
         outcome = execute(run)
     except ExecutionBridgeError as exc:
         outcome = ExecutionResult(status="blocked", note=str(exc), artifact_path=run.artifact_path)
+    except Exception as exc:
+        outcome = ExecutionResult(status="blocked", note=f"execution bridge crashed: {exc}", artifact_path=run.artifact_path)
     if outcome.status.lower().strip() not in RUN_OUTCOMES:
         outcome = ExecutionResult(status="blocked", note=f"invalid execution status: {outcome.status}", artifact_path=outcome.artifact_path or run.artifact_path)
-    result = validate(run, outcome)
+    try:
+        result = validate(run, outcome)
+    except Exception as exc:
+        result = ValidationResult(status="blocked", passed=False, note=f"validation failed: {exc}")
     if result.status not in RUN_OUTCOMES:
         result = ValidationResult(status="blocked", passed=False, note=f"invalid validation status: {result.status}")
 
@@ -1255,6 +1371,8 @@ def run_loop(
         if not tick:
             break
         out.append(tick)
+        if tick.validation.status not in {"done", "blocked", "retry"}:
+            break
         if tick.validation.status == "retry" and not continue_on_retry:
             break
     return out

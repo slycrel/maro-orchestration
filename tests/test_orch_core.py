@@ -1,6 +1,8 @@
+import json
 from pathlib import Path
 
 import orch
+import pytest
 
 
 def _mkproj(tmp_path: Path, slug: str, content: str, priority: int = 0):
@@ -237,6 +239,62 @@ def test_session_execution_bridge_blocks_invalid_artifact_path(monkeypatch, tmp_
     assert tick.validation.status == "blocked"
     assert tick.run.status == "blocked"
     assert "under orchestration root" in (tick.run.note or "")
+
+
+def test_worker_session_bridge_by_name(monkeypatch, tmp_path):
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    _mkproj(tmp_path, "demo", "- [ ] first\n", priority=3)
+
+    workers = tmp_path / "prototypes" / "poe-orchestration" / "workers"
+    workers.mkdir(parents=True)
+    script = workers / "handle.sh"
+    script.write_text(
+        "#!/usr/bin/env bash\n"
+        'cat > "$ORCH_SESSION_RESULT_PATH" <<EOF\n'
+        '{"status":"done","note":"named worker","artifact_path":"$ORCH_RUN_ARTIFACT_PATH"}\n'
+        "EOF\n",
+        encoding="utf-8",
+    )
+    script.chmod(0o755)
+
+    tick = orch.run_tick(
+        "demo",
+        worker="handle",
+        execution=orch.worker_session_bridge("handle"),
+    )
+
+    assert tick is not None
+    assert tick.validation.status == "done"
+    assert tick.run.status == "done"
+
+
+def test_worker_session_bridge_errors_when_missing(monkeypatch, tmp_path):
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    _mkproj(tmp_path, "demo", "- [ ] first\n", priority=3)
+
+    with pytest.raises(ValueError):
+        orch.worker_session_bridge("missing-has-no-script")
+
+
+def test_x_capture_salvage_bridge_writes_evidence(monkeypatch, tmp_path):
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    _mkproj(tmp_path, "demo", "- [ ] first\n", priority=3)
+
+    tick = orch.run_tick(
+        "demo",
+        worker="tester",
+        execution=orch.command_execution_bridge("printf \"%s\" \"this page isn't working\" >&2"),
+        validation=orch.x_capture_salvage_validation_bridge(),
+    )
+
+    assert tick is not None
+    assert tick.validation.status == "retry"
+    assert tick.run.status == "running"
+    artifact_root = tmp_path / "prototypes" / "poe-orchestration" / tick.run.artifact_path
+    salvage = artifact_root / "x-capture-salvage.json"
+    assert salvage.exists()
+    payload = json.loads(salvage.read_text(encoding="utf-8"))
+    assert payload["matches"]
 
 
 def test_command_execution_bridge_success(monkeypatch, tmp_path):

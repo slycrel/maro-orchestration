@@ -108,6 +108,27 @@ def test_cli_tick_session_cmd(tmp_path):
     assert "execution=done validation=done" in r.stdout
 
 
+def test_cli_tick_worker_session(tmp_path):
+    r = _run(tmp_path, "init", "demo", "Session", "worker", "--priority", "1")
+    assert r.returncode == 0
+
+    workers = tmp_path / "prototypes" / "poe-orchestration" / "workers"
+    workers.mkdir(parents=True)
+    script = workers / "handle"
+    script.write_text(
+        "#!/usr/bin/env bash\n"
+        'cat > "$ORCH_SESSION_RESULT_PATH" <<EOF\n'
+        '{"status":"done","note":"cli worker","artifact_path":"$ORCH_RUN_ARTIFACT_PATH"}\n'
+        "EOF\n",
+        encoding="utf-8",
+    )
+    script.chmod(0o755)
+
+    r = _run(tmp_path, "tick", "--project", "demo", "--worker-session", "handle")
+    assert r.returncode == 0
+    assert "execution=done validation=done" in r.stdout
+
+
 def test_cli_tick_session_cmd_markers_trigger_retries(tmp_path):
     r = _run(tmp_path, "init", "demo", "Session", "salvage", "--priority", "1")
     assert r.returncode == 0

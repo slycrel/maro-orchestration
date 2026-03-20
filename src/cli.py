@@ -15,6 +15,7 @@ from orch import (
     finalize_run,
     run_loop,
     session_execution_bridge,
+    worker_session_bridge,
     x_capture_salvage_validation_bridge,
     load_run_record,
     load_validation_summary,
@@ -64,7 +65,9 @@ def _build_validation(args):
         bridges.append(artifact_validation_bridge(args.require_artifact, nonempty=args.require_nonempty))
     if getattr(args, "review_cmd", None):
         bridges.append(review_command_validation_bridge(args.review_cmd))
-    if getattr(args, "session_cmd", None) and not getattr(args, "disable_x_capture", False):
+    if (getattr(args, "session_cmd", None) or getattr(args, "worker_session", None)) and not getattr(
+        args, "disable_x_capture", False
+    ):
         bridges.append(x_capture_salvage_validation_bridge())
     if not bridges:
         return None
@@ -74,13 +77,17 @@ def _build_validation(args):
 
 
 def _build_execution(args):
-    if args.exec_cmd and args.session_cmd:
-        raise ValueError("only one of --exec-cmd or --session-cmd can be set")
+    if args.exec_cmd and (args.session_cmd or args.worker_session):
+        raise ValueError("only one of --exec-cmd, --session-cmd, or --worker-session can be set")
+    if args.session_cmd and args.worker_session:
+        raise ValueError("only one of --session-cmd or --worker-session can be set")
     if args.session_cmd:
         return session_execution_bridge(
             args.session_cmd,
             timeout_seconds=args.session_timeout,
         )
+    if args.worker_session:
+        return worker_session_bridge(args.worker_session, timeout_seconds=args.session_timeout)
     if args.exec_cmd:
         return command_execution_bridge(args.exec_cmd)
     return None
@@ -149,6 +156,7 @@ def main(argv: list[str] | None = None) -> int:
     p_tick.add_argument("--note")
     p_tick.add_argument("--exec-cmd", help="Shell command execution bridge for the claimed task")
     p_tick.add_argument("--session-cmd", help="Session command execution bridge for the claimed task")
+    p_tick.add_argument("--worker-session", help="Named worker session script")
     p_tick.add_argument("--session-timeout", type=float, default=None, help="Timeout in seconds for session command")
     p_tick.add_argument("--disable-x-capture", action="store_true", help="Disable X capture/rate-limit salvage classification")
     p_tick.add_argument("--require-artifact", action="append", default=[], help="Artifact path relative to the run artifact dir that must exist")
@@ -163,6 +171,7 @@ def main(argv: list[str] | None = None) -> int:
     p_loop.add_argument("--max-runs", type=int, default=10)
     p_loop.add_argument("--exec-cmd", help="Shell command execution bridge for each claimed task")
     p_loop.add_argument("--session-cmd", help="Session command execution bridge for each claimed task")
+    p_loop.add_argument("--worker-session", help="Named worker session script")
     p_loop.add_argument("--session-timeout", type=float, default=None, help="Timeout in seconds for session command")
     p_loop.add_argument("--disable-x-capture", action="store_true", help="Disable X capture/rate-limit salvage classification")
     p_loop.add_argument("--require-artifact", action="append", default=[], help="Artifact path relative to the run artifact dir that must exist")
