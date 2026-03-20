@@ -108,6 +108,37 @@ class ExecutionBridgeError(RuntimeError):
     """Raised when a concrete execution backend fails."""
 
 
+@dataclass(frozen=True)
+class WorkerSessionSpec:
+    command: str
+    payload_name: str = "worker-payload.json"
+    result_name: str = "worker-result.json"
+
+
+def _ensure_nonempty_artifact_name(raw: object, default: str) -> str:
+    value = str(raw or "").strip()
+    return value if value else default
+
+
+def _load_worker_session_manifest(path: Path) -> WorkerSessionSpec:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if isinstance(data, str):
+        command = data.strip()
+        if not command:
+            raise ValueError(f"invalid worker session manifest: {path} does not define a command")
+        return WorkerSessionSpec(command=command)
+    if not isinstance(data, dict):
+        raise ValueError(f"invalid worker session manifest format in {path}")
+
+    command = str(data.get("command") or "").strip()
+    if not command:
+        raise ValueError(f"invalid worker session manifest format in {path}: missing 'command'")
+
+    payload_name = _ensure_nonempty_artifact_name(data.get("payload_name"), "worker-payload.json")
+    result_name = _ensure_nonempty_artifact_name(data.get("result_name"), "worker-result.json")
+    return WorkerSessionSpec(command=command, payload_name=payload_name, result_name=result_name)
+
+
 def _load_run_records() -> List[RunRecord]:
     out: List[RunRecord] = []
     root = runs_root()
@@ -188,6 +219,32 @@ def _extract_session_result_from_text(raw: str) -> Optional[dict]:
     return None
 
 
+def _extract_json_result(raw: str) -> Optional[dict]:
+    if not raw.strip():
+        return None
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        payload = _extract_session_result_from_text(raw)
+    if isinstance(payload, dict):
+        return payload
+    return None
+
+
+def _coerce_validation_payload(raw: dict, *, run: RunRecord, execution: ExecutionResult) -> ValidationResult:
+    status = (raw.get("status") or "").lower().strip()
+    if status not in RUN_OUTCOMES:
+        raise ValueError(f"invalid review status: {status}")
+
+    note = raw.get("note")
+    if isinstance(note, str) and note.strip():
+        note_text = note.strip()
+    else:
+        note_text = f"review result for {run.run_id}"
+    passed = status == "done"
+    return ValidationResult(status=status, passed=passed, note=note_text)
+
+
 def _mark_stale_running_attempts(project: str, item_index: int) -> None:
     stale_note = "superseded by a new attempt"
     for record in _load_run_records():
@@ -235,6 +292,19 @@ def resolve_worker_session_script(
     *,
     worker_root: Optional[Path] = None,
 ) -> Optional[Path]:
+    spec = resolve_worker_session_spec(worker, worker_root=worker_root)
+    if spec is None:
+        return None
+    if Path(spec.command).is_file():
+        return Path(spec.command)
+    return None
+
+
+def resolve_worker_session_spec(
+    worker: str,
+    *,
+    worker_root: Optional[Path] = None,
+) -> Optional[WorkerSessionSpec]:
     if not worker or not worker.strip():
         return None
 
@@ -249,7 +319,9 @@ def resolve_worker_session_script(
     if candidate_path.exists():
         if not candidate_path.is_file():
             raise ExecutionBridgeError(f"worker session source must be a file: {candidate_path}")
-        return candidate_path.resolve()
+        if candidate_path.suffix == ".json":
+            return _load_worker_session_manifest(candidate_path)
+        return WorkerSessionSpec(command=str(candidate_path.resolve()))
 
     if not WORKER_NAME_RE.match(raw):
         return None
@@ -259,7 +331,28 @@ def resolve_worker_session_script(
         if script.exists():
             if not script.is_file():
                 raise ExecutionBridgeError(f"worker session source must be a file: {script}")
-            return script.resolve()
+            if script.suffix == ".json":
+                return _load_worker_session_manifest(script)
+            return WorkerSessionSpec(command=str(script.resolve()))
+
+    manifest = root / f"{raw}.json"
+    if manifest.exists():
+        if not manifest.is_file():
+            raise ExecutionBridgeError(f"worker session source must be a file: {manifest}")
+        return _load_worker_session_manifest(manifest)
+
+    work_dir = root / raw
+    if work_dir.exists() and work_dir.is_dir():
+        for manifest_name in ("worker-session.json", "session.json", "manifest.json", "config.json", "run.json"):
+            manifest_path = work_dir / manifest_name
+            if manifest_path.exists() and manifest_path.is_file():
+                return _load_worker_session_manifest(manifest_path)
+
+        fallback = work_dir / "run.sh"
+        if fallback.exists():
+            if not fallback.is_file():
+                raise ExecutionBridgeError(f"worker session source must be a file: {fallback}")
+            return WorkerSessionSpec(command=str(fallback.resolve()))
 
     return None
 
@@ -326,6 +419,8 @@ def project_priority(slug: str) -> int:
 
 def parse_next(slug: str) -> Tuple[List[str], List[NextItem]]:
     p = next_path(slug)
+    if not p.exists():
+        raise ValueError(f"project {slug} has no NEXT.md")
     lines = p.read_text(encoding="utf-8").splitlines()
     items: List[NextItem] = []
     for i, line in enumerate(lines):
@@ -402,7 +497,16 @@ def decompose_goal(goal: str, *, max_steps: int = 4) -> List[str]:
         chunk = max(1, len(words) // max_steps + 1)
         pieces = [" ".join(words[i : i + chunk]).strip() for i in range(0, len(words), chunk)]
 
-    cleaned = [p for p in pieces if p]
+    cleaned_steps: List[str] = []
+    for piece in pieces:
+        step = piece.strip().strip(" -")
+        if not step:
+            continue
+        if cleaned_steps and cleaned_steps[-1].lower() == step.lower():
+            continue
+        cleaned_steps.append(step)
+
+    cleaned = [p for p in cleaned_steps if p]
     if not cleaned:
         raise ValueError(f"could not decompose goal: {goal}")
     return cleaned[:max_steps]
@@ -602,6 +706,29 @@ def load_validation_summary(run_id: str) -> Optional[dict]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _active_salvage_runs() -> List[dict]:
+    out = []
+    for record in _load_run_records():
+        if record.status != "running":
+            continue
+        artifact_path = record.artifact_path
+        if not artifact_path:
+            continue
+        salvage_path = orch_root() / artifact_path / "x-capture-salvage.json"
+        if not salvage_path.exists():
+            continue
+        out.append(
+            {
+                "run_id": record.run_id,
+                "project": record.project,
+                "item": record.index,
+                "attempt": record.attempt,
+                "artifact_path": record.artifact_path,
+            }
+        )
+    return out
+
+
 def write_operator_status() -> dict:
     statuses = [project_status(slug) for slug in list_projects()]
     active = [s for s in statuses if s.doing > 0]
@@ -623,7 +750,12 @@ def write_operator_status() -> dict:
             "index": next_sel[1].index,
             "text": next_sel[1].text,
         } if next_sel else None,
+        "salvage": {
+            "active_runs": _active_salvage_runs(),
+            "active_count": 0,
+        },
     }
+    payload["salvage"]["active_count"] = len(payload["salvage"]["active_runs"])
     operator_status_path().write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     return payload
 
@@ -637,6 +769,8 @@ def start_item(
     note: Optional[str] = None,
     allow_running: bool = False,
 ) -> RunRecord:
+    if not project_dir(slug).exists():
+        raise ValueError(f"project {slug} does not exist")
     if item_index is None:
         item = select_next_item(slug)
         if not item:
@@ -703,6 +837,8 @@ def finalize_run(run_id: str, status: str, *, note: Optional[str] = None) -> Run
 
 
 def run_once(project: Optional[str] = None, *, worker: str = "handle", source: str = "run-once", note: Optional[str] = None) -> Optional[RunRecord]:
+    if project and not project_dir(project).exists():
+        raise ValueError(f"project {project} does not exist")
     if project:
         item = select_next_item(project)
         if item:
@@ -801,15 +937,22 @@ def worker_session_bridge(
     if not worker or not worker.strip():
         raise ValueError("worker cannot be empty")
 
-    script = resolve_worker_session_script(worker, worker_root=worker_root)
-    if script is None:
+    spec = resolve_worker_session_spec(worker, worker_root=worker_root)
+    if spec is None:
         raise ValueError(f"no worker session script found for {worker!r}")
 
+    resolved_payload_name = payload_name
+    resolved_result_name = result_name
+    if spec.payload_name:
+        resolved_payload_name = spec.payload_name
+    if spec.result_name:
+        resolved_result_name = spec.result_name
+
     return session_execution_bridge(
-        str(script),
+        spec.command,
         timeout_seconds=timeout_seconds,
-        payload_name=payload_name,
-        result_name=result_name,
+        payload_name=resolved_payload_name,
+        result_name=resolved_result_name,
     )
 
 
@@ -1217,6 +1360,14 @@ def review_command_validation_bridge(command: str, *, timeout_seconds: Optional[
             return ValidationResult(status="blocked", passed=False, note=f"review timed out after {timeout_seconds}s: {command}: {exc}")
         (review_dir / "stdout.log").write_text(proc.stdout or "", encoding="utf-8")
         (review_dir / "stderr.log").write_text(proc.stderr or "", encoding="utf-8")
+
+        payload = _extract_json_result(proc.stdout or "")
+        if payload is not None:
+            try:
+                return _coerce_validation_payload(payload, run=run, execution=execution)
+            except Exception as exc:
+                return ValidationResult(status="blocked", passed=False, note=f"invalid review payload: {exc}")
+
         if proc.returncode == 0:
             note = f"review passed: {command}"
             if proc.stdout.strip():
@@ -1246,6 +1397,20 @@ def chain_validation_bridges(*bridges: ValidationBridge) -> ValidationBridge:
             except Exception as exc:
                 failure_note = f"validation bridge failed: {exc}"
                 return ValidationResult(status="blocked", passed=False, note=failure_note)
+
+            if result.status not in RUN_OUTCOMES:
+                return ValidationResult(
+                    status="blocked",
+                    passed=False,
+                    note=f"invalid validation status: {result.status}",
+                )
+
+            if result.status == "done" and not result.passed:
+                return ValidationResult(
+                    status="blocked",
+                    passed=False,
+                    note=result.note or "validation bridge returned done without pass",
+                )
 
             if result.note:
                 notes.append(result.note)

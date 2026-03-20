@@ -268,12 +268,87 @@ def test_worker_session_bridge_by_name(monkeypatch, tmp_path):
     assert tick.run.status == "done"
 
 
+def test_worker_session_bridge_from_manifest_json(monkeypatch, tmp_path):
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    _mkproj(tmp_path, "demo", "- [ ] first\n", priority=3)
+
+    workers = tmp_path / "prototypes" / "poe-orchestration" / "workers"
+    workers.mkdir(parents=True)
+    manifest = workers / "researcher.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "command": 'cat > "$ORCH_SESSION_RESULT_PATH" <<EOF\n'
+                '{"status":"done","note":"manifest worker","artifact_path":"$ORCH_RUN_ARTIFACT_PATH"}\n'
+                "EOF\n",
+                "payload_name": "researcher-payload.json",
+                "result_name": "researcher-result.json",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    tick = orch.run_tick(
+        "demo",
+        worker="researcher",
+        execution=orch.worker_session_bridge("researcher"),
+    )
+
+    assert tick is not None
+    assert tick.validation.status == "done"
+    assert tick.run.status == "done"
+    artifact_root = tmp_path / "prototypes" / "poe-orchestration" / tick.run.artifact_path
+    assert (artifact_root / "researcher-result.json").exists()
+    assert not (artifact_root / "worker-result.json").exists()
+
+
 def test_worker_session_bridge_errors_when_missing(monkeypatch, tmp_path):
     monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
     _mkproj(tmp_path, "demo", "- [ ] first\n", priority=3)
 
     with pytest.raises(ValueError):
         orch.worker_session_bridge("missing-has-no-script")
+
+
+def test_review_command_validation_bridge_parses_json_payload(monkeypatch, tmp_path):
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    _mkproj(tmp_path, "demo", "- [ ] first\n", priority=3)
+
+    tick = orch.run_tick(
+        "demo",
+        worker="tester",
+        execution=orch.command_execution_bridge("printf ok > \"$ORCH_RUN_ARTIFACT_DIR/result.txt\""),
+        validation=orch.review_command_validation_bridge(
+            'cat <<\"JSON\"\n'
+            '{"status":"retry","note":"temporary captcha"}\n'
+            'JSON',
+        ),
+    )
+
+    assert tick is not None
+    assert tick.validation.status == "retry"
+    assert tick.run.status == "running"
+
+
+def test_chain_validation_bridge_blocks_done_without_pass(monkeypatch, tmp_path):
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    _mkproj(tmp_path, "demo", "- [ ] first\n", priority=3)
+
+    run = orch.start_item("demo", source="unit", worker="tester")
+    bridge = orch.chain_validation_bridges(
+        lambda _run, execution: orch.ValidationResult(status="done", passed=False, note="reviewer bug"),
+    )
+
+    result = bridge(run, orch.ExecutionResult(status="done", note="command ok"))
+    assert result.status == "blocked"
+    assert result.passed is False
+
+
+def test_run_once_rejects_missing_project(monkeypatch, tmp_path):
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+
+    with pytest.raises(ValueError):
+        orch.run_once("missing")
 
 
 def test_x_capture_salvage_bridge_writes_evidence(monkeypatch, tmp_path):
@@ -295,6 +370,24 @@ def test_x_capture_salvage_bridge_writes_evidence(monkeypatch, tmp_path):
     assert salvage.exists()
     payload = json.loads(salvage.read_text(encoding="utf-8"))
     assert payload["matches"]
+
+
+def test_operator_status_tracks_active_x_capture_salvage(monkeypatch, tmp_path):
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    _mkproj(tmp_path, "demo", "- [ ] first\n", priority=3)
+
+    tick = orch.run_tick(
+        "demo",
+        worker="tester",
+        execution=orch.command_execution_bridge('printf "%s" "this page isn\'t working" >&2'),
+        validation=orch.x_capture_salvage_validation_bridge(),
+    )
+    assert tick is not None
+    assert tick.validation.status == "retry"
+
+    status = orch.write_operator_status()
+    assert status["salvage"]["active_count"] == 1
+    assert status["salvage"]["active_runs"][0]["run_id"] == tick.run.run_id
 
 
 def test_command_execution_bridge_success(monkeypatch, tmp_path):

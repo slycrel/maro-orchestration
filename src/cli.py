@@ -341,6 +341,8 @@ def main(argv: list[str] | None = None) -> int:
             tick = run_tick(project=args.project, worker=args.worker, source=args.source, note=args.note, execution=execution, validation=validation)
         except ValueError as exc:
             return fail("E_TICK_FAILED", str(exc))
+        except Exception as exc:
+            return fail("E_TICK_FAILED", str(exc))
         if not tick:
             print("tick=(none)")
             return 1
@@ -368,6 +370,8 @@ def main(argv: list[str] | None = None) -> int:
                 continue_on_retry=args.continue_on_retry,
             )
         except ValueError as exc:
+            return fail("E_LOOP_FAILED", str(exc))
+        except Exception as exc:
             return fail("E_LOOP_FAILED", str(exc))
         if not ticks:
             print("loop=(none)")
