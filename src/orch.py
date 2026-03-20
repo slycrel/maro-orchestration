@@ -7,6 +7,7 @@ import json
 import os
 import re
 import time
+import uuid
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Iterable, List, Optional, Tuple
@@ -40,6 +41,22 @@ class ProjectStatus:
     next_item: Optional[NextItem]
 
 
+@dataclass
+class RunRecord:
+    run_id: str
+    project: str
+    index: int
+    text: str
+    status: str
+    source: str
+    worker: str
+    started_at: str
+    updated_at: str
+    finished_at: Optional[str] = None
+    note: Optional[str] = None
+    artifact_path: Optional[str] = None
+
+
 def ws_root() -> Path:
     env_root = os.environ.get("OPENCLAW_WORKSPACE") or os.environ.get("WORKSPACE_ROOT")
     if env_root:
@@ -53,6 +70,22 @@ def orch_root() -> Path:
 
 def projects_root() -> Path:
     return orch_root() / "projects"
+
+
+def output_root() -> Path:
+    p = orch_root() / "output"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def runs_root() -> Path:
+    p = output_root() / "runs"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def operator_status_path() -> Path:
+    return output_root() / "operator-status.json"
 
 
 def project_dir(slug: str) -> Path:
@@ -81,6 +114,10 @@ def priority_path(slug: str) -> Path:
 
 def now_utc_iso() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def new_run_id() -> str:
+    return f"run-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}-{uuid.uuid4().hex[:8]}"
 
 
 def list_projects() -> List[str]:
@@ -144,6 +181,14 @@ def mark_item(slug: str, item_index: int, new_state: str) -> None:
         raise ValueError(f"item_index {item_index} not found in NEXT.md for {slug}")
     lines[item.index] = re.sub(r"\[(.)\]", f"[{new_state}]", lines[item.index], count=1)
     write_next_lines(slug, lines)
+
+
+def get_item(slug: str, item_index: int) -> NextItem:
+    _lines, items = parse_next(slug)
+    item = next((it for it in items if it.index == item_index), None)
+    if item is None:
+        raise ValueError(f"item_index {item_index} not found in NEXT.md for {slug}")
+    return item
 
 
 def mark_first_todo_done(slug: str) -> Optional[NextItem]:
@@ -216,15 +261,26 @@ def list_blocked_projects() -> List[ProjectStatus]:
     return sorted(out, key=lambda s: (s.priority, s.blocked, s.slug), reverse=True)
 
 
-def append_decision(slug: str, lines: Iterable[str]) -> None:
-    dp = decisions_path(slug)
-    dp.parent.mkdir(parents=True, exist_ok=True)
-    if not dp.exists():
-        dp.write_text("# DECISIONS\n\n", encoding="utf-8")
+def append_section_lines(path: Path, heading: str, lines: Iterable[str]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not path.exists():
+        path.write_text(heading + "\n\n", encoding="utf-8")
     stamp = now_utc_iso()
     payload = ["", f"## {stamp}", *[f"- {ln}" for ln in lines]]
-    with dp.open("a", encoding="utf-8") as f:
+    with path.open("a", encoding="utf-8") as f:
         f.write("\n".join(payload) + "\n")
+
+
+def append_decision(slug: str, lines: Iterable[str]) -> None:
+    append_section_lines(decisions_path(slug), "# DECISIONS", lines)
+
+
+def append_risk(slug: str, lines: Iterable[str]) -> None:
+    append_section_lines(risks_path(slug), "# RISKS", lines)
+
+
+def append_provenance(slug: str, lines: Iterable[str]) -> None:
+    append_section_lines(provenance_path(slug), "# PROVENANCE", lines)
 
 
 def ensure_project(slug: str, mission: str, priority: int = 0) -> Path:
@@ -252,6 +308,116 @@ def ensure_project(slug: str, mission: str, priority: int = 0) -> Path:
         provenance_path(slug).write_text("# PROVENANCE\n\n- (links to key artifacts, datasets, runs)\n", encoding="utf-8")
     priority_path(slug).write_text(f"{priority}\n", encoding="utf-8")
     return pdir
+
+
+def _run_record_path(run_id: str) -> Path:
+    return runs_root() / f"{run_id}.json"
+
+
+def write_run_record(record: RunRecord) -> Path:
+    path = _run_record_path(record.run_id)
+    path.write_text(json.dumps(asdict(record), indent=2) + "\n", encoding="utf-8")
+    return path
+
+
+def load_run_record(run_id: str) -> RunRecord:
+    data = json.loads(_run_record_path(run_id).read_text(encoding="utf-8"))
+    return RunRecord(**data)
+
+
+def write_operator_status() -> dict:
+    statuses = [project_status(slug) for slug in list_projects()]
+    active = [s for s in statuses if s.doing > 0]
+    blocked = [s for s in statuses if s.blocked > 0]
+    next_sel = select_global_next()
+    payload = {
+        "generated_at": now_utc_iso(),
+        "project_count": len(statuses),
+        "active_projects": [s.slug for s in active],
+        "blocked_projects": [s.slug for s in blocked],
+        "queue": {
+            "todo": sum(s.todo for s in statuses),
+            "doing": sum(s.doing for s in statuses),
+            "blocked": sum(s.blocked for s in statuses),
+            "done": sum(s.done for s in statuses),
+        },
+        "next": {
+            "project": next_sel[0],
+            "index": next_sel[1].index,
+            "text": next_sel[1].text,
+        } if next_sel else None,
+    }
+    operator_status_path().write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    return payload
+
+
+def start_item(slug: str, item_index: Optional[int] = None, *, source: str = "manual", worker: str = "handle", note: Optional[str] = None) -> RunRecord:
+    if item_index is None:
+        item = select_next_item(slug)
+        if not item:
+            raise ValueError(f"no TODO item found for {slug}")
+    else:
+        item = get_item(slug, item_index)
+        if item.state != STATE_TODO:
+            raise ValueError(f"item_index {item_index} for {slug} is not TODO")
+    mark_item(slug, item.index, STATE_DOING)
+    started_at = now_utc_iso()
+    run = RunRecord(
+        run_id=new_run_id(),
+        project=slug,
+        index=item.index,
+        text=item.text,
+        status="running",
+        source=source,
+        worker=worker,
+        started_at=started_at,
+        updated_at=started_at,
+        note=note,
+    )
+    artifact = write_run_record(run)
+    run.artifact_path = str(artifact.relative_to(orch_root()))
+    artifact = write_run_record(run)
+    append_provenance(slug, [f"Started `{run.text}` via {source}/{worker} ({run.run_id}).", f"Artifact: `{run.artifact_path}`"])
+    write_operator_status()
+    return run
+
+
+def finalize_run(run_id: str, status: str, *, note: Optional[str] = None) -> RunRecord:
+    if status not in {"done", "blocked"}:
+        raise ValueError(f"unsupported final status: {status}")
+    run = load_run_record(run_id)
+    state = STATE_DONE if status == "done" else STATE_BLOCKED
+    current = get_item(run.project, run.index)
+    if current.state != STATE_DOING:
+        raise ValueError(f"cannot finalize {run_id}: item is not in progress")
+    mark_item(run.project, run.index, state)
+    now = now_utc_iso()
+    run.status = status
+    run.updated_at = now
+    run.finished_at = now
+    run.note = note or run.note
+    write_run_record(run)
+    if status == "done":
+        append_decision(run.project, [f"Completed `{run.text}` ({run.run_id}).", *( [run.note] if run.note else [] )])
+    else:
+        append_risk(run.project, [f"Blocked `{run.text}` ({run.run_id}).", *( [run.note] if run.note else [] )])
+    append_provenance(run.project, [f"Finalized `{run.text}` as {status} ({run.run_id}).", f"Artifact: `{run.artifact_path}`"])
+    write_operator_status()
+    return run
+
+
+def run_once(project: Optional[str] = None, *, worker: str = "handle", source: str = "run-once", note: Optional[str] = None) -> Optional[RunRecord]:
+    if project:
+        item = select_next_item(project)
+        if not item:
+            return None
+        return start_item(project, item.index, source=source, worker=worker, note=note)
+    selected = select_global_next()
+    if not selected:
+        write_operator_status()
+        return None
+    slug, item = selected
+    return start_item(slug, item.index, source=source, worker=worker, note=note)
 
 
 def status_report(project: Optional[str] = None) -> dict:

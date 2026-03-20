@@ -2,26 +2,50 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
 from orch import (
     append_decision,
     ensure_project,
+    finalize_run,
     list_blocked_projects,
+    load_run_record,
     mark_first_todo_done,
     mark_item,
+    operator_status_path,
     project_dir,
+    run_once,
     select_global_next,
     select_next_item,
+    start_item,
     status_report_json,
     status_report_markdown,
+    write_operator_status,
 )
 
 
 def fail(code: str, msg: str) -> int:
     print(f"ERROR[{code}] {msg}", file=sys.stderr)
     return 2
+
+
+def _print_run(prefix: str, run) -> None:
+    print(
+        " ".join(
+            [
+                prefix,
+                f"run_id={run.run_id}",
+                f"project={run.project}",
+                f"index={run.index}",
+                f"status={run.status}",
+                f"text={run.text}",
+                *( [f"artifact={run.artifact_path}"] if run.artifact_path else [] ),
+                *( [f"note={json.dumps(run.note)}"] if run.note else [] ),
+            ]
+        )
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -51,10 +75,34 @@ def main(argv: list[str] | None = None) -> int:
     p_report.add_argument("--format", choices=["md", "json"], default="md")
     p_report.add_argument("--out")
 
+    p_start = sub.add_parser("start", help="Claim the next TODO item and mark it in progress")
+    p_start.add_argument("--project")
+    p_start.add_argument("--index", type=int)
+    p_start.add_argument("--worker", default="handle")
+    p_start.add_argument("--source", default="manual")
+    p_start.add_argument("--note")
+
+    p_finish = sub.add_parser("finish", help="Finalize a running item")
+    p_finish.add_argument("run_id")
+    p_finish.add_argument("--status", choices=["done", "blocked"], default="done")
+    p_finish.add_argument("--note")
+
+    p_run = sub.add_parser("run", help="Run one orchestration cycle")
+    p_run.add_argument("--project")
+    p_run.add_argument("--worker", default="handle")
+    p_run.add_argument("--source", default="run-once")
+    p_run.add_argument("--note")
+    p_run.add_argument("--finish", choices=["done", "blocked"], help="Immediately finalize the claimed item")
+    p_run.add_argument("--finish-note")
+
+    p_status = sub.add_parser("status", help="Write/read operator status")
+    p_status.add_argument("--format", choices=["json", "path"], default="json")
+
     args = parser.parse_args(argv)
 
     if args.cmd == "init":
         p = ensure_project(args.slug, " ".join(args.mission), priority=args.priority)
+        write_operator_status()
         print(f"initialized={p}")
         return 0
 
@@ -86,9 +134,11 @@ def main(argv: list[str] | None = None) -> int:
             if not item:
                 print(f"project={args.project} updated=0")
                 return 1
+            write_operator_status()
             print(f"project={args.project} updated=1 index={item.index} text={item.text}")
             return 0
         mark_item(args.project, args.index, "x")
+        write_operator_status()
         print(f"project={args.project} updated=1 index={args.index}")
         return 0
 
@@ -117,6 +167,60 @@ def main(argv: list[str] | None = None) -> int:
             print(f"written={out}")
         else:
             print(content, end="")
+        return 0
+
+    if args.cmd == "start":
+        project = args.project
+        if args.index is not None and not project:
+            return fail("E_PROJECT_REQUIRED", "--index requires --project")
+        try:
+            if project:
+                if not project_dir(project).exists():
+                    return fail("E_PROJECT_NOT_FOUND", project)
+                run = start_item(project, args.index, source=args.source, worker=args.worker, note=args.note)
+            else:
+                run = run_once(worker=args.worker, source=args.source, note=args.note)
+                if not run:
+                    print("run=(none)")
+                    return 1
+        except ValueError as exc:
+            return fail("E_START_FAILED", str(exc))
+        _print_run("started", run)
+        return 0
+
+    if args.cmd == "finish":
+        try:
+            run = finalize_run(args.run_id, args.status, note=args.note)
+        except FileNotFoundError:
+            return fail("E_RUN_NOT_FOUND", args.run_id)
+        except ValueError as exc:
+            return fail("E_FINISH_FAILED", str(exc))
+        _print_run("finished", run)
+        return 0
+
+    if args.cmd == "run":
+        try:
+            run = run_once(project=args.project, worker=args.worker, source=args.source, note=args.note)
+        except ValueError as exc:
+            return fail("E_RUN_FAILED", str(exc))
+        if not run:
+            print("run=(none)")
+            return 1
+        _print_run("started", run)
+        if args.finish:
+            try:
+                run = finalize_run(run.run_id, args.finish, note=args.finish_note)
+            except ValueError as exc:
+                return fail("E_RUN_FINISH_FAILED", str(exc))
+            _print_run("finished", run)
+        return 0
+
+    if args.cmd == "status":
+        payload = write_operator_status()
+        if args.format == "path":
+            print(operator_status_path())
+        else:
+            print(json.dumps(payload, indent=2))
         return 0
 
     return fail("E_INTERNAL", "unknown command")

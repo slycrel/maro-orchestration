@@ -32,3 +32,32 @@ def test_global_next_prefers_priority_then_mtime(monkeypatch, tmp_path):
     slug, item = orch.select_global_next()
     assert slug == "high"
     assert item.text == "high"
+
+
+def test_start_and_finalize_run(monkeypatch, tmp_path):
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    _mkproj(tmp_path, "demo", "- [ ] first\n- [ ] second\n", priority=3)
+
+    run = orch.run_once("demo", worker="tester", source="unit")
+    assert run is not None
+    assert run.status == "running"
+    assert run.project == "demo"
+
+    item = orch.get_item("demo", run.index)
+    assert item.state == orch.STATE_DOING
+
+    status = orch.write_operator_status()
+    assert status["queue"]["doing"] == 1
+    assert status["next"]["project"] == "demo"
+
+    finished = orch.finalize_run(run.run_id, "done", note="unit verified")
+    assert finished.status == "done"
+    assert finished.note == "unit verified"
+    assert finished.finished_at is not None
+
+    item = orch.get_item("demo", run.index)
+    assert item.state == orch.STATE_DONE
+
+    status = orch.write_operator_status()
+    assert status["queue"]["doing"] == 0
+    assert status["queue"]["done"] == 1
