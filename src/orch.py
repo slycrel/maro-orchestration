@@ -12,6 +12,7 @@ import time
 import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+from shlex import quote
 from typing import Callable, Iterable, List, Optional, Tuple
 
 STATE_TODO = " "
@@ -113,7 +114,9 @@ class WorkerSessionSpec:
     command: str
     payload_name: str = "worker-payload.json"
     result_name: str = "worker-result.json"
+    working_directory: Optional[str] = None
     environment: dict = field(default_factory=dict)
+    timeout_seconds: Optional[float] = None
 
 
 def _ensure_nonempty_artifact_name(raw: object, default: str) -> str:
@@ -127,6 +130,21 @@ def _coerce_session_file_name(raw: object, *, default: str, field_name: str) -> 
     if path.is_absolute():
         raise ValueError(f"{field_name} must be a relative path: {value}")
     normalized = path.as_posix()
+    if any(part == ".." for part in normalized.split("/")):
+        raise ValueError(f"{field_name} must not contain path traversal: {value}")
+    return normalized
+
+
+def _coerce_session_directory_name(raw: object, *, field_name: str) -> Optional[str]:
+    value = _ensure_nonempty_artifact_name(raw, "")
+    if not value:
+        return None
+    path = Path(value)
+    if path.is_absolute():
+        raise ValueError(f"{field_name} must be a relative path: {value}")
+    normalized = path.as_posix().strip("/")
+    if not normalized or normalized == ".":
+        return None
     if any(part == ".." for part in normalized.split("/")):
         raise ValueError(f"{field_name} must not contain path traversal: {value}")
     return normalized
@@ -146,6 +164,20 @@ def _coerce_env_map(raw: object, *, worker: str) -> dict:
     return out
 
 
+def _coerce_positive_timeout(raw: object, *, field_name: str) -> Optional[float]:
+    if raw is None:
+        return None
+    if isinstance(raw, bool):
+        raise ValueError(f"{field_name} must be a positive number: {raw}")
+    try:
+        value = float(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field_name} must be a number: {raw}") from exc
+    if value <= 0:
+        raise ValueError(f"{field_name} must be greater than zero")
+    return value
+
+
 def _load_worker_session_manifest(path: Path) -> WorkerSessionSpec:
     data = json.loads(path.read_text(encoding="utf-8"))
     if isinstance(data, str):
@@ -156,7 +188,16 @@ def _load_worker_session_manifest(path: Path) -> WorkerSessionSpec:
     if not isinstance(data, dict):
         raise ValueError(f"invalid worker session manifest format in {path}")
 
-    command = str(data.get("command") or "").strip()
+    raw_command = data.get("command")
+    if raw_command is None:
+        raise ValueError(f"invalid worker session manifest format in {path}: missing 'command'")
+    if isinstance(raw_command, (list, tuple)):
+        command_parts = [str(part).strip() for part in raw_command]
+        if not command_parts or any(not part for part in command_parts):
+            raise ValueError(f"invalid worker session command in {path}")
+        command = " ".join(quote(part) for part in command_parts)
+    else:
+        command = str(raw_command).strip()
     if not command:
         raise ValueError(f"invalid worker session manifest format in {path}: missing 'command'")
 
@@ -170,13 +211,20 @@ def _load_worker_session_manifest(path: Path) -> WorkerSessionSpec:
         default="worker-result.json",
         field_name="result_name",
     )
+    working_directory = _coerce_session_directory_name(
+        data.get("working_directory") if "working_directory" in data else data.get("working_dir"),
+        field_name="working_directory",
+    )
     worker_name = path.stem if path.name else "worker_session"
     environment = _coerce_env_map(data.get("environment"), worker=worker_name)
+    timeout_seconds = _coerce_positive_timeout(data.get("timeout_seconds"), field_name="timeout_seconds")
     return WorkerSessionSpec(
         command=command,
         payload_name=payload_name,
         result_name=result_name,
+        working_directory=working_directory,
         environment=environment,
+        timeout_seconds=timeout_seconds,
     )
 
 
@@ -795,6 +843,18 @@ def _active_salvage_runs() -> List[dict]:
         salvage_path = orch_root() / artifact_path / "x-capture-salvage.json"
         if not salvage_path.exists():
             continue
+        first_kind = None
+        first_detail = None
+        try:
+            payload = json.loads(salvage_path.read_text(encoding="utf-8"))
+            if isinstance(payload, dict):
+                matches = payload.get("matches") or []
+                first = next((item for item in matches if isinstance(item, dict)), None)
+                if first:
+                    first_kind = first.get("kind")
+                    first_detail = first.get("detail")
+        except (OSError, json.JSONDecodeError):
+            pass
         out.append(
             {
                 "run_id": record.run_id,
@@ -802,6 +862,8 @@ def _active_salvage_runs() -> List[dict]:
                 "item": record.index,
                 "attempt": record.attempt,
                 "artifact_path": record.artifact_path,
+                "first_kind": first_kind,
+                "first_detail": first_detail,
             }
         )
     return out
@@ -860,7 +922,7 @@ def start_item(
         item = get_item(slug, item_index)
         if item.state == STATE_TODO:
             mark_item(slug, item.index, STATE_DOING)
-        elif item.state == STATE_DOING and allow_running:
+        elif item.state in {STATE_DOING, STATE_BLOCKED} and allow_running:
             pass
         else:
             raise ValueError(f"item_index {item_index} for {slug} is not TODO")
@@ -1028,12 +1090,14 @@ def worker_session_bridge(
         resolved_payload_name = spec.payload_name
     if spec.result_name:
         resolved_result_name = spec.result_name
+    resolved_timeout_seconds = timeout_seconds if timeout_seconds is not None else spec.timeout_seconds
 
     return session_execution_bridge(
         spec.command,
-        timeout_seconds=timeout_seconds,
+        timeout_seconds=resolved_timeout_seconds,
         payload_name=resolved_payload_name,
         result_name=resolved_result_name,
+        working_directory=spec.working_directory,
         extra_env=spec.environment,
     )
 
@@ -1044,6 +1108,7 @@ def session_execution_bridge(
     timeout_seconds: Optional[float] = None,
     payload_name: str = "session-payload.json",
     result_name: str = "session-result.json",
+    working_directory: Optional[str] = None,
     extra_env: Optional[dict] = None,
 ) -> ExecutionBridge:
     if not session_command or not session_command.strip():
@@ -1151,11 +1216,26 @@ def session_execution_bridge(
         if extra_env:
             env.update({str(k): str(v) for k, v in extra_env.items()})
 
+        cwd = orch_root()
+        if working_directory:
+            try:
+                resolved_working_directory = (orch_root() / working_directory).resolve()
+            except RuntimeError as exc:
+                raise ExecutionBridgeError(
+                    f"invalid worker working directory: {working_directory}: {exc}"
+                ) from exc
+            if not resolved_working_directory.exists():
+                raise ExecutionBridgeError(f"worker working directory does not exist: {resolved_working_directory}")
+            if not resolved_working_directory.is_dir():
+                raise ExecutionBridgeError(f"worker working directory must be a directory: {resolved_working_directory}")
+            cwd = resolved_working_directory
+            env["ORCH_SESSION_WORKING_DIR"] = str(resolved_working_directory)
+
         try:
             proc = subprocess.run(
                 session_command,
                 shell=True,
-                cwd=orch_root(),
+                cwd=cwd,
                 env=env,
                 capture_output=True,
                 text=True,
@@ -1479,6 +1559,11 @@ def review_command_validation_bridge(command: str, *, timeout_seconds: Optional[
             review_dir / "review.json",
             review_dir / "verdict.json",
         ]
+        for verdict_path in sorted(
+            {p for p in review_dir.glob("*.json") if p.is_file()}
+        ):
+            if verdict_path not in verdict_paths:
+                verdict_paths.append(verdict_path)
         for verdict_path in verdict_paths:
             if not verdict_path.exists():
                 continue
@@ -1652,6 +1737,7 @@ def run_loop(
     source: str = "loop",
     note: Optional[str] = None,
     max_runs: int = 10,
+    max_attempts_per_item: Optional[int] = None,
     execution: Optional[ExecutionBridge] = None,
     validation: Optional[ValidationBridge] = None,
     continue_on_retry: bool = False,
@@ -1659,6 +1745,8 @@ def run_loop(
 ) -> List[TickResult]:
     if max_runs <= 0:
         raise ValueError("max_runs must be greater than zero")
+    if max_attempts_per_item is not None and max_attempts_per_item <= 0:
+        raise ValueError("max_attempts_per_item must be greater than zero")
     out: List[TickResult] = []
     for _ in range(max_runs):
         tick = run_tick(
@@ -1672,11 +1760,34 @@ def run_loop(
         if not tick:
             break
         out.append(tick)
+        if (
+            max_attempts_per_item is not None
+            and tick.validation.status == "retry"
+            and tick.run.attempt >= max_attempts_per_item
+            and tick.run.status == "running"
+        ):
+            note = _merge_notes(
+                tick.validation.note,
+                f"max attempts reached for {tick.run.project}:{tick.run.index} ({tick.run.attempt}/{max_attempts_per_item})",
+            )
+            tick = TickResult(
+                run=finalize_run(tick.run.run_id, "blocked", note=note),
+                execution=tick.execution,
+                validation=ValidationResult(status="blocked", passed=False, note=note),
+            )
+            out[-1] = tick
+            break
         if tick.validation.status not in {"done", "blocked", "retry"}:
             break
         if tick.validation.status == "retry" and not continue_on_retry:
             break
         if tick.validation.status == "blocked" and not continue_on_blocked:
+            break
+        if (
+            max_attempts_per_item is not None
+            and tick.validation.status in {"retry", "blocked"}
+            and tick.run.attempt >= max_attempts_per_item
+        ):
             break
     return out
 

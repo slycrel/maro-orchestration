@@ -136,6 +136,20 @@ def test_validation_hook_can_block_or_retry(monkeypatch, tmp_path):
     assert still.status == "running"
 
 
+def test_run_once_can_resume_stale_running_item(monkeypatch, tmp_path):
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    _mkproj(tmp_path, "demo", "- [ ] first\n", priority=3)
+
+    first = orch.run_once("demo", worker="tester", source="unit")
+    assert first is not None
+    assert first.attempt == 1
+
+    resumed = orch.run_once("demo", worker="tester", source="unit")
+    assert resumed is not None
+    assert resumed.attempt == 2
+    assert resumed.index == first.index
+
+
 def test_run_loop_continue_on_retry_creates_new_attempts(monkeypatch, tmp_path):
     monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
     _mkproj(tmp_path, "demo", "- [ ] first\n", priority=3)
@@ -302,6 +316,63 @@ def test_worker_session_bridge_from_manifest_json(monkeypatch, tmp_path):
     assert not (artifact_root / "worker-result.json").exists()
 
 
+def test_worker_session_bridge_manifest_command_list(monkeypatch, tmp_path):
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    _mkproj(tmp_path, "demo", "- [ ] first\n", priority=3)
+
+    workers = tmp_path / "prototypes" / "poe-orchestration" / "workers"
+    workers.mkdir(parents=True)
+    manifest = workers / "list.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "command": ["bash", "-lc", 'printf "%s" "$ORCH_ITEM_TEXT" > "$ORCH_RUN_ARTIFACT_DIR/cmd.txt"'],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    tick = orch.run_tick(
+        "demo",
+        worker="list",
+        execution=orch.worker_session_bridge("list"),
+    )
+
+    assert tick is not None
+    assert tick.validation.status == "done"
+    assert tick.run.status == "done"
+    artifact_root = tmp_path / "prototypes" / "poe-orchestration" / tick.run.artifact_path
+    assert (artifact_root / "cmd.txt").read_text(encoding="utf-8") == "first"
+
+
+def test_worker_session_manifest_timeout_applies_without_cli_override(monkeypatch, tmp_path):
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    _mkproj(tmp_path, "demo", "- [ ] first\n", priority=3)
+
+    workers = tmp_path / "prototypes" / "poe-orchestration" / "workers"
+    workers.mkdir(parents=True)
+    manifest = workers / "slow.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "command": "sleep 1",
+                "timeout_seconds": 0.01,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    tick = orch.run_tick(
+        "demo",
+        worker="slow",
+        execution=orch.worker_session_bridge("slow"),
+    )
+
+    assert tick is not None
+    assert tick.validation.status == "blocked"
+    assert tick.run.status == "blocked"
+
+
 def test_worker_session_bridge_manifest_supports_nested_artifacts_and_env(monkeypatch, tmp_path):
     monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
     _mkproj(tmp_path, "demo", "- [ ] first\n", priority=3)
@@ -338,6 +409,38 @@ def test_worker_session_bridge_manifest_supports_nested_artifacts_and_env(monkey
     artifact_root = tmp_path / "prototypes" / "poe-orchestration" / tick.run.artifact_path
     assert (artifact_root / "nested" / "payload.json").exists()
     assert (artifact_root / "nested" / "result.json").exists()
+
+
+def test_worker_session_bridge_supports_working_directory(monkeypatch, tmp_path):
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    _mkproj(tmp_path, "demo", "- [ ] first\n", priority=3)
+
+    workers = tmp_path / "prototypes" / "poe-orchestration" / "workers"
+    worker_dir = workers / "worker-dir"
+    worker_dir.mkdir(parents=True, exist_ok=True)
+    manifest = worker_dir / "runner.json"
+    manifest.write_text(
+        json.dumps(
+                {
+                    "command": 'printf "%s" "$ORCH_SESSION_WORKING_DIR" > "$ORCH_RUN_ARTIFACT_DIR/working_directory.txt"',
+                    "working_directory": "workers/worker-dir",
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    tick = orch.run_tick(
+        "demo",
+        worker="runner",
+        execution=orch.worker_session_bridge(str(manifest)),
+    )
+
+    assert tick is not None
+    assert tick.validation.status == "done"
+    assert tick.run.status == "done"
+    artifact_root = tmp_path / "prototypes" / "poe-orchestration" / tick.run.artifact_path
+    expected = str(worker_dir)
+    assert (artifact_root / "working_directory.txt").read_text(encoding="utf-8") == expected
 
 
 def test_worker_session_bridge_errors_when_missing(monkeypatch, tmp_path):
@@ -427,6 +530,50 @@ def test_run_loop_continue_on_blocked_when_enabled(monkeypatch, tmp_path):
     assert loop[1].validation.status == "done"
 
 
+def test_run_loop_respects_max_attempts_per_item(monkeypatch, tmp_path):
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    _mkproj(tmp_path, "demo", "- [ ] first\n", priority=3)
+
+    def validator(run, _execution):
+        if run.attempt < 3:
+            return orch.ValidationResult(status="retry", passed=False, note=f"retry {run.attempt}")
+        return orch.ValidationResult(status="done", passed=True, note="ok")
+
+    loop = orch.run_loop(
+        "demo",
+        worker="tester",
+        execution=lambda run: orch.ExecutionResult(status="done", note="ok"),
+        validation=validator,
+        max_runs=10,
+        continue_on_retry=True,
+        max_attempts_per_item=2,
+    )
+
+    assert len(loop) == 2
+    assert loop[-1].run.attempt == 2
+    assert loop[-1].validation.status == "blocked"
+    assert loop[-1].run.status == "blocked"
+
+
+def test_review_command_validation_bridge_parses_any_json_artifact(monkeypatch, tmp_path):
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    _mkproj(tmp_path, "demo", "- [ ] first\n", priority=3)
+
+    tick = orch.run_tick(
+        "demo",
+        worker="tester",
+        execution=orch.command_execution_bridge('printf ok > "$ORCH_RUN_ARTIFACT_DIR/result.txt"'),
+        validation=orch.review_command_validation_bridge(
+            'printf \'{"status":"retry","note":"custom verdict"}\' > "$ORCH_REVIEW_ARTIFACT_DIR/loop.json"',
+            timeout_seconds=2,
+        ),
+    )
+
+    assert tick is not None
+    assert tick.validation.status == "retry"
+    assert "custom verdict" in (tick.validation.note or "")
+
+
 def test_run_once_rejects_missing_project(monkeypatch, tmp_path):
     monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
 
@@ -475,6 +622,7 @@ def test_operator_status_tracks_active_x_capture_salvage(monkeypatch, tmp_path):
     status = orch.write_operator_status()
     assert status["salvage"]["active_count"] == 1
     assert status["salvage"]["active_runs"][0]["run_id"] == tick.run.run_id
+    assert status["salvage"]["active_runs"][0]["first_kind"] == "auth"
 
 
 def test_command_execution_bridge_success(monkeypatch, tmp_path):

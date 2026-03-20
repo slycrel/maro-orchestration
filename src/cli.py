@@ -65,8 +65,9 @@ def _build_validation(args):
         bridges.append(artifact_validation_bridge(args.require_artifact, nonempty=args.require_nonempty))
     if getattr(args, "review_cmd", None):
         bridges.append(review_command_validation_bridge(args.review_cmd))
-    if (getattr(args, "session_cmd", None) or getattr(args, "worker_session", None)) and not getattr(
-        args, "disable_x_capture", False
+    if (
+        (getattr(args, "exec_cmd", None) or getattr(args, "session_cmd", None) or getattr(args, "worker_session", None))
+        and not getattr(args, "disable_x_capture", False)
     ):
         bridges.append(x_capture_salvage_validation_bridge())
     if not bridges:
@@ -179,6 +180,11 @@ def main(argv: list[str] | None = None) -> int:
     p_loop.add_argument("--review-cmd", help="Shell command reviewer run after execution succeeds")
     p_loop.add_argument("--continue-on-retry", action="store_true", help="Continue loop when validation status is retry")
     p_loop.add_argument("--continue-on-blocked", action="store_true", help="Continue loop when validation status is blocked")
+    p_loop.add_argument(
+        "--max-attempts-per-item",
+        type=int,
+        help="Maximum attempts per item before stopping non-done statuses",
+    )
 
     p_status = sub.add_parser("status", help="Write/read operator status")
     p_status.add_argument("--format", choices=["json", "path"], default="json")
@@ -370,6 +376,7 @@ def main(argv: list[str] | None = None) -> int:
                 validation=validation,
                 continue_on_retry=args.continue_on_retry,
                 continue_on_blocked=args.continue_on_blocked,
+                max_attempts_per_item=args.max_attempts_per_item,
             )
         except ValueError as exc:
             return fail("E_LOOP_FAILED", str(exc))

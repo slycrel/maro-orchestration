@@ -130,6 +130,21 @@ def test_cli_tick_exec_cmd(tmp_path):
     assert (run_dirs[0] / "project.txt").read_text(encoding="utf-8") == "demo"
 
 
+def test_cli_tick_exec_cmd_x_capture(tmp_path):
+    r = _run(tmp_path, "init", "demo", "Exec", "capture", "--priority", "1")
+    assert r.returncode == 0
+    r = _run(
+        tmp_path,
+        "tick",
+        "--project",
+        "demo",
+        "--exec-cmd",
+        'printf "%s" "this page isn\'t working" >&2',
+    )
+    assert r.returncode == 0
+    assert "execution=done validation=retry" in r.stdout
+
+
 
 def test_cli_tick_session_cmd(tmp_path):
     r = _run(tmp_path, "init", "demo", "Session", "bridge", "--priority", "1")
