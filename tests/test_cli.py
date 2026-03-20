@@ -67,3 +67,24 @@ def test_cli_plan_and_loop(tmp_path):
     r = _run(tmp_path, "loop", "--project", "demo", "--max-runs", "3", "--source", "cli-loop", "--worker", "director")
     assert r.returncode == 0
     assert "runs=" in r.stdout
+
+
+
+def test_cli_tick_exec_cmd(tmp_path):
+    r = _run(tmp_path, "init", "demo", "Exec", "bridge", "--priority", "1")
+    assert r.returncode == 0
+    r = _run(
+        tmp_path,
+        "tick",
+        "--project",
+        "demo",
+        "--exec-cmd",
+        'printf "%s" "$ORCH_PROJECT" > "$ORCH_RUN_ARTIFACT_DIR/project.txt"',
+    )
+    assert r.returncode == 0
+    assert "execution=done validation=done" in r.stdout
+
+    runs_dir = tmp_path / "prototypes" / "poe-orchestration" / "output" / "runs"
+    run_dirs = [p for p in runs_dir.iterdir() if p.is_dir()]
+    assert len(run_dirs) == 1
+    assert (run_dirs[0] / "project.txt").read_text(encoding="utf-8") == "demo"

@@ -39,6 +39,7 @@ cd prototypes/poe-orchestration
 python3 src/cli.py init demo "Ship demo flow" --priority 3
 python3 src/cli.py run --project demo --worker handle --source manual
 python3 src/cli.py finish <run_id> --status done --note "verified"
+python3 src/cli.py tick --project demo --exec-cmd 'printf "%s\n" "$ORCH_ITEM_TEXT" > "$ORCH_RUN_ARTIFACT_DIR/item.txt"'
 python3 src/cli.py status
 python3 src/cli.py report --project demo
 ```
@@ -60,6 +61,8 @@ orch next [--project <slug>]
 orch start [--project <slug>] [--index N] [--worker NAME] [--source NAME] [--note TEXT]
 orch finish <run_id> [--status done|blocked] [--note TEXT]
 orch run [--project <slug>] [--worker NAME] [--source NAME] [--note TEXT] [--finish done|blocked] [--finish-note TEXT]
+orch tick [--project <slug>] [--worker NAME] [--source NAME] [--note TEXT] [--exec-cmd 'shell command']
+orch loop [--project <slug>] [--worker NAME] [--source NAME] [--note TEXT] [--max-runs N] [--exec-cmd 'shell command']
 orch done <project> [--index N]
 orch blocked
 orch log <project> <message...>
@@ -73,7 +76,7 @@ orch report [--project <slug>] [--format md|json] [--out PATH]
 - no validator pass beyond state transition integrity
 - no OpenClaw queue adapter yet
 - no real NOW vs AGENDA routing yet
-- no worker execution backend yet; runs are orchestration records, not remote agents
+- no remote/session worker backend yet; execution can now bridge to local shell commands, but not OpenClaw sessions or external agents
 
 ## Docs
 

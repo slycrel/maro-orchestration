@@ -132,3 +132,39 @@ def test_validation_hook_can_block_or_retry(monkeypatch, tmp_path):
     assert loop[0].validation.status == "retry"
     still = orch.load_run_record(loop[0].run.run_id)
     assert still.status == "running"
+
+
+def test_command_execution_bridge_success(monkeypatch, tmp_path):
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    _mkproj(tmp_path, "demo", "- [ ] first\n", priority=3)
+
+    tick = orch.run_tick(
+        "demo",
+        worker="tester",
+        execution=orch.command_execution_bridge('printf "%s" "$ORCH_ITEM_TEXT" > "$ORCH_RUN_ARTIFACT_DIR/result.txt"'),
+    )
+
+    assert tick is not None
+    assert tick.validation.status == "done"
+    assert tick.run.status == "done"
+    artifact_dir = tmp_path / "prototypes" / "poe-orchestration" / tick.run.artifact_path
+    assert (artifact_dir / "result.txt").read_text(encoding="utf-8") == "first"
+    assert (artifact_dir / "stdout.log").exists()
+    assert (artifact_dir / "stderr.log").exists()
+
+
+
+def test_command_execution_bridge_failure_blocks(monkeypatch, tmp_path):
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    _mkproj(tmp_path, "demo", "- [ ] first\n", priority=3)
+
+    tick = orch.run_tick(
+        "demo",
+        worker="tester",
+        execution=orch.command_execution_bridge('echo nope >&2; exit 7'),
+    )
+
+    assert tick is not None
+    assert tick.validation.status == "blocked"
+    assert tick.run.status == "blocked"
+    assert "command failed (7)" in (tick.run.note or "")

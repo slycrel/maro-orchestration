@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import subprocess
 import time
 import uuid
 from dataclasses import asdict, dataclass
@@ -89,6 +90,10 @@ class PlanResult:
 
 ExecutionBridge = Callable[[RunRecord], ExecutionResult]
 ValidationBridge = Callable[[RunRecord, ExecutionResult], ValidationResult]
+
+
+class ExecutionBridgeError(RuntimeError):
+    """Raised when a concrete execution backend fails."""
 
 
 def ws_root() -> Path:
@@ -500,6 +505,56 @@ def run_once(project: Optional[str] = None, *, worker: str = "handle", source: s
     return start_item(slug, item.index, source=source, worker=worker, note=note)
 
 
+def command_execution_bridge(command: str) -> ExecutionBridge:
+    if not command or not command.strip():
+        raise ValueError("command cannot be empty")
+
+    def _execute(run: RunRecord) -> ExecutionResult:
+        artifact_dir = runs_root() / run.run_id
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+        stdout_path = artifact_dir / "stdout.log"
+        stderr_path = artifact_dir / "stderr.log"
+
+        env = os.environ.copy()
+        env.update(
+            {
+                "ORCH_RUN_ID": run.run_id,
+                "ORCH_PROJECT": run.project,
+                "ORCH_ITEM_INDEX": str(run.index),
+                "ORCH_ITEM_TEXT": run.text,
+                "ORCH_WORKER": run.worker,
+                "ORCH_SOURCE": run.source,
+                "ORCH_ROOT": str(orch_root()),
+                "ORCH_RUN_ARTIFACT_DIR": str(artifact_dir),
+            }
+        )
+
+        proc = subprocess.run(
+            command,
+            shell=True,
+            cwd=orch_root(),
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        stdout_path.write_text(proc.stdout or "", encoding="utf-8")
+        stderr_path.write_text(proc.stderr or "", encoding="utf-8")
+
+        artifact_path = str(artifact_dir.relative_to(orch_root()))
+        if proc.returncode == 0:
+            note = f"command succeeded: {command}"
+            if proc.stdout.strip():
+                note = f"{note}; stdout={proc.stdout.strip().splitlines()[-1]}"
+            return ExecutionResult(status="done", note=note, artifact_path=artifact_path)
+
+        note = f"command failed ({proc.returncode}): {command}"
+        if proc.stderr.strip():
+            note = f"{note}; stderr={proc.stderr.strip().splitlines()[-1]}"
+        raise ExecutionBridgeError(note)
+
+    return _execute
+
+
 def _default_execution_bridge(run: RunRecord) -> ExecutionResult:
     return ExecutionResult(
         status="done",
@@ -541,7 +596,10 @@ def run_tick(
 
     execute = execution or _default_execution_bridge
     validate = validation or _default_validation_bridge
-    outcome = execute(run)
+    try:
+        outcome = execute(run)
+    except ExecutionBridgeError as exc:
+        outcome = ExecutionResult(status="blocked", note=str(exc), artifact_path=run.artifact_path)
     result = validate(run, outcome)
 
     update_note = _merge_notes(run.note, outcome.note)
