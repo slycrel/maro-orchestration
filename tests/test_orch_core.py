@@ -485,6 +485,41 @@ def test_chain_validation_bridge_blocks_done_without_pass(monkeypatch, tmp_path)
     assert result.passed is False
 
 
+def test_run_tick_blocks_validation_done_without_pass(monkeypatch, tmp_path):
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    _mkproj(tmp_path, "demo", "- [ ] first\n", priority=3)
+
+    tick = orch.run_tick(
+        "demo",
+        worker="tester",
+        execution=orch.command_execution_bridge("true"),
+        validation=lambda _run, _execution: orch.ValidationResult(status="done", passed=False, note="reviewer failed"),
+    )
+
+    assert tick is not None
+    assert tick.validation.status == "blocked"
+    assert tick.run.status == "blocked"
+
+
+def test_review_command_validation_payload_can_report_done_not_passed(monkeypatch, tmp_path):
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    _mkproj(tmp_path, "demo", "- [ ] first\n", priority=3)
+
+    tick = orch.run_tick(
+        "demo",
+        worker="tester",
+        execution=orch.command_execution_bridge('printf ok > "$ORCH_RUN_ARTIFACT_DIR/result.txt"'),
+        validation=orch.review_command_validation_bridge(
+            'printf \'{"status":"done","passed":false,"note":"policy fail"}\' > "$ORCH_REVIEW_ARTIFACT_DIR/decision.json"',
+        ),
+    )
+
+    assert tick is not None
+    assert tick.validation.status == "blocked"
+    assert tick.run.status == "blocked"
+    assert "policy fail" in (tick.validation.note or "")
+
+
 def test_run_loop_stops_on_blocked_by_default(monkeypatch, tmp_path):
     monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
     _mkproj(tmp_path, "demo", "- [ ] first\n- [ ] second\n", priority=3)

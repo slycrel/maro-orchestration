@@ -330,7 +330,16 @@ def _coerce_validation_payload(raw: dict, *, run: RunRecord, execution: Executio
         note_text = note.strip()
     else:
         note_text = f"review result for {run.run_id}"
-    passed = status == "done"
+
+    passed: bool
+    if "passed" in raw:
+        passed_raw = raw.get("passed")
+        if not isinstance(passed_raw, bool):
+            raise ValueError("review payload field 'passed' must be a boolean")
+        passed = passed_raw
+    else:
+        passed = status == "done"
+
     return ValidationResult(status=status, passed=passed, note=note_text)
 
 
@@ -1711,6 +1720,12 @@ def run_tick(
         result = ValidationResult(status="blocked", passed=False, note=f"validation failed: {exc}")
     if result.status not in RUN_OUTCOMES:
         result = ValidationResult(status="blocked", passed=False, note=f"invalid validation status: {result.status}")
+    if result.status == "done" and not result.passed:
+        result = ValidationResult(
+            status="blocked",
+            passed=False,
+            note=result.note or "validation reported unsuccessful result",
+        )
 
     if outcome.artifact_path:
         run.artifact_path = outcome.artifact_path
