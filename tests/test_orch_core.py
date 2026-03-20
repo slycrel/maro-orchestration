@@ -101,3 +101,34 @@ def test_run_tick_and_run_loop(monkeypatch, tmp_path):
     _, items = orch.parse_next("demo")
     assert items[0].state == orch.STATE_DONE
     assert items[1].state == orch.STATE_DONE
+
+
+def test_validation_hook_can_block_or_retry(monkeypatch, tmp_path):
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    _mkproj(tmp_path, "demo", "- [ ] first\n- [ ] second\n", priority=3)
+
+    tick = orch.run_tick(
+        "demo",
+        worker="tester",
+        execution=lambda run: orch.ExecutionResult(status="blocked", note="blocked by policy"),
+        validation=lambda run, execution: orch.ValidationResult(
+            status="blocked",
+            passed=False,
+            note=execution.note,
+        ),
+    )
+    assert tick is not None
+    assert tick.validation.status == "blocked"
+    assert tick.run.status == "blocked"
+
+    loop = orch.run_loop(
+        "demo",
+        worker="tester",
+        execution=lambda run: orch.ExecutionResult(status="retry", note="retry later"),
+        validation=lambda run, execution: orch.ValidationResult(status="retry", passed=False, note=execution.note),
+        max_runs=3,
+    )
+    assert len(loop) == 1
+    assert loop[0].validation.status == "retry"
+    still = orch.load_run_record(loop[0].run.run_id)
+    assert still.status == "running"
