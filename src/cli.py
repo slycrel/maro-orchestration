@@ -14,6 +14,7 @@ from orch import (
     ensure_project,
     finalize_run,
     load_run_record,
+    load_validation_summary,
     list_blocked_projects,
     review_command_validation_bridge,
     run_loop,
@@ -106,6 +107,10 @@ def main(argv: list[str] | None = None) -> int:
     p_finish.add_argument("run_id")
     p_finish.add_argument("--status", choices=["done", "blocked"], default="done")
     p_finish.add_argument("--note")
+
+    p_inspect = sub.add_parser("inspect-run", help="Show run record and validation summary")
+    p_inspect.add_argument("run_id")
+    p_inspect.add_argument("--format", choices=["json", "text"], default="text")
 
     p_run = sub.add_parser("run", help="Run one orchestration cycle")
     p_run.add_argument("--project")
@@ -242,6 +247,30 @@ def main(argv: list[str] | None = None) -> int:
         except ValueError as exc:
             return fail("E_FINISH_FAILED", str(exc))
         _print_run("finished", run)
+        return 0
+
+    if args.cmd == "inspect-run":
+        try:
+            run = load_run_record(args.run_id)
+            summary = load_validation_summary(args.run_id)
+        except FileNotFoundError:
+            return fail("E_RUN_NOT_FOUND", args.run_id)
+        payload = {"run": json.loads(json.dumps(run, default=lambda o: o.__dict__)), "validation_summary": summary}
+        if args.format == "json":
+            print(json.dumps(payload, indent=2))
+        else:
+            print(f"run_id={run.run_id}")
+            print(f"project={run.project}")
+            print(f"index={run.index}")
+            print(f"status={run.status}")
+            print(f"text={run.text}")
+            if run.artifact_path:
+                print(f"artifact={run.artifact_path}")
+            if run.note:
+                print(f"note={run.note}")
+            if summary:
+                print(f"validation_status={summary['validation']['status']}")
+                print(f"validation_passed={summary['validation']['passed']}")
         return 0
 
     if args.cmd == "run":

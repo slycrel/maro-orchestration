@@ -410,6 +410,21 @@ def load_run_record(run_id: str) -> RunRecord:
     return RunRecord(**data)
 
 
+def validation_summary_path(run: RunRecord) -> Optional[Path]:
+    if not run.artifact_path:
+        return None
+    path = orch_root() / run.artifact_path / "validation-summary.json"
+    return path if path.exists() else None
+
+
+def load_validation_summary(run_id: str) -> Optional[dict]:
+    run = load_run_record(run_id)
+    path = validation_summary_path(run)
+    if not path:
+        return None
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
 def write_operator_status() -> dict:
     statuses = [project_status(slug) for slug in list_projects()]
     active = [s for s in statuses if s.doing > 0]

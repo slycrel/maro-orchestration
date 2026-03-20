@@ -29,6 +29,7 @@ This is no longer just a checklist helper. It now has the beginnings of a real o
 - transition task state through `todo -> doing -> done|blocked`
 - leave an artifact trail the next session can inspect
 - emit operator status for heartbeat / dashboards / external control loops
+- inspect a run and its validation evidence directly from the CLI
 
 It is still a first pass. The actual autonomous planner/validator loop comes next.
 
@@ -60,6 +61,7 @@ orch init <slug> <mission...> [--priority N]
 orch next [--project <slug>]
 orch start [--project <slug>] [--index N] [--worker NAME] [--source NAME] [--note TEXT]
 orch finish <run_id> [--status done|blocked] [--note TEXT]
+orch inspect-run <run_id> [--format text|json]
 orch run [--project <slug>] [--worker NAME] [--source NAME] [--note TEXT] [--finish done|blocked] [--finish-note TEXT]
 orch tick [--project <slug>] [--worker NAME] [--source NAME] [--note TEXT] [--exec-cmd 'shell command'] [--require-artifact PATH] [--require-nonempty] [--review-cmd 'shell command']
 orch loop [--project <slug>] [--worker NAME] [--source NAME] [--note TEXT] [--max-runs N] [--exec-cmd 'shell command'] [--require-artifact PATH] [--require-nonempty] [--review-cmd 'shell command']

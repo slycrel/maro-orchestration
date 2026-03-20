@@ -160,3 +160,32 @@ def test_cli_smoke_script(tmp_path):
     assert r.returncode == 0
     assert "smoke=ok" in r.stdout
     assert "tick_run_id=" in r.stdout
+
+
+
+def test_cli_inspect_run(tmp_path):
+    r = _run(tmp_path, "init", "demo", "Inspect", "run", "--priority", "1")
+    assert r.returncode == 0
+    r = _run(
+        tmp_path,
+        "tick",
+        "--project",
+        "demo",
+        "--exec-cmd",
+        'printf ok > "$ORCH_RUN_ARTIFACT_DIR/result.txt"',
+        "--require-artifact",
+        "result.txt",
+        "--require-nonempty",
+    )
+    assert r.returncode == 0
+    run_id = next(part.split("=", 1)[1] for part in r.stdout.split() if part.startswith("run_id="))
+
+    text_view = _run(tmp_path, "inspect-run", run_id)
+    assert text_view.returncode == 0
+    assert "validation_status=done" in text_view.stdout
+
+    json_view = _run(tmp_path, "inspect-run", run_id, "--format", "json")
+    assert json_view.returncode == 0
+    payload = json.loads(json_view.stdout)
+    assert payload["run"]["run_id"] == run_id
+    assert payload["validation_summary"]["validation"]["status"] == "done"
