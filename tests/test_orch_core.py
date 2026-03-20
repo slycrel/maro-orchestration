@@ -155,6 +155,9 @@ def test_command_execution_bridge_success(monkeypatch, tmp_path):
     assert summary.exists()
     assert '"status": "done"' in summary.read_text(encoding="utf-8")
 
+    prov = tmp_path / "prototypes" / "poe-orchestration" / "projects" / "demo" / "PROVENANCE.md"
+    assert "validation-summary.json" in prov.read_text(encoding="utf-8")
+
 
 
 def test_command_execution_bridge_failure_blocks(monkeypatch, tmp_path):

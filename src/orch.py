@@ -486,7 +486,14 @@ def finalize_run(run_id: str, status: str, *, note: Optional[str] = None) -> Run
         append_decision(run.project, [f"Completed `{run.text}` ({run.run_id}).", *( [run.note] if run.note else [] )])
     else:
         append_risk(run.project, [f"Blocked `{run.text}` ({run.run_id}).", *( [run.note] if run.note else [] )])
-    append_provenance(run.project, [f"Finalized `{run.text}` as {status} ({run.run_id}).", f"Artifact: `{run.artifact_path}`"])
+
+    provenance_lines = [f"Finalized `{run.text}` as {status} ({run.run_id}).", f"Artifact: `{run.artifact_path}`"]
+    if run.artifact_path:
+        artifact_root = orch_root() / run.artifact_path
+        validation_summary = artifact_root / "validation-summary.json"
+        if validation_summary.exists():
+            provenance_lines.append(f"Validation: `{validation_summary.relative_to(orch_root())}`")
+    append_provenance(run.project, provenance_lines)
     write_operator_status()
     return run
 

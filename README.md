@@ -10,7 +10,7 @@ File-first orchestration with a stable CLI, durable run artifacts, and operator-
   - `orch start`
   - `orch finish`
   - `orch run`
-- durable run artifacts under `output/runs/` (including execution logs, review artifacts, and `validation-summary.json`)
+- durable run artifacts under `output/runs/` (including execution logs, review artifacts, and `validation-summary.json`, with provenance links on finalize)
 - operator status snapshot under `output/operator-status.json`
 - auditable project journals:
   - `DECISIONS.md`
