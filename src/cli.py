@@ -9,11 +9,13 @@ from pathlib import Path
 from orch import (
     append_decision,
     artifact_validation_bridge,
+    chain_validation_bridges,
     command_execution_bridge,
     ensure_project,
     finalize_run,
     load_run_record,
     list_blocked_projects,
+    review_command_validation_bridge,
     run_loop,
     mark_first_todo_done,
     mark_item,
@@ -51,6 +53,19 @@ def _print_run(prefix: str, run) -> None:
             ]
         )
     )
+
+
+def _build_validation(args):
+    bridges = []
+    if args.require_artifact:
+        bridges.append(artifact_validation_bridge(args.require_artifact, nonempty=args.require_nonempty))
+    if getattr(args, "review_cmd", None):
+        bridges.append(review_command_validation_bridge(args.review_cmd))
+    if not bridges:
+        return None
+    if len(bridges) == 1:
+        return bridges[0]
+    return chain_validation_bridges(*bridges)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -113,6 +128,7 @@ def main(argv: list[str] | None = None) -> int:
     p_tick.add_argument("--exec-cmd", help="Shell command execution bridge for the claimed task")
     p_tick.add_argument("--require-artifact", action="append", default=[], help="Artifact path relative to the run artifact dir that must exist")
     p_tick.add_argument("--require-nonempty", action="store_true", help="Require listed artifacts to be non-empty files")
+    p_tick.add_argument("--review-cmd", help="Shell command reviewer run after execution succeeds")
 
     p_loop = sub.add_parser("loop", help="Run a bounded automation loop")
     p_loop.add_argument("--project")
@@ -123,6 +139,7 @@ def main(argv: list[str] | None = None) -> int:
     p_loop.add_argument("--exec-cmd", help="Shell command execution bridge for each claimed task")
     p_loop.add_argument("--require-artifact", action="append", default=[], help="Artifact path relative to the run artifact dir that must exist")
     p_loop.add_argument("--require-nonempty", action="store_true", help="Require listed artifacts to be non-empty files")
+    p_loop.add_argument("--review-cmd", help="Shell command reviewer run after execution succeeds")
 
     p_status = sub.add_parser("status", help="Write/read operator status")
     p_status.add_argument("--format", choices=["json", "path"], default="json")
@@ -254,7 +271,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.cmd == "tick":
         execution = command_execution_bridge(args.exec_cmd) if args.exec_cmd else None
-        validation = artifact_validation_bridge(args.require_artifact, nonempty=args.require_nonempty) if args.require_artifact else None
+        validation = _build_validation(args)
         try:
             tick = run_tick(project=args.project, worker=args.worker, source=args.source, note=args.note, execution=execution, validation=validation)
         except ValueError as exc:
@@ -270,7 +287,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.max_runs <= 0:
             return fail("E_LOOP_BAD_LIMIT", "max-runs must be greater than zero")
         execution = command_execution_bridge(args.exec_cmd) if args.exec_cmd else None
-        validation = artifact_validation_bridge(args.require_artifact, nonempty=args.require_nonempty) if args.require_artifact else None
+        validation = _build_validation(args)
         try:
             ticks = run_loop(project=args.project, worker=args.worker, source=args.source, note=args.note, max_runs=args.max_runs, execution=execution, validation=validation)
         except ValueError as exc:

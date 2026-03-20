@@ -203,3 +203,43 @@ def test_artifact_validation_bridge_blocks_missing_artifacts(monkeypatch, tmp_pa
     assert tick.validation.status == "blocked"
     assert tick.run.status == "blocked"
     assert "missing artifacts: result.txt" in (tick.run.note or "")
+
+
+
+def test_review_command_validation_bridge_passes(monkeypatch, tmp_path):
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    _mkproj(tmp_path, "demo", "- [ ] first\n", priority=3)
+
+    tick = orch.run_tick(
+        "demo",
+        worker="tester",
+        execution=orch.command_execution_bridge('printf ok > "$ORCH_RUN_ARTIFACT_DIR/result.txt"'),
+        validation=orch.review_command_validation_bridge('test -s "$ORCH_RUN_ARTIFACT_DIR/result.txt" && printf reviewed > "$ORCH_REVIEW_ARTIFACT_DIR/verdict.txt"'),
+    )
+
+    assert tick is not None
+    assert tick.validation.status == "done"
+    assert tick.run.status == "done"
+    review_dir = tmp_path / "prototypes" / "poe-orchestration" / tick.run.artifact_path / "review"
+    assert (review_dir / "verdict.txt").read_text(encoding="utf-8") == "reviewed"
+
+
+
+def test_chain_validation_bridge_stops_on_review_failure(monkeypatch, tmp_path):
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    _mkproj(tmp_path, "demo", "- [ ] first\n", priority=3)
+
+    tick = orch.run_tick(
+        "demo",
+        worker="tester",
+        execution=orch.command_execution_bridge('printf ok > "$ORCH_RUN_ARTIFACT_DIR/result.txt"'),
+        validation=orch.chain_validation_bridges(
+            orch.artifact_validation_bridge(["result.txt"], nonempty=True),
+            orch.review_command_validation_bridge('grep -q excellent "$ORCH_RUN_ARTIFACT_DIR/result.txt"'),
+        ),
+    )
+
+    assert tick is not None
+    assert tick.validation.status == "blocked"
+    assert tick.run.status == "blocked"
+    assert "review failed" in (tick.run.note or "")

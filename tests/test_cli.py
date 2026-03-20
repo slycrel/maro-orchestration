@@ -126,3 +126,26 @@ def test_cli_tick_require_artifact_blocks_missing(tmp_path):
     )
     assert r.returncode == 0
     assert "execution=done validation=blocked" in r.stdout
+
+
+
+def test_cli_tick_review_cmd(tmp_path):
+    r = _run(tmp_path, "init", "demo", "Reviewer", "bridge", "--priority", "1")
+    assert r.returncode == 0
+    r = _run(
+        tmp_path,
+        "tick",
+        "--project",
+        "demo",
+        "--exec-cmd",
+        'printf ok > "$ORCH_RUN_ARTIFACT_DIR/result.txt"',
+        "--review-cmd",
+        'test -s "$ORCH_RUN_ARTIFACT_DIR/result.txt" && printf pass > "$ORCH_REVIEW_ARTIFACT_DIR/verdict.txt"',
+    )
+    assert r.returncode == 0
+    assert "execution=done validation=done" in r.stdout
+
+    runs_dir = tmp_path / "prototypes" / "poe-orchestration" / "output" / "runs"
+    run_dirs = [p for p in runs_dir.iterdir() if p.is_dir()]
+    assert len(run_dirs) == 1
+    assert (run_dirs[0] / "review" / "verdict.txt").read_text(encoding="utf-8") == "pass"

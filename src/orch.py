@@ -606,6 +606,86 @@ def artifact_validation_bridge(required_paths: List[str], *, nonempty: bool = Fa
     return _validate
 
 
+def review_command_validation_bridge(command: str) -> ValidationBridge:
+    if not command or not command.strip():
+        raise ValueError("command cannot be empty")
+
+    def _validate(run: RunRecord, execution: ExecutionResult) -> ValidationResult:
+        status = execution.status.lower().strip()
+        if status not in RUN_OUTCOMES:
+            raise ValueError(f"invalid execution status: {execution.status}")
+        if status != "done":
+            return ValidationResult(
+                status=status,
+                passed=False,
+                note=execution.note or "execution did not complete successfully",
+            )
+
+        artifact_root = orch_root()
+        if execution.artifact_path:
+            artifact_root = orch_root() / execution.artifact_path
+        review_dir = artifact_root / "review"
+        review_dir.mkdir(parents=True, exist_ok=True)
+
+        env = os.environ.copy()
+        env.update(
+            {
+                "ORCH_RUN_ID": run.run_id,
+                "ORCH_PROJECT": run.project,
+                "ORCH_ITEM_INDEX": str(run.index),
+                "ORCH_ITEM_TEXT": run.text,
+                "ORCH_WORKER": run.worker,
+                "ORCH_SOURCE": run.source,
+                "ORCH_ROOT": str(orch_root()),
+                "ORCH_RUN_ARTIFACT_DIR": str(artifact_root),
+                "ORCH_REVIEW_ARTIFACT_DIR": str(review_dir),
+            }
+        )
+
+        proc = subprocess.run(
+            command,
+            shell=True,
+            cwd=orch_root(),
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        (review_dir / "stdout.log").write_text(proc.stdout or "", encoding="utf-8")
+        (review_dir / "stderr.log").write_text(proc.stderr or "", encoding="utf-8")
+        if proc.returncode == 0:
+            note = f"review passed: {command}"
+            if proc.stdout.strip():
+                note = f"{note}; stdout={proc.stdout.strip().splitlines()[-1]}"
+            return ValidationResult(status="done", passed=True, note=note)
+
+        note = f"review failed ({proc.returncode}): {command}"
+        if proc.stderr.strip():
+            note = f"{note}; stderr={proc.stderr.strip().splitlines()[-1]}"
+        return ValidationResult(status="blocked", passed=False, note=note)
+
+    return _validate
+
+
+def chain_validation_bridges(*bridges: ValidationBridge) -> ValidationBridge:
+    cleaned = [bridge for bridge in bridges if bridge is not None]
+    if not cleaned:
+        raise ValueError("at least one validation bridge is required")
+
+    def _validate(run: RunRecord, execution: ExecutionResult) -> ValidationResult:
+        notes = []
+        final_status = "done"
+        for bridge in cleaned:
+            result = bridge(run, execution)
+            if result.note:
+                notes.append(result.note)
+            final_status = result.status
+            if result.status != "done":
+                return ValidationResult(status=result.status, passed=result.passed, note="; ".join(notes) if notes else result.note)
+        return ValidationResult(status=final_status, passed=True, note="; ".join(notes) if notes else None)
+
+    return _validate
+
+
 def _default_validation_bridge(run: RunRecord, execution: ExecutionResult) -> ValidationResult:
     status = execution.status.lower().strip()
     if status not in RUN_OUTCOMES:

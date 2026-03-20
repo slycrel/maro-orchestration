@@ -61,8 +61,8 @@ orch next [--project <slug>]
 orch start [--project <slug>] [--index N] [--worker NAME] [--source NAME] [--note TEXT]
 orch finish <run_id> [--status done|blocked] [--note TEXT]
 orch run [--project <slug>] [--worker NAME] [--source NAME] [--note TEXT] [--finish done|blocked] [--finish-note TEXT]
-orch tick [--project <slug>] [--worker NAME] [--source NAME] [--note TEXT] [--exec-cmd 'shell command'] [--require-artifact PATH] [--require-nonempty]
-orch loop [--project <slug>] [--worker NAME] [--source NAME] [--note TEXT] [--max-runs N] [--exec-cmd 'shell command'] [--require-artifact PATH] [--require-nonempty]
+orch tick [--project <slug>] [--worker NAME] [--source NAME] [--note TEXT] [--exec-cmd 'shell command'] [--require-artifact PATH] [--require-nonempty] [--review-cmd 'shell command']
+orch loop [--project <slug>] [--worker NAME] [--source NAME] [--note TEXT] [--max-runs N] [--exec-cmd 'shell command'] [--require-artifact PATH] [--require-nonempty] [--review-cmd 'shell command']
 orch done <project> [--index N]
 orch blocked
 orch log <project> <message...>
@@ -73,7 +73,7 @@ orch report [--project <slug>] [--format md|json] [--out PATH]
 ## Current gaps
 
 - no planner / decomposition engine yet
-- validator can now enforce required run artifacts, but there is still no reviewer loop or semantic quality gate
+- validator can now enforce required artifacts and run a separate shell reviewer, but there is still no semantic/LLM review loop
 - no OpenClaw queue adapter yet
 - no real NOW vs AGENDA routing yet
 - no remote/session worker backend yet; execution can now bridge to local shell commands, but not OpenClaw sessions or external agents
