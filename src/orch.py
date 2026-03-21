@@ -13,7 +13,7 @@ import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from shlex import quote
-from typing import Callable, Iterable, List, Optional, Tuple
+from typing import Any, Callable, Iterable, List, Optional, Tuple
 
 STATE_TODO = " "
 STATE_DOING = "~"
@@ -107,6 +107,69 @@ ValidationBridge = Callable[[RunRecord, ExecutionResult], ValidationResult]
 
 class ExecutionBridgeError(RuntimeError):
     """Raised when a concrete execution backend fails."""
+
+
+def _validation_trace_event(
+    bridge_name: str,
+    *,
+    status: str,
+    passed: bool,
+    note: Optional[str] = None,
+    error: Optional[str] = None,
+) -> dict:
+    payload: dict[str, Any] = {
+        "bridge": bridge_name,
+        "status": status,
+        "passed": passed,
+    }
+    if note:
+        payload["note"] = note
+    if error:
+        payload["error"] = error
+    return payload
+
+
+def named_validation_bridge(name: str, bridge: ValidationBridge) -> ValidationBridge:
+    clean_name = str(name or "").strip()
+    if not clean_name:
+        raise ValueError("validation bridge name cannot be empty")
+
+    def _wrapped(run: RunRecord, execution: ExecutionResult) -> ValidationResult:
+        try:
+            result = bridge(run, execution)
+        except Exception as exc:
+            setattr(
+                _wrapped,
+                "_last_trace",
+                [
+                    _validation_trace_event(
+                        clean_name,
+                        status="blocked",
+                        passed=False,
+                        note=f"validation bridge failed: {exc}",
+                        error=type(exc).__name__,
+                    )
+                ],
+            )
+            raise
+
+        setattr(
+            _wrapped,
+            "_last_trace",
+            [
+                _validation_trace_event(
+                    clean_name,
+                    status=result.status,
+                    passed=result.passed,
+                    note=result.note,
+                )
+            ],
+        )
+        return result
+
+    setattr(_wrapped, "__orch_validation_name__", clean_name)
+    setattr(_wrapped, "_last_trace", [])
+    return _wrapped
 
 
 @dataclass(frozen=True)
@@ -377,6 +440,67 @@ def _resolve_review_artifact_root(run: RunRecord, artifact_path: Optional[str]) 
         return _run_artifact_root(run)
     relative = _coerce_artifact_path(artifact_path, default=str(_run_artifact_root(run).relative_to(orch_root())))
     return orch_root() / relative
+
+
+def _validation_bridge_name(bridge: ValidationBridge, fallback_index: int) -> str:
+    explicit = getattr(bridge, "__orch_validation_name__", None)
+    if isinstance(explicit, str) and explicit.strip():
+        return explicit.strip()
+
+    bridge_name = getattr(bridge, "__name__", None)
+    if isinstance(bridge_name, str) and bridge_name and bridge_name != "<lambda>":
+        return bridge_name
+    return f"bridge-{fallback_index}"
+
+
+def _salvage_match_kinds(run: RunRecord) -> List[str]:
+    if not run.artifact_path:
+        return []
+    salvage_path = orch_root() / run.artifact_path / "x-capture-salvage.json"
+    if not salvage_path.exists() or not salvage_path.is_file():
+        return []
+    try:
+        payload = json.loads(salvage_path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    if not isinstance(payload, dict):
+        return []
+    matches = payload.get("matches")
+    if not isinstance(matches, list):
+        return []
+
+    out: List[str] = []
+    for row in matches:
+        if not isinstance(row, dict):
+            continue
+        kind = str(row.get("kind") or "").strip().lower()
+        if kind:
+            out.append(kind)
+    return out
+
+
+def _repeated_salvage_streak(run: RunRecord, *, kind: str, max_attempts: int = 12) -> int:
+    target = str(kind or "").strip().lower()
+    if not target:
+        return 0
+
+    prior = []
+    for record in _load_run_records():
+        if record.project != run.project or record.index != run.index:
+            continue
+        if record.attempt >= run.attempt:
+            continue
+        prior.append(record)
+
+    prior.sort(key=lambda record: record.attempt, reverse=True)
+    streak = 0
+    for record in prior[:max_attempts]:
+        kinds = _salvage_match_kinds(record)
+        if target in kinds:
+            streak += 1
+            continue
+        break
+    return streak
 
 
 
@@ -1379,7 +1503,9 @@ def artifact_progress_validation_bridge(
     return _validate
 
 
-def x_capture_salvage_validation_bridge() -> ValidationBridge:
+def x_capture_salvage_validation_bridge(*, max_auth_retries: int = 3) -> ValidationBridge:
+    if max_auth_retries < 1:
+        raise ValueError("max_auth_retries must be >= 1")
     auth_markers = [marker.lower() for marker in X_CAPTURE_AUTH_MARKERS]
     rate_markers = [marker.lower() for marker in X_CAPTURE_RATE_LIMIT_MARKERS]
 
@@ -1401,6 +1527,15 @@ def x_capture_salvage_validation_bridge() -> ValidationBridge:
             return ValidationResult(status="done", passed=True, note=execution.note)
 
         first_status, first_detail, _first_kind = messages[0]
+        resolved_status = first_status
+        resolved_detail = first_detail
+        if _first_kind == "auth":
+            prior_auth_hits = _repeated_salvage_streak(run, kind="auth")
+            auth_streak = prior_auth_hits + 1
+            if auth_streak >= max_auth_retries:
+                resolved_status = "blocked"
+                resolved_detail = f"auth/session marker detected repeatedly ({auth_streak} attempts)"
+
         artifact_path = run.artifact_path
         if execution.artifact_path:
             artifact_path = execution.artifact_path
@@ -1434,16 +1569,18 @@ def x_capture_salvage_validation_bridge() -> ValidationBridge:
                     "note": payload["note"],
                 },
             )
-            detail = payload["matches"][0]["detail"] if payload["matches"] else first_detail
+            detail = resolved_detail
+            if resolved_status == first_status and payload["matches"]:
+                detail = payload["matches"][0]["detail"]
             return ValidationResult(
-                status=first_status,
+                status=resolved_status,
                 passed=False,
                 note=f"x capture salvage hint: {detail}; evidence={salvage_path.relative_to(orch_root())}",
             )
         return ValidationResult(
-            status=first_status,
+            status=resolved_status,
             passed=False,
-            note=f"x capture salvage hint: {first_detail}",
+            note=f"x capture salvage hint: {resolved_detail}",
         )
 
     def _validate(run: RunRecord, execution: ExecutionResult) -> ValidationResult:
@@ -1526,6 +1663,8 @@ def artifact_validation_bridge(required_paths: List[str], *, nonempty: bool = Fa
 def review_command_validation_bridge(command: str, *, timeout_seconds: Optional[float] = None) -> ValidationBridge:
     if not command or not command.strip():
         raise ValueError("command cannot be empty")
+    if timeout_seconds is not None and timeout_seconds <= 0:
+        raise ValueError("timeout_seconds must be greater than zero")
 
     def _validate(run: RunRecord, execution: ExecutionResult) -> ValidationResult:
         status = execution.status.lower().strip()
@@ -1632,21 +1771,51 @@ def chain_validation_bridges(*bridges: ValidationBridge) -> ValidationBridge:
     def _validate(run: RunRecord, execution: ExecutionResult) -> ValidationResult:
         notes = []
         final_status = "done"
-        for bridge in cleaned:
+        trace = []
+        for idx, bridge in enumerate(cleaned, start=1):
+            bridge_name = _validation_bridge_name(bridge, idx)
             try:
                 result = bridge(run, execution)
             except Exception as exc:
                 failure_note = f"validation bridge failed: {exc}"
+                trace.append(
+                    _validation_trace_event(
+                        bridge_name,
+                        status="blocked",
+                        passed=False,
+                        note=failure_note,
+                        error=type(exc).__name__,
+                    )
+                )
+                setattr(_validate, "_last_trace", trace)
                 return ValidationResult(status="blocked", passed=False, note=failure_note)
 
             if result.status not in RUN_OUTCOMES:
+                trace.append(
+                    _validation_trace_event(
+                        bridge_name,
+                        status="blocked",
+                        passed=False,
+                        note=f"invalid validation status: {result.status}",
+                    )
+                )
+                setattr(_validate, "_last_trace", trace)
                 return ValidationResult(
                     status="blocked",
                     passed=False,
                     note=f"invalid validation status: {result.status}",
                 )
 
+            trace.append(
+                _validation_trace_event(
+                    bridge_name,
+                    status=result.status,
+                    passed=result.passed,
+                    note=result.note,
+                )
+            )
             if result.status == "done" and not result.passed:
+                setattr(_validate, "_last_trace", trace)
                 return ValidationResult(
                     status="blocked",
                     passed=False,
@@ -1657,9 +1826,12 @@ def chain_validation_bridges(*bridges: ValidationBridge) -> ValidationBridge:
                 notes.append(result.note)
             final_status = result.status
             if result.status != "done":
+                setattr(_validate, "_last_trace", trace)
                 return ValidationResult(status=result.status, passed=result.passed, note="; ".join(notes) if notes else result.note)
+        setattr(_validate, "_last_trace", trace)
         return ValidationResult(status=final_status, passed=True, note="; ".join(notes) if notes else None)
 
+    setattr(_validate, "_last_trace", [])
     return _validate
 
 
@@ -1681,7 +1853,13 @@ def _merge_notes(*notes: Optional[str]) -> Optional[str]:
     return "; ".join(chunks)
 
 
-def _write_validation_summary(run: RunRecord, execution: ExecutionResult, validation: ValidationResult) -> Optional[str]:
+def _write_validation_summary(
+    run: RunRecord,
+    execution: ExecutionResult,
+    validation: ValidationResult,
+    *,
+    validation_trace: Optional[List[dict]] = None,
+) -> Optional[str]:
     artifact_root = orch_root()
     if run.artifact_path:
         artifact_root = orch_root() / run.artifact_path
@@ -1698,6 +1876,8 @@ def _write_validation_summary(run: RunRecord, execution: ExecutionResult, valida
         "execution": asdict(execution),
         "validation": asdict(validation),
     }
+    if validation_trace:
+        summary["validation_trace"] = validation_trace
     summary_path.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
     return str(summary_path.relative_to(orch_root()))
 
@@ -1744,7 +1924,10 @@ def run_tick(
         run.updated_at = now_utc_iso()
         write_run_record(run)
 
-    summary_path = _write_validation_summary(run, outcome, result)
+    validation_trace = getattr(validate, "_last_trace", None)
+    if not isinstance(validation_trace, list):
+        validation_trace = None
+    summary_path = _write_validation_summary(run, outcome, result, validation_trace=validation_trace)
 
     update_note = _merge_notes(run.note, outcome.note, result.note, f"validation_summary={summary_path}" if summary_path else None)
     if update_note and update_note != run.note:

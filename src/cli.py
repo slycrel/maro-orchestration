@@ -24,6 +24,7 @@ from orch import (
     review_command_validation_bridge,
     mark_first_todo_done,
     mark_item,
+    named_validation_bridge,
     operator_status_path,
     orch_root,
     project_dir,
@@ -84,18 +85,34 @@ def _build_validation(args):
         getattr(args, "exec_cmd", None) or getattr(args, "session_cmd", None) or getattr(args, "worker_session", None)
     )
     if args.require_artifact:
-        bridges.append(artifact_validation_bridge(args.require_artifact, nonempty=args.require_nonempty))
+        bridges.append(
+            named_validation_bridge(
+                "artifact-required",
+                artifact_validation_bridge(args.require_artifact, nonempty=args.require_nonempty),
+            )
+        )
     if has_execution_bridge and not getattr(args, "disable_artifact_progress", False):
         bridges.append(
-            artifact_progress_validation_bridge(
-                history_size=max(1, getattr(args, "artifact_progress_window", 2)),
-                max_retry_attempts=max(1, getattr(args, "artifact_progress_max_attempts", 3)),
+            named_validation_bridge(
+                "artifact-progress",
+                artifact_progress_validation_bridge(
+                    history_size=max(1, getattr(args, "artifact_progress_window", 2)),
+                    max_retry_attempts=max(1, getattr(args, "artifact_progress_max_attempts", 3)),
+                ),
             )
         )
     if getattr(args, "review_cmd", None):
-        bridges.append(review_command_validation_bridge(args.review_cmd))
+        bridges.append(
+            named_validation_bridge(
+                "review-command",
+                review_command_validation_bridge(
+                    args.review_cmd,
+                    timeout_seconds=getattr(args, "review_timeout", None),
+                ),
+            )
+        )
     if has_execution_bridge and not getattr(args, "disable_x_capture", False):
-        bridges.append(x_capture_salvage_validation_bridge())
+        bridges.append(named_validation_bridge("x-capture-salvage", x_capture_salvage_validation_bridge()))
     if not bridges:
         return None
     if len(bridges) == 1:
@@ -195,6 +212,7 @@ def main(argv: list[str] | None = None) -> int:
     p_tick.add_argument("--require-artifact", action="append", default=[], help="Artifact path relative to the run artifact dir that must exist")
     p_tick.add_argument("--require-nonempty", action="store_true", help="Require listed artifacts to be non-empty files")
     p_tick.add_argument("--review-cmd", help="Shell command reviewer run after execution succeeds")
+    p_tick.add_argument("--review-timeout", type=float, default=None, help="Timeout in seconds for review command")
 
     p_loop = sub.add_parser("loop", help="Run a bounded automation loop")
     p_loop.add_argument("--project")
@@ -213,6 +231,7 @@ def main(argv: list[str] | None = None) -> int:
     p_loop.add_argument("--require-artifact", action="append", default=[], help="Artifact path relative to the run artifact dir that must exist")
     p_loop.add_argument("--require-nonempty", action="store_true", help="Require listed artifacts to be non-empty files")
     p_loop.add_argument("--review-cmd", help="Shell command reviewer run after execution succeeds")
+    p_loop.add_argument("--review-timeout", type=float, default=None, help="Timeout in seconds for review command")
     p_loop.add_argument("--continue-on-retry", action="store_true", help="Continue loop when validation status is retry")
     p_loop.add_argument("--continue-on-blocked", action="store_true", help="Continue loop when validation status is blocked")
     p_loop.add_argument(

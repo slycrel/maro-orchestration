@@ -641,6 +641,44 @@ def test_x_capture_salvage_bridge_writes_evidence(monkeypatch, tmp_path):
     assert any(record["run_id"] == tick.run.run_id for record in records)
 
 
+def test_x_capture_salvage_bridge_escalates_repeated_auth_to_blocked(monkeypatch, tmp_path):
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    _mkproj(tmp_path, "demo", "- [ ] first\n", priority=3)
+
+    validation = orch.x_capture_salvage_validation_bridge(max_auth_retries=3)
+
+    first = orch.run_tick(
+        "demo",
+        worker="tester",
+        execution=orch.command_execution_bridge('printf "%s" "this page isn\'t working" >&2'),
+        validation=validation,
+    )
+    assert first is not None
+    assert first.validation.status == "retry"
+    assert first.run.status == "running"
+
+    second = orch.run_tick(
+        "demo",
+        worker="tester",
+        execution=orch.command_execution_bridge('printf "%s" "captcha challenge" >&2'),
+        validation=validation,
+    )
+    assert second is not None
+    assert second.validation.status == "retry"
+    assert second.run.status == "running"
+
+    third = orch.run_tick(
+        "demo",
+        worker="tester",
+        execution=orch.command_execution_bridge('printf "%s" "login required" >&2'),
+        validation=validation,
+    )
+    assert third is not None
+    assert third.validation.status == "blocked"
+    assert third.run.status == "blocked"
+    assert third.validation.note and "repeatedly (3 attempts)" in third.validation.note
+
+
 def test_operator_status_tracks_active_x_capture_salvage(monkeypatch, tmp_path):
     monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
     _mkproj(tmp_path, "demo", "- [ ] first\n", priority=3)
@@ -751,6 +789,39 @@ def test_review_command_validation_bridge_reads_result_file(monkeypatch, tmp_pat
     assert tick is not None
     assert tick.validation.status == "done"
     assert tick.run.status == "done"
+
+
+def test_validation_summary_includes_bridge_trace(monkeypatch, tmp_path):
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    _mkproj(tmp_path, "demo", "- [ ] first\n", priority=3)
+
+    validation = orch.chain_validation_bridges(
+        orch.named_validation_bridge(
+            "artifact-gate",
+            orch.artifact_validation_bridge(["result.txt"], nonempty=True),
+        ),
+        orch.named_validation_bridge(
+            "review-gate",
+            orch.review_command_validation_bridge(
+                'printf \'{"status":"retry","note":"needs manual check"}\' > "$ORCH_REVIEW_ARTIFACT_DIR/verdict.json"'
+            ),
+        ),
+    )
+    tick = orch.run_tick(
+        "demo",
+        worker="tester",
+        execution=orch.command_execution_bridge('printf ok > "$ORCH_RUN_ARTIFACT_DIR/result.txt"'),
+        validation=validation,
+    )
+
+    assert tick is not None
+    assert tick.validation.status == "retry"
+    summary = orch.load_validation_summary(tick.run.run_id)
+    assert summary is not None
+    trace = summary.get("validation_trace")
+    assert isinstance(trace, list)
+    assert [event["bridge"] for event in trace] == ["artifact-gate", "review-gate"]
+    assert trace[-1]["status"] == "retry"
 
 
 

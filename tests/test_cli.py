@@ -341,6 +341,34 @@ def test_cli_tick_review_cmd(tmp_path):
 
 
 
+def test_cli_tick_review_timeout_blocks_and_records_trace(tmp_path):
+    r = _run(tmp_path, "init", "demo", "Reviewer", "timeout", "--priority", "1")
+    assert r.returncode == 0
+    tick = _run(
+        tmp_path,
+        "tick",
+        "--project",
+        "demo",
+        "--exec-cmd",
+        'printf ok > "$ORCH_RUN_ARTIFACT_DIR/result.txt"',
+        "--review-cmd",
+        "sleep 1",
+        "--review-timeout",
+        "0.01",
+    )
+    assert tick.returncode == 0
+    assert "execution=done validation=blocked" in tick.stdout
+    run_id = next(part.split("=", 1)[1] for part in tick.stdout.split() if part.startswith("run_id="))
+
+    inspect_json = _run(tmp_path, "inspect-run", run_id, "--format", "json")
+    assert inspect_json.returncode == 0
+    payload = json.loads(inspect_json.stdout)
+    assert payload["validation_summary"]["validation"]["status"] == "blocked"
+    trace = payload["validation_summary"].get("validation_trace")
+    assert isinstance(trace, list)
+    assert any(event.get("bridge") == "review-command" for event in trace)
+
+
 def test_cli_smoke_script(tmp_path):
     env = os.environ.copy()
     env["TMPDIR"] = str(tmp_path)
