@@ -10,7 +10,7 @@ File-first orchestration with a stable CLI, durable run artifacts, and operator-
   - `orch start`
   - `orch finish`
   - `orch run`
-- durable run artifacts under `output/runs/` (including execution logs, review artifacts, and `validation-summary.json`, with provenance links on finalize)
+- durable run artifacts under `output/runs/` (including execution logs, review artifacts, stale-progress checks, and `validation-summary.json`, with provenance links on finalize)
 - operator status snapshot under `output/operator-status.json`
 - auditable project journals:
   - `DECISIONS.md`
@@ -63,8 +63,8 @@ orch start [--project <slug>] [--index N] [--worker NAME] [--source NAME] [--not
 orch finish <run_id> [--status done|blocked] [--note TEXT]
 orch inspect-run <run_id> [--format text|json]
 orch run [--project <slug>] [--worker NAME] [--source NAME] [--note TEXT] [--finish done|blocked] [--finish-note TEXT]
-orch tick [--project <slug>] [--worker NAME] [--source NAME] [--note TEXT] [--exec-cmd 'shell command'] [--require-artifact PATH] [--require-nonempty] [--review-cmd 'shell command']
-orch loop [--project <slug>] [--worker NAME] [--source NAME] [--note TEXT] [--max-runs N] [--exec-cmd 'shell command'] [--require-artifact PATH] [--require-nonempty] [--review-cmd 'shell command']
+orch tick [--project <slug>] [--worker NAME] [--source NAME] [--note TEXT] [--exec-cmd 'shell command'] [--disable-artifact-progress] [--artifact-progress-window N] [--artifact-progress-max-attempts N] [--require-artifact PATH] [--require-nonempty] [--review-cmd 'shell command']
+orch loop [--project <slug>] [--worker NAME] [--source NAME] [--note TEXT] [--max-runs N] [--exec-cmd 'shell command'] [--disable-artifact-progress] [--artifact-progress-window N] [--artifact-progress-max-attempts N] [--require-artifact PATH] [--require-nonempty] [--review-cmd 'shell command']
 orch done <project> [--index N]
 orch blocked
 orch log <project> <message...>
@@ -75,7 +75,7 @@ orch report [--project <slug>] [--format md|json] [--out PATH]
 ## Current gaps
 
 - no planner / decomposition engine yet
-- validator can now enforce required artifacts and run a separate shell reviewer, but there is still no semantic/LLM review loop
+- validator can now enforce required artifacts, detect stale artifact progress across retries, and run a separate shell reviewer, but there is still no semantic/LLM review loop
 - no OpenClaw queue adapter yet
 - no real NOW vs AGENDA routing yet
 - no remote/session worker backend yet; execution can now bridge to local shell commands, but not OpenClaw sessions or external agents

@@ -237,6 +237,49 @@ def test_cli_tick_require_artifact_blocks_missing(tmp_path):
 
 
 
+def test_cli_loop_accepts_artifact_progress_options(tmp_path):
+    r = _run(tmp_path, "init", "demo", "Stale", "progress", "--priority", "1")
+    assert r.returncode == 0
+
+    loop = _run(
+        tmp_path,
+        "loop",
+        "--project",
+        "demo",
+        "--max-runs",
+        "1",
+        "--exec-cmd",
+        'printf same > "$ORCH_RUN_ARTIFACT_DIR/result.txt"',
+        "--artifact-progress-window",
+        "3",
+        "--artifact-progress-max-attempts",
+        "4",
+    )
+    assert loop.returncode == 0
+    assert "runs=1" in loop.stdout
+
+
+
+def test_cli_loop_can_disable_stale_artifact_progress_detection(tmp_path):
+    r = _run(tmp_path, "init", "demo", "Disable", "stale", "--priority", "1")
+    assert r.returncode == 0
+
+    loop = _run(
+        tmp_path,
+        "loop",
+        "--project",
+        "demo",
+        "--max-runs",
+        "1",
+        "--exec-cmd",
+        'printf same > "$ORCH_RUN_ARTIFACT_DIR/result.txt"',
+        "--disable-artifact-progress",
+    )
+    assert loop.returncode == 0
+    assert "runs=1" in loop.stdout
+
+
+
 def test_cli_tick_review_cmd(tmp_path):
     r = _run(tmp_path, "init", "demo", "Reviewer", "bridge", "--priority", "1")
     assert r.returncode == 0

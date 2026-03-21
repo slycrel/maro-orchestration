@@ -8,6 +8,7 @@ from pathlib import Path
 
 from orch import (
     append_decision,
+    artifact_progress_validation_bridge,
     artifact_validation_bridge,
     chain_validation_bridges,
     command_execution_bridge,
@@ -61,14 +62,21 @@ def _print_run(prefix: str, run) -> None:
 
 def _build_validation(args):
     bridges = []
+    has_execution_bridge = bool(
+        getattr(args, "exec_cmd", None) or getattr(args, "session_cmd", None) or getattr(args, "worker_session", None)
+    )
     if args.require_artifact:
         bridges.append(artifact_validation_bridge(args.require_artifact, nonempty=args.require_nonempty))
+    if has_execution_bridge and not getattr(args, "disable_artifact_progress", False):
+        bridges.append(
+            artifact_progress_validation_bridge(
+                history_size=max(1, getattr(args, "artifact_progress_window", 2)),
+                max_retry_attempts=max(1, getattr(args, "artifact_progress_max_attempts", 3)),
+            )
+        )
     if getattr(args, "review_cmd", None):
         bridges.append(review_command_validation_bridge(args.review_cmd))
-    if (
-        (getattr(args, "exec_cmd", None) or getattr(args, "session_cmd", None) or getattr(args, "worker_session", None))
-        and not getattr(args, "disable_x_capture", False)
-    ):
+    if has_execution_bridge and not getattr(args, "disable_x_capture", False):
         bridges.append(x_capture_salvage_validation_bridge())
     if not bridges:
         return None
@@ -160,6 +168,9 @@ def main(argv: list[str] | None = None) -> int:
     p_tick.add_argument("--worker-session", help="Named worker session script")
     p_tick.add_argument("--session-timeout", type=float, default=None, help="Timeout in seconds for session command")
     p_tick.add_argument("--disable-x-capture", action="store_true", help="Disable X capture/rate-limit salvage classification")
+    p_tick.add_argument("--disable-artifact-progress", action="store_true", help="Disable stale artifact progress detection across attempts")
+    p_tick.add_argument("--artifact-progress-window", type=int, default=2, help="Consecutive matching artifact attempts before stale progress triggers (default: 2)")
+    p_tick.add_argument("--artifact-progress-max-attempts", type=int, default=3, help="Attempts before stale artifact progress becomes blocked instead of retry (default: 3)")
     p_tick.add_argument("--require-artifact", action="append", default=[], help="Artifact path relative to the run artifact dir that must exist")
     p_tick.add_argument("--require-nonempty", action="store_true", help="Require listed artifacts to be non-empty files")
     p_tick.add_argument("--review-cmd", help="Shell command reviewer run after execution succeeds")
@@ -175,6 +186,9 @@ def main(argv: list[str] | None = None) -> int:
     p_loop.add_argument("--worker-session", help="Named worker session script")
     p_loop.add_argument("--session-timeout", type=float, default=None, help="Timeout in seconds for session command")
     p_loop.add_argument("--disable-x-capture", action="store_true", help="Disable X capture/rate-limit salvage classification")
+    p_loop.add_argument("--disable-artifact-progress", action="store_true", help="Disable stale artifact progress detection across attempts")
+    p_loop.add_argument("--artifact-progress-window", type=int, default=2, help="Consecutive matching artifact attempts before stale progress triggers (default: 2)")
+    p_loop.add_argument("--artifact-progress-max-attempts", type=int, default=3, help="Attempts before stale artifact progress becomes blocked instead of retry (default: 3)")
     p_loop.add_argument("--require-artifact", action="append", default=[], help="Artifact path relative to the run artifact dir that must exist")
     p_loop.add_argument("--require-nonempty", action="store_true", help="Require listed artifacts to be non-empty files")
     p_loop.add_argument("--review-cmd", help="Shell command reviewer run after execution succeeds")
