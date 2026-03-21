@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -157,6 +159,14 @@ def main(argv: list[str] | None = None) -> int:
     p_log.add_argument("project")
     p_log.add_argument("message", nargs="+")
 
+    p_enqueue = sub.add_parser("enqueue", help="Enqueue a project task into the workspace task queue")
+    p_enqueue.add_argument("project")
+    p_enqueue.add_argument("task", nargs="+")
+    p_enqueue.add_argument("--lane", default="manual")
+    p_enqueue.add_argument("--source", default="orch")
+    p_enqueue.add_argument("--reason", default="queued from orch")
+    p_enqueue.add_argument("--parent-job-id")
+
     p_blocked = sub.add_parser("blocked", help="List blocked projects")
 
     p_salvage = sub.add_parser("salvage", help="Show X-capture salvage status")
@@ -294,6 +304,29 @@ def main(argv: list[str] | None = None) -> int:
             return fail("E_PROJECT_NOT_FOUND", args.project)
         append_decision(args.project, [" ".join(args.message)])
         print(f"project={args.project} logged=1")
+        return 0
+
+    if args.cmd == "enqueue":
+        if not project_dir(args.project).exists():
+            return fail("E_PROJECT_NOT_FOUND", args.project)
+        workspace_root = Path(os.environ.get("OPENCLAW_WORKSPACE", str(orch_root().parents[2])))
+        queue = workspace_root / "scripts" / "task-queue.sh"
+        if not queue.exists():
+            return fail("E_QUEUE_NOT_FOUND", str(queue))
+        task_text = " ".join(args.task).strip()
+        if not task_text:
+            return fail("E_TASK_REQUIRED", "task text cannot be empty")
+        payload = f"project={args.project} :: {task_text}"
+        cmd = [str(queue), "enqueue", "project_task", payload, args.lane, args.source, args.reason]
+        if args.parent_job_id:
+            cmd.append(args.parent_job_id)
+        proc = subprocess.run(cmd, cwd=orch_root(), capture_output=True, text=True)
+        if proc.returncode != 0:
+            detail = (proc.stderr or proc.stdout or "queue enqueue failed").strip()
+            return fail("E_QUEUE_ENQUEUE", detail)
+        print(f"project={args.project} type=project_task lane={args.lane} payload={json.dumps(payload)}")
+        if proc.stdout.strip():
+            print(proc.stdout.strip())
         return 0
 
     if args.cmd == "blocked":

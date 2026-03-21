@@ -63,6 +63,7 @@ orch start [--project <slug>] [--index N] [--worker NAME] [--source NAME] [--not
 orch finish <run_id> [--status done|blocked] [--note TEXT]
 orch inspect-run <run_id> [--format text|json]
 orch run [--project <slug>] [--worker NAME] [--source NAME] [--note TEXT] [--finish done|blocked] [--finish-note TEXT]
+orch enqueue <project> <task...> [--lane NAME] [--source NAME] [--reason TEXT] [--parent-job-id ID]
 orch tick [--project <slug>] [--worker NAME] [--source NAME] [--note TEXT] [--exec-cmd 'shell command'] [--disable-artifact-progress] [--artifact-progress-window N] [--artifact-progress-max-attempts N] [--max-retry-streak N] [--require-artifact PATH] [--require-nonempty] [--review-cmd 'shell command'] [--review-timeout SECONDS]
 orch loop [--project <slug>] [--worker NAME] [--source NAME] [--note TEXT] [--max-runs N] [--exec-cmd 'shell command'] [--disable-artifact-progress] [--artifact-progress-window N] [--artifact-progress-max-attempts N] [--max-retry-streak N] [--require-artifact PATH] [--require-nonempty] [--review-cmd 'shell command'] [--review-timeout SECONDS]
 orch done <project> [--index N]
@@ -77,7 +78,7 @@ orch report [--project <slug>] [--format md|json] [--out PATH]
 
 - no planner / decomposition engine yet
 - validator can now enforce required artifacts, detect stale artifact progress across retries, run a separate shell reviewer (with timeout), capture per-bridge validation traces, and auto-escalate repeated X auth salvage loops
-- no OpenClaw queue adapter yet
+- no queue-backed dequeue/worker handoff yet; CLI can now enqueue `project_task` jobs into the workspace task queue
 - no real NOW vs AGENDA routing yet
 - no remote OpenClaw/external-agent backend yet; execution bridges cover local shell commands plus local session/worker scripts
 

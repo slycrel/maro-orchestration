@@ -34,6 +34,51 @@ def test_cli_salvage_empty(tmp_path):
     assert "salvage=(none)" in r.stdout
 
 
+
+def test_cli_enqueue_project_task(tmp_path):
+    queue_dir = tmp_path / "scripts"
+    queue_dir.mkdir(parents=True, exist_ok=True)
+    queue_script = queue_dir / "task-queue.sh"
+    queue_script.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        "ROOT_DIR=\"$(cd \"$(dirname \"$0\")/..\" && pwd)\"\n"
+        "mkdir -p \"$ROOT_DIR/output/queues\"\n"
+        "printf 'json:{\"type\":\"%s\",\"payload\":%s}\\n' \"$2\" \"$(python3 - <<'PY' \"$3\"\nimport json,sys\nprint(json.dumps(sys.argv[1]))\nPY\n)\" >> \"$ROOT_DIR/output/queues/tasks.queue\"\n"
+        "echo queued type=$2 payload=$3\n",
+        encoding="utf-8",
+    )
+    queue_script.chmod(0o755)
+
+    r = _run(tmp_path, "init", "demo", "Queue", "adapter", "--priority", "1")
+    assert r.returncode == 0
+
+    queued = _run(
+        tmp_path,
+        "enqueue",
+        "demo",
+        "Draft",
+        "queue",
+        "adapter",
+        "integration",
+        "--lane",
+        "manual",
+        "--source",
+        "orch-test",
+        "--reason",
+        "queue adapter smoke",
+    )
+    assert queued.returncode == 0
+    assert "type=project_task" in queued.stdout
+    assert 'payload="project=demo :: Draft queue adapter integration"' in queued.stdout
+
+    queue_file = tmp_path / "output" / "queues" / "tasks.queue"
+    assert queue_file.exists()
+    raw = queue_file.read_text(encoding="utf-8")
+    assert "project_task" in raw
+    assert "project=demo :: Draft queue adapter integration" in raw
+
+
 def test_cli_run_start_finish_status(tmp_path):
     r = _run(tmp_path, "init", "demo", "Build", "loop", "--priority", "5")
     assert r.returncode == 0
