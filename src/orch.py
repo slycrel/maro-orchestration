@@ -878,11 +878,23 @@ def _active_salvage_runs() -> List[dict]:
     return out
 
 
+def _pending_salvage_count(active_runs: Optional[List[dict]] = None) -> int:
+    if active_runs is None:
+        active_runs = _active_salvage_runs()
+    active_ids = {str(run.get("run_id")) for run in active_runs if run.get("run_id")}
+    if not active_ids:
+        return 0
+    records = _read_jsonl_records(_run_status_summary_record_path())
+    pending_ids = {str(record.get("run_id")) for record in records if record.get("run_id") in active_ids}
+    return len(pending_ids)
+
+
 def write_operator_status() -> dict:
     statuses = [project_status(slug) for slug in list_projects()]
     active = [s for s in statuses if s.doing > 0]
     blocked = [s for s in statuses if s.blocked > 0]
     next_sel = select_global_next()
+    active_salvage_runs = _active_salvage_runs()
     payload = {
         "generated_at": now_utc_iso(),
         "project_count": len(statuses),
@@ -900,14 +912,14 @@ def write_operator_status() -> dict:
             "text": next_sel[1].text,
         } if next_sel else None,
         "salvage": {
-            "active_runs": _active_salvage_runs(),
+            "active_runs": active_salvage_runs,
             "active_count": 0,
             "pending_count": 0,
             "index_path": str(_run_status_summary_record_path().relative_to(orch_root())),
         },
     }
-    payload["salvage"]["active_count"] = len(payload["salvage"]["active_runs"])
-    payload["salvage"]["pending_count"] = len(_read_jsonl_records(_run_status_summary_record_path()))
+    payload["salvage"]["active_count"] = len(active_salvage_runs)
+    payload["salvage"]["pending_count"] = _pending_salvage_count(active_salvage_runs)
     operator_status_path().write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     return payload
 

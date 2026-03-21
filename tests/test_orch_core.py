@@ -656,8 +656,41 @@ def test_operator_status_tracks_active_x_capture_salvage(monkeypatch, tmp_path):
 
     status = orch.write_operator_status()
     assert status["salvage"]["active_count"] == 1
+    assert status["salvage"]["pending_count"] == 1
     assert status["salvage"]["active_runs"][0]["run_id"] == tick.run.run_id
     assert status["salvage"]["active_runs"][0]["first_kind"] == "auth"
+
+
+def test_operator_status_pending_salvage_excludes_resolved_runs(monkeypatch, tmp_path):
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    _mkproj(tmp_path, "demo", "- [ ] first\n- [ ] second\n", priority=3)
+
+    first = orch.run_tick(
+        "demo",
+        worker="tester",
+        execution=orch.command_execution_bridge('printf "%s" "this page isn\'t working" >&2'),
+        validation=orch.x_capture_salvage_validation_bridge(),
+    )
+    assert first is not None
+    assert first.validation.status == "retry"
+
+    finalized = orch.finalize_run(first.run.run_id, "blocked", note="resolved auth issue")
+    assert finalized.status == "blocked"
+
+    second = orch.run_tick(
+        "demo",
+        worker="tester",
+        execution=orch.command_execution_bridge('printf "%s" "captcha" >&2'),
+        validation=orch.x_capture_salvage_validation_bridge(),
+    )
+    assert second is not None
+    assert second.validation.status == "retry"
+
+    status = orch.write_operator_status()
+    assert status["salvage"]["active_count"] == 1
+    assert status["salvage"]["pending_count"] == 1
+    assert status["salvage"]["active_runs"][0]["run_id"] == second.run.run_id
+
 
 
 def test_command_execution_bridge_success(monkeypatch, tmp_path):
