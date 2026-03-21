@@ -67,6 +67,7 @@ orch tick [--project <slug>] [--worker NAME] [--source NAME] [--note TEXT] [--ex
 orch loop [--project <slug>] [--worker NAME] [--source NAME] [--note TEXT] [--max-runs N] [--exec-cmd 'shell command'] [--disable-artifact-progress] [--artifact-progress-window N] [--artifact-progress-max-attempts N] [--require-artifact PATH] [--require-nonempty] [--review-cmd 'shell command']
 orch done <project> [--index N]
 orch blocked
+orch salvage [--format text|json]
 orch log <project> <message...>
 orch status
 orch report [--project <slug>] [--format md|json] [--out PATH]

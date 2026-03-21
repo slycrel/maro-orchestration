@@ -124,6 +124,9 @@ def main(argv: list[str] | None = None) -> int:
 
     p_blocked = sub.add_parser("blocked", help="List blocked projects")
 
+    p_salvage = sub.add_parser("salvage", help="Show X-capture salvage status")
+    p_salvage.add_argument("--format", choices=["text", "json"], default="text")
+
     p_report = sub.add_parser("report", help="Generate summary report")
     p_report.add_argument("--project")
     p_report.add_argument("--format", choices=["md", "json"], default="md")
@@ -261,6 +264,31 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         for b in blocked:
             print(f"project={b.slug} priority={b.priority} blocked={b.blocked} todo={b.todo}")
+        return 0
+
+    if args.cmd == "salvage":
+        payload = write_operator_status()["salvage"]
+        if args.format == "json":
+            print(json.dumps(payload, indent=2))
+            return 0
+        print(f"active_count={payload['active_count']} pending_count={payload['pending_count']} index_path={payload['index_path']}")
+        if not payload["active_runs"]:
+            print("salvage=(none)")
+            return 0
+        for run in payload["active_runs"]:
+            print(
+                " ".join(
+                    [
+                        f"run_id={run['run_id']}",
+                        f"project={run['project']}",
+                        f"item={run['item']}",
+                        f"attempt={run['attempt']}",
+                        *( [f"kind={run['first_kind']}"] if run.get("first_kind") else [] ),
+                        *( [f"detail={json.dumps(run['first_detail'])}"] if run.get("first_detail") else [] ),
+                        f"artifact={run['artifact_path']}",
+                    ]
+                )
+            )
         return 0
 
     if args.cmd == "report":

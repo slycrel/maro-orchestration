@@ -26,6 +26,14 @@ def test_cli_init_next_done_report(tmp_path):
     assert out.exists()
 
 
+def test_cli_salvage_empty(tmp_path):
+    r = _run(tmp_path, "salvage")
+    assert r.returncode == 0
+    assert "active_count=0" in r.stdout
+    assert "pending_count=0" in r.stdout
+    assert "salvage=(none)" in r.stdout
+
+
 def test_cli_run_start_finish_status(tmp_path):
     r = _run(tmp_path, "init", "demo", "Build", "loop", "--priority", "5")
     assert r.returncode == 0
@@ -143,6 +151,35 @@ def test_cli_tick_exec_cmd_x_capture(tmp_path):
     )
     assert r.returncode == 0
     assert "execution=done validation=retry" in r.stdout
+
+
+
+def test_cli_salvage_lists_active_runs(tmp_path):
+    r = _run(tmp_path, "init", "demo", "Exec", "capture", "--priority", "1")
+    assert r.returncode == 0
+    tick = _run(
+        tmp_path,
+        "tick",
+        "--project",
+        "demo",
+        "--exec-cmd",
+        'printf "%s" "this page isn\'t working" >&2',
+    )
+    assert tick.returncode == 0
+
+    text_view = _run(tmp_path, "salvage")
+    assert text_view.returncode == 0
+    assert "active_count=1" in text_view.stdout
+    assert "pending_count=1" in text_view.stdout
+    assert "kind=auth" in text_view.stdout
+    assert "project=demo" in text_view.stdout
+
+    json_view = _run(tmp_path, "salvage", "--format", "json")
+    assert json_view.returncode == 0
+    payload = json.loads(json_view.stdout)
+    assert payload["active_count"] == 1
+    assert payload["pending_count"] == 1
+    assert payload["active_runs"][0]["first_kind"] == "auth"
 
 
 
