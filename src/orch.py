@@ -1087,6 +1087,7 @@ def start_item(
         updated_at=started_at,
         note=note,
     )
+    _run_artifact_root(run)
     write_run_record(run)
     append_provenance(slug, [f"Started `{run.text}` via {source}/{worker} ({run.run_id}).", f"Artifact: `{run.artifact_path}`"])
     write_operator_status()
@@ -1456,6 +1457,44 @@ def _matching_attempt_signatures(run: RunRecord, *, max_attempts: int = 4) -> Li
 
     signatures.sort(key=lambda row: row[0], reverse=True)
     return signatures[:max_attempts]
+
+
+def _validation_status_for_record(record: RunRecord) -> Optional[str]:
+    path = validation_summary_path(record)
+    if not path:
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    validation = payload.get("validation")
+    if not isinstance(validation, dict):
+        return None
+    status = str(validation.get("status") or "").strip().lower()
+    if status not in RUN_OUTCOMES:
+        return None
+    return status
+
+
+def _retry_streak_for_item(run: RunRecord, *, max_attempts: int = 12) -> int:
+    previous_attempts = [
+        record
+        for record in _load_run_records()
+        if record.project == run.project and record.index == run.index and record.attempt < run.attempt
+    ]
+    if not previous_attempts:
+        return 1
+
+    streak = 1
+    for record in sorted(previous_attempts, key=lambda row: row.attempt, reverse=True)[:max_attempts]:
+        status = _validation_status_for_record(record)
+        if status == "retry":
+            streak += 1
+            continue
+        break
+    return streak
 
 
 def artifact_progress_validation_bridge(
@@ -1888,9 +1927,13 @@ def run_tick(
     worker: str = "handle",
     source: str = "tick",
     note: Optional[str] = None,
+    max_retry_streak: Optional[int] = None,
     execution: Optional[ExecutionBridge] = None,
     validation: Optional[ValidationBridge] = None,
 ) -> Optional[TickResult]:
+    if max_retry_streak is not None and max_retry_streak <= 0:
+        raise ValueError("max_retry_streak must be greater than zero")
+
     run = run_once(project=project, worker=worker, source=source, note=note)
     if not run:
         write_operator_status()
@@ -1918,6 +1961,17 @@ def run_tick(
             passed=False,
             note=result.note or "validation reported unsuccessful result",
         )
+    if result.status == "retry" and max_retry_streak is not None:
+        retry_streak = _retry_streak_for_item(run)
+        if retry_streak >= max_retry_streak:
+            result = ValidationResult(
+                status="blocked",
+                passed=False,
+                note=_merge_notes(
+                    result.note,
+                    f"retry streak reached {retry_streak} attempts for {run.project}:{run.index}",
+                ),
+            )
 
     if outcome.artifact_path:
         run.artifact_path = outcome.artifact_path
@@ -1947,6 +2001,7 @@ def run_loop(
     source: str = "loop",
     note: Optional[str] = None,
     max_runs: int = 10,
+    max_retry_streak: Optional[int] = None,
     max_attempts_per_item: Optional[int] = None,
     execution: Optional[ExecutionBridge] = None,
     validation: Optional[ValidationBridge] = None,
@@ -1955,6 +2010,8 @@ def run_loop(
 ) -> List[TickResult]:
     if max_runs <= 0:
         raise ValueError("max_runs must be greater than zero")
+    if max_retry_streak is not None and max_retry_streak <= 0:
+        raise ValueError("max_retry_streak must be greater than zero")
     if max_attempts_per_item is not None and max_attempts_per_item <= 0:
         raise ValueError("max_attempts_per_item must be greater than zero")
     out: List[TickResult] = []
@@ -1964,6 +2021,7 @@ def run_loop(
             worker=worker,
             source=source,
             note=note,
+            max_retry_streak=max_retry_streak,
             execution=execution,
             validation=validation,
         )

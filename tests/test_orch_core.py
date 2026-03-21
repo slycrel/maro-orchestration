@@ -175,6 +175,37 @@ def test_run_loop_continue_on_retry_creates_new_attempts(monkeypatch, tmp_path):
     assert loop[-1].run.status == "done"
 
 
+def test_run_tick_blocks_when_retry_streak_reaches_limit(monkeypatch, tmp_path):
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    _mkproj(tmp_path, "demo", "- [ ] first\n", priority=3)
+
+    validator = lambda _run, _execution: orch.ValidationResult(status="retry", passed=False, note="needs rerun")
+
+    first = orch.run_tick(
+        "demo",
+        worker="tester",
+        execution=lambda run: orch.ExecutionResult(status="done", note=f"ok {run.attempt}"),
+        validation=validator,
+        max_retry_streak=2,
+    )
+    assert first is not None
+    assert first.validation.status == "retry"
+    assert first.run.status == "running"
+
+    second = orch.run_tick(
+        "demo",
+        worker="tester",
+        execution=lambda run: orch.ExecutionResult(status="done", note=f"ok {run.attempt}"),
+        validation=validator,
+        max_retry_streak=2,
+    )
+    assert second is not None
+    assert second.validation.status == "blocked"
+    assert second.run.status == "blocked"
+    assert second.run.attempt == 2
+    assert "retry streak reached 2 attempts" in (second.run.note or "")
+
+
 def test_artifact_progress_validation_bridge_detects_stale_artifacts(monkeypatch, tmp_path):
     monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
     _mkproj(tmp_path, "demo", "- [ ] first\n", priority=3)

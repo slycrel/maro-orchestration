@@ -63,8 +63,8 @@ orch start [--project <slug>] [--index N] [--worker NAME] [--source NAME] [--not
 orch finish <run_id> [--status done|blocked] [--note TEXT]
 orch inspect-run <run_id> [--format text|json]
 orch run [--project <slug>] [--worker NAME] [--source NAME] [--note TEXT] [--finish done|blocked] [--finish-note TEXT]
-orch tick [--project <slug>] [--worker NAME] [--source NAME] [--note TEXT] [--exec-cmd 'shell command'] [--disable-artifact-progress] [--artifact-progress-window N] [--artifact-progress-max-attempts N] [--require-artifact PATH] [--require-nonempty] [--review-cmd 'shell command'] [--review-timeout SECONDS]
-orch loop [--project <slug>] [--worker NAME] [--source NAME] [--note TEXT] [--max-runs N] [--exec-cmd 'shell command'] [--disable-artifact-progress] [--artifact-progress-window N] [--artifact-progress-max-attempts N] [--require-artifact PATH] [--require-nonempty] [--review-cmd 'shell command'] [--review-timeout SECONDS]
+orch tick [--project <slug>] [--worker NAME] [--source NAME] [--note TEXT] [--exec-cmd 'shell command'] [--disable-artifact-progress] [--artifact-progress-window N] [--artifact-progress-max-attempts N] [--max-retry-streak N] [--require-artifact PATH] [--require-nonempty] [--review-cmd 'shell command'] [--review-timeout SECONDS]
+orch loop [--project <slug>] [--worker NAME] [--source NAME] [--note TEXT] [--max-runs N] [--exec-cmd 'shell command'] [--disable-artifact-progress] [--artifact-progress-window N] [--artifact-progress-max-attempts N] [--max-retry-streak N] [--require-artifact PATH] [--require-nonempty] [--review-cmd 'shell command'] [--review-timeout SECONDS]
 orch done <project> [--index N]
 orch blocked
 orch salvage [--format text|json]

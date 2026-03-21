@@ -209,6 +209,7 @@ def main(argv: list[str] | None = None) -> int:
     p_tick.add_argument("--disable-artifact-progress", action="store_true", help="Disable stale artifact progress detection across attempts")
     p_tick.add_argument("--artifact-progress-window", type=int, default=2, help="Consecutive matching artifact attempts before stale progress triggers (default: 2)")
     p_tick.add_argument("--artifact-progress-max-attempts", type=int, default=3, help="Attempts before stale artifact progress becomes blocked instead of retry (default: 3)")
+    p_tick.add_argument("--max-retry-streak", type=int, default=None, help="Consecutive retry outcomes per item before auto-blocking")
     p_tick.add_argument("--require-artifact", action="append", default=[], help="Artifact path relative to the run artifact dir that must exist")
     p_tick.add_argument("--require-nonempty", action="store_true", help="Require listed artifacts to be non-empty files")
     p_tick.add_argument("--review-cmd", help="Shell command reviewer run after execution succeeds")
@@ -228,6 +229,7 @@ def main(argv: list[str] | None = None) -> int:
     p_loop.add_argument("--disable-artifact-progress", action="store_true", help="Disable stale artifact progress detection across attempts")
     p_loop.add_argument("--artifact-progress-window", type=int, default=2, help="Consecutive matching artifact attempts before stale progress triggers (default: 2)")
     p_loop.add_argument("--artifact-progress-max-attempts", type=int, default=3, help="Attempts before stale artifact progress becomes blocked instead of retry (default: 3)")
+    p_loop.add_argument("--max-retry-streak", type=int, default=None, help="Consecutive retry outcomes per item before auto-blocking")
     p_loop.add_argument("--require-artifact", action="append", default=[], help="Artifact path relative to the run artifact dir that must exist")
     p_loop.add_argument("--require-nonempty", action="store_true", help="Require listed artifacts to be non-empty files")
     p_loop.add_argument("--review-cmd", help="Shell command reviewer run after execution succeeds")
@@ -438,7 +440,15 @@ def main(argv: list[str] | None = None) -> int:
             return fail("E_TICK_EXEC", str(exc))
         validation = _build_validation(args)
         try:
-            tick = run_tick(project=args.project, worker=args.worker, source=args.source, note=args.note, execution=execution, validation=validation)
+            tick = run_tick(
+                project=args.project,
+                worker=args.worker,
+                source=args.source,
+                note=args.note,
+                max_retry_streak=args.max_retry_streak,
+                execution=execution,
+                validation=validation,
+            )
         except ValueError as exc:
             return fail("E_TICK_FAILED", str(exc))
         except Exception as exc:
@@ -465,6 +475,7 @@ def main(argv: list[str] | None = None) -> int:
                 source=args.source,
                 note=args.note,
                 max_runs=args.max_runs,
+                max_retry_streak=args.max_retry_streak,
                 execution=execution,
                 validation=validation,
                 continue_on_retry=args.continue_on_retry,

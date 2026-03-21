@@ -153,6 +153,48 @@ def test_cli_tick_exec_cmd_x_capture(tmp_path):
     assert "execution=done validation=retry" in r.stdout
 
 
+def test_cli_tick_max_retry_streak_blocks_repeated_retries(tmp_path):
+    r = _run(tmp_path, "init", "demo", "Retry", "guard", "--priority", "1")
+    assert r.returncode == 0
+    next_path = tmp_path / "prototypes" / "poe-orchestration" / "projects" / "demo" / "NEXT.md"
+    next_path.write_text("- [ ] first\n", encoding="utf-8")
+
+    first = _run(
+        tmp_path,
+        "tick",
+        "--project",
+        "demo",
+        "--exec-cmd",
+        "true",
+        "--review-cmd",
+        'printf \'{"status":"retry","note":"manual check"}\'',
+        "--disable-x-capture",
+        "--disable-artifact-progress",
+        "--max-retry-streak",
+        "2",
+    )
+    assert first.returncode == 0
+    assert "execution=done validation=retry" in first.stdout
+
+    second = _run(
+        tmp_path,
+        "tick",
+        "--project",
+        "demo",
+        "--exec-cmd",
+        "true",
+        "--review-cmd",
+        'printf \'{"status":"retry","note":"manual check"}\'',
+        "--disable-x-capture",
+        "--disable-artifact-progress",
+        "--max-retry-streak",
+        "2",
+    )
+    assert second.returncode == 0
+    assert "execution=done validation=blocked" in second.stdout
+    assert "retry streak reached 2 attempts" in second.stdout
+
+
 
 def test_cli_salvage_lists_active_runs(tmp_path):
     r = _run(tmp_path, "init", "demo", "Exec", "capture", "--priority", "1")
