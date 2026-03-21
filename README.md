@@ -29,7 +29,7 @@ This is no longer just a checklist helper. It now has the beginnings of a real o
 - transition task state through `todo -> doing -> done|blocked`
 - leave an artifact trail the next session can inspect
 - emit operator status for heartbeat / dashboards / external control loops
-- inspect a run and its validation evidence directly from the CLI
+- inspect a run and its validation / salvage evidence directly from the CLI
 
 It is still a first pass. The actual autonomous planner/validator loop comes next.
 

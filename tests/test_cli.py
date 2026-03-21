@@ -377,6 +377,35 @@ def test_cli_inspect_run(tmp_path):
     payload = json.loads(json_view.stdout)
     assert payload["run"]["run_id"] == run_id
     assert payload["validation_summary"]["validation"]["status"] == "done"
+    assert payload["salvage_summary"] is None
+
+
+
+def test_cli_inspect_run_includes_salvage_summary(tmp_path):
+    r = _run(tmp_path, "init", "demo", "Inspect", "salvage", "--priority", "1")
+    assert r.returncode == 0
+    r = _run(
+        tmp_path,
+        "tick",
+        "--project",
+        "demo",
+        "--exec-cmd",
+        'printf "%s" "this page isn\'t working" >&2',
+    )
+    assert r.returncode == 0
+    run_id = next(part.split("=", 1)[1] for part in r.stdout.split() if part.startswith("run_id="))
+
+    text_view = _run(tmp_path, "inspect-run", run_id)
+    assert text_view.returncode == 0
+    assert "salvage_path=" in text_view.stdout
+    assert "salvage_kind=auth" in text_view.stdout
+
+    json_view = _run(tmp_path, "inspect-run", run_id, "--format", "json")
+    assert json_view.returncode == 0
+    payload = json.loads(json_view.stdout)
+    assert payload["run"]["run_id"] == run_id
+    assert payload["salvage_summary"]["path"].endswith("x-capture-salvage.json")
+    assert payload["salvage_summary"]["matches"][0]["kind"] == "auth"
 
 
 

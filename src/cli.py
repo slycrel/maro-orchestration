@@ -25,6 +25,7 @@ from orch import (
     mark_first_todo_done,
     mark_item,
     operator_status_path,
+    orch_root,
     project_dir,
     run_once,
     plan_project,
@@ -58,6 +59,23 @@ def _print_run(prefix: str, run) -> None:
             ]
         )
     )
+
+
+def _load_salvage_summary(run):
+    if not getattr(run, "artifact_path", None):
+        return None
+    path = Path(run.artifact_path) / "x-capture-salvage.json"
+    root_path = orch_root() / path
+    if not root_path.exists():
+        return None
+    try:
+        payload = json.loads(root_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    payload.setdefault("path", str(path))
+    return payload
 
 
 def _build_validation(args):
@@ -337,7 +355,12 @@ def main(argv: list[str] | None = None) -> int:
             summary = load_validation_summary(args.run_id)
         except FileNotFoundError:
             return fail("E_RUN_NOT_FOUND", args.run_id)
-        payload = {"run": json.loads(json.dumps(run, default=lambda o: o.__dict__)), "validation_summary": summary}
+        salvage = _load_salvage_summary(run)
+        payload = {
+            "run": json.loads(json.dumps(run, default=lambda o: o.__dict__)),
+            "validation_summary": summary,
+            "salvage_summary": salvage,
+        }
         if args.format == "json":
             print(json.dumps(payload, indent=2))
         else:
@@ -353,6 +376,15 @@ def main(argv: list[str] | None = None) -> int:
             if summary:
                 print(f"validation_status={summary['validation']['status']}")
                 print(f"validation_passed={summary['validation']['passed']}")
+            if salvage:
+                print(f"salvage_path={salvage.get('path')}")
+                matches = salvage.get("matches") or []
+                first = next((item for item in matches if isinstance(item, dict)), None)
+                if first:
+                    if first.get("kind"):
+                        print(f"salvage_kind={first['kind']}")
+                    if first.get("detail"):
+                        print(f"salvage_detail={first['detail']}")
         return 0
 
     if args.cmd == "run":
