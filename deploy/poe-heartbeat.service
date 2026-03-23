@@ -1,0 +1,18 @@
+[Unit]
+Description=Poe Heartbeat — periodic health check + tiered recovery
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=clawd
+WorkingDirectory=/home/clawd/claude/openclaw-orchestration/src
+ExecStart=/usr/bin/python3 /home/clawd/claude/openclaw-orchestration/src/heartbeat.py --loop --interval 60
+Restart=on-failure
+RestartSec=30
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=poe-heartbeat
+
+[Install]
+WantedBy=multi-user.target

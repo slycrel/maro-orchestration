@@ -257,6 +257,14 @@ def main(argv: list[str] | None = None) -> int:
     p_poe_run.add_argument("--verbose", "-v", action="store_true", help="Print progress")
     p_poe_run.add_argument("--format", choices=["text", "json"], default="text", help="Output format")
 
+    p_poe_heartbeat = sub.add_parser("poe-heartbeat", help="Run Poe's heartbeat — health check + tiered recovery (Phase 4)")
+    p_poe_heartbeat.add_argument("--loop", action="store_true", help="Run forever on an interval")
+    p_poe_heartbeat.add_argument("--interval", type=float, default=60.0, help="Seconds between checks (default: 60)")
+    p_poe_heartbeat.add_argument("--dry-run", action="store_true", help="Check only, no recovery or Telegram alerts")
+    p_poe_heartbeat.add_argument("--no-escalate", action="store_true", help="Skip Telegram escalation")
+    p_poe_heartbeat.add_argument("--verbose", "-v", action="store_true", default=True)
+    p_poe_heartbeat.add_argument("--format", choices=["text", "json"], default="text")
+
     p_poe_telegram = sub.add_parser("poe-telegram", help="Start Poe's Telegram listener (routes messages through handle)")
     p_poe_telegram.add_argument("--once", action="store_true", help="Process pending updates once and exit")
     p_poe_telegram.add_argument("--dry-run", action="store_true", help="Process but don't send responses")
@@ -672,6 +680,27 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print(result.summary())
         return 0 if result.status == "done" else 1
+
+    if args.cmd == "poe-heartbeat":
+        from heartbeat import run_heartbeat, heartbeat_loop
+        if args.loop:
+            heartbeat_loop(
+                interval=args.interval,
+                dry_run=args.dry_run,
+                verbose=args.verbose,
+                escalate=not args.no_escalate,
+            )
+            return 0
+        report = run_heartbeat(
+            dry_run=args.dry_run,
+            verbose=args.verbose,
+            escalate=not args.no_escalate,
+        )
+        if args.format == "json":
+            print(json.dumps(report.to_dict(), indent=2))
+        else:
+            print(report.summary())
+        return 0
 
     if args.cmd == "poe-telegram":
         from telegram_listener import poll_once, poll_loop
