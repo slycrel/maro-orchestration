@@ -374,18 +374,31 @@ def run_heartbeat(
 def heartbeat_loop(
     *,
     interval: float = 60.0,
+    evolver_every: int = 10,
     dry_run: bool = False,
     verbose: bool = True,
     escalate: bool = True,
 ) -> None:
-    """Run heartbeat on a fixed interval forever."""
+    """Run heartbeat on a fixed interval forever.
+
+    Every `evolver_every` heartbeat cycles, also runs the meta-evolver
+    to analyze recent outcomes and propose improvements.
+    """
     if verbose:
-        print(f"[heartbeat] loop started interval={interval}s", file=sys.stderr)
+        print(f"[heartbeat] loop started interval={interval}s evolver_every={evolver_every}", file=sys.stderr)
+    tick = 0
     while True:
         try:
             run_heartbeat(dry_run=dry_run, verbose=verbose, escalate=escalate)
         except Exception as e:
             print(f"[heartbeat] run failed: {e}", file=sys.stderr)
+        tick += 1
+        if tick % evolver_every == 0:
+            try:
+                from evolver import run_evolver
+                run_evolver(dry_run=dry_run, verbose=verbose, notify=escalate, min_outcomes=5)
+            except Exception as e:
+                print(f"[heartbeat] evolver failed: {e}", file=sys.stderr)
         time.sleep(interval)
 
 

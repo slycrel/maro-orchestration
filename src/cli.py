@@ -257,6 +257,14 @@ def main(argv: list[str] | None = None) -> int:
     p_poe_run.add_argument("--verbose", "-v", action="store_true", help="Print progress")
     p_poe_run.add_argument("--format", choices=["text", "json"], default="text", help="Output format")
 
+    p_poe_evolver = sub.add_parser("poe-evolver", help="Run Poe's meta-evolver — analyze outcomes + propose improvements (§19)")
+    p_poe_evolver.add_argument("--dry-run", action="store_true", help="Analyze without writing suggestions")
+    p_poe_evolver.add_argument("--min-outcomes", type=int, default=3, help="Minimum outcomes needed to run (default: 3)")
+    p_poe_evolver.add_argument("--window", type=int, default=50, help="How many recent outcomes to analyze (default: 50)")
+    p_poe_evolver.add_argument("--notify", action="store_true", help="Send Telegram summary of suggestions")
+    p_poe_evolver.add_argument("--verbose", "-v", action="store_true", default=True)
+    p_poe_evolver.add_argument("--format", choices=["text", "json"], default="text")
+
     p_poe_heartbeat = sub.add_parser("poe-heartbeat", help="Run Poe's heartbeat — health check + tiered recovery (Phase 4)")
     p_poe_heartbeat.add_argument("--loop", action="store_true", help="Run forever on an interval")
     p_poe_heartbeat.add_argument("--interval", type=float, default=60.0, help="Seconds between checks (default: 60)")
@@ -680,6 +688,21 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print(result.summary())
         return 0 if result.status == "done" else 1
+
+    if args.cmd == "poe-evolver":
+        from evolver import run_evolver
+        report = run_evolver(
+            outcomes_window=args.window,
+            min_outcomes=args.min_outcomes,
+            dry_run=args.dry_run,
+            verbose=args.verbose,
+            notify=args.notify,
+        )
+        if args.format == "json":
+            print(json.dumps(report.to_dict(), indent=2))
+        else:
+            print(report.summary())
+        return 0
 
     if args.cmd == "poe-heartbeat":
         from heartbeat import run_heartbeat, heartbeat_loop
