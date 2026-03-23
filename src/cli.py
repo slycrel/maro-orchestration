@@ -201,6 +201,15 @@ def main(argv: list[str] | None = None) -> int:
     p_run.add_argument("--finish", choices=["done", "blocked"], help="Immediately finalize the claimed item")
     p_run.add_argument("--finish-note")
 
+    p_poe_handle = sub.add_parser("poe-handle", help="Send a request through Poe's handle (auto-routes NOW/AGENDA)")
+    p_poe_handle.add_argument("message", nargs="+", help="The request to handle")
+    p_poe_handle.add_argument("--project", "-p", help="Project slug for AGENDA work")
+    p_poe_handle.add_argument("--model", "-m", help="LLM model string")
+    p_poe_handle.add_argument("--lane", choices=["now", "agenda"], help="Force a specific lane")
+    p_poe_handle.add_argument("--dry-run", action="store_true", help="Simulate without API calls")
+    p_poe_handle.add_argument("--verbose", "-v", action="store_true", help="Print progress")
+    p_poe_handle.add_argument("--format", choices=["text", "json"], default="text", help="Output format")
+
     p_poe_run = sub.add_parser("poe-run", help="Run Poe's autonomous loop on a goal (Phase 1)")
     p_poe_run.add_argument("goal", nargs="+", help="Goal description")
     p_poe_run.add_argument("--project", "-p", help="Project slug (auto-created if not exists)")
@@ -467,6 +476,23 @@ def main(argv: list[str] | None = None) -> int:
                 return fail("E_RUN_FINISH_FAILED", str(exc))
             _print_run("finished", run)
         return 0
+
+    if args.cmd == "poe-handle":
+        import handle as _handle_mod
+        msg = " ".join(args.message)
+        try:
+            result = _handle_mod.handle(
+                msg,
+                project=args.project,
+                model=args.model,
+                force_lane=args.lane,
+                dry_run=args.dry_run,
+                verbose=args.verbose,
+            )
+        except Exception as exc:
+            return fail("E_POE_HANDLE", str(exc))
+        print(result.format(mode=args.format))
+        return 0 if result.status == "done" else 1
 
     if args.cmd == "poe-run":
         import agent_loop as _al
