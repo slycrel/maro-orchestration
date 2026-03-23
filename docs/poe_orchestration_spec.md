@@ -1,5 +1,5 @@
 # Poe Orchestration — v0 Spec
-## Synthesized from 5 weeks of design conversations (Feb 5 – Mar 12, 2026)
+## Synthesized from 7 weeks of design conversations (Feb 5 – Mar 23, 2026)
 
 ---
 
@@ -9,7 +9,7 @@ An orchestration layer built on top of OpenClaw that turns a conversational AI b
 
 **Core principle**: The orchestration is the product. Projects (Polymarket bot, X scraping, etc.) are test cases that *use* it. It is not a framework that sits under projects — it's the operating system for getting things done.
 
-**Platform**: OpenClaw on a 2014 Mac Mini (Linux Mint 22), residential fiber.
+**Platform**: 2014 Mac Mini (Ubuntu Linux headless), user `clawd`, residential fiber. OpenClaw + Claude Code running in parallel.
 
 ---
 
@@ -18,11 +18,11 @@ An orchestration layer built on top of OpenClaw that turns a conversational AI b
 ### Layer 1: Infrastructure ("The Body")
 Schedulers, queues, tool access, sandboxes, cost controls, logging, retries, model selection/routing.
 
-- **Host**: Linux Mint 22, user `clawd` with sudo
+- **Host**: Ubuntu Linux headless, user `clawd` with sudo, 2014 Mac Mini
 - **Gateway**: OpenClaw local gateway, ws://127.0.0.1:18789, systemd service
-- **Communication**: Telegram (@edgar_allen_bot / "Poe")
-- **Model stack**: gpt-5.4 primary → gpt-5.3-codex-spark → gpt-5.3-codex → gpt-5.2-codex → gpt-5.1-codex-mini (fallbacks). Gemini as last resort.
-- **Auth**: Codex CLI OAuth (ChatGPT Plus subscription). Single routing/auth surface via Gateway.
+- **Communication**: Telegram (@edgar_allen_bot / "Poe"), Slack (Claude Code bridge)
+- **Model stack**: Claude Opus / Sonnet (primary) via Anthropic API or OpenRouter → GPT-5.x variants (fallback) → Gemini (last resort). OpenRouter as stable routing layer for multi-model access.
+- **Auth**: Anthropic API key or OpenRouter key for Claude models. Codex CLI OAuth for GPT fallbacks. `gh` CLI for GitHub (authenticated as `slycrel`).
 - **Accounts**: agentic.poe@yahoo.com, @AgenticPoe on X, Moltbook profile
 - **Browser**: Playwright + computer-use skill, xvfb display :99, Chrome persistent profile, VNC at :5900
 
@@ -272,14 +272,17 @@ Global ops (gateway, tools, email, calendar) live at `system/` level. No cross-p
 
 | Source | What was taken |
 |--------|---------------|
-| **Paperclip** | Atomic checkout/409, run_id propagation, redaction, secret_ref |
+| **Paperclip** | Atomic checkout/409, run_id propagation, redaction, secret_ref, goal ancestry |
 | **Deer-Flow** | LangGraph ideas, middleware, memory, eval hooks |
 | **Souls CLI** | Workspace fixer, curated persona bundles |
 | **AutoHarness** | Auto-test generation concepts |
-| **LangGraph** | Durable state graphs |
+| **LangGraph** | Durable state graphs, reflection/cycle support, checkpointed self-improvement loops |
 | **AutoGen** | Layered multi-agent patterns |
 | **CrewAI** | Crews + Flows control plane |
 | **Temporal** | Durable workflow ideas |
+| **DSPy** | Prompt-as-module auto-optimization from success/failure metrics |
+| **Reflexion** | Agent self-reflection on mistakes, stored lessons improve subsequent runs |
+| **Symphony / AWS Multi-Agent Orchestrator** | Decentralized ledger-based coordination, Beacon selection for smart delegation, weighted voting, fault-tolerant sub-agents |
 
 ---
 
@@ -307,3 +310,97 @@ Global ops (gateway, tools, email, calendar) live at `system/` level. No cross-p
 | 2 | Durable graph flows & control plane |
 | 3 | Scaling & crew personas |
 | 4 | Evaluation + continuous learning |
+
+---
+
+## 18. Goal Ancestry
+
+Every task carries a reverse-linked chain back to the top-level mission. This prevents drift, keeps agents aligned with the big picture, and makes reflection/auditing possible across the full goal tree.
+
+### Data Model
+
+Each task gets two new fields:
+
+```json
+{
+  "id": "task-uuid",
+  "title": "Implement WebSocket handler",
+  "status": "todo",
+  "parent_id": "subgoal-123",
+  "ancestry": [
+    {"id": "mission-001", "title": "Build self-leveling autonomous assistant"},
+    {"id": "objective-abc", "title": "Add autonomous bug-fix & evolution loop"},
+    {"id": "subgoal-123", "title": "Enable real-time sync for collaboration"}
+  ]
+}
+```
+
+- `parent_id`: Direct parent goal/task.
+- `ancestry`: Full chain from top-level mission down to immediate parent. Array of lightweight objects (id + title).
+- When spawning subtasks (via `orch start` or planner), inherit the parent's ancestry and append the parent as the new last element.
+
+### Prompt Injection at Dispatch
+
+When an agent picks up a leaf task, the execution loop builds a prompt prefix from the ancestry:
+
+```text
+Goal Ancestry (stay aligned with this chain):
+1. Mission: Build self-leveling autonomous assistant
+2. Objective: Add autonomous bug-fix & evolution loop
+3. Sub-goal: Enable real-time sync for collaboration
+Current Task: Implement WebSocket handler
+```
+
+This ensures the agent understands *why* it's doing the work without re-explanation each time.
+
+### CLI Traversal Helpers
+
+- `orch ancestry <task-id>` — Walk up the chain, print the full trace from leaf to mission.
+- `orch impact <goal-id>` — List all descendant tasks/artifacts that contributed to a goal (breadth-first traversal down the tree).
+
+### Edge Cases
+
+- **Cycle prevention**: Enforce strict tree structure. A task cannot be its own ancestor. Validate on subtask creation.
+- **Deep-chain context truncation**: If ancestry exceeds ~10 levels or a token budget, summarize the middle (keep top 2 + bottom 2 + "...N intermediate goals...").
+- **DAG support (future)**: Start with strict tree (single parent). Allow multiple parents later if tasks legitimately serve two goals, converting the tree to a DAG. Defer until needed.
+
+---
+
+## 19. Self-Leveling / Meta-Evolution
+
+The north star: an assistant that gets measurably better over time without manual prompt tuning.
+
+### DSPy-Style Prompt Optimization
+
+Treat prompts and agent instructions as tunable modules. After N runs, evaluate success/failure rates per task type. Auto-optimize prompt parameters (instruction phrasing, tool selection hints, context window allocation) against measured outcomes. DSPy's "compile prompts from examples + metrics" pattern applies directly.
+
+### Reflexion Pattern
+
+After each task completion (success or failure):
+1. Agent reflects on what went well or wrong.
+2. Reflection is stored as a structured lesson (task type, failure mode, corrective insight).
+3. On next similar task, relevant lessons are injected into the agent's prompt alongside goal ancestry.
+
+This turns failures into durable institutional knowledge rather than repeated mistakes.
+
+### Meta-Evolver Agent
+
+A dedicated node/persona that periodically reviews recent runs:
+- Scans the last N job artifacts and their outcomes.
+- Identifies failure patterns (e.g., "research tasks drift 40% of the time when ancestry depth > 5").
+- Auto-suggests prompt tweaks, new guardrails, or skill additions.
+- Outputs a structured recommendation that the planner/director can adopt.
+
+Implementation vehicle: LangGraph's reflection/cycle support. Wrap the meta-evolver as a periodic node in the orchestration graph that fires after every M completed tasks or on a heartbeat schedule.
+
+### Feedback Loop
+
+```
+Execute task → Log outcome + artifacts
+    → Reflect (per-task lesson)
+    → Aggregate (meta-evolver reviews N runs)
+    → Optimize (prompt tweaks, new skills, guardrail updates)
+    → Deploy changes → Execute next task (improved)
+```
+
+Start simple: file-based lesson storage, manual review of meta-evolver suggestions. Graduate to auto-application once confidence in the optimization loop is established.
