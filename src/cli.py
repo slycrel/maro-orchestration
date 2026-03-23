@@ -201,6 +201,16 @@ def main(argv: list[str] | None = None) -> int:
     p_run.add_argument("--finish", choices=["done", "blocked"], help="Immediately finalize the claimed item")
     p_run.add_argument("--finish-note")
 
+    p_poe_run = sub.add_parser("poe-run", help="Run Poe's autonomous loop on a goal (Phase 1)")
+    p_poe_run.add_argument("goal", nargs="+", help="Goal description")
+    p_poe_run.add_argument("--project", "-p", help="Project slug (auto-created if not exists)")
+    p_poe_run.add_argument("--model", "-m", help="LLM model string")
+    p_poe_run.add_argument("--max-steps", type=int, default=6, help="Max decomposition steps (default: 6)")
+    p_poe_run.add_argument("--max-iterations", type=int, default=20, help="Hard cap on LLM calls")
+    p_poe_run.add_argument("--dry-run", action="store_true", help="Simulate without API calls")
+    p_poe_run.add_argument("--verbose", "-v", action="store_true", help="Print progress")
+    p_poe_run.add_argument("--format", choices=["text", "json"], default="text", help="Output format")
+
     p_plan = sub.add_parser("plan", help="Split a goal into NEXT tasks")
     p_plan.add_argument("project")
     p_plan.add_argument("goal", nargs="+")
@@ -457,6 +467,39 @@ def main(argv: list[str] | None = None) -> int:
                 return fail("E_RUN_FINISH_FAILED", str(exc))
             _print_run("finished", run)
         return 0
+
+    if args.cmd == "poe-run":
+        import agent_loop as _al
+        goal_str = " ".join(args.goal)
+        try:
+            result = _al.run_agent_loop(
+                goal_str,
+                project=args.project,
+                model=args.model,
+                max_steps=args.max_steps,
+                max_iterations=args.max_iterations,
+                dry_run=args.dry_run,
+                verbose=args.verbose,
+            )
+        except Exception as exc:
+            return fail("E_POE_RUN", str(exc))
+        if args.format == "json":
+            print(json.dumps({
+                "loop_id": result.loop_id,
+                "project": result.project,
+                "goal": result.goal,
+                "status": result.status,
+                "steps_done": sum(1 for s in result.steps if s.status == "done"),
+                "steps_total": len(result.steps),
+                "stuck_reason": result.stuck_reason,
+                "tokens_in": result.total_tokens_in,
+                "tokens_out": result.total_tokens_out,
+                "elapsed_ms": result.elapsed_ms,
+                "log_path": result.log_path,
+            }, indent=2))
+        else:
+            print(result.summary())
+        return 0 if result.status == "done" else 1
 
     if args.cmd == "plan":
         try:
