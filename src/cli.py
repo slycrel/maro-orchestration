@@ -248,6 +248,8 @@ def main(argv: list[str] | None = None) -> int:
     p_poe_run = sub.add_parser("poe-run", help="Run Poe's autonomous loop on a goal (Phase 1)")
     p_poe_run.add_argument("goal", nargs="+", help="Goal description")
     p_poe_run.add_argument("--project", "-p", help="Project slug (auto-created if not exists)")
+    p_poe_run.add_argument("--parent", help="Parent project slug (sets goal ancestry for this run)")
+    p_poe_run.add_argument("--parent-title", help="Human-readable title of the parent goal")
     p_poe_run.add_argument("--model", "-m", help="LLM model string")
     p_poe_run.add_argument("--max-steps", type=int, default=6, help="Max decomposition steps (default: 6)")
     p_poe_run.add_argument("--max-iterations", type=int, default=20, help="Hard cap on LLM calls")
@@ -311,6 +313,16 @@ def main(argv: list[str] | None = None) -> int:
         type=int,
         help="Maximum attempts per item before stopping non-done statuses",
     )
+
+    p_ancestry = sub.add_parser("ancestry", help="Show goal ancestry chain for a project (§18)")
+    p_ancestry.add_argument("project", help="Project slug")
+    p_ancestry.add_argument("--set-parent", help="Set parent project slug (creates ancestry link)")
+    p_ancestry.add_argument("--parent-title", help="Human-readable title of the parent goal")
+    p_ancestry.add_argument("--format", choices=["text", "json"], default="text")
+
+    p_impact = sub.add_parser("impact", help="List all descendant projects of a goal (BFS)")
+    p_impact.add_argument("project", help="Root project slug to trace descendants from")
+    p_impact.add_argument("--format", choices=["text", "json"], default="text")
 
     p_status = sub.add_parser("status", help="Write/read operator status")
     p_status.add_argument("--format", choices=["json", "path"], default="json")
@@ -619,6 +631,18 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "poe-run":
         import agent_loop as _al
         goal_str = " ".join(args.goal)
+        # Wire up ancestry if --parent was specified
+        if getattr(args, "parent", None):
+            from ancestry import create_child_ancestry, set_project_ancestry
+            import orch as _o
+            _target_slug = args.project or _al._goal_to_slug(goal_str)
+            _target_dir = _o.project_dir(_target_slug)
+            if not _target_dir.exists():
+                _o.ensure_project(_target_slug, goal_str[:80])
+            _parent_dir = _o.project_dir(args.parent)
+            _parent_title = getattr(args, "parent_title", None) or args.parent
+            _child_ancestry = create_child_ancestry(args.parent, _parent_title, _parent_dir)
+            set_project_ancestry(_target_dir, _child_ancestry)
         try:
             result = _al.run_agent_loop(
                 goal_str,
@@ -731,6 +755,48 @@ def main(argv: list[str] | None = None) -> int:
             print(
                 f"iteration={idx} project={tick.run.project} run_id={tick.run.run_id} status={tick.validation.status} item={tick.run.index}"
             )
+        return 0
+
+    if args.cmd == "ancestry":
+        from ancestry import (
+            get_project_ancestry, set_project_ancestry,
+            create_child_ancestry, orch_ancestry,
+        )
+        p = project_dir(args.project)
+        if not p.exists():
+            return fail("E_PROJECT_NOT_FOUND", args.project)
+
+        if args.set_parent:
+            parent_p = project_dir(args.set_parent)
+            parent_title = args.parent_title or args.set_parent
+            new_ancestry = create_child_ancestry(args.set_parent, parent_title, parent_p)
+            set_project_ancestry(p, new_ancestry)
+            print(f"project={args.project} parent={args.set_parent} ancestry_depth={new_ancestry.depth()}")
+            return 0
+
+        chain = orch_ancestry(args.project, p)
+        if args.format == "json":
+            ancestry = get_project_ancestry(p)
+            print(json.dumps(ancestry.to_dict() if ancestry else {}, indent=2))
+        else:
+            for line in chain:
+                print(line)
+        return 0
+
+    if args.cmd == "impact":
+        from ancestry import orch_impact
+        p = project_dir(args.project)
+        if not p.exists():
+            return fail("E_PROJECT_NOT_FOUND", args.project)
+        descendants = orch_impact(args.project, p.parent)
+        if args.format == "json":
+            print(json.dumps(descendants))
+        else:
+            if not descendants:
+                print(f"project={args.project} descendants=(none)")
+            else:
+                for d in descendants:
+                    print(d)
         return 0
 
     if args.cmd == "status":

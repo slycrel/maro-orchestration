@@ -208,7 +208,16 @@ def run_agent_loop(
             if verbose:
                 print(f"[poe] created project={project}", file=sys.stderr, flush=True)
 
-    # Step 1: Decompose goal into steps (inject memory context)
+    # Load goal ancestry for prompt injection
+    try:
+        from ancestry import get_project_ancestry, build_ancestry_prompt
+        _proj_dir = o.project_dir(project)
+        _ancestry = get_project_ancestry(_proj_dir)
+        _ancestry_context = build_ancestry_prompt(_ancestry, current_task=goal)
+    except Exception:
+        _ancestry_context = ""
+
+    # Step 1: Decompose goal into steps (inject memory + ancestry context)
     if verbose:
         print(f"[poe] decomposing goal...", file=sys.stderr, flush=True)
     try:
@@ -216,7 +225,10 @@ def run_agent_loop(
         _lessons_context = inject_lessons_for_task("agenda", goal, max_lessons=3)
     except Exception:
         _lessons_context = ""
-    steps = _decompose(goal, adapter, max_steps=max_steps, verbose=verbose, lessons_context=_lessons_context)
+    steps = _decompose(
+        goal, adapter, max_steps=max_steps, verbose=verbose,
+        lessons_context=_lessons_context, ancestry_context=_ancestry_context,
+    )
     if verbose:
         print(f"[poe] decomposed into {len(steps)} steps", file=sys.stderr, flush=True)
 
@@ -258,6 +270,7 @@ def run_agent_loop(
             adapter=adapter,
             tools=[LLMTool(**t) for t in _EXECUTE_TOOLS],
             verbose=verbose,
+            ancestry_context=_ancestry_context,
         )
         step_elapsed = int((time.monotonic() - step_start) * 1000)
 
@@ -386,13 +399,21 @@ def run_agent_loop(
 # Decompose
 # ---------------------------------------------------------------------------
 
-def _decompose(goal: str, adapter, max_steps: int, verbose: bool = False, lessons_context: str = "") -> List[str]:
+def _decompose(
+    goal: str,
+    adapter,
+    max_steps: int,
+    verbose: bool = False,
+    lessons_context: str = "",
+    ancestry_context: str = "",
+) -> List[str]:
     """Ask the LLM to decompose a goal into steps. Falls back to heuristic."""
     from llm import LLMMessage
 
     system = _DECOMPOSE_SYSTEM
-    if lessons_context:
-        system = _DECOMPOSE_SYSTEM + "\n\n" + lessons_context
+    extras = [x for x in [ancestry_context, lessons_context] if x]
+    if extras:
+        system = _DECOMPOSE_SYSTEM + "\n\n" + "\n\n".join(extras)
 
     try:
         resp = adapter.complete(
@@ -433,6 +454,7 @@ def _execute_step(
     adapter,
     tools: List[Any],
     verbose: bool = False,
+    ancestry_context: str = "",
 ) -> Dict[str, Any]:
     """Execute one step via the LLM. Returns outcome dict."""
     from llm import LLMMessage
@@ -443,8 +465,10 @@ def _execute_step(
             f"  - {c}" for c in completed_context
         )
 
+    ancestry_block = f"\n\n{ancestry_context}" if ancestry_context else ""
+
     user_msg = (
-        f"Overall goal: {goal}\n\n"
+        f"Overall goal: {goal}{ancestry_block}\n\n"
         f"Current step ({step_num}/{total_steps}): {step_text}"
         f"{context_block}\n\n"
         f"Complete this step now. Call complete_step when done or flag_stuck if blocked."
