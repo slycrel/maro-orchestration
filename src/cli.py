@@ -201,6 +201,22 @@ def main(argv: list[str] | None = None) -> int:
     p_run.add_argument("--finish", choices=["done", "blocked"], help="Immediately finalize the claimed item")
     p_run.add_argument("--finish-note")
 
+    p_sheriff = sub.add_parser("sheriff", help="Loop Sheriff — check projects for stuck loops (Phase 4)")
+    sheriff_sub = p_sheriff.add_subparsers(dest="sheriff_cmd", required=True)
+
+    p_sheriff_check = sheriff_sub.add_parser("check", help="Check a project")
+    p_sheriff_check.add_argument("project")
+    p_sheriff_check.add_argument("--window", type=int, default=30)
+    p_sheriff_check.add_argument("--format", choices=["text", "json"], default="text")
+
+    p_sheriff_all = sheriff_sub.add_parser("all", help="Check all projects")
+    p_sheriff_all.add_argument("--window", type=int, default=30)
+    p_sheriff_all.add_argument("--format", choices=["text", "json"], default="text")
+
+    p_sheriff_health = sheriff_sub.add_parser("health", help="System health check")
+    p_sheriff_health.add_argument("--format", choices=["text", "json"], default="text")
+    p_sheriff_health.add_argument("--write-state", action="store_true")
+
     p_poe_director = sub.add_parser("poe-director", help="Run Poe's Director/Worker hierarchy on a directive (Phase 3)")
     p_poe_director.add_argument("directive", nargs="+", help="The directive to execute")
     p_poe_director.add_argument("--project", "-p", help="Project slug")
@@ -484,6 +500,30 @@ def main(argv: list[str] | None = None) -> int:
                 return fail("E_RUN_FINISH_FAILED", str(exc))
             _print_run("finished", run)
         return 0
+
+    if args.cmd == "sheriff":
+        import sheriff as _sheriff_mod
+        if args.sheriff_cmd == "check":
+            report = _sheriff_mod.check_project(args.project, window_minutes=args.window)
+            print(report.format(args.format))
+            return 0 if report.status == "healthy" else 1
+        if args.sheriff_cmd == "all":
+            reports = _sheriff_mod.check_all_projects(window_minutes=args.window)
+            if args.format == "json":
+                print(json.dumps([json.loads(r.format("json")) for r in reports], indent=2))
+            else:
+                for r in reports:
+                    print(r.format("text"))
+                    print()
+            stuck = [r for r in reports if r.status in ("stuck", "warning")]
+            return 1 if stuck else 0
+        if args.sheriff_cmd == "health":
+            health = _sheriff_mod.check_system_health()
+            if args.write_state:
+                project_reports = _sheriff_mod.check_all_projects()
+                _sheriff_mod.write_heartbeat_state(health, project_reports=project_reports)
+            print(health.format(args.format))
+            return 0 if health.status == "healthy" else 1
 
     if args.cmd == "poe-director":
         import director as _director_mod
