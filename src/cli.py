@@ -255,6 +255,12 @@ def main(argv: list[str] | None = None) -> int:
     p_poe_run.add_argument("--verbose", "-v", action="store_true", help="Print progress")
     p_poe_run.add_argument("--format", choices=["text", "json"], default="text", help="Output format")
 
+    p_poe_telegram = sub.add_parser("poe-telegram", help="Start Poe's Telegram listener (routes messages through handle)")
+    p_poe_telegram.add_argument("--once", action="store_true", help="Process pending updates once and exit")
+    p_poe_telegram.add_argument("--dry-run", action="store_true", help="Process but don't send responses")
+    p_poe_telegram.add_argument("--project", "-p", default="poe-telegram", help="Project slug for memory")
+    p_poe_telegram.add_argument("--verbose", "-v", action="store_true", default=True)
+
     p_plan = sub.add_parser("plan", help="Split a goal into NEXT tasks")
     p_plan.add_argument("project")
     p_plan.add_argument("goal", nargs="+")
@@ -642,6 +648,19 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print(result.summary())
         return 0 if result.status == "done" else 1
+
+    if args.cmd == "poe-telegram":
+        from telegram_listener import poll_once, poll_loop
+        try:
+            if args.once:
+                n = poll_once(dry_run=args.dry_run, project=args.project, verbose=args.verbose)
+                print(f"processed={n}")
+                return 0
+            else:
+                poll_loop(dry_run=args.dry_run, project=args.project, verbose=args.verbose)
+                return 0
+        except RuntimeError as exc:
+            return fail("E_TELEGRAM", str(exc))
 
     if args.cmd == "plan":
         try:
