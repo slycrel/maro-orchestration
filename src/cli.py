@@ -201,6 +201,14 @@ def main(argv: list[str] | None = None) -> int:
     p_run.add_argument("--finish", choices=["done", "blocked"], help="Immediately finalize the claimed item")
     p_run.add_argument("--finish-note")
 
+    p_poe_director = sub.add_parser("poe-director", help="Run Poe's Director/Worker hierarchy on a directive (Phase 3)")
+    p_poe_director.add_argument("directive", nargs="+", help="The directive to execute")
+    p_poe_director.add_argument("--project", "-p", help="Project slug")
+    p_poe_director.add_argument("--model", "-m", help="LLM model string")
+    p_poe_director.add_argument("--dry-run", action="store_true", help="Simulate without API calls")
+    p_poe_director.add_argument("--verbose", "-v", action="store_true", help="Print progress")
+    p_poe_director.add_argument("--format", choices=["text", "json"], default="text", help="Output format")
+
     p_poe_handle = sub.add_parser("poe-handle", help="Send a request through Poe's handle (auto-routes NOW/AGENDA)")
     p_poe_handle.add_argument("message", nargs="+", help="The request to handle")
     p_poe_handle.add_argument("--project", "-p", help="Project slug for AGENDA work")
@@ -476,6 +484,38 @@ def main(argv: list[str] | None = None) -> int:
                 return fail("E_RUN_FINISH_FAILED", str(exc))
             _print_run("finished", run)
         return 0
+
+    if args.cmd == "poe-director":
+        import director as _director_mod
+        directive = " ".join(args.directive)
+        try:
+            result = _director_mod.run_director(
+                directive,
+                project=args.project,
+                dry_run=args.dry_run,
+                verbose=args.verbose,
+            )
+        except Exception as exc:
+            return fail("E_POE_DIRECTOR", str(exc))
+        if args.format == "json":
+            print(json.dumps({
+                "director_id": result.director_id,
+                "status": result.status,
+                "plan_acceptance": result.plan_acceptance,
+                "tickets": len(result.tickets),
+                "report": result.report,
+                "tokens_in": result.tokens_in,
+                "tokens_out": result.tokens_out,
+                "elapsed_ms": result.elapsed_ms,
+                "log_path": result.log_path,
+            }, indent=2))
+        else:
+            print(result.summary())
+            if result.report:
+                print()
+                print("=== REPORT ===")
+                print(result.report)
+        return 0 if result.status == "done" else 1
 
     if args.cmd == "poe-handle":
         import handle as _handle_mod
