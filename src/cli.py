@@ -201,6 +201,17 @@ def main(argv: list[str] | None = None) -> int:
     p_run.add_argument("--finish", choices=["done", "blocked"], help="Immediately finalize the claimed item")
     p_run.add_argument("--finish-note")
 
+    p_memory = sub.add_parser("memory", help="Memory system — outcomes, lessons, session context (Phase 5)")
+    memory_sub = p_memory.add_subparsers(dest="memory_cmd", required=True)
+    memory_sub.add_parser("context", help="Print bootstrap context for current session")
+    p_mem_outcomes = memory_sub.add_parser("outcomes", help="List recent outcomes")
+    p_mem_outcomes.add_argument("--limit", type=int, default=10)
+    p_mem_outcomes.add_argument("--format", choices=["text", "json"], default="text")
+    p_mem_lessons = memory_sub.add_parser("lessons", help="List stored lessons")
+    p_mem_lessons.add_argument("--type", dest="task_type", help="Filter by task type")
+    p_mem_lessons.add_argument("--limit", type=int, default=10)
+    p_mem_lessons.add_argument("--format", choices=["text", "json"], default="text")
+
     p_sheriff = sub.add_parser("sheriff", help="Loop Sheriff — check projects for stuck loops (Phase 4)")
     sheriff_sub = p_sheriff.add_subparsers(dest="sheriff_cmd", required=True)
 
@@ -500,6 +511,31 @@ def main(argv: list[str] | None = None) -> int:
                 return fail("E_RUN_FINISH_FAILED", str(exc))
             _print_run("finished", run)
         return 0
+
+    if args.cmd == "memory":
+        import memory as _mem
+        if args.memory_cmd == "context":
+            ctx = _mem.bootstrap_context()
+            print(ctx if ctx else "(no memory yet)")
+            return 0
+        if args.memory_cmd == "outcomes":
+            outcomes = _mem.load_outcomes(limit=args.limit)
+            if args.format == "json":
+                from dataclasses import asdict
+                print(json.dumps([asdict(o) for o in outcomes], indent=2))
+            else:
+                for o in outcomes:
+                    print(f"[{o.recorded_at[:10]}] {o.status:6s} {o.task_type:8s} {o.goal[:60]}")
+            return 0
+        if args.memory_cmd == "lessons":
+            lessons = _mem.load_lessons(task_type=args.task_type, limit=args.limit)
+            if args.format == "json":
+                from dataclasses import asdict
+                print(json.dumps([asdict(l) for l in lessons], indent=2))
+            else:
+                for l in lessons:
+                    print(f"[{l.task_type:8s}] conf={l.confidence:.1f} {l.lesson[:80]}")
+            return 0
 
     if args.cmd == "sheriff":
         import sheriff as _sheriff_mod

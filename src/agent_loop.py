@@ -186,7 +186,7 @@ def run_agent_loop(
     start_ts = datetime.now(timezone.utc).isoformat()
 
     if verbose:
-        print(f"[poe] loop_id={loop_id} goal={goal!r}", flush=True)
+        print(f"[poe] loop_id={loop_id} goal={goal!r}", file=sys.stderr, flush=True)
 
     # Build adapter
     if adapter is None and not dry_run:
@@ -199,21 +199,26 @@ def run_agent_loop(
     if project and not o.project_dir(project).exists():
         o.ensure_project(project, goal[:80])
         if verbose:
-            print(f"[poe] created project={project}", flush=True)
+            print(f"[poe] created project={project}", file=sys.stderr, flush=True)
     elif not project:
         slug = _goal_to_slug(goal)
         project = slug
         if not o.project_dir(project).exists():
             o.ensure_project(project, goal[:80])
             if verbose:
-                print(f"[poe] created project={project}", flush=True)
+                print(f"[poe] created project={project}", file=sys.stderr, flush=True)
 
-    # Step 1: Decompose goal into steps
+    # Step 1: Decompose goal into steps (inject memory context)
     if verbose:
-        print(f"[poe] decomposing goal...", flush=True)
-    steps = _decompose(goal, adapter, max_steps=max_steps, verbose=verbose)
+        print(f"[poe] decomposing goal...", file=sys.stderr, flush=True)
+    try:
+        from memory import inject_lessons_for_task
+        _lessons_context = inject_lessons_for_task("agenda", goal, max_lessons=3)
+    except Exception:
+        _lessons_context = ""
+    steps = _decompose(goal, adapter, max_steps=max_steps, verbose=verbose, lessons_context=_lessons_context)
     if verbose:
-        print(f"[poe] decomposed into {len(steps)} steps", flush=True)
+        print(f"[poe] decomposed into {len(steps)} steps", file=sys.stderr, flush=True)
 
     # Add steps to project NEXT.md
     step_indices = o.append_next_items(project, steps)
@@ -241,7 +246,7 @@ def run_agent_loop(
 
         iteration += 1
         if verbose:
-            print(f"[poe] step {step_idx+1}/{len(steps)}: {step_text!r}", flush=True)
+            print(f"[poe] step {step_idx+1}/{len(steps)}: {step_text!r}", file=sys.stderr, flush=True)
 
         step_start = time.monotonic()
         outcome = _execute_step(
@@ -295,13 +300,13 @@ def run_agent_loop(
             o.mark_item(project, item_index, o.STATE_DONE)
             completed_context.append(f"Step {step_idx+1} ({step_text}): {step_summary}")
             if verbose:
-                print(f"[poe] step {step_idx+1} done: {step_summary}", flush=True)
+                print(f"[poe] step {step_idx+1} done: {step_summary}", file=sys.stderr, flush=True)
         else:
             o.mark_item(project, item_index, o.STATE_BLOCKED)
             loop_status = "stuck"
             stuck_reason = outcome.get("stuck_reason", f"step {step_idx+1} blocked")
             if verbose:
-                print(f"[poe] step {step_idx+1} stuck: {stuck_reason}", flush=True)
+                print(f"[poe] step {step_idx+1} stuck: {stuck_reason}", file=sys.stderr, flush=True)
 
         step_outcomes.append(StepOutcome(
             index=item_index,
@@ -349,7 +354,30 @@ def run_agent_loop(
     )
 
     if verbose:
-        print(f"[poe] {result.summary()}", flush=True)
+        print(f"[poe] {result.summary()}", file=sys.stderr, flush=True)
+
+    # Phase 5: Reflexion — record outcome + extract lessons
+    try:
+        from memory import reflect_and_record
+        done_steps = [s for s in step_outcomes if s.status == "done"]
+        summary = (
+            f"Completed {len(done_steps)}/{len(step_outcomes)} steps. "
+            + (stuck_reason or "All steps done.")
+        )
+        reflect_and_record(
+            goal=goal,
+            status=loop_status,
+            result_summary=summary,
+            task_type="agenda",
+            project=project,
+            tokens_in=total_tokens_in,
+            tokens_out=total_tokens_out,
+            elapsed_ms=elapsed_total,
+            adapter=adapter if not dry_run else None,
+            dry_run=dry_run,
+        )
+    except Exception:
+        pass  # Memory failures must never break the loop
 
     return result
 
@@ -358,14 +386,18 @@ def run_agent_loop(
 # Decompose
 # ---------------------------------------------------------------------------
 
-def _decompose(goal: str, adapter, max_steps: int, verbose: bool = False) -> List[str]:
+def _decompose(goal: str, adapter, max_steps: int, verbose: bool = False, lessons_context: str = "") -> List[str]:
     """Ask the LLM to decompose a goal into steps. Falls back to heuristic."""
     from llm import LLMMessage
+
+    system = _DECOMPOSE_SYSTEM
+    if lessons_context:
+        system = _DECOMPOSE_SYSTEM + "\n\n" + lessons_context
 
     try:
         resp = adapter.complete(
             [
-                LLMMessage("system", _DECOMPOSE_SYSTEM),
+                LLMMessage("system", system),
                 LLMMessage("user", f"Goal: {goal}\n\nDecompose into {max_steps} or fewer concrete steps."),
             ],
             max_tokens=1024,
@@ -381,7 +413,7 @@ def _decompose(goal: str, adapter, max_steps: int, verbose: bool = False) -> Lis
                 return [s.strip() for s in steps if s.strip()][:max_steps]
     except Exception as exc:
         if verbose:
-            print(f"[poe] decompose LLM call failed, using heuristic: {exc}", flush=True)
+            print(f"[poe] decompose LLM call failed, using heuristic: {exc}", file=sys.stderr, flush=True)
 
     # Fallback: heuristic decomposition (reuse orch logic)
     o = _orch()
