@@ -21,11 +21,18 @@ from typing import Any
 
 import requests
 
-# handle() imported at module level so tests can patch telegram_listener.handle
+# Module-level imports so tests can patch cleanly
 try:
     from handle import handle
 except ImportError:  # pragma: no cover
     handle = None  # type: ignore[assignment]
+
+try:
+    from sheriff import check_system_health, check_all_projects, read_heartbeat_state
+except ImportError:  # pragma: no cover
+    check_system_health = None  # type: ignore[assignment]
+    check_all_projects = None  # type: ignore[assignment]
+    read_heartbeat_state = None  # type: ignore[assignment]
 
 
 # ---------------------------------------------------------------------------
@@ -110,6 +117,24 @@ class TelegramBot:
         for chunk in chunks:
             self._call("sendMessage", chat_id=chat_id, text=chunk, parse_mode="Markdown")
 
+    def send_message_returning_id(self, chat_id: int, text: str) -> int:
+        """Send a short message and return its message_id (for later editing)."""
+        result = self._call("sendMessage", chat_id=chat_id, text=text[:4096])
+        return result.get("message_id", 0)
+
+    def edit_message(self, chat_id: int, message_id: int, text: str) -> None:
+        """Edit an existing message (splits into multiple if > 4096 chars)."""
+        chunks = [text[i:i+4096] for i in range(0, len(text), 4096)]
+        try:
+            self._call("editMessageText", chat_id=chat_id, message_id=message_id, text=chunks[0], parse_mode="Markdown")
+        except Exception:
+            # Edit failed (e.g. message too old) — send new messages instead
+            for chunk in chunks:
+                self._call("sendMessage", chat_id=chat_id, text=chunk, parse_mode="Markdown")
+            return
+        for chunk in chunks[1:]:
+            self._call("sendMessage", chat_id=chat_id, text=chunk, parse_mode="Markdown")
+
     def send_typing(self, chat_id: int) -> None:
         try:
             self._call("sendChatAction", chat_id=chat_id, action="typing")
@@ -134,8 +159,95 @@ def _save_offset(offset: int) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Slash command dispatch
+# ---------------------------------------------------------------------------
+
+def _parse_slash_command(text: str):
+    """Parse /command [args]. Returns (command, args_str) or (None, text)."""
+    text = text.strip()
+    if not text.startswith("/"):
+        return None, text
+    parts = text[1:].split(None, 1)
+    cmd = parts[0].lower().split("@")[0]  # strip @botname suffix
+    args = parts[1] if len(parts) > 1 else ""
+    return cmd, args
+
+
+def _dispatch_slash(
+    cmd: str,
+    args: str,
+    *,
+    project: str,
+    dry_run: bool,
+    verbose: bool,
+) -> str:
+    """Route a slash command to the appropriate handler."""
+    if cmd == "status":
+        # System health summary
+        try:
+            health = check_system_health()
+            projects = check_all_projects()
+            stuck = [r.project for r in projects if r.status in ("stuck", "warning")]
+            state = read_heartbeat_state() or {}
+            last_check = state.get("checked_at", "never")
+            lines = [
+                f"*Poe Status*",
+                f"Health: {health.status}",
+                f"Last heartbeat: {last_check}",
+                f"Stuck projects: {', '.join(stuck) if stuck else 'none'}",
+            ]
+            return "\n".join(lines)
+        except Exception as e:
+            return f"Status check failed: {e}"
+
+    elif cmd in ("director", "research", "build", "ops"):
+        # Force the director/worker path
+        if not args:
+            return f"Usage: /{cmd} <directive>"
+        try:
+            from director import run_director
+            from llm import build_adapter, MODEL_CHEAP
+            adapter = build_adapter(model=MODEL_CHEAP) if not dry_run else None
+            result = run_director(args, project=project, adapter=adapter, dry_run=dry_run, verbose=verbose)
+            return result.report or "(director produced no report)"
+        except Exception as e:
+            return f"Director error: {e}"
+
+    elif cmd == "ancestry":
+        if not args:
+            return "Usage: /ancestry <project-slug>"
+        try:
+            from ancestry import orch_ancestry, get_project_ancestry
+            from orch import project_dir
+            d = project_dir(args.strip())
+            chain = orch_ancestry(args.strip(), d)
+            return "\n".join(chain)
+        except Exception as e:
+            return f"Ancestry error: {e}"
+
+    elif cmd == "help":
+        return (
+            "*Poe commands*\n"
+            "/status — system health and stuck projects\n"
+            "/director <directive> — run full Director/Worker pipeline\n"
+            "/research <goal> — run a research worker\n"
+            "/build <goal> — run a build worker\n"
+            "/ops <command> — run an ops worker\n"
+            "/ancestry <project> — show goal ancestry chain\n"
+            "/help — show this message\n"
+            "\nOr just send a natural language message."
+        )
+
+    else:
+        return f"Unknown command /{cmd}. Try /help."
+
+
+# ---------------------------------------------------------------------------
 # Message handler
 # ---------------------------------------------------------------------------
+
+_ACK_MESSAGE = "⏳ Working on it..."
+
 
 def _process_message(
     bot: TelegramBot,
@@ -161,25 +273,54 @@ def _process_message(
     if verbose:
         print(f"[telegram] @{from_user} → {text[:80]}", file=sys.stderr)
 
-    if not dry_run:
+    # Parse slash command or natural language
+    cmd, args = _parse_slash_command(text)
+
+    if dry_run:
+        # In dry-run, just process without sending
+        if cmd:
+            _dispatch_slash(cmd, args, project=project, dry_run=True, verbose=verbose)
+        else:
+            try:
+                result = handle(text, project=project, dry_run=True, verbose=verbose)
+            except Exception as e:
+                if verbose:
+                    print(f"[telegram] dry-run handle() failed: {e}", file=sys.stderr)
+        return
+
+    # Send immediate ack for non-trivial commands
+    ack_id = 0
+    if cmd in ("director", "research", "build", "ops") or (cmd is None and len(text) > 20):
+        try:
+            ack_id = bot.send_message_returning_id(chat_id, _ACK_MESSAGE)
+        except Exception:
+            pass
+    else:
         bot.send_typing(chat_id)
 
+    # Execute
     try:
-        result = handle(text, project=project, dry_run=dry_run, verbose=verbose)
-        response = result.response or "(no response)"
+        if cmd:
+            response = _dispatch_slash(cmd, args, project=project, dry_run=False, verbose=verbose)
+        else:
+            result = handle(text, project=project, dry_run=False, verbose=verbose)
+            response = result.response or "(no response)"
     except Exception as e:
         response = f"Error: {e}"
         if verbose:
-            print(f"[telegram] handle() failed: {e}", file=sys.stderr)
+            print(f"[telegram] execution failed: {e}", file=sys.stderr)
 
     if verbose:
         print(f"[telegram] → {response[:120]}", file=sys.stderr)
 
-    if not dry_run:
-        try:
+    # Send/edit response
+    try:
+        if ack_id:
+            bot.edit_message(chat_id, ack_id, response)
+        else:
             bot.send_message(chat_id, response)
-        except Exception as e:
-            print(f"[telegram] send_message failed: {e}", file=sys.stderr)
+    except Exception as e:
+        print(f"[telegram] send/edit failed: {e}", file=sys.stderr)
 
 
 # ---------------------------------------------------------------------------

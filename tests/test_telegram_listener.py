@@ -13,6 +13,8 @@ from telegram_listener import (
     TelegramBot,
     _resolve_token,
     _resolve_allowed_chats,
+    _parse_slash_command,
+    _dispatch_slash,
     poll_once,
     _process_message,
 )
@@ -180,6 +182,126 @@ def test_poll_once_no_updates(monkeypatch, tmp_path):
         count = poll_once(dry_run=True)
 
     assert count == 0
+
+
+# ---------------------------------------------------------------------------
+# Slash command parsing
+# ---------------------------------------------------------------------------
+
+def test_parse_slash_command_basic():
+    cmd, args = _parse_slash_command("/status")
+    assert cmd == "status"
+    assert args == ""
+
+
+def test_parse_slash_command_with_args():
+    cmd, args = _parse_slash_command("/director research polymarket")
+    assert cmd == "director"
+    assert args == "research polymarket"
+
+
+def test_parse_slash_command_at_suffix():
+    cmd, args = _parse_slash_command("/status@mybotname")
+    assert cmd == "status"
+
+
+def test_parse_slash_command_natural_language():
+    cmd, args = _parse_slash_command("what time is it?")
+    assert cmd is None
+    assert args == "what time is it?"
+
+
+def test_parse_slash_command_help():
+    cmd, _ = _parse_slash_command("/help")
+    assert cmd == "help"
+
+
+# ---------------------------------------------------------------------------
+# Slash command dispatch
+# ---------------------------------------------------------------------------
+
+def test_dispatch_slash_help():
+    response = _dispatch_slash("help", "", project="test", dry_run=True, verbose=False)
+    assert "/status" in response
+    assert "/director" in response
+
+
+def test_dispatch_slash_unknown():
+    response = _dispatch_slash("foobar", "", project="test", dry_run=True, verbose=False)
+    assert "Unknown" in response or "foobar" in response
+
+
+def test_dispatch_slash_director_no_args():
+    response = _dispatch_slash("director", "", project="test", dry_run=True, verbose=False)
+    assert "Usage" in response
+
+
+def test_dispatch_slash_status():
+    with patch("telegram_listener.check_system_health") as mock_health, \
+         patch("telegram_listener.check_all_projects", return_value=[]), \
+         patch("telegram_listener.read_heartbeat_state", return_value={}):
+        from sheriff import SystemHealth
+        mock_health.return_value = SystemHealth(status="healthy", checks={})
+        response = _dispatch_slash("status", "", project="test", dry_run=False, verbose=False)
+    assert "healthy" in response.lower()
+
+
+# ---------------------------------------------------------------------------
+# Response timing — ack + edit
+# ---------------------------------------------------------------------------
+
+def test_process_message_sends_ack_for_long_message():
+    """Long natural-language messages should get an immediate ack, then an edit."""
+    bot = MagicMock()
+    bot.send_message_returning_id.return_value = 42
+
+    with patch("telegram_listener.handle") as mock_handle:
+        mock_handle.return_value = MagicMock(response="detailed answer here")
+        _process_message(
+            bot,
+            _make_tg_message("this is a longer message that should get an ack", chat_id=111),
+            allowed_chats={111},
+            dry_run=False,
+        )
+
+    bot.send_message_returning_id.assert_called_once()
+    bot.edit_message.assert_called_once_with(111, 42, "detailed answer here")
+    bot.send_message.assert_not_called()
+
+
+def test_process_message_short_message_no_ack():
+    """Short messages (<=20 chars) skip the ack, use typing indicator."""
+    bot = MagicMock()
+    bot.send_message_returning_id.return_value = 0
+
+    with patch("telegram_listener.handle") as mock_handle:
+        mock_handle.return_value = MagicMock(response="hi")
+        _process_message(
+            bot,
+            _make_tg_message("hi", chat_id=111),
+            allowed_chats={111},
+            dry_run=False,
+        )
+
+    bot.send_message_returning_id.assert_not_called()
+    bot.send_message.assert_called_once_with(111, "hi")
+
+
+def test_process_message_slash_director_sends_ack():
+    """Slash director commands should always get an ack."""
+    bot = MagicMock()
+    bot.send_message_returning_id.return_value = 99
+
+    with patch("telegram_listener._dispatch_slash", return_value="done"):
+        _process_message(
+            bot,
+            _make_tg_message("/director do something", chat_id=111),
+            allowed_chats={111},
+            dry_run=False,
+        )
+
+    bot.send_message_returning_id.assert_called_once()
+    bot.edit_message.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
