@@ -59,13 +59,14 @@ class LoopResult:
     loop_id: str
     project: str
     goal: str
-    status: str          # "done" | "stuck" | "error"
+    status: str          # "done" | "stuck" | "error" | "interrupted"
     steps: List[StepOutcome] = field(default_factory=list)
     stuck_reason: Optional[str] = None
     total_tokens_in: int = 0
     total_tokens_out: int = 0
     elapsed_ms: int = 0
     log_path: Optional[str] = None
+    interrupts_applied: int = 0
 
     def summary(self) -> str:
         done = sum(1 for s in self.steps if s.status == "done")
@@ -78,6 +79,7 @@ class LoopResult:
             f"steps_done={done}/{len(self.steps)} blocked={blocked}",
             f"tokens={self.total_tokens_in}in+{self.total_tokens_out}out",
             f"elapsed_ms={self.elapsed_ms}",
+            *([ f"interrupts_applied={self.interrupts_applied}"] if self.interrupts_applied else []),
         ]
         if self.stuck_reason:
             lines.append(f"stuck_reason={self.stuck_reason!r}")
@@ -163,6 +165,7 @@ def run_agent_loop(
     max_iterations: int = 20,
     dry_run: bool = False,
     verbose: bool = False,
+    interrupt_queue=None,
 ) -> LoopResult:
     """Run the autonomous loop for a goal.
 
@@ -175,11 +178,14 @@ def run_agent_loop(
         max_iterations: Hard cap on total LLM calls.
         dry_run: Simulate without LLM calls (uses stub responses).
         verbose: Print progress to stdout.
+        interrupt_queue: InterruptQueue instance (or None). If None, a default
+            queue is created automatically so any interface can post interrupts.
 
     Returns:
         LoopResult with full outcome.
     """
     from llm import LLMMessage, LLMTool, build_adapter, MODEL_CHEAP
+    from interrupt import InterruptQueue, apply_interrupt_to_steps, set_loop_running, clear_loop_running
 
     loop_id = str(uuid.uuid4())[:8]
     started_at = time.monotonic()
@@ -193,6 +199,19 @@ def run_agent_loop(
         adapter = build_adapter(model=model or MODEL_CHEAP)
     elif dry_run:
         adapter = _DryRunAdapter()
+
+    # Set up interrupt queue — auto-create if not provided
+    if interrupt_queue is None:
+        try:
+            interrupt_queue = InterruptQueue()
+        except Exception:
+            interrupt_queue = None  # Non-fatal: run without interrupt support
+
+    # Advertise this loop as running so other interfaces can route interrupts
+    try:
+        set_loop_running(loop_id, goal)
+    except Exception:
+        pass
 
     # Resolve or create project
     o = _orch()
@@ -239,7 +258,7 @@ def run_agent_loop(
         *[f"- step {i}: {s}" for i, s in enumerate(steps, 1)],
     ])
 
-    # Step 2: Execute each step in order
+    # Step 2: Execute each step in order (dynamic — interrupts may add/replace steps)
     step_outcomes: List[StepOutcome] = []
     total_tokens_in = 0
     total_tokens_out = 0
@@ -249,23 +268,33 @@ def run_agent_loop(
     loop_status = "done"
     stuck_reason = None
     completed_context: List[str] = []
+    interrupts_applied = 0
 
-    for step_idx, (step_text, item_index) in enumerate(zip(steps, step_indices)):
+    # Use mutable lists so interrupt handlers can modify remaining work
+    remaining_steps: List[str] = list(steps)
+    remaining_indices: List[int] = list(step_indices)
+    step_idx = 0  # global step counter (for numbering, includes injected steps)
+
+    while remaining_steps:
         if iteration >= max_iterations:
             loop_status = "stuck"
             stuck_reason = f"hit max_iterations={max_iterations} before completing all steps"
             break
 
+        step_text = remaining_steps.pop(0)
+        item_index = remaining_indices.pop(0) if remaining_indices else -1
+
         iteration += 1
+        step_idx += 1
         if verbose:
-            print(f"[poe] step {step_idx+1}/{len(steps)}: {step_text!r}", file=sys.stderr, flush=True)
+            print(f"[poe] step {step_idx}: {step_text!r}", file=sys.stderr, flush=True)
 
         step_start = time.monotonic()
         outcome = _execute_step(
             goal=goal,
             step_text=step_text,
-            step_num=step_idx + 1,
-            total_steps=len(steps),
+            step_num=step_idx,
+            total_steps=step_idx + len(remaining_steps),
             completed_context=completed_context,
             adapter=adapter,
             tools=[LLMTool(**t) for t in _EXECUTE_TOOLS],
@@ -302,24 +331,27 @@ def run_agent_loop(
                 tokens_out=outcome.get("tokens_out", 0),
                 elapsed_ms=step_elapsed,
             ))
-            o.mark_item(project, item_index, o.STATE_BLOCKED)
-            o.append_decision(project, [f"[loop:{loop_id}] stuck on step {step_idx+1}: {stuck_reason}"])
+            if item_index >= 0:
+                o.mark_item(project, item_index, o.STATE_BLOCKED)
+            o.append_decision(project, [f"[loop:{loop_id}] stuck on step {step_idx}: {stuck_reason}"])
             break
 
         # Write artifact
-        artifact_path = _write_step_artifact(project, loop_id, step_idx + 1, step_text, step_result)
+        _write_step_artifact(project, loop_id, step_idx, step_text, step_result)
 
         if step_status == "done":
-            o.mark_item(project, item_index, o.STATE_DONE)
-            completed_context.append(f"Step {step_idx+1} ({step_text}): {step_summary}")
+            if item_index >= 0:
+                o.mark_item(project, item_index, o.STATE_DONE)
+            completed_context.append(f"Step {step_idx} ({step_text}): {step_summary}")
             if verbose:
-                print(f"[poe] step {step_idx+1} done: {step_summary}", file=sys.stderr, flush=True)
+                print(f"[poe] step {step_idx} done: {step_summary}", file=sys.stderr, flush=True)
         else:
-            o.mark_item(project, item_index, o.STATE_BLOCKED)
+            if item_index >= 0:
+                o.mark_item(project, item_index, o.STATE_BLOCKED)
             loop_status = "stuck"
-            stuck_reason = outcome.get("stuck_reason", f"step {step_idx+1} blocked")
+            stuck_reason = outcome.get("stuck_reason", f"step {step_idx} blocked")
             if verbose:
-                print(f"[poe] step {step_idx+1} stuck: {stuck_reason}", file=sys.stderr, flush=True)
+                print(f"[poe] step {step_idx} stuck: {stuck_reason}", file=sys.stderr, flush=True)
 
         step_outcomes.append(StepOutcome(
             index=item_index,
@@ -334,6 +366,51 @@ def run_agent_loop(
 
         if loop_status == "stuck":
             break
+
+        # --- Interrupt polling: check for new instructions between steps ---
+        if interrupt_queue is not None:
+            try:
+                pending = interrupt_queue.poll()
+                for intr in pending:
+                    interrupts_applied += 1
+                    new_remaining, goal, should_stop = apply_interrupt_to_steps(
+                        intr, remaining_steps, goal
+                    )
+                    if should_stop:
+                        loop_status = "interrupted"
+                        stuck_reason = f"stopped by {intr.source}: {intr.message[:80]}"
+                        if verbose:
+                            print(
+                                f"[poe] interrupt: stop requested by {intr.source}",
+                                file=sys.stderr, flush=True,
+                            )
+                        remaining_steps = []
+                        remaining_indices = []
+                        break
+                    else:
+                        # Inject new steps into NEXT.md and get their indices
+                        added = [s for s in new_remaining if s not in remaining_steps]
+                        if added:
+                            new_idxs = o.append_next_items(project, added)
+                            # Reconstruct remaining with proper indices
+                            # Keep existing indices for pre-existing steps, append new ones
+                            existing_count = len(remaining_steps)
+                            remaining_steps = new_remaining
+                            remaining_indices = remaining_indices[:existing_count] + new_idxs
+                        else:
+                            remaining_steps = new_remaining
+                        o.append_decision(project, [
+                            f"[loop:{loop_id}] interrupt({intr.intent}) from {intr.source}: {intr.message[:60]}",
+                        ])
+                        if verbose:
+                            print(
+                                f"[poe] interrupt({intr.intent}) from {intr.source}: {len(remaining_steps)} steps remaining",
+                                file=sys.stderr, flush=True,
+                            )
+                if loop_status == "interrupted":
+                    break
+            except Exception:
+                pass  # Interrupt failures must never break the loop
 
     # Final summary artifact
     elapsed_total = int((time.monotonic() - started_at) * 1000)
@@ -359,6 +436,7 @@ def run_agent_loop(
         goal=goal,
         status=loop_status,
         steps=step_outcomes,
+        interrupts_applied=interrupts_applied,
         stuck_reason=stuck_reason,
         total_tokens_in=total_tokens_in,
         total_tokens_out=total_tokens_out,
@@ -391,6 +469,12 @@ def run_agent_loop(
         )
     except Exception:
         pass  # Memory failures must never break the loop
+
+    # Release loop lock so interfaces know we're idle
+    try:
+        clear_loop_running()
+    except Exception:
+        pass
 
     return result
 

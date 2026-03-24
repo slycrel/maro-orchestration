@@ -34,6 +34,13 @@ except ImportError:  # pragma: no cover
     check_all_projects = None  # type: ignore[assignment]
     read_heartbeat_state = None  # type: ignore[assignment]
 
+try:
+    from interrupt import InterruptQueue, is_loop_running, get_running_loop
+except ImportError:  # pragma: no cover
+    InterruptQueue = None  # type: ignore[assignment,misc]
+    is_loop_running = None  # type: ignore[assignment]
+    get_running_loop = None  # type: ignore[assignment]
+
 
 # ---------------------------------------------------------------------------
 # Config helpers
@@ -225,6 +232,19 @@ def _dispatch_slash(
         except Exception as e:
             return f"Ancestry error: {e}"
 
+    elif cmd == "stop":
+        # Post a stop interrupt if a loop is running
+        if is_loop_running and is_loop_running():
+            try:
+                q = InterruptQueue()
+                q.post("stop", source="telegram", intent="stop")
+                info = get_running_loop() if get_running_loop else None
+                loop_id = info.get("loop_id", "?") if info else "?"
+                return f"Stop signal sent to loop {loop_id}. It will halt after the current step."
+            except Exception as e:
+                return f"Could not post stop signal: {e}"
+        return "No loop is currently running."
+
     elif cmd == "help":
         return (
             "*Poe commands*\n"
@@ -234,8 +254,10 @@ def _dispatch_slash(
             "/build <goal> — run a build worker\n"
             "/ops <command> — run an ops worker\n"
             "/ancestry <project> — show goal ancestry chain\n"
+            "/stop — stop the currently running loop\n"
             "/help — show this message\n"
-            "\nOr just send a natural language message."
+            "\nOr just send a natural language message.\n"
+            "_While a loop is running, messages are routed as interrupts._"
         )
 
     else:
@@ -288,9 +310,17 @@ def _process_message(
                     print(f"[telegram] dry-run handle() failed: {e}", file=sys.stderr)
         return
 
-    # Send immediate ack for non-trivial commands
+    # Check if a loop is active — route natural language as interrupt if so
+    _loop_active = (
+        not cmd
+        and InterruptQueue is not None
+        and is_loop_running is not None
+        and is_loop_running()
+    )
+
+    # Send immediate ack for non-trivial commands or interrupt posts
     ack_id = 0
-    if cmd in ("director", "research", "build", "ops") or (cmd is None and len(text) > 20):
+    if _loop_active or cmd in ("director", "research", "build", "ops") or (cmd is None and len(text) > 20):
         try:
             ack_id = bot.send_message_returning_id(chat_id, _ACK_MESSAGE)
         except Exception:
@@ -300,7 +330,24 @@ def _process_message(
 
     # Execute
     try:
-        if cmd:
+        if _loop_active:
+            # Route message as an interrupt to the running loop
+            q = InterruptQueue()
+            intr = q.post(text, source="telegram")
+            loop_info = get_running_loop() if get_running_loop else {}
+            loop_id = (loop_info or {}).get("loop_id", "?")
+            intent_label = {
+                "additive": "added to plan",
+                "corrective": "plan updated",
+                "priority": "prioritized",
+                "stop": "stop signal sent",
+            }.get(intr.intent, intr.intent)
+            response = (
+                f"*Interrupt received* ({intent_label})\n"
+                f"Loop `{loop_id}` will pick this up after the current step.\n"
+                f"_{text[:80]}_"
+            )
+        elif cmd:
             response = _dispatch_slash(cmd, args, project=project, dry_run=False, verbose=verbose)
         else:
             result = handle(text, project=project, dry_run=False, verbose=verbose)

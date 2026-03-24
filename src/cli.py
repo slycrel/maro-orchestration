@@ -289,6 +289,14 @@ def main(argv: list[str] | None = None) -> int:
     p_poe_telegram.add_argument("--project", "-p", default="poe-telegram", help="Project slug for memory")
     p_poe_telegram.add_argument("--verbose", "-v", action="store_true", default=True)
 
+    p_poe_interrupt = sub.add_parser("poe-interrupt", help="Post an interrupt to a running agent loop")
+    p_poe_interrupt.add_argument("message", nargs="+", help="Interrupt message (natural language)")
+    p_poe_interrupt.add_argument("--source", default="cli", help="Source identifier (default: cli)")
+    p_poe_interrupt.add_argument("--intent", choices=["additive", "corrective", "priority", "stop"],
+                                  help="Force a specific intent (skip LLM classification)")
+    p_poe_interrupt.add_argument("--status", action="store_true", help="Show running loop status instead")
+    p_poe_interrupt.add_argument("--format", choices=["text", "json"], default="text")
+
     p_plan = sub.add_parser("plan", help="Split a goal into NEXT tasks")
     p_plan.add_argument("project")
     p_plan.add_argument("goal", nargs="+")
@@ -768,6 +776,33 @@ def main(argv: list[str] | None = None) -> int:
                 return 0
         except RuntimeError as exc:
             return fail("E_TELEGRAM", str(exc))
+
+    if args.cmd == "poe-interrupt":
+        from interrupt import InterruptQueue, is_loop_running, get_running_loop
+        import json as _json
+
+        if args.status:
+            info = get_running_loop()
+            if args.format == "json":
+                print(_json.dumps(info or {}))
+            elif info:
+                print(f"loop_id={info['loop_id']} goal={info.get('goal','?')!r} pid={info.get('pid','?')}")
+            else:
+                print("No loop running.")
+            return 0
+
+        message = " ".join(args.message)
+        q = InterruptQueue()
+        intr = q.post(message, source=args.source, intent=args.intent)
+        if args.format == "json":
+            print(_json.dumps(intr.to_dict()))
+        else:
+            running = get_running_loop()
+            if running:
+                print(f"interrupt posted: id={intr.id} intent={intr.intent} loop={running.get('loop_id','?')}")
+            else:
+                print(f"interrupt queued (no loop running yet): id={intr.id} intent={intr.intent}")
+        return 0
 
     if args.cmd == "plan":
         try:
