@@ -20,6 +20,7 @@ from agent_loop import (
     _execute_step,
     _goal_to_slug,
     run_agent_loop,
+    run_parallel_loops,
 )
 from llm import LLMMessage, LLMTool, LLMResponse, ToolCall
 
@@ -341,3 +342,28 @@ def test_cli_poe_run_json_format(monkeypatch, tmp_path, capsys):
     assert "loop_id" in data
     assert "status" in data
     assert data["status"] == "done"
+
+
+# ---------------------------------------------------------------------------
+# Phase 8: run_parallel_loops
+# ---------------------------------------------------------------------------
+
+def test_run_parallel_loops_two_goals(monkeypatch, tmp_path):
+    _setup_workspace(monkeypatch, tmp_path)
+    goals = ["test goal alpha", "test goal beta"]
+    results = run_parallel_loops(goals, dry_run=True, max_workers=2)
+    assert len(results) == 2
+    assert all(isinstance(r, LoopResult) for r in results)
+    assert all(r.status == "done" for r in results)
+
+
+def test_run_parallel_loops_empty():
+    results = run_parallel_loops([], dry_run=True)
+    assert results == []
+
+
+def test_run_parallel_loops_single_goal(monkeypatch, tmp_path):
+    _setup_workspace(monkeypatch, tmp_path)
+    results = run_parallel_loops(["solo goal"], dry_run=True, max_workers=3)
+    assert len(results) == 1
+    assert results[0].status == "done"

@@ -12,6 +12,7 @@ from workers import (
     WorkerResult,
     dispatch_worker,
     infer_worker_type,
+    infer_crew_size,
     _dry_run_worker,
     WORKER_RESEARCH, WORKER_BUILD, WORKER_OPS, WORKER_GENERAL, WORKER_TYPES,
 )
@@ -234,3 +235,46 @@ def test_cli_poe_director_explicit_acceptance(monkeypatch, tmp_path, capsys):
     assert rc == 0
     data = json.loads(capsys.readouterr().out)
     assert data["plan_acceptance"] == "explicit"
+
+
+# ---------------------------------------------------------------------------
+# Phase 8: infer_crew_size
+# ---------------------------------------------------------------------------
+
+class TestInferCrewSize:
+    def test_simple_short_directive(self):
+        assert infer_crew_size("fix the bug") == 1
+
+    def test_simple_keyword(self):
+        assert infer_crew_size("do a quick check on the system health status") == 1
+
+    def test_brief_keyword(self):
+        assert infer_crew_size("give me a brief summary of recent events") == 1
+
+    def test_medium_directive(self):
+        assert infer_crew_size("analyze the performance metrics and identify areas for improvement in our system") == 2
+
+    def test_comprehensive_keyword(self):
+        assert infer_crew_size("comprehensive review of all project outcomes") == 3
+
+    def test_detailed_keyword(self):
+        assert infer_crew_size("detailed analysis of failure patterns") == 3
+
+    def test_exhaustive_keyword(self):
+        assert infer_crew_size("exhaustive audit of system configuration") == 4
+
+    def test_thorough_keyword(self):
+        assert infer_crew_size("thorough investigation of all error logs") == 4
+
+    def test_very_long_directive(self):
+        words = ["word"] * 55
+        assert infer_crew_size(" ".join(words)) == 4
+
+    def test_returns_int(self):
+        result = infer_crew_size("test")
+        assert isinstance(result, int)
+
+    def test_range_1_to_4(self):
+        for text in ["hi", "medium length text with some words", "comprehensive review", "exhaustive deep dive"]:
+            size = infer_crew_size(text)
+            assert 1 <= size <= 4

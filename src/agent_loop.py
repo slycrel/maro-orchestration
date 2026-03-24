@@ -714,6 +714,43 @@ def main(argv=None):
     return 0 if result.status == "done" else 1
 
 
+# ---------------------------------------------------------------------------
+# Concurrent project support (Phase 8)
+# ---------------------------------------------------------------------------
+
+def run_parallel_loops(
+    goals: List[str],
+    *,
+    max_workers: int = 3,
+    **kwargs,
+) -> List[LoopResult]:
+    """Run multiple goals concurrently via ThreadPoolExecutor.
+
+    Args:
+        goals: List of goal strings to execute in parallel.
+        max_workers: Maximum concurrent threads (default: 3).
+        **kwargs: Passed through to run_agent_loop() for each goal.
+
+    Returns:
+        List of LoopResult in same order as input goals.
+    """
+    import concurrent.futures
+
+    if not goals:
+        return []
+
+    effective_workers = min(max_workers, len(goals))
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=effective_workers) as executor:
+        futures = [
+            executor.submit(run_agent_loop, goal, **kwargs)
+            for goal in goals
+        ]
+        results = [f.result() for f in futures]
+
+    return results
+
+
 if __name__ == "__main__":
     sys.path.insert(0, str(Path(__file__).parent))
     raise SystemExit(main())

@@ -329,3 +329,39 @@ def infer_worker_type(ticket: str) -> str:
     if build_score == best:
         return WORKER_BUILD
     return WORKER_OPS
+
+
+# ---------------------------------------------------------------------------
+# Crew composition (Phase 8)
+# ---------------------------------------------------------------------------
+
+_SIMPLE_KEYWORDS = {"quick", "simple", "brief"}
+_COMPREHENSIVE_KEYWORDS = {"comprehensive", "full", "complete", "detailed"}
+_EXHAUSTIVE_KEYWORDS = {"exhaustive", "thorough", "everything"}
+
+
+def infer_crew_size(directive: str) -> int:
+    """Infer optimal crew size (1-4) based on directive complexity.
+
+    Rules:
+        1 worker: short directive (<10 words) or contains quick/simple/brief
+        2 workers: medium complexity (10-25 words)
+        3 workers: contains comprehensive/full/complete/detailed or >25 words
+        4 workers: contains exhaustive/thorough/everything or >50 words
+    """
+    lower = directive.lower()
+    words = directive.split()
+    word_count = len(words)
+
+    # Check keyword overrides first (highest tier wins)
+    if any(kw in lower for kw in _EXHAUSTIVE_KEYWORDS) or word_count > 50:
+        return 4
+
+    if any(kw in lower for kw in _COMPREHENSIVE_KEYWORDS) or word_count > 25:
+        return 3
+
+    if any(kw in lower for kw in _SIMPLE_KEYWORDS) or word_count < 10:
+        return 1
+
+    # Default: medium complexity
+    return 2

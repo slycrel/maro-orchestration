@@ -262,8 +262,18 @@ def main(argv: list[str] | None = None) -> int:
     p_poe_evolver.add_argument("--min-outcomes", type=int, default=3, help="Minimum outcomes needed to run (default: 3)")
     p_poe_evolver.add_argument("--window", type=int, default=50, help="How many recent outcomes to analyze (default: 50)")
     p_poe_evolver.add_argument("--notify", action="store_true", help="Send Telegram summary of suggestions")
+    p_poe_evolver.add_argument("--list", action="store_true", dest="list_pending", help="List pending (unapplied) suggestions")
+    p_poe_evolver.add_argument("--apply", dest="apply_id", help="Mark a suggestion as applied by ID")
     p_poe_evolver.add_argument("--verbose", "-v", action="store_true", default=True)
     p_poe_evolver.add_argument("--format", choices=["text", "json"], default="text")
+
+    p_poe_metrics = sub.add_parser("poe-metrics", help="Show quality + cost metrics (Phase 8)")
+    p_poe_metrics.add_argument("--format", choices=["text", "json"], default="text")
+
+    p_poe_eval = sub.add_parser("poe-eval", help="Run evaluation benchmarks (Phase 8)")
+    p_poe_eval.add_argument("--dry-run", action="store_true", help="Return canned results without LLM calls")
+    p_poe_eval.add_argument("--benchmark", dest="benchmark_id", help="Run a specific benchmark by ID")
+    p_poe_eval.add_argument("--format", choices=["text", "json"], default="text")
 
     p_poe_heartbeat = sub.add_parser("poe-heartbeat", help="Run Poe's heartbeat — health check + tiered recovery (Phase 4)")
     p_poe_heartbeat.add_argument("--loop", action="store_true", help="Run forever on an interval")
@@ -690,7 +700,28 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if result.status == "done" else 1
 
     if args.cmd == "poe-evolver":
-        from evolver import run_evolver
+        from evolver import run_evolver, list_pending_suggestions, apply_suggestion
+
+        if getattr(args, "list_pending", False):
+            pending = list_pending_suggestions()
+            if args.format == "json":
+                print(json.dumps([s.to_dict() for s in pending], indent=2))
+            else:
+                if not pending:
+                    print("(no pending suggestions)")
+                else:
+                    for s in pending:
+                        print(f"  [{s.suggestion_id}] [{s.category}] {s.target}: {s.suggestion[:80]}")
+            return 0
+
+        if getattr(args, "apply_id", None):
+            ok = apply_suggestion(args.apply_id)
+            if ok:
+                print(f"applied={args.apply_id}")
+                return 0
+            else:
+                return fail("E_SUGGESTION_NOT_FOUND", args.apply_id)
+
         report = run_evolver(
             outcomes_window=args.window,
             min_outcomes=args.min_outcomes,
@@ -849,6 +880,26 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 for d in descendants:
                     print(d)
+        return 0
+
+    if args.cmd == "poe-metrics":
+        from metrics import get_metrics, format_metrics_report
+        metrics = get_metrics()
+        if args.format == "json":
+            from dataclasses import asdict
+            print(json.dumps(asdict(metrics), indent=2))
+        else:
+            print(format_metrics_report(metrics))
+        return 0
+
+    if args.cmd == "poe-eval":
+        from eval import run_eval
+        benchmark_ids = [args.benchmark_id] if getattr(args, "benchmark_id", None) else None
+        report = run_eval(benchmarks=benchmark_ids, dry_run=args.dry_run)
+        if args.format == "json":
+            print(json.dumps(report.to_dict(), indent=2))
+        else:
+            print(report.summary())
         return 0
 
     if args.cmd == "status":
