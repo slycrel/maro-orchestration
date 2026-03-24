@@ -367,3 +367,64 @@ def test_run_parallel_loops_single_goal(monkeypatch, tmp_path):
     results = run_parallel_loops(["solo goal"], dry_run=True, max_workers=3)
     assert len(results) == 1
     assert results[0].status == "done"
+
+
+# ---------------------------------------------------------------------------
+# Interrupt handling in agent loop
+# ---------------------------------------------------------------------------
+
+def test_interrupt_stop_halts_loop(monkeypatch, tmp_path):
+    """A stop interrupt posted to the queue causes the loop to end with status=interrupted."""
+    _setup_workspace(monkeypatch, tmp_path)
+    from interrupt import InterruptQueue
+
+    q = InterruptQueue(queue_path=tmp_path / "interrupts.jsonl")
+    # Pre-load stop interrupt — will be picked up after the first step completes
+    q.post("stop", source="test", intent="stop")
+
+    result = run_agent_loop(
+        "do several things",
+        project="interrupt-stop-test",
+        dry_run=True,
+        interrupt_queue=q,
+    )
+    assert result.status == "interrupted"
+    assert result.interrupts_applied >= 1
+
+
+def test_interrupt_additive_adds_steps(monkeypatch, tmp_path):
+    """An additive interrupt is processed and loop completes normally."""
+    _setup_workspace(monkeypatch, tmp_path)
+    from interrupt import InterruptQueue
+
+    q = InterruptQueue(queue_path=tmp_path / "interrupts.jsonl")
+    # Post additive — should not halt the loop
+    q.post("also verify the output", source="test", intent="additive")
+
+    result = run_agent_loop(
+        "research a topic",
+        project="interrupt-additive-test",
+        dry_run=True,
+        interrupt_queue=q,
+    )
+    # Loop completes (dry-run always produces done steps)
+    assert result.status == "done"
+    assert result.interrupts_applied >= 1
+
+
+def test_interrupt_no_interrupt_queue_completes_normally(monkeypatch, tmp_path):
+    """When queue_path points to a non-existent/empty file, loop runs normally."""
+    _setup_workspace(monkeypatch, tmp_path)
+    from interrupt import InterruptQueue
+
+    # Queue backed by a file that doesn't exist — poll() returns []
+    q = InterruptQueue(queue_path=tmp_path / "empty_interrupts.jsonl")
+
+    result = run_agent_loop(
+        "complete all tasks without interruption",
+        project="interrupt-empty-test",
+        dry_run=True,
+        interrupt_queue=q,
+    )
+    assert result.status == "done"
+    assert result.interrupts_applied == 0
