@@ -282,6 +282,39 @@ Built-in benchmarks test NOW lane (simple factual) and AGENDA lane (multi-step r
 
 ---
 
+## Interrupt handling (`interrupt.py`)
+
+Added Phase 9. Source-agnostic — any interface writes, the agent loop consumes.
+
+```
+InterruptQueue (file-backed, thread-safe)
+    post(message, source)
+        → _classify_intent()
+            → LLM (MODEL_CHEAP) or heuristic fallback
+            → intent: additive | corrective | priority | stop
+            → new_steps: List[str]
+        → append to memory/interrupts.jsonl
+
+run_agent_loop() [per-step]:
+    → interrupt_queue.poll()
+    → for each interrupt:
+        stop      → break, status="interrupted"
+        priority  → prepend new_steps to pending_steps
+        additive  → append new_steps to pending_steps
+        corrective → replace remaining steps (or goal)
+
+Loop lock:
+    set_loop_running(loop_id) → memory/loop.lock (PID-verified)
+    clear_loop_running()      → removes lock on completion/error
+
+telegram_listener:
+    is_loop_running() → True: post to interrupt queue
+                     → False: handle() normally
+    /stop slash command → posts stop interrupt
+```
+
+---
+
 ## Storage layout
 
 ```
@@ -298,6 +331,8 @@ workspace/prototypes/poe-orchestration/
     ├── outcomes.jsonl       # per-run outcomes
     ├── lessons.jsonl        # extracted lessons
     ├── suggestions.jsonl    # evolver suggestions
+    ├── interrupts.jsonl     # interrupt queue (polled by agent loop)
+    ├── loop.lock            # PID-verified lock while a loop is active
     ├── heartbeat-state.json # last heartbeat result
     ├── heartbeat-log.jsonl  # heartbeat history
     ├── eval-results.jsonl   # benchmark results
@@ -313,5 +348,99 @@ workspace/prototypes/poe-orchestration/
 | Short (<= 20 chars) or `/status` | Typing indicator → send response |
 | Long natural language | "⏳ Working on it..." → edit with result |
 | `/director`, `/research`, `/build`, `/ops` | "⏳ Working on it..." → edit with result |
+| Any message while loop is active | Routed to interrupt queue; ack sent |
+| `/stop` | Posts stop interrupt; loop halts at next step boundary |
 
 Heartbeat alerts are sent only when health is `critical` or `degraded`, or stuck projects are detected. Non-actionable status is logged silently.
+
+---
+
+## Planned architecture: Phases 10–13
+
+Not yet built. Documented here so design intent is clear before implementation.
+
+### Phase 10: Mission Layer
+
+```
+Mission (top-level goal, multi-day)
+  └─ Milestone (validation checkpoint — must pass before advancing)
+      └─ Feature (unit of work, one Worker Session)
+          └─ Worker Session (fresh context window per feature)
+```
+
+Key constraints:
+- No single session holds the full project in context
+- Milestones execute sequentially; features within a milestone can parallelize
+- Git is the coordination primitive for session handoffs
+- Background execution: agent starts a subprocess, continues other work, polls result
+- Skill library: completed goal chains → extracted reusable patterns → surfaced to future orchestration
+
+### Phase 11: Hook System
+
+```
+HookRegistry
+  ├── mission-level hooks   (fire on mission start/end)
+  ├── milestone-level hooks (fire before milestone validation)
+  ├── feature-level hooks   (fire before/after each feature)
+  └── step-level hooks      (fire between steps in agent_loop)
+
+Hook types:
+  reviewer   → LLM critique of work product before advancing
+  reporter   → emit summary to Telegram/log (non-blocking)
+  coordinator → LLM decides next step routing
+  script     → shell command (non-blocking, result injected as context)
+
+System Notifications (Factory pattern):
+  Hooks inject contextual guidance at the right moment —
+  not front-loaded in system prompt, injected when relevant.
+```
+
+### Phase 12: Inspector (Oversight + Quality)
+
+```
+Inspector (runs independently, NOT inside the agent loop)
+  ├── Friction detection: 7 signals per session
+  │   error_events | repeated_rephrasing | escalation_tone |
+  │   platform_confusion | abandoned_tool_flow | backtracking | context_churn
+  ├── LLM-as-judge batch analysis (periodic, not per-run)
+  │   → abstracted signals (no raw content exposed)
+  │   → semantic clustering → friction patterns
+  ├── Threshold crossing → structured ticket → evolver → suggestion PR
+  │   human approves before apply
+  ├── Goal alignment check: did completed work match mission intent?
+  └── Output: executive summary → Poe (CEO layer), not raw detail
+```
+
+Role distinction: Heartbeat = health (is the system running?). Inspector = quality (is the system producing the right outcomes?).
+
+### Phase 13: Role Separation (Poe as CEO)
+
+```
+Jeremy (Telegram — mission/goal level only)
+  └── Poe [CEO/Communicator]
+        - sets direction, surfaces executive summaries
+        - advisor on pivots/conflicts, not executor
+        - maintains map of active missions vs. north stars
+        ├── Director [Planner/Reviewer — POWER model]
+        │     - produces SPEC, reviews output, iterates
+        │     - does NOT execute steps directly
+        │     ├── Worker Sessions [Executors — MID model]
+        │     │     - fresh context per feature
+        │     │     - research/build/ops/general personas
+        │     └── Validator [Quality check — MID or specialized]
+        └── Inspector [Independent Oversight]
+              - separate from execution chain
+              - reports up to Poe, not to Director
+
+Autonomy tiers (per project/action):
+  manual  → human approves each action
+  safe    → auto-execute low-risk, escalate high-risk
+  full    → autonomous within defined scope
+
+Model assignment:
+  orchestrator  → MODEL_POWER (Opus)
+  worker/plan   → MODEL_MID (Sonnet)
+  classification/heartbeat → MODEL_CHEAP (Haiku)
+```
+
+Delegator-as-non-coder principle: if Poe or Director is executing steps directly, the architecture has failed. The role contract must be enforced at the code level, not just by convention.

@@ -69,6 +69,8 @@ Goals, voice, decision rules, rubric — portable across runtimes and models.
 
 ## 4. Agent Hierarchy
 
+Current (Phases 0–9):
+
 ```
 Jeremy (Telegram)
   └── Poe ("The Handle")
@@ -80,12 +82,45 @@ Jeremy (Telegram)
         └── NOW Lane — 1-shot quick tasks (bypass Director for trivial work)
 ```
 
+Target (Phases 10–13):
+
+```
+Jeremy (Telegram — mission/goal level only)
+  └── Poe [CEO/Communicator — POWER model]
+        - sets direction, surfaces executive summaries to Jeremy
+        - occasional advisor on pivots, conflicts, north star alignment
+        - does NOT execute steps or write code directly
+        ├── Director [Planner/Reviewer — POWER model]
+        │     - decomposes missions into milestones and features
+        │     - reviews worker output; iterates; does NOT execute
+        │     └── Worker Sessions [Executors — MID model]
+        │           - fresh context window per feature
+        │           - personas: research / build / ops / general
+        │           - background execution primitive
+        ├── Validator [Quality Gate — MID model]
+        │     - runs at each milestone boundary
+        │     - tests, artifact review, integration check
+        └── Inspector [Independent Oversight — MID model]
+              - separate from execution chain
+              - friction detection across all sessions
+              - goal alignment verification
+              - reports executive summary up to Poe
+```
+
 **Director Contract:**
 - Takes a directive → produces SPEC + TICKET artifacts
 - `plan_acceptance` modes: `explicit` (public/irreversible) or `inferred` (low-risk/reversible)
 - Gates worker kickoff on acceptance
 - Reviews/iterates until acceptance criteria met
-- Reports back to Handle for relay to Jeremy
+- Reports back to Poe (not directly to Jeremy — Poe decides what to surface)
+
+**Poe's CEO Contract:**
+- Communicates with Jeremy at mission/goal granularity
+- Step-level detail available on request but not surfaced by default
+- Maintains the map of how active missions relate to each other and to north star goals
+- Surfaces conflicts, cross-mission coordination opportunities
+- On high-level pivots or stuck missions: surfaces options with a recommendation, not a status dump
+- If Poe is executing steps directly, the architecture has failed
 
 ---
 
@@ -148,6 +183,13 @@ This policy must be encoded in a single, canonical, always-loaded location. It m
 
 ### Interruption Policy
 New messages during a run are additive/corrective by default. Only stop on explicit stop/wait/pivot. Continue background work and integrate new information.
+
+As of Phase 9, this is mechanically enforced via `InterruptQueue`: messages arriving while a loop is active are classified (additive/corrective/priority/stop) and injected between steps. The loop lock file prevents Telegram from double-handling active runs.
+
+### What Poe Surfaces (Phase 13 target)
+- **Proactively:** Mission start/complete, milestone validation results, Inspector quality alerts, cross-mission conflicts
+- **On request:** Step-level detail, worker output, raw metrics
+- **Never proactively:** Step execution status, individual LLM calls, routine heartbeat results
 
 ---
 
