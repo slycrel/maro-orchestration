@@ -154,6 +154,45 @@ def _save_suggestions(suggestions: List[Suggestion]) -> None:
             f.write(json.dumps(s.to_dict()) + "\n")
 
 
+def list_pending_suggestions(limit: int = 20) -> List[Suggestion]:
+    """Return suggestions where applied=False, newest first."""
+    all_suggestions = load_suggestions(limit=1000)
+    pending = [s for s in all_suggestions if not s.applied]
+    return pending[:limit]
+
+
+def apply_suggestion(suggestion_id: str) -> bool:
+    """Mark a suggestion as applied=True by rewriting suggestions.jsonl.
+
+    Returns True if the suggestion was found and updated, False otherwise.
+    """
+    p = _suggestions_path()
+    if not p.exists():
+        return False
+
+    lines = p.read_text(encoding="utf-8").splitlines()
+    found = False
+    new_lines: List[str] = []
+
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            d = json.loads(line)
+            if d.get("suggestion_id") == suggestion_id:
+                d["applied"] = True
+                found = True
+            new_lines.append(json.dumps(d))
+        except Exception:
+            new_lines.append(line)
+
+    if found:
+        p.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+
+    return found
+
+
 # ---------------------------------------------------------------------------
 # LLM analysis
 # ---------------------------------------------------------------------------

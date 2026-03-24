@@ -17,6 +17,8 @@ from evolver import (
     _build_outcomes_summary,
     _llm_analyze,
     run_evolver,
+    list_pending_suggestions,
+    apply_suggestion,
 )
 
 
@@ -290,3 +292,115 @@ def test_cli_poe_evolver_json(capsys):
     out = capsys.readouterr().out
     data = json.loads(out)
     assert "outcomes_reviewed" in data
+
+
+# ---------------------------------------------------------------------------
+# Phase 8: list_pending_suggestions + apply_suggestion
+# ---------------------------------------------------------------------------
+
+def test_list_pending_suggestions_empty(tmp_path):
+    with patch("evolver._suggestions_path", return_value=tmp_path / "nope.jsonl"):
+        result = list_pending_suggestions()
+    assert result == []
+
+
+def test_list_pending_suggestions_filters_applied(tmp_path):
+    path = tmp_path / "suggestions.jsonl"
+    s1 = Suggestion(suggestion_id="s1", category="observation", target="all",
+                    suggestion="pending one", failure_pattern="x", confidence=0.5,
+                    outcomes_analyzed=5, applied=False)
+    s2 = Suggestion(suggestion_id="s2", category="observation", target="all",
+                    suggestion="applied one", failure_pattern="y", confidence=0.7,
+                    outcomes_analyzed=10, applied=True)
+    s3 = Suggestion(suggestion_id="s3", category="prompt_tweak", target="all",
+                    suggestion="pending two", failure_pattern="z", confidence=0.6,
+                    outcomes_analyzed=8, applied=False)
+    path.write_text(
+        "\n".join(json.dumps(s.to_dict()) for s in [s1, s2, s3]) + "\n",
+        encoding="utf-8",
+    )
+    with patch("evolver._suggestions_path", return_value=path):
+        result = list_pending_suggestions()
+    assert len(result) == 2
+    ids = {s.suggestion_id for s in result}
+    assert "s1" in ids
+    assert "s3" in ids
+    assert "s2" not in ids
+
+
+def test_apply_suggestion_marks_applied(tmp_path):
+    path = tmp_path / "suggestions.jsonl"
+    s1 = Suggestion(suggestion_id="s1", category="observation", target="all",
+                    suggestion="test", failure_pattern="x", confidence=0.5,
+                    outcomes_analyzed=5, applied=False)
+    path.write_text(json.dumps(s1.to_dict()) + "\n", encoding="utf-8")
+
+    with patch("evolver._suggestions_path", return_value=path):
+        ok = apply_suggestion("s1")
+    assert ok is True
+
+    # Verify it's now applied
+    with patch("evolver._suggestions_path", return_value=path):
+        pending = list_pending_suggestions()
+    assert len(pending) == 0
+
+
+def test_apply_suggestion_not_found(tmp_path):
+    path = tmp_path / "suggestions.jsonl"
+    s1 = Suggestion(suggestion_id="s1", category="observation", target="all",
+                    suggestion="test", failure_pattern="x", confidence=0.5,
+                    outcomes_analyzed=5, applied=False)
+    path.write_text(json.dumps(s1.to_dict()) + "\n", encoding="utf-8")
+
+    with patch("evolver._suggestions_path", return_value=path):
+        ok = apply_suggestion("nonexistent")
+    assert ok is False
+
+
+def test_apply_suggestion_no_file(tmp_path):
+    with patch("evolver._suggestions_path", return_value=tmp_path / "nope.jsonl"):
+        ok = apply_suggestion("s1")
+    assert ok is False
+
+
+def test_cli_poe_evolver_list(capsys, tmp_path):
+    s1 = Suggestion(suggestion_id="s1", category="prompt_tweak", target="all",
+                    suggestion="Be more concise", failure_pattern="verbose output",
+                    confidence=0.8, outcomes_analyzed=10, applied=False)
+    with patch("evolver.list_pending_suggestions", return_value=[s1]):
+        import cli
+        rc = cli.main(["poe-evolver", "--list"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "s1" in out
+    assert "prompt_tweak" in out
+
+
+def test_cli_poe_evolver_list_json(capsys, tmp_path):
+    s1 = Suggestion(suggestion_id="s1", category="prompt_tweak", target="all",
+                    suggestion="Be more concise", failure_pattern="verbose output",
+                    confidence=0.8, outcomes_analyzed=10, applied=False)
+    with patch("evolver.list_pending_suggestions", return_value=[s1]):
+        import cli
+        rc = cli.main(["poe-evolver", "--list", "--format", "json"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    data = json.loads(out)
+    assert len(data) == 1
+    assert data[0]["suggestion_id"] == "s1"
+
+
+def test_cli_poe_evolver_apply(capsys):
+    with patch("evolver.apply_suggestion", return_value=True):
+        import cli
+        rc = cli.main(["poe-evolver", "--apply", "s1"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "applied=s1" in out
+
+
+def test_cli_poe_evolver_apply_not_found(capsys):
+    with patch("evolver.apply_suggestion", return_value=False):
+        import cli
+        rc = cli.main(["poe-evolver", "--apply", "nonexistent"])
+    assert rc == 2
