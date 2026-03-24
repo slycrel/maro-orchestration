@@ -144,6 +144,93 @@ Concurrent projects, crew composition, quality tracking.
 
 ---
 
+---
+
+## Phase 9: Interruption Handling *(COMPLETE)*
+
+Source-agnostic interrupt system baked into the agent loop, not just Telegram.
+
+- [x] `InterruptQueue`: file-backed, thread-safe — any interface posts, loop consumes
+- [x] Intent classification: additive / corrective / priority / stop (LLM + heuristic fallback)
+- [x] Loop refactored from `for` to `while` with mutable step queue — supports mid-run injection
+- [x] Loop lock file (PID-verified) — Telegram routes to interrupt queue when loop is active
+- [x] `/stop` slash command in Telegram listener
+- [x] `poe-interrupt "message"` CLI subcommand
+- [x] 35 new tests, 449 total passing
+
+**Artifact:** `poe-interrupt "message"`. `src/interrupt.py`, loop integration in `src/agent_loop.py`
+
+---
+
+## Phase 10: Mission Layer + Background Execution
+
+**Milestone-gated multi-day goal pursuit.** The goal ancestry chain gains a formal hierarchy with validation checkpoints and fresh context per unit of work.
+
+Inspired by Factory AI Missions research.
+
+- [ ] Formal hierarchy: Mission → Milestone → Feature → Worker Session
+- [ ] Each Feature gets a fresh context window (no single session holds the whole project)
+- [ ] Milestone validation gate: before advancing, validate accumulated work (tests, artifacts, integration)
+- [ ] Sequential-first parallelization: parallelize within features, sequential across milestones
+- [ ] Background execution primitive: start long-running process, continue other work, poll result asynchronously
+- [ ] Skill library: extract reusable execution patterns from completed goal chains, surface to future orchestration
+- [ ] Git as coordination primitive for session handoffs
+- [ ] `poe-mission "goal"` CLI entry point
+
+**Artifact:** `src/mission.py`, `src/skills.py`, `poe-mission` CLI
+
+---
+
+## Phase 11: Hooks + Reviewers at Every Level
+
+**Pluggable callbacks at each hierarchy level.** Any layer — mission, milestone, feature, step — can have hooks attached: code reviewers, coordinators, simple reporters, or custom scripts.
+
+Inspired by Jeremy's request for injectable reviewers/coordinators, and Factory AI's planning-tool-with-live-checkoffs pattern.
+
+- [ ] Hook registry: register named hooks at mission/milestone/feature/step scope
+- [ ] Hook types: `reviewer` (LLM critique before advancing), `reporter` (emit summary to Telegram/log), `coordinator` (LLM decides next step routing), `script` (shell command, non-blocking)
+- [ ] Built-in hooks: code reviewer (diff-aware critique), progress reporter (milestone summary), plan validator (checks step alignment with mission goal)
+- [ ] Three-tier prompting (Factory System Notifications pattern): hooks can inject contextual guidance into the running agent at the right moment — not front-loaded in system prompt
+- [ ] Hook results feed the evolver: reviewer friction signals captured as improvement data
+- [ ] Config: hooks defined in `.factory/hooks.yaml` (per-project or global)
+
+**Artifact:** `src/hooks.py`, hook config schema, built-in hook library
+
+---
+
+## Phase 12: Oversight + Quality Self-Examination
+
+**End-to-end quality layer.** Not health monitoring (that's heartbeat) — this is alignment and quality: is the system producing the right results, are the processes working, is Poe on track with its goals?
+
+Inspired by Factory AI Signals research (LLM-as-judge + friction detection) and Jeremy's explicit ask for self-examination separate from Poe-the-orchestrator.
+
+- [ ] Oversight agent ("Inspector"): independent agent that reviews completed missions end-to-end, separate from the loop that executed them
+- [ ] Friction detection (Factory 7-signal model): error events, repeated rephrasing, escalation tone, platform confusion, abandoned tool flows, backtracking, context churn — tracked per session
+- [ ] LLM-as-judge batch analysis: processes session logs in periodic batches, extracts abstracted improvement signals
+- [ ] Closed improvement loop: signal pattern crosses threshold → structured ticket → self-assigned to evolver → suggestion PR (human approves before apply)
+- [ ] Goal alignment check: Inspector verifies completed work against original mission intent, not just technical success
+- [ ] Facet schema evolution: cluster sessions semantically, propose new observability dimensions when patterns don't map to existing facets
+- [ ] Inspector results surface to Poe (CEO layer) as executive summary, not raw detail
+
+**Artifact:** `src/inspector.py`, friction tracking in `src/evolver.py`, `poe-inspect` CLI
+
+---
+
+## Phase 13: Poe as CEO
+
+**Explicit role separation.** Poe stops being an executor and becomes a communicator, planner, and advisor. Directors plan and review. Workers execute. Inspector validates. Poe's interface with Jeremy is at mission/goal level — not steps.
+
+- [ ] Formal role model: Poe (communicator/CEO) → Director (planner/reviewer) → Worker (executor) → Inspector (validator). Delegator-as-non-coder principle: if Poe is executing steps directly, the architecture has failed.
+- [ ] Autonomy tier system: `manual` (human approves each action), `safe` (auto-execute low-risk, escalate rest), `full` (autonomous within scope) — configurable per project and per action type
+- [ ] Model-agnostic role assignment: orchestrator tier gets POWER model (Opus), worker tier gets MID (Sonnet), research gets domain-specialized — assignment per role, not per call site
+- [ ] Poe ↔ Jeremy interface: Poe communicates at mission/goal level; step-level details are available on request but not surfaced by default
+- [ ] Goal relationship awareness: Poe maintains the map of how active missions relate to each other and to top-level north stars — surfaces conflicts, opportunities for coordination
+- [ ] Poe as occasional advisor: on high-level pivots or stuck missions, Poe surfaces options to Jeremy with a recommendation, not a status dump
+
+**Artifact:** Poe persona refactor across `handle.py`, `director.py`, `telegram_listener.py`; autonomy tier config
+
+---
+
 ## Superseded Plans
 
 The original M0-M4 milestones and N1-N4 roadmap items focused on infrastructure plumbing (adapters, scheduling, CI). That work was valuable scaffolding, but it didn't address the core need: making Poe autonomous. This roadmap replaces N1-N4 entirely.
