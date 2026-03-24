@@ -129,18 +129,18 @@ Poe proposes its own improvements based on failure patterns.
 
 ---
 
-## Phase 8: Scaling + Evaluation *(NEXT)*
+## Phase 8: Scaling + Evaluation *(COMPLETE)*
 
 Concurrent projects, crew composition, quality tracking.
 
-- [ ] Concurrent project support: multiple AGENDA lanes running in parallel
-- [ ] Crew composition: dynamic worker pool sizing based on task complexity
-- [ ] Quality tracking: per-goal success rate, time-to-completion, cost-per-goal
-- [ ] Evaluation suite: benchmark goals with known-good outcomes
-- [ ] Cost optimization: identify expensive patterns, generate cheaper alternatives
-- [ ] Auto-apply evolver suggestions after review-and-approve workflow
+- [x] Concurrent project support: multiple AGENDA lanes running in parallel
+- [x] Crew composition: dynamic worker pool sizing based on task complexity
+- [x] Quality tracking: per-goal success rate, time-to-completion, cost-per-goal
+- [x] Evaluation suite: benchmark goals with known-good outcomes
+- [x] Cost optimization: identify expensive patterns, generate cheaper alternatives
+- [x] Auto-apply evolver suggestions after review-and-approve workflow
 
-**Shippable artifact:** Poe handling multiple projects simultaneously with measurable quality and cost metrics.
+**Artifact:** `poe-metrics`, `poe-eval [--dry-run]`, `poe-evolver --list/--apply`. `src/metrics.py`, `src/eval.py`, `run_parallel_loops()`, `infer_crew_size()`
 
 ---
 
