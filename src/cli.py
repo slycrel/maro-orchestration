@@ -347,6 +347,20 @@ def main(argv: list[str] | None = None) -> int:
     p_hooks_run.add_argument("--dry-run", action="store_true", help="Skip LLM calls")
     p_hooks_run.add_argument("--format", choices=["text", "json"], default="text")
 
+    p_poe_inspector = sub.add_parser("poe-inspector", help="Run Poe's quality inspector — friction detection + oversight (Phase 12)")
+    p_poe_inspector.add_argument("--loop", action="store_true", help="Run forever on an interval (for systemd)")
+    p_poe_inspector.add_argument("--interval", type=float, default=3600.0, help="Seconds between runs (default: 3600)")
+    p_poe_inspector.add_argument("--limit", type=int, default=50, help="Number of outcomes to inspect (default: 50)")
+    p_poe_inspector.add_argument("--dry-run", action="store_true", help="Run without LLM calls or saving results")
+    p_poe_inspector.add_argument("--format", choices=["text", "json"], default="text")
+
+    p_poe_inspector_status = sub.add_parser("poe-inspector-status", help="Show latest inspector report summary (Phase 12)")
+    p_poe_inspector_status.add_argument("--format", choices=["text", "json"], default="text")
+
+    # poe-quality is an alias for poe-inspector-status (shorter to type)
+    p_poe_quality = sub.add_parser("poe-quality", help="Show quality summary (alias for poe-inspector-status)")
+    p_poe_quality.add_argument("--format", choices=["text", "json"], default="text")
+
     p_poe_skills = sub.add_parser("poe-skills", help="Manage skill library (Phase 10)")
     p_poe_skills.add_argument("--extract", action="store_true", help="Extract skills from recent outcomes")
     p_poe_skills.add_argument("--list", action="store_true", dest="list_skills", help="List known skills")
@@ -1240,6 +1254,36 @@ def main(argv: list[str] | None = None) -> int:
 
         # Default: show usage hint
         print("Use --list to list skills or --extract to extract from recent outcomes.")
+        return 0
+
+    if args.cmd == "poe-inspector":
+        from inspector import run_inspector, inspector_loop
+        if args.loop:
+            inspector_loop(interval_seconds=args.interval)
+            return 0
+        try:
+            from llm import build_adapter, MODEL_CHEAP
+            _insp_adapter = None if args.dry_run else build_adapter(model=MODEL_CHEAP)
+        except Exception:
+            _insp_adapter = None
+        report = run_inspector(limit=args.limit, adapter=_insp_adapter, dry_run=args.dry_run)
+        if args.format == "json":
+            print(json.dumps(report.to_dict(), indent=2))
+        else:
+            print(report.summary())
+        return 0
+
+    if args.cmd in ("poe-inspector-status", "poe-quality"):
+        from inspector import get_latest_inspection, get_friction_summary
+        if getattr(args, "format", "text") == "json":
+            report = get_latest_inspection()
+            print(json.dumps(report.to_dict() if report else {}, indent=2))
+        else:
+            summary = get_friction_summary()
+            if summary:
+                print(summary)
+            else:
+                print("No inspection report available. Run poe-inspector first.")
         return 0
 
     return fail("E_INTERNAL", "unknown command")

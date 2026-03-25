@@ -76,6 +76,7 @@ class HeartbeatReport:
     recovery_actions: List[RecoveryAction] = field(default_factory=list)
     telegram_sent: bool = False
     elapsed_ms: int = 0
+    quality_summary: str = ""                 # from inspector.get_friction_summary() (Phase 12)
 
     def summary(self) -> str:
         lines = [
@@ -104,6 +105,7 @@ class HeartbeatReport:
             ],
             "telegram_sent": self.telegram_sent,
             "elapsed_ms": self.elapsed_ms,
+            "quality_summary": self.quality_summary,
         }
 
 
@@ -350,6 +352,13 @@ def run_heartbeat(
         if sent and verbose:
             print(f"[heartbeat] telegram alert sent", file=sys.stderr)
 
+    # --- Phase 12: Inspector quality summary (read-only, never affects execution) ---
+    try:
+        from inspector import get_friction_summary as _get_friction_summary
+        report.quality_summary = _get_friction_summary()
+    except Exception:
+        pass  # Inspector failures must never affect heartbeat
+
     # --- Persist state ---
     if not dry_run:
         try:
@@ -375,6 +384,7 @@ def heartbeat_loop(
     *,
     interval: float = 60.0,
     evolver_every: int = 10,
+    inspector_every: int = 20,
     dry_run: bool = False,
     verbose: bool = True,
     escalate: bool = True,
@@ -383,9 +393,16 @@ def heartbeat_loop(
 
     Every `evolver_every` heartbeat cycles, also runs the meta-evolver
     to analyze recent outcomes and propose improvements.
+
+    Every `inspector_every` cycles (Phase 12), runs the quality inspector
+    to detect friction patterns and feed suggestions to the evolver.
     """
     if verbose:
-        print(f"[heartbeat] loop started interval={interval}s evolver_every={evolver_every}", file=sys.stderr)
+        print(
+            f"[heartbeat] loop started interval={interval}s "
+            f"evolver_every={evolver_every} inspector_every={inspector_every}",
+            file=sys.stderr,
+        )
     tick = 0
     while True:
         try:
@@ -399,6 +416,13 @@ def heartbeat_loop(
                 run_evolver(dry_run=dry_run, verbose=verbose, notify=escalate, min_outcomes=5)
             except Exception as e:
                 print(f"[heartbeat] evolver failed: {e}", file=sys.stderr)
+        if tick % inspector_every == 0:
+            # Phase 12: Inspector — quality oversight, separate from health (heartbeat)
+            try:
+                from inspector import run_inspector
+                run_inspector(dry_run=dry_run, verbose=verbose)
+            except Exception as e:
+                print(f"[heartbeat] inspector failed: {e}", file=sys.stderr)
         time.sleep(interval)
 
 
