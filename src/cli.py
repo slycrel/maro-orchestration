@@ -297,6 +297,30 @@ def main(argv: list[str] | None = None) -> int:
     p_poe_interrupt.add_argument("--status", action="store_true", help="Show running loop status instead")
     p_poe_interrupt.add_argument("--format", choices=["text", "json"], default="text")
 
+    p_poe_mission = sub.add_parser("poe-mission", help="Run a mission — milestone-gated multi-day goal pursuit (Phase 10)")
+    p_poe_mission.add_argument("goal", nargs="+", help="High-level multi-day goal")
+    p_poe_mission.add_argument("--project", "-p", help="Project slug (auto-created if not given)")
+    p_poe_mission.add_argument("--dry-run", action="store_true", help="Simulate without LLM calls")
+    p_poe_mission.add_argument("--verbose", "-v", action="store_true", help="Print progress")
+    p_poe_mission.add_argument("--format", choices=["text", "json"], default="text")
+
+    p_poe_mission_status = sub.add_parser("poe-mission-status", help="Show mission status for a project or all projects (Phase 10)")
+    p_poe_mission_status.add_argument("project", nargs="?", help="Project slug (omit for all)")
+    p_poe_mission_status.add_argument("--format", choices=["text", "json"], default="text")
+
+    p_poe_background = sub.add_parser("poe-background", help="Run a shell command in the background (Phase 10)")
+    p_poe_background.add_argument("command", nargs="+", help="Shell command to run")
+    p_poe_background.add_argument("--wait", action="store_true", help="Wait for completion (poll until done)")
+    p_poe_background.add_argument("--timeout", type=int, default=300, help="Timeout seconds (default: 300)")
+    p_poe_background.add_argument("--format", choices=["text", "json"], default="text")
+
+    p_poe_skills = sub.add_parser("poe-skills", help="Manage skill library (Phase 10)")
+    p_poe_skills.add_argument("--extract", action="store_true", help="Extract skills from recent outcomes")
+    p_poe_skills.add_argument("--list", action="store_true", dest="list_skills", help="List known skills")
+    p_poe_skills.add_argument("--outcomes-window", type=int, default=50, help="How many recent outcomes to analyze (default: 50)")
+    p_poe_skills.add_argument("--dry-run", action="store_true", help="Analyze without writing skills")
+    p_poe_skills.add_argument("--format", choices=["text", "json"], default="text")
+
     p_plan = sub.add_parser("plan", help="Split a goal into NEXT tasks")
     p_plan.add_argument("project")
     p_plan.add_argument("goal", nargs="+")
@@ -943,6 +967,161 @@ def main(argv: list[str] | None = None) -> int:
             print(operator_status_path())
         else:
             print(json.dumps(payload, indent=2))
+        return 0
+
+    if args.cmd == "poe-mission":
+        import mission as _mission_mod
+        goal_str = " ".join(args.goal)
+        try:
+            result = _mission_mod.run_mission(
+                goal_str,
+                project=args.project,
+                dry_run=args.dry_run,
+                verbose=args.verbose,
+            )
+        except Exception as exc:
+            return fail("E_POE_MISSION", str(exc))
+        if args.format == "json":
+            print(json.dumps({
+                "mission_id": result.mission_id,
+                "project": result.project,
+                "goal": result.goal,
+                "status": result.status,
+                "milestones_done": result.milestones_done,
+                "milestones_total": result.milestones_total,
+                "features_done": result.features_done,
+                "features_total": result.features_total,
+                "elapsed_ms": result.elapsed_ms,
+            }, indent=2))
+        else:
+            print(result.summary())
+        return 0 if result.status == "done" else 1
+
+    if args.cmd == "poe-mission-status":
+        import mission as _mission_mod
+        if args.project:
+            m = _mission_mod.load_mission(args.project)
+            if not m:
+                return fail("E_MISSION_NOT_FOUND", f"no mission.json for project={args.project}")
+            if args.format == "json":
+                summaries = [{
+                    "project": m.project,
+                    "mission_id": m.id,
+                    "goal": m.goal,
+                    "status": m.status,
+                    "milestones": [
+                        {
+                            "id": ms.id,
+                            "title": ms.title,
+                            "status": ms.status,
+                            "features": [
+                                {"id": f.id, "title": f.title, "status": f.status}
+                                for f in ms.features
+                            ],
+                        }
+                        for ms in m.milestones
+                    ],
+                }]
+                print(json.dumps(summaries, indent=2))
+            else:
+                print(f"mission_id={m.id} project={m.project} status={m.status}")
+                print(f"goal={m.goal!r}")
+                for ms in m.milestones:
+                    done_count = sum(1 for f in ms.features if f.status == "done")
+                    print(f"  milestone [{ms.status:10s}] {ms.title!r} features={done_count}/{len(ms.features)}")
+                    for f in ms.features:
+                        print(f"    feature  [{f.status:8s}] {f.title!r}")
+        else:
+            summaries = _mission_mod.list_missions()
+            if args.format == "json":
+                print(json.dumps(summaries, indent=2))
+            else:
+                if not summaries:
+                    print("missions=(none)")
+                else:
+                    for s in summaries:
+                        print(
+                            f"project={s['project']} status={s['status']} "
+                            f"milestones={s['milestones_done']}/{s['milestones_total']} "
+                            f"features={s['features_done']}/{s['features_total']} "
+                            f"goal={s['goal'][:60]!r}"
+                        )
+        return 0
+
+    if args.cmd == "poe-background":
+        import background as _bg_mod
+        command = " ".join(args.command)
+        try:
+            task = _bg_mod.start_background(command, timeout_seconds=args.timeout)
+            if args.wait:
+                task = _bg_mod.wait_background(task.id, timeout_seconds=args.timeout)
+        except Exception as exc:
+            return fail("E_POE_BACKGROUND", str(exc))
+        if args.format == "json":
+            print(json.dumps({
+                "id": task.id,
+                "command": task.command,
+                "pid": task.pid,
+                "status": task.status,
+                "started_at": task.started_at,
+                "completed_at": task.completed_at,
+                "exit_code": task.exit_code,
+                "output_file": task.output_file,
+            }, indent=2))
+        else:
+            print(f"id={task.id} pid={task.pid} status={task.status} command={task.command!r}")
+            if task.completed_at:
+                print(f"completed_at={task.completed_at} exit_code={task.exit_code}")
+        return 0
+
+    if args.cmd == "poe-skills":
+        import skills as _skills_mod
+        if args.list_skills:
+            skill_list = _skills_mod.load_skills()
+            if args.format == "json":
+                print(json.dumps([_skills_mod._skill_to_dict(s) for s in skill_list], indent=2))
+            else:
+                if not skill_list:
+                    print("skills=(none)")
+                else:
+                    for s in skill_list:
+                        print(f"  [{s.id}] {s.name} (uses={s.use_count} success_rate={s.success_rate:.2f})")
+                        print(f"    {s.description}")
+                        print(f"    triggers: {', '.join(s.trigger_patterns[:3])}")
+            return 0
+
+        if args.extract:
+            try:
+                from memory import load_outcomes
+                outcomes_raw = load_outcomes(limit=args.outcomes_window)
+                from dataclasses import asdict
+                outcomes_dicts = [asdict(o) for o in outcomes_raw]
+            except Exception as exc:
+                return fail("E_SKILLS_LOAD_OUTCOMES", str(exc))
+
+            if args.dry_run:
+                print(f"dry_run: would analyze {len(outcomes_dicts)} outcomes for skill extraction")
+                return 0
+
+            try:
+                from llm import build_adapter, MODEL_MID
+                skill_adapter = build_adapter(model=MODEL_MID)
+                extracted = _skills_mod.extract_skills(outcomes_dicts, skill_adapter)
+            except Exception as exc:
+                return fail("E_SKILLS_EXTRACT", str(exc))
+
+            if args.format == "json":
+                print(json.dumps([_skills_mod._skill_to_dict(s) for s in extracted], indent=2))
+            else:
+                if not extracted:
+                    print("extracted=(none)")
+                else:
+                    for s in extracted:
+                        print(f"extracted: [{s.id}] {s.name} — {s.description}")
+            return 0
+
+        # Default: show usage hint
+        print("Use --list to list skills or --extract to extract from recent outcomes.")
         return 0
 
     return fail("E_INTERNAL", "unknown command")

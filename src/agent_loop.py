@@ -244,9 +244,20 @@ def run_agent_loop(
         _lessons_context = inject_lessons_for_task("agenda", goal, max_lessons=3)
     except Exception:
         _lessons_context = ""
+    # Load matching skills for decompose prompt injection (Phase 10)
+    try:
+        from skills import find_matching_skills, format_skills_for_prompt
+        _matching_skills = find_matching_skills(goal)
+        _skills_context = format_skills_for_prompt(_matching_skills)
+        if _matching_skills and verbose:
+            print(f"[poe] injecting {len(_matching_skills)} skill(s) into decompose", file=sys.stderr, flush=True)
+    except Exception:
+        _skills_context = ""
+
     steps = _decompose(
         goal, adapter, max_steps=max_steps, verbose=verbose,
         lessons_context=_lessons_context, ancestry_context=_ancestry_context,
+        skills_context=_skills_context,
     )
     if verbose:
         print(f"[poe] decomposed into {len(steps)} steps", file=sys.stderr, flush=True)
@@ -490,12 +501,13 @@ def _decompose(
     verbose: bool = False,
     lessons_context: str = "",
     ancestry_context: str = "",
+    skills_context: str = "",
 ) -> List[str]:
     """Ask the LLM to decompose a goal into steps. Falls back to heuristic."""
     from llm import LLMMessage
 
     system = _DECOMPOSE_SYSTEM
-    extras = [x for x in [ancestry_context, lessons_context] if x]
+    extras = [x for x in [skills_context, ancestry_context, lessons_context] if x]
     if extras:
         system = _DECOMPOSE_SYSTEM + "\n\n" + "\n\n".join(extras)
 
