@@ -269,6 +269,63 @@ Inspired by Factory AI Signals research (LLM-as-judge + friction detection) and 
 
 ---
 
+## Phase 16: Tiered Memory — Short, Medium, Long Term
+
+**Memory with selective forgetting.** Not all memory is equal. Step-level results are noise in a week; lessons from a failed mission are load-bearing for months. Right now everything goes to a flat `outcomes.jsonl` and is treated uniformly. This phase introduces tiered retention with decay, forgetting, and promotion.
+
+Inspired by Jeremy: "I think we want to 'forget' some things and some things only apply in different memory spans."
+
+- [ ] **Three memory tiers:**
+  - `short` — session-scoped (single loop/mission run). Evicted at session end. Holds: step results, intermediate artifacts, working context.
+  - `medium` — project-scoped (days to weeks). Decays on a configurable schedule. Holds: lessons extracted from recent runs, per-project patterns, feature outcomes.
+  - `long` — system-wide (months+). Explicit promotion required. Holds: high-confidence skills, validated guardrails, fundamental lessons about Jeremy's preferences, stable architectural patterns.
+- [ ] **Decay model:** medium-tier entries have a `ttl_days` field. Lessons that aren't reinforced by future sessions decay and are garbage-collected. Lessons that appear repeatedly get promoted to long-tier automatically.
+- [ ] **Promotion path:** Inspector detects when a medium-tier lesson has been validated across N sessions → promotes to long. Evolver can also explicitly promote.
+- [ ] **Selective forgetting:** `poe-memory forget <id>` explicitly expires an entry. `poe-memory decay --dry-run` previews what would be pruned.
+- [ ] **Context injection respects tiers:** `inject_lessons_for_task()` queries long-tier first (always included), then medium-tier filtered by recency and relevance, then short-tier if in the same session. Short-tier lessons never bleed into a new session's context.
+- [ ] **Skill library tiers:** skills can be `provisional` (medium) or `established` (long). Test gate required to promote from provisional → established.
+- [ ] `poe-memory status` — show tier breakdown, total entries, oldest/newest per tier, decay candidates
+
+**Artifact:** `src/memory.py` (extended), `memory/short/`, `memory/medium/`, `memory/long/`, `poe-memory` CLI
+
+---
+
+## Phase 17: Behavior-Aligned Routing
+
+**RL-trained skill router.** Currently `find_matching_skills()` uses keyword matching. Memento-Skills showed that training a router on execution-success signal (not just semantic similarity) gives ~10% relative recall improvement and routes to skills that actually work, not just skills that sound relevant.
+
+Inspired by Memento-Skills arXiv:2603.18743: one-step offline RL, multi-positive InfoNCE loss, Boltzmann policy.
+
+- [ ] **Outcome label collection:** every skill invocation records (goal_text, skill_id, success) in `skill-stats.jsonl` — this already exists from Phase 14. Phase 17 structures it as training data.
+- [ ] **Feature extraction:** embed goal text and skill descriptions (sentence-transformers or tfidf fallback). Store embeddings in `memory/skill-embeddings.jsonl`.
+- [ ] **Router training:** lightweight sklearn logistic regression trained on (goal_embedding, skill_embedding) → success_probability. Retrained periodically (after N new labeled examples). Falls back to keyword matching if not enough data yet (threshold: 50 labeled examples).
+- [ ] **Inference:** `find_matching_skills(goal)` uses trained router scores when available, sorted by predicted success probability.
+- [ ] **Router retraining hook:** wired into evolver — when skill-stats grows by 50 entries, trigger retraining.
+- [ ] `poe-router stats` — show training data size, last trained, accuracy on holdout
+- [ ] `poe-router retrain` — force retrain
+
+**Artifact:** `src/router.py`, `memory/skill-embeddings.jsonl`, `memory/router-model.pkl`
+
+---
+
+## Phase 18: Sandbox Hardening
+
+**Production-grade skill isolation.** The current sandbox (Phase 15) runs skills in a plain `python3` subprocess with static content analysis. This phase hardens it to `uv`-isolated environments with explicit dependency manifests and resource limits.
+
+Deferred from Phase 15 by Jeremy's request — sandbox is functional, hardening can wait.
+
+- [ ] **`uv` virtual env per skill:** each skill execution creates (or reuses) a `uv` venv with the skill's declared dependencies. No shared package state between skills.
+- [ ] **Dependency manifest in skill format:** structured skill markdown gains a `## Dependencies` section listing pip packages. `sandbox.py` parses this and provisions the venv before execution.
+- [ ] **Resource limits:** CPU time limit (via `resource` module or `ulimit`), memory cap, filesystem write restriction (skills write only to a temp sandbox dir, not the workspace).
+- [ ] **Network isolation option:** configurable per-skill — `network: none | localhost | full`. Default `none` for skills that don't declare network access.
+- [ ] **Audit log:** every sandboxed execution logged to `memory/sandbox-audit.jsonl` with skill_id, command, exit_code, resources_used.
+- [ ] Migrate `run_skill_sandboxed()` to use `uv run` when available, fall back to plain subprocess.
+- [ ] `poe-sandbox audit [--limit N]` — show recent sandbox executions
+
+**Artifact:** `src/sandbox.py` (hardened), `memory/sandbox-audit.jsonl`
+
+---
+
 ## Superseded Plans
 
 The original M0-M4 milestones and N1-N4 roadmap items focused on infrastructure plumbing (adapters, scheduling, CI). That work was valuable scaffolding, but it didn't address the core need: making Poe autonomous. This roadmap replaces N1-N4 entirely.
