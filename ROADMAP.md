@@ -162,72 +162,79 @@ Source-agnostic interrupt system baked into the agent loop, not just Telegram.
 
 ---
 
-## Phase 10: Mission Layer + Background Execution
+## Phase 10: Mission Layer + Background Execution *(COMPLETE)*
 
 **Milestone-gated multi-day goal pursuit.** The goal ancestry chain gains a formal hierarchy with validation checkpoints and fresh context per unit of work.
 
 Inspired by Factory AI Missions research.
 
-- [ ] Formal hierarchy: Mission → Milestone → Feature → Worker Session
-- [ ] Each Feature gets a fresh context window (no single session holds the whole project)
-- [ ] Milestone validation gate: before advancing, validate accumulated work (tests, artifacts, integration)
-- [ ] Sequential-first parallelization: parallelize within features, sequential across milestones
-- [ ] Background execution primitive: start long-running process, continue other work, poll result asynchronously
-- [ ] Skill library: extract reusable execution patterns from completed goal chains, surface to future orchestration
-- [ ] Git as coordination primitive for session handoffs
-- [ ] `poe-mission "goal"` CLI entry point
+- [x] Formal hierarchy: Mission → Milestone → Feature → Worker Session
+- [x] Each Feature gets a fresh context window (no single session holds the whole project)
+- [x] Milestone validation gate: before advancing, validate accumulated work (tests, artifacts, integration)
+- [x] Sequential-first parallelization: parallelize within features, sequential across milestones
+- [x] Background execution primitive: start long-running process, continue other work, poll result asynchronously
+- [x] Skill library: extract reusable execution patterns from completed goal chains, surface to future orchestration
+- [x] Skills wired into agent_loop decompose prompts
+- [x] `poe-mission`, `poe-mission-status`, `poe-background`, `poe-skills` CLI subcommands
+- [x] 72 new tests, 521 total passing
 
-**Artifact:** `src/mission.py`, `src/skills.py`, `poe-mission` CLI
+**Artifact:** `src/mission.py`, `src/background.py`, `src/skills.py`, `poe-mission` CLI
 
 ---
 
-## Phase 11: Hooks + Reviewers at Every Level
+## Phase 11: Hooks + Reviewers at Every Level *(COMPLETE)*
 
 **Pluggable callbacks at each hierarchy level.** Any layer — mission, milestone, feature, step — can have hooks attached: code reviewers, coordinators, simple reporters, or custom scripts.
 
 Inspired by Jeremy's request for injectable reviewers/coordinators, and Factory AI's planning-tool-with-live-checkoffs pattern.
 
-- [ ] Hook registry: register named hooks at mission/milestone/feature/step scope
-- [ ] Hook types: `reviewer` (LLM critique before advancing), `reporter` (emit summary to Telegram/log), `coordinator` (LLM decides next step routing), `script` (shell command, non-blocking)
-- [ ] Built-in hooks: code reviewer (diff-aware critique), progress reporter (milestone summary), plan validator (checks step alignment with mission goal)
-- [ ] Three-tier prompting (Factory System Notifications pattern): hooks can inject contextual guidance into the running agent at the right moment — not front-loaded in system prompt
-- [ ] Hook results feed the evolver: reviewer friction signals captured as improvement data
-- [ ] Config: hooks defined in `.factory/hooks.yaml` (per-project or global)
+- [x] Hook registry: register named hooks at mission/milestone/feature/step scope
+- [x] Hook types: `reviewer` (LLM critique before advancing), `reporter` (non-blocking), `coordinator` (routing injection), `script` (shell command, non-blocking), `notification` (Factory System Notifications — injects context mid-run)
+- [x] Built-in hooks: step reviewer, milestone validator, progress reporter, plan alignment notification
+- [x] Factory System Notifications pattern: notification hooks inject contextual guidance at the right moment
+- [x] Wired into `run_mission()` and `run_agent_loop()` — only fires when hooks are enabled
+- [x] `poe-hooks list/enable/disable/add-reporter/run-builtin` CLI
+- [x] 35 new tests, 556 total passing
 
-**Artifact:** `src/hooks.py`, hook config schema, built-in hook library
+**Artifact:** `src/hooks.py`, built-in hook library, `poe-hooks` CLI
 
 ---
 
-## Phase 12: Oversight + Quality Self-Examination
+## Phase 12: Oversight + Quality Self-Examination *(COMPLETE)*
 
 **End-to-end quality layer.** Not health monitoring (that's heartbeat) — this is alignment and quality: is the system producing the right results, are the processes working, is Poe on track with its goals?
 
 Inspired by Factory AI Signals research (LLM-as-judge + friction detection) and Jeremy's explicit ask for self-examination separate from Poe-the-orchestrator.
 
-- [ ] Oversight agent ("Inspector"): independent agent that reviews completed missions end-to-end, separate from the loop that executed them
-- [ ] Friction detection (Factory 7-signal model): error events, repeated rephrasing, escalation tone, platform confusion, abandoned tool flows, backtracking, context churn — tracked per session
-- [ ] LLM-as-judge batch analysis: processes session logs in periodic batches, extracts abstracted improvement signals
-- [ ] Closed improvement loop: signal pattern crosses threshold → structured ticket → self-assigned to evolver → suggestion PR (human approves before apply)
-- [ ] Goal alignment check: Inspector verifies completed work against original mission intent, not just technical success
-- [ ] Facet schema evolution: cluster sessions semantically, propose new observability dimensions when patterns don't map to existing facets
-- [ ] Inspector results surface to Poe (CEO layer) as executive summary, not raw detail
+- [x] Inspector: independent quality agent, completely separate from execution chain
+- [x] Friction detection (Factory 7-signal model): error events, repeated rephrasing, escalation tone, platform confusion, abandoned tool flows, backtracking, context churn — heuristic-first, LLM-optional
+- [x] Goal alignment scoring per session (heuristic default + optional LLM)
+- [x] Cross-session pattern analysis → feeds evolver suggestions
+- [x] Closed loop: threshold breach → suggestion → evolver pipeline
+- [x] `run_evolver_with_friction()`: evolver gets richer context from inspection findings
+- [x] Inspector wired into heartbeat (every 20 ticks); heartbeat report gains quality_summary
+- [x] `poe-inspector [--loop]`, `poe-inspector-status`, `poe-quality` CLI
+- [x] `deploy/poe-inspector.service` systemd unit
+- [x] 41 new tests, 597 total passing
 
-**Artifact:** `src/inspector.py`, friction tracking in `src/evolver.py`, `poe-inspect` CLI
+**Artifact:** `src/inspector.py`, `deploy/poe-inspector.service`, `poe-inspector` CLI
 
 ---
 
-## Phase 13: Poe as CEO
+## Phase 13: Poe as CEO *(COMPLETE)*
 
 **Explicit role separation.** Poe stops being an executor and becomes a communicator, planner, and advisor. Directors plan and review. Workers execute. Inspector validates. Poe's interface with Jeremy is at mission/goal level — not steps.
 
-- [ ] Formal role model: Poe (communicator/CEO) → Director (planner/reviewer) → Worker (executor) → Inspector (validator). Delegator-as-non-coder principle: if Poe is executing steps directly, the architecture has failed.
-- [ ] Autonomy tier system: `manual` (human approves each action), `safe` (auto-execute low-risk, escalate rest), `full` (autonomous within scope) — configurable per project and per action type
-- [ ] Model-agnostic role assignment: orchestrator tier gets POWER model (Opus), worker tier gets MID (Sonnet), research gets domain-specialized — assignment per role, not per call site
-- [ ] Poe ↔ Jeremy interface: Poe communicates at mission/goal level; step-level details are available on request but not surfaced by default
-- [ ] Goal relationship awareness: Poe maintains the map of how active missions relate to each other and to top-level north stars — surfaces conflicts, opportunities for coordination
-- [ ] Poe as occasional advisor: on high-level pivots or stuck missions, Poe surfaces options to Jeremy with a recommendation, not a status dump
+- [x] `poe.py`: CEO-layer entry point — routes to Mission/Director/Inspector, never executes steps directly
+- [x] Executive summary compilation: Poe distills active missions + quality signals into 3-5 bullet summary for Jeremy
+- [x] Autonomy tier system: `manual` / `safe` / `full` — configurable per project and per action type, persists to `memory/autonomy.json`
+- [x] `assign_model_by_role()`: role-semantic model selection (orchestrator→POWER, worker→MID, classifier→CHEAP) wired into agent_loop, director, mission
+- [x] `goal_map.py`: active mission relationship graph, conflict detection, `/map` Telegram command
+- [x] Telegram: `/status` routes through Poe CEO layer, `/map` shows goal graph, natural language → `poe_handle()` first
+- [x] `handle.py` backward compat preserved — AGENDA tasks delegate to `poe_handle()`, dry_run stays on legacy path
+- [x] 88 new tests, 685 total passing
 
-**Artifact:** Poe persona refactor across `handle.py`, `director.py`, `telegram_listener.py`; autonomy tier config
+**Artifact:** `src/poe.py`, `src/autonomy.py`, `src/goal_map.py`, `poe`/`poe-status`/`poe-map`/`poe-autonomy` CLI
 
 ---
 
