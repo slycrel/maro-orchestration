@@ -405,6 +405,25 @@ def main(argv: list[str] | None = None) -> int:
     p_poe_skill_test.add_argument("--generate", action="store_true", help="Generate new test cases from recent failures")
     p_poe_skill_test.add_argument("--format", choices=["text", "json"], default="text")
 
+    # Phase 15: gateway + sandbox CLI subcommands
+    p_poe_gateway = sub.add_parser("poe-gateway", help="OpenClaw gateway status and messaging (Phase 15)")
+    gateway_sub = p_poe_gateway.add_subparsers(dest="gateway_cmd", required=True)
+
+    gateway_sub.add_parser("status", help="Check if OpenClaw gateway is reachable")
+
+    p_gw_send = gateway_sub.add_parser("send", help="Send a message to the OpenClaw gateway")
+    p_gw_send.add_argument("message", nargs="+", help="Message text to send")
+    p_gw_send.add_argument("--timeout", type=int, default=10, help="Send timeout in seconds (default: 10)")
+    p_gw_send.add_argument("--format", choices=["text", "json"], default="text")
+
+    p_poe_sandbox = sub.add_parser("poe-sandbox", help="Run skill tests in sandbox isolation (Phase 15)")
+    sandbox_sub = p_poe_sandbox.add_subparsers(dest="sandbox_cmd", required=True)
+
+    p_sb_test = sandbox_sub.add_parser("test", help="Run sandboxed tests for a skill")
+    p_sb_test.add_argument("skill_id", help="Skill ID or name to test")
+    p_sb_test.add_argument("--generate", action="store_true", help="Generate new tests from recent failures before running")
+    p_sb_test.add_argument("--format", choices=["text", "json"], default="text")
+
     p_plan = sub.add_parser("plan", help="Split a goal into NEXT tasks")
     p_plan.add_argument("project")
     p_plan.add_argument("goal", nargs="+")
@@ -1518,6 +1537,90 @@ def main(argv: list[str] | None = None) -> int:
         except Exception as exc:
             return fail("E_POE_SKILL_TEST", str(exc))
         return 0
+
+    # ---------------------------------------------------------------------------
+    # Phase 15: Gateway + Sandbox CLI handlers
+    # ---------------------------------------------------------------------------
+
+    if args.cmd == "poe-gateway":
+        from gateway import check_gateway_connection, send_to_gateway
+
+        if args.gateway_cmd == "status":
+            connected = check_gateway_connection()
+            if connected:
+                print("gateway=reachable")
+                return 0
+            else:
+                print("gateway=unreachable")
+                return 1
+
+        if args.gateway_cmd == "send":
+            message = " ".join(args.message)
+            result = send_to_gateway(message, timeout_seconds=args.timeout)
+            if getattr(args, "format", "text") == "json":
+                print(json.dumps({
+                    "connected": result.connected,
+                    "sent": result.sent,
+                    "response": result.response,
+                    "error": result.error,
+                    "elapsed_ms": result.elapsed_ms,
+                }, indent=2))
+            else:
+                print(f"connected={result.connected} sent={result.sent} elapsed_ms={result.elapsed_ms}")
+                if result.response:
+                    print(f"response={result.response}")
+                if result.error:
+                    print(f"error={result.error}")
+            return 0 if result.sent else 1
+
+    if args.cmd == "poe-sandbox":
+        from skills import load_skills, generate_skill_tests, _load_skill_tests
+        from sandbox import run_skill_tests_sandboxed
+
+        skill_id = args.skill_id
+        generate = getattr(args, "generate", False)
+
+        all_skills = load_skills()
+        target_skill = next((s for s in all_skills if s.id == skill_id or s.name == skill_id), None)
+        if target_skill is None:
+            return fail("E_SKILL_NOT_FOUND", f"No skill with id or name {skill_id!r}")
+
+        try:
+            if generate:
+                from attribution import load_attributions
+                attributions = load_attributions(limit=20)
+                failure_examples = [
+                    a.raw_reason for a in attributions
+                    if a.failed_skill == target_skill.name
+                ]
+                tests = generate_skill_tests(target_skill, failure_examples)
+                print(f"Generated {len(tests)} test case(s) for skill={target_skill.name!r}")
+            else:
+                tests = _load_skill_tests(skill_id)
+                if not tests:
+                    tests = _load_skill_tests(target_skill.id)
+
+            if not tests:
+                print(f"No tests found for skill={target_skill.name!r}. Use --generate to create them.")
+                return 0
+
+            passed, total = run_skill_tests_sandboxed(target_skill, tests)
+            if getattr(args, "format", "text") == "json":
+                print(json.dumps({
+                    "skill_id": target_skill.id,
+                    "skill_name": target_skill.name,
+                    "passed": passed,
+                    "total": total,
+                    "tests": [t.to_dict() for t in tests],
+                }, indent=2))
+            else:
+                print(f"Skill: {target_skill.name} (id={target_skill.id}) [sandboxed]")
+                print(f"Tests: {total} | Passed: {passed}")
+                for t in tests:
+                    print(f"  - [{t.input_description[:60]}] expect: {t.expected_keywords}")
+        except Exception as exc:
+            return fail("E_POE_SANDBOX", str(exc))
+        return 0 if (not tests or passed == total) else 1
 
     return fail("E_INTERNAL", "unknown command")
 

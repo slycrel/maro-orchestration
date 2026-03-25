@@ -257,6 +257,18 @@ Inspired by Factory AI Signals research (LLM-as-judge + friction detection) and 
 
 ---
 
+## Phase 15: Skill Sandbox + OpenClaw Gateway *(COMPLETE)*
+
+- [x] sandbox.py: subprocess isolation for skill execution; static safety analysis blocks eval/exec/import os/shutil/open; sandboxed test gate
+- [x] gateway.py: ws://127.0.0.1:18789 connect/send/receive; graceful ImportError fallback if websockets not installed; reads auth from openclaw.json (never logged)
+- [x] sheriff: openclaw_gateway health check wired (TCP fallback in sheriff.py; gateway module available for direct use)
+- [x] poe-gateway status/send, poe-sandbox test CLI subcommands
+- [x] 43 new tests; 828 total passing
+
+**Artifact:** `src/sandbox.py`, `src/gateway.py`
+
+---
+
 ## Superseded Plans
 
 The original M0-M4 milestones and N1-N4 roadmap items focused on infrastructure plumbing (adapters, scheduling, CI). That work was valuable scaffolding, but it didn't address the core need: making Poe autonomous. This roadmap replaces N1-N4 entirely.
