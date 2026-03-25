@@ -291,6 +291,8 @@ Decay model (Grok): `score *= 0.85` per non-reinforced day; `score = min(1.0, sc
 
 **Artifact:** `src/memory.py` (tiered section appended), `src/skills.py` (tier field + `promote_skill_tier()`), `memory/medium/`, `memory/long/`, `poe-memory` CLI, `tests/test_tiered_memory.py`
 
+**Open design question captured:** Jeremy raised the "muscle memory" concept — should long-tier lessons eventually graduate from query-able data into AGENTS.md identity (system prompt)? Answer: yes, via a "canon promotion" path. Inspector surfaces candidates (`times_applied ≥ N` across diverse task types); human gate required before writing to AGENTS.md. See `docs/MEMORY_ARCHITECTURE.md` for full design rationale and graduation path.
+
 ---
 
 ## Phase 17: Behavior-Aligned Routing *(COMPLETE)*
