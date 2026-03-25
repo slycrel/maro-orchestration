@@ -800,6 +800,7 @@ def run_skill_tests(
     tests: List[SkillTestCase],
     adapter=None,
     dry_run: bool = False,
+    sandboxed: bool = False,
 ) -> Tuple[int, int]:
     """Run test cases against a skill.
 
@@ -807,10 +808,12 @@ def run_skill_tests(
     expected_keyword appears in the response.
 
     Args:
-        skill:    Skill to test.
-        tests:    List of SkillTestCase to run.
-        adapter:  LLMAdapter. None or dry_run → all pass.
-        dry_run:  If True, return (len(tests), len(tests)) — all pass.
+        skill:     Skill to test.
+        tests:     List of SkillTestCase to run.
+        adapter:   LLMAdapter. None or dry_run → all pass.
+        dry_run:   If True, return (len(tests), len(tests)) — all pass.
+        sandboxed: If True and sandbox module available, run each test in
+                   an isolated subprocess (Phase 15).
 
     Returns:
         Tuple of (passed_count, total_count).
