@@ -404,3 +404,53 @@ def test_cli_poe_evolver_apply_not_found(capsys):
         import cli
         rc = cli.main(["poe-evolver", "--apply", "nonexistent"])
     assert rc == 2
+
+
+# ---------------------------------------------------------------------------
+# Phase 12 — receive_inspector_tickets
+# ---------------------------------------------------------------------------
+
+from evolver import receive_inspector_tickets
+
+
+def test_receive_inspector_tickets_saves_suggestions(tmp_path):
+    """receive_inspector_tickets saves each valid ticket as a Suggestion."""
+    tickets = [
+        {
+            "id": "insp-abc123",
+            "title": "Fix recurring errors",
+            "pattern": "error_events: repeated failures",
+            "suggested_fix": "Add retry logic to tool calls",
+            "priority": "high",
+            "auto_evolver": True,
+        },
+        {
+            "id": "insp-def456",
+            "title": "Reduce context churn",
+            "pattern": "context_churn: lessons not applied",
+            "suggested_fix": "Summarize lessons before each step",
+            "priority": "medium",
+            "auto_evolver": True,
+        },
+    ]
+    suggestions_path = tmp_path / "suggestions.jsonl"
+    with patch("evolver._suggestions_path", return_value=suggestions_path):
+        count = receive_inspector_tickets(tickets)
+
+    assert count == 2
+    assert suggestions_path.exists()
+    lines = [json.loads(l) for l in suggestions_path.read_text().splitlines() if l.strip()]
+    assert len(lines) == 2
+    categories = {l["category"] for l in lines}
+    assert "inspection_finding" in categories
+    # High priority → confidence 0.9
+    high = next(l for l in lines if "retry" in l["suggestion"])
+    assert high["confidence"] == pytest.approx(0.9)
+
+
+def test_receive_inspector_tickets_empty_list():
+    """Empty ticket list returns 0 and writes nothing."""
+    with patch("evolver._save_suggestions") as mock_save:
+        count = receive_inspector_tickets([])
+    assert count == 0
+    mock_save.assert_not_called()

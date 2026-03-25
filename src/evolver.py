@@ -409,6 +409,54 @@ def _notify_telegram(report: EvolverReport) -> None:
 # Friction-aware evolver (Phase 12)
 # ---------------------------------------------------------------------------
 
+def receive_inspector_tickets(tickets: List[dict]) -> int:
+    """Accept inspector-generated tickets and convert them to Suggestion objects.
+
+    Inspector tickets map:
+      title          → suggestion
+      pattern        → failure_pattern
+      suggested_fix  → suggestion (preferred over title)
+      priority       → confidence (high=0.9, medium=0.7, low=0.5)
+
+    Args:
+        tickets: List of ticket dicts from inspector.generate_tickets().
+
+    Returns:
+        Count of suggestions added.
+    """
+    import uuid as _uuid
+
+    _PRIORITY_CONFIDENCE = {"high": 0.9, "medium": 0.7, "low": 0.5}
+
+    suggestions: List[Suggestion] = []
+    for t in tickets:
+        if not isinstance(t, dict):
+            continue
+        priority = t.get("priority", "medium")
+        confidence = _PRIORITY_CONFIDENCE.get(priority, 0.7)
+        suggestion_text = t.get("suggested_fix") or t.get("title") or ""
+        if not suggestion_text.strip():
+            continue
+        suggestions.append(Suggestion(
+            suggestion_id=f"insp-{_uuid.uuid4().hex[:8]}",
+            category="inspection_finding",
+            target="all",
+            suggestion=suggestion_text,
+            failure_pattern=t.get("pattern", "inspector finding"),
+            confidence=confidence,
+            outcomes_analyzed=0,
+        ))
+
+    if suggestions:
+        try:
+            _save_suggestions(suggestions)
+        except Exception as e:
+            print(f"[evolver] receive_inspector_tickets: failed to save: {e}", file=sys.stderr)
+            return 0
+
+    return len(suggestions)
+
+
 def get_friction_summary() -> str:
     """Return a brief human-readable friction summary from the latest inspector run.
 

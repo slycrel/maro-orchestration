@@ -47,6 +47,11 @@ except ImportError:  # pragma: no cover
     MODEL_CHEAP = "cheap"  # type: ignore[assignment]
     MODEL_MID = "mid"  # type: ignore[assignment]
 
+try:
+    from evolver import receive_inspector_tickets
+except ImportError:  # pragma: no cover
+    receive_inspector_tickets = None  # type: ignore[assignment]
+
 
 # ---------------------------------------------------------------------------
 # Friction signal constants (Factory AI Signals research)
@@ -72,6 +77,23 @@ ALL_SIGNALS = [
 
 # Threshold: signal appearing in this fraction of sessions → threshold breach
 _BREACH_THRESHOLD = 0.30
+
+# Escalation keywords for tone detection
+_ESCALATION_KEYWORDS = frozenset([
+    "broken", "failed", "stuck", "error", "cannot", "impossible",
+    "doesn't work", "not working", "won't work", "can't",
+])
+
+# Human-readable descriptions for each friction type (spec FRICTION_TYPES dict)
+FRICTION_TYPES: Dict[str, str] = {
+    SIGNAL_ERROR_EVENTS:        "Tool failures, LLM errors, stuck loops",
+    SIGNAL_REPEATED_REPHRASE:   "Same goal decomposed 3+ times with little variation",
+    SIGNAL_ESCALATION_TONE:     "Words like 'broken', 'failed', 'stuck' in decision logs",
+    SIGNAL_PLATFORM_CONFUSION:  "Steps that ask about capabilities rather than execute",
+    SIGNAL_ABANDONED_TOOL_FLOW: "Steps marked blocked without attempting alternatives",
+    SIGNAL_BACKTRACKING:        "Step marked done then re-added or re-executed",
+    SIGNAL_CONTEXT_CHURN:       "Same context/lessons loaded but not applied",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -103,6 +125,130 @@ class FrictionSignal:
             count=d.get("count", 1),
             evidence=d.get("evidence", ""),
             session_id=d.get("session_id", ""),
+        )
+
+
+# ---------------------------------------------------------------------------
+# Phase 12 spec dataclasses (new in this phase — alongside existing ones above)
+# FrictionSignal below uses float severity (spec); existing FrictionSignal uses str.
+# They coexist under different usage paths.
+# ---------------------------------------------------------------------------
+
+@dataclass
+class SpecFrictionSignal:
+    """Spec-defined FrictionSignal with float severity (0.0–1.0) and timestamp."""
+    session_id: str
+    signal_type: str
+    severity: float          # 0.0–1.0
+    evidence: str
+    timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+    def to_dict(self) -> dict:
+        return {
+            "session_id": self.session_id,
+            "signal_type": self.signal_type,
+            "severity": self.severity,
+            "evidence": self.evidence,
+            "timestamp": self.timestamp,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "SpecFrictionSignal":
+        return cls(
+            session_id=d.get("session_id", ""),
+            signal_type=d.get("signal_type", ""),
+            severity=float(d.get("severity", 0.5)),
+            evidence=d.get("evidence", ""),
+            timestamp=d.get("timestamp", datetime.now(timezone.utc).isoformat()),
+        )
+
+
+@dataclass
+class AlignmentResult:
+    """Goal alignment check result (spec §12)."""
+    session_id: str
+    mission_goal: str
+    work_summary: str
+    aligned: bool
+    alignment_score: float   # 0.0–1.0
+    gaps: List[str]          # specific ways the work diverged from intent
+    timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+    def to_dict(self) -> dict:
+        return {
+            "session_id": self.session_id,
+            "mission_goal": self.mission_goal,
+            "work_summary": self.work_summary,
+            "aligned": self.aligned,
+            "alignment_score": self.alignment_score,
+            "gaps": self.gaps,
+            "timestamp": self.timestamp,
+        }
+
+
+@dataclass
+class InspectorReport:
+    """Full inspector run report (spec §12 — distinct from InspectionReport above)."""
+    report_id: str
+    sessions_analyzed: int
+    friction_signals: List["SpecFrictionSignal"] = field(default_factory=list)
+    alignment_results: List[AlignmentResult] = field(default_factory=list)
+    patterns: List[str] = field(default_factory=list)
+    evolver_tickets: List[dict] = field(default_factory=list)
+    executive_summary: str = ""
+    elapsed_ms: int = 0
+    timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+    def summary(self) -> str:
+        lines = [
+            f"inspector report_id={self.report_id}",
+            f"sessions_analyzed={self.sessions_analyzed}",
+            f"friction_signals={len(self.friction_signals)}",
+            f"alignment_results={len(self.alignment_results)}",
+            f"patterns={len(self.patterns)}",
+            f"evolver_tickets={len(self.evolver_tickets)}",
+            f"elapsed_ms={self.elapsed_ms}",
+        ]
+        if self.executive_summary:
+            lines.append(f"summary: {self.executive_summary[:200]}")
+        return "\n".join(lines)
+
+    def to_dict(self) -> dict:
+        return {
+            "report_id": self.report_id,
+            "sessions_analyzed": self.sessions_analyzed,
+            "friction_signals": [s.to_dict() for s in self.friction_signals],
+            "alignment_results": [a.to_dict() for a in self.alignment_results],
+            "patterns": self.patterns,
+            "evolver_tickets": self.evolver_tickets,
+            "executive_summary": self.executive_summary,
+            "elapsed_ms": self.elapsed_ms,
+            "timestamp": self.timestamp,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "InspectorReport":
+        return cls(
+            report_id=d.get("report_id", ""),
+            sessions_analyzed=d.get("sessions_analyzed", 0),
+            friction_signals=[SpecFrictionSignal.from_dict(s) for s in d.get("friction_signals", [])],
+            alignment_results=[
+                AlignmentResult(
+                    session_id=a.get("session_id", ""),
+                    mission_goal=a.get("mission_goal", ""),
+                    work_summary=a.get("work_summary", ""),
+                    aligned=a.get("aligned", False),
+                    alignment_score=float(a.get("alignment_score", 0.5)),
+                    gaps=a.get("gaps", []),
+                    timestamp=a.get("timestamp", ""),
+                )
+                for a in d.get("alignment_results", [])
+            ],
+            patterns=d.get("patterns", []),
+            evolver_tickets=d.get("evolver_tickets", []),
+            executive_summary=d.get("executive_summary", ""),
+            elapsed_ms=d.get("elapsed_ms", 0),
+            timestamp=d.get("timestamp", ""),
         )
 
 
@@ -216,6 +362,32 @@ def _inspection_log_path() -> Path:
         return d / "inspection-log.jsonl"
 
 
+def _inspector_report_log_path() -> Path:
+    """memory/inspector-log.jsonl — for spec InspectorReport objects."""
+    try:
+        from orch import orch_root
+        d = orch_root() / "memory"
+        d.mkdir(parents=True, exist_ok=True)
+        return d / "inspector-log.jsonl"
+    except Exception:
+        d = Path.cwd() / "memory"
+        d.mkdir(parents=True, exist_ok=True)
+        return d / "inspector-log.jsonl"
+
+
+def _friction_signals_log_path() -> Path:
+    """memory/friction-signals.jsonl — running friction signal log."""
+    try:
+        from orch import orch_root
+        d = orch_root() / "memory"
+        d.mkdir(parents=True, exist_ok=True)
+        return d / "friction-signals.jsonl"
+    except Exception:
+        d = Path.cwd() / "memory"
+        d.mkdir(parents=True, exist_ok=True)
+        return d / "friction-signals.jsonl"
+
+
 def _suggestions_path() -> Path:
     """Path to suggestions.jsonl — shared with evolver."""
     try:
@@ -225,6 +397,666 @@ def _suggestions_path() -> Path:
         return d / "suggestions.jsonl"
     except Exception:
         return Path.cwd() / "memory" / "suggestions.jsonl"
+
+
+# ---------------------------------------------------------------------------
+# Phase 12 spec functions — detect_friction, check_alignment, cluster_patterns,
+# generate_tickets, run_inspector (with spec signature), format_inspector_report
+# ---------------------------------------------------------------------------
+
+def detect_friction(
+    outcomes: List[Any],
+    hook_results_path: Optional[str] = None,
+) -> List["SpecFrictionSignal"]:
+    """Analyze outcome records for friction signals (spec §12, 7-signal model).
+
+    Handles both dict outcomes and Outcome dataclass objects.
+    Returns one SpecFrictionSignal per detected instance.
+
+    Args:
+        outcomes:          List of outcome dicts or Outcome objects.
+        hook_results_path: (unused, reserved for future hook log analysis)
+
+    Returns:
+        List of SpecFrictionSignal.
+    """
+    signals: List[SpecFrictionSignal] = []
+
+    def _to_dict(o: Any) -> dict:
+        if isinstance(o, dict):
+            return o
+        try:
+            from dataclasses import asdict
+            return asdict(o)
+        except Exception:
+            return o.__dict__ if hasattr(o, "__dict__") else {}
+
+    items = [_to_dict(o) for o in outcomes]
+    n = max(len(items), 1)
+
+    # --- error_events: status == "stuck" or "error" ---
+    stuck_items = [o for o in items if o.get("status") in ("stuck", "error")]
+    if stuck_items:
+        severity = min(1.0, len(stuck_items) / n)
+        for o in stuck_items:
+            sid = o.get("outcome_id") or o.get("loop_id") or o.get("session_id", "?")
+            signals.append(SpecFrictionSignal(
+                session_id=sid,
+                signal_type=SIGNAL_ERROR_EVENTS,
+                severity=severity,
+                evidence=f"status={o.get('status')} goal={str(o.get('goal', ''))[:50]}",
+            ))
+
+    # --- escalation_tone: scan summary / stuck_reason for keywords ---
+    for o in items:
+        text = " ".join([
+            str(o.get("summary", "")),
+            str(o.get("stuck_reason", "")),
+            str(o.get("result_summary", "")),
+        ]).lower()
+        found = [kw for kw in _ESCALATION_KEYWORDS if kw in text]
+        if found:
+            sid = o.get("outcome_id") or o.get("session_id", "?")
+            signals.append(SpecFrictionSignal(
+                session_id=sid,
+                signal_type=SIGNAL_ESCALATION_TONE,
+                severity=min(1.0, len(found) * 0.2),
+                evidence=f"keywords={found[:3]} in outcome text",
+            ))
+
+    # --- abandoned_tool_flow: blocked/stuck with empty or very short result ---
+    for o in items:
+        if o.get("status") in ("blocked", "stuck"):
+            result = str(o.get("result_summary") or o.get("summary") or "")
+            if len(result.strip()) < 20:
+                sid = o.get("outcome_id") or o.get("session_id", "?")
+                signals.append(SpecFrictionSignal(
+                    session_id=sid,
+                    signal_type=SIGNAL_ABANDONED_TOOL_FLOW,
+                    severity=0.7,
+                    evidence=f"blocked/stuck with short result ({len(result.strip())} chars)",
+                ))
+
+    # --- repeated_rephrasing: same goal slug stuck 3+ times ---
+    import re
+    from collections import Counter
+
+    def _goal_slug(goal: str) -> str:
+        return re.sub(r"[^a-z0-9]+", "-", goal.lower().strip())[:40]
+
+    slug_stuck: Dict[str, int] = {}
+    for o in items:
+        if o.get("status") in ("stuck", "error"):
+            slug = _goal_slug(str(o.get("goal", "")))
+            slug_stuck[slug] = slug_stuck.get(slug, 0) + 1
+
+    for slug, count in slug_stuck.items():
+        if count >= 3:
+            signals.append(SpecFrictionSignal(
+                session_id="multiple",
+                signal_type=SIGNAL_REPEATED_REPHRASE,
+                severity=min(1.0, count * 0.2),
+                evidence=f"goal slug '{slug}' stuck {count} times",
+            ))
+
+    # --- backtracking: done outcome followed by stuck in same project ---
+    project_statuses: Dict[str, List[str]] = {}
+    for o in items:
+        proj = str(o.get("project") or "unknown")
+        project_statuses.setdefault(proj, []).append(o.get("status", ""))
+
+    for proj, statuses in project_statuses.items():
+        found_done = False
+        for s in statuses:
+            if s == "done":
+                found_done = True
+            elif found_done and s in ("stuck", "blocked", "error"):
+                signals.append(SpecFrictionSignal(
+                    session_id=proj,
+                    signal_type=SIGNAL_BACKTRACKING,
+                    severity=0.6,
+                    evidence=f"project '{proj}' had done then stuck/blocked",
+                ))
+                break
+
+    # --- context_churn: lessons loaded but outcome still stuck ---
+    for o in items:
+        if o.get("status") in ("stuck", "error"):
+            lessons = o.get("lessons") or o.get("lessons_context") or []
+            if isinstance(lessons, list) and len(lessons) > 0:
+                sid = o.get("outcome_id") or o.get("session_id", "?")
+                signals.append(SpecFrictionSignal(
+                    session_id=sid,
+                    signal_type=SIGNAL_CONTEXT_CHURN,
+                    severity=0.5,
+                    evidence=f"lessons loaded ({len(lessons)}) but outcome stuck",
+                ))
+
+    return signals
+
+
+_ALIGNMENT_SYSTEM = """\
+You are an impartial quality reviewer. Given a stated goal and work summary,
+determine whether the work accomplished the goal.
+
+Respond ONLY with valid JSON:
+{"aligned": true or false, "score": 0.0 to 1.0, "gaps": ["gap1", "gap2"]}
+
+Score guide: 0.9+ = fully aligned, 0.7 = mostly, 0.5 = partial, 0.3 = minimal, 0.0 = not aligned.
+gaps: specific ways work diverged from intent. Empty list if fully aligned.
+"""
+
+
+def check_alignment(session: Any, adapter=None) -> AlignmentResult:
+    """Check whether completed work accomplished the stated goal.
+
+    Args:
+        session: Outcome record (dict or Outcome dataclass).
+        adapter: LLMAdapter. None → heuristic (status-based scoring).
+
+    Returns:
+        AlignmentResult with score and gaps list.
+    """
+    if not isinstance(session, dict):
+        try:
+            from dataclasses import asdict
+            session = asdict(session)
+        except Exception:
+            session = session.__dict__ if hasattr(session, "__dict__") else {}
+
+    session_id = session.get("outcome_id") or session.get("loop_id") or session.get("id", "?")
+    goal = session.get("goal", "")
+    summary = session.get("summary") or session.get("result_summary") or ""
+    status = session.get("status", "")
+
+    # Heuristic (no adapter)
+    if adapter is None:
+        if status == "done":
+            return AlignmentResult(
+                session_id=session_id, mission_goal=goal, work_summary=summary,
+                aligned=True, alignment_score=0.8, gaps=[],
+            )
+        elif status in ("stuck", "error", "blocked"):
+            return AlignmentResult(
+                session_id=session_id, mission_goal=goal, work_summary=summary,
+                aligned=False, alignment_score=0.3,
+                gaps=[f"Task did not complete: status={status}"],
+            )
+        else:
+            return AlignmentResult(
+                session_id=session_id, mission_goal=goal, work_summary=summary,
+                aligned=False, alignment_score=0.5,
+                gaps=[f"Unclear completion: status={status}"],
+            )
+
+    # LLM-as-judge (MODEL_MID per spec)
+    user_msg = (
+        f"Goal: {goal}\n\nWork summary: {summary[:600]}\n\n"
+        "Did the work accomplish the goal? Return JSON only."
+    )
+    try:
+        resp = adapter.complete(
+            [
+                LLMMessage("system", _ALIGNMENT_SYSTEM),
+                LLMMessage("user", user_msg),
+            ],
+            max_tokens=512,
+            temperature=0.1,
+        )
+        content = resp.content.strip()
+        start = content.find("{")
+        end = content.rfind("}") + 1
+        if start >= 0 and end > start:
+            data = json.loads(content[start:end])
+            score = float(data.get("score", 0.5))
+            aligned = bool(data.get("aligned", score >= 0.6))
+            gaps = [str(g) for g in data.get("gaps", [])]
+            return AlignmentResult(
+                session_id=session_id, mission_goal=goal, work_summary=summary,
+                aligned=aligned, alignment_score=score, gaps=gaps,
+            )
+    except Exception as e:
+        if __debug__:
+            print(f"[inspector] check_alignment LLM call failed: {e}", file=sys.stderr)
+
+    # LLM failed — heuristic fallback
+    return check_alignment(session, adapter=None)
+
+
+_CLUSTER_SYSTEM = """\
+You are analyzing friction signals from an autonomous AI system.
+Identify 1-3 named patterns that explain the most common problems.
+Respond ONLY with a JSON array of strings:
+["Pattern name: brief description", "Pattern name 2: ..."]
+If there are no clear patterns return: []
+"""
+
+
+def cluster_patterns(
+    signals: List["SpecFrictionSignal"],
+    adapter=None,
+) -> List[str]:
+    """Cluster friction signals into named patterns (spec §12).
+
+    Args:
+        signals: List of SpecFrictionSignal.
+        adapter: LLMAdapter (cheap model). None → group by signal_type.
+
+    Returns:
+        List of human-readable pattern descriptions (1–3 items).
+    """
+    if not signals:
+        return []
+
+    # Fallback: group by signal_type
+    if adapter is None:
+        from collections import Counter
+        type_counts = Counter(s.signal_type for s in signals)
+        patterns = []
+        for sig_type, count in type_counts.most_common(3):
+            desc = FRICTION_TYPES.get(sig_type, sig_type)
+            patterns.append(f"{sig_type}: {desc} ({count} occurrences)")
+        return patterns
+
+    signal_summary = "\n".join(
+        f"- [{s.signal_type}] severity={s.severity:.2f} evidence={s.evidence[:70]}"
+        for s in signals[:30]
+    )
+    try:
+        resp = adapter.complete(
+            [
+                LLMMessage("system", _CLUSTER_SYSTEM),
+                LLMMessage("user", f"Signals:\n{signal_summary}\n\nIdentify 1-3 patterns."),
+            ],
+            max_tokens=512,
+            temperature=0.2,
+        )
+        content = resp.content.strip()
+        start = content.find("[")
+        end = content.rfind("]") + 1
+        if start >= 0 and end > start:
+            result = json.loads(content[start:end])
+            if isinstance(result, list) and all(isinstance(p, str) for p in result):
+                return [p.strip() for p in result if p.strip()][:3]
+    except Exception as e:
+        if __debug__:
+            print(f"[inspector] cluster_patterns LLM call failed: {e}", file=sys.stderr)
+
+    # LLM failed — fallback
+    return cluster_patterns(signals, adapter=None)
+
+
+_TICKET_SYSTEM = """\
+You are generating improvement tickets for an autonomous AI system.
+For each friction pattern, create one structured improvement ticket.
+Respond ONLY with a JSON array:
+[{"title": "...", "pattern": "...", "suggested_fix": "...", "priority": "high|medium|low"}]
+"""
+
+
+def generate_tickets(
+    patterns: List[str],
+    signals: List["SpecFrictionSignal"],
+    adapter=None,
+) -> List[dict]:
+    """Generate improvement tickets from friction patterns (spec §12).
+
+    Returns list of ticket dicts: {id, title, pattern, suggested_fix, priority, auto_evolver}
+    auto_evolver=True means forward to evolver.
+    """
+    if not patterns:
+        return []
+
+    from collections import Counter
+    type_sev: Dict[str, List[float]] = {}
+    for s in signals:
+        type_sev.setdefault(s.signal_type, []).append(s.severity)
+    avg_sev = {t: sum(v) / len(v) for t, v in type_sev.items()}
+    max_sev = max(avg_sev.values()) if avg_sev else 0.5
+
+    def _prio(idx: int) -> str:
+        if max_sev >= 0.7 or idx == 0:
+            return "high"
+        if max_sev >= 0.4:
+            return "medium"
+        return "low"
+
+    # Fallback: generic ticket per pattern
+    if adapter is None:
+        tickets = []
+        for i, pat in enumerate(patterns):
+            priority = _prio(i)
+            tickets.append({
+                "id": f"insp-{uuid.uuid4().hex[:6]}",
+                "title": f"Address: {pat[:60]}",
+                "pattern": pat,
+                "suggested_fix": (
+                    "Review recent stuck outcomes and identify systemic improvements "
+                    "to prompts, tools, or error recovery paths."
+                ),
+                "priority": priority,
+                "auto_evolver": priority in ("high", "medium"),
+            })
+        return tickets
+
+    patterns_text = "\n".join(f"{i + 1}. {p}" for i, p in enumerate(patterns))
+    try:
+        resp = adapter.complete(
+            [
+                LLMMessage("system", _TICKET_SYSTEM),
+                LLMMessage("user", f"Patterns:\n{patterns_text}\n\nGenerate tickets."),
+            ],
+            max_tokens=1024,
+            temperature=0.2,
+        )
+        content = resp.content.strip()
+        start = content.find("[")
+        end = content.rfind("]") + 1
+        if start >= 0 and end > start:
+            raw = json.loads(content[start:end])
+            tickets = []
+            for i, t in enumerate(raw):
+                if not isinstance(t, dict):
+                    continue
+                priority = t.get("priority", _prio(i))
+                tickets.append({
+                    "id": f"insp-{uuid.uuid4().hex[:6]}",
+                    "title": str(t.get("title", f"Fix pattern {i + 1}")),
+                    "pattern": str(t.get("pattern", patterns[i] if i < len(patterns) else "")),
+                    "suggested_fix": str(t.get("suggested_fix", "")),
+                    "priority": priority,
+                    "auto_evolver": priority in ("high", "medium"),
+                })
+            return tickets
+    except Exception as e:
+        if __debug__:
+            print(f"[inspector] generate_tickets LLM call failed: {e}", file=sys.stderr)
+
+    # LLM failed — fallback
+    return generate_tickets(patterns, signals, adapter=None)
+
+
+def format_inspector_report(report: "InspectorReport") -> str:
+    """Format an InspectorReport as human-readable text for CLI output."""
+    lines = [
+        f"=== Inspector Report {report.report_id} ===",
+        f"Timestamp:          {report.timestamp[:19]}",
+        f"Sessions analyzed:  {report.sessions_analyzed}",
+        f"Friction signals:   {len(report.friction_signals)}",
+        f"Alignment results:  {len(report.alignment_results)}",
+        f"Patterns:           {len(report.patterns)}",
+        f"Evolver tickets:    {len(report.evolver_tickets)}",
+        f"Elapsed ms:         {report.elapsed_ms}",
+        "",
+    ]
+    if report.executive_summary:
+        lines += ["Summary:", f"  {report.executive_summary}", ""]
+    if report.patterns:
+        lines.append("Patterns:")
+        for p in report.patterns:
+            lines.append(f"  - {p}")
+        lines.append("")
+    if report.friction_signals:
+        lines.append(f"Friction Signals ({len(report.friction_signals)}):")
+        for s in report.friction_signals[:10]:
+            lines.append(
+                f"  [{s.signal_type:22s}] sev={s.severity:.2f} {s.evidence[:70]}"
+            )
+        if len(report.friction_signals) > 10:
+            lines.append(f"  ... and {len(report.friction_signals) - 10} more")
+        lines.append("")
+    if report.alignment_results:
+        aligned_n = sum(1 for a in report.alignment_results if a.aligned)
+        lines.append(f"Alignment ({aligned_n}/{len(report.alignment_results)} on-target):")
+        for a in report.alignment_results[:5]:
+            flag = "OK" if a.aligned else "MISS"
+            lines.append(
+                f"  [{flag}] score={a.alignment_score:.2f} goal={a.mission_goal[:50]!r}"
+            )
+        lines.append("")
+    if report.evolver_tickets:
+        lines.append(f"Evolver Tickets ({len(report.evolver_tickets)}):")
+        for t in report.evolver_tickets:
+            auto = "[auto]" if t.get("auto_evolver") else "      "
+            lines.append(
+                f"  {auto} [{t.get('priority', '?'):6s}] {t.get('title', '')[:60]}"
+            )
+    return "\n".join(lines)
+
+
+def _build_spec_executive_summary(
+    sessions_analyzed: int,
+    signals: List["SpecFrictionSignal"],
+    alignment_results: List[AlignmentResult],
+    patterns: List[str],
+    tickets: List[dict],
+    adapter=None,
+    dry_run: bool = False,
+) -> str:
+    """Build 2-4 sentence executive summary (spec §12)."""
+    n_signals = len(signals)
+    n_aligned = sum(1 for a in alignment_results if a.aligned)
+    n_total = len(alignment_results)
+    n_tickets = len(tickets)
+
+    if dry_run or adapter is None:
+        if n_signals == 0:
+            return (
+                f"Inspector analyzed {sessions_analyzed} sessions. "
+                "No friction signals detected — system appears healthy."
+            )
+        return (
+            f"Inspector analyzed {sessions_analyzed} sessions. "
+            f"Found {n_signals} friction signal(s) across {len(patterns)} pattern(s). "
+            f"Alignment: {n_aligned}/{n_total} sessions on-target. "
+            f"Generated {n_tickets} improvement ticket(s)."
+        )
+
+    _EXEC_SYS = (
+        "You are writing a brief executive quality summary for Poe's autonomous system. "
+        "2-4 sentences max. Lead with the most important finding."
+    )
+    data_text = (
+        f"Sessions: {sessions_analyzed}\n"
+        f"Friction signals: {n_signals}\n"
+        f"Patterns: {patterns[:3]}\n"
+        f"Alignment: {n_aligned}/{n_total}\n"
+        f"Tickets: {n_tickets}"
+    )
+    try:
+        resp = adapter.complete(
+            [
+                LLMMessage("system", _EXEC_SYS),
+                LLMMessage("user", f"Quality data:\n{data_text}\n\nWrite executive summary."),
+            ],
+            max_tokens=256,
+            temperature=0.3,
+        )
+        return resp.content.strip()
+    except Exception:
+        pass
+
+    return _build_spec_executive_summary(
+        sessions_analyzed, signals, alignment_results, patterns, tickets,
+        adapter=None, dry_run=True,
+    )
+
+
+def run_full_inspector(
+    *,
+    adapter=None,
+    dry_run: bool = False,
+    min_sessions: int = 5,
+    notify_telegram: bool = False,
+    limit: int = 50,
+    verbose: bool = False,
+) -> "InspectorReport":
+    """Run one quality inspection cycle returning InspectorReport (spec §12).
+
+    This is the spec-defined run_inspector function with the spec signature.
+    The existing run_inspector() function is preserved for backward compatibility.
+
+    Args:
+        adapter:          LLMAdapter. None → heuristics only.
+        dry_run:          No LLM, no Telegram, no persistence.
+        min_sessions:     Skip if fewer sessions available.
+        notify_telegram:  Send Telegram summary if signals found.
+        limit:            Load at most this many recent outcomes.
+        verbose:          Print progress to stderr.
+
+    Returns:
+        InspectorReport
+    """
+    report_id = uuid.uuid4().hex[:8]
+    started = time.monotonic()
+
+    if verbose:
+        print(f"[inspector] full_inspector report_id={report_id} starting...", file=sys.stderr)
+
+    # Load outcomes
+    try:
+        if load_outcomes is None:
+            raise ImportError("memory.load_outcomes not available")
+        outcomes_raw = load_outcomes(limit=limit)
+    except Exception as e:
+        if verbose:
+            print(f"[inspector] failed to load outcomes: {e}", file=sys.stderr)
+        return InspectorReport(
+            report_id=report_id,
+            sessions_analyzed=0,
+            executive_summary=f"Inspection skipped: could not load outcomes ({e})",
+            elapsed_ms=int((time.monotonic() - started) * 1000),
+        )
+
+    def _to_dict(o: Any) -> dict:
+        if isinstance(o, dict):
+            return o
+        try:
+            from dataclasses import asdict
+            return asdict(o)
+        except Exception:
+            return o.__dict__ if hasattr(o, "__dict__") else {}
+
+    outcomes = [_to_dict(o) for o in outcomes_raw]
+
+    if len(outcomes) < min_sessions:
+        if verbose:
+            print(
+                f"[inspector] only {len(outcomes)} sessions (need {min_sessions}), skipping",
+                file=sys.stderr,
+            )
+        return InspectorReport(
+            report_id=report_id,
+            sessions_analyzed=len(outcomes),
+            executive_summary=(
+                f"Inspection skipped: only {len(outcomes)} sessions "
+                f"(minimum {min_sessions} required)."
+            ),
+            elapsed_ms=int((time.monotonic() - started) * 1000),
+        )
+
+    _adapter = None if dry_run else adapter
+
+    # 1. Detect friction
+    signals = detect_friction(outcomes)
+
+    # 2. Check alignment on last 10
+    alignment_results: List[AlignmentResult] = []
+    for sess in outcomes[:10]:
+        try:
+            alignment_results.append(check_alignment(sess, adapter=_adapter))
+        except Exception:
+            pass
+
+    # 3. Cluster patterns
+    patterns = cluster_patterns(signals, adapter=_adapter)
+
+    # 4. Generate tickets
+    tickets = generate_tickets(patterns, signals, adapter=_adapter)
+
+    # 5. Executive summary
+    executive_summary = _build_spec_executive_summary(
+        len(outcomes), signals, alignment_results, patterns, tickets,
+        adapter=_adapter, dry_run=dry_run,
+    )
+
+    report = InspectorReport(
+        report_id=report_id,
+        sessions_analyzed=len(outcomes),
+        friction_signals=signals,
+        alignment_results=alignment_results,
+        patterns=patterns,
+        evolver_tickets=tickets,
+        executive_summary=executive_summary,
+        elapsed_ms=int((time.monotonic() - started) * 1000),
+    )
+
+    # 6. Forward auto_evolver tickets to evolver
+    if not dry_run:
+        auto_tickets = [t for t in tickets if t.get("auto_evolver")]
+        if auto_tickets:
+            try:
+                n = receive_inspector_tickets(auto_tickets) if receive_inspector_tickets else 0
+                if verbose:
+                    print(f"[inspector] forwarded {n} tickets to evolver", file=sys.stderr)
+            except Exception as e:
+                if verbose:
+                    print(f"[inspector] could not forward tickets: {e}", file=sys.stderr)
+
+    # 7. Persist
+    if not dry_run:
+        try:
+            p = _inspector_report_log_path()
+            p.parent.mkdir(parents=True, exist_ok=True)
+            with p.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(report.to_dict()) + "\n")
+        except Exception as e:
+            if verbose:
+                print(f"[inspector] failed to persist report: {e}", file=sys.stderr)
+
+        if signals:
+            try:
+                sp = _friction_signals_log_path()
+                sp.parent.mkdir(parents=True, exist_ok=True)
+                with sp.open("a", encoding="utf-8") as f:
+                    for s in signals:
+                        f.write(json.dumps(s.to_dict()) + "\n")
+            except Exception as e:
+                if verbose:
+                    print(f"[inspector] failed to persist signals: {e}", file=sys.stderr)
+
+    # 8. Telegram
+    if not dry_run and notify_telegram and signals:
+        try:
+            from telegram_listener import TelegramBot, _resolve_token, _resolve_allowed_chats
+            token = _resolve_token()
+            if token:
+                bot = TelegramBot(token)
+                allowed = _resolve_allowed_chats()
+                lines = [
+                    f"Inspector Report — {len(signals)} friction signal(s)",
+                    f"Sessions: {len(outcomes)}",
+                ]
+                for pat in patterns[:2]:
+                    lines.append(f"Pattern: {pat[:80]}")
+                if executive_summary:
+                    lines.append(f"Summary: {executive_summary[:200]}")
+                msg = "\n".join(lines)
+                for chat_id in (allowed or []):
+                    bot.send_message(chat_id, msg)
+        except Exception as e:
+            print(f"[inspector] telegram notify failed: {e}", file=sys.stderr)
+
+    report.elapsed_ms = int((time.monotonic() - started) * 1000)
+
+    if verbose:
+        print(
+            f"[inspector] done report_id={report_id} elapsed_ms={report.elapsed_ms} "
+            f"signals={len(signals)} tickets={len(tickets)}",
+            file=sys.stderr,
+        )
+
+    return report
 
 
 def _save_inspection_report(report: InspectionReport) -> None:

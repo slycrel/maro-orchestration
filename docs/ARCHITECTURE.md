@@ -355,92 +355,213 @@ Heartbeat alerts are sent only when health is `critical` or `degraded`, or stuck
 
 ---
 
-## Planned architecture: Phases 10–13
+## Mission Layer (`mission.py`, `background.py`, `skills.py`)
 
-Not yet built. Documented here so design intent is clear before implementation.
-
-### Phase 10: Mission Layer
+Phase 10. Multi-day goal hierarchy with fresh context per unit of work.
 
 ```
-Mission (top-level goal, multi-day)
-  └─ Milestone (validation checkpoint — must pass before advancing)
-      └─ Feature (unit of work, one Worker Session)
-          └─ Worker Session (fresh context window per feature)
+run_mission(goal)
+    → decompose_mission(goal) [MODEL_POWER]
+        → Mission: id, goal, milestones[]
+        → Milestone: id, title, features[], validation_criteria[]
+        → Feature: id, title (each gets its own run_agent_loop call)
+    → for each milestone (sequential):
+        → for each feature (parallel, max_workers=2):
+            run_agent_loop(feature.title, project=project)   ← fresh context
+        → _validate_milestone(milestone) [MODEL_MID]
+            → PASS: advance to next milestone
+            → FAIL: mission.status="stuck", break
+    → persist: projects/<slug>/mission.json
+    → log: memory/mission-log.jsonl
 ```
 
-Key constraints:
-- No single session holds the full project in context
-- Milestones execute sequentially; features within a milestone can parallelize
-- Git is the coordination primitive for session handoffs
-- Background execution: agent starts a subprocess, continues other work, polls result
-- Skill library: completed goal chains → extracted reusable patterns → surfaced to future orchestration
+Background execution (`background.py`):
+```
+start_background(command) → BackgroundTask (non-blocking, returns immediately)
+poll_background(task_id)  → checks PID liveness, reads exit code
+wait_background(task_id)  → polls every 2s until done or timeout
+```
 
-### Phase 11: Hook System
+Skill library (`skills.py`):
+```
+extract_skills(outcomes) → analyzes successes → Skill objects → memory/skills.jsonl
+find_matching_skills(goal) → keyword match against trigger_patterns
+format_skills_for_prompt(skills) → injected into _decompose() system prompt
+```
+
+---
+
+## Hook System (`hooks.py`)
+
+Phase 11. Pluggable callbacks at every level of the execution hierarchy.
 
 ```
-HookRegistry
-  ├── mission-level hooks   (fire on mission start/end)
-  ├── milestone-level hooks (fire before milestone validation)
-  ├── feature-level hooks   (fire before/after each feature)
-  └── step-level hooks      (fire between steps in agent_loop)
+HookRegistry (backed by .hooks/hooks.json)
+    register(hook) / unregister(id) / enable(id) / disable(id)
 
 Hook types:
-  reviewer   → LLM critique of work product before advancing
-  reporter   → emit summary to Telegram/log (non-blocking)
-  coordinator → LLM decides next step routing
-  script     → shell command (non-blocking, result injected as context)
+    reviewer     → LLM critique; BLOCK/FAIL in output sets should_block=True
+    reporter     → emit summary to log or Telegram (never blocks)
+    coordinator  → LLM routing decision, injected as context
+    script       → shell command, output captured (non-blocking)
+    notification → System Notification (Factory pattern): injects guidance
+                   into next LLM call at the right moment, not front-loaded
 
-System Notifications (Factory pattern):
-  Hooks inject contextual guidance at the right moment —
-  not front-loaded in system prompt, injected when relevant.
+run_hooks(scope, context, fire_on) → List[HookResult]
+    → fired at: SCOPE_MISSION, SCOPE_MILESTONE, SCOPE_FEATURE, SCOPE_STEP
+    → never raises; errors returned as status="skipped"
+    → any_blocking(results) → gates advancement in mission/agent_loop
+
+Built-in hooks (disabled by default, opt-in via poe-hooks enable <id>):
+    builtin-step-reviewer        — cheap model reviews each step result
+    builtin-milestone-validator  — mid model validates milestone criteria
+    builtin-progress-reporter    — logs milestone completion
+    builtin-plan-alignment       — notification: reminds worker of mission goal
 ```
 
-### Phase 12: Inspector (Oversight + Quality)
+---
+
+## Inspector (`inspector.py`)
+
+Phase 12. Independent quality oversight — separate from heartbeat (health).
 
 ```
-Inspector (runs independently, NOT inside the agent loop)
-  ├── Friction detection: 7 signals per session
-  │   error_events | repeated_rephrasing | escalation_tone |
-  │   platform_confusion | abandoned_tool_flow | backtracking | context_churn
-  ├── LLM-as-judge batch analysis (periodic, not per-run)
-  │   → abstracted signals (no raw content exposed)
-  │   → semantic clustering → friction patterns
-  ├── Threshold crossing → structured ticket → evolver → suggestion PR
-  │   human approves before apply
-  ├── Goal alignment check: did completed work match mission intent?
-  └── Output: executive summary → Poe (CEO layer), not raw detail
+Heartbeat = is the system running?
+Inspector = is the system producing the right outcomes?
+
+run_full_inspector()
+    → load_outcomes(limit=50)
+    → detect_friction(outcomes) → List[FrictionSignal]
+        signals: error_events | repeated_rephrasing | escalation_tone |
+                 platform_confusion | abandoned_tool_flow | backtracking | context_churn
+    → check_alignment(session) per recent outcome [heuristic or LLM]
+        → AlignmentResult(aligned, score, gaps)
+    → cluster_patterns(signals) → List[str] named patterns
+    → generate_tickets(patterns) → structured improvement tickets
+    → forward auto_evolver tickets → evolver.receive_inspector_tickets()
+    → persist: memory/inspector-log.jsonl, memory/friction-signals.jsonl
+    → return InspectorReport(executive_summary, ...)
+
+heartbeat_loop(): every 20 ticks → run_full_inspector()
 ```
 
-Role distinction: Heartbeat = health (is the system running?). Inspector = quality (is the system producing the right outcomes?).
+---
 
-### Phase 13: Role Separation (Poe as CEO)
+## Poe CEO Layer (`poe.py`, `autonomy.py`, `goal_map.py`)
+
+Phase 13. Role separation enforced at the code level.
 
 ```
+poe_handle(message)
+    → routes to Mission / Director / Inspector
+    → does NOT execute steps directly
+    → compiles executive summary for Jeremy
+
 Jeremy (Telegram — mission/goal level only)
-  └── Poe [CEO/Communicator]
-        - sets direction, surfaces executive summaries
-        - advisor on pivots/conflicts, not executor
-        - maintains map of active missions vs. north stars
-        ├── Director [Planner/Reviewer — POWER model]
-        │     - produces SPEC, reviews output, iterates
-        │     - does NOT execute steps directly
-        │     ├── Worker Sessions [Executors — MID model]
-        │     │     - fresh context per feature
-        │     │     - research/build/ops/general personas
-        │     └── Validator [Quality check — MID or specialized]
-        └── Inspector [Independent Oversight]
-              - separate from execution chain
-              - reports up to Poe, not to Director
+  └── poe_handle() [CEO/Communicator — MODEL_POWER]
+        ├── run_mission()     [Planner + Workers]
+        ├── run_director()    [Planner/Reviewer]
+        └── run_full_inspector() [Oversight]
 
-Autonomy tiers (per project/action):
-  manual  → human approves each action
-  safe    → auto-execute low-risk, escalate high-risk
-  full    → autonomous within defined scope
+goal_map.py:
+    GoalMap — directed graph of active missions and their relationships
+    detect_conflicts(map) → overlapping goals, resource contention
+    /map Telegram command → visual summary of active mission graph
 
-Model assignment:
-  orchestrator  → MODEL_POWER (Opus)
-  worker/plan   → MODEL_MID (Sonnet)
-  classification/heartbeat → MODEL_CHEAP (Haiku)
+autonomy.py:
+    AutonomyTier: MANUAL | SAFE | FULL
+    get_autonomy(project, action) → tier
+    set_autonomy(project, tier)   → persists to memory/autonomy.json
+    MANUAL: human approves each action
+    SAFE:   auto-execute low-risk, escalate high-risk
+    FULL:   autonomous within defined scope
+
+assign_model_by_role(role):
+    orchestrator → MODEL_POWER
+    worker       → MODEL_MID
+    classifier   → MODEL_CHEAP
 ```
 
-Delegator-as-non-coder principle: if Poe or Director is executing steps directly, the architecture has failed. The role contract must be enforced at the code level, not just by convention.
+---
+
+## Complete module dependency graph
+
+```
+telegram_listener
+    ├── poe (CEO layer — Phase 13 entry point)
+    │   ├── mission → agent_loop (fresh context per feature)
+    │   ├── director → workers
+    │   └── inspector
+    ├── handle (legacy NOW/AGENDA routing — backward compat)
+    │   ├── intent
+    │   └── agent_loop
+    │       ├── llm
+    │       ├── memory
+    │       ├── ancestry
+    │       ├── skills    (Phase 10 — injected into decompose)
+    │       ├── hooks     (Phase 11 — step-level)
+    │       └── interrupt (Phase 9 — polled between steps)
+    ├── sheriff
+    └── ancestry
+
+heartbeat (60s loop)
+    ├── sheriff
+    ├── llm
+    ├── telegram_listener
+    ├── evolver   (every 10 ticks)
+    └── inspector (every 20 ticks — Phase 12)
+
+cli (all commands)
+    └── all modules above
+```
+
+---
+
+## Storage layout (complete)
+
+```
+workspace/prototypes/poe-orchestration/
+├── .hooks/
+│   └── hooks.json           # HookRegistry — registered hooks
+├── projects/
+│   └── <slug>/
+│       ├── NEXT.md          # task checklist (todo/doing/done/blocked)
+│       ├── DECISIONS.md     # decision log
+│       ├── config.json      # project config (slug, mission, priority)
+│       ├── ancestry.json    # goal ancestry chain (optional)
+│       ├── mission.json     # active Mission object (Phase 10)
+│       └── output/
+│           └── runs/        # RunRecord artifacts
+└── memory/
+    ├── outcomes.jsonl           # per-run outcomes
+    ├── lessons.jsonl            # extracted lessons
+    ├── suggestions.jsonl        # evolver suggestions
+    ├── skills.jsonl             # skill library (Phase 10)
+    ├── background-tasks.jsonl   # background subprocess tracking (Phase 10)
+    ├── mission-log.jsonl        # mission run history (Phase 10)
+    ├── interrupts.jsonl         # interrupt queue (Phase 9)
+    ├── loop.lock                # PID-verified lock while loop is active
+    ├── inspector-log.jsonl      # inspector run history (Phase 12)
+    ├── friction-signals.jsonl   # running friction signal log (Phase 12)
+    ├── autonomy.json            # autonomy tier config (Phase 13)
+    ├── heartbeat-state.json     # last heartbeat result
+    ├── heartbeat-log.jsonl      # heartbeat history
+    ├── eval-results.jsonl       # benchmark results
+    └── YYYY-MM-DD.md            # daily narrative log
+```
+
+---
+
+## Telegram UX contract
+
+| Message type | Response timing |
+|-------------|----------------|
+| Short (<= 20 chars) or `/status` | Typing indicator → send response via poe_handle |
+| Long natural language | "⏳ Working on it..." → edit with result |
+| `/director`, `/research`, `/build`, `/ops` | "⏳ Working on it..." → edit with result |
+| `/map` | Goal relationship graph summary |
+| Any message while loop is active | Routed to interrupt queue; ack sent |
+| `/stop` | Posts stop interrupt; loop halts at next step boundary |
+
+Heartbeat alerts: `critical` or `degraded` health, or stuck projects.
+Inspector alerts: friction patterns crossing threshold (batched, not per-run).
