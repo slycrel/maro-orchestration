@@ -308,6 +308,23 @@ Inspired by Memento-Skills arXiv:2603.18743: one-step offline RL, multi-positive
 
 ---
 
+## Phase 19: Harness Patterns — Sprint Contracts + Agent Separation
+
+**Pre-flight "done" definitions and explicit Generator/Evaluator separation.** Inspired by Anthropic's engineering posts on long-running agent harnesses. The core insight: define "done" before starting, not after. No Worker should grade its own output.
+
+- [ ] **Sprint contracts:** before any Feature Worker starts, it negotiates a sprint contract with Inspector — explicit testable success criteria for this feature. Inspector grades against the contract, not a vague "did it work?" Wired into the hook system as a mandatory pre-feature hook.
+- [ ] **Worker boot protocol:** when a Worker session starts (or restarts), mandatory boot sequence: read progress log → check git state → run existing tests → verify environment → then pick next task. Prevents re-doing completed work or declaring premature success. Implemented as an Initializer hook.
+- [ ] **Immutable feature manifest:** missions generate a `feature_list.json` alongside `mission.json`. Each feature has `passes: false` initially. Workers can only flip to `true` — never remove or downgrade. Inspector validates monotonicity.
+- [ ] **Inspector skepticism calibration:** add few-shot examples (good/mediocre/bad session outcomes) to Inspector's evaluation prompts. Tune toward skepticism. Inspector should catch "confidently mediocre" output — not just obviously broken work.
+- [ ] **`pass@k` / `pass^k` metrics in skill test gate:** `pass@k` for exploratory skill capabilities, `pass^k` for regression/stability gates. Skills must pass `pass^3` before promoting from provisional to established tier.
+- [ ] **Running failure docs:** Workers write to a persistent `DEAD_ENDS.md` in the project directory — approaches tried and failed, in-progress at session end. Inspector and meta-evolver mine this directly. Prevents duplicate effort across sessions.
+- [ ] **GAN principle enforced:** no Worker context ever evaluates its own output. Skill QA and skill execution are separate invocations. Inspector is always a different context from the worker that produced the output being evaluated.
+- [ ] **March of Nines defense:** measure per-step success rate in agent_loop; when `step_success_rate^steps` < 0.5, alert Inspector. Track in metrics.py.
+
+**Artifact:** sprint contract negotiation in hooks, Worker boot protocol, `feature_list.json`, Inspector calibration, `DEAD_ENDS.md`
+
+---
+
 ## Phase 18: Sandbox Hardening
 
 **Production-grade skill isolation.** The current sandbox (Phase 15) runs skills in a plain `python3` subprocess with static content analysis. This phase hardens it to `uv`-isolated environments with explicit dependency manifests and resource limits.
