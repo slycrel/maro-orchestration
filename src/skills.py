@@ -64,6 +64,7 @@ class Skill:
     use_count: int = 0
     success_rate: float = 1.0
     content_hash: str = ""          # Phase 14: SHA256 of content for poisoning defense
+    tier: str = "provisional"       # Phase 16: "provisional" (medium) | "established" (long)
 
 
 @dataclass
@@ -203,6 +204,7 @@ def _skill_to_dict(skill: Skill) -> dict:
         "use_count": skill.use_count,
         "success_rate": skill.success_rate,
         "content_hash": skill.content_hash,
+        "tier": skill.tier,
     }
 
 
@@ -218,6 +220,7 @@ def _dict_to_skill(d: dict) -> Skill:
         use_count=d.get("use_count", 0),
         success_rate=d.get("success_rate", 1.0),
         content_hash=d.get("content_hash", ""),
+        tier=d.get("tier", "provisional"),
     )
 
 
@@ -474,6 +477,34 @@ def verify_skill_hash(skill: Skill, expected_hash: str) -> bool:
     if not expected_hash:
         return True  # No hash to verify against
     return compute_skill_hash(skill) == expected_hash
+
+
+# ---------------------------------------------------------------------------
+# Phase 16: Skill tier management (provisional → established)
+# ---------------------------------------------------------------------------
+
+def promote_skill_tier(skill_name: str) -> bool:
+    """Promote a skill from 'provisional' to 'established'.
+
+    Requires pass^3 >= 0.7: all 3 attempts would succeed at the current success rate.
+    Formula: pass^k = success_rate^k (Memento-Skills / Phase 19 regression gate).
+    Returns True if promotion succeeded, False otherwise.
+    """
+    skills = load_skills()
+    target = next((s for s in skills if s.name == skill_name), None)
+    if not target:
+        return False
+    if target.tier == "established":
+        return True  # Already promoted
+
+    # pass^3 = success_rate^3; require >= 0.7
+    pass_all_3 = target.success_rate ** 3
+    if pass_all_3 < 0.7:
+        return False
+
+    target.tier = "established"
+    save_skill(target)
+    return True
 
 
 # ---------------------------------------------------------------------------

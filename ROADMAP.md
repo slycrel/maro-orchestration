@@ -269,24 +269,27 @@ Inspired by Factory AI Signals research (LLM-as-judge + friction detection) and 
 
 ---
 
-## Phase 16: Tiered Memory — Short, Medium, Long Term
+## Phase 16: Tiered Memory — Short, Medium, Long Term *(COMPLETE)*
 
-**Memory with selective forgetting.** Not all memory is equal. Step-level results are noise in a week; lessons from a failed mission are load-bearing for months. Right now everything goes to a flat `outcomes.jsonl` and is treated uniformly. This phase introduces tiered retention with decay, forgetting, and promotion.
+**Memory with selective forgetting.** Not all memory is equal. Step-level results are noise in a week; lessons from a failed mission are load-bearing for months. This phase introduces tiered retention with exponential decay, forgetting, and promotion — using Grok's decay model.
 
 Inspired by Jeremy: "I think we want to 'forget' some things and some things only apply in different memory spans."
 
-- [ ] **Three memory tiers:**
-  - `short` — session-scoped (single loop/mission run). Evicted at session end. Holds: step results, intermediate artifacts, working context.
-  - `medium` — project-scoped (days to weeks). Decays on a configurable schedule. Holds: lessons extracted from recent runs, per-project patterns, feature outcomes.
-  - `long` — system-wide (months+). Explicit promotion required. Holds: high-confidence skills, validated guardrails, fundamental lessons about Jeremy's preferences, stable architectural patterns.
-- [ ] **Decay model:** medium-tier entries have a `ttl_days` field. Lessons that aren't reinforced by future sessions decay and are garbage-collected. Lessons that appear repeatedly get promoted to long-tier automatically.
-- [ ] **Promotion path:** Inspector detects when a medium-tier lesson has been validated across N sessions → promotes to long. Evolver can also explicitly promote.
-- [ ] **Selective forgetting:** `poe-memory forget <id>` explicitly expires an entry. `poe-memory decay --dry-run` previews what would be pruned.
-- [ ] **Context injection respects tiers:** `inject_lessons_for_task()` queries long-tier first (always included), then medium-tier filtered by recency and relevance, then short-tier if in the same session. Short-tier lessons never bleed into a new session's context.
-- [ ] **Skill library tiers:** skills can be `provisional` (medium) or `established` (long). Test gate required to promote from provisional → established.
-- [ ] `poe-memory status` — show tier breakdown, total entries, oldest/newest per tier, decay candidates
+Decay model (Grok): `score *= 0.85` per non-reinforced day; `score = min(1.0, score + 0.3)` on reinforcement; promote at `score ≥ 0.9 AND sessions_validated ≥ 3`; GC at `score < 0.2`.
 
-**Artifact:** `src/memory.py` (extended), `memory/short/`, `memory/medium/`, `memory/long/`, `poe-memory` CLI
+- [x] **Three memory tiers:**
+  - `short` — in-process only (no file I/O). `short_set/get/clear/all()`. Evicted at session end.
+  - `medium` — `memory/medium/lessons.jsonl`. Decays daily; auto-promotes on eligibility; GC when stale.
+  - `long` — `memory/long/lessons.jsonl`. Explicit promotion required (score + sessions gate).
+- [x] **Decay model:** `TieredLesson.score` decays exponentially (`DECAY_FACTOR=0.85`) per non-reinforced day. Applied inline on `load_tiered_lessons()`.
+- [x] **Promotion path:** `promote_lesson(id)` moves medium → long when eligible. `run_decay_cycle()` auto-promotes. Inspector/evolver can call directly.
+- [x] **Selective forgetting:** `poe-memory forget <id>` explicitly expires an entry. `poe-memory decay --dry-run` previews what would be pruned.
+- [x] **Context injection respects tiers:** `inject_tiered_lessons()` queries long-tier first (always included, no min_score filter), then medium-tier (min_score=0.3), then short-tier only if `include_short=True`. Short-tier never bleeds into new sessions.
+- [x] **Skill library tiers:** `Skill.tier = "provisional"` (default) | `"established"`. `promote_skill_tier()` requires `pass^3 ≥ 0.7` (success_rate^3). Both fields serialized through `_skill_to_dict`/`_dict_to_skill`.
+- [x] `poe-memory status/forget/decay/promote/list/record` CLI — full tier management
+- [x] 48 new tests; 961 total passing
+
+**Artifact:** `src/memory.py` (tiered section appended), `src/skills.py` (tier field + `promote_skill_tier()`), `memory/medium/`, `memory/long/`, `poe-memory` CLI, `tests/test_tiered_memory.py`
 
 ---
 

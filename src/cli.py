@@ -470,6 +470,27 @@ def main(argv: list[str] | None = None) -> int:
     p_poe_manifest.add_argument("project", help="Project slug")
     p_poe_manifest.add_argument("--format", choices=["text", "json"], default="text")
 
+    p_poe_memory = sub.add_parser("poe-memory", help="Tiered memory management — short/medium/long tiers with decay (Phase 16)")
+    memory_sub = p_poe_memory.add_subparsers(dest="memory_cmd")
+    memory_sub.add_parser("status", help="Show tier breakdown, counts, decay candidates, promote candidates")
+    p_mem_forget = memory_sub.add_parser("forget", help="Permanently expire a lesson by ID")
+    p_mem_forget.add_argument("lesson_id", help="Lesson ID to remove")
+    p_mem_forget.add_argument("--tier", choices=["medium", "long"], default="medium")
+    p_mem_decay = memory_sub.add_parser("decay", help="Run decay cycle: apply daily decay, auto-promote eligibles, GC stale entries")
+    p_mem_decay.add_argument("--dry-run", action="store_true", help="Preview what would happen without writing")
+    p_mem_decay.add_argument("--tier", choices=["medium", "long"], default="medium")
+    p_mem_promote = memory_sub.add_parser("promote", help="Promote a medium-tier lesson to long-tier")
+    p_mem_promote.add_argument("lesson_id", help="Lesson ID to promote")
+    p_mem_list = memory_sub.add_parser("list", help="List lessons in a tier")
+    p_mem_list.add_argument("--tier", choices=["medium", "long"], default="medium")
+    p_mem_list.add_argument("--task-type", default=None)
+    p_mem_list.add_argument("--format", choices=["text", "json"], default="text")
+    p_mem_record = memory_sub.add_parser("record", help="Manually record a tiered lesson")
+    p_mem_record.add_argument("lesson", help="Lesson text")
+    p_mem_record.add_argument("--task-type", default="general")
+    p_mem_record.add_argument("--outcome", choices=["done", "stuck"], default="done")
+    p_mem_record.add_argument("--tier", choices=["medium", "long"], default="medium")
+
     p_plan = sub.add_parser("plan", help="Split a goal into NEXT tasks")
     p_plan.add_argument("project")
     p_plan.add_argument("goal", nargs="+")
@@ -1213,6 +1234,59 @@ def main(argv: list[str] | None = None) -> int:
                 passes = "PASS" if f.get("passes") else "pending"
                 score_str = f" score={f['grade_score']:.2f}" if f.get("grade_score") is not None else ""
                 print(f"  [{passes:7s}]{score_str} [{f['id']}] {f['title']}")
+        return 0
+
+    if args.cmd == "poe-memory":
+        from memory import (
+            memory_status, run_decay_cycle, forget_lesson, promote_lesson,
+            load_tiered_lessons, record_tiered_lesson, MemoryTier,
+        )
+        memory_cmd = getattr(args, "memory_cmd", None) or "status"
+        if memory_cmd == "status":
+            status = memory_status()
+            print(json.dumps(status, indent=2))
+        elif memory_cmd == "decay":
+            tier = getattr(args, "tier", "medium")
+            dry_run = getattr(args, "dry_run", False)
+            result = run_decay_cycle(tier=tier, dry_run=dry_run)
+            label = "(dry-run) " if dry_run else ""
+            print(f"{label}tier={tier} decayed={result['decayed']} promoted={result['promoted']} gc={result['gc']}")
+        elif memory_cmd == "forget":
+            tier = getattr(args, "tier", "medium")
+            removed = forget_lesson(args.lesson_id, tier=tier)
+            if removed:
+                print(f"Removed lesson_id={args.lesson_id} from tier={tier}")
+            else:
+                print(f"lesson_id={args.lesson_id} not found in tier={tier}")
+                return 1
+        elif memory_cmd == "promote":
+            ok = promote_lesson(args.lesson_id)
+            if ok:
+                print(f"Promoted lesson_id={args.lesson_id} to long-tier")
+            else:
+                print(f"lesson_id={args.lesson_id} not eligible for promotion (score<{0.9} or sessions<3)")
+                return 1
+        elif memory_cmd == "list":
+            tier = getattr(args, "tier", "medium")
+            task_type = getattr(args, "task_type", None)
+            lessons = load_tiered_lessons(tier=tier, task_type=task_type, min_score=0.0)
+            if getattr(args, "format", "text") == "json":
+                import dataclasses
+                print(json.dumps([dataclasses.asdict(l) for l in lessons], indent=2))
+            else:
+                print(f"tier={tier} count={len(lessons)}")
+                for l in lessons:
+                    icon = "✓" if l.outcome == "done" else "✗"
+                    print(f"  [{l.lesson_id}] score={l.score:.2f} sessions={l.sessions_validated} {icon} [{l.task_type}] {l.lesson[:80]}")
+        elif memory_cmd == "record":
+            tier = getattr(args, "tier", "medium")
+            task_type = getattr(args, "task_type", "general")
+            outcome = getattr(args, "outcome", "done")
+            tl = record_tiered_lesson(args.lesson, task_type, outcome, source_goal="manual", tier=tier)
+            print(f"Recorded lesson_id={tl.lesson_id} tier={tier} score={tl.score:.2f}")
+        else:
+            print(f"Unknown poe-memory subcommand: {memory_cmd}")
+            return 1
         return 0
 
     if args.cmd == "poe-eval":
