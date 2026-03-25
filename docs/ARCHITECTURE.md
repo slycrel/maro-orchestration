@@ -167,7 +167,7 @@ This prevents agents from drifting away from the top-level mission even in deepl
 
 ## Memory and learning (`memory.py`)
 
-### After each run
+### Flat memory (Phase 5, legacy)
 ```python
 reflect_and_record(loop_result)
     → record_outcome()  → memory/outcomes.jsonl
@@ -176,12 +176,36 @@ reflect_and_record(loop_result)
     → _append_daily_log()  → memory/YYYY-MM-DD.md
 ```
 
-### On next run
+### Tiered memory (Phase 16)
+
+Three tiers with decay, promotion, and canon path. See `docs/MEMORY_ARCHITECTURE.md`.
+
+```
+short   — in-process only (short_set/get/clear/all). Evicts at session end.
+medium  — memory/medium/lessons.jsonl. Grok decay: score *= 0.85/day, +0.3 on reinforce.
+long    — memory/long/lessons.jsonl. Promoted from medium at score ≥ 0.9 + 3 sessions.
+```
+
+Graduation path:
+```
+medium lesson → long (score+sessions gate) → AGENTS.md identity (human-gated via canon-candidates)
+```
+
+Canon tracking:
 ```python
-inject_lessons_for_task(task_type, goal)
-    → load_lessons(task_type=task_type, limit=3)
-    → format as "Prior lessons — apply these:" block
-    → prepended to _DECOMPOSE_SYSTEM
+inject_tiered_lessons(task_type, track_applied=True)
+    → increments times_applied on each injected lesson
+    → _record_canon_hit() → memory/canon_stats.jsonl (lesson_id, tier, task_type, date)
+
+get_canon_candidates(min_hits=10, min_task_types=3)
+    → filters long-tier lessons that cross both thresholds
+    → surfaces for human review via poe-memory canon-candidates
+    → NEVER auto-writes to AGENTS.md
+```
+
+Skill tiers (Phase 16):
+```
+Skill.tier: "provisional" (default) → "established" (promote_skill_tier, requires pass^3 ≥ 0.7)
 ```
 
 ### Bootstrap
@@ -391,6 +415,62 @@ format_skills_for_prompt(skills) → injected into _decompose() system prompt
 
 ---
 
+## Persona System (`persona.py`, `personas/`) — Phase 20
+
+Personas are **composable data primitives**: YAML frontmatter + markdown body. Compose > inherit — no subclassing, pure data composition.
+
+```
+PersonaSpec fields:
+    name                 slug (must match filename stem)
+    role                 human-readable role
+    model_tier           "power" | "mid" | "cheap"
+    tool_access          list of allowed tool names (empty = all)
+    memory_scope         "session" | "project" | "global"
+    communication_style  one-liner baked into system prompt header
+    hooks                hook names to register when active
+    composes             other persona names (informational; use compose_persona() to merge)
+    system_prompt        markdown body (everything after frontmatter)
+```
+
+Composition (`compose_persona(*names)`):
+```
+system_prompt  → concatenated with "---" separator
+tool_access    → union, deduped (left-to-right)
+hooks          → union, deduped
+model_tier     → highest wins (power > mid > cheap)
+memory_scope   → broadest wins (global > project > session)
+name           → joined ("researcher+critic")
+```
+
+Spawn flow:
+```
+spawn_persona(name, goal, dry_run=False, compose_with=[...])
+    → PersonaRegistry.load(name)  (+ compose if compose_with given)
+    → short_clear()               (memory isolation: evict previous session)
+    → short_set(persona_name, persona_goal)
+    → build_persona_system_prompt(spec, goal=goal)
+    → run_agent_loop(goal, system_prompt_extra=...)
+    → short_clear()               (evict on exit)
+    → SpawnResult(status, summary, steps_taken, model_tier, memory_scope)
+```
+
+Built-in personas:
+```
+researcher    power   session   analytical, source-grounded, multi-angle
+builder       mid     project   direct, implementation-focused, ship-oriented
+critic        mid     session   skeptical, evidence-demanding, direct about weaknesses
+ops           mid     project   reliability-first, precise, incident-aware
+summarizer    cheap   session   concise, executive-level, signal over noise
+strategist    power   global    goal-aligned, long-horizon, trade-off explicit
+```
+
+Telegram integration:
+```
+/research <goal>  → spawn_persona("researcher", goal)
+```
+
+---
+
 ## Hook System (`hooks.py`)
 
 Phase 11. Pluggable callbacks at every level of the execution hierarchy.
@@ -553,7 +633,12 @@ workspace/prototypes/poe-orchestration/
     ├── heartbeat-state.json     # last heartbeat result
     ├── heartbeat-log.jsonl      # heartbeat history
     ├── eval-results.jsonl       # benchmark results
-    └── YYYY-MM-DD.md            # daily narrative log
+    ├── YYYY-MM-DD.md            # daily narrative log
+    ├── canon_stats.jsonl        # lesson application hits for canon-candidate tracking (Phase 16)
+    ├── medium/
+    │   └── lessons.jsonl        # medium-tier lessons with decay scores (Phase 16)
+    └── long/
+        └── lessons.jsonl        # long-tier validated lessons (Phase 16)
 ```
 
 ---
