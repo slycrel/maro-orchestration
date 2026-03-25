@@ -296,6 +296,7 @@ def run_mission(
     model: Optional[str] = None,
     dry_run: bool = False,
     verbose: bool = False,
+    hook_registry=None,
 ) -> MissionResult:
     """Run a mission: decompose into milestones + features, execute sequentially.
 
@@ -312,6 +313,10 @@ def run_mission(
     """
     from agent_loop import run_agent_loop, _DryRunAdapter, _goal_to_slug
     from llm import build_adapter, MODEL_POWER
+    from hooks import (
+        run_hooks, any_blocking, get_injected_context,
+        SCOPE_MISSION, SCOPE_MILESTONE, SCOPE_FEATURE, load_registry,
+    )
 
     started_at = time.monotonic()
 
@@ -324,6 +329,14 @@ def run_mission(
         adapter = build_adapter(model=model or MODEL_POWER)
     elif dry_run:
         adapter = _DryRunAdapter()
+
+    # Load hook registry (lazy — only if not provided)
+    _hook_registry = hook_registry
+    if _hook_registry is None:
+        try:
+            _hook_registry = load_registry()
+        except Exception:
+            _hook_registry = None
 
     # Resolve project
     o = _orch()
@@ -357,6 +370,14 @@ def run_mission(
     except Exception:
         pass
 
+    # Mission-start hooks (before)
+    try:
+        _mission_ctx = {"goal": goal, "mission_id": mission.id, "project": project}
+        run_hooks(SCOPE_MISSION, _mission_ctx, registry=_hook_registry, adapter=adapter,
+                  dry_run=dry_run, fire_on="before")
+    except Exception:
+        pass
+
     milestones_done = 0
 
     for ms_idx, milestone in enumerate(mission.milestones):
@@ -367,12 +388,33 @@ def run_mission(
         def _run_feature(feature: Feature) -> Feature:
             feature.status = "running"
             feat_start = time.monotonic()
+
+            # Feature "before" hooks — collect injected_context from NOTIFICATION hooks
+            _feature_before_ctx = {
+                "goal": goal,
+                "project": project,
+                "feature_title": feature.title,
+                "milestone_title": milestone.title,
+                "mission_id": mission.id,
+            }
+            _extra_ancestry = ""
+            try:
+                _before_results = run_hooks(
+                    SCOPE_FEATURE, _feature_before_ctx,
+                    registry=_hook_registry, adapter=adapter,
+                    dry_run=dry_run, fire_on="before",
+                )
+                _extra_ancestry = get_injected_context(_before_results)
+            except Exception:
+                pass
+
             try:
                 loop_result = run_agent_loop(
                     feature.title,
                     project=project,
                     adapter=adapter if dry_run else None,
                     dry_run=dry_run,
+                    ancestry_context_extra=_extra_ancestry,
                 )
                 feature.worker_session_id = loop_result.loop_id
                 feature.status = "done" if loop_result.status == "done" else "blocked"
@@ -384,6 +426,29 @@ def run_mission(
             except Exception as exc:
                 feature.status = "blocked"
                 feature.result_summary = f"error: {exc}"
+
+            # Feature "after" hooks — check for reviewer blocks
+            _feature_after_ctx = {
+                **_feature_before_ctx,
+                "feature_status": feature.status,
+                "feature_result_summary": feature.result_summary or "",
+            }
+            try:
+                _after_results = run_hooks(
+                    SCOPE_FEATURE, _feature_after_ctx,
+                    registry=_hook_registry, adapter=adapter,
+                    dry_run=dry_run, fire_on="after",
+                )
+                if any_blocking(_after_results):
+                    feature.status = "blocked"
+                    _blocked_outputs = [r.output for r in _after_results if r.should_block]
+                    feature.result_summary = (
+                        (feature.result_summary or "") +
+                        " [BLOCKED by hook: " + "; ".join(_blocked_outputs[:2]) + "]"
+                    )
+            except Exception:
+                pass
+
             feature.elapsed_ms = int((time.monotonic() - feat_start) * 1000)
             return feature
 
@@ -417,6 +482,31 @@ def run_mission(
         except Exception:
             passed = True  # Don't get stuck in validation
 
+        # Milestone "after" hooks — may block advancement
+        _ms_ctx = {
+            "goal": goal,
+            "project": project,
+            "milestone_title": milestone.title,
+            "mission_id": mission.id,
+            "validation_criteria": "\n".join(f"- {c}" for c in milestone.validation_criteria),
+            "features_done": sum(1 for f in milestone.features if f.status == "done"),
+            "features_total": len(milestone.features),
+            "features_summary": "\n".join(
+                f"- {f.title}: {f.status}" for f in milestone.features
+            ),
+        }
+        try:
+            _ms_results = run_hooks(
+                SCOPE_MILESTONE, _ms_ctx,
+                registry=_hook_registry, adapter=adapter,
+                dry_run=dry_run, fire_on="after",
+            )
+            if any_blocking(_ms_results):
+                passed = False
+                _log(f"  milestone BLOCKED by hook: {milestone.title!r}")
+        except Exception:
+            pass
+
         if passed:
             milestone.status = "done"
             milestone.validation_result = "passed"
@@ -443,6 +533,15 @@ def run_mission(
     if mission.status != "stuck":
         mission.status = "done"
     mission.completed_at = datetime.now(timezone.utc).isoformat()
+
+    # Mission-end hooks (after)
+    try:
+        _mission_end_ctx = {"goal": goal, "mission_id": mission.id, "project": project,
+                            "mission_status": mission.status}
+        run_hooks(SCOPE_MISSION, _mission_end_ctx, registry=_hook_registry, adapter=adapter,
+                  dry_run=dry_run, fire_on="after")
+    except Exception:
+        pass
 
     elapsed = int((time.monotonic() - started_at) * 1000)
 

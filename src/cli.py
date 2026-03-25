@@ -314,6 +314,39 @@ def main(argv: list[str] | None = None) -> int:
     p_poe_background.add_argument("--timeout", type=int, default=300, help="Timeout seconds (default: 300)")
     p_poe_background.add_argument("--format", choices=["text", "json"], default="text")
 
+    p_poe_hooks = sub.add_parser("poe-hooks", help="Manage hook registry (Phase 11)")
+    hooks_sub = p_poe_hooks.add_subparsers(dest="hooks_cmd", required=True)
+
+    p_hooks_list = hooks_sub.add_parser("list", help="List registered hooks")
+    p_hooks_list.add_argument("--scope", help="Filter by scope (mission/milestone/feature/step)")
+    p_hooks_list.add_argument("--format", choices=["text", "json"], default="text")
+
+    p_hooks_enable = hooks_sub.add_parser("enable", help="Enable a hook by ID")
+    p_hooks_enable.add_argument("id", help="Hook ID to enable")
+
+    p_hooks_disable = hooks_sub.add_parser("disable", help="Disable a hook by ID")
+    p_hooks_disable.add_argument("id", help="Hook ID to disable")
+
+    p_hooks_add_reporter = hooks_sub.add_parser("add-reporter", help="Register a reporter hook")
+    p_hooks_add_reporter.add_argument("name", help="Hook name")
+    p_hooks_add_reporter.add_argument("--scope", required=True,
+                                       choices=["mission", "milestone", "feature", "step"],
+                                       help="Scope for this hook")
+    p_hooks_add_reporter.add_argument("--target", required=True,
+                                       choices=["telegram", "log", "both"],
+                                       help="Report target")
+    p_hooks_add_reporter.add_argument("--template", default="",
+                                       help="Prompt template (optional)")
+    p_hooks_add_reporter.add_argument("--fire-on", choices=["before", "after"], default="after")
+
+    p_hooks_run = hooks_sub.add_parser("run-builtin", help="Test a builtin hook manually")
+    p_hooks_run.add_argument("id", help="Builtin hook ID to run")
+    p_hooks_run.add_argument("--goal", default="", help="Goal context")
+    p_hooks_run.add_argument("--step", default="", help="Step context")
+    p_hooks_run.add_argument("--result", default="", help="Step result context")
+    p_hooks_run.add_argument("--dry-run", action="store_true", help="Skip LLM calls")
+    p_hooks_run.add_argument("--format", choices=["text", "json"], default="text")
+
     p_poe_skills = sub.add_parser("poe-skills", help="Manage skill library (Phase 10)")
     p_poe_skills.add_argument("--extract", action="store_true", help="Extract skills from recent outcomes")
     p_poe_skills.add_argument("--list", action="store_true", dest="list_skills", help="List known skills")
@@ -1073,6 +1106,91 @@ def main(argv: list[str] | None = None) -> int:
             if task.completed_at:
                 print(f"completed_at={task.completed_at} exit_code={task.exit_code}")
         return 0
+
+    if args.cmd == "poe-hooks":
+        import hooks as _hooks_mod
+
+        registry = _hooks_mod.load_registry()
+
+        if args.hooks_cmd == "list":
+            hook_list = registry.list_hooks(scope=getattr(args, "scope", None))
+            if getattr(args, "format", "text") == "json":
+                from dataclasses import asdict
+                print(json.dumps([asdict(h) for h in hook_list], indent=2))
+            else:
+                if not hook_list:
+                    print("hooks=(none)")
+                else:
+                    for h in hook_list:
+                        status = "enabled" if h.enabled else "disabled"
+                        print(f"  [{h.id}] [{status:8s}] {h.name!r} type={h.hook_type} scope={h.scope} fire_on={h.fire_on}")
+            return 0
+
+        if args.hooks_cmd == "enable":
+            if registry.enable(args.id):
+                print(f"enabled={args.id}")
+                return 0
+            # Try to enable a builtin that isn't yet in registry
+            builtin = _hooks_mod._BUILTIN_BY_ID.get(args.id)
+            if builtin:
+                import copy
+                h = copy.copy(builtin)
+                h.enabled = True
+                registry.register(h)
+                print(f"enabled={args.id} (registered builtin)")
+                return 0
+            return fail("E_HOOK_NOT_FOUND", args.id)
+
+        if args.hooks_cmd == "disable":
+            if registry.disable(args.id):
+                print(f"disabled={args.id}")
+                return 0
+            return fail("E_HOOK_NOT_FOUND", args.id)
+
+        if args.hooks_cmd == "add-reporter":
+            import uuid as _uuid
+            hook = _hooks_mod.Hook(
+                id=str(_uuid.uuid4())[:8],
+                name=args.name,
+                scope=args.scope,
+                hook_type=_hooks_mod.TYPE_REPORTER,
+                enabled=True,
+                prompt_template=getattr(args, "template", ""),
+                report_target=args.target,
+                fire_on=args.fire_on,
+            )
+            registry.register(hook)
+            print(f"registered={hook.id} name={hook.name!r} scope={hook.scope} target={hook.report_target}")
+            return 0
+
+        if args.hooks_cmd == "run-builtin":
+            builtin = _hooks_mod._BUILTIN_BY_ID.get(args.id)
+            if not builtin:
+                return fail("E_HOOK_NOT_FOUND", args.id)
+            ctx = {
+                "goal": getattr(args, "goal", ""),
+                "step": getattr(args, "step", ""),
+                "step_result": getattr(args, "result", ""),
+                "project": "",
+                "milestone_title": "",
+                "feature_title": "",
+                "validation_criteria": "",
+                "features_summary": "",
+                "features_done": 0,
+                "features_total": 0,
+            }
+            dry_run = getattr(args, "dry_run", True)
+            result = _hooks_mod._run_single_hook(builtin, ctx, dry_run=dry_run)
+            if getattr(args, "format", "text") == "json":
+                from dataclasses import asdict
+                print(json.dumps(asdict(result), indent=2))
+            else:
+                print(f"hook_id={result.hook_id} status={result.status} should_block={result.should_block}")
+                if result.output:
+                    print(f"output: {result.output}")
+                if result.injected_context:
+                    print(f"injected_context: {result.injected_context[:200]}")
+            return 0
 
     if args.cmd == "poe-skills":
         import skills as _skills_mod

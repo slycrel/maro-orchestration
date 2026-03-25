@@ -166,6 +166,8 @@ def run_agent_loop(
     dry_run: bool = False,
     verbose: bool = False,
     interrupt_queue=None,
+    hook_registry=None,
+    ancestry_context_extra: str = "",
 ) -> LoopResult:
     """Run the autonomous loop for a goal.
 
@@ -236,6 +238,23 @@ def run_agent_loop(
     except Exception:
         _ancestry_context = ""
 
+    # Merge injected context from mission-level notification hooks (Phase 11)
+    if ancestry_context_extra:
+        _ancestry_context = (
+            (_ancestry_context + "\n\n" + ancestry_context_extra)
+            if _ancestry_context
+            else ancestry_context_extra
+        )
+
+    # Load hook registry for step-level hooks (Phase 11)
+    _hook_registry = hook_registry
+    if _hook_registry is None:
+        try:
+            from hooks import load_registry as _load_registry
+            _hook_registry = _load_registry()
+        except Exception:
+            _hook_registry = None
+
     # Step 1: Decompose goal into steps (inject memory + ancestry context)
     if verbose:
         print(f"[poe] decomposing goal...", file=sys.stderr, flush=True)
@@ -285,6 +304,7 @@ def run_agent_loop(
     remaining_steps: List[str] = list(steps)
     remaining_indices: List[int] = list(step_indices)
     step_idx = 0  # global step counter (for numbering, includes injected steps)
+    _next_step_injected_context: str = ""  # Phase 11: injected context from previous step's hooks
 
     while remaining_steps:
         if iteration >= max_iterations:
@@ -301,6 +321,12 @@ def run_agent_loop(
             print(f"[poe] step {step_idx}: {step_text!r}", file=sys.stderr, flush=True)
 
         step_start = time.monotonic()
+        # _next_step_injected is set by the previous iteration's hook run
+        _step_ancestry = (
+            (_ancestry_context + "\n\n" + _next_step_injected_context)
+            if _next_step_injected_context
+            else _ancestry_context
+        )
         outcome = _execute_step(
             goal=goal,
             step_text=step_text,
@@ -310,7 +336,7 @@ def run_agent_loop(
             adapter=adapter,
             tools=[LLMTool(**t) for t in _EXECUTE_TOOLS],
             verbose=verbose,
-            ancestry_context=_ancestry_context,
+            ancestry_context=_step_ancestry,
         )
         step_elapsed = int((time.monotonic() - step_start) * 1000)
 
@@ -320,6 +346,31 @@ def run_agent_loop(
         step_status = outcome["status"]
         step_result = outcome.get("result", "")
         step_summary = outcome.get("summary", step_text)
+
+        # Phase 11: Step-level hooks
+        _step_injected_context = ""
+        if _hook_registry is not None:
+            try:
+                from hooks import run_hooks as _run_hooks, any_blocking as _any_blocking, get_injected_context as _get_injected_ctx, SCOPE_STEP as _SCOPE_STEP
+                _step_hook_ctx = {
+                    "goal": goal,
+                    "step": step_text,
+                    "step_result": step_result,
+                    "project": project,
+                    "step_num": step_idx,
+                }
+                _step_results = _run_hooks(
+                    _SCOPE_STEP, _step_hook_ctx,
+                    registry=_hook_registry, adapter=adapter,
+                    dry_run=dry_run, fire_on="after",
+                )
+                if _any_blocking(_step_results):
+                    step_status = "blocked"
+                    _block_outputs = [r.output for r in _step_results if r.should_block]
+                    outcome["stuck_reason"] = "blocked by hook reviewer: " + "; ".join(_block_outputs[:2])
+                _step_injected_context = _get_injected_ctx(_step_results)
+            except Exception:
+                pass  # Hook failures must never break the loop
 
         # Stuck detection: same action repeated 3x
         action_key = f"{step_text}:{step_status}"
@@ -377,6 +428,9 @@ def run_agent_loop(
 
         if loop_status == "stuck":
             break
+
+        # Phase 11: carry injected_context forward to next step
+        _next_step_injected_context = _step_injected_context
 
         # --- Interrupt polling: check for new instructions between steps ---
         if interrupt_queue is not None:
