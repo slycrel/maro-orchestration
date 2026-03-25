@@ -204,10 +204,11 @@ def run_director(
     acceptance = "explicit" if requires_explicit_acceptance(directive) else "inferred"
     _log(f"plan_acceptance={acceptance}")
 
-    # Build adapter
+    # Build adapter — planner role uses MODEL_POWER for spec production
     if adapter is None and not dry_run:
-        from llm import build_adapter, MODEL_CHEAP
-        adapter = build_adapter(model=MODEL_CHEAP)
+        from llm import build_adapter
+        from poe import assign_model_by_role
+        adapter = build_adapter(model=assign_model_by_role("planner"))
 
     total_tokens_in = 0
     total_tokens_out = 0

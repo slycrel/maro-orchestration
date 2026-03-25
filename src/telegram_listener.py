@@ -28,6 +28,11 @@ except ImportError:  # pragma: no cover
     handle = None  # type: ignore[assignment]
 
 try:
+    from poe import poe_handle
+except ImportError:  # pragma: no cover
+    poe_handle = None  # type: ignore[assignment]
+
+try:
     from sheriff import check_system_health, check_all_projects, read_heartbeat_state
 except ImportError:  # pragma: no cover
     check_system_health = None  # type: ignore[assignment]
@@ -190,7 +195,14 @@ def _dispatch_slash(
 ) -> str:
     """Route a slash command to the appropriate handler."""
     if cmd == "status":
-        # System health summary
+        # Route through Poe CEO layer for executive summary
+        try:
+            if poe_handle is not None:
+                response = poe_handle("/status", dry_run=dry_run)
+                return response.message
+        except Exception:
+            pass
+        # Fallback: legacy system health summary
         try:
             health = check_system_health()
             projects = check_all_projects()
@@ -206,6 +218,18 @@ def _dispatch_slash(
             return "\n".join(lines)
         except Exception as e:
             return f"Status check failed: {e}"
+
+    elif cmd == "map":
+        # Goal relationship map via Poe CEO layer
+        try:
+            if poe_handle is not None:
+                response = poe_handle("/map", dry_run=dry_run)
+                return response.message
+            from goal_map import build_goal_map
+            gmap = build_goal_map()
+            return gmap.summary()
+        except Exception as e:
+            return f"Goal map failed: {e}"
 
     elif cmd in ("director", "research", "build", "ops"):
         # Force the director/worker path
@@ -248,7 +272,8 @@ def _dispatch_slash(
     elif cmd == "help":
         return (
             "*Poe commands*\n"
-            "/status — system health and stuck projects\n"
+            "/status — executive summary (active missions, quality)\n"
+            "/map — goal relationship map\n"
             "/director <directive> — run full Director/Worker pipeline\n"
             "/research <goal> — run a research worker\n"
             "/build <goal> — run a build worker\n"
@@ -350,8 +375,18 @@ def _process_message(
         elif cmd:
             response = _dispatch_slash(cmd, args, project=project, dry_run=False, verbose=verbose)
         else:
-            result = handle(text, project=project, dry_run=False, verbose=verbose)
-            response = result.response or "(no response)"
+            # Route natural language through Poe CEO layer when no loop is active
+            if poe_handle is not None:
+                try:
+                    poe_resp = poe_handle(text, dry_run=False)
+                    response = poe_resp.message or "(no response)"
+                except Exception:
+                    # Fallback to handle
+                    result = handle(text, project=project, dry_run=False, verbose=verbose)
+                    response = result.result or "(no response)"
+            else:
+                result = handle(text, project=project, dry_run=False, verbose=verbose)
+                response = result.result or "(no response)"
     except Exception as e:
         response = f"Error: {e}"
         if verbose:

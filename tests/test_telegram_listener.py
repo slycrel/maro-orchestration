@@ -106,20 +106,23 @@ def test_process_message_dry_run_no_send():
 
 
 def test_process_message_routes_to_handle():
+    # Phase 13: natural language messages now route through poe_handle first.
+    # Patch poe_handle to return a known response.
     bot = MagicMock()
-    with patch("telegram_listener.handle") as mock_handle:
-        mock_result = MagicMock()
-        mock_result.response = "great answer"
-        mock_handle.return_value = mock_result
+    with patch("telegram_listener.poe_handle") as mock_poe:
+        from poe import PoeResponse
+        mock_poe.return_value = PoeResponse(message="great answer", routed_to="now_lane")
         _process_message(bot, _make_tg_message("what time is it?", chat_id=111), allowed_chats={111}, dry_run=False)
-    mock_handle.assert_called_once()
+    mock_poe.assert_called_once()
     bot.send_message.assert_called_once_with(111, "great answer")
 
 
 def test_process_message_handle_error_sends_error():
+    # Both poe_handle and handle raise — should fall through to error response
     bot = MagicMock()
-    with patch("telegram_listener.handle", side_effect=RuntimeError("boom")):
-        _process_message(bot, _make_tg_message("fail this", chat_id=111), allowed_chats=set(), dry_run=False)
+    with patch("telegram_listener.poe_handle", side_effect=RuntimeError("poe boom")):
+        with patch("telegram_listener.handle", side_effect=RuntimeError("boom")):
+            _process_message(bot, _make_tg_message("fail this", chat_id=111), allowed_chats=set(), dry_run=False)
     bot.send_message.assert_called_once()
     assert "Error" in bot.send_message.call_args[0][1]
 
@@ -237,13 +240,16 @@ def test_dispatch_slash_director_no_args():
 
 
 def test_dispatch_slash_status():
-    with patch("telegram_listener.check_system_health") as mock_health, \
-         patch("telegram_listener.check_all_projects", return_value=[]), \
-         patch("telegram_listener.read_heartbeat_state", return_value={}):
-        from sheriff import SystemHealth
-        mock_health.return_value = SystemHealth(status="healthy", checks={})
+    # Phase 13: /status routes through poe_handle for executive summary.
+    # Patch poe_handle to return a predictable response.
+    from poe import PoeResponse
+    with patch("telegram_listener.poe_handle") as mock_poe:
+        mock_poe.return_value = PoeResponse(
+            message="Executive summary: system healthy, no active missions.",
+            routed_to="status",
+        )
         response = _dispatch_slash("status", "", project="test", dry_run=False, verbose=False)
-    assert "healthy" in response.lower()
+    assert "healthy" in response.lower() or "summary" in response.lower() or "Executive" in response
 
 
 # ---------------------------------------------------------------------------
@@ -252,11 +258,13 @@ def test_dispatch_slash_status():
 
 def test_process_message_sends_ack_for_long_message():
     """Long natural-language messages should get an immediate ack, then an edit."""
+    # Phase 13: poe_handle is called first for natural language
+    from poe import PoeResponse
     bot = MagicMock()
     bot.send_message_returning_id.return_value = 42
 
-    with patch("telegram_listener.handle") as mock_handle:
-        mock_handle.return_value = MagicMock(response="detailed answer here")
+    with patch("telegram_listener.poe_handle") as mock_poe:
+        mock_poe.return_value = PoeResponse(message="detailed answer here", routed_to="now_lane")
         _process_message(
             bot,
             _make_tg_message("this is a longer message that should get an ack", chat_id=111),
@@ -271,11 +279,12 @@ def test_process_message_sends_ack_for_long_message():
 
 def test_process_message_short_message_no_ack():
     """Short messages (<=20 chars) skip the ack, use typing indicator."""
+    from poe import PoeResponse
     bot = MagicMock()
     bot.send_message_returning_id.return_value = 0
 
-    with patch("telegram_listener.handle") as mock_handle:
-        mock_handle.return_value = MagicMock(response="hi")
+    with patch("telegram_listener.poe_handle") as mock_poe:
+        mock_poe.return_value = PoeResponse(message="hi", routed_to="now_lane")
         _process_message(
             bot,
             _make_tg_message("hi", chat_id=111),

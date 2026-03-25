@@ -361,6 +361,28 @@ def main(argv: list[str] | None = None) -> int:
     p_poe_quality = sub.add_parser("poe-quality", help="Show quality summary (alias for poe-inspector-status)")
     p_poe_quality.add_argument("--format", choices=["text", "json"], default="text")
 
+    # Phase 13: Poe CEO layer commands
+    p_poe_ceo = sub.add_parser("poe", help="Send a request through the Poe CEO layer (Phase 13)")
+    p_poe_ceo.add_argument("message", nargs="+", help="The request to handle")
+    p_poe_ceo.add_argument("--model", "-m", help="LLM model string override")
+    p_poe_ceo.add_argument("--dry-run", action="store_true", help="Simulate without API calls")
+    p_poe_ceo.add_argument("--format", choices=["text", "json"], default="text")
+
+    p_poe_status = sub.add_parser("poe-status", help="Executive summary via Poe CEO layer (Phase 13)")
+    p_poe_status.add_argument("--format", choices=["text", "json"], default="text")
+    p_poe_status.add_argument("--dry-run", action="store_true", help="Simulate without API calls")
+
+    p_poe_map = sub.add_parser("poe-map", help="Goal relationship map (Phase 13)")
+    p_poe_map.add_argument("--format", choices=["text", "json"], default="text")
+
+    p_poe_autonomy = sub.add_parser("poe-autonomy", help="View/set autonomy tier config (Phase 13)")
+    p_poe_autonomy.add_argument("--tier", choices=["manual", "safe", "full"],
+                                 help="Set default tier (or project/action tier)")
+    p_poe_autonomy.add_argument("--project", help="Project to set tier for")
+    p_poe_autonomy.add_argument("--action", dest="action_type",
+                                 help="Action type to set tier for")
+    p_poe_autonomy.add_argument("--format", choices=["text", "json"], default="text")
+
     p_poe_skills = sub.add_parser("poe-skills", help="Manage skill library (Phase 10)")
     p_poe_skills.add_argument("--extract", action="store_true", help="Extract skills from recent outcomes")
     p_poe_skills.add_argument("--list", action="store_true", dest="list_skills", help="List known skills")
@@ -1284,6 +1306,94 @@ def main(argv: list[str] | None = None) -> int:
                 print(summary)
             else:
                 print("No inspection report available. Run poe-inspector first.")
+        return 0
+
+    # Phase 13: Poe CEO layer commands
+
+    if args.cmd == "poe":
+        from poe import poe_handle
+        msg = " ".join(args.message)
+        try:
+            response = poe_handle(msg, model=args.model, dry_run=args.dry_run)
+        except Exception as exc:
+            return fail("E_POE_CEO", str(exc))
+        if args.format == "json":
+            print(json.dumps({
+                "message": response.message,
+                "routed_to": response.routed_to,
+                "mission_id": response.mission_id,
+                "executive_summary": response.executive_summary,
+            }, indent=2))
+        else:
+            print(response.message)
+        return 0
+
+    if args.cmd == "poe-status":
+        from poe import _compile_executive_summary
+        dry_run = getattr(args, "dry_run", False)
+        if dry_run:
+            summary = "[dry-run] Executive summary: no active missions."
+        else:
+            try:
+                from llm import build_adapter, MODEL_CHEAP
+                _adapter = build_adapter(model=MODEL_CHEAP)
+            except Exception:
+                _adapter = None
+            summary = _compile_executive_summary(adapter=_adapter)
+        if args.format == "json":
+            print(json.dumps({"summary": summary}, indent=2))
+        else:
+            print(summary)
+        return 0
+
+    if args.cmd == "poe-map":
+        from goal_map import build_goal_map
+        try:
+            gmap = build_goal_map()
+        except Exception as exc:
+            return fail("E_POE_MAP", str(exc))
+        if args.format == "json":
+            nodes_list = [n.to_dict() for n in gmap.nodes.values()]
+            print(json.dumps(nodes_list, indent=2))
+        else:
+            print(gmap.summary())
+        return 0
+
+    if args.cmd == "poe-autonomy":
+        from autonomy import (
+            load_config, set_default_tier, set_project_tier, set_action_tier,
+            TIER_MANUAL, TIER_SAFE, TIER_FULL,
+        )
+        tier = getattr(args, "tier", None)
+        project = getattr(args, "project", None)
+        action_type = getattr(args, "action_type", None)
+
+        if tier:
+            if project:
+                set_project_tier(project, tier)
+                print(f"set project={project} tier={tier}")
+            elif action_type:
+                set_action_tier(action_type, tier)
+                print(f"set action_type={action_type} tier={tier}")
+            else:
+                set_default_tier(tier)
+                print(f"set default_tier={tier}")
+            return 0
+
+        # Show current config
+        config = load_config()
+        if args.format == "json":
+            print(json.dumps(config.to_dict(), indent=2))
+        else:
+            print(f"default_tier={config.default_tier}")
+            if config.project_overrides:
+                print("project_overrides:")
+                for p, t in sorted(config.project_overrides.items()):
+                    print(f"  {p}: {t}")
+            if config.action_overrides:
+                print("action_overrides:")
+                for a, t in sorted(config.action_overrides.items()):
+                    print(f"  {a}: {t}")
         return 0
 
     return fail("E_INTERNAL", "unknown command")

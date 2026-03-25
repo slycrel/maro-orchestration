@@ -188,6 +188,7 @@ def run_agent_loop(
     """
     from llm import LLMMessage, LLMTool, build_adapter, MODEL_CHEAP
     from interrupt import InterruptQueue, apply_interrupt_to_steps, set_loop_running, clear_loop_running
+    from poe import assign_model_by_role
 
     loop_id = str(uuid.uuid4())[:8]
     started_at = time.monotonic()
@@ -196,9 +197,9 @@ def run_agent_loop(
     if verbose:
         print(f"[poe] loop_id={loop_id} goal={goal!r}", file=sys.stderr, flush=True)
 
-    # Build adapter
+    # Build adapter — worker role uses MODEL_MID by default (role-semantic selection)
     if adapter is None and not dry_run:
-        adapter = build_adapter(model=model or MODEL_CHEAP)
+        adapter = build_adapter(model=model or assign_model_by_role("worker"))
     elif dry_run:
         adapter = _DryRunAdapter()
 
