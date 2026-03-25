@@ -390,6 +390,21 @@ def main(argv: list[str] | None = None) -> int:
     p_poe_skills.add_argument("--dry-run", action="store_true", help="Analyze without writing skills")
     p_poe_skills.add_argument("--format", choices=["text", "json"], default="text")
 
+    # Phase 14 CLI subcommands
+    p_poe_attribution = sub.add_parser("poe-attribution", help="Run failure attribution on recent stuck outcomes (Phase 14)")
+    p_poe_attribution.add_argument("--batch", action="store_true", help="Attribute all recent stuck outcomes (default: yes)")
+    p_poe_attribution.add_argument("--limit", type=int, default=20, help="Max outcomes to analyze (default: 20)")
+    p_poe_attribution.add_argument("--format", choices=["text", "json"], default="text")
+
+    p_poe_skill_stats = sub.add_parser("poe-skill-stats", help="Show per-skill success rates (Phase 14)")
+    p_poe_skill_stats.add_argument("--escalated", action="store_true", help="Filter to skills needing redesign (below threshold)")
+    p_poe_skill_stats.add_argument("--format", choices=["text", "json"], default="text")
+
+    p_poe_skill_test = sub.add_parser("poe-skill-test", help="Run or generate tests for a skill (Phase 14)")
+    p_poe_skill_test.add_argument("skill_id", help="Skill ID to test")
+    p_poe_skill_test.add_argument("--generate", action="store_true", help="Generate new test cases from recent failures")
+    p_poe_skill_test.add_argument("--format", choices=["text", "json"], default="text")
+
     p_plan = sub.add_parser("plan", help="Split a goal into NEXT tasks")
     p_plan.add_argument("project")
     p_plan.add_argument("goal", nargs="+")
@@ -1394,6 +1409,114 @@ def main(argv: list[str] | None = None) -> int:
                 print("action_overrides:")
                 for a, t in sorted(config.action_overrides.items()):
                     print(f"  {a}: {t}")
+        return 0
+
+    # ---------------------------------------------------------------------------
+    # Phase 14: Failure attribution + skill stats + skill test CLI
+    # ---------------------------------------------------------------------------
+
+    if args.cmd == "poe-attribution":
+        from attribution import attribute_batch, load_attributions
+        from memory import load_outcomes as _load_outcomes
+        limit = getattr(args, "limit", 20)
+        try:
+            outcomes_raw = _load_outcomes(limit=limit * 2)
+            outcomes_dicts = []
+            for o in outcomes_raw:
+                try:
+                    from dataclasses import asdict
+                    outcomes_dicts.append(asdict(o))
+                except Exception:
+                    outcomes_dicts.append(o.__dict__ if hasattr(o, "__dict__") else {})
+            report = attribute_batch(outcomes_dicts[:limit])
+        except Exception as exc:
+            return fail("E_POE_ATTRIBUTION", str(exc))
+        if args.format == "json":
+            print(json.dumps(report.to_dict(), indent=2))
+        else:
+            print(report.summary())
+            if report.attributions:
+                print()
+                print("Recent attributions:")
+                for attr in report.attributions[:10]:
+                    print(f"  [{attr.failure_mode}] conf={attr.confidence:.2f} | {attr.failed_step[:60]}")
+        return 0
+
+    if args.cmd == "poe-skill-stats":
+        from skills import get_all_skill_stats, get_skills_needing_escalation, ESCALATION_THRESHOLD
+        escalated = getattr(args, "escalated", False)
+        try:
+            if escalated:
+                stats_list = get_skills_needing_escalation()
+            else:
+                stats_list = get_all_skill_stats()
+        except Exception as exc:
+            return fail("E_POE_SKILL_STATS", str(exc))
+        if args.format == "json":
+            print(json.dumps([s.to_dict() for s in stats_list], indent=2))
+        else:
+            if not stats_list:
+                msg = "No skill stats recorded yet."
+                if escalated:
+                    msg = f"No skills below escalation threshold ({ESCALATION_THRESHOLD})."
+                print(msg)
+            else:
+                if escalated:
+                    print(f"Skills needing redesign (success_rate < {ESCALATION_THRESHOLD}):")
+                else:
+                    print("Per-skill success rates:")
+                for s in stats_list:
+                    escalation_marker = " [ESCALATE]" if s.needs_escalation else ""
+                    print(
+                        f"  {s.skill_id} | {s.skill_name[:30]:30s} | "
+                        f"rate={s.success_rate:.2f} uses={s.total_uses} "
+                        f"ok={s.successes} fail={s.failures}{escalation_marker}"
+                    )
+        return 0
+
+    if args.cmd == "poe-skill-test":
+        from skills import load_skills, generate_skill_tests, run_skill_tests
+        skill_id = args.skill_id
+        generate = getattr(args, "generate", False)
+
+        # Find the skill
+        all_skills = load_skills()
+        target_skill = next((s for s in all_skills if s.id == skill_id or s.name == skill_id), None)
+        if target_skill is None:
+            return fail("E_SKILL_NOT_FOUND", f"No skill with id or name {skill_id!r}")
+
+        try:
+            if generate:
+                # Generate new tests from recent failure attributions
+                from attribution import load_attributions
+                attributions = load_attributions(limit=20)
+                failure_examples = [
+                    a.raw_reason for a in attributions
+                    if a.failed_skill == target_skill.name
+                ]
+                tests = generate_skill_tests(target_skill, failure_examples)
+                print(f"Generated {len(tests)} test case(s) for skill={target_skill.name!r}")
+            else:
+                # Load existing tests
+                from skills import _load_skill_tests
+                tests = _load_skill_tests(skill_id)
+                if not tests:
+                    tests = _load_skill_tests(target_skill.id)
+
+            if not tests:
+                print(f"No tests found for skill={target_skill.name!r}. Use --generate to create them.")
+                return 0
+
+            passed, total = run_skill_tests(target_skill, tests, adapter=None, dry_run=True)
+            if args.format == "json":
+                print(json.dumps([t.to_dict() for t in tests], indent=2))
+            else:
+                print(f"Skill: {target_skill.name} (id={target_skill.id})")
+                print(f"Tests: {total} | Passed (dry_run): {passed}")
+                for t in tests:
+                    print(f"  - [{t.input_description[:60]}] expect: {t.expected_keywords}")
+        except Exception as exc:
+            return fail("E_POE_SKILL_TEST", str(exc))
         return 0
 
     return fail("E_INTERNAL", "unknown command")

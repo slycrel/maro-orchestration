@@ -52,6 +52,12 @@ try:
 except ImportError:  # pragma: no cover
     receive_inspector_tickets = None  # type: ignore[assignment]
 
+try:
+    from attribution import attribute_failure, Attribution
+except ImportError:  # pragma: no cover
+    attribute_failure = None  # type: ignore[assignment]
+    Attribution = None  # type: ignore[assignment]
+
 
 # ---------------------------------------------------------------------------
 # Friction signal constants (Factory AI Signals research)
@@ -440,11 +446,23 @@ def detect_friction(
         severity = min(1.0, len(stuck_items) / n)
         for o in stuck_items:
             sid = o.get("outcome_id") or o.get("loop_id") or o.get("session_id", "?")
+            # Phase 14: add attribution context to evidence
+            evidence = f"status={o.get('status')} goal={str(o.get('goal', ''))[:50]}"
+            if attribute_failure is not None:
+                try:
+                    attr = attribute_failure(o)
+                    attr_ctx = (
+                        f" | failed_step={attr.failed_step[:40]}"
+                        f" failure_mode={attr.failure_mode}"
+                    )
+                    evidence = (evidence + attr_ctx)[:200]
+                except Exception:
+                    pass
             signals.append(SpecFrictionSignal(
                 session_id=sid,
                 signal_type=SIGNAL_ERROR_EVENTS,
                 severity=severity,
-                evidence=f"status={o.get('status')} goal={str(o.get('goal', ''))[:50]}",
+                evidence=evidence,
             ))
 
     # --- escalation_tone: scan summary / stuck_reason for keywords ---
@@ -698,11 +716,15 @@ def generate_tickets(
     patterns: List[str],
     signals: List["SpecFrictionSignal"],
     adapter=None,
+    attribution_report=None,
 ) -> List[dict]:
     """Generate improvement tickets from friction patterns (spec §12).
 
     Returns list of ticket dicts: {id, title, pattern, suggested_fix, priority, auto_evolver}
     auto_evolver=True means forward to evolver.
+
+    Phase 14: when attribution_report is provided and has most_blamed_skills,
+    include per-skill failure breakdown in ticket descriptions.
     """
     if not patterns:
         return []
@@ -721,6 +743,13 @@ def generate_tickets(
             return "medium"
         return "low"
 
+    # Phase 14: build skill blame suffix from attribution report
+    skill_blame_suffix = ""
+    if attribution_report is not None:
+        blamed = getattr(attribution_report, "most_blamed_skills", [])
+        if blamed:
+            skill_blame_suffix = f" Most blamed skills: {', '.join(blamed[:3])}."
+
     # Fallback: generic ticket per pattern
     if adapter is None:
         tickets = []
@@ -733,6 +762,7 @@ def generate_tickets(
                 "suggested_fix": (
                     "Review recent stuck outcomes and identify systemic improvements "
                     "to prompts, tools, or error recovery paths."
+                    + skill_blame_suffix
                 ),
                 "priority": priority,
                 "auto_evolver": priority in ("high", "medium"),

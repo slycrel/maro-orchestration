@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -16,13 +17,29 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 import orch
 from skills import (
     Skill,
+    SkillStats,
+    SkillTestCase,
+    SkillMutationResult,
+    ESCALATION_THRESHOLD,
     _skill_to_dict,
+    compute_skill_hash,
+    verify_skill_hash,
     extract_skills,
     find_matching_skills,
     format_skills_for_prompt,
+    generate_skill_tests,
+    get_all_skill_stats,
+    get_skill_stats,
+    get_skills_needing_escalation,
     increment_use,
     load_skills,
+    parse_skill_sections,
+    record_skill_outcome,
+    render_skill_markdown,
+    run_skill_tests,
     save_skill,
+    update_skill_section,
+    validate_skill_mutation,
 )
 from llm import LLMResponse
 
@@ -457,3 +474,522 @@ def test_cli_poe_skills_extract_dry_run(monkeypatch, tmp_path, capsys):
     assert rc == 0
     out = capsys.readouterr().out
     assert "dry_run" in out.lower() or "outcomes" in out.lower()
+
+
+# ===========================================================================
+# Phase 14 tests: SkillStats, parse_skill_sections, SkillTestCase,
+# validate_skill_mutation, compute_skill_hash, verify_skill_hash
+# ===========================================================================
+
+
+class _SkillTestMockAdapter:
+    """Returns valid skill test case JSON."""
+
+    def complete(self, messages, **kwargs):
+        payload = [
+            {"input_description": "research a topic", "expected_keywords": ["research", "result"]},
+            {"input_description": "build a feature", "expected_keywords": ["feature", "complete"]},
+        ]
+        return LLMResponse(
+            content=json.dumps(payload),
+            stop_reason="end_turn",
+            input_tokens=40,
+            output_tokens=50,
+        )
+
+
+class _SkillRunMockAdapter:
+    """Returns output containing expected keywords."""
+
+    def complete(self, messages, **kwargs):
+        return LLMResponse(
+            content="The research result is complete and ready.",
+            stop_reason="end_turn",
+            input_tokens=30,
+            output_tokens=20,
+        )
+
+
+class _SkillRunFailAdapter:
+    """Returns output NOT containing expected keywords."""
+
+    def complete(self, messages, **kwargs):
+        return LLMResponse(
+            content="Zyzzyva frumious bandersnatch output with nothing useful.",
+            stop_reason="end_turn",
+            input_tokens=30,
+            output_tokens=20,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Phase 14: Per-skill success rate tracking
+# ---------------------------------------------------------------------------
+
+def test_record_skill_outcome_success(monkeypatch, tmp_path):
+    """Recording a success increments success count and updates success_rate."""
+    _setup_workspace(monkeypatch, tmp_path)
+    with patch("skills._skill_stats_path", return_value=tmp_path / "skill-stats.jsonl"):
+        skill = _make_skill("stat tracker")
+        save_skill(skill)
+        record_skill_outcome(skill.id, success=True)
+        stats = get_skill_stats(skill.id)
+        assert stats is not None
+        assert stats.successes == 1
+        assert stats.total_uses == 1
+        assert stats.success_rate == 1.0
+
+
+def test_record_skill_outcome_failure(monkeypatch, tmp_path):
+    """Recording a failure decrements success_rate."""
+    _setup_workspace(monkeypatch, tmp_path)
+    with patch("skills._skill_stats_path", return_value=tmp_path / "skill-stats.jsonl"):
+        skill = _make_skill("failure tracker")
+        save_skill(skill)
+        record_skill_outcome(skill.id, success=True)
+        record_skill_outcome(skill.id, success=False)
+        stats = get_skill_stats(skill.id)
+        assert stats is not None
+        assert stats.failures == 1
+        assert stats.total_uses == 2
+        assert stats.success_rate == 0.5
+
+
+def test_get_skill_stats_unknown(monkeypatch, tmp_path):
+    """get_skill_stats returns None for unknown skill_id."""
+    _setup_workspace(monkeypatch, tmp_path)
+    with patch("skills._skill_stats_path", return_value=tmp_path / "skill-stats.jsonl"):
+        result = get_skill_stats("nonexistent_skill_id_xyz")
+        assert result is None
+
+
+def test_get_skills_needing_escalation(monkeypatch, tmp_path):
+    """get_skills_needing_escalation filters by threshold."""
+    _setup_workspace(monkeypatch, tmp_path)
+    with patch("skills._skill_stats_path", return_value=tmp_path / "skill-stats.jsonl"):
+        skill_good = _make_skill("good skill")
+        skill_good.id = "skgood01"
+        skill_bad = _make_skill("bad skill")
+        skill_bad.id = "skbad001"
+        save_skill(skill_good)
+        save_skill(skill_bad)
+
+        # Good skill: 8 success, 2 failures → rate = 0.8
+        for _ in range(8):
+            record_skill_outcome(skill_good.id, success=True)
+        for _ in range(2):
+            record_skill_outcome(skill_good.id, success=False)
+
+        # Bad skill: 1 success, 9 failures → rate = 0.1
+        record_skill_outcome(skill_bad.id, success=True)
+        for _ in range(9):
+            record_skill_outcome(skill_bad.id, success=False)
+
+        escalated = get_skills_needing_escalation()
+        ids = [s.skill_id for s in escalated]
+        assert skill_bad.id in ids
+        assert skill_good.id not in ids
+
+
+def test_escalation_threshold_constant():
+    """ESCALATION_THRESHOLD is 0.4."""
+    assert ESCALATION_THRESHOLD == 0.4
+
+
+def test_record_skill_outcome_needs_escalation_flag(monkeypatch, tmp_path):
+    """needs_escalation flag set when success_rate < ESCALATION_THRESHOLD."""
+    _setup_workspace(monkeypatch, tmp_path)
+    with patch("skills._skill_stats_path", return_value=tmp_path / "skill-stats.jsonl"):
+        skill = _make_skill("escalation flag test")
+        skill.id = "skesc001"
+        save_skill(skill)
+
+        # 3 failures out of 3 → rate = 0.0
+        for _ in range(3):
+            record_skill_outcome(skill.id, success=False)
+        stats = get_skill_stats(skill.id)
+        assert stats is not None
+        assert stats.needs_escalation is True
+
+
+# ---------------------------------------------------------------------------
+# Phase 14: Structured three-section markdown format
+# ---------------------------------------------------------------------------
+
+def test_parse_skill_sections_all(monkeypatch, tmp_path):
+    """Parses all three sections correctly."""
+    _setup_workspace(monkeypatch, tmp_path)
+    markdown = """## Spec
+This skill does research.
+
+## Behavior
+- Step 1: gather data
+- Step 2: analyze
+
+## Guardrails
+- Do not exceed 10 requests per minute
+"""
+    sections = parse_skill_sections(markdown)
+    assert "This skill does research" in sections["spec"]
+    assert "Step 1" in sections["behavior"]
+    assert "10 requests" in sections["guardrails"]
+
+
+def test_parse_skill_sections_partial(monkeypatch, tmp_path):
+    """Tolerates missing Guardrails section — returns empty string."""
+    _setup_workspace(monkeypatch, tmp_path)
+    markdown = """## Spec
+Does something useful.
+
+## Behavior
+Execute the steps.
+"""
+    sections = parse_skill_sections(markdown)
+    assert "Does something useful" in sections["spec"]
+    assert "Execute" in sections["behavior"]
+    assert sections["guardrails"] == ""
+
+
+def test_parse_skill_sections_no_sections(monkeypatch, tmp_path):
+    """No section headers → whole content treated as spec."""
+    _setup_workspace(monkeypatch, tmp_path)
+    markdown = "This is just plain text with no section markers."
+    sections = parse_skill_sections(markdown)
+    assert "plain text" in sections["spec"]
+    assert sections["behavior"] == ""
+    assert sections["guardrails"] == ""
+
+
+def test_parse_skill_sections_empty(monkeypatch, tmp_path):
+    """Empty markdown → all empty strings."""
+    _setup_workspace(monkeypatch, tmp_path)
+    sections = parse_skill_sections("")
+    assert sections == {"spec": "", "behavior": "", "guardrails": ""}
+
+
+def test_render_skill_markdown(monkeypatch, tmp_path):
+    """render_skill_markdown output contains ## Spec and ## Behavior."""
+    _setup_workspace(monkeypatch, tmp_path)
+    skill = _make_skill("render test skill")
+    md = render_skill_markdown(skill)
+    assert "## Spec" in md
+    assert "## Behavior" in md
+    assert "## Guardrails" in md
+    assert "render test skill" in md
+
+
+def test_update_skill_section(monkeypatch, tmp_path):
+    """update_skill_section returns new Skill with updated section."""
+    _setup_workspace(monkeypatch, tmp_path)
+    skill = _make_skill("section update test")
+    new_skill = update_skill_section(skill, "spec", "New spec content here.")
+    # Should be a new object
+    assert new_skill is not skill
+    sections = parse_skill_sections(new_skill.description)
+    assert "New spec content here" in sections["spec"]
+
+
+def test_update_skill_section_guardrails(monkeypatch, tmp_path):
+    """update_skill_section works for guardrails section."""
+    _setup_workspace(monkeypatch, tmp_path)
+    skill = _make_skill("guardrails test")
+    new_skill = update_skill_section(skill, "guardrails", "Never exceed 5 retries.")
+    sections = parse_skill_sections(new_skill.description)
+    assert "Never exceed" in sections["guardrails"]
+
+
+def test_update_skill_section_invalid_raises(monkeypatch, tmp_path):
+    """update_skill_section raises ValueError for invalid section name."""
+    _setup_workspace(monkeypatch, tmp_path)
+    skill = _make_skill("invalid section test")
+    with pytest.raises(ValueError):
+        update_skill_section(skill, "invalid_section", "content")
+
+
+# ---------------------------------------------------------------------------
+# Phase 14: Hash-based poisoning defense
+# ---------------------------------------------------------------------------
+
+def test_compute_skill_hash(monkeypatch, tmp_path):
+    """compute_skill_hash returns a non-empty hex string."""
+    _setup_workspace(monkeypatch, tmp_path)
+    skill = _make_skill("hash test skill")
+    h = compute_skill_hash(skill)
+    assert isinstance(h, str)
+    assert len(h) > 0
+    # Should be a hex string (SHA256 = 64 chars)
+    assert len(h) == 64
+
+
+def test_verify_skill_hash_pass(monkeypatch, tmp_path):
+    """Same content → verify_skill_hash returns True."""
+    _setup_workspace(monkeypatch, tmp_path)
+    skill = _make_skill("hash verify pass")
+    h = compute_skill_hash(skill)
+    assert verify_skill_hash(skill, h) is True
+
+
+def test_verify_skill_hash_fail(monkeypatch, tmp_path):
+    """Modified content → verify_skill_hash returns False."""
+    _setup_workspace(monkeypatch, tmp_path)
+    skill = _make_skill("hash verify fail")
+    h = compute_skill_hash(skill)
+    # Modify the skill name (content changes)
+    skill.name = "tampered name that is different"
+    assert verify_skill_hash(skill, h) is False
+
+
+def test_save_skill_stores_hash(monkeypatch, tmp_path):
+    """save_skill computes and stores content_hash."""
+    _setup_workspace(monkeypatch, tmp_path)
+    skill = _make_skill("hash storage test")
+    skill.content_hash = ""  # Ensure it starts empty
+    save_skill(skill)
+    loaded = [s for s in load_skills() if s.id == skill.id][0]
+    assert loaded.content_hash != ""
+    assert len(loaded.content_hash) == 64
+
+
+def test_load_skills_warns_on_hash_mismatch(monkeypatch, tmp_path, caplog):
+    """Corrupted skill file → warning logged, skill still loads."""
+    import logging
+    _setup_workspace(monkeypatch, tmp_path)
+
+    # Save a skill normally first
+    skill = _make_skill("hash mismatch test")
+    save_skill(skill)
+
+    # Resolve the actual skills file path via the module function
+    from skills import _skills_path
+    skills_file = _skills_path()
+    assert skills_file.exists(), f"Skills file not found at {skills_file}"
+
+    content = skills_file.read_text()
+    saved_hash = skill.content_hash
+    assert saved_hash, "Skill hash should be computed on save"
+
+    # Replace the hash with a bad value
+    corrupted = content.replace(saved_hash, "a" * 64)
+    skills_file.write_text(corrupted)
+
+    # Load with caplog to capture warnings
+    with caplog.at_level(logging.WARNING, logger="skills"):
+        loaded = load_skills()
+
+    # Skill should still load (graceful degradation)
+    ids = [s.id for s in loaded]
+    assert skill.id in ids
+
+    # Warning should have been emitted
+    warning_found = any("mismatch" in r.message.lower() or "hash" in r.message.lower()
+                        for r in caplog.records)
+    assert warning_found, f"Expected hash mismatch warning, got: {[r.message for r in caplog.records]}"
+
+
+# ---------------------------------------------------------------------------
+# Phase 14: Unit-test gate — generate_skill_tests and run_skill_tests
+# ---------------------------------------------------------------------------
+
+def test_generate_skill_tests_heuristic(monkeypatch, tmp_path):
+    """No adapter → heuristic returns SkillTestCases."""
+    _setup_workspace(monkeypatch, tmp_path)
+    with patch("skills._skill_tests_path", return_value=tmp_path / "skill-tests.jsonl"):
+        skill = _make_skill("heuristic test gen")
+        tests = generate_skill_tests(skill, failure_examples=["step 1 failed"], adapter=None)
+        assert isinstance(tests, list)
+        assert len(tests) >= 1
+        assert all(isinstance(t, SkillTestCase) for t in tests)
+        assert all(t.skill_id == skill.id for t in tests)
+
+
+def test_generate_skill_tests_mock_adapter(monkeypatch, tmp_path):
+    """LLM returns valid test JSON → SkillTestCases created."""
+    _setup_workspace(monkeypatch, tmp_path)
+    with patch("skills._skill_tests_path", return_value=tmp_path / "skill-tests.jsonl"):
+        skill = _make_skill("adapter test gen")
+        tests = generate_skill_tests(
+            skill,
+            failure_examples=["api call failed"],
+            adapter=_SkillTestMockAdapter(),
+        )
+        assert len(tests) >= 1
+        assert all(isinstance(t, SkillTestCase) for t in tests)
+        assert any("research" in " ".join(t.expected_keywords) for t in tests)
+
+
+def test_generate_skill_tests_saves_to_file(monkeypatch, tmp_path):
+    """generate_skill_tests saves to skill-tests.jsonl."""
+    _setup_workspace(monkeypatch, tmp_path)
+    tests_path = tmp_path / "skill-tests.jsonl"
+    with patch("skills._skill_tests_path", return_value=tests_path):
+        skill = _make_skill("save tests test")
+        generate_skill_tests(skill, failure_examples=["failed"], adapter=None)
+        assert tests_path.exists()
+        lines = [l for l in tests_path.read_text().splitlines() if l.strip()]
+        assert len(lines) >= 1
+
+
+def test_run_skill_tests_dry_run(monkeypatch, tmp_path):
+    """dry_run mode: all tests pass regardless."""
+    _setup_workspace(monkeypatch, tmp_path)
+    skill = _make_skill("dry run test")
+    tests = [
+        SkillTestCase(
+            skill_id=skill.id,
+            input_description="do something",
+            expected_keywords=["impossible_keyword_xyz"],
+            derived_from_failure="test",
+        )
+    ]
+    passed, total = run_skill_tests(skill, tests, adapter=None, dry_run=True)
+    assert passed == total
+    assert total == 1
+
+
+def test_run_skill_tests_no_adapter(monkeypatch, tmp_path):
+    """No adapter → all pass (dry_run equivalent)."""
+    _setup_workspace(monkeypatch, tmp_path)
+    skill = _make_skill("no adapter test")
+    tests = [
+        SkillTestCase(
+            skill_id=skill.id,
+            input_description="do something",
+            expected_keywords=["result"],
+            derived_from_failure="test",
+        )
+    ]
+    passed, total = run_skill_tests(skill, tests, adapter=None)
+    assert passed == total
+
+
+def test_run_skill_tests_empty(monkeypatch, tmp_path):
+    """Empty tests list → (0, 0)."""
+    _setup_workspace(monkeypatch, tmp_path)
+    skill = _make_skill("empty tests")
+    passed, total = run_skill_tests(skill, [], adapter=None)
+    assert passed == 0
+    assert total == 0
+
+
+def test_run_skill_tests_with_passing_adapter(monkeypatch, tmp_path):
+    """Adapter returns output with expected keyword → test passes."""
+    _setup_workspace(monkeypatch, tmp_path)
+    skill = _make_skill("passing adapter test")
+    tests = [
+        SkillTestCase(
+            skill_id=skill.id,
+            input_description="research something",
+            expected_keywords=["research", "result"],
+            derived_from_failure="test",
+        )
+    ]
+    passed, total = run_skill_tests(skill, tests, adapter=_SkillRunMockAdapter(), dry_run=False)
+    assert total == 1
+    assert passed == 1
+
+
+def test_run_skill_tests_with_failing_adapter(monkeypatch, tmp_path):
+    """Adapter returns output without expected keyword → test fails."""
+    _setup_workspace(monkeypatch, tmp_path)
+    skill = _make_skill("failing adapter test")
+    tests = [
+        SkillTestCase(
+            skill_id=skill.id,
+            input_description="do the research",
+            expected_keywords=["research", "result", "complete"],
+            derived_from_failure="test",
+        )
+    ]
+    passed, total = run_skill_tests(skill, tests, adapter=_SkillRunFailAdapter(), dry_run=False)
+    assert total == 1
+    assert passed == 0
+
+
+# ---------------------------------------------------------------------------
+# Phase 14: validate_skill_mutation
+# ---------------------------------------------------------------------------
+
+def test_validate_skill_mutation_no_tests(monkeypatch, tmp_path):
+    """No existing tests → generates them, runs (dry_run), not blocked."""
+    _setup_workspace(monkeypatch, tmp_path)
+    with patch("skills._skill_tests_path", return_value=tmp_path / "skill-tests.jsonl"):
+        with patch("skills._skill_stats_path", return_value=tmp_path / "skill-stats.jsonl"):
+            skill = _make_skill("mutation no tests")
+            mutated = _make_skill("mutation no tests")
+            mutated.description = "Updated description for mutation."
+            result = validate_skill_mutation(skill, mutated, adapter=None)
+            assert isinstance(result, SkillMutationResult)
+            # No adapter → dry_run → not blocked
+            assert result.blocked is False
+            assert result.skill_id == skill.id
+
+
+def test_validate_skill_mutation_blocked(monkeypatch, tmp_path):
+    """Failed tests → blocked=True."""
+    _setup_workspace(monkeypatch, tmp_path)
+    with patch("skills._skill_tests_path", return_value=tmp_path / "skill-tests.jsonl"):
+        with patch("skills._skill_stats_path", return_value=tmp_path / "skill-stats.jsonl"):
+            skill = _make_skill("mutation blocked test")
+            mutated = _make_skill("mutation blocked test")
+            mutated.description = "Completely different."
+
+            # Pre-create tests with impossible keywords
+            pre_tests = [
+                SkillTestCase(
+                    skill_id=skill.id,
+                    input_description="test input",
+                    expected_keywords=["IMPOSSIBLE_KEYWORD_ZYZZYVA_XYZ"],
+                    derived_from_failure="pre-made",
+                )
+            ]
+            # Save the tests so validate_skill_mutation loads them
+            from skills import _save_skill_tests
+            with patch("skills._skill_tests_path", return_value=tmp_path / "skill-tests.jsonl"):
+                _save_skill_tests(pre_tests)
+
+            # Use an adapter that returns output without the impossible keyword
+            result = validate_skill_mutation(skill, mutated, adapter=_SkillRunFailAdapter())
+            assert isinstance(result, SkillMutationResult)
+            assert result.blocked is True
+            assert result.block_reason
+
+
+def test_validate_skill_mutation_passes(monkeypatch, tmp_path):
+    """Tests pass → blocked=False."""
+    _setup_workspace(monkeypatch, tmp_path)
+    with patch("skills._skill_tests_path", return_value=tmp_path / "skill-tests.jsonl"):
+        with patch("skills._skill_stats_path", return_value=tmp_path / "skill-stats.jsonl"):
+            skill = _make_skill("mutation passes test")
+            mutated = _make_skill("mutation passes test")
+
+            # Pre-create tests with keywords that the mock adapter will satisfy
+            pre_tests = [
+                SkillTestCase(
+                    skill_id=skill.id,
+                    input_description="research something",
+                    expected_keywords=["research", "result"],
+                    derived_from_failure="pre-made",
+                )
+            ]
+            from skills import _save_skill_tests
+            with patch("skills._skill_tests_path", return_value=tmp_path / "skill-tests.jsonl"):
+                _save_skill_tests(pre_tests)
+
+            result = validate_skill_mutation(skill, mutated, adapter=_SkillRunMockAdapter())
+            assert isinstance(result, SkillMutationResult)
+            assert result.blocked is False
+
+
+def test_validate_skill_mutation_returns_correct_type(monkeypatch, tmp_path):
+    """validate_skill_mutation always returns SkillMutationResult."""
+    _setup_workspace(monkeypatch, tmp_path)
+    with patch("skills._skill_tests_path", return_value=tmp_path / "skill-tests.jsonl"):
+        with patch("skills._skill_stats_path", return_value=tmp_path / "skill-stats.jsonl"):
+            skill = _make_skill("type check test")
+            mutated = _make_skill("type check test")
+            result = validate_skill_mutation(skill, mutated)
+            assert isinstance(result, SkillMutationResult)
+            assert hasattr(result, "tests_run")
+            assert hasattr(result, "tests_passed")
+            assert hasattr(result, "blocked")
+            assert hasattr(result, "block_reason")

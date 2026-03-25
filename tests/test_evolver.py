@@ -454,3 +454,123 @@ def test_receive_inspector_tickets_empty_list():
         count = receive_inspector_tickets([])
     assert count == 0
     mock_save.assert_not_called()
+
+
+# ===========================================================================
+# Phase 14 tests: apply_suggestion skill_pattern test gate
+# ===========================================================================
+
+from unittest.mock import MagicMock
+
+
+def _make_skill_pattern_suggestion(
+    suggestion_id="gate-test-00",
+    target="my-skill",
+    suggestion="Updated behavior description",
+    applied=False,
+):
+    """Create a skill_pattern suggestion dict."""
+    return {
+        "suggestion_id": suggestion_id,
+        "category": "skill_pattern",
+        "target": target,
+        "suggestion": suggestion,
+        "failure_pattern": "skill keeps failing",
+        "confidence": 0.7,
+        "outcomes_analyzed": 5,
+        "generated_at": "2026-03-25T00:00:00+00:00",
+        "applied": applied,
+    }
+
+
+def _write_suggestion(path, suggestion_dict):
+    """Write a suggestion dict to a jsonl file."""
+    import json as _json
+    with path.open("w", encoding="utf-8") as f:
+        f.write(_json.dumps(suggestion_dict) + "\n")
+
+
+def test_apply_suggestion_skill_pattern_gate_blocked(tmp_path):
+    """skill_pattern suggestion where mutation fails test gate → status=gate_blocked."""
+    from unittest.mock import patch as _patch
+    import json as _json
+
+    sugg = _make_skill_pattern_suggestion()
+    suggestions_path = tmp_path / "suggestions.jsonl"
+    _write_suggestion(suggestions_path, sugg)
+
+    # Create a mock gate result that says blocked=True
+    mock_gate_result = {"blocked": True, "block_reason": "Tests failed: 2/2 tests blocked"}
+
+    with _patch("evolver._suggestions_path", return_value=suggestions_path):
+        with _patch("evolver._run_skill_test_gate", return_value=mock_gate_result):
+            found = apply_suggestion("gate-test-00")
+
+    assert found is True
+    lines = [_json.loads(l) for l in suggestions_path.read_text().splitlines() if l.strip()]
+    assert len(lines) == 1
+    updated = lines[0]
+    assert updated["applied"] is False
+    assert updated.get("status") == "gate_blocked"
+    assert "block_reason" in updated
+
+
+def test_apply_suggestion_skill_pattern_gate_passes(tmp_path):
+    """skill_pattern suggestion where mutation passes test gate → status=applied."""
+    from unittest.mock import patch as _patch
+    import json as _json
+
+    sugg = _make_skill_pattern_suggestion(suggestion_id="gate-pass-00")
+    suggestions_path = tmp_path / "suggestions.jsonl"
+    _write_suggestion(suggestions_path, sugg)
+
+    # Create a mock gate result that says not blocked
+    mock_gate_result = {"blocked": False, "block_reason": ""}
+
+    with _patch("evolver._suggestions_path", return_value=suggestions_path):
+        with _patch("evolver._run_skill_test_gate", return_value=mock_gate_result):
+            found = apply_suggestion("gate-pass-00")
+
+    assert found is True
+    lines = [_json.loads(l) for l in suggestions_path.read_text().splitlines() if l.strip()]
+    assert len(lines) == 1
+    updated = lines[0]
+    assert updated["applied"] is True
+    # "status" key should not be "gate_blocked"
+    assert updated.get("status") != "gate_blocked"
+
+
+def test_apply_suggestion_non_skill_pattern_not_gated(tmp_path):
+    """Non-skill_pattern suggestions apply directly without test gate."""
+    from unittest.mock import patch as _patch
+    import json as _json
+
+    sugg = {
+        "suggestion_id": "no-gate-00",
+        "category": "prompt_tweak",
+        "target": "all",
+        "suggestion": "Be more concise",
+        "failure_pattern": "drift",
+        "confidence": 0.8,
+        "outcomes_analyzed": 5,
+        "generated_at": "2026-03-25T00:00:00+00:00",
+        "applied": False,
+    }
+    suggestions_path = tmp_path / "suggestions.jsonl"
+    _write_suggestion(suggestions_path, sugg)
+
+    gate_called = []
+
+    def fake_gate(d):
+        gate_called.append(d)
+        return {"blocked": True, "block_reason": "should not be called"}
+
+    with _patch("evolver._suggestions_path", return_value=suggestions_path):
+        with _patch("evolver._run_skill_test_gate", side_effect=fake_gate):
+            found = apply_suggestion("no-gate-00")
+
+    # Gate should NOT have been called for prompt_tweak
+    assert len(gate_called) == 0
+    assert found is True
+    lines = [_json.loads(l) for l in suggestions_path.read_text().splitlines() if l.strip()]
+    assert lines[0]["applied"] is True

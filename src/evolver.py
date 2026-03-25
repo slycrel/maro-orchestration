@@ -42,6 +42,11 @@ try:
 except ImportError:  # pragma: no cover
     build_adapter = None  # type: ignore[assignment]
 
+try:
+    from skills import validate_skill_mutation
+except ImportError:  # pragma: no cover
+    validate_skill_mutation = None  # type: ignore[assignment]
+
 
 # ---------------------------------------------------------------------------
 # Data model
@@ -164,6 +169,10 @@ def list_pending_suggestions(limit: int = 20) -> List[Suggestion]:
 def apply_suggestion(suggestion_id: str) -> bool:
     """Mark a suggestion as applied=True by rewriting suggestions.jsonl.
 
+    Phase 14: For suggestions with category == "skill_pattern", runs the
+    unit-test gate via validate_skill_mutation() before applying. If the gate
+    blocks the mutation, sets status to "gate_blocked" instead of "applied".
+
     Returns True if the suggestion was found and updated, False otherwise.
     """
     p = _suggestions_path()
@@ -181,8 +190,19 @@ def apply_suggestion(suggestion_id: str) -> bool:
         try:
             d = json.loads(line)
             if d.get("suggestion_id") == suggestion_id:
-                d["applied"] = True
                 found = True
+                # Phase 14: skill_pattern suggestions go through test gate
+                if d.get("category") == "skill_pattern" and validate_skill_mutation is not None:
+                    gate_result = _run_skill_test_gate(d)
+                    if gate_result is not None and gate_result.get("blocked"):
+                        d["applied"] = False
+                        d["status"] = "gate_blocked"
+                        d["block_reason"] = gate_result.get("block_reason", "test gate blocked mutation")
+                    else:
+                        d["applied"] = True
+                        d.pop("status", None)
+                else:
+                    d["applied"] = True
             new_lines.append(json.dumps(d))
         except Exception:
             new_lines.append(line)
@@ -191,6 +211,58 @@ def apply_suggestion(suggestion_id: str) -> bool:
         p.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
 
     return found
+
+
+def _run_skill_test_gate(suggestion_dict: dict) -> Optional[dict]:
+    """Run the unit-test gate for a skill_pattern suggestion.
+
+    Returns dict with {blocked: bool, block_reason: str} or None if gate
+    cannot be run (e.g., skill not found).
+    """
+    if validate_skill_mutation is None:
+        return None
+
+    try:
+        from skills import load_skills, Skill
+        import uuid as _uuid
+        from datetime import datetime, timezone
+
+        skills = load_skills()
+        suggestion_text = suggestion_dict.get("suggestion", "")
+        target = suggestion_dict.get("target", "")
+
+        # Try to find the target skill
+        original_skill = None
+        for sk in skills:
+            if sk.name == target or sk.id == target:
+                original_skill = sk
+                break
+
+        if original_skill is None:
+            # Cannot validate — allow through
+            return {"blocked": False, "block_reason": ""}
+
+        # Create a mutated skill from the suggestion
+        mutated_skill = Skill(
+            id=original_skill.id,
+            name=original_skill.name,
+            description=suggestion_text[:500] if suggestion_text else original_skill.description,
+            trigger_patterns=original_skill.trigger_patterns,
+            steps_template=original_skill.steps_template,
+            source_loop_ids=original_skill.source_loop_ids,
+            created_at=original_skill.created_at,
+            use_count=original_skill.use_count,
+            success_rate=original_skill.success_rate,
+        )
+
+        # Run the gate (heuristic path — no adapter in apply_suggestion)
+        result = validate_skill_mutation(original_skill, mutated_skill, adapter=None)
+        return {"blocked": result.blocked, "block_reason": result.block_reason}
+
+    except Exception as e:
+        if __debug__:
+            print(f"[evolver] _run_skill_test_gate failed: {e}", file=sys.stderr)
+        return None
 
 
 # ---------------------------------------------------------------------------
