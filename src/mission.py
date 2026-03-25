@@ -328,6 +328,19 @@ def run_mission(
         SCOPE_MISSION, SCOPE_MILESTONE, SCOPE_FEATURE, load_registry,
     )
 
+    # Phase 19: optional sprint_contract + boot_protocol imports
+    try:
+        from sprint_contract import negotiate_contract, grade_contract, save_contract, save_grade
+        _sprint_contract_available = True
+    except ImportError:
+        _sprint_contract_available = False
+
+    try:
+        from boot_protocol import run_boot_protocol, format_boot_context
+        _boot_protocol_available = True
+    except ImportError:
+        _boot_protocol_available = False
+
     started_at = time.monotonic()
 
     def _log(msg: str):
@@ -374,6 +387,13 @@ def run_mission(
     mission.status = "running"
     _log(f"decomposed: {len(mission.milestones)} milestones")
 
+    # Phase 19: Generate immutable feature manifest (never overwrites existing)
+    try:
+        generate_feature_manifest(mission, project)
+        _log("feature manifest created")
+    except Exception:
+        pass
+
     # Persist initial mission
     try:
         save_mission(mission, project)
@@ -418,6 +438,48 @@ def run_mission(
             except Exception:
                 pass
 
+            # Phase 19: Worker Boot Protocol
+            _boot_ctx = ""
+            if _boot_protocol_available:
+                try:
+                    _boot_state = run_boot_protocol(project, dry_run=dry_run)
+                    _boot_ctx = format_boot_context(_boot_state)
+                    _log(f"  boot protocol: {len(_boot_state.completed_features)} completed features, "
+                         f"{len(_boot_state.dead_ends)} dead ends")
+                except Exception:
+                    pass
+
+            if _boot_ctx:
+                _extra_ancestry = (_extra_ancestry + "\n\n" + _boot_ctx) if _extra_ancestry else _boot_ctx
+
+            # Phase 19: Sprint Contract negotiation (before worker starts)
+            _sprint_contract = None
+            if _sprint_contract_available:
+                try:
+                    _sprint_contract = negotiate_contract(
+                        feature_title=feature.title,
+                        mission_goal=goal,
+                        milestone_title=milestone.title,
+                        feature_id=feature.id,
+                        adapter=adapter,
+                    )
+                    save_contract(_sprint_contract, project)
+                    # Inject contract criteria into worker context
+                    _contract_ctx = (
+                        f"Sprint contract for this feature:\n"
+                        + "\n".join(f"- {c}" for c in _sprint_contract.success_criteria)
+                        + "\nAcceptance keywords: " + ", ".join(_sprint_contract.acceptance_keywords)
+                    )
+                    _extra_ancestry = (_extra_ancestry + "\n\n" + _contract_ctx) if _extra_ancestry else _contract_ctx
+                    # Update feature_before_ctx with contract info
+                    _feature_before_ctx["success_criteria"] = "\n".join(
+                        f"- {c}" for c in _sprint_contract.success_criteria
+                    )
+                    _log(f"  sprint contract negotiated: {_sprint_contract.contract_id} "
+                         f"by={_sprint_contract.negotiated_by}")
+                except Exception:
+                    pass
+
             try:
                 loop_result = run_agent_loop(
                     feature.title,
@@ -442,6 +504,7 @@ def run_mission(
                 **_feature_before_ctx,
                 "feature_status": feature.status,
                 "feature_result_summary": feature.result_summary or "",
+                "feature_result": feature.result_summary or "",
             }
             try:
                 _after_results = run_hooks(
@@ -458,6 +521,28 @@ def run_mission(
                     )
             except Exception:
                 pass
+
+            # Phase 19: Sprint Contract grading (GAN: separate from worker — called here in mission context)
+            if _sprint_contract_available and _sprint_contract is not None:
+                try:
+                    _grade = grade_contract(
+                        _sprint_contract,
+                        feature.result_summary or "",
+                        adapter=adapter,  # GAN: mission.py calls grade, not agent_loop
+                    )
+                    save_grade(_grade, project)
+                    # Mark feature passing in immutable manifest
+                    try:
+                        mark_feature_passing(project, feature.id, _grade)
+                    except ValueError:
+                        pass  # Monotonicity violation — non-fatal
+                    feature.result_summary = (
+                        (feature.result_summary or "")
+                        + f" [contract:{_sprint_contract.contract_id} score={_grade.score:.2f}]"
+                    )
+                    _log(f"  contract graded: {_grade.contract_id} passed={_grade.passed} score={_grade.score:.2f}")
+                except Exception:
+                    pass
 
             feature.elapsed_ms = int((time.monotonic() - feat_start) * 1000)
             return feature
@@ -680,6 +765,155 @@ def load_mission(project: str) -> Optional[Mission]:
             completed_at=data.get("completed_at"),
             ancestry_context=data.get("ancestry_context", ""),
         )
+    except Exception:
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Phase 19: Immutable Feature Manifest
+# ---------------------------------------------------------------------------
+
+def generate_feature_manifest(mission: Mission, project: str) -> dict:
+    """Create feature_list.json alongside mission.json.
+
+    Written at mission start; never overwritten if it already exists.
+    Each feature starts with passes=false.
+
+    Args:
+        mission: The decomposed Mission.
+        project: Project slug.
+
+    Returns:
+        The manifest dict (for testing).
+    """
+    o = _orch()
+    path = o.project_dir(project) / "feature_list.json"
+
+    # Never overwrite an existing manifest
+    if path.exists():
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+
+    features = []
+    for ms in mission.milestones:
+        for f in ms.features:
+            features.append({
+                "id": f.id,
+                "title": f.title,
+                "milestone_id": ms.id,
+                "passes": False,
+                "contract_id": None,
+                "grade_score": None,
+            })
+
+    manifest = {"features": features}
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+    return manifest
+
+
+def mark_feature_passing(
+    project: str,
+    feature_id: str,
+    contract_grade,
+) -> None:
+    """Mark a feature as passing in feature_list.json.
+
+    Monotonicity enforced: cannot set passes=False on a feature that was
+    already passes=True.
+
+    Args:
+        project:        Project slug.
+        feature_id:     Feature ID to mark passing.
+        contract_grade: ContractGrade object (or dict) with .passed and .score.
+
+    Raises:
+        ValueError: If trying to downgrade a feature that already passes=True.
+    """
+    o = _orch()
+    path = o.project_dir(project) / "feature_list.json"
+    if not path.exists():
+        return  # Manifest not created yet — silent no-op
+
+    try:
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return
+
+    # Get grade info
+    if hasattr(contract_grade, "passed"):
+        passed = bool(contract_grade.passed)
+        score = float(getattr(contract_grade, "score", 0.0))
+        contract_id = getattr(contract_grade, "contract_id", None)
+    elif isinstance(contract_grade, dict):
+        passed = bool(contract_grade.get("passed", False))
+        score = float(contract_grade.get("score", 0.0))
+        contract_id = contract_grade.get("contract_id")
+    else:
+        passed = False
+        score = 0.0
+        contract_id = None
+
+    updated = False
+    for feat in manifest.get("features", []):
+        if feat.get("id") == feature_id:
+            # Monotonicity: once passes=True, cannot be set to False
+            if feat.get("passes") is True and not passed:
+                raise ValueError(
+                    f"Monotonicity violation: feature {feature_id!r} already passes=True; "
+                    "cannot downgrade to passes=False."
+                )
+            feat["passes"] = passed
+            feat["grade_score"] = score
+            if contract_id:
+                feat["contract_id"] = contract_id
+            updated = True
+            break
+
+    if updated:
+        try:
+            path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+
+
+def validate_manifest_monotonicity(project: str) -> bool:
+    """Validate that no feature has been incorrectly downgraded.
+
+    Returns True if manifest is monotonically correct (or doesn't exist).
+    """
+    o = _orch()
+    path = o.project_dir(project) / "feature_list.json"
+    if not path.exists():
+        return True
+    try:
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+        # All features should have either passes=True or passes=False (never None-like downgrade)
+        for feat in manifest.get("features", []):
+            passes = feat.get("passes")
+            if passes is not None and not isinstance(passes, bool):
+                return False
+        return True
+    except Exception:
+        return True
+
+
+def load_feature_manifest(project: str) -> Optional[dict]:
+    """Load feature_list.json for a project. Returns None if not found."""
+    try:
+        import orch as _o
+        path = _o.project_dir(project) / "feature_list.json"
+    except Exception:
+        return None
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return None
 

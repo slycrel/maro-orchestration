@@ -1,4 +1,6 @@
 """Phase 8: Quality + Cost tracking for Poe orchestration.
+Phase 19 adds pass@k / pass^k metrics and skill promotion eligibility.
+
 
 Computes per-goal success rate, time-to-completion, and estimated cost.
 Builds on memory/outcomes.jsonl data.
@@ -17,6 +19,11 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from memory import load_outcomes, Outcome
+
+try:
+    from skills import get_all_skill_stats
+except ImportError:  # pragma: no cover
+    get_all_skill_stats = None  # type: ignore[assignment]
 
 
 # ---------------------------------------------------------------------------
@@ -210,6 +217,85 @@ def identify_expensive_patterns(outcomes: List[Outcome]) -> List[str]:
 # ---------------------------------------------------------------------------
 # Human-readable report
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Phase 19: pass@k / pass^k metrics
+# ---------------------------------------------------------------------------
+
+def compute_pass_at_k(skill_id: str, k: int = 3) -> float:
+    """Compute pass@k: P(at least 1 success in k attempts).
+
+    Formula: pass@k = 1 - (1 - success_rate)^k
+
+    Args:
+        skill_id: Skill ID to look up in skill-stats.jsonl.
+        k:        Number of attempts.
+
+    Returns:
+        Float 0.0–1.0. Returns 0.0 if skill not found.
+    """
+    success_rate = _get_skill_success_rate(skill_id)
+    if success_rate is None:
+        return 0.0
+    result = 1.0 - (1.0 - success_rate) ** k
+    return max(0.0, min(1.0, result))
+
+
+def compute_pass_all_k(skill_id: str, k: int = 3) -> float:
+    """Compute pass^k: P(all k attempts succeed).
+
+    Formula: pass^k = success_rate^k
+
+    Args:
+        skill_id: Skill ID to look up in skill-stats.jsonl.
+        k:        Number of attempts.
+
+    Returns:
+        Float 0.0–1.0. Returns 0.0 if skill not found.
+    """
+    success_rate = _get_skill_success_rate(skill_id)
+    if success_rate is None:
+        return 0.0
+    result = success_rate ** k
+    return max(0.0, min(1.0, result))
+
+
+def check_skill_promotion_eligibility(
+    skill_id: str,
+    k: int = 3,
+    threshold: float = 0.7,
+) -> bool:
+    """Check if a skill is eligible for promotion from provisional to established.
+
+    A skill is eligible if pass^k >= threshold.
+    Default: pass^3 >= 0.7 means the skill must succeed 70%+ of the time
+    consistently across 3 consecutive attempts.
+
+    Args:
+        skill_id:   Skill ID.
+        k:          Number of consecutive attempts.
+        threshold:  Minimum pass^k score required (0.0–1.0).
+
+    Returns:
+        True if eligible for promotion.
+    """
+    pass_all = compute_pass_all_k(skill_id, k=k)
+    return pass_all >= threshold
+
+
+def _get_skill_success_rate(skill_id: str) -> Optional[float]:
+    """Internal: get success_rate for a skill from skill-stats.jsonl."""
+    if get_all_skill_stats is None:
+        return None
+    try:
+        all_stats = get_all_skill_stats()
+        for s in all_stats:
+            if s.skill_id == skill_id:
+                return float(s.success_rate)
+    except Exception:
+        pass
+    return None
+
 
 def format_metrics_report(metrics: SystemMetrics) -> str:
     """Format metrics as a human-readable text report."""

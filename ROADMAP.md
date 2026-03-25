@@ -310,20 +310,20 @@ Inspired by Memento-Skills arXiv:2603.18743: one-step offline RL, multi-positive
 
 ---
 
-## Phase 19: Harness Patterns — Sprint Contracts + Agent Separation
+## Phase 19: Harness Patterns — Sprint Contracts + Agent Separation *(COMPLETE)*
 
 **Pre-flight "done" definitions and explicit Generator/Evaluator separation.** Inspired by Anthropic's engineering posts on long-running agent harnesses. The core insight: define "done" before starting, not after. No Worker should grade its own output.
 
-- [ ] **Sprint contracts:** before any Feature Worker starts, it negotiates a sprint contract with Inspector — explicit testable success criteria for this feature. Inspector grades against the contract, not a vague "did it work?" Wired into the hook system as a mandatory pre-feature hook.
-- [ ] **Worker boot protocol:** when a Worker session starts (or restarts), mandatory boot sequence: read progress log → check git state → run existing tests → verify environment → then pick next task. Prevents re-doing completed work or declaring premature success. Implemented as an Initializer hook.
-- [ ] **Immutable feature manifest:** missions generate a `feature_list.json` alongside `mission.json`. Each feature has `passes: false` initially. Workers can only flip to `true` — never remove or downgrade. Inspector validates monotonicity.
-- [ ] **Inspector skepticism calibration:** add few-shot examples (good/mediocre/bad session outcomes) to Inspector's evaluation prompts. Tune toward skepticism. Inspector should catch "confidently mediocre" output — not just obviously broken work.
-- [ ] **`pass@k` / `pass^k` metrics in skill test gate:** `pass@k` for exploratory skill capabilities, `pass^k` for regression/stability gates. Skills must pass `pass^3` before promoting from provisional to established tier.
-- [ ] **Running failure docs:** Workers write to a persistent `DEAD_ENDS.md` in the project directory — approaches tried and failed, in-progress at session end. Inspector and meta-evolver mine this directly. Prevents duplicate effort across sessions.
-- [ ] **GAN principle enforced:** no Worker context ever evaluates its own output. Skill QA and skill execution are separate invocations. Inspector is always a different context from the worker that produced the output being evaluated.
-- [ ] **March of Nines defense:** measure per-step success rate in agent_loop; when `step_success_rate^steps` < 0.5, alert Inspector. Track in metrics.py.
+- [x] **Sprint contracts:** before any Feature Worker starts, it negotiates a sprint contract with Inspector — explicit testable success criteria for this feature. Inspector grades against the contract, not a vague "did it work?" Wired into the hook system as a mandatory pre-feature hook. (`src/sprint_contract.py`)
+- [x] **Worker boot protocol:** when a Worker session starts (or restarts), mandatory boot sequence: read progress log → check git state → run existing tests → verify environment → then pick next task. Prevents re-doing completed work or declaring premature success. Implemented as an Initializer hook. (`src/boot_protocol.py`)
+- [x] **Immutable feature manifest:** missions generate a `feature_list.json` alongside `mission.json`. Each feature has `passes: false` initially. Workers can only flip to `true` — never remove or downgrade. Inspector validates monotonicity. (`src/mission.py: generate_feature_manifest, mark_feature_passing, validate_manifest_monotonicity`)
+- [x] **Inspector skepticism calibration:** add few-shot examples (good/mediocre/bad session outcomes) to Inspector's evaluation prompts. Tune toward skepticism. Inspector should catch "confidently mediocre" output — not just obviously broken work. (`src/inspector.py: SKEPTICISM_EXAMPLES, _build_skeptic_prompt_prefix`)
+- [x] **`pass@k` / `pass^k` metrics in skill test gate:** `pass@k` for exploratory skill capabilities, `pass^k` for regression/stability gates. Skills must pass `pass^3` before promoting from provisional to established tier. (`src/metrics.py: compute_pass_at_k, compute_pass_all_k, check_skill_promotion_eligibility`)
+- [x] **Running failure docs:** Workers write to a persistent `DEAD_ENDS.md` in the project directory — approaches tried and failed, in-progress at session end. Inspector and meta-evolver mine this directly. Prevents duplicate effort across sessions. (`src/agent_loop.py` + `src/boot_protocol.py: update_dead_ends`)
+- [x] **GAN principle enforced:** no Worker context ever evaluates its own output. Skill QA and skill execution are separate invocations. Inspector is always a different context from the worker that produced the output being evaluated. (grade_contract called from `mission.py`, never from `agent_loop.py`)
+- [x] **March of Nines defense:** measure per-step success rate in agent_loop; when `step_success_rate^steps` < 0.5, alert Inspector. Track in metrics.py. (`src/agent_loop.py: march_of_nines_alert` in `LoopResult`)
 
-**Artifact:** sprint contract negotiation in hooks, Worker boot protocol, `feature_list.json`, Inspector calibration, `DEAD_ENDS.md`
+**Artifact:** `src/sprint_contract.py`, `src/boot_protocol.py`, `feature_list.json` manifest, Inspector skepticism calibration, `DEAD_ENDS.md` per project, `poe-contract`/`poe-boot`/`poe-manifest`/`poe-metrics pass-k` CLI commands, 61 new tests (913 total, 5 skipped)
 
 ---
 

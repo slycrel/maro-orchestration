@@ -564,6 +564,52 @@ Score guide: 0.9+ = fully aligned, 0.7 = mostly, 0.5 = partial, 0.3 = minimal, 0
 gaps: specific ways work diverged from intent. Empty list if fully aligned.
 """
 
+# ---------------------------------------------------------------------------
+# Phase 19: Inspector Skepticism Calibration — few-shot examples
+# ---------------------------------------------------------------------------
+
+SKEPTICISM_EXAMPLES = [
+    {
+        "work_summary": "Completed the research task. Found some information about the topic.",
+        "goal": "Research winning Polymarket trading strategies with citations",
+        "label": "MEDIOCRE",
+        "reason": "Vague output. No citations. 'Some information' is not a deliverable.",
+    },
+    {
+        "work_summary": "Error: LLM call failed. Unable to complete step.",
+        "goal": "Build a data pipeline",
+        "label": "FAILED",
+        "reason": "Technical failure with no recovery attempted.",
+    },
+    {
+        "work_summary": (
+            "Analyzed 12 wallets, identified 3 profitable patterns: momentum trading (avg +23%), "
+            "arbitrage (avg +18%), liquidity provision (avg +12%). "
+            "Full breakdown in artifacts/research-findings.md."
+        ),
+        "goal": "Research winning Polymarket trading strategies with citations",
+        "label": "GOOD",
+        "reason": "Specific, quantified, cites artifacts, directly addresses the goal.",
+    },
+]
+
+
+def _build_skeptic_prompt_prefix() -> str:
+    """Build few-shot example prefix for Inspector prompts."""
+    lines = [
+        "Before you evaluate, here are calibration examples (MEDIOCRE/FAILED/GOOD):",
+        "",
+    ]
+    for ex in SKEPTICISM_EXAMPLES:
+        lines.append(f"Example [{ex['label']}]:")
+        lines.append(f"  Goal: {ex['goal']}")
+        lines.append(f"  Work: {ex['work_summary'][:120]}")
+        lines.append(f"  Verdict: {ex['label']} — {ex['reason']}")
+        lines.append("")
+    lines.append("Now evaluate the actual session below with the same skepticism:")
+    lines.append("")
+    return "\n".join(lines)
+
 
 def check_alignment(session: Any, adapter=None) -> AlignmentResult:
     """Check whether completed work accomplished the stated goal.
@@ -607,9 +653,12 @@ def check_alignment(session: Any, adapter=None) -> AlignmentResult:
                 gaps=[f"Unclear completion: status={status}"],
             )
 
-    # LLM-as-judge (MODEL_MID per spec)
+    # LLM-as-judge (MODEL_MID per spec) with Phase 19 skepticism calibration
+    # Prepend few-shot examples so Inspector is calibrated against "confidently mediocre" output
+    _skeptic_prefix = _build_skeptic_prompt_prefix()
     user_msg = (
-        f"Goal: {goal}\n\nWork summary: {summary[:600]}\n\n"
+        _skeptic_prefix
+        + f"Goal: {goal}\n\nWork summary: {summary[:600]}\n\n"
         "Did the work accomplish the goal? Return JSON only."
     )
     try:

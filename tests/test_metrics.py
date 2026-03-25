@@ -306,3 +306,158 @@ def test_cli_poe_metrics_json(capsys):
     data = json.loads(out)
     assert "total_goals" in data
     assert data["total_goals"] == 3
+
+
+# ---------------------------------------------------------------------------
+# Phase 19: pass@k / pass^k metrics tests
+# ---------------------------------------------------------------------------
+
+from metrics import (
+    compute_pass_at_k,
+    compute_pass_all_k,
+    check_skill_promotion_eligibility,
+    _get_skill_success_rate,
+)
+from unittest.mock import MagicMock
+
+
+def _make_skill_stats(skill_id: str, success_rate: float):
+    """Create a mock SkillStats object."""
+    mock = MagicMock()
+    mock.skill_id = skill_id
+    mock.success_rate = success_rate
+    return mock
+
+
+def test_compute_pass_at_k_perfect(monkeypatch):
+    """pass@k with success_rate=1.0 → 1.0 regardless of k."""
+    monkeypatch.setattr(
+        "metrics.get_all_skill_stats",
+        lambda: [_make_skill_stats("skill-a", 1.0)]
+    )
+    assert compute_pass_at_k("skill-a", k=3) == pytest.approx(1.0)
+    assert compute_pass_at_k("skill-a", k=1) == pytest.approx(1.0)
+
+
+def test_compute_pass_at_k_zero(monkeypatch):
+    """pass@k with success_rate=0.0 → 0.0."""
+    monkeypatch.setattr(
+        "metrics.get_all_skill_stats",
+        lambda: [_make_skill_stats("skill-b", 0.0)]
+    )
+    assert compute_pass_at_k("skill-b", k=3) == pytest.approx(0.0)
+
+
+def test_compute_pass_at_k_formula(monkeypatch):
+    """pass@k formula: 1 - (1 - p)^k."""
+    monkeypatch.setattr(
+        "metrics.get_all_skill_stats",
+        lambda: [_make_skill_stats("skill-c", 0.5)]
+    )
+    # 1 - (1 - 0.5)^3 = 1 - 0.125 = 0.875
+    result = compute_pass_at_k("skill-c", k=3)
+    assert result == pytest.approx(0.875)
+
+
+def test_compute_pass_at_k_unknown_skill(monkeypatch):
+    """pass@k for unknown skill → 0.0."""
+    monkeypatch.setattr("metrics.get_all_skill_stats", lambda: [])
+    assert compute_pass_at_k("unknown-skill", k=3) == pytest.approx(0.0)
+
+
+def test_compute_pass_all_k_perfect(monkeypatch):
+    """pass^k with success_rate=1.0 → 1.0."""
+    monkeypatch.setattr(
+        "metrics.get_all_skill_stats",
+        lambda: [_make_skill_stats("skill-d", 1.0)]
+    )
+    assert compute_pass_all_k("skill-d", k=3) == pytest.approx(1.0)
+
+
+def test_compute_pass_all_k_formula(monkeypatch):
+    """pass^k formula: p^k."""
+    monkeypatch.setattr(
+        "metrics.get_all_skill_stats",
+        lambda: [_make_skill_stats("skill-e", 0.8)]
+    )
+    # 0.8^3 = 0.512
+    result = compute_pass_all_k("skill-e", k=3)
+    assert result == pytest.approx(0.512)
+
+
+def test_compute_pass_all_k_zero(monkeypatch):
+    """pass^k with success_rate=0.0 → 0.0."""
+    monkeypatch.setattr(
+        "metrics.get_all_skill_stats",
+        lambda: [_make_skill_stats("skill-f", 0.0)]
+    )
+    assert compute_pass_all_k("skill-f", k=3) == pytest.approx(0.0)
+
+
+def test_compute_pass_all_k_unknown_skill(monkeypatch):
+    """pass^k for unknown skill → 0.0."""
+    monkeypatch.setattr("metrics.get_all_skill_stats", lambda: [])
+    assert compute_pass_all_k("unknown-skill", k=3) == pytest.approx(0.0)
+
+
+def test_check_skill_promotion_eligibility_pass(monkeypatch):
+    """Skill with high success rate → eligible for promotion."""
+    monkeypatch.setattr(
+        "metrics.get_all_skill_stats",
+        lambda: [_make_skill_stats("skill-g", 0.95)]
+    )
+    # pass^3 = 0.95^3 = 0.857 >= 0.7 threshold
+    assert check_skill_promotion_eligibility("skill-g", k=3, threshold=0.7) is True
+
+
+def test_check_skill_promotion_eligibility_fail(monkeypatch):
+    """Skill with low success rate → not eligible."""
+    monkeypatch.setattr(
+        "metrics.get_all_skill_stats",
+        lambda: [_make_skill_stats("skill-h", 0.5)]
+    )
+    # pass^3 = 0.5^3 = 0.125 < 0.7 threshold
+    assert check_skill_promotion_eligibility("skill-h", k=3, threshold=0.7) is False
+
+
+def test_check_skill_promotion_threshold_boundary(monkeypatch):
+    """Skill well above threshold → eligible; well below → not eligible."""
+    # Use a clearly above-threshold rate: 0.95^3 = 0.857 >= 0.7
+    monkeypatch.setattr(
+        "metrics.get_all_skill_stats",
+        lambda: [_make_skill_stats("skill-i", 0.95)]
+    )
+    result = check_skill_promotion_eligibility("skill-i", k=3, threshold=0.7)
+    assert result is True
+
+    # Use a clearly below-threshold rate: 0.6^3 = 0.216 < 0.7
+    monkeypatch.setattr(
+        "metrics.get_all_skill_stats",
+        lambda: [_make_skill_stats("skill-j", 0.6)]
+    )
+    result_low = check_skill_promotion_eligibility("skill-j", k=3, threshold=0.7)
+    assert result_low is False
+
+
+def test_pass_at_k_range(monkeypatch):
+    """pass@k always returns a float in [0.0, 1.0]."""
+    for rate in [0.0, 0.25, 0.5, 0.75, 1.0]:
+        monkeypatch.setattr(
+            "metrics.get_all_skill_stats",
+            lambda r=rate: [_make_skill_stats("skill-range", r)]
+        )
+        for k in [1, 2, 3, 5, 10]:
+            result = compute_pass_at_k("skill-range", k=k)
+            assert 0.0 <= result <= 1.0
+
+
+def test_pass_all_k_range(monkeypatch):
+    """pass^k always returns a float in [0.0, 1.0]."""
+    for rate in [0.0, 0.25, 0.5, 0.75, 1.0]:
+        monkeypatch.setattr(
+            "metrics.get_all_skill_stats",
+            lambda r=rate: [_make_skill_stats("skill-range2", r)]
+        )
+        for k in [1, 2, 3, 5, 10]:
+            result = compute_pass_all_k("skill-range2", k=k)
+            assert 0.0 <= result <= 1.0

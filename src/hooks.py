@@ -143,6 +143,34 @@ BUILTIN_HOOKS: List[Hook] = [
         fire_on="before",
         enabled=False,
     ),
+    # Phase 19: Worker Boot Protocol hook
+    Hook(
+        id="builtin-worker-boot",
+        name="Worker Boot Protocol",
+        scope=SCOPE_FEATURE,
+        hook_type=TYPE_NOTIFICATION,
+        prompt_template=(
+            "Boot context for feature '{feature_title}': {boot_context}"
+        ),
+        fire_on="before",
+        enabled=False,
+    ),
+    # Phase 19: Sprint Contract grading hook
+    Hook(
+        id="builtin-sprint-contract",
+        name="Sprint Contract",
+        scope=SCOPE_FEATURE,
+        hook_type=TYPE_REVIEWER,
+        prompt_template=(
+            "Grade this feature result against sprint contract criteria:\n"
+            "Criteria: {success_criteria}\n"
+            "Result: {feature_result}\n"
+            "Reply PASS: [summary] or BLOCK: [what's missing]"
+        ),
+        model="cheap",
+        fire_on="after",
+        enabled=False,
+    ),
 ]
 
 # Index by id for fast lookup

@@ -522,3 +522,141 @@ def test_cli_poe_mission_status(monkeypatch, tmp_path, capsys):
     assert rc == 0
     out = capsys.readouterr().out
     assert "status-cli-test" in out
+
+
+# ---------------------------------------------------------------------------
+# Phase 19: Immutable Feature Manifest tests
+# ---------------------------------------------------------------------------
+
+def test_generate_feature_manifest_created(monkeypatch, tmp_path):
+    """generate_feature_manifest creates feature_list.json."""
+    _setup_workspace(monkeypatch, tmp_path)
+    import json
+    from mission import generate_feature_manifest
+    mission = decompose_mission("Build a test pipeline", _DecomposeMockAdapter())
+    mission.project = "manifest-test"
+    orch.ensure_project("manifest-test", "test")
+    manifest = generate_feature_manifest(mission, "manifest-test")
+    assert "features" in manifest
+    assert len(manifest["features"]) > 0
+    # feature_list.json should be written
+    path = orch.project_dir("manifest-test") / "feature_list.json"
+    assert path.exists()
+    data = json.loads(path.read_text())
+    assert len(data["features"]) == len(manifest["features"])
+
+
+def test_generate_feature_manifest_not_overwritten(monkeypatch, tmp_path):
+    """generate_feature_manifest never overwrites an existing manifest."""
+    _setup_workspace(monkeypatch, tmp_path)
+    import json
+    from mission import generate_feature_manifest
+    mission = decompose_mission("Build a pipeline", _DecomposeMockAdapter())
+    mission.project = "manifest-idempotent"
+    orch.ensure_project("manifest-idempotent", "test")
+    # First call
+    manifest1 = generate_feature_manifest(mission, "manifest-idempotent")
+    # Modify mission and call again — should not overwrite
+    mission.milestones[0].features[0].title = "CHANGED TITLE"
+    manifest2 = generate_feature_manifest(mission, "manifest-idempotent")
+    # Both should return the same first-written data
+    assert manifest1["features"][0]["title"] == manifest2["features"][0]["title"]
+
+
+def test_mark_feature_passing(monkeypatch, tmp_path):
+    """mark_feature_passing sets passes=true for a feature."""
+    _setup_workspace(monkeypatch, tmp_path)
+    import json
+    from mission import generate_feature_manifest, mark_feature_passing
+    from sprint_contract import ContractGrade
+    from datetime import datetime, timezone
+
+    mission = decompose_mission("Build something", _DecomposeMockAdapter())
+    mission.project = "mark-test"
+    orch.ensure_project("mark-test", "test")
+    generate_feature_manifest(mission, "mark-test")
+
+    feature = mission.milestones[0].features[0]
+    grade = ContractGrade(
+        contract_id="test0001",
+        feature_id=feature.id,
+        passed=True,
+        criteria_results=[],
+        score=0.9,
+        feedback="Good work",
+        graded_at=datetime.now(timezone.utc).isoformat(),
+    )
+    mark_feature_passing("mark-test", feature.id, grade)
+
+    path = orch.project_dir("mark-test") / "feature_list.json"
+    data = json.loads(path.read_text())
+    marked = next((f for f in data["features"] if f["id"] == feature.id), None)
+    assert marked is not None
+    assert marked["passes"] is True
+    assert marked["grade_score"] == pytest.approx(0.9)
+
+
+def test_mark_feature_monotonicity(monkeypatch, tmp_path):
+    """Cannot downgrade a feature from passes=True to passes=False."""
+    _setup_workspace(monkeypatch, tmp_path)
+    from mission import generate_feature_manifest, mark_feature_passing
+    from sprint_contract import ContractGrade
+    from datetime import datetime, timezone
+
+    mission = decompose_mission("Build something", _DecomposeMockAdapter())
+    mission.project = "monotone-test"
+    orch.ensure_project("monotone-test", "test")
+    generate_feature_manifest(mission, "monotone-test")
+
+    feature = mission.milestones[0].features[0]
+    # Mark as passing
+    pass_grade = ContractGrade(
+        contract_id="pass0001",
+        feature_id=feature.id,
+        passed=True,
+        criteria_results=[],
+        score=1.0,
+        feedback="All passed",
+        graded_at=datetime.now(timezone.utc).isoformat(),
+    )
+    mark_feature_passing("monotone-test", feature.id, pass_grade)
+
+    # Try to mark as failing — should raise ValueError
+    fail_grade = ContractGrade(
+        contract_id="fail0001",
+        feature_id=feature.id,
+        passed=False,
+        criteria_results=[],
+        score=0.0,
+        feedback="Failed",
+        graded_at=datetime.now(timezone.utc).isoformat(),
+    )
+    with pytest.raises(ValueError, match="[Mm]onoton"):
+        mark_feature_passing("monotone-test", feature.id, fail_grade)
+
+
+def test_validate_manifest_monotonicity_pass(monkeypatch, tmp_path):
+    """validate_manifest_monotonicity returns True for valid manifest."""
+    _setup_workspace(monkeypatch, tmp_path)
+    from mission import generate_feature_manifest, validate_manifest_monotonicity
+    mission = decompose_mission("Test", _DecomposeMockAdapter())
+    mission.project = "valid-monotone"
+    orch.ensure_project("valid-monotone", "test")
+    generate_feature_manifest(mission, "valid-monotone")
+    assert validate_manifest_monotonicity("valid-monotone") is True
+
+
+def test_run_mission_creates_feature_manifest(monkeypatch, tmp_path):
+    """run_mission creates feature_list.json."""
+    _setup_workspace(monkeypatch, tmp_path)
+    import json
+    result = run_mission(
+        "test feature manifest creation",
+        project="manifest-mission-test",
+        dry_run=True,
+    )
+    path = orch.project_dir("manifest-mission-test") / "feature_list.json"
+    assert path.exists()
+    data = json.loads(path.read_text())
+    assert "features" in data
+    assert len(data["features"]) > 0

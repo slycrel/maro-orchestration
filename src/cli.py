@@ -267,8 +267,14 @@ def main(argv: list[str] | None = None) -> int:
     p_poe_evolver.add_argument("--verbose", "-v", action="store_true", default=True)
     p_poe_evolver.add_argument("--format", choices=["text", "json"], default="text")
 
-    p_poe_metrics = sub.add_parser("poe-metrics", help="Show quality + cost metrics (Phase 8)")
+    p_poe_metrics = sub.add_parser("poe-metrics", help="Show quality + cost metrics (Phase 8/19)")
     p_poe_metrics.add_argument("--format", choices=["text", "json"], default="text")
+    poe_metrics_sub = p_poe_metrics.add_subparsers(dest="metrics_cmd")
+
+    p_pass_k = poe_metrics_sub.add_parser("pass-k", help="Show pass@k and pass^k for a skill (Phase 19)")
+    p_pass_k.add_argument("skill_id", help="Skill ID to compute pass@k for")
+    p_pass_k.add_argument("--k", type=int, default=3, help="Number of attempts (default: 3)")
+    p_pass_k.add_argument("--format", choices=["text", "json"], default="text")
 
     p_poe_eval = sub.add_parser("poe-eval", help="Run evaluation benchmarks (Phase 8)")
     p_poe_eval.add_argument("--dry-run", action="store_true", help="Return canned results without LLM calls")
@@ -436,6 +442,33 @@ def main(argv: list[str] | None = None) -> int:
     p_router_route.add_argument("goal", nargs="+", help="Goal text to route")
     p_router_route.add_argument("--top-k", type=int, default=3, help="Number of results (default: 3)")
     p_router_route.add_argument("--format", choices=["text", "json"], default="text")
+
+    # Phase 19: Sprint contract, boot protocol, manifest CLI commands
+    p_poe_contract = sub.add_parser("poe-contract", help="Sprint contract negotiation + grading (Phase 19)")
+    contract_sub = p_poe_contract.add_subparsers(dest="contract_cmd", required=True)
+
+    p_contract_negotiate = contract_sub.add_parser("negotiate", help="Generate a sprint contract for a feature")
+    p_contract_negotiate.add_argument("feature_title", nargs="+", help="Feature title")
+    p_contract_negotiate.add_argument("--goal", default="", help="Mission goal")
+    p_contract_negotiate.add_argument("--milestone", default="", help="Milestone title")
+    p_contract_negotiate.add_argument("--dry-run", action="store_true", help="Use heuristic (no LLM)")
+    p_contract_negotiate.add_argument("--format", choices=["text", "json"], default="text")
+
+    p_contract_grade = contract_sub.add_parser("grade", help="Grade work result against a contract")
+    p_contract_grade.add_argument("contract_id", help="Contract ID to grade against")
+    p_contract_grade.add_argument("--result", default="", help="Work result text to grade")
+    p_contract_grade.add_argument("--project", default="", help="Project slug (to load contract)")
+    p_contract_grade.add_argument("--dry-run", action="store_true", help="Use heuristic grading (no LLM)")
+    p_contract_grade.add_argument("--format", choices=["text", "json"], default="text")
+
+    p_poe_boot = sub.add_parser("poe-boot", help="Run Worker boot protocol for a project (Phase 19)")
+    p_poe_boot.add_argument("project", help="Project slug")
+    p_poe_boot.add_argument("--dry-run", action="store_true", help="Return minimal BootState without filesystem reads")
+    p_poe_boot.add_argument("--format", choices=["text", "json"], default="text")
+
+    p_poe_manifest = sub.add_parser("poe-manifest", help="Show feature manifest status for a project (Phase 19)")
+    p_poe_manifest.add_argument("project", help="Project slug")
+    p_poe_manifest.add_argument("--format", choices=["text", "json"], default="text")
 
     p_plan = sub.add_parser("plan", help="Split a goal into NEXT tasks")
     p_plan.add_argument("project")
@@ -1059,12 +1092,127 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.cmd == "poe-metrics":
         from metrics import get_metrics, format_metrics_report
+        # Phase 19: pass-k subcommand
+        if getattr(args, "metrics_cmd", None) == "pass-k":
+            from metrics import compute_pass_at_k, compute_pass_all_k, check_skill_promotion_eligibility
+            skill_id = args.skill_id
+            k = args.k
+            pass_at_k = compute_pass_at_k(skill_id, k=k)
+            pass_all_k = compute_pass_all_k(skill_id, k=k)
+            eligible = check_skill_promotion_eligibility(skill_id, k=k)
+            if getattr(args, "format", "text") == "json":
+                print(json.dumps({
+                    "skill_id": skill_id,
+                    "k": k,
+                    "pass_at_k": pass_at_k,
+                    "pass_all_k": pass_all_k,
+                    "promotion_eligible": eligible,
+                }, indent=2))
+            else:
+                print(f"skill_id={skill_id} k={k}")
+                print(f"  pass@k  = {pass_at_k:.4f}  (P at least 1 success in {k} attempts)")
+                print(f"  pass^k  = {pass_all_k:.4f}  (P all {k} attempts succeed)")
+                print(f"  promotion_eligible = {eligible}")
+            return 0
         metrics = get_metrics()
         if args.format == "json":
             from dataclasses import asdict
             print(json.dumps(asdict(metrics), indent=2))
         else:
             print(format_metrics_report(metrics))
+        return 0
+
+    # ---------------------------------------------------------------------------
+    # Phase 19: Sprint contract, boot protocol, manifest CLI handlers
+    # ---------------------------------------------------------------------------
+
+    if args.cmd == "poe-contract":
+        from sprint_contract import negotiate_contract, grade_contract, load_contracts
+        from dataclasses import asdict
+
+        if args.contract_cmd == "negotiate":
+            feature_title = " ".join(args.feature_title)
+            contract = negotiate_contract(
+                feature_title=feature_title,
+                mission_goal=args.goal,
+                milestone_title=args.milestone,
+                adapter=None,  # heuristic when --dry-run; real adapter otherwise
+            )
+            if getattr(args, "format", "text") == "json":
+                print(json.dumps(contract.to_dict(), indent=2))
+            else:
+                print(f"contract_id={contract.contract_id} negotiated_by={contract.negotiated_by}")
+                print(f"feature={contract.feature_title!r}")
+                print("success_criteria:")
+                for c in contract.success_criteria:
+                    print(f"  - {c}")
+                print(f"acceptance_keywords: {', '.join(contract.acceptance_keywords)}")
+            return 0
+
+        if args.contract_cmd == "grade":
+            project = args.project or ""
+            contract_id = args.contract_id
+            work_result = args.result
+
+            # Try to load the contract from project contracts
+            target_contract = None
+            if project:
+                contracts = load_contracts(project)
+                for c in contracts:
+                    if c.contract_id == contract_id:
+                        target_contract = c
+                        break
+
+            if target_contract is None:
+                # Can't grade without the original contract; show error
+                return fail("E_CONTRACT_NOT_FOUND", f"No contract {contract_id!r} in project {project!r}")
+
+            grade = grade_contract(target_contract, work_result, adapter=None)
+            if getattr(args, "format", "text") == "json":
+                print(json.dumps(grade.to_dict(), indent=2))
+            else:
+                print(f"contract_id={grade.contract_id} passed={grade.passed} score={grade.score:.3f}")
+                print(f"feedback: {grade.feedback}")
+                for cr in grade.criteria_results:
+                    status = "PASS" if cr["passed"] else "FAIL"
+                    print(f"  [{status}] {cr['criterion']}: {cr['evidence'][:80]}")
+            return 0
+
+    if args.cmd == "poe-boot":
+        from boot_protocol import run_boot_protocol, format_boot_context
+        state = run_boot_protocol(args.project, dry_run=args.dry_run)
+        if getattr(args, "format", "text") == "json":
+            print(json.dumps({
+                "project": state.project,
+                "loop_id": state.loop_id,
+                "completed_features": state.completed_features,
+                "git_head": state.git_head,
+                "existing_tests_pass": state.existing_tests_pass,
+                "dead_ends": state.dead_ends,
+                "boot_timestamp": state.boot_timestamp,
+                "boot_method": state.boot_method,
+            }, indent=2))
+        else:
+            print(format_boot_context(state))
+        return 0
+
+    if args.cmd == "poe-manifest":
+        from mission import load_feature_manifest
+        manifest = load_feature_manifest(args.project)
+        if manifest is None:
+            print(f"project={args.project} manifest=(none)")
+            return 1
+        features = manifest.get("features", [])
+        if getattr(args, "format", "text") == "json":
+            print(json.dumps(manifest, indent=2))
+        else:
+            total = len(features)
+            passing = sum(1 for f in features if f.get("passes"))
+            print(f"project={args.project} features={total} passing={passing}/{total}")
+            for f in features:
+                passes = "PASS" if f.get("passes") else "pending"
+                score_str = f" score={f['grade_score']:.2f}" if f.get("grade_score") is not None else ""
+                print(f"  [{passes:7s}]{score_str} [{f['id']}] {f['title']}")
         return 0
 
     if args.cmd == "poe-eval":

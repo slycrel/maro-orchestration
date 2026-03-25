@@ -67,6 +67,7 @@ class LoopResult:
     elapsed_ms: int = 0
     log_path: Optional[str] = None
     interrupts_applied: int = 0
+    march_of_nines_alert: bool = False    # Phase 19: chain_success < 0.5 alert
 
     def summary(self) -> str:
         done = sum(1 for s in self.steps if s.status == "done")
@@ -80,6 +81,7 @@ class LoopResult:
             f"tokens={self.total_tokens_in}in+{self.total_tokens_out}out",
             f"elapsed_ms={self.elapsed_ms}",
             *([ f"interrupts_applied={self.interrupts_applied}"] if self.interrupts_applied else []),
+            *([ "march_of_nines_alert=True"] if self.march_of_nines_alert else []),
         ]
         if self.stuck_reason:
             lines.append(f"stuck_reason={self.stuck_reason!r}")
@@ -306,6 +308,14 @@ def run_agent_loop(
     remaining_indices: List[int] = list(step_indices)
     step_idx = 0  # global step counter (for numbering, includes injected steps)
     _next_step_injected_context: str = ""  # Phase 11: injected context from previous step's hooks
+    _march_of_nines_alert = False  # Phase 19: cumulative step success rate alert
+
+    # Phase 19: lazy import for dead_ends and boot_protocol
+    try:
+        from boot_protocol import update_dead_ends as _update_dead_ends
+        _dead_ends_available = True
+    except ImportError:
+        _dead_ends_available = False
 
     while remaining_steps:
         if iteration >= max_iterations:
@@ -427,6 +437,37 @@ def run_agent_loop(
             elapsed_ms=step_elapsed,
         ))
 
+        # Phase 19: write dead end to DEAD_ENDS.md when step is blocked
+        if step_status == "blocked" and _dead_ends_available:
+            try:
+                _reason = outcome.get("stuck_reason", f"step blocked: {step_text[:80]}")
+                _attempted = outcome.get("result", "")[:200]
+                _dead_end_text = (
+                    f"Loop {loop_id} — Step: {step_text[:80]}\n"
+                    f"Reason: {_reason}\n"
+                    f"Attempted: {_attempted}"
+                )
+                _update_dead_ends(project, [_dead_end_text])
+            except Exception:
+                pass
+
+        # Phase 19: March of Nines defense — track cumulative chain success rate
+        if len(step_outcomes) >= 3:
+            try:
+                _steps_completed = sum(1 for s in step_outcomes if s.status == "done")
+                _steps_attempted = len(step_outcomes)
+                _cumulative_rate = _steps_completed / _steps_attempted
+                _chain_success = _cumulative_rate ** _steps_attempted
+                if _chain_success < 0.5:
+                    _march_of_nines_alert = True
+                    o.append_decision(project, [
+                        f"[loop:{loop_id}] March of Nines alert: "
+                        f"chain_success={_chain_success:.3f} "
+                        f"({_steps_completed}/{_steps_attempted} steps done)"
+                    ])
+            except Exception:
+                pass
+
         if loop_status == "stuck":
             break
 
@@ -508,6 +549,7 @@ def run_agent_loop(
         total_tokens_out=total_tokens_out,
         elapsed_ms=elapsed_total,
         log_path=log_path,
+        march_of_nines_alert=_march_of_nines_alert,
     )
 
     if verbose:
