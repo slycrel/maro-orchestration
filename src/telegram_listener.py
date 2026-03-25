@@ -231,7 +231,27 @@ def _dispatch_slash(
         except Exception as e:
             return f"Goal map failed: {e}"
 
-    elif cmd in ("director", "research", "build", "ops"):
+    elif cmd == "research":
+        # Route /research to the researcher persona (Phase 20)
+        if not args:
+            return "Usage: /research <question or goal>"
+        try:
+            from persona import PersonaRegistry, spawn_persona
+            registry = PersonaRegistry()
+            result = spawn_persona(
+                "researcher", args,
+                registry=registry,
+                dry_run=dry_run,
+                max_steps=20,
+            )
+            if result.status == "dry_run":
+                return f"[dry-run] Would spawn researcher persona for: {args[:80]}"
+            icon = "✓" if result.status == "done" else "✗"
+            return f"[{icon}] Research complete ({result.steps_taken} steps)\n\n{result.summary[:600]}"
+        except Exception as e:
+            return f"Research persona error: {e}"
+
+    elif cmd in ("director", "build", "ops"):
         # Force the director/worker path
         if not args:
             return f"Usage: /{cmd} <directive>"

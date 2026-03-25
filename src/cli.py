@@ -490,6 +490,27 @@ def main(argv: list[str] | None = None) -> int:
     p_mem_record.add_argument("--task-type", default="general")
     p_mem_record.add_argument("--outcome", choices=["done", "stuck"], default="done")
     p_mem_record.add_argument("--tier", choices=["medium", "long"], default="medium")
+    p_mem_canon = memory_sub.add_parser("canon-candidates", help="Show long-tier lessons eligible for AGENTS.md identity promotion (human review required)")
+    p_mem_canon.add_argument("--min-hits", type=int, default=10, help="Minimum times_applied (default 10)")
+    p_mem_canon.add_argument("--min-task-types", type=int, default=3, help="Minimum distinct task types seen (default 3)")
+    p_mem_canon.add_argument("--format", choices=["text", "json"], default="text")
+
+    p_poe_persona = sub.add_parser("poe-persona", help="Persona system — list, show, compose, and spawn agent personas (Phase 20)")
+    persona_sub = p_poe_persona.add_subparsers(dest="persona_cmd")
+    persona_sub.add_parser("list", help="List all available personas")
+    p_persona_show = persona_sub.add_parser("show", help="Show full spec for a persona")
+    p_persona_show.add_argument("name", help="Persona name")
+    p_persona_show.add_argument("--format", choices=["text", "json"], default="text")
+    p_persona_spawn = persona_sub.add_parser("spawn", help="Spawn a persona agent loop for a goal")
+    p_persona_spawn.add_argument("name", help="Persona name")
+    p_persona_spawn.add_argument("goal", nargs="+", help="Goal for this spawn")
+    p_persona_spawn.add_argument("--compose", nargs="*", default=None, help="Additional persona names to compose with")
+    p_persona_spawn.add_argument("--dry-run", action="store_true", help="Show what would happen without executing")
+    p_persona_spawn.add_argument("--max-steps", type=int, default=20)
+    p_persona_spawn.add_argument("--format", choices=["text", "json"], default="text")
+    p_persona_compose = persona_sub.add_parser("compose", help="Show a composed persona spec without spawning")
+    p_persona_compose.add_argument("names", nargs="+", help="Persona names to compose")
+    p_persona_compose.add_argument("--format", choices=["text", "json"], default="text")
 
     p_plan = sub.add_parser("plan", help="Split a goal into NEXT tasks")
     p_plan.add_argument("project")
@@ -1284,8 +1305,98 @@ def main(argv: list[str] | None = None) -> int:
             outcome = getattr(args, "outcome", "done")
             tl = record_tiered_lesson(args.lesson, task_type, outcome, source_goal="manual", tier=tier)
             print(f"Recorded lesson_id={tl.lesson_id} tier={tier} score={tl.score:.2f}")
+        elif memory_cmd == "canon-candidates":
+            from memory import get_canon_candidates
+            min_hits = getattr(args, "min_hits", 10)
+            min_task_types = getattr(args, "min_task_types", 3)
+            candidates = get_canon_candidates(min_hits=min_hits, min_task_types=min_task_types)
+            if getattr(args, "format", "text") == "json":
+                print(json.dumps(candidates, indent=2))
+            else:
+                if not candidates:
+                    print(f"No canon candidates (min_hits={min_hits}, min_task_types={min_task_types})")
+                else:
+                    print(f"Canon candidates ({len(candidates)}) — human review required before writing to AGENTS.md:")
+                    for c in candidates:
+                        print(f"\n  [{c['lesson_id']}] applied={c['times_applied']}x across {len(c['task_types_seen'])} task types")
+                        print(f"  Task types: {', '.join(c['task_types_seen'])}")
+                        print(f"  Lesson: {c['lesson']}")
+                        print(f"  Score={c['score']} sessions={c['sessions_validated']} recorded={c['recorded_at']}")
+                        print(f"  → {c['recommendation']}")
         else:
             print(f"Unknown poe-memory subcommand: {memory_cmd}")
+            return 1
+        return 0
+
+    if args.cmd == "poe-persona":
+        from persona import PersonaRegistry, compose_persona, spawn_persona, persona_to_dict
+        registry = PersonaRegistry()
+        persona_cmd = getattr(args, "persona_cmd", None) or "list"
+        if persona_cmd == "list":
+            names = registry.list()
+            if not names:
+                print("No personas found in personas/")
+            else:
+                print(f"Available personas ({len(names)}):")
+                for n in names:
+                    spec = registry.load(n)
+                    if spec:
+                        print(f"  {spec.name:20s} [{spec.model_tier:5s}] {spec.role}")
+                    else:
+                        print(f"  {n}")
+        elif persona_cmd == "show":
+            spec = registry.load(args.name)
+            if spec is None:
+                return fail("E_PERSONA_NOT_FOUND", f"Persona not found: {args.name!r}")
+            if getattr(args, "format", "text") == "json":
+                print(json.dumps(persona_to_dict(spec), indent=2))
+            else:
+                print(f"name:    {spec.name}")
+                print(f"role:    {spec.role}")
+                print(f"tier:    {spec.model_tier}")
+                print(f"scope:   {spec.memory_scope}")
+                print(f"style:   {spec.communication_style}")
+                print(f"composes: {spec.composes or '(none)'}")
+                print(f"hooks:   {spec.hooks or '(none)'}")
+                print(f"source:  {spec.source_file}")
+                print(f"\n--- System Prompt ---\n{spec.system_prompt[:500]}")
+        elif persona_cmd == "compose":
+            try:
+                spec = compose_persona(*args.names, registry=registry)
+            except ValueError as exc:
+                return fail("E_PERSONA_COMPOSE", str(exc))
+            if getattr(args, "format", "text") == "json":
+                print(json.dumps(persona_to_dict(spec), indent=2))
+            else:
+                print(f"Composed: {spec.name}")
+                print(f"role:     {spec.role}")
+                print(f"tier:     {spec.model_tier}")
+                print(f"scope:    {spec.memory_scope}")
+                print(f"style:    {spec.communication_style}")
+                print(f"hooks:    {spec.hooks or '(none)'}")
+                print(f"\n--- Composed System Prompt (preview) ---\n{spec.system_prompt[:600]}")
+        elif persona_cmd == "spawn":
+            goal_str = " ".join(args.goal)
+            compose_with = getattr(args, "compose", None) or None
+            dry_run = getattr(args, "dry_run", False)
+            max_steps = getattr(args, "max_steps", 20)
+            result = spawn_persona(
+                args.name, goal_str,
+                registry=registry,
+                dry_run=dry_run,
+                max_steps=max_steps,
+                compose_with=compose_with,
+            )
+            if getattr(args, "format", "text") == "json":
+                import dataclasses
+                print(json.dumps(dataclasses.asdict(result), indent=2))
+            else:
+                icon = "✓" if result.status == "done" else ("~" if result.status == "dry_run" else "✗")
+                print(f"[{icon}] persona={result.persona_name} status={result.status} steps={result.steps_taken}")
+                print(f"    {result.summary[:200]}")
+            return 0 if result.status in ("done", "dry_run") else 1
+        else:
+            print(f"Unknown poe-persona subcommand: {persona_cmd}")
             return 1
         return 0
 

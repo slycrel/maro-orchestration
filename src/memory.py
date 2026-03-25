@@ -836,14 +836,20 @@ def inject_tiered_lessons(
     max_long: int = 5,
     max_medium: int = 3,
     include_short: bool = False,
+    track_applied: bool = True,
 ) -> str:
     """Build a lessons injection string that respects tier priority.
 
     Long-tier lessons are always included (up to max_long).
     Medium-tier lessons are filtered by recency and relevance.
     Short-tier (session) items only included if include_short=True.
+
+    If track_applied=True (default), increments times_applied on each injected
+    lesson. This powers the canon-candidates pathway: lessons applied many times
+    across diverse task types become candidates for AGENTS.md identity promotion.
     """
     parts: List[str] = []
+    applied_ids: List[tuple] = []  # (lesson_id, tier)
 
     long_lessons = load_tiered_lessons(
         tier=MemoryTier.LONG, task_type=task_type, min_score=0.0, limit=max_long
@@ -853,6 +859,7 @@ def inject_tiered_lessons(
         for l in long_lessons:
             icon = "✓" if l.outcome == "done" else "✗"
             parts.append(f"- {icon} {l.lesson}")
+            applied_ids.append((l.lesson_id, MemoryTier.LONG))
 
     medium_lessons = load_tiered_lessons(
         tier=MemoryTier.MEDIUM, task_type=task_type, min_score=0.3, limit=max_medium
@@ -862,6 +869,7 @@ def inject_tiered_lessons(
         for l in medium_lessons:
             icon = "✓" if l.outcome == "done" else "✗"
             parts.append(f"- {icon} {l.lesson} [score={l.score:.2f}]")
+            applied_ids.append((l.lesson_id, MemoryTier.MEDIUM))
 
     if include_short and _SHORT_TERM:
         parts.append("### Session Context")
@@ -870,7 +878,129 @@ def inject_tiered_lessons(
 
     if not parts:
         return ""
+
+    # Track application counts for canon-candidate detection
+    if track_applied and applied_ids:
+        _increment_times_applied(applied_ids, task_type=task_type)
+
     return "## Tiered Lessons\n\n" + "\n".join(parts)
+
+
+def _increment_times_applied(
+    lesson_ids: List[tuple],
+    *,
+    task_type: str,
+) -> None:
+    """Increment times_applied for each (lesson_id, tier) pair.
+
+    Also records which task_types a lesson has been applied to, enabling
+    the canon-candidate check (task_type diversity gate).
+    """
+    for lid, tier in lesson_ids:
+        lessons = load_tiered_lessons(tier=tier, min_score=0.0)
+        target = next((l for l in lessons if l.lesson_id == lid), None)
+        if not target:
+            continue
+        target.times_applied += 1
+        # Track task_type diversity in short-term store (session-level aggregator)
+        # Persisted canon-tracking uses a separate canon_stats.jsonl
+        _record_canon_hit(lid, tier=tier, task_type=task_type)
+        _rewrite_tiered_lessons(tier=tier, lessons=lessons)
+
+
+# ---------------------------------------------------------------------------
+# Canon tracking (long → AGENTS.md identity path)
+# ---------------------------------------------------------------------------
+
+CANON_APPLY_THRESHOLD = 10   # times_applied before surfacing as candidate
+CANON_TASK_TYPE_MIN = 3      # distinct task_types before surfacing as candidate
+
+
+def _canon_stats_path() -> Path:
+    d = _memory_dir()
+    return d / "canon_stats.jsonl"
+
+
+def _record_canon_hit(lesson_id: str, *, tier: str, task_type: str) -> None:
+    """Record that lesson_id was applied to task_type. Appends to canon_stats.jsonl."""
+    path = _canon_stats_path()
+    entry = {
+        "lesson_id": lesson_id,
+        "tier": tier,
+        "task_type": task_type,
+        "at": _current_date(),
+    }
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(entry) + "\n")
+
+
+def _load_canon_stats() -> Dict[str, Dict[str, Any]]:
+    """Load aggregated canon stats keyed by lesson_id.
+
+    Returns: {lesson_id: {total_hits, task_types: set, tier}}
+    """
+    path = _canon_stats_path()
+    if not path.exists():
+        return {}
+    stats: Dict[str, Dict[str, Any]] = {}
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                e = json.loads(line)
+                lid = e["lesson_id"]
+                if lid not in stats:
+                    stats[lid] = {"total_hits": 0, "task_types": set(), "tier": e.get("tier", MemoryTier.LONG)}
+                stats[lid]["total_hits"] += 1
+                stats[lid]["task_types"].add(e.get("task_type", "general"))
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return stats
+
+
+def get_canon_candidates(
+    *,
+    min_hits: int = CANON_APPLY_THRESHOLD,
+    min_task_types: int = CANON_TASK_TYPE_MIN,
+) -> List[Dict[str, Any]]:
+    """Return long-tier lessons eligible for promotion to AGENTS.md identity.
+
+    Eligibility: times_applied >= min_hits AND distinct task_types >= min_task_types.
+    Candidates are surfaced for human review — never auto-written to AGENTS.md.
+    """
+    stats = _load_canon_stats()
+    long_lessons = load_tiered_lessons(tier=MemoryTier.LONG, min_score=0.0, limit=200)
+    lesson_map = {l.lesson_id: l for l in long_lessons}
+
+    candidates = []
+    for lid, s in stats.items():
+        if s["tier"] != MemoryTier.LONG:
+            continue
+        if s["total_hits"] < min_hits:
+            continue
+        if len(s["task_types"]) < min_task_types:
+            continue
+        lesson = lesson_map.get(lid)
+        if not lesson:
+            continue
+        candidates.append({
+            "lesson_id": lid,
+            "lesson": lesson.lesson,
+            "task_type": lesson.task_type,
+            "score": round(lesson.score, 3),
+            "times_applied": s["total_hits"],
+            "task_types_seen": sorted(s["task_types"]),
+            "sessions_validated": lesson.sessions_validated,
+            "recorded_at": lesson.recorded_at[:10],
+            "recommendation": "PROMOTE TO AGENTS.md — identity-level pattern",
+        })
+
+    candidates.sort(key=lambda x: x["times_applied"], reverse=True)
+    return candidates
 
 
 # ---------------------------------------------------------------------------

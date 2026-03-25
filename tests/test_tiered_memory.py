@@ -19,6 +19,8 @@ from memory import (
     PROMOTE_MIN_SCORE,
     PROMOTE_MIN_SESSIONS,
     GC_THRESHOLD,
+    CANON_APPLY_THRESHOLD,
+    CANON_TASK_TYPE_MIN,
     # Functions
     decay_score,
     reinforce_score,
@@ -30,6 +32,9 @@ from memory import (
     run_decay_cycle,
     inject_tiered_lessons,
     memory_status,
+    get_canon_candidates,
+    _record_canon_hit,
+    _load_canon_stats,
     # Short-term
     short_set,
     short_get,
@@ -579,3 +584,115 @@ def test_promote_skill_tier_success(monkeypatch, tmp_path):
     skills = load_skills()
     promoted = next(sk for sk in skills if sk.name == "goodskill")
     assert promoted.tier == "established"
+
+
+# ---------------------------------------------------------------------------
+# Canon tracking (times_applied + canon-candidates)
+# ---------------------------------------------------------------------------
+
+def test_record_canon_hit_persists(monkeypatch, tmp_path):
+    _setup(monkeypatch, tmp_path)
+    _record_canon_hit("abc123", tier=MemoryTier.LONG, task_type="research")
+    stats = _load_canon_stats()
+    assert "abc123" in stats
+    assert stats["abc123"]["total_hits"] == 1
+    assert "research" in stats["abc123"]["task_types"]
+
+
+def test_record_canon_hit_accumulates(monkeypatch, tmp_path):
+    _setup(monkeypatch, tmp_path)
+    _record_canon_hit("lid1", tier=MemoryTier.LONG, task_type="research")
+    _record_canon_hit("lid1", tier=MemoryTier.LONG, task_type="build")
+    _record_canon_hit("lid1", tier=MemoryTier.LONG, task_type="ops")
+    stats = _load_canon_stats()
+    assert stats["lid1"]["total_hits"] == 3
+    assert len(stats["lid1"]["task_types"]) == 3
+
+
+def test_inject_tiered_lessons_increments_times_applied(monkeypatch, tmp_path):
+    _setup(monkeypatch, tmp_path)
+    record_tiered_lesson("always verify sources", "general", "done", "g1", tier=MemoryTier.LONG)
+    lessons_before = load_tiered_lessons(tier=MemoryTier.LONG)
+    assert lessons_before[0].times_applied == 0
+
+    inject_tiered_lessons("general", track_applied=True)
+
+    lessons_after = load_tiered_lessons(tier=MemoryTier.LONG)
+    assert lessons_after[0].times_applied == 1
+
+
+def test_inject_tiered_lessons_no_tracking(monkeypatch, tmp_path):
+    _setup(monkeypatch, tmp_path)
+    record_tiered_lesson("stable lesson", "general", "done", "g1", tier=MemoryTier.LONG)
+    inject_tiered_lessons("general", track_applied=False)
+    lessons = load_tiered_lessons(tier=MemoryTier.LONG)
+    assert lessons[0].times_applied == 0
+
+
+def test_get_canon_candidates_empty(monkeypatch, tmp_path):
+    _setup(monkeypatch, tmp_path)
+    candidates = get_canon_candidates(min_hits=1, min_task_types=1)
+    assert candidates == []
+
+
+def test_get_canon_candidates_below_threshold(monkeypatch, tmp_path):
+    _setup(monkeypatch, tmp_path)
+    tl = record_tiered_lesson("not yet ready", "general", "done", "g1", tier=MemoryTier.LONG)
+    # Only 2 hits, 2 task types — below default threshold (10 hits, 3 types)
+    _record_canon_hit(tl.lesson_id, tier=MemoryTier.LONG, task_type="research")
+    _record_canon_hit(tl.lesson_id, tier=MemoryTier.LONG, task_type="build")
+    candidates = get_canon_candidates(min_hits=10, min_task_types=3)
+    assert not any(c["lesson_id"] == tl.lesson_id for c in candidates)
+
+
+def test_get_canon_candidates_eligible(monkeypatch, tmp_path):
+    _setup(monkeypatch, tmp_path)
+    tl = record_tiered_lesson("lead with action, not reasoning", "general", "done", "g1", tier=MemoryTier.LONG)
+    # Simulate many hits across diverse task types
+    for task_type in ["research", "build", "ops", "general", "now"]:
+        for _ in range(3):  # 15 total hits, 5 task types
+            _record_canon_hit(tl.lesson_id, tier=MemoryTier.LONG, task_type=task_type)
+    candidates = get_canon_candidates(min_hits=10, min_task_types=3)
+    assert any(c["lesson_id"] == tl.lesson_id for c in candidates)
+    candidate = next(c for c in candidates if c["lesson_id"] == tl.lesson_id)
+    assert candidate["times_applied"] == 15
+    assert len(candidate["task_types_seen"]) == 5
+    assert "recommendation" in candidate
+
+
+def test_get_canon_candidates_only_long_tier(monkeypatch, tmp_path):
+    _setup(monkeypatch, tmp_path)
+    # Medium-tier lesson with many hits should NOT appear as canon candidate
+    tl = record_tiered_lesson("medium lesson", "general", "done", "g1", tier=MemoryTier.MEDIUM)
+    for task_type in ["research", "build", "ops", "general"]:
+        for _ in range(5):
+            _record_canon_hit(tl.lesson_id, tier=MemoryTier.MEDIUM, task_type=task_type)
+    candidates = get_canon_candidates(min_hits=10, min_task_types=3)
+    assert not any(c["lesson_id"] == tl.lesson_id for c in candidates)
+
+
+def test_get_canon_candidates_sorted_by_hits(monkeypatch, tmp_path):
+    _setup(monkeypatch, tmp_path)
+    tl1 = record_tiered_lesson("lesson one", "general", "done", "g1", tier=MemoryTier.LONG)
+    tl2 = record_tiered_lesson("lesson two different words", "general", "done", "g2", tier=MemoryTier.LONG)
+    # tl1: 20 hits; tl2: 12 hits
+    for tt in ["research", "build", "ops", "general"]:
+        for _ in range(5):
+            _record_canon_hit(tl1.lesson_id, tier=MemoryTier.LONG, task_type=tt)
+    for tt in ["research", "build", "ops", "general"]:
+        for _ in range(3):
+            _record_canon_hit(tl2.lesson_id, tier=MemoryTier.LONG, task_type=tt)
+    candidates = get_canon_candidates(min_hits=10, min_task_types=3)
+    hits = [c["times_applied"] for c in candidates]
+    assert hits == sorted(hits, reverse=True)
+
+
+def test_inject_tiered_lessons_records_canon_stats(monkeypatch, tmp_path):
+    _setup(monkeypatch, tmp_path)
+    record_tiered_lesson("canon track lesson", "research", "done", "g1", tier=MemoryTier.LONG)
+    inject_tiered_lessons("research", track_applied=True)
+    stats = _load_canon_stats()
+    assert len(stats) == 1
+    lid = list(stats.keys())[0]
+    assert stats[lid]["total_hits"] == 1
+    assert "research" in stats[lid]["task_types"]

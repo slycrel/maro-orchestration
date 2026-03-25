@@ -350,20 +350,22 @@ Deferred from Phase 15 by Jeremy's request — sandbox is functional, hardening 
 
 ---
 
-## Phase 20: Persona System — Modular, Composable Agent Identities
+## Phase 20: Persona System — Modular, Composable Agent Identities *(COMPLETE)*
 
-**Make personas a first-class extensible primitive.** Right now worker personas are flat markdown files in `personas/`. This phase makes them composable, parameterizable, and spawnable on-demand — so you can say "spin up a research assistant to dig into X" and get a tuned agent loop with its own memory slice, retrieval strategy, and communication style.
+**Personas are composable data primitives.** Compose > inherit (Jeremy + Grok confirmed). No subclassing — personas merge by combining system prompt sections, taking the union of tool_access, highest model tier, and broadest memory scope.
 
-- [ ] **Persona spec format:** YAML frontmatter + markdown body. Fields: name, role, model_tier, tool_access (allowlist), memory_scope (session/project/global), communication_style, system_prompt_template, parent_persona (for inheritance).
-- [ ] **Persona registry:** `personas/` directory scanned at startup; personas loadable by name. Built-in: `researcher`, `builder`, `ops`, `critic`, `summarizer`, `strategist`.
-- [ ] **Researcher persona (priority):** deep-topic research loop — given a question, searches multiple sources, synthesizes historical + current consensus, cites sources, returns structured findings. Runs as a Mission with its own milestone structure. Triggered by "research X" intent or `/research` Telegram command.
-- [ ] **Persona inheritance:** `critic` can extend `researcher` and add skepticism calibration; `strategist` can extend any persona with goal-alignment awareness. Avoids copy-paste of base persona logic.
-- [ ] **Spawn-on-demand:** `poe-persona spawn researcher "what are the best Polymarket trading strategies"` — creates a fresh agent loop with the researcher persona, returns results to caller.
-- [ ] **Persona memory isolation:** each spawned persona gets its own memory slice (short-tier by default, opt-in to medium). Prevents cross-contamination between unrelated research runs.
-- [ ] **Poe as persona orchestrator:** Poe (CEO layer) can spawn personas as sub-agents of a mission. Researcher persona → findings artifact → Builder persona → implementation. Chain defined in mission decomposition.
-- [ ] Wire `/research` Telegram command into researcher persona loop rather than generic NOW/AGENDA routing.
+- [x] **Persona spec format:** YAML frontmatter + markdown body (backward compatible — bare .md files work). Fields: name, role, model_tier, tool_access, memory_scope, communication_style, hooks, composes. Malformed frontmatter gracefully falls back to defaults.
+- [x] **Persona registry:** `PersonaRegistry` scans `personas/`, loads by name, caches, excludes README.md. Built-in: `researcher`, `builder`, `ops`, `critic`, `summarizer`, `strategist`.
+- [x] **Researcher persona:** YAML frontmatter added to `research-assistant-deep-synth.md`. model_tier=power, memory_scope=session. Loaded as `researcher`.
+- [x] **Composition (compose > inherit):** `compose_persona(*names)` merges specs left-to-right: system prompts concatenated (section separator), tool_access unioned (deduped), hooks unioned (deduped), highest model tier wins (power > mid > cheap), broadest memory scope wins (global > project > session), communication_style concatenated. Optional `extra_prompt` param.
+- [x] **Spawn-on-demand:** `spawn_persona(name, goal, dry_run=True|False, compose_with=[...])` — fresh agent loop with persona system prompt. `short_clear()` at spawn start and end (memory isolation). Resolves LLM adapter from model_tier.
+- [x] **Memory isolation:** each spawn calls `short_clear()` + sets `persona_name`/`persona_goal` in short-term store. Session memory evicted on spawn exit.
+- [x] **`poe-persona` CLI:** `list / show / compose / spawn` subcommands. `spawn --dry-run` previews without executing. `spawn --compose` adds additional personas at runtime.
+- [x] **`/research` Telegram command** routes to researcher persona via `spawn_persona` rather than generic director path.
+- [x] **Canon promotion (Phase 16 addition):** `times_applied` tracking wired into `inject_tiered_lessons()` (default on). `_record_canon_hit()` writes to `memory/canon_stats.jsonl`. `get_canon_candidates()` surfaces long-tier lessons eligible for AGENTS.md identity promotion. `poe-memory canon-candidates` CLI. 10 new tests.
+- [x] 47 new tests (37 persona + 10 canon); 1008 total passing, 5 skipped
 
-**Artifact:** `personas/` YAML spec library, `src/persona.py`, `poe-persona` CLI
+**Artifact:** `src/persona.py`, `personas/` (6 built-in YAML-frontmatter specs), `poe-persona` CLI, `/research` Telegram command, `src/memory.py` (canon tracking appended)
 
 ---
 
