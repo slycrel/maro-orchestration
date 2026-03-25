@@ -343,6 +343,40 @@ Deferred from Phase 15 by Jeremy's request — sandbox is functional, hardening 
 
 ---
 
+## Phase 20: Persona System — Modular, Composable Agent Identities
+
+**Make personas a first-class extensible primitive.** Right now worker personas are flat markdown files in `personas/`. This phase makes them composable, parameterizable, and spawnable on-demand — so you can say "spin up a research assistant to dig into X" and get a tuned agent loop with its own memory slice, retrieval strategy, and communication style.
+
+- [ ] **Persona spec format:** YAML frontmatter + markdown body. Fields: name, role, model_tier, tool_access (allowlist), memory_scope (session/project/global), communication_style, system_prompt_template, parent_persona (for inheritance).
+- [ ] **Persona registry:** `personas/` directory scanned at startup; personas loadable by name. Built-in: `researcher`, `builder`, `ops`, `critic`, `summarizer`, `strategist`.
+- [ ] **Researcher persona (priority):** deep-topic research loop — given a question, searches multiple sources, synthesizes historical + current consensus, cites sources, returns structured findings. Runs as a Mission with its own milestone structure. Triggered by "research X" intent or `/research` Telegram command.
+- [ ] **Persona inheritance:** `critic` can extend `researcher` and add skepticism calibration; `strategist` can extend any persona with goal-alignment awareness. Avoids copy-paste of base persona logic.
+- [ ] **Spawn-on-demand:** `poe-persona spawn researcher "what are the best Polymarket trading strategies"` — creates a fresh agent loop with the researcher persona, returns results to caller.
+- [ ] **Persona memory isolation:** each spawned persona gets its own memory slice (short-tier by default, opt-in to medium). Prevents cross-contamination between unrelated research runs.
+- [ ] **Poe as persona orchestrator:** Poe (CEO layer) can spawn personas as sub-agents of a mission. Researcher persona → findings artifact → Builder persona → implementation. Chain defined in mission decomposition.
+- [ ] Wire `/research` Telegram command into researcher persona loop rather than generic NOW/AGENDA routing.
+
+**Artifact:** `personas/` YAML spec library, `src/persona.py`, `poe-persona` CLI
+
+---
+
+## Phase 21: Production Readiness — Bootstrap + Decoupling + macOS
+
+**Make the system installable and self-bootstrapping.** Currently tied to this specific box and OpenClaw directory layout. This phase decouples it, adds a bootstrap skill, and makes it work on macOS.
+
+Deferred intentionally — do this last, after the core system is proven.
+
+- [ ] **Full OpenClaw decoupling:** remove all hardcoded `~/.openclaw/` path assumptions. Config file (`~/.poe/config.json` or env vars) specifies workspace root, gateway URL, credentials. System works without OpenClaw present.
+- [ ] **Bootstrap skill:** `poe-bootstrap` installs Claude CLI (`claude` binary via npm/pip), creates workspace directory structure, writes systemd service files, runs first heartbeat. One command from a fresh Ubuntu or macOS box.
+- [ ] **macOS compatibility:** replace `systemd` with `launchd` plist generation for service management. `platform.system()` detection throughout. Test suite passes on macOS.
+- [ ] **Minimal dependency install:** `pip install poe-orchestration` installs core system. Optional extras: `[telegram]`, `[gateway]`, `[sandbox]`. No hard deps on `websockets`, `sentence-transformers`, etc. — all graceful ImportError fallbacks already exist.
+- [ ] **`claude` CLI skill:** bootstrap skill that installs and configures the Claude Code CLI as a worker backend, wires it into `ClaudeSubprocessAdapter`.
+- [ ] **Smoke test suite:** `poe-test` command runs a dry-run end-to-end from CLI install → heartbeat → single NOW-lane task → verify output. Green = system ready.
+
+**Artifact:** `src/bootstrap.py`, `deploy/launchd/`, `poe-bootstrap` CLI, macOS CI
+
+---
+
 ## Superseded Plans
 
 The original M0-M4 milestones and N1-N4 roadmap items focused on infrastructure plumbing (adapters, scheduling, CI). That work was valuable scaffolding, but it didn't address the core need: making Poe autonomous. This roadmap replaces N1-N4 entirely.
