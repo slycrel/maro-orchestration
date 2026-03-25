@@ -498,9 +498,10 @@ telegram_listener
     │       ├── llm
     │       ├── memory
     │       ├── ancestry
-    │       ├── skills    (Phase 10 — injected into decompose)
-    │       ├── hooks     (Phase 11 — step-level)
-    │       └── interrupt (Phase 9 — polled between steps)
+    │       ├── skills      (Phase 10 — injected into decompose)
+    │       ├── attribution (Phase 14 — failure attribution)
+    │       ├── hooks       (Phase 11 — step-level)
+    │       └── interrupt   (Phase 9 — polled between steps)
     ├── sheriff
     └── ancestry
 
@@ -508,8 +509,10 @@ heartbeat (60s loop)
     ├── sheriff
     ├── llm
     ├── telegram_listener
-    ├── evolver   (every 10 ticks)
-    └── inspector (every 20 ticks — Phase 12)
+    ├── evolver     (every 10 ticks)
+    │   └── skills  (test gate on skill_pattern mutations — Phase 14)
+    └── inspector   (every 20 ticks — Phase 12)
+        └── attribution  (per-session failure attribution — Phase 14)
 
 cli (all commands)
     └── all modules above
@@ -543,6 +546,9 @@ workspace/prototypes/poe-orchestration/
     ├── loop.lock                # PID-verified lock while loop is active
     ├── inspector-log.jsonl      # inspector run history (Phase 12)
     ├── friction-signals.jsonl   # running friction signal log (Phase 12)
+    ├── attributions.jsonl       # per-session failure attributions (Phase 14)
+    ├── skill-stats.jsonl        # per-skill success rate tracking (Phase 14)
+    ├── skill-tests.jsonl        # auto-generated skill test cases (Phase 14)
     ├── autonomy.json            # autonomy tier config (Phase 13)
     ├── heartbeat-state.json     # last heartbeat result
     ├── heartbeat-log.jsonl      # heartbeat history
