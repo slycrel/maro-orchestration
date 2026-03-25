@@ -384,20 +384,44 @@ def extract_skills(outcomes: List[dict], adapter) -> List[Skill]:
 # Skill matching + formatting
 # ---------------------------------------------------------------------------
 
-def find_matching_skills(goal: str, adapter=None) -> List[Skill]:
-    """Find skills whose trigger_patterns match the goal (keyword search).
+def find_matching_skills(goal: str, adapter=None, use_router: bool = True) -> List[Skill]:
+    """Find skills whose trigger_patterns match the goal.
+
+    Phase 17: when use_router=True (default) and a trained router is
+    available, scores candidates by predicted success probability rather
+    than keyword overlap. Falls back to keyword matching if the router
+    is unavailable or returns empty results.
 
     Args:
-        goal: Goal string to match against.
-        adapter: Not used (reserved for future semantic search).
+        goal:       Goal string to match against.
+        adapter:    Not used (reserved for future semantic search).
+        use_router: If True, attempt router-based scoring (Phase 17).
 
     Returns:
-        Top 2 matching skills by number of matching patterns.
+        Top matching skills in score order (up to 3 via router, 2 via keywords).
     """
     skills = load_skills()
     if not skills:
         return []
 
+    # Phase 17: router path — only use when a trained model is available
+    if use_router:
+        try:
+            from router import route_skills
+            route_results = route_skills(goal, skills, top_k=3)
+            # Only trust router results when the model was actually used
+            # (method="router"). If all results are keyword fallback, let
+            # the local keyword matching below handle it properly so that
+            # "no match → []" behavior is preserved.
+            if route_results and any(r.method == "router" for r in route_results):
+                skill_by_id = {s.id: s for s in skills}
+                matched = [skill_by_id[r.skill_id] for r in route_results if r.skill_id in skill_by_id]
+                if matched:
+                    return matched
+        except Exception:
+            pass  # fall through to keyword matching
+
+    # Keyword fallback (original behavior)
     goal_lower = goal.lower()
     scored: List[tuple] = []
     for skill in skills:

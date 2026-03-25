@@ -448,6 +448,14 @@ def run_evolver(
         _notify_telegram(report)
 
     report.elapsed_ms = int((time.monotonic() - started) * 1000)
+
+    # Phase 17: check if router retraining is needed
+    try:
+        from router import maybe_retrain
+        maybe_retrain()
+    except Exception:
+        pass
+
     return report
 
 

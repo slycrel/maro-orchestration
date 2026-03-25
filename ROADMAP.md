@@ -290,21 +290,23 @@ Inspired by Jeremy: "I think we want to 'forget' some things and some things onl
 
 ---
 
-## Phase 17: Behavior-Aligned Routing
+## Phase 17: Behavior-Aligned Routing *(COMPLETE)*
 
 **RL-trained skill router.** Currently `find_matching_skills()` uses keyword matching. Memento-Skills showed that training a router on execution-success signal (not just semantic similarity) gives ~10% relative recall improvement and routes to skills that actually work, not just skills that sound relevant.
 
 Inspired by Memento-Skills arXiv:2603.18743: one-step offline RL, multi-positive InfoNCE loss, Boltzmann policy.
 
-- [ ] **Outcome label collection:** every skill invocation records (goal_text, skill_id, success) in `skill-stats.jsonl` — this already exists from Phase 14. Phase 17 structures it as training data.
-- [ ] **Feature extraction:** embed goal text and skill descriptions (sentence-transformers or tfidf fallback). Store embeddings in `memory/skill-embeddings.jsonl`.
-- [ ] **Router training:** lightweight sklearn logistic regression trained on (goal_embedding, skill_embedding) → success_probability. Retrained periodically (after N new labeled examples). Falls back to keyword matching if not enough data yet (threshold: 50 labeled examples).
-- [ ] **Inference:** `find_matching_skills(goal)` uses trained router scores when available, sorted by predicted success probability.
-- [ ] **Router retraining hook:** wired into evolver — when skill-stats grows by 50 entries, trigger retraining.
-- [ ] `poe-router stats` — show training data size, last trained, accuracy on holdout
-- [ ] `poe-router retrain` — force retrain
+- [x] **Outcome label collection:** skill-stats.jsonl from Phase 14 used directly as training data. Positive: success_rate > 0.6; Negative: success_rate < 0.4; ambiguous middle skipped.
+- [x] **Feature extraction:** sentence-transformers (all-MiniLM-L6-v2) when available; TF-IDF unigram+bigram fallback; character-level fallback of last resort. Graceful ImportError handling throughout.
+- [x] **Router training:** sklearn LogisticRegression on TF-IDF features → success_probability. 80/20 holdout split. Falls back to keyword matching below MIN_TRAINING_SAMPLES=50. Saves to `memory/router-model.pkl`.
+- [x] **Inference:** `find_matching_skills(goal, use_router=True)` uses router scores when model is trained; sorted by predicted success probability. Keyword fallback preserves exact prior behavior when router unavailable.
+- [x] **Router retraining hook:** wired into `run_evolver()` — when skill-stats grows by RETRAIN_EVERY_N=50 entries, `maybe_retrain()` triggers retraining automatically.
+- [x] `poe-router stats` — show training data size, last trained, accuracy on holdout
+- [x] `poe-router retrain` — force retrain
+- [x] `poe-router route "goal text"` — show top skill matches with scores and method
+- [x] 29 new tests (24 pass + 5 skipped for sklearn); 857 total passing
 
-**Artifact:** `src/router.py`, `memory/skill-embeddings.jsonl`, `memory/router-model.pkl`
+**Artifact:** `src/router.py`, `memory/router-model.pkl`, `memory/router-stats.json`, `poe-router` CLI
 
 ---
 

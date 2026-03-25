@@ -424,6 +424,19 @@ def main(argv: list[str] | None = None) -> int:
     p_sb_test.add_argument("--generate", action="store_true", help="Generate new tests from recent failures before running")
     p_sb_test.add_argument("--format", choices=["text", "json"], default="text")
 
+    # Phase 17: Behavior-aligned skill router CLI
+    p_poe_router = sub.add_parser("poe-router", help="Behavior-aligned skill router (Phase 17)")
+    router_sub = p_poe_router.add_subparsers(dest="router_cmd", required=True)
+
+    router_sub.add_parser("stats", help="Show router training stats (samples, accuracy, method)")
+
+    router_sub.add_parser("retrain", help="Force retrain the router from current skill-stats")
+
+    p_router_route = router_sub.add_parser("route", help="Show top skill matches for a goal text")
+    p_router_route.add_argument("goal", nargs="+", help="Goal text to route")
+    p_router_route.add_argument("--top-k", type=int, default=3, help="Number of results (default: 3)")
+    p_router_route.add_argument("--format", choices=["text", "json"], default="text")
+
     p_plan = sub.add_parser("plan", help="Split a goal into NEXT tasks")
     p_plan.add_argument("project")
     p_plan.add_argument("goal", nargs="+")
@@ -1621,6 +1634,58 @@ def main(argv: list[str] | None = None) -> int:
         except Exception as exc:
             return fail("E_POE_SANDBOX", str(exc))
         return 0 if (not tests or passed == total) else 1
+
+    # Phase 17: Behavior-aligned skill router CLI handlers
+    # ---------------------------------------------------------------------------
+
+    if args.cmd == "poe-router":
+        from router import get_router_stats, train_router, route_skills as _route_skills
+        from skills import load_skills as _load_skills_r
+
+        if args.router_cmd == "stats":
+            stats = get_router_stats()
+            fmt = getattr(args, "format", "text")
+            if fmt == "json":
+                print(json.dumps(stats.to_dict(), indent=2))
+            else:
+                print(f"training_samples={stats.training_samples}")
+                print(f"last_trained={stats.last_trained or '(never)'}")
+                print(f"holdout_accuracy={stats.holdout_accuracy:.3f}")
+                print(f"feature_method={stats.feature_method}")
+                print(f"min_samples_reached={stats.min_samples_reached}")
+                print(f"model_path={stats.model_path}")
+            return 0
+
+        if args.router_cmd == "retrain":
+            stats = train_router()
+            fmt = getattr(args, "format", "text")
+            if fmt == "json":
+                print(json.dumps(stats.to_dict(), indent=2))
+            else:
+                if stats.min_samples_reached:
+                    print(f"retrained ok — samples={stats.training_samples} accuracy={stats.holdout_accuracy:.3f}")
+                else:
+                    print(f"not enough data — samples={stats.training_samples} (need 50)")
+            return 0
+
+        if args.router_cmd == "route":
+            goal_text = " ".join(args.goal)
+            top_k = getattr(args, "top_k", 3)
+            fmt = getattr(args, "format", "text")
+            all_skills = _load_skills_r()
+            results = _route_skills(goal_text, all_skills, top_k=top_k)
+            if fmt == "json":
+                print(json.dumps([
+                    {"skill_id": r.skill_id, "skill_name": r.skill_name, "score": r.score, "method": r.method}
+                    for r in results
+                ], indent=2))
+            else:
+                if not results:
+                    print("(no matching skills)")
+                else:
+                    for r in results:
+                        print(f"  [{r.method}] score={r.score:.3f} {r.skill_name} (id={r.skill_id})")
+            return 0
 
     return fail("E_INTERNAL", "unknown command")
 
