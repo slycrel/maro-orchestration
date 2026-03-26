@@ -10,6 +10,8 @@ design question it informs.
 
 | Question | Informs | Priority |
 |----------|---------|----------|
+| **Productive persistence in agents**: exploration-exploitation tradeoff, grit vs. stubbornness, when to quit — what does ML + psych research say about the optimal persistence model? (incl. OpenAI autocurricula emergent strategies, Duckworth grit, Kapur productive failure) | Roadblock resilience in agent_loop.py | High |
+| **Zoom in / zoom out metacognition**: adaptive expertise, double-loop learning (Argyris), OODA loops — how do smart people/systems toggle between object-level execution and meta-level goal review? Agent analogue: re-decompose on stuck vs. retry step | Loop resilience + decompose strategy | High |
 | How does spaced repetition interact with confidence/score signals? | Memory decay model (Phase 16/27) | High |
 | What distinguishes tacit vs. explicit knowledge in expertise research? | Crystallization Stage 4→5 (Phase 22) | High |
 | Kahneman System 1/2: when should an autonomous agent deliberate vs. act? | Loop decompose/execute split | Medium |
