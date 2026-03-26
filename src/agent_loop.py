@@ -266,6 +266,17 @@ def run_agent_loop(
         _lessons_context = inject_lessons_for_task("agenda", goal, max_lessons=3)
     except Exception:
         _lessons_context = ""
+    # Phase 27: inject resurrected graveyard lessons (decayed but topic-relevant)
+    try:
+        from memory import search_graveyard
+        _graveyard = search_graveyard(goal, resurrect=True)
+        if _graveyard:
+            if verbose:
+                print(f"[poe] resurrecting {len(_graveyard)} graveyard lesson(s) for goal", file=sys.stderr, flush=True)
+            _graveyard_lines = "\n".join(f"- {l.lesson}" for l in _graveyard[:3])
+            _lessons_context += f"\n\nPreviously-learned (resurrected from decay):\n{_graveyard_lines}"
+    except Exception:
+        pass
     # Load matching skills for decompose prompt injection (Phase 10)
     try:
         from skills import find_matching_skills, format_skills_for_prompt

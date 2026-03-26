@@ -287,6 +287,8 @@ def main(argv: list[str] | None = None) -> None:
     p_audit = sub.add_parser("audit", help="Sandbox audit log tail")
     p_audit.add_argument("--limit", type=int, default=10, help="Number of entries (default: 10)")
     sub.add_parser("memory", help="Memory tier stats")
+    p_watch = sub.add_parser("watch", help="Refresh snapshot on an interval (like watch)")
+    p_watch.add_argument("--interval", type=float, default=5.0, help="Refresh interval in seconds (default: 5)")
 
     args = parser.parse_args(argv)
 
@@ -300,6 +302,13 @@ def main(argv: list[str] | None = None) -> None:
         print_audit_tail(limit=args.limit)
     elif args.cmd == "memory":
         print_memory_stats()
+    elif args.cmd == "watch":
+        import time, os
+        while True:
+            os.system("clear")
+            print_snapshot()
+            print(f"\n(refreshing every {args.interval}s — Ctrl-C to stop)")
+            time.sleep(args.interval)
     else:
         print_snapshot()
 
