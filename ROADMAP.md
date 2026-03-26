@@ -463,6 +463,63 @@ Phase 21's `POE_WORKSPACE` env var + bootstrap makes this mostly straightforward
 
 ---
 
+### Phase 27: Prerequisite Knowledge Sub-Goals and Graveyard Query
+
+*From Jeremy's "kanji painting → learn Japanese" scenario, March 2026.*
+
+Two related gaps in the current learning architecture:
+
+**Sub-goal knowledge acquisition**: The system has no explicit mechanism to detect "this step requires domain knowledge I don't have" and spawn a sub-loop to acquire it before proceeding. Currently Poe either uses training-weight knowledge (which may be shallow) or gets stuck. The fix: a `knowledge_prerequisites` check during `_decompose()`, spawning a `is_sub_goal=True` loop to acquire missing knowledge and inject it into the parent context.
+
+**Graveyard query**: Before learning something from scratch, check whether we have decayed lessons about it (score 0.2–0.9). If yes, resurrect them via `reinforce_lesson()` instead of re-acquiring. The "graveyard" already exists — it's the decay range below the injection threshold. What's missing is a `search_graveyard(topic)` function that fuzzy-matches decayed lessons before triggering a sub-goal.
+
+**On incidental vs. durable knowledge**: You don't need to decide at recording time. The decay mechanism IS the filter — knowledge that keeps getting applied survives; incidental knowledge decays out naturally. The one useful addition: an `acquired_for` tag on lessons, so the gardener can see "this lesson was incidental to the kanji task" when reviewing canon candidates.
+
+Full design in `docs/MEMORY_ARCHITECTURE.md`.
+
+---
+
+### Phase 28: Poe Personality — Complementary Interaction Model
+
+*Jeremy, March 2026: "I'm a 6w5/INFJ... I expect a properly built persona would complement me and allow us both to interact better together."*
+
+**The opportunity**: a persona layer that understands Jeremy's cognitive patterns well enough to adapt communication style — not content decisions — to what actually lands. The Enneagram 6w5 + INFJ combination has specific, predictable patterns:
+- Needs certainty and honesty about unknowns (don't manufacture confidence for a Type 6)
+- Analytical overlay: wants the *why*, not just the *what* (5-wing)
+- Systems thinker who dislikes surface-level (INFJ)
+- Trusts directness over reassurance; hates being managed
+- High energy cost for social navigation → the agent should reduce friction, not add it
+
+**The hard line — complementary vs. manipulative:**
+- **Complementary**: adapts *communication style* to what lands best. Direct, systematic, honest about uncertainty, no unnecessary warmup.
+- **Manipulative**: adapts *content or recommendations* based on what the user's type will accept. Uses cognitive patterns to steer decisions.
+
+The first is useful and healthy. The second is a line that should never be crossed, and Poe should be explicitly designed to not cross it. The way to ensure this: Jeremy authors the "who I am" document himself (controls what's in Poe's model of him), the persona is transparent about what it knows, and it should never use that knowledge to pre-empt Jeremy's judgment on something he'd want to evaluate himself.
+
+**The fascinating part**: a well-built version of this could make every interaction more efficient precisely because Poe isn't starting from scratch socially each session. The scary part is real — which is why the design should be explicit and human-auditable, not emergent. Jeremy should be the gardener here more than anywhere else.
+
+**Implementation approach**:
+- Jeremy writes a `personas/jeremy.md` (not loaded into Poe's general persona rotation — specifically for the interaction layer)
+- Poe-CEO layer optionally loads it as context overlay (not a full persona swap)
+- The document lives in source control so changes are visible
+- Regular "does this still feel right?" review
+
+---
+
+### Phase 29: Human Psychology / Neurology / Philosophy Research Track
+
+*Jeremy, March 2026: "Human psychology, neurology, and philosophy ideas probably can come into play here. I'm definitely no expert in any of those areas, but seems like there are things we should learn about over time."*
+
+Not a single phase but a research track that informs multiple phases:
+- **For memory architecture**: cognitive science on how human memory consolidation works (sleep replay, spaced repetition, the role of emotion in encoding) → informs decay model tuning
+- **For the loop**: decision theory, satisficing vs. optimizing, fast/slow thinking (Kahneman) → informs when the agent should deliberate vs. act quickly
+- **For persona design (Phase 28)**: Enneagram, MBTI as frameworks for communication style, not personality determinism
+- **For crystallization (Phase 22)**: expertise research — what makes novice → expert knowledge transfer work, what gets tacit vs. explicit
+
+Concretely: a periodic `health-researcher` or `researcher` spawn with a curated reading list, outputs stored as `docs/research/` artifacts. Not a bottoms-up research program — targeted questions when a specific phase hits a relevant intersection.
+
+---
+
 ## Superseded Plans
 
 The original M0-M4 milestones and N1-N4 roadmap items focused on infrastructure plumbing (adapters, scheduling, CI). That work was valuable scaffolding, but it didn't address the core need: making Poe autonomous. This roadmap replaces N1-N4 entirely.

@@ -131,6 +131,51 @@ GPT/Codex: Less useful for architectural reasoning. More useful for code review 
 
 ---
 
+## Knowledge Sub-Goals and the "Graveyard"
+
+*Added 2026-03-26, from Jeremy's "kanji painting → learn Japanese" scenario.*
+
+### The prerequisite knowledge problem
+
+When a task requires knowledge Poe doesn't have, the system currently has two options: either the LLM reasons from its training weights (which may be insufficient) or the task fails/gets stuck. There's no explicit mechanism to say:
+
+```
+"To paint kanji, I need to understand stroke order and character meaning.
+I don't have that in my memory. → Spawn sub-goal: acquire relevant knowledge.
+→ Inject result into parent goal context.
+→ Continue."
+```
+
+This is a **prerequisite knowledge** pattern. It's not a new kind of memory — it's a new trigger for the existing memory system: **detect knowledge gaps during decompose or mid-step, not just at session start**.
+
+Implementation sketch (not yet built):
+- During `_decompose()`, add a knowledge-prerequisite check: "which steps require domain knowledge I likely don't have?"
+- Spawn a sub-loop (like `run_agent_loop` with `is_sub_goal=True`) to acquire it
+- Store acquired knowledge as a medium-tier lesson tagged with the parent goal ID
+- Inject into parent goal's context before proceeding
+
+### The graveyard
+
+Jeremy's instinct: "maybe a temporary knowledge graveyard we can pick through instead of learning from scratch."
+
+Good news: **the graveyard already exists**. It's the decay range between `GC_THRESHOLD` (0.2) and `PROMOTE_MIN_SCORE` (0.9). Lessons in that range are:
+- Not active enough to auto-inject (score < inject threshold)
+- Not dead enough to GC (score > 0.2)
+
+They're exactly the graveyard — partially decayed but recoverable via `reinforce_lesson()`.
+
+What's currently missing: **a graveyard query**. Before spawning a sub-goal to learn X, the system should first check: "do we have any decayed lessons about X?" If yes, `reinforce_lesson()` to bring them back to medium tier — free knowledge resurrection. If no, proceed with the sub-goal.
+
+This is low-hanging fruit. The `reinforce_lesson()` function already exists. The gap is a `search_graveyard(topic)` function that does fuzzy-matches decayed lessons against a topic string before triggering a fresh sub-goal.
+
+### On "incidental vs durable" knowledge
+
+You can't reliably know upfront which knowledge is worth keeping. The good news: **you don't need to**. The decay mechanism IS the filter. Knowledge that never gets reinforced naturally decays to GC threshold and disappears. Knowledge that keeps being useful gets reinforced and promotes. The system doesn't need a binary "keep/discard" decision at recording time.
+
+The only adjustment worth considering: tag lessons with an `acquired_for` field (the parent goal ID). This makes it visible that a lesson was incidental to a specific task — useful for the graveyard query, and for the gardener when reviewing canon candidates ("this was acquired for the kanji task, not a general pattern").
+
+---
+
 ## History
 
 - **2026-03-25**: Phase 16 implemented: short/medium/long tiers, decay model, skill tiers. Jeremy raised the "muscle memory" question — should long-tier lessons eventually graduate to AGENTS.md identity? Documented here as the canon promotion concept.
