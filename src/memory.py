@@ -558,6 +558,7 @@ class TieredLesson:
     times_applied: int = 0
     times_reinforced: int = 0
     recorded_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    acquired_for: Optional[str] = None  # goal_id that triggered this lesson (incidental flag)
 
 
 # ---------------------------------------------------------------------------
@@ -637,10 +638,13 @@ def record_tiered_lesson(
     *,
     tier: str = MemoryTier.MEDIUM,
     confidence: float = 0.7,
+    acquired_for: Optional[str] = None,
 ) -> TieredLesson:
     """Record a new lesson at the given tier.
 
     Checks for near-duplicates before writing; reinforces existing if match found.
+    Pass ``acquired_for=goal_id`` to tag incidental knowledge (e.g. lessons acquired
+    as a prerequisite sub-goal rather than as the primary task outcome).
     """
     import uuid
 
@@ -659,6 +663,7 @@ def record_tiered_lesson(
         tier=tier,
         score=1.0,
         last_reinforced=_current_date(),
+        acquired_for=acquired_for,
     )
     _append_tiered_lesson(tl, tier=tier)
     return tl
@@ -746,6 +751,57 @@ def reinforce_lesson(lesson_id: str, tier: str = MemoryTier.MEDIUM) -> Optional[
     target.last_reinforced = _current_date()
     _rewrite_tiered_lessons(tier=tier, lessons=lessons)
     return target
+
+
+def search_graveyard(
+    topic: str,
+    *,
+    min_score: float = GC_THRESHOLD,
+    max_score: float = 0.4,
+    limit: int = 10,
+    resurrect: bool = False,
+) -> List[TieredLesson]:
+    """Find decayed lessons matching *topic* before triggering a sub-goal re-acquisition.
+
+    The "graveyard" is lessons in the decay band [GC_THRESHOLD, 0.4) — still on disk
+    but below the active-injection threshold (0.3 default in inject_lessons).  These
+    are recoverable via ``reinforce_lesson()``.
+
+    Args:
+        topic:      Keywords to fuzzy-match against lesson text (space-separated; any
+                    word match counts; ranked by match ratio then score).
+        min_score:  Lower bound — default is GC_THRESHOLD (0.2) to include everything
+                    that hasn't been GC'd yet.
+        max_score:  Upper bound — default 0.4 (just below the injection threshold 0.3,
+                    plus a small buffer to surface lessons that need one reinforcement
+                    to become active again).
+        limit:      Maximum results to return.
+        resurrect:  If True, automatically call ``reinforce_lesson()`` on every match,
+                    bumping them back toward the active zone.  Default False (read-only).
+
+    Returns a list of TieredLesson sorted by similarity then score (descending).
+    """
+    keywords = [w.lower() for w in topic.split() if w]
+    results: List[TieredLesson] = []
+
+    for tier in (MemoryTier.MEDIUM, MemoryTier.LONG):
+        lessons = load_tiered_lessons(tier=tier, min_score=min_score)
+        for tl in lessons:
+            if tl.score >= max_score:
+                continue
+            text = tl.lesson.lower()
+            match_ratio = sum(1 for kw in keywords if kw in text) / max(len(keywords), 1)
+            if match_ratio > 0:
+                results.append((match_ratio, tl.score, tl))
+
+    results.sort(key=lambda x: (x[0], x[1]), reverse=True)
+    matched = [tl for _, _, tl in results[:limit]]
+
+    if resurrect:
+        for tl in matched:
+            reinforce_lesson(tl.lesson_id, tier=tl.tier)
+
+    return matched
 
 
 def forget_lesson(lesson_id: str, tier: str = MemoryTier.MEDIUM) -> bool:

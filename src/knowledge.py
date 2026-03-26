@@ -37,13 +37,16 @@ def _stage2_data() -> dict:
         status = memory_status()
         medium_lessons = load_tiered_lessons(tier=MemoryTier.MEDIUM, min_score=0.0)
         long_lessons = load_tiered_lessons(tier=MemoryTier.LONG, min_score=0.0)
-        graveyard = [l for l in medium_lessons if GC_THRESHOLD <= l.score < 0.4]
+        all_lessons = medium_lessons + long_lessons
+        graveyard = [l for l in all_lessons if GC_THRESHOLD <= l.score < 0.4]
+        incidental = [l for l in all_lessons if getattr(l, "acquired_for", None)]
         return {
             "medium_count": status["medium"].get("count", 0),
             "long_count": status["long"].get("count", 0),
             "promote_candidates": status["medium"].get("promote_candidates", 0),
             "gc_candidates": status["medium"].get("gc_candidates", 0),
             "graveyard_count": len(graveyard),
+            "incidental_count": len(incidental),
             "medium_avg_score": status["medium"].get("avg_score"),
         }
     except Exception as e:
@@ -146,6 +149,8 @@ def print_dashboard(stage_filter: Optional[int] = None) -> None:
             print(f"  long:   {lng} lessons")
             if gy:
                 print(f"  graveyard: {gy} recoverable (score 0.2–0.4) — run 'poe-memory list' to inspect")
+            if s2.get("incidental_count"):
+                print(f"  incidental: {s2['incidental_count']} lessons tagged acquired_for (sub-goal prerequisites)")
             if gc:
                 print(f"  ⚠  {gc} lessons near GC threshold — consider 'poe-memory decay'")
             if promo:

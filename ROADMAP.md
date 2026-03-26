@@ -392,7 +392,7 @@ Ideas that are real but not yet scheduled. Not prioritized against each other �
 
 ---
 
-### Phase 22: Knowledge Crystallization — Hardening Decisions Into Infrastructure
+### Phase 22: Knowledge Crystallization — Hardening Decisions Into Infrastructure *(PARTIAL)*
 
 *"A young sapling is flexible. As it grows it becomes the foundation for other young shoots."*
 
@@ -402,10 +402,15 @@ Full design in `docs/KNOWLEDGE_CRYSTALLIZATION.md`. The short version: every LLM
 Fluid LLM → Lesson (tiered memory) → Identity (canon/AGENTS.md) → Skill (Python) → Rule (zero-cost)
 ```
 
-What's missing today:
+**Shipped (Phase 22 first cut):**
+- `src/knowledge.py`: `poe-knowledge status [--stage N]` crystallization dashboard showing Stages 2–5 + graveyard + incidental counts + evolver suggestions
+- `src/knowledge.py`: `poe-knowledge promote` — lists all available cross-stage promotions (read-only)
+- Wired into `pyproject.toml` and `src/cli.py` as `poe-knowledge` entry point
+- `tests/test_knowledge.py`: 14 tests
+
+**Still missing:**
 - **Stage 5 (Skill → Rule)**: no mechanism for an established skill to graduate into a hardcoded path that skips the sandbox entirely
-- **Model tier auto-optimization**: evolver should track per-task-type success rates by tier and suggest downgrades. If `researcher` persona uses `power` for 200 tasks with 95% success but `mid` also succeeds on the same class, surface that
-- **Crystallization dashboard**: unified view of all graduation candidates across memory/skills/AGENTS.md
+- **Model tier auto-optimization**: evolver should track per-task-type success rates by tier and suggest downgrades
 
 ---
 
@@ -460,17 +465,21 @@ Goal: `docker run poe-orchestration` on any Linux/macOS with Docker.
 
 ---
 
-### Phase 27: Prerequisite Knowledge Sub-Goals and Graveyard Query
+### Phase 27: Prerequisite Knowledge Sub-Goals and Graveyard Query *(PARTIAL)*
 
 *From Jeremy's "kanji painting → learn Japanese" scenario, March 2026.*
 
 Two related gaps in the current learning architecture:
 
-**Sub-goal knowledge acquisition**: The system has no explicit mechanism to detect "this step requires domain knowledge I don't have" and spawn a sub-loop to acquire it before proceeding. Currently Poe either uses training-weight knowledge (which may be shallow) or gets stuck. The fix: a `knowledge_prerequisites` check during `_decompose()`, spawning a `is_sub_goal=True` loop to acquire missing knowledge and inject it into the parent context.
+**Graveyard query — SHIPPED:**
+- `TieredLesson.acquired_for: Optional[str]` — tag incidental/prerequisite lessons with the goal_id that triggered them
+- `memory.search_graveyard(topic, ...)` — fuzzy keyword match across graveyard (score 0.2–0.4), sorted by match ratio; `resurrect=True` calls `reinforce_lesson()` on all matches
+- `record_tiered_lesson(acquired_for=goal_id)` — propagates tag through to JSONL
+- Dashboard: `poe-knowledge status` now shows `incidental_count` in Stage 2 view
+- `tests/test_phase27.py`: 16 tests
 
-**Graveyard query**: Before learning something from scratch, check whether we have decayed lessons about it (score 0.2–0.9). If yes, resurrect them via `reinforce_lesson()` instead of re-acquiring. The "graveyard" already exists — it's the decay range below the injection threshold. What's missing is a `search_graveyard(topic)` function that fuzzy-matches decayed lessons before triggering a sub-goal.
-
-**On incidental vs. durable knowledge**: You don't need to decide at recording time. The decay mechanism IS the filter — knowledge that keeps getting applied survives; incidental knowledge decays out naturally. The one useful addition: an `acquired_for` tag on lessons, so the gardener can see "this lesson was incidental to the kanji task" when reviewing canon candidates.
+**Sub-goal knowledge acquisition — PENDING:**
+The system still has no explicit mechanism to detect "this step requires domain knowledge I don't have" and spawn a sub-loop to acquire it before proceeding. Missing: a `knowledge_prerequisites` check during `_decompose()` that calls `search_graveyard(topic)` first, and only spawns a new `is_sub_goal=True` loop if graveyard is empty.
 
 Full design in `docs/MEMORY_ARCHITECTURE.md`.
 
