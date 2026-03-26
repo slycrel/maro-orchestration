@@ -320,6 +320,14 @@ def run_agent_loop(
     step_idx = 0  # global step counter (for numbering, includes injected steps)
     _next_step_injected_context: str = ""  # Phase 11: injected context from previous step's hooks
     _march_of_nines_alert = False  # Phase 19: cumulative step success rate alert
+    _step_retries: Dict[str, int] = {}  # roadblock resilience: retries per step text
+
+    # Lazy import for injection scanning (security.py)
+    try:
+        from security import scan_external_content as _scan_content, InjectionRisk as _InjectionRisk
+        _security_available = True
+    except ImportError:
+        _security_available = False
 
     # Phase 19: lazy import for dead_ends and boot_protocol
     try:
@@ -368,6 +376,21 @@ def run_agent_loop(
         step_status = outcome["status"]
         step_result = outcome.get("result", "")
         step_summary = outcome.get("summary", step_text)
+
+        # Security: scan step result for prompt injection signals (external content defense)
+        if _security_available and step_status == "done" and len(step_result) > 200:
+            try:
+                _scan = _scan_content(
+                    step_result,
+                    log_fn=lambda msg: print(f"[poe] {msg}", file=sys.stderr, flush=True),
+                )
+                if _scan.risk >= _InjectionRisk.HIGH:
+                    if verbose:
+                        print(f"[poe] injection HIGH in step {step_idx} result — redacting before context injection", file=sys.stderr, flush=True)
+                    step_result = _scan.sanitized
+                    outcome["result"] = step_result
+            except Exception:
+                pass  # Security scan failures must never break the loop
 
         # Phase 11: Step-level hooks
         _step_injected_context = ""
@@ -430,12 +453,45 @@ def run_agent_loop(
             if verbose:
                 print(f"[poe] step {step_idx} done: {step_summary}", file=sys.stderr, flush=True)
         else:
-            if item_index >= 0:
-                o.mark_item(project, item_index, o.STATE_BLOCKED)
-            loop_status = "stuck"
-            stuck_reason = outcome.get("stuck_reason", f"step {step_idx} blocked")
-            if verbose:
-                print(f"[poe] step {step_idx} stuck: {stuck_reason}", file=sys.stderr, flush=True)
+            _prior_retries = _step_retries.get(step_text, 0)
+            if _prior_retries < 1:
+                # Roadblock resilience: retry once with a fallback hint before declaring stuck
+                _step_retries[step_text] = _prior_retries + 1
+                _block_reason = outcome.get("stuck_reason", "blocked")
+                _fallback_hint = (
+                    f"[Previous attempt blocked: {_block_reason[:120]}] "
+                    "Try an alternative approach: use a different tool, rephrase the request, "
+                    "work around the obstacle, or summarize what you know so far and mark complete."
+                )
+                _next_step_injected_context = (
+                    (_next_step_injected_context + "\n\n" + _fallback_hint).strip()
+                    if _next_step_injected_context
+                    else _fallback_hint
+                )
+                remaining_steps.insert(0, step_text)
+                remaining_indices.insert(0, item_index)
+                step_idx -= 1  # will be re-incremented at top of iteration
+                if verbose:
+                    print(f"[poe] step {step_idx+1} blocked ({_block_reason[:80]}), retrying with fallback hint", file=sys.stderr, flush=True)
+                # Record the blocked attempt but don't terminate
+                step_outcomes.append(StepOutcome(
+                    index=item_index,
+                    text=step_text,
+                    status="blocked",
+                    result=step_result,
+                    iteration=iteration,
+                    tokens_in=outcome.get("tokens_in", 0),
+                    tokens_out=outcome.get("tokens_out", 0),
+                    elapsed_ms=step_elapsed,
+                ))
+                continue
+            else:
+                if item_index >= 0:
+                    o.mark_item(project, item_index, o.STATE_BLOCKED)
+                loop_status = "stuck"
+                stuck_reason = outcome.get("stuck_reason", f"step {step_idx} blocked")
+                if verbose:
+                    print(f"[poe] step {step_idx} stuck after retry: {stuck_reason}", file=sys.stderr, flush=True)
 
         step_outcomes.append(StepOutcome(
             index=item_index,
