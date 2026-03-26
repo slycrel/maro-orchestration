@@ -414,16 +414,21 @@ Fluid LLM → Lesson (tiered memory) → Identity (canon/AGENTS.md) → Skill (P
 
 ---
 
-### Phase 23: Observability — Execution Visualization
+### Phase 23: Observability — Execution Visualization *(PARTIAL)*
 
 Currently no real-time view of what Poe is doing. `loop.lock` shows the active goal; `heartbeat-state.json` shows health; but no timeline, step trace, or resource graph.
 
-Options:
-- **TUI dashboard** (`rich` or `textual`): live view of active loop steps, recent outcomes, memory tier counts, heartbeat status, audit log tail. Runs as a separate process watching JSONL files.
-- **Simple web UI** (`fastapi` + plain HTML): same data over HTTP; accessible remotely. Better for headless box.
-- **Hook-based step stream**: `reporter` hook at `fire_on=step` writes to a named pipe or JSONL that the TUI consumes. Gives per-step granularity without modifying the loop.
+**Shipped (Phase 23 first cut):**
+- `src/observe.py`: `poe-observe` execution snapshot — reads loop.lock, heartbeat-state.json,
+  outcomes.jsonl, sandbox-audit.jsonl, memory stats — all local reads, no LLM calls
+- Subcommands: `loop`, `heartbeat`, `outcomes [--limit N]`, `audit [--limit N]`, `memory`
+- `tests/test_observe.py`: 27 tests
+- Wired into `pyproject.toml` as `poe-observe` entry point
 
-The hook infrastructure is already in place. This is a side project — maybe 2-3 days for a useful first version.
+**Still pending:**
+- **TUI dashboard** (`rich` or `textual`): live view with `watch`-style refresh. Can be done by wrapping `print_snapshot()` in a loop with `os.system("clear")`. Needs `rich` dep.
+- **Simple web UI** (`fastapi` + plain HTML): same data over HTTP for remote access from Slack/browser.
+- **Hook-based step stream**: `reporter` hook at `fire_on=step` writes to `observe.jsonl` giving per-step granularity. Hook infrastructure is in place.
 
 ---
 

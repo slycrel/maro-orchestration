@@ -1,0 +1,325 @@
+"""Tests for poe-observe execution snapshot (Phase 23 first cut)."""
+
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+
+import observe
+
+
+# ---------------------------------------------------------------------------
+# Helper: set up a fake workspace matching orch_root() layout
+# ---------------------------------------------------------------------------
+
+def _ws(tmp_path) -> Path:
+    """Returns the memory dir that orch_root() will use under POE_WORKSPACE."""
+    mem = tmp_path / "prototypes" / "poe-orchestration" / "memory"
+    mem.mkdir(parents=True, exist_ok=True)
+    return mem
+
+
+def _write_loop_lock(mem: Path, goal: str = "test goal", pid: int = 1234) -> None:
+    from datetime import datetime, timezone
+    (mem / "loop.lock").write_text(json.dumps({
+        "loop_id": "test-loop-001",
+        "goal": goal,
+        "pid": pid,
+        "started_at": datetime.now(timezone.utc).isoformat(),
+    }))
+
+
+def _write_heartbeat(mem: Path, status: str = "healthy") -> None:
+    from datetime import datetime, timezone
+    (mem / "heartbeat-state.json").write_text(json.dumps({
+        "status": status,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "message": f"system is {status}",
+    }))
+
+
+def _append_outcome(mem: Path, goal: str = "task", status: str = "success") -> None:
+    from datetime import datetime, timezone
+    line = json.dumps({
+        "goal": goal,
+        "status": status,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    })
+    with open(mem / "outcomes.jsonl", "a") as f:
+        f.write(line + "\n")
+
+
+def _append_audit(mem: Path, skill: str = "my-skill", success: bool = True) -> None:
+    from datetime import datetime, timezone
+    line = json.dumps({
+        "skill_name": skill,
+        "success": success,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "duration_ms": 42,
+        "network_blocked": True,
+        "static_safe": False,
+    })
+    with open(mem / "sandbox-audit.jsonl", "a") as f:
+        f.write(line + "\n")
+
+
+# ---------------------------------------------------------------------------
+# _read_loop_state
+# ---------------------------------------------------------------------------
+
+def test_read_loop_state_idle_when_no_lock(monkeypatch, tmp_path):
+    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    _ws(tmp_path)
+    state = observe._read_loop_state()
+    assert state["running"] is False
+
+
+def test_read_loop_state_running_when_lock_exists(monkeypatch, tmp_path):
+    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    mem = _ws(tmp_path)
+    _write_loop_lock(mem, goal="paint kanji")
+    state = observe._read_loop_state()
+    assert state["running"] is True
+    assert "kanji" in state["goal"]
+
+
+# ---------------------------------------------------------------------------
+# _read_heartbeat
+# ---------------------------------------------------------------------------
+
+def test_read_heartbeat_unavailable_when_no_file(monkeypatch, tmp_path):
+    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    _ws(tmp_path)
+    hb = observe._read_heartbeat()
+    assert hb["available"] is False
+
+
+def test_read_heartbeat_reads_status(monkeypatch, tmp_path):
+    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    mem = _ws(tmp_path)
+    _write_heartbeat(mem, status="degraded")
+    hb = observe._read_heartbeat()
+    assert hb["available"] is True
+    assert hb["status"] == "degraded"
+
+
+# ---------------------------------------------------------------------------
+# _read_recent_outcomes
+# ---------------------------------------------------------------------------
+
+def test_read_recent_outcomes_empty_when_no_file(monkeypatch, tmp_path):
+    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    _ws(tmp_path)
+    assert observe._read_recent_outcomes() == []
+
+
+def test_read_recent_outcomes_returns_most_recent_first(monkeypatch, tmp_path):
+    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    mem = _ws(tmp_path)
+    for i in range(5):
+        _append_outcome(mem, goal=f"task-{i}", status="success")
+    results = observe._read_recent_outcomes(limit=3)
+    assert len(results) == 3
+    # Most recent written is task-4
+    assert results[0]["goal"] == "task-4"
+
+
+def test_read_recent_outcomes_respects_limit(monkeypatch, tmp_path):
+    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    mem = _ws(tmp_path)
+    for i in range(10):
+        _append_outcome(mem, goal=f"task-{i}")
+    results = observe._read_recent_outcomes(limit=4)
+    assert len(results) == 4
+
+
+# ---------------------------------------------------------------------------
+# _read_audit_tail
+# ---------------------------------------------------------------------------
+
+def test_read_audit_tail_empty_when_no_file(monkeypatch, tmp_path):
+    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    _ws(tmp_path)
+    assert observe._read_audit_tail() == []
+
+
+def test_read_audit_tail_returns_entries(monkeypatch, tmp_path):
+    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    mem = _ws(tmp_path)
+    for i in range(3):
+        _append_audit(mem, skill=f"skill-{i}")
+    entries = observe._read_audit_tail(limit=2)
+    assert len(entries) == 2
+
+
+def test_read_audit_tail_chronological_order(monkeypatch, tmp_path):
+    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    mem = _ws(tmp_path)
+    for i in range(3):
+        _append_audit(mem, skill=f"skill-{i}")
+    entries = observe._read_audit_tail(limit=3)
+    # Should be oldest-first (reversed from reversed tail)
+    assert entries[0]["skill_name"] == "skill-0"
+    assert entries[-1]["skill_name"] == "skill-2"
+
+
+# ---------------------------------------------------------------------------
+# print_* functions — smoke tests
+# ---------------------------------------------------------------------------
+
+def test_print_loop_state_idle(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    _ws(tmp_path)
+    observe.print_loop_state()
+    out = capsys.readouterr().out
+    assert "idle" in out
+
+
+def test_print_loop_state_running(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    mem = _ws(tmp_path)
+    _write_loop_lock(mem, goal="research topic X")
+    observe.print_loop_state()
+    out = capsys.readouterr().out
+    assert "RUNNING" in out
+    assert "research topic X" in out
+
+
+def test_print_heartbeat_no_file(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    _ws(tmp_path)
+    observe.print_heartbeat()
+    out = capsys.readouterr().out
+    assert "heartbeat" in out.lower()
+
+
+def test_print_heartbeat_with_file(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    mem = _ws(tmp_path)
+    _write_heartbeat(mem, "healthy")
+    observe.print_heartbeat()
+    out = capsys.readouterr().out
+    assert "healthy" in out
+
+
+def test_print_recent_outcomes_no_data(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    _ws(tmp_path)
+    observe.print_recent_outcomes()
+    out = capsys.readouterr().out
+    assert "none" in out or "Recent" in out
+
+
+def test_print_recent_outcomes_with_data(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    mem = _ws(tmp_path)
+    _append_outcome(mem, goal="paint a kanji")
+    observe.print_recent_outcomes()
+    out = capsys.readouterr().out
+    assert "kanji" in out
+
+
+def test_print_audit_tail_no_data(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    _ws(tmp_path)
+    observe.print_audit_tail()
+    out = capsys.readouterr().out
+    assert "none" in out or "audit" in out.lower()
+
+
+def test_print_audit_tail_with_data(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    mem = _ws(tmp_path)
+    _append_audit(mem, skill="my-skill")
+    observe.print_audit_tail()
+    out = capsys.readouterr().out
+    assert "my-skill" in out
+
+
+def test_print_memory_stats_no_memory(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    _ws(tmp_path)
+    observe.print_memory_stats()
+    out = capsys.readouterr().out
+    assert "medium" in out or "Memory" in out
+
+
+def test_print_snapshot_runs(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    _ws(tmp_path)
+    observe.print_snapshot()
+    out = capsys.readouterr().out
+    assert "Snapshot" in out
+    assert "Loop" in out
+    assert "Heartbeat" in out
+    assert "outcomes" in out.lower()
+    assert "audit" in out.lower()
+    assert "Memory" in out
+
+
+# ---------------------------------------------------------------------------
+# CLI entry point
+# ---------------------------------------------------------------------------
+
+def test_main_no_args_shows_snapshot(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    _ws(tmp_path)
+    observe.main([])
+    out = capsys.readouterr().out
+    assert "Snapshot" in out
+
+
+def test_main_loop_subcommand(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    _ws(tmp_path)
+    observe.main(["loop"])
+    out = capsys.readouterr().out
+    assert "Loop" in out or "idle" in out
+
+
+def test_main_heartbeat_subcommand(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    _ws(tmp_path)
+    observe.main(["heartbeat"])
+    out = capsys.readouterr().out
+    assert "Heartbeat" in out or "heartbeat" in out.lower()
+
+
+def test_main_outcomes_subcommand(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    _ws(tmp_path)
+    observe.main(["outcomes"])
+    out = capsys.readouterr().out
+    assert "Recent" in out or "outcomes" in out.lower() or "none" in out
+
+
+def test_main_audit_subcommand(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    _ws(tmp_path)
+    observe.main(["audit"])
+    out = capsys.readouterr().out
+    assert "audit" in out.lower() or "none" in out
+
+
+def test_main_memory_subcommand(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    _ws(tmp_path)
+    observe.main(["memory"])
+    out = capsys.readouterr().out
+    assert "Memory" in out or "medium" in out
+
+
+def test_main_outcomes_limit_flag(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    mem = _ws(tmp_path)
+    for i in range(10):
+        _append_outcome(mem, goal=f"task-{i}")
+    observe.main(["outcomes", "--limit", "3"])
+    out = capsys.readouterr().out
+    # Should show "last 3" in the header
+    assert "3" in out

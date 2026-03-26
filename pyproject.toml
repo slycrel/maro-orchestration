@@ -26,6 +26,7 @@ poe-sandbox = "cli:_sandbox_main"
 poe-skills = "cli:_skills_main"
 poe-inspector = "inspector:main"
 poe-knowledge = "knowledge:main"
+poe-observe = "observe:main"
 poe-test = "bootstrap:_smoke_main"
 
 [tool.setuptools.packages.find]
