@@ -182,7 +182,7 @@ class ClaudeSubprocessAdapter(LLMAdapter):
 
     backend = "subprocess"
 
-    def __init__(self, model: str = MODEL_CHEAP, claude_bin: str = _CLAUDE_BIN, timeout: int = 120):
+    def __init__(self, model: str = MODEL_CHEAP, claude_bin: str = _CLAUDE_BIN, timeout: int = 300):
         self.model_key = model
         self.claude_bin = claude_bin
         self.timeout = timeout
@@ -201,7 +201,7 @@ class ClaudeSubprocessAdapter(LLMAdapter):
 
         # Build command
         model_str = resolve_model("subprocess", self.model_key)
-        cmd = [self.claude_bin, "-p", "--output-format", "json"]
+        cmd = [self.claude_bin, "-p", "--output-format", "json", "--dangerously-skip-permissions"]
         if model_str not in (MODEL_CHEAP, MODEL_MID, MODEL_POWER, "cheap", "mid", "power"):
             # Only add --model if it's a real model name, not our constants
             cmd += ["--model", model_str]
@@ -223,7 +223,9 @@ class ClaudeSubprocessAdapter(LLMAdapter):
 
         if result.returncode != 0:
             stderr = result.stderr.strip()
-            raise RuntimeError(f"claude subprocess failed (rc={result.returncode}): {stderr[:200]}")
+            stdout_hint = result.stdout.strip()[:200] if result.stdout.strip() else ""
+            detail = stderr[:300] or stdout_hint or "(no output)"
+            raise RuntimeError(f"claude subprocess failed (rc={result.returncode}): {detail}")
 
         # Parse JSON output
         try:
