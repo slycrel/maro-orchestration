@@ -432,11 +432,26 @@ Currently no real-time view of what Poe is doing. `loop.lock` shows the active g
 
 ---
 
-### Phase 24: Messaging Integrations — Slack, Signal, iMessage
+### Phase 24: Messaging Integrations — Slack, Signal, iMessage *(PARTIAL)*
 
 Telegram is the current interface. Others when needed (truly later, no urgency):
 
-- **Slack**: Socket Mode API (no public endpoint required). Natural fit for team visibility. A `slack_listener.py` mirror of `telegram_listener.py`.
+**Slack — SHIPPED (skeleton):**
+- `src/slack_listener.py`: Socket Mode listener (no public endpoint needed).
+  Mirrors `telegram_listener.py` exactly: same slash commands (`/status`, `/observe`,
+  `/knowledge`, `/director`, `/research`, `/build`, `/ops`, `/stop`, `/help`), same
+  interrupt routing when a loop is active, same dry_run/verbose API.
+- Credential resolution: `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, `SLACK_ALLOWED_CHANNELS`
+  from env → secrets/.env → openclaw.json. Graceful degradation without `slack-sdk`.
+- `/observe` and `/knowledge` inline — snapshot and crystallization status accessible
+  from Slack without any extra setup.
+- `tests/test_slack_listener.py`: 25 tests
+- `pyproject.toml`: `slack = ["slack-sdk>=3.0"]` extra; `poe-slack` entry point
+
+**To activate**: `pip install slack-sdk`, set `SLACK_BOT_TOKEN` + `SLACK_APP_TOKEN`,
+create a Slack app at api.slack.com with Socket Mode enabled.
+
+**Still pending:**
 - **Signal**: `signal-cli` daemon + REST API. E2E encrypted, good for personal use.
 - **iMessage**: macOS-only via AppleScript or Shortcuts. Brittle; low priority.
 

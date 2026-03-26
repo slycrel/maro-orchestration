@@ -755,7 +755,66 @@ cli (all commands)
 - `memory/sandbox-audit.jsonl` — live during sandboxed skill execution
 - Hook with `fire_on=step` + `type=reporter` — most direct path to per-step observability
 
-See Phase 23 in `ROADMAP.md` for the planned observability dashboard.
+## Execution Snapshot (`observe.py`) — Phase 23
+
+`poe-observe` is a read-only snapshot command showing what the system is doing right now.
+All reads are local JSONL/JSON — no LLM calls, no side effects.
+
+```
+poe-observe              → full snapshot
+poe-observe loop         → active goal / loop.lock
+poe-observe heartbeat    → heartbeat health
+poe-observe outcomes     → recent task outcomes (--limit N)
+poe-observe audit        → sandbox audit log tail (--limit N)
+poe-observe memory       → memory tier stats
+poe-observe watch        → refresh snapshot on interval (--interval N, default 5s)
+```
+
+Data sources read:
+- `memory/loop.lock` — active loop id, goal, pid, started_at
+- `memory/heartbeat-state.json` — health status, last updated
+- `memory/outcomes.jsonl` — recent task outcomes
+- `memory/sandbox-audit.jsonl` — sandboxed skill execution records
+- memory tier JSONL via `memory.memory_status()`
+
+---
+
+## Knowledge Crystallization Dashboard (`knowledge.py`) — Phase 22
+
+`poe-knowledge` is the unified view of where each piece of knowledge sits on the
+Fluid → Lesson → Identity → Skill → Rule graduation path.
+
+```
+poe-knowledge status [--stage N]   → crystallization dashboard (all stages or one)
+poe-knowledge promote              → list available cross-stage promotions (read-only)
+```
+
+Stage renderers:
+- **Stage 2** (Lessons): medium/long counts, avg score, graveyard count (0.2–0.4 band),
+  incidental lesson count (acquired_for tag), promote candidates, GC candidates
+- **Stage 3** (Identity): canon candidates with top-3 by times_applied
+- **Stage 4** (Skills): provisional/established counts, promote-ready names
+- **Stage 5** (Rules): stub — not yet implemented
+- **Evolver**: pending suggestion count by category
+
+---
+
+## Knowledge Graveyard (`memory.py`) — Phase 27
+
+The graveyard is the decay band [GC_THRESHOLD (0.2), 0.4) — lessons still on disk but
+below the active injection threshold. These are recoverable, not lost.
+
+```python
+search_graveyard(topic, resurrect=False)  # fuzzy match decayed lessons
+record_tiered_lesson(acquired_for=goal_id)  # tag incidental/prerequisite lessons
+```
+
+`TieredLesson.acquired_for: Optional[str]` — tag identifying the goal that triggered
+incidental knowledge acquisition (e.g. "learn kanji" triggered by "paint kanji").
+
+Before every `_decompose()` call in `agent_loop.py`, the loop searches the graveyard
+for topic-relevant lessons and resurrects them (`reinforce_lesson()`) so they re-enter
+the active zone and are injected into the decomposition prompt.
 
 ---
 
