@@ -422,13 +422,19 @@ def main(argv: list[str] | None = None) -> int:
     p_gw_send.add_argument("--timeout", type=int, default=10, help="Send timeout in seconds (default: 10)")
     p_gw_send.add_argument("--format", choices=["text", "json"], default="text")
 
-    p_poe_sandbox = sub.add_parser("poe-sandbox", help="Run skill tests in sandbox isolation (Phase 15)")
+    p_poe_sandbox = sub.add_parser("poe-sandbox", help="Skill sandbox isolation — test, audit, config (Phase 15+18)")
     sandbox_sub = p_poe_sandbox.add_subparsers(dest="sandbox_cmd", required=True)
 
     p_sb_test = sandbox_sub.add_parser("test", help="Run sandboxed tests for a skill")
     p_sb_test.add_argument("skill_id", help="Skill ID or name to test")
     p_sb_test.add_argument("--generate", action="store_true", help="Generate new tests from recent failures before running")
+    p_sb_test.add_argument("--no-network-block", action="store_true", help="Disable soft network blocking (Phase 18)")
+    p_sb_test.add_argument("--venv", action="store_true", help="Use isolated venv per execution — slow, ~500ms (Phase 18)")
     p_sb_test.add_argument("--format", choices=["text", "json"], default="text")
+    p_sb_audit = sandbox_sub.add_parser("audit", help="Show recent sandbox execution audit log (Phase 18)")
+    p_sb_audit.add_argument("--limit", type=int, default=20)
+    p_sb_audit.add_argument("--format", choices=["text", "json"], default="text")
+    sandbox_sub.add_parser("config", help="Show current sandbox hardening config defaults (Phase 18)")
 
     # Phase 17: Behavior-aligned skill router CLI
     p_poe_router = sub.add_parser("poe-router", help="Behavior-aligned skill router (Phase 17)")
@@ -1920,9 +1926,41 @@ def main(argv: list[str] | None = None) -> int:
             return 0 if result.sent else 1
 
     if args.cmd == "poe-sandbox":
-        from skills import load_skills, generate_skill_tests, _load_skill_tests
-        from sandbox import run_skill_tests_sandboxed
+        from sandbox import run_skill_tests_sandboxed, load_audit_log, SandboxConfig
 
+        sandbox_cmd = getattr(args, "sandbox_cmd", "test")
+
+        if sandbox_cmd == "audit":
+            entries = load_audit_log(limit=getattr(args, "limit", 20))
+            if getattr(args, "format", "text") == "json":
+                print(json.dumps(entries, indent=2))
+            else:
+                print(f"Sandbox audit log (last {len(entries)} entries):")
+                for e in entries:
+                    safe_icon = "✓" if e.get("static_safe") else "✗"
+                    net_icon = "N" if e.get("network_blocked") else " "
+                    venv_icon = "V" if e.get("venv_isolated") else " "
+                    res_icon = "R" if e.get("resource_limited") else " "
+                    ok = "ok" if e.get("success") else ("t/o" if e.get("timed_out") else "fail")
+                    print(f"  [{e.get('timestamp','')[:19]}] {ok:4s} [{safe_icon}{net_icon}{venv_icon}{res_icon}] "
+                          f"skill={e.get('skill_name','?')[:20]} exit={e.get('exit_code')} "
+                          f"{e.get('elapsed_ms')}ms  {e.get('output_preview','')[:50]}")
+            return 0
+
+        if sandbox_cmd == "config":
+            cfg = SandboxConfig()
+            print("Sandbox hardening defaults:")
+            print(f"  timeout_seconds:  {cfg.timeout_seconds}")
+            print(f"  max_cpu_seconds:  {cfg.max_cpu_seconds}  (RLIMIT_CPU)")
+            print(f"  max_file_size_mb: {cfg.max_file_size_mb}  (RLIMIT_FSIZE)")
+            print(f"  max_open_files:   {cfg.max_open_files}  (RLIMIT_NOFILE)")
+            print(f"  block_network:    {cfg.block_network}  (soft socket monkey-patch)")
+            print(f"  use_venv:         {cfg.use_venv}  (isolated venv, ~500ms overhead)")
+            print(f"  audit:            {cfg.audit}  (memory/sandbox-audit.jsonl)")
+            return 0
+
+        # sandbox_cmd == "test"
+        from skills import load_skills, generate_skill_tests, _load_skill_tests
         skill_id = args.skill_id
         generate = getattr(args, "generate", False)
 
@@ -1930,6 +1968,11 @@ def main(argv: list[str] | None = None) -> int:
         target_skill = next((s for s in all_skills if s.id == skill_id or s.name == skill_id), None)
         if target_skill is None:
             return fail("E_SKILL_NOT_FOUND", f"No skill with id or name {skill_id!r}")
+
+        sb_config = SandboxConfig(
+            block_network=not getattr(args, "no_network_block", False),
+            use_venv=getattr(args, "venv", False),
+        )
 
         try:
             if generate:
@@ -1950,17 +1993,21 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"No tests found for skill={target_skill.name!r}. Use --generate to create them.")
                 return 0
 
-            passed, total = run_skill_tests_sandboxed(target_skill, tests)
+            passed, total = run_skill_tests_sandboxed(target_skill, tests, config=sb_config)
+            net_label = " [network-blocked]" if sb_config.block_network else ""
+            venv_label = " [venv-isolated]" if sb_config.use_venv else ""
             if getattr(args, "format", "text") == "json":
                 print(json.dumps({
                     "skill_id": target_skill.id,
                     "skill_name": target_skill.name,
                     "passed": passed,
                     "total": total,
+                    "network_blocked": sb_config.block_network,
+                    "venv_isolated": sb_config.use_venv,
                     "tests": [t.to_dict() for t in tests],
                 }, indent=2))
             else:
-                print(f"Skill: {target_skill.name} (id={target_skill.id}) [sandboxed]")
+                print(f"Skill: {target_skill.name} (id={target_skill.id}) [sandboxed]{net_label}{venv_label}")
                 print(f"Tests: {total} | Passed: {passed}")
                 for t in tests:
                     print(f"  - [{t.input_description[:60]}] expect: {t.expected_keywords}")

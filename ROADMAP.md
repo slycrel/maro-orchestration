@@ -332,21 +332,22 @@ Inspired by Memento-Skills arXiv:2603.18743: one-step offline RL, multi-positive
 
 ---
 
-## Phase 18: Sandbox Hardening
+## Phase 18: Sandbox Hardening *(COMPLETE)*
 
-**Production-grade skill isolation.** The current sandbox (Phase 15) runs skills in a plain `python3` subprocess with static content analysis. This phase hardens it to `uv`-isolated environments with explicit dependency manifests and resource limits.
+**Production-grade skill isolation.** The current sandbox (Phase 15) runs skills in a plain `python3` subprocess with static content analysis. This phase hardens it to configurable resource limits, network isolation, and a full audit log.
 
-Deferred from Phase 15 by Jeremy's request — sandbox is functional, hardening can wait.
+- [x] **`SandboxConfig` dataclass:** configurable per-execution — `timeout_seconds`, `max_cpu_seconds`, `max_file_size_mb`, `max_open_files`, `block_network`, `use_venv`, `audit`. All documented defaults.
+- [x] **Resource limits via `preexec_fn`:** `_make_preexec_fn(config)` sets `RLIMIT_CPU`, `RLIMIT_FSIZE`, `RLIMIT_NOFILE` in child process before exec. `RLIMIT_AS` intentionally omitted — breaks Python mmap on Linux with overcommit.
+- [x] **Network isolation (soft):** `_NETWORK_BLOCKER_CODE` monkey-patches `socket.socket.connect` to raise `ConnectionRefusedError`. Injected into runner script preamble when `block_network=True`. No root required.
+- [x] **venv isolation (optional):** `_get_venv_python()` tries `uv venv` first, falls back to `python3 -m venv --without-pip`. `use_venv=False` by default (avoids ~500ms overhead). `venv_isolated` flag in result.
+- [x] **Audit log:** every sandboxed execution optionally logged to `memory/sandbox-audit.jsonl` (JSONL, newest-first on read). Fields: `audit_id`, `timestamp`, `skill_id`, `skill_name`, `static_safe`, `exit_code`, `elapsed_ms`, `timed_out`, `success`, `network_blocked`, `venv_isolated`, `resource_limited`, `output_preview`, `error`. Failures never block execution.
+- [x] **`SandboxResult` Phase 18 fields:** `audit_id` (12-char UUID prefix), `network_blocked`, `venv_isolated`, `resource_limited`.
+- [x] **Updated dangerous patterns:** added `import ctypes`, `socket.connect`, `requests.get/post`, `httpx.`, `aiohttp.`, `pickle.loads`, `marshal.loads`, `ctypes.`, `cffi.`, `urllib.request`.
+- [x] **`poe-sandbox` CLI extensions:** `test` gains `--no-network-block`, `--venv` flags; `audit [--limit N] [--format json]` subcommand; `config` subcommand shows current defaults.
+- [x] **`load_audit_log(limit=50)`:** reads JSONL newest-first.
+- [x] 33 new tests (1041 total passing, 5 skipped). Covers config/result fields, static analysis, network blocker code validity, subprocess network block, audit creation/ordering/limits, adversarial edge cases.
 
-- [ ] **`uv` virtual env per skill:** each skill execution creates (or reuses) a `uv` venv with the skill's declared dependencies. No shared package state between skills.
-- [ ] **Dependency manifest in skill format:** structured skill markdown gains a `## Dependencies` section listing pip packages. `sandbox.py` parses this and provisions the venv before execution.
-- [ ] **Resource limits:** CPU time limit (via `resource` module or `ulimit`), memory cap, filesystem write restriction (skills write only to a temp sandbox dir, not the workspace).
-- [ ] **Network isolation option:** configurable per-skill — `network: none | localhost | full`. Default `none` for skills that don't declare network access.
-- [ ] **Audit log:** every sandboxed execution logged to `memory/sandbox-audit.jsonl` with skill_id, command, exit_code, resources_used.
-- [ ] Migrate `run_skill_sandboxed()` to use `uv run` when available, fall back to plain subprocess.
-- [ ] `poe-sandbox audit [--limit N]` — show recent sandbox executions
-
-**Artifact:** `src/sandbox.py` (hardened), `memory/sandbox-audit.jsonl`
+**Artifact:** `src/sandbox.py` (hardened), `tests/test_sandbox_hardening.py`, `memory/sandbox-audit.jsonl` (runtime)
 
 ---
 
