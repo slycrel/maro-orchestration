@@ -29,6 +29,7 @@ poe-inspector = "inspector:main"
 poe-knowledge = "knowledge:main"
 poe-observe = "observe:main"
 poe-slack = "slack_listener:main"
+poe-gc = "gc_memory:main"
 poe-test = "bootstrap:_smoke_main"
 
 [tool.setuptools.packages.find]

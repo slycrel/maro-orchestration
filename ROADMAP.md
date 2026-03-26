@@ -459,10 +459,19 @@ Note: routing layer (`handle.py`, `poe.py`) is already interface-agnostic. Addin
 
 ---
 
-### Phase 25: Ops Hardening — Resource Profiling and Load Testing
+### Phase 25: Ops Hardening — Resource Profiling and Load Testing *(PARTIAL)*
 
 Before high-volume or mission-critical workloads:
-- **Disk growth**: JSONL files with no TTL accumulate unboundedly. Need a `poe-gc` command + scheduled rotation for outcomes/lessons older than N days (configurable retention).
+
+**Shipped (Phase 25 disk GC):**
+- `src/gc_memory.py`: `poe-gc` command — memory garbage collection with configurable retention
+  - `poe-gc status` / `poe-gc run [--yes] [--dry-run]`
+  - GC targets: outcomes.jsonl (default 90-day retention), sandbox-audit.jsonl (last 1000 entries), tiered lessons below GC_THRESHOLD (0.2), daily narrative logs (default 180-day retention)
+  - All operations are dry_run by default; `--yes` skips confirmation prompt (for cron)
+  - `tests/test_gc_memory.py`: 23 tests covering all GC operations, dry_run semantics, CLI
+  - `pyproject.toml`: `poe-gc` entry point
+
+**Still pending:**
 - **Memory profiling**: Python process size under various loop depths; relevant for parallel missions.
 - **Parallelization analysis**: `background.py` uses `max_workers=2`. Right ceiling? Bottleneck is probably API rate limits, not CPU.
 - **Load testing**: 100 NOW-lane tasks + 10 concurrent AGENDA loops. Where does it break?
