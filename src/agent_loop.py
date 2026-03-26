@@ -449,9 +449,10 @@ def run_agent_loop(
         if step_status == "done":
             if item_index >= 0:
                 o.mark_item(project, item_index, o.STATE_DONE)
-            completed_context.append(f"Step {step_idx} ({step_text}): {step_summary}")
+            _ctx_entry = f"Step {step_idx} ({step_text[:80]}): {step_summary[:120]}"
+            completed_context.append(_ctx_entry)
             if verbose:
-                print(f"[poe] step {step_idx} done: {step_summary}", file=sys.stderr, flush=True)
+                print(f"[poe] step {step_idx} done: {step_summary[:120]}", file=sys.stderr, flush=True)
         else:
             _prior_retries = _step_retries.get(step_text, 0)
             if _prior_retries < 1:

@@ -339,46 +339,6 @@ telegram_listener:
 
 ---
 
-## Storage layout
-
-```
-workspace/prototypes/poe-orchestration/
-├── projects/
-│   └── <slug>/
-│       ├── NEXT.md          # task checklist (todo/doing/done/blocked)
-│       ├── DECISIONS.md     # decision log
-│       ├── config.json      # project config (slug, mission, priority)
-│       ├── ancestry.json    # goal ancestry chain (optional)
-│       └── output/
-│           └── runs/        # RunRecord artifacts
-└── memory/
-    ├── outcomes.jsonl       # per-run outcomes
-    ├── lessons.jsonl        # extracted lessons
-    ├── suggestions.jsonl    # evolver suggestions
-    ├── interrupts.jsonl     # interrupt queue (polled by agent loop)
-    ├── loop.lock            # PID-verified lock while a loop is active
-    ├── heartbeat-state.json # last heartbeat result
-    ├── heartbeat-log.jsonl  # heartbeat history
-    ├── eval-results.jsonl   # benchmark results
-    └── YYYY-MM-DD.md        # daily narrative log
-```
-
----
-
-## Telegram UX contract
-
-| Message type | Response timing |
-|-------------|----------------|
-| Short (<= 20 chars) or `/status` | Typing indicator → send response |
-| Long natural language | "⏳ Working on it..." → edit with result |
-| `/director`, `/research`, `/build`, `/ops` | "⏳ Working on it..." → edit with result |
-| Any message while loop is active | Routed to interrupt queue; ack sent |
-| `/stop` | Posts stop interrupt; loop halts at next step boundary |
-
-Heartbeat alerts are sent only when health is `critical` or `degraded`, or stuck projects are detected. Non-actionable status is logged silently.
-
----
-
 ## Mission Layer (`mission.py`, `background.py`, `skills.py`)
 
 Phase 10. Multi-day goal hierarchy with fresh context per unit of work.

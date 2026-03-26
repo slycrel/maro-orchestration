@@ -1,15 +1,15 @@
-# Poe Orchestration — v0 Spec
+# Poe Orchestration — Design Spec
 ## Synthesized from 7 weeks of design conversations (Feb 5 – Mar 23, 2026)
 
 ---
 
 ## 1. System Overview
 
-An orchestration layer built on top of OpenClaw that turns a conversational AI bot ("Poe") into an autonomous agent capable of receiving high-level goals and executing them to completion through delegation, sub-agents, and structured task management.
+An orchestration layer that turns a conversational AI bot ("Poe") into an autonomous agent capable of receiving high-level goals and executing them to completion through delegation, sub-agents, and structured task management.
 
 **Core principle**: The orchestration is the product. Projects (Polymarket bot, X scraping, etc.) are test cases that *use* it. It is not a framework that sits under projects — it's the operating system for getting things done.
 
-**Platform**: 2014 Mac Mini (Ubuntu Linux headless), user `clawd`, residential fiber. OpenClaw + Claude Code running in parallel.
+**Platform**: 2014 Mac Mini (Ubuntu Linux headless), user `clawd`, residential fiber.
 
 ---
 
@@ -21,26 +21,21 @@ Schedulers, queues, tool access, sandboxes, cost controls, logging, retries, mod
 - **Host**: Ubuntu Linux headless, user `clawd` with sudo, 2014 Mac Mini
 - **Gateway**: OpenClaw local gateway, ws://127.0.0.1:18789, systemd service
 - **Communication**: Telegram (@edgar_allen_bot / "Poe"), Slack (Claude Code bridge)
-- **Model stack**: Claude Opus / Sonnet (primary) via Anthropic API or OpenRouter → GPT-5.x variants (fallback) → Gemini (last resort). OpenRouter as stable routing layer for multi-model access.
-- **Auth**: Anthropic API key or OpenRouter key for Claude models. Codex CLI OAuth for GPT fallbacks. `gh` CLI for GitHub (authenticated as `slycrel`).
-- **Accounts**: agentic.poe@yahoo.com, @AgenticPoe on X, Moltbook profile
-- **Browser**: Playwright + computer-use skill, xvfb display :99, Chrome persistent profile, VNC at :5900
+- **Model stack**: Claude Sonnet/Opus (primary) via Anthropic API or subprocess → OpenRouter (fallback)
+- **Auth**: Anthropic API key or OpenRouter key; `gh` CLI for GitHub (authenticated as `slycrel`)
 
 ### Layer 2: Agent Runtime ("The Process")
 Execution context with permissions, memory handles, and toolset.
 
-- **Main agent**: `agent:main:main` — conversational coordinator ("the Handle")
-- **Sub-agents**: Spawned via `sessions_spawn` or `openclaw agent` for background work
-- **Execution**: `openclaw-agent-locked.sh` wrapper with flock-based concurrency (2 slots)
-- **Backoff**: Jitter on rate-limit/cooldown, self-throttle at 85% usage
+- **Main agent**: conversational coordinator ("the Handle")
+- **Sub-agents**: Spawned via Director/Worker hierarchy or `run_mission()` features
+- **Backoff**: Jitter on rate-limit/cooldown
 
 ### Layer 3: Persona/Role ("The Mask")
 Goals, voice, decision rules, rubric — portable across runtimes and models.
 
-- **Personas directory**: `prototypes/poe-orchestration/personas/`
-- **Shipped personas**: chief-of-staff, last30days-brief, scrapling-adaptive-web-recon, systems-design-architect-coach, research-assistant-deep-synth, loop-validator
-- **Persona specs** (JSON): `prototypes/poe-orchestration/persona-specs/` mapping persona → default agent/model
-- **Key insight from Jeremy**: Personas are swappable masks, separate from infrastructure. Different models can wear the same persona. The persona is the reusable unit, not the agent instance.
+- **Personas directory**: `personas/`
+- **Key insight**: Personas are swappable masks, separate from infrastructure. Different models can wear the same persona.
 
 ---
 
@@ -51,7 +46,7 @@ Jeremy (Telegram)
   └── Poe ("The Handle")
         ├── Director sub-agent — plans, reviews, iterates; does NOT execute code
         │     ├── worker-research — info gathering, must produce cited artifacts
-        │     ├── worker-build — implementation (model: codex-cli/gpt-5.1-codex-mini)
+        │     ├── worker-build — implementation
         │     ├── worker-ops — automation/diagnostics/infrastructure
         │     └── worker-general — catch-all
         └── NOW Lane — 1-shot quick tasks (bypass Director for trivial work)
@@ -62,8 +57,6 @@ Jeremy (Telegram)
 - `plan_acceptance` modes: `explicit` (for public/irreversible) or `inferred` (low-risk/reversible)
 - Gates worker kickoff on acceptance
 - Reviews/iterates until acceptance criteria met
-- Reports back to Handle for relay to Jeremy
-- Checkpoints after each major phase
 
 ### Slash Commands
 `/director <directive>`, `/research <task>`, `/build <task>`, `/ops <task>`, `/general <task>`
@@ -73,106 +66,48 @@ Jeremy (Telegram)
 ## 4. Two Execution Lanes
 
 ### NOW Lane (Fast Path)
-For tasks completable in ~seconds. 1-shot delegation, no planning overhead.
-
-- **Skill**: `skills/now-lane/SKILL.md`
-- **Runner**: `prototypes/poe-orchestrator/scripts/now_run.py` / `now_run.sh`
-- **Schema**: UUID job_id + run_id, required fields: job_id, run_id, lane, source, reason, status, attempt, timestamps, artifact_paths
-- **Validator**: `prototypes/poe-orchestrator/scripts/validate-latest-now-artifact.py`
-- **Artifacts**: `prototypes/poe-orchestrator/artifacts/<job_id>.{md,json,log}`
-- **Ledger**: `prototypes/poe-orchestrator/job-ledger.jsonl`
+For tasks completable in ~seconds. 1-shot delegation, no planning overhead. `handle.py` classifies intent → NOW or AGENDA.
 
 ### AGENDA Lane (Heavy Path)
-For multi-step projects requiring planning, delegation, and review cycles.
-
-- **Entrypoint**: `scripts/poe-orch-run.sh` (--once, --loop, --status)
-- **Agenda file**: `output/agenda/agenda.json` + `output/agenda/checkpoint.json`
-- **Tick**: `scripts/poe-orch-tick.sh` — scans `projects/*/NEXT.md`, picks next unchecked task, marks in-progress
-- **Pump**: `scripts/poe-orch-pump.sh` — loops tick → run until stuck or time-bounded
-- **Autonomy loop**: `scripts/autonomy/autonomous_loop.py` + `run_loop.sh` — picks next leaf task, plans, executes, verifies, commits, logs
+For multi-step projects. `agent_loop.py` decomposes goal → executes steps → done|stuck. Per-project `projects/<slug>/NEXT.md` tracks checklist.
 
 ---
 
-## 5. Task Queue System
-
-### Core Engine
-- **Script**: `scripts/task-queue.sh` — supports `json:{...}` lines + legacy TSV
-- **Operations**: enqueue, list, run, status, archive, prune
-- **Task types**: article_capture, x_article_capture, script, project_task, email_triage
-- **Intake parser**: `scripts/task-queue-intake.sh` — auto-routes URLs and script paths
-- **Migration**: `scripts/task-queue-migrate.sh`
-
-### Atomic Claim/Checkout (from Paperclip pattern)
-- flock on `tasks.queue.lock`
-- Status transitions: queued → running → done/failed
-- `checkout <job_id>` returns 0 (success) or 153 (409-equivalent, walk away)
-- Stale claim recovery: `TASK_QUEUE_CLAIM_STALE_MINUTES` (default 30)
-
-### Intent Aliases
-- Numbered directive parsing: "Do #1 then #2 and #3" maps to configured aliases
-- Config: `config/intent-aliases.tsv` (editable without code changes)
-- Heartbeat drains intake every run, consumes queue items (limit 3)
-
-### Queue Archival
-- `scripts/task-queue.sh archive` / `prune`
-- Supports --keep-last, --min-age-s, --dry-run
-
----
-
-## 6. Loop Control — The Loop Sheriff
+## 5. Loop Control
 
 Jeremy was explicit: **validator-based, not count-based**. Don't cap iterations — detect when you're stuck.
 
-- **Validator**: `scripts/poe-orch-validate.sh` / `poe-orch-validate.py`
-- **Persona**: `prototypes/poe-orchestration/personas/loop-validator.md`
-- Detects repeated selection / no-progress
-- Escalates to Handle (Poe) or Jeremy when stuck
-- Independent from the execution loop itself
+`sheriff.py` checks:
+- Repetition: same TODO selected 3+ times with no state change
+- Artifact freshness: have output files changed recently?
+- Decision log freshness: are new decisions being added?
 
-> "You need an independent validator to keep from getting stuck in a loop. This could be a script, agent, or even simple queue. With agents we don't have to know up front." — Jeremy, Mar 3
-
----
-
-## 7. Heartbeat & Self-Healing
-
-### Heartbeat Loop
-- **Script**: `scripts/heartbeat-proactive-loop.sh`
-- **Cadence**: Every 5 minutes via cron
-- **State**: `memory/heartbeat-state.json`
-- **Recovery modes**: same-session, post-compaction, cold-start
-- **Prerequisite gate**: validates required bins/scripts + writable dirs before work
-
-### Tiered Recovery
-1. Gateway ping (`openclaw status --quiet`)
-2. Model ping via `opencode run`
-3. Config diagnostics (JSON valid, env vars present, backups exist)
-4. Scripted recovery (`auto-recover.sh` — bash-first, deterministic)
-5. Agentic recovery (spawn sub-agent for diagnosis)
-6. Escalation — Telegram notification to Jeremy
-
-**Key design decision**: Use a different model (Gemini) for heartbeat, so checks work even when primary model is down. Deterministic scripts first, agentic as fallback.
-
-### Codex Usage Guardrail
-- Runs `scripts/codex-usage.sh --json`, checks >= 85% usage
-- Max 1x/hour, writes to `output/usage/`
-
-### Proactive Discovery
-- Discovers and runs `prototypes/*/hooks/heartbeat-proactive.sh` by pattern
-- Each prototype can hook into the heartbeat without modifying global scripts
+The "March of Nines" problem: a 10-step chain at 90%/step = 35% failure. Stage gating (milestone validation) and checkpoint-resume are the fix — not retry logic.
 
 ---
 
-## 8. Observability
+## 6. Heartbeat & Self-Healing
 
-- **Queue run summaries**: `output/queue-runs/index.jsonl` (append-only)
-- **NOW lane ledger**: `prototypes/poe-orchestrator/job-ledger.jsonl`
-- **Dashboard**: `scripts/queue-runs-latest.sh` (colorized terminal renderer)
-- **Retrieval traces**: `output/qmd/retrieval-traces/`
-- **Actionable-only alerts**: Non-actionable failures logged as `status=degraded`, not surfaced to Jeremy
+Three-tier recovery:
+1. Scripted: deterministic bash checks and recovery (`sheriff.py`)
+2. LLM diagnosis: stuck projects analyzed by LLM
+3. Telegram escalation: critical alerts only
+
+**Key design**: Deterministic scripts first, agentic as fallback. Non-actionable failures are logged silently — not surfaced to Jeremy.
 
 ---
 
-## 9. UX Contract
+## 7. Observability
+
+- `memory/outcomes.jsonl` — per-run outcomes
+- `memory/heartbeat-log.jsonl` — heartbeat history
+- `memory/sandbox-audit.jsonl` — sandboxed skill execution audit
+- `projects/<slug>/DECISIONS.md` — per-project decision log
+- `memory/YYYY-MM-DD.md` — daily narrative log
+
+---
+
+## 8. UX Contract
 
 ### Response Timing
 | Elapsed | Expected behavior |
@@ -181,226 +116,80 @@ Jeremy was explicit: **validator-based, not count-based**. Don't cap iterations 
 | 5-15s | Status update if still working |
 | 30-40s | Substantive update, even if incomplete |
 
-### Three Response Modes
-1. **Instant answer** — known fact, quick lookup
-2. **"Just a sec"** — working on it, will update shortly
-3. **"I've got that started"** — backgrounded, will notify on completion
+Three response modes: instant answer / "just a sec" / "I've got that started" (backgrounded).
 
-### Default: async when uncertain. Better to pleasantly surprise than leave hanging.
-
-### Message Intent Contract
-- **Informational**: no action verb → treat as FYI
-- **Directive**: explicit verb + scope + success condition → execute
-- **Tie-breaker**: if ambiguous but low-risk and reversible → take action
-
-### Interruption Policy
-New messages during a run are additive/corrective by default. Only stop on explicit stop/wait/pivot. Continue background work and integrate new information.
+Default: async when uncertain. Better to pleasantly surprise than leave hanging.
 
 ---
 
-## 10. Autonomy Policy
+## 9. Autonomy Policy
 
 ### Authority Level: C (Aggressive)
-> "As long as we're able to roll back with git and/or are working forwards compatible (additive + backwards compatible) I think that's going to be just fine." — Jeremy
+> "As long as we're able to roll back with git and/or are working forwards compatible I think that's going to be just fine." — Jeremy
 
 ### Decision Gates (MUST ask Jeremy)
 - Money / real trades
 - Credentials / auth / external posting as Jeremy
 - Destructive deletions
 - Major direction changes / scope pivots
-- Representing Jeremy externally
 - Exposing private data outside the box
-- Locking out critical access
 
 ### Everything Else: Act First
-> "Prefer forgiveness rather than permission." — Jeremy, Feb 8
-> "Tie goes to taking action." — Jeremy, Feb 12
-> "Default to action and best judgement, document uncertainty > 30% to revisit at the end." — Jeremy, Mar 6
+> "Prefer forgiveness rather than permission."
 
 ---
 
-## 11. Concurrency Model
-
-- Queue workers: 3
-- One nested level: up to +3 each
-- Effective cap: ~10 total including Poe (tunable)
-- Persistent queue, variable over time
-- Global concurrency throttle: `scripts/openclaw-agent-locked.sh` (flock, 2 Codex slots)
-
----
-
-## 12. Workspace Isolation
-
-Each prototype is fully self-contained:
-```
-prototypes/
-  poe-orchestration/
-    docs/           # ORCHESTRATOR_SPEC_v0.md, CONVENTIONS.md, etc.
-    personas/       # Swappable persona definitions
-    persona-specs/  # JSON mappings (persona → agent/model)
-    projects/       # Per-project workspaces
-      <project>/
-        NEXT.md     # Task checklist
-        RISKS.md
-        DECISIONS.md
-    src/            # orch.py — core module
-    hooks/          # heartbeat-proactive.sh
-    memory/
-    output/
-  poe-orchestrator/
-    scripts/        # now_run.py, validate-latest-now-artifact.py
-    artifacts/      # Per-job artifacts
-    job-ledger.jsonl
-  polymarket-research-bot/  # Separate project, uses orchestration
-```
-
-Global ops (gateway, tools, email, calendar) live at `system/` level. No cross-prototype coupling in global scripts.
-
----
-
-## 13. Memory Strategy
-
-- File-based memory: daily files at `memory/YYYY-MM-DD.md`, plus `MEMORY.md` index
-- Separate audit trail vs. actionable memory
-- "Also-After" hooks: post-goal tasks that capture audit/memory/follow-ups/index artifacts
-
-> "An audit log isn't the same as actionable memory, so let's not forget, but also not mainline everything either." — Jeremy, Feb 15
-
----
-
-## 14. External Patterns Evaluated ("Steal List")
+## 10. External Patterns Incorporated
 
 | Source | What was taken |
 |--------|---------------|
-| **Paperclip** | Atomic checkout/409, run_id propagation, redaction, secret_ref, goal ancestry |
-| **Deer-Flow** | LangGraph ideas, middleware, memory, eval hooks |
-| **Souls CLI** | Workspace fixer, curated persona bundles |
-| **AutoHarness** | Auto-test generation concepts |
-| **LangGraph** | Durable state graphs, reflection/cycle support, checkpointed self-improvement loops |
-| **AutoGen** | Layered multi-agent patterns |
-| **CrewAI** | Crews + Flows control plane |
-| **Temporal** | Durable workflow ideas |
-| **DSPy** | Prompt-as-module auto-optimization from success/failure metrics |
+| **Paperclip** | Atomic checkout, run_id propagation, goal ancestry |
 | **Reflexion** | Agent self-reflection on mistakes, stored lessons improve subsequent runs |
-| **Symphony / AWS Multi-Agent Orchestrator** | Decentralized ledger-based coordination, Beacon selection for smart delegation, weighted voting, fault-tolerant sub-agents |
+| **Factory AI** | Three-tier prompting, milestone-gated validation, GAN-style Generator/Evaluator split |
+| **Memento-Skills** | Skill library evolution, failure attribution, unit-test gate on mutations |
+| **Anthropic Harness** | Sprint contracts, boot protocol, `pass^k` regression gates |
+| **LangGraph** | Durable state graphs, checkpointed self-improvement loops |
+| **DSPy** | Prompt-as-module auto-optimization from success/failure metrics |
 
 ---
 
-## 15. Failure Taxonomy
+## 11. Memory Strategy
 
-- **Type A**: Technical/runtime limits → retry, backoff, escalate
-- **Type B**: Goal drift / exploration waste ("ralph-wiggum exploration") → agenda correction + checkpoint
+Three tiers + identity:
+- `short`: in-process session only
+- `medium`: decays 0.85×/day, GC at <0.2
+- `long`: promoted from medium at score ≥ 0.9 AND sessions ≥ 3
+- `AGENTS.md/SOUL.md`: behavioral identity (human-gated writes only)
 
----
-
-## 16. Published Artifacts
-
-- **GitHub**: `slycrel/openclaw-orchestration` (tagged v0.1.0)
-- **Infrastructure backup**: `slycrel/openclaw-setup` (public, sanitized)
-- **Roadmap**: M1-M4 implemented, then replaced with N1-N4
+See `docs/MEMORY_ARCHITECTURE.md` for the full graduation path and `docs/KNOWLEDGE_CRYSTALLIZATION.md` for the crystallization pipeline.
 
 ---
 
-## 17. Rollout Phases
+## 12. Goal Ancestry
 
-| Phase | Focus |
-|-------|-------|
-| 0 | Sanity & audit — validate existing scaffolding |
-| 1 | Instant-ack + queue instrumentation |
-| 2 | Durable graph flows & control plane |
-| 3 | Scaling & crew personas |
-| 4 | Evaluation + continuous learning |
+Every task carries a reverse-linked chain back to the top-level mission. Prevents drift. Each agent's prompt includes:
 
----
-
-## 18. Goal Ancestry
-
-Every task carries a reverse-linked chain back to the top-level mission. This prevents drift, keeps agents aligned with the big picture, and makes reflection/auditing possible across the full goal tree.
-
-### Data Model
-
-Each task gets two new fields:
-
-```json
-{
-  "id": "task-uuid",
-  "title": "Implement WebSocket handler",
-  "status": "todo",
-  "parent_id": "subgoal-123",
-  "ancestry": [
-    {"id": "mission-001", "title": "Build self-leveling autonomous assistant"},
-    {"id": "objective-abc", "title": "Add autonomous bug-fix & evolution loop"},
-    {"id": "subgoal-123", "title": "Enable real-time sync for collaboration"}
-  ]
-}
 ```
-
-- `parent_id`: Direct parent goal/task.
-- `ancestry`: Full chain from top-level mission down to immediate parent. Array of lightweight objects (id + title).
-- When spawning subtasks (via `orch start` or planner), inherit the parent's ancestry and append the parent as the new last element.
-
-### Prompt Injection at Dispatch
-
-When an agent picks up a leaf task, the execution loop builds a prompt prefix from the ancestry:
-
-```text
 Goal Ancestry (stay aligned with this chain):
 1. Mission: Build self-leveling autonomous assistant
 2. Objective: Add autonomous bug-fix & evolution loop
-3. Sub-goal: Enable real-time sync for collaboration
-Current Task: Implement WebSocket handler
+→ Current Task: Implement WebSocket handler
 ```
 
-This ensures the agent understands *why* it's doing the work without re-explanation each time.
-
-### CLI Traversal Helpers
-
-- `orch ancestry <task-id>` — Walk up the chain, print the full trace from leaf to mission.
-- `orch impact <goal-id>` — List all descendant tasks/artifacts that contributed to a goal (breadth-first traversal down the tree).
-
-### Edge Cases
-
-- **Cycle prevention**: Enforce strict tree structure. A task cannot be its own ancestor. Validate on subtask creation.
-- **Deep-chain context truncation**: If ancestry exceeds ~10 levels or a token budget, summarize the middle (keep top 2 + bottom 2 + "...N intermediate goals...").
-- **DAG support (future)**: Start with strict tree (single parent). Allow multiple parents later if tasks legitimately serve two goals, converting the tree to a DAG. Defer until needed.
+Ancestry stored in `projects/<slug>/ancestry.json`.
 
 ---
 
-## 19. Self-Leveling / Meta-Evolution
+## 13. Self-Leveling
 
 The north star: an assistant that gets measurably better over time without manual prompt tuning.
 
-### DSPy-Style Prompt Optimization
-
-Treat prompts and agent instructions as tunable modules. After N runs, evaluate success/failure rates per task type. Auto-optimize prompt parameters (instruction phrasing, tool selection hints, context window allocation) against measured outcomes. DSPy's "compile prompts from examples + metrics" pattern applies directly.
-
-### Reflexion Pattern
-
-After each task completion (success or failure):
-1. Agent reflects on what went well or wrong.
-2. Reflection is stored as a structured lesson (task type, failure mode, corrective insight).
-3. On next similar task, relevant lessons are injected into the agent's prompt alongside goal ancestry.
-
-This turns failures into durable institutional knowledge rather than repeated mistakes.
-
-### Meta-Evolver Agent
-
-A dedicated node/persona that periodically reviews recent runs:
-- Scans the last N job artifacts and their outcomes.
-- Identifies failure patterns (e.g., "research tasks drift 40% of the time when ancestry depth > 5").
-- Auto-suggests prompt tweaks, new guardrails, or skill additions.
-- Outputs a structured recommendation that the planner/director can adopt.
-
-Implementation vehicle: LangGraph's reflection/cycle support. Wrap the meta-evolver as a periodic node in the orchestration graph that fires after every M completed tasks or on a heartbeat schedule.
-
-### Feedback Loop
-
 ```
 Execute task → Log outcome + artifacts
-    → Reflect (per-task lesson)
-    → Aggregate (meta-evolver reviews N runs)
+    → Reflect (per-task lesson, memory.py)
+    → Aggregate (meta-evolver reviews N runs, evolver.py)
     → Optimize (prompt tweaks, new skills, guardrail updates)
     → Deploy changes → Execute next task (improved)
 ```
 
-Start simple: file-based lesson storage, manual review of meta-evolver suggestions. Graduate to auto-application once confidence in the optimization loop is established.
+Start simple: file-based lesson storage, manual review of meta-evolver suggestions. Graduate to auto-application once confidence is established.

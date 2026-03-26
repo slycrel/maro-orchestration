@@ -2,28 +2,18 @@
 
 ## Baseline verification
 
-Run in a clean environment:
-
 ```bash
-cd prototypes/poe-orchestration
-python3 -m pip install -U pytest
-pytest
+python3 -m pytest -q
 bash scripts/smoke.sh
 ```
 
 Expected:
 - tests pass
 - smoke prints `smoke=ok`
-- smoke also exercises:
-  - `tick --exec-cmd`
-  - required artifact validation
-  - reviewer command validation
-  - persisted `validation-summary.json`
 
 ## Manual execution + review flow
 
 ```bash
-cd prototypes/poe-orchestration
 python3 src/cli.py init demo "Ship demo flow" --priority 3
 python3 src/cli.py tick \
   --project demo \
@@ -34,23 +24,24 @@ python3 src/cli.py tick \
 ```
 
 Expected artifacts under `output/runs/<run_id>/`:
-- `stdout.log`
-- `stderr.log`
-- `project.txt`
-- `review/stdout.log`
-- `review/stderr.log`
-- `review/verdict.txt`
+- `stdout.log`, `stderr.log`, `project.txt`
+- `review/stdout.log`, `review/stderr.log`, `review/verdict.txt`
 - `validation-summary.json`
 
-## Inspecting evidence
+## Agent loop smoke test
 
-Use the run id from `tick-start run_id=...`:
+```bash
+python3 -c "
+import sys; sys.path.insert(0, 'src')
+from agent_loop import run_agent_loop
+r = run_agent_loop('test goal', dry_run=True)
+print(r.summary())
+"
+```
+
+## Inspecting evidence
 
 ```bash
 python3 src/cli.py inspect-run <run_id>
 python3 src/cli.py inspect-run <run_id> --format json
 ```
-
-Expected:
-- text output includes `validation_status=done` for successful runs
-- json output includes both the run record and the persisted validation summary
