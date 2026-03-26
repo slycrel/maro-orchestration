@@ -17,29 +17,12 @@ from __future__ import annotations
 
 import os
 import platform
-import shutil
 import subprocess
 import sys
 from pathlib import Path
 from typing import Optional
 
-try:
-    from config import workspace_root, memory_dir, deploy_dir
-except ImportError:
-    def workspace_root() -> Path:  # type: ignore[misc]
-        for var in ("POE_WORKSPACE", "OPENCLAW_WORKSPACE", "WORKSPACE_ROOT"):
-            val = os.environ.get(var)
-            if val:
-                return Path(val).expanduser().resolve()
-        return Path.home() / ".poe" / "workspace"
-
-    def memory_dir() -> Path:  # type: ignore[misc]
-        p = workspace_root() / "memory"
-        p.mkdir(parents=True, exist_ok=True)
-        return p
-
-    def deploy_dir() -> Path:  # type: ignore[misc]
-        return Path(__file__).resolve().parent.parent / "deploy"
+from config import workspace_root, deploy_dir
 
 
 # ---------------------------------------------------------------------------
@@ -133,21 +116,21 @@ _SERVICES: list[dict] = [
         "label": "com.poe.heartbeat",
         "description": "Poe Orchestration — Heartbeat",
         "exec_cmd": f"{_PYTHON} {_SRC_DIR}/sheriff.py --heartbeat",
-        "exec_args_fn": lambda src: [_PYTHON, str(src / "sheriff.py"), "--heartbeat"],
+        "exec_args": [_PYTHON, str(_SRC_DIR / "sheriff.py"), "--heartbeat"],
     },
     {
         "name": "poe-telegram",
         "label": "com.poe.telegram",
         "description": "Poe Orchestration — Telegram Listener",
         "exec_cmd": f"{_PYTHON} {_SRC_DIR}/telegram_listener.py",
-        "exec_args_fn": lambda src: [_PYTHON, str(src / "telegram_listener.py")],
+        "exec_args": [_PYTHON, str(_SRC_DIR / "telegram_listener.py")],
     },
     {
         "name": "poe-inspector",
         "label": "com.poe.inspector",
         "description": "Poe Orchestration — Inspector",
         "exec_cmd": f"{_PYTHON} {_SRC_DIR}/inspector.py --loop",
-        "exec_args_fn": lambda src: [_PYTHON, str(src / "inspector.py"), "--loop"],
+        "exec_args": [_PYTHON, str(_SRC_DIR / "inspector.py"), "--loop"],
     },
 ]
 
@@ -176,11 +159,10 @@ def write_service_files(workspace: Optional[Path] = None) -> list[Path]:
         out_dir = deploy_dir() / "launchd"
         out_dir.mkdir(parents=True, exist_ok=True)
         for svc in _SERVICES:
-            exec_args = svc["exec_args_fn"](_SRC_DIR)
             content = _launchd_plist(
                 label=svc["label"],
                 description=svc["description"],
-                exec_args=exec_args,
+                exec_args=svc["exec_args"],
                 workspace=ws,
             )
             path = out_dir / f"{svc['label']}.plist"

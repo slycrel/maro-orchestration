@@ -753,7 +753,7 @@ cli (all commands)
 - `memory/sandbox-audit.jsonl` — live during sandboxed skill execution
 - Hook with `fire_on=step` + `type=reporter` — most direct path to per-step observability
 
-See `docs/FUTURE_CONSIDERATIONS.md` for the planned observability dashboard.
+See Phase 23 in `ROADMAP.md` for the planned observability dashboard.
 
 ---
 
