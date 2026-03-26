@@ -415,6 +415,108 @@ format_skills_for_prompt(skills) → injected into _decompose() system prompt
 
 ---
 
+## Sandbox Hardening (`sandbox.py`) — Phase 18
+
+Production-grade skill isolation. Every sandboxed execution is audited.
+
+```python
+@dataclass
+class SandboxConfig:
+    timeout_seconds: int = 30
+    max_cpu_seconds: int = 20      # RLIMIT_CPU (child process)
+    max_file_size_mb: int = 10     # RLIMIT_FSIZE
+    max_open_files: int = 64       # RLIMIT_NOFILE
+    block_network: bool = True     # soft socket monkey-patch (no root required)
+    use_venv: bool = False         # uv venv → python3 venv fallback; disabled by default (500ms overhead)
+    audit: bool = True             # appends to memory/sandbox-audit.jsonl
+```
+
+Static analysis (`is_skill_safe(skill)`):
+```
+Dangerous patterns blocked: import os, subprocess, eval/exec, open(, shutil,
+socket.connect, requests.get/post, httpx, aiohttp, pickle.loads, marshal.loads,
+import ctypes, ctypes., cffi., urllib.request
+```
+
+Network isolation (soft):
+```
+_NETWORK_BLOCKER_CODE injected into runner preamble when block_network=True
+→ monkey-patches socket.socket.connect to raise ConnectionRefusedError
+→ no root required; meaningful protection without network namespaces
+```
+
+Audit log (`memory/sandbox-audit.jsonl`):
+```
+fields: audit_id (12-char UUID), timestamp, skill_id, skill_name, static_safe,
+        exit_code, elapsed_ms, timed_out, success, network_blocked,
+        venv_isolated, resource_limited, output_preview, error
+read: load_audit_log(limit=50) — newest-first
+CLI: poe-sandbox audit [--limit N] [--format json]
+     poe-sandbox config
+     poe-sandbox test <skill_id> [--no-network-block] [--venv]
+```
+
+`SandboxResult` Phase 18 fields: `audit_id`, `network_blocked`, `venv_isolated`, `resource_limited`.
+
+Note: `RLIMIT_AS` (virtual memory) intentionally omitted — breaks Python mmap on Linux with overcommit.
+
+---
+
+## Config and Bootstrap (`config.py`, `bootstrap.py`) — Phase 21
+
+**No OpenClaw dependency.** All path resolution centralized in `src/config.py`.
+
+Workspace root resolution (priority order):
+```
+1. POE_WORKSPACE env var          (canonical)
+2. OPENCLAW_WORKSPACE env var     (backward compat)
+3. WORKSPACE_ROOT env var         (backward compat)
+4. ~/.poe/workspace               (default — no OpenClaw required)
+```
+
+Credential discovery:
+```
+1. POE_ENV_FILE env var           → explicit override
+2. <workspace>/secrets/.env       → workspace-local
+3. ~/.openclaw/workspace/secrets/ → legacy fallback (if exists)
+```
+
+`config.py` public API:
+```python
+workspace_root() → Path
+memory_dir()     → Path  (creates if needed)
+secrets_dir()    → Path
+credentials_env_file() → Path
+load_credentials_env() → dict[str, str]
+openclaw_cfg_path()    → Path  (OPENCLAW_CFG env var override)
+load_openclaw_cfg()    → dict
+deploy_dir()           → Path  (deploy/ sibling of src/)
+```
+
+Bootstrap (`poe-bootstrap`):
+```
+install    → create dirs + write service files + smoke test
+dirs       → create workspace/memory/skills/projects/output/secrets/logs/
+services   → write systemd (Linux) or launchd (macOS) service files
+status     → show workspace path, dir existence, service states
+smoke      → dry-run NOW-lane task via handle.py
+```
+
+Service file generation:
+```
+Linux (platform.system() == "Linux"):
+    deploy/systemd/poe-heartbeat.service
+    deploy/systemd/poe-telegram.service
+    deploy/systemd/poe-inspector.service
+
+macOS (Darwin):
+    deploy/launchd/com.poe.heartbeat.plist
+    deploy/launchd/com.poe.telegram.plist
+    deploy/launchd/com.poe.inspector.plist
+```
+
+---
+
 ## Persona System (`persona.py`, `personas/`) — Phase 20
 
 Personas are **composable data primitives**: YAML frontmatter + markdown body. Compose > inherit — no subclassing, pure data composition.
@@ -603,21 +705,23 @@ cli (all commands)
 ## Storage layout (complete)
 
 ```
-workspace/prototypes/poe-orchestration/
+<workspace>/                         # POE_WORKSPACE or ~/.poe/workspace (Phase 21)
 ├── .hooks/
-│   └── hooks.json           # HookRegistry — registered hooks
+│   └── hooks.json               # HookRegistry — registered hooks
 ├── projects/
 │   └── <slug>/
-│       ├── NEXT.md          # task checklist (todo/doing/done/blocked)
-│       ├── DECISIONS.md     # decision log
-│       ├── config.json      # project config (slug, mission, priority)
-│       ├── ancestry.json    # goal ancestry chain (optional)
-│       ├── mission.json     # active Mission object (Phase 10)
+│       ├── NEXT.md              # task checklist (todo/doing/done/blocked)
+│       ├── DECISIONS.md         # decision log
+│       ├── config.json          # project config (slug, mission, priority)
+│       ├── ancestry.json        # goal ancestry chain (optional)
+│       ├── mission.json         # active Mission object (Phase 10)
 │       └── output/
-│           └── runs/        # RunRecord artifacts
+│           └── runs/            # RunRecord artifacts
+├── secrets/
+│   └── .env                     # credentials (POE_ENV_FILE override, Phase 21)
 └── memory/
     ├── outcomes.jsonl           # per-run outcomes
-    ├── lessons.jsonl            # extracted lessons
+    ├── lessons.jsonl            # extracted lessons (flat, legacy)
     ├── suggestions.jsonl        # evolver suggestions
     ├── skills.jsonl             # skill library (Phase 10)
     ├── background-tasks.jsonl   # background subprocess tracking (Phase 10)
@@ -634,12 +738,22 @@ workspace/prototypes/poe-orchestration/
     ├── heartbeat-log.jsonl      # heartbeat history
     ├── eval-results.jsonl       # benchmark results
     ├── YYYY-MM-DD.md            # daily narrative log
-    ├── canon_stats.jsonl        # lesson application hits for canon-candidate tracking (Phase 16)
+    ├── canon_stats.jsonl        # lesson application hits (Phase 16)
+    ├── sandbox-audit.jsonl      # per-execution sandbox audit log (Phase 18)
     ├── medium/
     │   └── lessons.jsonl        # medium-tier lessons with decay scores (Phase 16)
     └── long/
         └── lessons.jsonl        # long-tier validated lessons (Phase 16)
 ```
+
+**In-process observability note:** There is no real-time step stream today. To observe a live loop:
+- `memory/loop.lock` — PID + goal of active loop
+- `heartbeat-state.json` — last health check (stale by up to 60s)
+- `memory/YYYY-MM-DD.md` — narrative log, flushed at reflect_and_record()
+- `memory/sandbox-audit.jsonl` — live during sandboxed skill execution
+- Hook with `fire_on=step` + `type=reporter` — most direct path to per-step observability
+
+See `docs/FUTURE_CONSIDERATIONS.md` for the planned observability dashboard.
 
 ---
 

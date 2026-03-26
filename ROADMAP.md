@@ -386,6 +386,83 @@ Inspired by Memento-Skills arXiv:2603.18743: one-step offline RL, multi-positive
 
 ---
 
+## Future Considerations
+
+Ideas that are real but not yet scheduled. Not prioritized against each other — captured here for planning discussions.
+
+---
+
+### Phase 22: Knowledge Crystallization — Hardening Decisions Into Infrastructure
+
+*"A young sapling is flexible. As it grows it becomes the foundation for other young shoots."*
+
+Full design in `docs/KNOWLEDGE_CRYSTALLIZATION.md`. The short version: every LLM call that answers a question Poe has answered correctly 50 times before is waste. The path is:
+
+```
+Fluid LLM → Lesson (tiered memory) → Identity (canon/AGENTS.md) → Skill (Python) → Rule (zero-cost)
+```
+
+What's missing today:
+- **Stage 5 (Skill → Rule)**: no mechanism for an established skill to graduate into a hardcoded path that skips the sandbox entirely
+- **Model tier auto-optimization**: evolver should track per-task-type success rates by tier and suggest downgrades. If `researcher` persona uses `power` for 200 tasks with 95% success but `mid` also succeeds on the same class, surface that
+- **Crystallization dashboard**: unified view of all graduation candidates across memory/skills/AGENTS.md
+
+---
+
+### Phase 23: Observability — Execution Visualization
+
+Currently no real-time view of what Poe is doing. `loop.lock` shows the active goal; `heartbeat-state.json` shows health; but no timeline, step trace, or resource graph.
+
+Options:
+- **TUI dashboard** (`rich` or `textual`): live view of active loop steps, recent outcomes, memory tier counts, heartbeat status, audit log tail. Runs as a separate process watching JSONL files.
+- **Simple web UI** (`fastapi` + plain HTML): same data over HTTP; accessible remotely. Better for headless box.
+- **Hook-based step stream**: `reporter` hook at `fire_on=step` writes to a named pipe or JSONL that the TUI consumes. Gives per-step granularity without modifying the loop.
+
+The hook infrastructure is already in place. This is a side project — maybe 2-3 days for a useful first version.
+
+---
+
+### Phase 24: Messaging Integrations — Slack, Signal, iMessage
+
+Telegram is the current interface. Others when needed (truly later, no urgency):
+
+- **Slack**: Socket Mode API (no public endpoint required). Natural fit for team visibility. A `slack_listener.py` mirror of `telegram_listener.py`.
+- **Signal**: `signal-cli` daemon + REST API. E2E encrypted, good for personal use.
+- **iMessage**: macOS-only via AppleScript or Shortcuts. Brittle; low priority.
+
+Note: routing layer (`handle.py`, `poe.py`) is already interface-agnostic. Adding an interface is ~100 lines.
+
+---
+
+### Phase 25: Ops Hardening — Resource Profiling and Load Testing
+
+Before high-volume or mission-critical workloads:
+- **Disk growth**: JSONL files with no TTL accumulate unboundedly. Need a `poe-gc` command + scheduled rotation for outcomes/lessons older than N days (configurable retention).
+- **Memory profiling**: Python process size under various loop depths; relevant for parallel missions.
+- **Parallelization analysis**: `background.py` uses `max_workers=2`. Right ceiling? Bottleneck is probably API rate limits, not CPU.
+- **Load testing**: 100 NOW-lane tasks + 10 concurrent AGENDA loops. Where does it break?
+
+---
+
+### Phase 26: Container Image — Portable Deployment
+
+Goal: `docker run poe-orchestration` on any Linux/macOS with Docker.
+
+**Recommendation: Alpine Linux + Python 3.12 slim. Not Go.** The value is in the Python LLM ecosystem; a Go rewrite would be significant work with no clear benefit. Go makes sense for single-binary CLIs with no runtime; that's not this system.
+
+```dockerfile
+FROM python:3.12-alpine
+COPY src/ /app/src/
+COPY personas/ /app/personas/
+ENV POE_WORKSPACE=/data
+VOLUME /data
+ENTRYPOINT ["python3", "/app/src/bootstrap.py"]
+```
+
+Phase 21's `POE_WORKSPACE` env var + bootstrap makes this mostly straightforward. Docker Compose would wire heartbeat + telegram + inspector services with a shared `/data` volume. No k8s needed at this scale.
+
+---
+
 ## Superseded Plans
 
 The original M0-M4 milestones and N1-N4 roadmap items focused on infrastructure plumbing (adapters, scheduling, CI). That work was valuable scaffolding, but it didn't address the core need: making Poe autonomous. This roadmap replaces N1-N4 entirely.

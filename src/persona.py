@@ -163,9 +163,16 @@ class PersonaRegistry:
         if personas_dir is None:
             try:
                 from orch import orch_root
-                personas_dir = orch_root() / "personas"
+                candidate = orch_root() / "personas"
+                if candidate.exists():
+                    personas_dir = candidate
             except Exception:
-                personas_dir = Path.cwd() / "personas"
+                pass
+            if personas_dir is None:
+                # Repo-relative fallback: personas/ sibling of src/
+                personas_dir = Path(__file__).resolve().parent.parent / "personas"
+                if not personas_dir.exists():
+                    personas_dir = Path.cwd() / "personas"
         self._dir = personas_dir
         self._cache: Dict[str, PersonaSpec] = {}
 
