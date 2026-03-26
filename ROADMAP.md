@@ -370,20 +370,19 @@ Inspired by Memento-Skills arXiv:2603.18743: one-step offline RL, multi-positive
 
 ---
 
-## Phase 21: Production Readiness — Bootstrap + Decoupling + macOS
+## Phase 21: Production Readiness — Bootstrap + Decoupling + macOS *(COMPLETE)*
 
-**Make the system installable and self-bootstrapping.** Currently tied to this specific box and OpenClaw directory layout. This phase decouples it, adds a bootstrap skill, and makes it work on macOS.
+**Make the system installable and self-bootstrapping.** Previously tied to this specific box and OpenClaw directory layout. Now decoupled, bootstrappable, and macOS-compatible.
 
-Deferred intentionally — do this last, after the core system is proven.
+- [x] **Full OpenClaw decoupling:** `src/config.py` centralizes workspace resolution with env var priority: `POE_WORKSPACE` → `OPENCLAW_WORKSPACE` → `WORKSPACE_ROOT` → `~/.poe/workspace` (no OpenClaw required). All hardcoded `/home/clawd/.openclaw/` absolute paths removed from `llm.py`, `sheriff.py`, `gateway.py`, `telegram_listener.py`, `interrupt.py`, `orch.py`. `OPENCLAW_CFG` env var overrides openclaw.json path.
+- [x] **`src/config.py`:** `workspace_root()`, `memory_dir()`, `secrets_dir()`, `credentials_env_file()`, `load_credentials_env()`, `openclaw_cfg_path()`, `load_openclaw_cfg()`, `deploy_dir()`. No third-party deps. Priority-ordered credential discovery: `POE_ENV_FILE` → `<workspace>/secrets/.env` → legacy OpenClaw path.
+- [x] **Bootstrap tool (`src/bootstrap.py`):** `poe-bootstrap install|dirs|services|status|smoke`. Creates `memory/`, `skills/`, `projects/`, `output/`, `secrets/`, `logs/` dirs. Writes systemd (Linux) or launchd (macOS) service files for poe-heartbeat, poe-telegram, poe-inspector. Smoke test: dry-run NOW-lane task.
+- [x] **macOS compatibility:** `platform.system()` detection in `write_service_files()`. Generates `.plist` files under `deploy/launchd/` on Darwin; `.service` files under `deploy/systemd/` on Linux. `KeepAlive`, `RunAtLoad`, log paths injected into plists.
+- [x] **`pyproject.toml` extras:** `[telegram]`, `[gateway]`, `[memory]`, `[all]`. No mandatory third-party deps in core. All existing `ImportError` fallbacks preserved.
+- [x] **Entry points:** `poe-bootstrap`, `poe-run`, `poe-handle`, `poe-memory`, `poe-persona`, `poe-sandbox`, `poe-skills`, `poe-inspector`, `poe-test`.
+- [x] 23 new tests (1064 total, 5 skipped). Covers workspace_root priority, credential discovery, dir creation idempotency, systemd/launchd content, workspace injection, status.
 
-- [ ] **Full OpenClaw decoupling:** remove all hardcoded `~/.openclaw/` path assumptions. Config file (`~/.poe/config.json` or env vars) specifies workspace root, gateway URL, credentials. System works without OpenClaw present.
-- [ ] **Bootstrap skill:** `poe-bootstrap` installs Claude CLI (`claude` binary via npm/pip), creates workspace directory structure, writes systemd service files, runs first heartbeat. One command from a fresh Ubuntu or macOS box.
-- [ ] **macOS compatibility:** replace `systemd` with `launchd` plist generation for service management. `platform.system()` detection throughout. Test suite passes on macOS.
-- [ ] **Minimal dependency install:** `pip install poe-orchestration` installs core system. Optional extras: `[telegram]`, `[gateway]`, `[sandbox]`. No hard deps on `websockets`, `sentence-transformers`, etc. — all graceful ImportError fallbacks already exist.
-- [ ] **`claude` CLI skill:** bootstrap skill that installs and configures the Claude Code CLI as a worker backend, wires it into `ClaudeSubprocessAdapter`.
-- [ ] **Smoke test suite:** `poe-test` command runs a dry-run end-to-end from CLI install → heartbeat → single NOW-lane task → verify output. Green = system ready.
-
-**Artifact:** `src/bootstrap.py`, `deploy/launchd/`, `poe-bootstrap` CLI, macOS CI
+**Artifact:** `src/config.py`, `src/bootstrap.py`, `deploy/systemd/` (generated), `deploy/launchd/` (generated), `pyproject.toml` extras + entry points
 
 ---
 

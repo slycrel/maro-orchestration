@@ -4,9 +4,31 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "poe-orchestration"
-version = "0.4.0"
-description = "File-first orchestration CLI"
+version = "0.5.0"
+description = "File-first autonomous orchestration system"
 requires-python = ">=3.10"
+# Core system has no mandatory third-party deps — everything is graceful-ImportError guarded.
+
+[project.optional-dependencies]
+telegram = ["python-telegram-bot>=20.0"]
+gateway = ["websockets>=12.0"]
+sandbox = []
+memory = ["pyyaml>=6.0"]
+all = ["pyyaml>=6.0", "websockets>=12.0"]
+
+[project.scripts]
+poe-bootstrap = "bootstrap:main"
+poe-run = "agent_loop:main"
+poe-handle = "handle:main"
+poe-memory = "cli:_memory_main"
+poe-persona = "cli:_persona_main"
+poe-sandbox = "cli:_sandbox_main"
+poe-skills = "cli:_skills_main"
+poe-inspector = "inspector:main"
+poe-test = "bootstrap:_smoke_main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

@@ -51,11 +51,18 @@ except ImportError:  # pragma: no cover
 # Config helpers
 # ---------------------------------------------------------------------------
 
-_OPENCLAW_CFG = Path.home() / ".openclaw" / "openclaw.json"
-_OFFSET_FILE = Path(os.environ.get("OPENCLAW_WORKSPACE", Path.home() / ".openclaw" / "workspace")) / "telegram_offset.txt"
+try:
+    from config import openclaw_cfg_path as _openclaw_cfg_path, workspace_root as _workspace_root
+    _OPENCLAW_CFG = _openclaw_cfg_path()
+    _OFFSET_FILE = _workspace_root() / "telegram_offset.txt"
+except ImportError:
+    _OPENCLAW_CFG = Path.home() / ".openclaw" / "openclaw.json"
+    _ws = os.environ.get("POE_WORKSPACE") or os.environ.get("OPENCLAW_WORKSPACE") or str(Path.home() / ".poe" / "workspace")
+    _OFFSET_FILE = Path(_ws) / "telegram_offset.txt"
 
 
 def _load_openclaw_cfg() -> dict:
+    # Always read from module-level _OPENCLAW_CFG so tests can patch it
     if _OPENCLAW_CFG.exists():
         try:
             return json.loads(_OPENCLAW_CFG.read_text())

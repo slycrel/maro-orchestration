@@ -362,7 +362,11 @@ def check_system_health() -> SystemHealth:
 
 
 def _read_env_file_key() -> Optional[str]:
-    env_file = Path("/home/clawd/.openclaw/workspace/secrets/recovered/runtime-credentials/.env")
+    try:
+        from config import credentials_env_file
+        env_file = credentials_env_file()
+    except ImportError:
+        env_file = Path.home() / ".poe" / "workspace" / "secrets" / ".env"
     if not env_file.exists():
         return None
     try:

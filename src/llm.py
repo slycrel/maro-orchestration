@@ -551,16 +551,21 @@ class OpenAIAdapter(LLMAdapter):
 # Credential discovery
 # ---------------------------------------------------------------------------
 
-_ENV_FILE = "/home/clawd/.openclaw/workspace/secrets/recovered/runtime-credentials/.env"
-
-
-def _load_env_file(path: str = _ENV_FILE) -> Dict[str, str]:
+def _load_env_file(path: Optional[str] = None) -> Dict[str, str]:
     """Load key=value pairs from an env file."""
+    try:
+        from config import load_credentials_env, credentials_env_file
+        if path is None:
+            return load_credentials_env()
+        return load_credentials_env()  # path arg kept for compat; use config resolution
+    except ImportError:
+        pass
     result: Dict[str, str] = {}
-    if not os.path.exists(path):
+    env_path = path or str(Path.home() / ".poe" / "workspace" / "secrets" / ".env")
+    if not os.path.exists(env_path):
         return result
     try:
-        for line in open(path).readlines():
+        for line in open(env_path).readlines():
             line = line.strip()
             if "=" in line and not line.startswith("#"):
                 k, v = line.split("=", 1)

@@ -516,9 +516,10 @@ def _mark_stale_running_attempts(project: str, item_index: int) -> None:
 
 
 def ws_root() -> Path:
-    env_root = os.environ.get("OPENCLAW_WORKSPACE") or os.environ.get("WORKSPACE_ROOT")
-    if env_root:
-        return Path(env_root).expanduser().resolve()
+    for var in ("POE_WORKSPACE", "OPENCLAW_WORKSPACE", "WORKSPACE_ROOT"):
+        val = os.environ.get(var)
+        if val:
+            return Path(val).expanduser().resolve()
     return Path(__file__).resolve().parents[3]
 
 

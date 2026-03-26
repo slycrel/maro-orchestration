@@ -37,7 +37,11 @@ except ImportError:
 # Constants
 # ---------------------------------------------------------------------------
 
-_OPENCLAW_CFG = Path.home() / ".openclaw" / "openclaw.json"
+try:
+    from config import openclaw_cfg_path as _openclaw_cfg_path
+    _OPENCLAW_CFG = _openclaw_cfg_path()
+except ImportError:
+    _OPENCLAW_CFG = Path.home() / ".openclaw" / "openclaw.json"
 _DEFAULT_GATEWAY_URL = "ws://127.0.0.1:18789"
 _DEFAULT_GATEWAY_HOST = "127.0.0.1"
 _DEFAULT_GATEWAY_PORT = 18789

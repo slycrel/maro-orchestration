@@ -361,7 +361,12 @@ def _default_lock_path() -> Path:
         import orch
         return orch.orch_root() / "memory" / "loop.lock"
     except Exception:
-        return Path.home() / ".openclaw" / "workspace" / "memory" / "loop.lock"
+        pass
+    try:
+        from config import memory_dir
+        return memory_dir() / "loop.lock"
+    except Exception:
+        return Path.home() / ".poe" / "workspace" / "memory" / "loop.lock"
 
 
 def set_loop_running(loop_id: str, goal: str = "") -> None:
