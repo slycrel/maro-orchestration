@@ -520,7 +520,7 @@ The first is useful and healthy. The second is a line that should never be cross
 
 ---
 
-### Phase 29: Human Psychology / Neurology / Philosophy Research Track
+### Phase 29: Human Psychology / Neurology / Philosophy Research Track *(PARTIAL)*
 
 *Jeremy, March 2026: "Human psychology, neurology, and philosophy ideas probably can come into play here. I'm definitely no expert in any of those areas, but seems like there are things we should learn about over time."*
 
@@ -530,7 +530,12 @@ Not a single phase but a research track that informs multiple phases:
 - **For persona design (Phase 28)**: Enneagram, MBTI as frameworks for communication style, not personality determinism
 - **For crystallization (Phase 22)**: expertise research — what makes novice → expert knowledge transfer work, what gets tacit vs. explicit
 
-Concretely: a periodic `health-researcher` or `researcher` spawn with a curated reading list, outputs stored as `docs/research/` artifacts. Not a bottoms-up research program — targeted questions when a specific phase hits a relevant intersection.
+**Shipped (Phase 29 scaffolding):**
+- `personas/psyche-researcher.md` — targeted research specialist persona. Evidence-grounded, implication-focused. Writes to `docs/research/` with a standard artifact format (question, findings, implications, confidence, sources). Composes with `reality-checker` for significant findings.
+- `docs/research/README.md` — active question queue (6 open questions, tied to phases), artifact format, completed log.
+
+**Still pending:**
+- Actually running the research — first spawn when the decay model tuning question (Phase 27 sub-goal design) needs grounding. Trigger: `poe-persona spawn psyche-researcher` with a specific question.
 
 ---
 
