@@ -518,6 +518,12 @@ def main(argv: list[str] | None = None) -> int:
     p_persona_compose.add_argument("names", nargs="+", help="Persona names to compose")
     p_persona_compose.add_argument("--format", choices=["text", "json"], default="text")
 
+    p_poe_knowledge = sub.add_parser("poe-knowledge", help="Crystallization dashboard — view all knowledge graduation stages (Phase 22)")
+    knowledge_sub = p_poe_knowledge.add_subparsers(dest="knowledge_cmd")
+    p_knowledge_status = knowledge_sub.add_parser("status", help="Full crystallization dashboard")
+    p_knowledge_status.add_argument("--stage", type=int, choices=[2, 3, 4, 5], help="Show only one stage")
+    knowledge_sub.add_parser("promote", help="List available promotion actions (read-only)")
+
     p_plan = sub.add_parser("plan", help="Split a goal into NEXT tasks")
     p_plan.add_argument("project")
     p_plan.add_argument("goal", nargs="+")
@@ -1404,6 +1410,16 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print(f"Unknown poe-persona subcommand: {persona_cmd}")
             return 1
+        return 0
+
+    if args.cmd == "poe-knowledge":
+        from knowledge import print_dashboard, print_promote_actions
+        knowledge_cmd = getattr(args, "knowledge_cmd", None)
+        if knowledge_cmd == "promote":
+            print_promote_actions()
+        else:
+            stage = getattr(args, "stage", None)
+            print_dashboard(stage_filter=stage)
         return 0
 
     if args.cmd == "poe-eval":

@@ -264,6 +264,19 @@ Distilled from 5 weeks of miscommunication. Violating these means you're buildin
 
 ---
 
+## 12. Knowledge Lifecycle
+
+The system's intelligence should compound over time, not restart each session.
+
+> "A young sapling is flexible and has a bunch of shoots. As it grows it gets more hardened and fixed, changing to become the foundation of other young shoots to continue growing. And of course we'd have our gardener pruning and trimming to make sure our trees are trees, bushes stay bushes, and we get fruit properly instead of shade as appropriate."
+> — Jeremy, March 2026
+
+Every LLM call that answers a question Poe has already answered correctly 50 times before is waste. The goal: LLM reasoning reserved for genuinely novel situations. Everything else crystallizes into lessons → identity → skills → rules.
+
+See `docs/KNOWLEDGE_CRYSTALLIZATION.md` for the full lifecycle.
+
+---
+
 ## The Philosophy
 
 Iteration over perfection. Ralph Wiggum is the spirit animal.

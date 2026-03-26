@@ -14,6 +14,21 @@ Poe should work the same way. The question is: **how do we make that graduation 
 
 ## The Crystallization Path
 
+```mermaid
+flowchart LR
+    A["Stage 1\nFluid\nLLM reasoning\npower tier"] -->|"repeated outcomes\nextract_lessons()"| B["Stage 2\nLesson\ntiered memory\nmid/cheap viable"]
+    B -->|"canon threshold\n10+ applies, 3+ types"| C["Stage 3\nIdentity\nAGENTS.md\nalways active"]
+    B -->|"extract_skills()\nfrom outcomes"| D["Stage 4\nSkill\nPython code\nsandboxed"]
+    D -->|"pass³ ≥ 0.7\nestablished tier"| E["Stage 5\nRule\nhardcoded path\nzero cost"]
+    E -->|"Inspector: wrong answer\nauto-demote"| D
+
+    style A fill:#ffcccc
+    style B fill:#ffe5cc
+    style C fill:#ffffcc
+    style D fill:#ccffcc
+    style E fill:#cce5ff
+```
+
 ```
 Stage 1: Fluid
     LLM reasoning on every decision
@@ -93,8 +108,8 @@ Jeremy is the gardener. The system surfaces candidates; the gardener decides wha
 - `poe-memory promote` — manual Stage 2 promotion
 
 **What the gardener doesn't have yet:**
-- A unified "crystallization dashboard" — all graduation candidates in one view
-- A way to say "this skill is now a rule" and have the system skip the sandbox
+- A unified "crystallization dashboard" — all graduation candidates in one view. `poe-knowledge status` (Phase 22 first cut) pulls from `canon_stats.jsonl` + `skills.jsonl` + evolver suggestions into a single display.
+- A way to say "this skill is now a rule" and have the system skip the sandbox entirely. Simplest first cut: a `rules/` directory of tiny Python modules imported directly (no subprocess, no sandbox). Inspector watches for "rule produced wrong answer" and auto-demotes to Stage 4.
 - Cost/benefit signal: "this skill runs 50x/day, promoting to rule saves $X/month"
 
 ---

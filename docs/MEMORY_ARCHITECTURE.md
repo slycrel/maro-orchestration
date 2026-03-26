@@ -38,6 +38,10 @@ Skills have a parallel tier: `provisional` (default) → `established` (requires
 
 ---
 
+*See `docs/KNOWLEDGE_CRYSTALLIZATION.md` for the full graduation lifecycle beyond long-tier lessons — Stages 1–5 with the graduation tax table and gardener tooling.*
+
+---
+
 ## The Graduation Path
 
 ```

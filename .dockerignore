@@ -1,0 +1,29 @@
+# Never bake workspace data or credentials into the image
+memory/
+projects/
+output/
+secrets/
+*.env
+.env
+
+# Dev artifacts
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+
+# VCS
+.git/
+.gitignore
+
+# Docs and tests (not needed at runtime)
+docs/
+tests/
+deploy/
+
+# IDE
+.vscode/
+.idea/

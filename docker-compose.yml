@@ -1,0 +1,45 @@
+version: "3.9"
+
+# Shared workspace volume — all services read/write the same /data
+volumes:
+  poe-data:
+
+# Common env: override POE_WORKSPACE and credentials here or via .env file
+x-poe-env: &poe-env
+  POE_WORKSPACE: /data
+  # Mount secrets via POE_ENV_FILE or place secrets/.env in the volume
+  # TELEGRAM_BOT_TOKEN: set in .env or secrets/.env
+  # ANTHROPIC_API_KEY: set in .env or secrets/.env
+  # OPENROUTER_API_KEY: set in .env or secrets/.env
+
+services:
+  heartbeat:
+    build: .
+    command: ["python3", "/app/src/sheriff.py", "--heartbeat"]
+    volumes:
+      - poe-data:/data
+    environment:
+      <<: *poe-env
+    restart: unless-stopped
+
+  telegram:
+    build: .
+    command: ["python3", "/app/src/telegram_listener.py"]
+    volumes:
+      - poe-data:/data
+    environment:
+      <<: *poe-env
+    restart: unless-stopped
+    depends_on:
+      - heartbeat
+
+  inspector:
+    build: .
+    command: ["python3", "/app/src/inspector.py", "--loop"]
+    volumes:
+      - poe-data:/data
+    environment:
+      <<: *poe-env
+    restart: unless-stopped
+    depends_on:
+      - heartbeat

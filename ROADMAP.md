@@ -444,22 +444,19 @@ Before high-volume or mission-critical workloads:
 
 ---
 
-### Phase 26: Container Image — Portable Deployment
+### Phase 26: Container Image — Portable Deployment *(COMPLETE)*
+
+Shipped before dogfooding as recommended. Isolated containers give you clean integration-test runs without risking the main workspace. One afternoon of work → huge confidence before going "in anger."
 
 Goal: `docker run poe-orchestration` on any Linux/macOS with Docker.
 
 **Recommendation: Alpine Linux + Python 3.12 slim. Not Go.** The value is in the Python LLM ecosystem; a Go rewrite would be significant work with no clear benefit. Go makes sense for single-binary CLIs with no runtime; that's not this system.
 
-```dockerfile
-FROM python:3.12-alpine
-COPY src/ /app/src/
-COPY personas/ /app/personas/
-ENV POE_WORKSPACE=/data
-VOLUME /data
-ENTRYPOINT ["python3", "/app/src/bootstrap.py"]
-```
+- [x] `Dockerfile`: Alpine + Python 3.12 slim, `POE_WORKSPACE=/data` volume, `pyyaml` only dep, `poe-bootstrap status` default command. Verified: `docker run --rm poe-orchestration:latest`.
+- [x] `docker-compose.yml`: three services (heartbeat, telegram, inspector) sharing `poe-data` volume, `restart: unless-stopped`, credentials via env or mounted `secrets/.env`.
+- [x] `.dockerignore`: excludes memory/, projects/, secrets/, tests/, docs/ — no workspace data baked into image.
 
-Phase 21's `POE_WORKSPACE` env var + bootstrap makes this mostly straightforward. Docker Compose would wire heartbeat + telegram + inspector services with a shared `/data` volume. No k8s needed at this scale.
+**Artifact:** `Dockerfile`, `docker-compose.yml`, `.dockerignore`
 
 ---
 

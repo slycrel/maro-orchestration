@@ -178,7 +178,7 @@ reflect_and_record(loop_result)
 
 ### Tiered memory (Phase 16)
 
-Three tiers with decay, promotion, and canon path. See `docs/MEMORY_ARCHITECTURE.md`.
+Three tiers with decay, promotion, and canon path. See `docs/MEMORY_ARCHITECTURE.md` for the tier design and `docs/KNOWLEDGE_CRYSTALLIZATION.md` for the full Stages 1–5 graduation lifecycle (Lesson → Identity → Skill → Rule).
 
 ```
 short   — in-process only (short_set/get/clear/all). Evicts at session end.
@@ -626,6 +626,8 @@ run_full_inspector()
 
 heartbeat_loop(): every 20 ticks → run_full_inspector()
 ```
+
+The Inspector's friction detection + GAN-style quality loop is directly analogous to the "Signals" pattern in Factory AI (LLM-as-judge, independent oversight). See `docs/FACTORY_AI_RESEARCH.md` for the research backing.
 
 ---
 
