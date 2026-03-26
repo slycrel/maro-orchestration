@@ -490,7 +490,7 @@ Full design in `docs/MEMORY_ARCHITECTURE.md`.
 
 ---
 
-### Phase 28: Poe Personality — Complementary Interaction Model
+### Phase 28: Poe Personality — Complementary Interaction Model *(PARTIAL)*
 
 *Jeremy, March 2026: "I'm a 6w5/INFJ... I expect a properly built persona would complement me and allow us both to interact better together."*
 
@@ -509,11 +509,14 @@ The first is useful and healthy. The second is a line that should never be cross
 
 **The fascinating part**: a well-built version of this could make every interaction more efficient precisely because Poe isn't starting from scratch socially each session. The scary part is real — which is why the design should be explicit and human-auditable, not emergent. Jeremy should be the gardener here more than anywhere else.
 
-**Implementation approach**:
-- Jeremy writes a `personas/jeremy.md` (not loaded into Poe's general persona rotation — specifically for the interaction layer)
-- Poe-CEO layer optionally loads it as context overlay (not a full persona swap)
-- The document lives in source control so changes are visible
-- Regular "does this still feel right?" review
+**Shipped (Phase 28 first cut):**
+- `personas/jeremy.md` — scaffold for Jeremy to author. Explicitly placeholders for Jeremy to fill in. Includes the hard-line design notes so the intent is clear when he reads it.
+- `personas/companion.md` — communication style adapter persona. Reformats other personas' outputs to match Jeremy's preferences (conclusion-first, no preamble, direct uncertainty, systems framing). Explicit table of complementary vs. manipulative that it must never cross. Composes with any other persona at the output stage.
+
+**Still pending:**
+- Jeremy fills in `personas/jeremy.md` — that's his document, not Poe's to write
+- CEO-layer integration: optionally load `companion` as an output filter on user-facing messages
+- "Does this still feel right?" review cadence
 
 ---
 
