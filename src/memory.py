@@ -31,10 +31,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 import sys
 import textwrap
 import time
+from collections import Counter
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, date, timezone
 from pathlib import Path
@@ -225,16 +227,21 @@ def load_lessons(
     task_type: Optional[str] = None,
     outcome_filter: Optional[str] = None,
     limit: int = 10,
+    *,
+    query: Optional[str] = None,
 ) -> List[Lesson]:
     """Load relevant lessons from the lessons ledger.
 
     Args:
         task_type: Filter by task type (None = all types).
         outcome_filter: Filter by outcome ("done" | "stuck" | None = all).
-        limit: Maximum number of lessons to return (most recent first).
+        limit: Maximum number of lessons to return.
+        query: If provided, rank lessons by TF-IDF relevance to this query
+            before returning (fetches 3× limit internally, then ranks down).
+            Without query, returns most recent first.
 
     Returns:
-        List of Lesson objects, most recent first.
+        List of Lesson objects.
     """
     path = _lessons_path()
     if not path.exists():
@@ -259,17 +266,33 @@ def load_lessons(
     except Exception:
         pass
 
-    # Return most recent, deduplicated by lesson text
-    seen = set()
-    deduped = []
+    # Deduplicate by lesson text
+    seen: set = set()
+    deduped: List[Lesson] = []
+    _pool_limit = limit * 3 if query else limit
     for l in reversed(lessons):
         key = l.lesson.strip()[:100]
         if key not in seen:
             seen.add(key)
             deduped.append(l)
-        if len(deduped) >= limit:
+        if len(deduped) >= _pool_limit:
             break
-    return deduped
+
+    # TF-IDF re-rank if query provided (always re-rank when query present)
+    if query and deduped:
+        # Adapt Lesson objects to look like TieredLesson for _tfidf_rank
+        class _LessonProxy:
+            def __init__(self, l: "Lesson"):
+                self._l = l
+                self.lesson = l.lesson
+            def __getattr__(self, name: str):
+                return getattr(self._l, name)
+
+        proxies = [_LessonProxy(l) for l in deduped]
+        ranked = _tfidf_rank(query, proxies, top_k=limit)  # type: ignore[arg-type]
+        return [p._l for p in ranked]  # type: ignore[attr-defined]
+
+    return deduped[:limit]
 
 
 def load_outcomes(limit: int = 20) -> List[Outcome]:
@@ -882,6 +905,94 @@ def run_decay_cycle(
 
 
 # ---------------------------------------------------------------------------
+# TF-IDF relevance ranking (Phase 35 P1)
+# ---------------------------------------------------------------------------
+
+_STOP_WORDS = frozenset({
+    "a", "an", "the", "and", "or", "but", "in", "on", "at", "to", "for",
+    "of", "with", "is", "was", "are", "were", "be", "been", "being", "it",
+    "its", "this", "that", "these", "those", "i", "we", "you", "he", "she",
+    "they", "what", "when", "where", "who", "which", "how", "if", "as", "by",
+    "from", "not", "can", "will", "do", "did", "does", "have", "had", "has",
+    "should", "would", "could", "may", "might", "step", "goal", "task",
+})
+
+
+def _tokenize(text: str) -> List[str]:
+    """Lowercase + split on non-alphanumeric, filter stop words + short tokens."""
+    return [
+        t for t in re.sub(r"[^a-z0-9]+", " ", text.lower()).split()
+        if t not in _STOP_WORDS and len(t) > 2
+    ]
+
+
+def _tfidf_rank(
+    query: str,
+    lessons: List["TieredLesson"],
+    *,
+    top_k: Optional[int] = None,
+) -> List["TieredLesson"]:
+    """Rank lessons by TF-IDF cosine similarity to query.
+
+    Pure stdlib — no sklearn, no numpy. Uses Counter for term frequency,
+    log-IDF for inverse document frequency, cosine similarity for ranking.
+
+    Args:
+        query: Goal or step text used as the query document.
+        lessons: List of TieredLesson objects to rank.
+        top_k: Return only the top-K matches. None = return all, ranked.
+
+    Returns:
+        Lessons sorted by descending cosine similarity to query.
+        Lessons with zero similarity are still included (sorted last).
+    """
+    if not lessons:
+        return []
+
+    query_terms = _tokenize(query)
+    if not query_terms:
+        return lessons  # no query signal — return as-is
+
+    # Build corpus: query + all lesson texts
+    docs: List[List[str]] = [query_terms]
+    for l in lessons:
+        docs.append(_tokenize(l.lesson))
+
+    n_docs = len(docs)  # includes query
+
+    # IDF: log(N / df + 1) for each term across the corpus
+    df: Counter = Counter()
+    for doc in docs:
+        for term in set(doc):
+            df[term] += 1
+
+    def idf(term: str) -> float:
+        return math.log(n_docs / (df.get(term, 0) + 1)) + 1.0
+
+    def tfidf_vec(doc_terms: List[str]) -> Dict[str, float]:
+        tf = Counter(doc_terms)
+        total = max(len(doc_terms), 1)
+        return {t: (c / total) * idf(t) for t, c in tf.items()}
+
+    def cosine(v1: Dict[str, float], v2: Dict[str, float]) -> float:
+        dot = sum(v1.get(t, 0.0) * v2.get(t, 0.0) for t in v1)
+        norm1 = math.sqrt(sum(x * x for x in v1.values())) or 1.0
+        norm2 = math.sqrt(sum(x * x for x in v2.values())) or 1.0
+        return dot / (norm1 * norm2)
+
+    query_vec = tfidf_vec(query_terms)
+    scores: List[tuple] = []
+    for lesson, doc_terms in zip(lessons, docs[1:]):
+        doc_vec = tfidf_vec(doc_terms)
+        sim = cosine(query_vec, doc_vec)
+        scores.append((sim, lesson))
+
+    scores.sort(key=lambda x: x[0], reverse=True)
+    ranked = [l for _, l in scores]
+    return ranked[:top_k] if top_k is not None else ranked
+
+
+# ---------------------------------------------------------------------------
 # Tier-aware context injection
 # ---------------------------------------------------------------------------
 
@@ -907,9 +1018,17 @@ def inject_tiered_lessons(
     parts: List[str] = []
     applied_ids: List[tuple] = []  # (lesson_id, tier)
 
-    long_lessons = load_tiered_lessons(
-        tier=MemoryTier.LONG, task_type=task_type, min_score=0.0, limit=max_long
+    # Load candidate lessons — fetch a wider pool when using TF-IDF ranking
+    _pool_multiplier = 3 if goal else 1
+
+    long_candidates = load_tiered_lessons(
+        tier=MemoryTier.LONG, task_type=task_type, min_score=0.0,
+        limit=max_long * _pool_multiplier,
     )
+    if goal and len(long_candidates) > max_long:
+        long_candidates = _tfidf_rank(goal, long_candidates, top_k=max_long)
+    long_lessons = long_candidates[:max_long]
+
     if long_lessons:
         parts.append("### Long-Term Lessons (always apply)")
         for l in long_lessons:
@@ -917,9 +1036,14 @@ def inject_tiered_lessons(
             parts.append(f"- {icon} {l.lesson}")
             applied_ids.append((l.lesson_id, MemoryTier.LONG))
 
-    medium_lessons = load_tiered_lessons(
-        tier=MemoryTier.MEDIUM, task_type=task_type, min_score=0.3, limit=max_medium
+    medium_candidates = load_tiered_lessons(
+        tier=MemoryTier.MEDIUM, task_type=task_type, min_score=0.3,
+        limit=max_medium * _pool_multiplier,
     )
+    if goal and len(medium_candidates) > max_medium:
+        medium_candidates = _tfidf_rank(goal, medium_candidates, top_k=max_medium)
+    medium_lessons = medium_candidates[:max_medium]
+
     if medium_lessons:
         parts.append("### Medium-Term Lessons (apply if relevant)")
         for l in medium_lessons:

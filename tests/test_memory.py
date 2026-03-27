@@ -308,3 +308,102 @@ def test_cli_memory_outcomes_json(monkeypatch, tmp_path, capsys):
     data = json.loads(capsys.readouterr().out)
     assert isinstance(data, list)
     assert data[0]["goal"] == "json goal"
+
+
+# ---------------------------------------------------------------------------
+# TF-IDF ranking (Phase 35 P1)
+# ---------------------------------------------------------------------------
+
+from memory import _tokenize, _tfidf_rank, TieredLesson, MemoryTier
+
+
+import datetime as _dt
+
+
+def _make_tiered_lesson(text: str) -> TieredLesson:
+    return TieredLesson(
+        lesson_id=str(abs(hash(text)) % 100000),
+        lesson=text,
+        tier=MemoryTier.MEDIUM,
+        task_type="research",
+        outcome="done",
+        source_goal="test goal",
+        confidence=0.8,
+        score=0.7,
+        last_reinforced=_dt.date.today().isoformat(),
+    )
+
+
+def test_tokenize_removes_stopwords():
+    tokens = _tokenize("The quick brown fox jumps around lazy dog")
+    assert "the" not in tokens
+    assert "quick" in tokens
+    assert "brown" in tokens
+
+
+def test_tokenize_lowercases():
+    tokens = _tokenize("Polymarket XYZ findings")
+    assert "polymarket" in tokens
+    assert "xyz" in tokens
+    assert "findings" in tokens
+
+
+def test_tfidf_rank_empty_lessons():
+    assert _tfidf_rank("research polymarket", []) == []
+
+
+def test_tfidf_rank_returns_all_when_no_top_k():
+    lessons = [_make_tiered_lesson(f"lesson number {i}") for i in range(5)]
+    ranked = _tfidf_rank("lesson number three", lessons)
+    assert len(ranked) == 5
+
+
+def test_tfidf_rank_most_relevant_first():
+    lessons = [
+        _make_tiered_lesson("polymarket betting strategies for prediction markets"),
+        _make_tiered_lesson("how to write unit tests in python"),
+        _make_tiered_lesson("polymarket liquidity and calibration research"),
+    ]
+    ranked = _tfidf_rank("polymarket prediction research", lessons, top_k=3)
+    # The two polymarket lessons should be ranked above the unit test lesson
+    top_names = [l.lesson for l in ranked[:2]]
+    assert all("polymarket" in n for n in top_names)
+
+
+def test_tfidf_rank_top_k_limits_output():
+    lessons = [_make_tiered_lesson(f"lesson {i} about research") for i in range(10)]
+    ranked = _tfidf_rank("research topic", lessons, top_k=3)
+    assert len(ranked) == 3
+
+
+def test_tfidf_rank_no_query_signal_returns_as_is():
+    """Empty or stop-word-only query returns list unchanged."""
+    lessons = [_make_tiered_lesson("some lesson text")]
+    result = _tfidf_rank("the a an", lessons)
+    assert len(result) == 1
+
+
+def test_load_lessons_query_reranks(monkeypatch, tmp_path):
+    """With query=, load_lessons returns most relevant lessons first."""
+    from memory import load_lessons
+
+    # Fake lessons JSONL with varying relevance
+    import json, datetime
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    lines = [
+        {"lesson_id": "a", "lesson": "polymarket betting calibration", "task_type": "research",
+         "outcome": "done", "source_goal": "test", "confidence": 0.7, "recorded_at": now},
+        {"lesson_id": "b", "lesson": "systemd service restart on failure", "task_type": "ops",
+         "outcome": "done", "source_goal": "test", "confidence": 0.7, "recorded_at": now},
+        {"lesson_id": "c", "lesson": "polymarket liquidity and market depth", "task_type": "research",
+         "outcome": "done", "source_goal": "test", "confidence": 0.7, "recorded_at": now},
+    ]
+    lessons_file = tmp_path / "lessons.jsonl"
+    lessons_file.write_text("\n".join(json.dumps(l) for l in lines))
+    monkeypatch.setattr("memory._lessons_path", lambda: lessons_file)
+
+    result = load_lessons(query="polymarket prediction research", limit=3)
+    # Both polymarket lessons should rank above systemd
+    assert result[0].lesson_id in ("a", "c")
+    assert result[1].lesson_id in ("a", "c")
+    assert result[2].lesson_id == "b"
