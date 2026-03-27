@@ -118,6 +118,16 @@ _EXECUTE_SYSTEM = textwrap.dedent("""\
     Do NOT use Bash to curl/wget URLs. Do NOT use any tool to fetch URLs.
     If a URL's content is missing from the pre-fetch block, note it as unavailable and
     work with what you have — do not attempt to fetch it yourself.
+
+    TOKEN EFFICIENCY — IMPORTANT:
+    Minimize token usage at every step. Prefer low-cost approaches first:
+    1. Use only the pre-fetched content already in context — never fetch more.
+    2. Summarize and extract; do not quote long passages verbatim.
+    3. Work with partial information rather than declaring stuck due to missing detail.
+    4. Produce concise, structured output: bullet points over paragraphs where possible.
+    5. Never use a tool call, Bash command, or file read if the answer is already in context.
+    If you are unsure how to proceed, pick the interpretation that requires the fewest tokens
+    to produce a useful result.
 """).strip()
 
 _EXECUTE_TOOLS = [
@@ -770,12 +780,15 @@ def _execute_step(
 
     ancestry_block = f"\n\n{ancestry_context}" if ancestry_context else ""
 
-    # Pre-fetch URLs found in the step text so raw HTML never enters the LLM context.
-    # This is the primary lever for token efficiency on web-research steps.
+    # Pre-fetch URLs found in the step text AND completed_context so raw HTML never
+    # enters the LLM context. Scanning prior step summaries ensures later steps
+    # can still access content fetched by earlier steps (e.g. a URL fetched in
+    # step 1 referenced again in step 4 without being repeated in the step text).
     prefetch_block = ""
     try:
         from web_fetch import enrich_step_with_urls
-        prefetch_block = enrich_step_with_urls(step_text)
+        _prior_ctx = "\n".join(completed_context) if completed_context else ""
+        prefetch_block = enrich_step_with_urls(step_text, extra_context=_prior_ctx)
         if prefetch_block:
             prefetch_block = "\n\n" + prefetch_block
     except Exception:

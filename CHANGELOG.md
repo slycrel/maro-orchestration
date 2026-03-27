@@ -1,5 +1,29 @@
 # Changelog
 
+## [1.1.0] - 2026-03-27
+
+Token burn reduction: 789k → 67k (91%) through pre-fetch layer, clean markdown fetching, and sub-agent tool restrictions.
+
+### Added — Web Pre-fetch Layer (`src/web_fetch.py`)
+- `_jina_fetch()`: Jina AI Reader (`r.jina.ai`) returns clean markdown from any URL — no raw HTML in context
+- `fetch_x_tweet()`: tries Jina first (full thread), then authenticated X CLI, then oEmbed fallback
+- `fetch_x_article()`: returns immediate human-readable notice (X native articles are deprecated/inaccessible)
+- `_x_cli_available()` / `_x_cookie_env()` / `_fetch_via_x_cli()`: authenticated X scraping via OpenClaw's `x-twitter-cli.sh`
+- Second-pass URL following: resolves t.co links and X article links found in fetched content (not just step text)
+- `enrich_step_with_urls(extra_context=...)`: scans prior step summaries so later steps can access URLs introduced earlier
+
+### Changed — Sub-agent Token Hygiene (`src/agent_loop.py`, `src/llm.py`)
+- `ClaudeSubprocessAdapter` now passes `--disallowedTools WebFetch,WebSearch` — prevents sub-agent from fetching raw HTML (was primary source of 200–535k token spikes per step)
+- `_EXECUTE_SYSTEM` — added URL FETCHING POLICY: sub-agent must use only pre-fetched content, no curl/wget/tool fetches
+- `_EXECUTE_SYSTEM` — added TOKEN EFFICIENCY section: prefer concise output, avoid verbatim quotes, work with partial info
+- `_execute_step()` — passes `completed_context` as `extra_context` to `enrich_step_with_urls` so URLs from step 1 are available to step 3 (fixes context-carry bug that caused step 3 blocks)
+
+### Tests
+- 1290 tests passing (up from 1264)
+- `tests/test_web_fetch.py`: 26 tests covering html stripping, URL extraction, X routing, Jina integration, enrich pipeline
+
+---
+
 ## [1.0.0] - 2026-03-23
 
 Phases 1–7 complete. Poe is now a fully autonomous, self-improving AI concierge reachable via Telegram.
