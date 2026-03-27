@@ -1,8 +1,10 @@
 # Roadmap
 
-Phased build plan for Agentic Poe. Each phase is independently shippable and testable. Phases are sequential for the core path — later phases depend on earlier ones.
+Phased build plan for autonomous agent orchestration. Each phase is independently shippable and testable.
 
-See `VISION.md` for the full intent behind this plan.
+**North star**: give the system a top-level mission; it breaks it into milestones, executes them autonomously over days/weeks, learns from what works, and reports progress without hand-holding. The user's job is mission definition and exception handling — not step supervision.
+
+See `VISION.md` for the full intent.
 
 ---
 
@@ -107,8 +109,8 @@ The gateway integration. Poe talks to Jeremy through Telegram.
 - [x] Slash commands: `/director`, `/research`, `/build`, `/ops`, `/status`, `/ancestry`, `/help`
 - [x] Goal ancestry (§18): parent_id + ancestry chain, prompt injection, CLI traversal helpers
 - [x] systemd service files: `poe-telegram.service`, `poe-heartbeat.service`
-- [ ] Wire to OpenClaw gateway (ws://127.0.0.1:18789) — deferred (not required for core operation)
-- [ ] Interruption handling: new messages additive/corrective — deferred
+- [x] Wire to OpenClaw gateway (ws://127.0.0.1:18789) — `src/gateway.py` (Phase 15)
+- [x] Interruption handling: new messages additive/corrective — `src/interrupt.py` (Phase 9)
 
 **Artifact:** `poe-telegram [--loop]`. `src/telegram_listener.py`, `src/llm.py`, `src/ancestry.py`
 
@@ -123,7 +125,7 @@ Poe proposes its own improvements based on failure patterns.
 - [x] Stores suggestions to `memory/suggestions.jsonl`
 - [x] Wired into heartbeat loop (fires every 10 heartbeat cycles)
 - [x] Telegram notification of suggestions (optional)
-- [ ] Auto-application of suggestions — deferred until confidence in suggestion quality is established
+- [x] Auto-application of suggestions — `poe-evolver --apply <id>` (Phase 8)
 
 **Artifact:** `poe-evolver [--dry-run]`. `src/evolver.py`
 
@@ -362,7 +364,7 @@ Inspired by Memento-Skills arXiv:2603.18743: one-step offline RL, multi-positive
 - [x] **Spawn-on-demand:** `spawn_persona(name, goal, dry_run=True|False, compose_with=[...])` — fresh agent loop with persona system prompt. `short_clear()` at spawn start and end (memory isolation). Resolves LLM adapter from model_tier.
 - [x] **Memory isolation:** each spawn calls `short_clear()` + sets `persona_name`/`persona_goal` in short-term store. Session memory evicted on spawn exit.
 - [x] **`poe-persona` CLI:** `list / show / compose / spawn` subcommands. `spawn --dry-run` previews without executing. `spawn --compose` adds additional personas at runtime.
-- [x] **`/research` Telegram command** routes to researcher persona via `spawn_persona` rather than generic director path.
+- [x] **`/research` Telegram command** runs `run_agent_loop()` with live step-by-step Telegram progress updates via `step_callback`.
 - [x] **Canon promotion (Phase 16 addition):** `times_applied` tracking wired into `inject_tiered_lessons()` (default on). `_record_canon_hit()` writes to `memory/canon_stats.jsonl`. `get_canon_candidates()` surfaces long-tier lessons eligible for AGENTS.md identity promotion. `poe-memory canon-candidates` CLI. 10 new tests.
 - [x] 47 new tests (37 persona + 10 canon); 1008 total passing, 5 skipped
 
@@ -558,8 +560,16 @@ Not a single phase but a research track that informs multiple phases:
 - `personas/psyche-researcher.md` — targeted research specialist persona. Evidence-grounded, implication-focused. Writes to `docs/research/` with a standard artifact format (question, findings, implications, confidence, sources). Composes with `reality-checker` for significant findings.
 - `docs/research/README.md` — active question queue (6 open questions, tied to phases), artifact format, completed log.
 
-**Still pending:**
-- Actually running the research — first spawn when the decay model tuning question (Phase 27 sub-goal design) needs grounding. Trigger: `poe-persona spawn psyche-researcher` with a specific question.
+**Shipped (Phase 29 first research run — March 2026):**
+- `docs/research/productive-persistence.md` — ML + psychology synthesis on agent persistence
+  (UCB/Thompson/Gittins, Duckworth grit, Seligman learned helplessness, productive failure, Kapur).
+  6/6 steps, 0 blocked, 123k tokens, 250s.
+
+**Still pending (research queue — run via `poe-persona spawn psyche-researcher`):**
+- Zoom in/zoom out metacognition (double-loop learning, OODA loops)
+- Spaced repetition + confidence/score signal interaction
+- Tacit vs. explicit knowledge in expertise research
+- Kahneman System 1/2: when should an agent deliberate vs. act?
 
 ---
 
@@ -578,11 +588,77 @@ Not a single phase but a research track that informs multiple phases:
 - `tests/test_llm.py`: updated monkeypatching for `_codex_auth_available` in 3 existing tests.
 - Confirmed: `gpt-5.4` works with ChatGPT Plus/Pro OAuth; `codex-mini-latest` does not.
 
+**Shipped (Phase 30 third cut — March 2026, 91% token reduction):**
+- `src/web_fetch.py`: URL pre-fetch layer — Jina Reader (clean markdown), authenticated X/Twitter CLI, t.co resolution, context-carry across steps
+- `src/llm.py`: `--disallowedTools WebFetch,WebSearch` in subprocess to prevent sub-agent raw HTML fetches
+- `src/agent_loop.py`: URL FETCHING POLICY + TOKEN EFFICIENCY sections in `_EXECUTE_SYSTEM`; `completed_context` passed as `extra_context` to `enrich_step_with_urls` (fixes step-3 context-carry bug)
+- Result: X/tweet research tasks: 789k → 67k tokens (91%), 0 blocked, 84s
+
 **Still pending:**
 - **Per-model cost breakdown in `poe-metrics`**: report should show actual cost by model across outcomes. Needs `model` field recorded in `outcomes.jsonl`.
 - **Haiku routing for simple sub-tasks**: `assign_model_by_role()` currently maps `worker → MID`. For classifier, summarizer, routing decisions, downgrade to `CHEAP`. Add a `classifier` role tier.
 - **Budget alerting**: configurable per-session token budget with Telegram alert when crossed.
-- **Codex token refresh**: `~/.codex/auth.json` access_token expires ~March 30. Need to wire in token refresh via `refresh_token` before expiry, or handle 401 gracefully and fall back to subprocess.
+- **Sub-agent token tracking**: `StepOutcome.tokens_in/out` already populated — feed per-step costs into evolver so the system can detect high-burn step patterns and propose cheaper alternatives.
+
+---
+
+### Phase 31: Persona Auto-Selection *(PLANNED)*
+
+Currently, persona selection requires explicit `/research`, `/build`, `/ops` commands. Goal content should drive persona selection automatically.
+
+- [ ] **Goal classifier → persona mapping**: extend `intent.py` or add `persona_for_goal(goal)` that uses LLM + heuristic to map goal content to best persona (researcher for lookup/analysis, builder for code/implement, ops for system/monitor, psyche-researcher for psychology/cognition questions)
+- [ ] **Confidence gate**: if classifier confidence < 0.7, default to generic worker; don't force a wrong persona
+- [ ] **Override**: explicit `/research`, `/build`, etc. always override auto-selection
+- [ ] **Feedback loop**: record persona_selected + outcome; feed to evolver for selection quality improvement
+- [ ] Wire into `poe_handle()` and natural-language Telegram/Slack routing
+
+**Artifact:** `persona_for_goal()` in `persona.py`, wired into `handle.py` and `poe.py`
+
+---
+
+### Phase 32: Skills Auto-Promotion *(PLANNED)*
+
+Skills are manually seeded or extracted as provisional. Promotion to established requires pass^3 ≥ 0.7 but the mechanism isn't wired to fire automatically.
+
+- [ ] **Auto-promotion in evolver**: after each run, check `get_skill_stats()` — any provisional skill meeting pass^3 ≥ 0.7 across ≥ 5 uses gets promoted automatically
+- [ ] **Demotion path**: if an established skill drops below 0.4 over 3 runs, demote back to provisional with a demotion note
+- [ ] **Telegram notification**: brief "skill promoted: X" message when auto-promotion fires
+- [ ] **Skills dashboard**: `poe-skills status` shows provisional/established counts, top-performing skills, candidates for promotion/demotion
+
+**Artifact:** `maybe_auto_promote_skills()` in `evolver.py`, `poe-skills status` CLI
+
+---
+
+### Phase 33: Sub-Agent Token Self-Improvement *(PLANNED)*
+
+The evolver currently optimizes for success rate. It should also optimize for token cost — detecting step patterns that burn disproportionate tokens and proposing cheaper alternatives.
+
+- [ ] **Per-step cost recording**: `StepOutcome.tokens_in/out` → write to `memory/step-costs.jsonl` with step_type heuristic (classify as: research, summarize, write, verify, etc.)
+- [ ] **Cost analyzer in evolver**: identify step types with cost > 2x median; generate `cost_optimization` suggestion type
+- [ ] **Cheap-first principle in decomposer**: inject step cost awareness into `_DECOMPOSE_SYSTEM` — favor steps that can be answered from pre-fetched context
+- [ ] **Token budget per loop**: optional `token_budget` arg to `run_agent_loop()`; abort loop gracefully if exceeded
+
+**Artifact:** `step-costs.jsonl`, `cost_optimization` suggestion type in `evolver.py`, `token_budget` in `agent_loop.py`
+
+---
+
+### Phase 34: Overnight Autonomous Mission Execution *(PLANNED)*
+
+The core north star: Jeremy sets a mission before sleeping; the system executes autonomously through the night, recovers from blocks, and reports in the morning. No step supervision required.
+
+Currently: missions exist (`mission.py`) but autonomous drain requires manual trigger. Missing: a cron/heartbeat-driven mission runner that:
+- Picks up incomplete missions from the queue
+- Runs milestones in sequence (or parallel where safe)
+- Self-recovers from blocks using the roadblock resilience pattern
+- Sends Telegram progress update at natural milestones (not every step)
+- Writes a morning briefing when done or stuck
+
+- [ ] **Mission drain in heartbeat**: `heartbeat.py` checks for incomplete missions every N ticks; spawns background process if none running
+- [ ] **Milestone-level progress notifications**: Telegram message per milestone completion (not per step) to avoid noise
+- [ ] **Morning briefing format**: on mission completion or irrecoverable stuck, send structured summary: milestones done, time elapsed, what's left, any blockers with explanation
+- [ ] **Safe interruption**: `/stop` halts the current step; mission state is persisted so it can be resumed
+
+**Artifact:** mission drain in `heartbeat.py`, milestone notification hooks, morning briefing formatter
 
 ---
 

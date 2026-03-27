@@ -1,57 +1,60 @@
-# openclaw-orchestration
+# Poe Orchestration
 
-Autonomous agent orchestration for Poe — a self-improving AI concierge running on a headless Linux box, reachable via Telegram.
+Autonomous agent framework. Give it a goal; it decomposes, executes, learns, and reports. No hand-holding required.
+
+Works standalone or alongside OpenClaw, Telegram, Slack, or any other interface you wire in.
 
 ---
 
-## What it is
+## What it does
 
-A Python orchestration system that gives Poe (the AI assistant) the ability to:
-
-- **Receive goals via Telegram** and route them autonomously
-- **Decompose, plan, and execute** multi-step work without human hand-holding
-- **Delegate** to specialized workers (research, build, ops) via a Director/Worker hierarchy
-- **Learn from failures** — lessons and outcomes persist across sessions
-- **Self-heal** — heartbeat monitors health, detects stuck loops, escalates to Telegram
-- **Self-improve** — meta-evolver reviews patterns and proposes prompt/guardrail improvements
-- **Trace goals to mission** — every task carries its full ancestry chain to prevent drift
+- **Autonomous loops**: goal → plan → execute steps → done|stuck, with stuck detection, roadblock recovery, and progress logging
+- **Multi-agent delegation**: Director plans, Workers execute (research / build / ops), Inspector validates — no Worker grades its own output
+- **Persistent memory**: lessons extracted from every run, injected into future prompts; tiered decay (short/medium/long); spaced repetition
+- **Self-improvement**: meta-evolver reviews failure patterns every 10 minutes and proposes prompt/guardrail/skill changes
+- **Skill library**: reusable step patterns extracted from successful runs; scored, tested, and promoted automatically
+- **Interface-agnostic**: Telegram, Slack, CLI, or call `run_agent_loop()` directly from Python — same behavior regardless of how a goal arrives
+- **Token-efficient research**: pre-fetch layer intercepts URLs before LLM calls, uses Jina Reader for clean markdown, authenticated X/Twitter access via CLI
 
 ---
 
 ## Architecture
 
 ```
-Telegram message
+Goal arrives (Telegram / Slack / CLI / Python API)
       ↓
-telegram_listener.py    ← polls Telegram Bot API, slash commands, ack+edit UX
+handle.py           ← NOW/AGENDA classification + routing
       ↓
-handle.py               ← NOW/AGENDA intent classification + routing
+  ┌───┴────────────────────────────────────────────────────┐
+  │ NOW lane (1-shot)       AGENDA lane (agent_loop.py)    │
+  │                           ↓                            │
+  │                    decompose goal → steps               │
+  │                           ↓                            │
+  │                    for each step:                       │
+  │                      pre-fetch URLs (web_fetch.py)      │
+  │                      execute (claude subprocess)        │
+  │                      hook reviewers (hooks.py)          │
+  │                      record outcome (memory.py)         │
+  │                      extract lessons                    │
+  │                      inject into next step              │
+  └────────────────────────────────────────────────────────┘
       ↓
-  ┌───┴────┐
-  │        │
-now lane  agenda lane
-(1-shot)  agent_loop.py  ← decompose → execute steps → done|stuck
-              ↓
-          director.py    ← Director plans → Worker executes → Director reviews
-          workers.py     ← research | build | ops | general personas
-              ↓
-          memory.py      ← record outcome, extract lessons, inject in future runs
-          ancestry.py    ← goal ancestry chain injected in prompts
-              ↓
-          evolver.py     ← periodic: analyze patterns → suggest improvements
-          heartbeat.py   ← periodic: health check → tiered recovery → Telegram alert
+poe.py (CEO layer) — distill + report to user
+      ↓
+Telegram / Slack / stdout
 ```
 
-### LLM Backends (`llm.py`)
+### LLM backends (`llm.py`)
 
-All backends share one interface: `LLMAdapter.complete(messages, *, tools, ...) → LLMResponse`
+All share one interface: `LLMAdapter.complete(messages, tools) → LLMResponse`
 
-| Backend | Trigger |
-|---------|---------|
+| Backend | When active |
+|---------|-------------|
 | `AnthropicSDKAdapter` | `ANTHROPIC_API_KEY` set |
-| `ClaudeSubprocessAdapter` | `claude` binary available (OAuth via Claude Code) |
+| `ClaudeSubprocessAdapter` | `claude` binary in PATH (Claude Code OAuth) |
 | `OpenRouterAdapter` | `OPENROUTER_API_KEY` set |
 | `OpenAIAdapter` | `OPENAI_API_KEY` set |
+| `CodexCLIAdapter` | `codex` binary available (ChatGPT OAuth) |
 
 `build_adapter("auto")` selects the best available backend. `MODEL_CHEAP/MID/POWER` abstract model names across backends.
 
@@ -60,156 +63,166 @@ All backends share one interface: `LLMAdapter.complete(messages, *, tools, ...) 
 ## Quickstart
 
 ```bash
-cd openclaw-orchestration
+# Bootstrap workspace + services
+python3 src/cli.py poe-bootstrap install
 
-# Give Poe a goal — autonomous loop (Phase 1)
-python3 src/cli.py poe-run "research the three main benefits of prediction markets"
+# Run an autonomous research loop
+python3 src/agent_loop.py "research winning polymarket strategies"
 
-# Route a message (auto-classifies NOW vs AGENDA) (Phase 2)
+# Route a message (auto-classifies NOW vs AGENDA)
 python3 src/cli.py poe-handle "what time is it in Tokyo?"
-python3 src/cli.py poe-handle "build me a research summary on polymarket strategies"
+python3 src/cli.py poe-handle "build me a research summary on LLM orchestration"
 
-# Director/Worker pipeline (Phase 3)
-python3 src/cli.py poe-director "write a comprehensive report on LLM orchestration frameworks"
+# Start Telegram listener
+python3 src/telegram_listener.py           # run forever
+python3 src/telegram_listener.py --once    # process pending and exit
 
-# System health (Phase 4)
+# System health
 python3 src/cli.py sheriff health
-python3 src/cli.py poe-heartbeat --dry-run
+python3 src/cli.py poe-observe
 
-# Memory + learning (Phase 5)
+# Memory
 python3 src/cli.py memory context
-python3 src/cli.py memory outcomes
-python3 src/cli.py memory lessons
-
-# Start Telegram listener (Phase 6)
-python3 src/cli.py poe-telegram --once       # process pending
-python3 src/cli.py poe-telegram              # run forever
-
-# Goal ancestry (Phase 6 / §18)
-python3 src/cli.py poe-run "research sub-goal" --parent "top-mission-project"
-python3 src/cli.py ancestry my-project
-python3 src/cli.py impact top-mission
-
-# Meta-evolver (Phase 7 / §19)
-python3 src/cli.py poe-evolver --dry-run
-python3 src/cli.py poe-evolver --list        # pending suggestions
-python3 src/cli.py poe-evolver --apply <id>  # mark applied
-
-# Quality metrics (Phase 8)
-python3 src/cli.py poe-metrics
-python3 src/cli.py poe-eval --dry-run
+python3 src/cli.py poe-memory status
 ```
+
+No OpenClaw installation required. Set `POE_WORKSPACE` to any directory and run.
 
 ---
 
-## Telegram interface
+## Interfaces
 
-Deploy `deploy/poe-telegram.service` to get Poe listening 24/7:
+### Telegram
+
+Deploy `deploy/poe-telegram.service` to listen 24/7:
 
 ```bash
 sudo cp deploy/poe-telegram.service /etc/systemd/system/
 sudo systemctl enable --now poe-telegram
 ```
 
-Slash commands in Telegram:
+Slash commands:
 
 | Command | What it does |
 |---------|-------------|
 | `/status` | System health, heartbeat, stuck projects |
+| `/research <goal or URL>` | Autonomous research loop with live step progress |
 | `/director <directive>` | Full Director/Worker pipeline |
-| `/research <goal>` | Research worker |
 | `/build <goal>` | Build worker |
 | `/ops <command>` | Ops worker |
-| `/ancestry <project>` | Show goal ancestry chain |
+| `/map` | Goal relationship map |
+| `/ancestry <project>` | Goal ancestry chain |
+| `/stop` | Stop running loop |
 | `/help` | Command list |
 
-Natural language messages are auto-routed (NOW = fast, AGENDA = multi-step loop).
+Natural language is auto-routed (NOW = fast, AGENDA = multi-step loop). Messages during an active loop are routed as interrupts.
+
+### Slack
+
+Mirror of the Telegram interface using Socket Mode (no public endpoint):
+
+```bash
+pip install slack-sdk
+export SLACK_BOT_TOKEN=xoxb-... SLACK_APP_TOKEN=xapp-...
+python3 src/slack_listener.py
+```
+
+### Python API
+
+```python
+from agent_loop import run_agent_loop
+
+result = run_agent_loop(
+    "research the three main benefits of prediction markets",
+    project="polymarket-research",
+    step_callback=lambda n, text, summary, status: print(f"step {n}: {summary}"),
+)
+print(result.summary())
+```
 
 ---
 
 ## Always-on services
 
 ```bash
-# Heartbeat + meta-evolver (60s interval, evolver every 10 ticks)
+# Heartbeat (health + meta-evolver, 60s interval)
 sudo cp deploy/poe-heartbeat.service /etc/systemd/system/
 sudo systemctl enable --now poe-heartbeat
+
+# Inspector (quality validation, runs every 20 heartbeat ticks)
+sudo cp deploy/poe-inspector.service /etc/systemd/system/
+sudo systemctl enable --now poe-inspector
 ```
 
 Heartbeat recovery tiers:
 1. **Scripted**: disk warn, API key missing, gateway down → log suggestion
-2. **LLM diagnosis**: stuck projects → ask cheap LLM for recovery action
-3. **Telegram escalation**: critical health or stuck projects → alert Jeremy
+2. **LLM diagnosis**: stuck projects → cheap LLM recovery action
+3. **Telegram escalation**: critical health → alert Jeremy
+
+---
+
+## Configuration
+
+Credentials are read in priority order:
+1. Environment variables: `ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`, `OPENAI_API_KEY`, `TELEGRAM_BOT_TOKEN`
+2. `$POE_ENV_FILE` or `<workspace>/secrets/.env`
+3. `~/.openclaw/openclaw.json` (OpenClaw config, if present)
+
+Workspace root resolves as: `POE_WORKSPACE` → `OPENCLAW_WORKSPACE` → `WORKSPACE_ROOT` → `~/.poe/workspace`
+
+OpenClaw is fully optional. The system runs standalone on any machine with Python 3.10+ and a Claude/OpenAI API key.
 
 ---
 
 ## Source modules
 
-| Module | Phase | What it does |
-|--------|-------|-------------|
-| `orch.py` | 0 | Core file-first state: NEXT.md tasks, run records, project lifecycle |
-| `llm.py` | 1/6 | Platform-agnostic LLM adapters (Anthropic, OpenRouter, OpenAI, subprocess) |
-| `agent_loop.py` | 1 | Autonomous loop: decompose goal → execute steps → done\|stuck |
-| `intent.py` | 2 | NOW/AGENDA classifier (LLM + heuristic fallback) |
-| `handle.py` | 2 | Entry point: classify → route → execute → respond |
-| `director.py` | 3 | Director agent: plan → delegate → review |
-| `workers.py` | 3 | Worker agents: research, build, ops, general |
-| `sheriff.py` | 4 | Loop Sheriff: detect stuck loops + system health checks |
-| `heartbeat.py` | 4 | Periodic health check + tiered recovery + Telegram escalation |
-| `memory.py` | 5 | Outcome recording, lesson extraction, Reflexion injection |
-| `telegram_listener.py` | 6 | Telegram polling, slash commands, ack+edit UX |
-| `ancestry.py` | 6 | Goal ancestry chain: parent_id, ancestry.json, prompt injection |
-| `evolver.py` | 7 | Meta-evolver: analyze outcomes → propose improvements |
-| `metrics.py` | 8 | Quality tracking: success rate, cost, token usage per task type |
-| `eval.py` | 8 | Evaluation suite: benchmark goals with known-good outcomes |
-| `cli.py` | all | Unified CLI entry point |
-
----
-
-## Goal ancestry
-
-Every project can carry a reverse-linked chain back to the top-level mission:
-
-```bash
-# Link a sub-goal to a parent
-python3 src/cli.py poe-run "implement the WebSocket handler" \
-    --parent top-level-mission \
-    --parent-title "Build self-leveling autonomous assistant"
-
-# Or set ancestry manually
-python3 src/cli.py ancestry my-project \
-    --set-parent top-mission \
-    --parent-title "Top level goal"
-
-# Inspect
-python3 src/cli.py ancestry my-project
-python3 src/cli.py impact top-mission   # all descendants (BFS)
-```
-
-Ancestry is injected into every decomposition and execution prompt, keeping agents aligned with the big picture.
+| Module | What it does |
+|--------|-------------|
+| `agent_loop.py` | Autonomous loop: decompose goal → execute steps → done\|stuck |
+| `llm.py` | Platform-agnostic LLM adapters (Anthropic, OpenRouter, OpenAI, subprocess, Codex) |
+| `web_fetch.py` | URL pre-fetch: Jina Reader clean markdown, X/Twitter auth, t.co resolution |
+| `memory.py` | Outcome recording, lesson extraction, tiered decay, Reflexion injection |
+| `skills.py` | Reusable step patterns: extract, score, test-gate, promote |
+| `persona.py` | Composable agent identities (researcher, builder, ops, companion, psyche-researcher) |
+| `hooks.py` | Pluggable callbacks at step/loop/mission level |
+| `poe.py` | CEO layer: distill active missions → executive summary |
+| `handle.py` | Entry point: classify intent → route → execute → respond |
+| `telegram_listener.py` | Telegram polling, slash commands, ack+edit UX, live step progress |
+| `slack_listener.py` | Slack Socket Mode, mirrors Telegram commands |
+| `director.py` | Director: plan → delegate to workers → review output |
+| `workers.py` | Worker agents: research, build, ops, general |
+| `sheriff.py` | Loop Sheriff: detect stuck loops, system health checks |
+| `heartbeat.py` | Periodic health + tiered recovery + Telegram escalation |
+| `evolver.py` | Meta-evolver: analyze outcomes → propose improvements |
+| `inspector.py` | Quality agent: friction detection, alignment scoring, evolver feed |
+| `mission.py` | Mission hierarchy: Mission → Milestone → Feature → Worker Session |
+| `ancestry.py` | Goal ancestry chain: parent_id, ancestry.json, prompt injection |
+| `metrics.py` | Success rate, cost, token usage per task type; pass@k / pass^k |
+| `security.py` | Prompt injection detection on external content (pre-loop scanning) |
+| `config.py` | Workspace resolution, credential discovery, env var priority |
+| `bootstrap.py` | `poe-bootstrap install`: dirs, services, smoke test |
+| `orch.py` | Core file-first state: NEXT.md tasks, run records, project lifecycle |
 
 ---
 
 ## Memory and self-improvement
 
-Poe accumulates knowledge across sessions:
-
 ```
 Run completes
-    → reflect_and_record() in memory.py
-    → outcome saved to memory/outcomes.jsonl
-    → LLM extracts 1-3 lessons to memory/lessons.jsonl
-    → daily log in memory/YYYY-MM-DD.md
+    → memory.py records outcome + extracts 1-3 lessons
+    → tiered JSONL: short (session) / medium (weeks) / long (months)
+    → decay applied daily; lessons promoted on score + reuse threshold
 
-Every 10 heartbeat ticks (~10 minutes):
+Every 10 heartbeat ticks (~10 min):
     → evolver analyzes last 50 outcomes
     → identifies failure patterns
-    → generates suggestions (prompt_tweak | new_guardrail | skill_pattern)
-    → saves to memory/suggestions.jsonl
+    → generates suggestions: prompt_tweak | new_guardrail | skill_pattern
 
-Next run with similar task type:
-    → inject_lessons_for_task() loads relevant lessons
+Next run with similar task:
+    → inject_tiered_lessons() loads relevant lessons (long-tier first)
     → ancestry context loaded
     → both injected into decompose + execute prompts
+    → router.py picks skills by predicted success probability (not just keyword match)
 ```
 
 ---
@@ -217,23 +230,21 @@ Next run with similar task type:
 ## Development
 
 ```bash
-# Run tests
+# Run tests (1290+ passing, all LLM calls mocked)
 python3 -m pytest tests/ -q
 
-# Run with dry-run (no LLM calls)
-python3 src/cli.py poe-run "test goal" --dry-run --verbose
+# Dry-run (no LLM calls)
+python3 src/agent_loop.py "test goal" --dry-run --verbose
 python3 src/cli.py poe-heartbeat --dry-run
 python3 src/cli.py poe-eval --dry-run
 ```
 
-Test count: 346+ passing. All LLM calls are mocked in tests.
-
 ---
 
-## Configuration
+## Compatibility
 
-Credentials are read from (in priority order):
-1. Environment variables: `ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`, `OPENAI_API_KEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`
-2. `~/.openclaw/openclaw.json` (existing OpenClaw config)
-
-No separate config file needed if you're already running OpenClaw.
+- **OpenClaw**: reads `~/.openclaw/openclaw.json` for credentials/tokens; can coordinate via OpenClaw gateway (`src/gateway.py`)
+- **Telegram**: first-class interface via Bot API polling
+- **Slack**: Socket Mode, no public endpoint needed
+- **macOS + Linux**: `bootstrap.py` generates systemd (Linux) or launchd (macOS) service files
+- **Docker**: `Dockerfile` + `docker-compose.yml` for isolated deployment
