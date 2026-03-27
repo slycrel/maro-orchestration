@@ -849,12 +849,11 @@ def build_adapter(
     if key:
         return AnthropicSDKAdapter(api_key=key, model=model)
 
-    # 2. Codex CLI — GPT-5.4 via ChatGPT OAuth, supports prompt caching
-    #    Ranked above claude subprocess because it's cheaper (caches aggressively)
-    if _codex_auth_available():
-        return CodexCLIAdapter(model=model)
-
-    # 3. Claude subprocess — always available on this box, no credits needed
+    # 2. Claude subprocess — always available on this box, no credits needed.
+    #    CodexCLIAdapter exists but is NOT in auto-detection: it wraps `codex exec`
+    #    which is an agentic subprocess (same fundamental cost model as claude -p)
+    #    and the OAuth token does not work with the public OpenAI API directly.
+    #    Use build_adapter("codex") explicitly if you want to experiment with it.
     if _claude_bin_available():
         return ClaudeSubprocessAdapter(model=model)
 
@@ -878,8 +877,8 @@ def detect_available_backends() -> Dict[str, bool]:
     """Return which backends are currently available."""
     env = _load_env_file()
     return {
-        "codex":      _codex_auth_available(),
         "subprocess": _claude_bin_available(),
+        "codex":      _codex_auth_available(),  # available but not in auto-detect chain
         "anthropic":  bool(_get_key("ANTHROPIC_API_KEY", env)),
         "openrouter": bool(_get_key("OPENROUTER_API_KEY", env)),
         "openai":     bool(_get_key("OPENAI_API_KEY", env)),

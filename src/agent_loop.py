@@ -646,6 +646,39 @@ def run_agent_loop(
     except Exception:
         pass  # Memory failures must never break the loop
 
+    # Auto-extract skills from successful loops so patterns crystallise automatically.
+    # Only runs when the loop completed successfully and had interesting blocking events
+    # (those are the cases worth learning from). Runs in a try/except so it never
+    # interrupts the caller.
+    if loop_status == "done" and not dry_run and step_outcomes:
+        try:
+            from skills import extract_skills, save_skill, load_skills
+            # Build a minimal outcome dict that extract_skills can analyse
+            outcome_for_extraction = {
+                "goal": goal,
+                "status": loop_status,
+                "task_type": "agenda",
+                "steps": [
+                    {
+                        "step": s.step,
+                        "status": s.status,
+                        "result": s.result,
+                        "summary": s.summary,
+                    }
+                    for s in step_outcomes
+                ],
+                "project": project,
+            }
+            existing_skills = {s.name for s in load_skills()}
+            extracted = extract_skills([outcome_for_extraction], adapter if adapter else None)
+            for skill in extracted:
+                if skill.name not in existing_skills:
+                    save_skill(skill)
+                    if verbose:
+                        print(f"[poe] skill crystallised: {skill.name}", file=sys.stderr, flush=True)
+        except Exception:
+            pass  # Skill extraction failures must never break the loop
+
     # Release loop lock so interfaces know we're idle
     try:
         clear_loop_running()
@@ -728,10 +761,22 @@ def _execute_step(
 
     ancestry_block = f"\n\n{ancestry_context}" if ancestry_context else ""
 
+    # Pre-fetch URLs found in the step text so raw HTML never enters the LLM context.
+    # This is the primary lever for token efficiency on web-research steps.
+    prefetch_block = ""
+    try:
+        from web_fetch import enrich_step_with_urls
+        prefetch_block = enrich_step_with_urls(step_text)
+        if prefetch_block:
+            prefetch_block = "\n\n" + prefetch_block
+    except Exception:
+        pass  # degrade gracefully if web_fetch unavailable
+
     user_msg = (
         f"Overall goal: {goal}{ancestry_block}\n\n"
         f"Current step ({step_num}/{total_steps}): {step_text}"
-        f"{context_block}\n\n"
+        f"{context_block}"
+        f"{prefetch_block}\n\n"
         f"Complete this step now. Call complete_step when done or flag_stuck if blocked."
     )
 
