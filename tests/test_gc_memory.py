@@ -70,7 +70,7 @@ def _write_tiered_lesson(mem: Path, tier: str, score: float) -> None:
         "confidence": 0.7,
         "tier": tier,
         "score": score,
-        "last_reinforced": date.today().isoformat(),
+        "last_reinforced": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
         "sessions_validated": 0,
         "times_applied": 0,
         "times_reinforced": 0,
