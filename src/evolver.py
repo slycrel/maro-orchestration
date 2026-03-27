@@ -537,6 +537,55 @@ def receive_inspector_tickets(tickets: List[dict]) -> int:
     return len(suggestions)
 
 
+def run_skill_maintenance(*, dry_run: bool = False, verbose: bool = False) -> dict:
+    """Phase 32: run auto-promotion, demotion, and rewrite gating in one call.
+
+    Called from run_evolver() and from heartbeat every N ticks.
+
+    Returns dict with keys: promoted, demoted, rewrite_candidates.
+    """
+    from skills import (
+        maybe_auto_promote_skills,
+        maybe_demote_skills,
+        skills_needing_rewrite,
+    )
+
+    promoted: list = []
+    demoted: list = []
+    rewrite_candidates: list = []
+
+    if not dry_run:
+        try:
+            promoted = maybe_auto_promote_skills()
+            if promoted and verbose:
+                print(f"[evolver] auto-promoted skills: {promoted}", file=sys.stderr)
+        except Exception as e:
+            if verbose:
+                print(f"[evolver] auto-promote failed: {e}", file=sys.stderr)
+
+        try:
+            demoted = maybe_demote_skills()
+            if demoted and verbose:
+                print(f"[evolver] demoted skills: {demoted}", file=sys.stderr)
+        except Exception as e:
+            if verbose:
+                print(f"[evolver] demotion failed: {e}", file=sys.stderr)
+
+    try:
+        rewrite_candidates = [s.id for s in skills_needing_rewrite()]
+        if rewrite_candidates and verbose:
+            print(f"[evolver] skills needing rewrite: {rewrite_candidates}", file=sys.stderr)
+    except Exception as e:
+        if verbose:
+            print(f"[evolver] rewrite scan failed: {e}", file=sys.stderr)
+
+    return {
+        "promoted": promoted,
+        "demoted": demoted,
+        "rewrite_candidates": rewrite_candidates,
+    }
+
+
 def get_friction_summary() -> str:
     """Return a brief human-readable friction summary from the latest inspector run.
 
@@ -670,6 +719,15 @@ def run_evolver_with_friction(
 
     if notify and suggestions and not dry_run:
         _notify_telegram(report)
+
+    # Phase 32: skill maintenance on every evolver run
+    try:
+        _skill_maint = run_skill_maintenance(dry_run=dry_run, verbose=verbose)
+        if _skill_maint["promoted"] or _skill_maint["demoted"]:
+            if verbose:
+                print(f"[evolver] skill maint: {_skill_maint}", file=sys.stderr)
+    except Exception:
+        pass
 
     report.elapsed_ms = int((time.monotonic() - started) * 1000)
     return report

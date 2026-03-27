@@ -46,6 +46,11 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 ESCALATION_THRESHOLD = 0.4   # success_rate below this → needs redesign
+UTILITY_EMA_ALPHA = 0.3      # EMA smoothing for utility score (Phase 32)
+AUTO_PROMOTE_MIN_USES = 5    # minimum uses before auto-promotion considered
+AUTO_PROMOTE_MIN_RATE = 0.70 # pass^3 threshold for auto-promotion
+REWRITE_TRIGGER_RATE = 0.40  # utility score below this triggers rewrite
+REWRITE_MIN_USES = 3         # minimum failures before rewrite fires
 
 
 # ---------------------------------------------------------------------------
@@ -65,6 +70,8 @@ class Skill:
     success_rate: float = 1.0
     content_hash: str = ""          # Phase 14: SHA256 of content for poisoning defense
     tier: str = "provisional"       # Phase 16: "provisional" (medium) | "established" (long)
+    utility_score: float = 1.0      # Phase 32: EMA of recent success/fail (1.0=perfect, 0.0=always fails)
+    failure_notes: List[str] = field(default_factory=list)  # Phase 32: recent failure reasons
 
 
 @dataclass
@@ -205,6 +212,8 @@ def _skill_to_dict(skill: Skill) -> dict:
         "success_rate": skill.success_rate,
         "content_hash": skill.content_hash,
         "tier": skill.tier,
+        "utility_score": skill.utility_score,
+        "failure_notes": skill.failure_notes,
     }
 
 
@@ -221,6 +230,8 @@ def _dict_to_skill(d: dict) -> Skill:
         success_rate=d.get("success_rate", 1.0),
         content_hash=d.get("content_hash", ""),
         tier=d.get("tier", "provisional"),
+        utility_score=float(d.get("utility_score", 1.0)),
+        failure_notes=d.get("failure_notes", []),
     )
 
 
@@ -620,6 +631,156 @@ def record_skill_outcome(skill_id: str, success: bool) -> None:
 def get_skills_needing_escalation() -> List[SkillStats]:
     """Return skill stats where success_rate < ESCALATION_THRESHOLD."""
     return [s for s in get_all_skill_stats() if s.success_rate < ESCALATION_THRESHOLD]
+
+
+# ---------------------------------------------------------------------------
+# Phase 32: Utility scoring, failure attribution, auto-promotion, rewrite gating
+# ---------------------------------------------------------------------------
+
+def update_skill_utility(skill_id: str, success: bool, failure_reason: str = "") -> None:
+    """Update a skill's utility_score using EMA and optionally append failure note.
+
+    EMA formula: utility = alpha * new_obs + (1 - alpha) * current_utility
+    where new_obs = 1.0 for success, 0.0 for failure.
+
+    Also calls record_skill_outcome so SkillStats stay in sync.
+
+    Args:
+        skill_id: The skill to update.
+        success: True if the step using this skill completed; False if blocked.
+        failure_reason: The stuck_reason string (only stored on failure, max 5 kept).
+    """
+    record_skill_outcome(skill_id, success)
+
+    skills = load_skills()
+    target = next((s for s in skills if s.id == skill_id), None)
+    if target is None:
+        return
+
+    new_obs = 1.0 if success else 0.0
+    target.utility_score = (
+        UTILITY_EMA_ALPHA * new_obs + (1 - UTILITY_EMA_ALPHA) * target.utility_score
+    )
+
+    if not success and failure_reason:
+        target.failure_notes = (target.failure_notes + [failure_reason[:200]])[-5:]
+
+    # Recompute content hash after mutation
+    target.content_hash = compute_skill_hash(target)
+
+    _save_skills(skills)
+
+
+def attribute_failure_to_skills(
+    step_text: str,
+    failure_reason: str,
+    goal: str = "",
+) -> List[str]:
+    """Find matching skills for a step that failed and record failure against them.
+
+    Returns list of skill_ids that were attributed.
+    """
+    matched = find_matching_skills(step_text + " " + goal, use_router=False)
+    attributed = []
+    for skill in matched:
+        try:
+            update_skill_utility(skill.id, success=False, failure_reason=failure_reason)
+            attributed.append(skill.id)
+        except Exception:
+            pass
+    return attributed
+
+
+def maybe_auto_promote_skills() -> List[str]:
+    """Promote provisional skills that meet quality threshold to established.
+
+    Criteria:
+      - tier == "provisional"
+      - utility_score >= AUTO_PROMOTE_MIN_RATE (EMA-based, smoothed)
+      - use_count >= AUTO_PROMOTE_MIN_USES
+
+    Returns list of promoted skill_ids.
+    """
+    skills = load_skills()
+    promoted = []
+    changed = False
+
+    for skill in skills:
+        if skill.tier != "provisional":
+            continue
+        if skill.use_count < AUTO_PROMOTE_MIN_USES:
+            continue
+        if skill.utility_score < AUTO_PROMOTE_MIN_RATE:
+            continue
+        skill.tier = "established"
+        skill.content_hash = compute_skill_hash(skill)
+        promoted.append(skill.id)
+        changed = True
+        logger.info("[skills] auto-promoted skill %s (%s)", skill.id, skill.name)
+
+    if changed:
+        _save_skills(skills)
+
+    return promoted
+
+
+def maybe_demote_skills() -> List[str]:
+    """Demote established skills with persistently low utility back to provisional.
+
+    Criteria:
+      - tier == "established"
+      - utility_score < REWRITE_TRIGGER_RATE
+      - use_count >= REWRITE_MIN_USES (enough data to trust the score)
+
+    Returns list of demoted skill_ids.
+    """
+    skills = load_skills()
+    demoted = []
+    changed = False
+
+    for skill in skills:
+        if skill.tier != "established":
+            continue
+        if skill.use_count < REWRITE_MIN_USES:
+            continue
+        if skill.utility_score >= REWRITE_TRIGGER_RATE:
+            continue
+        skill.tier = "provisional"
+        skill.content_hash = compute_skill_hash(skill)
+        demoted.append(skill.id)
+        changed = True
+        logger.info("[skills] demoted skill %s (%s) utility=%.2f", skill.id, skill.name, skill.utility_score)
+
+    if changed:
+        _save_skills(skills)
+
+    return demoted
+
+
+def skills_needing_rewrite() -> List[Skill]:
+    """Return skills that have underperformed and should be rewritten.
+
+    Criteria: utility_score < REWRITE_TRIGGER_RATE AND use_count >= REWRITE_MIN_USES.
+    These are candidates for the evolver's rewrite_skill() function.
+    """
+    skills = load_skills()
+    return [
+        s for s in skills
+        if s.utility_score < REWRITE_TRIGGER_RATE and s.use_count >= REWRITE_MIN_USES
+    ]
+
+
+def _save_skills(skills: List[Skill]) -> None:
+    """Overwrite skills.jsonl with the current list (full rewrite for consistency)."""
+    path = _skills_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            "\n".join(json.dumps(_skill_to_dict(s)) for s in skills) + "\n",
+            encoding="utf-8",
+        )
+    except Exception as e:
+        logger.warning("[skills] _save_skills failed: %s", e)
 
 
 # ---------------------------------------------------------------------------

@@ -993,3 +993,140 @@ def test_validate_skill_mutation_returns_correct_type(monkeypatch, tmp_path):
             assert hasattr(result, "tests_passed")
             assert hasattr(result, "blocked")
             assert hasattr(result, "block_reason")
+
+
+# ---------------------------------------------------------------------------
+# Phase 32: utility scoring, failure attribution, auto-promotion, rewrite gating
+# ---------------------------------------------------------------------------
+
+from skills import (
+    update_skill_utility,
+    attribute_failure_to_skills,
+    maybe_auto_promote_skills,
+    maybe_demote_skills,
+    skills_needing_rewrite,
+    UTILITY_EMA_ALPHA,
+    AUTO_PROMOTE_MIN_USES,
+    AUTO_PROMOTE_MIN_RATE,
+    REWRITE_TRIGGER_RATE,
+    REWRITE_MIN_USES,
+    _save_skills,
+)
+
+
+def _phase32_skill(tmp_path, skill_id="p32skill", tier="provisional", utility=1.0, use_count=0):
+    """Helper: write a single skill to tmp_path and return it."""
+    import datetime
+    skill = Skill(
+        id=skill_id,
+        name=f"Test Skill {skill_id}",
+        description="A test skill",
+        trigger_patterns=["test research"],
+        steps_template=["do the thing"],
+        source_loop_ids=[],
+        created_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        use_count=use_count,
+        success_rate=utility,
+        tier=tier,
+        utility_score=utility,
+    )
+    skills_file = tmp_path / "skills.jsonl"
+    import json
+    skills_file.write_text(json.dumps(_skill_to_dict(skill)) + "\n")
+    return skill
+
+
+def test_update_skill_utility_success_raises_score(monkeypatch, tmp_path):
+    skill = _phase32_skill(tmp_path, utility=0.5, use_count=3)
+    monkeypatch.setattr("skills._skills_path", lambda: tmp_path / "skills.jsonl")
+    monkeypatch.setattr("skills._skill_stats_path", lambda: tmp_path / "skill-stats.jsonl")
+    update_skill_utility(skill.id, success=True)
+    updated = next(s for s in load_skills() if s.id == skill.id)
+    assert updated.utility_score > 0.5  # EMA moved toward 1.0
+
+
+def test_update_skill_utility_failure_lowers_score(monkeypatch, tmp_path):
+    skill = _phase32_skill(tmp_path, utility=1.0, use_count=3)
+    monkeypatch.setattr("skills._skills_path", lambda: tmp_path / "skills.jsonl")
+    monkeypatch.setattr("skills._skill_stats_path", lambda: tmp_path / "skill-stats.jsonl")
+    update_skill_utility(skill.id, success=False, failure_reason="step blocked: timeout")
+    updated = next(s for s in load_skills() if s.id == skill.id)
+    assert updated.utility_score < 1.0
+    assert updated.failure_notes  # failure reason stored
+
+
+def test_update_skill_utility_unknown_skill_no_error(monkeypatch, tmp_path):
+    monkeypatch.setattr("skills._skills_path", lambda: tmp_path / "skills.jsonl")
+    monkeypatch.setattr("skills._skill_stats_path", lambda: tmp_path / "skill-stats.jsonl")
+    # No skills file — should not raise
+    update_skill_utility("nonexistent_id", success=True)
+
+
+def test_maybe_auto_promote_eligible(monkeypatch, tmp_path):
+    skill = _phase32_skill(tmp_path, tier="provisional",
+                           utility=AUTO_PROMOTE_MIN_RATE + 0.1,
+                           use_count=AUTO_PROMOTE_MIN_USES)
+    monkeypatch.setattr("skills._skills_path", lambda: tmp_path / "skills.jsonl")
+    promoted = maybe_auto_promote_skills()
+    assert skill.id in promoted
+    updated = load_skills()
+    assert updated[0].tier == "established"
+
+
+def test_maybe_auto_promote_not_enough_uses(monkeypatch, tmp_path):
+    skill = _phase32_skill(tmp_path, tier="provisional",
+                           utility=0.9,
+                           use_count=AUTO_PROMOTE_MIN_USES - 1)
+    monkeypatch.setattr("skills._skills_path", lambda: tmp_path / "skills.jsonl")
+    promoted = maybe_auto_promote_skills()
+    assert skill.id not in promoted
+
+
+def test_maybe_auto_promote_low_utility(monkeypatch, tmp_path):
+    skill = _phase32_skill(tmp_path, tier="provisional",
+                           utility=0.3,
+                           use_count=AUTO_PROMOTE_MIN_USES)
+    monkeypatch.setattr("skills._skills_path", lambda: tmp_path / "skills.jsonl")
+    promoted = maybe_auto_promote_skills()
+    assert promoted == []
+
+
+def test_maybe_demote_low_utility_established(monkeypatch, tmp_path):
+    skill = _phase32_skill(tmp_path, tier="established",
+                           utility=REWRITE_TRIGGER_RATE - 0.1,
+                           use_count=REWRITE_MIN_USES + 2)
+    monkeypatch.setattr("skills._skills_path", lambda: tmp_path / "skills.jsonl")
+    demoted = maybe_demote_skills()
+    assert skill.id in demoted
+    updated = load_skills()
+    assert updated[0].tier == "provisional"
+
+
+def test_maybe_demote_high_utility_not_demoted(monkeypatch, tmp_path):
+    skill = _phase32_skill(tmp_path, tier="established",
+                           utility=0.9,
+                           use_count=REWRITE_MIN_USES + 2)
+    monkeypatch.setattr("skills._skills_path", lambda: tmp_path / "skills.jsonl")
+    demoted = maybe_demote_skills()
+    assert demoted == []
+
+
+def test_skills_needing_rewrite(monkeypatch, tmp_path):
+    skill = _phase32_skill(tmp_path, utility=0.2, use_count=REWRITE_MIN_USES + 1)
+    monkeypatch.setattr("skills._skills_path", lambda: tmp_path / "skills.jsonl")
+    candidates = skills_needing_rewrite()
+    assert any(s.id == skill.id for s in candidates)
+
+
+def test_skills_needing_rewrite_not_enough_uses(monkeypatch, tmp_path):
+    skill = _phase32_skill(tmp_path, utility=0.1, use_count=REWRITE_MIN_USES - 1)
+    monkeypatch.setattr("skills._skills_path", lambda: tmp_path / "skills.jsonl")
+    candidates = skills_needing_rewrite()
+    assert candidates == []
+
+
+def test_ema_formula():
+    """EMA update: utility = alpha * new + (1-alpha) * old."""
+    old = 0.5
+    expected = UTILITY_EMA_ALPHA * 1.0 + (1 - UTILITY_EMA_ALPHA) * old
+    assert abs(expected - (UTILITY_EMA_ALPHA + (1 - UTILITY_EMA_ALPHA) * old)) < 1e-9

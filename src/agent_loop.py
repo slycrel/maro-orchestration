@@ -644,6 +644,13 @@ def run_agent_loop(
             completed_context.append(_ctx_entry)
             if verbose:
                 print(f"[poe] step {step_idx} done: {step_summary[:120]}", file=sys.stderr, flush=True)
+            # Phase 32: update utility score for any matching skills
+            try:
+                from skills import find_matching_skills, update_skill_utility
+                for _sk in find_matching_skills(step_text + " " + goal, use_router=False):
+                    update_skill_utility(_sk.id, success=True)
+            except Exception:
+                pass
             if step_callback is not None:
                 try:
                     step_callback(step_idx, step_text, step_summary, "done")
@@ -689,6 +696,12 @@ def run_agent_loop(
                 stuck_reason = outcome.get("stuck_reason", f"step {step_idx} blocked")
                 if verbose:
                     print(f"[poe] step {step_idx} stuck after retry: {stuck_reason}", file=sys.stderr, flush=True)
+                # Phase 32: attribute failure to any matching skills
+                try:
+                    from skills import attribute_failure_to_skills
+                    attribute_failure_to_skills(step_text, stuck_reason, goal=goal)
+                except Exception:
+                    pass
                 if step_callback is not None:
                     try:
                         step_callback(step_idx, step_text, stuck_reason or "blocked", "blocked")
