@@ -619,16 +619,19 @@ Currently, persona selection requires explicit `/research`, `/build`, `/ops` com
 
 ---
 
-### Phase 32: Skills Auto-Promotion *(PLANNED)*
+### Phase 32: Skills Auto-Promotion + Self-Rewriting *(PLANNED)*
 
-Skills are manually seeded or extracted as provisional. Promotion to established requires pass^3 ≥ 0.7 but the mechanism isn't wired to fire automatically.
+Skills are manually seeded or extracted as provisional. Promotion to established requires pass^3 ≥ 0.7 but the mechanism isn't wired to fire automatically. The larger opportunity (from Memento-Skills research — `docs/research/sumanth-agent-research.md`) is making skills self-rewriting: when a skill fails, the agent reflects and rewrites it.
 
+- [ ] **Utility scoring per skill**: add `utility_score` field to skill registry, updated on success (↑) / failure (↓). Low-utility skills deprioritized in retrieval; very low triggers rewrite.
+- [ ] **Failure attribution**: when a step fails with a skill in use, record failure against that skill specifically (not the goal). Enables targeted rewrites instead of blanket retries.
 - [ ] **Auto-promotion in evolver**: after each run, check `get_skill_stats()` — any provisional skill meeting pass^3 ≥ 0.7 across ≥ 5 uses gets promoted automatically
-- [ ] **Demotion path**: if an established skill drops below 0.4 over 3 runs, demote back to provisional with a demotion note
-- [ ] **Telegram notification**: brief "skill promoted: X" message when auto-promotion fires
-- [ ] **Skills dashboard**: `poe-skills status` shows provisional/established counts, top-performing skills, candidates for promotion/demotion
+- [ ] **Demotion + rewrite path**: if established skill drops below 0.4 over 3 runs, demote to provisional and trigger a LLM rewrite of the skill definition using the failure record
+- [ ] **Selective skill retrieval**: switch from loading all skills to RAG-style retrieval (TF-IDF or embedding match) — prevents context stuffing at scale
+- [ ] **Skill synthesis**: when no existing skill covers a new step type, create one and add to provisional registry (the skill-creator bootstraps itself)
+- [ ] **Skills dashboard**: `poe-skills status` shows provisional/established counts, utility scores, candidates for promotion/demotion/rewrite
 
-**Artifact:** `maybe_auto_promote_skills()` in `evolver.py`, `poe-skills status` CLI
+**Artifact:** `utility_score` + `failure_attribution()` in `skills.py`; `maybe_auto_promote_skills()` + `rewrite_skill()` in `evolver.py`; `poe-skills status` CLI
 
 ---
 
