@@ -964,6 +964,23 @@ def _execute_step(
 
     ancestry_block = f"\n\n{ancestry_context}" if ancestry_context else ""
 
+    # Phase 35 P1: constraint check — block HIGH-risk steps before any LLM call
+    try:
+        from constraint import check_step_constraints
+        _cr = check_step_constraints(step_text, goal=goal)
+        if _cr.blocked:
+            return {
+                "status": "blocked",
+                "stuck_reason": f"constraint violation ({_cr.risk_level}): {_cr.reason}",
+                "result": "",
+                "tokens_in": 0,
+                "tokens_out": 0,
+            }
+        if _cr.risk_level == "MEDIUM" and verbose:
+            print(f"[poe] constraint MEDIUM on step {step_num}: {_cr.reason}", file=sys.stderr, flush=True)
+    except ImportError:
+        pass  # constraint module optional
+
     # Pre-fetch URLs found in the step text AND completed_context so raw HTML never
     # enters the LLM context. Scanning prior step summaries ensures later steps
     # can still access content fetched by earlier steps (e.g. a URL fetched in

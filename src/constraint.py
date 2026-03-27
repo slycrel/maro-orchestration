@@ -1,0 +1,215 @@
+#!/usr/bin/env python3
+"""Phase 35 P1: Constraint harness — pre-execution action validation.
+
+Checks step text for risky patterns before execution.  Classifies risk as
+LOW / MEDIUM / HIGH.  Callers decide what to do with each level; the typical
+policy is:
+
+    LOW     → proceed, no log entry needed
+    MEDIUM  → proceed, log a warning
+    HIGH    → block the step, record as stuck
+
+Constraints are pluggable: add a callable to CONSTRAINT_REGISTRY to extend.
+Each constraint is a function(step_text, goal) -> Optional[ConstraintFlag].
+
+No LLM calls — this is a zero-cost, always-on safety layer that runs in-process
+before the subprocess is spawned.
+"""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass, field
+from typing import Callable, List, Optional
+
+
+# ---------------------------------------------------------------------------
+# Data model
+# ---------------------------------------------------------------------------
+
+@dataclass
+class ConstraintFlag:
+    """A single constraint violation found in a step."""
+    name: str           # machine name, e.g. "destructive_op"
+    risk: str           # "LOW" | "MEDIUM" | "HIGH"
+    detail: str         # human-readable description of what was found
+    pattern: str        # the text fragment that triggered this flag
+
+
+@dataclass
+class ConstraintResult:
+    """Result of running all constraints against a step."""
+    allowed: bool                       # False only if any HIGH-risk flag found
+    risk_level: str                     # worst risk level across all flags
+    flags: List[ConstraintFlag] = field(default_factory=list)
+
+    @property
+    def blocked(self) -> bool:
+        return not self.allowed
+
+    @property
+    def reason(self) -> Optional[str]:
+        if not self.flags:
+            return None
+        high = [f for f in self.flags if f.risk == "HIGH"]
+        if high:
+            return "; ".join(f.detail for f in high)
+        return "; ".join(f.detail for f in self.flags)
+
+    def as_dict(self) -> dict:
+        return {
+            "allowed": self.allowed,
+            "risk_level": self.risk_level,
+            "flags": [{"name": f.name, "risk": f.risk, "detail": f.detail} for f in self.flags],
+        }
+
+
+# ---------------------------------------------------------------------------
+# Individual constraint checkers
+# ---------------------------------------------------------------------------
+
+# Patterns that indicate destructive filesystem operations.
+_DESTRUCTIVE_PATTERNS = [
+    (r"\brm\s+-rf?\b",                       "HIGH",  "rm -r / rm -rf found in step"),
+    (r"\bshutil\.rmtree\b",                  "HIGH",  "shutil.rmtree found in step"),
+    (r"\bos\.remove\b.*\*",                  "HIGH",  "os.remove with wildcard found"),
+    (r"\btruncate\s+--size\s+0\b",           "HIGH",  "truncate --size 0 found"),
+    (r"\bdrop\s+table\b",                    "HIGH",  "DROP TABLE found in step"),
+    (r"\bdelete\s+from\b",                   "MEDIUM","DELETE FROM found in step"),
+    (r"\boverwrite\s+(all|every|the)\b",     "MEDIUM","broad overwrite intent found"),
+    (r"\bwipe\s+(disk|drive|data|all)\b",    "HIGH",  "wipe disk/drive/all found"),
+    (r"\bformat\s+/dev/\b",                  "HIGH",  "format /dev/ found in step"),
+]
+
+# Patterns that indicate access to secrets / credentials.
+_SECRET_PATTERNS = [
+    (r"~/\.env\b",                          "HIGH",  "access to ~/.env"),
+    (r"~/secrets/",                         "HIGH",  "access to ~/secrets/"),
+    (r"/etc/passwd\b",                      "HIGH",  "access to /etc/passwd"),
+    (r"/etc/shadow\b",                      "HIGH",  "access to /etc/shadow"),
+    (r"\.ssh/id_",                          "HIGH",  "access to SSH private key"),
+    (r"openclaw\.json\b",                   "MEDIUM","access to openclaw.json (contains credentials)"),
+    (r"\bapi[_\s-]?key\b.*\breadfile\b",    "MEDIUM","reading API key file"),
+    (r"\bpassword\b.*\breadfile\b",         "MEDIUM","reading password file"),
+    (r"credentials\.json\b",               "HIGH",  "access to credentials.json"),
+    (r"\.aws/credentials\b",               "HIGH",  "access to AWS credentials"),
+]
+
+# Patterns that indicate writing to paths outside expected workspace.
+_PATH_ESCAPE_PATTERNS = [
+    (r"\bwrite\b.*/etc/",                   "HIGH",  "write to /etc/"),
+    (r"\bwrite\b.*/usr/",                   "HIGH",  "write to /usr/"),
+    (r"\bwrite\b.*/bin/",                   "HIGH",  "write to /bin/"),
+    (r"\bwrite\b.*/sbin/",                  "HIGH",  "write to /sbin/"),
+    (r"\bwrite\b.*/root/",                  "HIGH",  "write to /root/"),
+    (r"\bwrite\b.*~/\.config/",             "MEDIUM","write to ~/.config/"),
+    (r"\bwrite\b.*~/\.ssh/",                "HIGH",  "write to ~/.ssh/"),
+    (r"\bcat\b.*>.*/etc/",                  "HIGH",  "shell redirect to /etc/"),
+]
+
+# Patterns that indicate dangerous network operations.
+_NETWORK_PATTERNS = [
+    (r"\bcurl\b.*-X\s*(DELETE|PUT)\b",      "MEDIUM","curl with DELETE/PUT method"),
+    (r"\bwget\b.*--post\b",                 "MEDIUM","wget POST request"),
+    (r"\bcurl\b.*(paypal|stripe|twilio)",   "HIGH",  "curl to payment API"),
+    (r"\bsend\s+(an?\s+)?(email|sms|text|message)\s+(to|about)\b",
+                                            "MEDIUM","send email/SMS/message"),
+    (r"\bpost\s+(publicly|to\s+twitter|to\s+x\.com)\b",
+                                            "MEDIUM","post publicly / to Twitter"),
+    (r"\bpublish\s+(to\s+)?pypi\b",         "HIGH",  "publish to PyPI"),
+    (r"\bgit\s+push\b.*--force\b",          "HIGH",  "git push --force"),
+]
+
+# Patterns that indicate code execution with user-controlled input.
+_EXEC_PATTERNS = [
+    (r"\beval\s*\(",                        "HIGH",  "eval() call found"),
+    (r"\bexec\s*\(",                        "MEDIUM","exec() call found"),
+    (r"\bos\.system\s*\(",                  "MEDIUM","os.system() call found"),
+    (r"\bsubprocess\.call\s*\(.*shell\s*=\s*True","MEDIUM","subprocess with shell=True"),
+    (r"\b__import__\s*\(",                  "HIGH",  "dynamic __import__() found"),
+]
+
+# All pattern groups with their constraint name
+_ALL_PATTERNS: List[tuple] = [
+    ("destructive_op",  _DESTRUCTIVE_PATTERNS),
+    ("secret_access",   _SECRET_PATTERNS),
+    ("path_escape",     _PATH_ESCAPE_PATTERNS),
+    ("unsafe_network",  _NETWORK_PATTERNS),
+    ("unsafe_exec",     _EXEC_PATTERNS),
+]
+
+
+def _check_patterns(
+    constraint_name: str,
+    patterns: list,
+    step_text: str,
+    goal: str,
+) -> List[ConstraintFlag]:
+    """Run a list of (regex, risk, detail) patterns against step + goal text."""
+    combined = (step_text + " " + goal).lower()
+    flags = []
+    for pattern_str, risk, detail in patterns:
+        m = re.search(pattern_str, combined, re.I)
+        if m:
+            flags.append(ConstraintFlag(
+                name=constraint_name,
+                risk=risk,
+                detail=detail,
+                pattern=m.group(0),
+            ))
+    return flags
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+#: Pluggable constraint registry. Add callables here to extend checking.
+#: Each callable signature: (step_text: str, goal: str) -> List[ConstraintFlag]
+CONSTRAINT_REGISTRY: List[Callable[[str, str], List[ConstraintFlag]]] = []
+
+
+def check_step_constraints(step_text: str, goal: str = "") -> ConstraintResult:
+    """Run all registered constraints + built-in patterns against a step.
+
+    Args:
+        step_text: The step description string.
+        goal: The overall goal (additional context for pattern matching).
+
+    Returns:
+        ConstraintResult with allowed=False if any HIGH-risk flags found.
+    """
+    all_flags: List[ConstraintFlag] = []
+
+    # Built-in pattern checks
+    for constraint_name, patterns in _ALL_PATTERNS:
+        all_flags.extend(_check_patterns(constraint_name, patterns, step_text, goal))
+
+    # Pluggable constraint extensions
+    for checker in CONSTRAINT_REGISTRY:
+        try:
+            all_flags.extend(checker(step_text, goal))
+        except Exception:
+            pass  # constraint failures must never block legitimate work
+
+    # Determine worst risk level
+    if not all_flags:
+        return ConstraintResult(allowed=True, risk_level="LOW", flags=[])
+
+    risk_order = {"HIGH": 3, "MEDIUM": 2, "LOW": 1}
+    worst = max(all_flags, key=lambda f: risk_order.get(f.risk, 0))
+    worst_level = worst.risk
+
+    # HIGH flags block execution; MEDIUM/LOW are logged but allowed
+    allowed = worst_level != "HIGH"
+
+    return ConstraintResult(allowed=allowed, risk_level=worst_level, flags=all_flags)
+
+
+def register_constraint(fn: Callable[[str, str], List[ConstraintFlag]]) -> None:
+    """Register an additional constraint checker.
+
+    Args:
+        fn: callable(step_text, goal) -> List[ConstraintFlag]
+    """
+    CONSTRAINT_REGISTRY.append(fn)
