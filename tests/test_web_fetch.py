@@ -200,35 +200,25 @@ def test_x_article_regex_no_false_positives():
     assert not _X_ARTICLE_RE.search("https://x.com/i/web/status/123")
 
 
-def test_fetch_x_article_cli_unavailable(monkeypatch):
-    monkeypatch.setattr(web_fetch, "_x_cli_available", lambda: False)
-    result = fetch_x_article("https://x.com/i/article/123")
-    assert "authentication" in result.lower() or "not available" in result.lower()
-
-
-_CLI_ARTICLE_CONTENT = "# X CLI Capture\n\n- Source URL: https://x.com/i/article/123\n\n## Content\nThis is the full article body text with enough content to pass the length threshold."
 _CLI_TWEET_CONTENT = "# X CLI Capture (12345)\n\n- Author: Test User (@testuser)\n\n## Content\nAuthenticated tweet content fetched via Poe's X session. More text here."
 
 
-def test_fetch_x_article_cli_returns_content(monkeypatch):
-    monkeypatch.setattr(web_fetch, "_x_cli_available", lambda: True)
-    monkeypatch.setattr(web_fetch, "_fetch_via_x_cli", lambda cmd, url: _CLI_ARTICLE_CONTENT)
+def test_fetch_x_article_returns_notice():
     result = fetch_x_article("https://x.com/i/article/123")
-    assert "article body text" in result.lower()
+    assert "X Article" in result
+    # Should explain why it's inaccessible and suggest alternatives
+    assert any(kw in result.lower() for kw in ["not accessible", "cannot", "not available", "javascript"])
 
 
-def test_fetch_x_article_cli_empty(monkeypatch):
-    monkeypatch.setattr(web_fetch, "_x_cli_available", lambda: True)
-    monkeypatch.setattr(web_fetch, "_fetch_via_x_cli", lambda cmd, url: "")
-    result = fetch_x_article("https://x.com/i/article/123")
-    assert "no content" in result.lower() or "auth" in result.lower()
+def test_fetch_x_article_includes_url():
+    result = fetch_x_article("https://x.com/i/article/9876543210")
+    assert "9876543210" in result
 
 
-def test_fetch_url_content_routes_x_article(monkeypatch):
-    monkeypatch.setattr(web_fetch, "_x_cli_available", lambda: True)
-    monkeypatch.setattr(web_fetch, "_fetch_via_x_cli", lambda cmd, url: _CLI_ARTICLE_CONTENT)
+def test_fetch_url_content_routes_x_article():
     result = fetch_url_content("https://x.com/i/article/9876543210")
-    assert "article body text" in result.lower()
+    assert "X Article" in result
+    assert "9876543210" in result
 
 
 def test_fetch_tweet_uses_cli_first(monkeypatch):
