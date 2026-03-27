@@ -27,11 +27,24 @@ except ImportError:  # pragma: no cover
 
 
 # ---------------------------------------------------------------------------
-# Cost constants (rough mid-tier pricing)
+# Cost constants — per-model pricing (USD per 1M tokens)
+# Update when Anthropic changes pricing.
 # ---------------------------------------------------------------------------
 
-COST_PER_M_INPUT = 0.25    # $0.25 per 1M input tokens
-COST_PER_M_OUTPUT = 1.25   # $1.25 per 1M output tokens
+COST_BY_MODEL: Dict[str, Dict[str, float]] = {
+    # Claude 4.x (current)
+    "claude-opus-4-6":         {"input": 15.00, "output": 75.00},
+    "claude-sonnet-4-6":       {"input":  3.00, "output": 15.00},
+    "claude-haiku-4-5":        {"input":  0.80, "output":  4.00},
+    # Short-form aliases (as used by subprocess adapter)
+    "opus":                    {"input": 15.00, "output": 75.00},
+    "sonnet":                  {"input":  3.00, "output": 15.00},
+    "haiku":                   {"input":  0.80, "output":  4.00},
+}
+
+# Default fallback — assumes mid-tier (Sonnet) when model is unknown
+COST_PER_M_INPUT = 3.00    # $3.00 per 1M input tokens  (Sonnet 4.6)
+COST_PER_M_OUTPUT = 15.00  # $15.00 per 1M output tokens (Sonnet 4.6)
 
 
 # ---------------------------------------------------------------------------
@@ -64,9 +77,16 @@ class SystemMetrics:
 # Cost estimation
 # ---------------------------------------------------------------------------
 
-def estimate_cost(tokens_in: int, tokens_out: int) -> float:
-    """Estimate USD cost for a given token usage."""
-    return (tokens_in * COST_PER_M_INPUT / 1_000_000) + (tokens_out * COST_PER_M_OUTPUT / 1_000_000)
+def estimate_cost(tokens_in: int, tokens_out: int, model: Optional[str] = None) -> float:
+    """Estimate USD cost for a given token usage.
+
+    Uses per-model pricing when the model is known; falls back to the
+    Sonnet 4.6 default (COST_PER_M_INPUT / COST_PER_M_OUTPUT) otherwise.
+    """
+    rates = COST_BY_MODEL.get(model or "", {})
+    cost_in = rates.get("input", COST_PER_M_INPUT)
+    cost_out = rates.get("output", COST_PER_M_OUTPUT)
+    return (tokens_in * cost_in / 1_000_000) + (tokens_out * cost_out / 1_000_000)
 
 
 # ---------------------------------------------------------------------------

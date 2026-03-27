@@ -6,6 +6,7 @@ which backend is actually serving the call:
 
   Backend            | When to use
   -------------------|------------------------------------------------------
+  CodexCLI           | codex binary available + authenticated (ChatGPT OAuth, no extra cost)
   ClaudeSubprocess   | Claude Code is installed + authenticated (always on this box)
   AnthropicSDK       | ANTHROPIC_API_KEY is set
   OpenRouter         | OPENROUTER_API_KEY is set with credits
@@ -16,7 +17,8 @@ Auto-detection order (highest to lowest priority):
     2. ANTHROPIC_API_KEY env var → AnthropicSDKAdapter
     3. OPENROUTER_API_KEY env var → OpenRouterAdapter
     4. OPENAI_API_KEY env var → OpenAIAdapter
-    5. claude binary in PATH → ClaudeSubprocessAdapter (always available on this box)
+    5. codex binary available + auth → CodexCLIAdapter (GPT-5.4 via ChatGPT OAuth, prompt caching)
+    6. claude binary in PATH → ClaudeSubprocessAdapter (always available on this box)
 
 Model names are backend-specific but normalized through constants:
     MODEL_CHEAP, MODEL_MID, MODEL_POWER — callers use these, not raw strings.
@@ -80,6 +82,14 @@ _MODEL_MAP: Dict[str, Dict[str, str]] = {
         MODEL_CHEAP: "haiku",
         MODEL_MID:   "sonnet",
         MODEL_POWER: "opus",
+    },
+    # CodexCLI uses gpt-5.4 (via ChatGPT OAuth); all tiers map to same model since
+    # GPT-5.4 is already the top available model on the ChatGPT Plus/Pro plan.
+    # Heavy reasoning tasks that need Claude Opus should use backend="subprocess".
+    "codex": {
+        MODEL_CHEAP: "gpt-5.4",
+        MODEL_MID:   "gpt-5.4",
+        MODEL_POWER: "gpt-5.4",
     },
 }
 
@@ -317,6 +327,183 @@ class ClaudeSubprocessAdapter(LLMAdapter):
             return None
 
         # Extract arguments (everything except "tool" key)
+        args = {k: v for k, v in data.items() if k != "tool"}
+        return ToolCall(name=tool_name, arguments=args)
+
+
+# ---------------------------------------------------------------------------
+# CodexCLIAdapter — uses `codex exec --json` (ChatGPT OAuth, prompt caching)
+# ---------------------------------------------------------------------------
+
+_CODEX_BIN = "/home/linuxbrew/.linuxbrew/bin/codex"
+_CODEX_AUTH_FILE = str(Path.home() / ".codex" / "auth.json")
+
+
+def _codex_auth_available() -> bool:
+    """Check if codex binary exists and auth file is present."""
+    bin_path = os.environ.get("CODEX_BIN", _CODEX_BIN)
+    if not (os.path.isfile(bin_path) and os.access(bin_path, os.X_OK)):
+        return False
+    auth_path = os.environ.get("CODEX_AUTH_FILE", _CODEX_AUTH_FILE)
+    return os.path.isfile(auth_path)
+
+
+class CodexCLIAdapter(LLMAdapter):
+    """Adapter using `codex exec --json` subprocess.
+
+    Uses ChatGPT OAuth credentials from ~/.codex/auth.json — no separate API
+    key needed. Supports prompt caching (cached_input_tokens in usage).
+    Tools are simulated via JSON-in-prompt (same approach as ClaudeSubprocessAdapter).
+
+    Recommended for default orchestration steps. Use ClaudeSubprocessAdapter
+    with model=MODEL_POWER (Opus) for heavy reasoning tasks.
+    """
+
+    backend = "codex"
+
+    def __init__(
+        self,
+        model: str = MODEL_CHEAP,
+        codex_bin: str = _CODEX_BIN,
+        timeout: int = 300,
+    ):
+        self.model_key = model
+        self.codex_bin = os.environ.get("CODEX_BIN", codex_bin)
+        self.timeout = timeout
+
+    def complete(
+        self,
+        messages: List[LLMMessage],
+        *,
+        tools: Optional[List[LLMTool]] = None,
+        tool_choice: str = "auto",
+        max_tokens: int = 4096,
+        temperature: float = 0.3,
+    ) -> LLMResponse:
+        prompt = self._build_prompt(messages, tools)
+        model_str = resolve_model("codex", self.model_key)
+
+        cmd = [
+            self.codex_bin,
+            "exec",
+            "--json",
+            "--model", model_str,
+            "-c", "approval_policy=\"never\"",
+            "-",  # read prompt from stdin
+        ]
+
+        try:
+            result = subprocess.run(
+                cmd,
+                input=prompt,
+                capture_output=True,
+                text=True,
+                timeout=self.timeout,
+            )
+        except subprocess.TimeoutExpired:
+            raise RuntimeError(f"codex subprocess timed out after {self.timeout}s")
+        except FileNotFoundError:
+            raise RuntimeError(f"codex binary not found at {self.codex_bin}")
+
+        if result.returncode != 0:
+            stderr = result.stderr.strip()
+            stdout_hint = result.stdout.strip()[:200] if result.stdout.strip() else ""
+            detail = stderr[:300] or stdout_hint or "(no output)"
+            raise RuntimeError(f"codex subprocess failed (rc={result.returncode}): {detail}")
+
+        return self._parse_jsonl_output(result.stdout, tools)
+
+    def _build_prompt(self, messages: List[LLMMessage], tools: Optional[List[LLMTool]]) -> str:
+        """Flatten messages into a single prompt string for codex exec stdin."""
+        parts = []
+
+        system_parts = [m.content for m in messages if m.role == "system"]
+        non_system = [m for m in messages if m.role != "system"]
+
+        if system_parts:
+            parts.append("[SYSTEM INSTRUCTIONS]\n" + "\n\n".join(system_parts))
+
+        if tools:
+            tool_list = "\n".join(
+                f'- "{t.name}": {t.description}\n  Arguments: {json.dumps(t.parameters.get("properties", {}), indent=2)}'
+                for t in tools
+            )
+            parts.append(_TOOL_INJECTION_TEMPLATE.format(tool_list=tool_list))
+
+        parts.append("[END SYSTEM INSTRUCTIONS]\n")
+
+        for m in non_system:
+            if m.role == "user":
+                parts.append(f"User: {m.content}")
+            elif m.role == "assistant":
+                parts.append(f"Assistant: {m.content}")
+
+        return "\n\n".join(parts)
+
+    def _parse_jsonl_output(self, stdout: str, tools: Optional[List[LLMTool]]) -> LLMResponse:
+        """Parse JSONL lines from `codex exec --json` output."""
+        content = ""
+        input_tokens = 0
+        output_tokens = 0
+        cached_tokens = 0
+
+        for line in stdout.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+            event_type = event.get("type", "")
+
+            if event_type == "item.completed":
+                item = event.get("item", {})
+                if item.get("type") == "agent_message":
+                    content = item.get("text", "")
+
+            elif event_type == "turn.completed":
+                usage = event.get("usage", {})
+                input_tokens = usage.get("input_tokens", 0)
+                cached_tokens = usage.get("cached_input_tokens", 0)
+                output_tokens = usage.get("output_tokens", 0)
+
+        # Parse tool calls if tools were requested
+        tool_calls: List[ToolCall] = []
+        if tools and content:
+            tc = self._parse_tool_call(content, tools)
+            if tc:
+                tool_calls = [tc]
+                content = ""
+
+        return LLMResponse(
+            content=content,
+            tool_calls=tool_calls,
+            stop_reason="end_turn",
+            model=resolve_model("codex", self.model_key),
+            input_tokens=input_tokens + cached_tokens,
+            output_tokens=output_tokens,
+            backend=self.backend,
+        )
+
+    def _parse_tool_call(self, text: str, tools: List[LLMTool]) -> Optional[ToolCall]:
+        """Extract a tool call from the model's JSON response."""
+        text = text.strip()
+        start = text.find("{")
+        end = text.rfind("}") + 1
+        if start < 0 or end <= start:
+            return None
+        try:
+            data = json.loads(text[start:end])
+        except json.JSONDecodeError:
+            return None
+        tool_name = data.get("tool")
+        if not tool_name:
+            return None
+        valid_names = {t.name for t in tools}
+        if tool_name not in valid_names:
+            return None
         args = {k: v for k, v in data.items() if k != "tool"}
         return ToolCall(name=tool_name, arguments=args)
 
@@ -619,6 +806,11 @@ def build_adapter(
     """
     env = _load_env_file()
 
+    if backend == "codex":
+        if not _codex_auth_available():
+            raise RuntimeError("codex not available: binary missing or ~/.codex/auth.json not found")
+        return CodexCLIAdapter(model=model)
+
     if backend == "subprocess" or backend == "claude":
         if not _claude_bin_available():
             raise RuntimeError(f"claude binary not found at {_CLAUDE_BIN}")
@@ -657,24 +849,28 @@ def build_adapter(
     if key:
         return AnthropicSDKAdapter(api_key=key, model=model)
 
-    # 2. Claude subprocess — always available on this box, no credits needed
-    #    Ranked above OpenRouter/OpenAI because it's reliable without payment
+    # 2. Codex CLI — GPT-5.4 via ChatGPT OAuth, supports prompt caching
+    #    Ranked above claude subprocess because it's cheaper (caches aggressively)
+    if _codex_auth_available():
+        return CodexCLIAdapter(model=model)
+
+    # 3. Claude subprocess — always available on this box, no credits needed
     if _claude_bin_available():
         return ClaudeSubprocessAdapter(model=model)
 
-    # 3. OpenRouter (multi-model routing, requires credits)
+    # 4. OpenRouter (multi-model routing, requires credits)
     key = _get_key("OPENROUTER_API_KEY", env)
     if key:
         return OpenRouterAdapter(api_key=key, model=model)
 
-    # 4. OpenAI
+    # 5. OpenAI
     key = _get_key("OPENAI_API_KEY", env)
     if key:
         return OpenAIAdapter(api_key=key, model=model)
 
     raise RuntimeError(
         "No LLM backend available. Set ANTHROPIC_API_KEY, OPENROUTER_API_KEY, "
-        "OPENAI_API_KEY, or install Claude Code (claude -p)."
+        "OPENAI_API_KEY, or install Claude Code (claude -p) / Codex CLI (codex)."
     )
 
 
@@ -682,6 +878,7 @@ def detect_available_backends() -> Dict[str, bool]:
     """Return which backends are currently available."""
     env = _load_env_file()
     return {
+        "codex":      _codex_auth_available(),
         "subprocess": _claude_bin_available(),
         "anthropic":  bool(_get_key("ANTHROPIC_API_KEY", env)),
         "openrouter": bool(_get_key("OPENROUTER_API_KEY", env)),

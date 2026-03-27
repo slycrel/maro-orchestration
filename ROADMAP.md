@@ -563,6 +563,29 @@ Not a single phase but a research track that informs multiple phases:
 
 ---
 
+### Phase 30: Token Cost Visibility + Model Routing *(PARTIAL)*
+
+*March 2026 — discovered after Max tier upgrade caused silent Opus usage and token burn in an hour.*
+
+**The problem**: cost constants in `metrics.py` were ~12x too low (old Haiku pricing used for Sonnet-class workloads). Alerting thresholds based on those numbers were never firing. Additionally, the subprocess adapter (primary on this box) skips prompt caching, and there's no per-model breakdown in the metrics report.
+
+**Shipped (Phase 30 first cut):**
+- `src/metrics.py`: `COST_BY_MODEL` dict — per-model USD/MTok pricing for Opus 4.6, Sonnet 4.6, Haiku 4.5, and short-form aliases. `estimate_cost()` now accepts `model=` arg and looks up accurate rates; falls back to Sonnet 4.6 defaults when model is unknown.
+- `~/.claude/settings.json`: model pinned to `claude-sonnet-4-6` (explicit ID, not alias) to prevent silent Opus fallback on tier upgrades or `--continue` session resumption.
+
+**Shipped (Phase 30 second cut — March 26, 2026):**
+- `src/llm.py`: `CodexCLIAdapter` — wraps `codex exec --json` as a subprocess. Uses ChatGPT OAuth from `~/.codex/auth.json` (no extra API key), model `gpt-5.4`. Supports prompt caching (`cached_input_tokens` in JSONL output). Auto-detection now ranks Codex above `claude -p` subprocess since it caches aggressively.
+- `tests/test_llm.py`: updated monkeypatching for `_codex_auth_available` in 3 existing tests.
+- Confirmed: `gpt-5.4` works with ChatGPT Plus/Pro OAuth; `codex-mini-latest` does not.
+
+**Still pending:**
+- **Per-model cost breakdown in `poe-metrics`**: report should show actual cost by model across outcomes. Needs `model` field recorded in `outcomes.jsonl`.
+- **Haiku routing for simple sub-tasks**: `assign_model_by_role()` currently maps `worker → MID`. For classifier, summarizer, routing decisions, downgrade to `CHEAP`. Add a `classifier` role tier.
+- **Budget alerting**: configurable per-session token budget with Telegram alert when crossed.
+- **Codex token refresh**: `~/.codex/auth.json` access_token expires ~March 30. Need to wire in token refresh via `refresh_token` before expiry, or handle 401 gracefully and fall back to subprocess.
+
+---
+
 ## Superseded Plans
 
 The original M0-M4 milestones and N1-N4 roadmap items focused on infrastructure plumbing (adapters, scheduling, CI). That work was valuable scaffolding, but it didn't address the core need: making Poe autonomous. This roadmap replaces N1-N4 entirely.

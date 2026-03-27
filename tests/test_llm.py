@@ -298,6 +298,7 @@ def test_build_adapter_auto_falls_back_to_subprocess(monkeypatch):
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.setattr("llm._claude_bin_available", lambda: True)
+    monkeypatch.setattr("llm._codex_auth_available", lambda: False)
     monkeypatch.setattr("llm._load_env_file", lambda *a, **kw: {})
     a = build_adapter("auto")
     assert isinstance(a, ClaudeSubprocessAdapter)
@@ -308,6 +309,7 @@ def test_build_adapter_no_backends_raises(monkeypatch):
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.setattr("llm._claude_bin_available", lambda: False)
+    monkeypatch.setattr("llm._codex_auth_available", lambda: False)
     monkeypatch.setattr("llm._load_env_file", lambda *a, **kw: {})
     with pytest.raises(RuntimeError, match="No LLM backend"):
         build_adapter("auto")
@@ -350,6 +352,7 @@ def test_detect_backends_returns_dict(monkeypatch):
 
 def test_detect_backends_no_keys(monkeypatch):
     monkeypatch.setattr("llm._claude_bin_available", lambda: False)
+    monkeypatch.setattr("llm._codex_auth_available", lambda: False)
     monkeypatch.setattr("llm._load_env_file", lambda *a, **kw: {})
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
