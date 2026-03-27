@@ -111,6 +111,13 @@ _EXECUTE_SYSTEM = textwrap.dedent("""\
       - flag_stuck: if you genuinely cannot complete this step (explain why precisely)
     Do NOT call flag_stuck for solvable problems — work through them first.
     Be thorough but concise. Output quality matters.
+
+    URL FETCHING POLICY — IMPORTANT:
+    All URL content has been pre-fetched and is provided in the PRE-FETCHED URL CONTENT
+    block below. Use ONLY that pre-fetched content for any URLs mentioned in the step.
+    Do NOT use Bash to curl/wget URLs. Do NOT use any tool to fetch URLs.
+    If a URL's content is missing from the pre-fetch block, note it as unavailable and
+    work with what you have — do not attempt to fetch it yourself.
 """).strip()
 
 _EXECUTE_TOOLS = [

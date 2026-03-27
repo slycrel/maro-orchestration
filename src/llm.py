@@ -212,7 +212,7 @@ class ClaudeSubprocessAdapter(LLMAdapter):
         # Build command
         model_str = resolve_model("subprocess", self.model_key)
         cmd = [self.claude_bin, "-p", "--output-format", "json", "--dangerously-skip-permissions",
-               "--disallowedTools", "WebFetch"]
+               "--disallowedTools", "WebFetch,WebSearch"]
         if model_str not in (MODEL_CHEAP, MODEL_MID, MODEL_POWER, "cheap", "mid", "power"):
             # Only add --model if it's a real model name, not our constants
             cmd += ["--model", model_str]
