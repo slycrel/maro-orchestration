@@ -225,6 +225,24 @@ def _html_to_text(html: str, max_chars: int = _MAX_TEXT_CHARS) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Jina Reader — URL-to-markdown proxy
+# ---------------------------------------------------------------------------
+
+def _jina_fetch(url: str, max_chars: int = _MAX_TEXT_CHARS) -> str:
+    """Fetch a URL via Jina Reader (r.jina.ai) which returns clean markdown.
+
+    Jina renders JavaScript-heavy pages server-side and strips navigation/boilerplate.
+    Returns the markdown content capped at max_chars, or "" on failure.
+    """
+    jina_url = _JINA_BASE + url
+    status, body = _http_get(jina_url, ua="PoeBot/1.0 (+https://github.com/slycrel/openclaw-orchestration)")
+    if status != 200 or not body:
+        return ""
+    # Jina response is already markdown — just cap length
+    return body.strip()[:max_chars]
+
+
+# ---------------------------------------------------------------------------
 # X/Twitter-specific fetching
 # ---------------------------------------------------------------------------
 
@@ -245,20 +263,27 @@ def fetch_x_tweet(url: str) -> str:
     handle, tweet_id = m.group(1), m.group(2)
     clean_url = f"https://twitter.com/{handle}/status/{tweet_id}"
 
-    # ---- 0. Authenticated CLI (OpenClaw x-twitter-cli.sh) ---------------
+    # ---- 0. Jina Reader — gets full rendered tweet + thread text (fast, public) ---
+    jina_content = _jina_fetch(url, max_chars=8_000)
+    if jina_content and len(jina_content) > 200:
+        _lower = jina_content.lower()
+        if not ("log in" in _lower and "sign up" in _lower and len(jina_content) < 500):
+            return f"[Tweet {handle}/{tweet_id} — via Jina]\n{jina_content}"
+
+    # ---- 1. Authenticated CLI (OpenClaw x-twitter-cli.sh) — auth-required content --
     if _x_cli_available():
         cli_content = _fetch_via_x_cli("post", url)
         if cli_content and len(cli_content) > 50:
             return f"[Tweet {handle}/{tweet_id} — via authenticated CLI]\n{cli_content}"
 
-    # ---- 1. Direct fetch ------------------------------------------------
+    # ---- 2. Direct fetch ------------------------------------------------
     status, html = _http_get(url)
     if status == 200 and html:
         text = _html_to_text(html, max_chars=8_000)
         if len(text) > 200:
             return f"[Tweet {handle}/{tweet_id}]\n{text}"
 
-    # ---- 2. oEmbed ------------------------------------------------------
+    # ---- 3. oEmbed ------------------------------------------------------
     oembed_url = f"https://publish.twitter.com/oembed?url={urllib.parse.quote(clean_url)}&omit_script=true"
     status, body = _http_get(oembed_url, timeout=10)
     if status == 200 and body:
@@ -291,7 +316,7 @@ def fetch_x_tweet(url: str) -> str:
         except Exception:
             pass
 
-    # ---- 3. Failure report -----------------------------------------------
+    # ---- 4. Failure report -----------------------------------------------
     return (
         f"[Tweet {handle}/{tweet_id}: access blocked (HTTP {status}). "
         f"This tweet may require authentication or may have been deleted. "
@@ -335,7 +360,15 @@ def fetch_url_content(url: str) -> str:
     if _X_POST_RE.search(url):
         return fetch_x_tweet(url)
 
-    # Regular pages
+    # Regular pages — try Jina Reader first (returns clean markdown, handles JS rendering)
+    jina_content = _jina_fetch(url)
+    if jina_content and len(jina_content) > 100:
+        # Skip Jina results that are just login walls (common pattern)
+        _lower = jina_content.lower()
+        if not ("log in" in _lower and "sign up" in _lower and len(jina_content) < 500):
+            return f"[Content from {url}]\n{jina_content}"
+
+    # Fallback: raw HTTP + HTML stripping (for sites that block Jina or return errors)
     status, html = _http_get(url)
     if status == 0:
         return f"[Could not connect to {url}]"
@@ -380,12 +413,15 @@ def extract_urls_from_text(text: str) -> List[str]:
 # Step enrichment — main entry point
 # ---------------------------------------------------------------------------
 
+_JINA_BASE = "https://r.jina.ai/"   # Jina Reader: converts any URL to clean markdown
+
 _SKIP_DOMAINS = frozenset([
     "publish.twitter.com",
     "platform.twitter.com",
     "abs.twimg.com",
     "localhost",
     "127.0.0.1",
+    "r.jina.ai",  # don't recurse into Jina itself
 ])
 
 _SKIP_EXTENSIONS = frozenset([
