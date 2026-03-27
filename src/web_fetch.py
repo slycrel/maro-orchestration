@@ -339,23 +339,41 @@ def enrich_step_with_urls(
     if not blocks:
         return ""
 
-    # Second pass: scan fetched content for unresolved Twitter URLs and fetch those too.
-    # This catches t.co links that were resolved but not followed (one level deep only).
+    # Second pass: follow Twitter/X URLs found in fetched content (one level, capped).
+    # This catches t.co-resolved tweets referenced in the first-pass content.
     fetched_set = set(urls)
+    # Normalise to base tweet ID to avoid /photo/N variants re-fetching the same tweet
+    _fetched_tweet_ids: set = set()
+    for u in urls:
+        m = _X_POST_RE.search(u)
+        if m:
+            _fetched_tweet_ids.add(m.group(2))
+
+    second_pass_limit = 2  # cap extra fetches to keep tokens bounded
+    second_pass_count = 0
     for content_block in list(blocks):
+        if second_pass_count >= second_pass_limit:
+            break
         for linked in extract_urls_from_text(content_block):
+            if second_pass_count >= second_pass_limit:
+                break
             if linked in fetched_set:
                 continue
             if not _should_fetch(linked):
                 continue
             if not (_X_POST_RE.search(linked) or "twitter.com" in linked or "x.com" in linked):
                 continue
+            # Skip if we already have this tweet ID (catches /photo/N variants)
+            m = _X_POST_RE.search(linked)
+            if m and m.group(2) in _fetched_tweet_ids:
+                continue
             fetched_set.add(linked)
+            if m:
+                _fetched_tweet_ids.add(m.group(2))
             sub = fetch_url_content(linked)
-            if sub and not sub.startswith("["):
+            if sub:
                 blocks.append(sub)
-            elif sub and _X_POST_RE.search(linked):
-                blocks.append(sub)  # include even blocked tweets so model knows
+                second_pass_count += 1
 
     header = (
         "=== PRE-FETCHED URL CONTENT ===\n"
