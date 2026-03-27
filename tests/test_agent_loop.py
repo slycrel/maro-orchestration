@@ -549,3 +549,69 @@ def test_dead_ends_written_on_block(monkeypatch, tmp_path):
     # The file may or may not be created depending on whether boot_protocol is available
     # But the loop should have completed
     assert result.loop_id is not None
+
+
+# ---------------------------------------------------------------------------
+# Parallel fan-out helpers (Phase 35 P1)
+# ---------------------------------------------------------------------------
+
+from agent_loop import _steps_are_independent, _run_steps_parallel
+
+
+def test_steps_are_independent_clean():
+    steps = [
+        "Fetch the article at https://example.com/a",
+        "Fetch the article at https://example.com/b",
+        "Fetch the article at https://example.com/c",
+    ]
+    assert _steps_are_independent(steps)
+
+
+def test_steps_are_independent_with_step_ref():
+    steps = [
+        "Fetch the article at https://example.com/a",
+        "Based on step 1, extract the key claims",
+    ]
+    assert not _steps_are_independent(steps)
+
+
+def test_steps_are_independent_with_above_ref():
+    steps = [
+        "Research the topic",
+        "Synthesize the results from the previous step into a summary",
+    ]
+    assert not _steps_are_independent(steps)
+
+
+def test_steps_are_independent_single_step():
+    # Single step — trivially independent
+    assert _steps_are_independent(["Do one thing"])
+
+
+def test_run_agent_loop_fan_out_dry_run():
+    """parallel_fan_out=3 with dry_run should return done without actual execution."""
+    result = run_agent_loop(
+        "fetch article A and fetch article B independently",
+        dry_run=True,
+        parallel_fan_out=3,
+        verbose=False,
+    )
+    assert result.status in ("done", "dry_run", "stuck")
+
+
+def test_run_agent_loop_fan_out_dependency_falls_back_sequential():
+    """When steps have dependencies, fan-out gate blocks parallel path (sequential used)."""
+    dependent_steps = [
+        "Fetch the data",
+        "Based on step 1, analyse the results",
+    ]
+    # Gate must detect dependency
+    assert not _steps_are_independent(dependent_steps)
+    # dry-run with parallel_fan_out=3 still completes via sequential path
+    result = run_agent_loop(
+        "research something with step dependencies",
+        dry_run=True,
+        parallel_fan_out=3,
+        verbose=False,
+    )
+    assert result.status in ("done", "dry_run", "stuck")

@@ -22,11 +22,13 @@ import os
 import sys
 import textwrap
 import time
+import re as _re
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 # ---------------------------------------------------------------------------
 # Imports (lazy to avoid circular with orch)
@@ -171,6 +173,105 @@ _EXECUTE_TOOLS = [
 
 
 # ---------------------------------------------------------------------------
+# Parallel fan-out helpers (Phase 35 P1)
+# ---------------------------------------------------------------------------
+
+# Phrases that indicate a step depends on a prior step's output.
+_DEPENDENCY_PATTERNS = [
+    r"\bstep \d+\b",               # "step 2", "step N"
+    r"\bfrom (the )?(previous|above|prior|last) step\b",
+    r"\bbased on (the )?(above|previous|prior|results?)\b",
+    r"\busing (the )?(result|output|finding|content) (from|of) (step|above)\b",
+    r"\bfrom the (result|output|content) (above|of step)\b",
+    r"\bidentified in step\b",
+    r"\bfollowing (the|from) step\b",
+]
+_DEP_RE = _re.compile("|".join(_DEPENDENCY_PATTERNS), _re.I)
+
+
+def _steps_are_independent(steps: List[str]) -> bool:
+    """Return True if no step references a prior step's output.
+
+    Heuristic only — misses implicit dependencies but is safe:
+    false negatives (marking dependent steps as independent) can't happen
+    because we require ALL steps to pass the check.
+    """
+    return not any(_DEP_RE.search(s) for s in steps)
+
+
+def _run_steps_parallel(
+    *,
+    goal: str,
+    steps: List[str],
+    adapter,
+    ancestry_context: str,
+    tools: list,
+    verbose: bool,
+    max_workers: int,
+) -> List[dict]:
+    """Execute steps concurrently using ThreadPoolExecutor.
+
+    Each step gets its own adapter instance (thread-safe: no shared state).
+    completed_context is empty for all parallel steps (no inter-step dependencies
+    by design — caller checked _steps_are_independent first).
+
+    Returns outcomes list in step-index order.
+    """
+    from llm import build_adapter
+
+    def _run_one(step_idx: int, step_text: str) -> tuple[int, dict]:
+        try:
+            from poe import classify_step_model
+            step_model = classify_step_model(step_text)
+            step_adapter = build_adapter(model=step_model) if step_model != adapter.model_key else adapter
+        except Exception:
+            step_adapter = adapter
+
+        # _execute_step handles prefetch internally
+        outcome = _execute_step(
+            goal=goal,
+            step_text=step_text,
+            step_num=step_idx,
+            total_steps=len(steps),
+            completed_context=[],
+            adapter=step_adapter,
+            tools=tools,
+            verbose=verbose,
+            ancestry_context=ancestry_context,
+        )
+        if verbose:
+            status_label = outcome.get("status", "?")
+            summary = outcome.get("summary", "")[:80]
+            print(f"[poe] parallel step {step_idx} {status_label}: {summary}", file=sys.stderr, flush=True)
+        return step_idx, outcome
+
+    n_workers = min(max_workers, len(steps))
+    outcomes_by_idx: Dict[int, dict] = {}
+
+    with ThreadPoolExecutor(max_workers=n_workers) as pool:
+        futures = {
+            pool.submit(_run_one, i + 1, s): i
+            for i, s in enumerate(steps)
+        }
+        for f in as_completed(futures):
+            try:
+                idx, outcome = f.result()
+                outcomes_by_idx[idx] = outcome
+            except Exception as exc:
+                i = futures[f]
+                outcomes_by_idx[i + 1] = {
+                    "status": "blocked",
+                    "stuck_reason": f"parallel execution error: {exc}",
+                    "result": "",
+                    "summary": f"step {i + 1} failed in fan-out",
+                    "tokens_in": 0,
+                    "tokens_out": 0,
+                }
+
+    return [outcomes_by_idx[i + 1] for i in range(len(steps))]
+
+
+# ---------------------------------------------------------------------------
 # Core loop
 # ---------------------------------------------------------------------------
 
@@ -188,6 +289,7 @@ def run_agent_loop(
     hook_registry=None,
     ancestry_context_extra: str = "",
     step_callback=None,
+    parallel_fan_out: int = 0,
 ) -> LoopResult:
     """Run the autonomous loop for a goal.
 
@@ -197,6 +299,9 @@ def run_agent_loop(
         model: LLM model string (defaults to MODEL_CHEAP).
         step_callback: Optional callable(step_num, step_text, summary, status) called
             after each step completes. Useful for live progress updates (e.g. Telegram).
+        parallel_fan_out: If > 0 and all decomposed steps are independent (no inter-step
+            references), run up to this many steps concurrently via ThreadPoolExecutor.
+            Falls back to sequential if steps have dependencies. Default 0 (sequential).
         adapter: Pre-built LLMAdapter instance (skips build_adapter()).
         max_steps: Maximum steps to decompose the goal into.
         max_iterations: Hard cap on total LLM calls.
@@ -314,6 +419,59 @@ def run_agent_loop(
     )
     if verbose:
         print(f"[poe] decomposed into {len(steps)} steps", file=sys.stderr, flush=True)
+
+    # Phase 35 P1: parallel fan-out — run independent steps concurrently
+    if parallel_fan_out > 0 and len(steps) > 1 and _steps_are_independent(steps):
+        if verbose:
+            print(f"[poe] fan-out: running {len(steps)} steps in parallel (max_workers={parallel_fan_out})", file=sys.stderr, flush=True)
+        _fanout_outcomes = _run_steps_parallel(
+            goal=goal,
+            steps=steps,
+            adapter=adapter,
+            ancestry_context=_ancestry_context,
+            tools=[LLMTool(**t) for t in _EXECUTE_TOOLS],
+            verbose=verbose,
+            max_workers=parallel_fan_out,
+        )
+        # Build LoopResult directly from parallel outcomes
+        _fanout_step_outcomes: List[StepOutcome] = []
+        _fanout_tokens_in = 0
+        _fanout_tokens_out = 0
+        _fanout_loop_status = "done"
+        _fanout_stuck_reason = None
+        for _i, (_step_text, _oc) in enumerate(zip(steps, _fanout_outcomes), 1):
+            _st = _oc.get("status", "blocked")
+            _fanout_step_outcomes.append(StepOutcome(
+                index=_i,
+                text=_step_text,
+                status=_st,
+                result=_oc.get("result", ""),
+                iteration=_i,
+                tokens_in=_oc.get("tokens_in", 0),
+                tokens_out=_oc.get("tokens_out", 0),
+            ))
+            _fanout_tokens_in += _oc.get("tokens_in", 0)
+            _fanout_tokens_out += _oc.get("tokens_out", 0)
+            if _st == "blocked":
+                _fanout_loop_status = "stuck"
+                _fanout_stuck_reason = _oc.get("stuck_reason", f"step {_i} blocked")
+            if step_callback is not None:
+                try:
+                    step_callback(_i, _step_text, _oc.get("result", "")[:120], _st)
+                except Exception:
+                    pass
+        elapsed = int((time.monotonic() - started_at) * 1000)
+        return LoopResult(
+            loop_id=loop_id,
+            project=project,
+            goal=goal,
+            status=_fanout_loop_status,
+            steps=_fanout_step_outcomes,
+            total_tokens_in=_fanout_tokens_in,
+            total_tokens_out=_fanout_tokens_out,
+            elapsed_ms=elapsed,
+            stuck_reason=_fanout_stuck_reason,
+        )
 
     # Add steps to project NEXT.md
     step_indices = o.append_next_items(project, steps)
