@@ -21,11 +21,14 @@ X-specific strategy (in priority order):
 from __future__ import annotations
 
 import html as html_lib
+import os
 import re
+import subprocess
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from pathlib import Path
 from typing import List, Optional, Tuple
 
 try:
@@ -50,9 +53,18 @@ _UA_STANDARD = (
 # Minimal UA for redirect-following — t.co returns 301 with this, 200+JS with Chrome UA
 _UA_REDIRECT = "Mozilla/5.0 (compatible; PoeBot/1.0)"
 
-# Patterns that tell us a URL is an X/Twitter post
+# Path to OpenClaw's authenticated X scraping CLI
+_X_CLI_SCRIPT = Path(
+    "/home/clawd/.openclaw/workspace/external/github-clean/poly-proto/scripts/x-twitter-cli.sh"
+)
+_X_CLI_TIMEOUT = 90  # seconds — Playwright can be slow
+
+# Patterns that tell us a URL is an X/Twitter post or article
 _X_POST_RE = re.compile(
     r"https?://(?:x|twitter)\.com/(\w+)/status/(\d+)", re.I
+)
+_X_ARTICLE_RE = re.compile(
+    r"https?://(?:x|twitter)\.com/i/article/\d+", re.I
 )
 _TCO_RE = re.compile(r"https?://t\.co/[A-Za-z0-9]+")
 _URL_RE = re.compile(
@@ -126,6 +138,67 @@ def _resolve_redirect(url: str, _depth: int = 0) -> str:
         return url
 
 
+def _x_cli_available() -> bool:
+    """True if the OpenClaw x-twitter-cli.sh script exists and is executable."""
+    return _X_CLI_SCRIPT.is_file() and os.access(_X_CLI_SCRIPT, os.X_OK)
+
+
+_X_COOKIE_CACHE = Path.home() / ".cache" / "twitter-cli" / "cookies.json"
+
+
+def _x_cookie_env() -> dict:
+    """Read auth_token + ct0 from the twitter-cli cookie cache.
+
+    Returns a dict with TWITTER_AUTH_TOKEN and TWITTER_CT0 set, or {} if
+    the cache file doesn't exist or is missing the needed keys.
+    """
+    try:
+        import json as _json
+        data = _json.loads(_X_COOKIE_CACHE.read_text(encoding="utf-8"))
+        auth_token = data.get("auth_token", "")
+        ct0 = data.get("ct0", "")
+        if auth_token and ct0:
+            env = os.environ.copy()
+            env["TWITTER_AUTH_TOKEN"] = auth_token
+            env["TWITTER_CT0"] = ct0
+            return env
+    except Exception:
+        pass
+    return {}
+
+
+def _fetch_via_x_cli(command: str, url: str) -> str:
+    """Run x-twitter-cli.sh <command> <url> and return the captured markdown.
+
+    The script writes a .md file and emits 'wrote_md=/path' on stdout.
+    Injects TWITTER_AUTH_TOKEN/CT0 env vars from the cookie cache so the
+    upgraded twitter-cli (v0.8.5+) authenticates correctly.
+    Returns stripped markdown content, or "" on failure.
+    """
+    try:
+        env = _x_cookie_env() or None  # None = inherit parent env
+        result = subprocess.run(
+            [str(_X_CLI_SCRIPT), command, url],
+            capture_output=True,
+            text=True,
+            timeout=_X_CLI_TIMEOUT,
+            env=env,
+        )
+        if result.returncode != 0:
+            return ""
+        for line in result.stdout.splitlines():
+            if line.startswith("wrote_md="):
+                md_path = line[len("wrote_md="):].strip()
+                try:
+                    content = Path(md_path).read_text(encoding="utf-8")
+                    return content[:_MAX_TEXT_CHARS]
+                except Exception:
+                    return ""
+        return ""
+    except Exception:
+        return ""
+
+
 def _html_to_text(html: str, max_chars: int = _MAX_TEXT_CHARS) -> str:
     """Strip HTML to readable prose, capped at max_chars."""
     if not _BS4:
@@ -171,6 +244,12 @@ def fetch_x_tweet(url: str) -> str:
 
     handle, tweet_id = m.group(1), m.group(2)
     clean_url = f"https://twitter.com/{handle}/status/{tweet_id}"
+
+    # ---- 0. Authenticated CLI (OpenClaw x-twitter-cli.sh) ---------------
+    if _x_cli_available():
+        cli_content = _fetch_via_x_cli("post", url)
+        if cli_content and len(cli_content) > 50:
+            return f"[Tweet {handle}/{tweet_id} — via authenticated CLI]\n{cli_content}"
 
     # ---- 1. Direct fetch ------------------------------------------------
     status, html = _http_get(url)
@@ -220,6 +299,23 @@ def fetch_x_tweet(url: str) -> str:
     )
 
 
+def fetch_x_article(url: str) -> str:
+    """Fetch an X/Twitter article (x.com/i/article/...) via authenticated CLI.
+
+    Falls back to a clear failure message if the CLI is unavailable or fails.
+    Returns descriptive failure message on error — never raises.
+    """
+    if _x_cli_available():
+        content = _fetch_via_x_cli("article", url)
+        if content and len(content) > 50:
+            return f"[X Article — via authenticated CLI]\n{content}"
+        return f"[X Article at {url}: CLI ran but returned no content (auth may have expired)]"
+    return (
+        f"[X Article at {url}: access requires authentication. "
+        "x-twitter-cli.sh not available — run sync-auth to restore session.]"
+    )
+
+
 def fetch_url_content(url: str) -> str:
     """Fetch any URL and return stripped text content.
 
@@ -231,6 +327,10 @@ def fetch_url_content(url: str) -> str:
         resolved = _resolve_redirect(url)
         if resolved and resolved != url:
             url = resolved
+
+    # X/Twitter articles (require authenticated session)
+    if _X_ARTICLE_RE.search(url):
+        return fetch_x_article(url)
 
     # X/Twitter posts
     if _X_POST_RE.search(url):

@@ -17,6 +17,9 @@ from web_fetch import (
     _should_fetch,
     enrich_step_with_urls,
     _TCO_RE,
+    _X_ARTICLE_RE,
+    fetch_x_article,
+    fetch_url_content,
 )
 
 
@@ -181,3 +184,57 @@ def test_enrich_end_to_end_header_format(monkeypatch):
     block = enrich_step_with_urls("Analyse https://x.com/foo/status/1")
     assert block.startswith("=== PRE-FETCHED URL CONTENT ===")
     assert block.endswith("=== END PRE-FETCHED CONTENT ===")
+
+
+# ---------------------------------------------------------------------------
+# X article routing
+# ---------------------------------------------------------------------------
+
+def test_x_article_regex_matches():
+    assert _X_ARTICLE_RE.search("https://x.com/i/article/1234567890")
+    assert _X_ARTICLE_RE.search("https://twitter.com/i/article/9876543210")
+
+
+def test_x_article_regex_no_false_positives():
+    assert not _X_ARTICLE_RE.search("https://x.com/user/status/123")
+    assert not _X_ARTICLE_RE.search("https://x.com/i/web/status/123")
+
+
+def test_fetch_x_article_cli_unavailable(monkeypatch):
+    monkeypatch.setattr(web_fetch, "_x_cli_available", lambda: False)
+    result = fetch_x_article("https://x.com/i/article/123")
+    assert "authentication" in result.lower() or "not available" in result.lower()
+
+
+_CLI_ARTICLE_CONTENT = "# X CLI Capture\n\n- Source URL: https://x.com/i/article/123\n\n## Content\nThis is the full article body text with enough content to pass the length threshold."
+_CLI_TWEET_CONTENT = "# X CLI Capture (12345)\n\n- Author: Test User (@testuser)\n\n## Content\nAuthenticated tweet content fetched via Poe's X session. More text here."
+
+
+def test_fetch_x_article_cli_returns_content(monkeypatch):
+    monkeypatch.setattr(web_fetch, "_x_cli_available", lambda: True)
+    monkeypatch.setattr(web_fetch, "_fetch_via_x_cli", lambda cmd, url: _CLI_ARTICLE_CONTENT)
+    result = fetch_x_article("https://x.com/i/article/123")
+    assert "article body text" in result.lower()
+
+
+def test_fetch_x_article_cli_empty(monkeypatch):
+    monkeypatch.setattr(web_fetch, "_x_cli_available", lambda: True)
+    monkeypatch.setattr(web_fetch, "_fetch_via_x_cli", lambda cmd, url: "")
+    result = fetch_x_article("https://x.com/i/article/123")
+    assert "no content" in result.lower() or "auth" in result.lower()
+
+
+def test_fetch_url_content_routes_x_article(monkeypatch):
+    monkeypatch.setattr(web_fetch, "_x_cli_available", lambda: True)
+    monkeypatch.setattr(web_fetch, "_fetch_via_x_cli", lambda cmd, url: _CLI_ARTICLE_CONTENT)
+    result = fetch_url_content("https://x.com/i/article/9876543210")
+    assert "article body text" in result.lower()
+
+
+def test_fetch_tweet_uses_cli_first(monkeypatch):
+    """When CLI is available and returns content, it should be used before direct fetch."""
+    monkeypatch.setattr(web_fetch, "_x_cli_available", lambda: True)
+    monkeypatch.setattr(web_fetch, "_fetch_via_x_cli", lambda cmd, url: _CLI_TWEET_CONTENT)
+    result = fetch_url_content("https://x.com/user/status/12345")
+    assert "Authenticated tweet content" in result
+    assert "authenticated CLI" in result
