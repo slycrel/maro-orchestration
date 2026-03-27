@@ -642,6 +642,23 @@ The evolver currently optimizes for success rate. It should also optimize for to
 
 ---
 
+### Phase 35: Backlog Steal-List — DeerFlow / Nanoclaws / AutoHarness *(PLANNED)*
+
+Research triage in `docs/research/backlog-triage.md`. P1 items (highest leverage):
+
+- [ ] **Cost-aware model routing** — route simple steps (classification, formatting, retrieval) to Haiku; reserve Sonnet/Opus for synthesis. Estimated 60–70% cost reduction. Add `classifier` role tier to `assign_model_by_role()`.
+- [ ] **Parallelized sub-agent fan-out** — current loop is sequential. Add async fan-out for independent research subtasks (`asyncio` + `background.py`). Unlocks 3–5× throughput on multi-step goals.
+- [ ] **Constraint harness layer** — pre-execution validation wrapper around tool calls. Check action legality (valid paths, allowed ops, permission scope) before dispatch. Catches ~80% of agent misfires without an LLM round-trip. Start with file write and shell exec constraints.
+- [ ] **Embedding/TF-IDF memory retrieval** — replace recency-only context injection with relevance-ranked retrieval. Reduces hallucination from stale/irrelevant lessons being injected.
+
+P2 items (infrastructure):
+- [ ] Machine-readable agent capability manifest (YAML, replaces AGENTS.md manual prose)
+- [ ] Structured iterative refinement loop (action → env response → patch → re-validate, N rounds before escalation)
+- [ ] Reporter/synthesis agent role (consolidates multi-agent outputs into structured deliverable)
+- [ ] Systematic HITL gating taxonomy (read/write/destroy/external — declarative, not implicit)
+
+---
+
 ### Phase 34: Overnight Autonomous Mission Execution *(PLANNED)*
 
 The core north star: Jeremy sets a mission before sleeping; the system executes autonomously through the night, recovers from blocks, and reports in the morning. No step supervision required.
