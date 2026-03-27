@@ -654,10 +654,12 @@ def run_agent_loop(
         try:
             from skills import extract_skills, save_skill, load_skills
             # Build a minimal outcome dict that extract_skills can analyse
+            done_summaries = [s.summary for s in step_outcomes if s.status == "done" and s.summary]
             outcome_for_extraction = {
                 "goal": goal,
                 "status": loop_status,
                 "task_type": "agenda",
+                "summary": ". ".join(done_summaries[:4]),  # extract_skills reads this field
                 "steps": [
                     {
                         "step": s.step,
