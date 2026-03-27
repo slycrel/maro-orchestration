@@ -119,10 +119,26 @@ _PERSONA_FILES: Dict[str, str] = {
 # ---------------------------------------------------------------------------
 
 def _load_persona(worker_type: str) -> str:
-    """Load persona text for a worker type. Falls back to inline."""
+    """Load persona text for a worker type.
+
+    Resolution order:
+    1. PersonaRegistry (uses all 18+ personas/ files including builder, ops, finance-analyst, etc.)
+    2. _PERSONA_FILES path lookup (legacy explicit file mapping)
+    3. _INLINE_PERSONAS fallback (hardcoded prompts)
+    """
+    # 1. Try PersonaRegistry — gives access to the full personas/ directory
+    try:
+        from persona import PersonaRegistry, build_persona_system_prompt
+        _registry = PersonaRegistry()
+        _spec = _registry.load(worker_type)
+        if _spec is not None:
+            return build_persona_system_prompt(_spec)
+    except Exception:
+        pass
+
+    # 2. Explicit file map (legacy)
     fname = _PERSONA_FILES.get(worker_type)
     if fname:
-        # Try to find personas dir relative to this file or OPENCLAW_WORKSPACE
         candidates = [
             Path(__file__).parent.parent / "personas" / fname,
         ]
@@ -138,6 +154,7 @@ def _load_persona(worker_type: str) -> str:
             if p.exists():
                 return p.read_text(encoding="utf-8").strip()
 
+    # 3. Inline fallback
     return _INLINE_PERSONAS.get(worker_type, _PERSONA_GENERAL)
 
 
