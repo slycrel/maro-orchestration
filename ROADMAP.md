@@ -565,11 +565,14 @@ Not a single phase but a research track that informs multiple phases:
   (UCB/Thompson/Gittins, Duckworth grit, Seligman learned helplessness, productive failure, Kapur).
   6/6 steps, 0 blocked, 123k tokens, 250s.
 
-**Still pending (research queue — run via `poe-persona spawn psyche-researcher`):**
-- Zoom in/zoom out metacognition (double-loop learning, OODA loops)
-- Spaced repetition + confidence/score signal interaction
-- Tacit vs. explicit knowledge in expertise research
-- Kahneman System 1/2: when should an agent deliberate vs. act?
+**Shipped (additional research runs — March 2026):**
+- `docs/research/zoom-metacognition.md` — double-loop learning, OODA loops, adaptive expertise; when to re-decompose vs retry (6/6, 164k tokens)
+- `docs/research/spaced-repetition-confidence.md` — SM-2/FSRS confidence signals, optimal review timing; implications for decay model tuning (6/6, 97k tokens)
+- `docs/research/system1-system2-agents.md` — Kahneman dual-process theory; signals for deliberate vs. fast agent action; decompose/execute split implications (6/6, 174k tokens)
+
+**Still pending (research queue):**
+- Tacit vs. explicit knowledge in expertise research (crystallization Stage 4→5)
+- Enneagram 6w5 + INFJ communication failures (companion persona Phase 28)
 
 ---
 
