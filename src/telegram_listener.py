@@ -199,6 +199,7 @@ def _dispatch_slash(
     project: str,
     dry_run: bool,
     verbose: bool,
+    progress_fn=None,
 ) -> str:
     """Route a slash command to the appropriate handler."""
     if cmd == "status":
@@ -239,24 +240,49 @@ def _dispatch_slash(
             return f"Goal map failed: {e}"
 
     elif cmd == "research":
-        # Route /research to the researcher persona (Phase 20)
         if not args:
             return "Usage: /research <question or goal>"
+        if dry_run:
+            return f"[dry-run] Would run research loop for: {args[:100]}"
         try:
-            from persona import PersonaRegistry, spawn_persona
-            registry = PersonaRegistry()
-            result = spawn_persona(
-                "researcher", args,
-                registry=registry,
-                dry_run=dry_run,
-                max_steps=20,
+            import time as _time
+            from agent_loop import run_agent_loop
+
+            lines: list[str] = [f"*Research:* {args[:100]}", ""]
+
+            def _step_cb(step_num, step_text, summary, status):
+                icon = "\u2713" if status == "done" else "\u2717"
+                lines.append(f"{icon} {step_num}. {summary[:90]}")
+                if progress_fn:
+                    try:
+                        progress_fn("\n".join(lines))
+                    except Exception:
+                        pass
+
+            result = run_agent_loop(
+                args,
+                project=f"tg-research-{int(_time.time())}",
+                verbose=verbose,
+                dry_run=False,
+                step_callback=_step_cb,
             )
-            if result.status == "dry_run":
-                return f"[dry-run] Would spawn researcher persona for: {args[:80]}"
-            icon = "✓" if result.status == "done" else "✗"
-            return f"[{icon}] Research complete ({result.steps_taken} steps)\n\n{result.summary[:600]}"
+
+            done_count = sum(1 for s in result.steps if s.status == "done")
+            blocked_count = sum(1 for s in result.steps if s.status == "blocked")
+            status_icon = "\u2705" if result.status == "done" else "\u26a0\ufe0f"
+            elapsed = result.elapsed_ms // 1000
+
+            last_done = next((s for s in reversed(result.steps) if s.status == "done"), None)
+            body = (last_done.result[:1500] if last_done else "") or "(no result)"
+
+            header = (
+                f"{status_icon} *Research complete* \u2014 {done_count}/{len(result.steps)} steps"
+                + (f", {blocked_count} blocked" if blocked_count else "")
+                + f" ({elapsed}s)\n\n"
+            )
+            return header + body
         except Exception as e:
-            return f"Research persona error: {e}"
+            return f"Research error: {e}"
 
     elif cmd in ("director", "build", "ops"):
         # Force the director/worker path
@@ -302,7 +328,7 @@ def _dispatch_slash(
             "/status — executive summary (active missions, quality)\n"
             "/map — goal relationship map\n"
             "/director <directive> — run full Director/Worker pipeline\n"
-            "/research <goal> — run a research worker\n"
+            "/research <goal or URL> — run autonomous research loop with live progress\n"
             "/build <goal> — run a build worker\n"
             "/ops <command> — run an ops worker\n"
             "/ancestry <project> — show goal ancestry chain\n"
@@ -353,7 +379,7 @@ def _process_message(
     if dry_run:
         # In dry-run, just process without sending
         if cmd:
-            _dispatch_slash(cmd, args, project=project, dry_run=True, verbose=verbose)
+            _dispatch_slash(cmd, args, project=project, dry_run=True, verbose=verbose, progress_fn=None)
         else:
             try:
                 result = handle(text, project=project, dry_run=True, verbose=verbose)
@@ -380,6 +406,15 @@ def _process_message(
     else:
         bot.send_typing(chat_id)
 
+    # Build a progress_fn for commands that support it (research)
+    _progress_fn = None
+    if cmd == "research" and ack_id:
+        def _progress_fn(text: str) -> None:
+            try:
+                bot.edit_message(chat_id, ack_id, text)
+            except Exception:
+                pass
+
     # Execute
     try:
         if _loop_active:
@@ -400,7 +435,7 @@ def _process_message(
                 f"_{text[:80]}_"
             )
         elif cmd:
-            response = _dispatch_slash(cmd, args, project=project, dry_run=False, verbose=verbose)
+            response = _dispatch_slash(cmd, args, project=project, dry_run=False, verbose=verbose, progress_fn=_progress_fn)
         else:
             # Route natural language through Poe CEO layer when no loop is active
             if poe_handle is not None:

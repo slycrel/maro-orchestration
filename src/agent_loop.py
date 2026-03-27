@@ -187,6 +187,7 @@ def run_agent_loop(
     interrupt_queue=None,
     hook_registry=None,
     ancestry_context_extra: str = "",
+    step_callback=None,
 ) -> LoopResult:
     """Run the autonomous loop for a goal.
 
@@ -194,6 +195,8 @@ def run_agent_loop(
         goal: Natural language goal description.
         project: Existing project slug to attach to, or None to auto-create.
         model: LLM model string (defaults to MODEL_CHEAP).
+        step_callback: Optional callable(step_num, step_text, summary, status) called
+            after each step completes. Useful for live progress updates (e.g. Telegram).
         adapter: Pre-built LLMAdapter instance (skips build_adapter()).
         max_steps: Maximum steps to decompose the goal into.
         max_iterations: Hard cap on total LLM calls.
@@ -470,6 +473,11 @@ def run_agent_loop(
             completed_context.append(_ctx_entry)
             if verbose:
                 print(f"[poe] step {step_idx} done: {step_summary[:120]}", file=sys.stderr, flush=True)
+            if step_callback is not None:
+                try:
+                    step_callback(step_idx, step_text, step_summary, "done")
+                except Exception:
+                    pass
         else:
             _prior_retries = _step_retries.get(step_text, 0)
             if _prior_retries < 1:
@@ -510,6 +518,11 @@ def run_agent_loop(
                 stuck_reason = outcome.get("stuck_reason", f"step {step_idx} blocked")
                 if verbose:
                     print(f"[poe] step {step_idx} stuck after retry: {stuck_reason}", file=sys.stderr, flush=True)
+                if step_callback is not None:
+                    try:
+                        step_callback(step_idx, step_text, stuck_reason or "blocked", "blocked")
+                    except Exception:
+                        pass
 
         step_outcomes.append(StepOutcome(
             index=item_index,

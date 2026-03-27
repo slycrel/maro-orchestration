@@ -236,6 +236,16 @@ class ClaudeSubprocessAdapter(LLMAdapter):
             stderr = result.stderr.strip()
             stdout_hint = result.stdout.strip()[:200] if result.stdout.strip() else ""
             detail = stderr[:300] or stdout_hint or "(no output)"
+            # Dump debug info to /tmp for post-mortem diagnosis
+            try:
+                import tempfile, os as _os
+                debug_path = _os.path.join(tempfile.gettempdir(), f"claude_rc1_{os.getpid()}.txt")
+                with open(debug_path, "w") as _f:
+                    _f.write(f"rc={result.returncode}\ncmd={cmd}\nprompt_len={len(prompt)}\n\n")
+                    _f.write(f"--- STDERR ---\n{result.stderr}\n--- STDOUT ---\n{result.stdout[:2000]}\n")
+                    _f.write(f"--- PROMPT (first 3000 chars) ---\n{prompt[:3000]}\n")
+            except Exception:
+                pass
             raise RuntimeError(f"claude subprocess failed (rc={result.returncode}): {detail}")
 
         # Parse JSON output
