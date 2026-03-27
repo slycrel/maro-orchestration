@@ -468,14 +468,29 @@ def poe_handle(
             # Fall through to agent loop
             pass
 
-    # Shorter AGENDA work → agent loop
+    # Shorter AGENDA work → agent loop (with persona auto-selection)
     if run_agent_loop is not None:
         try:
+            # Phase 31: select the best persona for this goal and inject system context
+            _persona_context = ""
+            try:
+                from persona import persona_for_goal, PersonaRegistry, build_persona_system_prompt
+                _registry = PersonaRegistry()
+                _persona_name, _persona_conf = persona_for_goal(
+                    message, registry=_registry, confidence_threshold=0.75
+                )
+                _spec = _registry.load(_persona_name)
+                if _spec:
+                    _persona_context = build_persona_system_prompt(_spec, goal=message)
+            except Exception:
+                _persona_context = ""
+
             loop_result = run_agent_loop(
                 message,
                 adapter=adapter,
                 dry_run=False,
                 verbose=False,
+                ancestry_context_extra=_persona_context,
             )
             done_steps = sum(1 for s in loop_result.steps if s.status == "done")
             summary = (

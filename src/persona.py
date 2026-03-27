@@ -450,6 +450,132 @@ def spawn_persona(
 
 
 # ---------------------------------------------------------------------------
+# Persona auto-selection (Phase 31)
+# ---------------------------------------------------------------------------
+
+# Keyword → persona name routing table.
+# Each entry: (keywords_any_of, persona_name, confidence)
+# Evaluated in order; first confident match wins.
+_PERSONA_ROUTING: List[tuple] = [
+    # Psychology / cognition / neuroscience / philosophy → psyche-researcher
+    (["psychology", "neuroscience", "cognition", "cognitive", "philosophy",
+      "enneagram", "mbti", "personality", "memory model", "spaced repetition",
+      "grit", "persistence", "learned helplessness", "kahneman", "system 1",
+      "tacit knowledge", "expertise", "intrinsic motivation"], "psyche-researcher", 0.85),
+    # Research / analysis / investigate / summarize → research-assistant-deep-synth
+    (["research", "investigate", "analyse", "analyze", "summarise", "summarize",
+      "tweet", "article", "paper", "study", "literature", "findings", "survey",
+      "what does", "what is", "how does", "explain", "why does"], "research-assistant-deep-synth", 0.75),
+    # Build / implement / code / write software → builder
+    (["build", "implement", "code", "write", "create", "develop", "add feature",
+      "fix bug", "refactor", "test", "unit test", "integration", "deploy",
+      "function", "class", "module", "api", "endpoint"], "builder", 0.80),
+    # System / ops / monitor / deploy / diagnose → ops
+    (["monitor", "diagnose", "health", "service", "systemd", "cron", "deploy",
+      "restart", "log", "alert", "heartbeat", "disk", "memory usage",
+      "process", "daemon", "script", "automation"], "ops", 0.75),
+    # Finance / market / trading / polymarket → finance-analyst
+    (["polymarket", "market", "trading", "prediction market", "bet", "odds",
+      "finance", "investment", "portfolio", "price", "token", "crypto"], "finance-analyst", 0.80),
+]
+
+_DEFAULT_PERSONA = "research-assistant-deep-synth"
+
+
+def persona_for_goal(
+    goal: str,
+    registry: Optional["PersonaRegistry"] = None,
+    *,
+    confidence_threshold: float = 0.70,
+    allow_llm_fallback: bool = False,
+    adapter=None,
+) -> tuple[str, float]:
+    """Select the best persona for a goal. Returns (persona_name, confidence).
+
+    Uses keyword routing first (fast, zero-cost). Falls back to LLM classification
+    if allow_llm_fallback=True and no keyword match exceeds confidence_threshold.
+
+    Args:
+        goal: Natural language goal string.
+        registry: PersonaRegistry instance (optional — used to validate that the
+            selected persona actually exists).
+        confidence_threshold: Minimum confidence to accept a keyword match.
+        allow_llm_fallback: Use cheap LLM if keyword match falls below threshold.
+        adapter: LLMAdapter instance for LLM fallback (auto-built if None).
+
+    Returns:
+        Tuple of (persona_name, confidence). confidence=1.0 means certain.
+    """
+    import re as _re
+    goal_lower = goal.lower()
+
+    def _kw_match(kw: str, text: str) -> bool:
+        """Word-boundary-aware keyword match. Multi-word phrases match as substrings."""
+        if " " in kw:
+            return kw in text
+        return bool(_re.search(r"\b" + _re.escape(kw) + r"\b", text))
+
+    # Keyword routing — score by hit count normalized by keyword list size
+    best_name = _DEFAULT_PERSONA
+    best_conf = 0.0
+
+    for keywords, persona_name, base_confidence in _PERSONA_ROUTING:
+        hits = sum(1 for kw in keywords if _kw_match(kw, goal_lower))
+        if hits == 0:
+            continue
+        # Scale confidence by hit density: more hits = more certain
+        conf = min(1.0, base_confidence * (1.0 + (hits - 1) * 0.05))
+        if conf > best_conf:
+            best_conf = conf
+            best_name = persona_name
+
+    # Validate persona exists in registry
+    if registry is not None and best_name != _DEFAULT_PERSONA:
+        available = registry.list()
+        if best_name not in available:
+            # Closest fallback that is available
+            fallbacks = {
+                "psyche-researcher": ["research-assistant-deep-synth"],
+                "finance-analyst": ["research-assistant-deep-synth"],
+            }
+            alternatives = fallbacks.get(best_name, [_DEFAULT_PERSONA])
+            for alt in alternatives:
+                if alt in available:
+                    best_name = alt
+                    best_conf *= 0.9  # slight confidence penalty for fallback
+                    break
+            else:
+                best_name = _DEFAULT_PERSONA
+                best_conf = 0.5
+
+    if best_conf >= confidence_threshold:
+        return best_name, best_conf
+
+    # LLM fallback (optional — avoids adding token cost to every routing decision)
+    if allow_llm_fallback and adapter is not None:
+        available_names = registry.list() if registry else list(
+            n for _, n, _ in _PERSONA_ROUTING
+        ) + [_DEFAULT_PERSONA]
+
+        try:
+            from llm import LLMMessage
+            personas_str = ", ".join(available_names)
+            prompt = (
+                f"Available personas: {personas_str}\n\n"
+                f"Goal: {goal[:300]}\n\n"
+                f"Which single persona best fits this goal? Reply with ONLY the persona name, nothing else."
+            )
+            resp = adapter.complete([LLMMessage("user", prompt)], max_tokens=30)
+            llm_name = resp.content.strip().lower().split()[0] if resp.content.strip() else ""
+            if llm_name in available_names:
+                return llm_name, 0.80
+        except Exception:
+            pass
+
+    return best_name or _DEFAULT_PERSONA, max(best_conf, 0.5)
+
+
+# ---------------------------------------------------------------------------
 # Persona spec serialization (for CLI display)
 # ---------------------------------------------------------------------------
 

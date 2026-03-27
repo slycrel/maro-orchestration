@@ -17,6 +17,7 @@ from persona import (
     spawn_persona,
     build_persona_system_prompt,
     persona_to_dict,
+    persona_for_goal,
 )
 
 PERSONAS_DIR = Path(__file__).parent.parent / "personas"
@@ -379,3 +380,69 @@ def test_all_builtin_personas_parse_without_error():
         assert spec.role
         assert spec.model_tier in ("power", "mid", "cheap")
         assert spec.memory_scope in ("session", "project", "global")
+
+
+# ---------------------------------------------------------------------------
+# persona_for_goal — Phase 31 auto-selection
+# ---------------------------------------------------------------------------
+
+def test_persona_for_goal_research_keyword():
+    name, conf = persona_for_goal("research and summarise the latest LLM orchestration frameworks")
+    assert name == "research-assistant-deep-synth"
+    assert conf >= 0.70
+
+
+def test_persona_for_goal_psychology_keyword():
+    name, conf = persona_for_goal("what does psychology say about grit and persistence in agents")
+    assert name == "psyche-researcher"
+    assert conf >= 0.75
+
+
+def test_persona_for_goal_build_keyword():
+    name, conf = persona_for_goal("implement a WebSocket handler for real-time updates")
+    assert name == "builder"
+    assert conf >= 0.70
+
+
+def test_persona_for_goal_ops_keyword():
+    name, conf = persona_for_goal("monitor the heartbeat service and diagnose why alerts are noisy")
+    assert name == "ops"
+    assert conf >= 0.70
+
+
+def test_persona_for_goal_finance_keyword():
+    name, conf = persona_for_goal("analyse the polymarket odds on the 2026 election")
+    assert name == "finance-analyst"
+    assert conf >= 0.75
+
+
+def test_persona_for_goal_default_on_no_match():
+    name, conf = persona_for_goal("do something miscellaneous")
+    assert name == "research-assistant-deep-synth"  # default
+    assert conf >= 0.0
+
+
+def test_persona_for_goal_validates_against_registry():
+    registry = PersonaRegistry(personas_dir=PERSONAS_DIR)
+    name, conf = persona_for_goal("what does psychology say about cognition", registry=registry)
+    # psyche-researcher exists in the real personas dir
+    assert name in registry.list()
+    assert conf >= 0.70
+
+
+def test_persona_for_goal_returns_tuple():
+    result = persona_for_goal("research the latest papers on LLM memory")
+    assert isinstance(result, tuple)
+    assert len(result) == 2
+    name, conf = result
+    assert isinstance(name, str)
+    assert isinstance(conf, float)
+    assert 0.0 <= conf <= 1.0
+
+
+def test_persona_for_goal_tweet_goal():
+    name, conf = persona_for_goal(
+        "Research the tweet at https://x.com/user/status/123 and summarise what they say"
+    )
+    assert name == "research-assistant-deep-synth"
+    assert conf >= 0.70
