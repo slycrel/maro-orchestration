@@ -110,17 +110,86 @@ def assign_model_by_role(role: str) -> str:
     Roles:
       orchestrator | planner | reviewer  → MODEL_POWER
       worker | executor | researcher     → MODEL_MID
-      classifier | heartbeat | signal_detector → MODEL_CHEAP
+      classifier | heartbeat | signal_detector | cheap_worker → MODEL_CHEAP
       (anything else)                    → MODEL_MID
     """
     power_roles = {"orchestrator", "planner", "reviewer"}
-    cheap_roles = {"classifier", "heartbeat", "signal_detector"}
+    cheap_roles = {"classifier", "heartbeat", "signal_detector", "cheap_worker"}
 
     if role in power_roles:
         return MODEL_POWER
     if role in cheap_roles:
         return MODEL_CHEAP
     # worker, executor, researcher, and anything unknown → MID
+    return MODEL_MID
+
+
+# ---------------------------------------------------------------------------
+# Per-step cost classification (Phase 35 P1)
+# ---------------------------------------------------------------------------
+
+# Keywords whose presence suggests a step is cheap (retrieve/format/classify).
+# Multi-word phrases match as substrings; single words use word boundaries.
+_CHEAP_STEP_KEYWORDS = [
+    # retrieval / lookup
+    "check if", "check whether", "look up", "find all", "find the", "list all",
+    "list the", "fetch the", "get the", "count the", "how many",
+    # classification / boolean
+    "classify", "categorise", "categorize", "tag", "label", "is it",
+    "does it", "true or false", "yes or no", "determine if", "determine whether",
+    # formatting / extraction
+    "format", "extract all", "extract the", "parse", "convert", "reformat",
+    "strip", "clean up", "rename", "sort by",
+    # simple summarization of a single known source
+    "briefly summarise", "briefly summarize", "one-line summary", "one sentence",
+    "tl;dr",
+    # verification
+    "verify that", "confirm that", "assert that", "validate",
+    "check reachability", "abort early if",
+]
+
+# Keywords that override cheap classification → keep at MID
+_FORCE_MID_KEYWORDS = [
+    "synthesize", "synthesise", "analyse in depth", "analyze in depth",
+    "write a comprehensive", "write a detailed", "produce a report",
+    "research", "investigate", "evaluate", "compare and contrast",
+    "design", "implement", "develop", "build", "create a",
+    "explain why", "reason about", "infer", "hypothesize",
+]
+
+
+def classify_step_model(step_text: str) -> str:
+    """Return MODEL_CHEAP or MODEL_MID based on step text content.
+
+    Cheap steps: retrieval, classification, formatting, boolean checks.
+    Mid steps: research, synthesis, writing, analysis, implementation.
+
+    This is a pure keyword heuristic — zero token cost. Aim for high precision
+    on CHEAP (don't wrongly downgrade synthesis) over high recall.
+
+    Args:
+        step_text: The step description string.
+
+    Returns:
+        MODEL_CHEAP or MODEL_MID.
+    """
+    import re as _re
+
+    text = step_text.lower()
+
+    def _match(kw: str) -> bool:
+        if " " in kw:
+            return kw in text
+        return bool(_re.search(r"\b" + _re.escape(kw) + r"\b", text))
+
+    # If any force-MID keyword present, keep at MID regardless
+    if any(_match(kw) for kw in _FORCE_MID_KEYWORDS):
+        return MODEL_MID
+
+    # If any cheap keyword present, downgrade to CHEAP
+    if any(_match(kw) for kw in _CHEAP_STEP_KEYWORDS):
+        return MODEL_CHEAP
+
     return MODEL_MID
 
 

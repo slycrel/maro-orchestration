@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 from poe import (
     PoeResponse,
     assign_model_by_role,
+    classify_step_model,
     poe_handle,
     _compile_executive_summary,
     _describe_goal_relationships,
@@ -348,3 +349,67 @@ def test_describe_goal_relationships_no_build_goal_map():
     with patch("poe.build_goal_map", None):
         result = _describe_goal_relationships("anything", adapter=None)
     assert "not available" in result.lower() or isinstance(result, str)
+
+
+# ---------------------------------------------------------------------------
+# classify_step_model — Phase 35 P1 cost-aware routing
+# ---------------------------------------------------------------------------
+
+def test_classify_cheap_check_reachability():
+    assert classify_step_model("Check reachability of https://x.com/user/status/123 and abort early if unavailable") == MODEL_CHEAP
+
+
+def test_classify_cheap_list_urls():
+    assert classify_step_model("List all URLs referenced in the tweet thread") == MODEL_CHEAP
+
+
+def test_classify_cheap_extract():
+    assert classify_step_model("Extract the author name, date, and tweet text from the pre-fetched content") == MODEL_CHEAP
+
+
+def test_classify_cheap_verify():
+    assert classify_step_model("Verify that the article was published after January 2026") == MODEL_CHEAP
+
+
+def test_classify_cheap_format():
+    assert classify_step_model("Format the findings into a markdown table with columns: tool, category, URL") == MODEL_CHEAP
+
+
+def test_classify_cheap_count():
+    assert classify_step_model("Count how many resources are referenced in the article") == MODEL_CHEAP
+
+
+def test_classify_mid_research():
+    assert classify_step_model("Research what ML papers say about exploration-exploitation tradeoff") == MODEL_MID
+
+
+def test_classify_mid_synthesize():
+    assert classify_step_model("Synthesize all gathered content into a structured summary of key claims") == MODEL_MID
+
+
+def test_classify_mid_analyse():
+    assert classify_step_model("Analyse in depth the implications for autonomous agent design") == MODEL_MID
+
+
+def test_classify_mid_implement():
+    assert classify_step_model("Implement a WebSocket handler for real-time step progress updates") == MODEL_MID
+
+
+def test_classify_mid_write_comprehensive():
+    assert classify_step_model("Write a comprehensive report covering all findings and practical takeaways") == MODEL_MID
+
+
+def test_classify_mid_default_unknown():
+    assert classify_step_model("Do something with the data") == MODEL_MID
+
+
+def test_classify_force_mid_overrides_cheap_keyword():
+    # "research" is force-MID; even if a cheap keyword also present, stays MID
+    step = "Research and extract all key URLs from the article"
+    assert classify_step_model(step) == MODEL_MID
+
+
+def test_classify_step_model_returns_string():
+    result = classify_step_model("anything")
+    assert isinstance(result, str)
+    assert result in (MODEL_CHEAP, MODEL_MID, MODEL_POWER)

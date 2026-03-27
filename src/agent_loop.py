@@ -371,6 +371,19 @@ def run_agent_loop(
             print(f"[poe] step {step_idx}: {step_text!r}", file=sys.stderr, flush=True)
 
         step_start = time.monotonic()
+        # Phase 35 P1: per-step model selection — cheap retrieval/classify steps use Haiku
+        _step_adapter = adapter
+        try:
+            from poe import classify_step_model
+            _step_model = classify_step_model(step_text)
+            if _step_model != adapter.model_key:
+                _step_adapter = build_adapter(model=_step_model)
+                if verbose:
+                    _tier = "haiku" if _step_model == MODEL_CHEAP else "sonnet"
+                    print(f"[poe] step {step_idx}: routing to {_tier} (classify_step_model)", file=sys.stderr, flush=True)
+        except Exception:
+            pass  # Model selection failures must never break the loop
+
         # _next_step_injected is set by the previous iteration's hook run
         _step_ancestry = (
             (_ancestry_context + "\n\n" + _next_step_injected_context)
@@ -383,7 +396,7 @@ def run_agent_loop(
             step_num=step_idx,
             total_steps=step_idx + len(remaining_steps),
             completed_context=completed_context,
-            adapter=adapter,
+            adapter=_step_adapter,
             tools=[LLMTool(**t) for t in _EXECUTE_TOOLS],
             verbose=verbose,
             ancestry_context=_step_ancestry,
