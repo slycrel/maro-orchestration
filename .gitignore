@@ -18,3 +18,7 @@ output/
 
 # Temporary
 tmp/
+
+# Playwright CLI session artifacts
+.playwright-cli/
+**/.playwright-cli/
