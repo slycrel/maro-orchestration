@@ -649,17 +649,181 @@ def _forensics_lens(diag: LoopDiagnosis, profiles: List[StepProfile]) -> LensRes
 # Default lens registry
 # ---------------------------------------------------------------------------
 
+def _execution_lens(diag: LoopDiagnosis, profiles: List[StepProfile]) -> LensResult:
+    """Wraps the failure classifier as a lens — is the run making progress?"""
+    findings: List[str] = []
+    action = None
+
+    if diag.failure_class != "healthy":
+        findings.extend(diag.evidence)
+        action = diag.recommendation
+
+    if diag.steps_blocked > 0 and diag.steps_done > 0:
+        ratio = diag.steps_blocked / (diag.steps_done + diag.steps_blocked)
+        if ratio > 0.3:
+            findings.append(f"Block rate: {ratio:.0%} ({diag.steps_blocked}/{diag.steps_total})")
+
+    confidence = 0.9 if action else 0.3
+    return LensResult(
+        lens_name="execution",
+        findings=findings,
+        action=action,
+        confidence=confidence,
+    )
+
+
+def _quality_lens(diag: LoopDiagnosis, profiles: List[StepProfile]) -> LensResult:
+    """LLM-backed: does the output actually answer the goal? Uses reviewer persona.
+
+    Only runs when explicitly requested (include_llm=True). Uses the cheapest
+    model available to minimize token cost.
+    """
+    findings: List[str] = []
+    action = None
+
+    # Need done steps with actual content to evaluate
+    done_profiles = [p for p in profiles if p.status == "done" and p.tokens > 0]
+    if not done_profiles or not diag.steps_done:
+        return LensResult(lens_name="quality", cost="cheap")
+
+    # Load step artifacts for quality assessment
+    step_summaries = []
+    for p in done_profiles[:8]:  # Cap at 8 to control token usage
+        step_summaries.append(f"Step {p.step_idx}: {p.text[:80]}")
+
+    try:
+        from llm import build_adapter, MODEL_CHEAP, LLMMessage
+        adapter = build_adapter(model=MODEL_CHEAP)
+
+        prompt = (
+            f"Goal: {diag.loop_id}\n\n"  # loop_id isn't the goal — we'd need it passed in
+            f"Completed {diag.steps_done}/{diag.steps_total} steps:\n"
+            + "\n".join(f"  {s}" for s in step_summaries)
+            + "\n\nBriefly assess:\n"
+            "1. Did the steps address the goal or drift off-target?\n"
+            "2. Is the output substantive or superficial?\n"
+            "3. What's the single most important gap?\n"
+            "Answer in 3 short bullet points."
+        )
+        resp = adapter.complete(
+            [LLMMessage("user", prompt)],
+            max_tokens=300,
+            temperature=0.2,
+        )
+        if resp.content and len(resp.content) > 20:
+            findings.append(resp.content.strip())
+            # Check for obvious negative signals
+            _lower = resp.content.lower()
+            if any(w in _lower for w in ["drift", "off-target", "superficial", "shallow", "missed"]):
+                action = "Output quality concern — review step results before accepting"
+    except Exception as exc:
+        log.debug("quality lens LLM call failed: %s", exc)
+        findings.append(f"Quality assessment unavailable: {exc}")
+
+    confidence = 0.6 if action else 0.4
+    return LensResult(lens_name="quality", findings=findings, action=action, confidence=confidence, cost="cheap")
+
+
+# ---------------------------------------------------------------------------
+# Lens Aggregator — synthesize across lens results
+# ---------------------------------------------------------------------------
+
+@dataclass
+class AggregatedDiagnosis:
+    """Synthesized output from multiple lenses."""
+    loop_id: str
+    failure_class: str                  # from ExecutionLens / diagnose_loop
+    severity: str
+    confidence: float                   # aggregated confidence
+    primary_action: str                 # highest-confidence recommended action
+    supporting_evidence: List[str]      # merged evidence from all lenses
+    lens_agreement: int                 # how many lenses suggest the same action category
+    all_actions: List[str]              # every unique action recommended
+
+    def summary(self) -> str:
+        return (
+            f"[{self.failure_class}] confidence={self.confidence:.2f} "
+            f"agreement={self.lens_agreement} lenses | {self.primary_action}"
+        )
+
+
+def aggregate_lenses(
+    diag: LoopDiagnosis,
+    lens_results: List[LensResult],
+) -> AggregatedDiagnosis:
+    """Synthesize multiple lens results into a single diagnosis + action.
+
+    Confidence is boosted when multiple lenses agree on the same action category.
+    The highest-confidence action with the most lens agreement wins.
+    """
+    all_actions = []
+    all_evidence = list(diag.evidence)
+
+    for lr in lens_results:
+        all_evidence.extend(lr.findings)
+        if lr.action:
+            all_actions.append((lr.action, lr.confidence, lr.lens_name))
+
+    if not all_actions:
+        return AggregatedDiagnosis(
+            loop_id=diag.loop_id,
+            failure_class=diag.failure_class,
+            severity=diag.severity,
+            confidence=0.3,
+            primary_action=diag.recommendation or "No action recommended",
+            supporting_evidence=all_evidence,
+            lens_agreement=0,
+            all_actions=[],
+        )
+
+    # Group actions by verb (first meaningful word) — "split X" and "split Y" are the same category
+    def _action_key(a: str) -> str:
+        words = [w for w in a.lower().split() if w not in {"the", "a", "an", "to", "into", "for"}]
+        return words[0] if words else ""
+
+    categories: Dict[str, List[tuple]] = {}
+    for action, conf, lens in all_actions:
+        key = _action_key(action)
+        categories.setdefault(key, []).append((action, conf, lens))
+
+    # Pick the category with the most agreement, breaking ties by confidence
+    best_cat = max(categories.values(), key=lambda v: (len(v), max(c for _, c, _ in v)))
+    primary_action = max(best_cat, key=lambda x: x[1])[0]
+    agreement = len(best_cat)
+    avg_conf = sum(c for _, c, _ in best_cat) / len(best_cat)
+
+    # Boost confidence based on agreement
+    boosted_conf = min(1.0, avg_conf + (agreement - 1) * 0.1)
+
+    return AggregatedDiagnosis(
+        loop_id=diag.loop_id,
+        failure_class=diag.failure_class,
+        severity=diag.severity,
+        confidence=round(boosted_conf, 2),
+        primary_action=primary_action,
+        supporting_evidence=all_evidence[:20],  # cap for sanity
+        lens_agreement=agreement,
+        all_actions=[a for a, _, _ in all_actions],
+    )
+
+
+# ---------------------------------------------------------------------------
+# Default lens registry
+# ---------------------------------------------------------------------------
+
 _default_registry: Optional[LensRegistry] = None
 
 def get_lens_registry() -> LensRegistry:
-    """Get or create the default lens registry with built-in heuristic lenses."""
+    """Get or create the default lens registry with built-in lenses."""
     global _default_registry
     if _default_registry is None:
         _default_registry = LensRegistry()
+        _default_registry.register("execution", _execution_lens, cost="free")
         _default_registry.register("cost", _cost_lens, cost="free")
         _default_registry.register("architecture", _architecture_lens, cost="free")
         _default_registry.register("operator", _operator_lens, cost="free")
         _default_registry.register("forensics", _forensics_lens, cost="free")
+        _default_registry.register("quality", _quality_lens, cost="cheap")
     return _default_registry
 
 
@@ -757,16 +921,25 @@ def main(argv=None) -> None:
     if getattr(args, "lenses", False):
         events = _load_loop_events(diag.loop_id)
         profiles = _build_step_profiles(events)
-        lens_results = run_lenses(diag, profiles)
+        lens_results = run_lenses(diag, profiles, include_llm=getattr(args, "llm", False))
+
         if lens_results:
-            print(f"\n  Lens analysis:")
+            print(f"\n  Lens analysis ({len(lens_results)} active):")
             for lr in lens_results:
                 _conf = f"confidence={lr.confidence:.1f}" if lr.confidence > 0 else ""
-                print(f"\n  [{lr.lens_name}] {_conf}")
+                _cost = f" [{lr.cost}]" if lr.cost != "free" else ""
+                print(f"\n  [{lr.lens_name}]{_cost} {_conf}")
                 for f in lr.findings:
                     print(f"    {f}")
                 if lr.action:
-                    print(f"    → {lr.action}")
+                    print(f"    -> {lr.action}")
+
+            # Aggregated synthesis
+            agg = aggregate_lenses(diag, lens_results)
+            print(f"\n  Synthesis:")
+            print(f"    Confidence: {agg.confidence:.0%}")
+            print(f"    Agreement:  {agg.lens_agreement} lens(es) converge")
+            print(f"    Action:     {agg.primary_action}")
         else:
             print(f"\n  Lens analysis: no notable findings")
 

@@ -14,11 +14,13 @@ from introspect import (
     LoopDiagnosis,
     LensResult,
     StepProfile,
+    AggregatedDiagnosis,
     diagnose_loop,
     diagnose_latest,
     save_diagnosis,
     load_diagnoses,
     run_lenses,
+    aggregate_lenses,
     get_lens_registry,
     _build_step_profiles,
     FAILURE_CLASSES,
@@ -385,3 +387,76 @@ def test_custom_lens_registration():
     # Clean up
     del registry._lenses["custom_test"]
     del registry._costs["custom_test"]
+
+
+# ---------------------------------------------------------------------------
+# Execution lens (wraps failure classifier)
+# ---------------------------------------------------------------------------
+
+def test_execution_lens_surfaces_failure_class():
+    profiles = _make_profiles([
+        (1, "done", 5000, 3000),
+        (2, "blocked", 0, 100),
+        (3, "blocked", 0, 100),
+    ])
+    diag = LoopDiagnosis(
+        loop_id="x", failure_class="constraint_false_positive", severity="warning",
+        evidence=["2 steps blocked with 0 tokens"],
+        recommendation="Review constraint patterns",
+        steps_done=1, steps_blocked=2, steps_total=3,
+    )
+    results = run_lenses(diag, profiles)
+    exec_result = next((r for r in results if r.lens_name == "execution"), None)
+    assert exec_result is not None
+    assert exec_result.action is not None
+
+
+# ---------------------------------------------------------------------------
+# Aggregator
+# ---------------------------------------------------------------------------
+
+def test_aggregate_combines_actions():
+    diag = LoopDiagnosis(
+        loop_id="x", failure_class="decomposition_too_broad", severity="warning",
+        evidence=["Step 4 consumed 332K tokens"],
+        recommendation="Split step 4",
+    )
+    lens_results = [
+        LensResult(lens_name="cost", findings=["step 4 expensive"], action="Split step 4 into smaller substeps", confidence=0.8),
+        LensResult(lens_name="operator", findings=["step 4 took 127s"], action="Split slow steps into smaller units", confidence=0.8),
+        LensResult(lens_name="forensics", findings=["last good: step 3"], confidence=0.5),
+    ]
+    agg = aggregate_lenses(diag, lens_results)
+    assert agg.confidence > 0.7
+    assert agg.lens_agreement >= 2
+    assert "split" in agg.primary_action.lower()
+
+
+def test_aggregate_no_actions_falls_back():
+    diag = LoopDiagnosis(loop_id="x", failure_class="healthy", severity="info")
+    lens_results = [
+        LensResult(lens_name="cost", findings=["avg 5K tokens/step"], confidence=0.2),
+    ]
+    agg = aggregate_lenses(diag, lens_results)
+    assert agg.lens_agreement == 0
+    assert agg.confidence <= 0.5
+
+
+def test_aggregate_summary():
+    diag = LoopDiagnosis(loop_id="x", failure_class="budget_exhaustion", severity="warning")
+    lens_results = [
+        LensResult(lens_name="execution", findings=["budget hit"], action="increase max_iterations", confidence=0.9),
+    ]
+    agg = aggregate_lenses(diag, lens_results)
+    assert "budget_exhaustion" in agg.summary()
+
+
+# ---------------------------------------------------------------------------
+# Registry includes execution lens
+# ---------------------------------------------------------------------------
+
+def test_registry_includes_execution_and_quality():
+    registry = get_lens_registry()
+    names = registry.list()
+    assert "execution" in names
+    assert "quality" in names
