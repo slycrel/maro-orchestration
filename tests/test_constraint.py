@@ -217,15 +217,23 @@ def test_tier_read_inspect():
 
 
 def test_tier_write_create_file():
-    assert classify_action_tier("Write the summary to docs/output.md") == ACTION_TIER_WRITE
+    assert classify_action_tier("Write to file /tmp/output.md with the summary") == ACTION_TIER_WRITE
 
 
 def test_tier_write_mkdir():
-    assert classify_action_tier("Create a new directory for the build artifacts") == ACTION_TIER_WRITE
+    assert classify_action_tier("mkdir -p /tmp/build-artifacts") == ACTION_TIER_WRITE
 
 
-def test_tier_write_update():
-    assert classify_action_tier("Update the config file with the new API endpoint") == ACTION_TIER_WRITE
+def test_tier_write_commit():
+    assert classify_action_tier("git commit the staged changes") == ACTION_TIER_WRITE
+
+
+def test_tier_write_natural_language_passes():
+    """Natural language 'write', 'save', 'create', 'update' should NOT trigger WRITE."""
+    assert classify_action_tier("Write a summary of the findings") == ACTION_TIER_READ
+    assert classify_action_tier("Save your analysis for later review") == ACTION_TIER_READ
+    assert classify_action_tier("Create a plan for the next sprint") == ACTION_TIER_READ
+    assert classify_action_tier("Update the team on progress") == ACTION_TIER_READ
 
 
 def test_tier_destroy_rm():
@@ -283,7 +291,7 @@ def test_hitl_policy_read_step_no_gate():
 
 
 def test_hitl_policy_write_step_warn():
-    p = hitl_policy("Save the updated config to workspace/poe.json")
+    p = hitl_policy("write to file /workspace/poe.json with the updated config")
     assert p["tier"] == ACTION_TIER_WRITE
     assert p["gate"] == "warn"
     assert p["allowed"] is True

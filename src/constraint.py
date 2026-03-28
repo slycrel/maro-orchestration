@@ -189,9 +189,9 @@ def _load_dynamic_constraints() -> List[tuple]:
     shape as _ALL_PATTERNS entries.  Returns empty list if file missing or unreadable.
     """
     try:
-        from orch import orch_root
-        path = orch_root() / "memory" / "dynamic-constraints.jsonl"
-    except Exception:
+        from orch_items import memory_dir
+        path = memory_dir() / "dynamic-constraints.jsonl"
+    except ImportError:
         path = Path.cwd() / "memory" / "dynamic-constraints.jsonl"
 
     if not path.exists():
@@ -336,23 +336,23 @@ _EXTERNAL_TIER_PATTERNS = [
 ]
 
 # Patterns that indicate file/state writes (persistent but not irreversible).
+# Same principle as DESTROY/EXTERNAL: require system context so that
+# "save your findings" or "write a summary" don't trigger WRITE tier.
 _WRITE_TIER_PATTERNS = [
-    r"\bwrite\b",
-    r"\bsave\b",
-    r"\bcreate\b",
-    r"\bappend\b",
-    r"\bmodify\b",
-    r"\bedit\b",
-    r"\bupdate\b",
+    r"\bwrite\s+(to\s+)?(file|disk|config|/)",
+    r"\bsave\s+(to\s+)?(file|disk|/)",
+    r"\bappend\s+(to\s+)?(file|log|/)",
     r"\bmkdir\b",
-    r"\btouch\b",
-    r"\bcopy\b",
-    r"\bmove\b",
-    r"\brename\b",
+    r"\btouch\s+/",
+    r"\bcopy\s+(file|/)",
+    r"\bmove\s+(file|/)",
+    r"\brename\s+(file|/)",
     r"\binsert\s+into\b",
-    r"\bcommit\b",
+    r"\bgit\s+commit\b",
     r"\bchmod\b",
     r"\bchown\b",
+    r"\bsed\s+-i\b",
+    r"\btee\s+(-a\s+)?/",
 ]
 
 # READ is the default — no explicit patterns needed (anything not matched above).

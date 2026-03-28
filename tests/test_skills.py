@@ -62,7 +62,7 @@ def _make_skill(name: str = "test skill", triggers=None, steps=None) -> Skill:
         trigger_patterns=triggers or ["test pattern", "sample trigger"],
         steps_template=steps or ["Step 1: research", "Step 2: implement", "Step 3: verify"],
         source_loop_ids=["loop001"],
-        created_at=datetime.utcnow().isoformat(),
+        created_at=datetime.now(timezone.utc).isoformat(),
         use_count=0,
         success_rate=1.0,
     )
