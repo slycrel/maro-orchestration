@@ -624,7 +624,7 @@ Currently, persona selection requires explicit `/research`, `/build`, `/ops` com
 
 ---
 
-### Phase 32: Skills Auto-Promotion + Self-Rewriting *(PARTIAL)*
+### Phase 32: Skills Auto-Promotion + Self-Rewriting *(DONE)*
 
 Skills are manually seeded or extracted as provisional. Promotion to established requires pass^3 ≥ 0.7 but the mechanism isn't wired to fire automatically. The larger opportunity (from Memento-Skills research — `docs/research/sumanth-agent-research.md`) is making skills self-rewriting: when a skill fails, the agent reflects and rewrites it.
 
@@ -638,23 +638,25 @@ Skills are manually seeded or extracted as provisional. Promotion to established
 - [x] **Skills dashboard**: `poe-skills --status` shows provisional/established counts, circuit state breakdown (closed/half-open/open), rewrite candidates, per-skill utility + consecutive failure/success stats.
 - [x] Wired into `agent_loop.py`: skill utility updated on step done/blocked. `run_skill_maintenance()` called at end of each evolver cycle.
 
-**Still pending:**
-- [ ] **Skill synthesis**: when no existing skill covers a new step type, create one and add to provisional registry (the skill-creator bootstraps itself)
+- [x] **Skill synthesis**: `synthesize_skill()` in `evolver.py` — when no skill matched at loop start, LLM synthesizes a new provisional skill from the goal + outcome summary after successful completion. Deduplicates by name. Wired in `agent_loop.py` via `_had_no_matching_skill` flag.
 
-**Artifact:** `utility_score` + circuit breaker + `attribute_failure_to_skills()` in `skills.py`; `rewrite_skill()` + `run_skill_maintenance()` in `evolver.py`; `poe-skills --status` CLI
+**Artifact:** `utility_score` + circuit breaker + `attribute_failure_to_skills()` in `skills.py`; `rewrite_skill()` + `synthesize_skill()` + `run_skill_maintenance()` in `evolver.py`; `poe-skills --status` CLI
 
 ---
 
-### Phase 33: Sub-Agent Token Self-Improvement *(PLANNED)*
+### Phase 33: Sub-Agent Token Self-Improvement *(PARTIAL)*
 
 The evolver currently optimizes for success rate. It should also optimize for token cost — detecting step patterns that burn disproportionate tokens and proposing cheaper alternatives.
 
-- [ ] **Per-step cost recording**: `StepOutcome.tokens_in/out` → write to `memory/step-costs.jsonl` with step_type heuristic (classify as: research, summarize, write, verify, etc.)
-- [ ] **Cost analyzer in evolver**: identify step types with cost > 2x median; generate `cost_optimization` suggestion type
+**Shipped (Phase 33 first cut — March 2026):**
+- [x] **Per-step cost recording**: `classify_step_type()` heuristic (8 categories); `record_step_cost()` writes to `memory/step-costs.jsonl`; `load_step_costs()` + `analyze_step_costs()` (lower-median 2x threshold). Wired in `agent_loop.py` on step done/blocked.
+- [x] **Cost analyzer**: `analyze_step_costs()` identifies expensive step types relative to median; returns summary dict with `expensive_types` list.
+
+**Still pending:**
 - [ ] **Cheap-first principle in decomposer**: inject step cost awareness into `_DECOMPOSE_SYSTEM` — favor steps that can be answered from pre-fetched context
 - [ ] **Token budget per loop**: optional `token_budget` arg to `run_agent_loop()`; abort loop gracefully if exceeded
 
-**Artifact:** `step-costs.jsonl`, `cost_optimization` suggestion type in `evolver.py`, `token_budget` in `agent_loop.py`
+**Artifact:** `step-costs.jsonl`, `classify_step_type()` + `record_step_cost()` + `analyze_step_costs()` in `metrics.py`
 
 ---
 
@@ -676,23 +678,20 @@ P2 items (infrastructure):
 
 ---
 
-### Phase 34: Overnight Autonomous Mission Execution *(PLANNED)*
+### Phase 34: Overnight Autonomous Mission Execution *(PARTIAL)*
 
 The core north star: Jeremy sets a mission before sleeping; the system executes autonomously through the night, recovers from blocks, and reports in the morning. No step supervision required.
 
-Currently: missions exist (`mission.py`) but autonomous drain requires manual trigger. Missing: a cron/heartbeat-driven mission runner that:
-- Picks up incomplete missions from the queue
-- Runs milestones in sequence (or parallel where safe)
-- Self-recovers from blocks using the roadblock resilience pattern
-- Sends Telegram progress update at natural milestones (not every step)
-- Writes a morning briefing when done or stuck
+**Shipped (Phase 34 first cut — March 2026):**
+- [x] **Mission drain detection**: `pending_missions()` — scans all projects, returns missions with remaining milestones (excludes done). Heartbeat calls this every `mission_check_every=5` ticks and logs count.
+- [x] **Morning briefing**: `morning_briefing()` — Telegram-ready status summary bucketed as Completed / In progress / Queued, with UTC timestamp header and `max_missions` cap per section.
 
-- [ ] **Mission drain in heartbeat**: `heartbeat.py` checks for incomplete missions every N ticks; spawns background process if none running
+**Still pending:**
+- [ ] **Autonomous mission drain**: heartbeat spawns a background process to actually run a pending mission (not just detect it)
 - [ ] **Milestone-level progress notifications**: Telegram message per milestone completion (not per step) to avoid noise
-- [ ] **Morning briefing format**: on mission completion or irrecoverable stuck, send structured summary: milestones done, time elapsed, what's left, any blockers with explanation
-- [ ] **Safe interruption**: `/stop` halts the current step; mission state is persisted so it can be resumed
+- [ ] **Safe interruption**: `/stop` halts the current step cleanly; mission state persisted for resume
 
-**Artifact:** mission drain in `heartbeat.py`, milestone notification hooks, morning briefing formatter
+**Artifact:** `pending_missions()` + `morning_briefing()` in `mission.py`; mission check loop in `heartbeat.py`
 
 ---
 
