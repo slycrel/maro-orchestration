@@ -20,28 +20,36 @@ Works standalone or alongside OpenClaw, Telegram, Slack, or any other interface 
 
 ## Architecture
 
-```
-Goal arrives (Telegram / Slack / CLI / Python API)
-      ↓
-handle.py           ← NOW/AGENDA classification + routing
-      ↓
-  ┌───┴────────────────────────────────────────────────────┐
-  │ NOW lane (1-shot)       AGENDA lane (agent_loop.py)    │
-  │                           ↓                            │
-  │                    decompose goal → steps               │
-  │                           ↓                            │
-  │                    for each step:                       │
-  │                      pre-fetch URLs (web_fetch.py)      │
-  │                      execute (claude subprocess)        │
-  │                      hook reviewers (hooks.py)          │
-  │                      record outcome (memory.py)         │
-  │                      extract lessons                    │
-  │                      inject into next step              │
-  └────────────────────────────────────────────────────────┘
-      ↓
-poe.py (CEO layer) — distill + report to user
-      ↓
-Telegram / Slack / stdout
+```mermaid
+flowchart TD
+    IN["Goal arrives\nTelegram / Slack / CLI / Python API"]
+    IN --> H[handle.py\nNOW / AGENDA classification]
+
+    H --> NOW["NOW lane\n1-shot response"]
+    H --> AL[agent_loop.py\nAutonomous executor]
+
+    subgraph LOOP["Agent Loop"]
+        AL --> RC["Rules check\nrules.jsonl — zero-cost match"]
+        RC -->|hit| STEPS
+        RC -->|miss| DC["_decompose()\nLLM step planner"]
+        DC --> STEPS["Steps queue\nparallel fan-out where independent"]
+
+        STEPS --> WK["Workers\nresearch · build · ops · reporter"]
+        WK --> INS[Inspector\nvalidates output]
+        INS -->|pass| REC["Record outcome\noutcomes.jsonl"]
+        INS -->|fail| WK
+        REC --> MEM["Memory\nlessons · skills · events"]
+    end
+
+    MEM --> EV["Evolver\nmeta-improvement every ~10 heartbeats"]
+    EV -->|new skill| MEM
+    EV -->|guardrail| CON[constraint.py\nHITL gating]
+
+    LOOP --> CEO["poe.py — CEO layer\ndistil + report"]
+    NOW --> CEO
+    CEO --> OUT["Telegram / Slack / stdout"]
+
+    HB["Heartbeat\nsheriff · mission drain\nmorning briefing"] -.->|monitors| LOOP
 ```
 
 ### LLM backends (`llm.py`)

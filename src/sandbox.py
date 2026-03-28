@@ -236,13 +236,8 @@ def _get_venv_python(tmp_dir: Path) -> Optional[str]:
 # ---------------------------------------------------------------------------
 
 def _audit_log_path() -> Path:
-    try:
-        from orch import orch_root
-        d = orch_root() / "memory"
-    except Exception:
-        d = Path.cwd() / "memory"
-    d.mkdir(parents=True, exist_ok=True)
-    return d / "sandbox-audit.jsonl"
+    from orch_items import memory_dir
+    return memory_dir() / "sandbox-audit.jsonl"
 
 
 def _write_audit(

@@ -66,13 +66,8 @@ class Rule:
 # ---------------------------------------------------------------------------
 
 def _rules_path() -> Path:
-    try:
-        from orch import orch_root
-        d = orch_root() / "memory"
-        d.mkdir(parents=True, exist_ok=True)
-        return d / "rules.jsonl"
-    except Exception:
-        return Path.cwd() / "memory" / "rules.jsonl"
+    from orch_items import memory_dir
+    return memory_dir() / "rules.jsonl"
 
 
 def load_rules(active_only: bool = True) -> List[Rule]:

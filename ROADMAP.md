@@ -696,7 +696,7 @@ The core north star: Jeremy sets a mission before sleeping; the system executes 
 
 ---
 
-### Phase 36: Agent Command Center — Observability Dashboard *(PARTIAL)*
+### Phase 36: Agent Command Center — Observability Dashboard *(DONE)*
 
 *From OpenClaw TASKS.md backlog (March 2026): "Build v1 agent command center: ingest orchestrator run events/logs and render a live dashboard of agents/jobs/queue."*
 
@@ -707,8 +707,9 @@ Currently `poe-observe` gives a static snapshot. The missing piece is a live eve
 - [x] **`poe-observe events [--limit N]`**: new CLI subcommand displays recent events with status icons (✓/✗/→), loop_id, and token counts. Wired into `agent_loop.py` at all key lifecycle points.
 - [x] **`poe-observe watch`**: already existed — periodic full-snapshot refresh (poll interval configurable).
 
-**Still pending:**
-- [ ] **Web dashboard (v1)**: local FastAPI server serving events over HTTP. Plain HTML table + live-refresh. Accessible from browser during overnight runs.
+- [x] **Web dashboard (v1)**: `poe-observe serve [--host HOST] [--port PORT]` — stdlib `http.server`, no deps. Serves live HTML dashboard at default `http://127.0.0.1:7700`; auto-refreshes every 5s. Shows loop state, heartbeat, memory stats, recent outcomes, live event table. `/api/snapshot` JSON endpoint for programmatic access.
+
+**Artifact:** `serve_dashboard()` + `_snapshot_json()` + `_DASHBOARD_HTML` in `observe.py`; `poe-observe serve` CLI
 
 **Artifact:** `write_event()` + `print_events_tail()` in `observe.py`; `poe-observe events` CLI; wired in `agent_loop.py`
 
@@ -725,6 +726,103 @@ Currently `poe-observe` gives a static snapshot. The missing piece is a live eve
 Auto-delete on immediate failure and synthesis rate-limiting are de-scoped (overkill for current usage — the name dedup and circuit breaker provide sufficient protection).
 
 **Artifact:** `synthesize_skill()` in `evolver.py`; `_had_no_matching_skill` wiring in `agent_loop.py`
+
+---
+
+### Phase 38: Subpackage Structure + Code Consolidation *(PARTIAL)*
+
+*"30+ flat files work until they don't. The seams are already showing."*
+
+The flat `src/` layout made sense at v0.1. At 46 files / 27K lines it creates three real problems: import ambiguity, test isolation friction, and cognitive load when navigating. The path forward is surgical — no flag days.
+
+**Proposed grouping:**
+
+```
+src/
+  core/          orch.py, config.py, cli_args.py, bootstrap.py, boot_protocol.py
+  agents/        agent_loop.py, director.py, workers.py, persona.py, inspector.py
+  memory/        memory.py, skills.py, rules.py, knowledge.py, gc_memory.py
+  ops/           heartbeat.py, sheriff.py, mission.py, background.py, autonomy.py
+  io/            telegram_listener.py, slack_listener.py, gateway.py, router.py, poe.py
+  tools/         web_fetch.py, sandbox.py, constraint.py, security.py
+  analytics/     metrics.py, eval.py, observe.py, attribution.py
+  evolution/     evolver.py, hooks.py
+```
+
+**Strategy:** add `__init__.py` re-exports so existing flat imports keep working during transition. Tests stay green throughout.
+
+**Shipped (Phase 38 first cut — March 2026):**
+- [x] **`memory_dir()` consolidated**: added canonical `memory_dir()` to `orch_items.py` (resolution order: `POE_MEMORY_DIR` env → `orch_root()/memory` → `cwd/memory`). Eliminated 12 copies of the same try/except fallback chain across `memory.py`, `gc_memory.py`, `observe.py`, `router.py`, `inspector.py` (×4), `attribution.py`, `eval.py`, `sandbox.py`, `skills.py` (×3), `evolver.py` (×2), `rules.py`. Re-exported from `orch.py`.
+- [x] README architecture diagram (Mermaid) added.
+
+**Still pending:**
+- [ ] Physical subpackage move (one package at a time, tests green after each)
+
+---
+
+### Phase 39: OSS Hygiene *(DONE)*
+
+MIT license, .github polish, architecture diagram in README, Polymarket example project.
+
+**Shipped (Phase 39 — March 2026):**
+- [x] **MIT LICENSE** file added
+- [x] **README architecture diagram** — Mermaid flowchart showing goal → decompose → workers → inspector → memory → evolver loop
+- [x] **`.github/`** already had CI, bug/feature templates, CODEOWNERS, PR template — confirmed complete
+
+**Shipped (Phase 39 — March 2026):**
+- [x] **MIT LICENSE** added
+- [x] **README architecture diagram** — Mermaid flowchart of full goal→execute→learn→evolve loop
+- [x] `.github/` already complete (CI, bug/feature templates, CODEOWNERS, PR template)
+
+**Still pending:**
+- [ ] Polymarket bot example in `projects/` (good first external showcase)
+- [ ] GitHub repo topics/tags (do manually)
+
+---
+
+### Phase 40: Pluggable Memory Backend *(TODO)*
+
+*Keep jsonl as default. Add SQLite as an optional flag for better querying.*
+
+Current jsonl is simple and reliable for a single-box setup. The pain points hit when: (a) GC needs to scan thousands of lessons efficiently, (b) "show me every Polymarket lesson" requires grep instead of a query, (c) concurrent writers need real row-level locking.
+
+**Plan:**
+- `MEMORY_BACKEND=sqlite` env var (or `config.toml` key) switches `memory.py` storage layer
+- SQLite schema mirrors jsonl structure exactly — same fields, no new abstractions
+- jsonl stays default; sqlite is opt-in
+- `poe-memory migrate` CLI command converts existing jsonl → sqlite
+- TF-IDF ranking stays pure stdlib (no new deps)
+
+---
+
+### Phase 41: Tool Registry + Expanded Function Calling *(TODO)*
+
+*`web_fetch` and `sandbox` exist. Make tools discoverable by workers.*
+
+Today workers receive a fixed prompt with hardcoded capabilities. A tool registry lets workers discover what's available at runtime and the LLM can select the right tool per step.
+
+**Plan:**
+- `src/tools.py`: `ToolRegistry` dataclass (name, description, input_schema, call fn)
+- Register existing tools: `web_fetch`, `sandbox_exec`, `git_read`, `file_read`
+- Add safe primitives: `file_write` (sandboxed path), `shell_read` (read-only shell)
+- Inject registry into `_decompose()` as a capabilities block — workers can reference tool names in steps
+- Implementation: swipe OpenAI function-calling JSON schema format (4 fields: name, description, parameters, required) — no SDK needed
+- No new deps: stdlib `json` + existing adapter tool-call support
+
+---
+
+### Phase 42: Nightly Eval Wired to Evolver *(TODO)*
+
+*`eval.py` exists. Make it run automatically and feed failures back into evolver.*
+
+Currently eval is a one-shot CLI command. The loop is: run eval → find regressions → evolver proposes fixes → human applies. The missing piece is automation.
+
+**Plan:**
+- Heartbeat triggers `run_nightly_eval()` once per 24h window (after midnight)
+- `eval.py` runs against a curated set of past goals (stored in `memory/eval-corpus.jsonl`)
+- Failures generate `evolver.Suggestion` entries with `category="eval_regression"` and `confidence=0.9`
+- These surface in `poe-evolver --list` and auto-apply if confidence >= 0.8 (existing mechanism)
+- Eval corpus seeded from `outcomes.jsonl` successes with success_rate >= 0.9
 
 ---
 

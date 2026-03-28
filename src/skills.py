@@ -203,10 +203,8 @@ def _orch():
 # ---------------------------------------------------------------------------
 
 def _skills_path() -> Path:
-    o = _orch()
-    mem = o.orch_root() / "memory"
-    mem.mkdir(parents=True, exist_ok=True)
-    return mem / "skills.jsonl"
+    from orch_items import memory_dir
+    return memory_dir() / "skills.jsonl"
 
 
 def _skill_to_dict(skill: Skill) -> dict:
@@ -606,15 +604,8 @@ def promote_skill_tier(skill_name: str) -> bool:
 # ---------------------------------------------------------------------------
 
 def _skill_stats_path() -> Path:
-    try:
-        from orch import orch_root
-        d = orch_root() / "memory"
-        d.mkdir(parents=True, exist_ok=True)
-        return d / "skill-stats.jsonl"
-    except Exception:
-        d = Path.cwd() / "memory"
-        d.mkdir(parents=True, exist_ok=True)
-        return d / "skill-stats.jsonl"
+    from orch_items import memory_dir
+    return memory_dir() / "skill-stats.jsonl"
 
 
 def get_all_skill_stats() -> List[SkillStats]:
@@ -1001,15 +992,8 @@ def update_skill_section(skill: Skill, section: str, new_content: str) -> Skill:
 # ---------------------------------------------------------------------------
 
 def _skill_tests_path() -> Path:
-    try:
-        from orch import orch_root
-        d = orch_root() / "memory"
-        d.mkdir(parents=True, exist_ok=True)
-        return d / "skill-tests.jsonl"
-    except Exception:
-        d = Path.cwd() / "memory"
-        d.mkdir(parents=True, exist_ok=True)
-        return d / "skill-tests.jsonl"
+    from orch_items import memory_dir
+    return memory_dir() / "skill-tests.jsonl"
 
 
 def _save_skill_tests(tests: List[SkillTestCase]) -> None:

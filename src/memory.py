@@ -80,15 +80,8 @@ class Lesson:
 # ---------------------------------------------------------------------------
 
 def _memory_dir() -> Path:
-    try:
-        from orch import orch_root
-        d = orch_root() / "memory"
-        d.mkdir(parents=True, exist_ok=True)
-        return d
-    except Exception:
-        d = Path.cwd() / "memory"
-        d.mkdir(parents=True, exist_ok=True)
-        return d
+    from orch_items import memory_dir
+    return memory_dir()
 
 
 def _outcomes_path() -> Path:

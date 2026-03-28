@@ -37,16 +37,8 @@ DEFAULT_NARRATIVE_RETAIN_DAYS = 180    # keep daily .md logs for 180 days
 # ---------------------------------------------------------------------------
 
 def _memory_dir() -> Path:
-    try:
-        from orch import orch_root
-        return orch_root() / "memory"
-    except Exception:
-        pass
-    try:
-        from config import memory_dir
-        return memory_dir()
-    except Exception:
-        return Path.home() / ".poe" / "workspace" / "memory"
+    from orch_items import memory_dir
+    return memory_dir()
 
 
 def _outcomes_path() -> Path:

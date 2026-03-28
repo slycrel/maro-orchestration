@@ -256,15 +256,8 @@ def run_benchmark(
 
 def _eval_results_path() -> Path:
     """Path to eval results file."""
-    try:
-        from orch import orch_root
-        d = orch_root() / "memory"
-        d.mkdir(parents=True, exist_ok=True)
-        return d / "eval-results.jsonl"
-    except Exception:
-        d = Path.cwd() / "memory"
-        d.mkdir(parents=True, exist_ok=True)
-        return d / "eval-results.jsonl"
+    from orch_items import memory_dir
+    return memory_dir() / "eval-results.jsonl"
 
 
 def run_eval(

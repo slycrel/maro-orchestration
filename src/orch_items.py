@@ -127,6 +127,31 @@ def orch_root() -> Path:
     return ws_root() / "prototypes" / "poe-orchestration"
 
 
+def memory_dir() -> Path:
+    """Canonical memory directory — used by memory.py, observe.py, gc_memory.py, router.py.
+
+    Resolution order:
+      1. orch_root()/memory  (standard layout)
+      2. $POE_MEMORY_DIR     (explicit override)
+      3. cwd/memory          (fallback for tests / portable use)
+
+    Always creates the directory.  Never raises.
+    """
+    override = os.environ.get("POE_MEMORY_DIR")
+    if override:
+        p = Path(override).expanduser().resolve()
+        p.mkdir(parents=True, exist_ok=True)
+        return p
+    p = orch_root() / "memory"
+    try:
+        p.mkdir(parents=True, exist_ok=True)
+        return p
+    except Exception:
+        fallback = Path.cwd() / "memory"
+        fallback.mkdir(parents=True, exist_ok=True)
+        return fallback
+
+
 def projects_root() -> Path:
     return orch_root() / "projects"
 

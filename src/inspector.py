@@ -357,52 +357,26 @@ class InspectionReport:
 # ---------------------------------------------------------------------------
 
 def _inspection_log_path() -> Path:
-    try:
-        from orch import orch_root
-        d = orch_root() / "memory"
-        d.mkdir(parents=True, exist_ok=True)
-        return d / "inspection-log.jsonl"
-    except Exception:
-        d = Path.cwd() / "memory"
-        d.mkdir(parents=True, exist_ok=True)
-        return d / "inspection-log.jsonl"
+    from orch_items import memory_dir
+    return memory_dir() / "inspection-log.jsonl"
 
 
 def _inspector_report_log_path() -> Path:
     """memory/inspector-log.jsonl — for spec InspectorReport objects."""
-    try:
-        from orch import orch_root
-        d = orch_root() / "memory"
-        d.mkdir(parents=True, exist_ok=True)
-        return d / "inspector-log.jsonl"
-    except Exception:
-        d = Path.cwd() / "memory"
-        d.mkdir(parents=True, exist_ok=True)
-        return d / "inspector-log.jsonl"
+    from orch_items import memory_dir
+    return memory_dir() / "inspector-log.jsonl"
 
 
 def _friction_signals_log_path() -> Path:
     """memory/friction-signals.jsonl — running friction signal log."""
-    try:
-        from orch import orch_root
-        d = orch_root() / "memory"
-        d.mkdir(parents=True, exist_ok=True)
-        return d / "friction-signals.jsonl"
-    except Exception:
-        d = Path.cwd() / "memory"
-        d.mkdir(parents=True, exist_ok=True)
-        return d / "friction-signals.jsonl"
+    from orch_items import memory_dir
+    return memory_dir() / "friction-signals.jsonl"
 
 
 def _suggestions_path() -> Path:
     """Path to suggestions.jsonl — shared with evolver."""
-    try:
-        from orch import orch_root
-        d = orch_root() / "memory"
-        d.mkdir(parents=True, exist_ok=True)
-        return d / "suggestions.jsonl"
-    except Exception:
-        return Path.cwd() / "memory" / "suggestions.jsonl"
+    from orch_items import memory_dir
+    return memory_dir() / "suggestions.jsonl"
 
 
 # ---------------------------------------------------------------------------

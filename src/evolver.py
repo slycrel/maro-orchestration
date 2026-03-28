@@ -129,24 +129,14 @@ class EvolverReport:
 # ---------------------------------------------------------------------------
 
 def _suggestions_path() -> Path:
-    try:
-        from orch import orch_root
-        d = orch_root() / "memory"
-        d.mkdir(parents=True, exist_ok=True)
-        return d / "suggestions.jsonl"
-    except Exception:
-        return Path.cwd() / "memory" / "suggestions.jsonl"
+    from orch_items import memory_dir
+    return memory_dir() / "suggestions.jsonl"
 
 
 def _dynamic_constraints_path() -> Path:
     """Path to evolver-generated dynamic constraint patterns."""
-    try:
-        from orch import orch_root
-        d = orch_root() / "memory"
-        d.mkdir(parents=True, exist_ok=True)
-        return d / "dynamic-constraints.jsonl"
-    except Exception:
-        return Path.cwd() / "memory" / "dynamic-constraints.jsonl"
+    from orch_items import memory_dir
+    return memory_dir() / "dynamic-constraints.jsonl"
 
 
 def load_suggestions(limit: int = 20) -> List[Suggestion]:

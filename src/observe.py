@@ -8,11 +8,13 @@ poe-observe audit        → sandbox audit log tail
 poe-observe memory       → memory tier stats (same data as Stage 2 of poe-knowledge status)
 poe-observe events       → tail the live event stream (memory/events.jsonl)
 poe-observe watch        → periodic full-snapshot refresh (like `watch`)
+poe-observe serve        → local HTTP dashboard (default port 7700); no deps, stdlib only
 
 All reads are local JSONL/JSON — no LLM calls, no side effects.
 
 Phase 36: write_event() appends structured step/loop events to memory/events.jsonl.
           Called from agent_loop.py after each step completion.
+          serve_dashboard() exposes a browser-friendly live view via stdlib http.server.
 """
 
 from __future__ import annotations
@@ -29,16 +31,8 @@ from typing import Any, Dict, List, Optional
 # ---------------------------------------------------------------------------
 
 def _memory_dir() -> Path:
-    try:
-        from orch import orch_root
-        return orch_root() / "memory"
-    except Exception:
-        pass
-    try:
-        from config import memory_dir
-        return memory_dir()
-    except Exception:
-        return Path.home() / ".poe" / "workspace" / "memory"
+    from orch_items import memory_dir
+    return memory_dir()
 
 
 def _loop_lock_path() -> Path:
@@ -364,6 +358,270 @@ def print_events_tail(limit: int = 20) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Phase 36: stdlib HTTP dashboard — no deps
+# ---------------------------------------------------------------------------
+
+_DASHBOARD_HTML = """\
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Poe — Agent Command Center</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root { --bg:#0d1117; --panel:#161b22; --border:#30363d; --text:#c9d1d9;
+          --green:#3fb950; --red:#f85149; --yellow:#d29922; --blue:#58a6ff;
+          --dim:#8b949e; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font: 13px/1.5 'Cascadia Code', 'SF Mono', monospace; padding: 16px; }
+  h1 { font-size: 15px; color: var(--blue); margin-bottom: 16px; }
+  h2 { font-size: 12px; color: var(--dim); text-transform: uppercase; letter-spacing: .08em;
+       margin: 16px 0 6px; border-bottom: 1px solid var(--border); padding-bottom: 4px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 12px; }
+  .panel.full { grid-column: 1 / -1; }
+  .badge { display: inline-block; padding: 1px 6px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+  .badge-green { background: #1a3a1a; color: var(--green); }
+  .badge-red   { background: #3a1a1a; color: var(--red); }
+  .badge-yellow{ background: #3a2d00; color: var(--yellow); }
+  .badge-blue  { background: #0d2044; color: var(--blue); }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th { text-align: left; color: var(--dim); padding: 3px 6px; font-weight: normal; }
+  td { padding: 3px 6px; border-top: 1px solid var(--border); word-break: break-word; }
+  .status-done  { color: var(--green); }
+  .status-stuck { color: var(--red); }
+  .status-start { color: var(--blue); }
+  #ticker { font-size: 11px; color: var(--dim); margin-top: 12px; }
+  #loop-goal { font-size: 14px; color: var(--text); margin: 4px 0; }
+  .idle { color: var(--dim); font-style: italic; }
+  .kv { display: flex; gap: 8px; flex-wrap: wrap; }
+  .kv span { white-space: nowrap; }
+  .key { color: var(--dim); }
+</style>
+</head>
+<body>
+<h1>&#x25B6; Poe — Agent Command Center</h1>
+<div class="grid">
+
+  <div class="panel">
+    <h2>Active Loop</h2>
+    <div id="loop-status"></div>
+  </div>
+
+  <div class="panel">
+    <h2>Heartbeat</h2>
+    <div id="hb-status"></div>
+  </div>
+
+  <div class="panel">
+    <h2>Memory</h2>
+    <div id="memory-status"></div>
+  </div>
+
+  <div class="panel">
+    <h2>Recent Outcomes</h2>
+    <div id="outcomes-status"></div>
+  </div>
+
+  <div class="panel full">
+    <h2>Live Events</h2>
+    <table id="events-table">
+      <thead><tr><th>Time</th><th>Loop</th><th>Type</th><th>Status</th><th>Step</th><th>Tokens</th></tr></thead>
+      <tbody id="events-body"></tbody>
+    </table>
+  </div>
+
+</div>
+<div id="ticker">Loading...</div>
+
+<script>
+function badge(text, cls) {
+  return `<span class="badge badge-${cls}">${text}</span>`;
+}
+function esc(s) {
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+async function refresh() {
+  try {
+    const r = await fetch('/api/snapshot');
+    const d = await r.json();
+
+    // Loop
+    const loop = d.loop || {};
+    let loopHtml;
+    if (loop.running) {
+      loopHtml = `${badge('RUNNING','green')} pid=${esc(loop.pid||'?')}
+        <div id="loop-goal">${esc(loop.goal||'(no goal)')}</div>
+        <div class="kv"><span><span class="key">id</span> ${esc((loop.loop_id||'?').slice(0,12))}</span>
+        <span><span class="key">started</span> ${esc(loop.started_at||'').slice(0,19)}</span></div>`;
+    } else {
+      loopHtml = `<span class="idle">idle — no loop.lock</span>`;
+    }
+    document.getElementById('loop-status').innerHTML = loopHtml;
+
+    // Heartbeat
+    const hb = d.heartbeat || {};
+    let hbHtml;
+    if (hb.available) {
+      const st = hb.status || '?';
+      const cls = st === 'ok' ? 'green' : st === 'warn' ? 'yellow' : 'red';
+      hbHtml = `${badge(st.toUpperCase(), cls)} updated ${esc(hb.updated_at||hb.timestamp||'?').slice(0,19)}`;
+      if (hb.message) hbHtml += `<div>${esc(hb.message)}</div>`;
+    } else {
+      hbHtml = `<span class="idle">no heartbeat-state.json</span>`;
+    }
+    document.getElementById('hb-status').innerHTML = hbHtml;
+
+    // Memory
+    const mem = d.memory || {};
+    if (mem.error) {
+      document.getElementById('memory-status').innerHTML = `<span class="status-stuck">${esc(mem.error)}</span>`;
+    } else {
+      const med = (mem.medium||{});
+      const lng = (mem.long||{});
+      let memHtml = `<div class="kv">
+        <span><span class="key">medium</span> ${med.count||0} lessons</span>
+        <span><span class="key">long</span> ${lng.count||0} lessons</span>`;
+      if (med.avg_score != null) memHtml += `<span><span class="key">avg</span> ${esc(med.avg_score)}</span>`;
+      memHtml += `</div>`;
+      if (med.promote_candidates) memHtml += `<div>${badge(med.promote_candidates+' to promote','blue')}</div>`;
+      if (med.gc_candidates) memHtml += `<div>${badge(med.gc_candidates+' near GC','yellow')}</div>`;
+      document.getElementById('memory-status').innerHTML = memHtml;
+    }
+
+    // Outcomes
+    const outcomes = d.outcomes || [];
+    if (!outcomes.length) {
+      document.getElementById('outcomes-status').innerHTML = '<span class="idle">none</span>';
+    } else {
+      let rows = outcomes.slice(0,8).map(o => {
+        const ts = (o.timestamp||o.recorded_at||'').slice(11,19);
+        const st = o.status||o.outcome||'?';
+        const cls = st==='done'?'status-done':st==='stuck'?'status-stuck':'';
+        const goal = esc((o.goal||o.task||'?').slice(0,55));
+        return `<tr><td>${ts}</td><td class="${cls}">${esc(st)}</td><td>${goal}</td></tr>`;
+      }).join('');
+      document.getElementById('outcomes-status').innerHTML =
+        `<table><thead><tr><th>Time</th><th>Status</th><th>Goal</th></tr></thead><tbody>${rows}</tbody></table>`;
+    }
+
+    // Events
+    const events = d.events || [];
+    const tbody = document.getElementById('events-body');
+    tbody.innerHTML = events.slice(-30).reverse().map(e => {
+      const ts = (e.ts||'').slice(11,19);
+      const lid = esc((e.loop_id||'').slice(0,8));
+      const et = esc(e.event_type||'?');
+      const st = e.status||'';
+      const stCls = st==='done'?'status-done':st==='stuck'?'status-stuck':st==='start'?'status-start':'';
+      const step = esc((e.step||'').slice(0,60));
+      const tok = (e.tokens_in||0)+(e.tokens_out||0);
+      return `<tr><td>${ts}</td><td>${lid}</td><td>${et}</td><td class="${stCls}">${esc(st)}</td><td>${step}</td><td>${tok||''}</td></tr>`;
+    }).join('');
+
+  } catch(err) {
+    document.getElementById('ticker').textContent = 'Error: ' + err;
+  }
+  document.getElementById('ticker').textContent =
+    'Last updated: ' + new Date().toLocaleTimeString();
+}
+refresh();
+setInterval(refresh, 5000);
+</script>
+</body>
+</html>
+"""
+
+
+def _snapshot_json(events_limit: int = 50) -> dict:
+    """Collect all data for the dashboard API response."""
+    loop = _read_loop_state()
+    hb = _read_heartbeat()
+    outcomes = _read_recent_outcomes(limit=15)
+    mem = _read_memory_stats()
+
+    events: List[dict] = []
+    path = _events_path()
+    if path.exists():
+        try:
+            for line in path.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if line:
+                    try:
+                        events.append(json.loads(line))
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+    events = events[-events_limit:]
+
+    return {
+        "loop": loop,
+        "heartbeat": hb,
+        "outcomes": outcomes,
+        "memory": mem,
+        "events": events,
+    }
+
+
+def serve_dashboard(host: str = "127.0.0.1", port: int = 7700) -> None:
+    """Serve the live dashboard over HTTP using stdlib only.
+
+    GET /          → HTML dashboard (auto-refreshes every 5s via JS)
+    GET /api/snapshot → JSON snapshot (loop + heartbeat + events + outcomes + memory)
+
+    No external dependencies. Runs until Ctrl-C.
+    """
+    import http.server
+    import threading
+
+    html_bytes = _DASHBOARD_HTML.encode("utf-8")
+
+    class _Handler(http.server.BaseHTTPRequestHandler):
+        def log_message(self, fmt: str, *args: Any) -> None:  # type: ignore[override]
+            pass  # silence access log
+
+        def do_GET(self) -> None:  # noqa: N802
+            if self.path == "/" or self.path == "/index.html":
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(html_bytes)))
+                self.end_headers()
+                self.wfile.write(html_bytes)
+            elif self.path.startswith("/api/snapshot"):
+                try:
+                    data = _snapshot_json()
+                    body = json.dumps(data).encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.send_header("Cache-Control", "no-cache")
+                    self.end_headers()
+                    self.wfile.write(body)
+                except Exception as exc:
+                    err = json.dumps({"error": str(exc)}).encode("utf-8")
+                    self.send_response(500)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(err)))
+                    self.end_headers()
+                    self.wfile.write(err)
+            else:
+                self.send_response(404)
+                self.end_headers()
+
+    server = http.server.HTTPServer((host, port), _Handler)
+    url = f"http://{host}:{port}"
+    print(f"Poe Command Center → {url}")
+    print("Ctrl-C to stop")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.shutdown()
+
+
+# ---------------------------------------------------------------------------
 # CLI entry point
 # ---------------------------------------------------------------------------
 
@@ -385,6 +643,9 @@ def main(argv: list[str] | None = None) -> None:
     p_events.add_argument("--limit", type=int, default=20, help="Number of events (default: 20)")
     p_watch = sub.add_parser("watch", help="Refresh snapshot on an interval (like watch)")
     p_watch.add_argument("--interval", type=float, default=5.0, help="Refresh interval in seconds (default: 5)")
+    p_serve = sub.add_parser("serve", help="Live HTTP dashboard (default http://127.0.0.1:7700)")
+    p_serve.add_argument("--host", default="127.0.0.1", help="Bind host (default: 127.0.0.1)")
+    p_serve.add_argument("--port", type=int, default=7700, help="Port (default: 7700)")
 
     args = parser.parse_args(argv)
 
@@ -407,6 +668,8 @@ def main(argv: list[str] | None = None) -> None:
             print_snapshot()
             print(f"\n(refreshing every {args.interval}s — Ctrl-C to stop)")
             time.sleep(args.interval)
+    elif args.cmd == "serve":
+        serve_dashboard(host=args.host, port=args.port)
     else:
         print_snapshot()
 

@@ -14,6 +14,7 @@ __pycache__/
 
 # Artifacts
 output/
+memory/
 *.log
 
 # Temporary
