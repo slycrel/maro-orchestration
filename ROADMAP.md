@@ -14,12 +14,19 @@ A recurring systems principle for orchestration:
 2. **Reliability** — make the common path complete consistently, fail legibly, and recover sanely.
 3. **Replayability** — preserve enough trace/checkpoint fidelity to replay failures, compare policy changes, and evaluate alternate interventions.
 
-These stages build on each other. Visibility without reliability is just a clearer view of dysfunction. Reliability without replayability limits the system's ability to learn from past runs. This roadmap increasingly follows that progression:
-- Phases 1–14 establish execution, routing, memory, and basic oversight
-- Phases 43–46 are the explicit visibility/reliability bridge
-- later eval, replay, and self-improvement work should increasingly target replayability rather than one-off fixes
+These stages build on each other. Visibility without reliability is just a clearer view of dysfunction. Reliability without replayability limits the system's ability to learn from past runs.
 
-A short version: **stop debugging by séance, then stop failing the same way twice, then make past runs reusable for future improvement.**
+Where each phase sits:
+
+| Stage | Phases | What they deliver |
+|-------|--------|-------------------|
+| **Visibility** | 23 (observe), 36 (dashboard), 43 (structured logging), 44 (failure classifier + lenses) | See what happened, why, and where tokens/time went |
+| **Reliability** | 22 (rules), 32 (skills auto-promotion), 33 (token budgets), 35 (constraints + HITL), 44-45 (diagnosis + recovery planner) | Common path completes, failures are legible, recovery is mechanical |
+| **Replayability** | 42 (nightly eval), 46 (intervention graduation), 40 (SQLite for queryable history) | Replay failures, compare policy changes, harden from past runs |
+
+We're currently at the **visibility→reliability boundary**. The introspection and lens work is converting visibility into reliability — structured diagnosis that changes behavior, not just reports.
+
+A short version: **stop debugging by seance, then stop failing the same way twice, then make past runs reusable for future improvement.**
 
 ---
 
