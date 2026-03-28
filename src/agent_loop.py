@@ -205,9 +205,18 @@ _EXECUTE_SYSTEM = textwrap.dedent("""\
     If a URL's content is missing from the pre-fetch block, note it as unavailable and
     work with what you have — do not attempt to fetch it yourself.
 
+    PRIOR STEP DATA — IMPORTANT:
+    The "Completed steps so far" section contains summaries AND excerpts from prior
+    step results. This is real data from actual execution — use it. When referencing
+    files, modules, or findings from prior steps, cite the ACTUAL names and content
+    shown in those excerpts. Do NOT invent or guess file names, function names, or
+    line numbers. If a prior step found specific files, reference those exact names.
+    If you need information not in the prior step data, say so explicitly rather
+    than fabricating plausible-sounding references.
+
     TOKEN EFFICIENCY — IMPORTANT:
     Minimize token usage at every step. Prefer low-cost approaches first:
-    1. Use only the pre-fetched content already in context — never fetch more.
+    1. Use only the pre-fetched content and prior step data already in context.
     2. Summarize and extract; do not quote long passages verbatim.
     3. Work with partial information rather than declaring stuck due to missing detail.
     4. Produce concise, structured output: bullet points over paragraphs where possible.
