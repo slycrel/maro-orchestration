@@ -574,3 +574,131 @@ def test_apply_suggestion_non_skill_pattern_not_gated(tmp_path):
     assert found is True
     lines = [_json.loads(l) for l in suggestions_path.read_text().splitlines() if l.strip()]
     assert lines[0]["applied"] is True
+
+
+# ===========================================================================
+# Phase 32: synthesize_skill tests
+# ===========================================================================
+
+from evolver import synthesize_skill
+
+
+class _SynthesisAdapter:
+    """Returns a well-formed skill JSON."""
+    def complete(self, messages, **kwargs):
+        result = MagicMock()
+        result.content = json.dumps({
+            "name": "web_search_summarize",
+            "description": "Search the web and summarize results for a given topic.",
+            "trigger_patterns": ["search and summarize", "web research", "look up"],
+            "steps_template": [
+                "Search for the topic using a web search tool",
+                "Extract the top 3 relevant results",
+                "Summarize the findings in 2-3 sentences",
+            ],
+        })
+        return result
+
+
+def test_synthesize_skill_returns_skill(tmp_path):
+    """synthesize_skill returns a Skill with correct fields."""
+    with patch("skills._skills_path", return_value=tmp_path / "skills.jsonl"):
+        skill = synthesize_skill(
+            goal="search and summarize recent news on AI",
+            outcome_summary="Found 3 articles and summarized them.",
+            source_loop_id="abc123",
+            adapter=_SynthesisAdapter(),
+            dry_run=True,
+        )
+    assert skill is not None
+    assert skill.name == "web_search_summarize"
+    assert "Search" in skill.steps_template[0]
+    assert skill.circuit_state == "closed"
+    assert skill.tier == "provisional"
+
+
+def test_synthesize_skill_saves_when_not_dry_run(tmp_path):
+    """synthesize_skill writes to skills.jsonl when dry_run=False."""
+    skills_path = tmp_path / "skills.jsonl"
+    with patch("skills._skills_path", return_value=skills_path):
+        skill = synthesize_skill(
+            goal="search and summarize recent news on AI",
+            outcome_summary="Found 3 articles and summarized them.",
+            source_loop_id="abc123",
+            adapter=_SynthesisAdapter(),
+            dry_run=False,
+        )
+    assert skill is not None
+    assert skills_path.exists()
+    data = json.loads(skills_path.read_text().strip().splitlines()[-1])
+    assert data["name"] == "web_search_summarize"
+
+
+def test_synthesize_skill_skips_duplicate_name(tmp_path):
+    """synthesize_skill returns None if a skill with the same name already exists."""
+    import json as _json
+    skills_path = tmp_path / "skills.jsonl"
+    # Pre-populate with the same name
+    existing = {
+        "id": "existing1",
+        "name": "web_search_summarize",
+        "description": "existing skill",
+        "trigger_patterns": ["web research"],
+        "steps_template": ["do stuff"],
+        "source_loop_ids": [],
+        "created_at": "2026-01-01T00:00:00+00:00",
+        "use_count": 0,
+        "tier": "provisional",
+        "circuit_state": "closed",
+    }
+    skills_path.write_text(_json.dumps(existing) + "\n", encoding="utf-8")
+    with patch("skills._skills_path", return_value=skills_path):
+        skill = synthesize_skill(
+            goal="search and summarize recent news on AI",
+            outcome_summary="Found 3 articles.",
+            adapter=_SynthesisAdapter(),
+            dry_run=False,
+        )
+    assert skill is None
+
+
+def test_synthesize_skill_no_adapter_returns_none():
+    """synthesize_skill returns None when adapter is None."""
+    skill = synthesize_skill(
+        goal="some goal",
+        outcome_summary="done",
+        adapter=None,
+    )
+    assert skill is None
+
+
+def test_synthesize_skill_bad_json_returns_none(tmp_path):
+    """synthesize_skill returns None when LLM returns unparseable content."""
+    class _BadAdapter:
+        def complete(self, messages, **kwargs):
+            result = MagicMock()
+            result.content = "not json at all"
+            return result
+
+    with patch("skills._skills_path", return_value=tmp_path / "skills.jsonl"):
+        skill = synthesize_skill(
+            goal="some goal",
+            outcome_summary="done",
+            adapter=_BadAdapter(),
+            dry_run=True,
+        )
+    assert skill is None
+
+
+def test_synthesize_skill_sets_source_loop_id(tmp_path):
+    """synthesize_skill records the source loop id."""
+    with patch("skills._skills_path", return_value=tmp_path / "skills.jsonl"):
+        skill = synthesize_skill(
+            goal="search and summarize",
+            outcome_summary="done",
+            source_loop_id="loop42",
+            adapter=_SynthesisAdapter(),
+            dry_run=True,
+        )
+    assert skill is not None
+    assert "loop42" in skill.source_loop_ids

@@ -403,12 +403,14 @@ def run_agent_loop(
     except Exception:
         pass
     # Load matching skills for decompose prompt injection (Phase 10)
+    _had_no_matching_skill = False  # Phase 32: track for post-loop synthesis
     try:
         from skills import find_matching_skills, format_skills_for_prompt
         _matching_skills = find_matching_skills(goal)
         _skills_context = format_skills_for_prompt(_matching_skills)
         if _matching_skills and verbose:
             print(f"[poe] injecting {len(_matching_skills)} skill(s) into decompose", file=sys.stderr, flush=True)
+        _had_no_matching_skill = not _matching_skills
     except Exception:
         _skills_context = ""
 
@@ -922,6 +924,23 @@ def run_agent_loop(
                         print(f"[poe] skill crystallised: {skill.name}", file=sys.stderr, flush=True)
         except Exception:
             pass  # Skill extraction failures must never break the loop
+
+    # Phase 32: skill synthesis — when no skill matched at start, synthesize one
+    # from this successful run so the pattern is available for future goals.
+    if loop_status == "done" and _had_no_matching_skill and not dry_run and step_outcomes:
+        try:
+            from evolver import synthesize_skill
+            done_steps = [s for s in step_outcomes if s.status == "done" and s.summary]
+            _synth_summary = ". ".join(s.summary for s in done_steps[:3])
+            synthesize_skill(
+                goal=goal,
+                outcome_summary=_synth_summary or "completed successfully",
+                source_loop_id=loop_id,
+                adapter=adapter,
+                verbose=verbose,
+            )
+        except Exception:
+            pass  # Synthesis failures must never break the loop
 
     # Release loop lock so interfaces know we're idle
     try:

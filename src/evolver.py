@@ -640,6 +640,136 @@ Rules:
     return target
 
 
+# ---------------------------------------------------------------------------
+# Phase 32: Skill synthesis — create a new skill from a successful outcome
+# ---------------------------------------------------------------------------
+
+_SYNTHESIZE_SYSTEM = """\
+You are an agent that distills successful task executions into reusable skill templates.
+Given a completed goal and its outcome summary, synthesize ONE reusable skill definition.
+Output ONLY valid JSON with these keys:
+{
+  "name": "<short snake_case skill name, e.g. web_research_summarise>",
+  "description": "<one sentence describing what this skill does>",
+  "trigger_patterns": ["<2-5 short keyword phrases that should trigger this skill>"],
+  "steps_template": ["<step 1>", "<step 2>", "<step 3>"]
+}
+Rules:
+- 2-5 steps, each concrete and actionable
+- trigger_patterns should be distinct phrases likely found in similar goal strings
+- description must be one sentence
+- name must be unique and descriptive (snake_case)
+"""
+
+
+def synthesize_skill(
+    goal: str,
+    outcome_summary: str,
+    source_loop_id: str = "",
+    *,
+    adapter=None,
+    dry_run: bool = False,
+    verbose: bool = False,
+) -> "Optional[Skill]":
+    """Synthesize a new provisional skill from a completed goal + outcome.
+
+    Called when a successful loop had no matching skill at start — this fills
+    the gap so similar goals benefit from the pattern next time.
+
+    Args:
+        goal:            The completed goal string.
+        outcome_summary: Brief description of what was accomplished.
+        source_loop_id:  Loop ID to tag as the source of this skill.
+        adapter:         LLMAdapter to use for synthesis.
+        dry_run:         If True, synthesize but do not persist.
+        verbose:         Print progress to stderr.
+
+    Returns:
+        New Skill on success, None if synthesis fails or adapter unavailable.
+    """
+    try:
+        from skills import Skill, save_skill, load_skills, compute_skill_hash
+        from llm import LLMMessage
+    except ImportError:
+        return None
+
+    if adapter is None:
+        return None
+
+    prompt = (
+        f"Completed goal: {goal}\n\n"
+        f"Outcome: {outcome_summary[:400]}"
+    )
+
+    try:
+        resp = adapter.complete(
+            [
+                LLMMessage("system", _SYNTHESIZE_SYSTEM),
+                LLMMessage("user", prompt),
+            ],
+            max_tokens=512,
+            temperature=0.3,
+        )
+        raw = resp.content.strip()
+        if raw.startswith("```"):
+            raw = "\n".join(raw.split("\n")[1:])
+            if raw.endswith("```"):
+                raw = raw[: raw.rfind("```")]
+        start = raw.find("{")
+        end = raw.rfind("}") + 1
+        if start < 0 or end <= start:
+            return None
+        parsed = json.loads(raw[start:end])
+    except Exception as e:
+        if verbose:
+            print(f"[evolver] synthesize_skill parse error: {e}", file=sys.stderr)
+        return None
+
+    name = str(parsed.get("name", "")).strip()
+    description = str(parsed.get("description", "")).strip()
+    trigger_patterns = [str(t) for t in parsed.get("trigger_patterns", [])]
+    steps_template = [str(s) for s in parsed.get("steps_template", [])]
+
+    if not name or not description or not steps_template:
+        return None
+
+    # Deduplicate — don't create if a skill with this name already exists
+    if not dry_run:
+        existing_names = {s.name for s in load_skills()}
+        if name in existing_names:
+            if verbose:
+                print(f"[evolver] synthesize_skill: skill '{name}' already exists, skipping", file=sys.stderr)
+            return None
+
+    now = datetime.now(timezone.utc).isoformat()
+    new_skill = Skill(
+        id=__import__("uuid").uuid4().hex[:8],
+        name=name,
+        description=description,
+        trigger_patterns=trigger_patterns or [goal[:60]],
+        steps_template=steps_template,
+        source_loop_ids=[source_loop_id] if source_loop_id else [],
+        created_at=now,
+        tier="provisional",
+        utility_score=1.0,
+        circuit_state="closed",
+    )
+    new_skill.content_hash = compute_skill_hash(new_skill)
+
+    if not dry_run:
+        try:
+            save_skill(new_skill)
+        except Exception as e:
+            if verbose:
+                print(f"[evolver] synthesize_skill: save failed: {e}", file=sys.stderr)
+            return None
+
+    if verbose:
+        print(f"[evolver] synthesized new skill: {new_skill.name} ({new_skill.id})", file=sys.stderr)
+
+    return new_skill
+
+
 def run_skill_maintenance(
     *,
     adapter=None,
