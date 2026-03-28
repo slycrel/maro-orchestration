@@ -220,15 +220,15 @@ def test_find_matching_skills_no_match(monkeypatch, tmp_path):
     assert matches2 == []
 
 
-def test_find_matching_skills_returns_top_2(monkeypatch, tmp_path):
-    """Returns at most 2 matching skills."""
+def test_find_matching_skills_returns_top_3(monkeypatch, tmp_path):
+    """Returns at most 3 matching skills (keyword cap)."""
     _setup_workspace(monkeypatch, tmp_path)
     for i in range(5):
         skill = _make_skill(f"skill {i}", triggers=["common keyword"])
         skill.id = f"sk00000{i}"
         save_skill(skill)
     matches = find_matching_skills("common keyword task")
-    assert len(matches) <= 2
+    assert len(matches) <= 3
 
 
 def test_find_matching_skills_partial_match(monkeypatch, tmp_path):
@@ -246,6 +246,23 @@ def test_find_matching_skills_empty_library(monkeypatch, tmp_path):
     _setup_workspace(monkeypatch, tmp_path)
     matches = find_matching_skills("any goal")
     assert matches == []
+
+
+def test_find_matching_skills_tfidf_fallback(monkeypatch, tmp_path):
+    """When no trigger pattern matches, TF-IDF fallback returns relevant skills."""
+    _setup_workspace(monkeypatch, tmp_path)
+    relevant = _make_skill("polymarket research", triggers=["unrelated-trigger"])
+    relevant.name = "polymarket research"
+    relevant.description = "Research prediction market calibration and betting strategies on polymarket"
+    irrelevant = _make_skill("systemd ops", triggers=["other-trigger"])
+    irrelevant.description = "Configure systemd services and restart on failure"
+    save_skill(relevant)
+    save_skill(irrelevant)
+    # No trigger pattern matches "polymarket strategy" exactly,
+    # but TF-IDF should surface the relevant skill first
+    matches = find_matching_skills("polymarket strategy calibration")
+    assert len(matches) >= 1
+    assert matches[0].id == relevant.id
 
 
 # ---------------------------------------------------------------------------

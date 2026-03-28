@@ -22,11 +22,13 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import re
 import sys
 import textwrap
 import time
 import uuid
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -412,6 +414,68 @@ def extract_skills(outcomes: List[dict], adapter) -> List[Skill]:
 # Skill matching + formatting
 # ---------------------------------------------------------------------------
 
+_SKILL_STOP_WORDS = frozenset({
+    "a", "an", "the", "and", "or", "but", "in", "on", "at", "to", "for",
+    "of", "with", "by", "from", "is", "it", "be", "as", "at", "this",
+    "that", "are", "was", "were", "been", "have", "has", "had", "do",
+    "does", "did", "will", "would", "could", "should", "may", "might",
+    "can", "not", "no", "so", "if", "we", "i", "you", "he", "she", "they",
+})
+
+
+def _skill_tokens(text: str) -> List[str]:
+    """Lowercase, split on non-alphanum, drop stop words and short tokens."""
+    return [
+        t for t in re.split(r"[^a-z0-9]+", text.lower())
+        if len(t) >= 3 and t not in _SKILL_STOP_WORDS
+    ]
+
+
+def _tfidf_skill_rank(goal: str, skills: List[Skill], top_k: int = 3) -> List[Skill]:
+    """TF-IDF cosine similarity ranking for skills against a goal string.
+
+    Used as a middle tier between the trained router (Phase 17) and raw
+    keyword substring matching — better quality than keyword, no training data
+    required. Returns up to top_k skills with non-zero similarity.
+    """
+    query_tokens = _skill_tokens(goal)
+    if not query_tokens or not skills:
+        return []
+
+    # Build skill documents: name + description + trigger_patterns
+    def skill_doc(s: Skill) -> str:
+        return " ".join([s.name, s.description] + list(s.trigger_patterns))
+
+    docs = [skill_doc(s) for s in skills]
+    doc_tokens = [_skill_tokens(d) for d in docs]
+    N = len(docs)
+
+    # IDF: smooth variant log((N+1)/(1+df)) — handles small N without zeroing out
+    df: Counter = Counter()
+    for tokens in doc_tokens:
+        for t in set(tokens):
+            df[t] += 1
+    idf = {t: math.log((N + 1) / (1 + df[t])) for t in df}
+
+    def tfidf_vec(tokens: List[str]) -> dict:
+        tf = Counter(tokens)
+        total = len(tokens) or 1
+        return {t: (tf[t] / total) * idf.get(t, 0.0) for t in tf}
+
+    def cosine(a: dict, b: dict) -> float:
+        dot = sum(a.get(t, 0.0) * b.get(t, 0.0) for t in a)
+        norm_a = math.sqrt(sum(v * v for v in a.values())) or 1.0
+        norm_b = math.sqrt(sum(v * v for v in b.values())) or 1.0
+        return dot / (norm_a * norm_b)
+
+    q_vec = tfidf_vec(query_tokens)
+    scored = [(cosine(q_vec, tfidf_vec(tokens)), skill)
+              for tokens, skill in zip(doc_tokens, skills)]
+    scored = [(sc, sk) for sc, sk in scored if sc > 0]
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return [sk for _, sk in scored[:top_k]]
+
+
 def find_matching_skills(goal: str, adapter=None, use_router: bool = True) -> List[Skill]:
     """Find skills whose trigger_patterns match the goal.
 
@@ -449,19 +513,24 @@ def find_matching_skills(goal: str, adapter=None, use_router: bool = True) -> Li
         except Exception:
             pass  # fall through to keyword matching
 
-    # Keyword fallback (original behavior)
+    # Keyword fallback: exact trigger pattern overlap
     goal_lower = goal.lower()
-    scored: List[tuple] = []
+    kw_scored: List[tuple] = []
     for skill in skills:
         score = sum(
             1 for pattern in skill.trigger_patterns
             if pattern.lower() in goal_lower or goal_lower in pattern.lower()
         )
         if score > 0:
-            scored.append((score, skill))
+            kw_scored.append((score, skill))
 
-    scored.sort(key=lambda x: x[0], reverse=True)
-    return [s for _, s in scored[:2]]
+    if kw_scored:
+        kw_scored.sort(key=lambda x: x[0], reverse=True)
+        return [s for _, s in kw_scored[:3]]
+
+    # TF-IDF fallback: relevance-ranked retrieval when no keyword match fires
+    # (Phase 32 selective retrieval — prevents returning stale/irrelevant skills)
+    return _tfidf_skill_rank(goal, skills, top_k=2)
 
 
 def format_skills_for_prompt(skills: List[Skill]) -> str:

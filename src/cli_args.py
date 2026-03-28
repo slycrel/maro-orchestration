@@ -260,6 +260,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_poe_skills = sub.add_parser("poe-skills", help="Manage skill library (Phase 10)")
     p_poe_skills.add_argument("--extract", action="store_true", help="Extract skills from recent outcomes")
     p_poe_skills.add_argument("--list", action="store_true", dest="list_skills", help="List known skills")
+    p_poe_skills.add_argument("--status", action="store_true", help="Show skill health dashboard (Phase 32)")
     p_poe_skills.add_argument("--outcomes-window", type=int, default=50, help="How many recent outcomes to analyze (default: 50)")
     p_poe_skills.add_argument("--dry-run", action="store_true", help="Analyze without writing skills")
     p_poe_skills.add_argument("--format", choices=["text", "json"], default="text")

@@ -605,33 +605,43 @@ Not a single phase but a research track that informs multiple phases:
 
 ---
 
-### Phase 31: Persona Auto-Selection *(PLANNED)*
+### Phase 31: Persona Auto-Selection *(PARTIAL)*
 
 Currently, persona selection requires explicit `/research`, `/build`, `/ops` commands. Goal content should drive persona selection automatically.
 
-- [ ] **Goal classifier → persona mapping**: extend `intent.py` or add `persona_for_goal(goal)` that uses LLM + heuristic to map goal content to best persona (researcher for lookup/analysis, builder for code/implement, ops for system/monitor, psyche-researcher for psychology/cognition questions)
-- [ ] **Confidence gate**: if classifier confidence < 0.7, default to generic worker; don't force a wrong persona
+**Shipped (Phase 31 first cut):**
+- [x] **`persona_for_goal(goal)`** in `persona.py`: keyword routing with word-boundary-aware matching. Scoring table covers research/build/ops/psyche/finance/legal/health/creative/companion. Returns `(persona_name, confidence)` tuple.
+- [x] **Confidence gate**: `confidence_threshold=0.5` default; below threshold returns `None` (generic worker)
+- [x] **`classify_step_model(step_text)`** in `poe.py`: per-step Haiku vs Sonnet routing via keyword heuristic — cheap for retrieval/classify/format/verify, mid for synthesis/analysis/implement
+- [x] **Three-tier resolution in `workers.py`**: `PersonaRegistry.load(worker_type)` → `_PERSONA_FILES` map → inline fallback, giving all 18+ personas access from worker dispatch path
+
+**Still pending:**
 - [ ] **Override**: explicit `/research`, `/build`, etc. always override auto-selection
 - [ ] **Feedback loop**: record persona_selected + outcome; feed to evolver for selection quality improvement
-- [ ] Wire into `poe_handle()` and natural-language Telegram/Slack routing
+- [ ] Wire `persona_for_goal()` into `poe_handle()` and natural-language Telegram/Slack routing
 
-**Artifact:** `persona_for_goal()` in `persona.py`, wired into `handle.py` and `poe.py`
+**Artifact:** `persona_for_goal()` in `persona.py`, `classify_step_model()` in `poe.py`, three-tier resolution in `workers.py`
 
 ---
 
-### Phase 32: Skills Auto-Promotion + Self-Rewriting *(PLANNED)*
+### Phase 32: Skills Auto-Promotion + Self-Rewriting *(PARTIAL)*
 
 Skills are manually seeded or extracted as provisional. Promotion to established requires pass^3 ≥ 0.7 but the mechanism isn't wired to fire automatically. The larger opportunity (from Memento-Skills research — `docs/research/sumanth-agent-research.md`) is making skills self-rewriting: when a skill fails, the agent reflects and rewrites it.
 
-- [ ] **Utility scoring per skill**: add `utility_score` field to skill registry, updated on success (↑) / failure (↓). Low-utility skills deprioritized in retrieval; very low triggers rewrite.
-- [ ] **Failure attribution**: when a step fails with a skill in use, record failure against that skill specifically (not the goal). Enables targeted rewrites instead of blanket retries.
-- [ ] **Auto-promotion in evolver**: after each run, check `get_skill_stats()` — any provisional skill meeting pass^3 ≥ 0.7 across ≥ 5 uses gets promoted automatically
-- [ ] **Demotion + rewrite path**: if established skill drops below 0.4 over 3 runs, demote to provisional and trigger a LLM rewrite of the skill definition using the failure record
-- [ ] **Selective skill retrieval**: switch from loading all skills to RAG-style retrieval (TF-IDF or embedding match) — prevents context stuffing at scale
-- [ ] **Skill synthesis**: when no existing skill covers a new step type, create one and add to provisional registry (the skill-creator bootstraps itself)
-- [ ] **Skills dashboard**: `poe-skills status` shows provisional/established counts, utility scores, candidates for promotion/demotion/rewrite
+**Shipped (Phase 32 first cut — March 2026):**
+- [x] **Utility scoring per skill**: `utility_score` field (EMA, alpha=0.3), updated on success (↑) / failure (↓). `update_skill_utility()` in `skills.py`.
+- [x] **Circuit breaker**: CLOSED → OPEN after 3 consecutive failures (blip tolerance). OPEN → HALF_OPEN on first success → CLOSED after 2 consecutive successes. Failure during HALF_OPEN re-opens immediately. Single failures stay closed — distinguishes network blip from structural failure.
+- [x] **Failure attribution**: `attribute_failure_to_skills()` — maps stuck step text to matching skills, calls `update_skill_utility(success=False)`. Targeted per-skill signal, not blanket goal failure.
+- [x] **Auto-promotion in evolver**: `maybe_auto_promote_skills()` — provisional → established when utility ≥ 0.70 AND use_count ≥ 5. Runs in `run_skill_maintenance()`.
+- [x] **Demotion + rewrite path**: `maybe_demote_skills()` — established → provisional when circuit OPEN or utility < 0.40. `rewrite_skill()` — LLM rewrites skill body for OPEN-circuit skills; sets HALF_OPEN (probationary). Gated on `circuit_state == "open"` — no rewrites from isolated failures.
+- [x] **Selective TF-IDF retrieval**: `_tfidf_skill_rank()` in `skills.py` — smooth IDF variant, cosine similarity. Used as middle tier when keyword matching misses; still caps at top 3. Prevents irrelevant skills from reaching the prompt.
+- [x] **Skills dashboard**: `poe-skills --status` shows provisional/established counts, circuit state breakdown (closed/half-open/open), rewrite candidates, per-skill utility + consecutive failure/success stats.
+- [x] Wired into `agent_loop.py`: skill utility updated on step done/blocked. `run_skill_maintenance()` called at end of each evolver cycle.
 
-**Artifact:** `utility_score` + `failure_attribution()` in `skills.py`; `maybe_auto_promote_skills()` + `rewrite_skill()` in `evolver.py`; `poe-skills status` CLI
+**Still pending:**
+- [ ] **Skill synthesis**: when no existing skill covers a new step type, create one and add to provisional registry (the skill-creator bootstraps itself)
+
+**Artifact:** `utility_score` + circuit breaker + `attribute_failure_to_skills()` in `skills.py`; `rewrite_skill()` + `run_skill_maintenance()` in `evolver.py`; `poe-skills --status` CLI
 
 ---
 
@@ -648,14 +658,15 @@ The evolver currently optimizes for success rate. It should also optimize for to
 
 ---
 
-### Phase 35: Backlog Steal-List — DeerFlow / Nanoclaws / AutoHarness *(PLANNED)*
+### Phase 35: Backlog Steal-List — DeerFlow / Nanoclaws / AutoHarness *(PARTIAL)*
 
 Research triage in `docs/research/backlog-triage.md`. P1 items (highest leverage):
 
-- [ ] **Cost-aware model routing** — route simple steps (classification, formatting, retrieval) to Haiku; reserve Sonnet/Opus for synthesis. Estimated 60–70% cost reduction. Add `classifier` role tier to `assign_model_by_role()`.
-- [ ] **Parallelized sub-agent fan-out** — current loop is sequential. Add async fan-out for independent research subtasks (`asyncio` + `background.py`). Unlocks 3–5× throughput on multi-step goals.
-- [ ] **Constraint harness layer** — pre-execution validation wrapper around tool calls. Check action legality (valid paths, allowed ops, permission scope) before dispatch. Catches ~80% of agent misfires without an LLM round-trip. Start with file write and shell exec constraints.
-- [ ] **Embedding/TF-IDF memory retrieval** — replace recency-only context injection with relevance-ranked retrieval. Reduces hallucination from stale/irrelevant lessons being injected.
+**Shipped (Phase 35 P1 — March 2026):**
+- [x] **Cost-aware model routing** — `classify_step_model(step_text)` in `poe.py`: routes simple steps (classify/format/verify/retrieve) to MODEL_CHEAP, synthesis/analysis to MODEL_MID. Per-step, zero token cost. Wired into `agent_loop.py` step execution.
+- [x] **Parallelized sub-agent fan-out** — `_steps_are_independent(steps)` + `parallel_fan_out()` in `agent_loop.py`: word-boundary regex scan detects inter-step references; independent sets run in ThreadPoolExecutor. Sequential fallback preserved.
+- [x] **Constraint harness layer** — `src/constraint.py`: 5 pattern groups (destructive, secret, path_escape, unsafe_network, unsafe_exec). HIGH blocks execution, MEDIUM warns. Pluggable `CONSTRAINT_REGISTRY`. Fires before LLM call in `agent_loop.py`.
+- [x] **TF-IDF memory retrieval** — `_tokenize()` + `_tfidf_rank()` in `memory.py`: pure stdlib cosine similarity. `inject_tiered_lessons()` and `load_lessons()` re-rank by relevance when `query=` provided. Smooth IDF variant handles small corpora.
 
 P2 items (infrastructure):
 - [ ] Machine-readable agent capability manifest (YAML, replaces AGENTS.md manual prose)

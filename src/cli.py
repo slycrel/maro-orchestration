@@ -1187,6 +1187,40 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.cmd == "poe-skills":
         import skills as _skills_mod
+        if getattr(args, "status", False):
+            skill_list = _skills_mod.load_skills()
+            rewrite_candidates = _skills_mod.skills_needing_rewrite()
+            rewrite_ids = {s.id for s in rewrite_candidates}
+            provisional = [s for s in skill_list if s.tier == "provisional"]
+            established = [s for s in skill_list if s.tier == "established"]
+            open_circuit = [s for s in skill_list if s.circuit_state == "open"]
+            half_open = [s for s in skill_list if s.circuit_state == "half_open"]
+            if args.format == "json":
+                print(json.dumps({
+                    "total": len(skill_list),
+                    "provisional": len(provisional),
+                    "established": len(established),
+                    "circuit_open": len(open_circuit),
+                    "circuit_half_open": len(half_open),
+                    "rewrite_candidates": len(rewrite_candidates),
+                    "skills": [_skills_mod._skill_to_dict(s) for s in skill_list],
+                }, indent=2))
+            else:
+                print(f"Skills: {len(skill_list)} total  |  {len(provisional)} provisional  {len(established)} established")
+                print(f"Circuit: {len(skill_list) - len(open_circuit) - len(half_open)} closed  {len(half_open)} half-open  {len(open_circuit)} open")
+                print(f"Rewrite candidates: {len(rewrite_candidates)}")
+                if skill_list:
+                    print()
+                    # Sort by utility descending
+                    for s in sorted(skill_list, key=lambda x: x.utility_score, reverse=True):
+                        circuit_tag = "" if s.circuit_state == "closed" else f" [{s.circuit_state.upper()}]"
+                        rewrite_tag = " *REWRITE*" if s.id in rewrite_ids else ""
+                        print(f"  {s.tier[0].upper()} {circuit_tag}  [{s.id}] {s.name}")
+                        print(f"    utility={s.utility_score:.2f}  uses={s.use_count}  "
+                              f"cf={s.consecutive_failures}  cs={s.consecutive_successes}"
+                              f"{rewrite_tag}")
+            return 0
+
         if args.list_skills:
             skill_list = _skills_mod.load_skills()
             if args.format == "json":
@@ -1232,7 +1266,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
         # Default: show usage hint
-        print("Use --list to list skills or --extract to extract from recent outcomes.")
+        print("Use --status for health dashboard, --list to list skills, or --extract to extract from recent outcomes.")
         return 0
 
     if args.cmd == "poe-inspector":
