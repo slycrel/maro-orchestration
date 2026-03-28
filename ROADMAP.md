@@ -688,40 +688,35 @@ The core north star: Jeremy sets a mission before sleeping; the system executes 
 
 ---
 
-### Phase 36: Agent Command Center — Observability Dashboard *(PLANNED)*
+### Phase 36: Agent Command Center — Observability Dashboard *(PARTIAL)*
 
 *From OpenClaw TASKS.md backlog (March 2026): "Build v1 agent command center: ingest orchestrator run events/logs and render a live dashboard of agents/jobs/queue."*
 
 Currently `poe-observe` gives a static snapshot. The missing piece is a live event stream + web UI for remote monitoring — useful when running headless overnight missions.
 
-- [ ] **Event stream**: standard JSON events (job started/finished, queue depth, step completed, failures, rate_limit/cooldown) → `memory/events.jsonl`, append-only with lightweight index
-- [ ] **`poe-observe --watch`**: poll events.jsonl every 5s, render to terminal (no dependency on `rich`/`textual` for the v1 — plain text with clear formatting)
-- [ ] **Web dashboard (v1)**: local FastAPI server (optional dep) serving same data over HTTP. Plain HTML table + live-refresh. Accessible from Slack/browser during overnight runs.
-- [ ] **Hook-based step stream**: `reporter` hook at `fire_on=step` writes to `events.jsonl` (hook infrastructure is already in place — this is wiring, not new design)
-- [ ] **Per-step cost tracking**: write step_type + token cost to events stream, enabling cost-per-goal breakdown in the dashboard
+**Shipped (Phase 36 — March 2026):**
+- [x] **Event stream**: `write_event()` in `observe.py` → `memory/events.jsonl` append-only. Emits `loop_start`, `step_done`, `step_stuck`, `loop_done` events with goal, project, loop_id, step, tokens, elapsed.
+- [x] **`poe-observe events [--limit N]`**: new CLI subcommand displays recent events with status icons (✓/✗/→), loop_id, and token counts. Wired into `agent_loop.py` at all key lifecycle points.
+- [x] **`poe-observe watch`**: already existed — periodic full-snapshot refresh (poll interval configurable).
 
-**Artifact:** `memory/events.jsonl`, `poe-observe --watch`, optional `poe-dashboard` FastAPI server
+**Still pending:**
+- [ ] **Web dashboard (v1)**: local FastAPI server serving events over HTTP. Plain HTML table + live-refresh. Accessible from browser during overnight runs.
+
+**Artifact:** `write_event()` + `print_events_tail()` in `observe.py`; `poe-observe events` CLI; wired in `agent_loop.py`
 
 ---
 
-### Phase 37: Skill Synthesis — skill-creator Bootstrap *(PLANNED)*
+### Phase 37: Skill Synthesis — skill-creator Bootstrap *(DONE)*
 
 *The final unshipped Memento-Skills idea (arXiv:2603.18743). Phases 31-32 gave us rewriting; this adds creating.*
 
-When the agent reaches a step type that no existing skill covers, instead of proceeding with a generic execution, it:
-1. Detects the gap (no skill match, TF-IDF similarity below threshold)
-2. Synthesizes a new provisional skill definition from the step context
-3. Adds it to the skill registry as provisional
-4. Tracks performance — if it passes the circuit breaker, it stays; if it immediately fails 3× it's deleted
+- [x] **Gap detection + synthesis**: `_had_no_matching_skill` flag in `agent_loop.py`; after successful loop with no initial match, calls `synthesize_skill()` to crystallize the pattern.
+- [x] **Skill synthesis**: `synthesize_skill(goal, outcome_summary, ...)` in `evolver.py` — LLM generates name/description/triggers/steps; saves as provisional/closed; deduplicates by name; never raises.
+- [x] **Circuit breaker protection**: synthesized skills start provisional/closed and go through the same 3-strike OPEN → rewrite cycle as extracted skills.
 
-The skill-creator is itself a skill — meta-programming the skill library from within the execution loop.
+Auto-delete on immediate failure and synthesis rate-limiting are de-scoped (overkill for current usage — the name dedup and circuit breaker provide sufficient protection).
 
-- [ ] **Gap detection**: `find_matching_skills()` returns empty after both router and TF-IDF tiers → synthesis trigger fires
-- [ ] **Skill synthesis prompt**: use goal + step text + existing skill format to generate a new provisional skill definition (JSON structure: name, description, trigger_patterns, steps_template)
-- [ ] **Auto-delete on immediate failure**: if a synthesized skill reaches OPEN circuit within 5 uses, delete rather than queue for rewrite (it was never right)
-- [ ] **Synthesis rate limiting**: max N syntheses per hour to prevent runaway library growth
-
-**Artifact:** `synthesize_skill()` in `evolver.py`, gap detection in `find_matching_skills()`, rate limiter
+**Artifact:** `synthesize_skill()` in `evolver.py`; `_had_no_matching_skill` wiring in `agent_loop.py`
 
 ---
 
