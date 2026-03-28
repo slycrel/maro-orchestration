@@ -968,6 +968,59 @@ def plan_recovery_all(diag: LoopDiagnosis) -> List[RecoveryPlan]:
 
 
 # ---------------------------------------------------------------------------
+# Phase 46: Intervention Graduation — track recurring patterns
+# ---------------------------------------------------------------------------
+
+@dataclass
+class RecurringPattern:
+    """A failure class that appears repeatedly, suggesting a durable fix is needed."""
+    failure_class: str
+    occurrences: int
+    first_seen: str                     # loop_id of first occurrence
+    last_seen: str                      # loop_id of most recent
+    recovery_action: Optional[str]      # from recovery planner
+    graduation_candidate: bool          # True if occurrences >= 3
+
+
+def find_recurring_patterns(min_occurrences: int = 3, limit: int = 50) -> List[RecurringPattern]:
+    """Scan diagnosis history for recurring failure classes.
+
+    Returns patterns that appear >= min_occurrences times, sorted by frequency.
+    These are candidates for graduation into permanent rules or guardrails.
+
+    Pure history scan — no LLM calls.
+    """
+    diagnoses = load_diagnoses(limit=limit)
+    if not diagnoses:
+        return []
+
+    # Count failure classes (skip healthy)
+    counts: Dict[str, List[LoopDiagnosis]] = {}
+    for d in diagnoses:
+        if d.failure_class == "healthy":
+            continue
+        counts.setdefault(d.failure_class, []).append(d)
+
+    patterns = []
+    for fc, diags in sorted(counts.items(), key=lambda x: -len(x[1])):
+        if len(diags) < min_occurrences:
+            continue
+        recovery = plan_recovery(diags[0])
+        patterns.append(RecurringPattern(
+            failure_class=fc,
+            occurrences=len(diags),
+            first_seen=diags[-1].loop_id,  # diagnoses are reverse-chronological
+            last_seen=diags[0].loop_id,
+            recovery_action=recovery.action if recovery else None,
+            graduation_candidate=len(diags) >= min_occurrences,
+        ))
+
+    log.info("recurring_patterns: %d patterns with %d+ occurrences",
+             len(patterns), min_occurrences)
+    return patterns
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -982,8 +1035,23 @@ def main(argv=None) -> None:
     parser.add_argument("--latest", action="store_true", help="Diagnose the most recent loop")
     parser.add_argument("--lenses", action="store_true", help="Also run multi-lens analysis")
     parser.add_argument("--history", type=int, metavar="N", help="Show last N diagnoses")
+    parser.add_argument("--patterns", action="store_true", help="Show recurring failure patterns (graduation candidates)")
 
     args = parser.parse_args(argv)
+
+    if args.patterns:
+        patterns = find_recurring_patterns()
+        if not patterns:
+            print("No recurring failure patterns found (need 3+ occurrences of the same failure class).")
+        else:
+            print(f"{len(patterns)} recurring pattern(s):")
+            for p in patterns:
+                _grad = " ** GRADUATION CANDIDATE" if p.graduation_candidate else ""
+                print(f"\n  {p.failure_class}  ({p.occurrences}x){_grad}")
+                print(f"    first: {p.first_seen[:8]}  last: {p.last_seen[:8]}")
+                if p.recovery_action:
+                    print(f"    recovery: {p.recovery_action}")
+        return
 
     if args.history:
         diagnoses = load_diagnoses(limit=args.history)

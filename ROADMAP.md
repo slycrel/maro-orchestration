@@ -860,14 +860,15 @@ The agent loop and persona spawn now have structured logging via stdlib `logging
 - [x] `poe.evolver` logger: run start/end, suggestion apply, skill synthesis
 - [x] `poe.heartbeat` logger: tick start/end, health status, escalation count
 - [x] `poe.memory` logger: reflect_and_record, lesson extraction count
+- [x] `poe.director` logger: run_director start/end, ticket count, timing
+- [x] `poe.inspector` logger: run_full_inspector start/end, session/signal counts
+- [x] `poe.mission` logger: run_mission + drain_next_mission lifecycle
+- [x] `poe.constraint` logger: hitl_policy BLOCKED/gated decisions at DEBUG
+- [x] `poe.introspect` logger: diagnosis results, lens findings
 - [x] `_configure_logging()`: `POE_LOG_LEVEL` env var (DEBUG/INFO/WARNING/ERROR), `verbose=True` → DEBUG
 - [x] Format: `HH:MM:SS L poe.module: message` on stderr
 
 **Still pending:**
-- [ ] `poe.director` — mission decomposition, milestone selection, delegation decisions
-- [ ] `poe.inspector` — friction detection, alignment checks, session quality
-- [ ] `poe.mission` — drain lifecycle, milestone progress, notification delivery
-- [ ] `poe.constraint` — detailed pattern match results at DEBUG (why a step was classified)
 - [ ] `poe.io` — Telegram/Slack message dispatch, gateway routing
 
 **Design notes:**

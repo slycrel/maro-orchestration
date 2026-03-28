@@ -16,6 +16,7 @@ from introspect import (
     StepProfile,
     AggregatedDiagnosis,
     RecoveryPlan,
+    RecurringPattern,
     diagnose_loop,
     diagnose_latest,
     save_diagnosis,
@@ -24,6 +25,7 @@ from introspect import (
     aggregate_lenses,
     plan_recovery,
     plan_recovery_all,
+    find_recurring_patterns,
     get_lens_registry,
     _build_step_profiles,
     FAILURE_CLASSES,
@@ -515,3 +517,48 @@ def test_recovery_plan_all_returns_list():
     plans = plan_recovery_all(diag)
     assert isinstance(plans, list)
     assert all(isinstance(p, RecoveryPlan) for p in plans)
+
+
+# ---------------------------------------------------------------------------
+# Recurring Patterns (Phase 46)
+# ---------------------------------------------------------------------------
+
+def test_find_recurring_patterns_empty(tmp_path, monkeypatch):
+    monkeypatch.setattr("introspect._diagnoses_path", lambda: tmp_path / "memory" / "diagnoses.jsonl")
+    patterns = find_recurring_patterns()
+    assert patterns == []
+
+
+def test_find_recurring_patterns_surfaces_repeats(tmp_path, monkeypatch):
+    monkeypatch.setattr("introspect._diagnoses_path", lambda: tmp_path / "memory" / "diagnoses.jsonl")
+    # Write 3 diagnoses with the same failure class
+    for i in range(3):
+        save_diagnosis(LoopDiagnosis(
+            loop_id=f"loop{i:02d}",
+            failure_class="decomposition_too_broad",
+            severity="warning",
+        ))
+    # And 1 with a different class (shouldn't surface)
+    save_diagnosis(LoopDiagnosis(
+        loop_id="loop99",
+        failure_class="adapter_timeout",
+        severity="critical",
+    ))
+    patterns = find_recurring_patterns(min_occurrences=3)
+    assert len(patterns) == 1
+    assert patterns[0].failure_class == "decomposition_too_broad"
+    assert patterns[0].occurrences == 3
+    assert patterns[0].graduation_candidate is True
+    assert patterns[0].recovery_action is not None  # has a recovery plan
+
+
+def test_find_recurring_patterns_ignores_healthy(tmp_path, monkeypatch):
+    monkeypatch.setattr("introspect._diagnoses_path", lambda: tmp_path / "memory" / "diagnoses.jsonl")
+    for i in range(5):
+        save_diagnosis(LoopDiagnosis(
+            loop_id=f"loop{i:02d}",
+            failure_class="healthy",
+            severity="info",
+        ))
+    patterns = find_recurring_patterns()
+    assert patterns == []
