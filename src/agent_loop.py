@@ -727,15 +727,25 @@ def run_agent_loop(
                     pass
         else:
             _prior_retries = _step_retries.get(step_text, 0)
-            if _prior_retries < 1:
-                # Roadblock resilience: retry once with a fallback hint before declaring stuck
+            if _prior_retries < 2:
+                # Phase 35 P2: iterative refinement — up to 2 retries with escalating hints
                 _step_retries[step_text] = _prior_retries + 1
                 _block_reason = outcome.get("stuck_reason", "blocked")
-                _fallback_hint = (
-                    f"[Previous attempt blocked: {_block_reason[:120]}] "
-                    "Try an alternative approach: use a different tool, rephrase the request, "
-                    "work around the obstacle, or summarize what you know so far and mark complete."
-                )
+                if _prior_retries == 0:
+                    # Round 1: generic fallback hint (existing behavior)
+                    _fallback_hint = (
+                        f"[Previous attempt blocked: {_block_reason[:120]}] "
+                        "Try an alternative approach: use a different tool, rephrase the request, "
+                        "work around the obstacle, or summarize what you know so far and mark complete."
+                    )
+                else:
+                    # Round 2: LLM-assisted targeted refinement hint (cheap model)
+                    _fallback_hint = _generate_refinement_hint(
+                        step_text=step_text,
+                        block_reason=_block_reason,
+                        partial_result=step_result,
+                        adapter=adapter,
+                    )
                 _next_step_injected_context = (
                     (_next_step_injected_context + "\n\n" + _fallback_hint).strip()
                     if _next_step_injected_context
@@ -1070,6 +1080,69 @@ def _decompose(
 
 
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Phase 35 P2: Iterative refinement — LLM-assisted patch hint (round 2 retry)
+# ---------------------------------------------------------------------------
+
+def _generate_refinement_hint(
+    step_text: str,
+    block_reason: str,
+    partial_result: str = "",
+    *,
+    adapter=None,
+) -> str:
+    """Generate a targeted refinement hint using a cheap LLM call.
+
+    Called on the second retry of a blocked step. Uses the cheap model
+    to analyze the specific failure and suggest a concrete patch.
+
+    Falls back to a generic hint if the adapter is unavailable or errors.
+    """
+    _fallback = (
+        f"[Refinement attempt 2 — blocked: {block_reason[:100]}] "
+        "Analyze the failure carefully. Try a completely different approach: "
+        "decompose this step further, use only information already available, "
+        "or produce a partial result and mark the step complete."
+    )
+
+    if adapter is None:
+        return _fallback
+
+    try:
+        from llm import LLMMessage, MODEL_CHEAP
+        _refine_prompt = (
+            f"A step in an autonomous agent loop failed twice.\n\n"
+            f"Step: {step_text}\n"
+            f"Failure reason: {block_reason[:200]}\n"
+        )
+        if partial_result:
+            _refine_prompt += f"Partial result so far: {partial_result[:300]}\n"
+        _refine_prompt += (
+            "\nIn ONE sentence, suggest the most likely fix or alternative approach. "
+            "Be specific and actionable. Do not suggest giving up."
+        )
+
+        # Use cheap model for refinement analysis
+        try:
+            from llm import build_adapter
+            _cheap_adapter = build_adapter(model=MODEL_CHEAP)
+        except Exception:
+            _cheap_adapter = adapter
+
+        resp = _cheap_adapter.complete(
+            [LLMMessage("user", _refine_prompt)],
+            max_tokens=150,
+            temperature=0.3,
+        )
+        hint = resp.content.strip()
+        if hint:
+            return f"[Refinement suggestion: {hint}] Previous failure: {block_reason[:80]}"
+    except Exception:
+        pass
+
+    return _fallback
+
+
 # Execute step
 # ---------------------------------------------------------------------------
 

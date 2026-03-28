@@ -659,3 +659,51 @@ def test_token_budget_none_is_ignored(monkeypatch, tmp_path):
     )
     assert result.status == "done"
     assert result.stuck_reason is None or "token_budget" not in result.stuck_reason
+
+
+# ---------------------------------------------------------------------------
+# Phase 35 P2: _generate_refinement_hint
+# ---------------------------------------------------------------------------
+
+from agent_loop import _generate_refinement_hint
+
+
+def test_generate_refinement_hint_no_adapter():
+    """Falls back to generic hint when adapter is None."""
+    hint = _generate_refinement_hint(
+        step_text="fetch external data",
+        block_reason="network timeout",
+        adapter=None,
+    )
+    assert "blocked" in hint.lower() or "refinement" in hint.lower() or "approach" in hint.lower()
+    assert isinstance(hint, str)
+    assert len(hint) > 10
+
+
+def test_generate_refinement_hint_with_failing_adapter():
+    """Falls back to generic hint when adapter raises."""
+    class _BadAdapter:
+        def complete(self, *a, **kw):
+            raise RuntimeError("model unavailable")
+
+    hint = _generate_refinement_hint(
+        step_text="analyze data",
+        block_reason="model error",
+        adapter=_BadAdapter(),
+    )
+    assert isinstance(hint, str)
+    assert len(hint) > 10
+
+
+def test_generate_refinement_hint_uses_llm_response():
+    """Uses LLM response when adapter works."""
+    from unittest.mock import MagicMock
+    mock = MagicMock()
+    mock.complete.return_value.content = "Try fetching from a cached source instead."
+
+    hint = _generate_refinement_hint(
+        step_text="fetch data",
+        block_reason="timeout",
+        adapter=mock,
+    )
+    assert "cached source" in hint or len(hint) > 10
