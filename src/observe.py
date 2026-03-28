@@ -1,4 +1,4 @@
-"""Execution snapshot — Phase 23 first cut.
+"""Execution snapshot — Phase 23 / Phase 36 event stream.
 
 poe-observe              → full snapshot (loop state, heartbeat, recent outcomes, audit tail)
 poe-observe loop         → active goal / loop lock only
@@ -6,8 +6,13 @@ poe-observe heartbeat    → heartbeat health only
 poe-observe outcomes     → recent task outcomes
 poe-observe audit        → sandbox audit log tail
 poe-observe memory       → memory tier stats (same data as Stage 2 of poe-knowledge status)
+poe-observe events       → tail the live event stream (memory/events.jsonl)
+poe-observe watch        → periodic full-snapshot refresh (like `watch`)
 
 All reads are local JSONL/JSON — no LLM calls, no side effects.
+
+Phase 36: write_event() appends structured step/loop events to memory/events.jsonl.
+          Called from agent_loop.py after each step completion.
 """
 
 from __future__ import annotations
@@ -46,6 +51,10 @@ def _heartbeat_path() -> Path:
 
 def _outcomes_path() -> Path:
     return _memory_dir() / "outcomes.jsonl"
+
+
+def _events_path() -> Path:
+    return _memory_dir() / "events.jsonl"
 
 
 def _audit_path() -> Path:
@@ -270,6 +279,91 @@ def print_snapshot(outcomes_limit: int = 10, audit_limit: int = 5) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Phase 36: Event stream — write_event + print_events_tail
+# ---------------------------------------------------------------------------
+
+def write_event(
+    event_type: str,
+    *,
+    goal: str = "",
+    project: str = "",
+    loop_id: str = "",
+    step: str = "",
+    step_idx: int = 0,
+    status: str = "",
+    tokens_in: int = 0,
+    tokens_out: int = 0,
+    elapsed_ms: int = 0,
+    detail: str = "",
+) -> bool:
+    """Append a structured event to memory/events.jsonl.
+
+    Called from agent_loop.py after each step so poe-observe events can
+    display a live feed of what the system is doing.
+
+    Never raises — returns True on success, False on failure.
+
+    event_type values: "step_done" | "step_stuck" | "loop_start" | "loop_done"
+    """
+    try:
+        path = _events_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        entry = {
+            "event_type": event_type,
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "goal": goal[:80],
+            "project": project,
+            "loop_id": loop_id,
+            "step": step[:120],
+            "step_idx": step_idx,
+            "status": status,
+            "tokens_in": tokens_in,
+            "tokens_out": tokens_out,
+            "elapsed_ms": elapsed_ms,
+            "detail": detail[:200],
+        }
+        with path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(entry) + "\n")
+        return True
+    except Exception:
+        return False
+
+
+def print_events_tail(limit: int = 20) -> None:
+    """Print the most recent events from events.jsonl."""
+    path = _events_path()
+    if not path.exists():
+        print("No events recorded yet.")
+        return
+
+    lines = path.read_text(encoding="utf-8").splitlines()
+    entries = []
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            entries.append(json.loads(line))
+        except Exception:
+            continue
+
+    recent = entries[-limit:]
+    print(f"Recent events (last {len(recent)}):")
+    print("─" * 60)
+    for e in recent:
+        ts = e.get("ts", "")[:19].replace("T", " ")
+        etype = e.get("event_type", "?")
+        status = e.get("status", "")
+        step = e.get("step", "")[:50]
+        loop_id = e.get("loop_id", "")[:8]
+        tok = e.get("tokens_in", 0) + e.get("tokens_out", 0)
+        status_icon = {"done": "✓", "stuck": "✗", "start": "→"}.get(status, " ")
+        print(f"  {ts}  [{loop_id}] {status_icon} {etype:<12} {step}")
+        if tok:
+            print(f"  {'':>26}  tokens={tok}")
+
+
+# ---------------------------------------------------------------------------
 # CLI entry point
 # ---------------------------------------------------------------------------
 
@@ -287,6 +381,8 @@ def main(argv: list[str] | None = None) -> None:
     p_audit = sub.add_parser("audit", help="Sandbox audit log tail")
     p_audit.add_argument("--limit", type=int, default=10, help="Number of entries (default: 10)")
     sub.add_parser("memory", help="Memory tier stats")
+    p_events = sub.add_parser("events", help="Live event stream tail (memory/events.jsonl)")
+    p_events.add_argument("--limit", type=int, default=20, help="Number of events (default: 20)")
     p_watch = sub.add_parser("watch", help="Refresh snapshot on an interval (like watch)")
     p_watch.add_argument("--interval", type=float, default=5.0, help="Refresh interval in seconds (default: 5)")
 
@@ -302,6 +398,8 @@ def main(argv: list[str] | None = None) -> None:
         print_audit_tail(limit=args.limit)
     elif args.cmd == "memory":
         print_memory_stats()
+    elif args.cmd == "events":
+        print_events_tail(limit=args.limit)
     elif args.cmd == "watch":
         import time, os
         while True:

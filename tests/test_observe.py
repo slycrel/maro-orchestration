@@ -323,3 +323,81 @@ def test_main_outcomes_limit_flag(monkeypatch, tmp_path, capsys):
     out = capsys.readouterr().out
     # Should show "last 3" in the header
     assert "3" in out
+
+
+# ---------------------------------------------------------------------------
+# Phase 36: write_event and print_events_tail tests
+# ---------------------------------------------------------------------------
+
+from observe import write_event, print_events_tail
+
+
+def test_write_event_creates_events_file(monkeypatch, tmp_path):
+    """write_event creates events.jsonl and returns True."""
+    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    _ws(tmp_path)
+    ok = write_event(
+        "step_done",
+        goal="test goal",
+        project="test-project",
+        loop_id="abc123",
+        step="Do something useful",
+        step_idx=1,
+        status="done",
+        tokens_in=100,
+        tokens_out=50,
+        elapsed_ms=1200,
+    )
+    assert ok is True
+    events_path = _ws(tmp_path) / "events.jsonl"
+    assert events_path.exists()
+    entry = json.loads(events_path.read_text().strip())
+    assert entry["event_type"] == "step_done"
+    assert entry["status"] == "done"
+    assert entry["loop_id"] == "abc123"
+    assert entry["tokens_in"] == 100
+    assert "ts" in entry
+
+
+def test_write_event_appends_multiple(monkeypatch, tmp_path):
+    """write_event appends entries; file grows with each call."""
+    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    _ws(tmp_path)
+    write_event("loop_start", goal="goal A", loop_id="aaa", status="start")
+    write_event("step_done", goal="goal A", loop_id="aaa", step="step 1", status="done")
+    write_event("loop_done", goal="goal A", loop_id="aaa", status="done")
+    events_path = _ws(tmp_path) / "events.jsonl"
+    lines = [l for l in events_path.read_text().splitlines() if l.strip()]
+    assert len(lines) == 3
+    types = [json.loads(l)["event_type"] for l in lines]
+    assert types == ["loop_start", "step_done", "loop_done"]
+
+
+def test_print_events_tail_no_file(monkeypatch, tmp_path, capsys):
+    """print_events_tail says 'No events recorded' when file missing."""
+    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    _ws(tmp_path)
+    print_events_tail()
+    out = capsys.readouterr().out
+    assert "No events" in out
+
+
+def test_print_events_tail_shows_events(monkeypatch, tmp_path, capsys):
+    """print_events_tail displays recent events."""
+    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    _ws(tmp_path)
+    write_event("step_done", goal="my goal", loop_id="x1", step="fetch data", status="done")
+    print_events_tail(limit=5)
+    out = capsys.readouterr().out
+    assert "fetch data" in out
+    assert "x1" in out
+
+
+def test_main_events_subcommand(monkeypatch, tmp_path, capsys):
+    """poe-observe events subcommand prints events tail."""
+    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    _ws(tmp_path)
+    write_event("step_done", goal="goal", loop_id="zzz", step="do it", status="done")
+    observe.main(["events"])
+    out = capsys.readouterr().out
+    assert "do it" in out or "zzz" in out

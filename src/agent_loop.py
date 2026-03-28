@@ -438,6 +438,13 @@ def run_agent_loop(
     if verbose:
         print(f"[poe] decomposed into {len(steps)} steps", file=sys.stderr, flush=True)
 
+    # Phase 36: emit loop_start event
+    try:
+        from observe import write_event as _write_event
+        _write_event("loop_start", goal=goal, project=project or "", loop_id=loop_id, status="start")
+    except Exception:
+        pass
+
     # Phase 35 P1: parallel fan-out — run independent steps concurrently
     if parallel_fan_out > 0 and len(steps) > 1 and _steps_are_independent(steps):
         if verbose:
@@ -596,6 +603,25 @@ def run_agent_loop(
         step_status = outcome["status"]
         step_result = outcome.get("result", "")
         step_summary = outcome.get("summary", step_text)
+
+        # Phase 36: emit step event to events.jsonl for live observability
+        try:
+            from observe import write_event
+            write_event(
+                "step_done" if step_status == "done" else "step_stuck",
+                goal=goal,
+                project=project or "",
+                loop_id=loop_id,
+                step=step_text,
+                step_idx=step_idx,
+                status=step_status,
+                tokens_in=outcome.get("tokens_in", 0),
+                tokens_out=outcome.get("tokens_out", 0),
+                elapsed_ms=step_elapsed,
+                detail=step_summary[:200] if step_summary else "",
+            )
+        except Exception:
+            pass  # Event failures must never break the loop
 
         # Security: scan step result for prompt injection signals (external content defense)
         if _security_available and step_status == "done" and len(step_result) > 200:
@@ -875,6 +901,23 @@ def run_agent_loop(
         f"[loop:{loop_id}] finished status={loop_status} steps={len(step_outcomes)} tokens={total_tokens_in}+{total_tokens_out}",
     ])
     o.write_operator_status()
+
+    # Phase 36: emit loop_done event
+    try:
+        from observe import write_event as _write_event_done
+        _write_event_done(
+            "loop_done",
+            goal=goal,
+            project=project or "",
+            loop_id=loop_id,
+            status=loop_status,
+            tokens_in=total_tokens_in,
+            tokens_out=total_tokens_out,
+            elapsed_ms=elapsed_total,
+            detail=stuck_reason or "",
+        )
+    except Exception:
+        pass
 
     result = LoopResult(
         loop_id=loop_id,
