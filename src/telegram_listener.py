@@ -13,11 +13,14 @@ Usage:
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sys
 import time
 from pathlib import Path
 from typing import Any
+
+log = logging.getLogger("poe.io.telegram")
 
 try:
     import requests
@@ -485,6 +488,7 @@ def poll_once(
     verbose: bool = True,
 ) -> int:
     """Process all pending updates once. Returns number of updates processed."""
+    log.info("telegram_poll dry_run=%s project=%s", dry_run, project)
     token = _resolve_token()
     if not token:
         raise RuntimeError("No Telegram bot token found (set TELEGRAM_BOT_TOKEN or configure openclaw.json)")

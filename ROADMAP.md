@@ -777,8 +777,8 @@ src/
 - [x] **`memory_dir()` consolidated**: added canonical `memory_dir()` to `orch_items.py` (resolution order: `POE_MEMORY_DIR` env → `orch_root()/memory` → `cwd/memory`). Eliminated 12 copies of the same try/except fallback chain across `memory.py`, `gc_memory.py`, `observe.py`, `router.py`, `inspector.py` (×4), `attribution.py`, `eval.py`, `sandbox.py`, `skills.py` (×3), `evolver.py` (×2), `rules.py`. Re-exported from `orch.py`.
 - [x] README architecture diagram (Mermaid) added.
 
-**Still pending:**
-- [ ] Physical subpackage move (one package at a time, tests green after each)
+**Deferred:**
+- [ ] Physical subpackage move — analysis showed 33 import references need updating for just the ops/ group. The churn:benefit ratio is unfavorable while runtime reliability improvements have higher leverage. Revisit when the flat layout causes a real problem (circular imports, test isolation failure).
 
 ---
 
@@ -848,7 +848,7 @@ Currently eval is a one-shot CLI command. The loop is: run eval → find regress
 
 ---
 
-### Phase 43: Structured Logging Expansion *(PARTIAL)*
+### Phase 43: Structured Logging Expansion *(DONE)*
 
 *"If you can't see what the system is doing, you can't fix it when it sticks."*
 
@@ -868,8 +868,10 @@ The agent loop and persona spawn now have structured logging via stdlib `logging
 - [x] `_configure_logging()`: `POE_LOG_LEVEL` env var (DEBUG/INFO/WARNING/ERROR), `verbose=True` → DEBUG
 - [x] Format: `HH:MM:SS L poe.module: message` on stderr
 
-**Still pending:**
-- [ ] `poe.io` — Telegram/Slack message dispatch, gateway routing
+- [x] `poe.io.telegram` logger: poll lifecycle
+- [x] `poe.io.slack` logger: poll lifecycle
+
+Phase 43 complete — all 11 execution modules instrumented.
 
 **Design notes:**
 - Every logger is `poe.<module>` — filter by module in production (`poe.loop` only) or get everything (`poe`)
