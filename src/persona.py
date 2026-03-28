@@ -48,11 +48,14 @@ Usage:
 from __future__ import annotations
 
 import json
+import logging
 import re
 import textwrap
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+log = logging.getLogger("poe.persona")
 
 
 # ---------------------------------------------------------------------------
@@ -400,13 +403,16 @@ def spawn_persona(
         )
 
     # Resolve adapter
+    log.info("spawn persona=%r goal=%r tier=%s", spec.name, goal[:60], spec.model_tier)
     if adapter is None:
         try:
             from llm import build_adapter, MODEL_POWER, MODEL_MID, MODEL_CHEAP
             tier_map = {"power": MODEL_POWER, "mid": MODEL_MID, "cheap": MODEL_CHEAP}
             model = tier_map.get(spec.model_tier, MODEL_MID)
             adapter = build_adapter(model=model)
+            log.info("adapter resolved: %s (model=%s)", type(adapter).__name__, model)
         except Exception as exc:
+            log.error("adapter resolution failed: %s", exc)
             return SpawnResult(
                 persona_name=spec.name, goal=goal,
                 status="stuck", summary=f"No LLM adapter available for persona spawn: {exc}",
@@ -414,6 +420,7 @@ def spawn_persona(
 
     # Build full system prompt
     system_prompt = build_persona_system_prompt(spec, goal=goal)
+    log.debug("system_prompt length=%d chars", len(system_prompt))
 
     # Isolate short-term memory for this spawn
     from memory import short_clear, short_set
@@ -422,6 +429,8 @@ def spawn_persona(
     short_set("persona_goal", goal)
 
     # Run agent loop with persona context
+    import time as _time
+    _spawn_t0 = _time.monotonic()
     try:
         from agent_loop import run_agent_loop
         result = run_agent_loop(
@@ -432,6 +441,9 @@ def spawn_persona(
         )
         short_clear()  # evict session memory after loop
 
+        _elapsed = _time.monotonic() - _spawn_t0
+        log.info("spawn done persona=%r status=%s steps=%d elapsed=%.1fs",
+                 spec.name, result.status, len(result.steps or []), _elapsed)
         return SpawnResult(
             persona_name=spec.name,
             goal=goal,
@@ -443,6 +455,8 @@ def spawn_persona(
         )
     except Exception as exc:
         short_clear()
+        _elapsed = _time.monotonic() - _spawn_t0
+        log.error("spawn failed persona=%r exc=%s elapsed=%.1fs", spec.name, exc, _elapsed)
         return SpawnResult(
             persona_name=spec.name, goal=goal,
             status="stuck", summary=f"Spawn failed: {exc}",

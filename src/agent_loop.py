@@ -18,6 +18,7 @@ CLI:
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sys
 import textwrap
@@ -29,6 +30,43 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
+
+log = logging.getLogger("poe.loop")
+
+_logging_configured = False
+
+def _configure_logging(verbose: bool = False) -> None:
+    """Set up poe.* logger hierarchy once.
+
+    Level resolution (first match wins):
+      1. POE_LOG_LEVEL env var (DEBUG, INFO, WARNING, ERROR)
+      2. verbose=True → DEBUG
+      3. default → WARNING (quiet)
+
+    Format: compact timestamp + level + logger name + message.
+    """
+    global _logging_configured
+    if _logging_configured:
+        return
+    _logging_configured = True
+
+    env_level = os.environ.get("POE_LOG_LEVEL", "").upper()
+    if env_level and hasattr(logging, env_level):
+        level = getattr(logging, env_level)
+    elif verbose:
+        level = logging.DEBUG
+    else:
+        level = logging.WARNING
+
+    root_logger = logging.getLogger("poe")
+    if not root_logger.handlers:
+        handler = logging.StreamHandler(sys.stderr)
+        handler.setFormatter(logging.Formatter(
+            "%(asctime)s %(levelname)-.1s %(name)s: %(message)s",
+            datefmt="%H:%M:%S",
+        ))
+        root_logger.addHandler(handler)
+    root_logger.setLevel(level)
 
 # ---------------------------------------------------------------------------
 # Imports (lazy to avoid circular with orch)
@@ -439,6 +477,11 @@ def _finalize_loop(
     Handles: Reflexion/memory recording, skill crystallisation, skill synthesis.
     All failures are swallowed — post-loop side effects must never raise.
     """
+    _done = sum(1 for s in step_outcomes if s.status == "done")
+    _blocked = sum(1 for s in step_outcomes if s.status == "blocked")
+    log.info("loop_end loop_id=%s status=%s steps=%d/%d(done/blocked) tokens=%d elapsed=%dms",
+             loop_id, loop_status, _done, _blocked,
+             total_tokens_in + total_tokens_out, elapsed_ms)
     # Phase 5: Reflexion — record outcome + extract lessons
     try:
         from memory import reflect_and_record
@@ -555,6 +598,12 @@ def run_agent_loop(
     loop_id = str(uuid.uuid4())[:8]
     started_at = time.monotonic()
     start_ts = datetime.now(timezone.utc).isoformat()
+
+    # Configure logging if verbose or POE_LOG_LEVEL is set
+    _configure_logging(verbose)
+
+    log.info("loop_start loop_id=%s goal=%r project=%s max_steps=%d",
+             loop_id, goal[:80], project or "(auto)", max_steps)
 
     if verbose:
         print(f"[poe] loop_id={loop_id} goal={goal!r}", file=sys.stderr, flush=True)
@@ -1287,6 +1336,8 @@ def _execute_step(
     ancestry_context: str = "",
 ) -> Dict[str, Any]:
     """Execute one step via the LLM. Returns outcome dict."""
+    _step_t0 = time.monotonic()
+    log.info("step_start %d/%d: %s", step_num, total_steps, step_text[:100])
     from llm import LLMMessage
 
     context_block = ""
@@ -1301,8 +1352,13 @@ def _execute_step(
     try:
         from constraint import hitl_policy, ACTION_TIER_DESTROY, ACTION_TIER_EXTERNAL, ACTION_TIER_WRITE
         _hp = hitl_policy(step_text, goal=goal)
+        log.debug("step %d constraint: tier=%s risk=%s allowed=%s",
+                  step_num, _hp["tier"], _hp["risk_level"], _hp["allowed"])
         if not _hp["allowed"]:
             _block_detail = _hp["reason"] or f"tier={_hp['tier']}"
+            log.warning("step %d BLOCKED by constraint: %s (tier=%s risk=%s) elapsed=%.1fs",
+                        step_num, _block_detail, _hp["tier"], _hp["risk_level"],
+                        time.monotonic() - _step_t0)
             return {
                 "status": "blocked",
                 "stuck_reason": f"constraint violation ({_hp['risk_level']}, tier={_hp['tier']}): {_block_detail}",
@@ -1346,6 +1402,8 @@ def _execute_step(
         f"Complete this step now. Call complete_step when done or flag_stuck if blocked."
     )
 
+    log.debug("step %d adapter_call start adapter=%s", step_num, type(adapter).__name__)
+    _llm_t0 = time.monotonic()
     try:
         resp = adapter.complete(
             [
@@ -1358,6 +1416,8 @@ def _execute_step(
             temperature=0.3,
         )
     except Exception as exc:
+        _elapsed = time.monotonic() - _step_t0
+        log.warning("step %d adapter_error: %s elapsed=%.1fs", step_num, exc, _elapsed)
         return {
             "status": "blocked",
             "stuck_reason": f"LLM call failed: {exc}",
@@ -1366,10 +1426,19 @@ def _execute_step(
             "tokens_out": 0,
         }
 
+    _llm_elapsed = time.monotonic() - _llm_t0
+    _tok = resp.input_tokens + resp.output_tokens
+    _has_tool = bool(resp.tool_calls)
+    _content_len = len(resp.content) if resp.content else 0
+    log.debug("step %d adapter_done: llm=%.1fs tokens=%d tool_calls=%s content_len=%d",
+              step_num, _llm_elapsed, _tok, _has_tool, _content_len)
+
     # Parse tool call
     if resp.tool_calls:
         tc = resp.tool_calls[0]
         if tc.name == "complete_step":
+            log.info("step %d DONE (complete_step) tokens=%d elapsed=%.1fs",
+                     step_num, _tok, time.monotonic() - _step_t0)
             return {
                 "status": "done",
                 "result": tc.arguments.get("result", resp.content),
@@ -1378,9 +1447,12 @@ def _execute_step(
                 "tokens_out": resp.output_tokens,
             }
         elif tc.name == "flag_stuck":
+            _reason = tc.arguments.get("reason", "unknown")
+            log.info("step %d BLOCKED (flag_stuck) reason=%r tokens=%d elapsed=%.1fs",
+                     step_num, _reason[:80], _tok, time.monotonic() - _step_t0)
             return {
                 "status": "blocked",
-                "stuck_reason": tc.arguments.get("reason", "unknown"),
+                "stuck_reason": _reason,
                 "result": tc.arguments.get("attempted", ""),
                 "tokens_in": resp.input_tokens,
                 "tokens_out": resp.output_tokens,
@@ -1388,6 +1460,8 @@ def _execute_step(
 
     # No tool call — treat content as result (some models don't always call tools)
     if resp.content and len(resp.content) > 20:
+        log.info("step %d DONE (content fallback, %d chars) tokens=%d elapsed=%.1fs",
+                 step_num, _content_len, _tok, time.monotonic() - _step_t0)
         return {
             "status": "done",
             "result": resp.content,
@@ -1396,6 +1470,9 @@ def _execute_step(
             "tokens_out": resp.output_tokens,
         }
 
+    log.warning("step %d BLOCKED (no tool call, content=%d chars) tokens=%d elapsed=%.1fs content=%r",
+                step_num, _content_len, _tok, time.monotonic() - _step_t0,
+                (resp.content or "")[:120])
     return {
         "status": "blocked",
         "stuck_reason": "LLM did not call a tool and produced no useful content",
