@@ -1059,6 +1059,25 @@ def run_agent_loop(
         # Write artifact
         _write_step_artifact(project, loop_id, step_idx, step_text, step_result)
 
+        # Lightweight verification: check if .py filenames cited in the result
+        # actually exist. Append a correction note if hallucinated files found.
+        if step_status == "done" and step_result and ".py" in step_result:
+            try:
+                import re as _verify_re
+                _cited_files = set(_verify_re.findall(r'\b([a-z_]+\.py)\b', step_result))
+                _src_files = set(f.name for f in Path("src").glob("*.py")) if Path("src").exists() else set()
+                _test_files = set(f.name for f in Path("tests").glob("*.py")) if Path("tests").exists() else set()
+                _all_real = _src_files | _test_files
+                _hallucinated = _cited_files - _all_real - {"__init__.py", "setup.py", "conftest.py"}
+                if _hallucinated and len(_hallucinated) <= len(_cited_files):
+                    _note = f"\n[VERIFICATION: {len(_hallucinated)} file(s) cited but not found: {', '.join(sorted(_hallucinated)[:5])}]"
+                    step_result = step_result + _note
+                    outcome["result"] = step_result
+                    log.warning("step %d verification: %d hallucinated files: %s",
+                                step_idx, len(_hallucinated), ", ".join(sorted(_hallucinated)[:5]))
+            except Exception:
+                pass  # verification must never break the loop
+
         if step_status == "done":
             if item_index >= 0:
                 o.mark_item(project, item_index, o.STATE_DONE)
