@@ -164,6 +164,22 @@ _DECOMPOSE_SYSTEM = textwrap.dedent("""\
     should touch at most ~2000 lines of code. If a directory has 20+ files,
     split the review across multiple steps by functional area.
 
+    LONG-RUNNING COMMANDS (tests, builds, installs): never combine execution
+    with analysis. The command and the analysis are ALWAYS separate steps.
+
+    BAD:  "Run the full test suite and analyze failures"
+    GOOD: "Run pytest with -q flag and capture output to a file"
+          "Read the test output and summarize pass/fail/skip counts"
+          "Identify failing tests and categorize the failure types"
+
+    BAD:  "Build the project and verify it works"
+    GOOD: "Run the build command and save output"
+          "Check build output for errors or warnings"
+
+    Any step that runs an external command (pytest, make, npm, docker, git)
+    should ONLY run the command and save/report its output. Analysis of that
+    output is a separate subsequent step.
+
     Prefer more steps that are each fast and concrete over fewer steps that are
     broad and slow. Setup steps (clone, fetch, install) should always be their
     own step, never bundled with analysis work.
@@ -1333,6 +1349,46 @@ def run_agent_loop(
         clear_loop_running()
     except Exception:
         pass
+
+    # Phase 45: Auto-recovery — if loop stuck with a low-risk auto-apply recovery,
+    # retry once with adjusted parameters. Only fires on first attempt (no recursion).
+    _auto_recovery_attempted = getattr(run_agent_loop, "_recovery_in_progress", False)
+    if (result.status == "stuck" and not dry_run and not _auto_recovery_attempted):
+        try:
+            from introspect import diagnose_loop as _diag_fn, plan_recovery as _plan_fn
+            _diag = _diag_fn(loop_id)
+            _recovery = _plan_fn(_diag)
+            if _recovery and _recovery.auto_apply and _recovery.risk == "low":
+                log.info("auto-recovery: %s (class=%s)", _recovery.action, _diag.failure_class)
+                _new_params = dict(_recovery.params)
+                _new_max_steps = _new_params.pop("max_steps", max_steps)
+                _new_max_iter = _new_params.pop("max_iterations", max_iterations)
+                # Guard against infinite recursion
+                run_agent_loop._recovery_in_progress = True  # type: ignore[attr-defined]
+                try:
+                    result = run_agent_loop(
+                        goal=goal,
+                        project=project,
+                        model=model,
+                        adapter=adapter,
+                        max_steps=_new_max_steps,
+                        max_iterations=_new_max_iter,
+                        dry_run=dry_run,
+                        verbose=verbose,
+                        interrupt_queue=interrupt_queue,
+                        hook_registry=hook_registry,
+                        ancestry_context_extra=ancestry_context_extra,
+                        step_callback=step_callback,
+                        parallel_fan_out=parallel_fan_out,
+                        token_budget=token_budget,
+                    )
+                    log.info("auto-recovery result: status=%s", result.status)
+                finally:
+                    run_agent_loop._recovery_in_progress = False  # type: ignore[attr-defined]
+        except ImportError:
+            pass
+        except Exception as exc:
+            log.debug("auto-recovery failed: %s", exc)
 
     return result
 
