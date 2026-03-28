@@ -12,14 +12,35 @@ Thanks for helping improve `openclaw-orchestration`.
 ## Local setup
 
 ```bash
-chmod +x scripts/*.sh
+# Create and activate a virtual environment
 python3 -m venv .venv
 source .venv/bin/activate
+
+# Install the package in editable mode with dev dependencies
+pip install -e ".[dev]"
+
+# Make scripts executable
+chmod +x scripts/*.sh
 ```
+
+`[dev]` pulls in `pytest` and `requests`.  For the full optional stack (Slack, YAML persona files, websocket gateway):
+
+```bash
+pip install -e ".[all]"
+```
+
+## Running tests
+
+```bash
+python3 -m pytest
+```
+
+All tests are self-contained and mock LLM calls — no API keys needed.  1460+ tests, ~80 seconds.
 
 ## Suggested pre-PR checks
 
 ```bash
+python3 -m pytest
 bash -n scripts/*.sh
 python3 -m py_compile src/orch.py
 ```

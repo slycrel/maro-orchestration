@@ -657,7 +657,7 @@ The evolver currently optimizes for success rate. It should also optimize for to
 
 ---
 
-### Phase 35: Backlog Steal-List — DeerFlow / Nanoclaws / AutoHarness *(PARTIAL)*
+### Phase 35: Backlog Steal-List — DeerFlow / Nanoclaws / AutoHarness *(DONE)*
 
 Research triage in `docs/research/backlog-triage.md`. P1 items (highest leverage):
 
@@ -667,11 +667,11 @@ Research triage in `docs/research/backlog-triage.md`. P1 items (highest leverage
 - [x] **Constraint harness layer** — `src/constraint.py`: 5 pattern groups (destructive, secret, path_escape, unsafe_network, unsafe_exec). HIGH blocks execution, MEDIUM warns. Pluggable `CONSTRAINT_REGISTRY`. Fires before LLM call in `agent_loop.py`.
 - [x] **TF-IDF memory retrieval** — `_tokenize()` + `_tfidf_rank()` in `memory.py`: pure stdlib cosine similarity. `inject_tiered_lessons()` and `load_lessons()` re-rank by relevance when `query=` provided. Smooth IDF variant handles small corpora.
 
-P2 items (infrastructure):
-- [ ] Machine-readable agent capability manifest (YAML, replaces AGENTS.md manual prose)
-- [ ] Structured iterative refinement loop (action → env response → patch → re-validate, N rounds before escalation)
-- [ ] Reporter/synthesis agent role (consolidates multi-agent outputs into structured deliverable)
-- [ ] Systematic HITL gating taxonomy (read/write/destroy/external — declarative, not implicit)
+**Shipped (Phase 35 P2 — March 2026):**
+- [x] **Machine-readable agent capability manifest** — `generate_manifest()` + `save_manifest()` + `load_manifest()` in `persona.py`; `poe-persona manifest [--format text|json|save]` CLI subcommand. Scans `PersonaRegistry` + routing keyword map; sorted alphabetical output.
+- [x] **Structured iterative refinement loop** — `_generate_refinement_hint()` in `agent_loop.py`: round 2 retry uses cheap LLM to generate targeted patch suggestions based on step text + block reason. Extended `_step_retries` cap from 1 to 2 rounds.
+- [x] **Reporter/synthesis agent role** — `personas/reporter.md`: consolidation/synthesis persona (model_tier: mid). Wired into `_PERSONA_ROUTING` + `_PERSONA_ROUTING_KEYWORDS` in `persona.py` with consolidation/synthesis/final-report trigger keywords.
+- [x] **Systematic HITL gating taxonomy** — `classify_action_tier()` + `hitl_policy()` + `ACTION_TIER_*` constants in `constraint.py`. Four tiers: READ (none), WRITE (warn), DESTROY (block), EXTERNAL (confirm). `hitl_policy()` folds tier + constraint risk into a single policy dict. 42 tests pass.
 
 ---
 

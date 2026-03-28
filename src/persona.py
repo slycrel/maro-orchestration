@@ -508,6 +508,10 @@ _PERSONA_ROUTING: List[tuple] = [
     # Finance / market / trading / polymarket → finance-analyst
     (["polymarket", "market", "trading", "prediction market", "bet", "odds",
       "finance", "investment", "portfolio", "price", "token", "crypto"], "finance-analyst", 0.80),
+    # Synthesis / consolidate / combine outputs → reporter
+    (["consolidate", "synthesize", "synthesis", "combine outputs", "merge results",
+      "write report", "compile findings", "summarize all", "integrate results",
+      "final report", "deliverable", "combine sub-agent"], "reporter", 0.80),
 ]
 
 _DEFAULT_PERSONA = "research-assistant-deep-synth"
@@ -808,4 +812,5 @@ _PERSONA_ROUTING_KEYWORDS: Dict[str, List[str]] = {
     "ops": ["deploy", "monitor", "ops", "infrastructure", "pipeline", "automate"],
     "finance-analyst": ["finance", "invest", "portfolio", "market", "trading", "profit"],
     "psyche-researcher": ["psychology", "neurology", "cognitive", "mental", "behavior"],
+    "reporter": ["consolidate", "synthesize", "combine outputs", "final report", "merge results"],
 }

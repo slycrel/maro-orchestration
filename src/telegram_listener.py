@@ -19,7 +19,12 @@ import time
 from pathlib import Path
 from typing import Any
 
-import requests
+try:
+    import requests
+    _REQUESTS_AVAILABLE = True
+except ImportError:  # pragma: no cover
+    requests = None  # type: ignore[assignment]
+    _REQUESTS_AVAILABLE = False
 
 # Module-level imports so tests can patch cleanly
 try:
@@ -118,6 +123,8 @@ class TelegramBot:
         self._base = f"https://api.telegram.org/bot{token}"
 
     def _call(self, method: str, **params) -> dict:
+        if not _REQUESTS_AVAILABLE:
+            raise ImportError("telegram_listener requires 'requests': pip install requests")
         resp = requests.post(f"{self._base}/{method}", json=params, timeout=30)
         data = resp.json()
         if not data.get("ok"):

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Phase 35 P1: Constraint harness — pre-execution action validation.
+"""Phase 35 P1/P2: Constraint harness — pre-execution action validation.
 
 Checks step text for risky patterns before execution.  Classifies risk as
 LOW / MEDIUM / HIGH.  Callers decide what to do with each level; the typical
@@ -8,6 +8,17 @@ policy is:
     LOW     → proceed, no log entry needed
     MEDIUM  → proceed, log a warning
     HIGH    → block the step, record as stuck
+
+Phase 35 P2 adds a HITL (Human-in-the-Loop) gating taxonomy. Actions are
+classified by *semantic action tier*:
+
+    READ     → no gate; proceed freely (observing only)
+    WRITE    → warn gate; log and proceed (persistent side-effects)
+    DESTROY  → block gate; requires explicit approval (irreversible)
+    EXTERNAL → confirm gate; requires confirmation (leaves this system)
+
+Use ``classify_action_tier()`` to determine the tier and ``hitl_policy()``
+to get a combined policy decision.
 
 Constraints are pluggable: add a callable to CONSTRAINT_REGISTRY to extend.
 Each constraint is a function(step_text, goal) -> Optional[ConstraintFlag].
@@ -213,3 +224,156 @@ def register_constraint(fn: Callable[[str, str], List[ConstraintFlag]]) -> None:
         fn: callable(step_text, goal) -> List[ConstraintFlag]
     """
     CONSTRAINT_REGISTRY.append(fn)
+
+
+# ---------------------------------------------------------------------------
+# Phase 35 P2 — HITL gating taxonomy
+# ---------------------------------------------------------------------------
+
+# Action tiers (semantic classification of what kind of thing a step does).
+ACTION_TIER_READ = "READ"
+ACTION_TIER_WRITE = "WRITE"
+ACTION_TIER_DESTROY = "DESTROY"
+ACTION_TIER_EXTERNAL = "EXTERNAL"
+
+# Gate policies: what the system should do when an action of each tier is found.
+# none    → proceed silently
+# warn    → log a warning, then proceed
+# confirm → pause and require explicit approval before proceeding
+# block   → halt; never execute without a human override
+_TIER_GATE = {
+    ACTION_TIER_READ:     "none",
+    ACTION_TIER_WRITE:    "warn",
+    ACTION_TIER_DESTROY:  "block",
+    ACTION_TIER_EXTERNAL: "confirm",
+}
+
+# Patterns that indicate irreversible destruction.
+_DESTROY_TIER_PATTERNS = [
+    r"\brm\b",
+    r"\bdelete\b",
+    r"\bremove\b",
+    r"\bshutil\.rmtree\b",
+    r"\bdrop\s+table\b",
+    r"\btruncate\b",
+    r"\bwipe\b",
+    r"\bformat\s+/dev/",
+    r"\bpurge\b",
+    r"\buninstall\b",
+    r"\bdestroy\b",
+    r"\berase\b",
+    r"\boverwrite\s+(all|every|the)\b",
+]
+
+# Patterns that indicate actions leaving this system (network, APIs, git remote).
+_EXTERNAL_TIER_PATTERNS = [
+    r"\bcurl\b",
+    r"\bwget\b",
+    r"\bgit\s+push\b",
+    r"\bgit\s+pull\b",
+    r"\bsend\s+(an?\s+)?(email|sms|text|message|notification|alert)\b",
+    r"\bpost\s+(to\s+)?(twitter|x\.com|slack|telegram|discord)\b",
+    r"\bpublish\b",
+    r"\bdeploy\b",
+    r"\bupload\b",
+    r"\bsubmit\b",
+    r"\bapi\s+call\b",
+    r"\bwebhook\b",
+    r"\bnotify\b",
+    r"\bbroadcast\b",
+    r"\btweet\b",
+]
+
+# Patterns that indicate file/state writes (persistent but not irreversible).
+_WRITE_TIER_PATTERNS = [
+    r"\bwrite\b",
+    r"\bsave\b",
+    r"\bcreate\b",
+    r"\bappend\b",
+    r"\bmodify\b",
+    r"\bedit\b",
+    r"\bupdate\b",
+    r"\bmkdir\b",
+    r"\btouch\b",
+    r"\bcopy\b",
+    r"\bmove\b",
+    r"\brename\b",
+    r"\binsert\s+into\b",
+    r"\bcommit\b",
+    r"\bchmod\b",
+    r"\bchown\b",
+]
+
+# READ is the default — no explicit patterns needed (anything not matched above).
+
+
+def classify_action_tier(step_text: str, goal: str = "") -> str:
+    """Classify the semantic action tier of a step.
+
+    Returns one of ACTION_TIER_READ, ACTION_TIER_WRITE, ACTION_TIER_DESTROY,
+    or ACTION_TIER_EXTERNAL.  Precedence (highest first): DESTROY > EXTERNAL > WRITE > READ.
+
+    Args:
+        step_text: The step description string.
+        goal: Optional goal context (not currently used in classification).
+
+    Returns:
+        One of the ACTION_TIER_* constants.
+    """
+    combined = step_text.lower()
+
+    for pat in _DESTROY_TIER_PATTERNS:
+        if re.search(pat, combined, re.I):
+            return ACTION_TIER_DESTROY
+
+    for pat in _EXTERNAL_TIER_PATTERNS:
+        if re.search(pat, combined, re.I):
+            return ACTION_TIER_EXTERNAL
+
+    for pat in _WRITE_TIER_PATTERNS:
+        if re.search(pat, combined, re.I):
+            return ACTION_TIER_WRITE
+
+    return ACTION_TIER_READ
+
+
+def hitl_policy(step_text: str, goal: str = "") -> dict:
+    """Return a combined HITL + constraint policy decision for a step.
+
+    Runs both the existing constraint checks (risk level) and the semantic
+    action-tier classification, then folds them into a single policy dict.
+
+    Returns a dict with keys:
+        tier          str   — ACTION_TIER_* constant
+        gate          str   — "none" | "warn" | "confirm" | "block"
+        allowed       bool  — False if HIGH risk or DESTROY tier
+        risk_level    str   — "LOW" | "MEDIUM" | "HIGH"
+        flags         list  — ConstraintFlag dicts from check_step_constraints()
+        reason        str | None
+
+    The ``allowed`` field is False when *either* the constraint harness raises
+    HIGH or the tier is DESTROY.  The gate field is the *stricter* of the two
+    signals (tier gate vs risk-derived gate).
+    """
+    constraint_result = check_step_constraints(step_text, goal)
+    tier = classify_action_tier(step_text, goal)
+    tier_gate = _TIER_GATE[tier]
+
+    # Derive a gate from risk level for comparison.
+    _risk_gate = {"HIGH": "block", "MEDIUM": "warn", "LOW": "none"}
+    risk_gate = _risk_gate.get(constraint_result.risk_level, "none")
+
+    # Pick the stricter gate.
+    _gate_order = {"none": 0, "warn": 1, "confirm": 2, "block": 3}
+    effective_gate = tier_gate if _gate_order[tier_gate] >= _gate_order[risk_gate] else risk_gate
+
+    allowed = constraint_result.allowed and tier != ACTION_TIER_DESTROY
+
+    return {
+        "tier": tier,
+        "gate": effective_gate,
+        "allowed": allowed,
+        "risk_level": constraint_result.risk_level,
+        "flags": [{"name": f.name, "risk": f.risk, "detail": f.detail} for f in constraint_result.flags],
+        "reason": constraint_result.reason,
+    }

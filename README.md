@@ -63,6 +63,9 @@ All share one interface: `LLMAdapter.complete(messages, tools) → LLMResponse`
 ## Quickstart
 
 ```bash
+# Install (creates editable install with test + runtime deps)
+pip install -e ".[dev]"
+
 # Bootstrap workspace + services
 python3 src/cli.py poe-bootstrap install
 
@@ -250,7 +253,7 @@ Next run with similar task:
 ## Development
 
 ```bash
-# Run tests (1380+ passing, all LLM calls mocked)
+# Run tests (1460+ passing, all LLM calls mocked)
 python3 -m pytest tests/ -q
 
 # Dry-run (no LLM calls)
