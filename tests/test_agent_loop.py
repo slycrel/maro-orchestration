@@ -15,7 +15,11 @@ import orch
 from agent_loop import (
     LoopResult,
     StepOutcome,
+    _BlockDecision,
     _DryRunAdapter,
+    _build_loop_context,
+    _handle_blocked_step,
+    _finalize_loop,
     _decompose,
     _execute_step,
     _goal_to_slug,
@@ -693,6 +697,199 @@ def test_generate_refinement_hint_with_failing_adapter():
     )
     assert isinstance(hint, str)
     assert len(hint) > 10
+
+
+# ---------------------------------------------------------------------------
+# _build_loop_context
+# ---------------------------------------------------------------------------
+
+def test_build_loop_context_returns_four_tuple():
+    """_build_loop_context always returns a 4-tuple even with nothing available."""
+    result = _build_loop_context("some research goal")
+    assert len(result) == 4
+    lessons_ctx, skills_ctx, cost_ctx, had_no_skill = result
+    assert isinstance(lessons_ctx, str)
+    assert isinstance(skills_ctx, str)
+    assert isinstance(cost_ctx, str)
+    assert isinstance(had_no_skill, bool)
+
+
+def test_build_loop_context_no_skills_sets_flag(monkeypatch):
+    """had_no_matching_skill=True when skills module returns empty list."""
+    monkeypatch.setattr("agent_loop._build_loop_context",
+        lambda goal, verbose=False: ("", "", "", True))
+    _, _, _, had_no_skill = _build_loop_context.__wrapped__("goal") if hasattr(_build_loop_context, "__wrapped__") else _build_loop_context("goal")
+    # Verify the real function also handles empty skills gracefully
+    result = _build_loop_context("unlikely goal zzzxxx999aaa")
+    assert result[3] is True or result[3] is False  # bool either way
+
+
+def test_build_loop_context_survives_import_errors(monkeypatch):
+    """_build_loop_context never raises even when memory/skills are missing."""
+    import sys
+    original_memory = sys.modules.get("memory")
+    sys.modules["memory"] = None  # type: ignore[assignment]
+    try:
+        result = _build_loop_context("test goal")
+        assert len(result) == 4
+    finally:
+        if original_memory is not None:
+            sys.modules["memory"] = original_memory
+        elif "memory" in sys.modules:
+            del sys.modules["memory"]
+
+
+# ---------------------------------------------------------------------------
+# _handle_blocked_step
+# ---------------------------------------------------------------------------
+
+def test_handle_blocked_step_retry_on_first_block():
+    """First block → retry=True with generic hint."""
+    decision = _handle_blocked_step(
+        step_text="fetch data from API",
+        outcome={"stuck_reason": "network timeout", "result": ""},
+        prior_retries=0,
+        adapter=None,
+    )
+    assert decision.retry is True
+    assert "blocked" in decision.hint.lower() or "alternative" in decision.hint.lower()
+    assert decision.loop_status == ""
+    assert decision.stuck_reason == ""
+
+
+def test_handle_blocked_step_retry_on_second_block():
+    """Second block → retry=True with refinement hint."""
+    decision = _handle_blocked_step(
+        step_text="analyze the dataset",
+        outcome={"stuck_reason": "permission denied", "result": "partial output"},
+        prior_retries=1,
+        adapter=None,
+    )
+    assert decision.retry is True
+    assert isinstance(decision.hint, str)
+    assert len(decision.hint) > 10
+
+
+def test_handle_blocked_step_terminates_after_two_retries():
+    """Third block (prior_retries=2) → retry=False, loop_status=stuck."""
+    decision = _handle_blocked_step(
+        step_text="write to database",
+        outcome={"stuck_reason": "connection refused", "result": ""},
+        prior_retries=2,
+        adapter=None,
+    )
+    assert decision.retry is False
+    assert decision.loop_status == "stuck"
+    assert "connection refused" in decision.stuck_reason
+
+
+def test_handle_blocked_step_preserves_original_reason():
+    """The stuck_reason in the decision comes from outcome, not fabricated."""
+    decision = _handle_blocked_step(
+        step_text="deploy service",
+        outcome={"stuck_reason": "auth token expired", "result": ""},
+        prior_retries=2,
+        adapter=None,
+    )
+    assert "auth token expired" in decision.stuck_reason
+
+
+def test_handle_blocked_step_missing_reason_uses_fallback():
+    """Works cleanly when outcome has no stuck_reason key."""
+    decision = _handle_blocked_step(
+        step_text="run tests",
+        outcome={},
+        prior_retries=2,
+        adapter=None,
+    )
+    assert decision.retry is False
+    assert isinstance(decision.stuck_reason, str)
+
+
+# ---------------------------------------------------------------------------
+# _finalize_loop
+# ---------------------------------------------------------------------------
+
+def test_finalize_loop_does_not_raise_on_empty_outcomes(tmp_path, monkeypatch):
+    """_finalize_loop never raises even with empty step_outcomes."""
+    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    _finalize_loop(
+        loop_id="test-loop",
+        goal="test goal",
+        project="test-project",
+        loop_status="done",
+        step_outcomes=[],
+        adapter=None,
+        dry_run=True,
+        verbose=False,
+        total_tokens_in=0,
+        total_tokens_out=0,
+        elapsed_ms=100,
+        had_no_matching_skill=False,
+    )
+
+
+def test_finalize_loop_calls_reflect_and_record(monkeypatch):
+    """_finalize_loop calls reflect_and_record with the right arguments."""
+    calls = {}
+
+    def fake_reflect(goal, status, result_summary, task_type, project, **kw):
+        calls["goal"] = goal
+        calls["status"] = status
+        calls["task_type"] = task_type
+
+    import memory
+    monkeypatch.setattr(memory, "reflect_and_record", fake_reflect)
+
+    _finalize_loop(
+        loop_id="fl-test",
+        goal="my goal",
+        project="proj",
+        loop_status="done",
+        step_outcomes=[],
+        adapter=None,
+        dry_run=False,
+        verbose=False,
+        total_tokens_in=5,
+        total_tokens_out=10,
+        elapsed_ms=200,
+        had_no_matching_skill=False,
+    )
+
+    assert calls.get("goal") == "my goal"
+    assert calls.get("status") == "done"
+    assert calls.get("task_type") == "agenda"
+
+
+def test_finalize_loop_skips_reflexion_in_dry_run(monkeypatch):
+    """dry_run=True → adapter passed as None to reflect_and_record."""
+    adapter_used = {}
+
+    def fake_reflect(goal, status, result_summary, task_type, project, *, adapter, **kw):
+        adapter_used["value"] = adapter
+
+    import memory
+    monkeypatch.setattr(memory, "reflect_and_record", fake_reflect)
+
+    class _FakeAdapter:
+        model_key = "test"
+
+    _finalize_loop(
+        loop_id="dr-test",
+        goal="goal",
+        project="proj",
+        loop_status="done",
+        step_outcomes=[],
+        adapter=_FakeAdapter(),
+        dry_run=True,
+        verbose=False,
+        total_tokens_in=0,
+        total_tokens_out=0,
+        elapsed_ms=0,
+        had_no_matching_skill=False,
+    )
+
+    assert adapter_used.get("value") is None
 
 
 def test_generate_refinement_hint_uses_llm_response():

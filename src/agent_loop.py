@@ -272,6 +272,221 @@ def _run_steps_parallel(
 
 
 # ---------------------------------------------------------------------------
+# Loop context / decompose helpers
+# ---------------------------------------------------------------------------
+
+@dataclass
+class _BlockDecision:
+    """Outcome of _handle_blocked_step(): what should the main loop do next."""
+    retry: bool            # True → re-queue step; False → terminate loop
+    hint: str              # context to prepend on retry
+    loop_status: str       # "stuck" on terminate, unchanged on retry
+    stuck_reason: str      # non-empty on terminate
+
+
+def _build_loop_context(
+    goal: str,
+    verbose: bool = False,
+) -> tuple:
+    """Load all context needed before decomposing a goal.
+
+    Returns:
+        (lessons_context, skills_context, cost_context, had_no_matching_skill)
+
+    All failures are swallowed — missing memory or skills never block a loop.
+    """
+    # Lessons from tiered memory
+    lessons_context = ""
+    try:
+        from memory import inject_lessons_for_task
+        lessons_context = inject_lessons_for_task("agenda", goal, max_lessons=3)
+    except Exception:
+        pass
+
+    # Resurrected graveyard lessons (topic-relevant, decayed)
+    try:
+        from memory import search_graveyard
+        _graveyard = search_graveyard(goal, resurrect=True)
+        if _graveyard:
+            if verbose:
+                print(
+                    f"[poe] resurrecting {len(_graveyard)} graveyard lesson(s) for goal",
+                    file=sys.stderr, flush=True,
+                )
+            _graveyard_lines = "\n".join(f"- {l.lesson}" for l in _graveyard[:3])
+            lessons_context += f"\n\nPreviously-learned (resurrected from decay):\n{_graveyard_lines}"
+    except Exception:
+        pass
+
+    # Matching skills for decompose prompt injection
+    skills_context = ""
+    had_no_matching_skill = False
+    try:
+        from skills import find_matching_skills, format_skills_for_prompt
+        _matching_skills = find_matching_skills(goal)
+        skills_context = format_skills_for_prompt(_matching_skills)
+        if _matching_skills and verbose:
+            print(
+                f"[poe] injecting {len(_matching_skills)} skill(s) into decompose",
+                file=sys.stderr, flush=True,
+            )
+        had_no_matching_skill = not _matching_skills
+    except Exception:
+        had_no_matching_skill = True
+
+    # Cost awareness: expensive step types from metrics history
+    cost_context = ""
+    try:
+        from metrics import analyze_step_costs
+        _cost_analysis = analyze_step_costs()
+        _expensive = _cost_analysis.get("expensive_types", [])
+        if _expensive:
+            cost_context = (
+                "COST AWARENESS: The following step types have historically consumed "
+                "disproportionate tokens — prefer cheaper alternatives when possible: "
+                + ", ".join(_expensive)
+            )
+    except Exception:
+        pass
+
+    return lessons_context, skills_context, cost_context, had_no_matching_skill
+
+
+def _handle_blocked_step(
+    step_text: str,
+    outcome: dict,
+    prior_retries: int,
+    adapter,
+) -> _BlockDecision:
+    """Decide what to do when a step returns status != 'done'.
+
+    Does not mutate any loop state — returns a decision the caller applies.
+
+    Args:
+        step_text:     The step text that failed.
+        outcome:       The raw outcome dict from _execute_step().
+        prior_retries: Number of times this step has already been retried.
+        adapter:       LLM adapter (used for round-2 refinement hint).
+
+    Returns:
+        _BlockDecision — retry=True means re-queue; retry=False means terminate.
+    """
+    block_reason = outcome.get("stuck_reason", "blocked")
+    step_result = outcome.get("result", "")
+
+    if prior_retries < 2:
+        if prior_retries == 0:
+            # Round 1: generic fallback hint
+            hint = (
+                f"[Previous attempt blocked: {block_reason[:120]}] "
+                "Try an alternative approach: use a different tool, rephrase the request, "
+                "work around the obstacle, or summarize what you know so far and mark complete."
+            )
+        else:
+            # Round 2: LLM-assisted targeted refinement hint
+            hint = _generate_refinement_hint(
+                step_text=step_text,
+                block_reason=block_reason,
+                partial_result=step_result,
+                adapter=adapter,
+            )
+        return _BlockDecision(retry=True, hint=hint, loop_status="", stuck_reason="")
+    else:
+        return _BlockDecision(
+            retry=False,
+            hint="",
+            loop_status="stuck",
+            stuck_reason=block_reason,
+        )
+
+
+def _finalize_loop(
+    loop_id: str,
+    goal: str,
+    project: str,
+    loop_status: str,
+    step_outcomes: List["StepOutcome"],
+    adapter,
+    *,
+    dry_run: bool,
+    verbose: bool,
+    total_tokens_in: int,
+    total_tokens_out: int,
+    elapsed_ms: int,
+    had_no_matching_skill: bool,
+) -> None:
+    """Run all post-loop side effects after the main execution loop ends.
+
+    Handles: Reflexion/memory recording, skill crystallisation, skill synthesis.
+    All failures are swallowed — post-loop side effects must never raise.
+    """
+    # Phase 5: Reflexion — record outcome + extract lessons
+    try:
+        from memory import reflect_and_record
+        done_steps = [s for s in step_outcomes if s.status == "done"]
+        summary = (
+            f"Completed {len(done_steps)}/{len(step_outcomes)} steps. "
+            + (step_outcomes[-1].result[:80] if step_outcomes and loop_status == "done" else "")
+        )
+        reflect_and_record(
+            goal=goal,
+            status=loop_status,
+            result_summary=summary,
+            task_type="agenda",
+            project=project,
+            tokens_in=total_tokens_in,
+            tokens_out=total_tokens_out,
+            elapsed_ms=elapsed_ms,
+            adapter=adapter if not dry_run else None,
+            dry_run=dry_run,
+        )
+    except Exception:
+        pass
+
+    # Auto-extract skills from successful loops (crystallise patterns)
+    if loop_status == "done" and not dry_run and step_outcomes:
+        try:
+            from skills import extract_skills, save_skill, load_skills
+            done_summaries = [s.summary for s in step_outcomes if s.status == "done" and s.summary]
+            outcome_for_extraction = {
+                "goal": goal,
+                "status": loop_status,
+                "task_type": "agenda",
+                "summary": ". ".join(done_summaries[:4]),
+                "steps": [
+                    {"step": s.step, "status": s.status, "result": s.result, "summary": s.summary}
+                    for s in step_outcomes
+                ],
+                "project": project,
+            }
+            existing_skills = {s.name for s in load_skills()}
+            extracted = extract_skills([outcome_for_extraction], adapter if adapter else None)
+            for skill in extracted:
+                if skill.name not in existing_skills:
+                    save_skill(skill)
+                    if verbose:
+                        print(f"[poe] skill crystallised: {skill.name}", file=sys.stderr, flush=True)
+        except Exception:
+            pass
+
+    # Phase 32: skill synthesis — when no skill matched at start, synthesize from this run
+    if loop_status == "done" and had_no_matching_skill and not dry_run and step_outcomes:
+        try:
+            from evolver import synthesize_skill
+            done_steps = [s for s in step_outcomes if s.status == "done" and s.summary]
+            _synth_summary = ". ".join(s.summary for s in done_steps[:3])
+            synthesize_skill(
+                goal=goal,
+                outcome_summary=_synth_summary or "completed successfully",
+                source_loop_id=loop_id,
+                adapter=adapter,
+                verbose=verbose,
+            )
+        except Exception:
+            pass
+
+
+# ---------------------------------------------------------------------------
 # Core loop
 # ---------------------------------------------------------------------------
 
@@ -387,48 +602,9 @@ def run_agent_loop(
     # Step 1: Decompose goal into steps (inject memory + ancestry context)
     if verbose:
         print(f"[poe] decomposing goal...", file=sys.stderr, flush=True)
-    try:
-        from memory import inject_lessons_for_task
-        _lessons_context = inject_lessons_for_task("agenda", goal, max_lessons=3)
-    except Exception:
-        _lessons_context = ""
-    # Phase 27: inject resurrected graveyard lessons (decayed but topic-relevant)
-    try:
-        from memory import search_graveyard
-        _graveyard = search_graveyard(goal, resurrect=True)
-        if _graveyard:
-            if verbose:
-                print(f"[poe] resurrecting {len(_graveyard)} graveyard lesson(s) for goal", file=sys.stderr, flush=True)
-            _graveyard_lines = "\n".join(f"- {l.lesson}" for l in _graveyard[:3])
-            _lessons_context += f"\n\nPreviously-learned (resurrected from decay):\n{_graveyard_lines}"
-    except Exception:
-        pass
-    # Load matching skills for decompose prompt injection (Phase 10)
-    _had_no_matching_skill = False  # Phase 32: track for post-loop synthesis
-    try:
-        from skills import find_matching_skills, format_skills_for_prompt
-        _matching_skills = find_matching_skills(goal)
-        _skills_context = format_skills_for_prompt(_matching_skills)
-        if _matching_skills and verbose:
-            print(f"[poe] injecting {len(_matching_skills)} skill(s) into decompose", file=sys.stderr, flush=True)
-        _had_no_matching_skill = not _matching_skills
-    except Exception:
-        _skills_context = ""
-
-    # Phase 33: cheap-first context — inject expensive step types into decompose prompt
-    _cost_context = ""
-    try:
-        from metrics import analyze_step_costs
-        _cost_analysis = analyze_step_costs()
-        _expensive = _cost_analysis.get("expensive_types", [])
-        if _expensive:
-            _cost_context = (
-                "COST AWARENESS: The following step types have historically consumed "
-                "disproportionate tokens — prefer cheaper alternatives when possible: "
-                + ", ".join(_expensive)
-            )
-    except Exception:
-        pass
+    _lessons_context, _skills_context, _cost_context, _had_no_matching_skill = (
+        _build_loop_context(goal, verbose=verbose)
+    )
 
     steps = _decompose(
         goal, adapter, max_steps=max_steps, verbose=verbose,
@@ -727,35 +903,20 @@ def run_agent_loop(
                     pass
         else:
             _prior_retries = _step_retries.get(step_text, 0)
-            if _prior_retries < 2:
-                # Phase 35 P2: iterative refinement — up to 2 retries with escalating hints
+            _decision = _handle_blocked_step(step_text, outcome, _prior_retries, adapter)
+            if _decision.retry:
                 _step_retries[step_text] = _prior_retries + 1
-                _block_reason = outcome.get("stuck_reason", "blocked")
-                if _prior_retries == 0:
-                    # Round 1: generic fallback hint (existing behavior)
-                    _fallback_hint = (
-                        f"[Previous attempt blocked: {_block_reason[:120]}] "
-                        "Try an alternative approach: use a different tool, rephrase the request, "
-                        "work around the obstacle, or summarize what you know so far and mark complete."
-                    )
-                else:
-                    # Round 2: LLM-assisted targeted refinement hint (cheap model)
-                    _fallback_hint = _generate_refinement_hint(
-                        step_text=step_text,
-                        block_reason=_block_reason,
-                        partial_result=step_result,
-                        adapter=adapter,
-                    )
                 _next_step_injected_context = (
-                    (_next_step_injected_context + "\n\n" + _fallback_hint).strip()
+                    (_next_step_injected_context + "\n\n" + _decision.hint).strip()
                     if _next_step_injected_context
-                    else _fallback_hint
+                    else _decision.hint
                 )
                 remaining_steps.insert(0, step_text)
                 remaining_indices.insert(0, item_index)
                 step_idx -= 1  # will be re-incremented at top of iteration
                 if verbose:
-                    print(f"[poe] step {step_idx+1} blocked ({_block_reason[:80]}), retrying with fallback hint", file=sys.stderr, flush=True)
+                    _br = outcome.get("stuck_reason", "blocked")
+                    print(f"[poe] step {step_idx+1} blocked ({_br[:80]}), retrying with fallback hint", file=sys.stderr, flush=True)
                 # Record the blocked attempt but don't terminate
                 step_outcomes.append(StepOutcome(
                     index=item_index,
@@ -769,10 +930,10 @@ def run_agent_loop(
                 ))
                 continue
             else:
+                loop_status = _decision.loop_status
+                stuck_reason = _decision.stuck_reason
                 if item_index >= 0:
                     o.mark_item(project, item_index, o.STATE_BLOCKED)
-                loop_status = "stuck"
-                stuck_reason = outcome.get("stuck_reason", f"step {step_idx} blocked")
                 if verbose:
                     print(f"[poe] step {step_idx} stuck after retry: {stuck_reason}", file=sys.stderr, flush=True)
                 # Phase 32: attribute failure to any matching skills
@@ -947,80 +1108,20 @@ def run_agent_loop(
     if verbose:
         print(f"[poe] {result.summary()}", file=sys.stderr, flush=True)
 
-    # Phase 5: Reflexion — record outcome + extract lessons
-    try:
-        from memory import reflect_and_record
-        done_steps = [s for s in step_outcomes if s.status == "done"]
-        summary = (
-            f"Completed {len(done_steps)}/{len(step_outcomes)} steps. "
-            + (stuck_reason or "All steps done.")
-        )
-        reflect_and_record(
-            goal=goal,
-            status=loop_status,
-            result_summary=summary,
-            task_type="agenda",
-            project=project,
-            tokens_in=total_tokens_in,
-            tokens_out=total_tokens_out,
-            elapsed_ms=elapsed_total,
-            adapter=adapter if not dry_run else None,
-            dry_run=dry_run,
-        )
-    except Exception:
-        pass  # Memory failures must never break the loop
-
-    # Auto-extract skills from successful loops so patterns crystallise automatically.
-    # Only runs when the loop completed successfully and had interesting blocking events
-    # (those are the cases worth learning from). Runs in a try/except so it never
-    # interrupts the caller.
-    if loop_status == "done" and not dry_run and step_outcomes:
-        try:
-            from skills import extract_skills, save_skill, load_skills
-            # Build a minimal outcome dict that extract_skills can analyse
-            done_summaries = [s.summary for s in step_outcomes if s.status == "done" and s.summary]
-            outcome_for_extraction = {
-                "goal": goal,
-                "status": loop_status,
-                "task_type": "agenda",
-                "summary": ". ".join(done_summaries[:4]),  # extract_skills reads this field
-                "steps": [
-                    {
-                        "step": s.step,
-                        "status": s.status,
-                        "result": s.result,
-                        "summary": s.summary,
-                    }
-                    for s in step_outcomes
-                ],
-                "project": project,
-            }
-            existing_skills = {s.name for s in load_skills()}
-            extracted = extract_skills([outcome_for_extraction], adapter if adapter else None)
-            for skill in extracted:
-                if skill.name not in existing_skills:
-                    save_skill(skill)
-                    if verbose:
-                        print(f"[poe] skill crystallised: {skill.name}", file=sys.stderr, flush=True)
-        except Exception:
-            pass  # Skill extraction failures must never break the loop
-
-    # Phase 32: skill synthesis — when no skill matched at start, synthesize one
-    # from this successful run so the pattern is available for future goals.
-    if loop_status == "done" and _had_no_matching_skill and not dry_run and step_outcomes:
-        try:
-            from evolver import synthesize_skill
-            done_steps = [s for s in step_outcomes if s.status == "done" and s.summary]
-            _synth_summary = ". ".join(s.summary for s in done_steps[:3])
-            synthesize_skill(
-                goal=goal,
-                outcome_summary=_synth_summary or "completed successfully",
-                source_loop_id=loop_id,
-                adapter=adapter,
-                verbose=verbose,
-            )
-        except Exception:
-            pass  # Synthesis failures must never break the loop
+    _finalize_loop(
+        loop_id=loop_id,
+        goal=goal,
+        project=project,
+        loop_status=loop_status,
+        step_outcomes=step_outcomes,
+        adapter=adapter,
+        dry_run=dry_run,
+        verbose=verbose,
+        total_tokens_in=total_tokens_in,
+        total_tokens_out=total_tokens_out,
+        elapsed_ms=elapsed_total,
+        had_no_matching_skill=_had_no_matching_skill,
+    )
 
     # Release loop lock so interfaces know we're idle
     try:
