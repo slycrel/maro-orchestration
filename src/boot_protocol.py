@@ -113,7 +113,7 @@ def _project_path(project: str) -> Path:
     try:
         import orch
         return orch.project_dir(project)
-    except Exception:
+    except ImportError:
         return Path.cwd() / "projects" / project
 
 

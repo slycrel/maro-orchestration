@@ -144,7 +144,7 @@ def decompose_mission(
     try:
         from poe import assign_model_by_role as _amr
         _ = _amr("orchestrator")  # ensure assign_model_by_role("orchestrator") → MODEL_POWER
-    except Exception:
+    except ImportError:
         pass
 
     mission_id = str(uuid.uuid4())[:8]
@@ -256,7 +256,7 @@ def _validate_milestone(
     try:
         from poe import assign_model_by_role as _amr
         _ = _amr("reviewer")  # ensure assign_model_by_role("reviewer") → MODEL_POWER
-    except Exception:
+    except ImportError:
         pass
 
     features_summary = "\n".join(
@@ -376,7 +376,7 @@ def run_mission(
         _proj_dir = o.project_dir(project)
         _ancestry = get_project_ancestry(_proj_dir)
         ancestry_context = build_ancestry_prompt(_ancestry, current_task=goal)
-    except Exception:
+    except ImportError:
         pass
 
     # Decompose
@@ -908,7 +908,7 @@ def load_feature_manifest(project: str) -> Optional[dict]:
     try:
         import orch as _o
         path = _o.project_dir(project) / "feature_list.json"
-    except Exception:
+    except ImportError:
         return None
     if not path.exists():
         return None
@@ -1102,6 +1102,9 @@ def _send_milestone_notification(project: str, milestone_title: str, status: str
     """Send a Telegram notification when a milestone completes."""
     try:
         from telegram_listener import TelegramBot, _resolve_token, _resolve_allowed_chats
+    except ImportError:
+        return
+    try:
         token = _resolve_token()
         if not token:
             return
@@ -1113,8 +1116,8 @@ def _send_milestone_notification(project: str, milestone_title: str, status: str
         msg = f"{icon} [{project}] Milestone: {milestone_title} — {status}"
         for chat_id in allowed:
             bot.send_message(chat_id, msg)
-    except Exception:
-        pass
+    except Exception as exc:
+        print(f"[mission] milestone notification failed: {exc}", file=sys.stderr)
 
 
 def drain_next_mission(
@@ -1222,15 +1225,19 @@ def drain_next_mission(
         if notify and not dry_run and all_milestones_done:
             try:
                 from telegram_listener import TelegramBot, _resolve_token, _resolve_allowed_chats
-                token = _resolve_token()
-                if token:
-                    bot = TelegramBot(token)
-                    allowed = _resolve_allowed_chats()
-                    briefing = morning_briefing()
-                    for chat_id in (allowed or []):
-                        bot.send_message(chat_id, f"Mission complete!\n{briefing[:3000]}")
-            except Exception:
+            except ImportError:
                 pass
+            else:
+                try:
+                    token = _resolve_token()
+                    if token:
+                        bot = TelegramBot(token)
+                        allowed = _resolve_allowed_chats()
+                        briefing = morning_briefing()
+                        for chat_id in (allowed or []):
+                            bot.send_message(chat_id, f"Mission complete!\n{briefing[:3000]}")
+                except Exception as exc:
+                    print(f"[mission] morning briefing notification failed: {exc}", file=sys.stderr)
 
         return {
             "project": project,

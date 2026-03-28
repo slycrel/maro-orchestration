@@ -110,11 +110,11 @@ def check_project(slug: str, *, window_minutes: int = 30) -> SheriffReport:
     Returns:
         SheriffReport with status and diagnosis.
     """
-    try:
-        import sys as _sys
-        _sys.path.insert(0, str(Path(__file__).parent))
-        from orch import orch_root, parse_next, project_dir, STATE_DOING, STATE_BLOCKED
+    import sys as _sys
+    _sys.path.insert(0, str(Path(__file__).parent))
+    from orch import orch_root, parse_next, project_dir, STATE_DOING, STATE_BLOCKED
 
+    try:
         proj_dir = project_dir(slug)
         if not proj_dir.exists():
             return SheriffReport(
