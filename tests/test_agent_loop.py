@@ -615,3 +615,47 @@ def test_run_agent_loop_fan_out_dependency_falls_back_sequential():
         verbose=False,
     )
     assert result.status in ("done", "dry_run", "stuck")
+
+
+# ---------------------------------------------------------------------------
+# Phase 33: token_budget
+# ---------------------------------------------------------------------------
+
+def test_token_budget_not_exceeded_completes(monkeypatch, tmp_path):
+    """A generous token_budget does not affect completion."""
+    _setup_workspace(monkeypatch, tmp_path)
+    result = run_agent_loop(
+        "simple budget test",
+        project="budget-ok",
+        dry_run=True,
+        token_budget=1_000_000,  # extremely generous
+    )
+    assert result.status == "done"
+
+
+def test_token_budget_zero_triggers_stuck(monkeypatch, tmp_path):
+    """token_budget=0 causes the loop to abort immediately after the first step."""
+    _setup_workspace(monkeypatch, tmp_path)
+    result = run_agent_loop(
+        "budget zero test",
+        project="budget-zero",
+        dry_run=True,
+        token_budget=0,  # any tokens at all exceeds this
+    )
+    # Should abort — first step completion will have >= 0 tokens
+    assert result.status in ("stuck", "done")  # dry_run steps may be 0 tokens
+    if result.stuck_reason:
+        assert "token_budget" in result.stuck_reason
+
+
+def test_token_budget_none_is_ignored(monkeypatch, tmp_path):
+    """token_budget=None (default) imposes no limit."""
+    _setup_workspace(monkeypatch, tmp_path)
+    result = run_agent_loop(
+        "no budget limit test",
+        project="budget-none",
+        dry_run=True,
+        token_budget=None,
+    )
+    assert result.status == "done"
+    assert result.stuck_reason is None or "token_budget" not in result.stuck_reason

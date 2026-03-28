@@ -290,6 +290,7 @@ def run_agent_loop(
     ancestry_context_extra: str = "",
     step_callback=None,
     parallel_fan_out: int = 0,
+    token_budget: Optional[int] = None,
 ) -> LoopResult:
     """Run the autonomous loop for a goal.
 
@@ -414,10 +415,25 @@ def run_agent_loop(
     except Exception:
         _skills_context = ""
 
+    # Phase 33: cheap-first context — inject expensive step types into decompose prompt
+    _cost_context = ""
+    try:
+        from metrics import analyze_step_costs
+        _cost_analysis = analyze_step_costs()
+        _expensive = _cost_analysis.get("expensive_types", [])
+        if _expensive:
+            _cost_context = (
+                "COST AWARENESS: The following step types have historically consumed "
+                "disproportionate tokens — prefer cheaper alternatives when possible: "
+                + ", ".join(_expensive)
+            )
+    except Exception:
+        pass
+
     steps = _decompose(
         goal, adapter, max_steps=max_steps, verbose=verbose,
         lessons_context=_lessons_context, ancestry_context=_ancestry_context,
-        skills_context=_skills_context,
+        skills_context=_skills_context, cost_context=_cost_context,
     )
     if verbose:
         print(f"[poe] decomposed into {len(steps)} steps", file=sys.stderr, flush=True)
@@ -565,6 +581,17 @@ def run_agent_loop(
 
         total_tokens_in += outcome.get("tokens_in", 0)
         total_tokens_out += outcome.get("tokens_out", 0)
+
+        # Phase 33: token budget — abort gracefully if exceeded
+        if token_budget is not None and (total_tokens_in + total_tokens_out) >= token_budget:
+            loop_status = "stuck"
+            stuck_reason = (
+                f"token_budget={token_budget} exceeded "
+                f"({total_tokens_in + total_tokens_out} total tokens after step {step_idx})"
+            )
+            if verbose:
+                print(f"[poe] {stuck_reason}", file=sys.stderr, flush=True)
+            break
 
         step_status = outcome["status"]
         step_result = outcome.get("result", "")
@@ -963,12 +990,13 @@ def _decompose(
     lessons_context: str = "",
     ancestry_context: str = "",
     skills_context: str = "",
+    cost_context: str = "",
 ) -> List[str]:
     """Ask the LLM to decompose a goal into steps. Falls back to heuristic."""
     from llm import LLMMessage
 
     system = _DECOMPOSE_SYSTEM
-    extras = [x for x in [skills_context, ancestry_context, lessons_context] if x]
+    extras = [x for x in [skills_context, ancestry_context, lessons_context, cost_context] if x]
     if extras:
         system = _DECOMPOSE_SYSTEM + "\n\n" + "\n\n".join(extras)
 
