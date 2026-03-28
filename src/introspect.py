@@ -105,7 +105,7 @@ def _events_path() -> Path:
     try:
         from orch_items import memory_dir
         return memory_dir() / "events.jsonl"
-    except ImportError:
+    except Exception:
         return Path.cwd() / "memory" / "events.jsonl"
 
 
@@ -113,7 +113,7 @@ def _diagnoses_path() -> Path:
     try:
         from orch_items import memory_dir
         return memory_dir() / "diagnoses.jsonl"
-    except ImportError:
+    except Exception:
         return Path.cwd() / "memory" / "diagnoses.jsonl"
 
 
@@ -132,7 +132,7 @@ def _load_loop_events(loop_id: str) -> List[dict]:
                 e = json.loads(line)
                 if e.get("loop_id", "").startswith(loop_id):
                     events.append(e)
-            except Exception:
+            except ImportError:
                 continue
     except Exception:
         pass

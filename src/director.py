@@ -28,6 +28,7 @@ CLI:
 from __future__ import annotations
 
 import json
+import logging
 import re
 import sys
 import textwrap
@@ -37,6 +38,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+
+log = logging.getLogger("poe.director")
 
 from workers import WorkerResult, dispatch_worker, infer_worker_type, WORKER_TYPES
 
@@ -193,6 +196,7 @@ def run_director(
 
     director_id = str(uuid.uuid4())[:8]
     started_at = time.monotonic()
+    log.info("director_start id=%s directive=%r dry_run=%s", director_id, directive[:60], dry_run)
 
     def _log(msg: str):
         if verbose:
@@ -334,6 +338,8 @@ def run_director(
         log_path=log_path,
     )
 
+    log.info("director_done id=%s status=%s tickets=%d tokens=%d elapsed=%dms",
+             director_id, status, len(tickets), total_tokens_in + total_tokens_out, elapsed)
     _log(f"done: {result.summary()}")
     return result
 

@@ -542,7 +542,7 @@ def _finalize_loop(
             if _recovery:
                 _tag = "AUTO-RECOVERABLE" if _recovery.auto_apply else "NEEDS-REVIEW"
                 log.warning("recovery[%s] risk=%s: %s", _tag, _recovery.risk, _recovery.action)
-    except ImportError:
+    except Exception:
         pass
     except Exception as exc:
         log.debug("introspect failed: %s", exc)
@@ -1508,7 +1508,7 @@ def _execute_step(
             print(f"[poe] HITL warn: step {step_num} is WRITE tier", file=sys.stderr, flush=True)
         elif _hp["risk_level"] == "MEDIUM" and verbose:
             print(f"[poe] constraint MEDIUM on step {step_num}: {_hp['reason']}", file=sys.stderr, flush=True)
-    except ImportError:
+    except Exception:
         pass  # constraint module optional
 
     # Pre-fetch URLs found in the step text AND completed_context so raw HTML never

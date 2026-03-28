@@ -365,7 +365,7 @@ def _read_env_file_key() -> Optional[str]:
     try:
         from config import credentials_env_file
         env_file = credentials_env_file()
-    except ImportError:
+    except Exception:
         env_file = Path.home() / ".poe" / "workspace" / "secrets" / ".env"
     if not env_file.exists():
         return None

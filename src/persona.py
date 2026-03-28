@@ -769,7 +769,7 @@ def save_manifest(
         try:
             import yaml
             content = yaml.dump({"agents": manifest}, default_flow_style=False, allow_unicode=True)
-        except ImportError:
+        except Exception:
             # Fallback to JSON if PyYAML not available
             content = json.dumps({"agents": manifest}, indent=2, ensure_ascii=False)
             output_path = output_path.with_suffix(".json")
@@ -802,7 +802,7 @@ def load_manifest(path: Optional[Path] = None) -> List[dict]:
             try:
                 import yaml
                 data = yaml.safe_load(content)
-            except ImportError:
+            except Exception:
                 data = json.loads(content)
         else:
             data = json.loads(content)

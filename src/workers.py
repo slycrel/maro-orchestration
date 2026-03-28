@@ -133,7 +133,7 @@ def _load_persona(worker_type: str) -> str:
         _spec = _registry.load(worker_type)
         if _spec is not None:
             return build_persona_system_prompt(_spec)
-    except ImportError:
+    except Exception:
         pass
 
     # 2. Explicit file map (legacy)

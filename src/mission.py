@@ -19,6 +19,7 @@ CLI:
 from __future__ import annotations
 
 import json
+import logging
 import sys
 import textwrap
 import time
@@ -28,6 +29,8 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
+
+log = logging.getLogger("poe.mission")
 
 
 # ---------------------------------------------------------------------------
@@ -144,7 +147,7 @@ def decompose_mission(
     try:
         from poe import assign_model_by_role as _amr
         _ = _amr("orchestrator")  # ensure assign_model_by_role("orchestrator") → MODEL_POWER
-    except ImportError:
+    except Exception:
         pass
 
     mission_id = str(uuid.uuid4())[:8]
@@ -194,7 +197,7 @@ def decompose_mission(
                     validation_criteria=[str(c).strip() for c in rm.get("validation_criteria", []) if str(c).strip()],
                     status="pending",
                 ))
-    except Exception:
+    except ImportError:
         pass  # fall through to heuristic
 
     # Heuristic fallback
@@ -256,7 +259,7 @@ def _validate_milestone(
     try:
         from poe import assign_model_by_role as _amr
         _ = _amr("reviewer")  # ensure assign_model_by_role("reviewer") → MODEL_POWER
-    except ImportError:
+    except Exception:
         pass
 
     features_summary = "\n".join(
@@ -342,6 +345,7 @@ def run_mission(
         _boot_protocol_available = False
 
     started_at = time.monotonic()
+    log.info("mission_start goal=%r project=%s dry_run=%s", goal[:60], project or "(auto)", dry_run)
 
     def _log(msg: str):
         if verbose:
@@ -358,7 +362,7 @@ def run_mission(
     if _hook_registry is None:
         try:
             _hook_registry = load_registry()
-        except Exception:
+        except ImportError:
             _hook_registry = None
 
     # Resolve project
@@ -376,7 +380,7 @@ def run_mission(
         _proj_dir = o.project_dir(project)
         _ancestry = get_project_ancestry(_proj_dir)
         ancestry_context = build_ancestry_prompt(_ancestry, current_task=goal)
-    except ImportError:
+    except Exception:
         pass
 
     # Decompose
@@ -669,6 +673,9 @@ def run_mission(
     except Exception:
         pass
 
+    log.info("mission_done id=%s status=%s milestones=%d/%d features=%d/%d elapsed=%dms",
+             mission.id, mission.status, milestones_done, len(mission.milestones),
+             features_done, features_total, elapsed)
     _log(f"mission complete: {result.summary()}")
     return result
 
@@ -914,7 +921,7 @@ def load_feature_manifest(project: str) -> Optional[dict]:
         return None
     try:
         return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
+    except ImportError:
         return None
 
 
@@ -1155,6 +1162,7 @@ def drain_next_mission(
     if not _acquire_drain_lock(mission_id):
         return None
 
+    log.info("drain_start project=%s goal=%r mission_id=%s", project, goal[:60], mission_id)
     if verbose:
         print(f"[mission:drain] draining {project!r}: {goal[:60]!r}", file=sys.stderr)
 

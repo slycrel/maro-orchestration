@@ -40,7 +40,7 @@ except ImportError:
 try:
     from config import openclaw_cfg_path as _openclaw_cfg_path
     _OPENCLAW_CFG = _openclaw_cfg_path()
-except ImportError:
+except Exception:
     _OPENCLAW_CFG = Path.home() / ".openclaw" / "openclaw.json"
 _DEFAULT_GATEWAY_URL = "ws://127.0.0.1:18789"
 _DEFAULT_GATEWAY_HOST = "127.0.0.1"
@@ -303,7 +303,7 @@ async def send_to_gateway_async(message: str, *, timeout_seconds: int = 10) -> G
             try:
                 raw = await _aio.wait_for(ws.recv(), timeout=timeout_seconds)
                 response = str(raw)
-            except Exception:
+            except ImportError:
                 response = None
 
         elapsed = int((time.monotonic() - start_ms) * 1000)

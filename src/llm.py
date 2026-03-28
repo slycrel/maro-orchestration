@@ -758,7 +758,7 @@ def _load_env_file(path: Optional[str] = None) -> Dict[str, str]:
         if path is None:
             return load_credentials_env()
         return load_credentials_env()  # path arg kept for compat; use config resolution
-    except ImportError:
+    except Exception:
         pass
     result: Dict[str, str] = {}
     env_path = path or str(Path.home() / ".poe" / "workspace" / "secrets" / ".env")
@@ -770,7 +770,7 @@ def _load_env_file(path: Optional[str] = None) -> Dict[str, str]:
             if "=" in line and not line.startswith("#"):
                 k, v = line.split("=", 1)
                 result[k.strip()] = v.strip().strip('"').strip("'")
-    except Exception:
+    except ImportError:
         pass
     return result
 

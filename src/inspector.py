@@ -26,6 +26,7 @@ Closed loop:
 from __future__ import annotations
 
 import json
+import logging
 import sys
 import time
 import uuid
@@ -33,6 +34,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+log = logging.getLogger("poe.inspector")
 
 # Module-level imports so tests can patch cleanly
 try:
@@ -962,6 +965,7 @@ def run_full_inspector(
     """
     report_id = uuid.uuid4().hex[:8]
     started = time.monotonic()
+    log.info("inspector_start id=%s min_sessions=%d dry_run=%s", report_id, min_sessions, dry_run)
 
     if verbose:
         print(f"[inspector] full_inspector report_id={report_id} starting...", file=sys.stderr)
@@ -1101,6 +1105,8 @@ def run_full_inspector(
             print(f"[inspector] telegram notify failed: {e}", file=sys.stderr)
 
     report.elapsed_ms = int((time.monotonic() - started) * 1000)
+    log.info("inspector_done id=%s sessions=%d signals=%d tickets=%d elapsed=%dms",
+             report_id, len(outcomes_raw), len(signals), len(tickets), report.elapsed_ms)
 
     if verbose:
         print(

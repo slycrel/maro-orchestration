@@ -1297,7 +1297,7 @@ def main(argv: list[str] | None = None) -> int:
         try:
             from llm import build_adapter, MODEL_CHEAP
             _insp_adapter = None if args.dry_run else build_adapter(model=MODEL_CHEAP)
-        except Exception:
+        except ImportError:
             _insp_adapter = None
         report = run_inspector(limit=args.limit, adapter=_insp_adapter, dry_run=args.dry_run)
         if args.format == "json":

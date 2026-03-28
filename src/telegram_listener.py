@@ -60,7 +60,7 @@ try:
     from config import openclaw_cfg_path as _openclaw_cfg_path, workspace_root as _workspace_root
     _OPENCLAW_CFG = _openclaw_cfg_path()
     _OFFSET_FILE = _workspace_root() / "telegram_offset.txt"
-except ImportError:
+except Exception:
     _OPENCLAW_CFG = Path.home() / ".openclaw" / "openclaw.json"
     _ws = os.environ.get("POE_WORKSPACE") or os.environ.get("OPENCLAW_WORKSPACE") or str(Path.home() / ".poe" / "workspace")
     _OFFSET_FILE = Path(_ws) / "telegram_offset.txt"
@@ -263,7 +263,7 @@ def _dispatch_slash(
                 if progress_fn:
                     try:
                         progress_fn("\n".join(lines))
-                    except Exception:
+                    except ImportError:
                         pass
 
             result = run_agent_loop(

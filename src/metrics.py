@@ -123,13 +123,8 @@ def classify_step_type(step_text: str) -> str:
 
 def _step_costs_path() -> Path:
     """Return path to step-costs.jsonl in the memory directory."""
-    try:
-        from config import memory_dir
-        return memory_dir() / "step-costs.jsonl"
-    except ImportError:
-        import os
-        workspace = os.environ.get("OPENCLAW_WORKSPACE", os.path.expanduser("~/.poe/workspace"))
-        return Path(workspace) / "memory" / "step-costs.jsonl"
+    from orch_items import memory_dir
+    return memory_dir() / "step-costs.jsonl"
 
 
 def record_step_cost(

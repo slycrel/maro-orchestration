@@ -30,10 +30,13 @@ before the subprocess is spawned.
 from __future__ import annotations
 
 import json
+import logging
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, List, Optional
+
+log = logging.getLogger("poe.constraint")
 
 
 # ---------------------------------------------------------------------------
@@ -419,6 +422,13 @@ def hitl_policy(step_text: str, goal: str = "") -> dict:
     effective_gate = tier_gate if _gate_order[tier_gate] >= _gate_order[risk_gate] else risk_gate
 
     allowed = constraint_result.allowed and tier != ACTION_TIER_DESTROY
+
+    if not allowed:
+        log.debug("hitl_policy BLOCKED: tier=%s risk=%s gate=%s step=%r",
+                  tier, constraint_result.risk_level, effective_gate, step_text[:80])
+    elif effective_gate not in ("none",):
+        log.debug("hitl_policy gate=%s: tier=%s risk=%s step=%r",
+                  effective_gate, tier, constraint_result.risk_level, step_text[:60])
 
     return {
         "tier": tier,

@@ -393,7 +393,7 @@ def _contracts_path(project: str) -> Path:
     try:
         import orch
         base = orch.orch_root() / "prototypes" / "poe-orchestration" / "projects" / project / "memory"
-    except Exception:
+    except ImportError:
         base = Path.cwd() / "projects" / project / "memory"
     base.mkdir(parents=True, exist_ok=True)
     return base / "contracts.jsonl"
@@ -435,7 +435,7 @@ def save_grade(grade: ContractGrade, project: str) -> None:
     try:
         import orch
         base = orch.orch_root() / "prototypes" / "poe-orchestration" / "projects" / project / "memory"
-    except Exception:
+    except ImportError:
         base = Path.cwd() / "projects" / project / "memory"
     base.mkdir(parents=True, exist_ok=True)
     path = base / "contract-grades.jsonl"
