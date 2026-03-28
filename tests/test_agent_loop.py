@@ -703,23 +703,21 @@ def test_generate_refinement_hint_with_failing_adapter():
 # _build_loop_context
 # ---------------------------------------------------------------------------
 
-def test_build_loop_context_returns_four_tuple():
-    """_build_loop_context always returns a 4-tuple even with nothing available."""
+def test_build_loop_context_returns_five_tuple():
+    """_build_loop_context always returns a 5-tuple even with nothing available."""
     result = _build_loop_context("some research goal")
-    assert len(result) == 4
-    lessons_ctx, skills_ctx, cost_ctx, had_no_skill = result
+    assert len(result) == 5
+    lessons_ctx, skills_ctx, cost_ctx, had_no_skill, matched_rule = result
     assert isinstance(lessons_ctx, str)
     assert isinstance(skills_ctx, str)
     assert isinstance(cost_ctx, str)
     assert isinstance(had_no_skill, bool)
+    assert matched_rule is None or hasattr(matched_rule, "steps_template")
 
 
 def test_build_loop_context_no_skills_sets_flag(monkeypatch):
     """had_no_matching_skill=True when skills module returns empty list."""
-    monkeypatch.setattr("agent_loop._build_loop_context",
-        lambda goal, verbose=False: ("", "", "", True))
-    _, _, _, had_no_skill = _build_loop_context.__wrapped__("goal") if hasattr(_build_loop_context, "__wrapped__") else _build_loop_context("goal")
-    # Verify the real function also handles empty skills gracefully
+    # Verify the real function handles empty skills gracefully
     result = _build_loop_context("unlikely goal zzzxxx999aaa")
     assert result[3] is True or result[3] is False  # bool either way
 
@@ -731,7 +729,7 @@ def test_build_loop_context_survives_import_errors(monkeypatch):
     sys.modules["memory"] = None  # type: ignore[assignment]
     try:
         result = _build_loop_context("test goal")
-        assert len(result) == 4
+        assert len(result) == 5
     finally:
         if original_memory is not None:
             sys.modules["memory"] = original_memory

@@ -394,7 +394,7 @@ Ideas that are real but not yet scheduled. Not prioritized against each other �
 
 ---
 
-### Phase 22: Knowledge Crystallization — Hardening Decisions Into Infrastructure *(PARTIAL)*
+### Phase 22: Knowledge Crystallization — Hardening Decisions Into Infrastructure *(DONE)*
 
 *"A young sapling is flexible. As it grows it becomes the foundation for other young shoots."*
 
@@ -410,8 +410,16 @@ Fluid LLM → Lesson (tiered memory) → Identity (canon/AGENTS.md) → Skill (P
 - Wired into `pyproject.toml` and `src/cli.py` as `poe-knowledge` entry point
 - `tests/test_knowledge.py`: 14 tests
 
-**Still missing:**
-- **Stage 5 (Skill → Rule)**: no mechanism for an established skill to graduate into a hardcoded path that skips the sandbox entirely
+**Shipped (Phase 22 Stage 5 — Skill → Rule graduation):**
+- `src/rules.py`: `Rule` dataclass + full lifecycle (`graduate_skill_to_rule`, `find_matching_rule`, `record_rule_use`, `record_rule_wrong_answer`, `demote_rule_to_skill`, `get_rule_graduation_candidates`)
+- Storage: `memory/rules.jsonl` — one JSON object per line, append/update pattern
+- Graduation threshold: established skill, pass^3 >= 0.70, use_count >= 3
+- Auto-demotion: 3 Inspector wrong-answer signals → rule deactivated, falls back to Stage 4
+- `src/agent_loop.py`: `_build_loop_context()` checks for matching rule before LLM decompose; rule match bypasses `_decompose()` entirely (zero inference cost for matched goals)
+- `src/knowledge.py`: Stage 5 dashboard section, `graduate`/`demote`/`rules` CLI commands
+- `tests/test_rules.py`: 28 tests covering all Rule lifecycle functions + `_build_loop_context` integration
+
+**Remaining (not blocking):**
 - **Model tier auto-optimization**: evolver should track per-task-type success rates by tier and suggest downgrades
 
 ---

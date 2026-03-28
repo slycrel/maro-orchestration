@@ -291,7 +291,11 @@ def _build_loop_context(
     """Load all context needed before decomposing a goal.
 
     Returns:
-        (lessons_context, skills_context, cost_context, had_no_matching_skill)
+        (lessons_context, skills_context, cost_context, had_no_matching_skill, matched_rule)
+
+    matched_rule is a Rule object if a Stage 5 rule matches the goal, else None.
+    When matched_rule is set, the caller should use rule.steps_template directly
+    and skip the LLM decompose call entirely.
 
     All failures are swallowed — missing memory or skills never block a loop.
     """
@@ -349,7 +353,22 @@ def _build_loop_context(
     except Exception:
         pass
 
-    return lessons_context, skills_context, cost_context, had_no_matching_skill
+    # Stage 5: check for a Rule match before returning (caller skips LLM decompose)
+    matched_rule = None
+    try:
+        from rules import find_matching_rule, record_rule_use
+        matched_rule = find_matching_rule(goal)
+        if matched_rule is not None:
+            record_rule_use(matched_rule.id)
+            if verbose:
+                print(
+                    f"[poe] Stage 5 rule hit: {matched_rule.name!r} — skipping LLM decompose",
+                    file=sys.stderr, flush=True,
+                )
+    except Exception:
+        pass
+
+    return lessons_context, skills_context, cost_context, had_no_matching_skill, matched_rule
 
 
 def _handle_blocked_step(
@@ -602,15 +621,24 @@ def run_agent_loop(
     # Step 1: Decompose goal into steps (inject memory + ancestry context)
     if verbose:
         print(f"[poe] decomposing goal...", file=sys.stderr, flush=True)
-    _lessons_context, _skills_context, _cost_context, _had_no_matching_skill = (
+    _lessons_context, _skills_context, _cost_context, _had_no_matching_skill, _matched_rule = (
         _build_loop_context(goal, verbose=verbose)
     )
 
-    steps = _decompose(
-        goal, adapter, max_steps=max_steps, verbose=verbose,
-        lessons_context=_lessons_context, ancestry_context=_ancestry_context,
-        skills_context=_skills_context, cost_context=_cost_context,
-    )
+    # Stage 5: rule hit — use deterministic steps, skip LLM decompose
+    if _matched_rule is not None and _matched_rule.steps_template:
+        steps = list(_matched_rule.steps_template)
+        if verbose:
+            print(f"[poe] using {len(steps)} rule steps from {_matched_rule.name!r}", file=sys.stderr, flush=True)
+    else:
+        steps = None  # computed by _decompose below
+
+    if steps is None:
+        steps = _decompose(
+            goal, adapter, max_steps=max_steps, verbose=verbose,
+            lessons_context=_lessons_context, ancestry_context=_ancestry_context,
+            skills_context=_skills_context, cost_context=_cost_context,
+        )
     if verbose:
         print(f"[poe] decomposed into {len(steps)} steps", file=sys.stderr, flush=True)
 

@@ -22,7 +22,7 @@ _STAGES = {
     2: ("Lesson", "Tiered memory: medium → long decay/promote"),
     3: ("Identity", "Canon → AGENTS.md system prompt"),
     4: ("Skill", "Python code, sandboxed, provisional → established"),
-    5: ("Rule", "Hardcoded path, zero inference cost [not yet implemented]"),
+    5: ("Rule", "Hardcoded path, zero inference cost — established skill graduates to rules.jsonl"),
 }
 
 
@@ -95,6 +95,28 @@ def _stage4_data() -> dict:
         return {"error": str(e)}
 
 
+def _stage5_data() -> dict:
+    """Active rules + graduation candidates."""
+    try:
+        from rules import load_rules, get_rule_graduation_candidates
+        active_rules = load_rules(active_only=True)
+        all_rules = load_rules(active_only=False)
+        demoted = [r for r in all_rules if not r.active]
+        candidates = get_rule_graduation_candidates()
+        return {
+            "active_count": len(active_rules),
+            "demoted_count": len(demoted),
+            "graduation_candidates": len(candidates),
+            "active_rules": [
+                {"name": r.name, "use_count": r.use_count, "wrong_answers": r.wrong_answer_count}
+                for r in active_rules[:5]
+            ],
+            "top_candidates": candidates[:3],
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
 def _suggestions_data() -> dict:
     """Open evolver suggestions (proposed improvements not yet applied)."""
     try:
@@ -125,6 +147,7 @@ def print_dashboard(stage_filter: Optional[int] = None) -> None:
     s2 = _stage2_data()
     s3 = _stage3_data()
     s4 = _stage4_data()
+    s5 = _stage5_data()
     sug = _suggestions_data()
 
     print("╔══════════════════════════════════════════════════════╗")
@@ -186,10 +209,26 @@ def print_dashboard(stage_filter: Optional[int] = None) -> None:
                 print(f"     Run 'poe-skill-stats' then 'poe-skills promote <name>'")
         print()
 
-    # Stage 5: Rules (not yet implemented)
+    # Stage 5: Rules
     if stage_filter is None or stage_filter == 5:
         print("Stage 5 — Rules (zero-cost hardcoded paths)")
-        print("  [not yet implemented — see Phase 22 in ROADMAP.md]")
+        if err := _fmt_error(s5):
+            print(err)
+        else:
+            n = s5["active_count"]
+            d = s5["demoted_count"]
+            cands = s5["graduation_candidates"]
+            if n == 0:
+                print("  No active rules yet")
+            else:
+                print(f"  active: {n}  demoted: {d}")
+                for r in s5.get("active_rules", []):
+                    wa = f"  ⚠ {r['wrong_answers']} wrong answers" if r["wrong_answers"] else ""
+                    print(f"    • {r['name']}  ({r['use_count']} uses){wa}")
+            if cands:
+                print(f"  ↑  {cands} skill(s) ready to graduate → run 'poe-knowledge graduate <name>'")
+                for c in s5.get("top_candidates", []):
+                    print(f"    • {c['name']}  pass^3={c['pass3']}  uses={c['use_count']}")
         print()
 
     # Evolver suggestions
@@ -219,6 +258,7 @@ def print_promote_actions() -> None:
     s2 = _stage2_data()
     s3 = _stage3_data()
     s4 = _stage4_data()
+    s5 = _stage5_data()
 
     print("Available promotion actions:")
     print()
@@ -240,10 +280,18 @@ def print_promote_actions() -> None:
         print(f"    poe-skills promote <name>")
         print()
 
+    if not _fmt_error(s5) and s5["graduation_candidates"]:
+        print(f"  Stage 4→5 (established skill → rule): {s5['graduation_candidates']} candidate(s)")
+        for c in s5.get("top_candidates", []):
+            print(f"    • {c['name']}  pass^3={c['pass3']}  uses={c['use_count']}")
+        print(f"    poe-knowledge graduate <name>")
+        print()
+
     if not (
         (not _fmt_error(s2) and s2["promote_candidates"]) or
         (not _fmt_error(s3) and s3["canon_candidates"]) or
-        (not _fmt_error(s4) and s4["promote_ready"])
+        (not _fmt_error(s4) and s4["promote_ready"]) or
+        (not _fmt_error(s5) and s5["graduation_candidates"])
     ):
         print("  Nothing ready to promote yet.")
 
@@ -265,12 +313,54 @@ def main(argv: list[str] | None = None) -> None:
 
     sub.add_parser("promote", help="List available promotion actions (read-only)")
 
+    p_graduate = sub.add_parser("graduate", help="Graduate an established skill to a Stage 5 rule")
+    p_graduate.add_argument("skill", help="Skill name or id to graduate")
+
+    p_demote = sub.add_parser("demote", help="Demote a rule back to Stage 4")
+    p_demote.add_argument("rule_id", help="Rule id to demote")
+
+    sub.add_parser("rules", help="List active Stage 5 rules")
+
     args = parser.parse_args(argv)
 
     if args.cmd == "status":
         print_dashboard(stage_filter=getattr(args, "stage", None))
     elif args.cmd == "promote":
         print_promote_actions()
+    elif args.cmd == "graduate":
+        from rules import graduate_skill_to_rule, get_rule_graduation_candidates
+        rule = graduate_skill_to_rule(args.skill)
+        if rule is None:
+            # Show why
+            cands = get_rule_graduation_candidates()
+            names = [c["name"] for c in cands]
+            print(f"Could not graduate {args.skill!r}.")
+            if names:
+                print(f"Eligible candidates: {', '.join(names)}")
+            else:
+                print("No skills currently meet the graduation threshold (established tier, pass^3 >= 0.7)")
+            raise SystemExit(1)
+        print(f"Graduated: {rule.name!r} → Rule id={rule.id}")
+        print(f"  trigger patterns: {rule.trigger_patterns}")
+        print(f"  {len(rule.steps_template)} steps")
+    elif args.cmd == "demote":
+        from rules import demote_rule_to_skill
+        ok = demote_rule_to_skill(args.rule_id)
+        if ok:
+            print(f"Rule {args.rule_id!r} demoted to Stage 4.")
+        else:
+            print(f"Rule {args.rule_id!r} not found.")
+            raise SystemExit(1)
+    elif args.cmd == "rules":
+        from rules import load_rules
+        rules = load_rules(active_only=True)
+        if not rules:
+            print("No active rules.")
+        else:
+            print(f"{len(rules)} active rule(s):")
+            for r in rules:
+                wa = f"  ⚠ {r.wrong_answer_count} wrong" if r.wrong_answer_count else ""
+                print(f"  {r.id}  {r.name}  ({r.use_count} uses){wa}")
     else:
         print_dashboard()
 
