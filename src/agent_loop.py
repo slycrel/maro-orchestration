@@ -858,6 +858,10 @@ def run_agent_loop(
     loop_status = "done"
     stuck_reason = None
     completed_context: List[str] = []
+    # Loop scratchpad: structured data store for step-to-step data sharing.
+    # Each step writes its findings here; subsequent steps can reference them.
+    # Persisted to artifacts at loop end for debugging and replay.
+    _scratchpad: Dict[str, Any] = {"steps": {}, "shared": {}}
     interrupts_applied = 0
 
     # Use mutable lists so interrupt handlers can modify remaining work
@@ -1090,13 +1094,35 @@ def run_agent_loop(
         if step_status == "done":
             if item_index >= 0:
                 o.mark_item(project, item_index, o.STATE_DONE)
-            # Pass meaningful context to subsequent steps — not just the summary,
-            # but a truncated version of the actual result. This prevents hallucination
-            # by giving subsequent steps real data (file names, findings) to reference.
-            _result_excerpt = step_result[:800] if step_result else ""
+
+            # Write to scratchpad: structured data for subsequent steps
+            _result_excerpt = step_result[:2000] if step_result else ""
+            _cited_files: List[str] = []
+            try:
+                import re as _scratchpad_re
+                _cited_files = sorted(set(
+                    _scratchpad_re.findall(r'\b([a-z_]+\.py)\b', step_result or "")
+                ))
+            except Exception:
+                pass
+            _scratchpad[f"step_{step_idx}"] = {
+                "text": step_text[:200],
+                "summary": step_summary[:200],
+                "result_excerpt": _result_excerpt,
+                "files_cited": _cited_files[:20],
+            }
+            # Update shared state: accumulate all real files found across steps
+            _all_files = _scratchpad.get("shared", {}).get("files_found", [])
+            _src_files = set(f.name for f in Path("src").glob("*.py")) if Path("src").exists() else set()
+            _real_cited = [f for f in _cited_files if f in _src_files]
+            _all_files = sorted(set(_all_files + _real_cited))
+            _scratchpad.setdefault("shared", {})["files_found"] = _all_files
+
+            # Build context entry: summary + truncated result for inline use
+            _ctx_excerpt = step_result[:800] if step_result else ""
             if len(step_result) > 800:
-                _result_excerpt += f"\n... ({len(step_result)} chars total, truncated)"
-            _ctx_entry = f"Step {step_idx} ({step_text[:80]}):\n{_result_excerpt}"
+                _ctx_excerpt += f"\n... ({len(step_result)} chars total — full result in scratchpad step_{step_idx})"
+            _ctx_entry = f"Step {step_idx} ({step_text[:80]}):\n{_ctx_excerpt}"
             completed_context.append(_ctx_entry)
             if verbose:
                 print(f"[poe] step {step_idx} done: {step_summary[:120]}", file=sys.stderr, flush=True)
@@ -1357,6 +1383,9 @@ def run_agent_loop(
             (_art_dir / f"loop-{loop_id}-PARTIAL.md").write_text(
                 "\n".join(_partial_lines), encoding="utf-8")
             log.info("wrote partial result: %s (%d steps)", f"loop-{loop_id}-PARTIAL.md", len(_done_steps))
+            # Also persist the scratchpad for debugging and replay
+            (_art_dir / f"loop-{loop_id}-scratchpad.json").write_text(
+                json.dumps(_scratchpad, indent=2, default=str), encoding="utf-8")
         except Exception as exc:
             log.debug("partial result write failed: %s", exc)
 
