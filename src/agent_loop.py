@@ -154,6 +154,16 @@ _DECOMPOSE_SYSTEM = textwrap.dedent("""\
           "Extract key findings from each source"
           "Synthesize findings into a structured summary"
 
+    BAD:  "Read all Python source files in src/"
+    GOOD: "Read the main entry point and map the module dependency graph"
+          "Read the 3 core modules (agent_loop, memory, skills) and summarize their APIs"
+          "Read the I/O layer (telegram, slack, gateway) and note integration points"
+
+    CODE REVIEW STEPS: never ask to read "all" files in a directory. Instead,
+    target specific files or groups of 3-5 related files per step. A single step
+    should touch at most ~2000 lines of code. If a directory has 20+ files,
+    split the review across multiple steps by functional area.
+
     Prefer more steps that are each fast and concrete over fewer steps that are
     broad and slow. Setup steps (clone, fetch, install) should always be their
     own step, never bundled with analysis work.
@@ -896,16 +906,20 @@ def run_agent_loop(
         except Exception:
             pass  # Event failures must never break the loop
 
-        # Security: scan step result for prompt injection signals (external content defense)
-        if _security_available and step_status == "done" and len(step_result) > 200:
+        # Security: scan step result for prompt injection signals (external content defense).
+        # Only scan results that contain pre-fetched external content (URLs, API responses).
+        # LLM-generated analysis (code reviews, summaries) should NOT be scanned — it
+        # false-positives on security terminology in reviewed code and corrupts the output.
+        _has_external = "PRE-FETCHED" in step_text or "http" in step_text.lower()
+        if _security_available and _has_external and step_status == "done" and len(step_result) > 200:
             try:
                 _scan = _scan_content(
                     step_result,
                     log_fn=lambda msg: print(f"[poe] {msg}", file=sys.stderr, flush=True),
                 )
                 if _scan.risk >= _InjectionRisk.HIGH:
-                    if verbose:
-                        print(f"[poe] injection HIGH in step {step_idx} result — redacting before context injection", file=sys.stderr, flush=True)
+                    log.warning("step %d injection HIGH in result — redacting before context injection (signals=%s)",
+                                step_idx, _scan.signals)
                     step_result = _scan.sanitized
                     outcome["result"] = step_result
             except Exception:

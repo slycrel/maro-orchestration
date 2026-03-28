@@ -19,6 +19,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sys
 import time
@@ -26,6 +27,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+log = logging.getLogger("poe.heartbeat")
 
 # Module-level imports so tests can patch them cleanly
 try:
@@ -308,6 +311,7 @@ def run_heartbeat(
     started = time.monotonic()
     checked_at = datetime.now(timezone.utc).isoformat()
 
+    log.info("heartbeat_start run_id=%s dry_run=%s", run_id, dry_run)
     if verbose:
         print(f"[heartbeat] run_id={run_id} starting...", file=sys.stderr)
 
@@ -370,6 +374,9 @@ def run_heartbeat(
 
     report.elapsed_ms = int((time.monotonic() - started) * 1000)
 
+    _escalated = sum(1 for a in report.recovery_actions if a.outcome == "escalated")
+    log.info("heartbeat_done run_id=%s health=%s stuck=%d escalated=%d elapsed=%dms",
+             run_id, health.status, len(stuck_projects), _escalated, report.elapsed_ms)
     if verbose:
         print(f"[heartbeat] done elapsed_ms={report.elapsed_ms}", file=sys.stderr)
 

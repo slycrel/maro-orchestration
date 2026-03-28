@@ -35,12 +35,15 @@ import math
 import re
 import sys
 import textwrap
+import logging
 import time
 from collections import Counter
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, date, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+log = logging.getLogger("poe.memory")
 
 
 # ---------------------------------------------------------------------------
@@ -450,6 +453,8 @@ def reflect_and_record(
 
     This is the main hook to call after run_agent_loop or handle() completes.
     """
+    log.info("reflect_and_record goal=%r status=%s tokens=%d elapsed=%dms",
+             goal[:60], status, tokens_in + tokens_out, elapsed_ms)
     lessons = extract_lessons_via_llm(
         goal=goal,
         status=status,
@@ -458,6 +463,7 @@ def reflect_and_record(
         adapter=adapter,
         dry_run=dry_run,
     )
+    log.debug("extracted %d lessons from reflection", len(lessons))
 
     return record_outcome(
         goal=goal,

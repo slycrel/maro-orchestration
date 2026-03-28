@@ -23,12 +23,15 @@ Usage:
 from __future__ import annotations
 
 import json
+import logging
 import sys
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+log = logging.getLogger("poe.evolver")
 
 # Module-level imports for clean test patching
 try:
@@ -258,6 +261,7 @@ def apply_suggestion(suggestion_id: str) -> bool:
 
     Returns True if the suggestion was found and updated, False otherwise.
     """
+    log.info("apply_suggestion id=%s", suggestion_id)
     p = _suggestions_path()
     if not p.exists():
         return False
@@ -470,6 +474,8 @@ def run_evolver(
     run_id = _uuid.uuid4().hex[:8]
     started = time.monotonic()
 
+    log.info("evolver_start run_id=%s outcomes_window=%d min=%d dry_run=%s",
+             run_id, outcomes_window, min_outcomes, dry_run)
     if verbose:
         print(f"[evolver] run_id={run_id} starting...", file=sys.stderr)
 
@@ -543,6 +549,8 @@ def run_evolver(
         _notify_telegram(report)
 
     report.elapsed_ms = int((time.monotonic() - started) * 1000)
+    log.info("evolver_done run_id=%s patterns=%d suggestions=%d auto_applied=%d elapsed=%dms",
+             run_id, len(patterns), len(suggestions), auto_applied, report.elapsed_ms)
 
     # Phase 17: check if router retraining is needed
     try:
@@ -782,6 +790,7 @@ def synthesize_skill(
     Returns:
         New Skill on success, None if synthesis fails or adapter unavailable.
     """
+    log.info("synthesize_skill goal=%r source_loop=%s", goal[:60], source_loop_id)
     try:
         from skills import Skill, save_skill, load_skills, compute_skill_hash
         from llm import LLMMessage
@@ -789,6 +798,7 @@ def synthesize_skill(
         return None
 
     if adapter is None:
+        log.debug("synthesize_skill skipped — no adapter")
         return None
 
     prompt = (
