@@ -29,8 +29,10 @@ before the subprocess is spawned.
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Callable, List, Optional
 
 
@@ -180,6 +182,44 @@ def _check_patterns(
 CONSTRAINT_REGISTRY: List[Callable[[str, str], List[ConstraintFlag]]] = []
 
 
+def _load_dynamic_constraints() -> List[tuple]:
+    """Load evolver-generated constraint patterns from memory/dynamic-constraints.jsonl.
+
+    Returns list of (constraint_name, [(pattern, risk, detail)]) tuples, same
+    shape as _ALL_PATTERNS entries.  Returns empty list if file missing or unreadable.
+    """
+    try:
+        from orch import orch_root
+        path = orch_root() / "memory" / "dynamic-constraints.jsonl"
+    except Exception:
+        path = Path.cwd() / "memory" / "dynamic-constraints.jsonl"
+
+    if not path.exists():
+        return []
+
+    patterns: List[tuple] = []
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+                pat = entry.get("pattern", "")
+                risk = entry.get("risk", "MEDIUM")
+                detail = entry.get("detail", f"dynamic guardrail: {pat[:60]}")
+                if pat:
+                    patterns.append((pat, risk, detail))
+            except Exception:
+                continue
+    except Exception:
+        return []
+
+    if not patterns:
+        return []
+    return [("dynamic_guardrail", patterns)]
+
+
 def check_step_constraints(step_text: str, goal: str = "") -> ConstraintResult:
     """Run all registered constraints + built-in patterns against a step.
 
@@ -194,6 +234,10 @@ def check_step_constraints(step_text: str, goal: str = "") -> ConstraintResult:
 
     # Built-in pattern checks
     for constraint_name, patterns in _ALL_PATTERNS:
+        all_flags.extend(_check_patterns(constraint_name, patterns, step_text, goal))
+
+    # Evolver-generated dynamic constraints (loaded from memory/dynamic-constraints.jsonl)
+    for constraint_name, patterns in _load_dynamic_constraints():
         all_flags.extend(_check_patterns(constraint_name, patterns, step_text, goal))
 
     # Pluggable constraint extensions

@@ -19,6 +19,8 @@ from evolver import (
     run_evolver,
     list_pending_suggestions,
     apply_suggestion,
+    _apply_suggestion_action,
+    _dynamic_constraints_path,
 )
 
 
@@ -702,3 +704,137 @@ def test_synthesize_skill_sets_source_loop_id(tmp_path):
         )
     assert skill is not None
     assert "loop42" in skill.source_loop_ids
+
+
+# ---------------------------------------------------------------------------
+# Feedback loop: _apply_suggestion_action
+# ---------------------------------------------------------------------------
+
+def test_apply_action_prompt_tweak_writes_lesson(tmp_path, monkeypatch):
+    """prompt_tweak action writes a TieredLesson to memory."""
+    captured = {}
+
+    def fake_record(lesson_text, task_type, outcome, source_goal, *, tier, confidence, **kw):
+        captured["lesson_text"] = lesson_text
+        captured["task_type"] = task_type
+        captured["tier"] = tier
+
+    monkeypatch.setattr("evolver.record_tiered_lesson", fake_record)
+    monkeypatch.setattr("evolver.MemoryTier", type("MT", (), {"MEDIUM": "medium"})())
+
+    _apply_suggestion_action({
+        "category": "prompt_tweak",
+        "target": "research",
+        "suggestion": "Be more concise in decompose steps",
+        "suggestion_id": "test-00",
+        "confidence": 0.85,
+    })
+
+    assert captured["lesson_text"] == "Be more concise in decompose steps"
+    assert captured["task_type"] == "research"
+    assert captured["tier"] == "medium"
+
+
+def test_apply_action_new_guardrail_writes_dynamic_constraint(tmp_path, monkeypatch):
+    """new_guardrail action appends to dynamic-constraints.jsonl."""
+    monkeypatch.setattr("evolver._dynamic_constraints_path", lambda: tmp_path / "dynamic-constraints.jsonl")
+
+    _apply_suggestion_action({
+        "category": "new_guardrail",
+        "target": "all",
+        "suggestion": r"\bdrop\s+database\b",
+        "suggestion_id": "test-01",
+        "confidence": 0.9,
+    })
+
+    content = (tmp_path / "dynamic-constraints.jsonl").read_text()
+    entry = json.loads(content.strip())
+    assert entry["pattern"] == r"\bdrop\s+database\b"
+    assert "test-01" in entry["source"]
+
+
+def test_apply_action_skill_pattern_creates_skill(tmp_path, monkeypatch):
+    """skill_pattern action writes a new Skill to the skill library."""
+    monkeypatch.setattr("skills._skills_path", lambda: tmp_path / "skills.jsonl")
+
+    _apply_suggestion_action({
+        "category": "skill_pattern",
+        "target": "new-skill-from-evolver",
+        "suggestion": "Step 1: research; Step 2: synthesize; Step 3: report",
+        "suggestion_id": "test-02",
+        "confidence": 0.82,
+    })
+
+    skills_data = (tmp_path / "skills.jsonl").read_text()
+    skill = json.loads(skills_data.strip())
+    assert skill["name"] == "new-skill-from-evolver"
+
+
+def test_apply_action_observation_is_noop(tmp_path, monkeypatch):
+    """observation category has no side effects."""
+    monkeypatch.setattr("evolver._dynamic_constraints_path", lambda: tmp_path / "dc.jsonl")
+    monkeypatch.setattr("skills._skills_path", lambda: tmp_path / "skills.jsonl")
+
+    _apply_suggestion_action({
+        "category": "observation",
+        "target": "all",
+        "suggestion": "Poe seems to work well on research tasks",
+        "suggestion_id": "test-03",
+        "confidence": 0.6,
+    })
+
+    assert not (tmp_path / "dc.jsonl").exists()
+    assert not (tmp_path / "skills.jsonl").exists()
+
+
+def test_dynamic_constraint_loaded_by_check(tmp_path, monkeypatch):
+    """Patterns written to dynamic-constraints.jsonl are picked up by check_step_constraints."""
+    from constraint import check_step_constraints
+
+    dc_path = tmp_path / "memory" / "dynamic-constraints.jsonl"
+    dc_path.parent.mkdir(parents=True)
+    dc_path.write_text(json.dumps({
+        "pattern": r"\bevil_command\b",
+        "risk": "HIGH",
+        "detail": "evolver guardrail: evil_command",
+        "source": "test-04",
+        "added_at": "2026-03-27T00:00:00+00:00",
+    }) + "\n")
+
+    monkeypatch.setattr("constraint._load_dynamic_constraints",
+                        lambda: [("dynamic_guardrail", [(r"\bevil_command\b", "HIGH", "evil blocked")])])
+
+    result = check_step_constraints("run evil_command now", goal="test")
+    assert result.blocked
+    assert any(f.name == "dynamic_guardrail" for f in result.flags)
+
+
+def test_run_evolver_auto_applies_high_confidence(tmp_path, monkeypatch):
+    """run_evolver auto-applies suggestions with confidence >= 0.8."""
+    from unittest.mock import MagicMock
+
+    monkeypatch.setattr("evolver._suggestions_path", lambda: tmp_path / "suggestions.jsonl")
+
+    applied_ids = []
+
+    def fake_apply(sid):
+        applied_ids.append(sid)
+        return True
+
+    monkeypatch.setattr("evolver.apply_suggestion", fake_apply)
+    monkeypatch.setattr("evolver.load_outcomes", lambda limit=50: [MagicMock()] * 10)
+    monkeypatch.setattr("evolver._llm_analyze", lambda outcomes, dry_run=False: (
+        ["pattern1"],
+        [
+            {"category": "prompt_tweak", "target": "research", "suggestion": "be concise",
+             "failure_pattern": "drift", "confidence": 0.9},
+            {"category": "observation", "target": "all", "suggestion": "all good",
+             "failure_pattern": "", "confidence": 0.5},
+        ],
+    ))
+
+    report = run_evolver(dry_run=False, verbose=False, min_outcomes=1)
+
+    assert report.outcomes_reviewed == 10
+    # Only the high-confidence suggestion should be auto-applied
+    assert len(applied_ids) == 1

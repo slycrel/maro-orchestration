@@ -1168,20 +1168,30 @@ def _execute_step(
 
     ancestry_block = f"\n\n{ancestry_context}" if ancestry_context else ""
 
-    # Phase 35 P1: constraint check — block HIGH-risk steps before any LLM call
+    # Phase 35 P1/P2: HITL constraint check — block/warn before any LLM call
     try:
-        from constraint import check_step_constraints
-        _cr = check_step_constraints(step_text, goal=goal)
-        if _cr.blocked:
+        from constraint import hitl_policy, ACTION_TIER_DESTROY, ACTION_TIER_EXTERNAL, ACTION_TIER_WRITE
+        _hp = hitl_policy(step_text, goal=goal)
+        if not _hp["allowed"]:
+            _block_detail = _hp["reason"] or f"tier={_hp['tier']}"
             return {
                 "status": "blocked",
-                "stuck_reason": f"constraint violation ({_cr.risk_level}): {_cr.reason}",
+                "stuck_reason": f"constraint violation ({_hp['risk_level']}, tier={_hp['tier']}): {_block_detail}",
                 "result": "",
                 "tokens_in": 0,
                 "tokens_out": 0,
             }
-        if _cr.risk_level == "MEDIUM" and verbose:
-            print(f"[poe] constraint MEDIUM on step {step_num}: {_cr.reason}", file=sys.stderr, flush=True)
+        _tier = _hp["tier"]
+        if _tier == ACTION_TIER_EXTERNAL:
+            # Headless mode: can't interactively confirm — log prominently and proceed
+            print(
+                f"[poe] HITL confirm: step {step_num} is EXTERNAL (gate=confirm) — proceeding autonomously",
+                file=sys.stderr, flush=True,
+            )
+        elif _tier == ACTION_TIER_WRITE and verbose:
+            print(f"[poe] HITL warn: step {step_num} is WRITE tier", file=sys.stderr, flush=True)
+        elif _hp["risk_level"] == "MEDIUM" and verbose:
+            print(f"[poe] constraint MEDIUM on step {step_num}: {_hp['reason']}", file=sys.stderr, flush=True)
     except ImportError:
         pass  # constraint module optional
 

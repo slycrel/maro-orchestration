@@ -47,6 +47,12 @@ try:
 except ImportError:  # pragma: no cover
     validate_skill_mutation = None  # type: ignore[assignment]
 
+try:
+    from memory import record_tiered_lesson, MemoryTier
+except ImportError:  # pragma: no cover
+    record_tiered_lesson = None  # type: ignore[assignment]
+    MemoryTier = None  # type: ignore[assignment]
+
 
 # ---------------------------------------------------------------------------
 # Data model
@@ -132,6 +138,17 @@ def _suggestions_path() -> Path:
         return Path.cwd() / "memory" / "suggestions.jsonl"
 
 
+def _dynamic_constraints_path() -> Path:
+    """Path to evolver-generated dynamic constraint patterns."""
+    try:
+        from orch import orch_root
+        d = orch_root() / "memory"
+        d.mkdir(parents=True, exist_ok=True)
+        return d / "dynamic-constraints.jsonl"
+    except Exception:
+        return Path.cwd() / "memory" / "dynamic-constraints.jsonl"
+
+
 def load_suggestions(limit: int = 20) -> List[Suggestion]:
     """Load most recent suggestions, newest first."""
     p = _suggestions_path()
@@ -164,6 +181,82 @@ def list_pending_suggestions(limit: int = 20) -> List[Suggestion]:
     all_suggestions = load_suggestions(limit=1000)
     pending = [s for s in all_suggestions if not s.applied]
     return pending[:limit]
+
+
+def _apply_suggestion_action(d: dict) -> None:
+    """Execute the real-world effect of an approved suggestion.
+
+    Called from apply_suggestion() after the test gate passes.  Each category
+    has a concrete action that closes the feedback loop:
+
+        skill_pattern  → write/update a Skill in skills.jsonl
+        prompt_tweak   → record a TieredLesson (medium tier) for future injection
+        new_guardrail  → append pattern to memory/dynamic-constraints.jsonl
+        observation    → no-op (informational only)
+
+    Never raises — failures are logged to stderr and silently swallowed so
+    a bad suggestion never blocks the caller.
+    """
+    category = d.get("category", "observation")
+    suggestion_text = d.get("suggestion", "")
+    target = d.get("target", "all")
+    suggestion_id = d.get("suggestion_id", "")
+    confidence = float(d.get("confidence", 0.5))
+
+    try:
+        if category == "skill_pattern":
+            # Write or update the skill in skills.jsonl
+            from skills import load_skills, save_skill, Skill
+            import uuid as _uuid
+            skills = load_skills()
+            existing = next((s for s in skills if s.name == target or s.id == target), None)
+            if existing is not None:
+                # Update description with the suggestion; keep rest intact
+                existing.description = suggestion_text[:500]
+                save_skill(existing)
+            else:
+                # Create a new provisional skill from the suggestion text
+                new_skill = Skill(
+                    id=_uuid.uuid4().hex[:8],
+                    name=target or f"evolver-skill-{suggestion_id}",
+                    description=suggestion_text[:500],
+                    trigger_patterns=[target] if target and target != "all" else [],
+                    steps_template=[suggestion_text[:200]],
+                    source_loop_ids=[suggestion_id],
+                    created_at=datetime.now(timezone.utc).isoformat(),
+                    tier="provisional",
+                    utility_score=confidence,
+                )
+                save_skill(new_skill)
+
+        elif category == "prompt_tweak":
+            # Record as a tiered lesson so it gets injected into future prompts
+            if record_tiered_lesson is not None and MemoryTier is not None:
+                record_tiered_lesson(
+                    lesson_text=suggestion_text,
+                    task_type=target if target and target != "all" else "general",
+                    outcome="evolver_suggestion",
+                    source_goal=f"evolver-{suggestion_id}",
+                    tier=MemoryTier.MEDIUM,
+                    confidence=confidence,
+                )
+
+        elif category == "new_guardrail":
+            # Append to dynamic-constraints.jsonl — loaded by constraint.py at runtime
+            entry = {
+                "pattern": suggestion_text,
+                "risk": "MEDIUM",
+                "detail": f"evolver guardrail (id={suggestion_id}): {suggestion_text[:80]}",
+                "source": suggestion_id,
+                "added_at": datetime.now(timezone.utc).isoformat(),
+            }
+            with open(_dynamic_constraints_path(), "a", encoding="utf-8") as f:
+                f.write(json.dumps(entry) + "\n")
+
+        # observation: no action needed
+
+    except Exception as e:
+        print(f"[evolver] _apply_suggestion_action({category}) failed: {e}", file=sys.stderr)
 
 
 def apply_suggestion(suggestion_id: str) -> bool:
@@ -201,8 +294,10 @@ def apply_suggestion(suggestion_id: str) -> bool:
                     else:
                         d["applied"] = True
                         d.pop("status", None)
+                        _apply_suggestion_action(d)
                 else:
                     d["applied"] = True
+                    _apply_suggestion_action(d)
             new_lines.append(json.dumps(d))
         except Exception:
             new_lines.append(line)
@@ -442,6 +537,16 @@ def run_evolver(
         except Exception as e:
             if verbose:
                 print(f"[evolver] failed to save suggestions: {e}", file=sys.stderr)
+
+    # Auto-apply high-confidence suggestions (closes the feedback loop)
+    auto_applied = 0
+    if not dry_run and suggestions:
+        for s in suggestions:
+            if s.confidence >= 0.8 and not s.applied:
+                if apply_suggestion(s.suggestion_id):
+                    auto_applied += 1
+        if verbose and auto_applied:
+            print(f"[evolver] auto-applied {auto_applied} high-confidence suggestions", file=sys.stderr)
 
     # Telegram notification
     if notify and suggestions and not dry_run:

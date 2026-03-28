@@ -707,3 +707,98 @@ def test_generate_refinement_hint_uses_llm_response():
         adapter=mock,
     )
     assert "cached source" in hint or len(hint) > 10
+
+
+# ---------------------------------------------------------------------------
+# Phase 35 P2: HITL tier wiring in _execute_step
+# ---------------------------------------------------------------------------
+
+def test_execute_step_destroy_tier_is_blocked():
+    """Steps classified as DESTROY tier must be blocked before LLM call."""
+    from unittest.mock import MagicMock
+    adapter = MagicMock()  # should never be called
+
+    outcome = _execute_step(
+        goal="clean up workspace",
+        step_text="Delete all old log files from the workspace",
+        step_num=1,
+        total_steps=1,
+        completed_context=[],
+        adapter=adapter,
+        tools=[],
+    )
+    assert outcome["status"] == "blocked"
+    assert "DESTROY" in outcome["stuck_reason"]
+    adapter.complete.assert_not_called()
+
+
+def test_execute_step_high_risk_is_blocked():
+    """HIGH risk steps are still blocked via hitl_policy."""
+    from unittest.mock import MagicMock
+    adapter = MagicMock()
+
+    outcome = _execute_step(
+        goal="system admin",
+        step_text="rm -rf /tmp/old_build_dir",
+        step_num=1,
+        total_steps=1,
+        completed_context=[],
+        adapter=adapter,
+        tools=[],
+    )
+    assert outcome["status"] == "blocked"
+    adapter.complete.assert_not_called()
+
+
+def test_execute_step_external_tier_logs_but_proceeds(capsys):
+    """EXTERNAL tier steps log a headless warning but are not blocked."""
+    class _OkAdapter:
+        def complete(self, messages, **kwargs):
+            from llm import LLMResponse, ToolCall
+            return LLMResponse(
+                content="",
+                tool_calls=[ToolCall(name="complete_step", arguments={"result": "notification sent", "summary": "sent"})],
+                input_tokens=1, output_tokens=1,
+            )
+
+    outcome = _execute_step(
+        goal="notify team",
+        step_text="Send a notification to the Slack channel with the results",
+        step_num=1,
+        total_steps=1,
+        completed_context=[],
+        adapter=_OkAdapter(),
+        tools=[],
+        verbose=True,
+    )
+    # Should not be blocked
+    assert outcome["status"] != "blocked"
+    captured = capsys.readouterr()
+    assert "EXTERNAL" in captured.err or "confirm" in captured.err.lower()
+
+
+def test_execute_step_read_tier_proceeds_silently(capsys):
+    """READ tier steps pass through with no HITL log output."""
+    class _OkAdapter:
+        def complete(self, messages, **kwargs):
+            from llm import LLMResponse, ToolCall
+            return LLMResponse(
+                content="",
+                tool_calls=[ToolCall(name="complete_step", arguments={"result": "findings summarised", "summary": "done"})],
+                input_tokens=1, output_tokens=1,
+            )
+
+    outcome = _execute_step(
+        goal="research topic",
+        step_text="Summarise the findings from the research notes",
+        step_num=1,
+        total_steps=1,
+        completed_context=[],
+        adapter=_OkAdapter(),
+        tools=[],
+        verbose=True,
+    )
+    assert outcome["status"] != "blocked"
+    captured = capsys.readouterr()
+    assert "HITL" not in captured.err
+    assert "EXTERNAL" not in captured.err
