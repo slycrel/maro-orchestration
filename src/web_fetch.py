@@ -202,8 +202,9 @@ def _fetch_via_x_cli(command: str, url: str) -> str:
 def _html_to_text(html: str, max_chars: int = _MAX_TEXT_CHARS) -> str:
     """Strip HTML to readable prose, capped at max_chars."""
     if not _BS4:
-        # Fallback: strip tags with regex
-        text = re.sub(r"<[^>]+>", " ", html)
+        # Fallback: strip script/style blocks first, then remove remaining tags.
+        text = re.sub(r"(?is)<(script|style|noscript)\b[^>]*>.*?</\1>", " ", html)
+        text = re.sub(r"<[^>]+>", " ", text)
         text = html_lib.unescape(text)
         text = re.sub(r"\s+", " ", text).strip()
         return text[:max_chars]
