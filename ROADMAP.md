@@ -6,6 +6,21 @@ Phased build plan for autonomous agent orchestration. Each phase is independentl
 
 See `VISION.md` for the full intent.
 
+## Guiding systems model: Visibility → Reliability → Replayability
+
+A recurring systems principle for orchestration:
+
+1. **Visibility** — see what the system planned, did, spent, produced, and why it failed.
+2. **Reliability** — make the common path complete consistently, fail legibly, and recover sanely.
+3. **Replayability** — preserve enough trace/checkpoint fidelity to replay failures, compare policy changes, and evaluate alternate interventions.
+
+These stages build on each other. Visibility without reliability is just a clearer view of dysfunction. Reliability without replayability limits the system's ability to learn from past runs. This roadmap increasingly follows that progression:
+- Phases 1–14 establish execution, routing, memory, and basic oversight
+- Phases 43–46 are the explicit visibility/reliability bridge
+- later eval, replay, and self-improvement work should increasingly target replayability rather than one-off fixes
+
+A short version: **stop debugging by séance, then stop failing the same way twice, then make past runs reusable for future improvement.**
+
 ---
 
 ## Phase 0: Foundation Audit *(COMPLETE)*

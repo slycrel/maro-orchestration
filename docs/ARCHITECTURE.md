@@ -236,6 +236,25 @@ Returns `SheriffReport(status="healthy"|"warning"|"stuck", diagnosis=..., eviden
 
 ---
 
+## Design principle: Visibility → Reliability → Replayability
+
+A useful orchestration system matures in three layers:
+
+1. **Visibility** — can we see what it planned, what it did, where time/tokens went, why it failed, and what artifacts changed?
+2. **Reliability** — can it complete common paths consistently, fail legibly, recover sanely, and stop repeating the same mistake forever?
+3. **Replayability** — can we rerun or replay a run/segment well enough to diagnose decisions, compare interventions, and test policy changes against prior traces?
+
+These layers build on each other. Without visibility, debugging turns into séance. Without reliability, visibility just gives a clearer view of repeated failure. Replayability is the advanced layer: especially valuable for algorithmic loops, eval, and policy iteration, but only after the first two exist.
+
+For `openclaw-orchestration`, this means:
+- structured logging, intent traces, token/time accounting, and diagnoses are **visibility**
+- decomposition quality, recovery planning, landing behavior, and safer execution are **reliability**
+- checkpoints, partial-result persistence, trace replay, and policy comparison are **replayability**
+
+This framing should guide architectural decisions and roadmap sequencing.
+
+---
+
 ## Heartbeat (`heartbeat.py`)
 
 Runs every 60 seconds (via systemd):
