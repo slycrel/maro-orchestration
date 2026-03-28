@@ -696,6 +696,43 @@ Currently: missions exist (`mission.py`) but autonomous drain requires manual tr
 
 ---
 
+### Phase 36: Agent Command Center — Observability Dashboard *(PLANNED)*
+
+*From OpenClaw TASKS.md backlog (March 2026): "Build v1 agent command center: ingest orchestrator run events/logs and render a live dashboard of agents/jobs/queue."*
+
+Currently `poe-observe` gives a static snapshot. The missing piece is a live event stream + web UI for remote monitoring — useful when running headless overnight missions.
+
+- [ ] **Event stream**: standard JSON events (job started/finished, queue depth, step completed, failures, rate_limit/cooldown) → `memory/events.jsonl`, append-only with lightweight index
+- [ ] **`poe-observe --watch`**: poll events.jsonl every 5s, render to terminal (no dependency on `rich`/`textual` for the v1 — plain text with clear formatting)
+- [ ] **Web dashboard (v1)**: local FastAPI server (optional dep) serving same data over HTTP. Plain HTML table + live-refresh. Accessible from Slack/browser during overnight runs.
+- [ ] **Hook-based step stream**: `reporter` hook at `fire_on=step` writes to `events.jsonl` (hook infrastructure is already in place — this is wiring, not new design)
+- [ ] **Per-step cost tracking**: write step_type + token cost to events stream, enabling cost-per-goal breakdown in the dashboard
+
+**Artifact:** `memory/events.jsonl`, `poe-observe --watch`, optional `poe-dashboard` FastAPI server
+
+---
+
+### Phase 37: Skill Synthesis — skill-creator Bootstrap *(PLANNED)*
+
+*The final unshipped Memento-Skills idea (arXiv:2603.18743). Phases 31-32 gave us rewriting; this adds creating.*
+
+When the agent reaches a step type that no existing skill covers, instead of proceeding with a generic execution, it:
+1. Detects the gap (no skill match, TF-IDF similarity below threshold)
+2. Synthesizes a new provisional skill definition from the step context
+3. Adds it to the skill registry as provisional
+4. Tracks performance — if it passes the circuit breaker, it stays; if it immediately fails 3× it's deleted
+
+The skill-creator is itself a skill — meta-programming the skill library from within the execution loop.
+
+- [ ] **Gap detection**: `find_matching_skills()` returns empty after both router and TF-IDF tiers → synthesis trigger fires
+- [ ] **Skill synthesis prompt**: use goal + step text + existing skill format to generate a new provisional skill definition (JSON structure: name, description, trigger_patterns, steps_template)
+- [ ] **Auto-delete on immediate failure**: if a synthesized skill reaches OPEN circuit within 5 uses, delete rather than queue for rewrite (it was never right)
+- [ ] **Synthesis rate limiting**: max N syntheses per hour to prevent runaway library growth
+
+**Artifact:** `synthesize_skill()` in `evolver.py`, gap detection in `find_matching_skills()`, rate limiter
+
+---
+
 ## Superseded Plans
 
 The original M0-M4 milestones and N1-N4 roadmap items focused on infrastructure plumbing (adapters, scheduling, CI). That work was valuable scaffolding, but it didn't address the core need: making Poe autonomous. This roadmap replaces N1-N4 entirely.

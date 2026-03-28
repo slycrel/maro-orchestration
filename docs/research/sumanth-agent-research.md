@@ -60,15 +60,15 @@ Works with any OpenAI-compatible endpoint. Not locked to GPT-4. Directly relevan
 
 | Idea | Poe Status | Gap / Opportunity |
 |------|-----------|-------------------|
-| Skill self-rewriting | Not implemented | High-value addition to poe-orchestrator |
-| Failure attribution | Manual/ad-hoc | Automate via reflection step in heartbeat loop |
-| Utility scoring | Not implemented | Add score field to skill registry |
-| Selective skill retrieval | All tools in context | Switch to RAG-style skill lookup |
-| Skill synthesis | Not implemented | skill-creator skill could bootstrap Poe's own capabilities |
-| Sandboxed execution | Partial (subprocess) | Formalize sandbox boundary |
-| Benchmark loop | Not implemented | Define eval harness for Poe improvement claims |
+| Skill self-rewriting | ✅ Phase 32: `rewrite_skill()` in `evolver.py` — circuit-breaker gated | Circuit breaker: 3+ consecutive failures → OPEN → LLM rewrites skill body → HALF_OPEN (probationary) |
+| Failure attribution | ✅ Phase 32: `attribute_failure_to_skills()` in `skills.py` | Wired into `agent_loop.py` on step blocked |
+| Utility scoring | ✅ Phase 32: EMA utility_score (alpha=0.3) in `skills.py` | Updated on success ↑ / failure ↓; gates promotion/demotion/rewrite |
+| Selective skill retrieval | ✅ Phase 32: `_tfidf_skill_rank()` in `skills.py` | Middle tier between trained router and keyword fallback; smooth IDF, cosine sim |
+| Skill synthesis | ❌ Phase 32 pending | skill-creator skill could bootstrap Poe's own capabilities |
+| Sandboxed execution | ✅ Phase 15+18: `src/sandbox.py` hardened | Resource limits, network isolation, audit log, static analysis |
+| Benchmark loop | ⚠️ Partial: eval harness + pass@k / pass^k in `metrics.py` | No continuous HLE/GAIA benchmark; eval is goal-specific not library-level |
 
-**Priority steal:** The **Reflect + Write** phases are the highest-leverage addition. Poe already has a heartbeat loop and task queue — inserting a reflection step after task completion that updates a skill registry would be a minimal but high-impact change.
+**Priority steal (remaining):** The **Skill synthesis** (creating new skills when none exist) is the only unshipped Memento-Skills idea. The circuit-breaker + rewrite cycle addresses the Reflect+Write phases. The read-only gap: continuous benchmark evaluation of the skill library's improving capability over time.
 
 ---
 
@@ -86,7 +86,10 @@ Works with any OpenAI-compatible endpoint. Not locked to GPT-4. Directly relevan
 
 ## Next Actions
 
-- [ ] Fetch the repo URL from @Sumanth_077's reply thread
-- [ ] Review skill representation format and utility score implementation
-- [ ] Prototype a Reflect+Write step in Poe's heartbeat loop (`~/.openclaw/workspace/scripts/`)
-- [ ] Define a minimal skill registry format compatible with poe-orchestrator's goal ancestry model
+- [x] Implement skill self-rewriting with circuit breaker (Phase 32 — `rewrite_skill()`, `run_skill_maintenance()`)
+- [x] Implement failure attribution (Phase 32 — `attribute_failure_to_skills()`, wired into agent_loop)
+- [x] Implement utility scoring (Phase 32 — EMA utility_score)
+- [x] Implement selective skill retrieval (Phase 32 — `_tfidf_skill_rank()`)
+- [ ] Fetch the repo URL from @Sumanth_077's reply thread — verify skill representation format
+- [ ] Implement skill synthesis (Phase 32 pending — create provisional skill when no match found)
+- [ ] Define library-level benchmark evaluation (continuous HLE/GAIA-style eval over skill library rounds)

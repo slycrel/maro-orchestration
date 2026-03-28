@@ -1,8 +1,8 @@
 # Poe-Orchestration Backlog Triage
-**Date:** 2026-03-27
+**Date:** 2026-03-27 (updated 2026-03-27)
 **Sources:** DeerFlow deep-dive (2026-03-07), Nanoclaws/sub-agent X thread (2026-03-07), AutoHarness arXiv:2603.03329 (2026-02-10)
 **Purpose:** Identify what to steal, what's done, what's net new for the poe-orchestration roadmap.
-**Roadmap context:** 21 phases complete, 9 partial, 5 planned as of Phase 35 triage.
+**Roadmap context:** 21 phases complete, 9 partial, 5 planned as of Phase 35 triage. P1 items all shipped March 2026.
 
 ---
 
@@ -76,10 +76,10 @@
 
 | # | Idea | Source | Implementation Status | Roadmap Label | Priority |
 |---|------|--------|-----------------------|---------------|----------|
-| 1 | TF-IDF/embedding memory retrieval | DeerFlow | ⚠️ Partial (routing only; memory injection is recency-only) | **on roadmap** (Phase 35 P1) | **P1** |
-| 2 | Constraint harness (action validation) | AutoHarness | ❌ Not implemented | **on roadmap** (Phase 35 P1) | **P1** |
-| 3 | Parallelized sub-agent fan-out | DeerFlow | ❌ Not implemented (parallel missions exist; subtask fan-out doesn't) | **on roadmap** (Phase 35 P1) | **P1** |
-| 4 | Cost-aware model routing | Nanoclaws | ⚠️ Partial (role-based tiers in Phase 13; step-level classifier routing pending) | **on roadmap** (Phase 35 P1 + Phase 30 pending) | **P1** |
+| 1 | TF-IDF/embedding memory retrieval | DeerFlow | ✅ Shipped (`_tfidf_rank()` in `memory.py`; `_tfidf_skill_rank()` in `skills.py`) | Phase 35 P1 DONE | — |
+| 2 | Constraint harness (action validation) | AutoHarness | ✅ Shipped (`src/constraint.py` — 5 pattern groups, pluggable registry, HIGH/MEDIUM gates) | Phase 35 P1 DONE | — |
+| 3 | Parallelized sub-agent fan-out | DeerFlow | ✅ Shipped (`_steps_are_independent()` + `parallel_fan_out()` in `agent_loop.py`) | Phase 35 P1 DONE | — |
+| 4 | Cost-aware model routing | Nanoclaws | ✅ Shipped (`classify_step_model()` in `poe.py` — per-step Haiku vs Sonnet, zero token cost) | Phase 35 P1 DONE | — |
 | 5 | Machine-readable agent registry | Nanoclaws | ⚠️ Partial (AGENTS.md prose; no YAML manifest) | **on roadmap** (Phase 35 P2) | **P2** |
 | 6 | Structured iterative refinement loop | AutoHarness | ⚠️ Partial (ad-hoc retry; no formal N-round contract) | **on roadmap** (Phase 35 P2) | **P2** |
 | 7 | Reporter/synthesis agent role | DeerFlow | ⚠️ Partial (reporter hook type exists; no dedicated synthesis agent) | **on roadmap** (Phase 35 P2) | **P2** |
@@ -106,19 +106,19 @@ Legend: ✅ Done · ⚠️ Partial · ❌ Not implemented
 
 ## Prioritized Recommendations
 
-### P1 — Ship next (high leverage, bounded scope)
+### P1 — All shipped (March 2026)
 
-**1. TF-IDF/embedding memory retrieval**
-Replace recency-only context injection in `memory_manager.py` with relevance-ranked retrieval. 2–3 day effort. Directly reduces hallucination from stale/irrelevant context being injected.
+**1. TF-IDF/embedding memory retrieval** ✅
+`_tfidf_rank()` in `memory.py` (smooth IDF, cosine similarity, stdlib only). `_tfidf_skill_rank()` in `skills.py` as middle retrieval tier between trained router and raw keyword matching.
 
-**2. Constraint harness layer**
-Add a pre-execution validation wrapper around tool calls. Harness checks action legality (valid paths, allowed operations, permission scope) before dispatch. Catches ~80% of agent misfires without LLM round-trip. Start with file write and shell exec constraints.
+**2. Constraint harness layer** ✅
+`src/constraint.py`: 5 pattern groups (destructive, secret, path_escape, unsafe_network, unsafe_exec). HIGH blocks, MEDIUM warns. Pluggable `CONSTRAINT_REGISTRY`. Fires in `agent_loop.py` before LLM call.
 
-**3. Parallelized sub-agent fan-out**
-Current orchestrator is strictly sequential. Add async fan-out for independent research/execution subtasks. DeerFlow does this well — steal the pattern. Unlocks 3–5× throughput on multi-step goals.
+**3. Parallelized sub-agent fan-out** ✅
+`_steps_are_independent(steps)` (word-boundary regex scan for inter-step refs) + `parallel_fan_out()` (ThreadPoolExecutor). Wired into `run_agent_loop()` when all steps are independent.
 
-**4. Cost-aware model routing**
-Route simple/deterministic steps (formatting, classification, retrieval) to Haiku/Flash. Reserve Opus/Sonnet for synthesis and novel reasoning. Estimated 60–70% cost reduction on typical task mixes.
+**4. Cost-aware model routing** ✅
+`classify_step_model(step_text)` in `poe.py`. `_CHEAP_STEP_KEYWORDS` (retrieval/classify/format/verify) → Haiku; `_FORCE_MID_KEYWORDS` (synthesis/analysis/implement) → Sonnet. Per-step, zero token cost.
 
 ### P2 — Next sprint (infrastructure improvements)
 

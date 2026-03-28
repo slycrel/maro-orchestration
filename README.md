@@ -198,6 +198,7 @@ OpenClaw is fully optional. The system runs standalone on any machine with Pytho
 | `mission.py` | Mission hierarchy: Mission → Milestone → Feature → Worker Session |
 | `ancestry.py` | Goal ancestry chain: parent_id, ancestry.json, prompt injection |
 | `metrics.py` | Success rate, cost, token usage per task type; pass@k / pass^k |
+| `constraint.py` | Pre-execution action validator: 5 pattern groups (destructive/secret/path/network/exec), HIGH blocks, MEDIUM warns, pluggable registry |
 | `security.py` | Prompt injection detection on external content (pre-loop scanning) |
 | `config.py` | Workspace resolution, credential discovery, env var priority |
 | `bootstrap.py` | `poe-bootstrap install`: dirs, services, smoke test |
@@ -223,14 +224,33 @@ Next run with similar task:
     → ancestry context loaded
     → both injected into decompose + execute prompts
     → router.py picks skills by predicted success probability (not just keyword match)
+    → TF-IDF fallback when router not trained — relevance-ranked, not just keyword substring
 ```
+
+---
+
+## Safety and reliability
+
+**Constraint harness** (`constraint.py`) — fires before every step execution, no LLM round-trip required:
+- Blocks destructive patterns (`rm -rf`, `DROP TABLE`, `format /`)
+- Blocks secret exposure (`/etc/passwd`, `~/.ssh/`, env dumps)
+- Blocks path escape (writes outside workspace)
+- Warns on unsafe network ops and shell exec patterns
+
+**Skill circuit breaker** — distinguishes a network blip from a broken skill:
+- 1-2 failures → circuit stays CLOSED, no action (blip tolerance)
+- 3+ consecutive failures → circuit OPEN → skill queued for LLM rewrite
+- After rewrite → HALF_OPEN (probationary, needs 2 successes to close)
+- Failure during HALF_OPEN → immediately back to OPEN
+
+**Prompt injection detection** (`security.py`) — scans external content before it enters the agent context.
 
 ---
 
 ## Development
 
 ```bash
-# Run tests (1290+ passing, all LLM calls mocked)
+# Run tests (1380+ passing, all LLM calls mocked)
 python3 -m pytest tests/ -q
 
 # Dry-run (no LLM calls)
