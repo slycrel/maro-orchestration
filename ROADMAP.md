@@ -605,7 +605,7 @@ Not a single phase but a research track that informs multiple phases:
 
 ---
 
-### Phase 31: Persona Auto-Selection *(PARTIAL)*
+### Phase 31: Persona Auto-Selection *(DONE)*
 
 Currently, persona selection requires explicit `/research`, `/build`, `/ops` commands. Goal content should drive persona selection automatically.
 
@@ -615,12 +615,10 @@ Currently, persona selection requires explicit `/research`, `/build`, `/ops` com
 - [x] **`classify_step_model(step_text)`** in `poe.py`: per-step Haiku vs Sonnet routing via keyword heuristic — cheap for retrieval/classify/format/verify, mid for synthesis/analysis/implement
 - [x] **Three-tier resolution in `workers.py`**: `PersonaRegistry.load(worker_type)` → `_PERSONA_FILES` map → inline fallback, giving all 18+ personas access from worker dispatch path
 
-**Still pending:**
-- [ ] **Override**: explicit `/research`, `/build`, etc. always override auto-selection
-- [ ] **Feedback loop**: record persona_selected + outcome; feed to evolver for selection quality improvement
-- [ ] Wire `persona_for_goal()` into `poe_handle()` and natural-language Telegram/Slack routing
+- [x] **Feedback loop**: `record_persona_outcome()` in `persona.py` writes `(persona, goal, status, confidence, loop_id)` to `memory/persona-outcomes.jsonl` after each loop. `load_persona_outcomes()` for evolver consumption. Wired in `poe.py` after `run_agent_loop`.
+- [x] **Routing expansion**: 13-rule routing table (up from 5) covering health, legal, strategy, creative, scraping, simplifier, critic, systems-design personas. `persona_for_goal()` wired into `poe_handle()` AGENDA path.
 
-**Artifact:** `persona_for_goal()` in `persona.py`, `classify_step_model()` in `poe.py`, three-tier resolution in `workers.py`
+**Artifact:** `persona_for_goal()` + `record_persona_outcome()` + `load_persona_outcomes()` in `persona.py`, wired in `poe.py`
 
 ---
 
