@@ -168,6 +168,7 @@ def test_poll_background_preserves_command(monkeypatch, tmp_path):
 # wait_background
 # ---------------------------------------------------------------------------
 
+@pytest.mark.slow
 def test_wait_background_completes(monkeypatch, tmp_path):
     """wait_background waits for a short command to finish."""
     _setup_workspace(monkeypatch, tmp_path)
@@ -176,6 +177,7 @@ def test_wait_background_completes(monkeypatch, tmp_path):
     assert result.status in ("done", "failed")  # short echo should complete
 
 
+@pytest.mark.slow
 def test_wait_background_timeout(monkeypatch, tmp_path):
     """wait_background returns status=timeout if command is too slow."""
     _setup_workspace(monkeypatch, tmp_path)

@@ -32,15 +32,32 @@ pip install -e ".[all]"
 ## Running tests
 
 ```bash
+# Fast feedback — skips slow integration tests (~28s)
+python3 -m pytest -m "not slow"
+
+# Full suite including slow tests (~75s)
 python3 -m pytest
+
+# Only slow tests (agent loop integration, background waits)
+python3 -m pytest -m slow
+
+# Single file (useful during development)
+python3 -m pytest tests/test_constraint.py
 ```
 
-All tests are self-contained and mock LLM calls — no API keys needed.  1460+ tests, ~80 seconds.
+All tests are self-contained and mock LLM calls — no API keys needed. 1500+ tests total.
+
+### Markers
+
+| Marker | Meaning |
+|--------|---------|
+| `@pytest.mark.slow` | Takes >2s (full agent loop runs, subprocess waits). 7 tests, ~46s. |
 
 ## Suggested pre-PR checks
 
 ```bash
-python3 -m pytest
+python3 -m pytest -m "not slow"     # fast pass — catches most regressions
+python3 -m pytest                    # full suite before pushing
 bash -n scripts/*.sh
 python3 -m py_compile src/orch.py
 ```

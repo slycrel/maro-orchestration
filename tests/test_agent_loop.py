@@ -254,6 +254,7 @@ def test_loop_steps_marked_in_project(monkeypatch, tmp_path):
     assert len(done_items) == sum(1 for s in result.steps if s.status == "done")
 
 
+@pytest.mark.slow
 def test_loop_stuck_detection(monkeypatch, tmp_path):
     """If the LLM always flags stuck, loop terminates with status=stuck."""
     _setup_workspace(monkeypatch, tmp_path)
@@ -449,6 +450,7 @@ def test_march_of_nines_alert_not_set_on_all_done(monkeypatch, tmp_path):
     assert result.march_of_nines_alert is False
 
 
+@pytest.mark.slow
 def test_march_of_nines_alert_set_on_low_success(monkeypatch, tmp_path):
     """Loop with many blocked steps → march_of_nines_alert=True."""
     _setup_workspace(monkeypatch, tmp_path)
@@ -507,6 +509,7 @@ def test_loop_result_has_march_of_nines_field(monkeypatch, tmp_path):
     assert isinstance(result.march_of_nines_alert, bool)
 
 
+@pytest.mark.slow
 def test_dead_ends_written_on_block(monkeypatch, tmp_path):
     """Blocked step writes to DEAD_ENDS.md."""
     _setup_workspace(monkeypatch, tmp_path)
@@ -684,6 +687,7 @@ def test_generate_refinement_hint_no_adapter():
     assert len(hint) > 10
 
 
+@pytest.mark.slow
 def test_generate_refinement_hint_with_failing_adapter():
     """Falls back to generic hint when adapter raises."""
     class _BadAdapter:
@@ -890,6 +894,7 @@ def test_finalize_loop_skips_reflexion_in_dry_run(monkeypatch):
     assert adapter_used.get("value") is None
 
 
+@pytest.mark.slow
 def test_generate_refinement_hint_uses_llm_response():
     """Uses LLM response when adapter works."""
     from unittest.mock import MagicMock
