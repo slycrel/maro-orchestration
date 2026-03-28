@@ -15,12 +15,15 @@ from introspect import (
     LensResult,
     StepProfile,
     AggregatedDiagnosis,
+    RecoveryPlan,
     diagnose_loop,
     diagnose_latest,
     save_diagnosis,
     load_diagnoses,
     run_lenses,
     aggregate_lenses,
+    plan_recovery,
+    plan_recovery_all,
     get_lens_registry,
     _build_step_profiles,
     FAILURE_CLASSES,
@@ -460,3 +463,55 @@ def test_registry_includes_execution_and_quality():
     names = registry.list()
     assert "execution" in names
     assert "quality" in names
+
+
+# ---------------------------------------------------------------------------
+# Recovery Planner (Phase 45)
+# ---------------------------------------------------------------------------
+
+def test_recovery_plan_for_decomposition_too_broad():
+    diag = LoopDiagnosis(loop_id="x", failure_class="decomposition_too_broad", severity="warning")
+    plan = plan_recovery(diag)
+    assert plan is not None
+    assert plan.auto_apply is True
+    assert plan.risk == "low"
+    assert "max_steps" in plan.params
+
+
+def test_recovery_plan_for_budget_exhaustion():
+    diag = LoopDiagnosis(loop_id="x", failure_class="budget_exhaustion", severity="warning")
+    plan = plan_recovery(diag)
+    assert plan is not None
+    assert plan.auto_apply is True
+    assert plan.params.get("max_iterations", 0) > 40
+
+
+def test_recovery_plan_for_adapter_timeout():
+    diag = LoopDiagnosis(loop_id="x", failure_class="adapter_timeout", severity="critical")
+    plan = plan_recovery(diag)
+    assert plan is not None
+    assert plan.auto_apply is False  # needs human review
+    assert plan.risk == "medium"
+
+
+def test_recovery_plan_for_healthy_returns_none():
+    diag = LoopDiagnosis(loop_id="x", failure_class="healthy", severity="info")
+    plan = plan_recovery(diag)
+    assert plan is None
+
+
+def test_recovery_plan_all_failure_classes_covered():
+    """Every non-healthy failure class has at least one recovery plan."""
+    for fc in FAILURE_CLASSES:
+        if fc == "healthy" or fc == "artifact_missing":
+            continue
+        diag = LoopDiagnosis(loop_id="x", failure_class=fc, severity="warning")
+        plans = plan_recovery_all(diag)
+        assert len(plans) >= 1, f"No recovery plan for {fc}"
+
+
+def test_recovery_plan_all_returns_list():
+    diag = LoopDiagnosis(loop_id="x", failure_class="constraint_false_positive", severity="warning")
+    plans = plan_recovery_all(diag)
+    assert isinstance(plans, list)
+    assert all(isinstance(p, RecoveryPlan) for p in plans)

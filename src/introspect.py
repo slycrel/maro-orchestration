@@ -857,6 +857,117 @@ def run_lenses(
 
 
 # ---------------------------------------------------------------------------
+# Phase 45: Recovery Planner — decision table for mechanical interventions
+# ---------------------------------------------------------------------------
+
+@dataclass
+class RecoveryPlan:
+    """A mechanical intervention the system can apply without human review."""
+    failure_class: str
+    action: str                         # human-readable description
+    auto_apply: bool                    # True = system can do this itself
+    risk: str                           # "low" | "medium" | "high"
+    params: Dict[str, Any] = field(default_factory=dict)  # action-specific parameters
+
+
+# Decision table: failure_class → recovery action
+# Ordered by preference (cheapest/safest first)
+_RECOVERY_TABLE: Dict[str, List[RecoveryPlan]] = {
+    "decomposition_too_broad": [
+        RecoveryPlan(
+            failure_class="decomposition_too_broad",
+            action="Re-run with tighter max_steps and code-surface cap",
+            auto_apply=True, risk="low",
+            params={"max_steps": 12, "hint": "limit to 3-5 files per step"},
+        ),
+    ],
+    "constraint_false_positive": [
+        RecoveryPlan(
+            failure_class="constraint_false_positive",
+            action="Retry blocked steps — constraint patterns may have been updated",
+            auto_apply=True, risk="low",
+            params={"retry_from": "first_blocked"},
+        ),
+    ],
+    "adapter_timeout": [
+        RecoveryPlan(
+            failure_class="adapter_timeout",
+            action="Retry with smaller step scope or switch to API adapter",
+            auto_apply=False, risk="medium",
+            params={"suggestion": "reduce step scope or use ANTHROPIC_API_KEY adapter"},
+        ),
+    ],
+    "budget_exhaustion": [
+        RecoveryPlan(
+            failure_class="budget_exhaustion",
+            action="Increase max_iterations and enable budget-aware landing",
+            auto_apply=True, risk="low",
+            params={"max_iterations": 60},
+        ),
+    ],
+    "empty_model_output": [
+        RecoveryPlan(
+            failure_class="empty_model_output",
+            action="Retry with explicit tool-call instruction in step text",
+            auto_apply=True, risk="low",
+            params={"hint": "You MUST call complete_step or flag_stuck. Do not return bare text."},
+        ),
+    ],
+    "token_explosion": [
+        RecoveryPlan(
+            failure_class="token_explosion",
+            action="Truncate completed_context to summaries and re-run from explosion point",
+            auto_apply=False, risk="medium",
+            params={"suggestion": "cap completed_context entries at 200 chars"},
+        ),
+    ],
+    "retry_churn": [
+        RecoveryPlan(
+            failure_class="retry_churn",
+            action="Skip the churning step and continue with remaining steps",
+            auto_apply=True, risk="low",
+            params={"action": "skip_and_continue"},
+        ),
+    ],
+    "setup_failure": [
+        RecoveryPlan(
+            failure_class="setup_failure",
+            action="Check adapter resolution and import chain; surface real exception",
+            auto_apply=False, risk="medium",
+            params={"suggestion": "run with POE_LOG_LEVEL=DEBUG to see the swallowed error"},
+        ),
+    ],
+    "integration_drift": [
+        RecoveryPlan(
+            failure_class="integration_drift",
+            action="Audit import names against actual module exports",
+            auto_apply=False, risk="medium",
+            params={"suggestion": "run the AST cross-check from the test tightening session"},
+        ),
+    ],
+}
+
+
+def plan_recovery(diag: LoopDiagnosis) -> Optional[RecoveryPlan]:
+    """Given a diagnosis, return the best recovery plan (if any).
+
+    Returns the first applicable plan from the decision table.
+    Plans with auto_apply=True are safe for the system to execute without
+    human review. Plans with auto_apply=False should be surfaced as
+    suggestions.
+    """
+    plans = _RECOVERY_TABLE.get(diag.failure_class, [])
+    if not plans:
+        return None
+    return plans[0]
+
+
+def plan_recovery_all(diag: LoopDiagnosis) -> List[RecoveryPlan]:
+    """Return all applicable recovery plans for a diagnosis."""
+    return list(_RECOVERY_TABLE.get(diag.failure_class, []))
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -942,6 +1053,17 @@ def main(argv=None) -> None:
             print(f"    Action:     {agg.primary_action}")
         else:
             print(f"\n  Lens analysis: no notable findings")
+
+    # Recovery plan
+    if diag.failure_class != "healthy":
+        recovery = plan_recovery(diag)
+        if recovery:
+            _auto = "AUTO" if recovery.auto_apply else "SUGGEST"
+            print(f"\n  Recovery plan [{_auto}] (risk={recovery.risk}):")
+            print(f"    {recovery.action}")
+            if recovery.params:
+                for k, v in recovery.params.items():
+                    print(f"    {k}: {v}")
 
 
 if __name__ == "__main__":
