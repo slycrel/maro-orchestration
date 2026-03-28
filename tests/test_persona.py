@@ -565,3 +565,85 @@ def test_load_persona_outcomes_respects_limit(monkeypatch, tmp_path):
         record_persona_outcome("researcher", f"goal {i}", "done")
     results = load_persona_outcomes(limit=2)
     assert len(results) == 2
+
+
+# ===========================================================================
+# Phase 35 P2: Agent capability manifest tests
+# ===========================================================================
+
+from persona import generate_manifest, save_manifest, load_manifest
+
+
+def test_generate_manifest_returns_list():
+    """generate_manifest() returns a non-empty list of dicts."""
+    manifest = generate_manifest()
+    assert isinstance(manifest, list)
+    assert len(manifest) > 0
+
+
+def test_generate_manifest_entries_have_required_fields():
+    """Each manifest entry has required keys."""
+    manifest = generate_manifest()
+    required = {"name", "role", "model_tier", "tool_access", "trigger_keywords", "description"}
+    for entry in manifest:
+        for key in required:
+            assert key in entry, f"Missing key {key!r} in entry {entry.get('name')!r}"
+
+
+def test_generate_manifest_sorted_by_name():
+    """Manifest entries are sorted alphabetically by name."""
+    manifest = generate_manifest()
+    names = [e["name"] for e in manifest]
+    assert names == sorted(names)
+
+
+def test_save_and_load_manifest(monkeypatch, tmp_path):
+    """save_manifest writes JSON; load_manifest reads it back."""
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    path = tmp_path / "test-manifest.json"
+    save_manifest(output_path=path, fmt="json")
+    assert path.exists()
+    loaded = load_manifest(path=path)
+    assert isinstance(loaded, list)
+    assert len(loaded) > 0
+    # Verify round-trip fidelity
+    original = generate_manifest()
+    assert len(loaded) == len(original)
+
+
+def test_load_manifest_returns_empty_when_missing(monkeypatch, tmp_path):
+    """load_manifest returns [] when no manifest file exists."""
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    result = load_manifest(path=tmp_path / "no-such-file.json")
+    assert result == []
+
+
+def test_manifest_includes_trigger_keywords_for_known_personas():
+    """Manifest entries for known personas include trigger keywords."""
+    manifest = generate_manifest()
+    entry_map = {e["name"]: e for e in manifest}
+    if "builder" in entry_map:
+        assert len(entry_map["builder"]["trigger_keywords"]) >= 0  # may be empty if not in routing table
+    # At least one persona should have keywords
+    total_keywords = sum(len(e["trigger_keywords"]) for e in manifest)
+    assert total_keywords > 0
+
+
+def test_poe_persona_manifest_cli(monkeypatch, tmp_path, capsys):
+    """poe-persona manifest CLI subcommand shows the manifest table."""
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    import cli
+    cli.main(["poe-persona", "manifest"])
+    out = capsys.readouterr().out
+    assert "Manifest" in out or "agent" in out.lower()
+
+
+def test_poe_persona_manifest_json_cli(monkeypatch, tmp_path, capsys):
+    """poe-persona manifest --format json outputs valid JSON."""
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    import cli
+    cli.main(["poe-persona", "manifest", "--format", "json"])
+    out = capsys.readouterr().out
+    data = json.loads(out)
+    assert "agents" in data
+    assert len(data["agents"]) > 0

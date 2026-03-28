@@ -678,3 +678,134 @@ def load_persona_outcomes(limit: int = 100) -> List[dict]:
         return list(reversed(results))[:limit]
     except Exception:
         return []
+
+
+# ---------------------------------------------------------------------------
+# Phase 35 P2: Machine-readable agent capability manifest
+# ---------------------------------------------------------------------------
+
+def generate_manifest(registry: Optional["PersonaRegistry"] = None) -> List[dict]:
+    """Generate a list of agent capability dicts from all loaded persona specs.
+
+    Each entry contains:
+      name, role, model_tier, tool_access, capabilities, trigger_keywords, description
+
+    This is the machine-readable replacement for AGENTS.md prose.
+    Suitable for serialization to YAML or JSON.
+    """
+    if registry is None:
+        registry = PersonaRegistry()
+
+    manifest = []
+    for name in registry.list():
+        try:
+            spec = registry.load(name)
+            if spec is None:
+                continue
+            # Extract trigger keywords from the routing table in persona_for_goal
+            triggers = _PERSONA_ROUTING_KEYWORDS.get(name, [])
+            entry = {
+                "name": name,
+                "role": spec.role,
+                "model_tier": spec.model_tier,
+                "tool_access": list(spec.tool_access),
+                "memory_scope": spec.memory_scope,
+                "trigger_keywords": list(triggers),
+                "composes": list(spec.composes),
+                "description": spec.system_prompt[:200].strip().replace("\n", " "),
+            }
+            manifest.append(entry)
+        except Exception:
+            continue
+
+    manifest.sort(key=lambda e: e["name"])
+    return manifest
+
+
+def save_manifest(
+    output_path: Optional[Path] = None,
+    registry: Optional["PersonaRegistry"] = None,
+    fmt: str = "json",
+) -> Path:
+    """Write the agent capability manifest to disk.
+
+    Args:
+        output_path: Where to write. Defaults to agents/manifest.json in orch_root.
+        registry:    PersonaRegistry to source from.
+        fmt:         "json" or "yaml" (yaml requires PyYAML).
+
+    Returns:
+        The path written to.
+    """
+    if output_path is None:
+        try:
+            import orch
+            output_path = orch.orch_root() / "agents" / f"manifest.{fmt}"
+        except Exception:
+            output_path = Path(".") / f"manifest.{fmt}"
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest = generate_manifest(registry=registry)
+
+    if fmt == "yaml":
+        try:
+            import yaml
+            content = yaml.dump({"agents": manifest}, default_flow_style=False, allow_unicode=True)
+        except ImportError:
+            # Fallback to JSON if PyYAML not available
+            content = json.dumps({"agents": manifest}, indent=2, ensure_ascii=False)
+            output_path = output_path.with_suffix(".json")
+    else:
+        content = json.dumps({"agents": manifest}, indent=2, ensure_ascii=False)
+
+    output_path.write_text(content + "\n", encoding="utf-8")
+    return output_path
+
+
+def load_manifest(path: Optional[Path] = None) -> List[dict]:
+    """Load the agent capability manifest from disk. Returns [] if not found."""
+    if path is None:
+        try:
+            import orch
+            for ext in ("json", "yaml"):
+                candidate = orch.orch_root() / "agents" / f"manifest.{ext}"
+                if candidate.exists():
+                    path = candidate
+                    break
+        except Exception:
+            pass
+
+    if path is None or not path.exists():
+        return []
+
+    try:
+        content = path.read_text(encoding="utf-8")
+        if str(path).endswith(".yaml") or str(path).endswith(".yml"):
+            try:
+                import yaml
+                data = yaml.safe_load(content)
+            except ImportError:
+                data = json.loads(content)
+        else:
+            data = json.loads(content)
+        return data.get("agents", [])
+    except Exception:
+        return []
+
+
+# Trigger keyword map for manifest generation (mirrors persona_for_goal routing table)
+_PERSONA_ROUTING_KEYWORDS: Dict[str, List[str]] = {
+    "health-researcher": ["health", "medical", "nutrition", "disease", "clinical", "symptom"],
+    "legal-researcher": ["legal", "law", "contract", "regulation", "compliance", "statute"],
+    "strategist": ["strategy", "roadmap", "competitive", "market", "planning", "vision"],
+    "creative-director": ["creative", "brand", "marketing", "campaign", "design", "story"],
+    "scrapling-adaptive-web-recon": ["scrape", "scraping", "crawl", "web extraction", "site data"],
+    "systems-design-architect-coach": ["architecture", "distributed", "system design", "microservice", "infra"],
+    "critic": ["critique", "review", "failure mode", "weakness", "evaluate", "assess"],
+    "simplifier": ["simplify", "too complex", "remove", "dead code", "reduce"],
+    "research-assistant-deep-synth": ["research", "analyze", "summarize", "literature", "investigate"],
+    "builder": ["build", "implement", "create", "code", "develop", "write"],
+    "ops": ["deploy", "monitor", "ops", "infrastructure", "pipeline", "automate"],
+    "finance-analyst": ["finance", "invest", "portfolio", "market", "trading", "profit"],
+    "psyche-researcher": ["psychology", "neurology", "cognitive", "mental", "behavior"],
+}

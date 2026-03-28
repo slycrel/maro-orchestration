@@ -386,6 +386,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_persona_compose = persona_sub.add_parser("compose", help="Show a composed persona spec without spawning")
     p_persona_compose.add_argument("names", nargs="+", help="Persona names to compose")
     p_persona_compose.add_argument("--format", choices=["text", "json"], default="text")
+    p_persona_manifest = persona_sub.add_parser("manifest", help="Machine-readable agent capability manifest (Phase 35 P2)")
+    p_persona_manifest.add_argument("--format", choices=["text", "json", "save"], default="text",
+                                    help="text=human table, json=raw JSON, save=write to agents/manifest.json")
 
     p_poe_knowledge = sub.add_parser("poe-knowledge", help="Crystallization dashboard — view all knowledge graduation stages (Phase 22)")
     knowledge_sub = p_poe_knowledge.add_subparsers(dest="knowledge_cmd")

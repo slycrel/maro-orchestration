@@ -942,6 +942,26 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"style:    {spec.communication_style}")
                 print(f"hooks:    {spec.hooks or '(none)'}")
                 print(f"\n--- Composed System Prompt (preview) ---\n{spec.system_prompt[:600]}")
+        elif persona_cmd == "manifest":
+            from persona import generate_manifest, save_manifest
+            fmt = getattr(args, "format", "text")
+            if fmt == "json":
+                entries = generate_manifest(registry=registry)
+                print(json.dumps({"agents": entries}, indent=2))
+            elif fmt == "save":
+                path = save_manifest(registry=registry, fmt="json")
+                print(f"Manifest saved to: {path}")
+            else:
+                entries = generate_manifest(registry=registry)
+                print(f"Agent Capability Manifest ({len(entries)} agents)")
+                print("─" * 60)
+                for e in entries:
+                    tier = e.get("model_tier", "?")
+                    role = e.get("role", "?")
+                    triggers = ", ".join(e.get("trigger_keywords", [])[:4])
+                    print(f"  {e['name']:30s} [{tier:5s}] {role}")
+                    if triggers:
+                        print(f"  {'':30s}  triggers: {triggers}")
         elif persona_cmd == "spawn":
             goal_str = " ".join(args.goal)
             compose_with = getattr(args, "compose", None) or None
