@@ -537,12 +537,127 @@ def receive_inspector_tickets(tickets: List[dict]) -> int:
     return len(suggestions)
 
 
-def run_skill_maintenance(*, dry_run: bool = False, verbose: bool = False) -> dict:
-    """Phase 32: run auto-promotion, demotion, and rewrite gating in one call.
+def rewrite_skill(skill: "Skill", adapter) -> Optional["Skill"]:
+    """LLM-rewrite a skill whose circuit breaker is OPEN.
+
+    Analyses the skill's failure_notes and current body, produces a revised
+    description + steps_template. Resets consecutive_failures and sets
+    circuit_state to "half_open" (probationary — not yet trusted).
+
+    Returns the updated Skill on success, None if rewrite fails or adapter unavailable.
+
+    The skill is saved to disk whether or not the caller uses the return value.
+    """
+    try:
+        from skills import _save_skills, load_skills, compute_skill_hash, _skill_to_dict
+        from llm import LLMMessage
+    except ImportError:
+        return None
+
+    if adapter is None:
+        return None
+
+    failure_summary = (
+        "\n".join(f"- {n}" for n in skill.failure_notes)
+        if skill.failure_notes
+        else "(no specific failure reasons recorded)"
+    )
+
+    prompt = f"""You are improving a skill definition for an autonomous agent system.
+
+The skill "{skill.name}" has a tripped circuit breaker (consecutive_failures={skill.consecutive_failures},
+utility_score={skill.utility_score:.2f}). Here are the recorded failure reasons:
+
+{failure_summary}
+
+Current skill description:
+{skill.description}
+
+Current steps template:
+{chr(10).join(f"{i+1}. {s}" for i, s in enumerate(skill.steps_template))}
+
+Based on the failure pattern, rewrite the skill. Output ONLY valid JSON with these keys:
+{{
+  "description": "<revised one-sentence description of what this skill does>",
+  "steps_template": ["<step 1>", "<step 2>", "..."],
+  "trigger_patterns": ["<keyword or phrase that should trigger this skill>", "..."]
+}}
+
+Rules:
+- Keep steps concrete and actionable (not vague)
+- Address the failure reasons directly
+- Do not add steps that require external network access if failures were network-related
+- 2-5 steps maximum
+- trigger_patterns: 3-6 short keyword phrases"""
+
+    try:
+        resp = adapter.complete(
+            [LLMMessage("user", prompt)],
+            max_tokens=600,
+        )
+        raw = resp.content.strip()
+        # Strip markdown code fences if present
+        if raw.startswith("```"):
+            raw = "\n".join(raw.split("\n")[1:])
+            if raw.endswith("```"):
+                raw = raw[: raw.rfind("```")]
+        parsed = json.loads(raw)
+    except Exception as e:
+        if verbose:
+            print(f"[evolver] rewrite_skill parse error for {skill.id}: {e}", file=sys.stderr)
+        return None
+
+    new_desc = str(parsed.get("description", skill.description)).strip()
+    new_steps = [str(s) for s in parsed.get("steps_template", skill.steps_template)]
+    new_triggers = [str(t) for t in parsed.get("trigger_patterns", skill.trigger_patterns)]
+
+    if not new_steps or not new_desc:
+        return None
+
+    # Apply rewrite — set to half_open (probationary) not closed
+    skills = load_skills()
+    target = next((s for s in skills if s.id == skill.id), None)
+    if target is None:
+        return None
+
+    target.description = new_desc
+    target.steps_template = new_steps
+    target.trigger_patterns = new_triggers
+    target.consecutive_failures = 0
+    target.consecutive_successes = 0
+    target.circuit_state = "half_open"  # on probation — not trusted yet
+    target.content_hash = compute_skill_hash(target)
+    target.failure_notes = target.failure_notes[-2:]  # keep last 2 for history
+
+    _save_skills(skills)
+
+    if verbose:
+        print(
+            f"[evolver] rewrote skill {skill.id} ({skill.name}) → half_open",
+            file=sys.stderr,
+        )
+
+    return target
+
+
+def run_skill_maintenance(
+    *,
+    adapter=None,
+    dry_run: bool = False,
+    verbose: bool = False,
+) -> dict:
+    """Phase 32: auto-promotion, demotion, circuit-breaker-gated rewriting.
 
     Called from run_evolver() and from heartbeat every N ticks.
 
-    Returns dict with keys: promoted, demoted, rewrite_candidates.
+    Rewrite policy:
+      - Only skills with circuit_state == "open" are eligible
+      - A single failure never triggers a rewrite (blip tolerance)
+      - CIRCUIT_OPEN_THRESHOLD (3) consecutive failures trips the breaker
+      - After rewrite, skill is set to "half_open" (probationary)
+      - CIRCUIT_HALFOPEN_RECOVERY (2) consecutive successes closes the breaker
+
+    Returns dict with keys: promoted, demoted, rewritten, rewrite_candidates.
     """
     from skills import (
         maybe_auto_promote_skills,
@@ -552,6 +667,7 @@ def run_skill_maintenance(*, dry_run: bool = False, verbose: bool = False) -> di
 
     promoted: list = []
     demoted: list = []
+    rewritten: list = []
     rewrite_candidates: list = []
 
     if not dry_run:
@@ -572,9 +688,16 @@ def run_skill_maintenance(*, dry_run: bool = False, verbose: bool = False) -> di
                 print(f"[evolver] demotion failed: {e}", file=sys.stderr)
 
     try:
-        rewrite_candidates = [s.id for s in skills_needing_rewrite()]
+        candidates = skills_needing_rewrite()
+        rewrite_candidates = [s.id for s in candidates]
         if rewrite_candidates and verbose:
-            print(f"[evolver] skills needing rewrite: {rewrite_candidates}", file=sys.stderr)
+            print(f"[evolver] skills with open circuit (rewrite candidates): {rewrite_candidates}", file=sys.stderr)
+
+        if not dry_run and adapter is not None:
+            for skill in candidates:
+                updated = rewrite_skill(skill, adapter=adapter, verbose=verbose)
+                if updated is not None:
+                    rewritten.append(skill.id)
     except Exception as e:
         if verbose:
             print(f"[evolver] rewrite scan failed: {e}", file=sys.stderr)
@@ -582,6 +705,7 @@ def run_skill_maintenance(*, dry_run: bool = False, verbose: bool = False) -> di
     return {
         "promoted": promoted,
         "demoted": demoted,
+        "rewritten": rewritten,
         "rewrite_candidates": rewrite_candidates,
     }
 
@@ -722,8 +846,10 @@ def run_evolver_with_friction(
 
     # Phase 32: skill maintenance on every evolver run
     try:
-        _skill_maint = run_skill_maintenance(dry_run=dry_run, verbose=verbose)
-        if _skill_maint["promoted"] or _skill_maint["demoted"]:
+        _skill_maint = run_skill_maintenance(
+            adapter=adapter, dry_run=dry_run, verbose=verbose
+        )
+        if any(_skill_maint.get(k) for k in ("promoted", "demoted", "rewritten")):
             if verbose:
                 print(f"[evolver] skill maint: {_skill_maint}", file=sys.stderr)
     except Exception:

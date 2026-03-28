@@ -1,7 +1,8 @@
 # Poe-Orchestration Backlog Triage
 **Date:** 2026-03-27
-**Sources:** DeerFlow deep-dive, Nanoclaws/sub-agent proposal, AutoHarness (arXiv:2603.03329)
+**Sources:** DeerFlow deep-dive (2026-03-07), Nanoclaws/sub-agent X thread (2026-03-07), AutoHarness arXiv:2603.03329 (2026-02-10)
 **Purpose:** Identify what to steal, what's done, what's net new for the poe-orchestration roadmap.
+**Roadmap context:** 21 phases complete, 9 partial, 5 planned as of Phase 35 triage.
 
 ---
 
@@ -73,18 +74,31 @@
 
 ## Summary Table
 
-| # | Idea | Source | Status | Priority |
-|---|------|--------|--------|----------|
-| 1 | TF-IDF/embedding memory retrieval | DeerFlow | ⚠️ Partial | **P1** |
-| 2 | Constraint harness (action validation) | AutoHarness | ❌ Net new | **P1** |
-| 3 | Parallelized sub-agent fan-out | DeerFlow | ❌ Net new | **P1** |
-| 4 | Cost-aware model routing | Nanoclaws | ❌ Net new | **P1** |
-| 5 | Machine-readable agent registry | Nanoclaws | ⚠️ Partial | **P2** |
-| 6 | Structured iterative refinement loop | AutoHarness | ⚠️ Partial | **P2** |
-| 7 | Reporter/synthesis agent role | DeerFlow | ❌ Net new | **P2** |
-| 8 | Systematic HITL gating | DeerFlow | ⚠️ Partial | **P2** |
-| 9 | Code-as-policy for stable decisions | AutoHarness | ❌ Net new | **P3** |
-| 10 | Capability-based task decomposition | Nanoclaws | ❌ Net new | **P3** |
+| # | Idea | Source | Implementation Status | Roadmap Label | Priority |
+|---|------|--------|-----------------------|---------------|----------|
+| 1 | TF-IDF/embedding memory retrieval | DeerFlow | ⚠️ Partial (routing only; memory injection is recency-only) | **on roadmap** (Phase 35 P1) | **P1** |
+| 2 | Constraint harness (action validation) | AutoHarness | ❌ Not implemented | **on roadmap** (Phase 35 P1) | **P1** |
+| 3 | Parallelized sub-agent fan-out | DeerFlow | ❌ Not implemented (parallel missions exist; subtask fan-out doesn't) | **on roadmap** (Phase 35 P1) | **P1** |
+| 4 | Cost-aware model routing | Nanoclaws | ⚠️ Partial (role-based tiers in Phase 13; step-level classifier routing pending) | **on roadmap** (Phase 35 P1 + Phase 30 pending) | **P1** |
+| 5 | Machine-readable agent registry | Nanoclaws | ⚠️ Partial (AGENTS.md prose; no YAML manifest) | **on roadmap** (Phase 35 P2) | **P2** |
+| 6 | Structured iterative refinement loop | AutoHarness | ⚠️ Partial (ad-hoc retry; no formal N-round contract) | **on roadmap** (Phase 35 P2) | **P2** |
+| 7 | Reporter/synthesis agent role | DeerFlow | ⚠️ Partial (reporter hook type exists; no dedicated synthesis agent) | **on roadmap** (Phase 35 P2) | **P2** |
+| 8 | Systematic HITL gating | DeerFlow | ⚠️ Partial (Telegram confirm for some actions; not declarative) | **on roadmap** (Phase 35 P2) | **P2** |
+| 9 | Code-as-policy for stable decisions | AutoHarness | ⚠️ Partial (Phase 22 crystallization path: Skill→Rule is Stage 5, not yet shipped) | **on roadmap** (Phase 22 Stage 5) | **P3** |
+| 10 | Capability-based task decomposition | Nanoclaws | ❌ Not implemented | **net new steal-worthy** | **P3** |
+
+**Already implemented (no action needed):**
+| Idea | Source | Where |
+|------|--------|-------|
+| Sub-agent delegation (coordinator → workers) | DeerFlow | `src/director.py`, `src/workers.py` (Phase 3) |
+| State machine executor + retry logic | DeerFlow | `src/agent_loop.py`, `src/orchestrator/` (Phase 1) |
+| Tiered authority levels | Nanoclaws | `AGENTS.md`, autonomy tiers (Phase 13) |
+| Environment feedback loop | AutoHarness | Telegram error/retry, heartbeat recovery (Phases 4, 6) |
+| Heartbeat / keep-alive loop | DeerFlow | `src/heartbeat.py` (Phase 4) |
+| Basic model tier routing by role | Nanoclaws | `assign_model_by_role()` in `src/llm.py` (Phase 13) |
+| Reporter hook (non-blocking synthesis) | DeerFlow | Hook type `reporter` in `src/hooks.py` (Phase 11) |
+| TF-IDF routing for skills | DeerFlow | `src/router.py` (Phase 17) |
+| Knowledge crystallization scaffold (Skill→Rule) | AutoHarness | `src/knowledge.py` Stages 1–4 (Phase 22) |
 
 Legend: ✅ Done · ⚠️ Partial · ❌ Not implemented
 

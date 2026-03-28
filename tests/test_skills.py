@@ -1010,11 +1010,15 @@ from skills import (
     AUTO_PROMOTE_MIN_RATE,
     REWRITE_TRIGGER_RATE,
     REWRITE_MIN_USES,
+    CIRCUIT_OPEN_THRESHOLD,
+    CIRCUIT_HALFOPEN_RECOVERY,
     _save_skills,
 )
 
 
-def _phase32_skill(tmp_path, skill_id="p32skill", tier="provisional", utility=1.0, use_count=0):
+def _phase32_skill(tmp_path, skill_id="p32skill", tier="provisional", utility=1.0,
+                   use_count=0, circuit_state="closed",
+                   consecutive_failures=0, consecutive_successes=0):
     """Helper: write a single skill to tmp_path and return it."""
     import datetime
     skill = Skill(
@@ -1029,6 +1033,9 @@ def _phase32_skill(tmp_path, skill_id="p32skill", tier="provisional", utility=1.
         success_rate=utility,
         tier=tier,
         utility_score=utility,
+        circuit_state=circuit_state,
+        consecutive_failures=consecutive_failures,
+        consecutive_successes=consecutive_successes,
     )
     skills_file = tmp_path / "skills.jsonl"
     import json
@@ -1112,14 +1119,27 @@ def test_maybe_demote_high_utility_not_demoted(monkeypatch, tmp_path):
 
 
 def test_skills_needing_rewrite(monkeypatch, tmp_path):
-    skill = _phase32_skill(tmp_path, utility=0.2, use_count=REWRITE_MIN_USES + 1)
+    """Only open-circuit skills with enough uses appear as rewrite candidates."""
+    skill = _phase32_skill(tmp_path, utility=0.2, use_count=REWRITE_MIN_USES + 1,
+                           circuit_state="open", consecutive_failures=CIRCUIT_OPEN_THRESHOLD)
     monkeypatch.setattr("skills._skills_path", lambda: tmp_path / "skills.jsonl")
     candidates = skills_needing_rewrite()
     assert any(s.id == skill.id for s in candidates)
 
 
 def test_skills_needing_rewrite_not_enough_uses(monkeypatch, tmp_path):
-    skill = _phase32_skill(tmp_path, utility=0.1, use_count=REWRITE_MIN_USES - 1)
+    """Use count below minimum — never a rewrite candidate."""
+    skill = _phase32_skill(tmp_path, utility=0.1, use_count=REWRITE_MIN_USES - 1,
+                           circuit_state="open", consecutive_failures=CIRCUIT_OPEN_THRESHOLD)
+    monkeypatch.setattr("skills._skills_path", lambda: tmp_path / "skills.jsonl")
+    candidates = skills_needing_rewrite()
+    assert candidates == []
+
+
+def test_skills_needing_rewrite_closed_circuit_not_eligible(monkeypatch, tmp_path):
+    """Low utility but closed circuit → blip, not a rewrite candidate."""
+    skill = _phase32_skill(tmp_path, utility=0.1, use_count=REWRITE_MIN_USES + 5,
+                           circuit_state="closed")
     monkeypatch.setattr("skills._skills_path", lambda: tmp_path / "skills.jsonl")
     candidates = skills_needing_rewrite()
     assert candidates == []
@@ -1130,3 +1150,57 @@ def test_ema_formula():
     old = 0.5
     expected = UTILITY_EMA_ALPHA * 1.0 + (1 - UTILITY_EMA_ALPHA) * old
     assert abs(expected - (UTILITY_EMA_ALPHA + (1 - UTILITY_EMA_ALPHA) * old)) < 1e-9
+
+
+# ---------------------------------------------------------------------------
+# Phase 32: circuit breaker state machine
+# ---------------------------------------------------------------------------
+
+def test_circuit_breaker_opens_after_threshold(monkeypatch, tmp_path):
+    """CIRCUIT_OPEN_THRESHOLD consecutive failures trip the breaker to open."""
+    skill = _phase32_skill(tmp_path, utility=1.0, use_count=5, circuit_state="closed")
+    monkeypatch.setattr("skills._skills_path", lambda: tmp_path / "skills.jsonl")
+    monkeypatch.setattr("skills._skill_stats_path", lambda: tmp_path / "skill-stats.jsonl")
+    for _ in range(CIRCUIT_OPEN_THRESHOLD):
+        update_skill_utility(skill.id, success=False, failure_reason="timed out")
+    updated = next(s for s in load_skills() if s.id == skill.id)
+    assert updated.circuit_state == "open"
+
+
+def test_circuit_breaker_blip_stays_closed(monkeypatch, tmp_path):
+    """Fewer than threshold consecutive failures leaves circuit closed."""
+    skill = _phase32_skill(tmp_path, utility=1.0, use_count=5, circuit_state="closed")
+    monkeypatch.setattr("skills._skills_path", lambda: tmp_path / "skills.jsonl")
+    monkeypatch.setattr("skills._skill_stats_path", lambda: tmp_path / "skill-stats.jsonl")
+    for _ in range(CIRCUIT_OPEN_THRESHOLD - 1):
+        update_skill_utility(skill.id, success=False, failure_reason="blip")
+    updated = next(s for s in load_skills() if s.id == skill.id)
+    assert updated.circuit_state == "closed"
+
+
+def test_circuit_breaker_opens_then_recovers_via_halfopen(monkeypatch, tmp_path):
+    """OPEN → HALF_OPEN on first success → CLOSED after CIRCUIT_HALFOPEN_RECOVERY successes."""
+    skill = _phase32_skill(tmp_path, utility=0.2, use_count=5,
+                           circuit_state="open", consecutive_failures=CIRCUIT_OPEN_THRESHOLD)
+    monkeypatch.setattr("skills._skills_path", lambda: tmp_path / "skills.jsonl")
+    monkeypatch.setattr("skills._skill_stats_path", lambda: tmp_path / "skill-stats.jsonl")
+    # First success: open → half_open
+    update_skill_utility(skill.id, success=True)
+    updated = next(s for s in load_skills() if s.id == skill.id)
+    assert updated.circuit_state == "half_open"
+    # Remaining successes to close
+    for _ in range(CIRCUIT_HALFOPEN_RECOVERY - 1):
+        update_skill_utility(skill.id, success=True)
+    updated = next(s for s in load_skills() if s.id == skill.id)
+    assert updated.circuit_state == "closed"
+
+
+def test_circuit_breaker_halfopen_failure_reopens(monkeypatch, tmp_path):
+    """Failure during half_open immediately trips back to open."""
+    skill = _phase32_skill(tmp_path, utility=0.5, use_count=5,
+                           circuit_state="half_open", consecutive_successes=1)
+    monkeypatch.setattr("skills._skills_path", lambda: tmp_path / "skills.jsonl")
+    monkeypatch.setattr("skills._skill_stats_path", lambda: tmp_path / "skill-stats.jsonl")
+    update_skill_utility(skill.id, success=False, failure_reason="still broken")
+    updated = next(s for s in load_skills() if s.id == skill.id)
+    assert updated.circuit_state == "open"
