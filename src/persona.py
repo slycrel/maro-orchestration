@@ -402,14 +402,14 @@ def spawn_persona(
     # Resolve adapter
     if adapter is None:
         try:
-            from llm import make_adapter, MODEL_POWER, MODEL_MID, MODEL_CHEAP
+            from llm import build_adapter, MODEL_POWER, MODEL_MID, MODEL_CHEAP
             tier_map = {"power": MODEL_POWER, "mid": MODEL_MID, "cheap": MODEL_CHEAP}
             model = tier_map.get(spec.model_tier, MODEL_MID)
-            adapter = make_adapter(model=model)
-        except Exception:
+            adapter = build_adapter(model=model)
+        except Exception as exc:
             return SpawnResult(
                 persona_name=spec.name, goal=goal,
-                status="stuck", summary="No LLM adapter available for persona spawn",
+                status="stuck", summary=f"No LLM adapter available for persona spawn: {exc}",
             )
 
     # Build full system prompt
