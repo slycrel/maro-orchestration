@@ -826,6 +826,36 @@ Currently eval is a one-shot CLI command. The loop is: run eval → find regress
 
 ---
 
+### Phase 43: Structured Logging Expansion *(PARTIAL)*
+
+*"If you can't see what the system is doing, you can't fix it when it sticks."*
+
+The agent loop and persona spawn now have structured logging via stdlib `logging` under the `poe.*` namespace. This needs to expand to cover every execution pathway so that runtime debugging never requires code changes.
+
+**Shipped (Phase 43 first cut — March 2026):**
+- [x] `poe.loop` logger: step lifecycle (start/done/blocked), adapter timing, constraint checks, loop summary
+- [x] `poe.persona` logger: spawn start/end, adapter resolution, timing
+- [x] `_configure_logging()`: `POE_LOG_LEVEL` env var (DEBUG/INFO/WARNING/ERROR), `verbose=True` → DEBUG
+- [x] Format: `HH:MM:SS L poe.module: message` on stderr
+
+**Still pending:**
+- [ ] `poe.director` — mission decomposition, milestone selection, delegation decisions
+- [ ] `poe.memory` — lesson extraction, TF-IDF matching, tier promotion/GC
+- [ ] `poe.evolver` — suggestion generation, auto-apply decisions, skill maintenance
+- [ ] `poe.heartbeat` — tick lifecycle, sheriff diagnosis, recovery actions
+- [ ] `poe.inspector` — friction detection, alignment checks, session quality
+- [ ] `poe.mission` — drain lifecycle, milestone progress, notification delivery
+- [ ] `poe.constraint` — detailed pattern match results at DEBUG (why a step was classified)
+- [ ] `poe.io` — Telegram/Slack message dispatch, gateway routing
+
+**Design notes:**
+- Every logger is `poe.<module>` — filter by module in production (`poe.loop` only) or get everything (`poe`)
+- INFO = lifecycle events with timing. DEBUG = content/decisions. WARNING = blocks/failures. ERROR = crashes.
+- Existing `if verbose: print(...)` patterns coexist; no mass conversion needed, just add `log.*` alongside where useful
+- Log output goes to stderr so it doesn't contaminate stdout result streams
+
+---
+
 ## Superseded Plans
 
 The original M0-M4 milestones and N1-N4 roadmap items focused on infrastructure plumbing (adapters, scheduling, CI). That work was valuable scaffolding, but it didn't address the core need: making Poe autonomous. This roadmap replaces N1-N4 entirely.

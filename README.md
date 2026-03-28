@@ -99,6 +99,28 @@ python3 src/cli.py poe-memory status
 
 No OpenClaw installation required. Set `POE_WORKSPACE` to any directory and run.
 
+### Logging
+
+Structured logging via stdlib `logging`. All loggers live under the `poe.*` namespace.
+
+```bash
+# Quiet (default) — only warnings and errors
+python3 src/agent_loop.py "your goal"
+
+# Step lifecycle, timing, tokens, block reasons
+POE_LOG_LEVEL=INFO python3 src/agent_loop.py "your goal"
+
+# Full detail — constraint checks, adapter type, content lengths
+POE_LOG_LEVEL=DEBUG python3 src/agent_loop.py "your goal"
+```
+
+The `--verbose` CLI flag is equivalent to `POE_LOG_LEVEL=DEBUG`. Output goes to stderr so it doesn't interfere with result output.
+
+| Logger | What it covers |
+|--------|---------------|
+| `poe.loop` | Step start/done/blocked, adapter timing, loop lifecycle |
+| `poe.persona` | Persona spawn, adapter resolution, spawn completion |
+
 ---
 
 ## Interfaces
