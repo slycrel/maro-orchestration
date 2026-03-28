@@ -22,6 +22,8 @@ from mission import (
     MissionResult,
     _validate_milestone,
     decompose_mission,
+    drain_next_mission,
+    is_drain_running,
     list_missions,
     load_mission,
     morning_briefing,
@@ -816,3 +818,92 @@ def test_morning_briefing_respects_max_missions(monkeypatch, tmp_path):
     # With max_missions=2, only 2 done projects should be listed (not 5)
     count = briefing.count("done-project-")
     assert count == 2
+
+
+# ---------------------------------------------------------------------------
+# Phase 34: drain_next_mission and lock helpers
+# ---------------------------------------------------------------------------
+
+def test_is_drain_running_false_when_no_lock(monkeypatch, tmp_path):
+    """is_drain_running() returns False when no lock file exists."""
+    _setup_workspace(monkeypatch, tmp_path)
+    assert is_drain_running() is False
+
+
+def test_drain_next_mission_returns_none_when_no_pending(monkeypatch, tmp_path):
+    """drain_next_mission returns None when no missions are pending."""
+    _setup_workspace(monkeypatch, tmp_path)
+    result = drain_next_mission(dry_run=True, notify=False)
+    assert result is None
+
+
+def test_drain_next_mission_dry_run_succeeds(monkeypatch, tmp_path):
+    """drain_next_mission(dry_run=True) drains a pending mission without LLM."""
+    _setup_workspace(monkeypatch, tmp_path)
+    _write_mission_json(
+        "drain-test", tmp_path,
+        goal="Test drain mission",
+        status="running",
+        milestones=[
+            {
+                "id": "m1", "title": "Feature A",
+                "features": [{"id": "f1", "title": "Build A", "status": "pending",
+                               "worker_session_id": "", "result_summary": "", "elapsed_ms": 0}],
+                "validation_criteria": [], "status": "pending", "validation_result": None,
+            }
+        ],
+    )
+    result = drain_next_mission(dry_run=True, notify=False)
+    assert result is not None
+    assert result["project"] == "drain-test"
+    assert result["status"] in ("done", "blocked")
+    assert result["milestones_total"] == 1
+
+
+def test_drain_next_mission_releases_lock_after_run(monkeypatch, tmp_path):
+    """Lock file is removed after drain completes (even on success)."""
+    _setup_workspace(monkeypatch, tmp_path)
+    _write_mission_json(
+        "lock-release-test", tmp_path,
+        goal="Lock release test",
+        status="running",
+        milestones=[
+            {
+                "id": "m1", "title": "MS1",
+                "features": [{"id": "f1", "title": "Do it", "status": "pending",
+                               "worker_session_id": "", "result_summary": "", "elapsed_ms": 0}],
+                "validation_criteria": [], "status": "pending", "validation_result": None,
+            }
+        ],
+    )
+    drain_next_mission(dry_run=True, notify=False)
+    # Lock should be released after run
+    assert is_drain_running() is False
+
+
+def test_drain_next_mission_skips_if_already_running(monkeypatch, tmp_path):
+    """drain_next_mission returns None without running if lock is held."""
+    _setup_workspace(monkeypatch, tmp_path)
+    _write_mission_json(
+        "skip-test", tmp_path,
+        goal="Skip if running",
+        status="running",
+        milestones=[
+            {
+                "id": "m1", "title": "MS1",
+                "features": [{"id": "f1", "title": "Do it", "status": "pending",
+                               "worker_session_id": "", "result_summary": "", "elapsed_ms": 0}],
+                "validation_criteria": [], "status": "pending", "validation_result": None,
+            }
+        ],
+    )
+    # Manually write the lock file
+    from mission import _drain_lock_path
+    lock_path = _drain_lock_path()
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path.write_text('{"mission_id": "fake"}', encoding="utf-8")
+    try:
+        result = drain_next_mission(dry_run=True, notify=False)
+        assert result is None
+    finally:
+        lock_path.unlink(missing_ok=True)

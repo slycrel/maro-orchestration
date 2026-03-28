@@ -429,16 +429,28 @@ def heartbeat_loop(
             except Exception as e:
                 print(f"[heartbeat] inspector failed: {e}", file=sys.stderr)
         if tick % mission_check_every == 0:
-            # Phase 34: Check for pending missions — detect drain opportunities
+            # Phase 34: Check for pending missions and drain autonomously
             try:
-                from mission import pending_missions
+                from mission import pending_missions, is_drain_running, drain_next_mission
                 pending = pending_missions()
-                if pending and verbose:
-                    print(
-                        f"[heartbeat] {len(pending)} mission(s) pending drain: "
-                        + ", ".join(m.get("project", "?") for m in pending[:3]),
-                        file=sys.stderr,
-                    )
+                if pending:
+                    if verbose:
+                        print(
+                            f"[heartbeat] {len(pending)} mission(s) pending drain: "
+                            + ", ".join(m.get("project", "?") for m in pending[:3]),
+                            file=sys.stderr,
+                        )
+                    if not is_drain_running():
+                        import threading as _threading
+                        _drain_thread = _threading.Thread(
+                            target=drain_next_mission,
+                            kwargs={"verbose": verbose, "notify": escalate},
+                            daemon=True,
+                            name="mission-drain",
+                        )
+                        _drain_thread.start()
+                        if verbose:
+                            print("[heartbeat] mission drain started in background", file=sys.stderr)
             except Exception as e:
                 if verbose:
                     print(f"[heartbeat] mission check failed: {e}", file=sys.stderr)

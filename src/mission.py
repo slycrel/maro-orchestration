@@ -1056,3 +1056,190 @@ def morning_briefing(max_missions: int = 5) -> str:
         lines.append("No active missions.")
 
     return "\n".join(lines)
+
+# ---------------------------------------------------------------------------
+# Phase 34: Autonomous mission drain
+# ---------------------------------------------------------------------------
+
+_DRAIN_LOCK_FILE = "mission-drain.lock"  # relative to orch memory/
+
+
+def _drain_lock_path() -> Path:
+    o = _orch()
+    return o.orch_root() / "memory" / _DRAIN_LOCK_FILE
+
+
+def is_drain_running() -> bool:
+    """Return True if a mission drain is currently in progress (lock file exists)."""
+    return _drain_lock_path().exists()
+
+
+def _acquire_drain_lock(mission_id: str) -> bool:
+    """Write drain lock file. Returns False if already locked."""
+    lock_path = _drain_lock_path()
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    if lock_path.exists():
+        return False
+    try:
+        lock_path.write_text(json.dumps({
+            "mission_id": mission_id,
+            "started_at": datetime.now(timezone.utc).isoformat(),
+        }), encoding="utf-8")
+        return True
+    except Exception:
+        return False
+
+
+def _release_drain_lock() -> None:
+    """Remove drain lock file."""
+    try:
+        _drain_lock_path().unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
+def _send_milestone_notification(project: str, milestone_title: str, status: str) -> None:
+    """Send a Telegram notification when a milestone completes."""
+    try:
+        from telegram_listener import TelegramBot, _resolve_token, _resolve_allowed_chats
+        token = _resolve_token()
+        if not token:
+            return
+        bot = TelegramBot(token)
+        allowed = _resolve_allowed_chats()
+        if not allowed:
+            return
+        icon = "✓" if status == "done" else "⚠"
+        msg = f"{icon} [{project}] Milestone: {milestone_title} — {status}"
+        for chat_id in allowed:
+            bot.send_message(chat_id, msg)
+    except Exception:
+        pass
+
+
+def drain_next_mission(
+    *,
+    dry_run: bool = False,
+    verbose: bool = False,
+    notify: bool = True,
+) -> Optional[dict]:
+    """Pick the oldest pending mission and run it synchronously.
+
+    Returns a summary dict if a mission was drained, None if no missions pending
+    or drain is already running.
+
+    Acquires a lock file to prevent concurrent drains.
+    Sends per-milestone Telegram notifications (when notify=True).
+    """
+    if is_drain_running():
+        if verbose:
+            print("[mission:drain] drain already running, skipping", file=sys.stderr)
+        return None
+
+    pending = pending_missions()
+    if not pending:
+        return None
+
+    # Pick oldest mission (first in sorted list)
+    target = pending[0]
+    project = target.get("project", "")
+    goal = target.get("goal", "")
+    mission_id = target.get("mission_id", "?")
+
+    if not project or not goal:
+        return None
+
+    if not _acquire_drain_lock(mission_id):
+        return None
+
+    if verbose:
+        print(f"[mission:drain] draining {project!r}: {goal[:60]!r}", file=sys.stderr)
+
+    try:
+        # Load the full mission to track milestone progress
+        mission = load_mission(project)
+        if mission is None:
+            return None
+
+        from llm import build_adapter, MODEL_POWER
+        adapter = build_adapter(model=MODEL_POWER) if not dry_run else None
+
+        started = time.monotonic()
+        milestones_done = 0
+
+        for ms in mission.milestones:
+            if ms.status == "done":
+                milestones_done += 1
+                continue
+
+            if verbose:
+                print(f"[mission:drain] milestone: {ms.title!r}", file=sys.stderr)
+
+            # Run features within this milestone
+            for feature in ms.features:
+                if feature.status == "done":
+                    continue
+                if dry_run:
+                    feature.status = "done"
+                    feature.result_summary = "dry-run"
+                else:
+                    from agent_loop import run_agent_loop
+                    loop_result = run_agent_loop(
+                        feature.title,
+                        project=project,
+                        adapter=adapter,
+                        verbose=verbose,
+                    )
+                    feature.status = loop_result.status
+                    done_steps = sum(1 for s in loop_result.steps if s.status == "done")
+                    feature.result_summary = (
+                        f"{done_steps}/{len(loop_result.steps)} steps done"
+                    )
+
+            # Determine milestone status
+            all_done = all(f.status == "done" for f in ms.features)
+            ms.status = "done" if all_done else "blocked"
+            milestones_done += 1 if all_done else 0
+
+            # Persist intermediate state
+            save_mission(mission, project)
+
+            # Per-milestone Telegram notification
+            if notify and not dry_run:
+                _send_milestone_notification(project, ms.title, ms.status)
+
+        elapsed_ms = int((time.monotonic() - started) * 1000)
+        all_milestones_done = all(ms.status == "done" for ms in mission.milestones)
+        mission_status = "done" if all_milestones_done else "blocked"
+
+        # Update mission top-level status
+        mission.status = mission_status
+        if all_milestones_done:
+            mission.completed_at = datetime.now(timezone.utc).isoformat()
+        save_mission(mission, project)
+
+        # Send morning briefing if done
+        if notify and not dry_run and all_milestones_done:
+            try:
+                from telegram_listener import TelegramBot, _resolve_token, _resolve_allowed_chats
+                token = _resolve_token()
+                if token:
+                    bot = TelegramBot(token)
+                    allowed = _resolve_allowed_chats()
+                    briefing = morning_briefing()
+                    for chat_id in (allowed or []):
+                        bot.send_message(chat_id, f"Mission complete!\n{briefing[:3000]}")
+            except Exception:
+                pass
+
+        return {
+            "project": project,
+            "mission_id": mission_id,
+            "goal": goal,
+            "status": mission_status,
+            "milestones_done": milestones_done,
+            "milestones_total": len(mission.milestones),
+            "elapsed_ms": elapsed_ms,
+        }
+    finally:
+        _release_drain_lock()
