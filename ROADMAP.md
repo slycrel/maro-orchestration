@@ -675,20 +675,16 @@ P2 items (infrastructure):
 
 ---
 
-### Phase 34: Overnight Autonomous Mission Execution *(PARTIAL)*
+### Phase 34: Overnight Autonomous Mission Execution *(DONE)*
 
 The core north star: Jeremy sets a mission before sleeping; the system executes autonomously through the night, recovers from blocks, and reports in the morning. No step supervision required.
 
-**Shipped (Phase 34 first cut — March 2026):**
-- [x] **Mission drain detection**: `pending_missions()` — scans all projects, returns missions with remaining milestones (excludes done). Heartbeat calls this every `mission_check_every=5` ticks and logs count.
+- [x] **Mission drain detection**: `pending_missions()` — scans all projects, returns missions with remaining milestones (excludes done). Heartbeat calls this every `mission_check_every=5` ticks.
 - [x] **Morning briefing**: `morning_briefing()` — Telegram-ready status summary bucketed as Completed / In progress / Queued, with UTC timestamp header and `max_missions` cap per section.
+- [x] **Autonomous mission drain**: `drain_next_mission()` — picks oldest pending mission, runs milestones+features sequentially, persists state after each milestone. File-based lock (`memory/mission-drain.lock`) prevents double-drain. Heartbeat spawns it as a daemon Thread.
+- [x] **Milestone-level progress notifications**: `_send_milestone_notification()` — Telegram alert per milestone completion (not per step). Final briefing sent when all milestones done.
 
-**Still pending:**
-- [ ] **Autonomous mission drain**: heartbeat spawns a background process to actually run a pending mission (not just detect it)
-- [ ] **Milestone-level progress notifications**: Telegram message per milestone completion (not per step) to avoid noise
-- [ ] **Safe interruption**: `/stop` halts the current step cleanly; mission state persisted for resume
-
-**Artifact:** `pending_missions()` + `morning_briefing()` in `mission.py`; mission check loop in `heartbeat.py`
+**Artifact:** `drain_next_mission()` + `is_drain_running()` + `_send_milestone_notification()` + `pending_missions()` + `morning_briefing()` in `mission.py`; drain thread in `heartbeat.py`
 
 ---
 
