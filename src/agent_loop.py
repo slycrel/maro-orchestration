@@ -1062,7 +1062,13 @@ def run_agent_loop(
         if step_status == "done":
             if item_index >= 0:
                 o.mark_item(project, item_index, o.STATE_DONE)
-            _ctx_entry = f"Step {step_idx} ({step_text[:80]}): {step_summary[:120]}"
+            # Pass meaningful context to subsequent steps — not just the summary,
+            # but a truncated version of the actual result. This prevents hallucination
+            # by giving subsequent steps real data (file names, findings) to reference.
+            _result_excerpt = step_result[:800] if step_result else ""
+            if len(step_result) > 800:
+                _result_excerpt += f"\n... ({len(step_result)} chars total, truncated)"
+            _ctx_entry = f"Step {step_idx} ({step_text[:80]}):\n{_result_excerpt}"
             completed_context.append(_ctx_entry)
             if verbose:
                 print(f"[poe] step {step_idx} done: {step_summary[:120]}", file=sys.stderr, flush=True)
@@ -1397,6 +1403,20 @@ def run_agent_loop(
 # Decompose
 # ---------------------------------------------------------------------------
 
+def _parse_steps(content: str, max_steps: int) -> Optional[List[str]]:
+    """Extract a JSON step list from LLM response content."""
+    start = content.find("[")
+    end = content.rfind("]") + 1
+    if start >= 0 and end > start:
+        try:
+            steps = json.loads(content[start:end])
+            if isinstance(steps, list) and all(isinstance(s, str) for s in steps):
+                return [s.strip() for s in steps if s.strip()][:max_steps]
+        except (json.JSONDecodeError, ValueError):
+            pass
+    return None
+
+
 def _decompose(
     goal: str,
     adapter,
@@ -1407,7 +1427,12 @@ def _decompose(
     skills_context: str = "",
     cost_context: str = "",
 ) -> List[str]:
-    """Ask the LLM to decompose a goal into steps. Falls back to heuristic."""
+    """Ask the LLM to decompose a goal into steps.
+
+    Uses multi-plan comparison: generates 3 candidate plans at higher temperature,
+    then picks the best one (or composes from all three). Falls back to single
+    plan at low temperature, then to heuristic.
+    """
     from llm import LLMMessage
 
     system = _DECOMPOSE_SYSTEM
@@ -1415,29 +1440,77 @@ def _decompose(
     if extras:
         system = _DECOMPOSE_SYSTEM + "\n\n" + "\n\n".join(extras)
 
+    user_msg = f"Goal: {goal}\n\nDecompose into {max_steps} or fewer concrete steps."
+
+    # --- Multi-plan: generate 3 candidates and compose ---
+    try:
+        candidates: List[List[str]] = []
+        for i in range(3):
+            resp = adapter.complete(
+                [LLMMessage("system", system), LLMMessage("user", user_msg)],
+                max_tokens=1024,
+                temperature=0.7,  # higher temp for diversity
+            )
+            parsed = _parse_steps(resp.content.strip(), max_steps)
+            if parsed:
+                candidates.append(parsed)
+
+        if len(candidates) >= 2:
+            # Ask a cheap LLM to compare and compose the best plan
+            plans_text = "\n\n".join(
+                f"Plan {i+1}:\n" + json.dumps(c, indent=2)
+                for i, c in enumerate(candidates)
+            )
+            compose_resp = adapter.complete(
+                [
+                    LLMMessage("system",
+                        "You are a plan reviewer. Given multiple candidate step plans for the same goal, "
+                        "produce the single best plan by selecting the strongest steps from each. "
+                        "Prefer plans with: (1) concrete file/module names over vague descriptions, "
+                        "(2) separation of commands from analysis, (3) balanced step sizes. "
+                        "Output ONLY a JSON array of step strings."),
+                    LLMMessage("user",
+                        f"Goal: {goal}\n\n{plans_text}\n\n"
+                        f"Compose the best plan ({max_steps} steps max). JSON array only."),
+                ],
+                max_tokens=1024,
+                temperature=0.1,
+            )
+            composed = _parse_steps(compose_resp.content.strip(), max_steps)
+            if composed:
+                log.info("decompose multi-plan: %d candidates → %d composed steps",
+                         len(candidates), len(composed))
+                if verbose:
+                    print(f"[poe] decomposed into {len(composed)} steps (multi-plan from {len(candidates)} candidates)",
+                          file=sys.stderr, flush=True)
+                return composed
+            # Fall through if compose failed — use the first valid candidate
+            log.debug("decompose compose failed, using first candidate")
+            return candidates[0]
+
+        elif len(candidates) == 1:
+            log.info("decompose multi-plan: only 1 valid candidate")
+            return candidates[0]
+
+    except Exception as exc:
+        log.info("decompose multi-plan failed, trying single plan: %s", exc)
+
+    # --- Single plan fallback (original approach) ---
     try:
         resp = adapter.complete(
-            [
-                LLMMessage("system", system),
-                LLMMessage("user", f"Goal: {goal}\n\nDecompose into {max_steps} or fewer concrete steps."),
-            ],
+            [LLMMessage("system", system), LLMMessage("user", user_msg)],
             max_tokens=1024,
             temperature=0.2,
         )
-        content = resp.content.strip()
-        # Extract JSON array from response (LLM may wrap in markdown)
-        start = content.find("[")
-        end = content.rfind("]") + 1
-        if start >= 0 and end > start:
-            steps = json.loads(content[start:end])
-            if isinstance(steps, list) and all(isinstance(s, str) for s in steps):
-                return [s.strip() for s in steps if s.strip()][:max_steps]
+        parsed = _parse_steps(resp.content.strip(), max_steps)
+        if parsed:
+            return parsed
     except Exception as exc:
         log.warning("decompose LLM failed, falling back to heuristic: %s", exc)
         if verbose:
             print(f"[poe] decompose LLM call failed, using heuristic: {exc}", file=sys.stderr, flush=True)
 
-    # Fallback: heuristic decomposition (reuse orch logic)
+    # --- Heuristic fallback ---
     o = _orch()
     _heuristic_steps = o.decompose_goal(goal, max_steps=max_steps)
     log.info("decompose heuristic produced %d steps (goal=%r)", len(_heuristic_steps), goal[:60])
