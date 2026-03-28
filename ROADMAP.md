@@ -832,17 +832,17 @@ Currently eval is a one-shot CLI command. The loop is: run eval → find regress
 
 The agent loop and persona spawn now have structured logging via stdlib `logging` under the `poe.*` namespace. This needs to expand to cover every execution pathway so that runtime debugging never requires code changes.
 
-**Shipped (Phase 43 first cut — March 2026):**
-- [x] `poe.loop` logger: step lifecycle (start/done/blocked), adapter timing, constraint checks, loop summary
+**Shipped (Phase 43 — March 2026):**
+- [x] `poe.loop` logger: step lifecycle (start/done/blocked), adapter timing, constraint checks, loop summary, decompose fallback
 - [x] `poe.persona` logger: spawn start/end, adapter resolution, timing
+- [x] `poe.evolver` logger: run start/end, suggestion apply, skill synthesis
+- [x] `poe.heartbeat` logger: tick start/end, health status, escalation count
+- [x] `poe.memory` logger: reflect_and_record, lesson extraction count
 - [x] `_configure_logging()`: `POE_LOG_LEVEL` env var (DEBUG/INFO/WARNING/ERROR), `verbose=True` → DEBUG
 - [x] Format: `HH:MM:SS L poe.module: message` on stderr
 
 **Still pending:**
 - [ ] `poe.director` — mission decomposition, milestone selection, delegation decisions
-- [ ] `poe.memory` — lesson extraction, TF-IDF matching, tier promotion/GC
-- [ ] `poe.evolver` — suggestion generation, auto-apply decisions, skill maintenance
-- [ ] `poe.heartbeat` — tick lifecycle, sheriff diagnosis, recovery actions
 - [ ] `poe.inspector` — friction detection, alignment checks, session quality
 - [ ] `poe.mission` — drain lifecycle, milestone progress, notification delivery
 - [ ] `poe.constraint` — detailed pattern match results at DEBUG (why a step was classified)
