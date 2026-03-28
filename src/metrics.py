@@ -13,9 +13,13 @@ Usage:
 
 from __future__ import annotations
 
+import json
+import re
 import time
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from memory import load_outcomes, Outcome
@@ -87,6 +91,155 @@ def estimate_cost(tokens_in: int, tokens_out: int, model: Optional[str] = None) 
     cost_in = rates.get("input", COST_PER_M_INPUT)
     cost_out = rates.get("output", COST_PER_M_OUTPUT)
     return (tokens_in * cost_in / 1_000_000) + (tokens_out * cost_out / 1_000_000)
+
+
+# ---------------------------------------------------------------------------
+# Phase 33: Per-step cost recording
+# ---------------------------------------------------------------------------
+
+_STEP_TYPE_PATTERNS: List[tuple] = [
+    ("research",  r"\b(research|investigate|find|search|look\s*up|fetch|retrieve)\b"),
+    ("summarize", r"\b(summarize|summarise|compile|distill|condense|aggregate)\b"),
+    ("analyze",   r"\b(analyze|analyse|assess|evaluate|compare|review|examine)\b"),
+    ("write",     r"\b(write|draft|create|generate|compose|produce|document)\b"),
+    ("verify",    r"\b(verify|check|confirm|validate|test|ensure|prove)\b"),
+    ("implement", r"\b(implement|build|code|develop|refactor|fix|add feature)\b"),
+    ("plan",      r"\b(plan|design|architect|outline|decompose|structure)\b"),
+]
+
+
+def classify_step_type(step_text: str) -> str:
+    """Classify a step text into a cost-trackable step type.
+
+    Returns one of: research, summarize, analyze, write, verify, implement, plan, general.
+    Used to group step costs so the evolver can find high-cost patterns.
+    """
+    text = step_text.lower()
+    for step_type, pattern in _STEP_TYPE_PATTERNS:
+        if re.search(pattern, text):
+            return step_type
+    return "general"
+
+
+def _step_costs_path() -> Path:
+    """Return path to step-costs.jsonl in the memory directory."""
+    try:
+        from config import memory_dir
+        return memory_dir() / "step-costs.jsonl"
+    except ImportError:
+        import os
+        workspace = os.environ.get("OPENCLAW_WORKSPACE", os.path.expanduser("~/.poe/workspace"))
+        return Path(workspace) / "memory" / "step-costs.jsonl"
+
+
+def record_step_cost(
+    step_text: str,
+    tokens_in: int,
+    tokens_out: int,
+    status: str,
+    goal: str = "",
+    model: str = "",
+    elapsed_ms: int = 0,
+) -> dict:
+    """Record per-step token cost to memory/step-costs.jsonl.
+
+    Classifies the step type via heuristic and estimates USD cost.
+    Never raises — cost recording failure must not break the agent loop.
+
+    Returns the recorded entry dict (useful for testing).
+    """
+    step_type = classify_step_type(step_text)
+    cost_usd = estimate_cost(tokens_in, tokens_out, model=model or None)
+    entry = {
+        "id": str(uuid.uuid4())[:12],
+        "recorded_at": datetime.now(timezone.utc).isoformat(),
+        "step_type": step_type,
+        "step_text_preview": step_text[:120],
+        "tokens_in": tokens_in,
+        "tokens_out": tokens_out,
+        "total_tokens": tokens_in + tokens_out,
+        "cost_usd": round(cost_usd, 8),
+        "status": status,
+        "goal_preview": goal[:80],
+        "model": model,
+        "elapsed_ms": elapsed_ms,
+    }
+    try:
+        path = _step_costs_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(entry) + "\n")
+    except Exception:
+        pass  # never break the caller
+    return entry
+
+
+def load_step_costs(limit: int = 100) -> List[dict]:
+    """Load recent step cost entries, newest first."""
+    try:
+        path = _step_costs_path()
+        if not path.exists():
+            return []
+        lines = path.read_text(encoding="utf-8").splitlines()
+        entries = []
+        for line in reversed(lines):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entries.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+            if len(entries) >= limit:
+                break
+        return entries
+    except Exception:
+        return []
+
+
+def analyze_step_costs(entries: Optional[List[dict]] = None) -> dict:
+    """Identify step types with above-median total token cost.
+
+    Returns a summary dict with:
+    - by_type: {step_type: {count, avg_tokens, total_tokens, avg_cost}}
+    - expensive_types: step types with avg_tokens > 2x median avg_tokens
+    - total_cost_usd: sum of all recorded step costs
+    """
+    if entries is None:
+        entries = load_step_costs(limit=500)
+    if not entries:
+        return {"by_type": {}, "expensive_types": [], "total_cost_usd": 0.0}
+
+    by_type: Dict[str, List[dict]] = {}
+    for e in entries:
+        by_type.setdefault(e.get("step_type", "general"), []).append(e)
+
+    type_stats: Dict[str, dict] = {}
+    for step_type, type_entries in by_type.items():
+        total_tok = sum(e.get("total_tokens", 0) for e in type_entries)
+        total_cost = sum(e.get("cost_usd", 0.0) for e in type_entries)
+        count = len(type_entries)
+        type_stats[step_type] = {
+            "count": count,
+            "avg_tokens": total_tok // count if count else 0,
+            "total_tokens": total_tok,
+            "avg_cost_usd": round(total_cost / count, 8) if count else 0.0,
+        }
+
+    avgs = [s["avg_tokens"] for s in type_stats.values() if s["avg_tokens"] > 0]
+    # Lower median: use floor((n-1)/2) so expensive types are above 2x the cheaper half
+    median_avg = sorted(avgs)[max(0, (len(avgs) - 1) // 2)] if avgs else 0
+    expensive_types = [
+        t for t, s in type_stats.items()
+        if median_avg > 0 and s["avg_tokens"] > 2 * median_avg
+    ]
+
+    total_cost = sum(e.get("cost_usd", 0.0) for e in entries)
+    return {
+        "by_type": type_stats,
+        "expensive_types": expensive_types,
+        "total_cost_usd": round(total_cost, 6),
+    }
 
 
 # ---------------------------------------------------------------------------

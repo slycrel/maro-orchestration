@@ -651,6 +651,20 @@ def run_agent_loop(
                     update_skill_utility(_sk.id, success=True)
             except Exception:
                 pass
+            # Phase 33: record per-step cost
+            try:
+                from metrics import record_step_cost
+                record_step_cost(
+                    step_text=step_text,
+                    tokens_in=outcome.get("tokens_in", 0),
+                    tokens_out=outcome.get("tokens_out", 0),
+                    status="done",
+                    goal=goal,
+                    model=getattr(adapter, "model_key", ""),
+                    elapsed_ms=step_elapsed,
+                )
+            except Exception:
+                pass
             if step_callback is not None:
                 try:
                     step_callback(step_idx, step_text, step_summary, "done")
@@ -700,6 +714,20 @@ def run_agent_loop(
                 try:
                     from skills import attribute_failure_to_skills
                     attribute_failure_to_skills(step_text, stuck_reason, goal=goal)
+                except Exception:
+                    pass
+                # Phase 33: record per-step cost (blocked)
+                try:
+                    from metrics import record_step_cost
+                    record_step_cost(
+                        step_text=step_text,
+                        tokens_in=outcome.get("tokens_in", 0),
+                        tokens_out=outcome.get("tokens_out", 0),
+                        status="blocked",
+                        goal=goal,
+                        model=getattr(adapter, "model_key", ""),
+                        elapsed_ms=step_elapsed,
+                    )
                 except Exception:
                     pass
                 if step_callback is not None:

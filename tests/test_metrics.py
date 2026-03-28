@@ -17,6 +17,10 @@ from metrics import (
     format_metrics_report,
     get_metrics,
     identify_expensive_patterns,
+    classify_step_type,
+    record_step_cost,
+    load_step_costs,
+    analyze_step_costs,
     COST_PER_M_INPUT,
     COST_PER_M_OUTPUT,
 )
@@ -461,3 +465,134 @@ def test_pass_all_k_range(monkeypatch):
         for k in [1, 2, 3, 5, 10]:
             result = compute_pass_all_k("skill-range2", k=k)
             assert 0.0 <= result <= 1.0
+
+
+# ---------------------------------------------------------------------------
+# Phase 33: per-step cost recording
+# ---------------------------------------------------------------------------
+
+def test_classify_step_type_research():
+    assert classify_step_type("research the polymarket strategies") == "research"
+
+
+def test_classify_step_type_summarize():
+    assert classify_step_type("summarize the findings from the previous step") == "summarize"
+
+
+def test_classify_step_type_analyze():
+    assert classify_step_type("analyze the calibration data and compare results") == "analyze"
+
+
+def test_classify_step_type_write():
+    assert classify_step_type("write a draft report about the topic") == "write"
+
+
+def test_classify_step_type_verify():
+    assert classify_step_type("verify that the implementation is correct") == "verify"
+
+
+def test_classify_step_type_implement():
+    assert classify_step_type("implement the new feature in agent_loop.py") == "implement"
+
+
+def test_classify_step_type_plan():
+    assert classify_step_type("plan the architecture and design the components") == "plan"
+
+
+def test_classify_step_type_general():
+    assert classify_step_type("do the thing with the stuff") == "general"
+
+
+def test_classify_step_type_empty():
+    assert classify_step_type("") == "general"
+
+
+def test_record_step_cost_returns_dict(monkeypatch, tmp_path):
+    monkeypatch.setattr("metrics._step_costs_path", lambda: tmp_path / "step-costs.jsonl")
+    entry = record_step_cost("research polymarket", 100, 50, "done", goal="test goal")
+    assert isinstance(entry, dict)
+    assert entry["step_type"] == "research"
+    assert entry["tokens_in"] == 100
+    assert entry["tokens_out"] == 50
+    assert entry["total_tokens"] == 150
+    assert entry["status"] == "done"
+    assert "cost_usd" in entry
+    assert "id" in entry
+    assert "recorded_at" in entry
+
+
+def test_record_step_cost_writes_file(monkeypatch, tmp_path):
+    path = tmp_path / "step-costs.jsonl"
+    monkeypatch.setattr("metrics._step_costs_path", lambda: path)
+    record_step_cost("find the data", 200, 100, "done")
+    assert path.exists()
+    lines = [l for l in path.read_text().splitlines() if l.strip()]
+    assert len(lines) == 1
+    data = json.loads(lines[0])
+    assert data["step_type"] == "research"
+
+
+def test_record_step_cost_never_raises(monkeypatch):
+    """record_step_cost should not raise even if path is invalid."""
+    monkeypatch.setattr("metrics._step_costs_path", lambda: Path("/nonexistent/path/that/does/not/exist/step-costs.jsonl"))
+    result = record_step_cost("step text", 1, 1, "done")
+    assert isinstance(result, dict)  # still returns the entry
+
+
+def test_load_step_costs_empty(monkeypatch, tmp_path):
+    monkeypatch.setattr("metrics._step_costs_path", lambda: tmp_path / "step-costs.jsonl")
+    assert load_step_costs() == []
+
+
+def test_load_step_costs_returns_newest_first(monkeypatch, tmp_path):
+    path = tmp_path / "step-costs.jsonl"
+    monkeypatch.setattr("metrics._step_costs_path", lambda: path)
+    record_step_cost("first step", 10, 5, "done")
+    record_step_cost("second step", 20, 10, "done")
+    entries = load_step_costs()
+    assert len(entries) == 2
+    # Newest first
+    assert entries[0]["step_text_preview"].startswith("second")
+
+
+def test_load_step_costs_respects_limit(monkeypatch, tmp_path):
+    path = tmp_path / "step-costs.jsonl"
+    monkeypatch.setattr("metrics._step_costs_path", lambda: path)
+    for i in range(5):
+        record_step_cost(f"step {i}", 10, 5, "done")
+    entries = load_step_costs(limit=3)
+    assert len(entries) == 3
+
+
+def test_analyze_step_costs_empty():
+    result = analyze_step_costs(entries=[])
+    assert result["by_type"] == {}
+    assert result["expensive_types"] == []
+    assert result["total_cost_usd"] == 0.0
+
+
+def test_analyze_step_costs_returns_correct_structure(monkeypatch, tmp_path):
+    path = tmp_path / "step-costs.jsonl"
+    monkeypatch.setattr("metrics._step_costs_path", lambda: path)
+    record_step_cost("research the topic", 1000, 500, "done")
+    record_step_cost("summarize findings", 200, 100, "done")
+    result = analyze_step_costs()
+    assert "by_type" in result
+    assert "expensive_types" in result
+    assert "total_cost_usd" in result
+    assert "research" in result["by_type"]
+    assert result["total_cost_usd"] > 0.0
+
+
+def test_analyze_step_costs_identifies_expensive(monkeypatch, tmp_path):
+    """Step types with avg_tokens > 2x median are flagged as expensive."""
+    path = tmp_path / "step-costs.jsonl"
+    monkeypatch.setattr("metrics._step_costs_path", lambda: path)
+    # cheap step: 100 tokens
+    for _ in range(3):
+        record_step_cost("verify the check", 80, 20, "done")
+    # expensive step: 3000 tokens
+    for _ in range(3):
+        record_step_cost("research the entire history of AI", 2500, 500, "done")
+    result = analyze_step_costs()
+    assert "research" in result["expensive_types"]
