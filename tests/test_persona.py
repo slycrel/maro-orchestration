@@ -337,6 +337,36 @@ def test_spawn_persona_compose_unknown_returns_stuck(tmp_path):
     assert result.status == "stuck"
 
 
+def test_spawn_persona_real_path_with_mock_adapter(tmp_path, monkeypatch):
+    """Exercise the non-dry-run spawn path with a mocked agent loop."""
+    from unittest.mock import patch
+    from agent_loop import LoopResult, StepOutcome
+
+    (tmp_path / "worker.md").write_text("---\nname: worker\nrole: Worker\n---\nDo work\n")
+    registry = PersonaRegistry(personas_dir=tmp_path)
+
+    fake_result = LoopResult(
+        loop_id="test-loop",
+        project="test",
+        goal="do something",
+        status="done",
+        steps=[StepOutcome(index=1, text="step 1", status="done", result="ok", iteration=1)],
+    )
+
+    class _FakeAdapter:
+        pass
+
+    with patch("agent_loop.run_agent_loop", return_value=fake_result) as mock_loop:
+        result = spawn_persona("worker", "do something", registry=registry, adapter=_FakeAdapter())
+    assert result.status == "done"
+    assert result.steps_taken == 1
+    assert "1/1" in result.summary
+    mock_loop.assert_called_once()
+    call_kwargs = mock_loop.call_args[1]
+    assert call_kwargs["goal"] == "do something"
+    assert "ancestry_context_extra" in call_kwargs
+
+
 # ---------------------------------------------------------------------------
 # persona_to_dict
 # ---------------------------------------------------------------------------

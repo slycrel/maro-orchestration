@@ -427,7 +427,7 @@ def spawn_persona(
         result = run_agent_loop(
             goal=goal,
             adapter=adapter,
-            system_prompt_extra=system_prompt,
+            ancestry_context_extra=system_prompt,
             max_steps=max_steps,
         )
         short_clear()  # evict session memory after loop
@@ -436,7 +436,7 @@ def spawn_persona(
             persona_name=spec.name,
             goal=goal,
             status=result.status,
-            summary=result.summary or "",
+            summary=result.summary() or "",
             steps_taken=len(result.steps or []),
             model_tier=spec.model_tier,
             memory_scope=spec.memory_scope,
