@@ -18,6 +18,8 @@ from persona import (
     build_persona_system_prompt,
     persona_to_dict,
     persona_for_goal,
+    record_persona_outcome,
+    load_persona_outcomes,
 )
 
 PERSONAS_DIR = Path(__file__).parent.parent / "personas"
@@ -500,3 +502,66 @@ def test_persona_for_goal_systems_design_keyword():
     )
     assert name == "systems-design-architect-coach"
     assert conf >= 0.70
+
+
+# ===========================================================================
+# Phase 31: Persona feedback loop tests
+# ===========================================================================
+
+def test_record_persona_outcome_writes_to_file(monkeypatch, tmp_path):
+    """record_persona_outcome writes a jsonl entry to persona-outcomes.jsonl."""
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    ok = record_persona_outcome(
+        persona_name="researcher",
+        goal="summarize AI research papers",
+        status="done",
+        confidence=0.85,
+        loop_id="abc123",
+    )
+    assert ok is True
+    out_path = tmp_path / "prototypes" / "poe-orchestration" / "memory" / "persona-outcomes.jsonl"
+    assert out_path.exists()
+    entry = json.loads(out_path.read_text().strip())
+    assert entry["persona"] == "researcher"
+    assert entry["status"] == "done"
+    assert entry["confidence"] == 0.85
+    assert entry["loop_id"] == "abc123"
+    assert "recorded_at" in entry
+
+
+def test_record_persona_outcome_goal_truncated(monkeypatch, tmp_path):
+    """record_persona_outcome truncates long goals to 120 chars."""
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    long_goal = "x" * 200
+    record_persona_outcome("builder", long_goal, "done")
+    out_path = tmp_path / "prototypes" / "poe-orchestration" / "memory" / "persona-outcomes.jsonl"
+    entry = json.loads(out_path.read_text().strip())
+    assert len(entry["goal"]) <= 120
+
+
+def test_load_persona_outcomes_empty(monkeypatch, tmp_path):
+    """load_persona_outcomes returns [] when no file exists."""
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    result = load_persona_outcomes()
+    assert result == []
+
+
+def test_load_persona_outcomes_returns_newest_first(monkeypatch, tmp_path):
+    """load_persona_outcomes returns entries newest-first."""
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    for i, persona in enumerate(["builder", "researcher", "ops"]):
+        record_persona_outcome(persona, f"goal {i}", "done")
+    results = load_persona_outcomes()
+    assert len(results) == 3
+    # Newest first — last written is "ops"
+    assert results[0]["persona"] == "ops"
+    assert results[-1]["persona"] == "builder"
+
+
+def test_load_persona_outcomes_respects_limit(monkeypatch, tmp_path):
+    """load_persona_outcomes respects the limit parameter."""
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    for i in range(5):
+        record_persona_outcome("researcher", f"goal {i}", "done")
+    results = load_persona_outcomes(limit=2)
+    assert len(results) == 2

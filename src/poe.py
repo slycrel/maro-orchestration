@@ -542,13 +542,15 @@ def poe_handle(
         try:
             # Phase 31: select the best persona for this goal and inject system context
             _persona_context = ""
+            _persona_name_selected = ""
+            _persona_conf_selected = 0.0
             try:
                 from persona import persona_for_goal, PersonaRegistry, build_persona_system_prompt
                 _registry = PersonaRegistry()
-                _persona_name, _persona_conf = persona_for_goal(
+                _persona_name_selected, _persona_conf_selected = persona_for_goal(
                     message, registry=_registry, confidence_threshold=0.75
                 )
-                _spec = _registry.load(_persona_name)
+                _spec = _registry.load(_persona_name_selected)
                 if _spec:
                     _persona_context = build_persona_system_prompt(_spec, goal=message)
             except Exception:
@@ -561,6 +563,21 @@ def poe_handle(
                 verbose=False,
                 ancestry_context_extra=_persona_context,
             )
+
+            # Phase 31: record persona outcome for feedback loop
+            if _persona_name_selected:
+                try:
+                    from persona import record_persona_outcome
+                    record_persona_outcome(
+                        persona_name=_persona_name_selected,
+                        goal=message,
+                        status=loop_result.status,
+                        confidence=_persona_conf_selected,
+                        loop_id=loop_result.loop_id,
+                    )
+                except Exception:
+                    pass
+
             done_steps = sum(1 for s in loop_result.steps if s.status == "done")
             summary = (
                 f"Task completed.\n"

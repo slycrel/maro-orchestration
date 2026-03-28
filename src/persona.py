@@ -614,3 +614,67 @@ def persona_to_dict(spec: PersonaSpec) -> Dict[str, Any]:
     d = asdict(spec)
     d["system_prompt_preview"] = spec.system_prompt[:200].replace("\n", " ")
     return d
+
+
+# ---------------------------------------------------------------------------
+# Phase 31: Persona feedback loop
+# ---------------------------------------------------------------------------
+
+def record_persona_outcome(
+    persona_name: str,
+    goal: str,
+    status: str,  # "done" | "stuck" | "unknown"
+    *,
+    confidence: float = 0.0,
+    loop_id: str = "",
+) -> bool:
+    """Record the outcome of a persona-routed loop to persona-outcomes.jsonl.
+
+    Used by the evolver to correlate persona selection quality with success.
+    Never raises — returns True if write succeeded, False otherwise.
+    """
+    from datetime import datetime, timezone
+
+    try:
+        import orch
+        out_path = orch.orch_root() / "memory" / "persona-outcomes.jsonl"
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        return False
+
+    entry = {
+        "persona": persona_name,
+        "goal": goal[:120],
+        "status": status,
+        "confidence": round(confidence, 3),
+        "loop_id": loop_id,
+        "recorded_at": datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        with out_path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(entry) + "\n")
+        return True
+    except Exception:
+        return False
+
+
+def load_persona_outcomes(limit: int = 100) -> List[dict]:
+    """Load recent persona outcome records, newest first."""
+    try:
+        import orch
+        out_path = orch.orch_root() / "memory" / "persona-outcomes.jsonl"
+        if not out_path.exists():
+            return []
+        lines = out_path.read_text(encoding="utf-8").splitlines()
+        results = []
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                results.append(json.loads(line))
+            except Exception:
+                continue
+        return list(reversed(results))[:limit]
+    except Exception:
+        return []
