@@ -514,6 +514,19 @@ def _finalize_loop(
     log.info("loop_end loop_id=%s status=%s steps=%d/%d(done/blocked) tokens=%d elapsed=%dms",
              loop_id, loop_status, _done, _blocked,
              total_tokens_in + total_tokens_out, elapsed_ms)
+
+    # Phase 44: Self-reflection — auto-diagnose execution trace
+    try:
+        from introspect import diagnose_loop as _diagnose, save_diagnosis as _save_diag
+        _diag = _diagnose(loop_id)
+        _save_diag(_diag)
+        if _diag.failure_class != "healthy":
+            log.warning("introspect: %s", _diag.summary())
+    except ImportError:
+        pass
+    except Exception as exc:
+        log.debug("introspect failed: %s", exc)
+
     # Phase 5: Reflexion — record outcome + extract lessons
     try:
         from memory import reflect_and_record

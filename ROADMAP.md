@@ -856,6 +856,56 @@ The agent loop and persona spawn now have structured logging via stdlib `logging
 
 ---
 
+### Phase 44: Self-Reflection — Run Observer + Failure Classifier *(IN PROGRESS)*
+
+*"The orchestrator should not only act — it should continuously watch itself act."*
+
+Full design in `docs/SELF_REFLECTION.md`. The short version: every manual debugging session we do (watch logs → classify failure → apply fix) should be a built-in subsystem. The four layers are: instrumentation (done) → introspection (this phase) → policy (Phase 45) → graduation (Phase 46).
+
+**Phase 44 scope — the introspection layer:**
+
+- `src/introspect.py`: `diagnose_loop(loop_id)` reads events.jsonl + step outcomes and produces a `LoopDiagnosis` with failure class, evidence, and recommendation
+- Failure taxonomy: `setup_failure`, `adapter_timeout`, `constraint_false_positive`, `decomposition_too_broad`, `empty_model_output`, `retry_churn`, `budget_exhaustion`, `token_explosion`, `artifact_missing`, `integration_drift`
+- Heuristic-only — no LLM calls, just pattern matching on trace data
+- `poe-introspect <loop_id>` CLI for manual diagnosis
+- Wired into `_finalize_loop()` — auto-diagnose after every loop, write to `memory/diagnoses.jsonl`
+- Feeds into `poe-observe serve` dashboard as a new "Diagnoses" panel
+
+**Not in scope:** recovery planning (Phase 45), rule graduation (Phase 46)
+
+---
+
+### Phase 45: Self-Reflection — Recovery Planner *(TODO)*
+
+*Given a failure class, choose the cheapest intervention.*
+
+The introspection layer (Phase 44) produces diagnoses. This phase adds a decision table that maps each failure class to a recovery action:
+
+- `decomposition_too_broad` → re-decompose with tighter step count
+- `constraint_false_positive` → add pattern to allowlist, retry
+- `adapter_timeout` → switch adapter type, reduce step scope
+- `budget_exhaustion` → increase max_iterations, enable landing
+- `token_explosion` → truncate completed_context to summaries
+- `empty_model_output` → retry with explicit tool-call instruction
+
+No LLM needed — it's a lookup table with preference for cheapest action first. Optionally auto-applies low-risk recoveries (retry, redecompose) and escalates high-risk ones (switch adapter, change policy) for human review.
+
+---
+
+### Phase 46: Self-Reflection — Intervention Graduation *(TODO)*
+
+*When humans repeatedly apply the same fix, propose a durable rule.*
+
+Closes the full loop: observe → classify → fix → verify → graduate.
+
+- Track which diagnoses led to human interventions (from evolver suggestion history)
+- When the same failure class + recovery action appears 3+ times: propose a permanent rule
+- Rules graduate via existing Phase 22 Stage 5 mechanism (rules.jsonl)
+- Example: "constraint_false_positive on natural-language 'remove'" → permanent allowlist rule
+- Example: "decomposition_too_broad on code review goals" → permanent decompose hint
+
+---
+
 ## Superseded Plans
 
 The original M0-M4 milestones and N1-N4 roadmap items focused on infrastructure plumbing (adapters, scheduling, CI). That work was valuable scaffolding, but it didn't address the core need: making Poe autonomous. This roadmap replaces N1-N4 entirely.
