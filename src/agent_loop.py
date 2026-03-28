@@ -515,10 +515,12 @@ def _finalize_loop(
              loop_id, loop_status, _done, _blocked,
              total_tokens_in + total_tokens_out, elapsed_ms)
 
-    # Phase 44: Self-reflection — auto-diagnose execution trace + run lenses
+    # Phase 44-45: Self-reflection — auto-diagnose + lenses + recovery plan
     try:
         from introspect import diagnose_loop as _diagnose, save_diagnosis as _save_diag
-        from introspect import run_lenses as _run_lenses, _build_step_profiles, _load_loop_events
+        from introspect import run_lenses as _run_lenses, aggregate_lenses as _aggregate
+        from introspect import plan_recovery as _plan_recovery
+        from introspect import _build_step_profiles, _load_loop_events
         _diag = _diagnose(loop_id)
         _save_diag(_diag)
         if _diag.failure_class != "healthy":
@@ -530,6 +532,16 @@ def _finalize_loop(
             for _lr in _lens_results:
                 if _lr.action:
                     log.warning("lens[%s]: %s", _lr.lens_name, _lr.action)
+            # Aggregated synthesis
+            if _lens_results:
+                _agg = _aggregate(_diag, _lens_results)
+                log.info("synthesis: confidence=%.0f%% agreement=%d action=%s",
+                         _agg.confidence * 100, _agg.lens_agreement, _agg.primary_action)
+            # Recovery plan
+            _recovery = _plan_recovery(_diag)
+            if _recovery:
+                _tag = "AUTO-RECOVERABLE" if _recovery.auto_apply else "NEEDS-REVIEW"
+                log.warning("recovery[%s] risk=%s: %s", _tag, _recovery.risk, _recovery.action)
     except ImportError:
         pass
     except Exception as exc:
