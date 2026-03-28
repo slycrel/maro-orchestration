@@ -642,7 +642,7 @@ Skills are manually seeded or extracted as provisional. Promotion to established
 
 ---
 
-### Phase 33: Sub-Agent Token Self-Improvement *(PARTIAL)*
+### Phase 33: Sub-Agent Token Self-Improvement *(DONE)*
 
 The evolver currently optimizes for success rate. It should also optimize for token cost — detecting step patterns that burn disproportionate tokens and proposing cheaper alternatives.
 
@@ -650,11 +650,10 @@ The evolver currently optimizes for success rate. It should also optimize for to
 - [x] **Per-step cost recording**: `classify_step_type()` heuristic (8 categories); `record_step_cost()` writes to `memory/step-costs.jsonl`; `load_step_costs()` + `analyze_step_costs()` (lower-median 2x threshold). Wired in `agent_loop.py` on step done/blocked.
 - [x] **Cost analyzer**: `analyze_step_costs()` identifies expensive step types relative to median; returns summary dict with `expensive_types` list.
 
-**Still pending:**
-- [ ] **Cheap-first principle in decomposer**: inject step cost awareness into `_DECOMPOSE_SYSTEM` — favor steps that can be answered from pre-fetched context
-- [ ] **Token budget per loop**: optional `token_budget` arg to `run_agent_loop()`; abort loop gracefully if exceeded
+- [x] **Cheap-first decomposer injection**: `analyze_step_costs()` supplies expensive_types list; injected as COST AWARENESS note into `_decompose()` via new `cost_context` param so the planner avoids high-cost step types.
+- [x] **Token budget per loop**: `token_budget: Optional[int]` param on `run_agent_loop()`; aborts with `status="stuck"` and descriptive `stuck_reason` when total tokens exceed budget. Default None = no limit.
 
-**Artifact:** `step-costs.jsonl`, `classify_step_type()` + `record_step_cost()` + `analyze_step_costs()` in `metrics.py`
+**Artifact:** `step-costs.jsonl`, `classify_step_type()` + `record_step_cost()` + `analyze_step_costs()` in `metrics.py`; `token_budget` + `cost_context` in `agent_loop.py`
 
 ---
 
