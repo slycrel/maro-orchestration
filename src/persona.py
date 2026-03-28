@@ -462,6 +462,37 @@ _PERSONA_ROUTING: List[tuple] = [
       "enneagram", "mbti", "personality", "memory model", "spaced repetition",
       "grit", "persistence", "learned helplessness", "kahneman", "system 1",
       "tacit knowledge", "expertise", "intrinsic motivation"], "psyche-researcher", 0.85),
+    # Health / medical / clinical / symptoms → health-researcher
+    (["health", "medical", "clinical", "symptoms", "symptom", "treatment",
+      "medication", "disease", "diagnosis", "therapy", "nutrition",
+      "exercise", "mental health", "wellness", "sleep", "diet"], "health-researcher", 0.85),
+    # Legal / compliance / regulatory / contracts → legal-researcher
+    (["legal", "law", "contract", "compliance", "regulation", "liability",
+      "gdpr", "privacy", "terms of service", "intellectual property",
+      "copyright", "patent", "lawsuit", "jurisdiction", "statute"], "legal-researcher", 0.85),
+    # Strategy / planning / roadmap / direction → strategist
+    (["strategy", "strategic", "roadmap", "direction", "prioritize",
+      "prioritization", "milestones", "okr", "kpi", "tradeoff", "north star",
+      "vision", "long-term", "short-term", "planning", "alignment"], "strategist", 0.80),
+    # Creative / writing / content / narrative / design → creative-director
+    (["creative", "content", "narrative", "story", "brand", "voice",
+      "copywriting", "headline", "tagline", "marketing copy", "campaign",
+      "creative brief", "design direction", "tone of voice"], "creative-director", 0.80),
+    # Web scraping / data extraction / crawl → scrapling-adaptive-web-recon
+    (["scrape", "scraping", "crawl", "crawling", "web extraction",
+      "data extraction", "html", "parse", "playwright", "selenium",
+      "beautifulsoup", "site map", "spider"], "scrapling-adaptive-web-recon", 0.85),
+    # Systems design / architecture / scalability → systems-design-architect-coach
+    (["architecture", "system design", "scalability", "distributed",
+      "microservice", "database schema", "data model", "latency",
+      "throughput", "capacity", "design pattern", "trade-off analysis"], "systems-design-architect-coach", 0.80),
+    # Review / critique / evaluate quality → critic
+    (["review", "critique", "evaluate", "assess", "quality", "problems",
+      "weaknesses", "flaws", "risks", "what's wrong", "failure mode"], "critic", 0.75),
+    # Simplify / reduce complexity / delete → simplifier
+    (["simplify", "simplification", "too complex", "over-engineered",
+      "delete", "remove", "deprecate", "refactor toward", "reduce complexity",
+      "unnecessary", "bloat", "dead code"], "simplifier", 0.80),
     # Research / analysis / investigate / summarize → research-assistant-deep-synth
     (["research", "investigate", "analyse", "analyze", "summarise", "summarize",
       "tweet", "article", "paper", "study", "literature", "findings", "survey",

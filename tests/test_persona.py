@@ -446,3 +446,57 @@ def test_persona_for_goal_tweet_goal():
     )
     assert name == "research-assistant-deep-synth"
     assert conf >= 0.70
+
+
+# ---------------------------------------------------------------------------
+# Phase 31: extended persona routing (health, legal, strategy, creative, etc.)
+# ---------------------------------------------------------------------------
+
+def test_persona_for_goal_health_keyword():
+    name, conf = persona_for_goal("research symptoms and treatments for insomnia and sleep health")
+    assert name == "health-researcher"
+    assert conf >= 0.70
+
+
+def test_persona_for_goal_legal_keyword():
+    name, conf = persona_for_goal("review this contract for GDPR compliance and liability clauses")
+    assert name == "legal-researcher"
+    assert conf >= 0.70
+
+
+def test_persona_for_goal_strategy_keyword():
+    name, conf = persona_for_goal("build a strategic roadmap for the next milestone prioritization")
+    assert name == "strategist"
+    assert conf >= 0.70
+
+
+def test_persona_for_goal_creative_keyword():
+    name, conf = persona_for_goal("write creative marketing copy and brand narrative for the campaign")
+    assert name == "creative-director"
+    assert conf >= 0.70
+
+
+def test_persona_for_goal_scraping_keyword():
+    name, conf = persona_for_goal("scrape and extract structured data from the site using playwright")
+    assert name == "scrapling-adaptive-web-recon"
+    assert conf >= 0.70
+
+
+def test_persona_for_goal_simplifier_keyword():
+    name, conf = persona_for_goal("the codebase is too complex, simplify and remove dead code")
+    assert name == "simplifier"
+    assert conf >= 0.70
+
+
+def test_persona_for_goal_critic_keyword():
+    name, conf = persona_for_goal("review this design and identify the failure modes and weaknesses")
+    assert name == "critic"
+    assert conf >= 0.70
+
+
+def test_persona_for_goal_systems_design_keyword():
+    name, conf = persona_for_goal(
+        "design the system architecture for scalable distributed microservices"
+    )
+    assert name == "systems-design-architect-coach"
+    assert conf >= 0.70
