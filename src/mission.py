@@ -972,3 +972,87 @@ def _write_mission_log(result: MissionResult, mission: Mission) -> None:
     }
     with open(path, "a", encoding="utf-8") as fh:
         fh.write(json.dumps(entry) + "\n")
+
+
+# ---------------------------------------------------------------------------
+# Phase 34: Morning briefing + mission drain detection
+# ---------------------------------------------------------------------------
+
+def pending_missions() -> List[dict]:
+    """Return missions that have work remaining (status != 'done' and have pending milestones).
+
+    Used by heartbeat to detect whether autonomous drain should trigger.
+    """
+    all_missions = list_missions()
+    result = []
+    for m in all_missions:
+        if m.get("status") == "done":
+            continue
+        # Has at least one non-done milestone
+        project = m.get("project", "")
+        mission = load_mission(project)
+        if mission is None:
+            continue
+        has_pending = any(
+            ms.status not in ("done",) for ms in mission.milestones
+        )
+        if has_pending:
+            result.append({
+                **m,
+                "milestones_pending": sum(
+                    1 for ms in mission.milestones if ms.status not in ("done",)
+                ),
+            })
+    return result
+
+
+def morning_briefing(max_missions: int = 5) -> str:
+    """Generate a morning status briefing of active/pending missions.
+
+    Suitable for Telegram notification or CLI display after an overnight run.
+    Returns a concise multi-line string.
+    """
+    from datetime import datetime, timezone
+
+    all_missions = list_missions()
+    now = datetime.now(timezone.utc)
+
+    done_today = []
+    in_progress = []
+    pending = []
+
+    for m in all_missions:
+        status = m.get("status", "unknown")
+        if status == "done":
+            done_today.append(m)
+        elif status in ("running", "blocked"):
+            in_progress.append(m)
+        else:
+            pending.append(m)
+
+    lines = [f"Morning briefing — {now.strftime('%Y-%m-%d %H:%M')} UTC"]
+    lines.append("")
+
+    if done_today:
+        lines.append(f"Completed ({len(done_today)}):")
+        for m in done_today[:max_missions]:
+            ms_done = m.get("milestones_done", 0)
+            ms_total = m.get("milestones_total", 0)
+            lines.append(f"  ✓ [{m['project']}] {m['goal'][:60]} ({ms_done}/{ms_total} milestones)")
+
+    if in_progress:
+        lines.append(f"\nIn progress ({len(in_progress)}):")
+        for m in in_progress[:max_missions]:
+            ms_done = m.get("milestones_done", 0)
+            ms_total = m.get("milestones_total", 0)
+            lines.append(f"  → [{m['project']}] {m['goal'][:60]} ({ms_done}/{ms_total} milestones)")
+
+    if pending:
+        lines.append(f"\nQueued ({len(pending)}):")
+        for m in pending[:max_missions]:
+            lines.append(f"  ○ [{m['project']}] {m['goal'][:60]}")
+
+    if not done_today and not in_progress and not pending:
+        lines.append("No active missions.")
+
+    return "\n".join(lines)

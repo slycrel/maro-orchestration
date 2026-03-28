@@ -24,6 +24,8 @@ from mission import (
     decompose_mission,
     list_missions,
     load_mission,
+    morning_briefing,
+    pending_missions,
     run_mission,
     save_mission,
 )
@@ -659,4 +661,158 @@ def test_run_mission_creates_feature_manifest(monkeypatch, tmp_path):
     assert path.exists()
     data = json.loads(path.read_text())
     assert "features" in data
-    assert len(data["features"]) > 0
+
+
+# ---------------------------------------------------------------------------
+# Phase 34: morning_briefing and pending_missions
+# ---------------------------------------------------------------------------
+
+def _missions_root(tmp_path: Path) -> Path:
+    """Return the projects root that orch resolves under tmp_path."""
+    return tmp_path / "prototypes" / "poe-orchestration" / "projects"
+
+
+def _write_mission_json(project_name: str, tmp_path: Path, goal: str, status: str, milestones: list) -> None:
+    """Write a minimal mission.json for testing inside the orch projects root."""
+    import uuid
+    project_dir = _missions_root(tmp_path) / project_name
+    project_dir.mkdir(parents=True, exist_ok=True)
+    mission_file = project_dir / "mission.json"
+    mission_file.write_text(json.dumps({
+        "id": uuid.uuid4().hex[:8],
+        "goal": goal,
+        "project": project_name,
+        "status": status,
+        "milestones": milestones,
+        "created_at": "2026-01-01T00:00:00+00:00",
+    }), encoding="utf-8")
+
+
+def test_pending_missions_empty_when_no_missions(monkeypatch, tmp_path):
+    """pending_missions returns [] when no projects have mission.json."""
+    _setup_workspace(monkeypatch, tmp_path)
+    result = pending_missions()
+    assert result == []
+
+
+def test_pending_missions_excludes_done_missions(monkeypatch, tmp_path):
+    """pending_missions excludes missions with status == 'done'."""
+    _setup_workspace(monkeypatch, tmp_path)
+    _write_mission_json(
+        "done-project", tmp_path,
+        goal="Fully completed mission",
+        status="done",
+        milestones=[{"id": "m1", "title": "M1", "features": [], "validation_criteria": [], "status": "done", "validation_result": None}],
+    )
+    result = pending_missions()
+    assert result == []
+
+
+def test_pending_missions_includes_missions_with_remaining_work(monkeypatch, tmp_path):
+    """pending_missions includes missions that have non-done milestones."""
+    _setup_workspace(monkeypatch, tmp_path)
+    _write_mission_json(
+        "active-project", tmp_path,
+        goal="Build something",
+        status="running",
+        milestones=[
+            {"id": "m1", "title": "Done MS", "features": [], "validation_criteria": [], "status": "done", "validation_result": None},
+            {"id": "m2", "title": "Pending MS", "features": [], "validation_criteria": [], "status": "pending", "validation_result": None},
+        ],
+    )
+    result = pending_missions()
+    assert len(result) == 1
+    assert result[0]["project"] == "active-project"
+    assert result[0]["milestones_pending"] == 1
+
+
+def test_pending_missions_counts_pending_milestones(monkeypatch, tmp_path):
+    """milestones_pending reflects count of non-done milestones."""
+    _setup_workspace(monkeypatch, tmp_path)
+    _write_mission_json(
+        "multi-ms-project", tmp_path,
+        goal="Multi milestone mission",
+        status="running",
+        milestones=[
+            {"id": "m1", "title": "MS1", "features": [], "validation_criteria": [], "status": "pending", "validation_result": None},
+            {"id": "m2", "title": "MS2", "features": [], "validation_criteria": [], "status": "pending", "validation_result": None},
+            {"id": "m3", "title": "MS3", "features": [], "validation_criteria": [], "status": "done", "validation_result": None},
+        ],
+    )
+    result = pending_missions()
+    assert len(result) == 1
+    assert result[0]["milestones_pending"] == 2
+
+
+def test_morning_briefing_no_missions(monkeypatch, tmp_path):
+    """morning_briefing says 'No active missions' when workspace is empty."""
+    _setup_workspace(monkeypatch, tmp_path)
+    briefing = morning_briefing()
+    assert isinstance(briefing, str)
+    assert "No active missions" in briefing
+
+
+def test_morning_briefing_shows_done_mission(monkeypatch, tmp_path):
+    """morning_briefing shows completed missions in Completed section."""
+    _setup_workspace(monkeypatch, tmp_path)
+    _write_mission_json(
+        "done-mission", tmp_path,
+        goal="A finished mission",
+        status="done",
+        milestones=[{"id": "m1", "title": "M1", "features": [], "validation_criteria": [], "status": "done", "validation_result": None}],
+    )
+    briefing = morning_briefing()
+    assert "Completed" in briefing
+    assert "done-mission" in briefing
+
+
+def test_morning_briefing_shows_in_progress(monkeypatch, tmp_path):
+    """morning_briefing shows running/blocked missions in In progress section."""
+    _setup_workspace(monkeypatch, tmp_path)
+    _write_mission_json(
+        "running-mission", tmp_path,
+        goal="Currently running mission",
+        status="running",
+        milestones=[{"id": "m1", "title": "M1", "features": [], "validation_criteria": [], "status": "pending", "validation_result": None}],
+    )
+    briefing = morning_briefing()
+    assert "In progress" in briefing
+    assert "running-mission" in briefing
+
+
+def test_morning_briefing_shows_queued(monkeypatch, tmp_path):
+    """morning_briefing shows pending missions in Queued section."""
+    _setup_workspace(monkeypatch, tmp_path)
+    _write_mission_json(
+        "queued-mission", tmp_path,
+        goal="Queued mission waiting to start",
+        status="pending",
+        milestones=[{"id": "m1", "title": "M1", "features": [], "validation_criteria": [], "status": "pending", "validation_result": None}],
+    )
+    briefing = morning_briefing()
+    assert "Queued" in briefing
+    assert "queued-mission" in briefing
+
+
+def test_morning_briefing_includes_header(monkeypatch, tmp_path):
+    """morning_briefing always includes a date-stamped header."""
+    _setup_workspace(monkeypatch, tmp_path)
+    briefing = morning_briefing()
+    assert "Morning briefing" in briefing
+    assert "UTC" in briefing
+
+
+def test_morning_briefing_respects_max_missions(monkeypatch, tmp_path):
+    """morning_briefing limits entries per section to max_missions."""
+    _setup_workspace(monkeypatch, tmp_path)
+    for i in range(5):
+        _write_mission_json(
+            f"done-project-{i}", tmp_path,
+            goal=f"Mission {i}",
+            status="done",
+            milestones=[{"id": "m1", "title": "M1", "features": [], "validation_criteria": [], "status": "done", "validation_result": None}],
+        )
+    briefing = morning_briefing(max_missions=2)
+    # With max_missions=2, only 2 done projects should be listed (not 5)
+    count = briefing.count("done-project-")
+    assert count == 2

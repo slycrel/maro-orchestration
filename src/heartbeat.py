@@ -385,6 +385,7 @@ def heartbeat_loop(
     interval: float = 60.0,
     evolver_every: int = 10,
     inspector_every: int = 20,
+    mission_check_every: int = 5,
     dry_run: bool = False,
     verbose: bool = True,
     escalate: bool = True,
@@ -396,11 +397,15 @@ def heartbeat_loop(
 
     Every `inspector_every` cycles (Phase 12), runs the quality inspector
     to detect friction patterns and feed suggestions to the evolver.
+
+    Every `mission_check_every` cycles (Phase 34), checks for pending
+    missions and logs/notifies if autonomous drain would be warranted.
     """
     if verbose:
         print(
             f"[heartbeat] loop started interval={interval}s "
-            f"evolver_every={evolver_every} inspector_every={inspector_every}",
+            f"evolver_every={evolver_every} inspector_every={inspector_every} "
+            f"mission_check_every={mission_check_every}",
             file=sys.stderr,
         )
     tick = 0
@@ -423,6 +428,20 @@ def heartbeat_loop(
                 run_inspector(dry_run=dry_run, verbose=verbose)
             except Exception as e:
                 print(f"[heartbeat] inspector failed: {e}", file=sys.stderr)
+        if tick % mission_check_every == 0:
+            # Phase 34: Check for pending missions — detect drain opportunities
+            try:
+                from mission import pending_missions
+                pending = pending_missions()
+                if pending and verbose:
+                    print(
+                        f"[heartbeat] {len(pending)} mission(s) pending drain: "
+                        + ", ".join(m.get("project", "?") for m in pending[:3]),
+                        file=sys.stderr,
+                    )
+            except Exception as e:
+                if verbose:
+                    print(f"[heartbeat] mission check failed: {e}", file=sys.stderr)
         time.sleep(interval)
 
 
