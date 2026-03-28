@@ -316,14 +316,16 @@ def _run_steps_parallel(
     n_workers = min(max_workers, len(steps))
     outcomes_by_idx: Dict[int, dict] = {}
 
+    _fanout_timeout = int(os.environ.get("POE_STEP_TIMEOUT", "600"))  # 10 min default
+
     with ThreadPoolExecutor(max_workers=n_workers) as pool:
         futures = {
             pool.submit(_run_one, i + 1, s): i
             for i, s in enumerate(steps)
         }
-        for f in as_completed(futures):
+        for f in as_completed(futures, timeout=_fanout_timeout):
             try:
-                idx, outcome = f.result()
+                idx, outcome = f.result(timeout=30)
                 outcomes_by_idx[idx] = outcome
             except Exception as exc:
                 i = futures[f]
@@ -589,7 +591,7 @@ def run_agent_loop(
     model: Optional[str] = None,
     adapter=None,
     max_steps: int = 8,
-    max_iterations: int = 20,
+    max_iterations: int = 40,
     dry_run: bool = False,
     verbose: bool = False,
     interrupt_queue=None,
@@ -1283,12 +1285,15 @@ def _decompose(
             if isinstance(steps, list) and all(isinstance(s, str) for s in steps):
                 return [s.strip() for s in steps if s.strip()][:max_steps]
     except Exception as exc:
+        log.warning("decompose LLM failed, falling back to heuristic: %s", exc)
         if verbose:
             print(f"[poe] decompose LLM call failed, using heuristic: {exc}", file=sys.stderr, flush=True)
 
     # Fallback: heuristic decomposition (reuse orch logic)
     o = _orch()
-    return o.decompose_goal(goal, max_steps=max_steps)
+    _heuristic_steps = o.decompose_goal(goal, max_steps=max_steps)
+    log.info("decompose heuristic produced %d steps (goal=%r)", len(_heuristic_steps), goal[:60])
+    return _heuristic_steps
 
 
 # ---------------------------------------------------------------------------
