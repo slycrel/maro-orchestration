@@ -828,7 +828,31 @@ def run_agent_loop(
         if iteration >= max_iterations:
             loop_status = "stuck"
             stuck_reason = f"hit max_iterations={max_iterations} before completing all steps"
+            log.warning("max_iterations reached: %d/%d steps done, %d remaining, tokens=%d",
+                        len(step_outcomes), len(step_outcomes) + len(remaining_steps),
+                        len(remaining_steps), total_tokens_in + total_tokens_out)
             break
+
+        # Budget-aware landing: when only 2 iterations remain and there are
+        # still multiple steps, replace the remaining steps with a single
+        # "synthesize what we have" step so the loop lands gracefully.
+        _remaining_budget = max_iterations - iteration
+        if _remaining_budget <= 2 and len(remaining_steps) > 1 and len(step_outcomes) >= 3:
+            _done_count = sum(1 for s in step_outcomes if s.status == "done")
+            if _done_count >= 2:
+                _synth_step = (
+                    f"Synthesize the findings from the {_done_count} completed steps into "
+                    f"a structured summary. Include: key findings, gaps or open questions, "
+                    f"and concrete recommendations. This is a partial result — "
+                    f"{len(remaining_steps)} steps were not completed."
+                )
+                remaining_steps.clear()
+                remaining_steps.append(_synth_step)
+                remaining_indices.clear()
+                remaining_indices.append(-1)
+                log.info("budget-aware landing: replaced %d remaining steps with synthesis step "
+                         "(budget=%d iterations left, %d steps done)",
+                         len(remaining_steps), _remaining_budget, _done_count)
 
         step_text = remaining_steps.pop(0)
         item_index = remaining_indices.pop(0) if remaining_indices else -1
@@ -873,6 +897,11 @@ def run_agent_loop(
 
         total_tokens_in += outcome.get("tokens_in", 0)
         total_tokens_out += outcome.get("tokens_out", 0)
+        log.info("step %d %s tokens_step=%d tokens_total=%d elapsed_step=%dms iter=%d/%d",
+                 step_idx, outcome.get("status", "?"),
+                 outcome.get("tokens_in", 0) + outcome.get("tokens_out", 0),
+                 total_tokens_in + total_tokens_out,
+                 step_elapsed, iteration, max_iterations)
 
         # Phase 33: token budget — abort gracefully if exceeded
         if token_budget is not None and (total_tokens_in + total_tokens_out) >= token_budget:
@@ -1217,6 +1246,36 @@ def run_agent_loop(
         log_path=log_path,
         march_of_nines_alert=_march_of_nines_alert,
     )
+
+    # Write a combined partial-result artifact so completed work is never lost
+    _done_steps = [s for s in step_outcomes if s.status == "done"]
+    if _done_steps:
+        try:
+            _partial_lines = [f"# Partial result: {goal}\n"]
+            _partial_lines.append(f"Status: {loop_status} | "
+                                  f"{len(_done_steps)}/{len(step_outcomes)} steps done | "
+                                  f"tokens: {total_tokens_in+total_tokens_out} | "
+                                  f"elapsed: {elapsed_total}ms\n")
+            if stuck_reason:
+                _partial_lines.append(f"Stuck reason: {stuck_reason}\n")
+            _partial_lines.append("---\n")
+            for s in step_outcomes:
+                _icon = "Done" if s.status == "done" else "BLOCKED"
+                _partial_lines.append(f"\n## Step {s.index if s.index >= 0 else '?'}: {s.text[:100]}")
+                _partial_lines.append(f"*[{_icon}]*\n")
+                if s.result:
+                    _partial_lines.append(s.result[:2000])
+                    if len(s.result) > 2000:
+                        _partial_lines.append(f"\n... (truncated, {len(s.result)} chars total)")
+                _partial_lines.append("")
+            o = _orch()
+            _art_dir = o.orch_root() / "prototypes" / "poe-orchestration" / "projects" / project / "artifacts"
+            _art_dir.mkdir(parents=True, exist_ok=True)
+            (_art_dir / f"loop-{loop_id}-PARTIAL.md").write_text(
+                "\n".join(_partial_lines), encoding="utf-8")
+            log.info("wrote partial result: %s (%d steps)", f"loop-{loop_id}-PARTIAL.md", len(_done_steps))
+        except Exception as exc:
+            log.debug("partial result write failed: %s", exc)
 
     if verbose:
         print(f"[poe] {result.summary()}", file=sys.stderr, flush=True)
