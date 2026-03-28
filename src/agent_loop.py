@@ -515,13 +515,21 @@ def _finalize_loop(
              loop_id, loop_status, _done, _blocked,
              total_tokens_in + total_tokens_out, elapsed_ms)
 
-    # Phase 44: Self-reflection — auto-diagnose execution trace
+    # Phase 44: Self-reflection — auto-diagnose execution trace + run lenses
     try:
         from introspect import diagnose_loop as _diagnose, save_diagnosis as _save_diag
+        from introspect import run_lenses as _run_lenses, _build_step_profiles, _load_loop_events
         _diag = _diagnose(loop_id)
         _save_diag(_diag)
         if _diag.failure_class != "healthy":
             log.warning("introspect: %s", _diag.summary())
+            # Run heuristic lenses on non-healthy loops
+            _events = _load_loop_events(loop_id)
+            _profiles = _build_step_profiles(_events)
+            _lens_results = _run_lenses(_diag, _profiles)
+            for _lr in _lens_results:
+                if _lr.action:
+                    log.warning("lens[%s]: %s", _lr.lens_name, _lr.action)
     except ImportError:
         pass
     except Exception as exc:

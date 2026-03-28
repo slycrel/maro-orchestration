@@ -12,10 +12,14 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from introspect import (
     LoopDiagnosis,
+    LensResult,
+    StepProfile,
     diagnose_loop,
     diagnose_latest,
     save_diagnosis,
     load_diagnoses,
+    run_lenses,
+    get_lens_registry,
     _build_step_profiles,
     FAILURE_CLASSES,
 )
@@ -271,3 +275,113 @@ def test_failure_classes_documented():
     assert "healthy" in FAILURE_CLASSES
     assert "setup_failure" in FAILURE_CLASSES
     assert "budget_exhaustion" in FAILURE_CLASSES
+
+
+# ---------------------------------------------------------------------------
+# Multi-Lens Introspection
+# ---------------------------------------------------------------------------
+
+def _make_profiles(specs):
+    """Build StepProfile list from (idx, status, tokens, elapsed_ms) tuples."""
+    return [
+        StepProfile(step_idx=s[0], text=f"step {s[0]}", status=s[1], tokens=s[2], elapsed_ms=s[3])
+        for s in specs
+    ]
+
+
+def test_lens_registry_has_four_builtin():
+    registry = get_lens_registry()
+    names = registry.list()
+    assert "cost" in names
+    assert "architecture" in names
+    assert "operator" in names
+    assert "forensics" in names
+
+
+def test_cost_lens_flags_expensive_step():
+    profiles = _make_profiles([
+        (1, "done", 5000, 3000),
+        (2, "done", 200000, 120000),  # 97% of tokens
+        (3, "done", 3000, 2000),
+    ])
+    diag = LoopDiagnosis(loop_id="x", failure_class="healthy", severity="info")
+    results = run_lenses(diag, profiles)
+    cost_result = next((r for r in results if r.lens_name == "cost"), None)
+    assert cost_result is not None
+    assert cost_result.action is not None
+    assert any("step 2" in f.lower() or "Step 2" in f for f in cost_result.findings)
+
+
+def test_operator_lens_flags_blocked_time():
+    profiles = _make_profiles([
+        (1, "done", 5000, 5000),
+        (2, "blocked", 0, 300000),  # 5 min blocked
+        (3, "done", 5000, 5000),
+    ])
+    diag = LoopDiagnosis(loop_id="x", failure_class="healthy", severity="info")
+    results = run_lenses(diag, profiles)
+    op_result = next((r for r in results if r.lens_name == "operator"), None)
+    assert op_result is not None
+    assert any("blocked" in f.lower() for f in op_result.findings)
+
+
+def test_forensics_lens_identifies_failure_transition():
+    profiles = _make_profiles([
+        (1, "done", 5000, 3000),
+        (2, "done", 5000, 3000),
+        (3, "blocked", 0, 100),
+    ])
+    diag = LoopDiagnosis(loop_id="x", failure_class="setup_failure", severity="critical")
+    results = run_lenses(diag, profiles)
+    forensics = next((r for r in results if r.lens_name == "forensics"), None)
+    assert forensics is not None
+    assert any("last successful" in f.lower() for f in forensics.findings)
+
+
+def test_architecture_lens_flags_uneven_steps():
+    # avg = (2K+2K+2K+500K)/4 = 126.5K, outlier > 126.5K*3 = 379.5K and > 50K
+    profiles = _make_profiles([
+        (1, "done", 2000, 1000),
+        (2, "done", 2000, 1000),
+        (3, "done", 2000, 1000),
+        (4, "done", 500000, 100000),  # clearly an outlier
+    ])
+    diag = LoopDiagnosis(loop_id="x", failure_class="healthy", severity="info")
+    results = run_lenses(diag, profiles)
+    arch = next((r for r in results if r.lens_name == "architecture"), None)
+    assert arch is not None
+    assert any("uneven" in f.lower() or "3x" in f for f in arch.findings)
+
+
+def test_run_lenses_returns_only_active():
+    """Lenses with no findings are filtered out."""
+    profiles = _make_profiles([
+        (1, "done", 5000, 3000),
+        (2, "done", 5000, 3000),
+        (3, "done", 5000, 3000),
+    ])
+    diag = LoopDiagnosis(loop_id="x", failure_class="healthy", severity="info")
+    results = run_lenses(diag, profiles)
+    # All results should have at least one finding
+    for r in results:
+        assert len(r.findings) > 0
+
+
+def test_custom_lens_registration():
+    """Custom lenses can be registered and run."""
+    registry = get_lens_registry()
+
+    def _custom(diag, profiles):
+        return LensResult(lens_name="custom", findings=["custom finding"], action="do custom thing")
+
+    registry.register("custom_test", _custom, cost="free")
+    assert "custom_test" in registry.list()
+
+    profiles = _make_profiles([(1, "done", 5000, 3000)])
+    diag = LoopDiagnosis(loop_id="x", failure_class="healthy", severity="info")
+    result = registry.run("custom_test", diag, profiles)
+    assert result.findings == ["custom finding"]
+
+    # Clean up
+    del registry._lenses["custom_test"]
+    del registry._costs["custom_test"]

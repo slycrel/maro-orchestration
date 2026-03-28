@@ -1,16 +1,19 @@
-"""Phase 44: Self-Reflection — Run Observer + Failure Classifier.
+"""Phase 44: Self-Reflection — Run Observer + Failure Classifier + Multi-Lens Introspection.
 
 Analyzes execution traces (events.jsonl, step outcomes) and produces
-structured diagnoses. No LLM calls — pure heuristics on trace data.
+structured diagnoses. Heuristic lenses run always (free); LLM lenses
+run selectively on failure or high-stakes tasks.
 
 Usage:
-    from introspect import diagnose_loop, diagnose_latest
+    from introspect import diagnose_loop, diagnose_latest, run_lenses
     diag = diagnose_loop("a3b2c1d0")
+    lens_results = run_lenses(diag, profiles)
     print(diag.failure_class, diag.recommendation)
 
 CLI:
     poe-introspect <loop_id>
     poe-introspect --latest
+    poe-introspect --latest --lenses
 """
 
 from __future__ import annotations
@@ -19,7 +22,7 @@ import json
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 log = logging.getLogger("poe.introspect")
 
@@ -381,6 +384,315 @@ def load_diagnoses(limit: int = 50) -> List[LoopDiagnosis]:
 
 
 # ---------------------------------------------------------------------------
+# Multi-Lens Introspection
+# ---------------------------------------------------------------------------
+
+@dataclass
+class LensResult:
+    """Output from a single analytical lens."""
+    lens_name: str
+    findings: List[str] = field(default_factory=list)
+    action: Optional[str] = None      # recommended next step (None = nothing notable)
+    confidence: float = 0.0            # 0.0–1.0
+    cost: str = "free"                 # "free" | "cheap" | "expensive"
+
+
+# Type alias for a lens function
+LensFn = Callable[[LoopDiagnosis, List[StepProfile]], LensResult]
+
+
+class LensRegistry:
+    """Registry of analytical lenses. Extensible — add lenses via register()."""
+
+    def __init__(self) -> None:
+        self._lenses: Dict[str, LensFn] = {}
+        self._costs: Dict[str, str] = {}
+
+    def register(self, name: str, fn: LensFn, cost: str = "free") -> None:
+        self._lenses[name] = fn
+        self._costs[name] = cost
+
+    def list(self) -> List[str]:
+        return sorted(self._lenses.keys())
+
+    def run(self, name: str, diag: LoopDiagnosis, profiles: List[StepProfile]) -> LensResult:
+        fn = self._lenses[name]
+        result = fn(diag, profiles)
+        result.cost = self._costs.get(name, "free")
+        return result
+
+    def run_heuristic(self, diag: LoopDiagnosis, profiles: List[StepProfile]) -> List[LensResult]:
+        """Run all free (heuristic) lenses."""
+        results = []
+        for name, fn in self._lenses.items():
+            if self._costs.get(name) == "free":
+                try:
+                    results.append(self.run(name, diag, profiles))
+                except Exception as exc:
+                    log.debug("lens %s failed: %s", name, exc)
+        return results
+
+    def run_all(self, diag: LoopDiagnosis, profiles: List[StepProfile]) -> List[LensResult]:
+        """Run all lenses (heuristic + LLM)."""
+        results = []
+        for name in self._lenses:
+            try:
+                results.append(self.run(name, diag, profiles))
+            except Exception as exc:
+                log.debug("lens %s failed: %s", name, exc)
+        return results
+
+
+# ---------------------------------------------------------------------------
+# Built-in heuristic lenses (free — always run)
+# ---------------------------------------------------------------------------
+
+def _cost_lens(diag: LoopDiagnosis, profiles: List[StepProfile]) -> LensResult:
+    """Which steps burned the most tokens? Was there a cheaper path?"""
+    findings: List[str] = []
+    action = None
+
+    if not profiles:
+        return LensResult(lens_name="cost")
+
+    total = sum(p.tokens for p in profiles)
+    if total == 0:
+        return LensResult(lens_name="cost", findings=["No tokens recorded"])
+
+    # Find the most expensive step
+    top = max(profiles, key=lambda p: p.tokens)
+    top_pct = (top.tokens / total * 100) if total > 0 else 0
+
+    if top_pct > 50:
+        findings.append(
+            f"Step {top.step_idx} consumed {top_pct:.0f}% of total tokens "
+            f"({top.tokens:,} / {total:,})"
+        )
+        action = f"Split step {top.step_idx} into smaller substeps or route to cheaper model"
+
+    # Check for steps that could have used a cheaper model
+    # Simple heuristic: classify/verify/format steps with > 10K tokens are wasteful
+    cheap_keywords = {"classify", "verify", "format", "list", "check", "validate", "count"}
+    for p in profiles:
+        if p.tokens > 10000:
+            words = set(p.text.lower().split())
+            if words & cheap_keywords:
+                findings.append(
+                    f"Step {p.step_idx} ({p.text[:50]}) used {p.tokens:,} tokens "
+                    f"but looks like a classify/verify task — should use cheap model"
+                )
+                if action is None:
+                    action = "Route simple classify/verify steps to cheap model tier"
+
+    # Average cost per done step
+    done_profiles = [p for p in profiles if p.status == "done"]
+    if done_profiles:
+        avg = total // len(done_profiles)
+        findings.append(f"Average tokens per done step: {avg:,}")
+
+    confidence = 0.8 if action else 0.3
+    return LensResult(lens_name="cost", findings=findings, action=action, confidence=confidence)
+
+
+def _architecture_lens(diag: LoopDiagnosis, profiles: List[StepProfile]) -> LensResult:
+    """Were independent steps run sequentially? Wrong ordering?"""
+    findings: List[str] = []
+    action = None
+
+    if len(profiles) < 3:
+        return LensResult(lens_name="architecture")
+
+    # Check for steps that could have been parallel
+    # Heuristic: steps with no shared keywords are likely independent
+    _independent_pairs = 0
+    for i in range(len(profiles) - 1):
+        words_a = set(profiles[i].text.lower().split())
+        words_b = set(profiles[i + 1].text.lower().split())
+        # Remove common filler words
+        _filler = {"the", "a", "an", "and", "or", "to", "in", "of", "for", "on", "with", "from"}
+        words_a -= _filler
+        words_b -= _filler
+        overlap = words_a & words_b
+        if len(overlap) <= 1 and profiles[i].status == "done" and profiles[i + 1].status == "done":
+            _independent_pairs += 1
+
+    if _independent_pairs >= 2:
+        findings.append(
+            f"{_independent_pairs} consecutive step pairs appear independent — "
+            f"could have been parallelized"
+        )
+        action = "Enable parallel_fan_out for independent steps"
+
+    # Check for blocked step followed by unrelated done step (ordering issue)
+    for i in range(len(profiles) - 1):
+        if profiles[i].status in ("stuck", "blocked") and profiles[i + 1].status == "done":
+            findings.append(
+                f"Step {profiles[i].step_idx} blocked, but step {profiles[i + 1].step_idx} "
+                f"succeeded — reordering might avoid the block"
+            )
+
+    # Check for very uneven step sizes (suggests poor decomposition)
+    tokens = [p.tokens for p in profiles if p.tokens > 0]
+    if tokens and len(tokens) >= 3:
+        avg = sum(tokens) // len(tokens)
+        outliers = [p for p in profiles if p.tokens > avg * 3 and p.tokens > 50000]
+        if outliers:
+            findings.append(
+                f"{len(outliers)} step(s) are 3x+ the average token cost — "
+                f"decomposition is uneven"
+            )
+            if action is None:
+                action = "Rebalance decomposition — split heavy steps, merge trivial ones"
+
+    confidence = 0.7 if action else 0.2
+    return LensResult(lens_name="architecture", findings=findings, action=action, confidence=confidence)
+
+
+def _operator_lens(diag: LoopDiagnosis, profiles: List[StepProfile]) -> LensResult:
+    """Where is wall-clock time going? Is it making real progress?"""
+    findings: List[str] = []
+    action = None
+
+    if not profiles:
+        return LensResult(lens_name="operator")
+
+    total_ms = sum(p.elapsed_ms for p in profiles)
+    done_ms = sum(p.elapsed_ms for p in profiles if p.status == "done")
+    blocked_ms = sum(p.elapsed_ms for p in profiles if p.status in ("stuck", "blocked"))
+
+    if total_ms > 0:
+        waste_pct = (blocked_ms / total_ms * 100)
+        if waste_pct > 30:
+            findings.append(
+                f"{waste_pct:.0f}% of wall-clock time spent on blocked steps "
+                f"({blocked_ms // 1000}s / {total_ms // 1000}s)"
+            )
+            action = "Too much time on blocked steps — improve decomposition or constraint tuning"
+
+    # Check for steps that took > 2 minutes
+    slow_steps = [p for p in profiles if p.elapsed_ms > 120000]
+    if slow_steps:
+        for p in slow_steps:
+            findings.append(
+                f"Step {p.step_idx} took {p.elapsed_ms // 1000}s: {p.text[:60]}"
+            )
+        if action is None:
+            action = "Break slow steps into smaller units (target < 60s each)"
+
+    # Progress rate: done steps per minute
+    if total_ms > 60000:
+        done_count = sum(1 for p in profiles if p.status == "done")
+        rate = done_count / (total_ms / 60000)
+        findings.append(f"Progress rate: {rate:.1f} steps/min ({done_count} done in {total_ms // 1000}s)")
+
+    confidence = 0.8 if action else 0.3
+    return LensResult(lens_name="operator", findings=findings, action=action, confidence=confidence)
+
+
+def _forensics_lens(diag: LoopDiagnosis, profiles: List[StepProfile]) -> LensResult:
+    """What exact event caused failure? What was the last good state?"""
+    findings: List[str] = []
+    action = None
+
+    if not profiles:
+        return LensResult(lens_name="forensics")
+
+    # Find the transition from done → blocked
+    last_done_idx = -1
+    first_block_idx = -1
+    for i, p in enumerate(profiles):
+        if p.status == "done":
+            last_done_idx = i
+        elif p.status in ("stuck", "blocked") and first_block_idx == -1:
+            first_block_idx = i
+
+    if last_done_idx >= 0 and first_block_idx >= 0:
+        findings.append(
+            f"Last successful step: #{profiles[last_done_idx].step_idx} "
+            f"({profiles[last_done_idx].text[:60]})"
+        )
+        findings.append(
+            f"First failure: #{profiles[first_block_idx].step_idx} "
+            f"({profiles[first_block_idx].text[:60]})"
+        )
+
+    # Token delta at failure point
+    if first_block_idx > 0:
+        pre_tokens = sum(p.tokens for p in profiles[:first_block_idx])
+        fail_tokens = profiles[first_block_idx].tokens
+        if fail_tokens == 0:
+            findings.append("Failure step consumed 0 tokens — blocked before LLM call")
+            action = "Check constraint/policy layer or adapter resolution"
+        elif fail_tokens > pre_tokens:
+            findings.append(
+                f"Failure step token jump: {pre_tokens:,} → {fail_tokens:,} "
+                f"({fail_tokens / max(pre_tokens, 1):.1f}x)"
+            )
+
+    # Check if all blocked steps share a pattern
+    blocked = [p for p in profiles if p.status in ("stuck", "blocked")]
+    if len(blocked) >= 2:
+        # Simple: check if all blocked step texts share common words
+        word_sets = [set(p.text.lower().split()) for p in blocked]
+        common = word_sets[0]
+        for ws in word_sets[1:]:
+            common &= ws
+        common -= {"the", "a", "an", "and", "or", "to", "in", "of", "for", "step"}
+        if len(common) >= 2:
+            findings.append(f"Blocked steps share keywords: {', '.join(sorted(common)[:5])}")
+
+    confidence = 0.9 if action else 0.5
+    return LensResult(lens_name="forensics", findings=findings, action=action, confidence=confidence)
+
+
+# ---------------------------------------------------------------------------
+# Default lens registry
+# ---------------------------------------------------------------------------
+
+_default_registry: Optional[LensRegistry] = None
+
+def get_lens_registry() -> LensRegistry:
+    """Get or create the default lens registry with built-in heuristic lenses."""
+    global _default_registry
+    if _default_registry is None:
+        _default_registry = LensRegistry()
+        _default_registry.register("cost", _cost_lens, cost="free")
+        _default_registry.register("architecture", _architecture_lens, cost="free")
+        _default_registry.register("operator", _operator_lens, cost="free")
+        _default_registry.register("forensics", _forensics_lens, cost="free")
+    return _default_registry
+
+
+def run_lenses(
+    diag: LoopDiagnosis,
+    profiles: List[StepProfile],
+    *,
+    include_llm: bool = False,
+) -> List[LensResult]:
+    """Run all applicable lenses on a diagnosis.
+
+    Args:
+        diag: The LoopDiagnosis from diagnose_loop()
+        profiles: Step profiles from the same loop
+        include_llm: If True, also run LLM-based lenses (costs tokens)
+
+    Returns list of LensResult, one per lens that had findings.
+    """
+    registry = get_lens_registry()
+    if include_llm:
+        results = registry.run_all(diag, profiles)
+    else:
+        results = registry.run_heuristic(diag, profiles)
+
+    # Filter to lenses that found something
+    active = [r for r in results if r.findings]
+    for r in active:
+        log.info("lens %s: %d findings, action=%s confidence=%.1f",
+                 r.lens_name, len(r.findings), r.action is not None, r.confidence)
+    return active
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -393,6 +705,7 @@ def main(argv=None) -> None:
     )
     parser.add_argument("loop_id", nargs="?", help="Loop ID to diagnose (or --latest)")
     parser.add_argument("--latest", action="store_true", help="Diagnose the most recent loop")
+    parser.add_argument("--lenses", action="store_true", help="Also run multi-lens analysis")
     parser.add_argument("--history", type=int, metavar="N", help="Show last N diagnoses")
 
     args = parser.parse_args(argv)
@@ -439,6 +752,23 @@ def main(argv=None) -> None:
             bar = "=" * min(50, tp["tokens"] // 5000) if tp["tokens"] > 0 else ""
             icon = "+" if tp["status"] == "done" else "x"
             print(f"    step {tp['step']:2d} [{icon}] {tp['tokens']:>8,}  {bar}")
+
+    # Multi-lens analysis
+    if getattr(args, "lenses", False):
+        events = _load_loop_events(diag.loop_id)
+        profiles = _build_step_profiles(events)
+        lens_results = run_lenses(diag, profiles)
+        if lens_results:
+            print(f"\n  Lens analysis:")
+            for lr in lens_results:
+                _conf = f"confidence={lr.confidence:.1f}" if lr.confidence > 0 else ""
+                print(f"\n  [{lr.lens_name}] {_conf}")
+                for f in lr.findings:
+                    print(f"    {f}")
+                if lr.action:
+                    print(f"    → {lr.action}")
+        else:
+            print(f"\n  Lens analysis: no notable findings")
 
 
 if __name__ == "__main__":

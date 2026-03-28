@@ -131,6 +131,78 @@ rules.py        — zero-cost hardcoded paths
                   → introspection adds: graduated recovery rules
 ```
 
+## Multi-Lens Introspection
+
+*Inspired by Jesse Schell's "The Art of Game Design: A Book of Lenses" — each lens reveals a different truth about the same artifact. No single lens is sufficient.*
+
+The failure classifier (Layer 2) answers **"what broke?"** But the same execution trace looks different depending on who's asking:
+
+- An **operator** sees: "step 4 took 127 seconds — is something hanging?"
+- A **planner** sees: "steps 3 and 5 are independent — should have been parallel"
+- An **economist** sees: "step 4 burned 332K tokens — haiku could have done this for 10K"
+- A **critic** sees: "18/20 steps 'done' but the goal asked for recommendations, not descriptions"
+- A **user-model** sees: "Jeremy wanted actionable output, not a tour of the codebase"
+
+### Lens vs. Persona
+
+**Lenses** are the analytical perspective — a set of questions to ask about the trace.
+**Personas** are one possible implementation tool a lens can use when it needs LLM analysis.
+
+A cost lens is pure arithmetic. A quality lens needs an LLM, and it uses a persona to frame the analysis. But the lens is the concept; the persona is optional plumbing.
+
+```
+Lens (concept: "what questions do I ask?")
+  ├── heuristic implementation (Python function, no LLM, runs always)
+  └── LLM implementation (uses a persona for framing, runs selectively)
+```
+
+### Lens Registry
+
+```python
+@dataclass
+class LensResult:
+    lens_name: str
+    findings: List[str]         # what the lens observed
+    action: Optional[str]       # recommended next step (or None if nothing notable)
+    confidence: float           # 0.0–1.0
+    cost: str                   # "free" | "cheap" | "expensive"
+
+class LensRegistry:
+    lenses: Dict[str, Lens]     # name → callable(trace_data) → LensResult
+```
+
+### Candidate Lenses
+
+| Lens | Type | Questions | When to run |
+|------|------|-----------|-------------|
+| **Forensics** | heuristic | What exact event caused failure? What was the last good state? | Always on failure |
+| **Cost** | heuristic | Which step burned the most? Was there a cheaper model tier? | Always |
+| **Architecture** | heuristic | Were independent steps run sequentially? Wrong ordering? | Always |
+| **Operator** | heuristic | Is it making progress? Where is wall-clock time going? | Always |
+| **Quality** | LLM (reviewer) | Does the output actually answer the goal? Is there drift? | On completion, before escalation |
+| **Critic** | LLM (skeptic) | Is this self-delusion? Claiming progress without substance? | On high-stakes tasks, before synthesis |
+| **User-Intent** | LLM (reality-checker) | Is this what the user actually meant? | On completion, before reporting |
+| **Simplifier** | LLM (general) | Is the plan overcomplicated? Could this be done in fewer steps? | On decomposition, before long runs |
+
+### Invocation Rules
+
+Heuristic lenses (free) run after every loop — they cost nothing.
+
+LLM lenses (cheap/expensive) run selectively:
+- **On failure**: quality + critic (is the "failure" real or just strict exit criteria?)
+- **Before escalation**: user-intent (is this worth bothering a human about?)
+- **Before final synthesis on big tasks**: quality + user-intent (is this actually useful?)
+- **On repeated same-class failure**: simplifier (is the whole approach wrong?)
+
+Never: all LLM lenses on every step of every loop. That's committee-think, not reflection.
+
+### The Line
+
+Good: lenses that produce different diagnostics, change actions, or change confidence.
+Bad: many perspectives all saying the same thing in different outfits. Introspection as aesthetic instead of control loop. "Perspective soup" with no synthesis or decision rule.
+
+The test: **if removing a lens would never change a decision, remove the lens.**
+
 ## Implementation Plan
 
 See ROADMAP.md Phases 44-46.
