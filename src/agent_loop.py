@@ -1589,18 +1589,30 @@ def _execute_step(
         f"Complete this step now. Call complete_step when done or flag_stuck if blocked."
     )
 
-    log.debug("step %d adapter_call start adapter=%s", step_num, type(adapter).__name__)
+    # Detect steps that run external commands — give them a longer timeout
+    _long_running_keywords = {"pytest", "test suite", "npm run", "make ", "docker ", "pip install",
+                              "git clone", "build ", "compile", "deploy"}
+    _step_lower = step_text.lower()
+    _is_long_running = any(kw in _step_lower for kw in _long_running_keywords)
+    _step_timeout = 600 if _is_long_running else None  # 10 min for commands, default otherwise
+
+    log.debug("step %d adapter_call start adapter=%s long_running=%s", step_num, type(adapter).__name__, _is_long_running)
     _llm_t0 = time.monotonic()
     try:
+        _call_kwargs: Dict[str, Any] = dict(
+            tools=tools,
+            tool_choice="required",
+            max_tokens=4096,
+            temperature=0.3,
+        )
+        if _step_timeout is not None:
+            _call_kwargs["timeout"] = _step_timeout
         resp = adapter.complete(
             [
                 LLMMessage("system", _EXECUTE_SYSTEM),
                 LLMMessage("user", user_msg),
             ],
-            tools=tools,
-            tool_choice="required",
-            max_tokens=4096,
-            temperature=0.3,
+            **_call_kwargs,
         )
     except Exception as exc:
         _elapsed = time.monotonic() - _step_t0
@@ -1764,7 +1776,7 @@ def _goal_to_slug(goal: str) -> str:
 class _DryRunAdapter:
     """Simulates LLM responses for testing."""
 
-    def complete(self, messages, *, tools=None, tool_choice="auto", max_tokens=4096, temperature=0.3):
+    def complete(self, messages, *, tools=None, tool_choice="auto", max_tokens=4096, temperature=0.3, **kwargs):
         from llm import LLMResponse, ToolCall
 
         # Extract user message content for context

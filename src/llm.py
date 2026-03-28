@@ -152,6 +152,7 @@ class LLMAdapter:
         tool_choice: str = "auto",
         max_tokens: int = 4096,
         temperature: float = 0.3,
+        **kwargs,
     ) -> LLMResponse:
         raise NotImplementedError
 
@@ -205,6 +206,7 @@ class ClaudeSubprocessAdapter(LLMAdapter):
         tool_choice: str = "auto",
         max_tokens: int = 4096,
         temperature: float = 0.3,
+        timeout: Optional[int] = None,
     ) -> LLMResponse:
         # Build the prompt text
         prompt = self._build_prompt(messages, tools)
@@ -219,16 +221,17 @@ class ClaudeSubprocessAdapter(LLMAdapter):
         elif model_str in ("sonnet", "opus", "haiku"):
             cmd += ["--model", model_str]
 
+        _timeout = timeout or self.timeout
         try:
             result = subprocess.run(
                 cmd,
                 input=prompt,
                 capture_output=True,
                 text=True,
-                timeout=self.timeout,
+                timeout=_timeout,
             )
         except subprocess.TimeoutExpired:
-            raise RuntimeError(f"claude subprocess timed out after {self.timeout}s")
+            raise RuntimeError(f"claude subprocess timed out after {_timeout}s")
         except FileNotFoundError:
             raise RuntimeError(f"claude binary not found at {self.claude_bin}")
 
@@ -390,6 +393,7 @@ class CodexCLIAdapter(LLMAdapter):
         tool_choice: str = "auto",
         max_tokens: int = 4096,
         temperature: float = 0.3,
+        **kwargs,
     ) -> LLMResponse:
         prompt = self._build_prompt(messages, tools)
         model_str = resolve_model("codex", self.model_key)
@@ -540,6 +544,7 @@ class AnthropicSDKAdapter(LLMAdapter):
         tool_choice: str = "auto",
         max_tokens: int = 4096,
         temperature: float = 0.3,
+        **kwargs,
     ) -> LLMResponse:
         import anthropic
 
@@ -620,6 +625,7 @@ class OpenRouterAdapter(LLMAdapter):
         tool_choice: str = "auto",
         max_tokens: int = 4096,
         temperature: float = 0.3,
+        **kwargs,
     ) -> LLMResponse:
         import requests
 
@@ -695,6 +701,7 @@ class OpenAIAdapter(LLMAdapter):
         tool_choice: str = "auto",
         max_tokens: int = 4096,
         temperature: float = 0.3,
+        **kwargs,
     ) -> LLMResponse:
         import requests
 
