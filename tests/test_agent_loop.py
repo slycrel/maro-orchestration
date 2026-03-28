@@ -915,7 +915,7 @@ def test_execute_step_destroy_tier_is_blocked():
 
     outcome = _execute_step(
         goal="clean up workspace",
-        step_text="Delete all old log files from the workspace",
+        step_text="rm -rf /var/log/old/ to clean up disk space",
         step_num=1,
         total_steps=1,
         completed_context=[],
@@ -958,7 +958,7 @@ def test_execute_step_external_tier_logs_but_proceeds(capsys):
 
     outcome = _execute_step(
         goal="notify team",
-        step_text="Send a notification to the Slack channel with the results",
+        step_text="Send a message to Slack via the webhook with the results",
         step_num=1,
         total_steps=1,
         completed_context=[],

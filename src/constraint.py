@@ -293,38 +293,45 @@ _TIER_GATE = {
 }
 
 # Patterns that indicate irreversible destruction.
+# IMPORTANT: these match against natural-language step descriptions, not just
+# shell commands.  Bare words like "remove" or "delete" cause false blocks on
+# steps like "remove outliers from the data".  Patterns here must require
+# system/command context (files, databases, packages, processes).
 _DESTROY_TIER_PATTERNS = [
-    r"\brm\b",
-    r"\bdelete\b",
-    r"\bremove\b",
+    r"\brm\s+-",                             # rm -rf, rm -r (not bare "rm")
+    r"\brm\s+/",                             # rm /some/path
     r"\bshutil\.rmtree\b",
     r"\bdrop\s+table\b",
-    r"\btruncate\b",
-    r"\bwipe\b",
+    r"\btruncate\s+(table|--size)\b",
+    r"\bwipe\s+(disk|drive|data|all|volume)\b",
     r"\bformat\s+/dev/",
-    r"\bpurge\b",
-    r"\buninstall\b",
-    r"\bdestroy\b",
-    r"\berase\b",
+    r"\buninstall\s+\w",                     # uninstall <package>
+    r"\bpurge\s+\w",                         # purge <package>
+    r"\bdestroy\s+(server|instance|cluster|database|volume|bucket|stack)\b",
+    r"\berase\s+(disk|drive|partition|volume)\b",
     r"\boverwrite\s+(all|every|the)\b",
+    r"\bdelete\s+(file|dir|folder|repo|branch|database|table|bucket|volume|server|instance)\b",
+    r"\bremove\s+(file|dir|folder|repo|branch|package|service|container|image)\b",
+    r"\bgit\s+branch\s+-[dD]\b",
+    r"\bkill\s+-9\b",
+    r"\bkillall\b",
 ]
 
 # Patterns that indicate actions leaving this system (network, APIs, git remote).
+# Same principle: require enough context that natural-language analysis steps
+# ("submit a summary") don't false-match.
 _EXTERNAL_TIER_PATTERNS = [
-    r"\bcurl\b",
-    r"\bwget\b",
+    r"\bcurl\s+",                            # curl <url> (not bare "curl")
+    r"\bwget\s+",
     r"\bgit\s+push\b",
     r"\bgit\s+pull\b",
-    r"\bsend\s+(an?\s+)?(email|sms|text|message|notification|alert)\b",
-    r"\bpost\s+(to\s+)?(twitter|x\.com|slack|telegram|discord)\b",
-    r"\bpublish\b",
-    r"\bdeploy\b",
-    r"\bupload\b",
-    r"\bsubmit\b",
+    r"\bsend\s+(an?\s+)?(email|sms|text|message)\s+(to|via)\b",
+    r"\bpost\s+(to\s+)(twitter|x\.com|slack|telegram|discord)\b",
+    r"\bdeploy\s+(to|on|the)\b",
+    r"\bupload\s+(to|the|a)\b",
     r"\bapi\s+call\b",
     r"\bwebhook\b",
-    r"\bnotify\b",
-    r"\bbroadcast\b",
+    r"\bbroadcast\s+(to|via|on)\b",
     r"\btweet\b",
 ]
 

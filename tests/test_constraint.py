@@ -229,37 +229,46 @@ def test_tier_write_update():
 
 
 def test_tier_destroy_rm():
-    assert classify_action_tier("Remove the temporary files from /tmp/cache") == ACTION_TIER_DESTROY
+    assert classify_action_tier("rm -rf /tmp/cache") == ACTION_TIER_DESTROY
 
 
 def test_tier_destroy_delete():
-    assert classify_action_tier("Delete all stale sessions from the database") == ACTION_TIER_DESTROY
+    assert classify_action_tier("delete file /var/log/old.log") == ACTION_TIER_DESTROY
 
 
 def test_tier_destroy_wipe():
-    assert classify_action_tier("Wipe the old data partition") == ACTION_TIER_DESTROY
+    assert classify_action_tier("Wipe disk /dev/sda2") == ACTION_TIER_DESTROY
 
 
 def test_tier_destroy_overrides_write():
     """DESTROY takes precedence over WRITE when both patterns appear."""
-    assert classify_action_tier("Write and then delete the temp file") == ACTION_TIER_DESTROY
+    assert classify_action_tier("Write and then remove package numpy") == ACTION_TIER_DESTROY
+
+
+def test_tier_destroy_natural_language_passes():
+    """Natural language 'remove' and 'delete' should NOT trigger DESTROY."""
+    assert classify_action_tier("Remove duplicate findings from the data") == ACTION_TIER_READ
+    assert classify_action_tier("Delete irrelevant entries from the results") == ACTION_TIER_READ
+    assert classify_action_tier("Analyze trends and remove outliers") == ACTION_TIER_READ
 
 
 def test_tier_external_curl():
-    assert classify_action_tier("Send the payload via curl to the webhook endpoint") == ACTION_TIER_EXTERNAL
+    assert classify_action_tier("curl https://api.example.com/data") == ACTION_TIER_EXTERNAL
 
 
 def test_tier_external_git_push():
     assert classify_action_tier("Push the changes to the remote repository with git push") == ACTION_TIER_EXTERNAL
 
 
-def test_tier_external_notify():
-    assert classify_action_tier("Notify the Slack channel about the completion") == ACTION_TIER_EXTERNAL
+def test_tier_external_deploy():
+    assert classify_action_tier("deploy to production cluster") == ACTION_TIER_EXTERNAL
 
 
-def test_tier_external_overrides_write():
-    """EXTERNAL takes precedence over WRITE when both appear."""
-    assert classify_action_tier("Write the post then publish to the blog") == ACTION_TIER_EXTERNAL
+def test_tier_external_natural_language_passes():
+    """Natural language 'notify', 'publish', 'submit' should NOT trigger EXTERNAL."""
+    assert classify_action_tier("Notify the user of completion") == ACTION_TIER_READ
+    assert classify_action_tier("Publish a final summary of findings") == ACTION_TIER_READ
+    assert classify_action_tier("Submit a report") == ACTION_TIER_READ
 
 
 # ---------------------------------------------------------------------------
@@ -281,14 +290,14 @@ def test_hitl_policy_write_step_warn():
 
 
 def test_hitl_policy_destroy_step_blocked():
-    p = hitl_policy("Delete all old log files from the workspace")
+    p = hitl_policy("rm -rf /var/log/old/ and clean up")
     assert p["tier"] == ACTION_TIER_DESTROY
     assert p["gate"] == "block"
     assert p["allowed"] is False
 
 
 def test_hitl_policy_external_step_confirm():
-    p = hitl_policy("Send a notification to the Telegram channel with results")
+    p = hitl_policy("Send the payload via curl https://api.example.com/webhook")
     assert p["tier"] == ACTION_TIER_EXTERNAL
     assert p["gate"] == "confirm"
     assert p["allowed"] is True
