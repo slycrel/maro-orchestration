@@ -76,3 +76,19 @@ bash scripts/adversarial-review.sh --dry-run
 - **2026-03-28 (Codex/openclaw-poe):** Got through 18/20 steps, stuck on
   budget_exhaustion (max_iterations=20, since bumped to 40). Partial review was
   substantive — successfully read and analyzed all major module groups.
+
+### Claude Code runs (2026-03-28)
+
+| Run | Steps | Time | Tokens | File accuracy | Features |
+|-----|-------|------|--------|---------------|----------|
+| 1 | 12/12 | 17.5m | 2.78M | ~30% | baseline (sequential) |
+| 2 | 12/12 | 13.6m | 1.19M | ~47% | sequential |
+| 3 | 12/12 | 17.8m | 1.73M | ~50% | sequential |
+| 4 | 12/12 | 17.1m | 2.49M | **100%** | multi-plan + rich context + file verification + scratchpad |
+| 5 | 10/12 | crash | — | — | parallel (TimeoutError bug) |
+| 6 | 12/12 | **~6.5m** | 1.65M | 100% | parallel + cost tracking + all anti-hallucination |
+
+Key improvements across runs:
+- **Hallucination fix (Run 4):** Rich step context, multi-plan decompose, file verification, PRIOR STEP DATA instruction → 100% file accuracy
+- **Parallel execution (Run 6):** Dependency-aware level batching → 2.7x faster than Run 1
+- **Cost tracking (Run 6):** Per-step USD estimates, upfront fail-fast, 80% warning, budget+slush hard stop

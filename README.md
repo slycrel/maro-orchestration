@@ -118,8 +118,11 @@ The `--verbose` CLI flag is equivalent to `POE_LOG_LEVEL=DEBUG`. Output goes to 
 
 | Logger | What it covers |
 |--------|---------------|
-| `poe.loop` | Step start/done/blocked, adapter timing, loop lifecycle |
+| `poe.loop` | Step start/done/blocked, adapter timing, USD cost per step, loop lifecycle |
+| `poe.planner` | Multi-plan decomposition, dependency graph, execution levels |
 | `poe.persona` | Persona spawn, adapter resolution, spawn completion |
+| `poe.evolver` | Meta-evolution cycles, suggestion apply, skill synthesis |
+| `poe.introspect` | Failure diagnosis, lens analysis, recovery planning |
 
 ---
 

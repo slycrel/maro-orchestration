@@ -606,7 +606,7 @@ Not a single phase but a research track that informs multiple phases:
 
 ---
 
-### Phase 30: Token Cost Visibility + Model Routing *(PARTIAL)*
+### Phase 30: Token Cost Visibility + Model Routing *(DONE)*
 
 *March 2026 — discovered after Max tier upgrade caused silent Opus usage and token burn in an hour.*
 
@@ -620,6 +620,12 @@ Not a single phase but a research track that informs multiple phases:
 - `src/llm.py`: `CodexCLIAdapter` — wraps `codex exec --json` as a subprocess. Uses ChatGPT OAuth from `~/.codex/auth.json` (no extra API key), model `gpt-5.4`. Supports prompt caching (`cached_input_tokens` in JSONL output). Auto-detection now ranks Codex above `claude -p` subprocess since it caches aggressively.
 - `tests/test_llm.py`: updated monkeypatching for `_codex_auth_available` in 3 existing tests.
 - Confirmed: `gpt-5.4` works with ChatGPT Plus/Pro OAuth; `codex-mini-latest` does not.
+
+**Shipped (Phase 30 third cut — March 28, 2026):**
+- Per-step USD cost in loop log: `cost_step=$0.42 cost_total=$1.70 model=sonnet`
+- `cost_budget` parameter on `run_agent_loop()`: fail fast if upfront estimate exceeds budget + 20% slush; warn at 80%; hard stop at budget + slush
+- `estimate_loop_cost()` in `metrics.py`: upfront cost estimate from historical step costs by type
+- Per-model pricing already existed in `COST_BY_MODEL` — now actively used in loop logging
 
 **Shipped (Phase 30 third cut — March 2026, 91% token reduction):**
 - `src/web_fetch.py`: URL pre-fetch layer — Jina Reader (clean markdown), authenticated X/Twitter CLI, t.co resolution, context-carry across steps
@@ -693,7 +699,7 @@ Research triage in `docs/research/backlog-triage.md`. P1 items (highest leverage
 
 **Shipped (Phase 35 P1 — March 2026):**
 - [x] **Cost-aware model routing** — `classify_step_model(step_text)` in `poe.py`: routes simple steps (classify/format/verify/retrieve) to MODEL_CHEAP, synthesis/analysis to MODEL_MID. Per-step, zero token cost. Wired into `agent_loop.py` step execution.
-- [x] **Parallelized sub-agent fan-out** — `_steps_are_independent(steps)` + `parallel_fan_out()` in `agent_loop.py`: word-boundary regex scan detects inter-step references; independent sets run in ThreadPoolExecutor. Sequential fallback preserved.
+- [x] **Parallelized sub-agent fan-out** — dependency-aware parallel execution. Planner annotates steps with `[after:N,M]` dependency tags. `parse_dependencies()` + `build_execution_levels()` in `planner.py` group steps into parallel batches. Main loop executes each level concurrently via ThreadPoolExecutor. Falls back to sequential when no annotations present. 5 independent safety rails: max_workers, cost_budget, token_budget, POE_STEP_TIMEOUT, max_iterations.
 - [x] **Constraint harness layer** — `src/constraint.py`: 5 pattern groups (destructive, secret, path_escape, unsafe_network, unsafe_exec). HIGH blocks execution, MEDIUM warns. Pluggable `CONSTRAINT_REGISTRY`. Fires before LLM call in `agent_loop.py`.
 - [x] **TF-IDF memory retrieval** — `_tokenize()` + `_tfidf_rank()` in `memory.py`: pure stdlib cosine similarity. `inject_tiered_lessons()` and `load_lessons()` re-rank by relevance when `query=` provided. Smooth IDF variant handles small corpora.
 
