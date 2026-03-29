@@ -812,6 +812,8 @@ def run_agent_loop(
     # Each step writes its findings here; subsequent steps can reference them.
     # Persisted to artifacts at loop end for debugging and replay.
     _scratchpad: Dict[str, Any] = {"steps": {}, "shared": {}}
+    import threading as _threading
+    _scratchpad_lock = _threading.Lock()
     interrupts_applied = 0
 
     # Use mutable lists so interrupt handlers can modify remaining work
@@ -1162,18 +1164,19 @@ def run_agent_loop(
                 ))
             except Exception:
                 pass
-            _scratchpad[f"step_{step_idx}"] = {
-                "text": step_text[:200],
-                "summary": step_summary[:200],
-                "result_excerpt": _result_excerpt,
-                "files_cited": _cited_files[:20],
-            }
-            # Update shared state: accumulate all real files found across steps
-            _all_files = _scratchpad.get("shared", {}).get("files_found", [])
-            _src_files = set(f.name for f in Path("src").glob("*.py")) if Path("src").exists() else set()
-            _real_cited = [f for f in _cited_files if f in _src_files]
-            _all_files = sorted(set(_all_files + _real_cited))
-            _scratchpad.setdefault("shared", {})["files_found"] = _all_files
+            with _scratchpad_lock:
+                _scratchpad[f"step_{step_idx}"] = {
+                    "text": step_text[:200],
+                    "summary": step_summary[:200],
+                    "result_excerpt": _result_excerpt,
+                    "files_cited": _cited_files[:20],
+                }
+                # Update shared state: accumulate all real files found across steps
+                _all_files = _scratchpad.get("shared", {}).get("files_found", [])
+                _src_files = set(f.name for f in Path("src").glob("*.py")) if Path("src").exists() else set()
+                _real_cited = [f for f in _cited_files if f in _src_files]
+                _all_files = sorted(set(_all_files + _real_cited))
+                _scratchpad.setdefault("shared", {})["files_found"] = _all_files
 
             # Build context entry: summary + truncated result for inline use
             _ctx_excerpt = step_result[:800] if step_result else ""
@@ -1440,9 +1443,17 @@ def run_agent_loop(
             (_art_dir / f"loop-{loop_id}-PARTIAL.md").write_text(
                 "\n".join(_partial_lines), encoding="utf-8")
             log.info("wrote partial result: %s (%d steps)", f"loop-{loop_id}-PARTIAL.md", len(_done_steps))
-            # Also persist the scratchpad for debugging and replay
-            (_art_dir / f"loop-{loop_id}-scratchpad.json").write_text(
-                json.dumps(_scratchpad, indent=2, default=str), encoding="utf-8")
+            # Persist scratchpad: one index file + per-step detail files
+            # Index maps to individual step files so parallel writes don't collide
+            _scratch_dir = _art_dir / f"loop-{loop_id}-scratchpad"
+            _scratch_dir.mkdir(exist_ok=True)
+            with _scratchpad_lock:
+                for _sk, _sv in _scratchpad.items():
+                    (_scratch_dir / f"{_sk}.json").write_text(
+                        json.dumps(_sv, indent=2, default=str), encoding="utf-8")
+                # Write index
+                (_scratch_dir / "index.json").write_text(
+                    json.dumps({"keys": list(_scratchpad.keys())}, indent=2), encoding="utf-8")
         except Exception as exc:
             log.debug("partial result write failed: %s", exc)
 
