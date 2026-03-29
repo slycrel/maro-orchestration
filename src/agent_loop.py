@@ -180,6 +180,7 @@ def _run_steps_parallel(
     tools: list,
     verbose: bool,
     max_workers: int,
+    project_dir: str = "",
 ) -> List[dict]:
     """Execute steps concurrently using ThreadPoolExecutor.
 
@@ -210,6 +211,7 @@ def _run_steps_parallel(
             tools=tools,
             verbose=verbose,
             ancestry_context=ancestry_context,
+            project_dir=project_dir,
         )
         if verbose:
             status_label = outcome.get("status", "?")
@@ -468,6 +470,24 @@ def _finalize_loop(
             if _recovery:
                 _tag = "AUTO-RECOVERABLE" if _recovery.auto_apply else "NEEDS-REVIEW"
                 log.warning("recovery[%s] risk=%s: %s", _tag, _recovery.risk, _recovery.action)
+        # Inject diagnosis-derived lessons directly into memory
+        # so the planner sees them via inject_lessons_for_task on the next run
+        if _diag.failure_class != "healthy":
+            try:
+                from memory import _store_lesson
+                _diag_lesson = (
+                    f"[auto-diagnosis] {_diag.failure_class}: {_diag.recommendation}"
+                )
+                _store_lesson(
+                    task_type="agenda",
+                    outcome=_diag.failure_class,
+                    lesson=_diag_lesson,
+                    source_goal=goal[:120],
+                    confidence=0.8,
+                )
+                log.info("injected diagnosis lesson: %s", _diag.failure_class)
+            except Exception:
+                pass
     except Exception as exc:
         log.debug("introspect failed: %s", exc)
 
@@ -740,6 +760,12 @@ def run_agent_loop(
     if parallel_fan_out > 0 and len(steps) > 1 and _steps_are_independent(steps):
         if verbose:
             print(f"[poe] fan-out: running {len(steps)} steps in parallel (max_workers={parallel_fan_out})", file=sys.stderr, flush=True)
+        _fanout_proj_dir = ""
+        if project:
+            try:
+                _fanout_proj_dir = str(o.orch_root() / "prototypes" / "poe-orchestration" / "projects" / project)
+            except Exception:
+                pass
         _fanout_outcomes = _run_steps_parallel(
             goal=goal,
             steps=steps,
@@ -748,6 +774,7 @@ def run_agent_loop(
             tools=[LLMTool(**t) for t in _EXECUTE_TOOLS],
             verbose=verbose,
             max_workers=parallel_fan_out,
+            project_dir=_fanout_proj_dir,
         )
         # Build LoopResult directly from parallel outcomes
         _fanout_step_outcomes: List[StepOutcome] = []
@@ -906,6 +933,7 @@ def run_agent_loop(
                 tools=[LLMTool(**t) for t in _EXECUTE_TOOLS],
                 verbose=verbose,
                 max_workers=min(parallel_fan_out, len(_batch_steps)),
+                project_dir=_proj_artifact_dir,
             )
 
             # Process batch outcomes
@@ -971,6 +999,12 @@ def run_agent_loop(
             if _next_step_injected_context
             else _ancestry_context
         )
+        _proj_artifact_dir = ""
+        if project:
+            try:
+                _proj_artifact_dir = str(o.orch_root() / "prototypes" / "poe-orchestration" / "projects" / project)
+            except Exception:
+                pass
         outcome = _execute_step(
             goal=goal,
             step_text=step_text,
@@ -981,6 +1015,7 @@ def run_agent_loop(
             tools=[LLMTool(**t) for t in _EXECUTE_TOOLS],
             verbose=verbose,
             ancestry_context=_step_ancestry,
+            project_dir=_proj_artifact_dir,
         )
         step_elapsed = int((time.monotonic() - step_start) * 1000)
 

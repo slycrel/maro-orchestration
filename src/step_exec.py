@@ -39,6 +39,9 @@ EXECUTE_SYSTEM = textwrap.dedent("""\
     Do NOT use Bash to curl/wget URLs. Do NOT use any tool to fetch URLs.
     If a URL's content is missing from the pre-fetch block, note it as unavailable and
     work with what you have — do not attempt to fetch it yourself.
+    EXCEPTION: If the overall goal specifies a CLI tool or command for data access
+    (e.g. a specific CLI, SDK, or installed tool), USE THAT TOOL as instructed.
+    Goal-level tool instructions take priority over this URL policy.
 
     PRIOR STEP DATA — IMPORTANT:
     The "Completed steps so far" section contains summaries AND excerpts from prior
@@ -180,6 +183,7 @@ def execute_step(
     tools: List[Any],
     verbose: bool = False,
     ancestry_context: str = "",
+    project_dir: str = "",
 ) -> Dict[str, Any]:
     """Execute one step via the LLM. Returns outcome dict."""
     _step_t0 = time.monotonic()
@@ -236,9 +240,17 @@ def execute_step(
     except Exception:
         pass
 
+    workspace_block = ""
+    if project_dir:
+        workspace_block = (
+            f"\n\nWORKSPACE: Save all output files to {project_dir}/ (not /tmp)."
+            f" This directory exists and is where artifacts persist across steps."
+        )
+
     user_msg = (
         f"Overall goal: {goal}{ancestry_block}\n\n"
         f"Current step ({step_num}/{total_steps}): {step_text}"
+        f"{workspace_block}"
         f"{context_block}"
         f"{prefetch_block}\n\n"
         f"Complete this step now. Call complete_step when done or flag_stuck if blocked."
