@@ -227,20 +227,42 @@ def _run_steps_parallel(
             pool.submit(_run_one, i + 1, s): i
             for i, s in enumerate(steps)
         }
-        for f in as_completed(futures, timeout=_fanout_timeout):
-            try:
-                idx, outcome = f.result(timeout=30)
-                outcomes_by_idx[idx] = outcome
-            except Exception as exc:
-                i = futures[f]
-                outcomes_by_idx[i + 1] = {
-                    "status": "blocked",
-                    "stuck_reason": f"parallel execution error: {exc}",
-                    "result": "",
-                    "summary": f"step {i + 1} failed in fan-out",
-                    "tokens_in": 0,
-                    "tokens_out": 0,
-                }
+        try:
+            for f in as_completed(futures, timeout=_fanout_timeout):
+                try:
+                    idx, outcome = f.result(timeout=30)
+                    outcomes_by_idx[idx] = outcome
+                except Exception as exc:
+                    i = futures[f]
+                    outcomes_by_idx[i + 1] = {
+                        "status": "blocked",
+                        "stuck_reason": f"parallel execution error: {exc}",
+                        "result": "",
+                        "summary": f"step {i + 1} failed in fan-out",
+                        "tokens_in": 0,
+                        "tokens_out": 0,
+                    }
+        except TimeoutError:
+            # Some futures didn't complete within the timeout — mark them as blocked
+            for f, i in futures.items():
+                if (i + 1) not in outcomes_by_idx:
+                    outcomes_by_idx[i + 1] = {
+                        "status": "blocked",
+                        "stuck_reason": f"parallel fan-out timeout ({_fanout_timeout}s)",
+                        "result": "",
+                        "summary": f"step {i + 1} timed out in fan-out",
+                        "tokens_in": 0,
+                        "tokens_out": 0,
+                    }
+                    log.warning("parallel step %d timed out after %ds", i + 1, _fanout_timeout)
+
+    # Fill any missing indices (shouldn't happen, but defensive)
+    for i in range(len(steps)):
+        if (i + 1) not in outcomes_by_idx:
+            outcomes_by_idx[i + 1] = {
+                "status": "blocked", "stuck_reason": "missing from fan-out results",
+                "result": "", "tokens_in": 0, "tokens_out": 0,
+            }
 
     return [outcomes_by_idx[i + 1] for i in range(len(steps))]
 
