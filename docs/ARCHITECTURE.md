@@ -20,30 +20,104 @@ How the openclaw-orchestration system works, from a Telegram message to a comple
 
 ---
 
+## Module inventory (48 files, ~29K LOC)
+
+### Core orchestration
+| Module | Lines | Role |
+|--------|-------|------|
+| `agent_loop.py` | 1575 | Core autonomous executor: decompose → execute → retry → recover |
+| `planner.py` | 205 | Multi-plan decomposition + heuristic fallback |
+| `step_exec.py` | 333 | Per-step LLM execution, constraint check, response parsing |
+| `director.py` | 608 | Plan + delegate pattern: produces specs, dispatches to workers |
+| `workers.py` | 384 | Worker registry + dispatch (research/build/ops/general) |
+| `poe.py` | 635 | CEO layer: routes goals via intent → NOW/AGENDA lanes |
+| `handle.py` | 361 | Unified entry point for all incoming requests |
+| `intent.py` | 164 | NOW vs AGENDA classification |
+
+### Memory & learning
+| Module | Lines | Role |
+|--------|-------|------|
+| `memory.py` | 1219 | Tiered lessons (short/medium/long), outcome recording, TF-IDF |
+| `skills.py` | 1254 | Reusable step patterns, EMA scoring, circuit breakers |
+| `rules.py` | 298 | Zero-cost graduated rules (established skill → hardcoded path) |
+| `knowledge.py` | 369 | Crystallization dashboard (Stages 2–5) |
+| `gc_memory.py` | 325 | JSONL rotation + memory garbage collection |
+
+### Self-reflection & quality
+| Module | Lines | Role |
+|--------|-------|------|
+| `introspect.py` | 1138 | Failure classifier, multi-lens analysis, recovery planner |
+| `inspector.py` | 1705 | Post-hoc quality oversight, friction signals, alignment checks |
+| `evolver.py` | 1121 | Meta-evolution: failure patterns → prompt/guardrail suggestions |
+| `attribution.py` | 392 | Map stuck steps back to responsible skills |
+| `eval.py` | 322 | Evaluation suite for regression testing |
+
+### Ops & health
+| Module | Lines | Role |
+|--------|-------|------|
+| `heartbeat.py` | 493 | Periodic health check + tiered recovery |
+| `sheriff.py` | 474 | Progress validation, stuck detection, system health |
+| `mission.py` | 1260 | Multi-day missions: milestones → features → worker sessions |
+| `background.py` | 307 | Non-blocking subprocess execution |
+| `autonomy.py` | 247 | Tier-based action gating (manual/safe/full) |
+| `interrupt.py` | 435 | Mid-loop interrupt queue for live corrections |
+
+### I/O & integration
+| Module | Lines | Role |
+|--------|-------|------|
+| `telegram_listener.py` | 571 | Telegram long-poll listener + slash commands |
+| `slack_listener.py` | 424 | Slack Socket Mode listener + slash commands |
+| `gateway.py` | 377 | OpenClaw HMAC-authenticated gateway |
+| `web_fetch.py` | 539 | URL pre-fetch + content extraction (Jina Reader) |
+
+### Safety & constraints
+| Module | Lines | Role |
+|--------|-------|------|
+| `constraint.py` | 440 | HITL gating: READ/WRITE/DESTROY/EXTERNAL tier classification |
+| `security.py` | 244 | Prompt injection detection + redaction |
+| `sandbox.py` | 536 | Skill code isolation (resource limits, network blocking) |
+
+### Infrastructure
+| Module | Lines | Role |
+|--------|-------|------|
+| `llm.py` | 903 | LLM adapter layer (Anthropic/OpenRouter/OpenAI/subprocess/Codex) |
+| `orch.py` | 579 | Orchestration core utilities, project management |
+| `orch_items.py` | 531 | Path utilities, run records, memory_dir() |
+| `orch_bridges.py` | 1227 | Execution + validation bridge implementations |
+| `config.py` | 117 | Configuration + path resolution |
+| `persona.py` | 830 | Composable persona system (20+ personas in personas/) |
+| `router.py` | 520 | Behavior-aligned skill routing |
+| `hooks.py` | 643 | Hook registry + execution engine |
+| `cli.py` | 1699 | CLI entry point for all poe-* commands |
+
 ## Module dependency graph
 
 ```
-telegram_listener
-    ├── handle (intent → routing)
-    │   ├── intent (NOW/AGENDA classifier)
-    │   └── agent_loop (AGENDA execution)
-    │       ├── llm (adapter layer)
-    │       ├── memory (lessons injection)
-    │       ├── ancestry (ancestry prompt)
-    │       └── director (complex directives)
-    │           └── workers (research/build/ops/general)
-    ├── sheriff (check_system_health, check_all_projects)
-    └── ancestry (goal chain for /ancestry command)
+telegram_listener / slack_listener / gateway
+    └── handle (intent → routing)
+        ├── intent (NOW/AGENDA classifier)
+        └── poe (CEO layer)
+            └── agent_loop (AGENDA execution)
+                ├── planner (multi-plan decomposition)
+                ├── step_exec (per-step LLM execution)
+                ├── llm (adapter layer)
+                ├── memory (lessons injection)
+                ├── skills (pattern matching)
+                ├── rules (zero-cost path check)
+                ├── constraint (HITL gating)
+                ├── introspect (post-loop diagnosis + lenses)
+                └── director (complex directives)
+                    └── workers (research/build/ops/general)
 
 heartbeat (runs independently, 60s loop)
     ├── sheriff (system health + project checks)
     ├── llm (tier-2 LLM diagnosis)
-    ├── telegram_listener (tier-3 Telegram escalation)
-    └── evolver (every 10 ticks)
-        └── memory (load_outcomes)
+    ├── mission (drain pending missions overnight)
+    └── evolver (every 10 ticks — meta-improvement)
+        └── memory (load_outcomes, load_lessons)
 
-cli (entry point for all commands)
-    └── all modules above
+cli (entry point for all poe-* commands)
+    └── routes to all modules above
 ```
 
 ---
