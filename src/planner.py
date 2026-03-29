@@ -72,9 +72,90 @@ DECOMPOSE_SYSTEM = textwrap.dedent("""\
     broad and slow. Setup steps (clone, fetch, install) should always be their
     own step, never bundled with analysis work.
 
-    Respond ONLY with a JSON array of step strings. No prose. Example:
-    ["step one description", "step two description", "step three description"]
+    PARALLEL EXECUTION: Steps that don't depend on each other can run in parallel.
+    Mark dependencies with [after:N] or [after:N,M] at the END of the step string.
+    Steps with no [after:] tag can run as soon as all prior tagged dependencies finish.
+
+    Example with dependencies:
+    ["Clone the repo",
+     "Map directory structure [after:1]",
+     "Read core modules [after:2]",
+     "Read I/O modules [after:2]",
+     "Read test files [after:2]",
+     "Synthesize findings [after:3,4,5]",
+     "Write report [after:6]"]
+
+    Steps 3, 4, 5 can run in parallel (all only depend on step 2).
+    Step 6 waits for all three. If you don't mark dependencies, steps
+    run sequentially (safe default).
+
+    Respond ONLY with a JSON array of step strings. No prose.
 """).strip()
+
+
+# ---------------------------------------------------------------------------
+# Dependency parsing
+# ---------------------------------------------------------------------------
+
+import re
+
+_AFTER_RE = re.compile(r'\[after:(\d+(?:,\d+)*)\]\s*$')
+
+
+def parse_dependencies(steps: List[str]) -> tuple:
+    """Parse [after:N,M] tags from step strings.
+
+    Returns:
+        (clean_steps, deps) where clean_steps has tags stripped and
+        deps is a dict mapping step_index (1-based) → set of dependency indices.
+        Steps with no tag depend on the previous step (sequential default).
+    """
+    clean: List[str] = []
+    deps: dict = {}
+
+    for i, step in enumerate(steps, 1):
+        m = _AFTER_RE.search(step)
+        if m:
+            clean.append(_AFTER_RE.sub("", step).rstrip())
+            deps[i] = {int(x) for x in m.group(1).split(",")}
+        else:
+            clean.append(step)
+            # Default: depends on previous step (sequential)
+            if i > 1:
+                deps[i] = {i - 1}
+            else:
+                deps[i] = set()
+
+    return clean, deps
+
+
+def build_execution_levels(deps: dict) -> List[List[int]]:
+    """Group step indices into execution levels based on dependencies.
+
+    Steps in the same level can run in parallel.
+    Returns list of levels, each a list of step indices (1-based).
+    """
+    n = max(deps.keys()) if deps else 0
+    levels: List[List[int]] = []
+    completed: set = set()
+
+    while len(completed) < n:
+        # Find all steps whose dependencies are satisfied
+        ready = [
+            i for i in range(1, n + 1)
+            if i not in completed and deps.get(i, set()).issubset(completed)
+        ]
+        if not ready:
+            # Circular dependency or missing dep — add all remaining sequentially
+            remaining = [i for i in range(1, n + 1) if i not in completed]
+            for r in remaining:
+                levels.append([r])
+                completed.add(r)
+            break
+        levels.append(ready)
+        completed.update(ready)
+
+    return levels
 
 
 # ---------------------------------------------------------------------------

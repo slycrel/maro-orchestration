@@ -537,6 +537,7 @@ def run_agent_loop(
     step_callback=None,
     parallel_fan_out: int = 0,
     token_budget: Optional[int] = None,
+    cost_budget: Optional[float] = None,
 ) -> LoopResult:
     """Run the autonomous loop for a goal.
 
@@ -838,10 +839,21 @@ def run_agent_loop(
 
         total_tokens_in += outcome.get("tokens_in", 0)
         total_tokens_out += outcome.get("tokens_out", 0)
-        log.info("step %d %s tokens_step=%d tokens_total=%d elapsed_step=%dms iter=%d/%d",
+        # Per-step cost estimate
+        _step_model = getattr(_step_adapter, "model_key", "")
+        try:
+            from metrics import estimate_cost
+            _step_cost = estimate_cost(outcome.get("tokens_in", 0), outcome.get("tokens_out", 0), model=_step_model)
+            _total_cost = estimate_cost(total_tokens_in, total_tokens_out, model=_step_model)
+        except ImportError:
+            _step_cost = 0.0
+            _total_cost = 0.0
+        log.info("step %d %s tokens_step=%d tokens_total=%d cost_step=$%.4f cost_total=$%.4f model=%s elapsed=%dms iter=%d/%d",
                  step_idx, outcome.get("status", "?"),
                  outcome.get("tokens_in", 0) + outcome.get("tokens_out", 0),
                  total_tokens_in + total_tokens_out,
+                 _step_cost, _total_cost,
+                 _step_model or "unknown",
                  step_elapsed, iteration, max_iterations)
 
         # Phase 33: token budget — abort gracefully if exceeded
@@ -851,6 +863,18 @@ def run_agent_loop(
                 f"token_budget={token_budget} exceeded "
                 f"({total_tokens_in + total_tokens_out} total tokens after step {step_idx})"
             )
+            if verbose:
+                print(f"[poe] {stuck_reason}", file=sys.stderr, flush=True)
+            break
+
+        # Cost budget — abort gracefully if USD cost exceeded
+        if cost_budget is not None and _total_cost >= cost_budget:
+            loop_status = "stuck"
+            stuck_reason = (
+                f"cost_budget=${cost_budget:.2f} exceeded "
+                f"(${_total_cost:.4f} total cost after step {step_idx})"
+            )
+            log.warning("cost budget exceeded: %s", stuck_reason)
             if verbose:
                 print(f"[poe] {stuck_reason}", file=sys.stderr, flush=True)
             break
