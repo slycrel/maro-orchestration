@@ -36,20 +36,6 @@ def test_cli_salvage_empty(tmp_path):
 
 
 def test_cli_enqueue_project_task(tmp_path):
-    queue_dir = tmp_path / "scripts"
-    queue_dir.mkdir(parents=True, exist_ok=True)
-    queue_script = queue_dir / "task-queue.sh"
-    queue_script.write_text(
-        "#!/usr/bin/env bash\n"
-        "set -euo pipefail\n"
-        "ROOT_DIR=\"$(cd \"$(dirname \"$0\")/..\" && pwd)\"\n"
-        "mkdir -p \"$ROOT_DIR/output/queues\"\n"
-        "printf 'json:{\"type\":\"%s\",\"payload\":%s}\\n' \"$2\" \"$(python3 - <<'PY' \"$3\"\nimport json,sys\nprint(json.dumps(sys.argv[1]))\nPY\n)\" >> \"$ROOT_DIR/output/queues/tasks.queue\"\n"
-        "echo queued type=$2 payload=$3\n",
-        encoding="utf-8",
-    )
-    queue_script.chmod(0o755)
-
     r = _run(tmp_path, "init", "demo", "Queue", "adapter", "--priority", "1")
     assert r.returncode == 0
 
@@ -70,13 +56,17 @@ def test_cli_enqueue_project_task(tmp_path):
     )
     assert queued.returncode == 0
     assert "type=project_task" in queued.stdout
-    assert 'payload="project=demo :: Draft queue adapter integration"' in queued.stdout
+    assert "job_id=" in queued.stdout
 
-    queue_file = tmp_path / "output" / "queues" / "tasks.queue"
-    assert queue_file.exists()
-    raw = queue_file.read_text(encoding="utf-8")
-    assert "project_task" in raw
-    assert "project=demo :: Draft queue adapter integration" in raw
+    # FileTaskStore: one JSON file per task in output/queues/tasks/
+    tasks_dir = tmp_path / "output" / "queues" / "tasks"
+    assert tasks_dir.exists(), f"tasks dir missing; stdout={queued.stdout}"
+    task_files = list(tasks_dir.glob("*.json"))
+    assert len(task_files) == 1
+    import json as _json
+    task = _json.loads(task_files[0].read_text(encoding="utf-8"))
+    assert task["lane"] == "manual"
+    assert "project=demo :: Draft queue adapter integration" in task["reason"]
 
 
 def test_cli_run_start_finish_status(tmp_path):

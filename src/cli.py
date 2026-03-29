@@ -197,24 +197,23 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "enqueue":
         if not project_dir(args.project).exists():
             return fail("E_PROJECT_NOT_FOUND", args.project)
-        workspace_root = Path(os.environ.get("OPENCLAW_WORKSPACE", str(orch_root().parents[2])))
-        queue = workspace_root / "scripts" / "task-queue.sh"
-        if not queue.exists():
-            return fail("E_QUEUE_NOT_FOUND", str(queue))
         task_text = " ".join(args.task).strip()
         if not task_text:
             return fail("E_TASK_REQUIRED", "task text cannot be empty")
         payload = f"project={args.project} :: {task_text}"
-        cmd = [str(queue), "enqueue", "project_task", payload, args.lane, args.source, args.reason]
-        if args.parent_job_id:
-            cmd.append(args.parent_job_id)
-        proc = subprocess.run(cmd, cwd=orch_root(), capture_output=True, text=True)
-        if proc.returncode != 0:
-            detail = (proc.stderr or proc.stdout or "queue enqueue failed").strip()
-            return fail("E_QUEUE_ENQUEUE", detail)
-        print(f"project={args.project} type=project_task lane={args.lane} payload={json.dumps(payload)}")
-        if proc.stdout.strip():
-            print(proc.stdout.strip())
+        blocked = [b.strip() for b in (args.blocked_by or "").split(",") if b.strip()]
+        try:
+            from task_store import enqueue as _enqueue
+            task = _enqueue(
+                lane=args.lane,
+                source=args.source,
+                reason=payload,
+                parent_job_id=getattr(args, "parent_job_id", ""),
+                blocked_by=blocked,
+            )
+            print(f"project={args.project} type=project_task lane={args.lane} job_id={task['job_id']} payload={json.dumps(payload)}")
+        except Exception as exc:
+            return fail("E_QUEUE_ENQUEUE", str(exc))
         return 0
 
     if args.cmd == "blocked":

@@ -33,7 +33,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_enqueue.add_argument("--lane", default="manual")
     p_enqueue.add_argument("--source", default="orch")
     p_enqueue.add_argument("--reason", default="queued from orch")
-    p_enqueue.add_argument("--parent-job-id")
+    p_enqueue.add_argument("--parent-job-id", default="")
+    p_enqueue.add_argument("--blocked-by", default="", help="Comma-separated job IDs this task depends on")
 
     p_blocked = sub.add_parser("blocked", help="List blocked projects")
 
