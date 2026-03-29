@@ -92,3 +92,27 @@ Key improvements across runs:
 - **Hallucination fix (Run 4):** Rich step context, multi-plan decompose, file verification, PRIOR STEP DATA instruction → 100% file accuracy
 - **Parallel execution (Run 6):** Dependency-aware level batching → 2.7x faster than Run 1
 - **Cost tracking (Run 6):** Per-step USD estimates, upfront fail-fast, 80% warning, budget+slush hard stop
+
+## Phase Audit Regression Test
+
+Smaller/faster test that audits "DONE" phases through the orchestration:
+
+```bash
+POE_LOG_LEVEL=INFO bash scripts/audit-phases.sh
+```
+
+- 8-step plan, $3 budget, parallel_fan_out=3
+- Verifies: feature code exists, non-dry_run tests exist, feature is wired
+- Produces output/phase-audit-report.md with VERIFIED/PARTIAL/BROKEN per phase
+
+### First run results (2026-03-28)
+
+- First attempt: hit $3 cost budget at step 5 ($5.08 total) — budget too tight
+- Auto-recovery fired, restarted with tighter decomposition
+- Recovery run: completed 11 steps, 2.83M tokens, parallel batches working
+- Results: 24 VERIFIED, 6 PARTIAL, 0 BROKEN
+- PARTIAL phases: 1 (dry_run tests), 10 (dry_run tests), 11 (dry_run tests),
+  26 (Docker untested), 39 (no API linting), 43 (no logging tests)
+- Main finding consistent with manual audit: dry_run-only test coverage
+
+**Budget note:** $3 is too tight for this task. Recommend $5-8 for the audit.
