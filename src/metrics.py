@@ -237,6 +237,42 @@ def analyze_step_costs(entries: Optional[List[dict]] = None) -> dict:
     }
 
 
+def estimate_loop_cost(num_steps: int, step_texts: Optional[List[str]] = None) -> float:
+    """Estimate total USD cost for a planned loop based on historical step costs.
+
+    Uses average per-step cost from step-costs.jsonl. If step_texts are provided,
+    classifies each step and uses the per-type average. Otherwise uses the global
+    average.
+
+    Returns estimated USD cost. Returns 0.0 if no historical data available.
+    """
+    analysis = analyze_step_costs()
+    by_type = analysis.get("by_type", {})
+
+    if not by_type:
+        return 0.0
+
+    if step_texts:
+        # Per-step estimate using step type classification
+        total = 0.0
+        for text in step_texts:
+            stype = classify_step_type(text)
+            stats = by_type.get(stype, {})
+            avg = stats.get("avg_cost_usd", 0.0)
+            if avg > 0:
+                total += avg
+            else:
+                # Fallback: global average
+                all_costs = [s["avg_cost_usd"] for s in by_type.values() if s.get("avg_cost_usd", 0) > 0]
+                total += sum(all_costs) / len(all_costs) if all_costs else 0.0
+        return round(total, 6)
+    else:
+        # Simple: num_steps × global average
+        all_costs = [s["avg_cost_usd"] for s in by_type.values() if s.get("avg_cost_usd", 0) > 0]
+        avg = sum(all_costs) / len(all_costs) if all_costs else 0.0
+        return round(num_steps * avg, 6)
+
+
 # ---------------------------------------------------------------------------
 # Core computation
 # ---------------------------------------------------------------------------

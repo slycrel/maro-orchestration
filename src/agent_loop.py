@@ -661,6 +661,44 @@ def run_agent_loop(
     if verbose:
         print(f"[poe] decomposed into {len(steps)} steps", file=sys.stderr, flush=True)
 
+    # Upfront cost estimation — fail fast if estimate exceeds budget
+    if cost_budget is not None:
+        try:
+            from metrics import estimate_loop_cost
+            _estimated = estimate_loop_cost(len(steps), step_texts=steps)
+            if _estimated > 0:
+                _slush = cost_budget * 0.2  # 20% overage allowance
+                if _estimated > cost_budget + _slush:
+                    log.warning("cost estimate $%.2f exceeds budget $%.2f + slush $%.2f — aborting",
+                                _estimated, cost_budget, _slush)
+                    return LoopResult(
+                        loop_id=loop_id, project=project or "", goal=goal,
+                        status="stuck",
+                        stuck_reason=f"Estimated cost ${_estimated:.2f} exceeds budget ${cost_budget:.2f} "
+                                     f"(with ${_slush:.2f} slush). Reduce step count or use cheaper models.",
+                    )
+                elif _estimated > cost_budget * 0.8:
+                    log.info("cost estimate $%.2f approaching budget $%.2f (%.0f%%)",
+                             _estimated, cost_budget, _estimated / cost_budget * 100)
+        except ImportError:
+            pass
+
+    # Parse step dependencies for level-based parallel execution
+    _clean_steps = steps
+    _deps = {}
+    _levels = None
+    try:
+        from planner import parse_dependencies, build_execution_levels
+        _clean_steps, _deps = parse_dependencies(steps)
+        _levels = build_execution_levels(_deps)
+        _parallel_levels = [l for l in _levels if len(l) > 1]
+        if _parallel_levels:
+            log.info("dependency graph: %d levels, %d parallelizable (%s)",
+                     len(_levels), len(_parallel_levels),
+                     ", ".join(f"L{i+1}={len(l)}" for i, l in enumerate(_levels)))
+    except ImportError:
+        pass
+
     # Phase 36: emit loop_start event
     try:
         from observe import write_event as _write_event
@@ -799,6 +837,83 @@ def run_agent_loop(
         step_text = remaining_steps.pop(0)
         item_index = remaining_indices.pop(0) if remaining_indices else -1
 
+        # Check for parallel peers: if this step has siblings at the same
+        # dependency level, batch them for parallel execution
+        _parallel_peers: List[str] = []
+        if _levels and parallel_fan_out > 0 and remaining_steps:
+            _current_step_num = step_idx + 1  # 1-based
+            # Find which level this step belongs to
+            for _lvl in _levels:
+                if _current_step_num in _lvl and len(_lvl) > 1:
+                    # Pop remaining peers from the front of remaining_steps
+                    _peer_count = 0
+                    for _peer_idx in _lvl:
+                        if _peer_idx != _current_step_num and remaining_steps:
+                            _parallel_peers.append(remaining_steps.pop(0))
+                            if remaining_indices:
+                                remaining_indices.pop(0)
+                            _peer_count += 1
+                    if _parallel_peers:
+                        log.info("parallel batch: step %d + %d peers at same level",
+                                 _current_step_num, len(_parallel_peers))
+                    break
+
+        if _parallel_peers:
+            # Run this step + peers in parallel
+            _batch_steps = [step_text] + _parallel_peers
+            iteration += len(_batch_steps)
+            _batch_start = time.monotonic()
+            if verbose:
+                print(f"[poe] parallel batch: {len(_batch_steps)} steps at level", file=sys.stderr, flush=True)
+
+            _batch_outcomes = _run_steps_parallel(
+                goal=goal,
+                steps=_batch_steps,
+                adapter=adapter,
+                ancestry_context=_ancestry_context,
+                tools=[LLMTool(**t) for t in _EXECUTE_TOOLS],
+                verbose=verbose,
+                max_workers=min(parallel_fan_out, len(_batch_steps)),
+            )
+
+            # Process batch outcomes
+            for _bi, (_batch_text, _batch_oc) in enumerate(zip(_batch_steps, _batch_outcomes)):
+                step_idx += 1
+                _b_status = _batch_oc.get("status", "blocked")
+                _b_elapsed = int((time.monotonic() - _batch_start) * 1000)
+                total_tokens_in += _batch_oc.get("tokens_in", 0)
+                total_tokens_out += _batch_oc.get("tokens_out", 0)
+
+                step_outcomes.append(StepOutcome(
+                    index=-1, text=_batch_text, status=_b_status,
+                    result=_batch_oc.get("result", ""),
+                    iteration=iteration,
+                    tokens_in=_batch_oc.get("tokens_in", 0),
+                    tokens_out=_batch_oc.get("tokens_out", 0),
+                    elapsed_ms=_b_elapsed,
+                ))
+
+                if _b_status == "done":
+                    _b_result = _batch_oc.get("result", "")
+                    _b_excerpt = _b_result[:800] if _b_result else ""
+                    completed_context.append(f"Step {step_idx} ({_batch_text[:80]}):\n{_b_excerpt}")
+                    if verbose:
+                        print(f"[poe] step {step_idx} done (parallel): {_batch_oc.get('summary', '')[:80]}", file=sys.stderr, flush=True)
+                elif _b_status == "blocked":
+                    if verbose:
+                        print(f"[poe] step {step_idx} blocked (parallel): {_batch_oc.get('stuck_reason', '')[:80]}", file=sys.stderr, flush=True)
+
+            # Log batch cost
+            try:
+                from metrics import estimate_cost
+                _batch_tokens = sum(o.get("tokens_in", 0) + o.get("tokens_out", 0) for o in _batch_outcomes)
+                log.info("parallel batch done: %d steps, %d tokens, %dms",
+                         len(_batch_steps), _batch_tokens, int((time.monotonic() - _batch_start) * 1000))
+            except ImportError:
+                pass
+
+            continue  # Skip the single-step execution below
+
         iteration += 1
         step_idx += 1
         if verbose:
@@ -867,17 +982,24 @@ def run_agent_loop(
                 print(f"[poe] {stuck_reason}", file=sys.stderr, flush=True)
             break
 
-        # Cost budget — abort gracefully if USD cost exceeded
-        if cost_budget is not None and _total_cost >= cost_budget:
-            loop_status = "stuck"
-            stuck_reason = (
-                f"cost_budget=${cost_budget:.2f} exceeded "
-                f"(${_total_cost:.4f} total cost after step {step_idx})"
-            )
-            log.warning("cost budget exceeded: %s", stuck_reason)
-            if verbose:
-                print(f"[poe] {stuck_reason}", file=sys.stderr, flush=True)
-            break
+        # Cost budget — warn at 80%, hard stop at budget + 20% slush
+        if cost_budget is not None and _total_cost > 0:
+            _cost_pct = _total_cost / cost_budget * 100
+            _slush = cost_budget * 0.2
+            if _total_cost >= cost_budget + _slush:
+                loop_status = "stuck"
+                stuck_reason = (
+                    f"cost_budget=${cost_budget:.2f} + slush=${_slush:.2f} exceeded "
+                    f"(${_total_cost:.4f} total after step {step_idx})"
+                )
+                log.warning("cost hard stop: %s", stuck_reason)
+                if verbose:
+                    print(f"[poe] {stuck_reason}", file=sys.stderr, flush=True)
+                break
+            elif _cost_pct >= 80 and not getattr(run_agent_loop, "_cost_warned", False):
+                log.warning("cost approaching budget: $%.4f / $%.2f (%.0f%%)",
+                            _total_cost, cost_budget, _cost_pct)
+                run_agent_loop._cost_warned = True  # type: ignore[attr-defined]
 
         step_status = outcome["status"]
         step_result = outcome.get("result", "")

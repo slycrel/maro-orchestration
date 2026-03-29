@@ -82,6 +82,8 @@ result = run_agent_loop(
     project='self-review',
     max_steps=12,
     max_iterations=40,
+    parallel_fan_out=3,
+    cost_budget=5.0,
     verbose=True,
 )
 elapsed = time.monotonic() - started
