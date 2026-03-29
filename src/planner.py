@@ -89,7 +89,10 @@ DECOMPOSE_SYSTEM = textwrap.dedent("""\
     Step 6 waits for all three. If you don't mark dependencies, steps
     run sequentially (safe default).
 
-    Respond ONLY with a JSON array of step strings. No prose.
+    OUTPUT FORMAT:
+    Respond ONLY with a JSON array of step strings. No prose, no explanation.
+    Each step string should be ONE short sentence (under 20 words).
+    The step text is a work order for an execution agent — be precise and actionable.
 """).strip()
 
 

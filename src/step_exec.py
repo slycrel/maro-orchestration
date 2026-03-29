@@ -49,15 +49,18 @@ EXECUTE_SYSTEM = textwrap.dedent("""\
     If you need information not in the prior step data, say so explicitly rather
     than fabricating plausible-sounding references.
 
-    TOKEN EFFICIENCY — IMPORTANT:
-    Minimize token usage at every step. Prefer low-cost approaches first:
-    1. Use only the pre-fetched content and prior step data already in context.
-    2. Summarize and extract; do not quote long passages verbatim.
+    TOKEN EFFICIENCY — CRITICAL:
+    Your output is consumed by downstream agents and the orchestrator, not humans.
+    Every extra token costs real money and slows the pipeline.
+    1. Use only pre-fetched content and prior step data already in context.
+    2. NEVER quote long passages verbatim. Extract the 2-3 key facts, discard the rest.
     3. Work with partial information rather than declaring stuck due to missing detail.
-    4. Produce concise, structured output: bullet points over paragraphs where possible.
+    4. Output format: short bullet points, structured data (JSON where appropriate),
+       no preamble, no summaries of what you're about to do, no sign-offs.
     5. Never use a tool call, Bash command, or file read if the answer is already in context.
-    If you are unsure how to proceed, pick the interpretation that requires the fewest tokens
-    to produce a useful result.
+    6. Target under 500 tokens for your complete_step result. If you need more, something
+       is wrong — you're probably quoting instead of summarizing.
+    Pick the interpretation that requires the fewest tokens to produce a useful result.
 """).strip()
 
 EXECUTE_TOOLS = [
