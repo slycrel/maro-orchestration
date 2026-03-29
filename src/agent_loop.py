@@ -538,6 +538,16 @@ def _finalize_loop(
         except Exception:
             pass
 
+    # Phase 32: auto-promote skills that meet threshold (don't wait for evolver heartbeat)
+    if not dry_run:
+        try:
+            from evolver import run_skill_maintenance
+            run_skill_maintenance()
+        except ImportError:
+            pass
+        except Exception:
+            pass
+
 
 # ---------------------------------------------------------------------------
 # Core loop

@@ -26,12 +26,15 @@ Graduation threshold:
 from __future__ import annotations
 
 import json
+import logging
 import re
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
+
+log = logging.getLogger("poe.rules")
 
 
 # ---------------------------------------------------------------------------
@@ -90,9 +93,11 @@ def load_rules(active_only: bool = True) -> List[Rule]:
                 r = Rule(**{k: d[k] for k in Rule.__dataclass_fields__ if k in d})
                 if not active_only or r.active:
                     rules.append(r)
-            except Exception:
+            except Exception as exc:
+                log.warning("rules.jsonl: skipping corrupted line: %s", exc)
                 continue
-    except Exception:
+    except Exception as exc:
+        log.warning("rules.jsonl: failed to read: %s", exc)
         return []
     return list(reversed(rules))
 

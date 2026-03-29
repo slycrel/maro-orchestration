@@ -13,6 +13,10 @@ ENV PYTHONPATH=/app/src
 
 VOLUME /data
 
+# Health check: verify Python + imports work
+HEALTHCHECK --interval=60s --timeout=10s --retries=3 \
+  CMD python3 -c "import sys; sys.path.insert(0,'/app/src'); import agent_loop; print('ok')" || exit 1
+
 # Default: bootstrap status. Override CMD to run a specific service.
 ENTRYPOINT ["python3", "/app/src/bootstrap.py"]
 CMD ["status"]

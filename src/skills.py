@@ -494,6 +494,12 @@ def find_matching_skills(goal: str, adapter=None, use_router: bool = True) -> Li
     if not skills:
         return []
 
+    # Filter out skills with open circuit breaker — they've failed 3+ times
+    # and shouldn't be injected until rewritten/recovered
+    skills = [s for s in skills if getattr(s, "circuit_state", "closed") != "open"]
+    if not skills:
+        return []
+
     # Phase 17: router path — only use when a trained model is available
     if use_router:
         try:

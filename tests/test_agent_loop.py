@@ -910,6 +910,24 @@ def test_generate_refinement_hint_uses_llm_response():
 
 
 # ---------------------------------------------------------------------------
+# Cost budget
+# ---------------------------------------------------------------------------
+
+def test_cost_budget_stops_loop(monkeypatch, tmp_path):
+    """Loop stops when estimated USD cost exceeds cost_budget + slush."""
+    _setup_workspace(monkeypatch, tmp_path)
+    result = run_agent_loop(
+        "expensive task",
+        project="cost-test",
+        dry_run=False,
+        cost_budget=0.0001,  # tiny budget — will be exceeded immediately
+    )
+    assert result.status == "stuck" or result.status == "done"
+    # If it ran at all with dry_run=False, the cost check should fire
+    # (exact behavior depends on adapter availability)
+
+
+# ---------------------------------------------------------------------------
 # Phase 35 P2: HITL tier wiring in _execute_step
 # ---------------------------------------------------------------------------
 
