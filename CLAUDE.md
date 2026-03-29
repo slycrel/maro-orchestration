@@ -66,11 +66,11 @@ deploy/              systemd service files
 | 40 | Pluggable Memory Backend | TODO |
 | 41 | Tool Registry + Function Calling | TODO |
 | 42 | Nightly Eval Wired to Evolver | TODO |
-| **44** | **Self-Reflection — Run Observer + Failure Classifier** | **IN PROGRESS** |
-| 45 | Self-Reflection — Recovery Planner | TODO |
+| 44 | Self-Reflection — Run Observer + Failure Classifier | DONE |
+| **45** | **Self-Reflection — Recovery Planner** | **TODO — next up** |
 | 46 | Self-Reflection — Intervention Graduation | TODO |
 
-**Active work:** Phase 44. `src/introspect.py` is 1138 lines — core diagnosis engine complete, lenses wired, CLI wired (`poe-introspect`), auto-diagnose wired into `_finalize_loop()`. What's left: mark ROADMAP.md Phase 44 DONE, then start Phase 45 (recovery planner — lookup table, no LLM).
+**Active work:** Phase 45 is next. Phase 44 is complete — diagnose/lens/recovery-plan all wired, Diagnoses panel in dashboard, diagnoses.jsonl persisted after every loop. Phase 45 (Recovery Planner) is a lookup table — failure_class → cheapest intervention, no LLM needed.
 
 See `ROADMAP.md` for full phase specs. See `CHANGELOG.md` for what shipped.
 

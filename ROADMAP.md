@@ -887,7 +887,7 @@ Phase 43 complete — all 11 execution modules instrumented.
 
 ---
 
-### Phase 44: Self-Reflection — Run Observer + Failure Classifier *(IN PROGRESS)*
+### Phase 44: Self-Reflection — Run Observer + Failure Classifier *(DONE)*
 
 *"The orchestrator should not only act — it should continuously watch itself act."*
 
@@ -902,7 +902,13 @@ Full design in `docs/SELF_REFLECTION.md`. The short version: every manual debugg
 - Wired into `_finalize_loop()` — auto-diagnose after every loop, write to `memory/diagnoses.jsonl`
 - Feeds into `poe-observe serve` dashboard as a new "Diagnoses" panel
 
-**Not in scope:** recovery planning (Phase 45), rule graduation (Phase 46)
+**Shipped (Phase 44 complete — 2026-03-29):**
+- `src/introspect.py` (1138 lines): `diagnose_loop()`, `run_lenses()`, `aggregate_lenses()`, `plan_recovery()`, `save_diagnosis()`
+- 10-class failure taxonomy: setup_failure, adapter_timeout, constraint_false_positive, decomposition_too_broad, empty_model_output, retry_churn, budget_exhaustion, token_explosion, artifact_missing, integration_drift
+- `poe-introspect <loop_id>` / `poe-introspect --latest [--lenses]` CLI
+- Auto-diagnose wired into `_finalize_loop()` → writes to `memory/diagnoses.jsonl`
+- Diagnoses panel in `poe-observe serve` dashboard
+- Fixed dead-code double-except in agent_loop.py
 
 ---
 

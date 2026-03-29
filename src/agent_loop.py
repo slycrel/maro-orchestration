@@ -468,8 +468,6 @@ def _finalize_loop(
             if _recovery:
                 _tag = "AUTO-RECOVERABLE" if _recovery.auto_apply else "NEEDS-REVIEW"
                 log.warning("recovery[%s] risk=%s: %s", _tag, _recovery.risk, _recovery.action)
-    except Exception:
-        pass
     except Exception as exc:
         log.debug("introspect failed: %s", exc)
 

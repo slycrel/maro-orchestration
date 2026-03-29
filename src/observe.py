@@ -55,6 +55,10 @@ def _audit_path() -> Path:
     return _memory_dir() / "sandbox-audit.jsonl"
 
 
+def _diagnoses_path() -> Path:
+    return _memory_dir() / "diagnoses.jsonl"
+
+
 # ---------------------------------------------------------------------------
 # Data readers
 # ---------------------------------------------------------------------------
@@ -107,6 +111,28 @@ def _read_recent_outcomes(limit: int = 10) -> List[Dict[str, Any]]:
 
 def _read_audit_tail(limit: int = 5) -> List[Dict[str, Any]]:
     path = _audit_path()
+    if not path.exists():
+        return []
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+        results = []
+        for line in reversed(lines):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                results.append(json.loads(line))
+            except Exception:
+                continue
+            if len(results) >= limit:
+                break
+        return list(reversed(results))
+    except Exception:
+        return []
+
+
+def _read_recent_diagnoses(limit: int = 8) -> List[Dict[str, Any]]:
+    path = _diagnoses_path()
     if not path.exists():
         return []
     try:
@@ -424,6 +450,11 @@ _DASHBOARD_HTML = """\
   </div>
 
   <div class="panel full">
+    <h2>Diagnoses (Phase 44)</h2>
+    <div id="diagnoses-status"></div>
+  </div>
+
+  <div class="panel full">
     <h2>Live Events</h2>
     <table id="events-table">
       <thead><tr><th>Time</th><th>Loop</th><th>Type</th><th>Status</th><th>Step</th><th>Tokens</th></tr></thead>
@@ -505,6 +536,25 @@ async function refresh() {
         `<table><thead><tr><th>Time</th><th>Status</th><th>Goal</th></tr></thead><tbody>${rows}</tbody></table>`;
     }
 
+    // Diagnoses
+    const diags = d.diagnoses || [];
+    if (!diags.length) {
+      document.getElementById('diagnoses-status').innerHTML = '<span class="idle">none — diagnoses.jsonl is empty</span>';
+    } else {
+      let rows = diags.map(diag => {
+        const ts = (diag.diagnosed_at||diag.ts||'').slice(0,19);
+        const fc = esc(diag.failure_class||'?');
+        const sev = diag.severity||'info';
+        const sevCls = sev==='critical'?'badge-red':sev==='warning'?'badge-yellow':'badge-blue';
+        const lid = esc((diag.loop_id||'').slice(0,12));
+        const rec = esc((diag.recommendation||'').slice(0,80));
+        const tok = diag.total_tokens||0;
+        return `<tr><td>${ts}</td><td>${lid}</td><td>${badge(fc, sev==='critical'?'red':sev==='warning'?'yellow':'blue')}</td><td>${badge(sev,sevCls.replace('badge-',''))}</td><td>${tok}</td><td>${rec}</td></tr>`;
+      }).join('');
+      document.getElementById('diagnoses-status').innerHTML =
+        `<table><thead><tr><th>Time</th><th>Loop</th><th>Class</th><th>Severity</th><th>Tokens</th><th>Recommendation</th></tr></thead><tbody>${rows}</tbody></table>`;
+    }
+
     // Events
     const events = d.events || [];
     const tbody = document.getElementById('events-body');
@@ -539,6 +589,7 @@ def _snapshot_json(events_limit: int = 50) -> dict:
     hb = _read_heartbeat()
     outcomes = _read_recent_outcomes(limit=15)
     mem = _read_memory_stats()
+    diagnoses = _read_recent_diagnoses(limit=8)
 
     events: List[dict] = []
     path = _events_path()
@@ -560,6 +611,7 @@ def _snapshot_json(events_limit: int = 50) -> dict:
         "heartbeat": hb,
         "outcomes": outcomes,
         "memory": mem,
+        "diagnoses": diagnoses,
         "events": events,
     }
 
