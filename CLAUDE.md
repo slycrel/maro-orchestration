@@ -67,10 +67,10 @@ deploy/              systemd service files
 | 41 | Tool Registry + Function Calling | TODO |
 | 42 | Nightly Eval Wired to Evolver | TODO |
 | 44 | Self-Reflection — Run Observer + Failure Classifier | DONE |
-| **45** | **Self-Reflection — Recovery Planner** | **TODO — next up** |
+| 45 | Self-Reflection — Recovery Planner | DONE |
 | 46 | Self-Reflection — Intervention Graduation | TODO |
 
-**Active work:** Phase 45 is next. Phase 44 is complete — diagnose/lens/recovery-plan all wired, Diagnoses panel in dashboard, diagnoses.jsonl persisted after every loop. Phase 45 (Recovery Planner) is a lookup table — failure_class → cheapest intervention, no LLM needed.
+**Active work:** Phases 44-45 complete. Self-reflection pipeline fully wired: diagnose → classify → plan recovery → auto-apply (low-risk) or suggest (high-risk). Phase 46 (Intervention Graduation) is next: when same fix is applied 3+ times, propose a permanent rule. Before that: stability sprint with real Polymarket objective end-to-end.
 
 See `ROADMAP.md` for full phase specs. See `CHANGELOG.md` for what shipped.
 

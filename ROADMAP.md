@@ -912,7 +912,7 @@ Full design in `docs/SELF_REFLECTION.md`. The short version: every manual debugg
 
 ---
 
-### Phase 45: Self-Reflection — Recovery Planner *(TODO)*
+### Phase 45: Self-Reflection — Recovery Planner *(DONE)*
 
 *Given a failure class, choose the cheapest intervention.*
 
@@ -924,8 +924,15 @@ The introspection layer (Phase 44) produces diagnoses. This phase adds a decisio
 - `budget_exhaustion` → increase max_iterations, enable landing
 - `token_explosion` → truncate completed_context to summaries
 - `empty_model_output` → retry with explicit tool-call instruction
+- `artifact_missing` → re-run with explicit artifact instruction
 
 No LLM needed — it's a lookup table with preference for cheapest action first. Optionally auto-applies low-risk recoveries (retry, redecompose) and escalates high-risk ones (switch adapter, change policy) for human review.
+
+**Shipped (Phase 45 — 2026-03-29):**
+- `_RECOVERY_TABLE`: all 10 failure classes mapped to `RecoveryPlan` entries with `auto_apply` + `risk` classification
+- `plan_recovery()` / `plan_recovery_all()`: return best or all applicable plans
+- Auto-recovery wired into `run_agent_loop()`: when loop ends stuck, diagnose → pick low-risk auto-apply plan → re-run with adjusted parameters (recursion-guarded)
+- High-risk plans logged as `NEEDS-REVIEW` suggestions, not auto-applied
 
 ---
 

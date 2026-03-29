@@ -945,6 +945,14 @@ _RECOVERY_TABLE: Dict[str, List[RecoveryPlan]] = {
             params={"suggestion": "run the AST cross-check from the test tightening session"},
         ),
     ],
+    "artifact_missing": [
+        RecoveryPlan(
+            failure_class="artifact_missing",
+            action="Re-run with explicit artifact instruction in step hints",
+            auto_apply=True, risk="low",
+            params={"hint": "You MUST produce a concrete artifact (file, summary, or structured data). Do not end a step with only status text."},
+        ),
+    ],
 }
 
 
