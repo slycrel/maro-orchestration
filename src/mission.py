@@ -606,22 +606,29 @@ def run_mission(
         except Exception:
             pass
 
+        # Count how many features actually completed
+        _features_ok = sum(1 for f in milestone.features if f.status == "done")
+        _features_total = len(milestone.features)
+
         if passed:
             milestone.status = "done"
             milestone.validation_result = "passed"
             milestones_done += 1
             _log(f"  milestone passed: {milestone.title!r}")
+        elif _features_ok > 0:
+            # Partial success — some features completed, validation failed.
+            # Mark as partial, continue to next milestone with available data.
+            milestone.status = "partial"
+            milestone.validation_result = "partial"
+            milestones_done += 1  # count partial as progress
+            _log(f"  milestone PARTIAL: {milestone.title!r} ({_features_ok}/{_features_total} features)")
         else:
+            # Total failure — no features completed.
             milestone.status = "failed"
             milestone.validation_result = "failed"
-            mission.status = "stuck"
-            _log(f"  milestone FAILED validation: {milestone.title!r}")
-            # Persist and break
-            try:
-                save_mission(mission, project)
-            except Exception:
-                pass
-            break
+            _log(f"  milestone FAILED: {milestone.title!r} (0/{_features_total} features)")
+            # Don't break — try remaining milestones. Later milestones
+            # may have independent sub-goals that can still produce value.
 
         # Persist after each milestone
         try:
@@ -630,7 +637,14 @@ def run_mission(
             pass
 
     if mission.status != "stuck":
-        mission.status = "done"
+        _any_failed = any(ms.status == "failed" for ms in mission.milestones)
+        _any_partial = any(ms.status == "partial" for ms in mission.milestones)
+        if _any_failed and milestones_done == 0:
+            mission.status = "stuck"
+        elif _any_failed or _any_partial:
+            mission.status = "partial"
+        else:
+            mission.status = "done"
     mission.completed_at = datetime.now(timezone.utc).isoformat()
 
     # Mission-end hooks (after)
