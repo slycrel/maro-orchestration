@@ -215,8 +215,9 @@ def handle(
 
     else:  # agenda
         # If poe.py is available, delegate AGENDA tasks to Poe CEO layer for richer routing.
-        # NOW lane stays here for backward compat. Falls back to existing behavior on any error.
-        if not dry_run:
+        # Skip the poe CEO layer when a project is explicitly specified —
+        # the caller wants a fresh run, not a status check on existing missions.
+        if not dry_run and not project:
             try:
                 from poe import poe_handle
                 from agent_loop import _goal_to_slug
@@ -227,8 +228,7 @@ def handle(
                     dry_run=False,
                 )
                 elapsed = int((time.monotonic() - started_at) * 1000)
-                # Resolve project slug so callers always get a non-None project
-                _poe_project = project or _goal_to_slug(message)
+                _poe_project = _goal_to_slug(message)
                 return HandleResult(
                     handle_id=handle_id,
                     lane="agenda",
@@ -242,7 +242,7 @@ def handle(
                     artifact_path=None,
                 )
             except (ImportError, Exception):
-                pass  # fall through to legacy agenda handling
+                pass  # fall through to direct agenda handling
         if verbose:
             print(f"[poe:{handle_id}] AGENDA lane — starting loop...", file=sys.stderr, flush=True)
 

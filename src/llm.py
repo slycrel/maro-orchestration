@@ -239,17 +239,41 @@ class ClaudeSubprocessAdapter(LLMAdapter):
             stderr = result.stderr.strip()
             stdout_hint = result.stdout.strip()[:200] if result.stdout.strip() else ""
             detail = stderr[:300] or stdout_hint or "(no output)"
-            # Dump debug info to /tmp for post-mortem diagnosis
-            try:
-                import tempfile, os as _os
-                debug_path = _os.path.join(tempfile.gettempdir(), f"claude_rc1_{os.getpid()}.txt")
-                with open(debug_path, "w") as _f:
-                    _f.write(f"rc={result.returncode}\ncmd={cmd}\nprompt_len={len(prompt)}\n\n")
-                    _f.write(f"--- STDERR ---\n{result.stderr}\n--- STDOUT ---\n{result.stdout[:2000]}\n")
-                    _f.write(f"--- PROMPT (first 3000 chars) ---\n{prompt[:3000]}\n")
-            except Exception:
-                pass
-            raise RuntimeError(f"claude subprocess failed (rc={result.returncode}): {detail}")
+
+            # Rate limit detection: "hit your limit" or "resets" in output
+            _combined = (detail + " " + stdout_hint).lower()
+            if "hit your limit" in _combined or "rate limit" in _combined or "resets" in _combined:
+                import time as _time
+                _wait = getattr(self, "_rate_limit_wait", 60)
+                # Exponential backoff: 60s → 120s → 240s, cap at 300s
+                self._rate_limit_wait = min(_wait * 2, 300)
+                log.warning("rate limit detected, waiting %ds before retry", _wait)
+                _time.sleep(_wait)
+                # Retry once
+                try:
+                    result = subprocess.run(
+                        cmd, input=prompt, capture_output=True, text=True, timeout=_timeout,
+                    )
+                    if result.returncode == 0:
+                        self._rate_limit_wait = 60  # reset on success
+                        # Fall through to normal parsing below
+                    else:
+                        raise RuntimeError(f"claude rate-limited, retry also failed: {result.stdout[:200]}")
+                except subprocess.TimeoutExpired:
+                    raise RuntimeError(f"claude rate-limited, retry timed out after {_timeout}s")
+
+            if result.returncode != 0:
+                # Dump debug info to /tmp for post-mortem diagnosis
+                try:
+                    import tempfile, os as _os
+                    debug_path = _os.path.join(tempfile.gettempdir(), f"claude_rc1_{os.getpid()}.txt")
+                    with open(debug_path, "w") as _f:
+                        _f.write(f"rc={result.returncode}\ncmd={cmd}\nprompt_len={len(prompt)}\n\n")
+                        _f.write(f"--- STDERR ---\n{result.stderr}\n--- STDOUT ---\n{result.stdout[:2000]}\n")
+                        _f.write(f"--- PROMPT (first 3000 chars) ---\n{prompt[:3000]}\n")
+                except Exception:
+                    pass
+                raise RuntimeError(f"claude subprocess failed (rc={result.returncode}): {detail}")
 
         # Parse JSON output
         try:
