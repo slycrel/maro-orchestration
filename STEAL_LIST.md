@@ -29,10 +29,10 @@ Compiled from Grok research sessions + prototype experiments (2026-03-29).
 | Item | Source | What | Where it lands | Effort |
 |------|--------|------|----------------|--------|
 | ~~**Hybrid retrieval (BM25 + vector + RRF)**~~ | Mimir | ✅ DONE — `src/hybrid_search.py` with BM25 + RRF. memory.py wired to use `hybrid_rank` (graceful fallback to TF-IDF). Vector deferred (needs embedding API). | `src/hybrid_search.py` + `src/memory.py` | M |
-| **Error nodes as queryable memory** | Mimir | Store failures as first-class nodes so agents self-query "what broke last time on similar goal?" | `src/memory.py` + `memory/diagnoses.jsonl` (Phase 44 data) | M |
+| ~~**Error nodes as queryable memory**~~ | Mimir | ✅ DONE — `find_relevant_failure_notes()` in introspect.py + wired into agent_loop.py `_build_decompose_context()`. Token-overlap matching, zero LLM cost. | `src/introspect.py` + `src/agent_loop.py` | M |
 | ~~**Skills trigger arrays**~~ | oh-my-claudecode | ✅ DONE — `trigger_patterns` field already on Skill dataclass; keyword fallback in `find_matching_skills()` does exact substring matching. Functionally identical. | `src/skills.py` | — |
 | **Auto-resume on rate limits** | oh-my-claudecode | Detect API rate limit, pause mission, poll, resume automatically. | `src/heartbeat.py` or `src/sheriff.py` — extend with rate-limit watch | M |
-| **SlowUpdateScheduler** | MetaClaw | IDLE_WAIT -> WINDOW_OPEN -> UPDATING -> PAUSING state machine. Gates heavy background work. | New module, called from heartbeat/cron | M |
+| ~~**SlowUpdateScheduler**~~ | MetaClaw | ✅ DONE — heartbeat_loop() checks `is_drain_running()` before evolver/inspector/eval each tick. Heavy background work deferred when a mission is active. | `src/heartbeat.py` | M |
 | ~~**Cron persistence (`jobs.json`)**~~ | 724-office | ✅ DONE — `src/scheduler.py` with JobStore backed by `memory/jobs.json`; once/daily/interval; `drain_due_jobs()` wired into heartbeat_loop(); `poe-schedule` CLI. | `src/scheduler.py` | M |
 | **`channels/` pluggable data sources** | Agent-Reach | Each platform (X, Reddit, YouTube, GitHub) is a separate module with standard interface. | New `src/channels/` alongside `web_fetch.py` | M |
 | ~~**`doctor` diagnostic command**~~ | Agent-Reach | ✅ DONE — `poe-doctor` CLI added (src/doctor.py). | `src/doctor.py` | S |

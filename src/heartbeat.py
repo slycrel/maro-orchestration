@@ -426,13 +426,27 @@ def heartbeat_loop(
         except Exception as e:
             print(f"[heartbeat] run failed: {e}", file=sys.stderr)
         tick += 1
-        if tick % evolver_every == 0:
+
+        # SlowUpdateScheduler (MetaClaw steal): gate heavy background work to idle windows.
+        # Check if a mission drain is currently running — if so, skip expensive LLM work
+        # this tick to avoid competing with an active mission's token/API budget.
+        _mission_active = False
+        try:
+            from mission import is_drain_running
+            _mission_active = is_drain_running()
+        except Exception:
+            pass
+        if _mission_active and verbose:
+            print("[heartbeat] mission active — deferring heavy background work this tick",
+                  file=sys.stderr)
+
+        if tick % evolver_every == 0 and not _mission_active:
             try:
                 from evolver import run_evolver
                 run_evolver(dry_run=dry_run, verbose=verbose, notify=escalate, min_outcomes=5)
             except Exception as e:
                 print(f"[heartbeat] evolver failed: {e}", file=sys.stderr)
-        if tick % inspector_every == 0:
+        if tick % inspector_every == 0 and not _mission_active:
             # Phase 12: Inspector — quality oversight, separate from health (heartbeat)
             try:
                 from inspector import run_inspector
@@ -465,8 +479,8 @@ def heartbeat_loop(
             except Exception as e:
                 if verbose:
                     print(f"[heartbeat] mission check failed: {e}", file=sys.stderr)
-        # Phase 42: nightly eval — run once per ~24h cycle
-        if tick % eval_every == 0 and tick > 0:
+        # Phase 42: nightly eval — run once per ~24h cycle (skip if mission active)
+        if tick % eval_every == 0 and tick > 0 and not _mission_active:
             try:
                 from eval import run_nightly_eval
                 _n_regressions = run_nightly_eval(dry_run=dry_run, verbose=verbose)
