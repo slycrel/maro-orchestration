@@ -286,6 +286,34 @@ def handle(
                 )
             except (ImportError, Exception):
                 pass  # fall through to direct agenda handling
+        # Clarification milestone — check goal clarity before starting (skipped if yolo=true)
+        _yolo = _cfg.get("yolo", "false").strip().lower() == "true"
+        if not dry_run and not _yolo:
+            try:
+                from intent import check_goal_clarity
+                _clarity = check_goal_clarity(message, adapter=adapter)
+                if not _clarity.get("clear"):
+                    _q = _clarity.get("question", "Could you clarify the goal?")
+                    elapsed = int((time.monotonic() - started_at) * 1000)
+                    if verbose:
+                        print(f"[poe:{handle_id}] clarity check: UNCLEAR — {_q}", file=sys.stderr, flush=True)
+                    return HandleResult(
+                        handle_id=handle_id,
+                        lane="agenda",
+                        lane_confidence=confidence,
+                        classification_reason=reason + " [clarity check: ambiguous]",
+                        message=message,
+                        status="clarification_needed",
+                        result=(
+                            f"Before starting, I need to clarify one thing:\n\n"
+                            f"{_q}\n\n"
+                            f"*(Add `yolo: true` to user/CONFIG.md to skip this check.)*"
+                        ),
+                        elapsed_ms=elapsed,
+                    )
+            except Exception:
+                pass  # clarity check must never block execution
+
         if verbose:
             print(f"[poe:{handle_id}] AGENDA lane — starting loop...", file=sys.stderr, flush=True)
 

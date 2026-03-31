@@ -162,3 +162,75 @@ def _heuristic_classify(message: str) -> Tuple[Lane, float, str]:
 
     # Default: AGENDA is safer (won't miss work)
     return ("agenda", 0.55, "Defaulting to AGENDA lane for thoroughness")
+
+
+# ---------------------------------------------------------------------------
+# Goal clarity check — Clarification milestone (Jeremy request)
+# ---------------------------------------------------------------------------
+
+_CLARITY_SYSTEM = """\
+You are a goal clarity assessor. A user submitted a goal for an autonomous agent to execute.
+Assess whether the goal has enough specificity for the agent to proceed without asking questions.
+
+CLEAR: the agent knows exactly what to research/build/do, who/what the target is, and what
+a good result looks like. Minor details can be inferred.
+
+UNCLEAR: the goal is ambiguous enough that the agent would have to guess at a core assumption
+that the user probably cares about. Typical markers: pronouns without referents ("it", "that"),
+generic targets ("my project", "the thing"), conflicting possible interpretations, or an
+obviously open-ended scope that needs bounding.
+
+Respond with JSON only:
+{"clear": true|false, "question": "one question that would resolve the ambiguity, if not clear"}
+
+If clear, question should be empty string. Be lenient — only flag genuinely ambiguous goals.
+Do NOT flag goals just because they're hard or require research.
+"""
+
+
+def check_goal_clarity(
+    goal: str,
+    *,
+    adapter=None,
+    dry_run: bool = False,
+) -> dict:
+    """Check whether a goal has enough specificity for the agent to proceed.
+
+    Returns:
+        {"clear": bool, "question": str}
+        clear=True means proceed without asking.
+        clear=False means surface the question to the user.
+
+    Non-fatal — returns clear=True on any error so the check never blocks execution.
+    """
+    if dry_run or adapter is None:
+        return {"clear": True, "question": ""}
+
+    if len(goal.split()) < 4:
+        # Very short goals are fine — probably a NOW-lane item anyway
+        return {"clear": True, "question": ""}
+
+    try:
+        import json as _json
+        from llm import LLMMessage
+
+        resp = adapter.complete(
+            [
+                LLMMessage("system", _CLARITY_SYSTEM),
+                LLMMessage("user", f"Goal: {goal}"),
+            ],
+            max_tokens=128,
+            temperature=0.1,
+        )
+        content = resp.content.strip()
+        start = content.find("{")
+        end = content.rfind("}") + 1
+        if start >= 0 and end > start:
+            data = _json.loads(content[start:end])
+            is_clear = bool(data.get("clear", True))
+            question = str(data.get("question", "")).strip()
+            return {"clear": is_clear, "question": question}
+    except Exception:
+        pass  # Clarity check failures must never block a run
+
+    return {"clear": True, "question": ""}

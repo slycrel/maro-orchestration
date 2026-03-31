@@ -117,3 +117,88 @@ def test_classify_falls_back_on_adapter_error():
     lane, conf, reason = classify("research X", adapter=FailAdapter())
     assert lane in ("now", "agenda")
     assert 0.0 <= conf <= 1.0
+
+
+# ---------------------------------------------------------------------------
+# check_goal_clarity
+# ---------------------------------------------------------------------------
+
+from intent import check_goal_clarity
+
+
+def test_clarity_dry_run_returns_clear():
+    result = check_goal_clarity("research X", dry_run=True)
+    assert result["clear"] is True
+    assert result["question"] == ""
+
+
+def test_clarity_no_adapter_returns_clear():
+    result = check_goal_clarity("research X", adapter=None)
+    assert result["clear"] is True
+
+
+def test_clarity_very_short_goal_returns_clear():
+    # < 4 words: skip check entirely
+    result = check_goal_clarity("go", adapter=None)
+    assert result["clear"] is True
+
+
+def test_clarity_adapter_error_returns_clear():
+    """Adapter failure must not block execution."""
+    class FailAdapter:
+        def complete(self, *args, **kwargs):
+            raise RuntimeError("API down")
+
+    result = check_goal_clarity("research winning polymarket strategies", adapter=FailAdapter())
+    assert result["clear"] is True
+
+
+def test_clarity_unclear_response_parsed():
+    import json
+
+    class ClarifyAdapter:
+        class _Resp:
+            content = json.dumps({"clear": False, "question": "What market type?"})
+            input_tokens = 10
+            output_tokens = 20
+            tool_calls = []
+
+        def complete(self, *args, **kwargs):
+            return self._Resp()
+
+    result = check_goal_clarity("research the optimal strategy now", adapter=ClarifyAdapter())
+    assert result["clear"] is False
+    assert "market" in result["question"].lower() or len(result["question"]) > 0
+
+
+def test_clarity_clear_response_parsed():
+    import json
+
+    class ClearAdapter:
+        class _Resp:
+            content = json.dumps({"clear": True, "question": ""})
+            input_tokens = 10
+            output_tokens = 20
+            tool_calls = []
+
+        def complete(self, *args, **kwargs):
+            return self._Resp()
+
+    result = check_goal_clarity("research winning polymarket prediction market strategies", adapter=ClearAdapter())
+    assert result["clear"] is True
+
+
+def test_clarity_malformed_json_returns_clear():
+    """Malformed LLM response must not block execution."""
+    class BadJsonAdapter:
+        class _Resp:
+            content = "not json at all"
+            input_tokens = 10
+            output_tokens = 5
+            tool_calls = []
+
+        def complete(self, *args, **kwargs):
+            return self._Resp()
+
+    result = check_goal_clarity("research X Y Z W", adapter=BadJsonAdapter())
+    assert result["clear"] is True

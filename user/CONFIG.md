@@ -41,6 +41,16 @@ always_skeptic: false
 
 ---
 
+## Verification
+
+# Enable Ralph verify loop: per-step quality check with retry when the result
+# doesn't address the step goal. Adds ~30% wall time. Best for high-stakes runs.
+# Can also trigger per-run with the "ralph:" prefix in the goal.
+# "true" = enable for all runs. "false" = only when ralph: prefix is used.
+ralph_verify: false
+
+---
+
 ## Quality Gate
 
 # Run a skeptic quality check after every loop. If output is below par,
