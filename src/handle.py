@@ -22,10 +22,13 @@ CLI:
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sys
 import time
 import uuid
+
+log = logging.getLogger("poe.handle")
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -218,6 +221,13 @@ def handle(
                 model = _effort_tier
             break
 
+    # mode:thin prefix — route to factory_thin loop (faster, lower cost, Haiku by default)
+    # Use when wall-time matters more than depth. Strips prefix before routing.
+    _use_thin_mode = False
+    if message.lower().startswith("mode:thin"):
+        message = message[len("mode:thin"):].lstrip()
+        _use_thin_mode = True
+
     # Build adapter
     if adapter is None and not dry_run:
         adapter = build_adapter(model=model or MODEL_CHEAP)
@@ -328,6 +338,36 @@ def handle(
 
         if verbose:
             print(f"[poe:{handle_id}] AGENDA lane — starting loop...", file=sys.stderr, flush=True)
+
+        # mode:thin — use factory_thin loop (faster, lower cost) instead of full Mode 2
+        if _use_thin_mode and not dry_run:
+            try:
+                from factory_thin import run_factory_thin
+                _thin_result = run_factory_thin(
+                    message,
+                    model=model or "cheap",
+                    verbose=verbose,
+                )
+                elapsed = int((time.monotonic() - started_at) * 1000)
+                _thin_text = _thin_result.final_report or "[no output produced]"
+                if _thin_result.status != "done":
+                    _thin_text += f"\n\n⚠️ Thin loop status: {_thin_result.status}"
+                return HandleResult(
+                    handle_id=handle_id,
+                    lane="agenda",
+                    lane_confidence=confidence,
+                    classification_reason=reason + " [mode:thin]",
+                    message=message,
+                    status=_thin_result.status,
+                    result=_thin_text,
+                    project=project or "",
+                    tokens_in=_thin_result.total_tokens // 2,
+                    tokens_out=_thin_result.total_tokens // 2,
+                    elapsed_ms=elapsed,
+                )
+            except Exception as _thin_exc:
+                log.warning("mode:thin failed, falling back to Mode 2: %s", _thin_exc)
+                # Fall through to run_agent_loop below
 
         loop_result = run_agent_loop(
             message,

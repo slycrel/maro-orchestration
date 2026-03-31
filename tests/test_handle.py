@@ -223,3 +223,63 @@ class TestEffortModifier:
     def test_no_effort_prefix_unchanged(self, monkeypatch, tmp_path):
         result, _ = self._run(monkeypatch, tmp_path, "what is 2 plus 2")
         assert result.message == "what is 2 plus 2"
+
+
+# ---------------------------------------------------------------------------
+# mode:thin prefix modifier
+# ---------------------------------------------------------------------------
+
+class TestModeThinModifier:
+    """mode:thin prefix strips keyword and routes to factory_thin loop."""
+
+    def _run(self, monkeypatch, tmp_path, goal):
+        _setup(monkeypatch, tmp_path)
+
+        # Patch at module level so `from factory_thin import run_factory_thin` picks it up
+        import factory_thin as _ft_mod
+        _called_thin = []
+
+        def _fake_factory_thin(g, **kwargs):
+            _called_thin.append(g)
+            class _R:
+                loop_id = "fake"
+                status = "done"
+                steps = []
+                final_report = f"[thin result for: {g}]"
+                total_tokens = 100
+                cost_usd = 0.01
+                elapsed_ms = 500
+                model = "cheap"
+            return _R()
+
+        monkeypatch.setattr(_ft_mod, "run_factory_thin", _fake_factory_thin)
+
+        # Patch build_adapter so no real LLM calls are made
+        import handle as _handle_mod
+        from unittest.mock import MagicMock
+        _mock_adapter = MagicMock()
+        _mock_adapter.model_key = "cheap"
+        monkeypatch.setattr(_handle_mod, "build_adapter",
+                            lambda **kw: _mock_adapter, raising=False)
+
+        result = handle(goal, force_lane="agenda")
+        return result, _called_thin
+
+    def test_mode_thin_strips_prefix(self, monkeypatch, tmp_path):
+        result, _ = self._run(monkeypatch, tmp_path, "mode:thin research nootropics")
+        assert result.message == "research nootropics"
+
+    def test_mode_thin_routes_to_factory(self, monkeypatch, tmp_path):
+        result, called_thin = self._run(monkeypatch, tmp_path, "mode:thin analyze this market")
+        assert called_thin  # factory_thin WAS called
+        assert "thin result" in result.result
+
+    def test_mode_thin_classification_reason(self, monkeypatch, tmp_path):
+        result, _ = self._run(monkeypatch, tmp_path, "mode:thin check bitcoin price")
+        assert "mode:thin" in result.classification_reason
+
+    def test_no_mode_thin_unchanged(self, monkeypatch, tmp_path):
+        """Without prefix, message is unchanged (dry_run path, no factory_thin call)."""
+        _setup(monkeypatch, tmp_path)
+        result = handle("research nootropics", dry_run=True)
+        assert result.message == "research nootropics"
