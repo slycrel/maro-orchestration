@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import textwrap
+from pathlib import Path
 from typing import List, Optional
 
 log = logging.getLogger("poe.planner")
@@ -71,6 +72,17 @@ DECOMPOSE_SYSTEM = textwrap.dedent("""\
     Prefer more steps that are each fast and concrete over fewer steps that are
     broad and slow. Setup steps (clone, fetch, install) should always be their
     own step, never bundled with analysis work.
+
+    OUTCOME-FIRST DECOMPOSITION (Bitter Lesson principle):
+    Decompose goals into OUTCOMES, not procedures. If the goal says "do X then Y
+    then Z", ignore the prescribed procedure. Instead ask: what is the desired
+    end state? Then decompose into the steps that achieve that end state.
+    The model should discover the "how" — the human provides the "what."
+    BAD:  Goal says "curl the API, parse JSON, filter by volume, sort descending"
+          → Steps: "curl the API", "parse the JSON", "filter by volume"...
+    GOOD: Goal says same thing
+          → Steps: "Identify top 10 accounts by trading volume" (let the agent
+            figure out whether to use curl, a CLI tool, or a script)
 
     PARALLEL EXECUTION: Steps that don't depend on each other can run in parallel.
     Mark dependencies with [after:N] or [after:N,M] at the END of the step string.
@@ -203,6 +215,19 @@ def decompose(
 
     system = DECOMPOSE_SYSTEM
     extras = [x for x in [skills_context, ancestry_context, lessons_context, cost_context] if x]
+
+    # Auto-inject user context if available
+    try:
+        _user_dir = Path(__file__).resolve().parent.parent / "user"
+        for _ctx_file in ("CONTEXT.md", "SIGNALS.md"):
+            _ctx_path = _user_dir / _ctx_file
+            if _ctx_path.exists():
+                _ctx = _ctx_path.read_text(encoding="utf-8").strip()
+                if _ctx:
+                    extras.append(f"USER CONTEXT ({_ctx_file}):\n{_ctx}")
+    except Exception:
+        pass
+
     if extras:
         system = DECOMPOSE_SYSTEM + "\n\n" + "\n\n".join(extras)
 

@@ -64,6 +64,17 @@ EXECUTE_SYSTEM = textwrap.dedent("""\
     6. Target under 500 tokens for your complete_step result. If you need more, something
        is wrong — you're probably quoting instead of summarizing.
     Pick the interpretation that requires the fewest tokens to produce a useful result.
+
+    DATA PIPELINE STRATEGY — for steps that fetch external data:
+    When a step requires fetching data from an API or CLI tool, NEVER dump raw output
+    into context. Instead:
+    1. Write a small script that fetches, filters, and summarizes the data to a file.
+    2. Run the script. Read only the summary file (not the raw output).
+    3. Pass the filtered summary to complete_step, not the raw data.
+    Example: instead of running `polymarket-cli list` and processing 50KB of JSON
+    in-context, write a script: fetch → filter top 10 by volume → extract key fields
+    → save to project_dir/filtered_data.json → read and summarize that file.
+    This turns a 100K-token step into a 5K-token step.
 """).strip()
 
 EXECUTE_TOOLS = [
