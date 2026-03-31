@@ -1302,6 +1302,12 @@ def assess_goal_alignment(goal: str, result_summary: str, adapter=None) -> float
 _INSPECTOR_NOTES_SYSTEM = """\
 You are a quality inspector for an autonomous AI system. Provide a brief one-sentence
 quality assessment of this agent session. Be specific and factual. No fluff.
+
+You MUST end your response with exactly one of these verdicts on its own line:
+VERDICT: **PROCEED** — output meets quality bar, no rework needed
+VERDICT: **RETRY** — output has fixable issues, rework the last step
+VERDICT: **ABORT** — output is fundamentally wrong, escalate to human
+No hedging. No "it depends". Commit to a verdict.
 """
 
 
