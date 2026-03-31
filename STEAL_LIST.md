@@ -19,7 +19,7 @@ Compiled from Grok research sessions + prototype experiments (2026-03-29).
 
 | Item | Source | What | Where it lands | Effort |
 |------|--------|------|----------------|--------|
-| **Verification patterns on rules** | meta_alchemist / oh-my-claudecode | Each rule gets a machine-checkable grep/script that proves it's being followed. Rule only graduates to permanent after 2x verified pass. | Phase 46 (Intervention Graduation) — add `verify_pattern` field to `rules.jsonl` entries | M |
+| ~~**Verification patterns on rules**~~ | meta_alchemist / oh-my-claudecode | ✅ DONE — `verify_pattern` shell command added to all 8 `_GRADUATION_TEMPLATES` entries. Written into every graduation suggestion. `verify_graduation_rules()` runs all patterns; `poe-graduation --verify` reports pass/fail. | `src/graduation.py` | M |
 | ~~**Skeptic persona modifier**~~ | Grok advice | ✅ DONE — apply_skeptic_modifier() in persona.py; trigger with "skeptic:" prefix or "--skeptic" in goal. | `src/persona.py`, `src/poe.py` | S |
 | ~~**Post-mission notification**~~ | oh-my-claudecode | ✅ DONE — fires at end of _finalize_loop() in agent_loop.py. | `src/agent_loop.py` | S |
 | **Polymarket CLI integration** | polymarket-cli (OSS) | Read-only market/position/leaderboard data without wallet. Perfect for research personas. | Researcher persona spec + `src/web_fetch.py` or new `tools/polymarket.py` | S |

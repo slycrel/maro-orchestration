@@ -41,6 +41,8 @@ _GRADUATION_TEMPLATES: Dict[str, dict] = {
             "'--step-timeout 600' as a user/CONFIG.md default."
         ),
         "confidence": 0.75,
+        # Verify that a >=600s timeout is present somewhere in the config or llm.py
+        "verify_pattern": "grep -rn 'step.timeout.*600\\|timeout.*600\\|600.*timeout' src/ user/ 2>/dev/null | head -1",
     },
     "constraint_false_positive": {
         "category": "new_guardrail",
@@ -52,6 +54,8 @@ _GRADUATION_TEMPLATES: Dict[str, dict] = {
             "Evidence: {evidence}"
         ),
         "confidence": 0.85,
+        # Verify allowlist entry exists in constraint.py
+        "verify_pattern": "grep -n 'allowlist\\|_ALLOWLIST\\|tier.*READ' src/constraint.py 2>/dev/null | head -1",
     },
     "decomposition_too_broad": {
         "category": "prompt_tweak",
@@ -64,6 +68,8 @@ _GRADUATION_TEMPLATES: Dict[str, dict] = {
             "Evidence: {evidence}"
         ),
         "confidence": 0.80,
+        # Verify 'single source' guidance is in director.py
+        "verify_pattern": "grep -n 'single source\\|single.*source\\|one step' src/director.py 2>/dev/null | head -1",
     },
     "token_explosion": {
         "category": "prompt_tweak",
@@ -74,6 +80,8 @@ _GRADUATION_TEMPLATES: Dict[str, dict] = {
             "Evidence: {evidence}"
         ),
         "confidence": 0.80,
+        # Verify token cap instruction in step_exec.py
+        "verify_pattern": "grep -n 'under 500\\|500 tokens\\|Target.*token' src/step_exec.py 2>/dev/null | head -1",
     },
     "empty_model_output": {
         "category": "new_guardrail",
@@ -85,6 +93,8 @@ _GRADUATION_TEMPLATES: Dict[str, dict] = {
             "Evidence: {evidence}"
         ),
         "confidence": 0.75,
+        # Verify early empty-output hint injection exists
+        "verify_pattern": "grep -n 'empty.*hint\\|hint.*empty\\|empty_output\\|no.*tool.*call' src/step_exec.py src/agent_loop.py 2>/dev/null | head -1",
     },
     "retry_churn": {
         "category": "observation",
@@ -95,6 +105,8 @@ _GRADUATION_TEMPLATES: Dict[str, dict] = {
             "rather than second. Evidence: {evidence}"
         ),
         "confidence": 0.70,
+        # Verify max_retries is >= 3 somewhere in the loop config
+        "verify_pattern": "grep -n 'max_retries.*[3-9]\\|MAX_RETRIES.*[3-9]' src/agent_loop.py src/step_exec.py 2>/dev/null | head -1",
     },
     "budget_exhaustion": {
         "category": "prompt_tweak",
@@ -105,6 +117,8 @@ _GRADUATION_TEMPLATES: Dict[str, dict] = {
             "Fewer, broader steps are better than many narrow steps.' Evidence: {evidence}"
         ),
         "confidence": 0.75,
+        # Verify step-count guidance in director.py
+        "verify_pattern": "grep -n '4-6 steps\\|4 to 6\\|fewer.*steps\\|Fewer.*steps' src/director.py 2>/dev/null | head -1",
     },
     "integration_drift": {
         "category": "observation",
@@ -115,6 +129,8 @@ _GRADUATION_TEMPLATES: Dict[str, dict] = {
             "that validates imports before beginning a loop. Evidence: {evidence}"
         ),
         "confidence": 0.70,
+        # Verify doctor check is wired at loop start
+        "verify_pattern": "grep -n 'doctor\\|validate_imports\\|self.test' src/agent_loop.py src/handle.py 2>/dev/null | head -1",
     },
 }
 
@@ -280,7 +296,7 @@ def run_graduation(
             evidence=evidence_str[:200],
         )
 
-        new_suggestions.append({
+        entry: dict = {
             "suggestion_id": f"grad-{run_id}-{fc[:12]}",
             "category": template["category"],
             "target": "all",
@@ -290,7 +306,10 @@ def run_graduation(
             "outcomes_analyzed": candidate.count,
             "generated_at": _now_iso(),
             "applied": False,
-        })
+        }
+        if template.get("verify_pattern"):
+            entry["verify_pattern"] = template["verify_pattern"]
+        new_suggestions.append(entry)
 
         log.info("graduation: new candidate fc=%s count=%d confidence=%.2f",
                  fc, candidate.count, template["confidence"])
@@ -320,6 +339,75 @@ def run_graduation(
     return len(new_suggestions)
 
 
+def verify_graduation_rules(lookback: int = 200) -> List[dict]:
+    """Run verify_pattern for each applied graduation suggestion.
+
+    For each graduation suggestion in suggestions.jsonl that has a verify_pattern,
+    run the pattern as a shell command from the repo root. Return a list of
+    verification results: {"failure_class", "verify_pattern", "passed", "output"}.
+
+    Passed = exit code 0 AND non-empty stdout (the pattern found something).
+    """
+    import subprocess
+    import re
+
+    path = _suggestions_path()
+    if not path.exists():
+        return []
+
+    results = []
+    seen: set = set()
+
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+        for line in lines[-lookback:]:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                d = json.loads(line)
+            except (json.JSONDecodeError, ValueError):
+                continue
+
+            fp = d.get("failure_pattern", "")
+            verify_pattern = d.get("verify_pattern", "")
+            if not verify_pattern or not fp.startswith("graduation:"):
+                continue
+            fc = fp[len("graduation:"):]
+            if fc in seen:
+                continue
+            seen.add(fc)
+
+            # Run the verify pattern from repo root
+            try:
+                _repo_root = str(Path(__file__).parent.parent)
+                proc = subprocess.run(
+                    verify_pattern,
+                    shell=True,
+                    cwd=_repo_root,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                passed = proc.returncode == 0 and bool(proc.stdout.strip())
+                output = proc.stdout.strip()[:200] or proc.stderr.strip()[:100]
+            except Exception as exc:
+                passed = False
+                output = str(exc)[:100]
+
+            results.append({
+                "failure_class": fc,
+                "verify_pattern": verify_pattern,
+                "passed": passed,
+                "output": output,
+            })
+
+    except Exception as exc:
+        log.debug("verify_graduation_rules: error reading suggestions: %s", exc)
+
+    return results
+
+
 def _now_iso() -> str:
     from datetime import datetime, timezone
     return datetime.now(timezone.utc).isoformat()
@@ -338,8 +426,24 @@ def main() -> None:
                    help="How many recent diagnoses to scan (default: 100)")
     p.add_argument("--dry-run", action="store_true",
                    help="Scan only, do not write suggestions")
+    p.add_argument("--verify", action="store_true",
+                   help="Run verify_pattern for each graduated rule and report pass/fail")
     p.add_argument("--verbose", "-v", action="store_true")
     args = p.parse_args()
+
+    if args.verify:
+        print("Verifying graduated rules (running verify_pattern for each):")
+        vresults = verify_graduation_rules()
+        if not vresults:
+            print("  (no graduated rules with verify_pattern found)")
+        for vr in vresults:
+            icon = "PASS" if vr["passed"] else "FAIL"
+            print(f"  [{icon}] {vr['failure_class']}")
+            if vr["output"]:
+                print(f"         → {vr['output']}")
+        pass_count = sum(1 for v in vresults if v["passed"])
+        print(f"\n{pass_count}/{len(vresults)} verified rules passing")
+        return
 
     candidates = scan_candidates(min_count=args.min_count, lookback=args.lookback)
     print(f"Graduation candidates (min_count={args.min_count}, lookback={args.lookback}):")

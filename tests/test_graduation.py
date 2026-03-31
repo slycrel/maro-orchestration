@@ -241,3 +241,76 @@ class TestRunGraduation:
         monkeypatch.setattr(graduation, "_diagnoses_path", lambda: tmp_path / "missing.jsonl")
         monkeypatch.setattr(graduation, "_suggestions_path", lambda: tmp_path / "sug.jsonl")
         assert graduation.run_graduation() == 0
+
+    def test_suggestion_includes_verify_pattern(self, tmp_path, monkeypatch):
+        """Suggestions written by run_graduation should include verify_pattern."""
+        sug_path = self._setup(tmp_path, monkeypatch, "token_explosion")
+        import graduation
+        graduation.run_graduation(min_count=3)
+        data = json.loads(sug_path.read_text().strip())
+        assert "verify_pattern" in data
+        assert len(data["verify_pattern"]) > 0
+
+
+# ---------------------------------------------------------------------------
+# verify_graduation_rules
+# ---------------------------------------------------------------------------
+
+class TestVerifyGraduationRules:
+    def test_returns_empty_when_no_file(self, tmp_path, monkeypatch):
+        import graduation
+        monkeypatch.setattr(graduation, "_suggestions_path", lambda: tmp_path / "missing.jsonl")
+        assert graduation.verify_graduation_rules() == []
+
+    def test_skips_entries_without_verify_pattern(self, tmp_path, monkeypatch):
+        import graduation
+        sug_path = _write_suggestions(tmp_path, [
+            {"failure_pattern": "graduation:adapter_timeout", "category": "observation"}
+            # no verify_pattern field
+        ])
+        monkeypatch.setattr(graduation, "_suggestions_path", lambda: sug_path)
+        results = graduation.verify_graduation_rules()
+        assert results == []
+
+    def test_passing_verify_pattern(self, tmp_path, monkeypatch):
+        """A pattern that matches (echo something) should pass."""
+        import graduation
+        sug_path = _write_suggestions(tmp_path, [
+            {
+                "failure_pattern": "graduation:adapter_timeout",
+                "category": "observation",
+                "verify_pattern": "echo found_it",
+            }
+        ])
+        monkeypatch.setattr(graduation, "_suggestions_path", lambda: sug_path)
+        results = graduation.verify_graduation_rules()
+        assert len(results) == 1
+        assert results[0]["failure_class"] == "adapter_timeout"
+        assert results[0]["passed"] is True
+        assert "found_it" in results[0]["output"]
+
+    def test_failing_verify_pattern(self, tmp_path, monkeypatch):
+        """A pattern with no output should fail."""
+        import graduation
+        sug_path = _write_suggestions(tmp_path, [
+            {
+                "failure_pattern": "graduation:token_explosion",
+                "category": "prompt_tweak",
+                "verify_pattern": "grep -n 'THIS_STRING_DOES_NOT_EXIST_ANYWHERE' /dev/null 2>/dev/null",
+            }
+        ])
+        monkeypatch.setattr(graduation, "_suggestions_path", lambda: sug_path)
+        results = graduation.verify_graduation_rules()
+        assert len(results) == 1
+        assert results[0]["passed"] is False
+
+    def test_deduplicates_same_failure_class(self, tmp_path, monkeypatch):
+        """Multiple suggestions for same failure_class produce only one verify result."""
+        import graduation
+        sug_path = _write_suggestions(tmp_path, [
+            {"failure_pattern": "graduation:adapter_timeout", "verify_pattern": "echo a"},
+            {"failure_pattern": "graduation:adapter_timeout", "verify_pattern": "echo b"},
+        ])
+        monkeypatch.setattr(graduation, "_suggestions_path", lambda: sug_path)
+        results = graduation.verify_graduation_rules()
+        assert len(results) == 1
