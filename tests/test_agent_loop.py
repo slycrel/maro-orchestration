@@ -258,17 +258,19 @@ def test_loop_steps_marked_in_project(monkeypatch, tmp_path):
 def test_loop_stuck_detection(monkeypatch, tmp_path):
     """If the LLM always flags stuck, loop terminates with status=stuck."""
     _setup_workspace(monkeypatch, tmp_path)
+    import agent_loop as _al
+    # Bypass multi-plan decompose (4 LLM calls) — this test focuses on stuck detection.
+    monkeypatch.setattr(_al, "_decompose",
+                        lambda *a, **kw: ["step one", "step two", "step three"])
+    # Prevent _generate_refinement_hint from calling build_adapter (real subprocess).
+    monkeypatch.setattr(_al, "_generate_refinement_hint",
+                        lambda *a, **kw: "try something different")
+    # Disable Phase 45 auto-recovery (retries with exhausted adapter).
+    monkeypatch.setattr(_al.run_agent_loop, "_recovery_in_progress", True, raising=False)
 
     class AlwaysStuckAdapter:
         def complete(self, messages, **kwargs):
             from llm import LLMResponse, ToolCall
-            user_content = next((m.content for m in reversed(messages) if m.role == "user"), "")
-            # decompose: return steps
-            if "concrete steps" in user_content.lower() or "decompose" in user_content.lower():
-                return LLMResponse(
-                    content='["step one", "step two", "step three"]',
-                    stop_reason="end_turn",
-                )
             # execute: always flag stuck
             return LLMResponse(
                 content="",

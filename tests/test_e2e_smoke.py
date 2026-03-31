@@ -412,13 +412,17 @@ class TestE2EAmbiguous:
     def test_empty_result_step(self, monkeypatch, tmp_path):
         """Step returns empty result — should still count as done (not stuck)."""
         _setup(monkeypatch, tmp_path)
+        import agent_loop as _al
+        # Bypass multi-plan decompose and auto-recovery for deterministic response sequence.
+        monkeypatch.setattr(_al, "_decompose",
+                            lambda *a, **kw: ["Check if file exists", "Report finding"])
+        monkeypatch.setattr(_al.run_agent_loop, "_recovery_in_progress", True, raising=False)
         from agent_loop import run_agent_loop
 
         adapter = ScriptedAdapter([
-            {"steps": ["Check if file exists", "Report finding"]},
-            {"tool": "complete_step", "result": ""},
-            {"tool": "complete_step", "result": "File does not exist"},
-            {"content": json.dumps({"lessons": []})},
+            {"tool": "complete_step", "result": ""},          # Step 1: empty result (still done)
+            {"tool": "complete_step", "result": "File does not exist"},  # Step 2
+            {"content": json.dumps({"lessons": []})},          # Reflection
         ])
 
         result = run_agent_loop(
