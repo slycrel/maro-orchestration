@@ -296,6 +296,7 @@ def handle(
             adapter=adapter,
             dry_run=dry_run,
             verbose=verbose,
+            ralph_verify=_cfg.get("ralph_verify", "").strip().lower() == "true",
         )
         elapsed = int((time.monotonic() - started_at) * 1000)
 

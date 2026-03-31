@@ -3,7 +3,7 @@
 Single canonical location for everything we've identified but haven't done yet.
 Read this at the start of every session. Update it as items are completed or new ones emerge.
 
-Last reviewed: 2026-03-30
+Last reviewed: 2026-03-31
 
 ---
 
@@ -17,7 +17,7 @@ Last reviewed: 2026-03-30
 ## Systemic Improvements (ordered by impact)
 
 ### Verification / Hallucination Detection
-- [ ] **Adversarial verification step** — after research-type steps, run a second pass with adversarial framing ("what evidence contradicts this claim?"). Catches sycophantic confirmation bias. Directly relevant to medical research accuracy.
+- [x] **Adversarial verification step** — implemented in factory_thin (post-execute, pre-compile) and quality_gate (second pass on Mode 2 runs). Catches overclaimed mechanisms, wrong evidence tiers, contested findings. (`factory` branch, 2026-03-31)
 - [ ] **Cross-reference check** — for factual claims, query a second source to verify. Flag disagreements.
 - [ ] **Confidence tagging** — each step result should carry a confidence indicator (strong evidence / weak evidence / model inference / unverified).
 
@@ -43,7 +43,8 @@ Last reviewed: 2026-03-30
 - [ ] **Replay with "factory mode"** — re-run a mission letting evolver inject self-generated sub-goals.
 
 ### Factory Mode Experiment (Mode 3 test)
-- [ ] **"factory" branch** — create a branch that replaces our Mode 2 infrastructure (CEO/Director/Worker hierarchy, sheriff, persona routing) with a single prompt that describes the *desired behavior* instead of implementing it as code. Run the same test suite (Polymarket, nootropic, e2e smoke) across this branch with various models (Sonnet, Opus, Haiku). Compare: does the prompt-based approach match or beat the engineered scaffolding? This is the definitive Bitter Lesson test — if the prompt works as well, we can dramatically simplify the codebase. If it doesn't, we know exactly which scaffolding is load-bearing.
+- [x] **"factory" branch** — created. Two variants: `factory_minimal` (single-call Haiku $0.04-0.06/60s) and `factory_thin` (loop+adversarial Haiku $0.38/375s). Bitter Lesson result: minimal surprisingly competitive; thin+adv matches Mode 2 quality at ~2x lower cost. Scaffolding that's load-bearing: adversarial verification. Scaffolding that's not: persona routing, lesson injection, multi-plan comparison. Polymarket thin+adv pending (needs session-idle run). (2026-03-31)
+- [ ] **Factory branch merge decision** — decide whether to merge factory insights back to main or keep experimental. Options: (a) add `--mode thin` flag to handle.py routing thin+adv loop, (b) merge adversarial review patterns (already done in quality_gate), (c) keep factory as benchmark branch.
 
 ### Conversation Mining (Phase 48 idea)
 - [ ] **Research pass through Telegram + Claude session data** — scrape Poe/Jeremy conversations (Telegram bot history + `~/.claude/projects/` session logs) for orchestration-related ideas, patterns, and deferred concepts. Run them through the system as research goals. Revisiting old ideas with current maturity will surface patterns we missed the first time. Jeremy's gut: as the project progresses, revisiting earlier conversations will yield better/more mature perspectives.

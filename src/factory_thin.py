@@ -129,6 +129,8 @@ def run_factory_thin(
     *,
     model: str = "cheap",
     max_steps: int = 8,
+    verify: bool = False,
+    max_retries: int = 2,
     verbose: bool = False,
 ) -> ThinLoopResult:
     """Run the thin factory loop: decompose → execute → adversarial review → compile."""
@@ -174,44 +176,65 @@ def run_factory_thin(
               for t in EXECUTE_TOOLS]
 
     completed_context = ""
+    if verify:
+        from step_exec import verify_step as _verify_step
+
     for step in steps:
         _log(f"executing step {step.index}: {step.text[:50]!r}")
 
-        context_block = f"\n\nCompleted so far:\n{completed_context}" if completed_context else ""
-        resp = adapter.complete(
-            [
-                LLMMessage("system", FACTORY_STEP),
-                LLMMessage("user",
-                    f"Overall goal: {goal}\n\n"
-                    f"Current step ({step.index}/{len(steps)}): {step.text}"
-                    + context_block
-                ),
-            ],
-            tools=_tools,
-            tool_choice="required",
-            max_tokens=4096,
-            temperature=0.2,
-        )
-        total_tokens_in += resp.input_tokens
-        total_tokens_out += resp.output_tokens
-        step.tokens = resp.input_tokens + resp.output_tokens
+        for _attempt in range(max_retries if verify else 1):
+            context_block = f"\n\nCompleted so far:\n{completed_context}" if completed_context else ""
+            retry_hint = f"\n\nPrevious attempt was rejected by verifier — produce more specific, complete output." if _attempt > 0 else ""
+            resp = adapter.complete(
+                [
+                    LLMMessage("system", FACTORY_STEP),
+                    LLMMessage("user",
+                        f"Overall goal: {goal}\n\n"
+                        f"Current step ({step.index}/{len(steps)}): {step.text}"
+                        + context_block + retry_hint
+                    ),
+                ],
+                tools=_tools,
+                tool_choice="required",
+                max_tokens=4096,
+                temperature=0.2,
+            )
+            total_tokens_in += resp.input_tokens
+            total_tokens_out += resp.output_tokens
+            step.tokens += resp.input_tokens + resp.output_tokens
 
-        if resp.tool_calls:
-            tc = resp.tool_calls[0]
-            if tc.name == "complete_step":
-                step.status = "done"
-                step.result = tc.arguments.get("result", "") or tc.arguments.get("summary", "")
+            candidate_result = ""
+            candidate_status = "stuck"
+
+            if resp.tool_calls:
+                tc = resp.tool_calls[0]
+                if tc.name == "complete_step":
+                    candidate_status = "done"
+                    candidate_result = tc.arguments.get("result", "") or tc.arguments.get("summary", "")
+                elif tc.name == "flag_stuck":
+                    candidate_status = "stuck"
+                    candidate_result = tc.arguments.get("reason", "")
+            elif resp.content and len(resp.content) > 20:
+                candidate_status = "done"
+                candidate_result = resp.content
+
+            if candidate_status == "done" and verify:
+                vresult = _verify_step(step.text, candidate_result, adapter)
+                total_tokens_in += 0  # verify uses cheap adapter call; tokens not tracked separately
+                if not vresult["passed"] and _attempt < max_retries - 1:
+                    _log(f"step {step.index} verify RETRY ({_attempt+1}/{max_retries-1}): {vresult['reason'][:60]}")
+                    continue  # retry
+                elif not vresult["passed"]:
+                    _log(f"step {step.index} verify FAILED after {max_retries} attempts — accepting anyway")
+
+            step.status = candidate_status
+            step.result = candidate_result
+            if candidate_status == "done":
                 completed_context += f"\nStep {step.index} ({step.text[:40]}): {step.result[:200]}"
                 _log(f"step {step.index} done tokens={step.tokens}")
-            elif tc.name == "flag_stuck":
-                step.status = "stuck"
-                step.result = tc.arguments.get("reason", "")
+            else:
                 _log(f"step {step.index} stuck: {step.result[:60]}")
-        else:
-            # No tool call — treat content as result
-            step.status = "done"
-            step.result = resp.content
-            completed_context += f"\nStep {step.index} ({step.text[:40]}): {step.result[:200]}"
+            break  # exit retry loop
 
     # --- Step 3: Adversarial review ---
     done_steps = [s for s in steps if s.status == "done"]
@@ -323,6 +346,8 @@ def main():
                    "claude-haiku-4-5-20251001", "claude-sonnet-4-6", "claude-opus-4-6"],
                    help="Model tier or full model ID")
     p.add_argument("--max-steps", type=int, default=8)
+    p.add_argument("--verify", action="store_true", help="Enable per-step Ralph verify loop")
+    p.add_argument("--max-retries", type=int, default=2, help="Max retries per step when --verify is set")
     p.add_argument("--verbose", "-v", action="store_true")
     p.add_argument("--out", help="Write final report to file")
     args = p.parse_args()
@@ -331,6 +356,8 @@ def main():
         args.goal,
         model=args.model,
         max_steps=args.max_steps,
+        verify=args.verify,
+        max_retries=args.max_retries,
         verbose=args.verbose,
     )
 
