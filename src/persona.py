@@ -625,6 +625,27 @@ def persona_for_goal(
 
 
 # ---------------------------------------------------------------------------
+# Skeptic modifier
+# ---------------------------------------------------------------------------
+
+_SKEPTIC_ADDITION = (
+    "\n\nSKEPTIC MODE: Before proposing any plan or answer, briefly list 2-3 ways "
+    "it could fail, go wrong, or miss the mark. Be specific to this task — not "
+    "generic warnings. Then proceed with your best answer accounting for those risks."
+)
+
+
+def apply_skeptic_modifier(spec: PersonaSpec) -> PersonaSpec:
+    """Return a copy of spec with the skeptic framing prepended to the system prompt.
+
+    Use when the goal is ambiguous, high-stakes, or the previous step produced
+    a result that feels overconfident. Does not affect tool_access or model_tier.
+    """
+    from dataclasses import replace
+    return replace(spec, system_prompt=spec.system_prompt + _SKEPTIC_ADDITION)
+
+
+# ---------------------------------------------------------------------------
 # Persona spec serialization (for CLI display)
 # ---------------------------------------------------------------------------
 

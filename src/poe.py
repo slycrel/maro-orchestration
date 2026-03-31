@@ -552,6 +552,15 @@ def poe_handle(
                 )
                 _spec = _registry.load(_persona_name_selected)
                 if _spec:
+                    # Apply skeptic modifier when goal is prefixed with "skeptic:" or
+                    # contains "--skeptic" flag (stripped from message before execution)
+                    _skeptic = (
+                        message.lower().startswith("skeptic:")
+                        or "--skeptic" in message.lower()
+                    )
+                    if _skeptic:
+                        from persona import apply_skeptic_modifier
+                        _spec = apply_skeptic_modifier(_spec)
                     _persona_context = build_persona_system_prompt(_spec, goal=message)
             except Exception:
                 _persona_context = ""

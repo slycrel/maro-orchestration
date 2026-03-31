@@ -34,7 +34,7 @@ Last reviewed: 2026-03-30
 
 ### Director / Mission Level
 - [ ] **Clarification milestone** — director asks user for clarification on ambiguous goals before committing resources. YOLO option. (Jeremy request)
-- [ ] **User-level config defaults** — "always YOLO", "default model tier", per-domain preferences. Separate from per-goal flags.
+- [x] **User-level config defaults** — Added user/CONFIG.md. Wired: default_model_tier. Documented: yolo, always_skeptic, notify_on_complete. (`low-hanging-fruit`)
 - [ ] **Skip-Director experiment** — for simple NOW-lane goals, skip Director entirely. Bitter Lesson test.
 - [ ] **Multi-agent debate pattern** — bull/bear debaters + risk manager as quality gate. (TradingAgents repo pattern, research in progress)
 

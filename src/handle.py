@@ -137,6 +137,31 @@ def _run_now(
 
 
 # ---------------------------------------------------------------------------
+# User config loader
+# ---------------------------------------------------------------------------
+
+def _load_user_config() -> dict:
+    """Parse user/CONFIG.md into a key→value dict. Non-fatal — returns {} on any error."""
+    try:
+        cfg_path = Path(__file__).resolve().parent.parent / "user" / "CONFIG.md"
+        if not cfg_path.exists():
+            return {}
+        result = {}
+        for line in cfg_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or ":" not in line:
+                continue
+            key, _, val = line.partition(":")
+            key = key.strip()
+            val = val.split("#")[0].strip()  # strip inline comments
+            if key and val:
+                result[key] = val
+        return result
+    except Exception:
+        return {}
+
+
+# ---------------------------------------------------------------------------
 # Core handle function
 # ---------------------------------------------------------------------------
 
@@ -173,6 +198,13 @@ def handle(
 
     if verbose:
         print(f"[poe:{handle_id}] handle: {message!r}", file=sys.stderr, flush=True)
+
+    # Apply user/CONFIG.md defaults (non-fatal — bad config never blocks a run)
+    _cfg = _load_user_config()
+    if model is None:
+        _tier = _cfg.get("default_model_tier", "").strip().lower()
+        if _tier in ("cheap", "mid", "power"):
+            model = _tier
 
     # Build adapter
     if adapter is None and not dry_run:

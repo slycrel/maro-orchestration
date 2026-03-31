@@ -11,7 +11,7 @@ Compiled from Grok research sessions + prototype experiments (2026-03-29).
 
 | Item | What | Where it lands | Effort |
 |------|------|----------------|--------|
-| **Commitment-forced verdicts** | Inspector must end with `VERDICT: PROCEED/RETRY/ABORT`. No hedging. One prompt edit. | `src/inspector.py` system prompt | S |
+| ~~**Commitment-forced verdicts**~~ | ✅ DONE — inspector.py system prompt ends with VERDICT: PROCEED/RETRY/ABORT. | `src/inspector.py` | S |
 | ~~**Pre-plan challenger**~~ | ✅ DONE — _challenge_spec() added to director.py, fires after _produce_spec. | `src/director.py` | S |
 | **Two-tier model routing** | Cheap model for analysis/classify steps, expensive for synthesis/decisions. Static assignment. | `src/agent_loop.py` + `src/llm.py` | M |
 
@@ -20,7 +20,7 @@ Compiled from Grok research sessions + prototype experiments (2026-03-29).
 | Item | Source | What | Where it lands | Effort |
 |------|--------|------|----------------|--------|
 | **Verification patterns on rules** | meta_alchemist / oh-my-claudecode | Each rule gets a machine-checkable grep/script that proves it's being followed. Rule only graduates to permanent after 2x verified pass. | Phase 46 (Intervention Graduation) — add `verify_pattern` field to `rules.jsonl` entries | M |
-| **Skeptic persona modifier** | Grok advice | System prompt addition: "list 2-3 ways this could break before proposing." Optional `--skeptic` flag or persona variant. | `src/persona.py` — add modifier, wire into `persona_for_goal()` | S |
+| ~~**Skeptic persona modifier**~~ | Grok advice | ✅ DONE — apply_skeptic_modifier() in persona.py; trigger with "skeptic:" prefix or "--skeptic" in goal. | `src/persona.py`, `src/poe.py` | S |
 | ~~**Post-mission notification**~~ | oh-my-claudecode | ✅ DONE — fires at end of _finalize_loop() in agent_loop.py. | `src/agent_loop.py` | S |
 | **Polymarket CLI integration** | polymarket-cli (OSS) | Read-only market/position/leaderboard data without wallet. Perfect for research personas. | Researcher persona spec + `src/web_fetch.py` or new `tools/polymarket.py` | S |
 
