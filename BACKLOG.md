@@ -57,12 +57,12 @@ Last reviewed: 2026-03-30
 ## Research to Process
 
 ### Links fetched but not fully digested
-- [ ] **TradingAgents** (github.com/TauricResearch/TradingAgents) — multi-agent Polymarket trading. Orchestration dogfood run in progress.
-- [ ] **Stanford Agent0** — self-improvement without supervision. Orchestration dogfood run in progress.
+- [x] **TradingAgents** (github.com/TauricResearch/TradingAgents) — multi-agent Polymarket trading. Dogfood run complete. Steal items in STEAL_LIST.md: commitment-forced verdicts (done), pre-plan challenger, two-tier model routing.
+- [x] **Stanford Agent0** — self-improvement without supervision. Dogfood run complete. Results in projects/agent0-research/. Key: problem generation + self-evaluation loop. Maps to evolver.
 - [ ] **Polymarket behavioral analysis** (hrundel75) — 400M trades / 2400 wallets. Good prompt for different Polymarket test: "find behavioral patterns not picks."
-- [ ] **LLM sycophancy** (rohanpaul/karpathy) — models mirror prompts not truth. Directly relevant to verification step design.
+- [x] **LLM sycophancy** (rohanpaul/karpathy) — models mirror prompts not truth. Addressed: adversarial verification step now auto-injects for research goals.
 - [ ] **Build-your-own-X** (agenticgirl) — 484k star repo, learning methodology. Low priority.
-- [ ] **FunSearch/EUREKA/Voyager papers** (garybasin) — LLM + genetic programming. Mode 3 territory.
+- [ ] **FunSearch/EUREKA/Voyager papers** (garybasin) — LLM + genetic programming. Mode 3 territory. Read the actual papers.
 
 ### Grok feedback sessions
 - [x] grok-response-2.txt — oh-my-claudecode, 724-office, Mimir steal list. Processed, items in STEAL_LIST.md.
