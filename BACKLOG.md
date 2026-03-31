@@ -80,7 +80,7 @@ Last reviewed: 2026-03-31
 - [ ] **Build-your-own-X** (agenticgirl) — 484k star repo, learning methodology. Low priority.
 - [ ] **FunSearch/EUREKA/Voyager papers** (garybasin) — LLM + genetic programming. Mode 3 territory. Read the actual papers.
 - [x] **claw-code** (github.com/instructkr/claw-code) — Python skeleton of Claude Code's leaked TS source. Most code is stubs but the tool/command inventory is a goldmine. Key findings: verificationAgent is a first-class built-in; TeamCreateTool exists; thinkback/replay is a real pattern; $ralph mode (OmX) validated our Ralph verify loop. Steal list added above. (2026-03-31)
-- [ ] **vtrivedy10 tweet** (x.com/vtrivedy10/status/2038346865775874285) — queued for review/dogfood. (2026-03-31)
+- [ ] **vtrivedy10 tweet** (x.com/vtrivedy10/status/2038346865775874285) — Viv @Vtrivedy10 (LangChain agents/evals) on "harnesses" for autonomous agents: models struggle with long-horizon tasks without scaffolding; well-designed harnesses prevent agents becoming lazy/confused; references @systematicls article on agent failure modes. DeepAgents mentioned. Directly validates Mode 2 scaffolding direction. Fetch the @systematicls linked article for deeper read. (2026-03-31)
 
 ### Grok feedback sessions
 - [x] grok-response-2.txt — oh-my-claudecode, 724-office, Mimir steal list. Processed, items in STEAL_LIST.md.

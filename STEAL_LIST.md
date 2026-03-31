@@ -13,7 +13,7 @@ Compiled from Grok research sessions + prototype experiments (2026-03-29).
 |------|------|----------------|--------|
 | ~~**Commitment-forced verdicts**~~ | ✅ DONE — inspector.py system prompt ends with VERDICT: PROCEED/RETRY/ABORT. | `src/inspector.py` | S |
 | ~~**Pre-plan challenger**~~ | ✅ DONE — _challenge_spec() added to director.py, fires after _produce_spec. | `src/director.py` | S |
-| **Two-tier model routing** | Cheap model for analysis/classify steps, expensive for synthesis/decisions. Static assignment. | `src/agent_loop.py` + `src/llm.py` | M |
+| ~~**Two-tier model routing**~~ | ✅ DONE — `classify_step_model()` in poe.py, wired into agent_loop.py serial and parallel loops. Tier aliases trigger it; explicit model strings bypass it. | `src/poe.py` + `src/agent_loop.py` | — |
 
 ###
 

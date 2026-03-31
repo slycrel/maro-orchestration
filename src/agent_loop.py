@@ -1263,6 +1263,25 @@ def run_agent_loop(
                 _ctx_excerpt += f"\n... ({len(step_result)} chars total — full result in scratchpad step_{step_idx})"
             _ctx_entry = f"Step {step_idx} ({step_text[:80]}):\n{_ctx_excerpt}"
             completed_context.append(_ctx_entry)
+
+            # Completed context compression (BACKLOG: prevent linear growth).
+            # Keep last 3 entries at full length; compress older ones to a one-liner.
+            # Older steps matter less — recent context dominates step execution quality.
+            _CTX_KEEP_FULL = 3
+            _CTX_COMPRESS_AFTER = 5
+            if len(completed_context) > _CTX_COMPRESS_AFTER:
+                _old_entries = completed_context[:-_CTX_KEEP_FULL]
+                _new_entries = completed_context[-_CTX_KEEP_FULL:]
+                _compressed = []
+                for _e in _old_entries:
+                    _header = _e.split("\n", 1)[0]
+                    _body_raw = _e.split("\n", 1)[1] if "\n" in _e else ""
+                    _body_short = _body_raw[:100].replace("\n", " ")
+                    if len(_body_raw) > 100:
+                        _body_short += "..."
+                    _compressed.append(f"{_header} [summary]: {_body_short}")
+                completed_context = _compressed + list(_new_entries)
+
             if verbose:
                 print(f"[poe] step {step_idx} done: {step_summary[:120]}", file=sys.stderr, flush=True)
             # Phase 32: update utility score for any matching skills
