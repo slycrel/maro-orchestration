@@ -28,7 +28,7 @@ Compiled from Grok research sessions + prototype experiments (2026-03-29).
 
 | Item | Source | What | Where it lands | Effort |
 |------|--------|------|----------------|--------|
-| **Hybrid retrieval (BM25 + vector + RRF)** | Mimir | Combined keyword + semantic search with Reciprocal Rank Fusion reranking. Replaces pure TF-IDF in memory. | `src/memory.py` — add `hybrid_search.py` alongside existing TF-IDF | M |
+| ~~**Hybrid retrieval (BM25 + vector + RRF)**~~ | Mimir | ✅ DONE — `src/hybrid_search.py` with BM25 + RRF. memory.py wired to use `hybrid_rank` (graceful fallback to TF-IDF). Vector deferred (needs embedding API). | `src/hybrid_search.py` + `src/memory.py` | M |
 | **Error nodes as queryable memory** | Mimir | Store failures as first-class nodes so agents self-query "what broke last time on similar goal?" | `src/memory.py` + `memory/diagnoses.jsonl` (Phase 44 data) | M |
 | ~~**Skills trigger arrays**~~ | oh-my-claudecode | ✅ DONE — `trigger_patterns` field already on Skill dataclass; keyword fallback in `find_matching_skills()` does exact substring matching. Functionally identical. | `src/skills.py` | — |
 | **Auto-resume on rate limits** | oh-my-claudecode | Detect API rate limit, pause mission, poll, resume automatically. | `src/heartbeat.py` or `src/sheriff.py` — extend with rate-limit watch | M |

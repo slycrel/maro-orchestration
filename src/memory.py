@@ -45,6 +45,13 @@ from typing import Any, Dict, List, Optional
 
 log = logging.getLogger("poe.memory")
 
+# Hybrid retrieval (BM25 + RRF) — graceful fallback to TF-IDF if unavailable
+try:
+    from hybrid_search import hybrid_rank as _hybrid_rank
+    _USE_HYBRID = True
+except ImportError:  # pragma: no cover
+    _USE_HYBRID = False
+
 
 # ---------------------------------------------------------------------------
 # Data types
@@ -285,7 +292,10 @@ def load_lessons(
                 return getattr(self._l, name)
 
         proxies = [_LessonProxy(l) for l in deduped]
-        ranked = _tfidf_rank(query, proxies, top_k=limit)  # type: ignore[arg-type]
+        if _USE_HYBRID:
+            ranked = _hybrid_rank(query, proxies, top_k=limit)
+        else:
+            ranked = _tfidf_rank(query, proxies, top_k=limit)  # type: ignore[arg-type]
         return [p._l for p in ranked]  # type: ignore[attr-defined]
 
     return deduped[:limit]
@@ -1032,7 +1042,8 @@ def inject_tiered_lessons(
         limit=max_long * _pool_multiplier,
     )
     if goal and len(long_candidates) > max_long:
-        long_candidates = _tfidf_rank(goal, long_candidates, top_k=max_long)
+        _ranker = _hybrid_rank if _USE_HYBRID else _tfidf_rank
+        long_candidates = _ranker(goal, long_candidates, top_k=max_long)
     long_lessons = long_candidates[:max_long]
 
     if long_lessons:
@@ -1047,7 +1058,8 @@ def inject_tiered_lessons(
         limit=max_medium * _pool_multiplier,
     )
     if goal and len(medium_candidates) > max_medium:
-        medium_candidates = _tfidf_rank(goal, medium_candidates, top_k=max_medium)
+        _ranker = _hybrid_rank if _USE_HYBRID else _tfidf_rank
+        medium_candidates = _ranker(goal, medium_candidates, top_k=max_medium)
     medium_lessons = medium_candidates[:max_medium]
 
     if medium_lessons:
