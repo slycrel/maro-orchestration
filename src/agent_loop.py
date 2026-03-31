@@ -1002,17 +1002,20 @@ def run_agent_loop(
 
         step_start = time.monotonic()
         # Phase 35 P1: per-step model selection — cheap retrieval/classify steps use Haiku
+        # Skip if caller explicitly specified a non-tier model string (e.g. --model claude-haiku-...)
         _step_adapter = adapter
-        try:
-            from poe import classify_step_model
-            _step_model = classify_step_model(step_text)
-            if _step_model != adapter.model_key:
-                _step_adapter = build_adapter(model=_step_model)
-                if verbose:
-                    _tier = "haiku" if _step_model == MODEL_CHEAP else "sonnet"
-                    print(f"[poe] step {step_idx}: routing to {_tier} (classify_step_model)", file=sys.stderr, flush=True)
-        except Exception:
-            pass  # Model selection failures must never break the loop
+        _explicit_model = getattr(adapter, "model_key", "") not in ("cheap", "mid", "power", "")
+        if not _explicit_model:
+            try:
+                from poe import classify_step_model
+                _step_model = classify_step_model(step_text)
+                if _step_model != adapter.model_key:
+                    _step_adapter = build_adapter(model=_step_model)
+                    if verbose:
+                        _tier = "haiku" if _step_model == MODEL_CHEAP else "sonnet"
+                        print(f"[poe] step {step_idx}: routing to {_tier} (classify_step_model)", file=sys.stderr, flush=True)
+            except Exception:
+                pass  # Model selection failures must never break the loop
 
         # _next_step_injected is set by the previous iteration's hook run
         _step_ancestry = (

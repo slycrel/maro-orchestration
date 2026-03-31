@@ -36,14 +36,19 @@ except ImportError:  # pragma: no cover
 # ---------------------------------------------------------------------------
 
 COST_BY_MODEL: Dict[str, Dict[str, float]] = {
-    # Claude 4.x (current)
-    "claude-opus-4-6":         {"input": 15.00, "output": 75.00},
-    "claude-sonnet-4-6":       {"input":  3.00, "output": 15.00},
-    "claude-haiku-4-5":        {"input":  0.80, "output":  4.00},
+    # Claude 4.x (current) — full versioned IDs
+    "claude-opus-4-6":             {"input": 15.00, "output": 75.00},
+    "claude-sonnet-4-6":           {"input":  3.00, "output": 15.00},
+    "claude-haiku-4-5":            {"input":  0.80, "output":  4.00},
+    "claude-haiku-4-5-20251001":   {"input":  0.80, "output":  4.00},
     # Short-form aliases (as used by subprocess adapter)
-    "opus":                    {"input": 15.00, "output": 75.00},
-    "sonnet":                  {"input":  3.00, "output": 15.00},
-    "haiku":                   {"input":  0.80, "output":  4.00},
+    "opus":                        {"input": 15.00, "output": 75.00},
+    "sonnet":                      {"input":  3.00, "output": 15.00},
+    "haiku":                       {"input":  0.80, "output":  4.00},
+    # Tier constants
+    "cheap":                       {"input":  0.80, "output":  4.00},
+    "mid":                         {"input":  3.00, "output": 15.00},
+    "power":                       {"input": 15.00, "output": 75.00},
 }
 
 # Default fallback — assumes mid-tier (Sonnet) when model is unknown
