@@ -3,7 +3,7 @@
 Single canonical location for everything we've identified but haven't done yet.
 Read this at the start of every session. Update it as items are completed or new ones emerge.
 
-Last reviewed: 2026-03-30
+Last reviewed: 2026-03-31
 
 ---
 
@@ -17,7 +17,8 @@ Last reviewed: 2026-03-30
 ## Systemic Improvements (ordered by impact)
 
 ### Verification / Hallucination Detection
-- [ ] **Adversarial verification step** — after research-type steps, run a second pass with adversarial framing ("what evidence contradicts this claim?"). Catches sycophantic confirmation bias. Directly relevant to medical research accuracy.
+- [x] **Adversarial verification step** — implemented in factory_thin (post-execute, pre-compile) and quality_gate (second pass on Mode 2 runs). Catches overclaimed mechanisms, wrong evidence tiers, contested findings. (`factory` branch, 2026-03-31)
+- [ ] **LLM Council / multi-angle critique skill** — Karpathy's LLM Council ported to Claude Code skill: spawn N sub-agents with distinct critical framings (devil's advocate, domain skeptic, implementation critic) that critique a plan/idea before synthesis. Direct cure for AI sycophancy. Relevant for Director's pre-plan challenger and quality gate. (hesamation/@x, 2026-03-31)
 - [ ] **Cross-reference check** — for factual claims, query a second source to verify. Flag disagreements.
 - [ ] **Confidence tagging** — each step result should carry a confidence indicator (strong evidence / weak evidence / model inference / unverified).
 
@@ -43,7 +44,10 @@ Last reviewed: 2026-03-30
 - [ ] **Replay with "factory mode"** — re-run a mission letting evolver inject self-generated sub-goals.
 
 ### Factory Mode Experiment (Mode 3 test)
-- [ ] **"factory" branch** — create a branch that replaces our Mode 2 infrastructure (CEO/Director/Worker hierarchy, sheriff, persona routing) with a single prompt that describes the *desired behavior* instead of implementing it as code. Run the same test suite (Polymarket, nootropic, e2e smoke) across this branch with various models (Sonnet, Opus, Haiku). Compare: does the prompt-based approach match or beat the engineered scaffolding? This is the definitive Bitter Lesson test — if the prompt works as well, we can dramatically simplify the codebase. If it doesn't, we know exactly which scaffolding is load-bearing.
+- [x] **"factory" branch** — created. Two variants: `factory_minimal` (single-call Haiku $0.04-0.06/60s) and `factory_thin` (loop+adversarial Haiku $0.38/375s). Bitter Lesson result: minimal surprisingly competitive; thin+adv matches Mode 2 quality at ~2x lower cost. Scaffolding that's load-bearing: adversarial verification. Scaffolding that's not: persona routing, lesson injection, multi-plan comparison. (2026-03-31)
+- [x] **Factory comparison complete** — Full comparison table in /tmp/factory-comparison.md. Key: thin+adv+verify nootropic: $0.36/493s/6 steps done. thin+adv polymarket: $1.40/574s/7 of 8 steps (Haiku token explosion on research = 4.4× Mode 2 tokens, so cost advantage disappears for complex goals). Mode 2 polymarket: $1.27/1156s/8 steps done on Sonnet. (2026-03-31)
+- [ ] **Factory branch merge decision** — Adversarial patterns already merged to main (quality_gate two-pass, handle.py contested claims). Remaining option: add `--mode thin` flag to handle.py for when wall-time matters more than depth. Ralph verify (--verify) validated useful for research goals. (2026-03-31)
+- [ ] **Token efficiency prompt in factory_thin** — FACTORY_STEP prompt lacks the "Target under 500 tokens" constraint from Mode 2's EXECUTE_SYSTEM. Haiku generates verbose step outputs (~560K tokens on step 1 of polymarket). Adding token efficiency language would fix the cost explosion on complex goals.
 
 ### Conversation Mining (Phase 48 idea)
 - [ ] **Research pass through Telegram + Claude session data** — scrape Poe/Jeremy conversations (Telegram bot history + `~/.claude/projects/` session logs) for orchestration-related ideas, patterns, and deferred concepts. Run them through the system as research goals. Revisiting old ideas with current maturity will surface patterns we missed the first time. Jeremy's gut: as the project progresses, revisiting earlier conversations will yield better/more mature perspectives.
@@ -53,6 +57,17 @@ Last reviewed: 2026-03-30
 - [ ] **Phase 42 nightly eval** — wire eval suite to evolver on a schedule.
 - [ ] **Auto-resume daemon** — detect API rate limits, pause mission, poll, resume. (oh-my-claudecode pattern, partially addressed with retry)
 - [ ] **Cron persistence** — scheduled missions survive restarts. `jobs.json` pattern. (724-office)
+- [ ] **ScheduleCronTool in Poe heartbeat** — wire Poe's cron tool so she can schedule her own future runs from within a mission. Closes the self-managing loop. (claw-code pattern)
+
+### claw-code steal list (github.com/instructkr/claw-code — Claude Code architecture map)
+- [ ] **verificationAgent as first-class agent** — Claude Code has `verificationAgent` as a peer to `planAgent`/`exploreAgent` in its built-in agent suite. Promote `verify_step()` to a named agent type with its own system prompt and tool set, not just a function call.
+- [ ] **TeamCreateTool pattern** — model-directed dynamic team creation/deletion at runtime. The LLM decides team composition mid-mission, not just at plan time. More dynamic than our Director/Worker hierarchy.
+- [ ] **thinkback replay** — session-level decision replay for self-improvement. Replay past missions with hindsight, compare decisions. Maps to Phase 44/45 but at session scope.
+- [ ] **effort modifier** — add `effort:` keyword to handle.py routing that sets a thinking/token budget level. Claude Code has a `/effort` command for this; we should support it as a goal prefix modifier.
+- [ ] **passes command** — multi-pass review as a unified first-class concept (vs our separate Inspector + adversarial reviewer). Worth unifying.
+- [ ] **ultraplan / ultrareview modes** — on-demand deep planning/review beyond normal operation. Discrete "go deeper" mode rather than always-on scaffolding.
+- [ ] **bughunter mode** — self-directed code quality scan. Poe scanning her own orchestration code for bugs, not just diagnosing runtime failures.
+- [ ] **btw (by-the-way) mode** — non-blocking observation mode; agent surfaces observations without interrupting workflow. Good for Inspector-style notes that don't block step execution.
 
 ## Research to Process
 
@@ -63,6 +78,7 @@ Last reviewed: 2026-03-30
 - [x] **LLM sycophancy** (rohanpaul/karpathy) — models mirror prompts not truth. Addressed: adversarial verification step now auto-injects for research goals.
 - [ ] **Build-your-own-X** (agenticgirl) — 484k star repo, learning methodology. Low priority.
 - [ ] **FunSearch/EUREKA/Voyager papers** (garybasin) — LLM + genetic programming. Mode 3 territory. Read the actual papers.
+- [x] **claw-code** (github.com/instructkr/claw-code) — Python skeleton of Claude Code's leaked TS source. Most code is stubs but the tool/command inventory is a goldmine. Key findings: verificationAgent is a first-class built-in; TeamCreateTool exists; thinkback/replay is a real pattern; $ralph mode (OmX) validated our Ralph verify loop. Steal list added above. (2026-03-31)
 
 ### Grok feedback sessions
 - [x] grok-response-2.txt — oh-my-claudecode, 724-office, Mimir steal list. Processed, items in STEAL_LIST.md.

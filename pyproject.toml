@@ -34,6 +34,8 @@ poe-gc = "gc_memory:main"
 poe-introspect = "introspect:main"
 poe-task = "task_store:main"
 poe-doctor = "doctor:main"
+poe-factory-minimal = "factory_minimal:main"
+poe-factory-thin = "factory_thin:main"
 poe-test = "bootstrap:_smoke_main"
 
 [tool.setuptools.packages.find]

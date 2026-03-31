@@ -137,7 +137,7 @@ class LoopResult:
 # Prompts and tools — extracted to planner.py and step_exec.py for readability.
 # Re-exported here for backward compatibility with existing imports.
 from planner import DECOMPOSE_SYSTEM, parse_steps as _parse_steps, decompose as _decompose_impl
-from step_exec import EXECUTE_SYSTEM, EXECUTE_TOOLS, execute_step as _execute_step, generate_refinement_hint as _generate_refinement_hint
+from step_exec import EXECUTE_SYSTEM, EXECUTE_TOOLS, execute_step as _execute_step, generate_refinement_hint as _generate_refinement_hint, verify_step as _verify_step
 
 _DECOMPOSE_SYSTEM = DECOMPOSE_SYSTEM
 _EXECUTE_SYSTEM = EXECUTE_SYSTEM
@@ -609,6 +609,7 @@ def run_agent_loop(
     parallel_fan_out: int = 0,
     token_budget: Optional[int] = None,
     cost_budget: Optional[float] = None,
+    ralph_verify: bool = False,
 ) -> LoopResult:
     """Run the autonomous loop for a goal.
 
@@ -1095,6 +1096,27 @@ def run_agent_loop(
         step_status = outcome["status"]
         step_result = outcome.get("result", "")
         step_summary = outcome.get("summary", step_text)
+
+        # Ralph verify loop — check that a "done" step actually addressed its goal.
+        # Triggered by "ralph:" or "verify:" prefix in goal text, or ralph_verify=True kwarg
+        # (handle.py passes this from user/CONFIG.md ralph_verify: true).
+        _ralph_active = ralph_verify or goal.lower().startswith(("ralph:", "verify:"))
+        if step_status == "done" and _ralph_active and step_result:
+            try:
+                _vr = _verify_step(step_text, step_result, _step_adapter)
+                if not _vr["passed"]:
+                    log.info("ralph verify FAIL step=%d reason=%r — marking blocked for retry",
+                             step_idx, _vr["reason"][:80])
+                    if verbose:
+                        print(f"[poe] ralph verify: step {step_idx} RETRY — {_vr['reason'][:80]}",
+                              file=sys.stderr, flush=True)
+                    # Treat as blocked so the loop's existing retry machinery handles it
+                    outcome["status"] = "blocked"
+                    outcome["stuck_reason"] = f"[ralph verify] {_vr['reason']}"
+                    step_status = "blocked"
+                    step_result = outcome.get("result", "")
+            except Exception:
+                pass  # verify never blocks loop progress
 
         # Phase 36: emit step event to events.jsonl for live observability
         try:

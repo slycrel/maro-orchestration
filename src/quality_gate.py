@@ -4,6 +4,10 @@ After a loop finishes, the quality gate reviews the output and decides whether
 it meets the bar for the goal. If not, it can recommend or trigger a re-run at
 a higher model tier.
 
+The gate also runs an adversarial pass that produces specific contested claims —
+these are appended to the result text even on PASS, so the output flags its own
+weak spots rather than silently emitting potentially overclaimed findings.
+
 The gate uses a cheap model (Haiku) regardless of what ran the loop — fast,
 low-cost, and good enough at pattern-matching for "was this thorough?".
 
@@ -12,13 +16,15 @@ Usage:
     verdict = run_quality_gate(goal, step_outcomes, adapter)
     if verdict.escalate:
         print(f"Re-run needed: {verdict.reason}")
+    if verdict.contested_claims:
+        print(f"Contested: {verdict.contested_claims}")
 """
 
 from __future__ import annotations
 
 import logging
 import textwrap
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Optional
 
 log = logging.getLogger("poe.quality_gate")
@@ -50,6 +56,25 @@ _GATE_SYSTEM = textwrap.dedent("""\
     the output would genuinely mislead or disappoint the user.
 """).strip()
 
+_ADVERSARIAL_SYSTEM = textwrap.dedent("""\
+    You are an adversarial reviewer. A research task just completed. Your job:
+    challenge the claims before they reach the user.
+
+    For each significant claim in the output:
+    - Is the evidence actually what it claims to be? (RCT vs observational vs animal?)
+    - Is the mechanism sound, or is it extrapolation?
+    - Are there competing studies, frameworks, or interpretations not mentioned?
+    - Is the dose, population, or context applicable to the goal?
+
+    Grade each finding: CONFIRMED / DOWNGRADED / CONTESTED / OVERCLAIMED.
+    Be specific — cite what's wrong, not just that something is uncertain.
+    Skip claims that are clearly solid. Focus on what would change a decision.
+
+    Produce a concise list of contested claims with verdict and one-sentence reason.
+    If everything checks out, respond with an empty list: []
+    Format: JSON array of {"claim": "...", "verdict": "...", "reason": "..."}
+""").strip()
+
 
 @dataclass
 class QualityVerdict:
@@ -57,6 +82,7 @@ class QualityVerdict:
     reason: str
     confidence: float
     escalate: bool      # True if verdict == "ESCALATE" and confidence is high enough
+    contested_claims: List[dict] = field(default_factory=list)  # from adversarial pass
 
 
 def run_quality_gate(
@@ -65,8 +91,15 @@ def run_quality_gate(
     adapter=None,
     *,
     confidence_threshold: float = 0.75,
+    run_adversarial: bool = True,
 ) -> QualityVerdict:
     """Review completed loop output and return a quality verdict.
+
+    Runs two passes:
+    1. PASS/ESCALATE verdict — should we re-run at a higher tier?
+    2. Adversarial claim review — what specific claims are contested/overclaimed?
+       Contested claims are returned in verdict.contested_claims regardless of
+       PASS/ESCALATE, so callers can append them to the result text.
 
     Uses the provided adapter (should be cheap tier — gate itself is cheap).
     Returns PASS with low confidence on any failure — gate errors must never
@@ -77,6 +110,7 @@ def run_quality_gate(
         step_outcomes: List of StepOutcome objects from the loop.
         adapter: LLM adapter to use for the review (cheap tier recommended).
         confidence_threshold: Minimum confidence to act on ESCALATE.
+        run_adversarial: Whether to run the adversarial claim review pass.
     """
     if adapter is None:
         return QualityVerdict("PASS", "no adapter — gate skipped", 0.0, False)
@@ -95,10 +129,17 @@ def run_quality_gate(
         for i, s in enumerate(review_steps)
     )
 
+    verdict = "PASS"
+    reason = ""
+    confidence = 0.0
+    escalate = False
+    contested_claims: List[dict] = []
+
     try:
         from llm import LLMMessage
         import json
 
+        # --- Pass 1: PASS/ESCALATE verdict ---
         user_msg = (
             f"Goal: {goal[:300]}\n\n"
             f"Output from final steps:\n{output_summary}\n\n"
@@ -125,12 +166,46 @@ def run_quality_gate(
             escalate = verdict == "ESCALATE" and confidence >= confidence_threshold
             log.info("quality_gate verdict=%s confidence=%.2f escalate=%s reason=%r",
                      verdict, confidence, escalate, reason[:80])
-            return QualityVerdict(verdict, reason, confidence, escalate)
 
     except Exception as exc:
-        log.debug("quality_gate failed (non-fatal): %s", exc)
+        log.debug("quality_gate pass1 failed (non-fatal): %s", exc)
+        return QualityVerdict("PASS", "gate parse error — defaulting to pass", 0.0, False)
 
-    return QualityVerdict("PASS", "gate parse error — defaulting to pass", 0.0, False)
+    # --- Pass 2: Adversarial claim review ---
+    if run_adversarial:
+        try:
+            from llm import LLMMessage
+            import json
+
+            adv_resp = adapter.complete(
+                [
+                    LLMMessage("system", _ADVERSARIAL_SYSTEM),
+                    LLMMessage("user",
+                        f"Goal: {goal[:300]}\n\n"
+                        f"Output to challenge:\n{output_summary}"
+                    ),
+                ],
+                max_tokens=1024,
+                temperature=0.3,
+            )
+
+            adv_content = adv_resp.content.strip()
+            start = adv_content.find("[")
+            end = adv_content.rfind("]") + 1
+            if start >= 0 and end > start:
+                parsed = json.loads(adv_content[start:end])
+                if isinstance(parsed, list):
+                    contested_claims = [
+                        c for c in parsed
+                        if isinstance(c, dict) and c.get("claim")
+                    ]
+                    log.info("quality_gate adversarial found %d contested claims",
+                             len(contested_claims))
+
+        except Exception as exc:
+            log.debug("quality_gate adversarial pass failed (non-fatal): %s", exc)
+
+    return QualityVerdict(verdict, reason, confidence, escalate, contested_claims)
 
 
 def next_model_tier(current_model: str) -> Optional[str]:

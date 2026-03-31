@@ -950,20 +950,37 @@ Closes the full loop: observe → classify → fix → verify → graduate.
 
 ---
 
-### Phase 47: Factory Mode Experiment — Bitter Lesson Validation *(TODO)*
+### Phase 47: Factory Mode Experiment — Bitter Lesson Validation *(PARTIAL — see Phase 49)*
 
 *"If the prompt works as well as the code, the code is legacy cruft."*
 
-Create a `factory` branch that replaces Mode 2 infrastructure (CEO/Director/Worker hierarchy, sheriff, persona routing, parallel fan-out logic) with a single system prompt that describes the desired behavior. The agent gets: goal + user context + tools + memory — but no engineered execution logic. It decides how to decompose, route, verify, and recover on its own.
+**Shipped (2026-03-31):** `factory_minimal` (single-call, $0.04-0.06/60s) and `factory_thin+adv` (decompose → execute → adversarial review → compile) built and benchmarked. Key findings extracted and merged. Full results in `docs/FACTORY_MODE_FINDINGS.md`.
 
-Run the same test suite (Polymarket, nootropic, e2e smoke) across this branch with Sonnet, Opus, and Haiku. Compare completion rate, token cost, output quality, and failure modes against mainline.
+**What was learned:**
+- Adversarial review is load-bearing → merged to `quality_gate.py` and `handle.py`
+- Ralph verify loop adds value for research goals → available via `--verify` flag and `ralph:` prefix
+- Token efficiency prompt critical for Haiku → added to `FACTORY_STEP`
+- Not load-bearing: persona routing, lesson injection, multi-plan comparison
+- Haiku token explosion on complex research goals makes factory_thin not reliably cheaper than Mode 2 on Sonnet
 
-**Expected outcomes:**
-- If prompt-only matches mainline: aggressively simplify the codebase, keep only memory + tools + observability
-- If prompt-only fails on specific patterns: those patterns are the load-bearing scaffolding worth keeping
-- The gap between Sonnet and Opus on prompt-only reveals how much our scaffolding compensates for model capability
+**What's deferred:** Full factory-vs-Mode-2 conclusion is premature. Variance is high, Mode 2 is still evolving, no scoring rubric yet. Revisit in Phase 49 after Mode 2 stabilizes. See `BACKLOG.md` for open items.
 
-This is the definitive test of whether we're building infrastructure or hobbles.
+---
+
+### Phase 49: Factory Mode Revisit — Full Comparison *(TODO — shelved until Phase 46+ ships)*
+
+*"Test factory mode vs a stable target, not a moving one."*
+
+Revisit the factory-vs-Mode-2 comparison after Mode 2 has stabilized (post-Phase 46 graduation, post-context compression). The key question — can we prompt our way into the full pipeline? — needs:
+
+1. **A scoring rubric** — subjective quality comparison isn't enough. Define 5-10 criteria (evidence tier accuracy, actionability, contested claim rate, hallucination rate) with numeric scores.
+2. **3+ goal types** — nootropic and polymarket aren't enough. Add at least one code-related goal and one ops/planning goal.
+3. **Sonnet factory run** — all Phase 47 runs used Haiku. A Sonnet factory run isolates prompt design from model capability.
+4. **Token efficiency validation** — confirm the `FACTORY_STEP` token efficiency prompt fix actually closes the Haiku verbosity gap.
+
+**Decision gate:** After Phase 49, make a binary call: merge factory as `--mode thin` flag in `handle.py`, or discard factory branch entirely.
+
+*Prerequisite: Phase 46 shipped, Mode 2 stable for 2+ weeks.*
 
 ---
 

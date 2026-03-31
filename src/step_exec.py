@@ -357,3 +357,80 @@ def execute_step(
         "tokens_in": resp.input_tokens,
         "tokens_out": resp.output_tokens,
     }
+
+
+# ---------------------------------------------------------------------------
+# Ralph verify loop — per-step verification
+# ---------------------------------------------------------------------------
+
+_VERIFY_SYSTEM = textwrap.dedent("""\
+    You are a step verifier. A step in a larger task just completed.
+    Your job: did the result actually accomplish what the step asked for?
+
+    PASS: the result directly addresses the step goal with specific content.
+    RETRY: the result is vague, off-topic, incomplete, or mostly a plan for doing
+           the work rather than the work itself.
+
+    Respond with JSON only:
+    {"verdict": "PASS" or "RETRY", "reason": "one sentence", "confidence": 0.0-1.0}
+
+    Be strict but fair. RETRY only if the result genuinely failed the step goal.
+    Do not retry steps that are complete but imperfect.
+""").strip()
+
+
+def verify_step(
+    step_text: str,
+    result: str,
+    adapter,
+    *,
+    confidence_threshold: float = 0.75,
+) -> dict:
+    """Verify that a completed step result actually addressed the step goal.
+
+    Returns a dict with:
+        passed: bool — True if step should be accepted as-is
+        reason: str — why it passed or failed
+        confidence: float
+
+    Non-fatal — returns passed=True on any error so verify never blocks execution.
+    """
+    # Coerce to string — model sometimes returns dict/list in tool call arguments
+    if not isinstance(result, str):
+        result = str(result) if result else ""
+    if not result.strip():
+        return {"passed": False, "reason": "empty result", "confidence": 1.0}
+
+    try:
+        from llm import LLMMessage
+        import json
+
+        resp = adapter.complete(
+            [
+                LLMMessage("system", _VERIFY_SYSTEM),
+                LLMMessage("user",
+                    f"Step goal: {step_text}\n\n"
+                    f"Step result (first 1200 chars):\n{result[:1200]}"
+                ),
+            ],
+            max_tokens=128,
+            temperature=0.1,
+        )
+
+        content = resp.content.strip()
+        start = content.find("{")
+        end = content.rfind("}") + 1
+        if start >= 0 and end > start:
+            data = json.loads(content[start:end])
+            verdict = data.get("verdict", "PASS").upper()
+            reason = data.get("reason", "")
+            confidence = float(data.get("confidence", 0.5))
+            passed = verdict == "PASS" or confidence < confidence_threshold
+            log.debug("verify_step verdict=%s confidence=%.2f passed=%s reason=%r",
+                      verdict, confidence, passed, reason[:80])
+            return {"passed": passed, "reason": reason, "confidence": confidence}
+
+    except Exception as exc:
+        log.debug("verify_step failed (non-fatal): %s", exc)
+
+    return {"passed": True, "reason": "verify skipped (error)", "confidence": 0.0}
