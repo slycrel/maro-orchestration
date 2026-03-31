@@ -839,18 +839,11 @@ Today workers receive a fixed prompt with hardcoded capabilities. A tool registr
 
 ---
 
-### Phase 42: Nightly Eval Wired to Evolver *(TODO)*
+### Phase 42: Nightly Eval Wired to Evolver *(DONE)*
 
 *`eval.py` exists. Make it run automatically and feed failures back into evolver.*
 
-Currently eval is a one-shot CLI command. The loop is: run eval → find regressions → evolver proposes fixes → human applies. The missing piece is automation.
-
-**Plan:**
-- Heartbeat triggers `run_nightly_eval()` once per 24h window (after midnight)
-- `eval.py` runs against a curated set of past goals (stored in `memory/eval-corpus.jsonl`)
-- Failures generate `evolver.Suggestion` entries with `category="eval_regression"` and `confidence=0.9`
-- These surface in `poe-evolver --list` and auto-apply if confidence >= 0.8 (existing mechanism)
-- Eval corpus seeded from `outcomes.jsonl` successes with success_rate >= 0.9
+**Shipped (2026-03-31):** `run_nightly_eval()` added to `eval.py`. Wired into `heartbeat_loop()` via `eval_every=1440` parameter (~24h at 60s tick). Failures generate Suggestion entries with `category="observation"` and `confidence=0.9` which the evolver auto-applies. All 4 built-in benchmarks currently passing.
 
 ---
 

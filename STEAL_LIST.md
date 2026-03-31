@@ -30,7 +30,7 @@ Compiled from Grok research sessions + prototype experiments (2026-03-29).
 |------|--------|------|----------------|--------|
 | **Hybrid retrieval (BM25 + vector + RRF)** | Mimir | Combined keyword + semantic search with Reciprocal Rank Fusion reranking. Replaces pure TF-IDF in memory. | `src/memory.py` — add `hybrid_search.py` alongside existing TF-IDF | M |
 | **Error nodes as queryable memory** | Mimir | Store failures as first-class nodes so agents self-query "what broke last time on similar goal?" | `src/memory.py` + `memory/diagnoses.jsonl` (Phase 44 data) | M |
-| **Skills trigger arrays** | oh-my-claudecode | `triggers: ["arbitrage", "liquidity"]` field on skills for keyword auto-injection. Complements TF-IDF. | `src/skills.py` — add `triggers` field to skill entries | S |
+| ~~**Skills trigger arrays**~~ | oh-my-claudecode | ✅ DONE — `trigger_patterns` field already on Skill dataclass; keyword fallback in `find_matching_skills()` does exact substring matching. Functionally identical. | `src/skills.py` | — |
 | **Auto-resume on rate limits** | oh-my-claudecode | Detect API rate limit, pause mission, poll, resume automatically. | `src/heartbeat.py` or `src/sheriff.py` — extend with rate-limit watch | M |
 | **SlowUpdateScheduler** | MetaClaw | IDLE_WAIT -> WINDOW_OPEN -> UPDATING -> PAUSING state machine. Gates heavy background work. | New module, called from heartbeat/cron | M |
 | **Cron persistence (`jobs.json`)** | 724-office | Scheduled missions survive restarts. JSON file with timezone-aware one-shot + recurring entries. | Extend heartbeat or new `src/scheduler.py` | M |

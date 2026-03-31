@@ -393,6 +393,7 @@ def heartbeat_loop(
     evolver_every: int = 10,
     inspector_every: int = 20,
     mission_check_every: int = 5,
+    eval_every: int = 1440,   # Phase 42: ~24h at 60s interval
     dry_run: bool = False,
     verbose: bool = True,
     escalate: bool = True,
@@ -407,6 +408,9 @@ def heartbeat_loop(
 
     Every `mission_check_every` cycles (Phase 34), checks for pending
     missions and logs/notifies if autonomous drain would be warranted.
+
+    Every `eval_every` cycles (Phase 42, default ~24h), runs the eval suite
+    and converts any regressions to evolver Suggestion entries.
     """
     if verbose:
         print(
@@ -461,6 +465,16 @@ def heartbeat_loop(
             except Exception as e:
                 if verbose:
                     print(f"[heartbeat] mission check failed: {e}", file=sys.stderr)
+        # Phase 42: nightly eval — run once per ~24h cycle
+        if tick % eval_every == 0 and tick > 0:
+            try:
+                from eval import run_nightly_eval
+                _n_regressions = run_nightly_eval(dry_run=dry_run, verbose=verbose)
+                if _n_regressions and verbose:
+                    print(f"[heartbeat] nightly eval: {_n_regressions} regression suggestion(s)", file=sys.stderr)
+            except Exception as e:
+                if verbose:
+                    print(f"[heartbeat] nightly eval failed: {e}", file=sys.stderr)
         time.sleep(interval)
 
 

@@ -320,3 +320,89 @@ def run_eval(
             pass
 
     return report
+
+
+# ---------------------------------------------------------------------------
+# Phase 42: Nightly eval → evolver feedback loop
+# ---------------------------------------------------------------------------
+
+def run_nightly_eval(
+    *,
+    dry_run: bool = False,
+    verbose: bool = False,
+) -> int:
+    """Run eval suite and convert failures to evolver Suggestion entries.
+
+    Called from heartbeat_loop() on a 24h cadence. Failures generate
+    Suggestions with category="observation" and confidence=0.9 so they
+    surface in poe-evolver --list and feed the improvement cycle.
+
+    Returns: number of regression suggestions written (0 on dry_run or all pass).
+    """
+    import sys as _sys
+    if verbose:
+        print("[eval] nightly eval starting...", file=_sys.stderr, flush=True)
+
+    try:
+        report = run_eval(dry_run=dry_run, verbose=verbose)
+    except Exception as exc:
+        if verbose:
+            print(f"[eval] nightly eval failed (non-fatal): {exc}", file=_sys.stderr, flush=True)
+        return 0
+
+    failed = [r for r in report.results if r.status != "pass"]
+    if not failed:
+        if verbose:
+            print(f"[eval] nightly eval: all {report.pass_count} passed", file=_sys.stderr, flush=True)
+        return 0
+
+    if verbose:
+        print(f"[eval] nightly eval: {len(failed)} failure(s) — generating regression suggestions",
+              file=_sys.stderr, flush=True)
+
+    if dry_run:
+        return 0
+
+    import uuid as _uuid
+    import json as _json
+    from datetime import datetime as _dt, timezone as _tz
+    from pathlib import Path as _Path
+
+    try:
+        from orch_items import memory_dir
+        sug_path = memory_dir() / "suggestions.jsonl"
+    except Exception:
+        sug_path = _Path.cwd() / "memory" / "suggestions.jsonl"
+
+    run_id = _uuid.uuid4().hex[:8]
+    new_suggestions = []
+    for i, r in enumerate(failed):
+        reason = r.failure_reason or f"score={r.score:.2f}"
+        text = (
+            f"Eval regression: benchmark '{r.benchmark_id}' failed "
+            f"({reason}). "
+            f"Investigate and fix the behavior pattern this benchmark covers."
+        )
+        new_suggestions.append({
+            "suggestion_id": f"eval-{run_id}-{i:02d}",
+            "category": "observation",
+            "target": r.benchmark_id,
+            "suggestion": text[:500],
+            "failure_pattern": f"eval_regression:{r.benchmark_id}",
+            "confidence": 0.90,
+            "outcomes_analyzed": report.benchmarks_run,
+            "generated_at": _dt.now(_tz.utc).isoformat(),
+            "applied": False,
+        })
+
+    try:
+        sug_path.parent.mkdir(parents=True, exist_ok=True)
+        with sug_path.open("a", encoding="utf-8") as f:
+            for s in new_suggestions:
+                f.write(_json.dumps(s) + "\n")
+    except Exception as exc:
+        if verbose:
+            print(f"[eval] failed to write regression suggestions: {exc}", file=_sys.stderr, flush=True)
+        return 0
+
+    return len(new_suggestions)
