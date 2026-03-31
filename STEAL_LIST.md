@@ -7,6 +7,16 @@ Compiled from Grok research sessions + prototype experiments (2026-03-29).
 
 ## NOW — do these next
 
+### From TradingAgents (dogfood research run, 2026-03-30)
+
+| Item | What | Where it lands | Effort |
+|------|------|----------------|--------|
+| **Commitment-forced verdicts** | Inspector must end with `VERDICT: PROCEED/RETRY/ABORT`. No hedging. One prompt edit. | `src/inspector.py` system prompt | S |
+| **Pre-plan challenger** | Before Director locks milestones, 1 round of Skeptic Worker critique → Director synthesizes. | `src/director.py` decompose path | S |
+| **Two-tier model routing** | Cheap model for analysis/classify steps, expensive for synthesis/decisions. Static assignment. | `src/agent_loop.py` + `src/llm.py` | M |
+
+###
+
 | Item | Source | What | Where it lands | Effort |
 |------|--------|------|----------------|--------|
 | **Verification patterns on rules** | meta_alchemist / oh-my-claudecode | Each rule gets a machine-checkable grep/script that proves it's being followed. Rule only graduates to permanent after 2x verified pass. | Phase 46 (Intervention Graduation) — add `verify_pattern` field to `rules.jsonl` entries | M |
