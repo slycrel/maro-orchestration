@@ -146,30 +146,10 @@ def run_factory_thin(
     steps = [ThinStep(index=i+1, text=t) for i, t in enumerate(step_texts)]
 
     # --- Step 2: Execute each step ---
-    _tools = [
-        {
-            "name": "complete_step",
-            "description": "Record the completed result for this step.",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "result": {"type": "string", "description": "The complete result of this step."},
-                },
-                "required": ["result"],
-            },
-        },
-        {
-            "name": "flag_stuck",
-            "description": "Flag that this step cannot be completed.",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "reason": {"type": "string", "description": "Why this step is blocked."},
-                },
-                "required": ["reason"],
-            },
-        },
-    ]
+    from llm import LLMTool
+    from step_exec import EXECUTE_TOOLS
+    _tools = [LLMTool(name=t["name"], description=t["description"], parameters=t["parameters"])
+              for t in EXECUTE_TOOLS]
 
     completed_context = ""
     for step in steps:
@@ -198,7 +178,7 @@ def run_factory_thin(
             tc = resp.tool_calls[0]
             if tc.name == "complete_step":
                 step.status = "done"
-                step.result = tc.arguments.get("result", "")
+                step.result = tc.arguments.get("result", "") or tc.arguments.get("summary", "")
                 completed_context += f"\nStep {step.index} ({step.text[:40]}): {step.result[:200]}"
                 _log(f"step {step.index} done tokens={step.tokens}")
             elif tc.name == "flag_stuck":
