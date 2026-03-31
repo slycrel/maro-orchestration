@@ -299,6 +299,37 @@ def handle(
         )
         elapsed = int((time.monotonic() - started_at) * 1000)
 
+        # Quality gate — skeptic review; escalate model tier if output is below bar
+        _gate_note = ""
+        if not dry_run and loop_result.status == "done" and _cfg.get("quality_gate", "true") == "true":
+            try:
+                from quality_gate import run_quality_gate, next_model_tier
+                _gate_verdict = run_quality_gate(message, loop_result.steps, adapter)
+                if _gate_verdict.escalate:
+                    _next_tier = next_model_tier(model or "cheap")
+                    _action = _cfg.get("quality_gate_action", "escalate").strip().lower()
+                    _gate_note = f"\n\n⚠️ Quality gate: ESCALATE — {_gate_verdict.reason}"
+                    if verbose:
+                        print(f"[poe:{handle_id}] quality gate: ESCALATE → {_next_tier} ({_gate_verdict.reason})",
+                              file=sys.stderr, flush=True)
+                    if _action == "escalate" and _next_tier:
+                        if verbose:
+                            print(f"[poe:{handle_id}] re-running with model={_next_tier}",
+                                  file=sys.stderr, flush=True)
+                        _escalated_adapter = build_adapter(model=_next_tier)
+                        loop_result = run_agent_loop(
+                            message,
+                            project=(project or loop_result.project or "") + "-escalated",
+                            model=_next_tier,
+                            adapter=_escalated_adapter,
+                            dry_run=False,
+                            verbose=verbose,
+                        )
+                        elapsed = int((time.monotonic() - started_at) * 1000)
+                        _gate_note = f"\n\n✅ Quality gate escalated to {_next_tier} — re-run complete."
+            except Exception:
+                pass  # gate never blocks delivery of results
+
         # Build result text from completed steps
         result_parts = []
         for s in loop_result.steps:
@@ -307,6 +338,8 @@ def handle(
         result_text = "\n\n---\n\n".join(result_parts) if result_parts else "[no output produced]"
         if loop_result.status == "stuck":
             result_text += f"\n\n⚠️ Stuck: {loop_result.stuck_reason}"
+        if _gate_note:
+            result_text += _gate_note
 
         return HandleResult(
             handle_id=handle_id,
