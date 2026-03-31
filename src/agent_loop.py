@@ -320,6 +320,17 @@ def _build_loop_context(
     except Exception:
         pass
 
+    # Error nodes: relevant failure patterns from diagnoses.jsonl (Phase 46 follow-on)
+    try:
+        from introspect import find_relevant_failure_notes
+        _failure_notes = find_relevant_failure_notes(goal, limit=2)
+        if _failure_notes:
+            lessons_context += "\n\nKnown failure patterns for similar goals:\n" + "\n".join(
+                f"- {note}" for note in _failure_notes
+            )
+    except Exception:
+        pass
+
     # Matching skills for decompose prompt injection
     skills_context = ""
     had_no_matching_skill = False

@@ -384,6 +384,51 @@ def load_diagnoses(limit: int = 50) -> List[LoopDiagnosis]:
 
 
 # ---------------------------------------------------------------------------
+# Error nodes as queryable memory (Phase 46 follow-on / Mimir steal)
+# ---------------------------------------------------------------------------
+
+def find_relevant_failure_notes(goal: str, limit: int = 2, lookback: int = 50) -> List[str]:
+    """Find recent non-healthy diagnoses relevant to the current goal.
+
+    Returns brief failure notes that can be injected into agent context
+    as "known patterns to avoid" before decomposition starts.
+
+    Uses simple token overlap — zero LLM cost.
+    """
+    diagnoses = load_diagnoses(limit=lookback)
+    non_healthy = [d for d in diagnoses if d.failure_class != "healthy"]
+    if not non_healthy:
+        return []
+
+    goal_tokens = set(goal.lower().split())
+    # Remove very common words that would match everything
+    _STOPWORDS = {"a", "an", "the", "to", "in", "of", "for", "and", "or", "with",
+                  "is", "are", "was", "were", "my", "me", "i", "on", "at", "by"}
+    goal_tokens -= _STOPWORDS
+
+    scored: List[tuple] = []
+    for diag in non_healthy:
+        # Score by overlap between goal tokens and evidence strings
+        evidence_text = " ".join(diag.evidence).lower()
+        evidence_tokens = set(evidence_text.split()) - _STOPWORDS
+        overlap = len(goal_tokens & evidence_tokens)
+        if overlap > 0:
+            scored.append((overlap, diag))
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+    top = scored[:limit]
+    if not top:
+        return []
+
+    notes = []
+    for _, diag in top:
+        # Keep notes brief: class name + recommendation snippet
+        rec = diag.recommendation[:120].replace("\n", " ")
+        notes.append(f"[{diag.failure_class}] {rec}")
+    return notes
+
+
+# ---------------------------------------------------------------------------
 # Multi-Lens Introspection
 # ---------------------------------------------------------------------------
 
