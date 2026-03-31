@@ -35,7 +35,7 @@ Last reviewed: 2026-03-31
 - [ ] **LLM + genetic programming (FunSearch)** — iterative optimization where LLM generates and refines solutions. (garybasin link, DeepMind FunSearch paper)
 
 ### Director / Mission Level
-- [ ] **Clarification milestone** — director asks user for clarification on ambiguous goals before committing resources. YOLO option. (Jeremy request)
+- [x] **Clarification milestone** — director asks user for clarification on ambiguous goals before committing resources. YOLO option. Done: `check_goal_clarity()` in intent.py, wired in handle.py AGENDA path; skippable with `yolo: true` in user/CONFIG.md. (2026-03-31)
 - [x] **User-level config defaults** — Added user/CONFIG.md. Wired: default_model_tier. Documented: yolo, always_skeptic, notify_on_complete. (`low-hanging-fruit`)
 - [ ] **Skip-Director experiment** — for simple NOW-lane goals, skip Director entirely. Bitter Lesson test.
 - [ ] **Multi-agent debate pattern** — bull/bear debaters + risk manager as quality gate. (TradingAgents repo pattern, research in progress)
@@ -56,7 +56,7 @@ Last reviewed: 2026-03-31
 
 ### Infrastructure
 - [ ] **Phase 38 subpackage move** — src/ is flat with 49 modules. Deferred (33+ imports per group), revisit when it causes real problems.
-- [ ] **Phase 42 nightly eval** — wire eval suite to evolver on a schedule.
+- [x] **Phase 42 nightly eval** — wire eval suite to evolver on a schedule. Done: `run_nightly_eval()` in eval.py; fires via `eval_every=1440` in heartbeat_loop(); failures → evolver Suggestion entries. (2026-03-31)
 - [ ] **Auto-resume daemon** — detect API rate limits, pause mission, poll, resume. (oh-my-claudecode pattern, partially addressed with retry)
 - [ ] **Cron persistence** — scheduled missions survive restarts. `jobs.json` pattern. (724-office)
 - [ ] **ScheduleCronTool in Poe heartbeat** — wire Poe's cron tool so she can schedule her own future runs from within a mission. Closes the self-managing loop. (claw-code pattern)
@@ -65,7 +65,7 @@ Last reviewed: 2026-03-31
 - [ ] **verificationAgent as first-class agent** — Claude Code has `verificationAgent` as a peer to `planAgent`/`exploreAgent` in its built-in agent suite. Promote `verify_step()` to a named agent type with its own system prompt and tool set, not just a function call.
 - [ ] **TeamCreateTool pattern** — model-directed dynamic team creation/deletion at runtime. The LLM decides team composition mid-mission, not just at plan time. More dynamic than our Director/Worker hierarchy.
 - [ ] **thinkback replay** — session-level decision replay for self-improvement. Replay past missions with hindsight, compare decisions. Maps to Phase 44/45 but at session scope.
-- [ ] **effort modifier** — add `effort:` keyword to handle.py routing that sets a thinking/token budget level. Claude Code has a `/effort` command for this; we should support it as a goal prefix modifier.
+- [x] **effort modifier** — add `effort:` keyword to handle.py routing that sets a thinking/token budget level. Done: `effort:low/mid/high` prefix in handle.py strips keyword and overrides model tier (low→cheap, mid→mid, high→power). (claw-code steal, 2026-03-31)
 - [ ] **passes command** — multi-pass review as a unified first-class concept (vs our separate Inspector + adversarial reviewer). Worth unifying.
 - [ ] **ultraplan / ultrareview modes** — on-demand deep planning/review beyond normal operation. Discrete "go deeper" mode rather than always-on scaffolding.
 - [ ] **bughunter mode** — self-directed code quality scan. Poe scanning her own orchestration code for bugs, not just diagnosing runtime failures.

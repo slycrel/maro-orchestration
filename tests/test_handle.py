@@ -174,3 +174,52 @@ def test_cli_poe_handle_json(monkeypatch, tmp_path, capsys):
     data = json.loads(out)
     assert "handle_id" in data
     assert data["lane"] == "now"
+
+
+# ---------------------------------------------------------------------------
+# effort: prefix modifier
+# ---------------------------------------------------------------------------
+
+class TestEffortModifier:
+    """effort:low/mid/high prefix strips the keyword and overrides model tier."""
+
+    def _run(self, monkeypatch, tmp_path, goal, expected_message_fragment=None):
+        """Run handle in dry_run mode and return (result, captured_model)."""
+        _setup(monkeypatch, tmp_path)
+
+        captured = {}
+        import handle as _handle_mod
+        _orig_build = None
+        try:
+            from llm import build_adapter
+            _orig_build = build_adapter
+        except Exception:
+            pass
+
+        def _fake_build(model=None, **kwargs):
+            captured["model"] = model
+            from unittest.mock import MagicMock
+            m = MagicMock()
+            m.model_key = model or "cheap"
+            return m
+
+        monkeypatch.setattr(_handle_mod, "build_adapter", _fake_build, raising=False)
+
+        result = handle(goal, dry_run=True)
+        return result, captured.get("model")
+
+    def test_effort_low_strips_prefix(self, monkeypatch, tmp_path):
+        result, _ = self._run(monkeypatch, tmp_path, "effort:low summarize this topic")
+        assert result.message == "summarize this topic"
+
+    def test_effort_mid_strips_prefix(self, monkeypatch, tmp_path):
+        result, _ = self._run(monkeypatch, tmp_path, "effort:mid summarize this topic")
+        assert result.message == "summarize this topic"
+
+    def test_effort_high_strips_prefix(self, monkeypatch, tmp_path):
+        result, _ = self._run(monkeypatch, tmp_path, "effort:high deep research task")
+        assert result.message == "deep research task"
+
+    def test_no_effort_prefix_unchanged(self, monkeypatch, tmp_path):
+        result, _ = self._run(monkeypatch, tmp_path, "what is 2 plus 2")
+        assert result.message == "what is 2 plus 2"

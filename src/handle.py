@@ -206,6 +206,18 @@ def handle(
         if _tier in ("cheap", "mid", "power"):
             model = _tier
 
+    # effort: prefix modifier — "effort:low/mid/high <goal>" overrides model tier
+    # Stripped before classification so the effort keyword doesn't affect routing.
+    _EFFORT_MAP = {"low": "cheap", "mid": "mid", "high": "power"}
+    _msg_lower = message.lower()
+    for _effort_level, _effort_tier in _EFFORT_MAP.items():
+        _effort_prefix = f"effort:{_effort_level}"
+        if _msg_lower.startswith(_effort_prefix):
+            message = message[len(_effort_prefix):].lstrip()
+            if model is None:
+                model = _effort_tier
+            break
+
     # Build adapter
     if adapter is None and not dry_run:
         adapter = build_adapter(model=model or MODEL_CHEAP)
