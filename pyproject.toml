@@ -39,6 +39,7 @@ poe-factory-minimal = "factory_minimal:main"
 poe-factory-thin = "factory_thin:main"
 poe-test = "bootstrap:_smoke_main"
 poe-bughunter = "bughunter:main"
+poe-schedule = "scheduler:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

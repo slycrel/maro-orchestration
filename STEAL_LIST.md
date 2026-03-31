@@ -33,7 +33,7 @@ Compiled from Grok research sessions + prototype experiments (2026-03-29).
 | ~~**Skills trigger arrays**~~ | oh-my-claudecode | ✅ DONE — `trigger_patterns` field already on Skill dataclass; keyword fallback in `find_matching_skills()` does exact substring matching. Functionally identical. | `src/skills.py` | — |
 | **Auto-resume on rate limits** | oh-my-claudecode | Detect API rate limit, pause mission, poll, resume automatically. | `src/heartbeat.py` or `src/sheriff.py` — extend with rate-limit watch | M |
 | **SlowUpdateScheduler** | MetaClaw | IDLE_WAIT -> WINDOW_OPEN -> UPDATING -> PAUSING state machine. Gates heavy background work. | New module, called from heartbeat/cron | M |
-| **Cron persistence (`jobs.json`)** | 724-office | Scheduled missions survive restarts. JSON file with timezone-aware one-shot + recurring entries. | Extend heartbeat or new `src/scheduler.py` | M |
+| ~~**Cron persistence (`jobs.json`)**~~ | 724-office | ✅ DONE — `src/scheduler.py` with JobStore backed by `memory/jobs.json`; once/daily/interval; `drain_due_jobs()` wired into heartbeat_loop(); `poe-schedule` CLI. | `src/scheduler.py` | M |
 | **`channels/` pluggable data sources** | Agent-Reach | Each platform (X, Reddit, YouTube, GitHub) is a separate module with standard interface. | New `src/channels/` alongside `web_fetch.py` | M |
 | ~~**`doctor` diagnostic command**~~ | Agent-Reach | ✅ DONE — `poe-doctor` CLI added (src/doctor.py). | `src/doctor.py` | S |
 

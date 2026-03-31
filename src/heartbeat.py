@@ -475,6 +475,15 @@ def heartbeat_loop(
             except Exception as e:
                 if verbose:
                     print(f"[heartbeat] nightly eval failed: {e}", file=sys.stderr)
+        # Cron persistence: check for due scheduler jobs every tick
+        try:
+            from scheduler import drain_due_jobs
+            _n_due = drain_due_jobs(dry_run=dry_run, verbose=verbose)
+            if _n_due and verbose:
+                print(f"[heartbeat] scheduler: submitted {_n_due} job(s)", file=sys.stderr)
+        except Exception as e:
+            if verbose:
+                print(f"[heartbeat] scheduler check failed: {e}", file=sys.stderr)
         time.sleep(interval)
 
 
