@@ -46,6 +46,9 @@ Compiled from Grok research sessions + prototype experiments (2026-03-29).
 | **Skill retrieval with stemmer** | MetaClaw | Lightweight skill matching without embeddings. | Skills layer when needed | S |
 | **Three-layer memory compression** | 724-office | Session -> LLM compress -> vector retrieval. Handles memory bloat over long missions. | `src/memory.py` — compress on eviction or every N heartbeats | M |
 | **MCP/plugin hot-reload** | 724-office / Mimir | JSON-RPC over stdio/HTTP with auto-reconnect. Hot-reload persona plugins without restart. | `src/orch_bridges.py` extension | M |
+| **Role-specific tool visibility** | systematicls harness article | Inspector and Worker see different tool subsets — reduces hallucinated calls and prompt noise. Inspector needs no complete_step; Worker doesn't need verify_step. | `src/step_exec.py` — filtered EXECUTE_TOOLS per role | S |
+| **Back-pressure lifecycle hooks** | systematicls harness article | Inject contextual guidance at step retry AND budget-exceeded decision points (not just system prompt). We have retries covered; budget-exceeded path is missing. | `agent_loop.py` budget-exceeded branch | S |
+| **Subagent context firewall** | systematicls harness article | Sub-loops get only a filtered summary of parent context — prevents context contamination and reduces token cost on deep delegations. Complements TeamCreateTool. | New `context_firewall.py` or adapter wrapper | M |
 
 ---
 
@@ -60,4 +63,5 @@ Compiled from Grok research sessions + prototype experiments (2026-03-29).
 | [MetaClaw](https://github.com/aiming-lab/MetaClaw) | — | RL-based agent framework | SlowUpdateScheduler, skill retrieval (WARNING: hardcoded API key) |
 | [ClawTeam](https://github.com/HKUDS/ClawTeam) | — | Multi-agent framework | FileTaskStore (DONE — ported as `src/task_store.py`) |
 | meta_alchemist | — | Self-evolving Claude Code framework | Verification-based rule promotion, session hooks |
+| [systematicls harness article](x.com/systematicls) | — | Agent harness engineering patterns from LangChain agents/evals | Role-specific tool visibility, back-pressure hooks, subagent context firewall, dual-memory validation |
 | Grok (external reviewer) | — | Independent code review of openclaw-orchestration | Skeptic prompting, stability sprint advice, dashboard-as-real-tool |

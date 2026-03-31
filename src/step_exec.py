@@ -11,9 +11,11 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import sys
 import textwrap
 import time
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 log = logging.getLogger("poe.loop")
@@ -123,6 +125,37 @@ EXECUTE_TOOLS = [
             "required": ["reason"],
         },
     },
+    {
+        "name": "schedule_run",
+        "description": (
+            "Schedule a future autonomous run with a new goal. "
+            "Use this to set up follow-up work: e.g. 'check this market again tomorrow', "
+            "'re-analyze after data updates in 2 hours', or 'run daily digest at 08:00'. "
+            "The scheduled run fires even if this process restarts."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "goal": {
+                    "type": "string",
+                    "description": "The goal or task to run at the scheduled time.",
+                },
+                "when": {
+                    "type": "string",
+                    "description": (
+                        "When to run. Accepts: ISO datetime (e.g. '2026-04-02T09:00:00Z'), "
+                        "'daily at HH:MM' (recurring daily), "
+                        "'in N minutes' / 'in N hours' / 'in N days' (one-shot offset)."
+                    ),
+                },
+                "note": {
+                    "type": "string",
+                    "description": "Optional context note for the scheduled run.",
+                },
+            },
+            "required": ["goal", "when"],
+        },
+    },
 ]
 
 
@@ -187,6 +220,54 @@ def generate_refinement_hint(
         pass
 
     return _fallback
+
+
+# ---------------------------------------------------------------------------
+# Schedule-run: when parsing
+# ---------------------------------------------------------------------------
+
+def _parse_when(when: str) -> Dict[str, Any]:
+    """Parse a natural-language 'when' string into a scheduler schedule dict.
+
+    Supports:
+      - ISO datetime: '2026-04-02T09:00:00Z'  → once at that time
+      - 'daily at HH:MM'                       → daily recurring
+      - 'in N minutes' / 'in N hours' / 'in N days'  → once, offset from now
+    """
+    w = when.strip().lower()
+
+    # "daily at HH:MM"
+    m = re.match(r"daily\s+at\s+(\d{1,2}:\d{2})", w)
+    if m:
+        return {"type": "daily", "time": m.group(1)}
+
+    # "in N minutes / hours / days"
+    m = re.match(r"in\s+(\d+)\s+(minute|minutes|hour|hours|day|days)", w)
+    if m:
+        n = int(m.group(1))
+        unit = m.group(2)
+        now = datetime.now(timezone.utc)
+        if "day" in unit:
+            dt = now + timedelta(days=n)
+        elif "hour" in unit:
+            dt = now + timedelta(hours=n)
+        else:
+            dt = now + timedelta(minutes=n)
+        return {"type": "once", "at": dt.isoformat()}
+
+    # ISO datetime or other datetime-like string — try once
+    # Normalize: support both 'Z' and '+00:00'
+    _iso = when.strip().replace("Z", "+00:00")
+    try:
+        datetime.fromisoformat(_iso)
+        return {"type": "once", "at": _iso}
+    except ValueError:
+        pass
+
+    # Fallback: run once 1 hour from now
+    log.warning("schedule_run: could not parse 'when' %r — defaulting to 1 hour from now", when)
+    _dt = datetime.now(timezone.utc) + timedelta(hours=1)
+    return {"type": "once", "at": _dt.isoformat()}
 
 
 # ---------------------------------------------------------------------------
@@ -344,6 +425,32 @@ def execute_step(
                 "status": "blocked",
                 "stuck_reason": _reason,
                 "result": tc.arguments.get("attempted", ""),
+                "tokens_in": resp.input_tokens,
+                "tokens_out": resp.output_tokens,
+            }
+        elif tc.name == "schedule_run":
+            _sched_goal = tc.arguments.get("goal", "")
+            _sched_when = tc.arguments.get("when", "in 1 hour")
+            _sched_note = tc.arguments.get("note", "")
+            _sched_result = f"[no action — scheduler unavailable]"
+            try:
+                from scheduler import add_job
+                _schedule = _parse_when(_sched_when)
+                _job = add_job(_sched_goal, _schedule)
+                _sched_result = (
+                    f"Scheduled: '{_sched_goal[:80]}' "
+                    f"(job_id={_job['job_id']}, next_run={_job['next_run'][:16]})"
+                )
+                if _sched_note:
+                    _sched_result += f" — {_sched_note}"
+            except Exception as _exc:
+                _sched_result = f"[schedule_run failed: {_exc}]"
+            log.info("step %d DONE (schedule_run) job=%r tokens=%d elapsed=%.1fs",
+                     step_num, _sched_goal[:60], _tok, time.monotonic() - _step_t0)
+            return {
+                "status": "done",
+                "result": _sched_result,
+                "summary": f"Scheduled follow-up: {_sched_goal[:60]}",
                 "tokens_in": resp.input_tokens,
                 "tokens_out": resp.output_tokens,
             }
