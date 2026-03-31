@@ -68,7 +68,7 @@ Last reviewed: 2026-03-31
 - [x] **effort modifier** — add `effort:` keyword to handle.py routing that sets a thinking/token budget level. Done: `effort:low/mid/high` prefix in handle.py strips keyword and overrides model tier (low→cheap, mid→mid, high→power). (claw-code steal, 2026-03-31)
 - [ ] **passes command** — multi-pass review as a unified first-class concept (vs our separate Inspector + adversarial reviewer). Worth unifying.
 - [ ] **ultraplan / ultrareview modes** — on-demand deep planning/review beyond normal operation. Discrete "go deeper" mode rather than always-on scaffolding.
-- [ ] **bughunter mode** — self-directed code quality scan. Poe scanning her own orchestration code for bugs, not just diagnosing runtime failures.
+- [x] **bughunter mode** — self-directed code quality scan. Poe scanning her own orchestration code for bugs, not just diagnosing runtime failures. Done: `src/bughunter.py` with stdlib AST scanner (BH001 bare except, BH003 mutable defaults, BH004 shadowed builtins, BH010 TODOs); `poe-bughunter` CLI. 16 tests. Src scans clean. (claw-code steal, 2026-03-31)
 - [ ] **btw (by-the-way) mode** — non-blocking observation mode; agent surfaces observations without interrupting workflow. Good for Inspector-style notes that don't block step execution.
 
 ## Research to Process
