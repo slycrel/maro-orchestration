@@ -92,6 +92,15 @@ EXECUTE_TOOLS = [
                     "type": "string",
                     "description": "One-sentence summary of what was accomplished.",
                 },
+                "confidence": {
+                    "type": "string",
+                    "enum": ["strong", "weak", "inferred", "unverified"],
+                    "description": (
+                        "How confident you are in this result. "
+                        "strong = verified/cited; weak = partial/indirect; "
+                        "inferred = reasoned from context; unverified = not independently confirmed."
+                    ),
+                },
             },
             "required": ["result", "summary"],
         },
@@ -314,15 +323,19 @@ def execute_step(
     if resp.tool_calls:
         tc = resp.tool_calls[0]
         if tc.name == "complete_step":
-            log.info("step %d DONE (complete_step) tokens=%d elapsed=%.1fs",
-                     step_num, _tok, time.monotonic() - _step_t0)
-            return {
+            _confidence = tc.arguments.get("confidence", "") or ""
+            log.info("step %d DONE (complete_step) tokens=%d elapsed=%.1fs confidence=%s",
+                     step_num, _tok, time.monotonic() - _step_t0, _confidence or "unset")
+            _out: dict = {
                 "status": "done",
                 "result": tc.arguments.get("result", resp.content),
                 "summary": tc.arguments.get("summary", step_text),
                 "tokens_in": resp.input_tokens,
                 "tokens_out": resp.output_tokens,
             }
+            if _confidence:
+                _out["confidence"] = _confidence
+            return _out
         elif tc.name == "flag_stuck":
             _reason = tc.arguments.get("reason", "unknown")
             log.info("step %d BLOCKED (flag_stuck) reason=%r tokens=%d elapsed=%.1fs",

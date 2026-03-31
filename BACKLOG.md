@@ -20,7 +20,7 @@ Last reviewed: 2026-03-31
 - [x] **Adversarial verification step** — implemented in factory_thin (post-execute, pre-compile) and quality_gate (second pass on Mode 2 runs). Catches overclaimed mechanisms, wrong evidence tiers, contested findings. (`factory` branch, 2026-03-31)
 - [ ] **LLM Council / multi-angle critique skill** — Karpathy's LLM Council ported to Claude Code skill: spawn N sub-agents with distinct critical framings (devil's advocate, domain skeptic, implementation critic) that critique a plan/idea before synthesis. Direct cure for AI sycophancy. Relevant for Director's pre-plan challenger and quality gate. (hesamation/@x, 2026-03-31)
 - [ ] **Cross-reference check** — for factual claims, query a second source to verify. Flag disagreements.
-- [ ] **Confidence tagging** — each step result should carry a confidence indicator (strong evidence / weak evidence / model inference / unverified).
+- [x] **Confidence tagging** — each step result should carry a confidence indicator (strong evidence / weak evidence / model inference / unverified). Done: `confidence` field added to complete_step tool schema (optional enum), StepOutcome dataclass, and completed_context entries tagged with `[confidence:X]`. (2026-03-31)
 
 ### Token Efficiency
 - [ ] **Data pipeline enforcement** — the DATA PIPELINE STRATEGY prompt is in place but agents still dump raw API output into context on some runs. Need stronger enforcement or a pre-execution check that detects "this step will generate >50KB of raw output" and auto-wraps it in a filter script.

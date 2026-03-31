@@ -92,6 +92,7 @@ class StepOutcome:
     tokens_in: int = 0
     tokens_out: int = 0
     elapsed_ms: int = 0
+    confidence: str = ""  # "strong" | "weak" | "inferred" | "unverified" | ""
 
 
 @dataclass
@@ -1289,7 +1290,9 @@ def run_agent_loop(
             _ctx_excerpt = step_result[:800] if step_result else ""
             if len(step_result) > 800:
                 _ctx_excerpt += f"\n... ({len(step_result)} chars total — full result in scratchpad step_{step_idx})"
-            _ctx_entry = f"Step {step_idx} ({step_text[:80]}):\n{_ctx_excerpt}"
+            _step_confidence = outcome.get("confidence", "")
+            _confidence_tag = f" [confidence:{_step_confidence}]" if _step_confidence else ""
+            _ctx_entry = f"Step {step_idx} ({step_text[:80]}){_confidence_tag}:\n{_ctx_excerpt}"
             completed_context.append(_ctx_entry)
 
             # Completed context compression (BACKLOG: prevent linear growth).
@@ -1419,6 +1422,7 @@ def run_agent_loop(
             tokens_in=outcome.get("tokens_in", 0),
             tokens_out=outcome.get("tokens_out", 0),
             elapsed_ms=step_elapsed,
+            confidence=outcome.get("confidence", ""),
         ))
 
         # Phase 19: write dead end to DEAD_ENDS.md when step is blocked
