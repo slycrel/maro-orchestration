@@ -1012,6 +1012,23 @@ def run_agent_loop(
         if verbose:
             print(f"[poe] step {step_idx}: {step_text!r}", file=sys.stderr, flush=True)
 
+        # vtrivedy10/systematicls: re-inject goal + key constraints at step 5+ (every 5 steps)
+        # Counteracts instruction fade-out as context grows.
+        _REMINDER_EVERY = 5
+        if step_idx > 0 and step_idx % _REMINDER_EVERY == 0:
+            _reorient = (
+                f"GOAL REORIENTATION (step {step_idx}):\n"
+                f"Original goal: {goal}\n"
+                "You are still working on this goal. Stay on task.\n"
+                "Key constraints: target <500 tokens per step result; "
+                "never dump raw API output; use prior step data already in context."
+            )
+            _next_step_injected_context = (
+                (_next_step_injected_context + "\n\n" + _reorient).strip()
+                if _next_step_injected_context
+                else _reorient
+            )
+
         step_start = time.monotonic()
         # Phase 35 P1: per-step model selection — cheap retrieval/classify steps use Haiku
         # Skip if caller explicitly specified a non-tier model string (e.g. --model claude-haiku-...)
@@ -1326,10 +1343,21 @@ def run_agent_loop(
             _decision = _handle_blocked_step(step_text, outcome, _prior_retries, adapter)
             if _decision.retry:
                 _step_retries[step_text] = _prior_retries + 1
+                # vtrivedy10: re-inject original goal on retry to counter instruction fade-out
+                _retry_reminder = (
+                    f"RETRY REMINDER — ORIGINAL GOAL: {goal}\n"
+                    "Focus only on completing the step above. "
+                    "Use data already in context. Target <500 tokens."
+                )
+                _hint_with_reminder = (
+                    (_decision.hint + "\n\n" + _retry_reminder).strip()
+                    if _decision.hint
+                    else _retry_reminder
+                )
                 _next_step_injected_context = (
-                    (_next_step_injected_context + "\n\n" + _decision.hint).strip()
+                    (_next_step_injected_context + "\n\n" + _hint_with_reminder).strip()
                     if _next_step_injected_context
-                    else _decision.hint
+                    else _hint_with_reminder
                 )
                 remaining_steps.insert(0, step_text)
                 remaining_indices.insert(0, item_index)
