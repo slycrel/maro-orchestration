@@ -216,13 +216,14 @@ def decompose(
     system = DECOMPOSE_SYSTEM
     extras = [x for x in [skills_context, ancestry_context, lessons_context, cost_context] if x]
 
-    # Auto-inject user context if available
+    # Auto-inject user context if available (capped at 500 chars per file
+    # to avoid inflating decomposition token cost)
     try:
         _user_dir = Path(__file__).resolve().parent.parent / "user"
         for _ctx_file in ("CONTEXT.md", "SIGNALS.md"):
             _ctx_path = _user_dir / _ctx_file
             if _ctx_path.exists():
-                _ctx = _ctx_path.read_text(encoding="utf-8").strip()
+                _ctx = _ctx_path.read_text(encoding="utf-8").strip()[:500]
                 if _ctx:
                     extras.append(f"USER CONTEXT ({_ctx_file}):\n{_ctx}")
     except Exception:
@@ -312,3 +313,48 @@ def decompose(
     except Exception:
         # Last resort: split on sentences
         return [goal]
+
+
+# ---------------------------------------------------------------------------
+# Verification step injection
+# ---------------------------------------------------------------------------
+
+_RESEARCH_KEYWORDS = {
+    "research", "analyze", "investigate", "study", "evidence", "clinical",
+    "pubmed", "find out", "is it true", "verify", "compare", "review",
+    "assess", "evaluate", "risk", "benefit", "safety",
+}
+
+
+def maybe_add_verification_step(steps: List[str], goal: str, max_steps: int = 8) -> List[str]:
+    """Append an adversarial verification step for research-type goals.
+
+    If the goal contains research keywords, adds a final step that
+    cross-checks key claims from prior steps with adversarial framing.
+    This catches sycophantic confirmation bias — the model will build
+    a case for whatever it's asked, so we explicitly ask it to argue
+    against the prior findings.
+
+    Only adds the step if there's room under max_steps.
+    """
+    goal_lower = goal.lower()
+    if not any(kw in goal_lower for kw in _RESEARCH_KEYWORDS):
+        return steps
+
+    # Don't exceed max_steps
+    if len(steps) >= max_steps:
+        return steps
+
+    # Don't add if the last step already looks like verification
+    if steps and any(v in steps[-1].lower() for v in ("verify", "check", "validate", "contra")):
+        return steps
+
+    n = len(steps)
+    verify_step = (
+        f"Adversarial verification: for each key claim from prior steps, "
+        f"search for contradicting evidence. Flag claims with weak or "
+        f"contested evidence. Rate each finding: strong/moderate/weak/contested. "
+        f"[after:{n}]"
+    )
+    log.info("injecting verification step for research goal")
+    return steps + [verify_step]

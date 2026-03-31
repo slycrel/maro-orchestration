@@ -950,6 +950,39 @@ Closes the full loop: observe → classify → fix → verify → graduate.
 
 ---
 
+### Phase 47: Factory Mode Experiment — Bitter Lesson Validation *(TODO)*
+
+*"If the prompt works as well as the code, the code is legacy cruft."*
+
+Create a `factory` branch that replaces Mode 2 infrastructure (CEO/Director/Worker hierarchy, sheriff, persona routing, parallel fan-out logic) with a single system prompt that describes the desired behavior. The agent gets: goal + user context + tools + memory — but no engineered execution logic. It decides how to decompose, route, verify, and recover on its own.
+
+Run the same test suite (Polymarket, nootropic, e2e smoke) across this branch with Sonnet, Opus, and Haiku. Compare completion rate, token cost, output quality, and failure modes against mainline.
+
+**Expected outcomes:**
+- If prompt-only matches mainline: aggressively simplify the codebase, keep only memory + tools + observability
+- If prompt-only fails on specific patterns: those patterns are the load-bearing scaffolding worth keeping
+- The gap between Sonnet and Opus on prompt-only reveals how much our scaffolding compensates for model capability
+
+This is the definitive test of whether we're building infrastructure or hobbles.
+
+---
+
+### Phase 48: Conversation Mining — Idea Archaeology *(TODO)*
+
+*"Revisiting ideas with current maturity yields perspectives we missed the first time."*
+
+Research pass through all Poe/Jeremy conversation history:
+- Telegram bot messages (`@edgar_allen_bot` history)
+- Claude Code session logs (`~/.claude/projects/` JSONL files)
+- OpenClaw workspace MEMORY.md, TASKS.md history
+- Git commit messages and PR discussions
+
+Extract orchestration-related ideas, patterns, deferred concepts, and "what if" musings. Run them through the system as research goals. Cross-reference against current BACKLOG.md and STEAL_LIST.md for items that were noted but never pursued, or ideas whose time has come now that the foundation is stronger.
+
+**Why this matters:** Early conversations contain raw intuitions that were too ambitious at the time but may now be achievable. The system's improved self-improvement loop means these ideas get evaluated by a smarter planner than when they were first discussed.
+
+---
+
 ## Superseded Plans
 
 The original M0-M4 milestones and N1-N4 roadmap items focused on infrastructure plumbing (adapters, scheduling, CI). That work was valuable scaffolding, but it didn't address the core need: making Poe autonomous. This roadmap replaces N1-N4 entirely.

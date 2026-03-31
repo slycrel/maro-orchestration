@@ -2,6 +2,12 @@
 
 **This is the mainline repo.** All orchestration work happens here unless explicitly directed elsewhere.
 
+**Start-of-session checklist:**
+1. Read this file (CLAUDE.md)
+2. Read BACKLOG.md — deferred items, bugs, ideas. Update as you work.
+3. Check ROADMAP.md for phase status
+4. Check `~/claude/grok-response-*.txt` for unprocessed feedback
+
 - GitHub: https://github.com/slycrel/openclaw-orchestration
 - Machine: Ubuntu headless, user `clawd`, `/home/clawd/claude/openclaw-orchestration/`
 - Owner: Jeremy Stone (`slycrel`) — 25+ years engineering, AI orchestration

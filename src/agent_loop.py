@@ -1567,9 +1567,11 @@ def run_agent_loop(
 def _decompose(goal, adapter, max_steps, verbose=False, lessons_context="",
                ancestry_context="", skills_context="", cost_context=""):
     """Delegate to planner.decompose(). See planner.py for full implementation."""
-    return _decompose_impl(goal, adapter, max_steps, verbose=verbose,
-                           lessons_context=lessons_context, ancestry_context=ancestry_context,
-                           skills_context=skills_context, cost_context=cost_context)
+    from planner import maybe_add_verification_step
+    steps = _decompose_impl(goal, adapter, max_steps, verbose=verbose,
+                            lessons_context=lessons_context, ancestry_context=ancestry_context,
+                            skills_context=skills_context, cost_context=cost_context)
+    return maybe_add_verification_step(steps, goal, max_steps=max_steps)
 
 # _execute_step and _generate_refinement_hint are imported from step_exec at module top.
 # _decompose delegates to _decompose_impl (from planner.py) above.
