@@ -395,7 +395,10 @@ def verify_step(
 
     Non-fatal — returns passed=True on any error so verify never blocks execution.
     """
-    if not result or not result.strip():
+    # Coerce to string — model sometimes returns dict/list in tool call arguments
+    if not isinstance(result, str):
+        result = str(result) if result else ""
+    if not result.strip():
         return {"passed": False, "reason": "empty result", "confidence": 1.0}
 
     try:

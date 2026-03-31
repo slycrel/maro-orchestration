@@ -831,6 +831,7 @@ def build_adapter(
     model: str = MODEL_DEFAULT,
     *,
     api_key: Optional[str] = None,
+    timeout: Optional[int] = None,
 ) -> LLMAdapter:
     """Build an LLM adapter with auto-detection or explicit backend choice.
 
@@ -839,6 +840,8 @@ def build_adapter(
                  "auto" tries each in priority order until one works.
         model:   MODEL_CHEAP | MODEL_MID | MODEL_POWER, or a raw model string.
         api_key: Explicit API key (overrides env detection).
+        timeout: Override the subprocess adapter's per-call timeout in seconds.
+                 Default is 300s. Increase for long research steps.
 
     Returns:
         A ready-to-use LLMAdapter.
@@ -856,7 +859,8 @@ def build_adapter(
     if backend == "subprocess" or backend == "claude":
         if not _claude_bin_available():
             raise RuntimeError(f"claude binary not found at {_CLAUDE_BIN}")
-        return ClaudeSubprocessAdapter(model=model)
+        kwargs = {"timeout": timeout} if timeout is not None else {}
+        return ClaudeSubprocessAdapter(model=model, **kwargs)
 
     if backend == "anthropic":
         key = api_key or _get_key("ANTHROPIC_API_KEY", env)

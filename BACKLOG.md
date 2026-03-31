@@ -18,6 +18,7 @@ Last reviewed: 2026-03-31
 
 ### Verification / Hallucination Detection
 - [x] **Adversarial verification step** — implemented in factory_thin (post-execute, pre-compile) and quality_gate (second pass on Mode 2 runs). Catches overclaimed mechanisms, wrong evidence tiers, contested findings. (`factory` branch, 2026-03-31)
+- [ ] **LLM Council / multi-angle critique skill** — Karpathy's LLM Council ported to Claude Code skill: spawn N sub-agents with distinct critical framings (devil's advocate, domain skeptic, implementation critic) that critique a plan/idea before synthesis. Direct cure for AI sycophancy. Relevant for Director's pre-plan challenger and quality gate. (hesamation/@x, 2026-03-31)
 - [ ] **Cross-reference check** — for factual claims, query a second source to verify. Flag disagreements.
 - [ ] **Confidence tagging** — each step result should carry a confidence indicator (strong evidence / weak evidence / model inference / unverified).
 
@@ -43,8 +44,10 @@ Last reviewed: 2026-03-31
 - [ ] **Replay with "factory mode"** — re-run a mission letting evolver inject self-generated sub-goals.
 
 ### Factory Mode Experiment (Mode 3 test)
-- [x] **"factory" branch** — created. Two variants: `factory_minimal` (single-call Haiku $0.04-0.06/60s) and `factory_thin` (loop+adversarial Haiku $0.38/375s). Bitter Lesson result: minimal surprisingly competitive; thin+adv matches Mode 2 quality at ~2x lower cost. Scaffolding that's load-bearing: adversarial verification. Scaffolding that's not: persona routing, lesson injection, multi-plan comparison. Polymarket thin+adv pending (needs session-idle run). (2026-03-31)
-- [ ] **Factory branch merge decision** — decide whether to merge factory insights back to main or keep experimental. Options: (a) add `--mode thin` flag to handle.py routing thin+adv loop, (b) merge adversarial review patterns (already done in quality_gate), (c) keep factory as benchmark branch.
+- [x] **"factory" branch** — created. Two variants: `factory_minimal` (single-call Haiku $0.04-0.06/60s) and `factory_thin` (loop+adversarial Haiku $0.38/375s). Bitter Lesson result: minimal surprisingly competitive; thin+adv matches Mode 2 quality at ~2x lower cost. Scaffolding that's load-bearing: adversarial verification. Scaffolding that's not: persona routing, lesson injection, multi-plan comparison. (2026-03-31)
+- [x] **Factory comparison complete** — Full comparison table in /tmp/factory-comparison.md. Key: thin+adv+verify nootropic: $0.36/493s/6 steps done. thin+adv polymarket: $1.40/574s/7 of 8 steps (Haiku token explosion on research = 4.4× Mode 2 tokens, so cost advantage disappears for complex goals). Mode 2 polymarket: $1.27/1156s/8 steps done on Sonnet. (2026-03-31)
+- [ ] **Factory branch merge decision** — Adversarial patterns already merged to main (quality_gate two-pass, handle.py contested claims). Remaining option: add `--mode thin` flag to handle.py for when wall-time matters more than depth. Ralph verify (--verify) validated useful for research goals. (2026-03-31)
+- [ ] **Token efficiency prompt in factory_thin** — FACTORY_STEP prompt lacks the "Target under 500 tokens" constraint from Mode 2's EXECUTE_SYSTEM. Haiku generates verbose step outputs (~560K tokens on step 1 of polymarket). Adding token efficiency language would fix the cost explosion on complex goals.
 
 ### Conversation Mining (Phase 48 idea)
 - [ ] **Research pass through Telegram + Claude session data** — scrape Poe/Jeremy conversations (Telegram bot history + `~/.claude/projects/` session logs) for orchestration-related ideas, patterns, and deferred concepts. Run them through the system as research goals. Revisiting old ideas with current maturity will surface patterns we missed the first time. Jeremy's gut: as the project progresses, revisiting earlier conversations will yield better/more mature perspectives.

@@ -60,6 +60,12 @@ FACTORY_STEP = textwrap.dedent("""\
     observational, animal/in-vitro). Grade each claim: Tier 1/2/3.
     If the step involves synthesis: make concrete recommendations, not hedges.
 
+    TOKEN EFFICIENCY — CRITICAL:
+    Target under 500 tokens for your complete_step result. Use bullet points and
+    structured data (JSON where appropriate). Never quote long passages verbatim —
+    extract the 2-3 key facts and discard the rest. No preamble, no sign-offs.
+    If you need more than 500 tokens, you're probably quoting instead of summarizing.
+
     Use complete_step() with your result when done.
     Use flag_stuck() only if you're genuinely blocked (missing data, access issue).
     Never flag stuck because the task is hard.
@@ -131,6 +137,7 @@ def run_factory_thin(
     max_steps: int = 8,
     verify: bool = False,
     max_retries: int = 2,
+    step_timeout: Optional[int] = None,
     verbose: bool = False,
 ) -> ThinLoopResult:
     """Run the thin factory loop: decompose → execute → adversarial review → compile."""
@@ -147,7 +154,7 @@ def run_factory_thin(
 
     _log(f"model={model} goal={goal[:60]!r}")
 
-    adapter = build_adapter(model=model)
+    adapter = build_adapter(model=model, timeout=step_timeout)
 
     # --- Step 1: Decompose ---
     _log("decomposing...")
@@ -210,10 +217,12 @@ def run_factory_thin(
                 tc = resp.tool_calls[0]
                 if tc.name == "complete_step":
                     candidate_status = "done"
-                    candidate_result = tc.arguments.get("result", "") or tc.arguments.get("summary", "")
+                    _r = tc.arguments.get("result", "") or tc.arguments.get("summary", "")
+                    candidate_result = _r if isinstance(_r, str) else str(_r) if _r else ""
                 elif tc.name == "flag_stuck":
                     candidate_status = "stuck"
-                    candidate_result = tc.arguments.get("reason", "")
+                    _r = tc.arguments.get("reason", "")
+                    candidate_result = _r if isinstance(_r, str) else str(_r) if _r else ""
             elif resp.content and len(resp.content) > 20:
                 candidate_status = "done"
                 candidate_result = resp.content
@@ -348,6 +357,8 @@ def main():
     p.add_argument("--max-steps", type=int, default=8)
     p.add_argument("--verify", action="store_true", help="Enable per-step Ralph verify loop")
     p.add_argument("--max-retries", type=int, default=2, help="Max retries per step when --verify is set")
+    p.add_argument("--step-timeout", type=int, default=None,
+                   help="Per-step subprocess timeout in seconds (default: 300). Increase for long research steps.")
     p.add_argument("--verbose", "-v", action="store_true")
     p.add_argument("--out", help="Write final report to file")
     args = p.parse_args()
@@ -358,6 +369,7 @@ def main():
         max_steps=args.max_steps,
         verify=args.verify,
         max_retries=args.max_retries,
+        step_timeout=args.step_timeout,
         verbose=args.verbose,
     )
 
