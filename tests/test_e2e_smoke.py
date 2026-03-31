@@ -346,21 +346,33 @@ class TestE2EAmbiguous:
     def test_some_steps_done_some_stuck(self, monkeypatch, tmp_path):
         """2 of 3 steps complete, last one stuck → loop finishes with partial work."""
         _setup(monkeypatch, tmp_path)
+        import agent_loop as _al
+        # Bypass multi-plan decompose (3 LLM calls + compose) — this test focuses on
+        # stuck-step behavior, not decompose. Patching avoids consuming execute responses.
+        _STEPS = [
+            "Gather data from source A",
+            "Gather data from source B",
+            "Synthesize A and B into report",
+        ]
+        monkeypatch.setattr(_al, "_decompose", lambda *a, **kw: _STEPS)
+        # Prevent _generate_refinement_hint from calling build_adapter (real subprocess).
+        # Fires on prior_retries==1 (second failure of a step).
+        monkeypatch.setattr(_al, "_generate_refinement_hint",
+                            lambda *a, **kw: "try a different approach")
+        # Disable Phase 45 auto-recovery: it re-calls run_agent_loop with an exhausted
+        # adapter, which produces 0 done steps and overwrites the result we want to check.
+        monkeypatch.setattr(_al.run_agent_loop, "_recovery_in_progress", True, raising=False)
         from agent_loop import run_agent_loop
 
         adapter = ScriptedAdapter([
-            {"steps": [
-                "Gather data from source A",
-                "Gather data from source B",
-                "Synthesize A and B into report",
-            ]},
             # Step 1 succeeds
             {"tool": "complete_step", "result": "Source A: 100 records"},
             # Step 2 succeeds
             {"tool": "complete_step", "result": "Source B: 50 records"},
-            # Step 3 fails
+            # Step 3: fails 3 times (prior_retries 0 → generic hint; 1 → patched hint; 2 → abort)
             {"tool": "flag_stuck", "reason": "Cannot merge incompatible formats"},
             {"tool": "flag_stuck", "reason": "Still incompatible"},
+            {"tool": "flag_stuck", "reason": "Truly incompatible — giving up"},
             # Reflection
             {"content": json.dumps({"lessons": ["Format mismatch between sources"]})},
         ])
