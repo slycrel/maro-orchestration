@@ -29,7 +29,8 @@ Last reviewed: 2026-03-31
 
 ### Self-Improvement Loop
 - [ ] **Evolver signal scanning** — extend meta-evolver to scan outcomes for "business signals" and propose sub-missions autonomously. Mode 2 → Mode 3 bridge. (Grok/Zakin feedback)
-- [ ] **Verification patterns on rules** — each rule gets a machine-checkable test before graduating to permanent. (Phase 46, meta_alchemist pattern)
+- [x] **Phase 46: Intervention Graduation** — `graduation.py` shipped. Scans diagnoses for repeated failure classes (≥3x), proposes high-confidence Suggestions that evolver auto-applies. 8 failure classes covered. CLI: `poe-graduation`. (2026-03-31)
+- [ ] **Verification patterns on rules** — each graduated rule gets a machine-checkable test before going fully permanent. (meta_alchemist pattern, Phase 46 follow-on)
 - [ ] **Problem generation (Agent0)** — Stanford's approach: generate problems, solve them, learn from mistakes without supervision. Research in progress via orchestration dogfood run.
 - [ ] **LLM + genetic programming (FunSearch)** — iterative optimization where LLM generates and refines solutions. (garybasin link, DeepMind FunSearch paper)
 
@@ -79,6 +80,7 @@ Last reviewed: 2026-03-31
 - [ ] **Build-your-own-X** (agenticgirl) — 484k star repo, learning methodology. Low priority.
 - [ ] **FunSearch/EUREKA/Voyager papers** (garybasin) — LLM + genetic programming. Mode 3 territory. Read the actual papers.
 - [x] **claw-code** (github.com/instructkr/claw-code) — Python skeleton of Claude Code's leaked TS source. Most code is stubs but the tool/command inventory is a goldmine. Key findings: verificationAgent is a first-class built-in; TeamCreateTool exists; thinkback/replay is a real pattern; $ralph mode (OmX) validated our Ralph verify loop. Steal list added above. (2026-03-31)
+- [ ] **vtrivedy10 tweet** (x.com/vtrivedy10/status/2038346865775874285) — queued for review/dogfood. (2026-03-31)
 
 ### Grok feedback sessions
 - [x] grok-response-2.txt — oh-my-claudecode, 724-office, Mimir steal list. Processed, items in STEAL_LIST.md.

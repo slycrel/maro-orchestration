@@ -559,6 +559,17 @@ def run_evolver(
     except Exception:
         pass
 
+    # Phase 46: intervention graduation — propose permanent rules for repeated patterns
+    if not dry_run:
+        try:
+            from graduation import run_graduation
+            _grad_count = run_graduation(verbose=verbose)
+            if _grad_count and verbose:
+                print(f"[evolver] graduation: {_grad_count} new permanent rule suggestion(s)", file=sys.stderr)
+            log.debug("evolver graduation_pass: new_suggestions=%d", _grad_count)
+        except Exception as _grad_exc:
+            log.debug("graduation pass failed (non-fatal): %s", _grad_exc)
+
     return report
 
 

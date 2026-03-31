@@ -936,17 +936,22 @@ No LLM needed — it's a lookup table with preference for cheapest action first.
 
 ---
 
-### Phase 46: Self-Reflection — Intervention Graduation *(TODO)*
+### Phase 46: Self-Reflection — Intervention Graduation *(DONE)*
 
 *When humans repeatedly apply the same fix, propose a durable rule.*
 
 Closes the full loop: observe → classify → fix → verify → graduate.
 
-- Track which diagnoses led to human interventions (from evolver suggestion history)
-- When the same failure class + recovery action appears 3+ times: propose a permanent rule
-- Rules graduate via existing Phase 22 Stage 5 mechanism (rules.jsonl)
-- Example: "constraint_false_positive on natural-language 'remove'" → permanent allowlist rule
-- Example: "decomposition_too_broad on code review goals" → permanent decompose hint
+**Shipped (2026-03-31):** `src/graduation.py` — new module.
+
+- Scans `memory/diagnoses.jsonl` for repeated failure classes (default: ≥3 occurrences)
+- For each pattern above threshold (not yet proposed): writes a high-confidence Suggestion to `memory/suggestions.jsonl`
+- Evolver auto-applies suggestions with confidence ≥ 0.8 on next run — graduation is non-interactive by default
+- Deduplication: once a graduation suggestion is proposed for a failure class, it won't be re-proposed
+- 8 failure classes covered with heuristic templates (adapter_timeout, constraint_false_positive, decomposition_too_broad, token_explosion, empty_model_output, retry_churn, budget_exhaustion, integration_drift)
+- Wired into `run_evolver()` as non-fatal post-analysis pass
+- CLI: `poe-graduation [--min-count N] [--lookback N] [--dry-run]`
+- 18 tests, all passing
 
 ---
 
