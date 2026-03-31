@@ -301,10 +301,12 @@ def handle(
 
         # Quality gate — skeptic review; escalate model tier if output is below bar
         _gate_note = ""
+        _contested_claims: list = []
         if not dry_run and loop_result.status == "done" and _cfg.get("quality_gate", "true") == "true":
             try:
                 from quality_gate import run_quality_gate, next_model_tier
                 _gate_verdict = run_quality_gate(message, loop_result.steps, adapter)
+                _contested_claims = _gate_verdict.contested_claims or []
                 if _gate_verdict.escalate:
                     _next_tier = next_model_tier(model or "cheap")
                     _action = _cfg.get("quality_gate_action", "escalate").strip().lower()
@@ -327,6 +329,7 @@ def handle(
                         )
                         elapsed = int((time.monotonic() - started_at) * 1000)
                         _gate_note = f"\n\n✅ Quality gate escalated to {_next_tier} — re-run complete."
+                        _contested_claims = []  # fresh run — don't append stale claims
             except Exception:
                 pass  # gate never blocks delivery of results
 
@@ -338,6 +341,12 @@ def handle(
         result_text = "\n\n---\n\n".join(result_parts) if result_parts else "[no output produced]"
         if loop_result.status == "stuck":
             result_text += f"\n\n⚠️ Stuck: {loop_result.stuck_reason}"
+        if _contested_claims:
+            _claims_text = "\n".join(
+                f"- [{c.get('verdict', '?')}] {c.get('claim', '')} — {c.get('reason', '')}"
+                for c in _contested_claims
+            )
+            result_text += f"\n\n---\n\n**⚠️ Adversarial review — contested claims:**\n{_claims_text}"
         if _gate_note:
             result_text += _gate_note
 

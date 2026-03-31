@@ -1,6 +1,6 @@
 """Factory Mode — Thin Loop variant.
 
-Keeps the step execution loop (decompose → execute → compile) but strips
+Keeps the step execution loop (decompose → execute → adversarial review → compile) but strips
 all Mode 2 scaffolding: no Director, no Inspector, no persona routing,
 no lesson injection, no skill matching, no multi-plan comparison,
 no pre-plan challenger, no user context injection.
@@ -65,10 +65,32 @@ FACTORY_STEP = textwrap.dedent("""\
     Never flag stuck because the task is hard.
 """).strip()
 
+FACTORY_ADVERSARIAL = textwrap.dedent("""\
+    You are an adversarial reviewer. A research task just completed. Your job:
+    challenge the claims before they get compiled into a final report.
+
+    For each significant claim in the step results:
+    - Is the evidence actually what it claims to be? (RCT vs observational vs animal?)
+    - Is the mechanism sound, or is it extrapolation?
+    - Are there competing studies, frameworks, or interpretations not mentioned?
+    - Is the dose, population, or context applicable to the goal?
+
+    Grade each finding: CONFIRMED / DOWNGRADED / CONTESTED / OVERCLAIMED.
+    Be specific — cite what's wrong, not just that something is uncertain.
+    Skip claims that are clearly solid. Focus on what would change a decision.
+
+    Produce a concise adversarial report: list of contested claims with your verdict
+    and one-sentence reason. These corrections will feed into the final compile.
+""").strip()
+
 FACTORY_COMPILE = textwrap.dedent("""\
     Compile the step results into a final polished deliverable.
     Lead with the key findings. Be specific and actionable.
     No filler. No restating what was asked. Just the work product.
+
+    If adversarial review findings are provided, incorporate them:
+    downgrade contested claims, flag overclaimed mechanisms, and note where
+    the evidence is weaker than the initial steps suggested.
 """).strip()
 
 
@@ -109,7 +131,7 @@ def run_factory_thin(
     max_steps: int = 8,
     verbose: bool = False,
 ) -> ThinLoopResult:
-    """Run the thin factory loop: decompose → execute → compile."""
+    """Run the thin factory loop: decompose → execute → adversarial review → compile."""
     from llm import build_adapter, LLMMessage, ToolCall
 
     loop_id = str(uuid.uuid4())[:8]
@@ -191,20 +213,45 @@ def run_factory_thin(
             step.result = resp.content
             completed_context += f"\nStep {step.index} ({step.text[:40]}): {step.result[:200]}"
 
-    # --- Step 3: Compile final report ---
+    # --- Step 3: Adversarial review ---
     done_steps = [s for s in steps if s.status == "done"]
-    _log(f"compiling report from {len(done_steps)}/{len(steps)} done steps...")
+    _log(f"running adversarial review on {len(done_steps)} steps...")
 
     step_summaries = "\n\n".join(
         f"Step {s.index}: {s.text}\n{s.result[:800]}"
         for s in done_steps
     )
+
+    adversarial_findings = ""
+    try:
+        adv_resp = adapter.complete(
+            [
+                LLMMessage("system", FACTORY_ADVERSARIAL),
+                LLMMessage("user",
+                    f"Goal: {goal}\n\nStep results to challenge:\n{step_summaries}"
+                ),
+            ],
+            max_tokens=2048,
+            temperature=0.3,
+        )
+        total_tokens_in += adv_resp.input_tokens
+        total_tokens_out += adv_resp.output_tokens
+        adversarial_findings = adv_resp.content
+        _log(f"adversarial review done tokens={adv_resp.input_tokens + adv_resp.output_tokens}")
+    except Exception as exc:
+        _log(f"adversarial review failed (non-fatal): {exc}")
+
+    # --- Step 4: Compile final report ---
+    _log(f"compiling report from {len(done_steps)}/{len(steps)} done steps...")
+
+    adv_block = f"\n\nAdversarial review findings:\n{adversarial_findings}" if adversarial_findings else ""
     compile_resp = adapter.complete(
         [
             LLMMessage("system", FACTORY_COMPILE),
             LLMMessage("user",
-                f"Goal: {goal}\n\nStep results:\n{step_summaries}\n\n"
-                f"Compile into a final structured report."
+                f"Goal: {goal}\n\nStep results:\n{step_summaries}"
+                + adv_block +
+                "\n\nCompile into a final structured report."
             ),
         ],
         max_tokens=4096,
