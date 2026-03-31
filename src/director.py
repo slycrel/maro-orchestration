@@ -167,6 +167,24 @@ _COMPILE_SYSTEM = textwrap.dedent("""\
     No hedging. No "I" statements. Just the work product.
 """).strip()
 
+_CHALLENGER_SYSTEM = textwrap.dedent("""\
+    You are a skeptical plan reviewer. Your job: challenge a proposed work plan
+    before it is locked in. Find gaps, risks, and wrong assumptions.
+
+    Given a directive and a proposed plan, identify 2-3 specific failure modes:
+    - Steps that are vague, unverifiable, or assume access not guaranteed
+    - Missing steps that are obviously needed to achieve the goal
+    - Steps that will produce noise, not signal (e.g. raw dumps instead of insights)
+
+    Respond with a JSON object:
+    {
+      "critiques": ["specific issue 1", "specific issue 2"],
+      "revised_spec": "one paragraph: the improved approach that addresses these critiques"
+    }
+
+    Be specific. If the plan is solid, say so briefly and keep revised_spec identical.
+""").strip()
+
 
 # ---------------------------------------------------------------------------
 # Core director function
@@ -223,6 +241,16 @@ def run_director(
     total_tokens_in += spec_tokens[0]
     total_tokens_out += spec_tokens[1]
     _log(f"spec produced, tickets={len(tickets)}")
+
+    # Phase 1b: Pre-plan challenger — one skeptic critique before locking
+    if not dry_run and adapter is not None:
+        try:
+            spec, challenge_tokens = _challenge_spec(directive, spec, tickets, adapter)
+            total_tokens_in += challenge_tokens[0]
+            total_tokens_out += challenge_tokens[1]
+            _log("pre-plan challenger: spec reviewed")
+        except Exception:
+            pass  # challenger is non-fatal
 
     # Phase 2: Dispatch workers + review
     worker_results: List[WorkerResult] = []
@@ -410,6 +438,60 @@ def _produce_spec(
         task=directive,
     )]
     return (f"Single-worker fallback for: {directive[:80]}", tickets, (0, 0))
+
+
+def _challenge_spec(
+    directive: str,
+    spec: str,
+    tickets: List[Ticket],
+    adapter,
+) -> Tuple[str, Tuple[int, int]]:
+    """Run one skeptic critique pass on the proposed spec.
+
+    Returns (revised_spec, token_counts). On any failure returns original spec.
+    Uses cheap model — this is a quality gate, not synthesis.
+    """
+    from llm import LLMMessage
+    try:
+        from llm import build_adapter as _build
+        _cheap_adapter = _build(model=None)  # uses MODEL_CHEAP default
+    except Exception:
+        _cheap_adapter = adapter
+
+    tickets_text = "\n".join(f"  [{t.worker_type}] {t.task}" for t in tickets)
+    user_msg = (
+        f"Directive: {directive}\n\n"
+        f"Proposed spec: {spec}\n\n"
+        f"Proposed tickets:\n{tickets_text}\n\n"
+        "Identify 2-3 failure modes, then provide a revised spec."
+    )
+
+    try:
+        resp = _cheap_adapter.complete(
+            [
+                LLMMessage("system", _CHALLENGER_SYSTEM),
+                LLMMessage("user", user_msg),
+            ],
+            max_tokens=512,
+            temperature=0.3,
+        )
+        content = resp.content.strip()
+        start = content.find("{")
+        end = content.rfind("}") + 1
+        if start >= 0 and end > start:
+            data = json.loads(content[start:end])
+            revised = data.get("revised_spec", "").strip()
+            critiques = data.get("critiques", [])
+            if critiques:
+                log.info("pre-plan challenger: %d critiques → spec revised", len(critiques))
+                for c in critiques:
+                    log.debug("challenger critique: %s", c)
+            if revised:
+                return revised, (resp.input_tokens, resp.output_tokens)
+    except Exception as exc:
+        log.debug("pre-plan challenger failed (non-fatal): %s", exc)
+
+    return spec, (0, 0)
 
 
 def _review_worker_output(

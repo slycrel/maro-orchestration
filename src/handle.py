@@ -214,10 +214,21 @@ def handle(
         )
 
     else:  # agenda
-        # If poe.py is available, delegate AGENDA tasks to Poe CEO layer for richer routing.
-        # Skip the poe CEO layer when a project is explicitly specified —
-        # the caller wants a fresh run, not a status check on existing missions.
-        if not dry_run and not project:
+        # Only route through poe CEO layer for meta-commands (status, inspect, goal-map).
+        # For actual mission goals, always go direct to run_agent_loop to avoid stale
+        # mission data being returned instead of a fresh run.
+        _is_meta_command = False
+        try:
+            from poe import _looks_like_status, _looks_like_inspect, _looks_like_goal_map
+            _is_meta_command = (
+                _looks_like_status(message)
+                or _looks_like_inspect(message)
+                or _looks_like_goal_map(message)
+            )
+        except ImportError:
+            pass
+
+        if not dry_run and not project and _is_meta_command:
             try:
                 from poe import poe_handle
                 from agent_loop import _goal_to_slug

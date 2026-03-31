@@ -566,6 +566,27 @@ def _finalize_loop(
         except Exception:
             pass
 
+    # Post-mission Telegram notification
+    if not dry_run:
+        try:
+            from telegram_listener import TelegramBot, _resolve_token, _resolve_allowed_chats
+            _token = _resolve_token()
+            _chat_ids = _resolve_allowed_chats()
+            if _token and _chat_ids:
+                _bot = TelegramBot(_token)
+                _done_count = sum(1 for s in step_outcomes if s.status == "done")
+                _total_tokens = total_tokens_in + total_tokens_out
+                _status_icon = "✅" if loop_status == "done" else ("⚠️" if loop_status == "partial" else "❌")
+                _msg = (
+                    f"{_status_icon} *Mission complete* — `{project or goal[:40]}`\n"
+                    f"Status: {loop_status} | Steps: {_done_count}/{len(step_outcomes)} done\n"
+                    f"Tokens: {_total_tokens:,} | Time: {elapsed_ms // 1000}s"
+                )
+                for _cid in _chat_ids:
+                    _bot.send_message(_cid, _msg)
+        except Exception:
+            pass
+
 
 # ---------------------------------------------------------------------------
 # Core loop

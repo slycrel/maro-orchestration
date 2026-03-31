@@ -11,7 +11,7 @@ Last reviewed: 2026-03-30
 
 - [x] **Stale mission shortcircuit** — `poe_handle()` returned cached summary instead of new mission. Fixed: skip CEO layer when `--project` is explicit. (`e7ad725`)
 - [x] **Rate-limit no recovery** — Claude "hit your limit" → immediate failure. Fixed: exponential backoff retry in `llm.py`. (`e7ad725`)
-- [ ] **Stale mission still possible without --project** — `poe_handle()` can still return stale data when no project specified. Needs "new mission" vs "resume" distinction in the CEO layer.
+- [x] **Stale mission still possible without --project** — Fixed: CEO layer now only handles meta-commands (status/inspect/map); actual goals always go direct to run_agent_loop. (`low-hanging-fruit`)
 - [ ] **Flaky e2e tests** — `test_empty_result_step` and `test_loop_stuck_detection` occasionally fail due to ScriptedAdapter response cycling timing. Not blocking but should be deterministic.
 
 ## Systemic Improvements (ordered by impact)
@@ -24,7 +24,7 @@ Last reviewed: 2026-03-30
 ### Token Efficiency
 - [ ] **Data pipeline enforcement** — the DATA PIPELINE STRATEGY prompt is in place but agents still dump raw API output into context on some runs. Need stronger enforcement or a pre-execution check that detects "this step will generate >50KB of raw output" and auto-wraps it in a filter script.
 - [ ] **Completed context compression** — as steps accumulate, `completed_context` grows linearly. Summarize older steps to fixed-length summaries after N steps.
-- [ ] **Lesson injection overhead** — runs 2-5 showed token spike when lessons accumulate. Cap injected lesson tokens or rank more aggressively.
+- [x] **Lesson injection overhead** — Fixed: capped inject output at 1200 chars in memory.py. (`low-hanging-fruit`)
 
 ### Self-Improvement Loop
 - [ ] **Evolver signal scanning** — extend meta-evolver to scan outcomes for "business signals" and propose sub-missions autonomously. Mode 2 → Mode 3 bridge. (Grok/Zakin feedback)

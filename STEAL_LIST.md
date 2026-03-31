@@ -12,7 +12,7 @@ Compiled from Grok research sessions + prototype experiments (2026-03-29).
 | Item | What | Where it lands | Effort |
 |------|------|----------------|--------|
 | **Commitment-forced verdicts** | Inspector must end with `VERDICT: PROCEED/RETRY/ABORT`. No hedging. One prompt edit. | `src/inspector.py` system prompt | S |
-| **Pre-plan challenger** | Before Director locks milestones, 1 round of Skeptic Worker critique → Director synthesizes. | `src/director.py` decompose path | S |
+| ~~**Pre-plan challenger**~~ | ✅ DONE — _challenge_spec() added to director.py, fires after _produce_spec. | `src/director.py` | S |
 | **Two-tier model routing** | Cheap model for analysis/classify steps, expensive for synthesis/decisions. Static assignment. | `src/agent_loop.py` + `src/llm.py` | M |
 
 ###
@@ -21,7 +21,7 @@ Compiled from Grok research sessions + prototype experiments (2026-03-29).
 |------|--------|------|----------------|--------|
 | **Verification patterns on rules** | meta_alchemist / oh-my-claudecode | Each rule gets a machine-checkable grep/script that proves it's being followed. Rule only graduates to permanent after 2x verified pass. | Phase 46 (Intervention Graduation) — add `verify_pattern` field to `rules.jsonl` entries | M |
 | **Skeptic persona modifier** | Grok advice | System prompt addition: "list 2-3 ways this could break before proposing." Optional `--skeptic` flag or persona variant. | `src/persona.py` — add modifier, wire into `persona_for_goal()` | S |
-| **Post-mission notification** | oh-my-claudecode | On mission complete, send structured summary (cost, outcomes, lessons, replay ID) to Telegram. | `src/telegram_listener.py` — hook into `_finalize_loop()` reporter | S |
+| ~~**Post-mission notification**~~ | oh-my-claudecode | ✅ DONE — fires at end of _finalize_loop() in agent_loop.py. | `src/agent_loop.py` | S |
 | **Polymarket CLI integration** | polymarket-cli (OSS) | Read-only market/position/leaderboard data without wallet. Perfect for research personas. | Researcher persona spec + `src/web_fetch.py` or new `tools/polymarket.py` | S |
 
 ## NEXT — after stability sprint
@@ -35,7 +35,7 @@ Compiled from Grok research sessions + prototype experiments (2026-03-29).
 | **SlowUpdateScheduler** | MetaClaw | IDLE_WAIT -> WINDOW_OPEN -> UPDATING -> PAUSING state machine. Gates heavy background work. | New module, called from heartbeat/cron | M |
 | **Cron persistence (`jobs.json`)** | 724-office | Scheduled missions survive restarts. JSON file with timezone-aware one-shot + recurring entries. | Extend heartbeat or new `src/scheduler.py` | M |
 | **`channels/` pluggable data sources** | Agent-Reach | Each platform (X, Reddit, YouTube, GitHub) is a separate module with standard interface. | New `src/channels/` alongside `web_fetch.py` | M |
-| **`doctor` diagnostic command** | Agent-Reach | Check which tools/channels/APIs work in current environment before running. | `poe-doctor` CLI or `--doctor` flag | S |
+| ~~**`doctor` diagnostic command**~~ | Agent-Reach | ✅ DONE — `poe-doctor` CLI added (src/doctor.py). | `src/doctor.py` | S |
 
 ## LATER — when the need is real
 

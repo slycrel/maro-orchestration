@@ -349,10 +349,14 @@ def bootstrap_context(*, max_outcomes: int = 5, max_lessons: int = 10) -> str:
     return "# Memory Context (from prior sessions)\n\n" + "\n".join(parts)
 
 
+_MAX_LESSON_INJECT_CHARS = 1200  # cap total injected lesson text to avoid token spikes
+
+
 def inject_lessons_for_task(task_type: str, goal: str, max_lessons: int = 3) -> str:
     """Build a lessons injection string for a specific task type.
 
     Used to prepend relevant lessons to an agent's system prompt.
+    Capped at _MAX_LESSON_INJECT_CHARS to prevent token spikes as lessons accumulate.
     """
     lessons = load_lessons(task_type=task_type, limit=max_lessons)
     if not lessons:
@@ -366,7 +370,10 @@ def inject_lessons_for_task(task_type: str, goal: str, max_lessons: int = 3) -> 
     for l in lessons:
         icon = "✓" if l.outcome == "done" else "✗"
         lines.append(f"- {icon} {l.lesson}")
-    return "\n".join(lines)
+    result = "\n".join(lines)
+    if len(result) > _MAX_LESSON_INJECT_CHARS:
+        result = result[:_MAX_LESSON_INJECT_CHARS].rsplit("\n", 1)[0]
+    return result
 
 
 # ---------------------------------------------------------------------------

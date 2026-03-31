@@ -1,0 +1,148 @@
+"""poe-doctor — pre-flight environment check.
+
+Verifies that the tools, credentials, and data directories needed for a run
+are present and functional. Run before kicking off a mission to catch config
+issues early.
+
+Usage:
+    poe-doctor
+    python3 doctor.py
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import sys
+from pathlib import Path
+
+
+def _check(label: str, ok: bool, detail: str = "") -> dict:
+    status = "PASS" if ok else "FAIL"
+    icon = "✓" if ok else "✗"
+    msg = f"  {icon} {label}"
+    if detail:
+        msg += f" — {detail}"
+    print(msg)
+    return {"label": label, "ok": ok, "detail": detail}
+
+
+def run_doctor() -> bool:
+    """Run all checks. Returns True if all pass."""
+    print("poe-doctor — environment check\n")
+    results = []
+
+    # Python version
+    major, minor = sys.version_info[:2]
+    results.append(_check(
+        "Python version",
+        major == 3 and minor >= 10,
+        f"{major}.{minor} (need 3.10+)",
+    ))
+
+    # Key dependencies
+    for dep in ("requests", "anthropic"):
+        try:
+            __import__(dep)
+            results.append(_check(f"Package: {dep}", True))
+        except ImportError:
+            results.append(_check(f"Package: {dep}", False, "pip install " + dep))
+
+    # Config file
+    cfg_path = Path.home() / ".openclaw" / "openclaw.json"
+    cfg = None
+    if cfg_path.exists():
+        try:
+            cfg = json.loads(cfg_path.read_text())
+            results.append(_check("openclaw.json", True, str(cfg_path)))
+        except Exception as exc:
+            results.append(_check("openclaw.json", False, f"parse error: {exc}"))
+    else:
+        results.append(_check("openclaw.json", False, f"not found at {cfg_path}"))
+
+    # Telegram bot token
+    tg_token = ""
+    if cfg:
+        tg_token = cfg.get("channels", {}).get("telegram", {}).get("botToken", "")
+    tg_token = tg_token or os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    results.append(_check(
+        "Telegram bot token",
+        bool(tg_token),
+        f"token length={len(tg_token)}" if tg_token else "missing (set in openclaw.json or TELEGRAM_BOT_TOKEN)",
+    ))
+
+    # Telegram chat ID
+    tg_chat = ""
+    if cfg:
+        tg_chat = str(cfg.get("channels", {}).get("telegram", {}).get("chatId", ""))
+    tg_chat = tg_chat or os.environ.get("TELEGRAM_CHAT_ID", "")
+    results.append(_check(
+        "Telegram chat ID",
+        bool(tg_chat),
+        f"chat_id={tg_chat}" if tg_chat else "missing (set in openclaw.json or TELEGRAM_CHAT_ID)",
+    ))
+
+    # LLM connectivity (quick API probe)
+    try:
+        src_dir = Path(__file__).resolve().parent
+        if str(src_dir) not in sys.path:
+            sys.path.insert(0, str(src_dir))
+        from llm import build_adapter, LLMMessage
+        adapter = build_adapter()
+        resp = adapter.complete(
+            [LLMMessage("user", "Reply with exactly: ok")],
+            max_tokens=8,
+            temperature=0.0,
+        )
+        ok = "ok" in resp.content.lower()
+        results.append(_check("LLM API reachable", ok, resp.content.strip()[:40]))
+    except Exception as exc:
+        results.append(_check("LLM API reachable", False, str(exc)[:80]))
+
+    # Memory directory
+    mem_dir = Path(__file__).resolve().parent.parent / "memory"
+    results.append(_check(
+        "Memory directory",
+        mem_dir.exists(),
+        str(mem_dir),
+    ))
+
+    # Skills file
+    skills_path = Path(__file__).resolve().parent.parent / "skills.jsonl"
+    if not skills_path.exists():
+        skills_path = Path(__file__).resolve().parent.parent / "memory" / "skills.jsonl"
+    results.append(_check(
+        "Skills data",
+        skills_path.exists(),
+        f"{skills_path} ({'exists' if skills_path.exists() else 'will be created on first run'})",
+    ))
+
+    # Output directory
+    output_dir = Path(__file__).resolve().parent.parent / "output"
+    results.append(_check(
+        "Output directory",
+        output_dir.exists(),
+        str(output_dir),
+    ))
+
+    # Summary
+    passed = sum(1 for r in results if r["ok"])
+    total = len(results)
+    print(f"\n{passed}/{total} checks passed")
+
+    if passed < total:
+        failed = [r["label"] for r in results if not r["ok"]]
+        print(f"Failed: {', '.join(failed)}")
+        return False
+
+    print("All checks passed — ready to run.")
+    return True
+
+
+def main():
+    ok = run_doctor()
+    sys.exit(0 if ok else 1)
+
+
+if __name__ == "__main__":
+    main()
