@@ -355,6 +355,144 @@ def _run_skill_test_gate(suggestion_dict: dict) -> Optional[dict]:
 
 
 # ---------------------------------------------------------------------------
+# Business signal scanning (Mode 2 → Mode 3 bridge)
+# ---------------------------------------------------------------------------
+
+_SIGNAL_SYSTEM = """\
+You are Poe's signal scanner. You analyze completed run outcomes to identify
+actionable business opportunities, follow-up leads, and domain insights that
+should become autonomous sub-missions.
+
+You receive summaries of recent completed run results. Look for:
+1. Findings that warrant deeper investigation (e.g. "this market shows unusual patterns")
+2. Data sources identified but not fully explored
+3. Patterns suggesting a repeatable opportunity or risk
+4. Follow-up questions the current run could not answer
+
+Do NOT propose generic "do more research" missions. Each signal must be concrete and
+actionable — something that can be turned into a specific autonomous goal.
+
+Respond with JSON:
+{
+  "signals": [
+    {
+      "signal_type": "opportunity|lead|pattern|follow_up",
+      "description": "what was found and why it matters",
+      "suggested_goal": "a specific, runnable goal for an autonomous agent",
+      "confidence": 0.0-1.0,
+      "source_outcome": "brief description of the outcome that generated this signal"
+    }
+  ]
+}
+
+If there are no actionable signals, return {"signals": []}.
+Propose at most 3 signals. High confidence (>= 0.8) only.
+"""
+
+
+@dataclass
+class BusinessSignal:
+    signal_type: str        # "opportunity" | "lead" | "pattern" | "follow_up"
+    description: str
+    suggested_goal: str
+    confidence: float
+    source_outcome: str
+
+    def to_dict(self) -> dict:
+        return {
+            "signal_type": self.signal_type,
+            "description": self.description,
+            "suggested_goal": self.suggested_goal,
+            "confidence": self.confidence,
+            "source_outcome": self.source_outcome,
+        }
+
+
+def scan_outcomes_for_signals(
+    outcomes: List[Any],
+    *,
+    dry_run: bool = False,
+    min_confidence: float = 0.7,
+) -> List[BusinessSignal]:
+    """Scan done outcomes for actionable business signals and follow-up leads.
+
+    Converts high-confidence signals into sub_mission Suggestion entries so the
+    evolver queue can schedule them as autonomous runs. This closes the
+    Mode 2 → Mode 3 loop: the system proposes its own next goals from findings.
+
+    Args:
+        outcomes: List of Outcome objects (recent).
+        dry_run: Skip if True (analysis only).
+        min_confidence: Filter signals below this threshold.
+
+    Returns:
+        List of BusinessSignal objects above the confidence threshold.
+    """
+    if dry_run or build_adapter is None:
+        return []
+
+    done_outcomes = [o for o in outcomes if getattr(o, "status", "") == "done"]
+    if not done_outcomes:
+        return []
+
+    # Build summary from done outcomes — goals + key findings
+    lines = ["Recent completed outcomes and their key findings:"]
+    for o in done_outcomes[:15]:
+        goal_text = getattr(o, "goal", "")[:80]
+        summary_text = getattr(o, "summary", "")[:200]
+        if summary_text:
+            lines.append(
+                f"  [{getattr(o, 'task_type', 'general')}] {goal_text}\n"
+                f"    Finding: {summary_text}"
+            )
+
+    if len(lines) <= 1:
+        return []
+
+    try:
+        adapter = build_adapter(model=MODEL_CHEAP)
+        resp = adapter.complete(
+            [
+                LLMMessage("system", _SIGNAL_SYSTEM),
+                LLMMessage("user", f"Scan these outcomes for signals:\n\n" + "\n".join(lines)),
+            ],
+            max_tokens=1024,
+            temperature=0.3,
+        )
+        content = resp.content.strip()
+        start = content.find("{")
+        end = content.rfind("}") + 1
+        if start < 0 or end <= start:
+            return []
+
+        data = json.loads(content[start:end])
+        signals: List[BusinessSignal] = []
+        for r in data.get("signals", []):
+            if not isinstance(r, dict):
+                continue
+            confidence = float(r.get("confidence", 0.0))
+            if confidence < min_confidence:
+                continue
+            suggested_goal = r.get("suggested_goal", "").strip()
+            if not suggested_goal:
+                continue
+            signals.append(BusinessSignal(
+                signal_type=r.get("signal_type", "follow_up"),
+                description=r.get("description", ""),
+                suggested_goal=suggested_goal,
+                confidence=confidence,
+                source_outcome=r.get("source_outcome", ""),
+            ))
+
+        log.info("signal_scan done=%d signals=%d", len(done_outcomes), len(signals))
+        return signals
+
+    except Exception as exc:
+        log.debug("scan_outcomes_for_signals failed (non-fatal): %s", exc)
+        return []
+
+
+# ---------------------------------------------------------------------------
 # LLM analysis
 # ---------------------------------------------------------------------------
 
@@ -456,6 +594,7 @@ def run_evolver(
     dry_run: bool = False,
     verbose: bool = True,
     notify: bool = False,
+    scan_signals: bool = True,
 ) -> EvolverReport:
     """Run one meta-evolution cycle.
 
@@ -514,6 +653,27 @@ def run_evolver(
             ))
         except Exception:
             pass
+
+    # Business signal scan — convert actionable findings to sub_mission suggestions
+    if scan_signals:
+        try:
+            signals = scan_outcomes_for_signals(outcomes, dry_run=dry_run)
+            for sig in signals:
+                import uuid as _sig_uuid
+                suggestions.append(Suggestion(
+                    suggestion_id=f"sig-{_sig_uuid.uuid4().hex[:8]}",
+                    category="sub_mission",
+                    target=sig.signal_type,
+                    suggestion=sig.suggested_goal,
+                    failure_pattern=f"signal from: {sig.source_outcome[:80]}",
+                    confidence=sig.confidence,
+                    outcomes_analyzed=len(outcomes),
+                ))
+            if verbose and signals:
+                print(f"[evolver] signal_scan: {len(signals)} sub_mission suggestion(s)", file=sys.stderr)
+            log.info("evolver signal_scan signals=%d", len(signals))
+        except Exception as _sig_exc:
+            log.debug("signal scan failed (non-fatal): %s", _sig_exc)
 
     report = EvolverReport(
         run_id=run_id,

@@ -1,9 +1,10 @@
-"""Tests for step_exec — _parse_when and schedule_run tool handler."""
+"""Tests for step_exec — _parse_when, schedule_run, data pipeline enforcement."""
 
 from __future__ import annotations
 
 import sys
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -191,3 +192,186 @@ class TestScheduleRunTool:
         from scheduler import list_jobs
         jobs = list_jobs()
         assert any("BTC" in j["goal"] for j in jobs)
+
+
+# ---------------------------------------------------------------------------
+# Data pipeline enforcement helpers
+# ---------------------------------------------------------------------------
+
+class TestIsDataHeavyStep:
+    def test_polymarket_cli_detected(self):
+        from step_exec import _is_data_heavy_step
+        assert _is_data_heavy_step("Run polymarket-cli list to get all markets")
+
+    def test_fetch_all_detected(self):
+        from step_exec import _is_data_heavy_step
+        assert _is_data_heavy_step("Fetch all events from the API")
+
+    def test_list_all_detected(self):
+        from step_exec import _is_data_heavy_step
+        assert _is_data_heavy_step("List all trades from the database")
+
+    def test_requests_get_detected(self):
+        from step_exec import _is_data_heavy_step
+        assert _is_data_heavy_step("Use requests.get to fetch the full data")
+
+    def test_normal_step_not_detected(self):
+        from step_exec import _is_data_heavy_step
+        assert not _is_data_heavy_step("Summarize the research findings")
+
+    def test_analysis_step_not_detected(self):
+        from step_exec import _is_data_heavy_step
+        assert not _is_data_heavy_step("Analyze the top performing wallets by return rate")
+
+    def test_case_insensitive(self):
+        from step_exec import _is_data_heavy_step
+        assert _is_data_heavy_step("FETCH ALL records from the endpoint")
+
+
+class TestResultLooksLikeRawDump:
+    def test_short_result_not_flagged(self):
+        from step_exec import _result_looks_like_raw_dump
+        assert not _result_looks_like_raw_dump("Short clean summary of findings.")
+
+    def test_long_clean_text_not_flagged(self):
+        from step_exec import _result_looks_like_raw_dump
+        # Long but no brace density or long lines
+        clean = "Finding: " + "A" * 2100
+        assert not _result_looks_like_raw_dump(clean)
+
+    def test_high_brace_density_flagged(self):
+        from step_exec import _result_looks_like_raw_dump
+        # 35+ braces and over 2000 chars = JSON dump
+        raw = "{" * 20 + "key: value" * 10 + "}" * 20
+        padded = raw + "x" * 2000  # ensure over char threshold
+        assert _result_looks_like_raw_dump(padded)
+
+    def test_many_long_lines_flagged(self):
+        from step_exec import _result_looks_like_raw_dump
+        # 6 lines each 350 chars = raw text dump
+        long_line = "A" * 350
+        result = "\n".join([long_line] * 8)
+        assert _result_looks_like_raw_dump(result)
+
+    def test_exactly_at_threshold_not_flagged(self):
+        from step_exec import _result_looks_like_raw_dump
+        # Right at the char threshold — just under
+        result = "x" * 1999
+        assert not _result_looks_like_raw_dump(result)
+
+
+class TestDataPipelineEnforcementInExecuteStep:
+    """Integration: data-heavy steps get pipeline block injected; raw results get flagged."""
+
+    def _complete_step_adapter(self, result_text: str):
+        """Adapter that returns a complete_step call with given result."""
+        from llm import LLMResponse, ToolCall
+        resp = LLMResponse(
+            content="",
+            tool_calls=[ToolCall(name="complete_step", arguments={
+                "result": result_text,
+                "summary": "step done",
+            })],
+            stop_reason="tool_use",
+            input_tokens=50,
+            output_tokens=20,
+        )
+        adapter = MagicMock()
+        adapter.complete.return_value = resp
+        return adapter
+
+    def test_data_heavy_step_injects_enforcement(self, tmp_path, monkeypatch):
+        """When step is data-heavy, user_msg contains the pipeline enforcement block."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+
+        captured_msgs = []
+        adapter = MagicMock()
+
+        from llm import LLMResponse, ToolCall
+        adapter.complete.side_effect = lambda msgs, **kw: (
+            captured_msgs.append(msgs) or
+            LLMResponse("", [ToolCall("complete_step", {"result": "ok", "summary": "done"})],
+                        "tool_use", 10, 10)
+        )
+
+        from step_exec import execute_step, EXECUTE_TOOLS
+        execute_step(
+            goal="Research markets",
+            step_text="Fetch all events from the polymarket-cli API",
+            step_num=1,
+            total_steps=1,
+            completed_context=[],
+            adapter=adapter,
+            tools=EXECUTE_TOOLS,
+        )
+        assert captured_msgs, "adapter.complete never called"
+        user_content = captured_msgs[0][-1].content  # last message is user msg
+        assert "DATA PIPELINE ENFORCEMENT" in user_content
+
+    def test_non_data_heavy_step_no_injection(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+
+        captured_msgs = []
+        adapter = MagicMock()
+        from llm import LLMResponse, ToolCall
+        adapter.complete.side_effect = lambda msgs, **kw: (
+            captured_msgs.append(msgs) or
+            LLMResponse("", [ToolCall("complete_step", {"result": "clean summary", "summary": "done"})],
+                        "tool_use", 10, 10)
+        )
+
+        from step_exec import execute_step, EXECUTE_TOOLS
+        execute_step(
+            goal="Research markets",
+            step_text="Summarize the top three findings from prior steps",
+            step_num=1,
+            total_steps=1,
+            completed_context=[],
+            adapter=adapter,
+            tools=EXECUTE_TOOLS,
+        )
+        user_content = captured_msgs[0][-1].content
+        assert "DATA PIPELINE ENFORCEMENT" not in user_content
+
+    def test_raw_dump_result_gets_flagged(self, tmp_path, monkeypatch):
+        """If the agent ignores pipeline enforcement and returns raw output, flag it."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+
+        # 35 braces + long result (>2000 chars) = raw dump signal
+        raw_result = "{" * 20 + "data" * 600 + "}" * 20
+
+        from step_exec import execute_step, EXECUTE_TOOLS
+        adapter = self._complete_step_adapter(raw_result)
+        result = execute_step(
+            goal="Get market data",
+            step_text="Fetch all markets",
+            step_num=1,
+            total_steps=1,
+            completed_context=[],
+            adapter=adapter,
+            tools=EXECUTE_TOOLS,
+        )
+        assert result["status"] == "done"
+        assert result["result"].startswith("[RAW_OUTPUT_DETECTED]")
+
+    def test_clean_result_not_flagged(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+
+        clean_result = "Top 3 markets by volume: BTC-USD ($1.2B), ETH-USD ($0.8B), SOL-USD ($0.3B)."
+
+        from step_exec import execute_step, EXECUTE_TOOLS
+        adapter = self._complete_step_adapter(clean_result)
+        result = execute_step(
+            goal="Summarize markets",
+            step_text="Summarize the top markets",
+            step_num=1,
+            total_steps=1,
+            completed_context=[],
+            adapter=adapter,
+            tools=EXECUTE_TOOLS,
+        )
+        assert not result["result"].startswith("[RAW_OUTPUT_DETECTED]")

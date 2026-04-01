@@ -29,6 +29,150 @@ from typing import List, Optional
 
 log = logging.getLogger("poe.quality_gate")
 
+
+# ---------------------------------------------------------------------------
+# LLM Council — multi-framing critique (sycophancy defense)
+# ---------------------------------------------------------------------------
+
+_COUNCIL_FRAMINGS = [
+    (
+        "devil_advocate",
+        textwrap.dedent("""\
+            You are the devil's advocate. Assume the output is fundamentally flawed.
+            Find what's missing, what assumptions are unjustified, and what conclusions
+            the research failed to reach that it should have.
+
+            Be specific. Name gaps. Don't say "could be more thorough" — say exactly
+            what was omitted and why it matters for the stated goal.
+
+            Respond with JSON:
+            {
+              "verdict": "WEAK" or "ACCEPTABLE" or "STRONG",
+              "concerns": ["specific concern 1", "specific concern 2"],
+              "most_critical_gap": "the single biggest missing piece"
+            }
+        """).strip(),
+    ),
+    (
+        "domain_skeptic",
+        textwrap.dedent("""\
+            You are a domain skeptic. Challenge the methodology and assumptions.
+            Identify where the research draws on weak evidence, misapplies domain
+            knowledge, or reaches conclusions a domain expert would dispute.
+
+            Focus on: wrong evidence tiers (animal vs human), confounded variables,
+            contested mechanisms, population mismatch, missing context.
+
+            Respond with JSON:
+            {
+              "verdict": "WEAK" or "ACCEPTABLE" or "STRONG",
+              "concerns": ["specific concern 1", "specific concern 2"],
+              "most_critical_gap": "the single biggest methodological flaw"
+            }
+        """).strip(),
+    ),
+    (
+        "implementation_critic",
+        textwrap.dedent("""\
+            You are the implementation critic. Focus on actionability.
+            Is this output actually usable? Can someone act on it?
+            Are there missing specifics (doses, timelines, tools, steps) that block
+            real-world use? Are recommendations internally consistent?
+
+            Respond with JSON:
+            {
+              "verdict": "WEAK" or "ACCEPTABLE" or "STRONG",
+              "concerns": ["specific concern 1", "specific concern 2"],
+              "most_critical_gap": "what would block someone from actually using this"
+            }
+        """).strip(),
+    ),
+]
+
+
+@dataclass
+class CouncilCritique:
+    critic: str           # "devil_advocate" | "domain_skeptic" | "implementation_critic"
+    verdict: str          # "WEAK" | "ACCEPTABLE" | "STRONG"
+    concerns: List[str]
+    most_critical_gap: str
+
+
+@dataclass
+class CouncilVerdict:
+    critiques: List[CouncilCritique]
+    weak_count: int       # how many critics rated WEAK
+    escalate: bool        # True if majority (2+) weak
+
+
+def run_llm_council(
+    goal: str,
+    step_outcomes: list,
+    adapter=None,
+) -> CouncilVerdict:
+    """Run 3 critics with distinct framings; escalate if 2+ rate WEAK.
+
+    Devil's advocate looks for gaps. Domain skeptic challenges methodology.
+    Implementation critic tests actionability. Together they catch failure modes
+    that the single adversarial pass misses (sycophancy defense).
+
+    Falls back to empty verdict on any failure — never blocks the caller.
+    """
+    if adapter is None:
+        return CouncilVerdict([], 0, False)
+
+    done_steps = [s for s in step_outcomes if getattr(s, "status", "") == "done"]
+    if not done_steps:
+        return CouncilVerdict([], 0, False)
+
+    review_steps = done_steps[-3:]
+    output_summary = "\n\n".join(
+        f"Step {getattr(s, 'index', i+1)}: {getattr(s, 'text', '?')[:80]}\n"
+        f"Result: {(getattr(s, 'result', '') or '')[:500]}"
+        for i, s in enumerate(review_steps)
+    )
+    user_msg = f"Goal: {goal[:300]}\n\nOutput to review:\n{output_summary}"
+
+    critiques: List[CouncilCritique] = []
+
+    try:
+        from llm import LLMMessage
+        import json
+
+        for critic_name, critic_system in _COUNCIL_FRAMINGS:
+            try:
+                resp = adapter.complete(
+                    [
+                        LLMMessage("system", critic_system),
+                        LLMMessage("user", user_msg),
+                    ],
+                    max_tokens=512,
+                    temperature=0.4,
+                )
+                content = resp.content.strip()
+                start = content.find("{")
+                end = content.rfind("}") + 1
+                if start >= 0 and end > start:
+                    data = json.loads(content[start:end])
+                    critiques.append(CouncilCritique(
+                        critic=critic_name,
+                        verdict=data.get("verdict", "ACCEPTABLE").upper(),
+                        concerns=data.get("concerns", [])[:4],
+                        most_critical_gap=data.get("most_critical_gap", ""),
+                    ))
+                    log.debug("council critic=%s verdict=%s", critic_name, critiques[-1].verdict)
+            except Exception as exc:
+                log.debug("council critic=%s failed (non-fatal): %s", critic_name, exc)
+
+    except Exception as exc:
+        log.debug("run_llm_council setup failed (non-fatal): %s", exc)
+
+    weak_count = sum(1 for c in critiques if c.verdict == "WEAK")
+    escalate = weak_count >= 2
+    log.info("council critics=%d weak=%d escalate=%s", len(critiques), weak_count, escalate)
+
+    return CouncilVerdict(critiques=critiques, weak_count=weak_count, escalate=escalate)
+
 _GATE_SYSTEM = textwrap.dedent("""\
     You are a quality reviewer. A research/analysis task just completed.
     Your job: decide if the output meets the bar for the stated goal.
@@ -83,6 +227,7 @@ class QualityVerdict:
     confidence: float
     escalate: bool      # True if verdict == "ESCALATE" and confidence is high enough
     contested_claims: List[dict] = field(default_factory=list)  # from adversarial pass
+    council: Optional[CouncilVerdict] = None  # from LLM council (if run_council=True)
 
 
 def run_quality_gate(
@@ -92,14 +237,18 @@ def run_quality_gate(
     *,
     confidence_threshold: float = 0.75,
     run_adversarial: bool = True,
+    run_council: bool = False,
 ) -> QualityVerdict:
     """Review completed loop output and return a quality verdict.
 
-    Runs two passes:
+    Runs up to three passes:
     1. PASS/ESCALATE verdict — should we re-run at a higher tier?
     2. Adversarial claim review — what specific claims are contested/overclaimed?
        Contested claims are returned in verdict.contested_claims regardless of
        PASS/ESCALATE, so callers can append them to the result text.
+    3. LLM Council (optional, run_council=True) — 3 critics with distinct framings
+       (devil's advocate, domain skeptic, implementation critic). Escalates if 2+
+       critics rate WEAK. Catches sycophancy that single-pass adversarial misses.
 
     Uses the provided adapter (should be cheap tier — gate itself is cheap).
     Returns PASS with low confidence on any failure — gate errors must never
@@ -111,6 +260,7 @@ def run_quality_gate(
         adapter: LLM adapter to use for the review (cheap tier recommended).
         confidence_threshold: Minimum confidence to act on ESCALATE.
         run_adversarial: Whether to run the adversarial claim review pass.
+        run_council: Whether to run the LLM council (3 additional critic calls).
     """
     if adapter is None:
         return QualityVerdict("PASS", "no adapter — gate skipped", 0.0, False)
@@ -205,7 +355,20 @@ def run_quality_gate(
         except Exception as exc:
             log.debug("quality_gate adversarial pass failed (non-fatal): %s", exc)
 
-    return QualityVerdict(verdict, reason, confidence, escalate, contested_claims)
+    # --- Pass 3: LLM Council (optional) ---
+    council_verdict: Optional[CouncilVerdict] = None
+    if run_council:
+        council_verdict = run_llm_council(goal, step_outcomes, adapter)
+        if council_verdict.escalate and not escalate:
+            escalate = True
+            verdict = "ESCALATE"
+            reason = (
+                f"LLM Council: {council_verdict.weak_count}/3 critics rated WEAK — "
+                + (council_verdict.critiques[0].most_critical_gap[:80] if council_verdict.critiques else "")
+            )
+            log.info("quality_gate council_escalated weak=%d", council_verdict.weak_count)
+
+    return QualityVerdict(verdict, reason, confidence, escalate, contested_claims, council_verdict)
 
 
 def next_model_tier(current_model: str) -> Optional[str]:

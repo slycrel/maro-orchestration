@@ -21,6 +21,8 @@ from evolver import (
     apply_suggestion,
     _apply_suggestion_action,
     _dynamic_constraints_path,
+    BusinessSignal,
+    scan_outcomes_for_signals,
 )
 
 
@@ -838,3 +840,142 @@ def test_run_evolver_auto_applies_high_confidence(tmp_path, monkeypatch):
     assert report.outcomes_reviewed == 10
     # Only the high-confidence suggestion should be auto-applied
     assert len(applied_ids) == 1
+
+
+# ---------------------------------------------------------------------------
+# BusinessSignal + scan_outcomes_for_signals
+# ---------------------------------------------------------------------------
+
+class TestBusinessSignal:
+    def test_to_dict(self):
+        s = BusinessSignal(
+            signal_type="opportunity",
+            description="Unusual market odds",
+            suggested_goal="Analyze top Polymarket markets for mispriced odds",
+            confidence=0.85,
+            source_outcome="polymarket research run",
+        )
+        d = s.to_dict()
+        assert d["signal_type"] == "opportunity"
+        assert d["confidence"] == 0.85
+        assert "suggested_goal" in d
+
+
+class TestScanOutcomesForSignals:
+    def _make_outcome(self, status="done", goal="research goal", summary="found useful pattern"):
+        o = MagicMock()
+        o.status = status
+        o.goal = goal
+        o.summary = summary
+        o.task_type = "research"
+        return o
+
+    def test_dry_run_returns_empty(self):
+        outcomes = [self._make_outcome()]
+        result = scan_outcomes_for_signals(outcomes, dry_run=True)
+        assert result == []
+
+    def test_no_done_outcomes_returns_empty(self):
+        outcomes = [self._make_outcome(status="stuck")]
+        with patch("evolver.build_adapter") as mock_build:
+            result = scan_outcomes_for_signals(outcomes)
+        assert result == []
+
+    def test_valid_signal_returned(self):
+        signal_json = json.dumps({
+            "signals": [{
+                "signal_type": "opportunity",
+                "description": "Top wallets show consistent pattern",
+                "suggested_goal": "Analyze Polymarket top wallet strategies",
+                "confidence": 0.85,
+                "source_outcome": "polymarket run",
+            }]
+        })
+        mock_adapter = MagicMock()
+        mock_adapter.complete.return_value = MagicMock(
+            content=signal_json, input_tokens=20, output_tokens=50
+        )
+        outcomes = [self._make_outcome()]
+        with patch("evolver.build_adapter", return_value=mock_adapter):
+            signals = scan_outcomes_for_signals(outcomes, min_confidence=0.7)
+        assert len(signals) == 1
+        assert signals[0].signal_type == "opportunity"
+        assert "Polymarket" in signals[0].suggested_goal
+
+    def test_low_confidence_signal_filtered(self):
+        signal_json = json.dumps({
+            "signals": [{
+                "signal_type": "lead",
+                "description": "Weak lead",
+                "suggested_goal": "Maybe look into this",
+                "confidence": 0.4,
+                "source_outcome": "some run",
+            }]
+        })
+        mock_adapter = MagicMock()
+        mock_adapter.complete.return_value = MagicMock(content=signal_json, input_tokens=10, output_tokens=20)
+        outcomes = [self._make_outcome()]
+        with patch("evolver.build_adapter", return_value=mock_adapter):
+            signals = scan_outcomes_for_signals(outcomes, min_confidence=0.7)
+        assert signals == []
+
+    def test_adapter_error_returns_empty(self):
+        mock_adapter = MagicMock()
+        mock_adapter.complete.side_effect = RuntimeError("network error")
+        outcomes = [self._make_outcome()]
+        with patch("evolver.build_adapter", return_value=mock_adapter):
+            signals = scan_outcomes_for_signals(outcomes)
+        assert signals == []
+
+    def test_empty_suggested_goal_filtered(self):
+        signal_json = json.dumps({
+            "signals": [{
+                "signal_type": "follow_up",
+                "description": "something",
+                "suggested_goal": "",
+                "confidence": 0.9,
+                "source_outcome": "run",
+            }]
+        })
+        mock_adapter = MagicMock()
+        mock_adapter.complete.return_value = MagicMock(content=signal_json, input_tokens=10, output_tokens=20)
+        outcomes = [self._make_outcome()]
+        with patch("evolver.build_adapter", return_value=mock_adapter):
+            signals = scan_outcomes_for_signals(outcomes)
+        assert signals == []
+
+
+class TestRunEvolverSignalScan:
+    def test_signals_become_sub_mission_suggestions(self, monkeypatch, tmp_path):
+        """run_evolver converts business signals into sub_mission Suggestion entries."""
+        monkeypatch.setattr("evolver.load_outcomes", lambda limit=50: [MagicMock(status="done")] * 5)
+        monkeypatch.setattr("evolver._llm_analyze", lambda outcomes, dry_run=False: ([], []))
+        monkeypatch.setattr("evolver._save_suggestions", lambda s: None)
+
+        fake_signal = BusinessSignal(
+            signal_type="opportunity",
+            description="Test signal",
+            suggested_goal="Run deeper analysis",
+            confidence=0.85,
+            source_outcome="test outcome",
+        )
+        monkeypatch.setattr("evolver.scan_outcomes_for_signals", lambda outcomes, dry_run=False: [fake_signal])
+
+        # Prevent graduation pass from running
+        monkeypatch.setattr("evolver.run_graduation", lambda verbose=False: 0, raising=False)
+
+        report = run_evolver(dry_run=False, verbose=False, min_outcomes=1, scan_signals=True)
+        sub_missions = [s for s in report.suggestions if s.category == "sub_mission"]
+        assert len(sub_missions) == 1
+        assert "deeper analysis" in sub_missions[0].suggestion
+
+    def test_scan_signals_false_skips_scan(self, monkeypatch):
+        scan_called = []
+        monkeypatch.setattr("evolver.load_outcomes", lambda limit=50: [MagicMock(status="done")] * 5)
+        monkeypatch.setattr("evolver._llm_analyze", lambda outcomes, dry_run=False: ([], []))
+        monkeypatch.setattr("evolver._save_suggestions", lambda s: None)
+        monkeypatch.setattr("evolver.scan_outcomes_for_signals",
+                            lambda outcomes, dry_run=False: scan_called.append(True) or [])
+
+        run_evolver(dry_run=False, verbose=False, min_outcomes=1, scan_signals=False)
+        assert scan_called == []

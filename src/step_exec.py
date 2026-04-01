@@ -79,6 +79,58 @@ EXECUTE_SYSTEM = textwrap.dedent("""\
     This turns a 100K-token step into a 5K-token step.
 """).strip()
 
+# ---------------------------------------------------------------------------
+# Data pipeline enforcement helpers
+# ---------------------------------------------------------------------------
+
+# Keywords in step text that suggest the agent will touch external data sources
+# and is at risk of dumping raw output into context.
+_DATA_HEAVY_KEYWORDS = frozenset({
+    "fetch all", "get all", "list all", "query all", "retrieve all",
+    "polymarket-cli", "fetch data", "get data", "download data",
+    "curl ", "wget ", "requests.get", "httpx.get", "enumerate all",
+    "dump ", "raw output", "full response", "entire response",
+    "all markets", "all events", "all trades", "all positions",
+})
+
+# Extra enforcement block injected into user_msg when a data-heavy step is detected.
+_DATA_PIPELINE_EXTRA = textwrap.dedent("""\
+
+    DATA PIPELINE ENFORCEMENT — this step touches external data:
+    You MUST NOT return raw output. Write a filter script instead:
+      1. Fetch → save raw output to a temp file
+      2. Filter → extract only the needed fields (≤20 items max)
+      3. Save the filtered result to {project_dir}/step_data.json
+      4. Read the filtered file, summarize in ≤200 words
+    Call complete_step with that summary. Raw JSON dumps will be flagged.
+""").strip()
+
+# Result length above which we check for raw-dump patterns.
+_RAW_DUMP_CHAR_THRESHOLD = 2000
+
+
+def _is_data_heavy_step(step_text: str) -> bool:
+    """Return True if the step text suggests risk of raw-output dumping."""
+    lower = step_text.lower()
+    return any(kw in lower for kw in _DATA_HEAVY_KEYWORDS)
+
+
+def _result_looks_like_raw_dump(result: str) -> bool:
+    """Heuristic: detect if a complete_step result is raw API output.
+
+    Checks two signals:
+    - High brace density (JSON dump)
+    - Many long lines (raw text output)
+    """
+    if len(result) < _RAW_DUMP_CHAR_THRESHOLD:
+        return False
+    brace_count = result.count("{") + result.count("}")
+    if brace_count > 30:
+        return True
+    long_lines = sum(1 for line in result.splitlines() if len(line) > 300)
+    return long_lines > 5
+
+
 EXECUTE_TOOLS = [
     {
         "name": "complete_step",
@@ -356,12 +408,22 @@ def execute_step(
             f" This directory exists and is where artifacts persist across steps."
         )
 
+    # Pre-check: detect data-heavy steps and inject stronger enforcement
+    _data_heavy = _is_data_heavy_step(step_text)
+    _pipeline_block = ""
+    if _data_heavy:
+        _pipeline_block = "\n\n" + _DATA_PIPELINE_EXTRA.format(
+            project_dir=project_dir or "/tmp/poe_step"
+        )
+        log.debug("step %d data_heavy=True — injecting pipeline enforcement", step_num)
+
     user_msg = (
         f"Overall goal: {goal}{ancestry_block}\n\n"
         f"Current step ({step_num}/{total_steps}): {step_text}"
         f"{workspace_block}"
         f"{context_block}"
-        f"{prefetch_block}\n\n"
+        f"{prefetch_block}"
+        f"{_pipeline_block}\n\n"
         f"Complete this step now. Call complete_step when done or flag_stuck if blocked."
     )
 
@@ -413,11 +475,17 @@ def execute_step(
         tc = resp.tool_calls[0]
         if tc.name == "complete_step":
             _confidence = tc.arguments.get("confidence", "") or ""
+            _result_text = tc.arguments.get("result", resp.content)
+            # Post-check: flag raw dumps so caller can act on it
+            if _result_looks_like_raw_dump(_result_text):
+                log.warning("step %d RAW_DUMP_DETECTED result_len=%d — agent ignored pipeline enforcement",
+                            step_num, len(_result_text))
+                _result_text = "[RAW_OUTPUT_DETECTED] " + _result_text
             log.info("step %d DONE (complete_step) tokens=%d elapsed=%.1fs confidence=%s",
                      step_num, _tok, time.monotonic() - _step_t0, _confidence or "unset")
             _out: dict = {
                 "status": "done",
-                "result": tc.arguments.get("result", resp.content),
+                "result": _result_text,
                 "summary": tc.arguments.get("summary", step_text),
                 "tokens_in": resp.input_tokens,
                 "tokens_out": resp.output_tokens,
