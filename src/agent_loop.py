@@ -138,7 +138,13 @@ class LoopResult:
 # Prompts and tools — extracted to planner.py and step_exec.py for readability.
 # Re-exported here for backward compatibility with existing imports.
 from planner import DECOMPOSE_SYSTEM, parse_steps as _parse_steps, decompose as _decompose_impl
-from step_exec import EXECUTE_SYSTEM, EXECUTE_TOOLS, execute_step as _execute_step, generate_refinement_hint as _generate_refinement_hint, verify_step as _verify_step
+from step_exec import (
+    EXECUTE_SYSTEM, EXECUTE_TOOLS,
+    EXECUTE_TOOLS_WORKER, EXECUTE_TOOLS_SHORT, EXECUTE_TOOLS_INSPECTOR,
+    execute_step as _execute_step,
+    generate_refinement_hint as _generate_refinement_hint,
+    verify_step as _verify_step,
+)
 
 _DECOMPOSE_SYSTEM = DECOMPOSE_SYSTEM
 _EXECUTE_SYSTEM = EXECUTE_SYSTEM
@@ -926,6 +932,18 @@ def run_agent_loop(
                 log.info("budget-aware landing: replaced %d remaining steps with synthesis step "
                          "(budget=%d iterations left, %d steps done)",
                          len(remaining_steps), _remaining_budget, _done_count)
+                # back-pressure: inject budget reminder so synthesis step knows context
+                _budget_reminder = (
+                    f"BUDGET PRESSURE — {_remaining_budget} iteration(s) remaining.\n"
+                    f"Original goal: {goal}\n"
+                    "Deliver the best synthesis possible from what you have. "
+                    "Do NOT attempt new research — consolidate only."
+                )
+                _next_step_injected_context = (
+                    (_next_step_injected_context + "\n\n" + _budget_reminder).strip()
+                    if _next_step_injected_context
+                    else _budget_reminder
+                )
 
         step_text = remaining_steps.pop(0)
         item_index = remaining_indices.pop(0) if remaining_indices else -1

@@ -3,7 +3,7 @@
 Single canonical location for everything we've identified but haven't done yet.
 Read this at the start of every session. Update it as items are completed or new ones emerge.
 
-Last reviewed: 2026-03-31 (late evening session)
+Last reviewed: 2026-03-31 (continued session)
 
 ---
 
@@ -62,14 +62,14 @@ Last reviewed: 2026-03-31 (late evening session)
 - [x] **ScheduleCronTool in Poe heartbeat** — wire Poe's cron tool so she can schedule her own future runs from within a mission. Closes the self-managing loop. Done: `schedule_run` tool added to `EXECUTE_TOOLS` in step_exec.py; parses 'daily at HH:MM' / 'in N minutes/hours/days' / ISO datetime; calls scheduler.add_job(); 13 tests. (2026-03-31)
 
 ### claw-code steal list (github.com/instructkr/claw-code — Claude Code architecture map)
-- [ ] **verificationAgent as first-class agent** — Claude Code has `verificationAgent` as a peer to `planAgent`/`exploreAgent` in its built-in agent suite. Promote `verify_step()` to a named agent type with its own system prompt and tool set, not just a function call.
+- [x] **verificationAgent as first-class agent** — `src/verification_agent.py` with `VerificationAgent` class: `verify_step()`, `adversarial_pass()`, `quality_review()`. step_exec.py's `verify_step` delegates to it. `poe-verify` CLI. 21 tests. (2026-03-31)
 - [ ] **TeamCreateTool pattern** — model-directed dynamic team creation/deletion at runtime. The LLM decides team composition mid-mission, not just at plan time. More dynamic than our Director/Worker hierarchy.
 - [ ] **thinkback replay** — session-level decision replay for self-improvement. Replay past missions with hindsight, compare decisions. Maps to Phase 44/45 but at session scope.
 - [x] **effort modifier** — add `effort:` keyword to handle.py routing that sets a thinking/token budget level. Done: `effort:low/mid/high` prefix in handle.py strips keyword and overrides model tier (low→cheap, mid→mid, high→power). (claw-code steal, 2026-03-31)
 - [ ] **passes command** — multi-pass review as a unified first-class concept (vs our separate Inspector + adversarial reviewer). Worth unifying.
-- [ ] **ultraplan / ultrareview modes** — on-demand deep planning/review beyond normal operation. Discrete "go deeper" mode rather than always-on scaffolding.
+- [x] **ultraplan / ultrareview modes** — `ultraplan:` prefix added to handle.py: strips keyword, sets model=power, passes max_steps=12 to run_agent_loop. For complex multi-part goals needing thorough decomposition. 3 tests. `ultrareview:` deferred — quality gate already covers the review use case. (2026-03-31)
 - [x] **bughunter mode** — self-directed code quality scan. Poe scanning her own orchestration code for bugs, not just diagnosing runtime failures. Done: `src/bughunter.py` with stdlib AST scanner (BH001 bare except, BH003 mutable defaults, BH004 shadowed builtins, BH010 TODOs); `poe-bughunter` CLI. 16 tests. Src scans clean. (claw-code steal, 2026-03-31)
-- [ ] **btw (by-the-way) mode** — non-blocking observation mode; agent surfaces observations without interrupting workflow. Good for Inspector-style notes that don't block step execution.
+- [x] **btw (by-the-way) mode** — non-blocking observation mode; `btw:` prefix routes to NOW lane with `_BTW_SYSTEM` prompt, tags result as `[Observation]`. 5 tests. (2026-03-31)
 
 ## Research to Process
 

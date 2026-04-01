@@ -94,6 +94,12 @@ If the request is a question, answer it. If it's a task, complete it.
 Do not hedge or defer — just do the work.
 """
 
+_BTW_SYSTEM = """You are Poe, surfacing a non-blocking observation.
+Note what you observe, briefly and specifically. Do not attempt to fix or solve anything.
+Keep it to 1–3 sentences max. Format: one sentence per observation, plain text.
+This is a side-note, not a task result.
+"""
+
 
 def _run_now(
     message: str,
@@ -228,6 +234,23 @@ def handle(
         message = message[len("mode:thin"):].lstrip()
         _use_thin_mode = True
 
+    # btw: prefix — non-blocking observation mode. Surfaces a quick note without
+    # spawning a full loop. The result is tagged as an observation, not a work product.
+    # Good for "btw: I noticed the API is rate-limiting us" style side-notes.
+    _btw_mode = False
+    if message.lower().startswith("btw:"):
+        message = message[len("btw:"):].lstrip()
+        _btw_mode = True
+
+    # ultraplan: prefix — deep planning mode. Uses power model + max_steps=12.
+    # For complex multi-part goals that need thorough decomposition.
+    _ultraplan_max_steps = None
+    if message.lower().startswith("ultraplan:"):
+        message = message[len("ultraplan:"):].lstrip()
+        if model is None:
+            model = "power"
+        _ultraplan_max_steps = 12
+
     # Build adapter
     if adapter is None and not dry_run:
         adapter = build_adapter(model=model or MODEL_CHEAP)
@@ -244,6 +267,35 @@ def handle(
 
     if verbose:
         print(f"[poe:{handle_id}] classified lane={lane} confidence={confidence:.2f}: {reason}", file=sys.stderr, flush=True)
+
+    # btw mode: quick observation, always routes to NOW regardless of classification.
+    # The result is prefixed with "[Observation]" to distinguish from work products.
+    if _btw_mode:
+        from llm import LLMMessage
+        _btw_t0 = time.monotonic()
+        try:
+            _btw_resp = adapter.complete(
+                [LLMMessage("system", _BTW_SYSTEM), LLMMessage("user", message)],
+                max_tokens=256,
+                temperature=0.3,
+            )
+            _btw_content = _btw_resp.content.strip() or "[no observation]"
+        except Exception as _btw_exc:
+            _btw_content = f"[observation error: {_btw_exc}]"
+            _btw_resp = type("R", (), {"input_tokens": 0, "output_tokens": 0})()
+        elapsed = int((time.monotonic() - started_at) * 1000)
+        return HandleResult(
+            handle_id=handle_id,
+            lane="now",
+            lane_confidence=1.0,
+            classification_reason="btw: non-blocking observation",
+            message=message,
+            status="done",
+            result=f"[Observation] {_btw_content}",
+            tokens_in=getattr(_btw_resp, "input_tokens", 0),
+            tokens_out=getattr(_btw_resp, "output_tokens", 0),
+            elapsed_ms=elapsed,
+        )
 
     # Route to lane
     if lane == "now":
@@ -369,8 +421,7 @@ def handle(
                 log.warning("mode:thin failed, falling back to Mode 2: %s", _thin_exc)
                 # Fall through to run_agent_loop below
 
-        loop_result = run_agent_loop(
-            message,
+        _loop_kwargs: dict = dict(
             project=project,
             model=model,
             adapter=adapter,
@@ -378,6 +429,10 @@ def handle(
             verbose=verbose,
             ralph_verify=_cfg.get("ralph_verify", "").strip().lower() == "true",
         )
+        if _ultraplan_max_steps is not None:
+            _loop_kwargs["max_steps"] = _ultraplan_max_steps
+
+        loop_result = run_agent_loop(message, **_loop_kwargs)
         elapsed = int((time.monotonic() - started_at) * 1000)
 
         # Quality gate — skeptic review; escalate model tier if output is below bar

@@ -158,6 +158,14 @@ EXECUTE_TOOLS = [
     },
 ]
 
+# Role-specific subsets — reduces hallucinated calls and prompt noise.
+# Worker (default): all tools including schedule_run for multi-day goals.
+# Short-run: complete_step + flag_stuck only; no schedule_run (single-session tasks).
+# Inspector: flag_stuck only; inspector roles produce critiques, not completions.
+EXECUTE_TOOLS_WORKER = EXECUTE_TOOLS
+EXECUTE_TOOLS_SHORT = [t for t in EXECUTE_TOOLS if t["name"] != "schedule_run"]
+EXECUTE_TOOLS_INSPECTOR = [t for t in EXECUTE_TOOLS if t["name"] == "flag_stuck"]
+
 
 # ---------------------------------------------------------------------------
 # Refinement hint (round 2 retry)
@@ -508,14 +516,19 @@ def verify_step(
 ) -> dict:
     """Verify that a completed step result actually addressed the step goal.
 
-    Returns a dict with:
-        passed: bool — True if step should be accepted as-is
-        reason: str — why it passed or failed
-        confidence: float
-
+    Delegates to VerificationAgent for a named, composable implementation.
+    Returns a dict with: passed, reason, confidence.
     Non-fatal — returns passed=True on any error so verify never blocks execution.
     """
-    # Coerce to string — model sometimes returns dict/list in tool call arguments
+    try:
+        from verification_agent import VerificationAgent
+        va = VerificationAgent(adapter, confidence_threshold=confidence_threshold)
+        verdict = va.verify_step(step_text, result)
+        return {"passed": verdict.passed, "reason": verdict.reason, "confidence": verdict.confidence}
+    except ImportError:
+        pass
+
+    # Fallback: inline logic if verification_agent unavailable
     if not isinstance(result, str):
         result = str(result) if result else ""
     if not result.strip():

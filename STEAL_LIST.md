@@ -23,6 +23,7 @@ Compiled from Grok research sessions + prototype experiments (2026-03-29).
 | ~~**Skeptic persona modifier**~~ | Grok advice | ✅ DONE — apply_skeptic_modifier() in persona.py; trigger with "skeptic:" prefix or "--skeptic" in goal. | `src/persona.py`, `src/poe.py` | S |
 | ~~**Post-mission notification**~~ | oh-my-claudecode | ✅ DONE — fires at end of _finalize_loop() in agent_loop.py. | `src/agent_loop.py` | S |
 | **Polymarket CLI integration** | polymarket-cli (OSS) | Read-only market/position/leaderboard data without wallet. Perfect for research personas. | Researcher persona spec + `src/web_fetch.py` or new `tools/polymarket.py` | S |
+| ~~**verificationAgent as first-class agent**~~ | claw-code | ✅ DONE — `src/verification_agent.py`: `VerificationAgent` class with `verify_step()`, `adversarial_pass()`, `quality_review()`. step_exec.py delegates to it. `poe-verify` CLI. 21 tests. | `src/verification_agent.py` | M |
 
 ## NEXT — after stability sprint
 
@@ -46,8 +47,8 @@ Compiled from Grok research sessions + prototype experiments (2026-03-29).
 | **Skill retrieval with stemmer** | MetaClaw | Lightweight skill matching without embeddings. | Skills layer when needed | S |
 | **Three-layer memory compression** | 724-office | Session -> LLM compress -> vector retrieval. Handles memory bloat over long missions. | `src/memory.py` — compress on eviction or every N heartbeats | M |
 | **MCP/plugin hot-reload** | 724-office / Mimir | JSON-RPC over stdio/HTTP with auto-reconnect. Hot-reload persona plugins without restart. | `src/orch_bridges.py` extension | M |
-| **Role-specific tool visibility** | systematicls harness article | Inspector and Worker see different tool subsets — reduces hallucinated calls and prompt noise. Inspector needs no complete_step; Worker doesn't need verify_step. | `src/step_exec.py` — filtered EXECUTE_TOOLS per role | S |
-| **Back-pressure lifecycle hooks** | systematicls harness article | Inject contextual guidance at step retry AND budget-exceeded decision points (not just system prompt). We have retries covered; budget-exceeded path is missing. | `agent_loop.py` budget-exceeded branch | S |
+| ~~**Role-specific tool visibility**~~ | systematicls harness article | ✅ DONE — `EXECUTE_TOOLS_WORKER` (all), `EXECUTE_TOOLS_SHORT` (no schedule_run, used in factory_thin), `EXECUTE_TOOLS_INSPECTOR` (flag_stuck only) exported from step_exec.py. factory_thin now uses SHORT. | `src/step_exec.py` | S |
+| ~~**Back-pressure lifecycle hooks**~~ | systematicls harness article | ✅ DONE — budget-aware landing now injects `_budget_reminder` into `_next_step_injected_context` at synthesis step so the agent knows it's under budget pressure. | `agent_loop.py` budget-aware landing | S |
 | **Subagent context firewall** | systematicls harness article | Sub-loops get only a filtered summary of parent context — prevents context contamination and reduces token cost on deep delegations. Complements TeamCreateTool. | New `context_firewall.py` or adapter wrapper | M |
 
 ---

@@ -178,9 +178,9 @@ def run_factory_thin(
 
     # --- Step 2: Execute each step ---
     from llm import LLMTool
-    from step_exec import EXECUTE_TOOLS
+    from step_exec import EXECUTE_TOOLS_SHORT
     _tools = [LLMTool(name=t["name"], description=t["description"], parameters=t["parameters"])
-              for t in EXECUTE_TOOLS]
+              for t in EXECUTE_TOOLS_SHORT]
 
     completed_context = ""
     if verify:

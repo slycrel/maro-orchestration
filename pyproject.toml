@@ -40,6 +40,7 @@ poe-factory-thin = "factory_thin:main"
 poe-test = "bootstrap:_smoke_main"
 poe-bughunter = "bughunter:main"
 poe-schedule = "scheduler:main"
+poe-verify = "verification_agent:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
