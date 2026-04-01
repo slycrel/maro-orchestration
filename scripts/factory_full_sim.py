@@ -44,27 +44,35 @@ DIRECTOR: Decompose the goal into concrete parallel-friendly steps. Be outcome-f
   Identify which steps can run in parallel (group them).
 
 WORKERS: Execute each step. For research steps: cite evidence quality (RCT, meta-analysis,
-  observational, animal/in-vitro). Grade each claim Tier 1/2/3. Target <500 tokens per step.
+  observational, animal/in-vitro). Grade each claim Tier 1/2/3. Target <400 tokens per step.
   Use bullet points and structured data. Never quote verbatim — extract key facts.
 
-INSPECTOR + QUALITY GATE: Two-pass review.
-  Pass 1 — check for stuck steps, missing artifacts, vague outputs.
-  Pass 2 — verify the steps together form a complete answer to the goal.
-  Verdict: PROCEED | RETRY (specify which step and why) | ABORT.
+VERIFY (per step): After each step, rate PASS or RETRY.
+  PASS: result directly addresses step goal with specific content.
+  RETRY: result is vague, off-topic, or is a plan rather than work done.
+  On RETRY: re-execute once with refined approach. Mark partial if second attempt also fails.
+  Record verify field in each executed_step.
 
-ADVERSARIAL VERIFIER: Challenge every significant claim.
+SKEPTIC COUNCIL (3 critics, replaces single adversarial pass):
+  1. devil_advocate: gaps, unjustified assumptions
+  2. domain_skeptic: wrong evidence tier, confounded variables, population mismatch
+  3. implementation_critic: missing actionable specifics, internal inconsistency
   Grade each: CONFIRMED | DOWNGRADED | CONTESTED | OVERCLAIMED.
-  Cite competing evidence, mechanism flaws, or context mismatches.
-  Skip claims that are clearly solid. Focus on what would change a decision.
+  Set needs_escalation=true in metrics if 2+ critics find WEAK/CONTESTED outputs.
 
-EVOLVER (every 5 cycles or on repeated failure): Scan the cycle history for patterns.
-  Propose one concrete improvement: a prompt tweak, guardrail, or step strategy change.
-  Mark it as AUTO_APPLY (low-risk) or SUGGEST (needs human review).
+INSPECTOR + QUALITY GATE: Two-pass review.
+  Pass 1 — stuck steps, missing artifacts, vague outputs.
+  Pass 2 — steps together form complete answer to goal.
+  Verdict: PROCEED | RETRY (specify step) | ABORT.
 
-MEMORY (tiered):
-  hot: Current cycle working set — step results, artifacts, running hypotheses (full detail).
-  warm: Prior cycle summaries — compress to ~100 chars each after cycle 2.
-  cold: Older entries — single-sentence summaries only.
+EVOLVER (every 3 cycles OR on any repeated failure — same step RETRY 2+ times):
+  Scan cycle history for patterns. Propose one concrete improvement.
+  Mark AUTO_APPLY (low-risk) or SUGGEST (needs human review).
+
+MEMORY (tiered — hard limits: hot=5×150, warm=8×100, cold=10×60 chars):
+  hot: Current cycle working set. Max 5 items, 150 chars each.
+  warm: Prior cycle summaries. Max 8 items, 100 chars each. Compress after cycle 1.
+  cold: Older entries. Max 10 items, 60 chars each.
 
 RECOVERY PLANNER: If inspector_verdict is RETRY for >2 consecutive cycles on same step,
   trigger recovery: reframe the step, try an alternative approach, split it, or mark partial.
@@ -73,47 +81,30 @@ Output ONLY valid JSON each cycle. No prose outside the JSON. Structure:
 
 {
   "cycle": N,
-  "director_plan": {
-    "steps": ["step text", ...],
-    "parallel_groups": [[0, 1], [2], [3, 4]],
-    "rationale": "why this decomposition"
-  },
+  "director_plan": {"steps": [...], "parallel_groups": [[0,1],[2],[3,4]], "rationale": "..."},
   "executed_steps": [
-    {
-      "step": "step text",
-      "status": "done | stuck | partial",
-      "result": "findings, max 500 tokens",
-      "artifacts": ["file.py", "data.json"],
-      "evidence_grades": [{"claim": "...", "tier": 1}]
-    }
+    {"step": "...", "status": "done|stuck|partial", "verify": "PASS|RETRY",
+     "result": "max 400 tokens", "artifacts": [], "evidence_grades": [{"claim":"...","tier":1}]}
   ],
-  "inspector_verdict": "PROCEED | RETRY | ABORT",
-  "inspector_notes": "what needs fixing, or null",
+  "inspector_verdict": "PROCEED|RETRY|ABORT",
+  "inspector_notes": null,
   "adversarial_findings": [
-    {"claim": "...", "grade": "CONFIRMED|DOWNGRADED|CONTESTED|OVERCLAIMED", "reason": "..."}
+    {"critic": "devil_advocate|domain_skeptic|implementation_critic",
+     "claim": "...", "grade": "CONFIRMED|DOWNGRADED|CONTESTED|OVERCLAIMED", "reason": "..."}
   ],
   "evolver_suggestion": {"type": "AUTO_APPLY|SUGGEST", "description": "..."} | null,
-  "memory": {
-    "hot": ["current working items..."],
-    "warm": ["prior summaries compressed to ~100 chars..."],
-    "cold": ["old one-liners..."]
-  },
-  "recovery_action": "what recovery was triggered, or null",
-  "final_output": "polished deliverable for user — only on last cycle or when COMPLETE",
-  "status": "running | partial | complete",
-  "metrics": {
-    "steps_done": N,
-    "steps_stuck": N,
-    "adversarial_downgrades": N
-  }
+  "memory": {"hot": ["max 5x150"], "warm": ["max 8x100"], "cold": ["max 10x60"]},
+  "recovery_action": null,
+  "final_output": "deliverable — only on last cycle or COMPLETE",
+  "status": "running|partial|complete",
+  "metrics": {"steps_done": N, "steps_stuck": N, "adversarial_downgrades": N, "needs_escalation": false}
 }
 
 Rules:
-- Target <1000 tokens total per cycle output. Be ruthlessly concise.
+- Target <700 tokens total per cycle output. Ruthlessly concise.
 - [UNCERTAIN] marks genuinely unknown claims. Never hedge with "consult an expert".
-- If status=complete, final_output must be non-null and be the actual deliverable.
-- Only mark complete when goal is fully answered. Use partial if meaningful progress was made.
-- Memory.hot entries carry forward across cycles. Compress ruthlessly.
+- status=complete requires non-null final_output with the actual deliverable.
+- Memory hard limits are enforced by the scaffold — do not exceed them.
 """).strip()
 
 
@@ -238,10 +229,12 @@ def run_cycle(goal: str, adapter, state: SimState, verbose: bool = False, state_
 
     # Update state from cycle output
     if not cycle.parse_error:
-        # Carry memory forward
+        # Carry memory forward with hard limits (hot=5×150, warm=8×100, cold=10×60)
         new_mem = cycle.raw.get("memory", {})
         if new_mem:
             state.memory = new_mem
+        for key, max_n, max_c in [("hot", 5, 150), ("warm", 8, 100), ("cold", 10, 60)]:
+            state.memory[key] = [e[:max_c] for e in state.memory.get(key, [])[:max_n]]
 
         state.status = cycle.raw.get("status", state.status)
         if cycle.raw.get("final_output"):
@@ -267,7 +260,8 @@ def print_cycle(cycle: SimCycle, verbose: bool = False):
 
     print(f"\n{'='*60}")
     print(f"CYCLE {cycle.cycle} | {cycle.elapsed_ms}ms | ${cycle.cost_usd:.4f} | {cycle.tokens_in+cycle.tokens_out:,}tok")
-    print(f"Status: {status} | Inspector: {verdict} | Steps: {metrics.get('steps_done',0)} done / {metrics.get('steps_stuck',0)} stuck")
+    esc = " | ESCALATE" if metrics.get("needs_escalation") else ""
+    print(f"Status: {status} | Inspector: {verdict} | Steps: {metrics.get('steps_done',0)} done / {metrics.get('steps_stuck',0)} stuck{esc}")
 
     if cycle.parse_error:
         print(f"  [!] Parse error: {cycle.parse_error}")
@@ -288,7 +282,8 @@ def print_cycle(cycle: SimCycle, verbose: bool = False):
             for s in steps:
                 status_icon = "✓" if s.get("status") == "done" else "~" if s.get("status") == "partial" else "✗"
                 result_preview = (s.get("result", "")[:120] + "...") if len(s.get("result", "")) > 120 else s.get("result", "")
-                print(f"  {status_icon} {s['step'][:60]}")
+                verify = f"[{s.get('verify','?')}] " if s.get("verify") else ""
+                print(f"  {status_icon} {verify}{s['step'][:60]}")
                 if result_preview:
                     print(f"    → {result_preview}")
 
@@ -328,7 +323,7 @@ def main():
     parser = argparse.ArgumentParser(description="OpenClaw full architecture simulation loop")
     parser.add_argument("goal", nargs="?", default="", help="Goal to achieve")
     parser.add_argument("--model", default="cheap", choices=["cheap", "mid", "power"], help="Model tier")
-    parser.add_argument("--cycles", type=int, default=5, help="Max cycles before stopping (default: 5)")
+    parser.add_argument("--cycles", type=int, default=3, help="Max cycles before stopping (default: 3)")
     parser.add_argument("--verbose", "-v", action="store_true", help="Show step-level detail")
     parser.add_argument("--out", help="Save final output to file")
     parser.add_argument("--interactive", "-i", action="store_true", help="Prompt to continue after each cycle")
@@ -362,6 +357,8 @@ def main():
             sys.exit(1)
         model = MODEL_MAP[args.model]
         state = SimState(goal=goal, model=model)
+
+    adapter = build_adapter(model=model)
 
     print(f"\nOpenClaw Factory Full Sim")
     print(f"Goal:  {goal}")
