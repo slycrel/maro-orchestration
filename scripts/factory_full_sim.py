@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-factory_full_sim.py — v2. Full OpenClaw architecture simulation in one prompt loop.
+factory_full_sim.py — v3. Self-evolving OpenClaw miniature.
 
 Tests the Bitter Lesson thesis: can the entire flywheel (Director → Workers → Inspector →
 Evolver → tiered memory → recovery) be expressed as a pure behavioral prompt + thin loop?
@@ -12,6 +12,11 @@ v2 changes (from self-audit via factory_audit_v2.md):
   - Memory hard limits enforced at scaffold level (hot=5×150, warm=8×100, cold=10×60)
   - Token target: 1000 → 700/cycle; step budget: 500 → 400 tokens
   - needs_escalation flag in metrics; verify + ESCALATE shown in print_cycle
+
+v3 changes:
+  - Full model-tier escalation on needs_escalation=true (cheap→mid→power)
+    Mirrors mainline quality_gate.next_model_tier(). All 5 audit gaps now closed.
+  - Default --model changed to mid (per nootropic benchmark: sharper council, fewer tokens)
 
 Nootropic benchmark (v2):
   cheap: 27,896 tok / $0.048 / 62s / 5 steps / all PASS
@@ -44,6 +49,10 @@ from metrics import estimate_cost
 
 MODEL_MAP = {"cheap": MODEL_CHEAP, "mid": MODEL_MID, "power": MODEL_POWER}
 DEFAULT_STATE_FILE = Path("factory_sim_state.json")
+
+# Model escalation — mirrors mainline quality_gate.next_model_tier()
+def escalate_model(current: str) -> str:
+    return {"cheap": "mid", "mid": "power", "power": "power"}.get(current, "mid")
 
 # The mega-prompt. Describes the full architecture as desired behavior.
 # Bitter Lesson style: outcome-first, no micromanagement.
@@ -253,6 +262,13 @@ def run_cycle(goal: str, adapter, state: SimState, verbose: bool = False, state_
         if cycle.raw.get("final_output"):
             state.final_output = cycle.raw["final_output"]
 
+        # v3: model-tier escalation on needs_escalation (quality_gate parity)
+        if cycle.raw.get("metrics", {}).get("needs_escalation"):
+            new_tier = escalate_model(state.model)
+            if new_tier != state.model:
+                print(f"  [ESCALATE] {state.model} → {new_tier} for next cycle")
+                state.model = new_tier
+
     state.total_tokens += cycle.tokens_in + cycle.tokens_out
     state.total_cost += cycle.cost_usd
     state.cycles.append(cycle)
@@ -335,7 +351,7 @@ def print_cycle(cycle: SimCycle, verbose: bool = False):
 def main():
     parser = argparse.ArgumentParser(description="OpenClaw full architecture simulation loop")
     parser.add_argument("goal", nargs="?", default="", help="Goal to achieve")
-    parser.add_argument("--model", default="cheap", choices=["cheap", "mid", "power"], help="Model tier")
+    parser.add_argument("--model", default="mid", choices=["cheap", "mid", "power"], help="Model tier (default: mid)")
     parser.add_argument("--cycles", type=int, default=3, help="Max cycles before stopping (default: 3)")
     parser.add_argument("--verbose", "-v", action="store_true", help="Show step-level detail")
     parser.add_argument("--out", help="Save final output to file")
@@ -382,6 +398,10 @@ def main():
     t_start = time.time()
 
     for _ in range(args.cycles):
+        # Rebuild adapter if model was escalated last cycle
+        if state.model != model:
+            model = state.model
+            adapter = build_adapter(model=MODEL_MAP[model])
         cycle = run_cycle(goal, adapter, state, verbose=args.verbose, state_file=state_file)
         print_cycle(cycle, verbose=args.verbose)
 
