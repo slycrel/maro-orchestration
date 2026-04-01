@@ -18,6 +18,15 @@ v3 changes:
     Mirrors mainline quality_gate.next_model_tier(). All 5 audit gaps now closed.
   - Default --model changed to mid (per nootropic benchmark: sharper council, fewer tokens)
 
+v4 changes (from 8-cycle stress test — tip found at cycle 6):
+  - council{} dict replaces adversarial_findings[] (~80 tok/cycle savings, compat shim kept)
+  - population_match field on evidence_grades (prevents cross-population tier inflation)
+  - schema_version:4 field for output distinguishability
+  - Step budget 400→300 tokens; cycle target 700→650
+  - Scaffold: post-json.dumps token hard-check at 630, compress memory on breach
+  - Subprocess timeout caught gracefully (record as parse error, continue loop)
+  - Context window: prior_memory trimmed harder on cycle > 5
+
 Nootropic benchmark (v2):
   cheap: 27,896 tok / $0.048 / 62s / 5 steps / all PASS
   mid:   15,854 tok / $0.104 / 69s / 3 steps / all PASS — sharper adversarial
@@ -65,9 +74,10 @@ DIRECTOR: Decompose the goal into concrete parallel-friendly steps. Be outcome-f
   Bad steps: vague, bundled, or procedural fluff.
   Identify which steps can run in parallel (group them).
 
-WORKERS: Execute each step. For research steps: cite evidence quality (RCT, meta-analysis,
-  observational, animal/in-vitro). Grade each claim Tier 1/2/3. Target <400 tokens per step.
-  Use bullet points and structured data. Never quote verbatim — extract key facts.
+WORKERS: Execute each step. For research steps: grade each claim Tier 1 (RCT/meta-analysis),
+  2 (observational/cohort), or 3 (animal/in-vitro/expert opinion). Target <300 tokens per step.
+  Bullets and structured data only. Never quote verbatim — extract key facts.
+  Include population_match in evidence_grades: true if study population matches goal population.
 
 VERIFY (per step): After each step, rate PASS or RETRY.
   PASS: result directly addresses step goal with specific content.
@@ -106,24 +116,27 @@ Output ONLY valid JSON each cycle. No prose outside the JSON. Structure:
   "director_plan": {"steps": [...], "parallel_groups": [[0,1],[2],[3,4]], "rationale": "..."},
   "executed_steps": [
     {"step": "...", "status": "done|stuck|partial", "verify": "PASS|RETRY",
-     "result": "max 400 tokens", "artifacts": [], "evidence_grades": [{"claim":"...","tier":1}]}
+     "result": "max 300 tokens", "artifacts": [],
+     "evidence_grades": [{"claim":"...","tier":1,"population_match":true}]}
   ],
   "inspector_verdict": "PROCEED|RETRY|ABORT",
   "inspector_notes": null,
-  "adversarial_findings": [
-    {"critic": "devil_advocate|domain_skeptic|implementation_critic",
-     "claim": "...", "grade": "CONFIRMED|DOWNGRADED|CONTESTED|OVERCLAIMED", "reason": "..."}
-  ],
+  "council": {
+    "devil_advocate": {"claim":"...","grade":"CONFIRMED|DOWNGRADED|CONTESTED|OVERCLAIMED","reason":"15 words max"},
+    "domain_skeptic": {"claim":"...","grade":"...","reason":"15 words max"},
+    "implementation_critic": {"claim":"...","grade":"...","reason":"15 words max"}
+  },
   "evolver_suggestion": {"type": "AUTO_APPLY|SUGGEST", "description": "..."} | null,
   "memory": {"hot": ["max 5x150"], "warm": ["max 8x100"], "cold": ["max 10x60"]},
   "recovery_action": null,
   "final_output": "deliverable — only on last cycle or COMPLETE",
   "status": "running|partial|complete",
-  "metrics": {"steps_done": N, "steps_stuck": N, "adversarial_downgrades": N, "needs_escalation": false}
+  "schema_version": 4,
+  "metrics": {"steps_done": N, "steps_stuck": N, "council_downgrades": N, "needs_escalation": false}
 }
 
 Rules:
-- Target <700 tokens total per cycle output. Ruthlessly concise.
+- Target <650 tokens total per cycle output. Ruthlessly concise.
 - [UNCERTAIN] marks genuinely unknown claims. Never hedge with "consult an expert".
 - status=complete requires non-null final_output with the actual deliverable.
 - Memory hard limits are enforced by the scaffold — do not exceed them.
@@ -198,7 +211,7 @@ def build_user_message(goal: str, state: SimState) -> str:
                 "steps_done": c.raw.get("metrics", {}).get("steps_done", 0),
                 "steps_stuck": c.raw.get("metrics", {}).get("steps_stuck", 0),
             }
-            for c in state.cycles[-5:]  # last 5 cycles only
+            for c in state.cycles[-3:]  # trim to 3 on deep runs
         ],
     }
     return (
@@ -218,11 +231,22 @@ def run_cycle(goal: str, adapter, state: SimState, verbose: bool = False, state_
     ]
 
     t0 = time.time()
-    response = adapter.complete(
-        messages=messages,
-        temperature=0.2,
-        max_tokens=4096,
-    )
+    try:
+        response = adapter.complete(
+            messages=messages,
+            temperature=0.2,
+            max_tokens=4096,
+        )
+    except RuntimeError as e:
+        # Subprocess timeout or adapter failure — record and continue
+        elapsed_ms = int((time.time() - t0) * 1000)
+        cycle = SimCycle(cycle=state.cycle_count, elapsed_ms=elapsed_ms)
+        cycle.parse_error = f"adapter error: {e}"
+        cycle.raw = {"error": str(e)}
+        state.cycles.append(cycle)
+        if state_file:
+            save_state(state, state_file)
+        return cycle
     elapsed_ms = int((time.time() - t0) * 1000)
 
     cycle = SimCycle(
@@ -258,6 +282,16 @@ def run_cycle(goal: str, adapter, state: SimState, verbose: bool = False, state_
         for key, max_n, max_c in [("hot", 5, 150), ("warm", 8, 100), ("cold", 10, 60)]:
             state.memory[key] = [e[:max_c] for e in state.memory.get(key, [])[:max_n]]
 
+        # Token hard-check: if output exceeded budget, compress memory harder
+        output_tokens_est = len(json.dumps(cycle.raw)) // 4
+        if output_tokens_est > 630:
+            state.memory["hot"] = state.memory["hot"][:3]
+            state.memory["warm"] = state.memory["warm"][:5]
+
+        # Backwards-compat shim: accept adversarial_findings as alias for council
+        if "adversarial_findings" in cycle.raw and "council" not in cycle.raw:
+            cycle.raw["council"] = cycle.raw["adversarial_findings"]
+
         state.status = cycle.raw.get("status", state.status)
         if cycle.raw.get("final_output"):
             state.final_output = cycle.raw["final_output"]
@@ -284,8 +318,11 @@ def print_cycle(cycle: SimCycle, verbose: bool = False):
     verdict = r.get("inspector_verdict", "?")
     status = r.get("status", "?")
     metrics = r.get("metrics", {})
-    adv = r.get("adversarial_findings", [])
-    downgrades = [f for f in adv if f.get("grade") in ("DOWNGRADED", "CONTESTED", "OVERCLAIMED")]
+    # Handle both council dict (v4) and adversarial_findings list (v1-v3 compat)
+    council = r.get("council", r.get("adversarial_findings", []))
+    if isinstance(council, dict):
+        council = [{"critic": k, **v} for k, v in council.items()]
+    downgrades = [f for f in council if f.get("grade") in ("DOWNGRADED", "CONTESTED", "OVERCLAIMED")]
 
     print(f"\n{'='*60}")
     print(f"CYCLE {cycle.cycle} | {cycle.elapsed_ms}ms | ${cycle.cost_usd:.4f} | {cycle.tokens_in+cycle.tokens_out:,}tok")
@@ -316,11 +353,13 @@ def print_cycle(cycle: SimCycle, verbose: bool = False):
                 if result_preview:
                     print(f"    → {result_preview}")
 
-    # Adversarial
+    # Council findings
     if downgrades:
-        print(f"\nAdversarial downgrades ({len(downgrades)}):")
+        print(f"\nCouncil downgrades ({len(downgrades)}):")
         for f in downgrades[:3]:
-            print(f"  [{f['grade']}] {f['claim'][:80]} — {f.get('reason', '')[:80]}")
+            critic = f.get("critic", "")
+            prefix = f"[{critic}] " if critic else ""
+            print(f"  [{f['grade']}] {prefix}{f['claim'][:70]} — {f.get('reason', '')[:70]}")
 
     # Inspector notes
     notes = r.get("inspector_notes")
