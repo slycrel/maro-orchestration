@@ -18,6 +18,7 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -435,13 +436,33 @@ class TestE2EAmbiguous:
     def test_mission_with_partial_milestone(self, monkeypatch, tmp_path):
         """Mission where first milestone partially succeeds — should continue."""
         _setup(monkeypatch, tmp_path)
+        import agent_loop as _al
+        from agent_loop import LoopResult, StepOutcome
+
+        # Stub run_agent_loop: mission.py calls it with adapter=None so it builds
+        # a real subprocess adapter internally — bypassing ScriptedAdapter entirely.
+        # Instead return a canned LoopResult per feature call.
+        _feature_idx = [0]
+        def _fake_run_agent_loop(goal, *, project=None, **kw):
+            idx = _feature_idx[0]
+            _feature_idx[0] += 1
+            return LoopResult(
+                loop_id=f"fake-{idx:02d}",
+                project=project or "test",
+                goal=goal,
+                status="done",
+                steps=[StepOutcome(index=1, text=goal, status="done",
+                                   result="done", iteration=1)],
+            )
+        monkeypatch.setattr(_al, "run_agent_loop", _fake_run_agent_loop)
+
         from mission import run_mission
 
-        # Mission decompose → 2 milestones, each with 1 feature
-        # First milestone's feature succeeds but validation fails
-        # Second milestone's feature succeeds
+        # With run_agent_loop stubbed, remaining adapter calls are:
+        # 0: decompose_mission (milestones)
+        # 1: Milestone 1 validation → fails (features done but criteria not met)
+        # 2: Milestone 2 validation → passes
         adapter = ScriptedAdapter([
-            # Mission decompose (milestones + features)
             {"content": json.dumps({
                 "milestones": [
                     {
@@ -456,17 +477,7 @@ class TestE2EAmbiguous:
                     },
                 ],
             })},
-            # Feature 1 loop: decompose + execute
-            {"steps": ["Fetch the records"]},
-            {"tool": "complete_step", "result": "Fetched 10 of 100 records"},
-            {"content": json.dumps({"lessons": []})},
-            # Milestone 1 validation — fails (only 10%)
             {"content": json.dumps({"passed": False, "reason": "Only 10% fetched"})},
-            # Feature 2 loop: decompose + execute
-            {"steps": ["Compute the stats"]},
-            {"tool": "complete_step", "result": "Mean=42, StdDev=7"},
-            {"content": json.dumps({"lessons": []})},
-            # Milestone 2 validation — passes
             {"content": json.dumps({"passed": True})},
         ])
 
