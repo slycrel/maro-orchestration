@@ -216,7 +216,10 @@ _ADVERSARIAL_SYSTEM = textwrap.dedent("""\
 
     Produce a concise list of contested claims with verdict and one-sentence reason.
     If everything checks out, respond with an empty list: []
-    Format: JSON array of {"claim": "...", "verdict": "...", "reason": "..."}
+    Format: JSON array of {"claim": "...", "verdict": "...", "reason": "...", "population_match": true|false}
+    Set population_match=false when the cited study population doesn't match the goal population
+    (e.g. study was in MCI patients but goal targets healthy adults; study used vegetarians
+    but recommendation applies to omnivores). This is the most commonly missed downgrade.
 """).strip()
 
 
@@ -228,6 +231,7 @@ class QualityVerdict:
     escalate: bool      # True if verdict == "ESCALATE" and confidence is high enough
     contested_claims: List[dict] = field(default_factory=list)  # from adversarial pass
     council: Optional[CouncilVerdict] = None  # from LLM council (if run_council=True)
+    debate: Optional["DebateVerdict"] = None  # from bull/bear debate (if run_debate=True)
 
 
 def run_quality_gate(
@@ -238,10 +242,11 @@ def run_quality_gate(
     confidence_threshold: float = 0.75,
     run_adversarial: bool = True,
     run_council: bool = False,
+    with_debate: bool = False,
 ) -> QualityVerdict:
     """Review completed loop output and return a quality verdict.
 
-    Runs up to three passes:
+    Runs up to four passes:
     1. PASS/ESCALATE verdict — should we re-run at a higher tier?
     2. Adversarial claim review — what specific claims are contested/overclaimed?
        Contested claims are returned in verdict.contested_claims regardless of
@@ -249,6 +254,8 @@ def run_quality_gate(
     3. LLM Council (optional, run_council=True) — 3 critics with distinct framings
        (devil's advocate, domain skeptic, implementation critic). Escalates if 2+
        critics rate WEAK. Catches sycophancy that single-pass adversarial misses.
+    4. Multi-agent debate (optional, with_debate=True) — bull/bear debaters argue
+       for/against the output; risk manager gives PROCEED/CAUTION/REJECT verdict.
 
     Uses the provided adapter (should be cheap tier — gate itself is cheap).
     Returns PASS with low confidence on any failure — gate errors must never
@@ -368,7 +375,243 @@ def run_quality_gate(
             )
             log.info("quality_gate council_escalated weak=%d", council_verdict.weak_count)
 
-    return QualityVerdict(verdict, reason, confidence, escalate, contested_claims, council_verdict)
+    # --- Pass 4: Multi-agent debate (optional) ---
+    debate_verdict: Optional[DebateVerdict] = None
+    if with_debate:
+        debate_verdict = run_debate(goal, step_outcomes, adapter=adapter)
+        if debate_verdict.escalate and not escalate:
+            escalate = True
+            verdict = "ESCALATE"
+            reason = (
+                f"Debate: Risk Manager={debate_verdict.risk_manager_verdict} "
+                f"(dominant={debate_verdict.dominant_position}) — "
+                f"{debate_verdict.risk_manager_reasoning[:80]}"
+            )
+            log.info("quality_gate debate_escalated verdict=%s", debate_verdict.risk_manager_verdict)
+
+    return QualityVerdict(verdict, reason, confidence, escalate, contested_claims, council_verdict, debate_verdict)
+
+
+# ---------------------------------------------------------------------------
+# Multi-agent debate: Bull / Bear / Risk Manager
+# ---------------------------------------------------------------------------
+
+_BULL_SYSTEM = textwrap.dedent("""\
+    You are the BULL analyst. Your job: argue the strongest possible case FOR the output
+    being correct, useful, and sufficient. Commit to a position — don't hedge.
+
+    Make the most compelling argument you can for why:
+    - The key claims are well-supported
+    - The methodology is sound for the stated goal
+    - The output is actionable and ready to use
+
+    Respond with JSON:
+    {
+      "position": "brief summary of your bull thesis",
+      "key_points": ["point 1", "point 2", "point 3"],
+      "confidence": 0.0–1.0,
+      "strongest_evidence": "the single most compelling piece of evidence for this output"
+    }
+""").strip()
+
+_BEAR_SYSTEM = textwrap.dedent("""\
+    You are the BEAR analyst. Your job: argue the strongest possible case AGAINST the output
+    — that it is flawed, incomplete, or dangerous to act on. Commit to a position — don't hedge.
+
+    Make the most compelling argument you can for why:
+    - Key claims are unsupported or wrong
+    - The methodology has critical gaps
+    - Acting on this output would be a mistake
+
+    Respond with JSON:
+    {
+      "position": "brief summary of your bear thesis",
+      "key_points": ["point 1", "point 2", "point 3"],
+      "confidence": 0.0–1.0,
+      "fatal_flaw": "the single most damaging problem with this output"
+    }
+""").strip()
+
+_RISK_MANAGER_SYSTEM = textwrap.dedent("""\
+    You are the RISK MANAGER. A bull analyst and a bear analyst have debated an output.
+    Your job: read both positions and give a final verdict.
+
+    You are NOT looking for who argued better rhetorically. You are deciding:
+    - Can the user safely act on this output? (PROCEED)
+    - Should the user proceed cautiously with caveats? (CAUTION)
+    - Is the output too flawed or incomplete to act on? (REJECT)
+
+    PROCEED: bull's case is substantially stronger; output is actionable.
+    CAUTION: bear raises valid concerns but the output is still useful with caveats.
+    REJECT: bear identifies fatal flaws that make the output unreliable.
+
+    Respond with JSON:
+    {
+      "verdict": "PROCEED" | "CAUTION" | "REJECT",
+      "reasoning": "one sentence — why this verdict",
+      "dominant_position": "bull" | "bear" | "neutral",
+      "key_risk": "the most important caveat the user should know"
+    }
+""").strip()
+
+
+@dataclass
+class DebatePosition:
+    role: str               # "bull" | "bear"
+    position: str           # the argued thesis
+    key_points: List[str]
+    confidence: float
+    highlight: str          # strongest_evidence (bull) or fatal_flaw (bear)
+
+
+@dataclass
+class DebateVerdict:
+    bull: Optional[DebatePosition]
+    bear: Optional[DebatePosition]
+    risk_manager_verdict: str       # "PROCEED" | "CAUTION" | "REJECT"
+    risk_manager_reasoning: str
+    dominant_position: str          # "bull" | "bear" | "neutral"
+    key_risk: str
+    escalate: bool                  # True if REJECT or CAUTION
+
+
+def run_debate(
+    goal: str,
+    step_outcomes: list,
+    *,
+    adapter=None,
+) -> DebateVerdict:
+    """Run the bull/bear debate with risk manager verdict.
+
+    Three-stage structured debate:
+    1. Bull argues FOR the output being correct and actionable
+    2. Bear argues AGAINST — fatal flaws, unsupported claims, gaps
+    3. Risk Manager reads both and gives PROCEED / CAUTION / REJECT
+
+    Returns a DebateVerdict. Escalates if risk manager says REJECT or CAUTION.
+    Never raises — returns a neutral default on any failure.
+    """
+    _null = DebateVerdict(
+        bull=None, bear=None,
+        risk_manager_verdict="PROCEED", risk_manager_reasoning="(debate skipped)",
+        dominant_position="neutral", key_risk="", escalate=False,
+    )
+
+    if adapter is None:
+        return _null
+
+    done_steps = [s for s in step_outcomes if getattr(s, "status", "") == "done"]
+    if not done_steps:
+        return _null
+
+    review_steps = done_steps[-4:]
+    output_summary = "\n\n".join(
+        f"Step {getattr(s, 'index', i+1)}: {getattr(s, 'text', '?')[:80]}\n"
+        f"Result: {(getattr(s, 'result', '') or '')[:600]}"
+        for i, s in enumerate(review_steps)
+    )
+    context_msg = f"Goal: {goal[:300]}\n\nOutput to debate:\n{output_summary}"
+
+    bull_pos: Optional[DebatePosition] = None
+    bear_pos: Optional[DebatePosition] = None
+
+    try:
+        import json
+        from llm import LLMMessage
+
+        # Stage 1: Bull
+        try:
+            bull_resp = adapter.complete(
+                [LLMMessage("system", _BULL_SYSTEM), LLMMessage("user", context_msg)],
+                max_tokens=512, temperature=0.5,
+            )
+            d = json.loads(_extract_json(bull_resp.content, "{", "}"))
+            bull_pos = DebatePosition(
+                role="bull",
+                position=d.get("position", ""),
+                key_points=d.get("key_points", [])[:4],
+                confidence=float(d.get("confidence", 0.5)),
+                highlight=d.get("strongest_evidence", ""),
+            )
+            log.debug("debate bull confidence=%.2f", bull_pos.confidence)
+        except Exception as exc:
+            log.debug("debate bull failed (non-fatal): %s", exc)
+
+        # Stage 2: Bear
+        try:
+            bear_resp = adapter.complete(
+                [LLMMessage("system", _BEAR_SYSTEM), LLMMessage("user", context_msg)],
+                max_tokens=512, temperature=0.5,
+            )
+            d = json.loads(_extract_json(bear_resp.content, "{", "}"))
+            bear_pos = DebatePosition(
+                role="bear",
+                position=d.get("position", ""),
+                key_points=d.get("key_points", [])[:4],
+                confidence=float(d.get("confidence", 0.5)),
+                highlight=d.get("fatal_flaw", ""),
+            )
+            log.debug("debate bear confidence=%.2f", bear_pos.confidence)
+        except Exception as exc:
+            log.debug("debate bear failed (non-fatal): %s", exc)
+
+        # Stage 3: Risk Manager — reads both positions
+        debate_summary = f"Goal: {goal[:200]}\n\n"
+        if bull_pos:
+            debate_summary += (
+                f"BULL POSITION:\n{bull_pos.position}\n"
+                f"Key points: {'; '.join(bull_pos.key_points)}\n"
+                f"Strongest evidence: {bull_pos.highlight}\n\n"
+            )
+        if bear_pos:
+            debate_summary += (
+                f"BEAR POSITION:\n{bear_pos.position}\n"
+                f"Key points: {'; '.join(bear_pos.key_points)}\n"
+                f"Fatal flaw: {bear_pos.highlight}\n\n"
+            )
+
+        rm_verdict = "PROCEED"
+        rm_reasoning = "(risk manager unavailable)"
+        dominant = "neutral"
+        key_risk = ""
+
+        try:
+            rm_resp = adapter.complete(
+                [LLMMessage("system", _RISK_MANAGER_SYSTEM), LLMMessage("user", debate_summary)],
+                max_tokens=256, temperature=0.2,
+            )
+            d = json.loads(_extract_json(rm_resp.content, "{", "}"))
+            rm_verdict = d.get("verdict", "PROCEED").upper()
+            rm_reasoning = d.get("reasoning", "")
+            dominant = d.get("dominant_position", "neutral")
+            key_risk = d.get("key_risk", "")
+            log.info("debate risk_manager verdict=%s dominant=%s", rm_verdict, dominant)
+        except Exception as exc:
+            log.debug("debate risk_manager failed (non-fatal): %s", exc)
+
+        escalate = rm_verdict in {"REJECT", "CAUTION"}
+        return DebateVerdict(
+            bull=bull_pos,
+            bear=bear_pos,
+            risk_manager_verdict=rm_verdict,
+            risk_manager_reasoning=rm_reasoning,
+            dominant_position=dominant,
+            key_risk=key_risk,
+            escalate=escalate,
+        )
+
+    except Exception as exc:
+        log.debug("run_debate setup failed (non-fatal): %s", exc)
+        return _null
+
+
+def _extract_json(text: str, open_char: str, close_char: str) -> str:
+    """Extract the first JSON object/array from text."""
+    start = text.find(open_char)
+    end = text.rfind(close_char if open_char == "{" else "]") + 1
+    if start >= 0 and end > start:
+        return text[start:end]
+    return text
 
 
 def next_model_tier(current_model: str) -> Optional[str]:
