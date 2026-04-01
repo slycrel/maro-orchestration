@@ -1,27 +1,24 @@
 #!/usr/bin/env python3
 """
-factory_full_sim.py — v2. Full OpenClaw architecture simulation in one prompt loop.
+factory_full_sim_v1.py — v1 baseline. Archived after self-audit produced v2.
+
+Prompt: single adversarial pass, Evolver every 5 cycles, no verify field,
+memory limits behavioral (not enforced), 1000 token/cycle target.
+
+Nootropic benchmark: cheap=35K tok/$0.047/47s, mid=109K tok/$0.436/155s (self-audit goal).
+See factory_full_sim.py for v2 (Ralph verify, 3-critic council, memory hard limits).
+"""
+# ── ARCHIVED v1 — do not develop further ──────────────────────────────────────
+"""
+factory_full_sim.py — Simulate the full OpenClaw orchestration architecture in one prompt loop.
 
 Tests the Bitter Lesson thesis: can the entire flywheel (Director → Workers → Inspector →
-Evolver → tiered memory → recovery) be expressed as a pure behavioral prompt + thin loop?
-
-v2 changes (from self-audit via factory_audit_v2.md):
-  - Per-step Ralph verify (PASS/RETRY) with inline re-exec on RETRY
-  - 3-critic Skeptic Council (devil_advocate / domain_skeptic / implementation_critic)
-  - Evolver threshold: every 5 cycles → every 3 cycles OR on repeated step failure
-  - Memory hard limits enforced at scaffold level (hot=5×150, warm=8×100, cold=10×60)
-  - Token target: 1000 → 700/cycle; step budget: 500 → 400 tokens
-  - needs_escalation flag in metrics; verify + ESCALATE shown in print_cycle
-
-Nootropic benchmark (v2):
-  cheap: 27,896 tok / $0.048 / 62s / 5 steps / all PASS
-  mid:   15,854 tok / $0.104 / 69s / 3 steps / all PASS — sharper adversarial
-
-See factory_full_sim_v1.py for baseline. See factory_audit_v2.md for gap analysis.
+Evolver → tiered memory → recovery) be expressed as a pure behavioral prompt + thin loop,
+without the mainline scaffolding?
 
 Usage:
-    python3 scripts/factory_full_sim.py "your goal" [--model cheap|mid|power] [--cycles N] [-v] [--out FILE]
-    python3 scripts/factory_full_sim.py --resume   # continue interrupted run
+    python3 scripts/factory_full_sim.py "your goal here" [--model cheap|mid|power] [--cycles N] [--verbose] [--out FILE]
+    python3 scripts/factory_full_sim.py "nootropic stack for focus and memory" --model cheap --verbose
 """
 
 import argparse
