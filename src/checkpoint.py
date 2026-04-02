@@ -1,3 +1,4 @@
+# @lat: [[checkpointing]]
 """Session checkpoint — write per-step progress so loops can resume mid-run.
 
 Addresses research GAP 3: no mechanism to resume a prior loop from where it

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# @lat: [[memory-system]]
 """Phase 5: Memory + Learning system for Poe orchestration.
 
 Three memory layers:

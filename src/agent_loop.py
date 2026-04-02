@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# @lat: [[core-loop]]
 """Phase 1: Autonomous loop runner for Poe orchestration.
 
 The critical unlock: give Poe a goal, watch it work until done or stuck.

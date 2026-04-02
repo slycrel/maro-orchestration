@@ -1,3 +1,4 @@
+# @lat: [[poe-identity]]
 """Poe Self-Identity — persistent 'who I am' block injected into every session.
 
 Addresses research GAP 1: agents with an always-in-context identity block maintain

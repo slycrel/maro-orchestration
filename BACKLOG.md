@@ -74,6 +74,13 @@ Last reviewed: 2026-04-01 (session 4 — overnight)
 - [x] **bughunter mode** — self-directed code quality scan. Poe scanning her own orchestration code for bugs, not just diagnosing runtime failures. Done: `src/bughunter.py` with stdlib AST scanner (BH001 bare except, BH003 mutable defaults, BH004 shadowed builtins, BH010 TODOs); `poe-bughunter` CLI. 16 tests. Src scans clean. (claw-code steal, 2026-03-31)
 - [x] **btw (by-the-way) mode** — non-blocking observation mode; `btw:` prefix routes to NOW lane with `_BTW_SYSTEM` prompt, tags result as `[Observation]`. 5 tests. (2026-03-31)
 
+### X Links steal list (2026-04-01 research batch — research/X_LINKS_SYNTHESIS.md)
+
+- [ ] **lat.md — Knowledge graph docs** (9/10) — Replace flat CLAUDE.md/AGENTS.md with `lat.md/` graph of cross-linked markdown files. `[[wiki links]]` between sections, `[[src/file.py#fn]]` links into source, `// @lat: [[section-id]]` backlinks in src/. `lat check` enforces drift in CI. `lat search` (semantic) + `lat section` (exact) replace ad-hoc grep. Install: `npm install -g lat.md && lat init`. Phase: 55. Effort: 2-4h.
+- [ ] **Promotion cycle + decision journal** (8/10) — Three CLAUDE.md blocks that create a self-improving memory system: (1) Knowledge hierarchy: observation → hypothesis (2+ confirmations) → standing rule (promoted to default); contradiction demotes. (2) Decision journal: ADR-style log searched before new decisions made. (3) Self-tightening quality gates: triggers promote, never-fires prune. Wire into memory.py + evolver.py + inspector.py. Phase: 56. Effort: 4-8h.
+- [ ] **Polymarket BTC lag edge validation** (6/10) — @slash1sol claims 0.3% BTC price lag vs TradingView/CryptoQuant feeds, <100ms execution, $400-700/day. Source is promotional; validate edge independently with real data before building. If confirmed, implement latency-gap detector for Phase 29. Effort: 1-2h validate.
+- [ ] **Claude Code declarative skill/hook architecture** (5/10) — k1rallik thread exposed Claude Code's declarative skill registration (manifest-based, not imperative), role-based tool gating (workers see different tool subsets than directors), and hook lifecycle (pre/post execution + session start/stop). Read before implementing Phase 41 (Tool Registry + Function Calling). Effort: read-only prereq.
+
 ## Research to Process
 
 ### Links fetched but not fully digested
