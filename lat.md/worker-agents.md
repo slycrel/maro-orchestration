@@ -25,7 +25,7 @@ Workers see different tool subsets than directors. Defined in `src/step_exec.py`
 - `EXECUTE_TOOLS_SHORT` — restricted (quick steps)
 - `EXECUTE_TOOLS_WORKER` — includes TeamCreateTool
 
-**Pending Phase 41:** declarative tool registry with role-gated manifests. See Claude Code internals research (k1rallik thread) before implementing.
+**Pending Phase 41:** declarative tool registry with role-gated manifests. Design doc: `research/PHASE41_TOOL_REGISTRY_DESIGN.md`. Implementation order: `ToolDefinition` + `ToolRegistry` → `PermissionContext` → `SKILL.md` format → progressive loading → hook event pipelines → deferred tools → MCP.
 
 ## Related Concepts
 
