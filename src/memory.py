@@ -1233,7 +1233,395 @@ def memory_status() -> Dict[str, Any]:
         "short": {"count": len(_SHORT_TERM), "note": "in-process only"},
         "medium": _tier_stats(MemoryTier.MEDIUM),
         "long": _tier_stats(MemoryTier.LONG),
+        "rules": {"count": len(load_standing_rules())},
         "gc_threshold": GC_THRESHOLD,
         "promote_min_score": PROMOTE_MIN_SCORE,
         "promote_min_sessions": PROMOTE_MIN_SESSIONS,
     }
+
+
+# ---------------------------------------------------------------------------
+# Phase 56: Standing Rules — promotion cycle top tier
+# ---------------------------------------------------------------------------
+# Observation → hypothesis (2+ confirmations) → standing rule (applied by default)
+# Contradiction demotes back to hypothesis. Rules survive indefinitely (no decay).
+# @lat: [[memory-system#Pending: Promotion Cycle (Phase 56)]]
+
+_RULES_FILENAME = "standing_rules.jsonl"
+_HYPOTHESES_FILENAME = "hypotheses.jsonl"
+
+# Minimum long-tier confirmations before promoting to standing rule
+RULE_PROMOTE_CONFIRMATIONS = 2
+
+
+@dataclass
+class StandingRule:
+    """A promoted rule applied unconditionally in every planning call."""
+    rule_id: str
+    rule: str                       # The rule text injected into decompose
+    source_lesson_id: str           # Long-tier lesson this was promoted from
+    domain: str                     # goal domain / task_type tag
+    confirmations: int              # times confirmed in production after promotion
+    contradictions: int             # times contradicted (≥1 → demoted back to hypothesis)
+    promoted_at: str
+    last_applied: str = ""
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "rule_id": self.rule_id, "rule": self.rule,
+            "source_lesson_id": self.source_lesson_id, "domain": self.domain,
+            "confirmations": self.confirmations, "contradictions": self.contradictions,
+            "promoted_at": self.promoted_at, "last_applied": self.last_applied,
+        }
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "StandingRule":
+        return cls(**{k: d[k] for k in cls.__dataclass_fields__ if k in d})
+
+
+@dataclass
+class Hypothesis:
+    """A lesson being tracked toward standing-rule promotion."""
+    hyp_id: str
+    lesson: str
+    domain: str
+    confirmations: int              # how many sessions have confirmed this pattern
+    contradictions: int
+    source_lesson_ids: List[str]    # lessons that contributed
+    first_seen: str
+    last_seen: str
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "hyp_id": self.hyp_id, "lesson": self.lesson, "domain": self.domain,
+            "confirmations": self.confirmations, "contradictions": self.contradictions,
+            "source_lesson_ids": self.source_lesson_ids,
+            "first_seen": self.first_seen, "last_seen": self.last_seen,
+        }
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "Hypothesis":
+        return cls(**{k: d.get(k, v) for k, v in {
+            "hyp_id": "", "lesson": "", "domain": "", "confirmations": 0,
+            "contradictions": 0, "source_lesson_ids": [], "first_seen": "", "last_seen": "",
+        }.items()})
+
+
+def _rules_path() -> Path:
+    return _memory_dir() / _RULES_FILENAME
+
+
+def _hypotheses_path() -> Path:
+    return _memory_dir() / _HYPOTHESES_FILENAME
+
+
+def load_standing_rules(domain: Optional[str] = None) -> List[StandingRule]:
+    """Load all standing rules, optionally filtered by domain."""
+    try:
+        path = _rules_path()
+        if not path.exists():
+            return []
+        rules = []
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line:
+                try:
+                    rules.append(StandingRule.from_dict(json.loads(line)))
+                except Exception:
+                    pass
+        if domain:
+            rules = [r for r in rules if r.domain == domain or r.domain == ""]
+        return rules
+    except Exception:
+        return []
+
+
+def load_hypotheses(domain: Optional[str] = None) -> List[Hypothesis]:
+    """Load tracked hypotheses, optionally filtered by domain."""
+    try:
+        path = _hypotheses_path()
+        if not path.exists():
+            return []
+        hyps = []
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line:
+                try:
+                    hyps.append(Hypothesis.from_dict(json.loads(line)))
+                except Exception:
+                    pass
+        if domain:
+            hyps = [h for h in hyps if h.domain == domain or h.domain == ""]
+        return hyps
+    except Exception:
+        return []
+
+
+def _rewrite_rules(rules: List[StandingRule]) -> None:
+    try:
+        _rules_path().write_text(
+            "\n".join(json.dumps(r.to_dict()) for r in rules) + ("\n" if rules else ""),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+
+
+def _rewrite_hypotheses(hyps: List[Hypothesis]) -> None:
+    try:
+        _hypotheses_path().write_text(
+            "\n".join(json.dumps(h.to_dict()) for h in hyps) + ("\n" if hyps else ""),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+
+
+def observe_pattern(lesson: str, domain: str, *, source_lesson_id: str = "") -> Optional[StandingRule]:
+    """Record a confirmed lesson observation. Promotes to StandingRule at threshold.
+
+    Call this when a long-tier lesson is confirmed again in production:
+    - First call: creates/increments Hypothesis
+    - At RULE_PROMOTE_CONFIRMATIONS: promotes to StandingRule and removes Hypothesis
+
+    Returns the new StandingRule if promotion occurred, else None.
+    """
+    now = _current_date()
+    hyps = load_hypotheses(domain=None)
+
+    # Find existing hypothesis by similarity (exact or near-exact lesson text)
+    target_hyp: Optional[Hypothesis] = None
+    lesson_lower = lesson.lower().strip()
+    for h in hyps:
+        if h.lesson.lower().strip() == lesson_lower or h.domain == domain and _text_similarity(h.lesson, lesson) > 0.85:
+            target_hyp = h
+            break
+
+    if target_hyp is None:
+        # New observation — create hypothesis
+        import uuid as _uuid
+        target_hyp = Hypothesis(
+            hyp_id=str(_uuid.uuid4())[:8],
+            lesson=lesson,
+            domain=domain,
+            confirmations=1,
+            contradictions=0,
+            source_lesson_ids=[source_lesson_id] if source_lesson_id else [],
+            first_seen=now,
+            last_seen=now,
+        )
+        hyps.append(target_hyp)
+        _rewrite_hypotheses(hyps)
+        return None
+
+    # Existing hypothesis — confirm
+    target_hyp.confirmations += 1
+    target_hyp.last_seen = now
+    if source_lesson_id and source_lesson_id not in target_hyp.source_lesson_ids:
+        target_hyp.source_lesson_ids.append(source_lesson_id)
+
+    if target_hyp.confirmations >= RULE_PROMOTE_CONFIRMATIONS:
+        # Promote to standing rule
+        import uuid as _uuid
+        rule = StandingRule(
+            rule_id=str(_uuid.uuid4())[:8],
+            rule=target_hyp.lesson,
+            source_lesson_id=target_hyp.source_lesson_ids[0] if target_hyp.source_lesson_ids else "",
+            domain=target_hyp.domain,
+            confirmations=target_hyp.confirmations,
+            contradictions=0,
+            promoted_at=now,
+        )
+        with open(_rules_path(), "a", encoding="utf-8") as f:
+            f.write(json.dumps(rule.to_dict()) + "\n")
+        # Remove from hypotheses
+        hyps = [h for h in hyps if h.hyp_id != target_hyp.hyp_id]
+        _rewrite_hypotheses(hyps)
+        log.info("standing rule promoted: %s (domain=%s, confirmations=%d)",
+                 rule.rule_id, rule.domain, rule.confirmations)
+        return rule
+
+    _rewrite_hypotheses(hyps)
+    return None
+
+
+def contradict_pattern(lesson: str, domain: str) -> bool:
+    """Record a contradiction — demotes hypothesis or increments rule.contradictions.
+
+    A standing rule with contradictions >= 1 should be flagged for review.
+    Returns True if something was found and updated.
+    """
+    lesson_lower = lesson.lower().strip()
+
+    # Check standing rules first
+    rules = load_standing_rules()
+    for r in rules:
+        if r.rule.lower().strip() == lesson_lower or _text_similarity(r.rule, lesson) > 0.85:
+            r.contradictions += 1
+            _rewrite_rules(rules)
+            log.warning("standing rule contradicted: rule_id=%s contradictions=%d", r.rule_id, r.contradictions)
+            return True
+
+    # Check hypotheses
+    hyps = load_hypotheses()
+    for h in hyps:
+        if h.lesson.lower().strip() == lesson_lower or _text_similarity(h.lesson, lesson) > 0.85:
+            h.contradictions += 1
+            if h.contradictions > h.confirmations:
+                # Demote — remove hypothesis
+                hyps = [x for x in hyps if x.hyp_id != h.hyp_id]
+                log.info("hypothesis demoted (contradictions > confirmations): %s", h.hyp_id)
+            _rewrite_hypotheses(hyps)
+            return True
+
+    return False
+
+
+def inject_standing_rules(domain: str = "") -> str:
+    """Return standing rules formatted for injection into decompose system prompt.
+
+    Returns empty string if no rules exist (safe to always call).
+    """
+    rules = load_standing_rules(domain=domain)
+    if not rules:
+        return ""
+    lines = ["### Standing Rules (apply unconditionally)"]
+    for r in rules:
+        lines.append(f"- {r.rule}")
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Phase 56: Decision Journal
+# ---------------------------------------------------------------------------
+# ADR-style log of significant decisions. Searched before new decisions.
+# Format: what was decided, alternatives considered, why this won, trade-offs.
+
+_DECISIONS_FILENAME = "decisions.jsonl"
+
+DECISION_SEARCH_LIMIT = 3  # max decisions to inject into context
+
+
+@dataclass
+class Decision:
+    """A recorded architectural or strategic decision."""
+    decision_id: str
+    domain: str                     # goal domain / subsystem tag
+    decision: str                   # what was decided
+    alternatives: List[str]         # what else was considered
+    rationale: str                  # why this won
+    trade_offs: str                 # known downsides
+    recorded_at: str
+    goal_context: str = ""          # the goal that prompted this decision
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "decision_id": self.decision_id, "domain": self.domain,
+            "decision": self.decision, "alternatives": self.alternatives,
+            "rationale": self.rationale, "trade_offs": self.trade_offs,
+            "recorded_at": self.recorded_at, "goal_context": self.goal_context,
+        }
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "Decision":
+        return cls(**{k: d.get(k, v) for k, v in {
+            "decision_id": "", "domain": "", "decision": "", "alternatives": [],
+            "rationale": "", "trade_offs": "", "recorded_at": "", "goal_context": "",
+        }.items()})
+
+
+def _decisions_path() -> Path:
+    return _memory_dir() / _DECISIONS_FILENAME
+
+
+def record_decision(
+    decision: str,
+    rationale: str,
+    *,
+    domain: str = "",
+    alternatives: Optional[List[str]] = None,
+    trade_offs: str = "",
+    goal_context: str = "",
+) -> Decision:
+    """Record a significant decision to the decision journal.
+
+    Args:
+        decision: What was decided (one sentence).
+        rationale: Why this was chosen over alternatives.
+        domain: Subsystem/domain tag for filtering (e.g. "memory", "routing").
+        alternatives: Other options that were considered.
+        trade_offs: Known downsides or limitations of the chosen approach.
+        goal_context: The goal that prompted this decision.
+
+    Returns:
+        The recorded Decision object.
+    """
+    import uuid as _uuid
+    d = Decision(
+        decision_id=str(_uuid.uuid4())[:8],
+        domain=domain,
+        decision=decision,
+        alternatives=alternatives or [],
+        rationale=rationale,
+        trade_offs=trade_offs,
+        recorded_at=datetime.now(timezone.utc).isoformat(),
+        goal_context=goal_context,
+    )
+    try:
+        with open(_decisions_path(), "a", encoding="utf-8") as f:
+            f.write(json.dumps(d.to_dict()) + "\n")
+    except Exception as exc:
+        log.warning("decision journal write failed: %s", exc)
+    return d
+
+
+def search_decisions(query: str, domain: str = "", limit: int = DECISION_SEARCH_LIMIT) -> List[Decision]:
+    """Search the decision journal for relevant prior decisions.
+
+    Uses TF-IDF similarity against decision + rationale text.
+    Returns top-K matches, newest first on ties.
+    """
+    try:
+        path = _decisions_path()
+        if not path.exists():
+            return []
+        all_decisions = []
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line:
+                try:
+                    all_decisions.append(Decision.from_dict(json.loads(line)))
+                except Exception:
+                    pass
+        if domain:
+            all_decisions = [d for d in all_decisions if d.domain == domain or d.domain == ""]
+
+        if not all_decisions:
+            return []
+
+        # Rank by similarity to query
+        class _FakeTL:
+            """Adapter so _tfidf_rank can score decisions."""
+            def __init__(self, d: Decision):
+                self.lesson = f"{d.decision} {d.rationale}"
+                self._d = d
+
+        scored = _tfidf_rank(query, [_FakeTL(d) for d in all_decisions], top_k=limit)
+        return [s._d for s in scored]
+    except Exception:
+        return []
+
+
+def inject_decisions(goal: str, domain: str = "") -> str:
+    """Return relevant prior decisions formatted for injection into decompose prompt.
+
+    Returns empty string if no relevant decisions (safe to always call).
+    """
+    decisions = search_decisions(goal, domain=domain)
+    if not decisions:
+        return ""
+    lines = ["### Prior Decisions (search before making new ones)"]
+    for d in decisions:
+        alts = f" Alternatives considered: {', '.join(d.alternatives)}." if d.alternatives else ""
+        lines.append(f"- **{d.decision}** — {d.rationale}{alts}")
+    return "\n".join(lines)

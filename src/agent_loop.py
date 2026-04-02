@@ -313,6 +313,24 @@ def _build_loop_context(
     except Exception:
         pass
 
+    # Phase 56: Standing rules (top tier — apply unconditionally)
+    try:
+        from memory import inject_standing_rules
+        _rules = inject_standing_rules()
+        if _rules:
+            lessons_context = _rules + ("\n\n" + lessons_context if lessons_context else "")
+    except Exception:
+        pass
+
+    # Phase 56: Decision journal (relevant prior decisions)
+    try:
+        from memory import inject_decisions
+        _decisions = inject_decisions(goal)
+        if _decisions:
+            lessons_context = (lessons_context + "\n\n" + _decisions) if lessons_context else _decisions
+    except Exception:
+        pass
+
     # Resurrected graveyard lessons (topic-relevant, decayed)
     try:
         from memory import search_graveyard
