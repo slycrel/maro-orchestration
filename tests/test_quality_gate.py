@@ -19,6 +19,12 @@ from quality_gate import (
     run_quality_gate,
     next_model_tier,
     _COUNCIL_FRAMINGS,
+    DebatePosition,
+    DebateVerdict,
+    run_debate,
+    _BULL_SYSTEM,
+    _BEAR_SYSTEM,
+    _RISK_MANAGER_SYSTEM,
 )
 
 
@@ -250,3 +256,199 @@ class TestNextModelTier:
 
     def test_unknown_returns_none(self):
         assert next_model_tier("gpt-4") is None
+
+
+# ---------------------------------------------------------------------------
+# Multi-agent debate: DebatePosition, DebateVerdict, run_debate
+# ---------------------------------------------------------------------------
+
+def _make_debate_adapter(bull_json: str, bear_json: str, rm_json: str):
+    """Adapter that returns bull, bear, risk-manager responses in sequence."""
+    responses = [bull_json, bear_json, rm_json]
+    call_count = [0]
+
+    def _complete(messages, **kw):
+        idx = call_count[0]
+        call_count[0] += 1
+        resp = MagicMock()
+        resp.content = responses[idx] if idx < len(responses) else '{"verdict":"PROCEED","reasoning":"ok","dominant_position":"neutral","key_risk":""}'
+        resp.tool_calls = []
+        resp.input_tokens = 80
+        resp.output_tokens = 40
+        return resp
+
+    adapter = MagicMock()
+    adapter.complete = MagicMock(side_effect=_complete)
+    return adapter
+
+
+class TestDebateDataclasses:
+    def test_debate_position_fields(self):
+        p = DebatePosition(role="bull", position="positive", key_points=["a"], confidence=0.8, highlight="evidence")
+        assert p.role == "bull"
+        assert p.confidence == 0.8
+
+    def test_debate_verdict_fields(self):
+        v = DebateVerdict(
+            bull=None, bear=None,
+            risk_manager_verdict="PROCEED", risk_manager_reasoning="looks good",
+            dominant_position="bull", key_risk="watch rates",
+            escalate=False,
+        )
+        assert v.escalate is False
+        assert v.risk_manager_verdict == "PROCEED"
+
+
+class TestRunDebate:
+    def test_no_adapter_returns_non_escalating_default(self):
+        result = run_debate("some goal", [], adapter=None)
+        assert result.escalate is False
+        assert result.risk_manager_verdict == "PROCEED"
+
+    def test_no_done_steps_returns_default(self):
+        adapter = MagicMock()
+        steps = [MagicMock(status="blocked", index=1, text="step", result="")]
+        result = run_debate("goal", steps, adapter=adapter)
+        assert result.escalate is False
+
+    def test_proceed_verdict_no_escalation(self):
+        adapter = _make_debate_adapter(
+            bull_json='{"position":"strong","key_points":["a","b"],"confidence":0.8,"strongest_evidence":"data"}',
+            bear_json='{"position":"weak","key_points":["x"],"confidence":0.3,"fatal_flaw":"minor"}',
+            rm_json='{"verdict":"PROCEED","reasoning":"bull wins","dominant_position":"bull","key_risk":"none"}',
+        )
+        steps = [MagicMock(status="done", index=1, text="step", result="output")]
+        result = run_debate("goal", steps, adapter=adapter)
+        assert result.risk_manager_verdict == "PROCEED"
+        assert result.escalate is False
+        assert result.dominant_position == "bull"
+
+    def test_reject_verdict_escalates(self):
+        adapter = _make_debate_adapter(
+            bull_json='{"position":"ok","key_points":[],"confidence":0.4,"strongest_evidence":""}',
+            bear_json='{"position":"fatal","key_points":["fatal flaw"],"confidence":0.9,"fatal_flaw":"wrong data"}',
+            rm_json='{"verdict":"REJECT","reasoning":"output is unreliable","dominant_position":"bear","key_risk":"wrong data"}',
+        )
+        steps = [MagicMock(status="done", index=1, text="step", result="output")]
+        result = run_debate("goal", steps, adapter=adapter)
+        assert result.risk_manager_verdict == "REJECT"
+        assert result.escalate is True
+        assert result.dominant_position == "bear"
+
+    def test_caution_verdict_escalates(self):
+        adapter = _make_debate_adapter(
+            bull_json='{"position":"ok","key_points":[],"confidence":0.6,"strongest_evidence":"partial"}',
+            bear_json='{"position":"weak","key_points":["gap"],"confidence":0.5,"fatal_flaw":"incomplete"}',
+            rm_json='{"verdict":"CAUTION","reasoning":"proceed with caveats","dominant_position":"neutral","key_risk":"incomplete data"}',
+        )
+        steps = [MagicMock(status="done", index=1, text="step", result="output")]
+        result = run_debate("goal", steps, adapter=adapter)
+        assert result.escalate is True
+        assert result.risk_manager_verdict == "CAUTION"
+
+    def test_bull_position_populated(self):
+        adapter = _make_debate_adapter(
+            bull_json='{"position":"strong thesis","key_points":["p1","p2"],"confidence":0.85,"strongest_evidence":"RCT data"}',
+            bear_json='{"position":"weak","key_points":[],"confidence":0.2,"fatal_flaw":""}',
+            rm_json='{"verdict":"PROCEED","reasoning":"ok","dominant_position":"bull","key_risk":""}',
+        )
+        steps = [MagicMock(status="done", index=1, text="step", result="output")]
+        result = run_debate("goal", steps, adapter=adapter)
+        assert result.bull is not None
+        assert result.bull.position == "strong thesis"
+        assert result.bull.confidence == 0.85
+        assert result.bull.highlight == "RCT data"
+
+    def test_bear_position_populated(self):
+        adapter = _make_debate_adapter(
+            bull_json='{"position":"ok","key_points":[],"confidence":0.5,"strongest_evidence":""}',
+            bear_json='{"position":"fatal flaw found","key_points":["data wrong"],"confidence":0.9,"fatal_flaw":"methodology invalid"}',
+            rm_json='{"verdict":"REJECT","reasoning":"bear wins","dominant_position":"bear","key_risk":"methodology"}',
+        )
+        steps = [MagicMock(status="done", index=1, text="step", result="output")]
+        result = run_debate("goal", steps, adapter=adapter)
+        assert result.bear is not None
+        assert result.bear.highlight == "methodology invalid"
+
+    def test_adapter_failure_returns_default(self):
+        adapter = MagicMock()
+        adapter.complete = MagicMock(side_effect=RuntimeError("API down"))
+        steps = [MagicMock(status="done", index=1, text="step", result="output")]
+        result = run_debate("goal", steps, adapter=adapter)
+        assert result.escalate is False  # failure never escalates
+
+    def test_debate_prompts_exist(self):
+        assert "BULL" in _BULL_SYSTEM or "bull" in _BULL_SYSTEM.lower()
+        assert "BEAR" in _BEAR_SYSTEM or "bear" in _BEAR_SYSTEM.lower()
+        assert "RISK MANAGER" in _RISK_MANAGER_SYSTEM or "risk" in _RISK_MANAGER_SYSTEM.lower()
+
+
+class TestQualityGateWithDebate:
+    def test_with_debate_false_no_debate_field_populated(self):
+        adapter = MagicMock()
+        resp = MagicMock()
+        resp.content = '{"verdict":"PASS","reason":"good","confidence":0.9}'
+        resp.tool_calls = []
+        resp.input_tokens = 50
+        resp.output_tokens = 25
+        adapter.complete = MagicMock(return_value=resp)
+        steps = [MagicMock(status="done", index=1, text="step", result="result")]
+        verdict = run_quality_gate("goal", steps, adapter, with_debate=False)
+        assert verdict.debate is None
+
+    def test_with_debate_true_populates_debate_field(self):
+        call_count = [0]
+
+        def _multi_resp(messages, **kw):
+            i = call_count[0]
+            call_count[0] += 1
+            resp = MagicMock()
+            resp.tool_calls = []
+            resp.input_tokens = 50
+            resp.output_tokens = 25
+            if i == 0:  # quality gate pass 1
+                resp.content = '{"verdict":"PASS","reason":"ok","confidence":0.9}'
+            elif i == 1:  # adversarial
+                resp.content = '[]'
+            elif i == 2:  # bull
+                resp.content = '{"position":"strong","key_points":[],"confidence":0.8,"strongest_evidence":"x"}'
+            elif i == 3:  # bear
+                resp.content = '{"position":"weak","key_points":[],"confidence":0.3,"fatal_flaw":"none"}'
+            else:  # risk manager
+                resp.content = '{"verdict":"PROCEED","reasoning":"fine","dominant_position":"bull","key_risk":""}'
+            return resp
+
+        adapter = MagicMock()
+        adapter.complete = MagicMock(side_effect=_multi_resp)
+        steps = [MagicMock(status="done", index=1, text="step", result="output")]
+        verdict = run_quality_gate("goal", steps, adapter, run_adversarial=True, with_debate=True)
+        assert verdict.debate is not None
+
+    def test_debate_reject_overrides_pass(self):
+        call_count = [0]
+
+        def _multi_resp(messages, **kw):
+            i = call_count[0]
+            call_count[0] += 1
+            resp = MagicMock()
+            resp.tool_calls = []
+            resp.input_tokens = 50
+            resp.output_tokens = 25
+            if i == 0:
+                resp.content = '{"verdict":"PASS","reason":"ok","confidence":0.9}'
+            elif i == 1:
+                resp.content = '[]'
+            elif i == 2:
+                resp.content = '{"position":"ok","key_points":[],"confidence":0.5,"strongest_evidence":""}'
+            elif i == 3:
+                resp.content = '{"position":"fatal","key_points":["flaw"],"confidence":0.9,"fatal_flaw":"wrong"}'
+            else:
+                resp.content = '{"verdict":"REJECT","reasoning":"output unreliable","dominant_position":"bear","key_risk":"wrong data"}'
+            return resp
+
+        adapter = MagicMock()
+        adapter.complete = MagicMock(side_effect=_multi_resp)
+        steps = [MagicMock(status="done", index=1, text="step", result="output")]
+        verdict = run_quality_gate("goal", steps, adapter, run_adversarial=True, with_debate=True)
+        assert verdict.escalate is True
+        assert "REJECT" in verdict.reason or "Debate" in verdict.reason

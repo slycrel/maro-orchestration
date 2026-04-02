@@ -213,7 +213,12 @@ def decompose(
     """
     from llm import LLMMessage
 
-    system = DECOMPOSE_SYSTEM
+    # Inject Poe's persistent identity block (GAP 1 fix — always in context)
+    try:
+        from poe_self import with_poe_identity
+        system = with_poe_identity(DECOMPOSE_SYSTEM)
+    except Exception:
+        system = DECOMPOSE_SYSTEM
     extras = [x for x in [skills_context, ancestry_context, lessons_context, cost_context] if x]
 
     # Auto-inject user context if available (capped at 500 chars per file

@@ -1,0 +1,62 @@
+{
+  "0xfd8e46519d0a8f9c35e5010ef4e7f56f7583aea4": {
+    "median_hold_days": 1.95,
+    "sample_count": 500,
+    "min_days": 1.42,
+    "max_days": 3.73
+  },
+  "0x177a1175934f46d2bfe34468b53b94edd81ea453": {
+    "median_hold_days": 1.8,
+    "sample_count": 52,
+    "min_days": 0.8,
+    "max_days": 111.79
+  },
+  "0x176742c3baa0e08974188b2e1a2b638a3cf8964e": {
+    "median_hold_days": 1.66,
+    "sample_count": 300,
+    "min_days": 1.09,
+    "max_days": 522.72
+  },
+  "0x36bc6aac04b92548ce78a990d2a83eb64b92d8cd": {
+    "median_hold_days": 1.71,
+    "sample_count": 362,
+    "min_days": 0.83,
+    "max_days": 33.19
+  },
+  "0x6d882337dfc6958423c782c50618110bbda93eff": {
+    "median_hold_days": 1.48,
+    "sample_count": 485,
+    "min_days": 0.11,
+    "max_days": 111.79
+  },
+  "0x3a4986448ace69f8f5084dc47b7569316b8f4292": {
+    "median_hold_days": 1.78,
+    "sample_count": 332,
+    "min_days": 0.93,
+    "max_days": 124.39
+  },
+  "0xd0d6053c3c37e727402d84c14069780d360993aa": {
+    "median_hold_days": 1.23,
+    "sample_count": 500,
+    "min_days": 1.22,
+    "max_days": 1.24
+  },
+  "0x5940ba313461e460aa85d2b82cf01ccd9d9f9615": {
+    "median_hold_days": 1.81,
+    "sample_count": 500,
+    "min_days": 1.77,
+    "max_days": 1.85
+  },
+  "0xd106952ebf30a3125affd8a23b6c1f30c35fc79c": {
+    "median_hold_days": 1.9,
+    "sample_count": 500,
+    "min_days": 1.27,
+    "max_days": 1.98
+  },
+  "0x0cf59e8e751d7857ef67823ef11b9b6d8eef610f": {
+    "median_hold_days": 1.92,
+    "sample_count": 498,
+    "min_days": 1.09,
+    "max_days": 2.05
+  }
+}

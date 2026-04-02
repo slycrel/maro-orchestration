@@ -628,6 +628,7 @@ def run_agent_loop(
     token_budget: Optional[int] = None,
     cost_budget: Optional[float] = None,
     ralph_verify: bool = False,
+    resume_from_loop_id: Optional[str] = None,
 ) -> LoopResult:
     """Run the autonomous loop for a goal.
 
@@ -647,6 +648,9 @@ def run_agent_loop(
         verbose: Print progress to stdout.
         interrupt_queue: InterruptQueue instance (or None). If None, a default
             queue is created automatically so any interface can post interrupts.
+        resume_from_loop_id: If set, load the checkpoint for this loop_id and
+            skip already-completed steps. The original goal and steps are
+            replayed from checkpoint; new steps start from where it left off.
 
     Returns:
         LoopResult with full outcome.
@@ -750,6 +754,39 @@ def run_agent_loop(
         )
     if verbose:
         print(f"[poe] decomposed into {len(steps)} steps", file=sys.stderr, flush=True)
+
+    # GAP 3: Session resume — load checkpoint and skip completed steps
+    _resume_completed: List[StepOutcome] = []
+    if resume_from_loop_id:
+        try:
+            from checkpoint import load_checkpoint, resume_from as _resume_from
+            _ckpt = load_checkpoint(resume_from_loop_id)
+            if _ckpt is not None:
+                _remaining, _done = _resume_from(_ckpt)
+                # Reconstruct StepOutcome objects from completed checkpoint data
+                for _cs in _done:
+                    _resume_completed.append(StepOutcome(
+                        index=_cs.index,
+                        text=_cs.text,
+                        status=_cs.status,
+                        result=_cs.result,
+                        tokens_in=_cs.tokens_in,
+                        tokens_out=_cs.tokens_out,
+                        elapsed_ms=_cs.elapsed_ms,
+                    ))
+                steps = _remaining
+                if verbose:
+                    print(
+                        f"[poe] resuming from checkpoint {resume_from_loop_id}: "
+                        f"{len(_resume_completed)} steps already done, {len(steps)} remaining",
+                        file=sys.stderr, flush=True,
+                    )
+                log.info("checkpoint resume: loop_id=%s done=%d remaining=%d",
+                         resume_from_loop_id, len(_resume_completed), len(steps))
+            else:
+                log.warning("checkpoint not found for resume_from_loop_id=%s, starting fresh", resume_from_loop_id)
+        except Exception as _ckpt_err:
+            log.warning("checkpoint resume failed (%s), starting fresh", _ckpt_err)
 
     # Upfront cost estimation — fail fast if estimate exceeds budget
     if cost_budget is not None:
@@ -864,7 +901,8 @@ def run_agent_loop(
     ])
 
     # Step 2: Execute each step in order (dynamic — interrupts may add/replace steps)
-    step_outcomes: List[StepOutcome] = []
+    # Pre-populate with any completed steps from a checkpoint resume
+    step_outcomes: List[StepOutcome] = list(_resume_completed)
     total_tokens_in = 0
     total_tokens_out = 0
     stuck_streak = 0
@@ -1443,6 +1481,13 @@ def run_agent_loop(
             confidence=outcome.get("confidence", ""),
         ))
 
+        # GAP 3: write checkpoint after each step so loop is resumable
+        try:
+            from checkpoint import write_checkpoint as _write_ckpt
+            _write_ckpt(loop_id, goal, project or "", steps, step_outcomes)
+        except Exception:
+            pass
+
         # Phase 19: write dead end to DEAD_ENDS.md when step is blocked
         if step_status == "blocked" and _dead_ends_available:
             try:
@@ -1633,6 +1678,14 @@ def run_agent_loop(
         elapsed_ms=elapsed_total,
         had_no_matching_skill=_had_no_matching_skill,
     )
+
+    # GAP 3: delete checkpoint on successful completion (keep on stuck/partial for resume)
+    if result.status == "done":
+        try:
+            from checkpoint import delete_checkpoint as _del_ckpt
+            _del_ckpt(loop_id)
+        except Exception:
+            pass
 
     # Release loop lock so interfaces know we're idle
     try:

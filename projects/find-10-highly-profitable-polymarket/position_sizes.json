@@ -1,0 +1,62 @@
+{
+  "0xfd8e46519d0a8f9c35e5010ef4e7f56f7583aea4": {
+    "avg_position_size_usd": 6.28,
+    "num_trades": 500,
+    "min_size_usd": 0.37,
+    "max_size_usd": 89.15
+  },
+  "0x177a1175934f46d2bfe34468b53b94edd81ea453": {
+    "avg_position_size_usd": 1.0,
+    "num_trades": 61,
+    "min_size_usd": 1.0,
+    "max_size_usd": 1.0
+  },
+  "0x176742c3baa0e08974188b2e1a2b638a3cf8964e": {
+    "avg_position_size_usd": 18.53,
+    "num_trades": 369,
+    "min_size_usd": 0.05,
+    "max_size_usd": 413.55
+  },
+  "0x36bc6aac04b92548ce78a990d2a83eb64b92d8cd": {
+    "avg_position_size_usd": 17.35,
+    "num_trades": 500,
+    "min_size_usd": 0.01,
+    "max_size_usd": 430.0
+  },
+  "0x6d882337dfc6958423c782c50618110bbda93eff": {
+    "avg_position_size_usd": 1.38,
+    "num_trades": 500,
+    "min_size_usd": 0.01,
+    "max_size_usd": 149.57
+  },
+  "0x3a4986448ace69f8f5084dc47b7569316b8f4292": {
+    "avg_position_size_usd": 16.61,
+    "num_trades": 443,
+    "min_size_usd": 0.3,
+    "max_size_usd": 261.65
+  },
+  "0xd0d6053c3c37e727402d84c14069780d360993aa": {
+    "avg_position_size_usd": 19.62,
+    "num_trades": 500,
+    "min_size_usd": 0.43,
+    "max_size_usd": 79.2
+  },
+  "0x5940ba313461e460aa85d2b82cf01ccd9d9f9615": {
+    "avg_position_size_usd": 7.12,
+    "num_trades": 500,
+    "min_size_usd": 0.34,
+    "max_size_usd": 10.0
+  },
+  "0xd106952ebf30a3125affd8a23b6c1f30c35fc79c": {
+    "avg_position_size_usd": 84.86,
+    "num_trades": 500,
+    "min_size_usd": 0.01,
+    "max_size_usd": 5127.17
+  },
+  "0x0cf59e8e751d7857ef67823ef11b9b6d8eef610f": {
+    "avg_position_size_usd": 4.17,
+    "num_trades": 500,
+    "min_size_usd": 0.01,
+    "max_size_usd": 45.76
+  }
+}

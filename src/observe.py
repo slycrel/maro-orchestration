@@ -161,6 +161,91 @@ def _read_memory_stats() -> Dict[str, Any]:
         return {"error": str(e)}
 
 
+def _read_cost_summary(hours: int = 24) -> Dict[str, Any]:
+    """Sum step-costs.jsonl entries from the last N hours."""
+    try:
+        from metrics import load_step_costs
+        entries = load_step_costs(limit=2000)
+        if not entries:
+            return {"total_usd": 0.0, "tokens_in": 0, "tokens_out": 0, "step_count": 0}
+
+        cutoff_ts = None
+        if hours > 0:
+            from datetime import timedelta
+            cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+            cutoff_ts = cutoff.isoformat()
+
+        total_usd = 0.0
+        tokens_in = 0
+        tokens_out = 0
+        by_model: Dict[str, float] = {}
+        count = 0
+
+        for e in entries:
+            if cutoff_ts and (e.get("ts") or "") < cutoff_ts:
+                continue
+            total_usd += e.get("cost_usd", 0.0)
+            tokens_in += e.get("tokens_in", 0)
+            tokens_out += e.get("tokens_out", 0)
+            model = e.get("model", "unknown")
+            by_model[model] = by_model.get(model, 0.0) + e.get("cost_usd", 0.0)
+            count += 1
+
+        return {
+            "total_usd": round(total_usd, 6),
+            "tokens_in": tokens_in,
+            "tokens_out": tokens_out,
+            "step_count": count,
+            "by_model": {k: round(v, 6) for k, v in sorted(by_model.items(), key=lambda x: -x[1])},
+            "window_hours": hours,
+        }
+    except Exception as e:
+        return {"error": str(e), "total_usd": 0.0}
+
+
+def _read_ancestry_tree() -> List[Dict[str, Any]]:
+    """Scan workspace projects for ancestry relationships.
+
+    Returns a list of project nodes each with:
+      slug, parent_id, depth, ancestry (breadcrumb list of {id, title})
+    """
+    try:
+        from orch_items import orch_root
+        projects_root = orch_root() / "projects"
+        if not projects_root.exists():
+            return []
+
+        nodes = []
+        for slug_dir in sorted(projects_root.iterdir()):
+            if not slug_dir.is_dir():
+                continue
+            ancestry_file = slug_dir / "ancestry.json"
+            slug = slug_dir.name
+            if ancestry_file.exists():
+                try:
+                    a = json.loads(ancestry_file.read_text(encoding="utf-8"))
+                    nodes.append({
+                        "slug": slug,
+                        "parent_id": a.get("parent_id"),
+                        "depth": len(a.get("ancestry", [])),
+                        "ancestry": a.get("ancestry", []),
+                    })
+                except Exception:
+                    pass
+            else:
+                # Project exists but no ancestry.json = root-level
+                nodes.append({
+                    "slug": slug,
+                    "parent_id": None,
+                    "depth": 0,
+                    "ancestry": [],
+                })
+
+        return nodes
+    except Exception:
+        return []
+
+
 # ---------------------------------------------------------------------------
 # Renderers
 # ---------------------------------------------------------------------------
@@ -423,6 +508,15 @@ _DASHBOARD_HTML = """\
   .kv { display: flex; gap: 8px; flex-wrap: wrap; }
   .kv span { white-space: nowrap; }
   .key { color: var(--dim); }
+  .cost-big { font-size: 22px; font-weight: bold; color: var(--green); }
+  button.replay { margin-top: 8px; background: #1a3a1a; color: var(--green); border: 1px solid var(--green);
+    border-radius: 4px; padding: 3px 10px; font: 12px monospace; cursor: pointer; }
+  button.replay:hover { background: #2a5a2a; }
+  button.replay:disabled { opacity: 0.4; cursor: default; }
+  .tree-node { margin-left: calc(var(--depth, 0) * 16px); font-size: 12px; padding: 2px 0; }
+  .tree-root { color: var(--blue); }
+  .tree-child { color: var(--text); }
+  .tree-sep { color: var(--dim); }
 </style>
 </head>
 <body>
@@ -440,13 +534,24 @@ _DASHBOARD_HTML = """\
   </div>
 
   <div class="panel">
+    <h2>Cost (24h)</h2>
+    <div id="cost-status"></div>
+  </div>
+
+  <div class="panel">
     <h2>Memory</h2>
     <div id="memory-status"></div>
   </div>
 
-  <div class="panel">
+  <div class="panel full">
     <h2>Recent Outcomes</h2>
     <div id="outcomes-status"></div>
+    <button class="replay" id="replay-btn" onclick="replayLast()">&#9654; Replay Last Goal</button>
+  </div>
+
+  <div class="panel full">
+    <h2>Mission Ancestry Tree</h2>
+    <div id="ancestry-status"></div>
   </div>
 
   <div class="panel full">
@@ -472,6 +577,26 @@ function badge(text, cls) {
 function esc(s) {
   return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
+async function replayLast() {
+  const btn = document.getElementById('replay-btn');
+  btn.disabled = true;
+  btn.textContent = '⏳ Queuing...';
+  try {
+    const r = await fetch('/api/replay', {method: 'POST'});
+    const d = await r.json();
+    if (r.ok) {
+      btn.textContent = '✓ Queued: ' + (d.goal||'').slice(0,40);
+      setTimeout(() => { btn.disabled = false; btn.textContent = '▶ Replay Last Goal'; }, 5000);
+    } else {
+      btn.textContent = '✗ ' + (d.error||'failed');
+      setTimeout(() => { btn.disabled = false; btn.textContent = '▶ Replay Last Goal'; }, 3000);
+    }
+  } catch(err) {
+    btn.textContent = '✗ ' + err;
+    setTimeout(() => { btn.disabled = false; btn.textContent = '▶ Replay Last Goal'; }, 3000);
+  }
+}
+
 async function refresh() {
   try {
     const r = await fetch('/api/snapshot');
@@ -520,6 +645,31 @@ async function refresh() {
       document.getElementById('memory-status').innerHTML = memHtml;
     }
 
+    // Cost
+    const cost = d.cost || {};
+    if (cost.error) {
+      document.getElementById('cost-status').innerHTML = `<span class="status-stuck">${esc(cost.error)}</span>`;
+    } else {
+      const usd = (cost.total_usd || 0).toFixed(4);
+      const tok = ((cost.tokens_in||0) + (cost.tokens_out||0)).toLocaleString();
+      let costHtml = `<div class="cost-big">$${usd}</div>`;
+      costHtml += `<div class="kv" style="margin-top:4px">
+        <span><span class="key">steps</span> ${cost.step_count||0}</span>
+        <span><span class="key">tokens</span> ${tok}</span>
+        <span><span class="key">window</span> ${cost.window_hours||24}h</span>
+      </div>`;
+      const byModel = cost.by_model || {};
+      const modelEntries = Object.entries(byModel);
+      if (modelEntries.length) {
+        costHtml += `<div style="margin-top:6px;font-size:11px;color:var(--dim)">`;
+        modelEntries.forEach(([m, c]) => {
+          costHtml += `<div>${esc(m)}: $${Number(c).toFixed(4)}</div>`;
+        });
+        costHtml += `</div>`;
+      }
+      document.getElementById('cost-status').innerHTML = costHtml;
+    }
+
     // Outcomes
     const outcomes = d.outcomes || [];
     if (!outcomes.length) {
@@ -534,6 +684,25 @@ async function refresh() {
       }).join('');
       document.getElementById('outcomes-status').innerHTML =
         `<table><thead><tr><th>Time</th><th>Status</th><th>Goal</th></tr></thead><tbody>${rows}</tbody></table>`;
+    }
+
+    // Ancestry tree
+    const ancestry = d.ancestry || [];
+    if (!ancestry.length) {
+      document.getElementById('ancestry-status').innerHTML = '<span class="idle">no projects found</span>';
+    } else {
+      // Sort by depth then slug so roots come first
+      const sorted = [...ancestry].sort((a,b) => (a.depth - b.depth) || a.slug.localeCompare(b.slug));
+      let html = '';
+      sorted.forEach(node => {
+        const indent = node.depth * 16;
+        const prefix = node.depth > 0 ? '└─ ' : '';
+        const cls = node.depth === 0 ? 'tree-root' : 'tree-child';
+        const crumbs = (node.ancestry||[]).map(n => esc(n.title||n.id)).join(' › ');
+        const trail = crumbs ? `<span class="tree-sep"> (${crumbs})</span>` : '';
+        html += `<div class="tree-node ${cls}" style="--depth:${node.depth}">${prefix}<strong>${esc(node.slug)}</strong>${trail}</div>`;
+      });
+      document.getElementById('ancestry-status').innerHTML = html;
     }
 
     // Diagnoses
@@ -590,6 +759,8 @@ def _snapshot_json(events_limit: int = 50) -> dict:
     outcomes = _read_recent_outcomes(limit=15)
     mem = _read_memory_stats()
     diagnoses = _read_recent_diagnoses(limit=8)
+    cost = _read_cost_summary(hours=24)
+    ancestry = _read_ancestry_tree()
 
     events: List[dict] = []
     path = _events_path()
@@ -612,11 +783,13 @@ def _snapshot_json(events_limit: int = 50) -> dict:
         "outcomes": outcomes,
         "memory": mem,
         "diagnoses": diagnoses,
+        "cost": cost,
+        "ancestry": ancestry,
         "events": events,
     }
 
 
-def serve_dashboard(host: str = "127.0.0.1", port: int = 7700) -> None:
+def serve_dashboard(host: str = "0.0.0.0", port: int = 7700) -> None:
     """Serve the live dashboard over HTTP using stdlib only.
 
     GET /          → HTML dashboard (auto-refreshes every 5s via JS)
@@ -633,6 +806,15 @@ def serve_dashboard(host: str = "127.0.0.1", port: int = 7700) -> None:
         def log_message(self, fmt: str, *args: Any) -> None:  # type: ignore[override]
             pass  # silence access log
 
+        def _send_json(self, status: int, data: dict) -> None:
+            body = json.dumps(data).encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+            self.wfile.write(body)
+
         def do_GET(self) -> None:  # noqa: N802
             if self.path == "/" or self.path == "/index.html":
                 self.send_response(200)
@@ -642,21 +824,36 @@ def serve_dashboard(host: str = "127.0.0.1", port: int = 7700) -> None:
                 self.wfile.write(html_bytes)
             elif self.path.startswith("/api/snapshot"):
                 try:
-                    data = _snapshot_json()
-                    body = json.dumps(data).encode("utf-8")
-                    self.send_response(200)
-                    self.send_header("Content-Type", "application/json")
-                    self.send_header("Content-Length", str(len(body)))
-                    self.send_header("Cache-Control", "no-cache")
-                    self.end_headers()
-                    self.wfile.write(body)
+                    self._send_json(200, _snapshot_json())
                 except Exception as exc:
-                    err = json.dumps({"error": str(exc)}).encode("utf-8")
-                    self.send_response(500)
-                    self.send_header("Content-Type", "application/json")
-                    self.send_header("Content-Length", str(len(err)))
-                    self.end_headers()
-                    self.wfile.write(err)
+                    self._send_json(500, {"error": str(exc)})
+            else:
+                self.send_response(404)
+                self.end_headers()
+
+        def do_POST(self) -> None:  # noqa: N802
+            if self.path == "/api/replay":
+                # Re-run the last completed outcome's goal in a background thread.
+                outcomes = _read_recent_outcomes(limit=1)
+                if not outcomes:
+                    self._send_json(404, {"error": "no outcomes to replay"})
+                    return
+                goal = outcomes[0].get("goal") or outcomes[0].get("task", "")
+                if not goal:
+                    self._send_json(400, {"error": "last outcome has no goal field"})
+                    return
+                def _run() -> None:
+                    try:
+                        import sys as _sys
+                        _sys.path.insert(0, str(Path(__file__).parent))
+                        import orch  # noqa: F401 — sets up path
+                        from handle import handle
+                        handle(goal, dry_run=False, verbose=True)
+                    except Exception as exc:
+                        import traceback
+                        traceback.print_exc()
+                threading.Thread(target=_run, daemon=True).start()
+                self._send_json(202, {"queued": True, "goal": goal})
             else:
                 self.send_response(404)
                 self.end_headers()
@@ -696,7 +893,7 @@ def main(argv: list[str] | None = None) -> None:
     p_watch = sub.add_parser("watch", help="Refresh snapshot on an interval (like watch)")
     p_watch.add_argument("--interval", type=float, default=5.0, help="Refresh interval in seconds (default: 5)")
     p_serve = sub.add_parser("serve", help="Live HTTP dashboard (default http://127.0.0.1:7700)")
-    p_serve.add_argument("--host", default="127.0.0.1", help="Bind host (default: 127.0.0.1)")
+    p_serve.add_argument("--host", default="0.0.0.0", help="Bind host (default: 0.0.0.0 — all interfaces)")
     p_serve.add_argument("--port", type=int, default=7700, help="Port (default: 7700)")
 
     args = parser.parse_args(argv)

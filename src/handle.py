@@ -251,6 +251,14 @@ def handle(
             model = "power"
         _ultraplan_max_steps = 12
 
+    # direct: prefix — skip Director, route immediately to run_agent_loop.
+    # Experiment: for simple goals, Director SPEC+challenge+dispatch overhead
+    # adds cost without improving output quality (Bitter Lesson).
+    _direct_mode = False
+    if message.lower().startswith("direct:"):
+        message = message[len("direct:"):].lstrip()
+        _direct_mode = True
+
     # Build adapter
     if adapter is None and not dry_run:
         adapter = build_adapter(model=model or MODEL_CHEAP)
@@ -267,6 +275,11 @@ def handle(
 
     if verbose:
         print(f"[poe:{handle_id}] classified lane={lane} confidence={confidence:.2f}: {reason}", file=sys.stderr, flush=True)
+
+    # direct: forces AGENDA lane regardless of classifier — the whole point is to bypass
+    # Director overhead (which only applies to AGENDA) and go straight to run_agent_loop.
+    if _direct_mode:
+        lane = "agenda"
 
     # btw mode: quick observation, always routes to NOW regardless of classification.
     # The result is prefixed with "[Observation]" to distinguish from work products.
@@ -420,6 +433,39 @@ def handle(
             except Exception as _thin_exc:
                 log.warning("mode:thin failed, falling back to Mode 2: %s", _thin_exc)
                 # Fall through to run_agent_loop below
+
+        # direct: prefix — skip quality gate and escalation, route straight to run_agent_loop.
+        # Bitter Lesson experiment: for simple goals, scaffolding overhead doesn't improve output.
+        if _direct_mode:
+            _direct_result = run_agent_loop(
+                message,
+                project=project,
+                model=model,
+                adapter=adapter,
+                dry_run=dry_run,
+                verbose=verbose,
+            )
+            elapsed = int((time.monotonic() - started_at) * 1000)
+            _direct_parts = []
+            for s in _direct_result.steps:
+                if s.status == "done" and s.result:
+                    _direct_parts.append(f"**Step {s.index}: {s.text}**\n{s.result}")
+            _direct_text = "\n\n---\n\n".join(_direct_parts) if _direct_parts else "[no output]"
+            if _direct_result.status == "stuck":
+                _direct_text += f"\n\n⚠️ Stuck: {_direct_result.stuck_reason}"
+            return HandleResult(
+                handle_id=handle_id,
+                lane="agenda",
+                lane_confidence=confidence,
+                classification_reason=reason + " [direct]",
+                message=message,
+                status=_direct_result.status,
+                result=_direct_text,
+                project=_direct_result.project or project or "",
+                tokens_in=_direct_result.total_tokens_in,
+                tokens_out=_direct_result.total_tokens_out,
+                elapsed_ms=elapsed,
+            )
 
         _loop_kwargs: dict = dict(
             project=project,

@@ -1,0 +1,62 @@
+{
+  "0xfd8e46519d0a8f9c35e5010ef4e7f56f7583aea4": {
+    "median_entry_timing_days": 1.0,
+    "sample_count": 78,
+    "min_days": 1,
+    "max_days": 3
+  },
+  "0x177a1175934f46d2bfe34468b53b94edd81ea453": {
+    "median_entry_timing_days": 1,
+    "sample_count": 23,
+    "min_days": 0,
+    "max_days": 111
+  },
+  "0x176742c3baa0e08974188b2e1a2b638a3cf8964e": {
+    "median_entry_timing_days": 1.0,
+    "sample_count": 256,
+    "min_days": 0,
+    "max_days": 522
+  },
+  "0x36bc6aac04b92548ce78a990d2a83eb64b92d8cd": {
+    "median_entry_timing_days": 1.0,
+    "sample_count": 86,
+    "min_days": 0,
+    "max_days": 32
+  },
+  "0x6d882337dfc6958423c782c50618110bbda93eff": {
+    "median_entry_timing_days": 1,
+    "sample_count": 77,
+    "min_days": 0,
+    "max_days": 111
+  },
+  "0x3a4986448ace69f8f5084dc47b7569316b8f4292": {
+    "median_entry_timing_days": 1,
+    "sample_count": 115,
+    "min_days": 0,
+    "max_days": 124
+  },
+  "0xd0d6053c3c37e727402d84c14069780d360993aa": {
+    "median_entry_timing_days": 0.0,
+    "sample_count": 38,
+    "min_days": 0,
+    "max_days": 0
+  },
+  "0x5940ba313461e460aa85d2b82cf01ccd9d9f9615": {
+    "median_entry_timing_days": 1.0,
+    "sample_count": 168,
+    "min_days": 1,
+    "max_days": 1
+  },
+  "0xd106952ebf30a3125affd8a23b6c1f30c35fc79c": {
+    "median_entry_timing_days": 1,
+    "sample_count": 77,
+    "min_days": 0,
+    "max_days": 1
+  },
+  "0x0cf59e8e751d7857ef67823ef11b9b6d8eef610f": {
+    "median_entry_timing_days": 1.0,
+    "sample_count": 82,
+    "min_days": 0,
+    "max_days": 1
+  }
+}

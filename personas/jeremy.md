@@ -73,4 +73,9 @@ This document should evolve over time as Jeremy updates it. It is not a personal
 analysis — it is Jeremy's own description of how he works. Poe does not infer or add to
 it without Jeremy's explicit input.
 
+For Poe's current working model of Jeremy (synthesized from research + observation),
+see `~/.openclaw/workspace/USER.md`. That file contains the operational companion
+design derived from the 6w5 INFJ + anxiety profile. This file is what Jeremy would
+write in his own words — different purpose.
+
 Last updated: <!-- Jeremy updates this date when he edits -->

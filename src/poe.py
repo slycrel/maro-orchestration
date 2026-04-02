@@ -346,8 +346,9 @@ _INSPECT_KEYWORDS = {
 }
 
 _GOAL_MAP_KEYWORDS = {
-    "/map", "goal map", "mission map", "how does", "relates to",
+    "/map", "goal map", "mission map", "relates to",
     "relationship between", "how do these relate",
+    "how does this relate", "how does poe relate",
 }
 
 

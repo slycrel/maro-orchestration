@@ -1,0 +1,302 @@
+{
+  "0xd0d6053c3c37e727402d84c14069780d360993aa": {
+    "win_rate": 0.434,
+    "wins": 217,
+    "total_resolved": null,
+    "position_size": {
+      "avg_position_size_usd": 19.62,
+      "total_trades": null,
+      "total_notional_usd": null
+    },
+    "category_concentration": {
+      "politics": 0.0,
+      "crypto": 97.0,
+      "sports": 0.0,
+      "other": 3.0
+    },
+    "category_counts": {
+      "politics": 0,
+      "crypto": 485,
+      "sports": 0,
+      "other": 15
+    },
+    "hold_duration": {
+      "median_hold_days": 1.23,
+      "sample_count": 500
+    },
+    "entry_timing": {
+      "median_entry_timing_days": 0.0,
+      "sample_count": 38
+    }
+  },
+  "0xd106952ebf30a3125affd8a23b6c1f30c35fc79c": {
+    "win_rate": 0.522,
+    "wins": 261,
+    "total_resolved": null,
+    "position_size": {
+      "avg_position_size_usd": 84.86,
+      "total_trades": null,
+      "total_notional_usd": null
+    },
+    "category_concentration": {
+      "politics": 0.0,
+      "crypto": 0.0,
+      "sports": 0.0,
+      "other": 100.0
+    },
+    "category_counts": {
+      "politics": 0,
+      "crypto": 0,
+      "sports": 0,
+      "other": 500
+    },
+    "hold_duration": {
+      "median_hold_days": 1.9,
+      "sample_count": 500
+    },
+    "entry_timing": {
+      "median_entry_timing_days": 1,
+      "sample_count": 77
+    }
+  },
+  "0x3a4986448ace69f8f5084dc47b7569316b8f4292": {
+    "win_rate": 0.2971,
+    "wins": 131,
+    "total_resolved": null,
+    "position_size": {
+      "avg_position_size_usd": 16.61,
+      "total_trades": null,
+      "total_notional_usd": null
+    },
+    "category_concentration": {
+      "politics": 8.58,
+      "crypto": 47.63,
+      "sports": 1.13,
+      "other": 42.66
+    },
+    "category_counts": {
+      "politics": 38,
+      "crypto": 211,
+      "sports": 5,
+      "other": 189
+    },
+    "hold_duration": {
+      "median_hold_days": 1.78,
+      "sample_count": 332
+    },
+    "entry_timing": {
+      "median_entry_timing_days": 1,
+      "sample_count": 115
+    }
+  },
+  "0x177a1175934f46d2bfe34468b53b94edd81ea453": {
+    "win_rate": 0.1273,
+    "wins": 7,
+    "total_resolved": null,
+    "position_size": {
+      "avg_position_size_usd": 1.0,
+      "total_trades": null,
+      "total_notional_usd": null
+    },
+    "category_concentration": {
+      "politics": 0.0,
+      "crypto": 1.64,
+      "sports": 34.43,
+      "other": 63.93
+    },
+    "category_counts": {
+      "politics": 0,
+      "crypto": 1,
+      "sports": 21,
+      "other": 39
+    },
+    "hold_duration": {
+      "median_hold_days": 1.8,
+      "sample_count": 52
+    },
+    "entry_timing": {
+      "median_entry_timing_days": 1,
+      "sample_count": 23
+    }
+  },
+  "0xfd8e46519d0a8f9c35e5010ef4e7f56f7583aea4": {
+    "win_rate": 0.66,
+    "wins": 330,
+    "total_resolved": null,
+    "position_size": {
+      "avg_position_size_usd": 6.28,
+      "total_trades": null,
+      "total_notional_usd": null
+    },
+    "category_concentration": {
+      "politics": 0.0,
+      "crypto": 0.0,
+      "sports": 0.0,
+      "other": 100.0
+    },
+    "category_counts": {
+      "politics": 0,
+      "crypto": 0,
+      "sports": 0,
+      "other": 500
+    },
+    "hold_duration": {
+      "median_hold_days": 1.95,
+      "sample_count": 500
+    },
+    "entry_timing": {
+      "median_entry_timing_days": 1.0,
+      "sample_count": 78
+    }
+  },
+  "0x36bc6aac04b92548ce78a990d2a83eb64b92d8cd": {
+    "win_rate": 0.2814,
+    "wins": 139,
+    "total_resolved": null,
+    "position_size": {
+      "avg_position_size_usd": 17.35,
+      "total_trades": null,
+      "total_notional_usd": null
+    },
+    "category_concentration": {
+      "politics": 10.6,
+      "crypto": 51.0,
+      "sports": 0.8,
+      "other": 37.6
+    },
+    "category_counts": {
+      "politics": 53,
+      "crypto": 255,
+      "sports": 4,
+      "other": 188
+    },
+    "hold_duration": {
+      "median_hold_days": 1.71,
+      "sample_count": 362
+    },
+    "entry_timing": {
+      "median_entry_timing_days": 1.0,
+      "sample_count": 86
+    }
+  },
+  "0x5940ba313461e460aa85d2b82cf01ccd9d9f9615": {
+    "win_rate": 0.496,
+    "wins": 248,
+    "total_resolved": null,
+    "position_size": {
+      "avg_position_size_usd": 7.12,
+      "total_trades": null,
+      "total_notional_usd": null
+    },
+    "category_concentration": {
+      "politics": 0.0,
+      "crypto": 75.6,
+      "sports": 0.0,
+      "other": 24.4
+    },
+    "category_counts": {
+      "politics": 0,
+      "crypto": 378,
+      "sports": 0,
+      "other": 122
+    },
+    "hold_duration": {
+      "median_hold_days": 1.81,
+      "sample_count": 500
+    },
+    "entry_timing": {
+      "median_entry_timing_days": 1.0,
+      "sample_count": 168
+    }
+  },
+  "0x6d882337dfc6958423c782c50618110bbda93eff": {
+    "win_rate": 0.44,
+    "wins": 220,
+    "total_resolved": null,
+    "position_size": {
+      "avg_position_size_usd": 1.38,
+      "total_trades": null,
+      "total_notional_usd": null
+    },
+    "category_concentration": {
+      "politics": 0.0,
+      "crypto": 0.0,
+      "sports": 13.6,
+      "other": 86.4
+    },
+    "category_counts": {
+      "politics": 0,
+      "crypto": 0,
+      "sports": 68,
+      "other": 432
+    },
+    "hold_duration": {
+      "median_hold_days": 1.48,
+      "sample_count": 485
+    },
+    "entry_timing": {
+      "median_entry_timing_days": 1,
+      "sample_count": 77
+    }
+  },
+  "0x0cf59e8e751d7857ef67823ef11b9b6d8eef610f": {
+    "win_rate": 0.53,
+    "wins": 265,
+    "total_resolved": null,
+    "position_size": {
+      "avg_position_size_usd": 4.17,
+      "total_trades": null,
+      "total_notional_usd": null
+    },
+    "category_concentration": {
+      "politics": 0.4,
+      "crypto": 99.6,
+      "sports": 0.0,
+      "other": 0.0
+    },
+    "category_counts": {
+      "politics": 2,
+      "crypto": 498,
+      "sports": 0,
+      "other": 0
+    },
+    "hold_duration": {
+      "median_hold_days": 1.92,
+      "sample_count": 498
+    },
+    "entry_timing": {
+      "median_entry_timing_days": 1.0,
+      "sample_count": 82
+    }
+  },
+  "0x176742c3baa0e08974188b2e1a2b638a3cf8964e": {
+    "win_rate": 0.3686,
+    "wins": 136,
+    "total_resolved": null,
+    "position_size": {
+      "avg_position_size_usd": 18.53,
+      "total_trades": null,
+      "total_notional_usd": null
+    },
+    "category_concentration": {
+      "politics": 0.54,
+      "crypto": 52.57,
+      "sports": 1.9,
+      "other": 44.99
+    },
+    "category_counts": {
+      "politics": 2,
+      "crypto": 194,
+      "sports": 7,
+      "other": 166
+    },
+    "hold_duration": {
+      "median_hold_days": 1.66,
+      "sample_count": 300
+    },
+    "entry_timing": {
+      "median_entry_timing_days": 1.0,
+      "sample_count": 256
+    }
+  }
+}

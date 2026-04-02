@@ -1,0 +1,152 @@
+{
+  "0xfd8e46519d0a8f9c35e5010ef4e7f56f7583aea4": {
+    "category_counts": {
+      "politics": 0,
+      "crypto": 0,
+      "sports": 0,
+      "other": 500
+    },
+    "category_concentration": {
+      "politics": 0.0,
+      "crypto": 0.0,
+      "sports": 0.0,
+      "other": 100.0
+    },
+    "total_trades": 500
+  },
+  "0x177a1175934f46d2bfe34468b53b94edd81ea453": {
+    "category_counts": {
+      "politics": 0,
+      "crypto": 1,
+      "sports": 21,
+      "other": 39
+    },
+    "category_concentration": {
+      "politics": 0.0,
+      "crypto": 1.64,
+      "sports": 34.43,
+      "other": 63.93
+    },
+    "total_trades": 61
+  },
+  "0x176742c3baa0e08974188b2e1a2b638a3cf8964e": {
+    "category_counts": {
+      "politics": 2,
+      "crypto": 194,
+      "sports": 7,
+      "other": 166
+    },
+    "category_concentration": {
+      "politics": 0.54,
+      "crypto": 52.57,
+      "sports": 1.9,
+      "other": 44.99
+    },
+    "total_trades": 369
+  },
+  "0x36bc6aac04b92548ce78a990d2a83eb64b92d8cd": {
+    "category_counts": {
+      "politics": 53,
+      "crypto": 255,
+      "sports": 4,
+      "other": 188
+    },
+    "category_concentration": {
+      "politics": 10.6,
+      "crypto": 51.0,
+      "sports": 0.8,
+      "other": 37.6
+    },
+    "total_trades": 500
+  },
+  "0x6d882337dfc6958423c782c50618110bbda93eff": {
+    "category_counts": {
+      "politics": 0,
+      "crypto": 0,
+      "sports": 68,
+      "other": 432
+    },
+    "category_concentration": {
+      "politics": 0.0,
+      "crypto": 0.0,
+      "sports": 13.6,
+      "other": 86.4
+    },
+    "total_trades": 500
+  },
+  "0x3a4986448ace69f8f5084dc47b7569316b8f4292": {
+    "category_counts": {
+      "politics": 38,
+      "crypto": 211,
+      "sports": 5,
+      "other": 189
+    },
+    "category_concentration": {
+      "politics": 8.58,
+      "crypto": 47.63,
+      "sports": 1.13,
+      "other": 42.66
+    },
+    "total_trades": 443
+  },
+  "0xd0d6053c3c37e727402d84c14069780d360993aa": {
+    "category_counts": {
+      "politics": 0,
+      "crypto": 485,
+      "sports": 0,
+      "other": 15
+    },
+    "category_concentration": {
+      "politics": 0.0,
+      "crypto": 97.0,
+      "sports": 0.0,
+      "other": 3.0
+    },
+    "total_trades": 500
+  },
+  "0x5940ba313461e460aa85d2b82cf01ccd9d9f9615": {
+    "category_counts": {
+      "politics": 0,
+      "crypto": 378,
+      "sports": 0,
+      "other": 122
+    },
+    "category_concentration": {
+      "politics": 0.0,
+      "crypto": 75.6,
+      "sports": 0.0,
+      "other": 24.4
+    },
+    "total_trades": 500
+  },
+  "0xd106952ebf30a3125affd8a23b6c1f30c35fc79c": {
+    "category_counts": {
+      "politics": 0,
+      "crypto": 0,
+      "sports": 0,
+      "other": 500
+    },
+    "category_concentration": {
+      "politics": 0.0,
+      "crypto": 0.0,
+      "sports": 0.0,
+      "other": 100.0
+    },
+    "total_trades": 500
+  },
+  "0x0cf59e8e751d7857ef67823ef11b9b6d8eef610f": {
+    "category_counts": {
+      "politics": 2,
+      "crypto": 498,
+      "sports": 0,
+      "other": 0
+    },
+    "category_concentration": {
+      "politics": 0.4,
+      "crypto": 99.6,
+      "sports": 0.0,
+      "other": 0.0
+    },
+    "total_trades": 500
+  }
+}

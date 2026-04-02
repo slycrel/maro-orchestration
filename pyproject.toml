@@ -41,6 +41,10 @@ poe-test = "bootstrap:_smoke_main"
 poe-bughunter = "bughunter:main"
 poe-schedule = "scheduler:main"
 poe-verify = "verification_agent:main"
+poe-thinkback = "thinkback:_cli_main"
+poe-passes = "passes:_cli_main"
+poe-cross-ref = "cross_ref:_cli_main"
+poe-checkpoint = "checkpoint:_cli_main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

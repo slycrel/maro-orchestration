@@ -355,3 +355,36 @@ class TestBtwModifier:
         result = handle("research polymarket strategies", dry_run=True)
         assert result.message == "research polymarket strategies"
         assert not result.result.startswith("[Observation]")
+
+
+# ---------------------------------------------------------------------------
+
+class TestDirectModifier:
+    """direct: strips prefix, skips quality gate, routes straight to run_agent_loop."""
+
+    def test_direct_strips_prefix(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        result = handle("direct: check market status", dry_run=True)
+        assert result.message == "check market status"
+
+    def test_direct_routes_to_agenda(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        result = handle("direct: research trading strategies", dry_run=True)
+        assert result.lane == "agenda"
+
+    def test_direct_classification_reason(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        result = handle("direct: do something useful", dry_run=True)
+        assert "[direct]" in result.classification_reason
+
+    def test_direct_case_insensitive(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        result = handle("Direct: check the logs", dry_run=True)
+        assert result.message == "check the logs"
+        assert "[direct]" in result.classification_reason
+
+    def test_no_direct_prefix_unchanged(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        result = handle("research polymarket strategies", dry_run=True)
+        assert result.message == "research polymarket strategies"
+        assert "[direct]" not in result.classification_reason

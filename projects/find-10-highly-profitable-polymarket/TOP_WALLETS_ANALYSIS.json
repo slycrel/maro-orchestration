@@ -1,0 +1,377 @@
+{
+  "collection_date": "2026-03-31",
+  "data_window": "6 months (Oct 2025 - Mar 2026)",
+  "note": "Data represents sampled trading activity (max 500 trades per wallet analyzed). Cumulative bets shown are notional estimates based on avg position size \u00d7 trade count. Top performers ranked by win rate.",
+  "wallets": {
+    "0xfd8e46519d0a8f9c35e5010ef4e7f56f7583aea4": {
+      "rank_by_winrate": 1,
+      "cumulative_notional_usd": 3140.0,
+      "trading_metrics": {
+        "total_trades_sampled": 500,
+        "resolved_positions": 500,
+        "wins": 330,
+        "losses": 170,
+        "win_rate": 0.66,
+        "loss_rate": 0.34
+      },
+      "position_sizing": {
+        "avg_position_usd": 6.28,
+        "min_position_usd": 0.37,
+        "max_position_usd": 89.15,
+        "range": "$0.37 - $89.15"
+      },
+      "market_focus": {
+        "primary_category": "other",
+        "category_breakdown": {
+          "politics": "0.0%",
+          "crypto": "0.0%",
+          "sports": "0.0%",
+          "other": "100.0%"
+        },
+        "trade_counts": {
+          "politics": 0,
+          "crypto": 0,
+          "sports": 0,
+          "other": 500
+        }
+      },
+      "holding_patterns": {
+        "median_hold_days": 1.95,
+        "median_entry_timing_days": 1.0
+      }
+    },
+    "0x0cf59e8e751d7857ef67823ef11b9b6d8eef610f": {
+      "rank_by_winrate": 2,
+      "cumulative_notional_usd": 2085.0,
+      "trading_metrics": {
+        "total_trades_sampled": 500,
+        "resolved_positions": 500,
+        "wins": 265,
+        "losses": 233,
+        "win_rate": 0.53,
+        "loss_rate": 0.47
+      },
+      "position_sizing": {
+        "avg_position_usd": 4.17,
+        "min_position_usd": 0.01,
+        "max_position_usd": 45.76,
+        "range": "$0.01 - $45.76"
+      },
+      "market_focus": {
+        "primary_category": "crypto",
+        "category_breakdown": {
+          "politics": "0.4%",
+          "crypto": "99.6%",
+          "sports": "0.0%",
+          "other": "0.0%"
+        },
+        "trade_counts": {
+          "politics": 2,
+          "crypto": 498,
+          "sports": 0,
+          "other": 0
+        }
+      },
+      "holding_patterns": {
+        "median_hold_days": 1.92,
+        "median_entry_timing_days": 1.0
+      }
+    },
+    "0xd106952ebf30a3125affd8a23b6c1f30c35fc79c": {
+      "rank_by_winrate": 3,
+      "cumulative_notional_usd": 42430.0,
+      "trading_metrics": {
+        "total_trades_sampled": 500,
+        "resolved_positions": 500,
+        "wins": 261,
+        "losses": 239,
+        "win_rate": 0.522,
+        "loss_rate": 0.478
+      },
+      "position_sizing": {
+        "avg_position_usd": 84.86,
+        "min_position_usd": 0.01,
+        "max_position_usd": 5127.17,
+        "range": "$0.01 - $5127.17"
+      },
+      "market_focus": {
+        "primary_category": "other",
+        "category_breakdown": {
+          "politics": "0.0%",
+          "crypto": "0.0%",
+          "sports": "0.0%",
+          "other": "100.0%"
+        },
+        "trade_counts": {
+          "politics": 0,
+          "crypto": 0,
+          "sports": 0,
+          "other": 500
+        }
+      },
+      "holding_patterns": {
+        "median_hold_days": 1.9,
+        "median_entry_timing_days": 1
+      }
+    },
+    "0x5940ba313461e460aa85d2b82cf01ccd9d9f9615": {
+      "rank_by_winrate": 4,
+      "cumulative_notional_usd": 3560.0,
+      "trading_metrics": {
+        "total_trades_sampled": 500,
+        "resolved_positions": 500,
+        "wins": 248,
+        "losses": 252,
+        "win_rate": 0.496,
+        "loss_rate": 0.504
+      },
+      "position_sizing": {
+        "avg_position_usd": 7.12,
+        "min_position_usd": 0.34,
+        "max_position_usd": 10.0,
+        "range": "$0.34 - $10.00"
+      },
+      "market_focus": {
+        "primary_category": "crypto",
+        "category_breakdown": {
+          "politics": "0.0%",
+          "crypto": "75.6%",
+          "sports": "0.0%",
+          "other": "24.4%"
+        },
+        "trade_counts": {
+          "politics": 0,
+          "crypto": 378,
+          "sports": 0,
+          "other": 122
+        }
+      },
+      "holding_patterns": {
+        "median_hold_days": 1.81,
+        "median_entry_timing_days": 1.0
+      }
+    },
+    "0x6d882337dfc6958423c782c50618110bbda93eff": {
+      "rank_by_winrate": 5,
+      "cumulative_notional_usd": 690.0,
+      "trading_metrics": {
+        "total_trades_sampled": 500,
+        "resolved_positions": 500,
+        "wins": 220,
+        "losses": 250,
+        "win_rate": 0.44,
+        "loss_rate": 0.56
+      },
+      "position_sizing": {
+        "avg_position_usd": 1.38,
+        "min_position_usd": 0.01,
+        "max_position_usd": 149.57,
+        "range": "$0.01 - $149.57"
+      },
+      "market_focus": {
+        "primary_category": "other",
+        "category_breakdown": {
+          "politics": "0.0%",
+          "crypto": "0.0%",
+          "sports": "13.6%",
+          "other": "86.4%"
+        },
+        "trade_counts": {
+          "politics": 0,
+          "crypto": 0,
+          "sports": 68,
+          "other": 432
+        }
+      },
+      "holding_patterns": {
+        "median_hold_days": 1.48,
+        "median_entry_timing_days": 1
+      }
+    },
+    "0xd0d6053c3c37e727402d84c14069780d360993aa": {
+      "rank_by_winrate": 6,
+      "cumulative_notional_usd": 9810.0,
+      "trading_metrics": {
+        "total_trades_sampled": 500,
+        "resolved_positions": 500,
+        "wins": 217,
+        "losses": 283,
+        "win_rate": 0.434,
+        "loss_rate": 0.566
+      },
+      "position_sizing": {
+        "avg_position_usd": 19.62,
+        "min_position_usd": 0.43,
+        "max_position_usd": 79.2,
+        "range": "$0.43 - $79.20"
+      },
+      "market_focus": {
+        "primary_category": "crypto",
+        "category_breakdown": {
+          "politics": "0.0%",
+          "crypto": "97.0%",
+          "sports": "0.0%",
+          "other": "3.0%"
+        },
+        "trade_counts": {
+          "politics": 0,
+          "crypto": 485,
+          "sports": 0,
+          "other": 15
+        }
+      },
+      "holding_patterns": {
+        "median_hold_days": 1.23,
+        "median_entry_timing_days": 0.0
+      }
+    },
+    "0x176742c3baa0e08974188b2e1a2b638a3cf8964e": {
+      "rank_by_winrate": 7,
+      "cumulative_notional_usd": 6837.57,
+      "trading_metrics": {
+        "total_trades_sampled": 369,
+        "resolved_positions": 369,
+        "wins": 136,
+        "losses": 225,
+        "win_rate": 0.3686,
+        "loss_rate": 0.6314
+      },
+      "position_sizing": {
+        "avg_position_usd": 18.53,
+        "min_position_usd": 0.05,
+        "max_position_usd": 413.55,
+        "range": "$0.05 - $413.55"
+      },
+      "market_focus": {
+        "primary_category": "crypto",
+        "category_breakdown": {
+          "politics": "0.5%",
+          "crypto": "52.6%",
+          "sports": "1.9%",
+          "other": "45.0%"
+        },
+        "trade_counts": {
+          "politics": 2,
+          "crypto": 194,
+          "sports": 7,
+          "other": 166
+        }
+      },
+      "holding_patterns": {
+        "median_hold_days": 1.66,
+        "median_entry_timing_days": 1.0
+      }
+    },
+    "0x3a4986448ace69f8f5084dc47b7569316b8f4292": {
+      "rank_by_winrate": 8,
+      "cumulative_notional_usd": 7358.23,
+      "trading_metrics": {
+        "total_trades_sampled": 443,
+        "resolved_positions": 441,
+        "wins": 131,
+        "losses": 240,
+        "win_rate": 0.2971,
+        "loss_rate": 0.7029
+      },
+      "position_sizing": {
+        "avg_position_usd": 16.61,
+        "min_position_usd": 0.3,
+        "max_position_usd": 261.65,
+        "range": "$0.30 - $261.65"
+      },
+      "market_focus": {
+        "primary_category": "crypto",
+        "category_breakdown": {
+          "politics": "8.6%",
+          "crypto": "47.6%",
+          "sports": "1.1%",
+          "other": "42.7%"
+        },
+        "trade_counts": {
+          "politics": 38,
+          "crypto": 211,
+          "sports": 5,
+          "other": 189
+        }
+      },
+      "holding_patterns": {
+        "median_hold_days": 1.78,
+        "median_entry_timing_days": 1
+      }
+    },
+    "0x36bc6aac04b92548ce78a990d2a83eb64b92d8cd": {
+      "rank_by_winrate": 9,
+      "cumulative_notional_usd": 8675.0,
+      "trading_metrics": {
+        "total_trades_sampled": 500,
+        "resolved_positions": 494,
+        "wins": 139,
+        "losses": 270,
+        "win_rate": 0.2814,
+        "loss_rate": 0.7186
+      },
+      "position_sizing": {
+        "avg_position_usd": 17.35,
+        "min_position_usd": 0.01,
+        "max_position_usd": 430.0,
+        "range": "$0.01 - $430.00"
+      },
+      "market_focus": {
+        "primary_category": "crypto",
+        "category_breakdown": {
+          "politics": "10.6%",
+          "crypto": "51.0%",
+          "sports": "0.8%",
+          "other": "37.6%"
+        },
+        "trade_counts": {
+          "politics": 53,
+          "crypto": 255,
+          "sports": 4,
+          "other": 188
+        }
+      },
+      "holding_patterns": {
+        "median_hold_days": 1.71,
+        "median_entry_timing_days": 1.0
+      }
+    },
+    "0x177a1175934f46d2bfe34468b53b94edd81ea453": {
+      "rank_by_winrate": 10,
+      "cumulative_notional_usd": 61.0,
+      "trading_metrics": {
+        "total_trades_sampled": 61,
+        "resolved_positions": 55,
+        "wins": 7,
+        "losses": 41,
+        "win_rate": 0.1273,
+        "loss_rate": 0.8727
+      },
+      "position_sizing": {
+        "avg_position_usd": 1.0,
+        "min_position_usd": 1.0,
+        "max_position_usd": 1.0,
+        "range": "$1.00 - $1.00"
+      },
+      "market_focus": {
+        "primary_category": "other",
+        "category_breakdown": {
+          "politics": "0.0%",
+          "crypto": "1.6%",
+          "sports": "34.4%",
+          "other": "63.9%"
+        },
+        "trade_counts": {
+          "politics": 0,
+          "crypto": 1,
+          "sports": 21,
+          "other": 39
+        }
+      },
+      "holding_patterns": {
+        "median_hold_days": 1.8,
+        "median_entry_timing_days": 1
+      }
+    }
+  }
+}

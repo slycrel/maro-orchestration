@@ -178,6 +178,40 @@ EXECUTE_TOOLS = [
         },
     },
     {
+        "name": "create_team_worker",
+        "description": (
+            "Dynamically create a specialist worker to handle a focused subtask. "
+            "The worker runs immediately with its own LLM call and returns its result "
+            "back to you, so you can use it when calling complete_step. "
+            "Use this when you need a specific angle of analysis that warrants a "
+            "dedicated specialist (e.g. risk-auditor, market-analyst, fact-checker, "
+            "data-extractor, devil-advocate, synthesizer). "
+            "Maximum 3 team workers per step."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "role": {
+                    "type": "string",
+                    "description": (
+                        "The specialist role (e.g. 'market-analyst', 'risk-auditor', "
+                        "'fact-checker', 'data-extractor', 'devil-advocate', 'synthesizer'). "
+                        "Free-form — unknown roles get a generic specialist persona."
+                    ),
+                },
+                "task": {
+                    "type": "string",
+                    "description": "The specific focused task for this specialist.",
+                },
+                "persona": {
+                    "type": "string",
+                    "description": "Optional: custom system prompt override for this worker.",
+                },
+            },
+            "required": ["role", "task"],
+        },
+    },
+    {
         "name": "schedule_run",
         "description": (
             "Schedule a future autonomous run with a new goal. "
@@ -211,12 +245,14 @@ EXECUTE_TOOLS = [
 ]
 
 # Role-specific subsets — reduces hallucinated calls and prompt noise.
-# Worker (default): all tools including schedule_run for multi-day goals.
-# Short-run: complete_step + flag_stuck only; no schedule_run (single-session tasks).
+# Worker (default): all tools including schedule_run and create_team_worker.
+# Short-run: complete_step + flag_stuck only; no schedule_run or team workers.
 # Inspector: flag_stuck only; inspector roles produce critiques, not completions.
 EXECUTE_TOOLS_WORKER = EXECUTE_TOOLS
-EXECUTE_TOOLS_SHORT = [t for t in EXECUTE_TOOLS if t["name"] != "schedule_run"]
+EXECUTE_TOOLS_SHORT = [t for t in EXECUTE_TOOLS if t["name"] not in {"schedule_run", "create_team_worker"}]
 EXECUTE_TOOLS_INSPECTOR = [t for t in EXECUTE_TOOLS if t["name"] == "flag_stuck"]
+
+_MAX_TEAM_WORKERS_PER_STEP = 3  # guard against runaway spawning
 
 
 # ---------------------------------------------------------------------------
@@ -501,6 +537,32 @@ def execute_step(
                 "status": "blocked",
                 "stuck_reason": _reason,
                 "result": tc.arguments.get("attempted", ""),
+                "tokens_in": resp.input_tokens,
+                "tokens_out": resp.output_tokens,
+            }
+        elif tc.name == "create_team_worker":
+            _tw_role = tc.arguments.get("role", "general")
+            _tw_task = tc.arguments.get("task", "")
+            _tw_persona = tc.arguments.get("persona") or None
+            _tw_result_text = f"[team-worker error: no output]"
+            try:
+                from team import create_team_worker as _create_worker, format_team_result_for_injection
+                _tw_res = _create_worker(
+                    _tw_role,
+                    _tw_task,
+                    persona=_tw_persona,
+                    adapter=adapter,
+                )
+                _tw_result_text = format_team_result_for_injection(_tw_res)
+            except Exception as _tw_exc:
+                _tw_result_text = f"[team-worker failed: {_tw_exc}]"
+                log.warning("step %d create_team_worker failed role=%r: %s", step_num, _tw_role, _tw_exc)
+            log.info("step %d DONE (create_team_worker) role=%r tokens=%d elapsed=%.1fs",
+                     step_num, _tw_role, _tok, time.monotonic() - _step_t0)
+            return {
+                "status": "done",
+                "result": _tw_result_text,
+                "summary": f"Team worker [{_tw_role}]: {_tw_task[:60]}",
                 "tokens_in": resp.input_tokens,
                 "tokens_out": resp.output_tokens,
             }

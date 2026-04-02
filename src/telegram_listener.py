@@ -302,7 +302,8 @@ def _dispatch_slash(
             from director import run_director
             from llm import build_adapter, MODEL_CHEAP
             adapter = build_adapter(model=MODEL_CHEAP) if not dry_run else None
-            result = run_director(args, project=project, adapter=adapter, dry_run=dry_run, verbose=verbose)
+            result = run_director(args, project=project, adapter=adapter, dry_run=dry_run, verbose=verbose,
+                                  skip_if_simple=True)
             return result.report or "(director produced no report)"
         except Exception as e:
             return f"Director error: {e}"

@@ -25,7 +25,7 @@ from __future__ import annotations
 import logging
 import textwrap
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import Any, List, Optional
 
 log = logging.getLogger("poe.quality_gate")
 
@@ -232,6 +232,7 @@ class QualityVerdict:
     contested_claims: List[dict] = field(default_factory=list)  # from adversarial pass
     council: Optional[CouncilVerdict] = None  # from LLM council (if run_council=True)
     debate: Optional["DebateVerdict"] = None  # from bull/bear debate (if run_debate=True)
+    cross_ref: Optional[Any] = None  # from cross-reference check (if run_cross_ref=True)
 
 
 def run_quality_gate(
@@ -243,12 +244,14 @@ def run_quality_gate(
     run_adversarial: bool = True,
     run_council: bool = False,
     with_debate: bool = False,
+    run_cross_ref: bool = False,
 ) -> QualityVerdict:
     """Review completed loop output and return a quality verdict.
 
-    Runs up to four passes:
+    Runs up to five passes:
     1. PASS/ESCALATE verdict — should we re-run at a higher tier?
     2. Adversarial claim review — what specific claims are contested/overclaimed?
+    2.5. Cross-reference check (optional, run_cross_ref=True) — second-source fact check.
        Contested claims are returned in verdict.contested_claims regardless of
        PASS/ESCALATE, so callers can append them to the result text.
     3. LLM Council (optional, run_council=True) — 3 critics with distinct framings
@@ -389,7 +392,29 @@ def run_quality_gate(
             )
             log.info("quality_gate debate_escalated verdict=%s", debate_verdict.risk_manager_verdict)
 
-    return QualityVerdict(verdict, reason, confidence, escalate, contested_claims, council_verdict, debate_verdict)
+    # --- Pass 2.5: Cross-reference check (optional) ---
+    cross_ref_result = None
+    if run_cross_ref:
+        try:
+            from cross_ref import run_cross_ref as _run_cross_ref
+            # Build cross-ref text from step outputs
+            _cr_text = "\n\n".join(
+                (getattr(s, "result", "") or s.get("result", "") if isinstance(s, dict) else getattr(s, "result", ""))
+                for s in done_steps[-3:]
+            )
+            cross_ref_result = _run_cross_ref(_cr_text, adapter=adapter)
+            if cross_ref_result.has_disputes and not escalate:
+                escalate = True
+                verdict = "ESCALATE"
+                reason = (
+                    f"Cross-ref: {len(cross_ref_result.disputes)} disputed claim(s) — "
+                    + cross_ref_result.disputes[0].claim[:60]
+                )
+                log.info("quality_gate cross_ref_escalated disputes=%d", len(cross_ref_result.disputes))
+        except Exception as exc:
+            log.warning("quality_gate cross_ref pass failed: %s", exc)
+
+    return QualityVerdict(verdict, reason, confidence, escalate, contested_claims, council_verdict, debate_verdict, cross_ref_result)
 
 
 # ---------------------------------------------------------------------------

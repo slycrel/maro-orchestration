@@ -982,6 +982,98 @@ Revisit the factory-vs-Mode-2 comparison after Mode 2 has stabilized (post-Phase
 
 ---
 
+### Phase 50: Thinkback Replay — Session-Level Hindsight Analysis *(DONE)*
+
+*"The evolver learns across runs. Thinkback learns within a run."*
+
+The evolver (Phase 7) works at the pattern level — aggregating lessons across many runs. But within a single completed session, there's signal the evolver never sees: were the *step-by-step decisions* optimal given what we now know happened? A hindsight analyst that reviews each step choice against the final outcome is a qualitatively different signal.
+
+**Shipped (2026-03-31):** `src/thinkback.py` — new module.
+
+- `ThinkbackReport` dataclass: per-step `StepReview` (decision_quality: good/acceptable/poor, hindsight_note, counterfactual), overall_assessment, mission_efficiency (0.0–1.0), key_lessons, would_retry, retry_strategy
+- `run_thinkback(loop_result)` — replays a LoopResult through hindsight LLM analysis; dry_run mode skips LLM
+- `run_thinkback_from_outcome(outcome_dict)` — works with raw outcomes.jsonl records (synthesizes steps from summary + lessons)
+- `load_latest_outcome()` / `load_outcome_by_id()` — outcome loading helpers
+- `_save_thinkback_lessons()` — writes extracted lessons back to `memory/lessons.jsonl` tagged `[thinkback:{run_id}]`
+- Wired into `passes.py` as the thinkback pass; CLI: `poe-thinkback --latest [--save]`
+- 31 tests, all passing
+
+---
+
+### Phase 51: Passes — Unified Multi-Pass Review Pipeline *(DONE)*
+
+*"Council, debate, and thinkback are more valuable together than separately."*
+
+The quality_gate, adversarial pass, LLM council, debate, and thinkback are each powerful but scattered. This phase unifies them into a single composable pipeline: configure which passes to run, chain their verdicts, get one escalation signal.
+
+**Shipped (2026-03-31):** `src/passes.py` — new module.
+
+- `PassConfig` dataclass: quality_gate, adversarial, council, debate, thinkback flags; `from_names(["council","debate"])` / `from_preset("thorough")`
+- Named presets: `quick` (quality_gate only), `standard` (+adversarial), `thorough` (+council), `full` (+debate), `all` (+thinkback)
+- `PassReport` dataclass: per-pass `PassResult` with verdict/reason/escalate/elapsed_ms; aggregate `escalate` (any pass escalated), `escalation_reason`, `elapsed_ms`
+- `run_passes(goal, step_outcomes, config=..., preset=...)` — chains passes, aggregates verdict
+- Council/debate absorbed into quality_gate's internal passes when co-enabled; thinkback always standalone
+- CLI: `poe-passes --goal "..." --passes all`, `poe-passes --preset thorough --latest-outcome`
+- 29 tests, all passing
+
+---
+
+### Phase 52: Cross-Reference Check — Second-Source Fact Verification *(DONE)*
+
+*"The verifier never sees the original response — so it can't pattern-match against the first answer."*
+
+For factual claims in research output, query a second LLM context with no prior answer in scope. Disagreements surface alongside the output, flagging where the original may have hallucinated or overclaimed.
+
+**Shipped (2026-04-01):** `src/cross_ref.py` — new module.
+
+- Two-stage pipeline: (1) claim extraction — asks LLM to identify verifiable facts (numbers, named studies, mechanisms, comparisons); (2) claim verification — fresh LLM context per claim, no source answer visible
+- `ClaimVerification` dataclass: claim, category, status (confirmed/disputed/unknown), confidence, note, elapsed_ms
+- `CrossRefReport` dataclass: verified list, disputes list, has_disputes property, dispute_summary(), full_summary()
+- `run_cross_ref(text)` — full pipeline; dry_run mode skips LLM; never raises
+- `cross_ref_annotation(report)` — returns empty string if no disputes (safe to always append)
+- Wired into `run_quality_gate(run_cross_ref=True)` as Pass 2.5; disputes trigger ESCALATE
+- `QualityVerdict.cross_ref` field added for downstream access
+- `poe-cross-ref --text "..." [--file FILE] [--max-claims N]` CLI
+- 39 tests, all passing
+
+---
+
+### Phase 53: Persistent Identity Block — Session Coherence Fix *(DONE)*
+
+*"Agents without an always-in-context identity block lose coherence across sessions."*
+
+Research GAP 1 addressed: Poe now has a stable self-model injected into every decompose call. Previously each planning session started cold — no consistent "who I am" framing.
+
+**Shipped (2026-04-01):** `src/poe_self.py` — new module. `user/POE_IDENTITY.md` — durable identity file.
+
+- `load_poe_identity(use_cache, max_chars)` — reads `user/POE_IDENTITY.md`, falls back to built-in minimal identity
+- `with_poe_identity(system_prompt, separator)` — prepends `## Who I Am` block to any system prompt
+- Wired into `planner.py::decompose()` — every planning call now runs with identity context
+- `_IDENTITY_FALLBACK` — always-available minimal identity if file is missing
+- 18 tests, all passing
+
+---
+
+### Phase 54: Session Checkpointing — Loop Resume (GAP 3) *(DONE)*
+
+*"A loop interrupted at step 6 of 8 should resume from step 7, not restart from scratch."*
+
+Research GAP 3 addressed: long-running loops that fail, timeout, or get interrupted can now be resumed from the last completed step rather than restarting from zero.
+
+**Shipped (2026-04-01):** `src/checkpoint.py` — new module.
+
+- `write_checkpoint(loop_id, goal, project, steps, step_outcomes)` — writes per-step progress JSON; called after each step in the main loop
+- `load_checkpoint(loop_id)` — loads checkpoint by loop_id; returns None if not found
+- `delete_checkpoint(loop_id)` — cleans up after successful completion
+- `resume_from(ckpt)` — extracts (remaining_steps, completed) for handoff to caller
+- `list_checkpoints()` — lists all saved checkpoints, newest first
+- `Checkpoint` dataclass: `remaining_steps`, `next_step_index`, `is_complete()` properties
+- Wired into `run_agent_loop()` — `resume_from_loop_id` parameter; checkpoint written every step; deleted on `status=done`
+- `poe-checkpoint list/show/delete` CLI
+- 24 tests, all passing
+
+---
+
 ### Phase 48: Conversation Mining — Idea Archaeology *(TODO)*
 
 *"Revisiting ideas with current maturity yields perspectives we missed the first time."*

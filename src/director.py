@@ -187,6 +187,57 @@ _CHALLENGER_SYSTEM = textwrap.dedent("""\
 
 
 # ---------------------------------------------------------------------------
+# Skip-Director experiment: complexity classifier
+# ---------------------------------------------------------------------------
+
+# Keywords that indicate multi-step coordination — Director adds value here.
+_COMPLEX_KEYWORDS = frozenset({
+    "and then", "after that", "coordinate", "for each", "pipeline",
+    "phase 1", "phase 2", "multiple", "sequence", "in order to",
+    "followed by", "then ", "first ", "second ", "finally ",
+    "compare across", "across all", "synthesize", "orchestrate",
+    "build and test", "fetch and", "analyze and", "research and",
+})
+
+# Keywords that signal a goal that definitely needs the Director (high complexity).
+_DEFINITELY_COMPLEX = frozenset({
+    "mission", "milestone", "roadmap", "multi-day", "long-term",
+    "design system", "architecture", "refactor", "deploy", "release",
+})
+
+
+def _is_simple_directive(directive: str) -> bool:
+    """Return True if the directive is simple enough to skip the Director.
+
+    Simple = single-scope, ≤ 12 words, no multi-step coordination.
+    The Director adds overhead (SPEC + challenge + dispatch + review) that's
+    wasted when the goal is already clear and bounded.
+
+    Used by run_director(skip_if_simple=True) for the Skip-Director experiment.
+    """
+    lower = directive.lower().strip()
+
+    # Long directives imply complexity
+    word_count = len(lower.split())
+    if word_count > 15:
+        return False
+
+    # Explicit complexity signals
+    if any(kw in lower for kw in _DEFINITELY_COMPLEX):
+        return False
+
+    # Multi-step coordination signals
+    if any(kw in lower for kw in _COMPLEX_KEYWORDS):
+        return False
+
+    # Multiple sentences = likely multi-step
+    if lower.count(".") >= 2 or lower.count(";") >= 1:
+        return False
+
+    return True
+
+
+# ---------------------------------------------------------------------------
 # Core director function
 # ---------------------------------------------------------------------------
 
@@ -197,6 +248,7 @@ def run_director(
     adapter=None,
     dry_run: bool = False,
     verbose: bool = False,
+    skip_if_simple: bool = False,
 ) -> DirectorResult:
     """Run the Director on a directive.
 
@@ -214,13 +266,58 @@ def run_director(
 
     director_id = str(uuid.uuid4())[:8]
     started_at = time.monotonic()
-    log.info("director_start id=%s directive=%r dry_run=%s", director_id, directive[:60], dry_run)
+    log.info("director_start id=%s directive=%r dry_run=%s skip_if_simple=%s",
+             director_id, directive[:60], dry_run, skip_if_simple)
 
     def _log(msg: str):
         if verbose:
             print(f"[poe:director:{director_id}] {msg}", file=sys.stderr, flush=True)
 
     _log(f"directive={directive!r}")
+
+    # Skip-Director experiment: route simple goals to run_agent_loop directly.
+    # Skips SPEC production + challenge + dispatch + review overhead.
+    # Controlled by skip_if_simple=True (opt-in, not default).
+    if skip_if_simple and _is_simple_directive(directive):
+        log.info("director_skip id=%s directive=%r (simple goal → run_agent_loop direct)",
+                 director_id, directive[:60])
+        _log("skip: simple directive → routing direct to run_agent_loop")
+        try:
+            from agent_loop import run_agent_loop
+            if adapter is None and not dry_run:
+                from llm import build_adapter, MODEL_MID
+                adapter = build_adapter(model=MODEL_MID)
+            loop_result = run_agent_loop(
+                directive,
+                project=project,
+                adapter=adapter,
+                dry_run=dry_run,
+                verbose=verbose,
+            )
+            elapsed = int((time.monotonic() - started_at) * 1000)
+            done_steps = [s for s in loop_result.steps if s.status == "done"]
+            report = "\n\n".join(s.result for s in done_steps if s.result) or "[no output]"
+            log.info("director_skip_done id=%s loop_status=%s steps=%d elapsed=%dms",
+                     director_id, loop_result.status, len(done_steps), elapsed)
+            return DirectorResult(
+                director_id=director_id,
+                directive=directive,
+                plan_acceptance="inferred",
+                status=loop_result.status,
+                spec="[skip-director: routed direct to run_agent_loop]",
+                tickets=[],
+                worker_results=[],
+                review_decisions=[],
+                report=report,
+                project=loop_result.project,
+                tokens_in=loop_result.total_tokens_in,
+                tokens_out=loop_result.total_tokens_out,
+                elapsed_ms=elapsed,
+            )
+        except Exception as exc:
+            log.warning("director_skip failed, falling back to full Director: %s", exc)
+            _log(f"skip failed ({exc}), running full Director")
+            # Fall through to full Director run
 
     # Check plan acceptance mode
     acceptance = "explicit" if requires_explicit_acceptance(directive) else "inferred"

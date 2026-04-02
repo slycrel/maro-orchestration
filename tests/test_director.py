@@ -24,6 +24,7 @@ from director import (
     requires_explicit_acceptance,
     _produce_spec,
     _review_worker_output,
+    _is_simple_directive,
 )
 
 
@@ -278,3 +279,167 @@ class TestInferCrewSize:
         for text in ["hi", "medium length text with some words", "comprehensive review", "exhaustive deep dive"]:
             size = infer_crew_size(text)
             assert 1 <= size <= 4
+
+
+# ---------------------------------------------------------------------------
+# Skip-Director experiment: _is_simple_directive + skip_if_simple
+# ---------------------------------------------------------------------------
+
+class TestIsSimpleDirective:
+    def test_short_clear_goal_is_simple(self):
+        assert _is_simple_directive("check weather in New York") is True
+
+    def test_single_word_is_simple(self):
+        assert _is_simple_directive("status") is True
+
+    def test_over_15_words_is_not_simple(self):
+        long_goal = "fetch the latest price data for all listed tokens and then compare them across all markets"
+        assert _is_simple_directive(long_goal) is False
+
+    def test_exactly_15_words_is_simple(self):
+        fifteen = " ".join(["word"] * 15)
+        assert _is_simple_directive(fifteen) is True
+
+    def test_16_words_is_not_simple(self):
+        sixteen = " ".join(["word"] * 16)
+        assert _is_simple_directive(sixteen) is False
+
+    def test_definitely_complex_mission(self):
+        assert _is_simple_directive("build a multi-day mission plan") is False
+
+    def test_definitely_complex_architecture(self):
+        assert _is_simple_directive("design system architecture") is False
+
+    def test_definitely_complex_refactor(self):
+        assert _is_simple_directive("refactor the codebase") is False
+
+    def test_definitely_complex_deploy(self):
+        assert _is_simple_directive("deploy the release") is False
+
+    def test_complex_keyword_and_then(self):
+        assert _is_simple_directive("fetch data and then analyze it") is False
+
+    def test_complex_keyword_pipeline(self):
+        assert _is_simple_directive("set up a pipeline") is False
+
+    def test_complex_keyword_coordinate(self):
+        assert _is_simple_directive("coordinate with the team") is False
+
+    def test_complex_keyword_research_and(self):
+        assert _is_simple_directive("research and compare approaches") is False
+
+    def test_multiple_sentences_is_not_simple(self):
+        assert _is_simple_directive("do this. do that. then do more.") is False
+
+    def test_semicolon_is_not_simple(self):
+        assert _is_simple_directive("do this; then that") is False
+
+    def test_single_sentence_with_one_period_is_ok(self):
+        assert _is_simple_directive("fetch the price.") is True
+
+    def test_strips_leading_trailing_whitespace(self):
+        assert _is_simple_directive("  check status  ") is True
+
+    def test_case_insensitive(self):
+        assert _is_simple_directive("MISSION critical task") is False
+
+
+class TestRunDirectorSkipIfSimple:
+    def test_simple_goal_skips_director(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        import agent_loop as _al
+        from agent_loop import LoopResult, StepOutcome
+
+        called = []
+
+        def _fake_loop(goal, *, project=None, adapter=None, dry_run=False, verbose=False, **kw):
+            called.append(goal)
+            return LoopResult(
+                loop_id="skip-test",
+                project=project or "test",
+                goal=goal,
+                status="done",
+                steps=[StepOutcome(index=1, text=goal, status="done",
+                                   result="direct result", iteration=1)],
+            )
+
+        monkeypatch.setattr(_al, "run_agent_loop", _fake_loop)
+
+        result = run_director("check the price", skip_if_simple=True, dry_run=True)
+
+        assert result.status == "done"
+        assert called == ["check the price"]
+        assert "direct result" in (result.report or "")
+
+    def test_complex_goal_does_not_skip(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        import agent_loop as _al
+
+        skipped = []
+
+        def _fake_loop(goal, **kw):
+            skipped.append("called")
+
+        monkeypatch.setattr(_al, "run_agent_loop", _fake_loop)
+
+        # complex goal — should go through Director, not fake loop
+        result = run_director(
+            "build and test the full pipeline then deploy to staging",
+            skip_if_simple=True,
+            dry_run=True,
+        )
+
+        # Director dry_run returns a DirectorResult without calling run_agent_loop
+        assert not skipped
+        assert isinstance(result, DirectorResult)
+
+    def test_skip_if_simple_false_does_not_skip(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        import agent_loop as _al
+
+        skipped = []
+
+        def _fake_loop(goal, **kw):
+            skipped.append("called")
+
+        monkeypatch.setattr(_al, "run_agent_loop", _fake_loop)
+
+        result = run_director("check price", skip_if_simple=False, dry_run=True)
+
+        # skip_if_simple=False → Director runs normally, fake loop never called
+        assert not skipped
+        assert isinstance(result, DirectorResult)
+
+    def test_skip_result_has_done_status(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        import agent_loop as _al
+        from agent_loop import LoopResult, StepOutcome
+
+        monkeypatch.setattr(_al, "run_agent_loop", lambda goal, **kw: LoopResult(
+            loop_id="x",
+            project="test",
+            goal=goal,
+            status="done",
+            steps=[StepOutcome(index=1, text=goal, status="done",
+                               result="output", iteration=1)],
+        ))
+
+        result = run_director("quick lookup", skip_if_simple=True, dry_run=True)
+        assert result.status == "done"
+
+    def test_skip_result_preserves_directive(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        import agent_loop as _al
+        from agent_loop import LoopResult, StepOutcome
+
+        monkeypatch.setattr(_al, "run_agent_loop", lambda goal, **kw: LoopResult(
+            loop_id="x",
+            project="test",
+            goal=goal,
+            status="done",
+            steps=[StepOutcome(index=1, text=goal, status="done",
+                               result="r", iteration=1)],
+        ))
+
+        result = run_director("quick lookup", skip_if_simple=True, dry_run=True)
+        assert result.directive == "quick lookup"
