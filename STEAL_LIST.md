@@ -53,6 +53,20 @@ Compiled from Grok research sessions + prototype experiments (2026-03-29).
 
 ---
 
+## From X links research batch (2026-04-01)
+
+Ingested via orchestration loop from @tom_doerr, @teknium, @slash1sol, @pawelhuryn, @k1rallik threads.
+
+| Item | Source | What | Status | Where it lands | Effort |
+|------|--------|------|--------|----------------|--------|
+| ~~**lat.md knowledge graph**~~ | @k1rallik | ✅ DONE — 9 concept nodes in `lat.md/`, `[[wiki links]]`, `lat check` CI. Replaces flat AGENTS.md for orchestration concepts. | DONE | `lat.md/` | M |
+| ~~**Three-tier promotion cycle**~~ | @pawelhuryn | ✅ DONE — observation → hypothesis (2+ confirmations) → standing rule. `observe_pattern()`, `contradict_pattern()`, `inject_standing_rules()` in memory.py. Standing rules injected into every decompose call. | DONE | `src/memory.py` | M |
+| ~~**Decision journal**~~ | @pawelhuryn | ✅ DONE — `record_decision()`, `search_decisions()`, `inject_decisions()` in memory.py. TF-IDF search of prior decisions before new planning. | DONE | `src/memory.py` | S |
+| **Tool registry + progressive disclosure** | @k1rallik | Gate tools at prompt composition time; progressive skill disclosure (stub in prompt, full on invoke); `PermissionContext` deny patterns. Phase 41. Design complete (`research/PHASE41_TOOL_REGISTRY_DESIGN.md`). | DESIGN COMPLETE | `src/step_exec.py` → `ToolRegistry`, `PermissionContext`, `SkillLoader` | L |
+| **Polymarket BTC lag claim** | @slash1sol | UNCONFIRMED — structural analysis: binary YES/NO contracts, 4% round-trip fees vs 0.3% claimed edge = negative EV. See `research/POLYMARKET_BTC_LAG_VALIDATION.md`. | INVALIDATED | — | — |
+
+---
+
 ## Sources
 
 | Repo | Stars | What it is | Key insight |
@@ -66,3 +80,7 @@ Compiled from Grok research sessions + prototype experiments (2026-03-29).
 | meta_alchemist | — | Self-evolving Claude Code framework | Verification-based rule promotion, session hooks |
 | [systematicls harness article](x.com/systematicls) | — | Agent harness engineering patterns from LangChain agents/evals | Role-specific tool visibility, back-pressure hooks, subagent context firewall, dual-memory validation |
 | Grok (external reviewer) | — | Independent code review of openclaw-orchestration | Skeptic prompting, stability sprint advice, dashboard-as-real-tool |
+| [@k1rallik](https://x.com/k1rallik) | — | Claude Code architecture reverse-engineering — lat.md knowledge graph + tool registry design | Tool registry at prompt-composition time, progressive skill disclosure, lat.md cross-links |
+| [@pawelhuryn](https://x.com/pawelhuryn) | — | Self-improving agent memory patterns | Three-tier promotion cycle, decision journal, contradict/confirm dynamics |
+| [@tom_doerr (724-office)](https://x.com/tom_doerr) | — | Single-agent tool-use loop with persistent memory | (previously noted; confirmed via this batch) |
+| [@teknium](https://x.com/teknium) | — | LLM research insights | (ingested; no immediate steal candidate) |

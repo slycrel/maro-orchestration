@@ -43,12 +43,15 @@ src/                 All production Python (50+ modules)
   constraint.py      Pre-execution constraint enforcement
   ...
 
-tests/               50+ test files, ~1290 tests
+tests/               55+ test files, 2013 tests
 scripts/             smoke.sh, audit-phases.sh, enqueue.sh
 personas/            YAML persona specs
 docs/                Architecture, memory systems, self-reflection design
-memory/              Runtime: outcomes.jsonl, lessons.jsonl, diagnoses.jsonl
+lat.md/              Knowledge graph: 9 cross-linked concept nodes + index
+memory/              Runtime: outcomes.jsonl, lessons.jsonl, standing_rules.jsonl, decisions.jsonl
 output/              Runtime: phase audits, self-review reports
+research/            Research outputs: X link synthesis, Polymarket validation, Phase 41 design
+user/                POE_IDENTITY.md — durable Poe identity (editable)
 deploy/              systemd service files
 ```
 
@@ -56,7 +59,7 @@ deploy/              systemd service files
 
 ## Current state
 
-**As of 2026-03-29:**
+**As of 2026-04-01:**
 
 | Phase | Name | Status |
 |-------|------|--------|
@@ -70,13 +73,20 @@ deploy/              systemd service files
 | 30–39, 43 | Token visibility, skills auto-promotion, token self-improvement, overnight missions, dashboards, skill synthesis, OSS hygiene, structured logging | DONE |
 | 38 | Subpackage Structure | PARTIAL |
 | 40 | Pluggable Memory Backend | TODO |
-| 41 | Tool Registry + Function Calling | TODO |
+| 41 | Tool Registry + Function Calling | DESIGN COMPLETE (see `research/PHASE41_TOOL_REGISTRY_DESIGN.md`) |
 | 42 | Nightly Eval Wired to Evolver | TODO |
 | 44 | Self-Reflection — Run Observer + Failure Classifier | DONE |
 | 45 | Self-Reflection — Recovery Planner | DONE |
 | 46 | Self-Reflection — Intervention Graduation | TODO |
+| 50 | Thinkback Replay | DONE |
+| 51 | Passes — Unified Multi-Pass Review | DONE |
+| 52 | Cross-Reference Check | DONE |
+| 53 | Persistent Identity Block (GAP 1) | DONE |
+| 54 | Session Checkpointing / Loop Resume (GAP 3) | DONE |
+| 55 | lat.md Knowledge Graph | DONE |
+| 56 | Promotion Cycle — Standing Rules + Decision Journal | DONE |
 
-**Active work:** Phases 44-45 complete. Self-reflection pipeline fully wired: diagnose → classify → plan recovery → auto-apply (low-risk) or suggest (high-risk). Phase 46 (Intervention Graduation) is next: when same fix is applied 3+ times, propose a permanent rule. Before that: stability sprint with real Polymarket objective end-to-end.
+**Active work:** Phases 53-56 complete. Poe now has persistent identity injection (GAP 1), loop resume from checkpoint (GAP 3), a cross-linked knowledge graph (`lat.md/`), and a three-tier self-improving memory: observation → hypothesis → standing rule. Decision journal records and searches architectural decisions before planning. Phase 41 design doc is complete; implementation is next. Ready to connect to openclaw-poe.
 
 See `ROADMAP.md` for full phase specs. See `CHANGELOG.md` for what shipped.
 

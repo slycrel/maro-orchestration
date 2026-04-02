@@ -1,8 +1,42 @@
 # Changelog
 
+## [1.6.0] - 2026-04-01
+
+Session 6: Knowledge graph (lat.md), promotion cycle + decision journal, Polymarket claim validation, Phase 41 architecture design. 25 new tests (2013 total, 0 failures).
+
+### Added — Phase 55: lat.md Knowledge Graph
+- `lat.md/` directory — 9 concept files cross-linked via `[[wiki links]]`: `core-loop`, `memory-system`, `self-improvement`, `worker-agents`, `quality-gates`, `poe-identity`, `checkpointing`, `intent-classification`, `constraint-system`
+- `lat.md/lat.md` — index of all concept nodes
+- `# @lat: [[node#Section]]` backlinks added to key source modules: `agent_loop.py`, `planner.py`, `checkpoint.py`, `memory.py`, `worker-agents.md`
+- `lat check` passes clean (0 broken links)
+
+### Added — Phase 56: Promotion Cycle — Standing Rules + Decision Journal
+- `StandingRule` dataclass — `rule_id`, `rule`, `domain`, `confirmations`, `contradictions`, `promoted_at`, `source_lesson_id` (JSONL: `memory/standing_rules.jsonl`)
+- `Hypothesis` dataclass — pre-promotion rule candidate (JSONL: `memory/hypotheses.jsonl`)
+- `observe_pattern(lesson, domain, source_lesson_id)` — create/increment hypothesis; auto-promotes at `RULE_PROMOTE_CONFIRMATIONS=2`; returns `StandingRule` on promotion
+- `contradict_pattern(lesson, domain)` — demotes hypothesis if `contradictions > confirmations`; increments rule contradiction count
+- `inject_standing_rules(domain)` — formatted rules block injected into every decompose call (unconditional)
+- `Decision` dataclass — `decision_id`, `decision`, `rationale`, `domain`, `alternatives`, `trade_offs`
+- `record_decision(decision, rationale, domain, ...)` — writes to `memory/decisions.jsonl`
+- `search_decisions(query, domain, limit)` — TF-IDF ranking; returns relevant prior decisions
+- `inject_decisions(goal, domain)` — formatted prior decisions block for decompose injection
+- Wired into `agent_loop.py` — standing rules + decisions injected into every `_build_decompose_context()` call
+- `memory_status()` updated to report standing rule count
+- `tests/test_promotion_cycle.py` — 25 tests
+
+### Research / Documentation
+- `research/POLYMARKET_BTC_LAG_VALIDATION.md` — @slash1sol BTC lag claim validated as UNCONFIRMED. Binary YES/NO contracts (not continuous price feed), 4% round-trip fees vs 0.3% claimed edge = −13x EV. No build warranted.
+- `research/PHASE41_TOOL_REGISTRY_DESIGN.md` — Phase 41 implementation design from Claude Code architecture analysis. 8 sections: tool registry, role-gated visibility, progressive skill disclosure, hook lifecycle, function calling schema. Implementation order documented.
+- `research/X_LINKS_SYNTHESIS.md` — ingested 5 X/Twitter posts via Jina-based orchestration loop; ranked steal candidates; lat.md + promotion cycle selected for immediate build
+- STEAL_LIST.md — X links research batch added; lat.md and promotion cycle marked DONE; Phase 41 and Polymarket claim documented
+- ROADMAP.md — Phases 55 and 56 added with full spec entries
+- CLAUDE.md — current state table updated through Phase 56
+
+---
+
 ## [1.5.0] - 2026-04-01
 
-Session 5: Persistent identity block (GAP 1), session checkpointing/resume (GAP 3). 42 new tests (1983 total, 0 failures).
+Session 5: Persistent identity block (GAP 1), session checkpointing/resume (GAP 3). 42 new tests (1988 total, 0 failures).
 
 ### Added
 - `src/poe_self.py` — `load_poe_identity()`, `with_poe_identity()` — identity block injected into every decompose call (Phase 53)

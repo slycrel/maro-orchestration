@@ -1074,6 +1074,51 @@ Research GAP 3 addressed: long-running loops that fail, timeout, or get interrup
 
 ---
 
+### Phase 55: lat.md Knowledge Graph *(DONE)*
+
+*"Flat AGENTS.md doesn't scale — concepts need cross-references, not prose paragraphs."*
+
+Replace documentation that lives in flat prose with a graph of cross-linked concept files. Wiki-style `[[links]]` between sections. `lat check` verifies no broken links exist. Source files carry `# @lat:` backlinks pointing at the concept nodes they implement.
+
+**Shipped (2026-04-01):** `lat.md/` directory — 9 concept files + index.
+
+- `lat.md/core-loop.md` — autonomous execution loop: decompose, execute, stuck detection, roadblock recovery
+- `lat.md/memory-system.md` — tiered lessons, hybrid search, promotion cycle, decision journal
+- `lat.md/self-improvement.md` — evolver, thinkback, graduation, intervention pipeline
+- `lat.md/worker-agents.md` — Director/Worker/Verifier hierarchy, persona system, tool visibility
+- `lat.md/quality-gates.md` — Inspector, adversarial pass, council, cross-ref, passes pipeline
+- `lat.md/poe-identity.md` — persistent identity block, with_poe_identity injection, fallback
+- `lat.md/checkpointing.md` — per-step checkpoint write, resume_from_loop_id, CLI
+- `lat.md/intent-classification.md` — NOW/AGENDA routing, magic keywords, intent.py
+- `lat.md/constraint-system.md` — pre-execution constraint enforcement, pattern groups, HITL
+- `lat.md/lat.md` — index of all concept nodes
+- Source backlinks: `# @lat: [[node#Section]]` comments added to key modules
+- `lat check` passes clean (0 broken links)
+
+---
+
+### Phase 56: Promotion Cycle — Standing Rules + Decision Journal *(DONE)*
+
+*"Lessons observed once are hints. Lessons confirmed twice become rules."*
+
+Three-tier self-improving memory: raw observation → hypothesis (2+ confirmations) → standing rule applied unconditionally to every decompose call. Contradictions demote. Decision journal records architectural choices; searched before new decisions are made.
+
+**Shipped (2026-04-01):** Extended `src/memory.py`.
+
+- `StandingRule` dataclass — `rule_id`, `rule`, `domain`, `confirmations`, `contradictions`, `promoted_at`, `source_lesson_id`
+- `Hypothesis` dataclass — same shape, lives in `memory/hypotheses.jsonl` until promoted
+- `observe_pattern(lesson, domain, source_lesson_id)` — create/increment hypothesis; promote to rule at `RULE_PROMOTE_CONFIRMATIONS=2`; returns `StandingRule` on promotion
+- `contradict_pattern(lesson, domain)` — demotes hypothesis if `contradictions > confirmations`; increments rule contradiction counter
+- `inject_standing_rules(domain)` — returns formatted rules block for unconditional injection into every decompose call
+- `Decision` dataclass — `decision_id`, `decision`, `rationale`, `domain`, `alternatives`, `trade_offs`
+- `record_decision(decision, rationale, domain, ...)` — writes to `memory/decisions.jsonl`
+- `search_decisions(query, domain, limit)` — TF-IDF ranking via `_FakeTL` adapter; returns relevant prior decisions
+- `inject_decisions(goal, domain)` — formatted prior decisions block for decompose injection
+- Wired into `agent_loop.py` — standing rules prepended before lessons; decisions appended; both in every planning call
+- 25 tests, all passing
+
+---
+
 ### Phase 48: Conversation Mining — Idea Archaeology *(TODO)*
 
 *"Revisiting ideas with current maturity yields perspectives we missed the first time."*

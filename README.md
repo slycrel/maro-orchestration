@@ -32,13 +32,15 @@ flowchart TD
         AL --> RC["Rules check\nrules.jsonl — zero-cost match"]
         RC -->|hit| STEPS
         RC -->|miss| DC["_decompose()\nLLM step planner"]
+        ID["poe_self.py\nidentity block"] -->|prepend| DC
         DC --> STEPS["Steps queue\nparallel fan-out where independent"]
 
         STEPS --> WK["Workers\nresearch · build · ops · reporter"]
         WK --> INS[Inspector\nvalidates output]
         INS -->|pass| REC["Record outcome\noutcomes.jsonl"]
         INS -->|fail| WK
-        REC --> MEM["Memory\nlessons · skills · events"]
+        REC --> CKP["checkpoint.py\nper-step JSON state"]
+        CKP --> MEM["Memory\nlessons · rules · decisions · skills"]
     end
 
     MEM --> EV["Evolver\nmeta-improvement every ~10 heartbeats"]
@@ -239,6 +241,8 @@ OpenClaw is fully optional. The system runs standalone on any machine with Pytho
 | `config.py` | Workspace resolution, credential discovery, env var priority |
 | `bootstrap.py` | `poe-bootstrap install`: dirs, services, smoke test |
 | `orch.py` | Core file-first state: NEXT.md tasks, run records, project lifecycle |
+| `poe_self.py` | Persistent identity block: `load_poe_identity()`, `with_poe_identity()` — injected into every decompose call |
+| `checkpoint.py` | Per-step loop checkpointing: `write_checkpoint()`, `resume_from()`, `delete_checkpoint()` — enables loop resume |
 
 ---
 
@@ -250,15 +254,27 @@ Run completes
     → tiered JSONL: short (session) / medium (weeks) / long (months)
     → decay applied daily; lessons promoted on score + reuse threshold
 
+Promotion cycle (three-tier):
+    → observe_pattern(lesson) → hypothesis (1 confirmation)
+    → observe_pattern(lesson) again → StandingRule promoted (2+ confirmations)
+    → contradict_pattern(lesson) → demotes hypothesis if contradictions > confirmations
+    → inject_standing_rules() → applied unconditionally to every decompose call
+
+Decision journal:
+    → record_decision(decision, rationale, alternatives) on architectural choices
+    → search_decisions(goal) → TF-IDF ranked relevant priors injected before planning
+    → prevents re-litigating settled decisions
+
 Every 10 heartbeat ticks (~10 min):
     → evolver analyzes last 50 outcomes
     → identifies failure patterns
     → generates suggestions: prompt_tweak | new_guardrail | skill_pattern
 
 Next run with similar task:
-    → inject_tiered_lessons() loads relevant lessons (long-tier first)
+    → inject_standing_rules() — unconditional rules prepended
+    → inject_decisions(goal) — relevant prior decisions appended
+    → inject_tiered_lessons() — ranked lessons (long-tier first)
     → ancestry context loaded
-    → both injected into decompose + execute prompts
     → router.py picks skills by predicted success probability (not just keyword match)
     → TF-IDF fallback when router not trained — relevance-ranked, not just keyword substring
 ```
@@ -286,7 +302,7 @@ Next run with similar task:
 ## Development
 
 ```bash
-# Run tests (1460+ passing, all LLM calls mocked)
+# Run tests (2013+ passing, all LLM calls mocked)
 python3 -m pytest tests/ -q
 
 # Dry-run (no LLM calls)
