@@ -145,7 +145,13 @@ from step_exec import (
     execute_step as _execute_step,
     generate_refinement_hint as _generate_refinement_hint,
     verify_step as _verify_step,
+    get_tools_for_role as _get_tools_for_role,
 )
+try:
+    from tool_registry import PermissionContext as _PermissionContext, ROLE_WORKER as _ROLE_WORKER
+except ImportError:
+    _PermissionContext = None  # type: ignore[assignment,misc]
+    _ROLE_WORKER = "worker"
 
 _DECOMPOSE_SYSTEM = DECOMPOSE_SYSTEM
 _EXECUTE_SYSTEM = EXECUTE_SYSTEM
@@ -648,6 +654,7 @@ def run_agent_loop(
     cost_budget: Optional[float] = None,
     ralph_verify: bool = False,
     resume_from_loop_id: Optional[str] = None,
+    permission_context=None,
 ) -> LoopResult:
     """Run the autonomous loop for a goal.
 
@@ -690,6 +697,15 @@ def run_agent_loop(
 
     if verbose:
         print(f"[poe] loop_id={loop_id} goal={goal!r}", file=sys.stderr, flush=True)
+
+    # Resolve tool set from PermissionContext (Phase 41 — prompt-composition-time gating)
+    _perm_ctx = permission_context
+    if _perm_ctx is None and _PermissionContext is not None:
+        _perm_ctx = _PermissionContext(role=_ROLE_WORKER)
+    _active_tools = (
+        _get_tools_for_role(_perm_ctx.role, _perm_ctx.deny_patterns)
+        if _perm_ctx is not None else list(_EXECUTE_TOOLS)
+    )
 
     # Build adapter — worker role uses MODEL_MID by default (role-semantic selection)
     if adapter is None and not dry_run:
@@ -867,7 +883,7 @@ def run_agent_loop(
             steps=steps,
             adapter=adapter,
             ancestry_context=_ancestry_context,
-            tools=[LLMTool(**t) for t in _EXECUTE_TOOLS],
+            tools=[LLMTool(**t) for t in _active_tools],
             verbose=verbose,
             max_workers=parallel_fan_out,
             project_dir=_fanout_proj_dir,
@@ -1039,7 +1055,7 @@ def run_agent_loop(
                 steps=_batch_steps,
                 adapter=adapter,
                 ancestry_context=_ancestry_context,
-                tools=[LLMTool(**t) for t in _EXECUTE_TOOLS],
+                tools=[LLMTool(**t) for t in _active_tools],
                 verbose=verbose,
                 max_workers=min(parallel_fan_out, len(_batch_steps)),
                 project_dir=_proj_artifact_dir,
@@ -1141,7 +1157,7 @@ def run_agent_loop(
             total_steps=step_idx + len(remaining_steps),
             completed_context=completed_context,
             adapter=_step_adapter,
-            tools=[LLMTool(**t) for t in _EXECUTE_TOOLS],
+            tools=[LLMTool(**t) for t in _active_tools],
             verbose=verbose,
             ancestry_context=_step_ancestry,
             project_dir=_proj_artifact_dir,

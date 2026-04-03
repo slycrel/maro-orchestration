@@ -254,6 +254,38 @@ EXECUTE_TOOLS_WORKER = EXECUTE_TOOLS
 EXECUTE_TOOLS_SHORT = [t for t in EXECUTE_TOOLS if t["name"] not in {"schedule_run", "create_team_worker"}]
 EXECUTE_TOOLS_INSPECTOR = [t for t in EXECUTE_TOOLS if t["name"] == "flag_stuck"]
 
+# ---------------------------------------------------------------------------
+# Registry-based tool access (Phase 41)
+# ---------------------------------------------------------------------------
+# Use get_tools_for_role() in new code instead of the imperative lists above.
+# The imperative lists remain for backward compatibility.
+
+try:
+    from tool_registry import (  # noqa: E402
+        registry as _tool_registry,
+        PermissionContext,
+        ROLE_WORKER, ROLE_SHORT, ROLE_INSPECTOR, ROLE_DIRECTOR, ROLE_VERIFIER,
+        worker_context, short_context, inspector_context, director_context,
+    )
+
+    def get_tools_for_role(role: str, deny_patterns=None) -> list:
+        """Return tool schema list for the given role, filtered by deny patterns.
+
+        Preferred over the imperative EXECUTE_TOOLS_* lists for new code.
+        Falls back to EXECUTE_TOOLS on any error.
+        """
+        ctx = PermissionContext(role=role, deny_patterns=deny_patterns or [])
+        return _tool_registry.get_tool_schemas(ctx)
+
+except ImportError:
+    # Graceful fallback if tool_registry is unavailable
+    def get_tools_for_role(role: str, deny_patterns=None) -> list:  # type: ignore[misc]
+        if role == ROLE_INSPECTOR if "ROLE_INSPECTOR" in dir() else "inspector":
+            return EXECUTE_TOOLS_INSPECTOR
+        if role == ROLE_SHORT if "ROLE_SHORT" in dir() else "short":
+            return EXECUTE_TOOLS_SHORT
+        return EXECUTE_TOOLS
+
 _MAX_TEAM_WORKERS_PER_STEP = 3  # guard against runaway spawning
 
 
