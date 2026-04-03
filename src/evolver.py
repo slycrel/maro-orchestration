@@ -30,6 +30,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from llm_parse import extract_json, safe_float, safe_list, content_or_empty
 
 log = logging.getLogger("poe.evolver")
 
@@ -459,18 +460,13 @@ def scan_outcomes_for_signals(
             max_tokens=1024,
             temperature=0.3,
         )
-        content = resp.content.strip()
-        start = content.find("{")
-        end = content.rfind("}") + 1
-        if start < 0 or end <= start:
+        data = extract_json(content_or_empty(resp), dict, log_tag="evolver.signal_scan")
+        if not data:
             return []
 
-        data = json.loads(content[start:end])
         signals: List[BusinessSignal] = []
-        for r in data.get("signals", []):
-            if not isinstance(r, dict):
-                continue
-            confidence = float(r.get("confidence", 0.0))
+        for r in safe_list(data.get("signals", []), element_type=dict):
+            confidence = safe_float(r.get("confidence"), default=0.0, min_val=0.0, max_val=1.0)
             if confidence < min_confidence:
                 continue
             suggested_goal = r.get("suggested_goal", "").strip()
@@ -568,14 +564,10 @@ def _llm_analyze(outcomes: List[Any], *, dry_run: bool = False) -> tuple[List[st
             max_tokens=2048,
             temperature=0.2,
         )
-        content = resp.content.strip()
-        # Extract JSON from response
-        start = content.find("{")
-        end = content.rfind("}") + 1
-        if start >= 0 and end > start:
-            data = json.loads(content[start:end])
-            patterns = data.get("failure_patterns", [])
-            raw_suggestions = data.get("suggestions", [])
+        data = extract_json(content_or_empty(resp), dict, log_tag="evolver._analyze")
+        if data:
+            patterns = safe_list(data.get("failure_patterns", []), element_type=str)
+            raw_suggestions = safe_list(data.get("suggestions", []), element_type=dict)
             return patterns, raw_suggestions
     except Exception as e:
         if __debug__:
@@ -648,7 +640,7 @@ def run_evolver(
                 target=raw.get("target", "all"),
                 suggestion=raw.get("suggestion", ""),
                 failure_pattern=raw.get("failure_pattern", ""),
-                confidence=float(raw.get("confidence", 0.5)),
+                confidence=safe_float(raw.get("confidence"), default=0.5, min_val=0.0, max_val=1.0),
                 outcomes_analyzed=len(outcomes),
             ))
         except Exception:
@@ -1198,13 +1190,10 @@ def run_evolver_with_friction(
                 max_tokens=2048,
                 temperature=0.2,
             )
-            content = resp.content.strip()
-            start = content.find("{")
-            end = content.rfind("}") + 1
-            if start >= 0 and end > start:
-                data = json.loads(content[start:end])
-                patterns = data.get("failure_patterns", [])
-                raw_suggestions = data.get("suggestions", [])
+            data = extract_json(content_or_empty(resp), dict, log_tag="evolver.run_friction")
+            if data:
+                patterns = safe_list(data.get("failure_patterns", []), element_type=str)
+                raw_suggestions = safe_list(data.get("suggestions", []), element_type=dict)
         except Exception as e:
             if verbose:
                 print(f"[evolver-friction] LLM analysis failed: {e}", file=sys.stderr)
@@ -1219,7 +1208,7 @@ def run_evolver_with_friction(
                 target=raw.get("target", "all"),
                 suggestion=raw.get("suggestion", ""),
                 failure_pattern=raw.get("failure_pattern", ""),
-                confidence=float(raw.get("confidence", 0.5)),
+                confidence=safe_float(raw.get("confidence"), default=0.5, min_val=0.0, max_val=1.0),
                 outcomes_analyzed=len(outcomes),
             ))
         except Exception:

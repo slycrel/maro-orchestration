@@ -20,6 +20,8 @@ from typing import Any, Dict, List, Optional
 
 log = logging.getLogger("poe.loop")
 
+from llm_parse import extract_json, safe_float, safe_str, content_or_empty  # noqa: E402
+
 
 # ---------------------------------------------------------------------------
 # Execute system prompt
@@ -680,14 +682,11 @@ def verify_step(
             temperature=0.1,
         )
 
-        content = resp.content.strip()
-        start = content.find("{")
-        end = content.rfind("}") + 1
-        if start >= 0 and end > start:
-            data = json.loads(content[start:end])
-            verdict = data.get("verdict", "PASS").upper()
-            reason = data.get("reason", "")
-            confidence = float(data.get("confidence", 0.5))
+        data = extract_json(content_or_empty(resp), dict, log_tag="step_exec.verify_step")
+        if data:
+            verdict = safe_str(data.get("verdict", "PASS")).upper()
+            reason = safe_str(data.get("reason"))
+            confidence = safe_float(data.get("confidence"), default=0.5, min_val=0.0, max_val=1.0)
             passed = verdict == "PASS" or confidence < confidence_threshold
             log.debug("verify_step verdict=%s confidence=%.2f passed=%s reason=%r",
                       verdict, confidence, passed, reason[:80])

@@ -26,6 +26,7 @@ import logging
 import textwrap
 from dataclasses import dataclass, field
 from typing import Any, List, Optional
+from llm_parse import extract_json, safe_float, safe_str, safe_list, content_or_empty
 
 log = logging.getLogger("poe.quality_gate")
 
@@ -149,16 +150,13 @@ def run_llm_council(
                     max_tokens=512,
                     temperature=0.4,
                 )
-                content = resp.content.strip()
-                start = content.find("{")
-                end = content.rfind("}") + 1
-                if start >= 0 and end > start:
-                    data = json.loads(content[start:end])
+                data = extract_json(content_or_empty(resp), dict, log_tag="quality_gate.council")
+                if data:
                     critiques.append(CouncilCritique(
                         critic=critic_name,
-                        verdict=data.get("verdict", "ACCEPTABLE").upper(),
-                        concerns=data.get("concerns", [])[:4],
-                        most_critical_gap=data.get("most_critical_gap", ""),
+                        verdict=safe_str(data.get("verdict", "ACCEPTABLE")).upper(),
+                        concerns=safe_list(data.get("concerns", []), element_type=str, max_items=4),
+                        most_critical_gap=safe_str(data.get("most_critical_gap")),
                     ))
                     log.debug("council critic=%s verdict=%s", critic_name, critiques[-1].verdict)
             except Exception as exc:
@@ -315,14 +313,11 @@ def run_quality_gate(
             temperature=0.1,
         )
 
-        content = resp.content.strip()
-        start = content.find("{")
-        end = content.rfind("}") + 1
-        if start >= 0 and end > start:
-            data = json.loads(content[start:end])
-            verdict = data.get("verdict", "PASS").upper()
-            reason = data.get("reason", "")
-            confidence = float(data.get("confidence", 0.5))
+        data = extract_json(content_or_empty(resp), dict, log_tag="quality_gate.pass1")
+        if data:
+            verdict = safe_str(data.get("verdict", "PASS")).upper()
+            reason = safe_str(data.get("reason"))
+            confidence = safe_float(data.get("confidence"), default=0.5, min_val=0.0, max_val=1.0)
             escalate = verdict == "ESCALATE" and confidence >= confidence_threshold
             log.info("quality_gate verdict=%s confidence=%.2f escalate=%s reason=%r",
                      verdict, confidence, escalate, reason[:80])
@@ -349,18 +344,14 @@ def run_quality_gate(
                 temperature=0.3,
             )
 
-            adv_content = adv_resp.content.strip()
-            start = adv_content.find("[")
-            end = adv_content.rfind("]") + 1
-            if start >= 0 and end > start:
-                parsed = json.loads(adv_content[start:end])
-                if isinstance(parsed, list):
-                    contested_claims = [
-                        c for c in parsed
-                        if isinstance(c, dict) and c.get("claim")
-                    ]
-                    log.info("quality_gate adversarial found %d contested claims",
-                             len(contested_claims))
+            parsed = extract_json(content_or_empty(adv_resp), list, log_tag="quality_gate.adversarial")
+            if parsed:
+                contested_claims = safe_list(
+                    [c for c in parsed if isinstance(c, dict) and c.get("claim")],
+                    element_type=dict,
+                )
+                log.info("quality_gate adversarial found %d contested claims",
+                         len(contested_claims))
 
         except Exception as exc:
             log.debug("quality_gate adversarial pass failed (non-fatal): %s", exc)

@@ -43,6 +43,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, date, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from llm_parse import extract_json, safe_list, content_or_empty
 
 log = logging.getLogger("poe.memory")
 
@@ -441,13 +442,10 @@ def extract_lessons_via_llm(
             max_tokens=256,
             temperature=0.3,
         )
-        content = resp.content.strip()
-        start = content.find("[")
-        end = content.rfind("]") + 1
-        if start >= 0 and end > start:
-            lessons = json.loads(content[start:end])
-            if isinstance(lessons, list) and all(isinstance(l, str) for l in lessons):
-                return [l.strip() for l in lessons if l.strip()][:3]
+        lessons = extract_json(content_or_empty(resp), list, log_tag="memory.extract_lessons")
+        validated = safe_list(lessons, element_type=str, max_items=3)
+        if validated:
+            return [l.strip() for l in validated if l.strip()]
     except Exception:
         pass
 

@@ -42,6 +42,7 @@ from typing import Any, Dict, List, Optional, Tuple
 log = logging.getLogger("poe.director")
 
 from workers import WorkerResult, dispatch_worker, infer_worker_type, WORKER_TYPES
+from llm_parse import extract_json, safe_float, safe_str, safe_list, content_or_empty
 
 MAX_REVIEW_ROUNDS = 2  # Director reviews each worker output up to this many times
 
@@ -501,15 +502,12 @@ def _produce_spec(
             max_tokens=1024,
             temperature=0.2,
         )
-        content = resp.content.strip()
-        start = content.find("{")
-        end = content.rfind("}") + 1
-        if start >= 0 and end > start:
-            data = json.loads(content[start:end])
-            spec = data.get("spec", "")
-            raw_tickets = data.get("tickets", [])
+        data = extract_json(content_or_empty(resp), dict, log_tag="director._produce_spec")
+        if data:
+            spec = safe_str(data.get("spec"))
+            raw_tickets = safe_list(data.get("tickets", []), element_type=dict, max_items=4)
             tickets = []
-            for i, t in enumerate(raw_tickets[:4]):
+            for i, t in enumerate(raw_tickets):
                 wtype = t.get("worker_type", WORKER_TYPES[-1])
                 if wtype not in WORKER_TYPES:
                     wtype = infer_worker_type(t.get("task", ""))
@@ -572,13 +570,10 @@ def _challenge_spec(
             max_tokens=512,
             temperature=0.3,
         )
-        content = resp.content.strip()
-        start = content.find("{")
-        end = content.rfind("}") + 1
-        if start >= 0 and end > start:
-            data = json.loads(content[start:end])
-            revised = data.get("revised_spec", "").strip()
-            critiques = data.get("critiques", [])
+        data = extract_json(content_or_empty(resp), dict, log_tag="director._challenge_spec")
+        if data:
+            revised = safe_str(data.get("revised_spec"))
+            critiques = safe_list(data.get("critiques", []), element_type=str)
             if critiques:
                 log.info("pre-plan challenger: %d critiques → spec revised", len(critiques))
                 for c in critiques:
@@ -621,15 +616,12 @@ def _review_worker_output(
             max_tokens=256,
             temperature=0.1,
         )
-        content = resp.content.strip()
-        start = content.find("{")
-        end = content.rfind("}") + 1
-        if start >= 0 and end > start:
-            data = json.loads(content[start:end])
+        data = extract_json(content_or_empty(resp), dict, log_tag="director._review_worker_output")
+        if data:
             return (
                 ReviewDecision(
                     accepted=bool(data.get("accepted", True)),
-                    reason=data.get("reason", ""),
+                    reason=safe_str(data.get("reason")),
                     revision_request=data.get("revision_request"),
                 ),
                 (resp.input_tokens, resp.output_tokens),

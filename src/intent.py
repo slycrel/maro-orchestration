@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import re
 from typing import Tuple
+from llm_parse import extract_json, safe_float, safe_str, content_or_empty
 
 
 # ---------------------------------------------------------------------------
@@ -87,17 +88,13 @@ def _llm_classify(message: str, adapter) -> Tuple[Lane, float, str]:
         max_tokens=128,
         temperature=0.1,
     )
-    content = resp.content.strip()
-    # Extract JSON
-    start = content.find("{")
-    end = content.rfind("}") + 1
-    if start >= 0 and end > start:
-        data = json.loads(content[start:end])
-        lane = data.get("lane", "agenda").lower()
+    data = extract_json(content_or_empty(resp), dict, log_tag="intent.classify")
+    if data:
+        lane = safe_str(data.get("lane", "agenda")).lower()
         if lane not in ("now", "agenda"):
             lane = "agenda"
-        confidence = float(data.get("confidence", 0.7))
-        reason = data.get("reason", "")
+        confidence = safe_float(data.get("confidence"), default=0.7, min_val=0.0, max_val=1.0)
+        reason = safe_str(data.get("reason"))
         return (lane, confidence, reason)
 
     # Couldn't parse — fall back
@@ -222,13 +219,10 @@ def check_goal_clarity(
             max_tokens=128,
             temperature=0.1,
         )
-        content = resp.content.strip()
-        start = content.find("{")
-        end = content.rfind("}") + 1
-        if start >= 0 and end > start:
-            data = _json.loads(content[start:end])
+        data = extract_json(content_or_empty(resp), dict, log_tag="intent.check_clarity")
+        if data:
             is_clear = bool(data.get("clear", True))
-            question = str(data.get("question", "")).strip()
+            question = safe_str(data.get("question"))
             return {"clear": is_clear, "question": question}
     except Exception:
         pass  # Clarity check failures must never block a run
