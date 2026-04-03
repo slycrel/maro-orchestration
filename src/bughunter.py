@@ -26,6 +26,7 @@ from __future__ import annotations
 import ast
 import json
 import py_compile
+import re
 import sys
 import tempfile
 from dataclasses import dataclass, field
@@ -170,6 +171,53 @@ class _BugVisitor(ast.NodeVisitor):
                           f"argument name '{arg_name}' shadows a builtin")
 
 
+# BH011: json.loads(content[...]) or json.loads(raw[...]) — the rfind-slice pattern
+# that breaks on nested braces. Does NOT flag json.loads(line) or json.loads(path.read_text()).
+_BARE_JSON_LOADS_RE = re.compile(
+    r"\bjson\.loads\s*\(\s*(?:content|raw)\["
+)
+# BH012: float(data.get(...)) / float(raw.get(...)) / float(parsed.get(...)) —
+# common variable names for freshly-parsed LLM dicts. Does NOT flag from_dict
+# methods (those read persisted JSON, not raw LLM output).
+_BARE_FLOAT_DICT_GET_RE = re.compile(
+    r"\bfloat\s*\(\s*(?:data|raw|parsed|r|result)\.get\s*\("
+)
+
+def _scan_llm_parse_patterns(filepath: str, source: str) -> List[BugFinding]:
+    """Scan for LLM output parsing anti-patterns (BH011, BH012).
+
+    BH011: bare json.loads() on LLM content — should use extract_json() from llm_parse.
+    BH012: float(x.get(...)) without safe_float — crashes on non-numeric LLM values.
+
+    Both checks skip llm_parse.py itself (that's where the safe versions live).
+    """
+    findings = []
+    if Path(filepath).name == "llm_parse.py":
+        return findings
+
+    for lineno, line in enumerate(source.splitlines(), 1):
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            continue
+        if _BARE_JSON_LOADS_RE.search(line):
+            findings.append(BugFinding(
+                file=filepath,
+                line=lineno,
+                severity="warning",
+                code="BH011",
+                message="bare json.loads() on LLM content — use extract_json() from llm_parse",
+            ))
+        if _BARE_FLOAT_DICT_GET_RE.search(line):
+            findings.append(BugFinding(
+                file=filepath,
+                line=lineno,
+                severity="warning",
+                code="BH012",
+                message="float(x.get(...)) on LLM value — use safe_float() from llm_parse",
+            ))
+    return findings
+
+
 def _scan_comments(filepath: str, source: str) -> List[BugFinding]:
     """Scan for TODO/FIXME/HACK/XXX comments (BH010)."""
     findings = []
@@ -218,6 +266,8 @@ def scan_file(filepath: str, *, include_todos: bool = False) -> tuple[list, bool
 
     if include_todos:
         findings += _scan_comments(filepath, source)
+
+    findings += _scan_llm_parse_patterns(filepath, source)
 
     return findings, True
 

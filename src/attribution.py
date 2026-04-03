@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
+from llm_parse import extract_json, safe_float, safe_str, safe_list, content_or_empty
 
 # Module-level imports for clean test patching
 try:
@@ -279,18 +280,14 @@ def attribute_failure(outcome: dict, adapter=None) -> Attribution:
                 )
             else:
                 raise RuntimeError("LLMMessage not available")
-            content = resp.content.strip()
-            start = content.find("{")
-            end = content.rfind("}") + 1
-            if start >= 0 and end > start:
-                data = json.loads(content[start:end])
-                failed_step = str(data.get("failed_step", "")).strip() or _heuristic_failed_step(outcome)
-                failure_mode = str(data.get("failure_mode", "unknown"))
+            data = extract_json(content_or_empty(resp), dict, log_tag="attribution.attribute")
+            if data:
+                failed_step = safe_str(data.get("failed_step")) or _heuristic_failed_step(outcome)
+                failure_mode = safe_str(data.get("failure_mode", "unknown"))
                 if failure_mode not in ("tool_failure", "bad_output", "stuck_loop", "llm_error", "unknown"):
                     failure_mode = "unknown"
-                contributing_factors = [str(f) for f in data.get("contributing_factors", []) if str(f).strip()]
-                confidence = float(data.get("confidence", 0.5))
-                confidence = max(0.0, min(1.0, confidence))
+                contributing_factors = safe_list(data.get("contributing_factors", []), element_type=str)
+                confidence = safe_float(data.get("confidence"), default=0.5, min_val=0.0, max_val=1.0)
                 return Attribution(
                     session_id=session_id,
                     goal=goal,

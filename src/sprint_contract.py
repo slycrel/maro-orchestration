@@ -21,6 +21,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from llm_parse import extract_json, content_or_empty
 
 
 # ---------------------------------------------------------------------------
@@ -163,15 +164,8 @@ def negotiate_contract(
                 max_tokens=512,
                 temperature=0.2,
             )
-            content = resp.content.strip()
-            # Strip markdown fences
-            if content.startswith("```"):
-                lines = content.split("\n")
-                content = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
-            start = content.find("{")
-            end = content.rfind("}") + 1
-            if start >= 0 and end > start:
-                data = json.loads(content[start:end])
+            data = extract_json(content_or_empty(resp), dict, log_tag="sprint_contract.negotiate")
+            if data:
                 raw_criteria = data.get("success_criteria", [])
                 raw_keywords = data.get("acceptance_keywords", [])
                 if isinstance(raw_criteria, list) and raw_criteria:
@@ -270,14 +264,8 @@ def grade_contract(
             max_tokens=1024,
             temperature=0.1,
         )
-        content = resp.content.strip()
-        if content.startswith("```"):
-            lines = content.split("\n")
-            content = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
-        start = content.find("{")
-        end = content.rfind("}") + 1
-        if start >= 0 and end > start:
-            data = json.loads(content[start:end])
+        data = extract_json(content_or_empty(resp), dict, log_tag="sprint_contract.grade")
+        if data:
             raw_results = data.get("criteria_results", [])
             criteria_results = []
             for i, cr in enumerate(raw_results):

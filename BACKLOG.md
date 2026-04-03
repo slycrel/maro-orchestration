@@ -3,7 +3,7 @@
 Single canonical location for everything we've identified but haven't done yet.
 Read this at the start of every session. Update it as items are completed or new ones emerge.
 
-Last reviewed: 2026-04-01 (session 4 — overnight)
+Last reviewed: 2026-04-03 (session 7)
 
 ---
 
@@ -76,8 +76,8 @@ Last reviewed: 2026-04-01 (session 4 — overnight)
 
 ### X Links steal list (2026-04-01 research batch — research/X_LINKS_SYNTHESIS.md)
 
-- [ ] **lat.md — Knowledge graph docs** (9/10) — Replace flat CLAUDE.md/AGENTS.md with `lat.md/` graph of cross-linked markdown files. `[[wiki links]]` between sections, `[[src/file.py#fn]]` links into source, `// @lat: [[section-id]]` backlinks in src/. `lat check` enforces drift in CI. `lat search` (semantic) + `lat section` (exact) replace ad-hoc grep. Install: `npm install -g lat.md && lat init`. Phase: 55. Effort: 2-4h.
-- [ ] **Promotion cycle + decision journal** (8/10) — Three CLAUDE.md blocks that create a self-improving memory system: (1) Knowledge hierarchy: observation → hypothesis (2+ confirmations) → standing rule (promoted to default); contradiction demotes. (2) Decision journal: ADR-style log searched before new decisions made. (3) Self-tightening quality gates: triggers promote, never-fires prune. Wire into memory.py + evolver.py + inspector.py. Phase: 56. Effort: 4-8h.
+- [x] **lat.md — Knowledge graph docs** (9/10) — DONE (2026-04-01). 9 cross-linked concept nodes in `lat.md/`, `[[wiki links]]`, `lat check` CI clean. Phase 55.
+- [x] **Promotion cycle + decision journal** (8/10) — DONE (2026-04-01). `observe_pattern()` → hypothesis → StandingRule at 2 confirmations. `contradict_pattern()` demotes. `inject_standing_rules()` + `inject_decisions()` wired into every decompose call. Phase 56.
 - [x] **Polymarket BTC lag edge validation** (6/10) — Research complete (2026-04-02). **Verdict: UNCONFIRMED — promotional fiction.** Structural failures: (1) Wrong product type — Polymarket BTC contracts are binary YES/NO (prob markets), not continuous price feeds; no "lag" surface exists. (2) Fee economics — even at corrected ~4% round-trip fee, the 0.3% claimed edge is 13x smaller than fees. (3) Near-zero liquidity — no resting orders to fill against. (4) Resolution mismatch — single Binance 12:00 ET candle close; intraday moves irrelevant. Full report: `research/POLYMARKET_BTC_LAG_VALIDATION.md`. No further investigation warranted unless claim is restated for a different venue (perpetual futures, spot CEX).
 - [x] **Claude Code declarative skill/hook architecture** (5/10) — Research complete (2026-04-01). Design doc: `research/PHASE41_TOOL_REGISTRY_DESIGN.md`. Key findings: (1) Gate tools at prompt composition time, not call time — denied tools never appear in system prompt. (2) `PermissionContext` object with deny_patterns threaded through call stack. (3) Progressive skill disclosure: name+description early, full definition on invocation. (4) Event-matcher-handler hook pipelines (PreToolUse=blocking, PostToolUse=non-blocking). (5) `ToolDefinition` dataclass + `ToolRegistry.get_tools(ctx)` assembly pipeline. Implementation order: ToolDefinition → PermissionContext → SKILL.md format → progressive loading → hook events → deferred tools → MCP.
 

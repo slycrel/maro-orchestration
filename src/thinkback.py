@@ -36,6 +36,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from llm_parse import safe_float
 
 log = logging.getLogger("poe.thinkback")
 
@@ -381,7 +382,7 @@ def run_thinkback(
         status=status,
         step_reviews=step_reviews,
         overall_assessment=parsed.get("overall_assessment", "acceptable"),
-        mission_efficiency=float(parsed.get("mission_efficiency", 0.5)),
+        mission_efficiency=safe_float(parsed.get("mission_efficiency"), default=0.5, min_val=0.0, max_val=1.0),
         key_lessons=key_lessons,
         would_retry=bool(parsed.get("would_retry", False)),
         retry_strategy=parsed.get("retry_strategy"),

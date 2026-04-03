@@ -29,6 +29,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
+from llm_parse import extract_json, safe_str, safe_list, content_or_empty
 
 log = logging.getLogger("poe.mission")
 
@@ -168,17 +169,10 @@ def decompose_mission(
             max_tokens=2048,
             temperature=0.2,
         )
-        content = resp.content.strip()
-        # Strip markdown fences if present
-        if content.startswith("```"):
-            lines = content.split("\n")
-            content = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
-        start = content.find("{")
-        end = content.rfind("}") + 1
-        if start >= 0 and end > start:
-            data = json.loads(content[start:end])
-            raw_milestones = data.get("milestones", [])
-            for rm in raw_milestones[:max_milestones]:
+        data = extract_json(content_or_empty(resp), dict, log_tag="mission.decompose_milestones")
+        if data:
+            raw_milestones = safe_list(data.get("milestones", []), element_type=dict, max_items=max_milestones)
+            for rm in raw_milestones:
                 features = [
                     Feature(
                         id=str(uuid.uuid4())[:8],
@@ -285,11 +279,8 @@ def _validate_milestone(
             max_tokens=256,
             temperature=0.1,
         )
-        content = resp.content.strip()
-        start = content.find("{")
-        end = content.rfind("}") + 1
-        if start >= 0 and end > start:
-            data = json.loads(content[start:end])
+        data = extract_json(content_or_empty(resp), dict, log_tag="mission.validate_milestone")
+        if data:
             return bool(data.get("passed", True))
     except Exception:
         pass

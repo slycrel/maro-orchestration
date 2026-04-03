@@ -34,6 +34,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from llm_parse import extract_json, safe_float, content_or_empty
 
 log = logging.getLogger("poe.inspector")
 
@@ -647,12 +648,9 @@ def check_alignment(session: Any, adapter=None) -> AlignmentResult:
             max_tokens=512,
             temperature=0.1,
         )
-        content = resp.content.strip()
-        start = content.find("{")
-        end = content.rfind("}") + 1
-        if start >= 0 and end > start:
-            data = json.loads(content[start:end])
-            score = float(data.get("score", 0.5))
+        data = extract_json(content_or_empty(resp), dict, log_tag="inspector.check_alignment")
+        if data:
+            score = safe_float(data.get("score"), default=0.5, min_val=0.0, max_val=1.0)
             aligned = bool(data.get("aligned", score >= 0.6))
             gaps = [str(g) for g in data.get("gaps", [])]
             return AlignmentResult(
@@ -715,13 +713,9 @@ def cluster_patterns(
             max_tokens=512,
             temperature=0.2,
         )
-        content = resp.content.strip()
-        start = content.find("[")
-        end = content.rfind("]") + 1
-        if start >= 0 and end > start:
-            result = json.loads(content[start:end])
-            if isinstance(result, list) and all(isinstance(p, str) for p in result):
-                return [p.strip() for p in result if p.strip()][:3]
+        result = extract_json(content_or_empty(resp), list, log_tag="inspector.cluster_patterns")
+        if isinstance(result, list) and all(isinstance(p, str) for p in result):
+            return [p.strip() for p in result if p.strip()][:3]
     except Exception as e:
         if __debug__:
             print(f"[inspector] cluster_patterns LLM call failed: {e}", file=sys.stderr)
@@ -805,11 +799,8 @@ def generate_tickets(
             max_tokens=1024,
             temperature=0.2,
         )
-        content = resp.content.strip()
-        start = content.find("[")
-        end = content.rfind("]") + 1
-        if start >= 0 and end > start:
-            raw = json.loads(content[start:end])
+        raw = extract_json(content_or_empty(resp), list, log_tag="inspector.generate_tickets")
+        if raw is not None:
             tickets = []
             for i, t in enumerate(raw):
                 if not isinstance(t, dict):
@@ -1438,11 +1429,8 @@ def _analyze_patterns_with_llm(
             max_tokens=1024,
             temperature=0.2,
         )
-        content = resp.content.strip()
-        start = content.find("{")
-        end = content.rfind("}") + 1
-        if start >= 0 and end > start:
-            data = json.loads(content[start:end])
+        data = extract_json(content_or_empty(resp), dict, log_tag="inspector.analyze_patterns")
+        if data:
             return (
                 data.get("patterns", []),
                 data.get("suggestions", []),

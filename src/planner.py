@@ -16,6 +16,7 @@ import logging
 import textwrap
 from pathlib import Path
 from typing import List, Optional
+from llm_parse import extract_json
 
 log = logging.getLogger("poe.planner")
 
@@ -180,15 +181,9 @@ def build_execution_levels(deps: dict) -> List[List[int]]:
 
 def parse_steps(content: str, max_steps: int) -> Optional[List[str]]:
     """Extract a JSON step list from LLM response content."""
-    start = content.find("[")
-    end = content.rfind("]") + 1
-    if start >= 0 and end > start:
-        try:
-            steps = json.loads(content[start:end])
-            if isinstance(steps, list) and all(isinstance(s, str) for s in steps):
-                return [s.strip() for s in steps if s.strip()][:max_steps]
-        except (json.JSONDecodeError, ValueError):
-            pass
+    steps = extract_json(content, list, log_tag="planner.parse_steps")
+    if steps and isinstance(steps, list) and all(isinstance(s, str) for s in steps):
+        return [s.strip() for s in steps if s.strip()][:max_steps]
     return None
 
 

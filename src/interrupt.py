@@ -33,6 +33,7 @@ from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
+from llm_parse import extract_json, content_or_empty
 
 # ---------------------------------------------------------------------------
 # Data types
@@ -264,11 +265,8 @@ def _classify_intent(
             max_tokens=512,
             temperature=0.1,
         )
-        content = resp.content.strip()
-        start = content.find("{")
-        end = content.rfind("}") + 1
-        if start >= 0 and end > start:
-            d = json.loads(content[start:end])
+        d = extract_json(content_or_empty(resp), dict, log_tag="interrupt.classify_interrupt")
+        if d:
             intent = d.get("intent", INTENT_ADDITIVE)
             if intent not in VALID_INTENTS:
                 intent = INTENT_ADDITIVE

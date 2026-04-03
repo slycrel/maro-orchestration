@@ -30,7 +30,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-from llm_parse import extract_json, safe_float, safe_list, content_or_empty
+from llm_parse import extract_json, safe_float, safe_str, safe_list, content_or_empty
 
 log = logging.getLogger("poe.evolver")
 
@@ -978,19 +978,13 @@ def synthesize_skill(
             max_tokens=512,
             temperature=0.3,
         )
-        raw = resp.content.strip()
-        if raw.startswith("```"):
-            raw = "\n".join(raw.split("\n")[1:])
-            if raw.endswith("```"):
-                raw = raw[: raw.rfind("```")]
-        start = raw.find("{")
-        end = raw.rfind("}") + 1
-        if start < 0 or end <= start:
-            return None
-        parsed = json.loads(raw[start:end])
+        parsed = extract_json(content_or_empty(resp), dict, log_tag="evolver.synthesize_skill")
     except Exception as e:
         if verbose:
             print(f"[evolver] synthesize_skill parse error: {e}", file=sys.stderr)
+        return None
+
+    if not parsed:
         return None
 
     name = str(parsed.get("name", "")).strip()

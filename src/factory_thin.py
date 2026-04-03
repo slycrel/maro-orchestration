@@ -28,6 +28,7 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from llm_parse import extract_json
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -331,15 +332,9 @@ def run_factory_thin(
 # ---------------------------------------------------------------------------
 
 def _parse_steps(content: str, max_steps: int) -> List[str]:
-    start = content.find("[")
-    end = content.rfind("]") + 1
-    if start >= 0 and end > start:
-        try:
-            steps = json.loads(content[start:end])
-            if isinstance(steps, list) and all(isinstance(s, str) for s in steps):
-                return [s.strip() for s in steps if s.strip()][:max_steps]
-        except (json.JSONDecodeError, ValueError):
-            pass
+    steps = extract_json(content, list, log_tag="factory_thin._parse_steps")
+    if isinstance(steps, list) and all(isinstance(s, str) for s in steps):
+        return [s.strip() for s in steps if s.strip()][:max_steps]
     return []
 
 

@@ -37,6 +37,7 @@ import textwrap
 import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
+from llm_parse import safe_float
 
 log = logging.getLogger("poe.cross_ref")
 
@@ -245,7 +246,7 @@ def verify_single_claim(
             claim=claim,
             category=category,
             status=str(parsed.get("status", "unknown")),
-            confidence=float(parsed.get("confidence", 0.5)),
+            confidence=safe_float(parsed.get("confidence"), default=0.5, min_val=0.0, max_val=1.0),
             note=str(parsed.get("note", "")),
             elapsed_ms=elapsed,
         )

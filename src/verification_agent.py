@@ -24,6 +24,7 @@ import logging
 import textwrap
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
+from llm_parse import extract_json, safe_float, content_or_empty
 
 log = logging.getLogger("poe.verification")
 
@@ -175,14 +176,11 @@ class VerificationAgent:
                 max_tokens=128,
                 temperature=0.1,
             )
-            content = resp.content.strip()
-            start = content.find("{")
-            end = content.rfind("}") + 1
-            if start >= 0 and end > start:
-                data = json.loads(content[start:end])
+            data = extract_json(content_or_empty(resp), dict, log_tag="verification_agent.verify_step")
+            if data:
                 verdict = data.get("verdict", "PASS").upper()
                 reason = data.get("reason", "")
-                confidence = float(data.get("confidence", 0.5))
+                confidence = safe_float(data.get("confidence"), default=0.5, min_val=0.0, max_val=1.0)
                 passed = verdict == "PASS" or confidence < self._confidence_threshold
                 log.debug("verify_step verdict=%s confidence=%.2f passed=%s reason=%r",
                           verdict, confidence, passed, reason[:80])
@@ -217,12 +215,8 @@ class VerificationAgent:
                 max_tokens=1024,
                 temperature=0.2,
             )
-            content = resp.content.strip()
-            # Parse JSON array
-            start = content.find("[")
-            end = content.rfind("]") + 1
-            if start >= 0 and end > start:
-                raw = json.loads(content[start:end])
+            raw = extract_json(content_or_empty(resp), list, log_tag="verification_agent.adversarial_pass")
+            if raw is not None:
                 claims = []
                 for item in raw:
                     if isinstance(item, dict):
@@ -289,14 +283,11 @@ class VerificationAgent:
                 max_tokens=256,
                 temperature=0.1,
             )
-            content = resp.content.strip()
-            start = content.find("{")
-            end = content.rfind("}") + 1
-            if start >= 0 and end > start:
-                data = json.loads(content[start:end])
+            data = extract_json(content_or_empty(resp), dict, log_tag="verification_agent.quality_review")
+            if data:
                 verdict = data.get("verdict", "PASS").upper()
                 reason = data.get("reason", "")
-                confidence = float(data.get("confidence", 0.5))
+                confidence = safe_float(data.get("confidence"), default=0.5, min_val=0.0, max_val=1.0)
                 escalate = verdict == "ESCALATE" and confidence >= self._confidence_threshold
                 log.info("quality_review verdict=%s confidence=%.2f escalate=%s reason=%r",
                          verdict, confidence, escalate, reason[:80])

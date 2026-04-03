@@ -33,6 +33,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional, Tuple
+from llm_parse import extract_json, content_or_empty
 
 # Module-level imports for clean test patching
 try:
@@ -377,14 +378,8 @@ def extract_skills(outcomes: List[dict], adapter) -> List[Skill]:
             max_tokens=2048,
             temperature=0.3,
         )
-        content = resp.content.strip()
-        if content.startswith("```"):
-            lines = content.split("\n")
-            content = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
-        start = content.find("{")
-        end = content.rfind("}") + 1
-        if start >= 0 and end > start:
-            data = json.loads(content[start:end])
+        data = extract_json(content_or_empty(resp), dict, log_tag="skills.extract_skill_patterns")
+        if data:
             raw_skills = data.get("skills", [])
             extracted: List[Skill] = []
             now = datetime.now(timezone.utc).isoformat()
@@ -1085,11 +1080,8 @@ def generate_skill_tests(
                 max_tokens=512,
                 temperature=0.2,
             )
-            content = resp.content.strip()
-            start = content.find("[")
-            end = content.rfind("]") + 1
-            if start >= 0 and end > start:
-                raw = json.loads(content[start:end])
+            raw = extract_json(content_or_empty(resp), list, log_tag="skills.generate_skill_tests")
+            if raw is not None:
                 for item in raw[:3]:
                     if isinstance(item, dict):
                         input_desc = str(item.get("input_description", "")).strip()
