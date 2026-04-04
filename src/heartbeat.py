@@ -610,6 +610,9 @@ def heartbeat_loop(
             f"mission_check_every={mission_check_every} backlog_every={backlog_every}",
             file=sys.stderr,
         )
+    global _evolver_active, _inspector_active, _backlog_drain_active
+    global _task_store_drain_active, _eval_active, _harness_optimizer_active
+
     tick = 0
     while True:
         try:
