@@ -1514,6 +1514,9 @@ def run_agent_loop(
                 o.mark_item(project, item_index, o.STATE_DONE)
 
             # Write to scratchpad: structured data for subsequent steps
+            if not isinstance(step_result, str):
+                step_result = json.dumps(step_result)
+                outcome["result"] = step_result
             _result_excerpt = step_result[:2000] if step_result else ""
             _cited_files: List[str] = []
             try:

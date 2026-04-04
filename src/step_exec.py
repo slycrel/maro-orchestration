@@ -9,6 +9,7 @@ Usage:
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -640,6 +641,8 @@ def execute_step(
         if tc.name == "complete_step":
             _confidence = tc.arguments.get("confidence", "") or ""
             _result_text = tc.arguments.get("result", resp.content)
+            if not isinstance(_result_text, str):
+                _result_text = json.dumps(_result_text)
             # Post-check: flag raw dumps so caller can act on it
             if _result_looks_like_raw_dump(_result_text):
                 log.warning("step %d RAW_DUMP_DETECTED result_len=%d — agent ignored pipeline enforcement",

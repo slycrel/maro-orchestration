@@ -599,10 +599,11 @@ def _review_worker_output(
     if dry_run or adapter is None:
         return (ReviewDecision(accepted=True, reason="[dry-run] auto-accepted"), (0, 0))
 
+    _r_result = result.result if isinstance(result.result, str) else json.dumps(result.result)
     user_msg = (
         f"Directive: {directive}\n\n"
         f"Ticket ({ticket.worker_type}): {ticket.task}\n\n"
-        f"Worker output:\n{result.result[:2000]}\n\n"
+        f"Worker output:\n{_r_result[:2000]}\n\n"
         f"Worker status: {result.status}"
         + (f"\nStuck reason: {result.stuck_reason}" if result.stuck_reason else "")
     )
@@ -649,7 +650,8 @@ def _compile_report(
 
     parts_text = ""
     for i, r in enumerate(worker_results, 1):
-        parts_text += f"\n\n### Worker {i} ({r.worker_type})\nStatus: {r.status}\n{r.result[:2000]}"
+        _r_text = r.result if isinstance(r.result, str) else json.dumps(r.result)
+        parts_text += f"\n\n### Worker {i} ({r.worker_type})\nStatus: {r.status}\n{_r_text[:2000]}"
 
     user_msg = (
         f"Directive: {directive}\n\n"

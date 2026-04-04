@@ -17,6 +17,7 @@ Usage:
 
 from __future__ import annotations
 
+import json
 import textwrap
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -269,11 +270,14 @@ def dispatch_worker(
     if resp.tool_calls:
         tc = resp.tool_calls[0]
         if tc.name == "deliver_result":
+            _wr_result = tc.arguments.get("result", resp.content)
+            if not isinstance(_wr_result, str):
+                _wr_result = json.dumps(_wr_result)
             return WorkerResult(
                 worker_type=worker_type,
                 ticket=ticket,
                 status="done",
-                result=tc.arguments.get("result", resp.content),
+                result=_wr_result,
                 tokens_in=resp.input_tokens,
                 tokens_out=resp.output_tokens,
             )
