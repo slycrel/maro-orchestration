@@ -407,3 +407,95 @@ def test_load_lessons_query_reranks(monkeypatch, tmp_path):
     assert result[0].lesson_id in ("a", "c")
     assert result[1].lesson_id in ("a", "c")
     assert result[2].lesson_id == "b"
+
+
+# ---------------------------------------------------------------------------
+# Step trace recording (Meta-Harness steal)
+# ---------------------------------------------------------------------------
+
+from memory import record_step_trace, load_step_traces
+
+
+def _make_step_outcome(step="do something", status="done", result="result text",
+                       summary="summary", stuck_reason=None):
+    from types import SimpleNamespace
+    return SimpleNamespace(step=step, status=status, result=result,
+                           summary=summary, stuck_reason=stuck_reason)
+
+
+class TestRecordStepTrace:
+    def test_writes_to_step_traces_jsonl(self, monkeypatch, tmp_path):
+        monkeypatch.setattr("memory._step_traces_path", lambda: tmp_path / "step_traces.jsonl")
+        step_outcomes = [
+            _make_step_outcome("fetch data", "done", "data fetched"),
+            _make_step_outcome("analyze", "stuck", stuck_reason="LLM timed out"),
+        ]
+        record_step_trace("outcome-abc", "test goal", step_outcomes, task_type="research")
+
+        lines = (tmp_path / "step_traces.jsonl").read_text().strip().splitlines()
+        assert len(lines) == 1
+        trace = json.loads(lines[0])
+        assert trace["outcome_id"] == "outcome-abc"
+        assert trace["goal"] == "test goal"
+        assert len(trace["steps"]) == 2
+
+    def test_stuck_reason_included(self, monkeypatch, tmp_path):
+        monkeypatch.setattr("memory._step_traces_path", lambda: tmp_path / "step_traces.jsonl")
+        step_outcomes = [_make_step_outcome("risky step", "stuck", stuck_reason="rate limit hit")]
+        record_step_trace("o-001", "goal", step_outcomes)
+        trace = json.loads((tmp_path / "step_traces.jsonl").read_text().strip())
+        stuck_step = trace["steps"][0]
+        assert stuck_step["stuck_reason"] == "rate limit hit"
+
+    def test_done_step_no_stuck_reason_key(self, monkeypatch, tmp_path):
+        monkeypatch.setattr("memory._step_traces_path", lambda: tmp_path / "step_traces.jsonl")
+        step_outcomes = [_make_step_outcome("do thing", "done", stuck_reason=None)]
+        record_step_trace("o-002", "goal", step_outcomes)
+        trace = json.loads((tmp_path / "step_traces.jsonl").read_text().strip())
+        assert "stuck_reason" not in trace["steps"][0]
+
+    def test_result_truncated_to_500(self, monkeypatch, tmp_path):
+        monkeypatch.setattr("memory._step_traces_path", lambda: tmp_path / "step_traces.jsonl")
+        step_outcomes = [_make_step_outcome(result="x" * 1000)]
+        record_step_trace("o-003", "goal", step_outcomes)
+        trace = json.loads((tmp_path / "step_traces.jsonl").read_text().strip())
+        assert len(trace["steps"][0]["result"]) <= 500
+
+    def test_empty_step_outcomes_writes_empty_trace(self, monkeypatch, tmp_path):
+        monkeypatch.setattr("memory._step_traces_path", lambda: tmp_path / "step_traces.jsonl")
+        record_step_trace("o-004", "goal", [])
+        trace = json.loads((tmp_path / "step_traces.jsonl").read_text().strip())
+        assert trace["steps"] == []
+
+
+class TestLoadStepTraces:
+    def test_returns_empty_when_file_missing(self, monkeypatch, tmp_path):
+        monkeypatch.setattr("memory._step_traces_path", lambda: tmp_path / "nonexistent.jsonl")
+        assert load_step_traces(["o-001"]) == {}
+
+    def test_loads_matching_outcome_id(self, monkeypatch, tmp_path):
+        path = tmp_path / "step_traces.jsonl"
+        monkeypatch.setattr("memory._step_traces_path", lambda: path)
+        step_outcomes = [_make_step_outcome("step1", "done")]
+        record_step_trace("o-abc", "test goal", step_outcomes)
+        traces = load_step_traces(["o-abc"])
+        assert "o-abc" in traces
+        assert traces["o-abc"]["goal"] == "test goal"
+
+    def test_filters_to_requested_ids(self, monkeypatch, tmp_path):
+        path = tmp_path / "step_traces.jsonl"
+        monkeypatch.setattr("memory._step_traces_path", lambda: path)
+        record_step_trace("o-1", "goal 1", [_make_step_outcome()])
+        record_step_trace("o-2", "goal 2", [_make_step_outcome()])
+        traces = load_step_traces(["o-1"])
+        assert "o-1" in traces
+        assert "o-2" not in traces
+
+    def test_malformed_lines_skipped(self, monkeypatch, tmp_path):
+        path = tmp_path / "step_traces.jsonl"
+        monkeypatch.setattr("memory._step_traces_path", lambda: path)
+        with open(path, "w") as f:
+            f.write("not json\n")
+            f.write(json.dumps({"outcome_id": "o-good", "goal": "g", "steps": []}) + "\n")
+        traces = load_step_traces(["o-good"])
+        assert "o-good" in traces

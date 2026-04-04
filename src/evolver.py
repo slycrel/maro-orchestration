@@ -522,7 +522,11 @@ Be specific and actionable. Suggest at most 5 improvements total. If there are n
 
 
 def _build_outcomes_summary(outcomes: List[Any]) -> str:
-    """Summarize outcomes for LLM analysis."""
+    """Summarize outcomes for LLM analysis.
+
+    Meta-Harness steal: enriches stuck outcomes with full step-level execution
+    traces so the proposer sees actual failure paths, not just aggregate summaries.
+    """
     if not outcomes:
         return "(no outcomes to analyze)"
 
@@ -544,6 +548,26 @@ def _build_outcomes_summary(outcomes: List[Any]) -> str:
         lines.append("\nStuck outcome summaries:")
         for o in stuck[:10]:
             lines.append(f"  - {o.summary[:120]}")
+
+        # Meta-Harness: include full step traces for stuck outcomes so the
+        # proposer can identify exactly where runs failed and why
+        stuck_ids = [getattr(o, "outcome_id", "") for o in stuck[:5] if getattr(o, "outcome_id", "")]
+        if stuck_ids:
+            try:
+                from memory import load_step_traces
+                traces = load_step_traces(stuck_ids)
+                if traces:
+                    lines.append("\nFull step traces for stuck runs:")
+                    for oid, trace in traces.items():
+                        lines.append(f"\n  [trace:{oid}] goal: {trace.get('goal', '')[:80]}")
+                        for step in trace.get("steps", [])[:8]:
+                            s_status = step.get("status", "?")
+                            s_text = step.get("step", "")[:60]
+                            s_reason = step.get("stuck_reason", "")
+                            lines.append(f"    [{s_status}] {s_text}"
+                                         + (f" — stuck: {s_reason[:80]}" if s_reason else ""))
+            except Exception:
+                pass
 
     return "\n".join(lines)
 

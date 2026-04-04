@@ -657,13 +657,13 @@ def _finalize_loop(
 
     # Phase 5: Reflexion — record outcome + extract lessons
     try:
-        from memory import reflect_and_record
+        from memory import reflect_and_record, record_step_trace
         done_steps = [s for s in step_outcomes if s.status == "done"]
         summary = (
             f"Completed {len(done_steps)}/{len(step_outcomes)} steps. "
             + (step_outcomes[-1].result[:80] if step_outcomes and loop_status == "done" else "")
         )
-        reflect_and_record(
+        _outcome_rec = reflect_and_record(
             goal=goal,
             status=loop_status,
             result_summary=summary,
@@ -675,6 +675,18 @@ def _finalize_loop(
             adapter=adapter if not dry_run else None,
             dry_run=dry_run,
         )
+        # Meta-Harness steal: persist step-level traces so the evolver proposer
+        # sees full execution context, not just aggregate summaries.
+        if not dry_run and step_outcomes and _outcome_rec is not None:
+            try:
+                record_step_trace(
+                    _outcome_rec.outcome_id,
+                    goal,
+                    step_outcomes,
+                    task_type="agenda",
+                )
+            except Exception:
+                pass
     except Exception:
         pass
 

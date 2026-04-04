@@ -113,6 +113,88 @@ def _memory_index_path() -> Path:
     return _memory_dir() / "MEMORY.md"
 
 
+def _step_traces_path() -> Path:
+    return _memory_dir() / "step_traces.jsonl"
+
+
+# ---------------------------------------------------------------------------
+# Step trace recording (Meta-Harness steal: proposer reads full execution traces)
+# ---------------------------------------------------------------------------
+
+def record_step_trace(
+    outcome_id: str,
+    goal: str,
+    step_outcomes: List[Any],
+    *,
+    task_type: str = "general",
+) -> None:
+    """Persist per-step execution trace alongside the outcome record.
+
+    Stores all step details (step text, status, result, summary, stuck_reason)
+    in memory/step_traces.jsonl keyed by outcome_id. The evolver reads these
+    to give the proposer full execution context, not just summary metrics.
+
+    Args:
+        outcome_id: ID from the Outcome returned by reflect_and_record.
+        goal: The top-level goal for this run.
+        step_outcomes: List of StepOutcome objects from agent_loop.
+        task_type: Task classification (e.g. "agenda", "research").
+    """
+    steps_data = []
+    for s in step_outcomes:
+        entry: Dict[str, Any] = {
+            "step": getattr(s, "step", ""),
+            "status": getattr(s, "status", ""),
+            "result": (getattr(s, "result", "") or "")[:500],
+            "summary": getattr(s, "summary", "") or "",
+        }
+        sr = getattr(s, "stuck_reason", None)
+        if sr:
+            entry["stuck_reason"] = str(sr)[:300]
+        steps_data.append(entry)
+
+    trace = {
+        "outcome_id": outcome_id,
+        "goal": goal[:200],
+        "task_type": task_type,
+        "recorded_at": datetime.now(timezone.utc).isoformat(),
+        "steps": steps_data,
+    }
+    try:
+        with open(_step_traces_path(), "a", encoding="utf-8") as f:
+            f.write(json.dumps(trace) + "\n")
+    except OSError as exc:
+        log.warning("record_step_trace: failed to write: %s", exc)
+
+
+def load_step_traces(outcome_ids: List[str]) -> Dict[str, Any]:
+    """Load step traces for the given outcome_ids.
+
+    Returns:
+        Dict mapping outcome_id → trace dict. Missing IDs are absent.
+    """
+    path = _step_traces_path()
+    if not path.exists():
+        return {}
+
+    target_ids = set(outcome_ids)
+    result: Dict[str, Any] = {}
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                trace = json.loads(line)
+                oid = trace.get("outcome_id", "")
+                if oid in target_ids:
+                    result[oid] = trace
+            except json.JSONDecodeError:
+                pass
+    except OSError:
+        pass
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Outcome recording
 # ---------------------------------------------------------------------------

@@ -1115,3 +1115,61 @@ class TestScanCalibrationLog:
 
         run_evolver(dry_run=False, verbose=False, min_outcomes=1, scan_calibration=False)
         assert scan_called == []
+
+
+# ---------------------------------------------------------------------------
+# _build_outcomes_summary — step trace enrichment (Meta-Harness steal)
+# ---------------------------------------------------------------------------
+
+from evolver import _build_outcomes_summary
+
+
+class TestBuildOutcomesSummaryTraceEnrichment:
+    def _make_outcome(self, status="done", goal="test goal", summary="summary text",
+                      task_type="research", outcome_id="o-001"):
+        return MagicMock(
+            status=status,
+            goal=goal,
+            summary=summary,
+            task_type=task_type,
+            outcome_id=outcome_id,
+        )
+
+    def test_stuck_outcome_without_traces_still_works(self, monkeypatch):
+        monkeypatch.setattr("memory.load_step_traces", lambda ids: {}, raising=False)
+        outcomes = [self._make_outcome("stuck", outcome_id="o-stuck")]
+        result = _build_outcomes_summary(outcomes)
+        assert "stuck" in result
+        assert "o-stuck" in result or "stuck outcome" in result.lower()
+
+    def test_stuck_outcome_with_traces_includes_step_detail(self, monkeypatch):
+        trace = {
+            "goal": "the stuck goal",
+            "steps": [
+                {"step": "fetch data", "status": "done", "result": "ok", "summary": ""},
+                {"step": "analyze", "status": "stuck", "stuck_reason": "LLM timed out"},
+            ],
+        }
+        monkeypatch.setattr("memory.load_step_traces", lambda ids: {"o-stuck": trace})
+        outcomes = [self._make_outcome("stuck", outcome_id="o-stuck")]
+        result = _build_outcomes_summary(outcomes)
+        assert "trace:o-stuck" in result
+        assert "LLM timed out" in result
+        assert "analyze" in result
+
+    def test_done_outcomes_no_trace_fetch(self, monkeypatch):
+        called = []
+        monkeypatch.setattr("memory.load_step_traces", lambda ids: called.append(ids) or {})
+        outcomes = [self._make_outcome("done")]
+        _build_outcomes_summary(outcomes)
+        # load_step_traces should not be called when there are no stuck outcomes
+        assert called == []
+
+    def test_load_traces_exception_does_not_crash(self, monkeypatch):
+        def _raise(ids):
+            raise RuntimeError("disk error")
+        monkeypatch.setattr("memory.load_step_traces", _raise)
+        outcomes = [self._make_outcome("stuck", outcome_id="o-stuck")]
+        # Should not raise
+        result = _build_outcomes_summary(outcomes)
+        assert isinstance(result, str)
