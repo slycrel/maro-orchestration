@@ -651,6 +651,25 @@ def _split_exec_analyze(step: str) -> List[str]:
     return [run_step, analyze_step]
 
 
+def _shape_steps(steps: List[str], *, label: str = "") -> List[str]:
+    """Apply exec+analyze splitting to every step in a list.
+
+    Single invariant gate — use instead of inline _is_combined_exec_analyze loops.
+    Safe to call at any plan-mutation point: inject_steps, replan, interrupt replace,
+    initial plan, DAG insertion.
+    """
+    shaped: List[str] = []
+    for s in steps:
+        if _is_combined_exec_analyze(s):
+            parts = _split_exec_analyze(s)
+            shaped.extend(parts)
+            log.info("step-shape%s: split compound step: %r → %r",
+                     f"[{label}]" if label else "", s[:60], [p[:40] for p in parts])
+        else:
+            shaped.append(s)
+    return shaped
+
+
 def _handle_blocked_step(
     step_text: str,
     outcome: dict,
@@ -1301,15 +1320,7 @@ def run_agent_loop(
     # The decompose prompt forbids these but the LLM occasionally violates the rule.
     # Catching them here is cheaper than a timeout + recovery cycle.
     # Must run BEFORE append_next_items so shaped steps are what gets written to NEXT.md.
-    _shaped_steps: List[str] = []
-    for _raw_step in steps:
-        if _is_combined_exec_analyze(_raw_step):
-            _parts = _split_exec_analyze(_raw_step)
-            _shaped_steps.extend(_parts)
-            log.info("step-shape: split combined exec+analyze step into %d: %r → %r",
-                     len(_parts), _raw_step[:60], [p[:40] for p in _parts])
-        else:
-            _shaped_steps.append(_raw_step)
+    _shaped_steps = _shape_steps(steps, label="initial-plan")
     if len(_shaped_steps) != len(steps):
         if verbose:
             print(
@@ -1587,16 +1598,7 @@ def run_agent_loop(
             # Mutable task graph: inject collected steps from parallel batch into plan.
             # Apply step-shaper before injecting — same guard as pre-execution shaper.
             if _batch_injected:
-                _shaped_batch_inject: List[str] = []
-                for _inj_s in _batch_injected[:6]:
-                    if _is_combined_exec_analyze(_inj_s):
-                        _inj_parts = _split_exec_analyze(_inj_s)
-                        _shaped_batch_inject.extend(_inj_parts)
-                        log.info("parallel inject step-shape: split compound: %r → %r",
-                                 _inj_s[:60], [p[:40] for p in _inj_parts])
-                    else:
-                        _shaped_batch_inject.append(_inj_s)
-                _capped_inject = _shaped_batch_inject[:6]
+                _capped_inject = _shape_steps(_batch_injected[:6], label="parallel-inject")
                 remaining_steps[:0] = _capped_inject
                 remaining_indices[:0] = [-1] * len(_capped_inject)
                 log.info("parallel batch: injected %d step(s) from batch into plan",
@@ -1924,17 +1926,7 @@ def run_agent_loop(
             _injected = outcome.get("inject_steps", [])
             if _injected and isinstance(_injected, list):
                 _raw_injected = [str(s).strip() for s in _injected if str(s).strip()][:3]
-                # Apply step-shaper to injected steps: split any compound exec+analyze steps
-                # before they enter the plan (same guard as the pre-execution shaper).
-                _clean_injected = []
-                for _inj_s in _raw_injected:
-                    if _is_combined_exec_analyze(_inj_s):
-                        _inj_parts = _split_exec_analyze(_inj_s)
-                        _clean_injected.extend(_inj_parts)
-                        log.info("inject step-shape: split compound inject step: %r → %r",
-                                 _inj_s[:60], [p[:40] for p in _inj_parts])
-                    else:
-                        _clean_injected.append(_inj_s)
+                _clean_injected = _shape_steps(_raw_injected, label="inject")
                 if _clean_injected:
                     remaining_steps[:0] = _clean_injected
                     remaining_indices[:0] = [-1] * len(_clean_injected)
@@ -2033,10 +2025,12 @@ def run_agent_loop(
             elif _decision.split_into:
                 # Step-shape violation: inject the split steps in place of the stuck one.
                 # E.g. a combined "run tests and analyze failures" becomes two atomic steps.
-                for _new_step in reversed(_decision.split_into):
+                # Apply shaper so recovery-generated steps are also guaranteed atomic.
+                _split_shaped = _shape_steps(list(_decision.split_into), label="replan-split")
+                for _new_step in reversed(_split_shaped):
                     remaining_steps.insert(0, _new_step)
                     remaining_indices.insert(0, -1)
-                _manifest_steps.extend(_decision.split_into)
+                _manifest_steps.extend(_split_shaped)
                 _replan_count += 1
                 if verbose:
                     print(
@@ -2182,6 +2176,8 @@ def run_agent_loop(
                         remaining_indices = []
                         break
                     else:
+                        # Shape interrupt-injected steps before they enter remaining_steps.
+                        new_remaining = _shape_steps(new_remaining, label="interrupt")
                         # Inject new steps into NEXT.md and get their indices
                         added = [s for s in new_remaining if s not in remaining_steps]
                         if added:

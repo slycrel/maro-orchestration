@@ -108,8 +108,11 @@ def test_process_message_dry_run_no_send():
 def test_process_message_routes_to_handle():
     # Phase 13: natural language messages now route through poe_handle first.
     # Patch poe_handle to return a known response.
+    # Also patch is_loop_running to False — parallel test workers can leave loop state set,
+    # causing interrupt routing instead of poe_handle routing.
     bot = MagicMock()
-    with patch("telegram_listener.poe_handle") as mock_poe:
+    with patch("telegram_listener.poe_handle") as mock_poe, \
+         patch("telegram_listener.is_loop_running", return_value=False):
         from poe import PoeResponse
         mock_poe.return_value = PoeResponse(message="great answer", routed_to="now_lane")
         _process_message(bot, _make_tg_message("what time is it?", chat_id=111), allowed_chats={111}, dry_run=False)
@@ -120,9 +123,10 @@ def test_process_message_routes_to_handle():
 def test_process_message_handle_error_sends_error():
     # Both poe_handle and handle raise — should fall through to error response
     bot = MagicMock()
-    with patch("telegram_listener.poe_handle", side_effect=RuntimeError("poe boom")):
-        with patch("telegram_listener.handle", side_effect=RuntimeError("boom")):
-            _process_message(bot, _make_tg_message("fail this", chat_id=111), allowed_chats=set(), dry_run=False)
+    with patch("telegram_listener.poe_handle", side_effect=RuntimeError("poe boom")), \
+         patch("telegram_listener.handle", side_effect=RuntimeError("boom")), \
+         patch("telegram_listener.is_loop_running", return_value=False):
+        _process_message(bot, _make_tg_message("fail this", chat_id=111), allowed_chats=set(), dry_run=False)
     bot.send_message.assert_called_once()
     assert "Error" in bot.send_message.call_args[0][1]
 
@@ -258,12 +262,14 @@ def test_dispatch_slash_status():
 
 def test_process_message_sends_ack_for_long_message():
     """Long natural-language messages should get an immediate ack, then an edit."""
-    # Phase 13: poe_handle is called first for natural language
+    # Phase 13: poe_handle is called first for natural language.
+    # Patch is_loop_running=False so parallel test workers don't trigger interrupt routing.
     from poe import PoeResponse
     bot = MagicMock()
     bot.send_message_returning_id.return_value = 42
 
-    with patch("telegram_listener.poe_handle") as mock_poe:
+    with patch("telegram_listener.poe_handle") as mock_poe, \
+         patch("telegram_listener.is_loop_running", return_value=False):
         mock_poe.return_value = PoeResponse(message="detailed answer here", routed_to="now_lane")
         _process_message(
             bot,
@@ -279,11 +285,13 @@ def test_process_message_sends_ack_for_long_message():
 
 def test_process_message_short_message_no_ack():
     """Short messages (<=20 chars) skip the ack, use typing indicator."""
+    # Patch is_loop_running=False so parallel test workers don't trigger interrupt routing.
     from poe import PoeResponse
     bot = MagicMock()
     bot.send_message_returning_id.return_value = 0
 
-    with patch("telegram_listener.poe_handle") as mock_poe:
+    with patch("telegram_listener.poe_handle") as mock_poe, \
+         patch("telegram_listener.is_loop_running", return_value=False):
         mock_poe.return_value = PoeResponse(message="hi", routed_to="now_lane")
         _process_message(
             bot,

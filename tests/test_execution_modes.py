@@ -266,6 +266,56 @@ class TestPipelineStepParsing:
 
 
 # ---------------------------------------------------------------------------
+# _shape_steps — universal invariant gate
+# ---------------------------------------------------------------------------
+
+class TestShapeSteps:
+    def _import(self):
+        from agent_loop import _shape_steps
+        return _shape_steps
+
+    def test_passthrough_atomic_steps(self):
+        _shape_steps = self._import()
+        steps = ["research polymarket trends", "write a summary report"]
+        assert _shape_steps(steps) == steps
+
+    def test_splits_compound_exec_analyze(self):
+        _shape_steps = self._import()
+        steps = ["run pytest and analyze the failures"]
+        result = _shape_steps(steps)
+        assert len(result) == 2
+        assert "analyze" in result[1].lower()
+
+    def test_splits_one_of_three(self):
+        _shape_steps = self._import()
+        steps = [
+            "fetch the data",
+            "run the script and analyze output",
+            "write a report",
+        ]
+        result = _shape_steps(steps)
+        assert len(result) == 4  # one step split into 2
+
+    def test_empty_list(self):
+        _shape_steps = self._import()
+        assert _shape_steps([]) == []
+
+    def test_label_does_not_affect_output(self):
+        _shape_steps = self._import()
+        steps = ["run tests and analyze failures"]
+        assert _shape_steps(steps, label="replan") == _shape_steps(steps)
+
+    def test_all_compound_steps_split(self):
+        _shape_steps = self._import()
+        steps = [
+            "run lint and analyze errors",
+            "execute build and check results",
+        ]
+        result = _shape_steps(steps)
+        assert len(result) == 4
+
+
+# ---------------------------------------------------------------------------
 # Registry completeness check
 # ---------------------------------------------------------------------------
 

@@ -471,6 +471,9 @@ def spawn_persona(
 # Each entry: (keywords_any_of, persona_name, confidence)
 # Evaluated in order; first confident match wins.
 _PERSONA_ROUTING: List[tuple] = [
+    # GStack / garrytan / founder-engineer mode → garrytan
+    (["garrytan", "gstack", "founder review", "phase-gated", "think plan build",
+      "founder taste", "gstack review"], "garrytan", 0.95),
     # Psychology / cognition / neuroscience / philosophy → psyche-researcher
     (["psychology", "neuroscience", "cognition", "cognitive", "philosophy",
       "enneagram", "mbti", "personality", "memory model", "spaced repetition",

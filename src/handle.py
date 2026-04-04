@@ -48,6 +48,7 @@ class _PrefixRule:
     flag: str             # attribute name on _PrefixResult to set True
     model_tier: str = ""  # if non-empty, override model to this tier (cheap/mid/power)
     max_steps: int = 0    # if > 0, override max_steps to this value
+    persona: str = ""     # if non-empty, force this persona name (overrides persona_for_goal)
 
 
 @dataclass
@@ -64,6 +65,7 @@ class _PrefixResult:
     pipeline_mode: bool = False
     strict_mode: bool = False
     team_mode: bool = False
+    forced_persona: str = ""   # if non-empty, override persona_for_goal selection
 
 
 _PREFIX_REGISTRY: List[_PrefixRule] = [
@@ -82,6 +84,8 @@ _PREFIX_REGISTRY: List[_PrefixRule] = [
     _PrefixRule("pipeline:",    flag="pipeline_mode"),
     _PrefixRule("strict:",      flag="strict_mode"),
     _PrefixRule("team:",        flag="team_mode",  model_tier="mid"),
+    # forced persona shortcuts
+    _PrefixRule("garrytan:",    flag="",           model_tier="power", persona="garrytan"),
 ]
 
 
@@ -108,6 +112,8 @@ def _apply_prefixes(message: str) -> _PrefixResult:
                     result.model_tier = rule.model_tier
                 if rule.max_steps:
                     result.max_steps = rule.max_steps
+                if rule.persona and not result.forced_persona:
+                    result.forced_persona = rule.persona
                 changed = True
                 lower = result.message.lower()  # re-check after strip
                 break  # restart registry scan after each match
@@ -607,6 +613,26 @@ def handle(
         )
         if _ultraplan_max_steps is not None:
             _loop_kwargs["max_steps"] = _ultraplan_max_steps
+
+        # Persona injection: select best persona for goal and inject as ancestry_context_extra.
+        # forced_persona (from garrytan:, etc.) overrides auto-selection.
+        _persona_ctx = ""
+        try:
+            from persona import persona_for_goal, PersonaRegistry, build_persona_system_prompt
+            _preg = PersonaRegistry()
+            _pname = (
+                _pfx.forced_persona
+                if _pfx.forced_persona
+                else persona_for_goal(message, registry=_preg, confidence_threshold=0.75)[0]
+            )
+            _pspec = _preg.load(_pname)
+            if _pspec:
+                _persona_ctx = build_persona_system_prompt(_pspec, goal=message)
+                log.info("handle: persona=%s forced=%s", _pname, bool(_pfx.forced_persona))
+        except Exception:
+            pass
+        if _persona_ctx:
+            _loop_kwargs["ancestry_context_extra"] = _persona_ctx
 
         loop_result = run_agent_loop(message, **_loop_kwargs)
         elapsed = int((time.monotonic() - started_at) * 1000)
