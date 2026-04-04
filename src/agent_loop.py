@@ -146,6 +146,7 @@ from step_exec import (
     generate_refinement_hint as _generate_refinement_hint,
     verify_step as _verify_step,
     get_tools_for_role as _get_tools_for_role,
+    _classify_step,
 )
 try:
     from tool_registry import PermissionContext as _PermissionContext, ROLE_WORKER as _ROLE_WORKER
@@ -2105,6 +2106,8 @@ def _write_plan_manifest(
     step_lines = []
     for i, step_text in enumerate(planned_steps, 1):
         outcome = _by_idx.get(i)
+        step_type = _classify_step(step_text)
+        _type_tag = f" `[{step_type}]`" if step_type != "general" else ""
         if outcome is None:
             icon = "⬜"
             suffix = ""
@@ -2120,7 +2123,7 @@ def _write_plan_manifest(
         else:
             icon = "❌"
             suffix = f" | {outcome.elapsed_ms}ms"
-        step_lines.append(f"{i}. {icon} {step_text[:120]}{suffix}")
+        step_lines.append(f"{i}. {icon}{_type_tag} {step_text[:120]}{suffix}")
 
     exec_lines: List[str] = []
     if step_outcomes:

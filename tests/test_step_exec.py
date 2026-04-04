@@ -375,3 +375,121 @@ class TestDataPipelineEnforcementInExecuteStep:
             tools=EXECUTE_TOOLS,
         )
         assert not result["result"].startswith("[RAW_OUTPUT_DETECTED]")
+
+
+# ---------------------------------------------------------------------------
+# _classify_step
+# ---------------------------------------------------------------------------
+
+class TestClassifyStep:
+    def test_exec_command_pytest(self):
+        from step_exec import _classify_step
+        assert _classify_step("Run pytest -q and save output to a file") == "exec_command"
+
+    def test_exec_command_grep(self):
+        from step_exec import _classify_step
+        assert _classify_step("grep for TODO comments in src/") == "exec_command"
+
+    def test_exec_command_make(self):
+        from step_exec import _classify_step
+        assert _classify_step("make build and capture output") == "exec_command"
+
+    def test_read_artifact(self):
+        from step_exec import _classify_step
+        assert _classify_step("Read the captured output and count failures") == "read_artifact"
+
+    def test_inspect_code(self):
+        from step_exec import _classify_step
+        assert _classify_step("inspect the source files for missing imports") == "inspect_code"
+
+    def test_analyze(self):
+        from step_exec import _classify_step
+        assert _classify_step("Analyze the test output for failure patterns") == "analyze"
+
+    def test_synthesize(self):
+        from step_exec import _classify_step
+        assert _classify_step("Synthesize findings into a final report") == "synthesize"
+
+    def test_general_fallback(self):
+        from step_exec import _classify_step
+        assert _classify_step("Set up the project workspace") == "general"
+
+
+class TestArtifactMaterialization:
+    """exec_command steps get artifact path injected into user_msg."""
+
+    def _adapter_capturing_prompt(self):
+        """Returns adapter that captures the user message it received."""
+        from llm import LLMResponse, ToolCall
+        captured = {}
+
+        class _Cap:
+            def complete(self, messages, **kw):
+                captured["user"] = next(
+                    (m.content for m in reversed(messages) if m.role == "user"), ""
+                )
+                return LLMResponse(
+                    content="",
+                    tool_calls=[ToolCall(
+                        name="complete_step",
+                        arguments={"result": "Saved to artifacts/step-1-output.txt. Exit 0.", "summary": "done"},
+                    )],
+                )
+
+        return _Cap(), captured
+
+    def test_exec_step_injects_artifact_path(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("POE_ORCH_ROOT", str(tmp_path))
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+
+        from step_exec import execute_step, EXECUTE_TOOLS
+        adapter, captured = self._adapter_capturing_prompt()
+        execute_step(
+            goal="Review repo",
+            step_text="Run pytest -q and save output",
+            step_num=1,
+            total_steps=3,
+            completed_context=[],
+            adapter=adapter,
+            tools=EXECUTE_TOOLS,
+            project_dir=str(tmp_path / "projects" / "review-repo"),
+        )
+        assert "ARTIFACT MATERIALIZATION" in captured["user"]
+        assert "step-1-output.txt" in captured["user"]
+
+    def test_non_exec_step_no_artifact_injection(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("POE_ORCH_ROOT", str(tmp_path))
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+
+        from step_exec import execute_step, EXECUTE_TOOLS
+        adapter, captured = self._adapter_capturing_prompt()
+        execute_step(
+            goal="Review repo",
+            step_text="Analyze the failure patterns from prior step",
+            step_num=2,
+            total_steps=3,
+            completed_context=[],
+            adapter=adapter,
+            tools=EXECUTE_TOOLS,
+            project_dir=str(tmp_path / "projects" / "review-repo"),
+        )
+        assert "ARTIFACT MATERIALIZATION" not in captured["user"]
+
+    def test_step_type_label_in_user_msg(self, tmp_path, monkeypatch):
+        """Step type is embedded in the user message for the executor."""
+        monkeypatch.setenv("POE_ORCH_ROOT", str(tmp_path))
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+
+        from step_exec import execute_step, EXECUTE_TOOLS
+        adapter, captured = self._adapter_capturing_prompt()
+        execute_step(
+            goal="Review repo",
+            step_text="Run pytest -q and save output",
+            step_num=1,
+            total_steps=3,
+            completed_context=[],
+            adapter=adapter,
+            tools=EXECUTE_TOOLS,
+            project_dir=str(tmp_path / "projects" / "review-repo"),
+        )
+        assert "[exec_command]" in captured["user"]

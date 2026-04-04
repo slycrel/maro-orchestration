@@ -86,6 +86,69 @@ _DATA_PIPELINE_EXTRA = textwrap.dedent("""\
 # Result length above which we check for raw-dump patterns.
 _RAW_DUMP_CHAR_THRESHOLD = 2000
 
+# ---------------------------------------------------------------------------
+# Step type classifier
+# ---------------------------------------------------------------------------
+
+# Commands that run subprocesses / shell tools — exec_command steps.
+_EXEC_CMD_KEYWORDS = frozenset({
+    "pytest", "python ", "run ", "execute ", "bash ", "sh ", "make ",
+    "npm ", "yarn ", "docker ", "git ", "cargo ", "go test", "mvn ",
+    "grep ", "find ", "curl ", "rg ", "wget ", "cat ", "invoke ",
+    "install ", "build ", "compile", "lint ", "mypy ", "ruff ",
+})
+
+
+def _classify_step(step_text: str) -> str:
+    """Return a high-level step type for prompt injection and manifest display.
+
+    Types:
+      exec_command  — runs a shell command or tool
+      read_artifact — reads a file or captured output from a prior step
+      analyze       — reasons over data that is already available in context
+      synthesize    — produces a final deliverable (report, summary, patch)
+      inspect_code  — reads source files to understand structure/behaviour
+      general       — everything else
+    """
+    low = step_text.lower()
+    if any(kw in low for kw in _EXEC_CMD_KEYWORDS):
+        return "exec_command"
+    if any(kw in low for kw in (
+        "read the", "read and", "load the", "open the",
+        "parse the file", "read artifacts", "read output", "read captured",
+    )):
+        return "read_artifact"
+    if any(kw in low for kw in (
+        "inspect", "read the code", "review the code", "look at the source",
+        "examine the source", "read src/", "read the module",
+    )):
+        return "inspect_code"
+    if any(kw in low for kw in (
+        "analyz", "summariz", "interpret", "evaluate", "assess",
+        "identify ", "categoriz", "conclude", "judge", "count ",
+    )):
+        return "analyze"
+    if any(kw in low for kw in (
+        "synthesiz", "write a report", "compile a report", "compile the",
+        "draft", "produce a", "create a summary", "write up",
+    )):
+        return "synthesize"
+    return "general"
+
+
+# Injected into exec_command steps to enforce artifact-first output handling.
+# Long command output in context burns tokens and loses fidelity — save to file.
+_ARTIFACT_MATERIALIZE = textwrap.dedent("""\
+
+    ARTIFACT MATERIALIZATION (exec_command step):
+    This step runs a command. You MUST:
+    1. Run the command
+    2. Save ALL stdout + stderr + exit code to: {artifact_path}
+    3. Call complete_step with ONLY: artifact path + exit code + ≤100-word summary
+    Do NOT include raw command output in complete_step result — just the path + summary.
+    Example result: "Saved to {artifact_path}. Exit 0. 142 passed, 3 failed in 4s."
+""").strip()
+
 
 def _is_data_heavy_step(step_text: str) -> bool:
     """Return True if the step text suggests risk of raw-output dumping."""
@@ -518,6 +581,10 @@ def execute_step(
             f" This directory exists and is where artifacts persist across steps."
         )
 
+    # Classify step type — drives prompt injection and manifest annotation.
+    _step_type = _classify_step(step_text)
+    log.debug("step %d type=%s", step_num, _step_type)
+
     # Pre-check: detect data-heavy steps and inject stronger enforcement
     _data_heavy = _is_data_heavy_step(step_text)
     _pipeline_block = ""
@@ -527,13 +594,23 @@ def execute_step(
         )
         log.debug("step %d data_heavy=True — injecting pipeline enforcement", step_num)
 
+    # Artifact materialization: exec_command steps save output to a file
+    # rather than stuffing raw stdout into the reasoning context.
+    _artifact_block = ""
+    if _step_type == "exec_command" and not _data_heavy and project_dir:
+        _artifact_dir = f"{project_dir}/artifacts"
+        _artifact_path = f"{_artifact_dir}/step-{step_num}-output.txt"
+        _artifact_block = "\n\n" + _ARTIFACT_MATERIALIZE.format(artifact_path=_artifact_path)
+        log.debug("step %d exec_command — injecting artifact materialization", step_num)
+
     user_msg = (
         f"Overall goal: {goal}{ancestry_block}\n\n"
-        f"Current step ({step_num}/{total_steps}): {step_text}"
+        f"Current step ({step_num}/{total_steps}) [{_step_type}]: {step_text}"
         f"{workspace_block}"
         f"{context_block}"
         f"{prefetch_block}"
-        f"{_pipeline_block}\n\n"
+        f"{_pipeline_block}"
+        f"{_artifact_block}\n\n"
         f"Complete this step now. Call complete_step when done or flag_stuck if blocked."
     )
 
