@@ -931,6 +931,11 @@ def handle_escalation(
         except Exception as exc:
             log.warning("escalation continue: failed to enqueue continuation: %s", exc)
 
+    elif action == "narrow" and not revised_goal:
+        # LLM chose narrow but forgot to provide a revised goal — fall back to surface
+        log.warning("escalation narrow: no revised_goal from LLM, falling back to surface")
+        action = "surface"
+
     elif action == "narrow" and revised_goal:
         # Spawn a new task with the narrowed goal
         try:

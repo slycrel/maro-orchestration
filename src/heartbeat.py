@@ -635,7 +635,7 @@ def heartbeat_loop(
                 print(f"[heartbeat] scheduler check failed: {e}", file=sys.stderr)
 
         # Task store drain: pick up loop_continuation and loop_escalation tasks every tick.
-        # Mirrors backlog drain — runs in a background thread so a slow continuation loop
+        # Runs in a background thread (via _run_task_store_drain) so a slow continuation loop
         # (which may run dozens of LLM iterations) doesn't block the heartbeat tick.
         # The _task_store_drain_active flag prevents stacking if a prior drain is still running.
         if not _mission_active:

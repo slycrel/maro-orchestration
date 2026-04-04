@@ -683,7 +683,10 @@ def handle_task(
     """
     source = task.get("source", "")
     reason = task.get("reason", "")
-    depth = int(task.get("continuation_depth", 0))
+    try:
+        depth = int(task.get("continuation_depth", 0))
+    except (TypeError, ValueError):
+        depth = 0
     job_id = task.get("job_id", "unknown")
 
     if source == "loop_escalation":
@@ -761,8 +764,8 @@ def drain_task_store(
             handle_task(task, adapter=adapter, dry_run=dry_run, verbose=verbose)
             try:
                 complete(job_id)
-            except Exception:
-                pass
+            except Exception as _ce:
+                log.warning("drain_task_store: failed to mark %s complete: %s", job_id, _ce)
             processed += 1
             log.info("drain_task_store: completed %s", job_id)
             # Emit observable event so the dashboard shows continuation/escalation activity
