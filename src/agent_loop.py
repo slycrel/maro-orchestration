@@ -1708,6 +1708,14 @@ def run_agent_loop(
             _ctx_entry = f"Step {step_idx} ({step_text[:80]}){_confidence_tag}:\n{_ctx_excerpt}"
             completed_context.append(_ctx_entry)
 
+            # Environment snapshot: cache step result in shared_ctx so team workers
+            # created in later steps can read what earlier steps discovered without
+            # re-fetching. Key is "step:N:text" for human-readable disambiguation.
+            _snap_key = f"step:{step_idx}:{step_text[:40]}"
+            _snap_val = step_summary[:200] if step_summary else (step_result[:200] if step_result else "")
+            if _snap_val:
+                _loop_shared_ctx[_snap_key] = _snap_val
+
             # Mutable task graph: insert any steps the worker discovered mid-execution.
             # Injected steps are prepended to remaining_steps so they run before the
             # original plan resumes. This allows workers to surface dependencies,
