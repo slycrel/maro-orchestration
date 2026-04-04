@@ -32,6 +32,17 @@ Session 10: GStack Tier 1 steals (decision taxonomy + confidence gates + anti-sy
 - `_PrefixResult` dataclass carries all parsed flags cleanly into `handle()`
 - 11 new tests: single prefix, stacking, effort model tier, ultraplan max_steps, verify=ralph alias, case-insensitive, registry completeness check
 
+## [1.10.3] - 2026-04-04
+
+Meta-Harness steal: proposer reads full execution traces. 2456 tests, 5 skipped.
+
+### Added — Full execution trace storage + evolver enrichment
+- `src/memory.py` — `record_step_trace(outcome_id, goal, step_outcomes, task_type)`: persists per-step detail (step text, status, result, summary, stuck_reason) to `memory/step_traces.jsonl`; `load_step_traces(outcome_ids)` returns matching traces by id
+- `src/agent_loop.py` — captures `reflect_and_record()` return value; calls `record_step_trace()` for every non-dry-run loop after recording the outcome
+- `src/evolver.py` — `_build_outcomes_summary()` extended: for stuck outcomes, calls `load_step_traces()` and appends per-step trace blocks (up to 8 steps, 5 stuck outcomes); load_traces exceptions silently ignored
+- 9 new tests in `tests/test_memory.py`: trace written, stuck_reason included, done step no stuck_reason key, result truncated, empty steps, missing file, loads matching id, filters to requested ids, malformed lines skipped
+- 4 new tests in `tests/test_evolver.py`: trace enrichment with/without traces, done outcomes don't trigger fetch, exception safety
+
 ## [1.10.2] - 2026-04-04
 
 GStack Tier 2 calibration review loop. 2443 tests, 5 skipped.

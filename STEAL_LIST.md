@@ -96,7 +96,7 @@ Sources: @neural_avb (Meta-Harness), @ivanburazin (open-multi-agent), @_overment
 
 | Item | What | Status | Where it lands | Effort |
 |------|------|--------|----------------|--------|
-| **Proposer reads full execution traces** | Don't pass summary metrics to the improver — give it raw traces, failed candidates, and source code. Much stronger than scalar reward. | TODO | `src/evolver.py` — extend `scan_outcomes_for_signals()` to attach full step traces, not just summaries | M |
+| ~~**Proposer reads full execution traces**~~ | Don't pass summary metrics to the improver — give it raw traces, failed candidates, and source code. Much stronger than scalar reward. | ✅ DONE — `record_step_trace()` in memory.py; agent_loop writes traces; `_build_outcomes_summary` enriches stuck outcomes with step-level detail. 13 tests. (2026-04-04) | `src/memory.py`, `src/agent_loop.py`, `src/evolver.py` | M |
 | **Harness self-optimization loop** | The scaffold (context assembly, memory formatting, tool selection) is itself code that an agent can rewrite and test. | TODO | New `src/harness_optimizer.py` — runs nightly, proposes improvements to EXECUTE_SYSTEM/DECOMPOSE_SYSTEM; gated by smoke tests | L |
 | **Environment snapshot caching** | Cache world-state between steps so heartbeat tasks don't re-read the same files every tick. | TODO | `src/agent_loop.py` — step-level state cache, keyed by loop_id; invalidate on write-tool calls | M |
 | **Skill text as steering** | The description of what to optimize matters more than the optimizer architecture. Tight skill descriptions → better proposer outputs. | TODO | `src/skills.py` — add `optimization_objective` field to Skill; surface in improver context | S |
