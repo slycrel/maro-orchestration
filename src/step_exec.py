@@ -29,56 +29,31 @@ from llm_parse import extract_json, safe_float, safe_str, content_or_empty  # no
 
 EXECUTE_SYSTEM = textwrap.dedent("""\
     You are Poe, an autonomous execution agent.
-    You are given a goal and a specific step to complete.
-    Complete the step to the best of your ability, producing a concrete result.
-    Then call exactly one tool:
-      - complete_step: if you have successfully completed this step
-      - flag_stuck: if you genuinely cannot complete this step (explain why precisely)
-    Do NOT call flag_stuck for solvable problems — work through them first.
-    Be thorough but concise. Output quality matters.
+    Complete the given step and call exactly one tool:
+      - complete_step: successfully completed
+      - flag_stuck: genuinely blocked (explain precisely)
+    Do NOT flag_stuck for solvable problems — work through them first.
 
-    URL FETCHING POLICY — IMPORTANT:
-    All URL content has been pre-fetched and is provided in the PRE-FETCHED URL CONTENT
-    block below. Use ONLY that pre-fetched content for any URLs mentioned in the step.
-    Do NOT use Bash to curl/wget URLs. Do NOT use any tool to fetch URLs.
-    If a URL's content is missing from the pre-fetch block, note it as unavailable and
-    work with what you have — do not attempt to fetch it yourself.
-    EXCEPTION: If the overall goal specifies a CLI tool or command for data access
-    (e.g. a specific CLI, SDK, or installed tool), USE THAT TOOL as instructed.
-    Goal-level tool instructions take priority over this URL policy.
+    URL FETCHING:
+    Use ONLY the pre-fetched content in PRE-FETCHED URL CONTENT below.
+    If a URL is missing from that block, note it as unavailable and proceed.
+    EXCEPTION: Goal-level CLI/SDK/tool instructions override this — use those tools.
 
-    PRIOR STEP DATA — IMPORTANT:
-    The "Completed steps so far" section contains summaries AND excerpts from prior
-    step results. This is real data from actual execution — use it. When referencing
-    files, modules, or findings from prior steps, cite the ACTUAL names and content
-    shown in those excerpts. Do NOT invent or guess file names, function names, or
-    line numbers. If a prior step found specific files, reference those exact names.
-    If you need information not in the prior step data, say so explicitly rather
-    than fabricating plausible-sounding references.
+    PRIOR STEP DATA:
+    "Completed steps so far" is real execution data. Reference ONLY the exact file
+    names, function names, and values shown there — never invent or guess.
 
-    TOKEN EFFICIENCY — CRITICAL:
-    Your output is consumed by downstream agents and the orchestrator, not humans.
-    Every extra token costs real money and slows the pipeline.
-    1. Use only pre-fetched content and prior step data already in context.
-    2. NEVER quote long passages verbatim. Extract the 2-3 key facts, discard the rest.
-    3. Work with partial information rather than declaring stuck due to missing detail.
-    4. Output format: short bullet points, structured data (JSON where appropriate),
-       no preamble, no summaries of what you're about to do, no sign-offs.
-    5. Never use a tool call, Bash command, or file read if the answer is already in context.
-    6. Target under 500 tokens for your complete_step result. If you need more, something
-       is wrong — you're probably quoting instead of summarizing.
-    Pick the interpretation that requires the fewest tokens to produce a useful result.
+    TOKEN EFFICIENCY:
+    1. Extract 2-3 key facts from sources; never quote long passages verbatim.
+    2. Output: bullet points or structured JSON. No preamble, no sign-offs.
+    3. Work with partial information rather than flagging stuck.
+    4. Target under 500 tokens for complete_step. More = you're quoting, not summarizing.
 
-    DATA PIPELINE STRATEGY — for steps that fetch external data:
-    When a step requires fetching data from an API or CLI tool, NEVER dump raw output
-    into context. Instead:
-    1. Write a small script that fetches, filters, and summarizes the data to a file.
-    2. Run the script. Read only the summary file (not the raw output).
-    3. Pass the filtered summary to complete_step, not the raw data.
-    Example: instead of running `polymarket-cli list` and processing 50KB of JSON
-    in-context, write a script: fetch → filter top 10 by volume → extract key fields
-    → save to project_dir/filtered_data.json → read and summarize that file.
-    This turns a 100K-token step into a 5K-token step.
+    DATA PIPELINE (steps fetching external data):
+    NEVER dump raw output into context. Instead:
+    1. Write a filter script: fetch → filter to ≤20 items → save to {project_dir}/step_data.json
+    2. Read the filtered file and summarize in ≤200 words.
+    Call complete_step with that summary, not raw data.
 """).strip()
 
 # ---------------------------------------------------------------------------
@@ -460,6 +435,27 @@ def execute_step(
     except Exception:
         pass  # constraint module optional
 
+    # Phase 41 step 5: PreStepExecution event — extensible blocking gate
+    try:
+        from step_events import step_event_bus as _bus
+        _pre_veto = _bus.fire_pre(
+            step_text=step_text,
+            goal=goal,
+            step_index=step_num - 1,  # 0-based index, step_num is 1-based
+        )
+        if _pre_veto is not None:
+            log.warning("step %d vetoed by event handler %r: %s",
+                        step_num, _pre_veto.handler_name, _pre_veto.reason)
+            return {
+                "status": "blocked",
+                "stuck_reason": f"pre-step veto ({_pre_veto.handler_name}): {_pre_veto.reason}",
+                "result": "",
+                "tokens_in": 0,
+                "tokens_out": 0,
+            }
+    except Exception:
+        pass  # step_events module optional
+
     # Pre-fetch URLs
     prefetch_block = ""
     try:
@@ -504,11 +500,19 @@ def execute_step(
     _is_long_running = any(kw in _step_lower for kw in _long_running_keywords)
     _step_timeout = 600 if _is_long_running else None
 
+    # Phase 41 step 6: inject tool_search if any deferred tools are in the list
+    _active_tools = list(tools)
+    try:
+        from tool_search import inject_tool_search_if_needed
+        _active_tools = inject_tool_search_if_needed(_active_tools)
+    except Exception:
+        pass
+
     log.debug("step %d adapter_call start adapter=%s long_running=%s", step_num, type(adapter).__name__, _is_long_running)
     _llm_t0 = time.monotonic()
     try:
         _call_kwargs: Dict[str, Any] = dict(
-            tools=tools,
+            tools=_active_tools,
             tool_choice="required",
             max_tokens=4096,
             temperature=0.3,
@@ -540,9 +544,53 @@ def execute_step(
     log.debug("step %d adapter_done: llm=%.1fs tokens=%d tool_calls=%s content_len=%d",
               step_num, _llm_elapsed, _tok, _has_tool, _content_len)
 
-    # Parse tool call
+    # Parse tool call — collect outcome in _outcome, fire PostStepExecution before return
+    _outcome: Dict[str, Any]
+    _tool_name_used: Optional[str] = None
+
     if resp.tool_calls:
         tc = resp.tool_calls[0]
+        _tool_name_used = tc.name
+
+        # Phase 41 step 6: tool_search — deferred tool resolution
+        # Model called tool_search(query=...) to get full schema for a deferred tool.
+        # Resolve the schema and re-call the LLM with the expanded tool list.
+        if tc.name == "tool_search":
+            _ts_query = tc.arguments.get("query", "")
+            log.debug("step %d tool_search query=%r", step_num, _ts_query)
+            _resolved_schemas: List[dict] = []
+            try:
+                from tool_search import resolve_deferred_tools, format_tool_search_result
+                _resolved_schemas = resolve_deferred_tools(_ts_query)
+            except Exception as _ts_exc:
+                log.warning("step %d tool_search failed: %s", step_num, _ts_exc)
+            if _resolved_schemas:
+                # Re-call the LLM with expanded tool list
+                _expanded_tools = _active_tools + _resolved_schemas
+                _ts_result_block = format_tool_search_result(_resolved_schemas)
+                try:
+                    resp = adapter.complete(
+                        [
+                            LLMMessage("system", EXECUTE_SYSTEM),
+                            LLMMessage("user", user_msg),
+                            LLMMessage("assistant", f"[tool_search result for '{_ts_query}']"),
+                            LLMMessage("user", _ts_result_block),
+                        ],
+                        tools=_expanded_tools,
+                        tool_choice="required",
+                        max_tokens=4096,
+                        temperature=0.3,
+                    )
+                    _tok = resp.input_tokens + resp.output_tokens
+                    _tool_name_used = resp.tool_calls[0].name if resp.tool_calls else None
+                    tc = resp.tool_calls[0] if resp.tool_calls else tc
+                    log.debug("step %d tool_search re-call done: tool=%r", step_num, _tool_name_used)
+                except Exception as _rerun_exc:
+                    log.warning("step %d tool_search re-call failed: %s", step_num, _rerun_exc)
+                    # Fall through to original response handling
+            else:
+                log.debug("step %d tool_search: no matches for %r", step_num, _ts_query)
+
         if tc.name == "complete_step":
             _confidence = tc.arguments.get("confidence", "") or ""
             _result_text = tc.arguments.get("result", resp.content)
@@ -553,7 +601,7 @@ def execute_step(
                 _result_text = "[RAW_OUTPUT_DETECTED] " + _result_text
             log.info("step %d DONE (complete_step) tokens=%d elapsed=%.1fs confidence=%s",
                      step_num, _tok, time.monotonic() - _step_t0, _confidence or "unset")
-            _out: dict = {
+            _outcome = {
                 "status": "done",
                 "result": _result_text,
                 "summary": tc.arguments.get("summary", step_text),
@@ -561,13 +609,12 @@ def execute_step(
                 "tokens_out": resp.output_tokens,
             }
             if _confidence:
-                _out["confidence"] = _confidence
-            return _out
+                _outcome["confidence"] = _confidence
         elif tc.name == "flag_stuck":
             _reason = tc.arguments.get("reason", "unknown")
             log.info("step %d BLOCKED (flag_stuck) reason=%r tokens=%d elapsed=%.1fs",
                      step_num, _reason[:80], _tok, time.monotonic() - _step_t0)
-            return {
+            _outcome = {
                 "status": "blocked",
                 "stuck_reason": _reason,
                 "result": tc.arguments.get("attempted", ""),
@@ -578,7 +625,7 @@ def execute_step(
             _tw_role = tc.arguments.get("role", "general")
             _tw_task = tc.arguments.get("task", "")
             _tw_persona = tc.arguments.get("persona") or None
-            _tw_result_text = f"[team-worker error: no output]"
+            _tw_result_text = "[team-worker error: no output]"
             try:
                 from team import create_team_worker as _create_worker, format_team_result_for_injection
                 _tw_res = _create_worker(
@@ -593,7 +640,7 @@ def execute_step(
                 log.warning("step %d create_team_worker failed role=%r: %s", step_num, _tw_role, _tw_exc)
             log.info("step %d DONE (create_team_worker) role=%r tokens=%d elapsed=%.1fs",
                      step_num, _tw_role, _tok, time.monotonic() - _step_t0)
-            return {
+            _outcome = {
                 "status": "done",
                 "result": _tw_result_text,
                 "summary": f"Team worker [{_tw_role}]: {_tw_task[:60]}",
@@ -604,7 +651,7 @@ def execute_step(
             _sched_goal = tc.arguments.get("goal", "")
             _sched_when = tc.arguments.get("when", "in 1 hour")
             _sched_note = tc.arguments.get("note", "")
-            _sched_result = f"[no action — scheduler unavailable]"
+            _sched_result = "[no action — scheduler unavailable]"
             try:
                 from scheduler import add_job
                 _schedule = _parse_when(_sched_when)
@@ -619,36 +666,61 @@ def execute_step(
                 _sched_result = f"[schedule_run failed: {_exc}]"
             log.info("step %d DONE (schedule_run) job=%r tokens=%d elapsed=%.1fs",
                      step_num, _sched_goal[:60], _tok, time.monotonic() - _step_t0)
-            return {
+            _outcome = {
                 "status": "done",
                 "result": _sched_result,
                 "summary": f"Scheduled follow-up: {_sched_goal[:60]}",
                 "tokens_in": resp.input_tokens,
                 "tokens_out": resp.output_tokens,
             }
-
-    # No tool call — treat content as result (some models don't always call tools)
-    if resp.content and len(resp.content) > 20:
+        else:
+            # Unknown tool name — treat as blocked
+            _outcome = {
+                "status": "blocked",
+                "stuck_reason": f"unrecognised tool: {tc.name}",
+                "result": "",
+                "tokens_in": resp.input_tokens,
+                "tokens_out": resp.output_tokens,
+            }
+    elif resp.content and len(resp.content) > 20:
+        # No tool call — treat content as result (some models don't always call tools)
         log.info("step %d DONE (content fallback, %d chars) tokens=%d elapsed=%.1fs",
                  step_num, _content_len, _tok, time.monotonic() - _step_t0)
-        return {
+        _outcome = {
             "status": "done",
             "result": resp.content,
             "summary": step_text,
             "tokens_in": resp.input_tokens,
             "tokens_out": resp.output_tokens,
         }
+    else:
+        log.warning("step %d BLOCKED (no tool call, content=%d chars) tokens=%d elapsed=%.1fs content=%r",
+                    step_num, _content_len, _tok, time.monotonic() - _step_t0,
+                    (resp.content or "")[:120])
+        _outcome = {
+            "status": "blocked",
+            "stuck_reason": "LLM did not call a tool and produced no useful content",
+            "result": resp.content,
+            "tokens_in": resp.input_tokens,
+            "tokens_out": resp.output_tokens,
+        }
 
-    log.warning("step %d BLOCKED (no tool call, content=%d chars) tokens=%d elapsed=%.1fs content=%r",
-                step_num, _content_len, _tok, time.monotonic() - _step_t0,
-                (resp.content or "")[:120])
-    return {
-        "status": "blocked",
-        "stuck_reason": "LLM did not call a tool and produced no useful content",
-        "result": resp.content,
-        "tokens_in": resp.input_tokens,
-        "tokens_out": resp.output_tokens,
-    }
+    # Phase 41 step 5: PostStepExecution event (non-blocking)
+    try:
+        from step_events import step_event_bus as _bus
+        _step_elapsed_ms = int((time.monotonic() - _step_t0) * 1000)
+        _bus.fire_post(
+            step_text=step_text,
+            goal=goal,
+            step_index=step_num - 1,
+            result=_outcome.get("result"),
+            tool_name=_tool_name_used,
+            elapsed_ms=_step_elapsed_ms,
+        )
+    except Exception:
+        pass
+
+    return _outcome
 
 
 # ---------------------------------------------------------------------------
