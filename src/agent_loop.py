@@ -1578,9 +1578,19 @@ def run_agent_loop(
                     if verbose:
                         print(f"[poe] step {step_idx} blocked (parallel): {_batch_oc.get('stuck_reason', '')[:80]}", file=sys.stderr, flush=True)
 
-            # Mutable task graph: inject collected steps from parallel batch into plan
+            # Mutable task graph: inject collected steps from parallel batch into plan.
+            # Apply step-shaper before injecting — same guard as pre-execution shaper.
             if _batch_injected:
-                _capped_inject = _batch_injected[:6]  # max 2 per worker × 3 workers
+                _shaped_batch_inject: List[str] = []
+                for _inj_s in _batch_injected[:6]:
+                    if _is_combined_exec_analyze(_inj_s):
+                        _inj_parts = _split_exec_analyze(_inj_s)
+                        _shaped_batch_inject.extend(_inj_parts)
+                        log.info("parallel inject step-shape: split compound: %r → %r",
+                                 _inj_s[:60], [p[:40] for p in _inj_parts])
+                    else:
+                        _shaped_batch_inject.append(_inj_s)
+                _capped_inject = _shaped_batch_inject[:6]
                 remaining_steps[:0] = _capped_inject
                 remaining_indices[:0] = [-1] * len(_capped_inject)
                 log.info("parallel batch: injected %d step(s) from batch into plan",
@@ -1907,7 +1917,18 @@ def run_agent_loop(
             # re-plan from the director.
             _injected = outcome.get("inject_steps", [])
             if _injected and isinstance(_injected, list):
-                _clean_injected = [str(s).strip() for s in _injected if str(s).strip()][:3]
+                _raw_injected = [str(s).strip() for s in _injected if str(s).strip()][:3]
+                # Apply step-shaper to injected steps: split any compound exec+analyze steps
+                # before they enter the plan (same guard as the pre-execution shaper).
+                _clean_injected = []
+                for _inj_s in _raw_injected:
+                    if _is_combined_exec_analyze(_inj_s):
+                        _inj_parts = _split_exec_analyze(_inj_s)
+                        _clean_injected.extend(_inj_parts)
+                        log.info("inject step-shape: split compound inject step: %r → %r",
+                                 _inj_s[:60], [p[:40] for p in _inj_parts])
+                    else:
+                        _clean_injected.append(_inj_s)
                 if _clean_injected:
                     remaining_steps[:0] = _clean_injected
                     remaining_indices[:0] = [-1] * len(_clean_injected)
