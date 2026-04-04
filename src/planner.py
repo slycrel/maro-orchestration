@@ -22,6 +22,49 @@ log = logging.getLogger("poe.planner")
 
 
 # ---------------------------------------------------------------------------
+# Large-scope review detection
+# ---------------------------------------------------------------------------
+
+_LARGE_SCOPE_KEYWORDS = frozenset({
+    "entire codebase", "whole codebase", "full codebase",
+    "entire repo", "whole repo", "full repo",
+    "adversarial review", "comprehensive review", "complete review",
+    "codebase review", "code review of", "full audit", "complete audit",
+    "review the codebase", "review the repo", "audit the codebase",
+    "audit the repo", "review all", "review every", "all modules",
+    "all files", "every module",
+})
+
+
+def _is_large_scope_review(goal: str) -> bool:
+    """Return True if the goal covers a scope too large for a single flat step list."""
+    low = goal.lower()
+    return any(kw in low for kw in _LARGE_SCOPE_KEYWORDS)
+
+
+# Staged-pass decomposition prompt: when a goal is too broad for 8 flat steps,
+# break it into domain-area passes each small enough to execute within budget.
+_STAGED_PASS_SYSTEM = textwrap.dedent("""\
+    You are Poe, an autonomous planning agent.
+    The goal covers a scope too large for a single execution pass.
+    Decompose it into 3-5 STAGED PASSES — thematic sub-goals each independently executable.
+
+    Each pass covers one domain area. Passes should be roughly equal in effort.
+    Use [after:N] syntax for a final synthesis pass that depends on all prior passes.
+
+    Example output for a codebase review:
+    [
+      "Pass 1/4 — Architecture: read CLAUDE.md, ROADMAP.md, map src/ modules and dependency graph",
+      "Pass 2/4 — Core execution: audit agent_loop.py, step_exec.py, director.py for exec/analyze patterns",
+      "Pass 3/4 — Tests + integrations: review test coverage, read telegram.py, slack_listener.py for security",
+      "Pass 4/4 — Synthesize: compile findings from passes 1-3 into adversarial report with severity ratings [after:1,2,3]"
+    ]
+
+    OUTPUT FORMAT: JSON array of pass strings. No prose. Each pass is one sentence under 25 words.
+""").strip()
+
+
+# ---------------------------------------------------------------------------
 # Decompose system prompt
 # ---------------------------------------------------------------------------
 
@@ -206,6 +249,30 @@ def decompose(
         system = DECOMPOSE_SYSTEM + "\n\n" + "\n\n".join(extras)
 
     user_msg = f"Goal: {goal}\n\nDecompose into {max_steps} or fewer concrete steps."
+
+    # --- Large-scope review: staged-pass decomposition ---
+    # When the goal spans a scope too broad for 8 flat steps (e.g. "review the entire codebase"),
+    # decompose into domain-area passes. Each pass is independently executable within budget.
+    # This is the first level of the dynamic tree traversal — the director or subsequent loops
+    # handle each pass as its own sub-goal.
+    if _is_large_scope_review(goal):
+        try:
+            resp = adapter.complete(
+                [LLMMessage("system", _STAGED_PASS_SYSTEM),
+                 LLMMessage("user", f"Goal: {goal}\n\nDecompose into 3-5 staged passes.")],
+                max_tokens=512,
+                temperature=0.2,
+            )
+            staged = parse_steps(resp.content.strip(), max_steps)
+            if staged:
+                log.info("decompose staged-pass: %d passes for large-scope goal", len(staged))
+                if verbose:
+                    import sys
+                    print(f"[poe] large-scope goal → staged-pass decomposition: {len(staged)} passes",
+                          file=sys.stderr, flush=True)
+                return staged
+        except Exception as exc:
+            log.info("staged-pass decomposition failed, falling back to multi-plan: %s", exc)
 
     # --- Multi-plan: generate 3 candidates and compose ---
     try:

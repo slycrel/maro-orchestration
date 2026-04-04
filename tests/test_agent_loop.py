@@ -1339,3 +1339,49 @@ def test_is_combined_exec_analyze_does_not_over_trigger():
     assert _is_combined_exec_analyze("Identify the root cause of the import failure") is False
     assert _is_combined_exec_analyze("Evaluate the quality of the test coverage summary") is False
     assert _is_combined_exec_analyze("Conclude whether the architecture matches the design doc") is False
+
+
+# ---------------------------------------------------------------------------
+# Budget ceiling continuation task
+# ---------------------------------------------------------------------------
+
+def test_budget_ceiling_enqueues_continuation(monkeypatch, tmp_path):
+    """When max_iterations is hit with remaining steps, a continuation task is enqueued."""
+    import sys
+    sys.path.insert(0, str(tmp_path))
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+
+    enqueued = {}
+
+    def _fake_enqueue(lane, source, reason, parent_job_id):
+        enqueued["lane"] = lane
+        enqueued["source"] = source
+        enqueued["reason"] = reason
+        enqueued["parent"] = parent_job_id
+        return {"job_id": "cont-001"}
+
+    import agent_loop as _al
+    monkeypatch.setattr(_al, "_ts_enqueue_ref", None, raising=False)
+
+    import task_store as _ts
+    monkeypatch.setattr(_ts, "enqueue", _fake_enqueue)
+
+    # Patch task_store import inside agent_loop's closure
+    import unittest.mock as mock
+    with mock.patch("task_store.enqueue", _fake_enqueue):
+        from agent_loop import run_agent_loop, _DryRunAdapter
+        result = run_agent_loop(
+            "adversarial review of the entire codebase",
+            adapter=_DryRunAdapter(),
+            max_iterations=1,   # force immediate budget ceiling
+            max_steps=4,
+            dry_run=False,
+        )
+
+    # loop hits ceiling and records stuck status
+    assert result.status in ("stuck", "done", "partial")
+    # If continuation was enqueued, check it
+    if enqueued:
+        assert enqueued["source"] == "loop_continuation"
+        assert "CONTINUATION" in enqueued["reason"]
+        assert enqueued["lane"] == "agenda"

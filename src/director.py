@@ -206,6 +206,57 @@ _DEFINITELY_COMPLEX = frozenset({
     "design system", "architecture", "refactor", "deploy", "release",
 })
 
+# Keywords that indicate a large-scope review requiring staged passes.
+_LARGE_SCOPE_KEYWORDS = frozenset({
+    "entire codebase", "whole codebase", "full codebase",
+    "entire repo", "whole repo", "full repo",
+    "adversarial review", "comprehensive review", "complete review",
+    "codebase review", "code review of", "full audit", "complete audit",
+    "review the codebase", "review the repo", "audit the codebase",
+    "audit the repo", "review all", "review every", "all modules",
+    "all files", "every module",
+})
+
+
+def _is_large_scope_review(directive: str) -> bool:
+    """Return True if the directive covers a scope too large for a single loop pass."""
+    low = directive.lower()
+    return any(kw in low for kw in _LARGE_SCOPE_KEYWORDS)
+
+
+# Spec system prompt for large-scope reviews — raises ticket cap to 6 and
+# instructs domain-area splitting so each worker handles a bounded slice.
+_LARGE_SCOPE_SPEC_SYSTEM = textwrap.dedent("""\
+    You are the Director for Poe, an autonomous orchestration system.
+    Your job: take a large-scope review directive and produce a staged work plan.
+    You PLAN and REVIEW. You do NOT execute.
+
+    The goal is too large to complete in a single pass. Split it into 4-6 domain-area
+    worker tickets, each covering a bounded, independently-reviewable slice.
+    Order tickets so a final synthesis ticket can draw on all prior results.
+
+    Worker types available:
+    - research: information gathering, analysis, synthesis
+    - build: code, scripts, configurations, structured artifacts
+    - ops: infrastructure, automation, diagnostics, system tasks
+    - general: everything else
+
+    Respond with a JSON object:
+    {
+      "spec": "one paragraph describing the staged approach",
+      "tickets": [
+        {"worker_type": "research|build|ops|general", "task": "specific bounded task for this domain area"}
+      ]
+    }
+
+    Rules:
+    - 4-6 tickets. Each covers one domain area (e.g. docs/architecture, core execution, tests, integrations, security).
+    - Last ticket is always synthesis: "Compile findings from all prior passes into a structured report with severity ratings."
+    - Each ticket must be independently executable with a bounded file/scope set.
+    - Concrete file names or module areas are better than vague descriptions.
+    - Pick the right worker type for each ticket.
+""").strip()
+
 
 def _is_simple_directive(directive: str) -> bool:
     """Return True if the directive is simple enough to skip the Director.
@@ -225,6 +276,10 @@ def _is_simple_directive(directive: str) -> bool:
 
     # Explicit complexity signals
     if any(kw in lower for kw in _DEFINITELY_COMPLEX):
+        return False
+
+    # Large-scope reviews always need the Director for staged-pass routing
+    if _is_large_scope_review(lower):
         return False
 
     # Multi-step coordination signals
@@ -494,9 +549,12 @@ def _produce_spec(
         return (f"[dry-run spec] Plan for: {directive[:80]}", tickets, (0, 0))
 
     try:
+        _large_scope = _is_large_scope_review(directive)
+        _spec_system = _LARGE_SCOPE_SPEC_SYSTEM if _large_scope else _SPEC_SYSTEM
+        _max_tickets = 6 if _large_scope else 4
         resp = adapter.complete(
             [
-                LLMMessage("system", _SPEC_SYSTEM),
+                LLMMessage("system", _spec_system),
                 LLMMessage("user", f"Directive: {directive}"),
             ],
             max_tokens=1024,
@@ -505,7 +563,7 @@ def _produce_spec(
         data = extract_json(content_or_empty(resp), dict, log_tag="director._produce_spec")
         if data:
             spec = safe_str(data.get("spec"))
-            raw_tickets = safe_list(data.get("tickets", []), element_type=dict, max_items=4)
+            raw_tickets = safe_list(data.get("tickets", []), element_type=dict, max_items=_max_tickets)
             tickets = []
             for i, t in enumerate(raw_tickets):
                 wtype = t.get("worker_type", WORKER_TYPES[-1])

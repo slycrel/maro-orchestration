@@ -25,6 +25,8 @@ from director import (
     _produce_spec,
     _review_worker_output,
     _is_simple_directive,
+    _is_large_scope_review,
+    _LARGE_SCOPE_SPEC_SYSTEM,
 )
 
 
@@ -427,6 +429,11 @@ class TestRunDirectorSkipIfSimple:
         result = run_director("quick lookup", skip_if_simple=True, dry_run=True)
         assert result.status == "done"
 
+    def test_large_scope_not_simple(self):
+        assert _is_simple_directive("adversarial review of the entire codebase") is False
+        assert _is_simple_directive("do a comprehensive review of the full repo") is False
+        assert _is_simple_directive("full audit of all modules") is False
+
     def test_skip_result_preserves_directive(self, monkeypatch, tmp_path):
         monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
         import agent_loop as _al
@@ -443,3 +450,57 @@ class TestRunDirectorSkipIfSimple:
 
         result = run_director("quick lookup", skip_if_simple=True, dry_run=True)
         assert result.directive == "quick lookup"
+
+
+class TestLargeScopeReview:
+    def test_detection_positive(self):
+        assert _is_large_scope_review("adversarial review of the entire codebase")
+        assert _is_large_scope_review("do a comprehensive review of the full repo")
+        assert _is_large_scope_review("full audit of all modules")
+        assert _is_large_scope_review("codebase review focusing on security")
+        assert _is_large_scope_review("audit the codebase for quality issues")
+
+    def test_detection_negative(self):
+        assert not _is_large_scope_review("review the auth module")
+        assert not _is_large_scope_review("analyze the test failures")
+        assert not _is_large_scope_review("write a report on memory usage")
+
+    def test_produce_spec_large_scope_dry_run(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        # In dry_run, _produce_spec returns a single-ticket fallback regardless
+        spec, tickets, _ = _produce_spec(
+            "adversarial review of the entire codebase",
+            adapter=None,
+            dry_run=True,
+            log=lambda m: None,
+        )
+        assert "[dry-run]" in tickets[0].task
+
+    def test_produce_spec_large_scope_uses_large_system(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        captured = {}
+
+        class _FakeAdapter:
+            def complete(self, messages, **kw):
+                captured["system"] = messages[0].content
+                from types import SimpleNamespace
+                return SimpleNamespace(
+                    content='{"spec": "staged review", "tickets": ['
+                            '{"worker_type": "research", "task": "pass 1: docs"},'
+                            '{"worker_type": "research", "task": "pass 2: core"},'
+                            '{"worker_type": "research", "task": "pass 3: tests"},'
+                            '{"worker_type": "general", "task": "pass 4: synthesize"}'
+                            ']}',
+                    input_tokens=10,
+                    output_tokens=40,
+                )
+
+        spec, tickets, _ = _produce_spec(
+            "adversarial review of the entire codebase",
+            adapter=_FakeAdapter(),
+            dry_run=False,
+            log=lambda m: None,
+        )
+        # Should use the large-scope spec system (allows 4-6 tickets)
+        assert "staged" in captured["system"].lower() or "domain" in captured["system"].lower()
+        assert len(tickets) == 4

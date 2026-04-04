@@ -99,3 +99,61 @@ def test_levels_diamond():
 
 def test_levels_empty():
     assert build_execution_levels({}) == []
+
+
+# ---------------------------------------------------------------------------
+# Large-scope review detection
+# ---------------------------------------------------------------------------
+
+from planner import _is_large_scope_review, decompose
+
+
+class TestLargeScopeDetection:
+    def test_positive_cases(self):
+        assert _is_large_scope_review("adversarial review of the entire codebase")
+        assert _is_large_scope_review("comprehensive review of the full repo")
+        assert _is_large_scope_review("full audit of all modules")
+        assert _is_large_scope_review("codebase review for security issues")
+        assert _is_large_scope_review("audit the codebase")
+        assert _is_large_scope_review("review the entire repo")
+
+    def test_negative_cases(self):
+        assert not _is_large_scope_review("review the auth module")
+        assert not _is_large_scope_review("analyze test failures in test_memory.py")
+        assert not _is_large_scope_review("write a summary of memory.py")
+        assert not _is_large_scope_review("run the test suite")
+
+
+class TestStagedPassDecomposition:
+    """decompose() should return staged passes for large-scope goals."""
+
+    def _make_adapter(self, response_json: str):
+        from types import SimpleNamespace
+        class _Adapter:
+            def complete(self, messages, **kw):
+                return SimpleNamespace(
+                    content=response_json,
+                    input_tokens=5,
+                    output_tokens=20,
+                )
+        return _Adapter()
+
+    def test_staged_pass_returned_for_large_scope(self):
+        passes = [
+            "Pass 1/3 — Architecture: read CLAUDE.md and map modules",
+            "Pass 2/3 — Core: audit agent_loop.py and step_exec.py [after:1]",
+            "Pass 3/3 — Synthesize findings [after:1,2]",
+        ]
+        adapter = self._make_adapter(f'["{passes[0]}", "{passes[1]}", "{passes[2]}"]')
+        result = decompose("adversarial review of the entire codebase", adapter, max_steps=8)
+        assert len(result) == 3
+        assert "Pass 1" in result[0]
+        assert "Pass 3" in result[2]
+
+    def test_staged_pass_not_triggered_for_normal_goal(self):
+        """Normal goals should go through multi-plan, not staged-pass."""
+        steps = ["Step 1: read auth.py", "Step 2: analyze patterns", "Step 3: write report"]
+        adapter = self._make_adapter(f'["{steps[0]}", "{steps[1]}", "{steps[2]}"]')
+        result = decompose("review the auth module for injection risks", adapter, max_steps=8)
+        # Should return the multi-plan result (all 3 steps, since adapter always returns same JSON)
+        assert len(result) == 3

@@ -1151,6 +1151,32 @@ def run_agent_loop(
             log.warning("max_iterations reached: %d/%d steps done, %d remaining, tokens=%d",
                         len(step_outcomes), len(step_outcomes) + len(remaining_steps),
                         len(remaining_steps), total_tokens_in + total_tokens_out)
+
+            # Budget ceiling: enqueue a continuation task so the tree traversal continues
+            # in the next agent invocation rather than silently dropping remaining work.
+            if remaining_steps:
+                try:
+                    from task_store import enqueue as _ts_enqueue
+                    _done_count = sum(1 for s in step_outcomes if s.status == "done")
+                    _cont_reason = (
+                        f"CONTINUATION of: {goal}\n\n"
+                        f"Previous pass completed {_done_count}/{len(step_outcomes)} steps "
+                        f"before hitting budget ceiling (max_iterations={max_iterations}).\n"
+                        f"Remaining work ({len(remaining_steps)} steps):\n"
+                        + "\n".join(f"- {s[:120]}" for s in remaining_steps[:10])
+                    )
+                    _cont_task = _ts_enqueue(
+                        lane="agenda",
+                        source="loop_continuation",
+                        reason=_cont_reason,
+                        parent_job_id=loop_id,
+                    )
+                    log.info("budget_ceiling_continuation: enqueued %s with %d remaining steps "
+                             "(parent=%s)", _cont_task["job_id"], len(remaining_steps), loop_id)
+                    stuck_reason += f"; continuation enqueued as {_cont_task['job_id']}"
+                except Exception as _ce:
+                    log.warning("failed to enqueue continuation task: %s", _ce)
+
             break
 
         # Budget-aware landing: when only 2 iterations remain and there are
