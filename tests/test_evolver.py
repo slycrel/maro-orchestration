@@ -242,6 +242,7 @@ def test_run_evolver_generates_suggestions():
     ]
     with patch("evolver.load_outcomes", return_value=outcomes), \
          patch("evolver._llm_analyze", return_value=(["pattern 1"], raw_suggestions)), \
+         patch("evolver.scan_outcomes_for_signals", return_value=[]), \
          patch("evolver._save_suggestions") as mock_save:
         report = run_evolver(dry_run=False, verbose=False, notify=False)
 
@@ -259,6 +260,7 @@ def test_run_evolver_saves_suggestions(tmp_path):
     ]
     with patch("evolver.load_outcomes", return_value=outcomes), \
          patch("evolver._llm_analyze", return_value=([], raw_suggestions)), \
+         patch("evolver.scan_outcomes_for_signals", return_value=[]), \
          patch("evolver._suggestions_path", return_value=tmp_path / "suggestions.jsonl"):
         report = run_evolver(dry_run=False, verbose=False, notify=False)
 

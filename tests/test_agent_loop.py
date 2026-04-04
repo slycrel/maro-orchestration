@@ -983,6 +983,7 @@ def test_generate_refinement_hint_uses_llm_response():
 # Cost budget
 # ---------------------------------------------------------------------------
 
+@pytest.mark.slow
 def test_cost_budget_stops_loop(monkeypatch, tmp_path):
     """Loop stops when estimated USD cost exceeds cost_budget + slush."""
     _setup_workspace(monkeypatch, tmp_path)

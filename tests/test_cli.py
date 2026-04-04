@@ -1,16 +1,41 @@
+import contextlib
+import io
 import json
 import os
 import subprocess
+import sys
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
+import cli as _cli_module
+
+
+class _RunResult:
+    """Mimics subprocess.CompletedProcess enough for existing test assertions."""
+    def __init__(self, returncode: int, stdout: str, stderr: str):
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
 
 
 def _run(tmp_path, *args):
-    env = os.environ.copy()
-    env["OPENCLAW_WORKSPACE"] = str(tmp_path)
-    return subprocess.run(["python3", "src/cli.py", *args], cwd=ROOT, env=env, capture_output=True, text=True)
+    """Run cli.main() in-process with OPENCLAW_WORKSPACE pointed at tmp_path."""
+    prev = os.environ.get("OPENCLAW_WORKSPACE")
+    os.environ["OPENCLAW_WORKSPACE"] = str(tmp_path)
+    out = io.StringIO()
+    err = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            rc = _cli_module.main(list(args))
+    except SystemExit as e:
+        rc = e.code if isinstance(e.code, int) else 1
+    finally:
+        if prev is None:
+            os.environ.pop("OPENCLAW_WORKSPACE", None)
+        else:
+            os.environ["OPENCLAW_WORKSPACE"] = prev
+    return _RunResult(rc or 0, out.getvalue(), err.getvalue())
 
 
 def test_cli_init_next_done_report(tmp_path):
@@ -446,6 +471,8 @@ def test_cli_tick_review_timeout_blocks_and_records_trace(tmp_path):
     assert any(event.get("bridge") == "review-command" for event in trace)
 
 
+import pytest
+@pytest.mark.slow
 def test_cli_smoke_script(tmp_path):
     env = os.environ.copy()
     env["TMPDIR"] = str(tmp_path)
