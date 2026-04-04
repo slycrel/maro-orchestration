@@ -32,6 +32,15 @@ Session 10: GStack Tier 1 steals (decision taxonomy + confidence gates + anti-sy
 - `_PrefixResult` dataclass carries all parsed flags cleanly into `handle()`
 - 11 new tests: single prefix, stacking, effort model tier, ultraplan max_steps, verify=ralph alias, case-insensitive, registry completeness check
 
+## [1.10.5] - 2026-04-04
+
+Skill text as steering (Meta-Harness steal). 2469 tests, 5 skipped.
+
+### Added — optimization_objective field on Skill (Meta-Harness steal)
+- `src/skills.py` — `optimization_objective: str = ""` added to Skill dataclass; wired into `_skill_to_dict()`, `_dict_to_skill()` (backward-compatible via `.get()`), `format_skills_for_prompt()` (shown when non-empty as "Optimize for: ..."), `compute_skill_hash()` (field included in hash so mutations are detected)
+- `src/skill_loader.py` — `export_skill_as_markdown()` writes `optimization_objective: "..."` in YAML frontmatter when non-empty
+- 8 new tests: default empty, round-trips through dict, missing-key default, prompt includes/excludes, hash changes, export includes/omits
+
 ## [1.10.4] - 2026-04-04
 
 Auto-resume on rate limits — multi-cycle polling retry. 2461 tests, 5 skipped.
