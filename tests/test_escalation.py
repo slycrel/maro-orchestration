@@ -46,11 +46,14 @@ class TestHandleEscalationDryRun:
 
 
 class TestHandleEscalationWithLLM:
-    def _make_adapter(self, action: str, revised_goal: str = ""):
+    def _make_adapter(self, action: str, revised_goal: str = "",
+                      decision_class: str = "mechanical", confidence: int = 8):
         class _Adapter:
             def complete(self, messages, **kw):
                 body = {
                     "action": action,
+                    "decision_class": decision_class,
+                    "confidence": confidence,
                     "reasoning": f"test reasoning for {action}",
                     "summary_for_user": "test summary",
                 }
@@ -129,6 +132,61 @@ class TestHandleEscalationWithLLM:
         task = _make_escalation_task(depth=2)
         result = handle_escalation(task, adapter=_BadAdapter())
         assert result.action == "surface"
+
+    def test_decision_class_and_confidence_in_result(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        task = _make_escalation_task(depth=2)
+        result = handle_escalation(
+            task, adapter=self._make_adapter("close", decision_class="mechanical", confidence=9)
+        )
+        assert result.decision_class == "mechanical"
+        assert result.confidence == 9
+
+    def test_user_challenge_overrides_to_surface(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        task = _make_escalation_task(depth=2)
+        # LLM says "continue" but classifies as user_challenge — must surface
+        result = handle_escalation(
+            task, adapter=self._make_adapter("continue", decision_class="user_challenge", confidence=7)
+        )
+        assert result.action == "surface"
+
+    def test_low_confidence_overrides_to_surface(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        task = _make_escalation_task(depth=2)
+        result = handle_escalation(
+            task, adapter=self._make_adapter("close", decision_class="mechanical", confidence=3)
+        )
+        assert result.action == "surface"
+        assert "Low confidence" in result.summary_for_user
+
+    def test_medium_confidence_adds_caveat(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        task = _make_escalation_task(depth=2)
+        result = handle_escalation(
+            task, adapter=self._make_adapter("close", decision_class="taste", confidence=6)
+        )
+        # Action preserved (not overridden) but caveat prepended
+        assert result.action == "close"
+        assert "6/10" in result.summary_for_user
+
+    def test_calibration_log_written(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        import json
+        from pathlib import Path
+        # Point memory dir to tmp_path by monkeypatching Path resolution
+        mem_dir = tmp_path / "memory"
+        mem_dir.mkdir()
+        import unittest.mock as _mock
+        cal_path = mem_dir / "calibration.jsonl"
+        with _mock.patch("pathlib.Path.mkdir"):
+            # Patch the resolved path used in handle_escalation
+            with _mock.patch("builtins.open", _mock.mock_open()) as mock_file:
+                task = _make_escalation_task(depth=2)
+                handle_escalation(task, adapter=self._make_adapter("close", confidence=8))
+                # Verify open was called with a calibration path
+                calls = [str(c) for c in mock_file.call_args_list]
+                assert any("calibration" in c for c in calls)
 
 
 # ---------------------------------------------------------------------------

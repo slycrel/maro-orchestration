@@ -22,6 +22,24 @@ log = logging.getLogger("poe.planner")
 
 
 # ---------------------------------------------------------------------------
+# Anti-sycophancy rules (injected into every planning prompt)
+# ---------------------------------------------------------------------------
+
+# Stolen from gstack/office-hours: explicit constraints prevent drift toward
+# validation-seeking in long planning chains. The planner must take positions,
+# not hedge — hedged plans produce hedged steps that produce hedged outcomes.
+ANTI_SYCOPHANCY_RULES = textwrap.dedent("""\
+    ANTI-SYCOPHANCY RULES (non-negotiable):
+    - Take a position. State your recommendation clearly — never answer with "it depends" alone.
+    - If the goal contains a bad assumption or is too vague to decompose, name it.
+    - State what evidence or information would change your plan.
+    - Never open with affirmations: no "Great!", "Certainly!", "Of course!", "Happy to help!".
+    - Prefer honest uncertainty over false confidence. "I don't know X, so step N reads X first"
+      is correct. Pretending to know X and producing a wrong plan is not.
+""").strip()
+
+
+# ---------------------------------------------------------------------------
 # Large-scope review detection
 # ---------------------------------------------------------------------------
 
@@ -62,6 +80,8 @@ _STAGED_PASS_SYSTEM = textwrap.dedent("""\
 
     OUTPUT FORMAT: JSON array of pass strings. No prose. Each pass is one sentence under 25 words.
 """).strip()
+
+_STAGED_PASS_SYSTEM = _STAGED_PASS_SYSTEM + "\n\n" + ANTI_SYCOPHANCY_RULES
 
 
 # ---------------------------------------------------------------------------
@@ -123,6 +143,8 @@ DECOMPOSE_SYSTEM = textwrap.dedent("""\
     Respond ONLY with a JSON array of step strings. No prose, no explanation.
     Each step is ONE sentence under 20 words — a precise work order for an execution agent.
 """).strip()
+
+DECOMPOSE_SYSTEM = DECOMPOSE_SYSTEM + "\n\n" + ANTI_SYCOPHANCY_RULES
 
 
 # ---------------------------------------------------------------------------

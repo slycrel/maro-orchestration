@@ -144,6 +144,8 @@ _SPEC_SYSTEM = textwrap.dedent("""\
     - Worker tickets must be concrete and specific (not vague meta-tasks).
     - Order tickets so each one can use previous results as context.
     - Pick the right worker type for each ticket.
+    - Take a position on scope and approach. If the directive is ambiguous, name the
+      assumption you're making rather than hedging. State what would change your plan.
 """).strip()
 
 _REVIEW_SYSTEM = textwrap.dedent("""\
@@ -255,6 +257,10 @@ _LARGE_SCOPE_SPEC_SYSTEM = textwrap.dedent("""\
     - Each ticket must be independently executable with a bounded file/scope set.
     - Concrete file names or module areas are better than vague descriptions.
     - Pick the right worker type for each ticket.
+    - Take a position on which domain areas matter most. Don't produce equal-weight coverage
+      if the directive implies a specific concern — lead with the riskiest area.
+    - State what evidence would change the staged decomposition (e.g. if the repo is small,
+      fewer passes; if security is the stated concern, security gets its own early ticket).
 """).strip()
 
 
@@ -804,7 +810,23 @@ _ESCALATION_SYSTEM = textwrap.dedent("""\
     - What remains (incomplete steps)
     - The continuation depth (how many passes have been attempted)
 
-    Decide ONE of:
+    DECISION TAXONOMY — classify your decision before choosing an action:
+
+    MECHANICAL: The right move is obvious from the evidence. No human judgment needed.
+      Auto-decide. Log reasoning but do not surface. Examples: scope is clearly bounded,
+      completed work clearly answers the core question, goal is unambiguously too large.
+
+    TASTE: A reasonable person could disagree with this call, but you have a defensible position.
+      Auto-decide. Surface your reasoning prominently in summary_for_user so the operator
+      can override if they disagree. Examples: close vs. continue is a judgment call,
+      narrowing strategy has trade-offs, partial result quality is debatable.
+
+    USER_CHALLENGE: This requires human judgment. Cannot be auto-decided.
+      Always output action="surface". Provide a clear framing of the decision the operator
+      needs to make. Examples: contradictory signals, ethical/policy questions, scope ambiguity
+      that depends on unstated operator preferences, risk of destroying prior work.
+
+    ACTIONS:
     - "continue": remaining work is valid and worth pursuing; spawn another focused pass
     - "narrow": scope is still too broad; rewrite the goal to a smaller, achievable target
       (provide a revised_goal in your response)
@@ -815,12 +837,27 @@ _ESCALATION_SYSTEM = textwrap.dedent("""\
     - "continue" only if the remaining work is distinct and bounded (not the same breadth as the original)
     - "narrow" when the original goal was genuinely too large but a smaller slice would be valuable
     - "close" when the completed work already answers the core question even if incomplete
-    - "surface" when there is no clear automated path forward (contradictory signals, policy questions, etc.)
+    - "surface" when there is no clear automated path forward (USER_CHALLENGE cases always surface)
     - Never "continue" indefinitely — prefer "close" or "surface" over a fifth+ continuation
+
+    CONFIDENCE SCORE (1–10):
+    Rate your confidence in this decision. Be calibrated — not all decisions are equally clear.
+    - 8–10: Mechanical decisions with strong evidence. Act without caveat.
+    - 5–7: Taste decisions. Flag uncertainty in summary_for_user.
+    - 1–4: Genuine uncertainty. Override to "surface" regardless of your action choice.
+
+    ANTI-SYCOPHANCY RULES (non-negotiable):
+    - Take a position. State your decision clearly — never answer with "it depends" alone.
+    - If the escalation context contains a bad assumption, name it.
+    - State what information would change this decision.
+    - Never open with affirmations: no "Great!", "Certainly!", "Of course!", "Happy to help!".
+    - Prefer honest uncertainty over false confidence. If you don't know, score low and surface.
 
     Respond with a JSON object:
     {
       "action": "continue" | "narrow" | "close" | "surface",
+      "decision_class": "mechanical" | "taste" | "user_challenge",
+      "confidence": <integer 1-10>,
       "reasoning": "one or two sentences explaining the decision",
       "revised_goal": "narrowed goal string (only if action == 'narrow')",
       "summary_for_user": "brief status summary for operator/user (always include)"
@@ -834,6 +871,8 @@ class EscalationDecision:
     reasoning: str
     followup_task_id: Optional[str] = None   # task enqueued as a result, if any
     summary_for_user: str = ""
+    decision_class: str = "mechanical"   # "mechanical" | "taste" | "user_challenge"
+    confidence: int = 5                  # 1–10 calibrated confidence score
 
 
 def handle_escalation(
@@ -910,6 +949,50 @@ def handle_escalation(
     reasoning = safe_str(data.get("reasoning", ""))
     summary_for_user = safe_str(data.get("summary_for_user", ""))
     revised_goal = safe_str(data.get("revised_goal", ""))
+    decision_class = safe_str(data.get("decision_class", "mechanical")).strip().lower()
+    if decision_class not in ("mechanical", "taste", "user_challenge"):
+        decision_class = "mechanical"
+    try:
+        confidence = int(data.get("confidence", 5))
+        confidence = max(1, min(10, confidence))
+    except (TypeError, ValueError):
+        confidence = 5
+
+    # Confidence-gated enforcement: low confidence overrides to surface
+    if confidence < 5:
+        log.info("escalation confidence=%d < 5, overriding action=%s to surface", confidence, action)
+        action = "surface"
+        summary_for_user = (
+            f"[Low confidence ({confidence}/10) — escalating to operator] " + summary_for_user
+        )
+    elif confidence <= 6:
+        # Taste-level uncertainty: add caveat
+        summary_for_user = f"[Confidence {confidence}/10] " + summary_for_user
+
+    # User-challenge decisions always surface regardless of LLM action choice
+    if decision_class == "user_challenge" and action != "surface":
+        log.info("escalation decision_class=user_challenge, overriding action=%s to surface", action)
+        action = "surface"
+
+    # Log calibration event for self-improvement
+    try:
+        import json as _json
+        import time as _time
+        _cal_dir = Path(__file__).resolve().parent.parent / "memory"
+        _cal_dir.mkdir(parents=True, exist_ok=True)
+        _cal_path = _cal_dir / "calibration.jsonl"
+        with open(_cal_path, "a", encoding="utf-8") as _f:
+            _f.write(_json.dumps({
+                "ts": _time.time(),
+                "event": "escalation_decision",
+                "job_id": job_id,
+                "depth": depth,
+                "action": action,
+                "decision_class": decision_class,
+                "confidence": confidence,
+            }) + "\n")
+    except Exception as _exc:
+        log.debug("calibration log failed (non-fatal): %s", _exc)
 
     log.info("escalation_decision job_id=%s action=%s reasoning=%r", job_id, action, reasoning[:80])
 
@@ -996,6 +1079,8 @@ def handle_escalation(
         reasoning=reasoning,
         followup_task_id=followup_task_id,
         summary_for_user=summary_for_user,
+        decision_class=decision_class,
+        confidence=confidence,
     )
 
 
