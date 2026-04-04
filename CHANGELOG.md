@@ -1,5 +1,27 @@
 # Changelog
 
+## [1.10.9] - 2026-04-04
+
+inject_steps step-shaper fix. 2506 tests, 5 skipped.
+
+### Fixed — inject_steps bypass of step-shaper (Codex review)
+- `src/agent_loop.py` — compound exec+analyze steps injected mid-run via `inject_steps` previously bypassed the pre-execution `_is_combined_exec_analyze` shaper, allowing bad step shapes into the live plan after the initial guard had fired
+- Serial inject path (line ~1910): `_split_exec_analyze()` now applied to each injected step before prepending to `remaining_steps`; shaped parts logged
+- Parallel-batch inject path: same treatment applied to `_batch_injected` before capping at 6 and inserting into plan
+- No new tests needed — existing step-shape tests cover the shaper; behavior change is in injection paths
+
+## [1.10.8] - 2026-04-04
+
+Dep-aware parallel execution pool. 2506 tests, 5 skipped.
+
+### Added — `_run_steps_dag()` in agent_loop.py (open-multi-agent steal)
+- Semaphore-gated pool where tasks start as soon as their specific deps complete — auto-unblock replaces level-based "wait for whole level" scheduling
+- Completed dep results passed as `completed_context` to downstream steps: "Synthesize [after:1,2]" receives actual outputs of steps 1 and 2 (not empty context)
+- Diamond, pipeline, and mixed DAG topologies handled correctly; blocked/errored deps still unblock downstream (resilient)
+- Wired as preferred execution path when `_parallel_levels` is non-empty (explicit `[after:N]` parallelism detected by `parse_dependencies` + `build_execution_levels`)
+- Falls back to heuristic fan-out (legacy) for plans without explicit dep tags; serial loop unchanged for sequential plans
+- 12 new tests in `tests/test_dag_executor.py`: ordering guarantees, dep context injection, blocked-dep resilience, concurrency limiting, round-trip with `parse_dependencies`
+
 ## [1.10.7] - 2026-04-04
 
 Harness self-optimization loop (Meta-Harness steal). 2494 tests, 5 skipped.
