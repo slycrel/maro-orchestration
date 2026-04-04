@@ -23,6 +23,7 @@ from agent_loop import (
     _decompose,
     _execute_step,
     _goal_to_slug,
+    _write_plan_manifest,
     run_agent_loop,
     run_parallel_loops,
 )
@@ -1111,3 +1112,110 @@ def test_run_agent_loop_ensure_project_always_called_even_when_dir_exists(monkey
     # ensure_project must have run again and recreated NEXT.md
     assert (proj_dir / "NEXT.md").exists()
     assert result.status in ("done", "stuck")
+
+
+# ---------------------------------------------------------------------------
+# Plan manifest (run visibility)
+# ---------------------------------------------------------------------------
+
+def test_write_plan_manifest_creates_file(monkeypatch, tmp_path):
+    """_write_plan_manifest writes a markdown file before execution starts."""
+    monkeypatch.setenv("POE_ORCH_ROOT", str(tmp_path))
+    import importlib, agent_loop as al
+    importlib.reload(al)
+
+    steps = ["Research the topic", "Summarize findings", "Write report"]
+    result = al._write_plan_manifest(
+        project="test-proj",
+        loop_id="abc12345",
+        goal="Do research",
+        planned_steps=steps,
+        start_ts="2026-04-04T00:00:00Z",
+    )
+    assert result is not None
+    path = tmp_path / "projects" / "test-proj" / "artifacts" / "loop-abc12345-plan.md"
+    assert path.exists()
+    content = path.read_text()
+    assert "abc12345" in content
+    assert "Do research" in content
+    # All 3 steps listed
+    assert "Research the topic" in content
+    assert "Summarize findings" in content
+    assert "Write report" in content
+    # Status is running (default)
+    assert "running" in content
+
+
+def test_write_plan_manifest_shows_step_status(monkeypatch, tmp_path):
+    """Plan manifest marks completed steps with ✅ and blocked with ❌."""
+    monkeypatch.setenv("POE_ORCH_ROOT", str(tmp_path))
+    import importlib, agent_loop as al
+    importlib.reload(al)
+
+    steps = ["Step one", "Step two", "Step three"]
+    outcomes = [
+        al.StepOutcome(index=1, text="Step one", status="done", result="ok",
+                       iteration=1, tokens_in=10, tokens_out=20, elapsed_ms=500),
+        al.StepOutcome(index=2, text="Step two", status="blocked", result="failed",
+                       iteration=2, tokens_in=5, tokens_out=5, elapsed_ms=200),
+    ]
+    al._write_plan_manifest(
+        project="test-proj",
+        loop_id="xyz99999",
+        goal="multi-step goal",
+        planned_steps=steps,
+        start_ts="2026-04-04T00:00:00Z",
+        step_outcomes=outcomes,
+    )
+    content = (tmp_path / "projects" / "test-proj" / "artifacts" / "loop-xyz99999-plan.md").read_text()
+    assert "✅" in content   # done step
+    assert "❌" in content   # blocked step
+    assert "⬜" in content   # pending step 3
+    assert "500ms" in content
+    assert "Execution Log" in content
+
+
+def test_write_plan_manifest_final_status(monkeypatch, tmp_path):
+    """Final manifest write includes done/stuck status and total elapsed."""
+    monkeypatch.setenv("POE_ORCH_ROOT", str(tmp_path))
+    import importlib, agent_loop as al
+    importlib.reload(al)
+
+    steps = ["Only step"]
+    outcomes = [
+        al.StepOutcome(index=1, text="Only step", status="done", result="result",
+                       iteration=1, tokens_in=10, tokens_out=10, elapsed_ms=999),
+    ]
+    al._write_plan_manifest(
+        project="p",
+        loop_id="finaltest",
+        goal="goal",
+        planned_steps=steps,
+        start_ts="2026-04-04T00:00:00Z",
+        step_outcomes=outcomes,
+        status="done",
+        elapsed_ms=1500,
+    )
+    content = (tmp_path / "projects" / "p" / "artifacts" / "loop-finaltest-plan.md").read_text()
+    assert "done" in content
+    assert "1500ms" in content
+
+
+def test_run_agent_loop_writes_plan_manifest(monkeypatch, tmp_path):
+    """run_agent_loop writes a plan manifest to artifacts/ after decomposition."""
+    monkeypatch.setenv("POE_ORCH_ROOT", str(tmp_path))
+    result = run_agent_loop(
+        "write a plan for research",
+        project="vis-test",
+        dry_run=True,
+    )
+    # Find the manifest file
+    artifacts = tmp_path / "projects" / "vis-test" / "artifacts"
+    assert artifacts.exists(), "artifacts dir should be created"
+    manifests = list(artifacts.glob("loop-*-plan.md"))
+    assert len(manifests) == 1, f"expected 1 plan manifest, found {manifests}"
+    content = manifests[0].read_text()
+    assert "vis-test" in content
+    assert "write a plan for research" in content
+    # Terminal status should be written
+    assert any(s in content for s in ("done", "stuck"))
