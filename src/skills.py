@@ -83,6 +83,7 @@ class Skill:
     consecutive_failures: int = 0   # Phase 32: streak of consecutive failures (resets on success)
     consecutive_successes: int = 0  # Phase 32: streak of consecutive successes (for half-open recovery)
     circuit_state: str = "closed"   # Phase 32: "closed" | "half_open" | "open"
+    optimization_objective: str = ""  # Meta-Harness: what the skill should optimize for (guides harness improver)
 
 
 @dataclass
@@ -226,6 +227,7 @@ def _skill_to_dict(skill: Skill) -> dict:
         "consecutive_failures": skill.consecutive_failures,
         "consecutive_successes": skill.consecutive_successes,
         "circuit_state": skill.circuit_state,
+        "optimization_objective": skill.optimization_objective,
     }
 
 
@@ -247,6 +249,7 @@ def _dict_to_skill(d: dict) -> Skill:
         consecutive_failures=int(d.get("consecutive_failures", 0)),
         consecutive_successes=int(d.get("consecutive_successes", 0)),
         circuit_state=d.get("circuit_state", "closed"),
+        optimization_objective=d.get("optimization_objective", ""),
     )
 
 
@@ -545,6 +548,8 @@ def format_skills_for_prompt(skills: List[Skill]) -> str:
     lines = ["Reusable skills from past successful goals:"]
     for skill in skills:
         lines.append(f"\nSkill: {skill.name} — {skill.description}")
+        if skill.optimization_objective:
+            lines.append(f"Optimize for: {skill.optimization_objective}")
         lines.append("Steps:")
         for step in skill.steps_template:
             lines.append(f"  - {step}")
@@ -556,11 +561,12 @@ def format_skills_for_prompt(skills: List[Skill]) -> str:
 # ---------------------------------------------------------------------------
 
 def compute_skill_hash(skill: Skill) -> str:
-    """SHA256 of skill content (name + description + steps_template joined)."""
+    """SHA256 of skill content (name + description + steps_template + optimization_objective joined)."""
     content = "\n".join([
         skill.name,
         skill.description,
         "\n".join(skill.steps_template),
+        skill.optimization_objective,
     ])
     return hashlib.sha256(content.encode("utf-8")).hexdigest()
 

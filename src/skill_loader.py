@@ -287,6 +287,7 @@ def export_skill_as_markdown(
     success_rate = getattr(skill, "success_rate", 1.0)
     use_count = getattr(skill, "use_count", 0)
     tier = getattr(skill, "tier", "provisional")
+    optimization_objective = getattr(skill, "optimization_objective", "")
 
     # Format triggers for YAML inline list
     trigger_str = "[" + ", ".join(repr(t) for t in triggers[:8]) + "]"
@@ -298,6 +299,10 @@ def export_skill_as_markdown(
         f'description: "{description}"',
         "roles_allowed: [worker]",
         f"triggers: {trigger_str}",
+    ]
+    if optimization_objective:
+        lines.append(f'optimization_objective: "{optimization_objective}"')
+    lines += [
         "---",
         "",
         f"# {name}",

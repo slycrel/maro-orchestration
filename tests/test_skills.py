@@ -1221,3 +1221,70 @@ def test_circuit_breaker_halfopen_failure_reopens(monkeypatch, tmp_path):
     update_skill_utility(skill.id, success=False, failure_reason="still broken")
     updated = next(s for s in load_skills() if s.id == skill.id)
     assert updated.circuit_state == "open"
+
+
+# ---------------------------------------------------------------------------
+# optimization_objective field (Meta-Harness skill text as steering)
+# ---------------------------------------------------------------------------
+
+class TestOptimizationObjective:
+    def test_default_is_empty_string(self):
+        skill = _make_skill()
+        assert skill.optimization_objective == ""
+
+    def test_round_trips_through_dict(self):
+        from skills import _dict_to_skill
+        skill = _make_skill()
+        skill.optimization_objective = "minimize LLM calls per step while maintaining accuracy"
+        d = _skill_to_dict(skill)
+        assert d["optimization_objective"] == skill.optimization_objective
+        restored = _dict_to_skill(d)
+        assert restored.optimization_objective == skill.optimization_objective
+
+    def test_dict_to_skill_missing_key_defaults_to_empty(self):
+        from skills import _dict_to_skill
+        d = {
+            "id": "sk-test", "name": "test", "description": "desc",
+            "trigger_patterns": [], "steps_template": [],
+            "source_loop_ids": [], "created_at": "",
+        }
+        skill = _dict_to_skill(d)
+        assert skill.optimization_objective == ""
+
+    def test_format_skills_for_prompt_includes_objective(self):
+        skill = _make_skill()
+        skill.optimization_objective = "reduce token cost"
+        result = format_skills_for_prompt([skill])
+        assert "Optimize for: reduce token cost" in result
+
+    def test_format_skills_for_prompt_omits_when_empty(self):
+        skill = _make_skill()
+        skill.optimization_objective = ""
+        result = format_skills_for_prompt([skill])
+        assert "Optimize for" not in result
+
+    def test_compute_skill_hash_changes_with_objective(self):
+        skill = _make_skill()
+        h1 = compute_skill_hash(skill)
+        skill.optimization_objective = "new objective"
+        h2 = compute_skill_hash(skill)
+        assert h1 != h2
+
+    def test_export_skill_as_markdown_includes_objective(self, tmp_path):
+        from skill_loader import export_skill_as_markdown
+        skill = _make_skill("my test skill")
+        skill.optimization_objective = "minimize steps while preserving quality"
+        path = export_skill_as_markdown(skill, skills_dir=tmp_path, overwrite=True)
+        assert path is not None
+        content = path.read_text()
+        assert "optimization_objective" in content
+        assert "minimize steps while preserving quality" in content
+
+    def test_export_skill_omits_objective_when_empty(self, tmp_path):
+        from skill_loader import export_skill_as_markdown
+        skill = _make_skill("another skill")
+        skill.optimization_objective = ""
+        path = export_skill_as_markdown(skill, skills_dir=tmp_path, overwrite=True)
+        assert path is not None
+        content = path.read_text()
+        assert "optimization_objective" not in content
