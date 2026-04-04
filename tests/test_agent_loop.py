@@ -1346,28 +1346,20 @@ def test_is_combined_exec_analyze_does_not_over_trigger():
 # ---------------------------------------------------------------------------
 
 def test_budget_ceiling_enqueues_continuation(monkeypatch, tmp_path):
-    """When max_iterations is hit with remaining steps, a continuation task is enqueued."""
-    import sys
-    sys.path.insert(0, str(tmp_path))
+    """Below depth threshold: budget ceiling enqueues a continuation task."""
+    import unittest.mock as mock
     monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("POE_MAX_CONTINUATION_DEPTH", "4")
 
     enqueued = {}
 
-    def _fake_enqueue(lane, source, reason, parent_job_id):
+    def _fake_enqueue(lane, source, reason, parent_job_id, continuation_depth=0):
         enqueued["lane"] = lane
         enqueued["source"] = source
         enqueued["reason"] = reason
-        enqueued["parent"] = parent_job_id
+        enqueued["depth"] = continuation_depth
         return {"job_id": "cont-001"}
 
-    import agent_loop as _al
-    monkeypatch.setattr(_al, "_ts_enqueue_ref", None, raising=False)
-
-    import task_store as _ts
-    monkeypatch.setattr(_ts, "enqueue", _fake_enqueue)
-
-    # Patch task_store import inside agent_loop's closure
-    import unittest.mock as mock
     with mock.patch("task_store.enqueue", _fake_enqueue):
         from agent_loop import run_agent_loop, _DryRunAdapter
         result = run_agent_loop(
@@ -1376,12 +1368,73 @@ def test_budget_ceiling_enqueues_continuation(monkeypatch, tmp_path):
             max_iterations=1,   # force immediate budget ceiling
             max_steps=4,
             dry_run=False,
+            continuation_depth=0,
         )
 
-    # loop hits ceiling and records stuck status
     assert result.status in ("stuck", "done", "partial")
-    # If continuation was enqueued, check it
     if enqueued:
         assert enqueued["source"] == "loop_continuation"
         assert "CONTINUATION" in enqueued["reason"]
         assert enqueued["lane"] == "agenda"
+        assert enqueued["depth"] == 1  # depth incremented
+
+
+def test_budget_ceiling_escalates_at_depth_limit(monkeypatch, tmp_path):
+    """At depth threshold: budget ceiling writes an escalation task, not a continuation."""
+    import unittest.mock as mock
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("POE_MAX_CONTINUATION_DEPTH", "2")
+
+    enqueued = {}
+
+    def _fake_enqueue(lane, source, reason, parent_job_id, continuation_depth=0):
+        enqueued["lane"] = lane
+        enqueued["source"] = source
+        enqueued["reason"] = reason
+        enqueued["depth"] = continuation_depth
+        return {"job_id": "esc-001"}
+
+    with mock.patch("task_store.enqueue", _fake_enqueue):
+        from agent_loop import run_agent_loop, _DryRunAdapter
+        result = run_agent_loop(
+            "adversarial review of the entire codebase",
+            adapter=_DryRunAdapter(),
+            max_iterations=1,   # force immediate budget ceiling
+            max_steps=4,
+            dry_run=False,
+            continuation_depth=2,  # at the limit
+        )
+
+    assert result.status in ("stuck", "done", "partial")
+    if enqueued:
+        # Should escalate, not continue
+        assert enqueued["source"] == "loop_escalation"
+        assert "ESCALATION" in enqueued["reason"]
+        assert "Options:" in enqueued["reason"]
+        assert enqueued["lane"] == "agenda"
+
+
+def test_continuation_depth_in_ancestry_context(monkeypatch, tmp_path):
+    """continuation_depth > 0 injects a CONTINUATION PASS note into ancestry context."""
+    import unittest.mock as mock
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+
+    captured_ancestry = {}
+
+    def _fake_decompose(goal, adapter, max_steps, verbose=False, lessons_context="",
+                        ancestry_context="", skills_context="", cost_context=""):
+        captured_ancestry["ctx"] = ancestry_context
+        return ["single step: do the work"]
+
+    with mock.patch("agent_loop._decompose", _fake_decompose):
+        from agent_loop import run_agent_loop, _DryRunAdapter
+        run_agent_loop(
+            "review the auth module",
+            adapter=_DryRunAdapter(),
+            max_iterations=5,
+            continuation_depth=2,
+        )
+
+    ctx = captured_ancestry.get("ctx", "")
+    assert "CONTINUATION PASS 2" in ctx
+    assert "narrowly" in ctx.lower()

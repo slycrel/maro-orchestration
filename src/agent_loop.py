@@ -773,6 +773,7 @@ def run_agent_loop(
     ralph_verify: bool = False,
     resume_from_loop_id: Optional[str] = None,
     permission_context=None,
+    continuation_depth: int = 0,
 ) -> LoopResult:
     """Run the autonomous loop for a goal.
 
@@ -873,6 +874,19 @@ def run_agent_loop(
         _ancestry_context = build_ancestry_prompt(_ancestry, current_task=goal)
     except Exception:
         _ancestry_context = ""
+
+    # Continuation depth awareness: let the planner know this is pass N of a large task.
+    # This allows the LLM to decompose more narrowly ("this is attempt 2, focus on remaining
+    # items") rather than re-planning from scratch each time.
+    if continuation_depth > 0:
+        _depth_note = (
+            f"CONTINUATION PASS {continuation_depth}: This loop is a continuation of a larger "
+            f"task that exceeded budget in a prior pass. Decompose narrowly — focus on the "
+            f"remaining work described in the goal, not the full original scope."
+        )
+        _ancestry_context = (
+            (_ancestry_context + "\n\n" + _depth_note) if _ancestry_context else _depth_note
+        )
 
     # Merge injected context from mission-level notification hooks (Phase 11)
     if ancestry_context_extra:
@@ -1152,30 +1166,96 @@ def run_agent_loop(
                         len(step_outcomes), len(step_outcomes) + len(remaining_steps),
                         len(remaining_steps), total_tokens_in + total_tokens_out)
 
-            # Budget ceiling: enqueue a continuation task so the tree traversal continues
-            # in the next agent invocation rather than silently dropping remaining work.
+            # Budget ceiling: enqueue a continuation or escalation task.
+            #
+            # Dynamic tree traversal: the soft depth limit (POE_MAX_CONTINUATION_DEPTH,
+            # default 4) is not a hard failure — it's a "kick up" threshold. Below the
+            # limit, spawn a continuation and keep walking the tree. At the limit, write
+            # an escalation that surfaces the situation: "this task has been through N
+            # passes, here's what's done, here's what's left — continue or find an
+            # alternative?" The escalation is a durable, inspectable record that can be
+            # resumed, reprioritized, or closed, rather than silently dropped work.
             if remaining_steps:
                 try:
                     from task_store import enqueue as _ts_enqueue
                     _done_count = sum(1 for s in step_outcomes if s.status == "done")
-                    _cont_reason = (
-                        f"CONTINUATION of: {goal}\n\n"
-                        f"Previous pass completed {_done_count}/{len(step_outcomes)} steps "
-                        f"before hitting budget ceiling (max_iterations={max_iterations}).\n"
-                        f"Remaining work ({len(remaining_steps)} steps):\n"
-                        + "\n".join(f"- {s[:120]}" for s in remaining_steps[:10])
+                    _done_summary = "; ".join(
+                        s.text[:80] for s in step_outcomes if s.status == "done"
                     )
-                    _cont_task = _ts_enqueue(
-                        lane="agenda",
-                        source="loop_continuation",
-                        reason=_cont_reason,
-                        parent_job_id=loop_id,
+                    _remaining_summary = "\n".join(
+                        f"- {s[:120]}" for s in remaining_steps[:10]
                     )
-                    log.info("budget_ceiling_continuation: enqueued %s with %d remaining steps "
-                             "(parent=%s)", _cont_task["job_id"], len(remaining_steps), loop_id)
-                    stuck_reason += f"; continuation enqueued as {_cont_task['job_id']}"
+                    _next_depth = continuation_depth + 1
+
+                    # Read the soft escalation threshold from env (not a hardcoded constant).
+                    # Default 4: allows up to 4 continuation passes before asking "is this
+                    # worth continuing?". Operators can raise this for known deep tasks.
+                    import os as _os
+                    _max_depth = int(_os.environ.get("POE_MAX_CONTINUATION_DEPTH", "4"))
+
+                    if continuation_depth >= _max_depth:
+                        # Escalation path: don't silently continue — kick up.
+                        # The escalation task is a dead-end-with-feedback record that a
+                        # higher-level system (director, operator, user) can resolve:
+                        #   - enqueue a new continuation (continue)
+                        #   - rewrite the goal (pivot)
+                        #   - mark it done with the partial result (close)
+                        _esc_reason = (
+                            f"ESCALATION — task has been through {continuation_depth} continuation "
+                            f"pass(es) without completing.\n\n"
+                            f"Original goal: {goal}\n\n"
+                            f"Accomplished ({_done_count} steps):\n{_done_summary or '(none)'}\n\n"
+                            f"Remaining ({len(remaining_steps)} steps):\n{_remaining_summary}\n\n"
+                            f"Options: (1) enqueue a new continuation with continuation_depth="
+                            f"{_next_depth} to keep going; (2) rewrite the goal to reduce scope; "
+                            f"(3) accept the partial result as-is.\n"
+                            f"Parent loop: {loop_id}"
+                        )
+                        _esc_task = _ts_enqueue(
+                            lane="agenda",
+                            source="loop_escalation",
+                            reason=_esc_reason,
+                            parent_job_id=loop_id,
+                            continuation_depth=continuation_depth,
+                        )
+                        log.warning(
+                            "budget_ceiling_escalation: depth=%d >= max=%d, escalated to %s "
+                            "(parent=%s, %d steps done, %d remaining)",
+                            continuation_depth, _max_depth, _esc_task["job_id"],
+                            loop_id, _done_count, len(remaining_steps),
+                        )
+                        stuck_reason += (
+                            f"; escalated (depth {continuation_depth} >= max {_max_depth}) "
+                            f"as {_esc_task['job_id']}"
+                        )
+                    else:
+                        # Continuation path: keep walking the tree.
+                        _cont_reason = (
+                            f"CONTINUATION of: {goal}\n\n"
+                            f"Pass {continuation_depth + 1} of a multi-pass task. "
+                            f"Previous pass completed {_done_count}/{len(step_outcomes)} steps "
+                            f"before hitting budget ceiling (max_iterations={max_iterations}).\n\n"
+                            f"Accomplished so far:\n{_done_summary or '(none)'}\n\n"
+                            f"Remaining work ({len(remaining_steps)} steps):\n{_remaining_summary}"
+                        )
+                        _cont_task = _ts_enqueue(
+                            lane="agenda",
+                            source="loop_continuation",
+                            reason=_cont_reason,
+                            parent_job_id=loop_id,
+                            continuation_depth=_next_depth,
+                        )
+                        log.info(
+                            "budget_ceiling_continuation: enqueued %s depth=%d with %d remaining "
+                            "steps (parent=%s)",
+                            _cont_task["job_id"], _next_depth, len(remaining_steps), loop_id,
+                        )
+                        stuck_reason += (
+                            f"; continuation (depth {_next_depth}) enqueued as "
+                            f"{_cont_task['job_id']}"
+                        )
                 except Exception as _ce:
-                    log.warning("failed to enqueue continuation task: %s", _ce)
+                    log.warning("failed to enqueue continuation/escalation task: %s", _ce)
 
             break
 

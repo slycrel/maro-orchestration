@@ -49,6 +49,7 @@ def make_task(
     reason: str = "",
     parent_job_id: str = "",
     blocked_by: Optional[List[str]] = None,
+    continuation_depth: int = 0,
 ) -> Dict[str, Any]:
     now = utc_now()
     return {
@@ -61,6 +62,7 @@ def make_task(
         "attempt": 0,
         "parent_job_id": parent_job_id,
         "blocked_by": blocked_by or [],
+        "continuation_depth": continuation_depth,
         "timestamps": {
             "queued_at_utc": now,
             "claimed_at_utc": "",
@@ -127,11 +129,13 @@ def enqueue(
     parent_job_id: str = "",
     blocked_by: Optional[List[str]] = None,
     job_id: Optional[str] = None,
+    continuation_depth: int = 0,
 ) -> Dict[str, Any]:
     """Create a new task and write it to disk."""
     jid = job_id or new_job_id()
     task = make_task(jid, lane=lane, source=source, reason=reason,
-                     parent_job_id=parent_job_id, blocked_by=blocked_by)
+                     parent_job_id=parent_job_id, blocked_by=blocked_by,
+                     continuation_depth=continuation_depth)
 
     # If blocked_by contains task IDs, verify they exist
     if task["blocked_by"]:
