@@ -259,6 +259,27 @@ def handle(
         message = message[len("direct:"):].lstrip()
         _direct_mode = True
 
+    # Magic keyword prefixes — mutate execution behaviour without changing the goal.
+    # ralph:/verify: — enable Ralph per-step verify loop (retries if verifier says RETRY).
+    # pipeline: — inject strong data pipeline enforcement for data-heavy goals.
+    # strict: — enable thorough quality passes (council + debate + cross-ref).
+    _ralph_prefix = False
+    _pipeline_prefix = False
+    _strict_prefix = False
+    _msg_lower_current = message.lower()
+    if _msg_lower_current.startswith("ralph:"):
+        message = message[len("ralph:"):].lstrip()
+        _ralph_prefix = True
+    elif _msg_lower_current.startswith("verify:"):
+        message = message[len("verify:"):].lstrip()
+        _ralph_prefix = True
+    if message.lower().startswith("pipeline:"):
+        message = message[len("pipeline:"):].lstrip()
+        _pipeline_prefix = True
+    if message.lower().startswith("strict:"):
+        message = message[len("strict:"):].lstrip()
+        _strict_prefix = True
+
     # Build adapter
     if adapter is None and not dry_run:
         adapter = build_adapter(model=model or MODEL_CHEAP)
@@ -467,13 +488,14 @@ def handle(
                 elapsed_ms=elapsed,
             )
 
+        _ralph_from_cfg = _cfg.get("ralph_verify", "").strip().lower() == "true"
         _loop_kwargs: dict = dict(
             project=project,
             model=model,
             adapter=adapter,
             dry_run=dry_run,
             verbose=verbose,
-            ralph_verify=_cfg.get("ralph_verify", "").strip().lower() == "true",
+            ralph_verify=_ralph_from_cfg or _ralph_prefix,
         )
         if _ultraplan_max_steps is not None:
             _loop_kwargs["max_steps"] = _ultraplan_max_steps
@@ -487,7 +509,11 @@ def handle(
         if not dry_run and loop_result.status == "done" and _cfg.get("quality_gate", "true") == "true":
             try:
                 from quality_gate import run_quality_gate, next_model_tier
-                _gate_verdict = run_quality_gate(message, loop_result.steps, adapter)
+                _gate_verdict = run_quality_gate(
+                    message, loop_result.steps, adapter,
+                    run_council=_strict_prefix,
+                    run_cross_ref=_strict_prefix,
+                )
                 _contested_claims = _gate_verdict.contested_claims or []
                 if _gate_verdict.escalate:
                     _next_tier = next_model_tier(model or "cheap")

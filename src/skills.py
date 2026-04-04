@@ -824,6 +824,14 @@ def maybe_auto_promote_skills() -> List[str]:
 
     if changed:
         _save_skills(skills)
+        # Hermes steal: auto-export newly promoted skills as SKILL.md curated files
+        for skill in skills:
+            if skill.id in promoted:
+                try:
+                    from skill_loader import export_skill_as_markdown
+                    export_skill_as_markdown(skill)
+                except Exception:
+                    pass  # export is optional, never blocks promotion
 
     return promoted
 

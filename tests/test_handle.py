@@ -388,3 +388,54 @@ class TestDirectModifier:
         result = handle("research polymarket strategies", dry_run=True)
         assert result.message == "research polymarket strategies"
         assert "[direct]" not in result.classification_reason
+
+
+# ---------------------------------------------------------------------------
+# Magic keyword prefixes: ralph:, verify:, pipeline:, strict:
+# ---------------------------------------------------------------------------
+
+class TestMagicKeywordPrefixes:
+    """Magic prefixes strip the keyword and mutate execution behaviour."""
+
+    def test_ralph_strips_prefix(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        result = handle("ralph: research market trends", dry_run=True)
+        assert result.message == "research market trends"
+
+    def test_verify_strips_prefix(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        result = handle("verify: analyze the data", dry_run=True)
+        assert result.message == "analyze the data"
+
+    def test_ralph_case_insensitive(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        result = handle("Ralph: research something", dry_run=True)
+        assert result.message == "research something"
+
+    def test_pipeline_strips_prefix(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        result = handle("pipeline: fetch market data", dry_run=True)
+        assert result.message == "fetch market data"
+
+    def test_strict_strips_prefix(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        result = handle("strict: analyze trading performance", dry_run=True)
+        assert result.message == "analyze trading performance"
+
+    def test_no_ralph_prefix_unchanged(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        result = handle("research market trends", dry_run=True)
+        assert result.message == "research market trends"
+
+    def test_ralph_and_pipeline_combined(self, monkeypatch, tmp_path):
+        # ralph: then pipeline: — both prefixes stripped in sequence
+        _setup(monkeypatch, tmp_path)
+        result = handle("ralph: pipeline: fetch and verify data", dry_run=True)
+        assert result.message == "fetch and verify data"
+
+    def test_verify_equivalent_to_ralph(self, monkeypatch, tmp_path):
+        # verify: is an alias for ralph: — message stripped identically
+        _setup(monkeypatch, tmp_path)
+        r1 = handle("ralph: check the analysis", dry_run=True)
+        r2 = handle("verify: check the analysis", dry_run=True)
+        assert r1.message == r2.message == "check the analysis"

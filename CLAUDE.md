@@ -73,7 +73,7 @@ deploy/              systemd service files
 | 30–39, 43 | Token visibility, skills auto-promotion, token self-improvement, overnight missions, dashboards, skill synthesis, OSS hygiene, structured logging | DONE |
 | 38 | Subpackage Structure | PARTIAL |
 | 40 | Pluggable Memory Backend | TODO |
-| 41 | Tool Registry + Function Calling | DESIGN COMPLETE (see `research/PHASE41_TOOL_REGISTRY_DESIGN.md`) |
+| 41 | Tool Registry + Function Calling | STEPS 1-6 DONE — step 7 (MCP) remains |
 | 42 | Nightly Eval Wired to Evolver | TODO |
 | 44 | Self-Reflection — Run Observer + Failure Classifier | DONE |
 | 45 | Self-Reflection — Recovery Planner | DONE |
@@ -86,7 +86,7 @@ deploy/              systemd service files
 | 55 | lat.md Knowledge Graph | DONE |
 | 56 | Promotion Cycle — Standing Rules + Decision Journal | DONE |
 
-**Active work:** Phases 53-56 complete. Poe now has persistent identity injection (GAP 1), loop resume from checkpoint (GAP 3), a cross-linked knowledge graph (`lat.md/`), and a three-tier self-improving memory: observation → hypothesis → standing rule. Decision journal records and searches architectural decisions before planning. Phase 41 design doc is complete; implementation is next. Ready to connect to openclaw-poe.
+**Active work (as of 2026-04-02):** LLM parse robustness landed — `llm_parse.py` centralizes all JSON/float extraction across 17 modules; bughunter BH011/BH012 detectors prevent regression. Phase 41 steps 1-6 shipped: `tool_registry.py` (composition-time tool gating), `skill_loader.py` (SKILL.md format + progressive disclosure + skill auto-export from skills.jsonl), `step_events.py` (typed pre/post step events with glob matchers), `tool_search.py` (deferred tool resolution + LLM re-call). Magic keyword prefixes (`ralph:`, `verify:`, `pipeline:`, `strict:`) added to handle.py. `poe-doctor` extended with Phase 41 checks. 2282 tests passing. Phase 41 step 7 (MCP) remains.
 
 See `ROADMAP.md` for full phase specs. See `CHANGELOG.md` for what shipped.
 
@@ -98,11 +98,11 @@ These were identified from studying ClawTeam, MetaClaw, superpowers, oh-my-claud
 
 | Item | What | Priority |
 |------|------|----------|
-| `task_store.py` port | FileTaskStore: file-per-task JSON, fcntl locking, DAG dep resolution, stale claim recovery. Replaces bash task-queue.sh pattern. | NOW |
-| Ralph verify loop | `verify_step_id` on AGENDA steps — run verifier after step, retry if fails. Explicit quality gate complementing Inspector. | NEXT |
-| Magic keyword triggers | `ralph:`, `pipeline:`, `verify:`, `strict:` prefixes in goal text mutate execution behavior. Could live in `intent.py`. | NEXT |
+| `task_store.py` port | FileTaskStore: file-per-task JSON, fcntl locking, DAG dep resolution, stale claim recovery. Replaces bash task-queue.sh pattern. | DONE |
+| Ralph verify loop | `verify_step_id` on AGENDA steps — run verifier after step, retry if fails. Explicit quality gate complementing Inspector. | DONE |
+| Magic keyword triggers | `ralph:`, `pipeline:`, `verify:`, `strict:` prefixes in goal text mutate execution behavior. | DONE (2026-04-02) |
 | SlowUpdateScheduler | IDLE_WAIT → WINDOW_OPEN → UPDATING → PAUSING. Gates heavy background work to idle windows. Good for heartbeat consolidation. | NEXT |
-| `doctor` command | Check which tools/channels work in current environment. Useful for validate-environment before runs. | NEXT |
+| `doctor` command | Check which tools/channels work in current environment. Useful for validate-environment before runs. | DONE (extended with Phase 41 checks, 2026-04-02) |
 
 Reference implementation: `~/.openclaw/workspace/prototypes/poe-orchestrator/` — that's the prototype where these were prototyped. Use it for reference only; do not develop there.
 

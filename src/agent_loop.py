@@ -299,6 +299,7 @@ class _BlockDecision:
 def _build_loop_context(
     goal: str,
     verbose: bool = False,
+    permission_context=None,
 ) -> tuple:
     """Load all context needed before decomposing a goal.
 
@@ -379,6 +380,27 @@ def _build_loop_context(
     except Exception:
         had_no_matching_skill = True
 
+    # Phase 41 step 4: curated SKILL.md summaries (progressive disclosure)
+    # Summaries (name + description + triggers) are shown upfront; full body
+    # is loaded on demand by the step executor when a skill name is invoked.
+    curated_skills_context = ""
+    try:
+        from skill_loader import skill_loader as _skill_loader
+        _role = getattr(permission_context, "role", None) if permission_context else None
+        _curated_block = _skill_loader.get_summaries_block(role=_role, goal=goal)
+        if _curated_block:
+            curated_skills_context = _curated_block
+            if verbose:
+                _curated_count = len(_skill_loader.find_matching(goal, role=_role))
+                print(
+                    f"[poe] injecting {_curated_count} curated skill(s) into decompose",
+                    file=sys.stderr, flush=True,
+                )
+            if had_no_matching_skill:
+                had_no_matching_skill = False
+    except Exception:
+        pass
+
     # Cost awareness: expensive step types from metrics history
     cost_context = ""
     try:
@@ -408,6 +430,14 @@ def _build_loop_context(
                 )
     except Exception:
         pass
+
+    # Merge curated SKILL.md summaries with runtime skill context
+    if curated_skills_context:
+        skills_context = (
+            (skills_context + "\n\n" + curated_skills_context).strip()
+            if skills_context
+            else curated_skills_context
+        )
 
     return lessons_context, skills_context, cost_context, had_no_matching_skill, matched_rule
 
@@ -770,7 +800,7 @@ def run_agent_loop(
     if verbose:
         print(f"[poe] decomposing goal...", file=sys.stderr, flush=True)
     _lessons_context, _skills_context, _cost_context, _had_no_matching_skill, _matched_rule = (
-        _build_loop_context(goal, verbose=verbose)
+        _build_loop_context(goal, verbose=verbose, permission_context=permission_context)
     )
 
     # Stage 5: rule hit — use deterministic steps, skip LLM decompose

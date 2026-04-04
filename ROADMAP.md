@@ -823,19 +823,52 @@ Current jsonl is simple and reliable for a single-box setup. The pain points hit
 
 ---
 
-### Phase 41: Tool Registry + Expanded Function Calling *(TODO)*
+### Phase 41: Tool Registry + Expanded Function Calling *(IN PROGRESS — steps 1-5 done)*
 
 *`web_fetch` and `sandbox` exist. Make tools discoverable by workers.*
 
-Today workers receive a fixed prompt with hardcoded capabilities. A tool registry lets workers discover what's available at runtime and the LLM can select the right tool per step.
+Design doc: `research/PHASE41_TOOL_REGISTRY_DESIGN.md`
 
-**Plan:**
-- `src/tools.py`: `ToolRegistry` dataclass (name, description, input_schema, call fn)
-- Register existing tools: `web_fetch`, `sandbox_exec`, `git_read`, `file_read`
-- Add safe primitives: `file_write` (sandboxed path), `shell_read` (read-only shell)
-- Inject registry into `_decompose()` as a capabilities block — workers can reference tool names in steps
-- Implementation: swipe OpenAI function-calling JSON schema format (4 fields: name, description, parameters, required) — no SDK needed
-- No new deps: stdlib `json` + existing adapter tool-call support
+**Implementation status (as of 2026-04-02):**
+
+- [x] **Step 1-2: ToolDefinition + PermissionContext + ToolRegistry** (`src/tool_registry.py`)
+  - `ToolDefinition` (declarative per-tool object: name, description, input_schema, roles_allowed, is_enabled, should_defer)
+  - `PermissionContext` (role + glob deny_patterns; `allows()` method)
+  - `ToolRegistry` — filter pipeline: role → deny patterns → is_enabled → alphabetical sort
+  - Module-level `registry` singleton populated from `step_exec.EXECUTE_TOOLS`
+  - Role constants: `ROLE_WORKER`, `ROLE_SHORT`, `ROLE_INSPECTOR`, `ROLE_DIRECTOR`, `ROLE_VERIFIER`
+  - Convenience factories: `worker_context()`, `short_context()`, `inspector_context()`, `director_context()`
+  - `step_exec.get_tools_for_role()` using registry; `agent_loop.run_agent_loop(permission_context=)` for composition-time tool filtering
+  - 45 tests in `tests/test_tool_registry.py`
+
+- [x] **Step 3-4: SKILL.md format + SkillLoader + progressive disclosure** (`src/skill_loader.py`, `skills/`)
+  - `SkillSummary` dataclass; `_parse_frontmatter()` for YAML-ish frontmatter (no deps)
+  - `SkillLoader`: `load_summaries(role)`, `find_matching(goal, role)`, `load_full(name)`, `get_summaries_block(role, goal)`, `invalidate()`
+  - Glob trigger matching, role filtering, cache with `invalidate()`
+  - `skills/` directory — 4 seed files: `web_research.md`, `code_implement.md`, `debug_investigate.md`, `data_analysis.md`
+  - Progressive disclosure: summaries in decompose prompt; full body loaded on demand
+  - Wired into `agent_loop._build_loop_context()` — curated skills merged with runtime skills
+  - 42 tests in `tests/test_skill_loader.py`
+
+- [x] **Step 5: Hook event model** (`src/step_events.py`)
+  - `PreStepEvent`, `PostStepEvent` typed payloads
+  - `StepVeto` + `StepVetoedError` for blocking semantics
+  - `StepEventBus` — `@on_pre_step(match=)`, `@on_post_step(match=)`, glob matcher on step_text
+  - `fire_pre()` (blocking — returns `StepVeto` or None), `fire_post()` (non-blocking, swallows exceptions)
+  - Wired into `step_exec.execute_step()` — pre fires after constraint check; post fires before final return
+  - `step_exec` refactored to collect `_outcome` + single return (enables post-fire)
+  - 35 tests in `tests/test_step_events.py`
+
+- [x] **Step 6: Deferred tool resolution** (`src/tool_search.py`)
+  - `TOOL_SEARCH_SCHEMA` — always-full tool schema; injected when deferred stubs present
+  - `resolve_deferred_tools(query, ctx, registry)` — exact/partial/glob/description matching; returns full schemas for deferred tools visible to ctx
+  - `format_tool_search_result()` — human-readable schema block for LLM injection
+  - `inject_tool_search_if_needed(schemas)` — auto-adds `tool_search` when `[deferred]` stubs detected; idempotent
+  - Wired into `step_exec.execute_step()`: deferred detection, `tool_search` call handling with LLM re-call with expanded tool list
+  - 26 tests in `tests/test_tool_search.py`
+
+**Remaining steps:**
+- [ ] Step 7: MCP integration — external tool servers as deferred registry entries
 
 ---
 

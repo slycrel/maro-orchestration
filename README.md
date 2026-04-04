@@ -302,7 +302,7 @@ Next run with similar task:
 ## Development
 
 ```bash
-# Run tests (2013+ passing, all LLM calls mocked)
+# Run tests (2282+ passing, all LLM calls mocked)
 python3 -m pytest tests/ -q
 
 # Dry-run (no LLM calls)

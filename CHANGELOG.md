@@ -1,5 +1,81 @@
 # Changelog
 
+## [1.8.0] - 2026-04-03
+
+Session 8: Pi coding agent synthesis + steal execution. System prompt token audit (1892→936 tokens, -51%). Architecture non-goals doc. STEAL_LIST.md updated with Pi items. BACKLOG.md updated.
+
+### Changed — System Prompt Token Audit (Pi steal)
+- `src/step_exec.py` — `EXECUTE_SYSTEM` trimmed from ~844 to ~333 tokens (-61%). Cuts: removed editorial commentary ("your output is consumed by downstream agents"), deduplicated negatives (URL policy already implied "don't fetch"), removed rules 1 and 5 from TOKEN EFFICIENCY (covered by other sections), cut the polymarket example from DATA PIPELINE STRATEGY (the 3 steps are sufficient). All behavior-changing content preserved.
+- `src/planner.py` — `DECOMPOSE_SYSTEM` trimmed from ~1048 to ~603 tokens (-42%). Cuts: reduced 3 BAD/GOOD pairs in STEP GRANULARITY to 2 (removed the clone/review example, covered by the setup rule), merged CODE REVIEW STEPS into the granularity section, removed the second BAD/GOOD pair in LONG-RUNNING COMMANDS (build is same pattern as test), shortened the PARALLEL EXECUTION example from 7 steps to 4. All rules preserved.
+- Combined system prompt cost: 1892 → 936 tokens (-51%). Pi's target was <1k combined.
+
+### Added — Architecture Non-Goals
+- `docs/ARCHITECTURE_NON_GOALS.md` — Documents 8 deliberate non-goals: tool minimalism (Poe is an orchestrator, not a coding REPL), MCP-as-default, interactive approval gates, hidden sub-agents, full Neo4j, plugin marketplace, provider portability contracts, headless UI. Each entry has rationale and revisit conditions. Prevents scope creep during planning discussions.
+
+### Changed — Steal List / Backlog
+- `STEAL_LIST.md` — Added Pi coding agent section with 5 steal candidates (2 DONE, 2 TODO, 1 LATER). Sources section updated.
+- `BACKLOG.md` — Token audit and architecture non-goals marked complete under Token Efficiency.
+
+## [1.7.0] - 2026-04-02
+
+Session 7: LLM parse robustness overhaul, bughunter anti-pattern detectors, Phase 41 implementation (tool registry, curated skill loader, step event model, tool search, deferred tools), magic keyword prefixes, doctor Phase 41 checks, skill auto-export. 139 new tests (2282 total, 0 failures).
+
+### Added — LLM Parse Robustness
+- `src/llm_parse.py` — `extract_json()` (depth-counter bracket matching, markdown fence stripping, type validation, list-unwrapping), `safe_float()` (None/NaN/Inf/non-numeric guards), `safe_str()`, `safe_list()`, `content_or_empty()`, `strip_markdown_fences()`, `_find_json_bounds()`
+- `tests/test_llm_parse_robustness.py` — 90 tests covering all failure modes: markdown-fenced JSON, None content, malformed JSON, truncated responses, type mismatches, wrapped lists, refusal messages, nested braces in string fields
+- Wired `llm_parse` into 17 modules replacing `rfind + json.loads` pattern: `director.py`, `step_exec.py`, `memory.py`, `intent.py`, `evolver.py`, `quality_gate.py`, `mission.py`, `attribution.py`, `inspector.py`, `planner.py`, `skills.py`, `sprint_contract.py`, `verification_agent.py`, `factory_thin.py`, `interrupt.py`, `cross_ref.py`, `thinkback.py`
+
+### Added — Bughunter Anti-Pattern Detectors
+- `src/bughunter.py` — BH011 (`json.loads(content[`/`raw[` rfind-slice pattern), BH012 (`float(data/raw/parsed/r/result.get(...)` float-on-LLM-dict pattern)
+- `_scan_llm_parse_patterns()` — regex-based static detector wired into `scan_file()`; skips `llm_parse.py` itself and JSONL-reading patterns to avoid false positives
+
+### Added — Phase 41: Tool Registry (step 1-2, completed previous session)
+- `src/tool_registry.py` — `ToolDefinition`, `PermissionContext` (glob deny patterns), `ToolRegistry` (role→deny→is_enabled→sort pipeline), module-level `registry` singleton, `worker_context()`/`short_context()`/`inspector_context()`/`director_context()` factories
+- Role constants: `ROLE_WORKER`, `ROLE_SHORT`, `ROLE_INSPECTOR`, `ROLE_DIRECTOR`, `ROLE_VERIFIER`
+- `src/step_exec.py` — `get_tools_for_role(role, deny_patterns=None)` using registry; backward-compat lists retained
+- `src/agent_loop.py` — `permission_context` param on `run_agent_loop()`; `_active_tools` resolved at composition time from `PermissionContext`
+- `tests/test_tool_registry.py` — 45 tests
+
+### Added — Phase 41: Curated Skill Loader (step 3-4)
+- `src/skill_loader.py` — `SkillSummary` dataclass, `SkillLoader` class: `load_summaries(role)`, `find_matching(goal, role)`, `load_full(name)`, `get_summaries_block(role, goal)`; `_parse_frontmatter()` for YAML-ish frontmatter; module-level `skill_loader` singleton
+- `skills/` directory — 4 seed SKILL.md files with YAML frontmatter: `web_research`, `code_implement`, `debug_investigate`, `data_analysis`
+- Progressive disclosure: summaries (name + description + triggers) injected into decompose prompt; full body loaded on demand via `load_full()`
+- Wired `skill_loader.get_summaries_block()` into `agent_loop._build_loop_context()` alongside runtime skills; merged into `skills_context` before decompose
+- `_build_loop_context()` now accepts `permission_context=None` and forwards role to skill loader
+- `tests/test_skill_loader.py` — 42 tests
+
+### Added — Phase 41: Step Event Model (step 5)
+- `src/step_events.py` — `PreStepEvent`, `PostStepEvent`, `StepVeto`, `StepVetoedError`; `StepEventBus` with `@on_pre_step(match=)`, `@on_post_step(match=)`, `register_pre()`, `register_post()`, `unregister()`, `clear()`, `fire_pre()`, `fire_post()`, `list_handlers()`; module-level `step_event_bus` singleton
+- Glob matcher on step_text — handlers fire only for matching steps (e.g. `match="create_*"`)
+- Blocking semantics: `fire_pre()` returns `StepVeto` to veto execution; non-blocking: `fire_post()` swallows all handler exceptions
+- Wired into `step_exec.execute_step()`: `fire_pre` fires after constraint check; `fire_post` fires before final return with elapsed_ms and result
+- Refactored `execute_step` outcome paths to collect `_outcome` dict + single return (cleaner, enables post-fire)
+- `tests/test_step_events.py` — 35 tests
+
+### Added — Doctor Phase 41 checks
+- `src/doctor.py` — Added Phase 41 checks: tool registry (expected tools registered), curated skills (SKILL.md count), step event bus (handler count), bughunter scan result
+- Added `--json` flag stub to CLI (`argparse`-based)
+- 10 tests in `tests/test_doctor.py`
+
+### Added — Magic keyword prefixes
+- `handle.py` — `ralph:` and `verify:` prefixes enable per-step Ralph verify loop (alias for `ralph_verify=True`)
+- `handle.py` — `pipeline:` prefix marks goal as data-heavy (future: injects pipeline enforcement mode flag)
+- `handle.py` — `strict:` prefix enables thorough quality passes: council + cross-reference checks (wires `run_council=True, run_cross_ref=True` into `run_quality_gate`)
+- 8 new tests in `tests/test_handle.py`
+
+### Added — Phase 41: Tool Search / Deferred Tool Resolution (step 6)
+- `src/tool_search.py` — `resolve_deferred_tools(query, ctx, registry)`: glob/substring/description matching, returns full schemas for deferred tools; `format_tool_search_result()`: human-readable schema block for LLM injection; `inject_tool_search_if_needed()`: adds `tool_search` schema to tool list when deferred stubs present; `TOOL_SEARCH_SCHEMA`: always-full tool definition
+- Wired into `step_exec.execute_step()`: deferred tool detection, `inject_tool_search_if_needed` applied before LLM call, `tool_search` tool call handling with schema resolution and LLM re-call with expanded tool list
+- 26 tests in `tests/test_tool_search.py`
+
+### Added — Skill Auto-Export (Hermes steal)
+- `src/skill_loader.py` — `export_skill_as_markdown(skill, skills_dir, overwrite)`: converts a runtime `Skill` (from skills.jsonl) to SKILL.md in `skills/`; `_slugify()` for safe filenames; invalidates `skill_loader` cache on write
+- `src/skills.py` — `maybe_auto_promote_skills()` now calls `export_skill_as_markdown()` after each promotion; newly established skills become available to `SkillLoader` immediately
+- 18 new tests in `tests/test_skill_loader.py` (export + slugify)
+
+### Changed
+- `BACKLOG.md` — lat.md and promotion cycle marked done; last reviewed updated
+
 ## [1.6.0] - 2026-04-01
 
 Session 6: Knowledge graph (lat.md), promotion cycle + decision journal, Polymarket claim validation, Phase 41 architecture design. 25 new tests (2013 total, 0 failures).

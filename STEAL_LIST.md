@@ -67,6 +67,23 @@ Ingested via orchestration loop from @tom_doerr, @teknium, @slash1sol, @pawelhur
 
 ---
 
+## From Pi coding agent research (2026-04-03)
+
+Source: Mario Zechner (@badlogicgames) — "I Hated Every Coding Agent, So I Built My Own"
+Flagged by @dexhorthy. Full synthesis: `research/PI_CODING_AGENT_SYNTHESIS.md`.
+
+| Item | What | Status | Where it lands | Effort |
+|------|------|--------|----------------|--------|
+| ~~**System prompt token audit**~~ | Measure + cut EXECUTE_SYSTEM + DECOMPOSE_SYSTEM token overhead. Pi: <1k combined. | ✅ DONE — 1892→936 tokens (-51%). `src/step_exec.py` + `src/planner.py`. | `src/step_exec.py`, `src/planner.py` | S |
+| ~~**Architecture non-goals doc**~~ | Document what Poe deliberately doesn't do — prevents scope creep. | ✅ DONE — `docs/ARCHITECTURE_NON_GOALS.md`, 8 non-goals with rationale and revisit conditions. | `docs/ARCHITECTURE_NON_GOALS.md` | XS |
+| **Runtime tool extension** | Agent generates + registers new ToolDefinition at runtime. Self-extending system. | TODO | Phase 41 step_exec.py + tool_registry.py — agent writes a ToolDefinition dict, calls register, tool becomes available next step. | M |
+| **Human-readable session export** | `poe export` produces markdown summary of a completed loop (steps, results, context). | TODO | `src/checkpoint.py` — add `export_human()` that renders checkpoint JSONL as readable markdown. | S |
+| **Session branching** | Checkpoint creates branch instead of overwriting — enables experimental paths without consuming main context. | LATER | `src/checkpoint.py` — branch_from_loop_id() + loop ancestry tree in observe dashboard | L |
+
+**What NOT to steal:** 4-tool minimalism (wrong use case — Poe is an orchestrator, not a coding REPL), TypeScript monorepo, flicker-free terminal UI.
+
+---
+
 ## Sources
 
 | Repo | Stars | What it is | Key insight |

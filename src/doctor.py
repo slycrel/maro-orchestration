@@ -107,7 +107,7 @@ def run_doctor() -> bool:
         str(mem_dir),
     ))
 
-    # Skills file
+    # Skills file (runtime JSONL)
     skills_path = Path(__file__).resolve().parent.parent / "skills.jsonl"
     if not skills_path.exists():
         skills_path = Path(__file__).resolve().parent.parent / "memory" / "skills.jsonl"
@@ -125,6 +125,71 @@ def run_doctor() -> bool:
         str(output_dir),
     ))
 
+    # Phase 41: tool registry
+    try:
+        src_dir = Path(__file__).resolve().parent
+        if str(src_dir) not in sys.path:
+            sys.path.insert(0, str(src_dir))
+        from tool_registry import registry as _reg
+        _names = _reg.names()
+        _required_tools = {"complete_step", "flag_stuck"}
+        _missing = _required_tools - set(_names)
+        results.append(_check(
+            "Tool registry",
+            not _missing,
+            f"{len(_names)} tool(s) registered" if not _missing else f"missing: {', '.join(_missing)}",
+        ))
+    except Exception as exc:
+        results.append(_check("Tool registry", False, str(exc)[:80]))
+
+    # Phase 41: curated skills (SKILL.md files)
+    try:
+        from skill_loader import SkillLoader, SKILLS_DIR
+        _skills_dir_ok = SKILLS_DIR.exists()
+        if _skills_dir_ok:
+            _loader = SkillLoader()
+            _curated = _loader.load_summaries()
+            results.append(_check(
+                "Curated skills (skills/)",
+                True,
+                f"{len(_curated)} SKILL.md file(s) loaded",
+            ))
+        else:
+            results.append(_check(
+                "Curated skills (skills/)",
+                False,
+                "skills/ directory missing — run from repo root or create it",
+            ))
+    except Exception as exc:
+        results.append(_check("Curated skills (skills/)", False, str(exc)[:80]))
+
+    # Phase 41: step event bus
+    try:
+        from step_events import step_event_bus
+        _handlers = step_event_bus.list_handlers()
+        _pre_count = len(_handlers["pre"])
+        _post_count = len(_handlers["post"])
+        results.append(_check(
+            "Step event bus",
+            True,
+            f"loaded — {_pre_count} pre-step handler(s), {_post_count} post-step handler(s)",
+        ))
+    except Exception as exc:
+        results.append(_check("Step event bus", False, str(exc)[:80]))
+
+    # Bughunter scan (quick check)
+    try:
+        from bughunter import run_bughunter
+        _bh_report = run_bughunter()
+        _bh_count = len(_bh_report.findings)
+        results.append(_check(
+            "Bughunter (src/)",
+            _bh_count == 0,
+            "clean" if _bh_count == 0 else f"{_bh_count} issue(s) — run poe-bughunter for details",
+        ))
+    except Exception as exc:
+        results.append(_check("Bughunter (src/)", True, f"skipped: {exc}"))  # optional, not fatal
+
     # Summary
     passed = sum(1 for r in results if r["ok"])
     total = len(results)
@@ -140,6 +205,10 @@ def run_doctor() -> bool:
 
 
 def main():
+    import argparse
+    parser = argparse.ArgumentParser(description="Poe environment health check")
+    parser.add_argument("--json", action="store_true", help="JSON output (not yet implemented, use text)")
+    args = parser.parse_args()
     ok = run_doctor()
     sys.exit(0 if ok else 1)
 
