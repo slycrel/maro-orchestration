@@ -32,6 +32,13 @@ Session 10: GStack Tier 1 steals (decision taxonomy + confidence gates + anti-sy
 - `_PrefixResult` dataclass carries all parsed flags cleanly into `handle()`
 - 11 new tests: single prefix, stacking, effort model tier, ultraplan max_steps, verify=ralph alias, case-insensitive, registry completeness check
 
+## [1.10.6] - 2026-04-04
+
+Environment snapshot caching + Skill steering field. 2469 tests, 5 skipped.
+
+### Changed — Environment snapshot caching (Meta-Harness steal)
+- `src/agent_loop.py` — after each successful serial step, write compressed step summary (or first 200 chars of result) to `_loop_shared_ctx["step:N:{text[:40]}"]`; team workers spawned in later steps inherit these snapshots through `shared_ctx` injection, eliminating redundant re-fetches
+
 ## [1.10.5] - 2026-04-04
 
 Skill text as steering (Meta-Harness steal). 2469 tests, 5 skipped.
