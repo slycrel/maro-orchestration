@@ -1,5 +1,27 @@
 # Changelog
 
+## [1.10.7] - 2026-04-04
+
+Harness self-optimization loop (Meta-Harness steal). 2494 tests, 5 skipped.
+
+### Added — Harness optimizer (`src/harness_optimizer.py`)
+- `HarnessProposal` dataclass: target, original_clause, proposed_change, failure_pattern, confidence
+- `HarnessOptimizerReport` dataclass: run_id, target_analyzed, traces_reviewed, proposals, elapsed_ms, skipped, skip_reason, with `summary()` method
+- `_load_harness_text(target)`: imports EXECUTE_SYSTEM from step_exec or DECOMPOSE_SYSTEM from planner at runtime
+- `_hash_prompt(text)` + `_record_candidate(target, text)`: tracks prompt version history in `memory/harness_candidates.jsonl` so the proposer can see what has been tried before
+- `load_candidates_history(target)`: loads all recorded versions for a target (public — usable by other analysis tools)
+- `_load_stuck_traces(limit=10)`: reads `memory/step_traces.jsonl`, filters to traces with at least one stuck step, returns most-recent-first
+- `_format_trace_for_prompt(trace, max_steps=6)`: compact `[STUCK]`/`[done]` format with stuck_reason included
+- `_HARNESS_OPTIMIZER_SYSTEM`: anti-sycophancy system prompt — concrete word-level proposals only; `{"proposals": []}` if prompt is fine
+- `_llm_analyze_harness(harness_texts, stuck_traces, dry_run)`: builds multi-section user message (current prompts + stuck traces), calls MODEL_MID, parses JSON proposals
+- `_save_harness_proposals(proposals, run_id)`: creates evolver `Suggestion` objects with `category="prompt_tweak"`, saves via `_save_suggestions()`
+- `run_harness_optimizer(targets, max_traces, min_stuck_traces, dry_run, verbose)`: main entry point; skips gracefully if no harness text loadable or insufficient stuck traces
+- CLI: `python3 harness_optimizer.py [--dry-run] [--targets ...] [--min-traces N] [--max-traces N] [-v]`; also registered as `poe-harness-optimizer`
+- 25 tests in `tests/test_harness_optimizer.py`
+
+### Changed — Heartbeat wires harness optimizer
+- `src/heartbeat.py` — added `_harness_optimizer_active` flag + `_harness_optimizer_lock`; `_run_harness_optimizer_bg()` daemon-thread wrapper; heartbeat_loop fires optimizer every `evolver_every * 5` ticks (default ~50 heartbeats ≈ 50 min) when no mission is active
+
 ## [1.10.0] - 2026-04-04
 
 Session 10: GStack Tier 1 steals (decision taxonomy + confidence gates + anti-sycophancy + calibration). Heartbeat backgrounding (daemon threads). Depth-gated context firewall. Mutable task graph via inject_steps. Magic prefix registry refactor. 2425 tests, 5 skipped.

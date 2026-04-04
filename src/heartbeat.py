@@ -407,6 +407,25 @@ _inspector_lock = threading.Lock()
 _eval_active = False
 _eval_lock = threading.Lock()
 
+_harness_optimizer_active = False
+_harness_optimizer_lock = threading.Lock()
+
+
+def _run_harness_optimizer_bg(*, dry_run: bool = False, verbose: bool = False) -> None:
+    """Run harness optimizer in background thread. Clears flag in finally."""
+    global _harness_optimizer_active
+    try:
+        from harness_optimizer import run_harness_optimizer
+        report = run_harness_optimizer(dry_run=dry_run, verbose=verbose)
+        if verbose:
+            print(f"[heartbeat] harness_optimizer: {report.summary()}", file=sys.stderr)
+    except Exception as e:
+        if verbose:
+            print(f"[heartbeat] harness_optimizer failed: {e}", file=sys.stderr)
+    finally:
+        with _harness_optimizer_lock:
+            _harness_optimizer_active = False
+
 
 def _run_evolver_bg(*, dry_run: bool = False, verbose: bool = False,
                     escalate: bool = True) -> None:
@@ -580,6 +599,9 @@ def heartbeat_loop(
 
     Every `eval_every` cycles (Phase 42, default ~24h), runs the eval suite
     and converts any regressions to evolver Suggestion entries.
+
+    Every `evolver_every * 5` cycles, runs the harness optimizer to propose
+    word-level improvements to EXECUTE_SYSTEM/DECOMPOSE_SYSTEM based on stuck traces.
     """
     if verbose:
         print(
@@ -710,6 +732,26 @@ def heartbeat_loop(
                     print("[heartbeat] nightly eval started in background", file=sys.stderr)
             elif verbose:
                 print("[heartbeat] nightly eval already active — skipping tick", file=sys.stderr)
+        # Harness optimizer: propose word-level improvements to EXECUTE_SYSTEM/DECOMPOSE_SYSTEM.
+        # Runs every ~50 heartbeats (evolver_every * 5) — staggered from evolver to spread load.
+        if tick % (evolver_every * 5) == 0 and tick > 0 and not _mission_active:
+            with _harness_optimizer_lock:
+                _ho_running = _harness_optimizer_active
+            if not _ho_running:
+                with _harness_optimizer_lock:
+                    _harness_optimizer_active = True
+                _hot = threading.Thread(
+                    target=_run_harness_optimizer_bg,
+                    kwargs={"dry_run": dry_run, "verbose": verbose},
+                    daemon=True,
+                    name="harness-optimizer-bg",
+                )
+                _hot.start()
+                if verbose:
+                    print("[heartbeat] harness optimizer started in background", file=sys.stderr)
+            elif verbose:
+                print("[heartbeat] harness optimizer already active — skipping tick", file=sys.stderr)
+
         # Cron persistence: check for due scheduler jobs every tick
         try:
             from scheduler import drain_due_jobs
