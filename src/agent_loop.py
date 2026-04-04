@@ -447,11 +447,17 @@ _EXEC_KEYWORDS = frozenset([
     "pytest", "python", "run ", "execute", "make ", "npm ", "yarn ", "docker",
     "git ", "bash ", "sh ", "cargo ", "go test", "mvn ", "gradle",
     "install ", "build ", "compile", "lint ", "mypy ", "ruff ",
+    "grep ", "find ", "curl ", "fetch", "rg ", "wget ", "cat ",
+    "invoke ", "launch ", "trigger ", "call ", "exec ",
 ])
 _ANALYZE_KEYWORDS = frozenset([
     "analyz", "summariz", "review", "identify failure", "check result",
     "interpret", "categoriz", "parse output", "parse result",
     "count pass", "count fail", "report on", "describe result",
+    "judge", "critique", "conclude", "evaluate", "assess",
+    "examine", "determine", "count the", "verify result",
+    "see if", "check if", "identify", "inspect result",
+    "inspect output", "look at result",
 ])
 
 
@@ -512,21 +518,25 @@ def _handle_blocked_step(
     block_reason = outcome.get("stuck_reason", "blocked")
     step_result = outcome.get("result", "")
 
+    # Combined exec+analyze steps are structurally wrong — retrying identically
+    # won't fix a bad step shape.  Split immediately on first block regardless
+    # of the reason (timeout, LLM confusion, output overflow, etc.).
+    if _is_combined_exec_analyze(step_text):
+        _parts = _split_exec_analyze(step_text)
+        log.info("step-shape: combined exec+analyze blocked (%s) — splitting into %d steps",
+                 block_reason[:60], len(_parts))
+        return _BlockDecision(
+            retry=False,
+            hint="",
+            loop_status="",      # not stuck — split recovers
+            stuck_reason="",
+            split_into=_parts,
+        )
+
     # Timeout failures must not be retried identically — the subprocess will
     # just time out again, burning wall-clock time with zero progress.
-    # If the step is a combined exec+analyze, split it and inject both halves.
-    # Otherwise terminate so Phase 45 recovery can handle it.
     _is_timeout = "timed out" in block_reason.lower()
     if _is_timeout:
-        if _is_combined_exec_analyze(step_text):
-            _parts = _split_exec_analyze(step_text)
-            return _BlockDecision(
-                retry=False,
-                hint="",
-                loop_status="",          # not stuck — split recovers
-                stuck_reason="",
-                split_into=_parts,
-            )
         _split_hint = (
             f"TIMEOUT: step exceeded subprocess time limit ({block_reason}). "
             "Recovery: split this step into two — "

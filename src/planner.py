@@ -48,13 +48,18 @@ DECOMPOSE_SYSTEM = textwrap.dedent("""\
     per step, at most ~2000 lines. Split 20+ file directories by functional area.
     Setup steps (clone, fetch, install) are their own step — never bundled.
 
-    LONG-RUNNING COMMANDS (tests, builds, installs):
-    Never combine execution with analysis — always separate steps.
-    BAD:  "Run the full test suite and analyze failures"
-    GOOD: "Run pytest -q and capture output to a file"
-          "Summarize pass/fail/skip counts and categorize failure types"
-    Any external command (pytest, make, npm, docker, git) should ONLY run the
-    command and capture output. Analysis is a separate subsequent step.
+    HARD RULE — exec and analyze are ALWAYS separate steps (no exceptions):
+    Any step that runs a command MUST NOT also describe analyzing, interpreting,
+    summarizing, evaluating, or checking the command's output.
+    FORBIDDEN patterns (will be automatically split and count against your plan quality):
+      "run X and analyze"    "execute X and interpret"   "run X and check results"
+      "grep X and identify"  "fetch X and evaluate"      "run X and count failures"
+      "invoke X and assess"  "call X and determine"      "run X and see if"
+    REQUIRED pattern:
+      Step N:   Run <command> and save output to artifacts/<name>.txt
+      Step N+1: Read artifacts/<name>.txt and <analysis goal>
+    This applies to: pytest, make, npm, docker, git, grep, find, curl, rg,
+    and ANY shell command whose output needs to be reasoned about.
 
     OUTCOME-FIRST (Bitter Lesson principle):
     Decompose into OUTCOMES, not procedures. Ask: what is the desired end state?

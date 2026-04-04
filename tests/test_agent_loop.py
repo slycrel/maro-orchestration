@@ -1285,3 +1285,57 @@ def test_step_shape_splits_combined_steps_before_execution(monkeypatch, tmp_path
     )
     # Dry-run uses ScriptedAdapter which produces fixed steps — just verify no crash
     assert result.status in ("done", "stuck")
+
+
+# ---------------------------------------------------------------------------
+# Step-shape: combined exec+analyze always splits, regardless of block reason
+# ---------------------------------------------------------------------------
+
+def test_handle_blocked_step_combined_splits_on_non_timeout_block():
+    """Combined exec+analyze step splits on first block even without a timeout."""
+    decision = _handle_blocked_step(
+        step_text="run pytest and analyze failures",
+        outcome={"stuck_reason": "LLM could not interpret the mixed output", "result": ""},
+        prior_retries=0,
+        adapter=None,
+    )
+    assert decision.retry is False
+    assert len(decision.split_into) == 2
+    assert decision.loop_status == ""    # not stuck — split recovers
+    assert decision.stuck_reason == ""
+
+
+def test_handle_blocked_step_combined_splits_even_at_retry_2():
+    """Combined steps split even if prior_retries=2 — never terminates as stuck."""
+    decision = _handle_blocked_step(
+        step_text="execute grep and identify matching lines",
+        outcome={"stuck_reason": "output too large", "result": ""},
+        prior_retries=2,
+        adapter=None,
+    )
+    assert decision.retry is False
+    assert len(decision.split_into) == 2
+    assert decision.loop_status == ""
+
+
+def test_is_combined_exec_analyze_new_patterns():
+    """Expanded keyword sets catch patterns Codex identified as slipping through."""
+    # grep + identify/conclude
+    assert _is_combined_exec_analyze("grep for all TODO comments and identify the most critical ones") is True
+    # fetch + evaluate
+    assert _is_combined_exec_analyze("fetch the API response and evaluate whether the data is complete") is True
+    # invoke + assess
+    assert _is_combined_exec_analyze("invoke the build script and assess any compilation errors") is True
+    # run + judge
+    assert _is_combined_exec_analyze("run mypy and judge the severity of each type error") is True
+    # curl + conclude
+    assert _is_combined_exec_analyze("curl the endpoint and conclude whether auth is working") is True
+    # find + evaluate
+    assert _is_combined_exec_analyze("find all Python files and evaluate import dependencies") is True
+
+
+def test_is_combined_exec_analyze_does_not_over_trigger():
+    """Pure analysis steps without an exec keyword are not flagged."""
+    assert _is_combined_exec_analyze("Identify the root cause of the import failure") is False
+    assert _is_combined_exec_analyze("Evaluate the quality of the test coverage summary") is False
+    assert _is_combined_exec_analyze("Conclude whether the architecture matches the design doc") is False
