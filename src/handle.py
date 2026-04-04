@@ -36,6 +36,83 @@ from typing import Any, Dict, List, Optional
 
 
 # ---------------------------------------------------------------------------
+# Magic prefix registry
+# ---------------------------------------------------------------------------
+# Each prefix mutates execution without changing the goal text.
+# The registry defines all prefixes centrally — adding a new prefix requires
+# one entry here, not scattered startswith() chains scattered through handle().
+
+@dataclass
+class _PrefixRule:
+    prefix: str           # exact lowercase prefix string (including trailing : or space)
+    flag: str             # attribute name on _PrefixResult to set True
+    model_tier: str = ""  # if non-empty, override model to this tier (cheap/mid/power)
+    max_steps: int = 0    # if > 0, override max_steps to this value
+
+
+@dataclass
+class _PrefixResult:
+    """Result of applying the prefix registry to a message."""
+    message: str          # cleaned message with all prefixes stripped
+    model_tier: str = ""  # model tier override (empty = no override)
+    max_steps: int = 0    # max_steps override (0 = no override)
+    thin_mode: bool = False
+    btw_mode: bool = False
+    ultraplan_mode: bool = False
+    direct_mode: bool = False
+    ralph_mode: bool = False
+    pipeline_mode: bool = False
+    strict_mode: bool = False
+
+
+_PREFIX_REGISTRY: List[_PrefixRule] = [
+    # effort: overrides model tier; exclusive per level (first match wins)
+    _PrefixRule("effort:low",   flag="",           model_tier="cheap"),
+    _PrefixRule("effort:mid",   flag="",           model_tier="mid"),
+    _PrefixRule("effort:high",  flag="",           model_tier="power"),
+    # execution mode modifiers
+    _PrefixRule("mode:thin",    flag="thin_mode"),
+    _PrefixRule("btw:",         flag="btw_mode"),
+    _PrefixRule("ultraplan:",   flag="ultraplan_mode", model_tier="power", max_steps=12),
+    _PrefixRule("direct:",      flag="direct_mode"),
+    # quality / behavior modifiers (non-exclusive — can stack)
+    _PrefixRule("ralph:",       flag="ralph_mode"),
+    _PrefixRule("verify:",      flag="ralph_mode"),   # alias for ralph:
+    _PrefixRule("pipeline:",    flag="pipeline_mode"),
+    _PrefixRule("strict:",      flag="strict_mode"),
+]
+
+
+def _apply_prefixes(message: str) -> _PrefixResult:
+    """Strip all recognized magic prefixes from `message` and return a _PrefixResult.
+
+    Prefixes are matched case-insensitively and stripped in registry order.
+    Multiple prefixes can stack (e.g. "strict: pipeline: do the thing").
+    The effort: group is exclusive (first level wins); all others accumulate.
+
+    This replaces nine separate startswith() blocks scattered through handle().
+    """
+    result = _PrefixResult(message=message)
+    changed = True
+    while changed:
+        changed = False
+        lower = result.message.lower()
+        for rule in _PREFIX_REGISTRY:
+            if lower.startswith(rule.prefix):
+                result.message = result.message[len(rule.prefix):].lstrip()
+                if rule.flag:
+                    setattr(result, rule.flag, True)
+                if rule.model_tier and not result.model_tier:
+                    result.model_tier = rule.model_tier
+                if rule.max_steps:
+                    result.max_steps = rule.max_steps
+                changed = True
+                lower = result.message.lower()  # re-check after strip
+                break  # restart registry scan after each match
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Data types
 # ---------------------------------------------------------------------------
 
@@ -215,70 +292,21 @@ def handle(
         if _tier in ("cheap", "mid", "power"):
             model = _tier
 
-    # effort: prefix modifier — "effort:low/mid/high <goal>" overrides model tier
-    # Stripped before classification so the effort keyword doesn't affect routing.
-    _EFFORT_MAP = {"low": "cheap", "mid": "mid", "high": "power"}
-    _msg_lower = message.lower()
-    for _effort_level, _effort_tier in _EFFORT_MAP.items():
-        _effort_prefix = f"effort:{_effort_level}"
-        if _msg_lower.startswith(_effort_prefix):
-            message = message[len(_effort_prefix):].lstrip()
-            if model is None:
-                model = _effort_tier
-            break
+    # Apply magic prefix registry — strips all recognized prefixes in one pass.
+    _pfx = _apply_prefixes(message)
+    message = _pfx.message
+    if _pfx.model_tier and model is None:
+        model = _pfx.model_tier
 
-    # mode:thin prefix — route to factory_thin loop (faster, lower cost, Haiku by default)
-    # Use when wall-time matters more than depth. Strips prefix before routing.
-    _use_thin_mode = False
-    if message.lower().startswith("mode:thin"):
-        message = message[len("mode:thin"):].lstrip()
-        _use_thin_mode = True
-
-    # btw: prefix — non-blocking observation mode. Surfaces a quick note without
-    # spawning a full loop. The result is tagged as an observation, not a work product.
-    # Good for "btw: I noticed the API is rate-limiting us" style side-notes.
-    _btw_mode = False
-    if message.lower().startswith("btw:"):
-        message = message[len("btw:"):].lstrip()
-        _btw_mode = True
-
-    # ultraplan: prefix — deep planning mode. Uses power model + max_steps=12.
-    # For complex multi-part goals that need thorough decomposition.
-    _ultraplan_max_steps = None
-    if message.lower().startswith("ultraplan:"):
-        message = message[len("ultraplan:"):].lstrip()
-        if model is None:
-            model = "power"
-        _ultraplan_max_steps = 12
-
-    # direct: prefix — skip Director, route immediately to run_agent_loop.
-    # Experiment: for simple goals, Director SPEC+challenge+dispatch overhead
-    # adds cost without improving output quality (Bitter Lesson).
-    _direct_mode = False
-    if message.lower().startswith("direct:"):
-        message = message[len("direct:"):].lstrip()
-        _direct_mode = True
-
-    # Magic keyword prefixes — mutate execution behaviour without changing the goal.
-    # ralph:/verify: — enable Ralph per-step verify loop (retries if verifier says RETRY).
-    # pipeline: — inject strong data pipeline enforcement for data-heavy goals.
-    # strict: — enable thorough quality passes (council + debate + cross-ref).
-    _ralph_prefix = False
-    _pipeline_prefix = False
-    _strict_prefix = False
-    _msg_lower_current = message.lower()
-    if _msg_lower_current.startswith("ralph:"):
-        message = message[len("ralph:"):].lstrip()
-        _ralph_prefix = True
-    elif _msg_lower_current.startswith("verify:"):
-        message = message[len("verify:"):].lstrip()
-        _ralph_prefix = True
-    if message.lower().startswith("pipeline:"):
-        message = message[len("pipeline:"):].lstrip()
-        _pipeline_prefix = True
-    if message.lower().startswith("strict:"):
-        message = message[len("strict:"):].lstrip()
-        _strict_prefix = True
+    # Unpack prefix flags into local names for backward compatibility
+    # with the rest of this function (no other code changes needed below).
+    _use_thin_mode = _pfx.thin_mode
+    _btw_mode = _pfx.btw_mode
+    _ultraplan_max_steps = _pfx.max_steps if _pfx.max_steps else None
+    _direct_mode = _pfx.direct_mode
+    _ralph_prefix = _pfx.ralph_mode
+    _pipeline_prefix = _pfx.pipeline_mode
+    _strict_prefix = _pfx.strict_mode
 
     # Build adapter
     if adapter is None and not dry_run:

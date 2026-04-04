@@ -439,3 +439,94 @@ class TestMagicKeywordPrefixes:
         r1 = handle("ralph: check the analysis", dry_run=True)
         r2 = handle("verify: check the analysis", dry_run=True)
         assert r1.message == r2.message == "check the analysis"
+
+
+# ---------------------------------------------------------------------------
+# _apply_prefixes registry unit tests
+# ---------------------------------------------------------------------------
+
+class TestApplyPrefixes:
+    """Direct tests for the _apply_prefixes() registry function."""
+
+    def test_no_prefix_unchanged(self):
+        from handle import _apply_prefixes
+        r = _apply_prefixes("just a plain goal")
+        assert r.message == "just a plain goal"
+        assert not r.btw_mode
+        assert not r.ralph_mode
+        assert not r.strict_mode
+
+    def test_single_prefix_stripped(self):
+        from handle import _apply_prefixes
+        r = _apply_prefixes("btw: something interesting")
+        assert r.message == "something interesting"
+        assert r.btw_mode is True
+
+    def test_stacked_prefixes_all_stripped(self):
+        from handle import _apply_prefixes
+        r = _apply_prefixes("strict: pipeline: verify this dataset")
+        assert r.message == "verify this dataset"
+        assert r.strict_mode is True
+        assert r.pipeline_mode is True
+
+    def test_effort_low_sets_model_tier(self):
+        from handle import _apply_prefixes
+        r = _apply_prefixes("effort:low research nootropics")
+        assert r.message == "research nootropics"
+        assert r.model_tier == "cheap"
+
+    def test_effort_high_sets_model_tier(self):
+        from handle import _apply_prefixes
+        r = _apply_prefixes("effort:high analyze the codebase")
+        assert r.model_tier == "power"
+        assert r.message == "analyze the codebase"
+
+    def test_ultraplan_sets_max_steps(self):
+        from handle import _apply_prefixes
+        r = _apply_prefixes("ultraplan: review everything")
+        assert r.ultraplan_mode is True
+        assert r.max_steps == 12
+        assert r.model_tier == "power"
+        assert r.message == "review everything"
+
+    def test_verify_sets_ralph_mode(self):
+        from handle import _apply_prefixes
+        r = _apply_prefixes("verify: check the claim")
+        assert r.ralph_mode is True
+        assert r.message == "check the claim"
+
+    def test_ralph_and_verify_both_set_ralph_mode(self):
+        from handle import _apply_prefixes
+        r1 = _apply_prefixes("ralph: do thing")
+        r2 = _apply_prefixes("verify: do thing")
+        assert r1.ralph_mode is True
+        assert r2.ralph_mode is True
+        assert r1.message == r2.message == "do thing"
+
+    def test_direct_mode_flag(self):
+        from handle import _apply_prefixes
+        r = _apply_prefixes("direct: fetch the data")
+        assert r.direct_mode is True
+        assert r.message == "fetch the data"
+
+    def test_case_insensitive_matching(self):
+        from handle import _apply_prefixes
+        r = _apply_prefixes("BTW: something")
+        assert r.btw_mode is True
+        assert r.message == "something"
+
+    def test_effort_first_model_wins(self):
+        # effort: sets model_tier; ultraplan: also sets model_tier (power)
+        # but effort: parsed first so it wins (effort:mid → mid, not overridden by ultraplan)
+        from handle import _apply_prefixes
+        r = _apply_prefixes("effort:mid ultraplan: do complex thing")
+        assert r.model_tier == "mid"  # effort:mid wins (first non-empty tier wins)
+
+    def test_prefix_registry_covers_all_known_prefixes(self):
+        """Sanity: all 11 known prefixes are in the registry."""
+        from handle import _PREFIX_REGISTRY
+        prefixes = {r.prefix for r in _PREFIX_REGISTRY}
+        for expected in ["effort:low", "effort:mid", "effort:high", "mode:thin",
+                          "btw:", "ultraplan:", "direct:", "ralph:", "verify:",
+                          "pipeline:", "strict:"]:
+            assert expected in prefixes, f"Missing prefix: {expected}"

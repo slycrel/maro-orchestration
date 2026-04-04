@@ -1340,6 +1340,7 @@ def run_agent_loop(
             )
 
             # Process batch outcomes
+            _batch_injected: List[str] = []  # collect inject_steps from all batch members
             for _bi, (_batch_text, _batch_oc) in enumerate(zip(_batch_steps, _batch_outcomes)):
                 step_idx += 1
                 _b_status = _batch_oc.get("status", "blocked")
@@ -1354,6 +1355,7 @@ def run_agent_loop(
                     tokens_in=_batch_oc.get("tokens_in", 0),
                     tokens_out=_batch_oc.get("tokens_out", 0),
                     elapsed_ms=_b_elapsed,
+                    injected_steps=_batch_oc.get("inject_steps", []),
                 ))
 
                 if _b_status == "done":
@@ -1362,9 +1364,27 @@ def run_agent_loop(
                     completed_context.append(f"Step {step_idx} ({_batch_text[:80]}):\n{_b_excerpt}")
                     if verbose:
                         print(f"[poe] step {step_idx} done (parallel): {_batch_oc.get('summary', '')[:80]}", file=sys.stderr, flush=True)
+                    # Collect inject_steps from this batch member
+                    _bi_inject = _batch_oc.get("inject_steps", [])
+                    if _bi_inject and isinstance(_bi_inject, list):
+                        _batch_injected.extend(
+                            str(s).strip() for s in _bi_inject if str(s).strip()
+                        )
                 elif _b_status == "blocked":
                     if verbose:
                         print(f"[poe] step {step_idx} blocked (parallel): {_batch_oc.get('stuck_reason', '')[:80]}", file=sys.stderr, flush=True)
+
+            # Mutable task graph: inject collected steps from parallel batch into plan
+            if _batch_injected:
+                _capped_inject = _batch_injected[:6]  # max 2 per worker × 3 workers
+                remaining_steps[:0] = _capped_inject
+                remaining_indices[:0] = [-1] * len(_capped_inject)
+                log.info("parallel batch: injected %d step(s) from batch into plan",
+                         len(_capped_inject))
+                if verbose:
+                    for _s in _capped_inject:
+                        print(f"[poe] injected step (from parallel batch): {_s[:80]}",
+                              file=sys.stderr, flush=True)
 
             # Log batch cost
             try:
