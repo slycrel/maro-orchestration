@@ -43,6 +43,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import subprocess
@@ -50,6 +51,8 @@ import textwrap
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+log = logging.getLogger("poe.llm")
 
 
 # ---------------------------------------------------------------------------
@@ -244,23 +247,45 @@ class ClaudeSubprocessAdapter(LLMAdapter):
             _combined = (detail + " " + stdout_hint).lower()
             if "hit your limit" in _combined or "rate limit" in _combined or "resets" in _combined:
                 import time as _time
+                # Multi-cycle polling: retry up to _RATE_LIMIT_MAX_RETRIES times.
+                # Each cycle waits exponentially longer (60→120→240→480→900→1800s, capped).
+                _RATE_LIMIT_MAX_RETRIES = getattr(self, "_rate_limit_max_retries", 6)
+                _RATE_LIMIT_CYCLE_CAP = 1800  # 30 minutes max per wait
                 _wait = getattr(self, "_rate_limit_wait", 60)
-                # Exponential backoff: 60s → 120s → 240s, cap at 300s
-                self._rate_limit_wait = min(_wait * 2, 300)
-                log.warning("rate limit detected, waiting %ds before retry", _wait)
-                _time.sleep(_wait)
-                # Retry once
-                try:
-                    result = subprocess.run(
-                        cmd, input=prompt, capture_output=True, text=True, timeout=_timeout,
+                _retry_success = False
+                for _attempt in range(_RATE_LIMIT_MAX_RETRIES):
+                    log.warning(
+                        "rate limit detected (attempt %d/%d), waiting %ds before retry",
+                        _attempt + 1, _RATE_LIMIT_MAX_RETRIES, _wait,
                     )
+                    _time.sleep(_wait)
+                    _wait = min(_wait * 2, _RATE_LIMIT_CYCLE_CAP)
+                    try:
+                        result = subprocess.run(
+                            cmd, input=prompt, capture_output=True, text=True, timeout=_timeout,
+                        )
+                    except subprocess.TimeoutExpired:
+                        log.warning("rate limit retry timed out after %ds, will retry", _timeout)
+                        continue
                     if result.returncode == 0:
-                        self._rate_limit_wait = 60  # reset on success
-                        # Fall through to normal parsing below
-                    else:
-                        raise RuntimeError(f"claude rate-limited, retry also failed: {result.stdout[:200]}")
-                except subprocess.TimeoutExpired:
-                    raise RuntimeError(f"claude rate-limited, retry timed out after {_timeout}s")
+                        _retry_success = True
+                        break
+                    # Check if still rate-limited
+                    _retry_combined = (result.stderr + " " + result.stdout).lower()
+                    if "hit your limit" not in _retry_combined and "rate limit" not in _retry_combined:
+                        # Non-rate-limit error — stop retrying
+                        break
+                    # Still rate-limited — continue loop with longer wait
+                if _retry_success:
+                    self._rate_limit_wait = 60  # reset backoff counter on success
+                else:
+                    self._rate_limit_wait = _wait  # persist longer wait for next call
+                if not _retry_success:
+                    if result.returncode != 0:
+                        raise RuntimeError(
+                            f"claude rate-limited after {_RATE_LIMIT_MAX_RETRIES} retries: "
+                            f"{result.stdout[:200]}"
+                        )
 
             if result.returncode != 0:
                 # Dump debug info to /tmp for post-mortem diagnosis

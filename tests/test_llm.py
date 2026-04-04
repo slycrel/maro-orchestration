@@ -381,3 +381,113 @@ def test_dry_run_adapter_with_new_interface():
     r = a.complete([LLMMessage("user", "Say hi")])
     assert isinstance(r, LLMResponse)
     assert isinstance(r.content, str)
+
+
+# ---------------------------------------------------------------------------
+# Rate limit multi-cycle retry (auto-resume on rate limits)
+# ---------------------------------------------------------------------------
+
+from llm import ClaudeSubprocessAdapter
+
+
+def _make_subprocess_result(returncode=0, stdout="", stderr=""):
+    return MagicMock(returncode=returncode, stdout=stdout, stderr=stderr)
+
+
+class TestRateLimitMultiCycleRetry:
+    def _make_adapter(self, max_retries=3):
+        a = ClaudeSubprocessAdapter()
+        a._rate_limit_wait = 1  # start short for tests
+        a._rate_limit_max_retries = max_retries
+        return a
+
+    def test_succeeds_on_second_attempt(self, monkeypatch):
+        """First call hits rate limit, second succeeds."""
+        calls = []
+
+        def _fake_run(cmd, **kw):
+            calls.append(len(calls))
+            if len(calls) == 1:
+                return _make_subprocess_result(1, stderr="You have hit your limit", stdout="You have hit your limit")
+            return _make_subprocess_result(0, stdout=json.dumps({"result": "done", "usage": {}}))
+
+        monkeypatch.setattr("subprocess.run", _fake_run)
+        monkeypatch.setattr("time.sleep", lambda s: None)
+
+        adapter = self._make_adapter(max_retries=3)
+        resp = adapter.complete([LLMMessage("user", "test")])
+        assert resp.content == "done"
+        assert len(calls) == 2
+
+    def test_retries_up_to_max_retries(self, monkeypatch):
+        """Rate limit persists through all retries — raises after max_retries."""
+        calls = []
+
+        def _fake_run(cmd, **kw):
+            calls.append(1)
+            return _make_subprocess_result(1, stderr="rate limit exceeded", stdout="rate limit exceeded")
+
+        monkeypatch.setattr("subprocess.run", _fake_run)
+        monkeypatch.setattr("time.sleep", lambda s: None)
+
+        adapter = self._make_adapter(max_retries=3)
+        with pytest.raises(RuntimeError, match="rate-limited after 3 retries"):
+            adapter.complete([LLMMessage("user", "test")])
+        # 1 initial + 3 retries = 4 subprocess calls
+        assert len(calls) == 4
+
+    def test_backoff_wait_grows_exponentially(self, monkeypatch):
+        """Wait times should grow each cycle."""
+        wait_times = []
+
+        def _fake_run(cmd, **kw):
+            return _make_subprocess_result(1, stderr="hit your limit", stdout="hit your limit")
+
+        monkeypatch.setattr("subprocess.run", _fake_run)
+        monkeypatch.setattr("time.sleep", lambda s: wait_times.append(s))
+
+        adapter = self._make_adapter(max_retries=3)
+        adapter._rate_limit_wait = 10  # start at 10s for easy math
+        with pytest.raises(RuntimeError):
+            adapter.complete([LLMMessage("user", "test")])
+
+        assert len(wait_times) == 3
+        assert wait_times[0] < wait_times[1] < wait_times[2]
+
+    def test_non_rate_limit_error_stops_retry(self, monkeypatch):
+        """Non-rate-limit errors should not trigger the multi-cycle loop."""
+        calls = []
+
+        def _fake_run(cmd, **kw):
+            calls.append(1)
+            if len(calls) == 1:
+                return _make_subprocess_result(1, stderr="hit your limit", stdout="hit your limit")
+            # Second call: generic error, not rate-limit
+            return _make_subprocess_result(1, stderr="internal error", stdout="internal error")
+
+        monkeypatch.setattr("subprocess.run", _fake_run)
+        monkeypatch.setattr("time.sleep", lambda s: None)
+
+        adapter = self._make_adapter(max_retries=5)
+        with pytest.raises(RuntimeError):
+            adapter.complete([LLMMessage("user", "test")])
+        # Should stop after 2 calls (initial + 1 retry that gave non-rate-limit error)
+        assert len(calls) == 2
+
+    def test_rate_limit_wait_resets_on_success(self, monkeypatch):
+        """After successful retry, _rate_limit_wait resets to 60."""
+        calls = []
+
+        def _fake_run(cmd, **kw):
+            calls.append(1)
+            if len(calls) == 1:
+                return _make_subprocess_result(1, stderr="hit your limit", stdout="hit your limit")
+            return _make_subprocess_result(0, stdout=json.dumps({"result": "ok", "usage": {}}))
+
+        monkeypatch.setattr("subprocess.run", _fake_run)
+        monkeypatch.setattr("time.sleep", lambda s: None)
+
+        adapter = self._make_adapter(max_retries=3)
+        adapter._rate_limit_wait = 300
+        adapter.complete([LLMMessage("user", "test")])
+        assert adapter._rate_limit_wait == 60
