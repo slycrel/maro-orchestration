@@ -120,11 +120,45 @@ def ws_root() -> Path:
         val = os.environ.get(var)
         if val:
             return Path(val).expanduser().resolve()
-    return Path(__file__).resolve().parents[3]
+    # parents[3] is designed for the prototype layout:
+    #   <ws>/prototypes/poe-orchestration/src/orch_items.py
+    # Guard against shallow checkouts (container/CI) where parents[3] hits / or near-root.
+    here = Path(__file__).resolve()
+    try:
+        candidate = here.parents[3]
+    except IndexError:
+        candidate = Path("/")
+    _unsafe = {Path("/"), Path("/tmp"), Path("/var"), Path("/usr"), Path("/opt")}
+    if candidate in _unsafe:
+        # Fall back to two levels up (repo root) — better than writing to /
+        return here.parents[1]
+    return candidate
 
 
 def orch_root() -> Path:
-    return ws_root() / "prototypes" / "poe-orchestration"
+    """Resolve the poe-orchestration root directory.
+
+    Resolution order:
+      1. POE_ORCH_ROOT env var — explicit override for containers / CI
+      2. Traditional prototype path (ws_root/prototypes/poe-orchestration) if it exists
+      3. The mainline repo root — detected by presence of src/agent_loop.py
+      4. Traditional path regardless (original behaviour; may fail on bad environments)
+    """
+    override = os.environ.get("POE_ORCH_ROOT")
+    if override:
+        return Path(override).expanduser().resolve()
+
+    traditional = ws_root() / "prototypes" / "poe-orchestration"
+    if traditional.exists():
+        return traditional
+
+    # Auto-detect mainline repo: src/orch_items.py lives two levels inside it
+    here = Path(__file__).resolve()
+    repo_root = here.parents[1]  # one up from src/
+    if (repo_root / "src" / "agent_loop.py").exists():
+        return repo_root
+
+    return traditional
 
 
 def memory_dir() -> Path:
