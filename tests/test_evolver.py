@@ -981,3 +981,137 @@ class TestRunEvolverSignalScan:
 
         run_evolver(dry_run=False, verbose=False, min_outcomes=1, scan_signals=False)
         assert scan_called == []
+
+
+# ---------------------------------------------------------------------------
+# scan_calibration_log
+# ---------------------------------------------------------------------------
+
+from evolver import scan_calibration_log, CalibrationFinding
+
+
+def _write_cal_entries(path: Path, entries: list) -> None:
+    with open(path, "w") as f:
+        for e in entries:
+            f.write(json.dumps(e) + "\n")
+
+
+class TestScanCalibrationLog:
+    def test_empty_file_returns_no_findings(self, tmp_path):
+        cal = tmp_path / "calibration.jsonl"
+        cal.write_text("")
+        assert scan_calibration_log(cal_path=cal) == []
+
+    def test_missing_file_returns_no_findings(self, tmp_path):
+        assert scan_calibration_log(cal_path=tmp_path / "nonexistent.jsonl") == []
+
+    def test_insufficient_entries_skipped(self, tmp_path):
+        cal = tmp_path / "calibration.jsonl"
+        _write_cal_entries(cal, [
+            {"decision_class": "mechanical", "confidence": 8, "action_raw": "close", "action_final": "close"},
+            {"decision_class": "mechanical", "confidence": 7, "action_raw": "close", "action_final": "surface"},
+        ])
+        # min_entries defaults to 5; only 2 entries → no finding
+        findings = scan_calibration_log(cal_path=cal)
+        assert findings == []
+
+    def test_high_override_rate_generates_finding(self, tmp_path):
+        cal = tmp_path / "calibration.jsonl"
+        entries = [
+            {"decision_class": "taste", "confidence": 7, "action_raw": "close", "action_final": "surface"},
+            {"decision_class": "taste", "confidence": 6, "action_raw": "continue", "action_final": "surface"},
+            {"decision_class": "taste", "confidence": 7, "action_raw": "close", "action_final": "surface"},
+            {"decision_class": "taste", "confidence": 8, "action_raw": "close", "action_final": "surface"},
+            {"decision_class": "taste", "confidence": 6, "action_raw": "close", "action_final": "surface"},
+        ]
+        _write_cal_entries(cal, entries)
+        findings = scan_calibration_log(cal_path=cal, min_entries=5, high_override_threshold=0.4)
+        assert len(findings) == 1
+        assert findings[0].decision_class == "taste"
+        assert findings[0].override_rate == 1.0
+        assert "override rate" in findings[0].suggestion
+
+    def test_no_override_no_finding(self, tmp_path):
+        cal = tmp_path / "calibration.jsonl"
+        entries = [
+            {"decision_class": "mechanical", "confidence": 8, "action_raw": "close", "action_final": "close"},
+            {"decision_class": "mechanical", "confidence": 9, "action_raw": "close", "action_final": "close"},
+            {"decision_class": "mechanical", "confidence": 8, "action_raw": "continue", "action_final": "continue"},
+            {"decision_class": "mechanical", "confidence": 9, "action_raw": "close", "action_final": "close"},
+            {"decision_class": "mechanical", "confidence": 8, "action_raw": "close", "action_final": "close"},
+        ]
+        _write_cal_entries(cal, entries)
+        findings = scan_calibration_log(cal_path=cal, min_entries=5)
+        assert findings == []
+
+    def test_low_confidence_generates_finding(self, tmp_path):
+        cal = tmp_path / "calibration.jsonl"
+        entries = [
+            {"decision_class": "user_challenge", "confidence": 3, "action_raw": "surface", "action_final": "surface"},
+            {"decision_class": "user_challenge", "confidence": 4, "action_raw": "surface", "action_final": "surface"},
+            {"decision_class": "user_challenge", "confidence": 3, "action_raw": "surface", "action_final": "surface"},
+            {"decision_class": "user_challenge", "confidence": 4, "action_raw": "surface", "action_final": "surface"},
+            {"decision_class": "user_challenge", "confidence": 3, "action_raw": "surface", "action_final": "surface"},
+        ]
+        _write_cal_entries(cal, entries)
+        findings = scan_calibration_log(cal_path=cal, min_entries=5, low_confidence_threshold=6.0)
+        assert len(findings) == 1
+        assert "mean confidence" in findings[0].suggestion
+        assert findings[0].mean_confidence < 6.0
+
+    def test_multiple_classes_independent(self, tmp_path):
+        cal = tmp_path / "calibration.jsonl"
+        # mechanical: fine (no overrides, high confidence)
+        mech = [{"decision_class": "mechanical", "confidence": 9, "action_raw": "close", "action_final": "close"}] * 5
+        # taste: high override rate
+        taste = [{"decision_class": "taste", "confidence": 7, "action_raw": "close", "action_final": "surface"}] * 5
+        _write_cal_entries(cal, mech + taste)
+        findings = scan_calibration_log(cal_path=cal, min_entries=5, high_override_threshold=0.4)
+        classes = {f.decision_class for f in findings}
+        assert "taste" in classes
+        assert "mechanical" not in classes
+
+    def test_malformed_lines_skipped(self, tmp_path):
+        cal = tmp_path / "calibration.jsonl"
+        with open(cal, "w") as f:
+            f.write("not json\n")
+            f.write(json.dumps({"decision_class": "mechanical", "confidence": 8,
+                                "action_raw": "close", "action_final": "close"}) + "\n")
+        # Only 1 valid entry — below min_entries → no finding, no crash
+        findings = scan_calibration_log(cal_path=cal)
+        assert isinstance(findings, list)
+
+    def test_run_evolver_wires_calibration_scan(self, monkeypatch, tmp_path):
+        """scan_calibration=True causes calibration suggestions to appear in report."""
+        monkeypatch.setattr("evolver.load_outcomes", lambda limit=50: [MagicMock(status="done")] * 5)
+        monkeypatch.setattr("evolver._llm_analyze", lambda outcomes, dry_run=False: ([], []))
+        monkeypatch.setattr("evolver._save_suggestions", lambda s: None)
+        monkeypatch.setattr("evolver.scan_outcomes_for_signals", lambda outcomes, dry_run=False: [])
+        monkeypatch.setattr("evolver.run_graduation", lambda verbose=False: 0, raising=False)
+
+        fake_finding = CalibrationFinding(
+            decision_class="taste",
+            entry_count=10,
+            override_count=5,
+            override_rate=0.5,
+            mean_confidence=5.5,
+            suggestion="add examples for taste decisions",
+        )
+        monkeypatch.setattr("evolver.scan_calibration_log", lambda: [fake_finding])
+
+        report = run_evolver(dry_run=False, verbose=False, min_outcomes=1, scan_calibration=True)
+        cal_suggestions = [s for s in report.suggestions if s.category == "prompt_tweak" and s.target == "escalation"]
+        assert len(cal_suggestions) == 1
+        assert "taste" in cal_suggestions[0].suggestion
+
+    def test_run_evolver_scan_calibration_false_skips(self, monkeypatch):
+        scan_called = []
+        monkeypatch.setattr("evolver.load_outcomes", lambda limit=50: [MagicMock(status="done")] * 5)
+        monkeypatch.setattr("evolver._llm_analyze", lambda outcomes, dry_run=False: ([], []))
+        monkeypatch.setattr("evolver._save_suggestions", lambda s: None)
+        monkeypatch.setattr("evolver.scan_outcomes_for_signals", lambda outcomes, dry_run=False: [])
+        monkeypatch.setattr("evolver.scan_calibration_log",
+                            lambda: scan_called.append(True) or [])
+
+        run_evolver(dry_run=False, verbose=False, min_outcomes=1, scan_calibration=False)
+        assert scan_called == []

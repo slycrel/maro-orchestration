@@ -579,6 +579,120 @@ def _llm_analyze(outcomes: List[Any], *, dry_run: bool = False) -> tuple[List[st
 # Core run
 # ---------------------------------------------------------------------------
 
+@dataclass
+class CalibrationFinding:
+    """One finding from the calibration log scan."""
+    decision_class: str
+    entry_count: int
+    override_count: int
+    override_rate: float      # fraction where action_raw != action_final
+    mean_confidence: float    # mean LLM-reported confidence (1–10 scale)
+    suggestion: str           # human-readable recommendation
+
+
+def scan_calibration_log(
+    cal_path: Optional[Path] = None,
+    *,
+    min_entries: int = 5,
+    high_override_threshold: float = 0.4,
+    low_confidence_threshold: float = 6.0,
+) -> List[CalibrationFinding]:
+    """Scan memory/calibration.jsonl for systematic miscalibration patterns.
+
+    Each entry in calibration.jsonl has:
+        {"ts": "...", "job_id": "...", "decision_class": "...",
+         "confidence": 1-10, "action_raw": "...", "action_final": "...", ...}
+
+    Findings are generated when:
+    - override_rate > high_override_threshold for a decision_class
+      (LLM keeps picking an action the guardrails override)
+    - mean_confidence < low_confidence_threshold for any class
+      (LLM is systematically uncertain — prompt may need clearer rules)
+
+    Args:
+        cal_path: Path to calibration.jsonl. Defaults to orch_root/memory/calibration.jsonl.
+        min_entries: Skip a class with fewer entries than this.
+        high_override_threshold: Override rate above which a finding is raised.
+        low_confidence_threshold: Mean confidence below which a finding is raised.
+
+    Returns:
+        List of CalibrationFinding objects (empty if no issues found).
+    """
+    if cal_path is None:
+        try:
+            import o
+            cal_path = o.orch_root() / "memory" / "calibration.jsonl"
+        except Exception:
+            return []
+
+    if not cal_path.exists():
+        return []
+
+    # Parse entries
+    entries: List[Dict[str, Any]] = []
+    try:
+        with open(cal_path) as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entries.append(json.loads(line))
+                except json.JSONDecodeError:
+                    pass
+    except OSError:
+        return []
+
+    if not entries:
+        return []
+
+    # Group by decision_class
+    from collections import defaultdict
+    by_class: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    for entry in entries:
+        dc = entry.get("decision_class", "unknown")
+        by_class[dc].append(entry)
+
+    findings: List[CalibrationFinding] = []
+    for decision_class, class_entries in by_class.items():
+        if len(class_entries) < min_entries:
+            continue
+
+        override_count = sum(
+            1 for e in class_entries
+            if e.get("action_raw") != e.get("action_final")
+        )
+        override_rate = override_count / len(class_entries)
+        confidences = [e.get("confidence", 5) for e in class_entries if isinstance(e.get("confidence"), (int, float))]
+        mean_confidence = sum(confidences) / len(confidences) if confidences else 5.0
+
+        finding_reason = []
+        if override_rate > high_override_threshold:
+            finding_reason.append(
+                f"override rate {override_rate:.0%} (>{high_override_threshold:.0%}) — "
+                f"LLM action is being overridden by guardrails too often; "
+                f"add clearer {decision_class!r} examples to the escalation prompt"
+            )
+        if mean_confidence < low_confidence_threshold:
+            finding_reason.append(
+                f"mean confidence {mean_confidence:.1f}/10 (<{low_confidence_threshold}) — "
+                f"LLM is systematically uncertain on {decision_class!r} decisions; "
+                f"consider adding explicit criteria or worked examples"
+            )
+
+        if finding_reason:
+            findings.append(CalibrationFinding(
+                decision_class=decision_class,
+                entry_count=len(class_entries),
+                override_count=override_count,
+                override_rate=override_rate,
+                mean_confidence=mean_confidence,
+                suggestion="; ".join(finding_reason),
+            ))
+
+    return findings
+
+
 def run_evolver(
     *,
     outcomes_window: int = 50,
@@ -587,6 +701,7 @@ def run_evolver(
     verbose: bool = True,
     notify: bool = False,
     scan_signals: bool = True,
+    scan_calibration: bool = True,
 ) -> EvolverReport:
     """Run one meta-evolution cycle.
 
@@ -666,6 +781,32 @@ def run_evolver(
             log.info("evolver signal_scan signals=%d", len(signals))
         except Exception as _sig_exc:
             log.debug("signal scan failed (non-fatal): %s", _sig_exc)
+
+    # Calibration review — detect systematic over/under-confidence in escalation decisions
+    if scan_calibration:
+        try:
+            cal_findings = scan_calibration_log()
+            for cf in cal_findings:
+                import uuid as _cal_uuid
+                suggestions.append(Suggestion(
+                    suggestion_id=f"cal-{_cal_uuid.uuid4().hex[:8]}",
+                    category="prompt_tweak",
+                    target="escalation",
+                    suggestion=cf.suggestion,
+                    failure_pattern=(
+                        f"calibration: class={cf.decision_class!r} "
+                        f"override_rate={cf.override_rate:.0%} "
+                        f"mean_confidence={cf.mean_confidence:.1f}/10 "
+                        f"n={cf.entry_count}"
+                    ),
+                    confidence=0.75,
+                    outcomes_analyzed=cf.entry_count,
+                ))
+            if verbose and cal_findings:
+                print(f"[evolver] calibration_scan: {len(cal_findings)} finding(s)", file=sys.stderr)
+            log.info("evolver calibration_scan findings=%d", len(cal_findings))
+        except Exception as _cal_exc:
+            log.debug("calibration scan failed (non-fatal): %s", _cal_exc)
 
     report = EvolverReport(
         run_id=run_id,
