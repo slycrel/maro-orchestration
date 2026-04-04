@@ -622,25 +622,45 @@ def _write_now_artifact(
 # ---------------------------------------------------------------------------
 
 def _parse_continuation_reason(reason: str):
-    """Extract (goal, context) from a loop_continuation reason string.
+    """Extract (goal, context) from a loop_continuation or loop_escalation reason string.
 
-    Continuation reasons have the format:
-        CONTINUATION of: <original goal>
+    Recognized prefixes and their formats:
 
-        Pass N of a multi-pass task. Previous pass completed...
-        Remaining work (M steps):
-        - step text
-        ...
+    "CONTINUATION of: <goal>\\n\\nPass N..."
+        → goal=<goal>, context=remainder
 
-    Returns (original_goal, context_block) where context_block is the
-    "Accomplished / Remaining" detail passed as ancestry_context_extra
-    so the planner knows what's already done and what's left.
+    "NARROWED from escalation <id>:\\n\\n<revised goal>\\n\\n..."
+        → goal=<revised goal> (second line block), context=full reason
+
+    "ESCALATION — task has been through..."
+        → goal extracted from "Original goal: <goal>" line, context=full reason
+
+    Falls back to (reason, "") for unrecognized formats.
     """
     if reason.startswith("CONTINUATION of:"):
         parts = reason.split("\n", 1)
         goal = parts[0].replace("CONTINUATION of:", "").strip()
         context = parts[1].strip() if len(parts) > 1 else ""
         return goal, context
+
+    if reason.startswith("NARROWED from escalation"):
+        # Format: "NARROWED from escalation <id>:\n\n<revised goal>\n\n..."
+        # The revised goal is the first non-empty line after the prefix line.
+        lines = reason.split("\n")
+        for line in lines[1:]:
+            stripped = line.strip()
+            if stripped:
+                return stripped, reason
+        return reason, ""
+
+    if reason.startswith("ESCALATION —"):
+        # Format includes "Original goal: <goal>" line
+        for line in reason.split("\n"):
+            if line.startswith("Original goal:"):
+                goal = line.replace("Original goal:", "").strip()
+                return goal, reason
+        return reason, ""
+
     # Fallback: treat the whole reason as the goal
     return reason, ""
 
@@ -745,6 +765,19 @@ def drain_task_store(
                 pass
             processed += 1
             log.info("drain_task_store: completed %s", job_id)
+            # Emit observable event so the dashboard shows continuation/escalation activity
+            try:
+                from observe import write_event as _write_event
+                _write_event(
+                    "task_drained",
+                    goal=task.get("reason", "")[:80],
+                    project=task.get("parent_job_id", ""),
+                    loop_id=job_id,
+                    status=task.get("source", ""),
+                    detail=f"depth={task.get('continuation_depth', 0)}",
+                )
+            except Exception:
+                pass
         except Exception as exc:
             log.warning("drain_task_store: task %s failed: %s", job_id, exc)
             try:

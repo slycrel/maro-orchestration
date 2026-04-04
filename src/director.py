@@ -972,6 +972,20 @@ def handle_escalation(
     if verbose:
         print(f"[poe:director:escalation] {action}: {reasoning[:80]}", file=sys.stderr, flush=True)
 
+    # Emit observable event for dashboard visibility into escalation decisions
+    try:
+        from observe import write_event as _write_event
+        _write_event(
+            "escalation_processed",
+            goal=task.get("reason", "")[:80],
+            project=task.get("parent_job_id", ""),
+            loop_id=job_id,
+            status=action,
+            detail=f"depth={depth} followup={followup_task_id or 'none'} | {reasoning[:100]}",
+        )
+    except Exception:
+        pass
+
     return EscalationDecision(
         action=action,
         reasoning=reasoning,

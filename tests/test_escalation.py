@@ -139,7 +139,7 @@ from handle import handle_task, drain_task_store, _parse_continuation_reason
 
 
 class TestParseContinuationReason:
-    def test_extracts_goal_from_prefix(self):
+    def test_extracts_goal_from_continuation_prefix(self):
         reason = "CONTINUATION of: review the auth module\n\nPass 2 of a multi-pass task.\n\nRemaining:\n- step 3"
         goal, ctx = _parse_continuation_reason(reason)
         assert goal == "review the auth module"
@@ -157,6 +157,22 @@ class TestParseContinuationReason:
         goal, ctx = _parse_continuation_reason(reason)
         assert goal == "do the thing"
         assert ctx == ""
+
+    def test_narrowed_prefix_extracts_revised_goal(self):
+        reason = "NARROWED from escalation abc123:\n\nreview only auth.py for injection risks\n\nMore context here."
+        goal, ctx = _parse_continuation_reason(reason)
+        assert goal == "review only auth.py for injection risks"
+        assert ctx == reason  # full reason as context
+
+    def test_escalation_prefix_extracts_original_goal(self):
+        reason = (
+            "ESCALATION — task has been through 4 passes.\n\n"
+            "Original goal: adversarial review of the entire codebase\n\n"
+            "Accomplished: step 1, step 2\n\nRemaining:\n- step 3"
+        )
+        goal, ctx = _parse_continuation_reason(reason)
+        assert goal == "adversarial review of the entire codebase"
+        assert ctx == reason  # full reason as context
 
 
 class TestHandleTask:

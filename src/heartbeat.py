@@ -395,6 +395,30 @@ def run_heartbeat(
 _backlog_drain_active = False
 _backlog_drain_lock = threading.Lock()
 
+_task_store_drain_active = False
+_task_store_drain_lock = threading.Lock()
+
+
+def _run_task_store_drain(*, dry_run: bool = False, verbose: bool = False) -> None:
+    """Drain loop_continuation and loop_escalation tasks from the task store.
+
+    Called from a daemon thread by heartbeat_loop. Each call processes up to
+    max_tasks tasks. The thread flag prevents stacking — if a prior drain is
+    still running (e.g. a slow continuation loop), the next heartbeat tick skips.
+    """
+    global _task_store_drain_active
+    try:
+        from handle import drain_task_store
+        n = drain_task_store(dry_run=dry_run, verbose=verbose, max_tasks=3)
+        if n and verbose:
+            print(f"[heartbeat] task store drain: processed {n} task(s)", file=sys.stderr)
+    except Exception as exc:
+        if verbose:
+            print(f"[heartbeat] task store drain failed: {exc}", file=sys.stderr)
+    finally:
+        with _task_store_drain_lock:
+            _task_store_drain_active = False
+
 
 def _run_backlog_step(*, dry_run: bool = False, verbose: bool = False) -> None:
     """Pick the highest-priority NEXT.md TODO and run one agent loop iteration.
@@ -611,18 +635,26 @@ def heartbeat_loop(
                 print(f"[heartbeat] scheduler check failed: {e}", file=sys.stderr)
 
         # Task store drain: pick up loop_continuation and loop_escalation tasks every tick.
-        # These are enqueued by budget-ceiling logic and need to be processed promptly.
-        # Uses a background thread so a slow continuation doesn't block the heartbeat tick.
+        # Mirrors backlog drain — runs in a background thread so a slow continuation loop
+        # (which may run dozens of LLM iterations) doesn't block the heartbeat tick.
+        # The _task_store_drain_active flag prevents stacking if a prior drain is still running.
         if not _mission_active:
-            try:
-                from handle import drain_task_store as _drain_task_store
-                _n_tasks = _drain_task_store(dry_run=dry_run, verbose=verbose)
-                if _n_tasks and verbose:
-                    print(f"[heartbeat] task store drain: processed {_n_tasks} task(s)",
-                          file=sys.stderr)
-            except Exception as e:
+            with _task_store_drain_lock:
+                _ts_running = _task_store_drain_active
+            if not _ts_running:
+                with _task_store_drain_lock:
+                    _task_store_drain_active = True
+                _tst = threading.Thread(
+                    target=_run_task_store_drain,
+                    kwargs={"dry_run": dry_run, "verbose": verbose},
+                    daemon=True,
+                    name="task-store-drain",
+                )
+                _tst.start()
                 if verbose:
-                    print(f"[heartbeat] task store drain failed: {e}", file=sys.stderr)
+                    print("[heartbeat] task store drain started", file=sys.stderr)
+            elif verbose:
+                print("[heartbeat] task store drain already active — skipping tick", file=sys.stderr)
 
         time.sleep(interval)
 

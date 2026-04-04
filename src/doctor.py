@@ -190,6 +190,40 @@ def run_doctor() -> bool:
     except Exception as exc:
         results.append(_check("Bughunter (src/)", True, f"skipped: {exc}"))  # optional, not fatal
 
+    # Continuation traversal config
+    _max_depth = os.environ.get("POE_MAX_CONTINUATION_DEPTH", "")
+    results.append(_check(
+        "POE_MAX_CONTINUATION_DEPTH",
+        True,  # optional — default of 4 is fine, warn only when unset for awareness
+        f"={_max_depth}" if _max_depth else "not set (default: 4 passes before escalation)",
+    ))
+
+    _step_timeout = os.environ.get("POE_STEP_TIMEOUT", "")
+    results.append(_check(
+        "POE_STEP_TIMEOUT",
+        True,  # optional
+        f"={_step_timeout}s" if _step_timeout else "not set (default: 600s per step)",
+    ))
+
+    # Task store queue — check for stuck continuation/escalation tasks
+    try:
+        from task_store import list_tasks as _list_tasks
+        _queued = _list_tasks(status_filter="queued")
+        _continuations = [t for t in _queued if t.get("source") == "loop_continuation"]
+        _escalations = [t for t in _queued if t.get("source") == "loop_escalation"]
+        _task_detail = (
+            f"{len(_continuations)} continuation(s), {len(_escalations)} escalation(s) queued"
+            if (_continuations or _escalations)
+            else f"{len(_queued)} task(s) queued — no stuck continuations"
+        )
+        results.append(_check(
+            "Task store queue",
+            len(_escalations) == 0,  # escalations waiting = needs attention
+            _task_detail,
+        ))
+    except Exception as exc:
+        results.append(_check("Task store queue", True, f"skipped: {exc}"))  # optional
+
     # Summary
     passed = sum(1 for r in results if r["ok"])
     total = len(results)
