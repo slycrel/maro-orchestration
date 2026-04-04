@@ -1,5 +1,37 @@
 # Changelog
 
+## [1.10.0] - 2026-04-04
+
+Session 10: GStack Tier 1 steals (decision taxonomy + confidence gates + anti-sycophancy + calibration). Heartbeat backgrounding (daemon threads). Depth-gated context firewall. Mutable task graph via inject_steps. Magic prefix registry refactor. 2425 tests, 5 skipped.
+
+### Added — GStack Tier 1: Decision taxonomy + confidence-gated escalation
+- `src/director.py` — `_ESCALATION_SYSTEM` extended with Mechanical/Taste/User Challenge taxonomy; anti-sycophancy rules injected directly into prompt
+- `EscalationDecision` dataclass: added `decision_class: str = "mechanical"` and `confidence: int = 5`
+- `handle_escalation()`: extracts `decision_class` + `confidence` from LLM JSON; `user_challenge` → force surface; `confidence < 5` → force surface with `[Low confidence (N/10)]` in summary; `confidence 5–6` → prepend `[Confidence N/10]` caveat; appends entry to `memory/calibration.jsonl`
+- 6 new tests: taxonomy override, low-confidence override, medium-confidence caveat, calibration log written, decision_class/confidence in result, invalid action defaults to surface
+
+### Added — Heartbeat backgrounding
+- `src/heartbeat.py` — evolver, inspector, and nightly eval each moved to daemon threads; module-level active flags (`_evolver_active`, `_inspector_active`, `_eval_active`) with companion `RLock` double-checked locking; same pattern as backlog drain
+- `_run_evolver_bg()`, `_run_inspector_bg()`, `_run_eval_bg()` — clear flag in finally block; exceptions logged, never propagated
+- Heartbeat tick no longer blocks on slow evolver or inspector runs
+- 11 new tests: happy path + exception swallowed for each bg function; double-start prevention for evolver and inspector
+
+### Added — Context firewall (depth-gated)
+- `src/handle.py` — `_context_firewall(reason, depth, cap=600)`: depth ≤ 1 → cap to 600 chars; depth ≥ 2 → strip accumulated history, keep only "Original goal:" line + "Remaining:" block; falls back to cap truncation on unstructured input
+- Wired into `handle_task()` continuation path, replacing bare `_cont_ctx[:600]`
+- 5 new tests: shallow pass-through, deep extraction, "Accomplished" stripped, fallback cap, always within cap
+
+### Added — Mutable task graph (inject_steps)
+- `src/step_exec.py` — `inject_steps` optional array field added to `complete_step` tool schema (max 3 per step); extracted and capped after parsing tool call response
+- `src/agent_loop.py` — serial done path: injected steps prepended to `remaining_steps`; parallel batch: `_batch_injected` collected from all batch members, capped at 6, prepended after batch completes; `StepOutcome.injected_steps` field added
+- Workers can now add discovery-driven steps mid-execution without pre-planning them
+- 2 new tests: inject_steps inserted into plan, inject_steps capped at three
+
+### Changed — Magic prefix registry
+- `src/handle.py` — replaced 9 scattered `startswith()` chains with `_PrefixRule` dataclass + `_PREFIX_REGISTRY` list + `_apply_prefixes()` loop; supports stacking multiple prefixes, case-insensitive matching, model tier precedence; `verify:` aliased to `ralph_mode`; `ultraplan:` sets both model_tier=power and max_steps=12
+- `_PrefixResult` dataclass carries all parsed flags cleanly into `handle()`
+- 11 new tests: single prefix, stacking, effort model tier, ultraplan max_steps, verify=ralph alias, case-insensitive, registry completeness check
+
 ## [1.9.1] - 2026-04-03
 
 Codex review feedback: fix subprocess timeout handling. Three bugs found via adversarial repo review run (step 9/13 "run pytest and analyze" timing out at 300s and retrying uselessly).

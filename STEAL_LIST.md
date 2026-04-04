@@ -49,7 +49,7 @@ Compiled from Grok research sessions + prototype experiments (2026-03-29).
 | **MCP/plugin hot-reload** | 724-office / Mimir | JSON-RPC over stdio/HTTP with auto-reconnect. Hot-reload persona plugins without restart. | `src/orch_bridges.py` extension | M |
 | ~~**Role-specific tool visibility**~~ | systematicls harness article | ✅ DONE — `EXECUTE_TOOLS_WORKER` (all), `EXECUTE_TOOLS_SHORT` (no schedule_run, used in factory_thin), `EXECUTE_TOOLS_INSPECTOR` (flag_stuck only) exported from step_exec.py. factory_thin now uses SHORT. | `src/step_exec.py` | S |
 | ~~**Back-pressure lifecycle hooks**~~ | systematicls harness article | ✅ DONE — budget-aware landing now injects `_budget_reminder` into `_next_step_injected_context` at synthesis step so the agent knows it's under budget pressure. | `agent_loop.py` budget-aware landing | S |
-| **Subagent context firewall** | systematicls harness article | Sub-loops get only a filtered summary of parent context — prevents context contamination and reduces token cost on deep delegations. Complements TeamCreateTool. | New `context_firewall.py` or adapter wrapper | M |
+| **Subagent context firewall** | systematicls harness article | Sub-loops get only a filtered summary of parent context — prevents context contamination and reduces token cost on deep delegations. Complements TeamCreateTool. | PARTIAL — `_context_firewall()` in handle.py strips accumulated history for continuation tasks at depth ≥ 2. Full team-delegation version (TeamCreateTool sub-loops) still TODO. | `src/handle.py` → `context_firewall.py` or adapter wrapper | M |
 
 ---
 
@@ -84,6 +84,67 @@ Flagged by @dexhorthy. Full synthesis: `research/PI_CODING_AGENT_SYNTHESIS.md`.
 
 ---
 
+---
+
+## From X links research batch (2026-04-03)
+
+Sources: @neural_avb (Meta-Harness), @ivanburazin (open-multi-agent), @_overment (dependency graph), @garrytan / @ryancarson (operational philosophy).
+
+### Meta-Harness — Stanford paper `arxiv.org/abs/2603.28052`
+
+"Everything in your AI system that is not the LLM itself is a harness." An agentic proposer (Claude Code) reads source code + execution traces of all prior harness candidates from a filesystem, then iteratively rewrites the harness. Results: +7.7 pts classification with 75% fewer tokens; found environment snapshot optimization unprompted.
+
+| Item | What | Status | Where it lands | Effort |
+|------|------|--------|----------------|--------|
+| **Proposer reads full execution traces** | Don't pass summary metrics to the improver — give it raw traces, failed candidates, and source code. Much stronger than scalar reward. | TODO | `src/evolver.py` — extend `scan_outcomes_for_signals()` to attach full step traces, not just summaries | M |
+| **Harness self-optimization loop** | The scaffold (context assembly, memory formatting, tool selection) is itself code that an agent can rewrite and test. | TODO | New `src/harness_optimizer.py` — runs nightly, proposes improvements to EXECUTE_SYSTEM/DECOMPOSE_SYSTEM; gated by smoke tests | L |
+| **Environment snapshot caching** | Cache world-state between steps so heartbeat tasks don't re-read the same files every tick. | TODO | `src/agent_loop.py` — step-level state cache, keyed by loop_id; invalidate on write-tool calls | M |
+| **Skill text as steering** | The description of what to optimize matters more than the optimizer architecture. Tight skill descriptions → better proposer outputs. | TODO | `src/skills.py` — add `optimization_objective` field to Skill; surface in improver context | S |
+
+### open-multi-agent — `github.com/JackChen-me/open-multi-agent`
+
+Claude Code architecture reverse-engineered into a standalone in-process multi-agent framework. Key: coordinator agent decomposes goal into dependency DAG at runtime; semaphore-gated AgentPool runs independent tasks in parallel; SharedMemory is team-level, not per-agent.
+
+| Item | What | Status | Where it lands | Effort |
+|------|------|--------|----------------|--------|
+| **Coordinator-as-agent for DAG decomposition** | LLM agent that decomposes goals into a dependency task graph at runtime — not hardcoded plans. | TODO | `src/planner.py` — add `decompose_to_dag()` returning tasks with explicit `depends_on` lists; feed to agent_loop serial/parallel router | M |
+| **Semaphore-based parallel pool with auto-unblock** | Independent tasks run concurrently; tasks with unmet deps block and auto-unblock when deps complete. | TODO | `src/agent_loop.py` parallel fan-out — replace `_steps_are_independent()` guard with dep-aware scheduler | M |
+| **Team-level SharedMemory** | Persistent state store accessible to all agents in a team — eliminates redundant re-fetches. | TODO | `src/step_exec.py` — add `_shared_ctx` dict to loop state; inject into each `execute_step` call; workers can read/write it | S |
+| **Three execution modes** | `runAgent` (one-shot) / `runTeam` (auto-plan + DAG) / `runTasks` (explicit pipeline). | TODO | `src/handle.py` — expose `direct:` (already done), `team:` (auto-DAG), and `pipeline:` (explicit steps list) lane variants | S |
+| **In-process execution vs. subprocess spawning** | No PTY/subprocess overhead; can deploy serverless or in Docker without shell access. | LATER | Architecture shift — deferred until Poe needs containerized deployment | L |
+
+### @_overment — Dynamic dependency graph + triadic heartbeat
+
+776 bookmarks, 90K views. Architecture: dynamic (mutable) dependency graph + heartbeat involving LLM + code + events. The graph mutates during execution; events are first-class nodes that can unblock tasks or inject new branches.
+
+| Item | What | Status | Where it lands | Effort |
+|------|------|--------|----------------|--------|
+| ~~**Mutable task graph**~~ | Static DAGs break when reality diverges from plan. Tasks can spawn new tasks and update deps mid-execution. | ✅ DONE — `inject_steps` array field on `complete_step` tool; serial and parallel agent_loop both prepend injected steps to remaining_steps. (2026-04-04) | `src/step_exec.py`, `src/agent_loop.py` | M |
+| **Event-reactive heartbeat (LLM + code + events)** | Heartbeat isn't just a timer — external events (Telegram, file change, API response) trigger the reasoning cycle. | TODO | `src/heartbeat.py` — add event queue alongside timer; events from interrupt.py unblock heartbeat immediately instead of waiting for next tick | M |
+| **Events as first-class graph nodes** | An incoming message is an event node that can unblock a waiting task or inject a branch — not just interrupt the loop. | TODO | `src/interrupt.py` + `src/heartbeat.py` — model interrupts as typed events; route to waiting dep slots in task graph | L |
+
+### @garrytan / @ryancarson — Operational philosophy (not architecture)
+
+Garry Tan quoting Ryan Carson's "How to turn your OpenClaw into the world's best assistant." Both are using Claude Code as an autonomous EA/chief-of-staff — proactive, memory-backed, runs without hand-holding. Garry also previewed "GStack for Openclaw" (upcoming integration layer). No code to steal, but the framing matters:
+
+> Poe is already building toward this pattern. The north star posture — "a chief of staff that wakes up with tasks and executes without prompting" — validates the architecture direction. Worth reading the full Ryan Carson article when available.
+
+---
+
+## From GStack research (2026-04-04)
+
+Source: Garry Tan (@garrytan) — "GStack for OpenClaw" integration layer preview. Tier 1 items are framing/judgment-quality improvements, not new capabilities.
+
+| Item | What | Status | Where it lands | Effort |
+|------|------|--------|----------------|--------|
+| ~~**Mechanical/Taste/User Challenge taxonomy**~~ | Decision classifier for escalation: Mechanical (clear rules) → automate; Taste (preferences/aesthetics) → surface; User Challenge (challenges user agency) → always surface | ✅ DONE — `EscalationDecision.decision_class`; `user_challenge` forces surface regardless of LLM action. (2026-04-04) | `src/director.py` | S |
+| ~~**Confidence-gated escalation (1–10)**~~ | LLM rates its own decision confidence; low confidence → force surface with `[Low confidence]` prefix; medium → caveat prepended | ✅ DONE — `EscalationDecision.confidence`; thresholds at 5 and 7. (2026-04-04) | `src/director.py` | S |
+| ~~**Anti-sycophancy rules**~~ | Explicit instructions in escalation system prompt to resist agreeing with user momentum; commit to taxonomy-based classification | ✅ DONE — injected into `_ESCALATION_SYSTEM`. (2026-04-04) | `src/director.py` | XS |
+| ~~**Calibration logging**~~ | Append decision_class + confidence + action + reasoning to `memory/calibration.jsonl` for retrospective calibration review | ✅ DONE — written on every `handle_escalation()` call (non-dry-run). (2026-04-04) | `src/director.py` → `memory/calibration.jsonl` | XS |
+| **Tier 2: Calibration review loop** | Periodic scan of calibration.jsonl to detect systematic over/under-confidence by decision class; suggest prompt adjustments | TODO | `src/evolver.py` — add `scan_calibration_log()` signal scanner | S |
+
+---
+
 ## Sources
 
 | Repo | Stars | What it is | Key insight |
@@ -99,5 +160,6 @@ Flagged by @dexhorthy. Full synthesis: `research/PI_CODING_AGENT_SYNTHESIS.md`.
 | Grok (external reviewer) | — | Independent code review of openclaw-orchestration | Skeptic prompting, stability sprint advice, dashboard-as-real-tool |
 | [@k1rallik](https://x.com/k1rallik) | — | Claude Code architecture reverse-engineering — lat.md knowledge graph + tool registry design | Tool registry at prompt-composition time, progressive skill disclosure, lat.md cross-links |
 | [@pawelhuryn](https://x.com/pawelhuryn) | — | Self-improving agent memory patterns | Three-tier promotion cycle, decision journal, contradict/confirm dynamics |
+| [@garrytan (GStack)](https://x.com/garrytan) | — | GStack for OpenClaw — judgment-quality Tier 1 improvements | Mechanical/Taste/User Challenge taxonomy, confidence gates, anti-sycophancy, calibration logging |
 | [@tom_doerr (724-office)](https://x.com/tom_doerr) | — | Single-agent tool-use loop with persistent memory | (previously noted; confirmed via this batch) |
 | [@teknium](https://x.com/teknium) | — | LLM research insights | (ingested; no immediate steal candidate) |
