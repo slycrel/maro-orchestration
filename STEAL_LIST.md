@@ -109,7 +109,7 @@ Claude Code architecture reverse-engineered into a standalone in-process multi-a
 |------|------|--------|----------------|--------|
 | **Coordinator-as-agent for DAG decomposition** | LLM agent that decomposes goals into a dependency task graph at runtime — not hardcoded plans. | TODO | `src/planner.py` — add `decompose_to_dag()` returning tasks with explicit `depends_on` lists; feed to agent_loop serial/parallel router | M |
 | **Semaphore-based parallel pool with auto-unblock** | Independent tasks run concurrently; tasks with unmet deps block and auto-unblock when deps complete. | TODO | `src/agent_loop.py` parallel fan-out — replace `_steps_are_independent()` guard with dep-aware scheduler | M |
-| **Team-level SharedMemory** | Persistent state store accessible to all agents in a team — eliminates redundant re-fetches. | TODO | `src/step_exec.py` — add `_shared_ctx` dict to loop state; inject into each `execute_step` call; workers can read/write it | S |
+| ~~**Team-level SharedMemory**~~ | Persistent state store accessible to all agents in a team — eliminates redundant re-fetches. | ✅ DONE — `_loop_shared_ctx` dict initialized before fan-out; threaded through `_run_steps_parallel` → `execute_step` → `create_team_worker`; written back after each worker completes. 8 tests. (2026-04-04) | `src/agent_loop.py`, `src/step_exec.py`, `src/team.py` | S |
 | **Three execution modes** | `runAgent` (one-shot) / `runTeam` (auto-plan + DAG) / `runTasks` (explicit pipeline). | TODO | `src/handle.py` — expose `direct:` (already done), `team:` (auto-DAG), and `pipeline:` (explicit steps list) lane variants | S |
 | **In-process execution vs. subprocess spawning** | No PTY/subprocess overhead; can deploy serverless or in Docker without shell access. | LATER | Architecture shift — deferred until Poe needs containerized deployment | L |
 
@@ -141,7 +141,7 @@ Source: Garry Tan (@garrytan) — "GStack for OpenClaw" integration layer previe
 | ~~**Confidence-gated escalation (1–10)**~~ | LLM rates its own decision confidence; low confidence → force surface with `[Low confidence]` prefix; medium → caveat prepended | ✅ DONE — `EscalationDecision.confidence`; thresholds at 5 and 7. (2026-04-04) | `src/director.py` | S |
 | ~~**Anti-sycophancy rules**~~ | Explicit instructions in escalation system prompt to resist agreeing with user momentum; commit to taxonomy-based classification | ✅ DONE — injected into `_ESCALATION_SYSTEM`. (2026-04-04) | `src/director.py` | XS |
 | ~~**Calibration logging**~~ | Append decision_class + confidence + action + reasoning to `memory/calibration.jsonl` for retrospective calibration review | ✅ DONE — written on every `handle_escalation()` call (non-dry-run). (2026-04-04) | `src/director.py` → `memory/calibration.jsonl` | XS |
-| **Tier 2: Calibration review loop** | Periodic scan of calibration.jsonl to detect systematic over/under-confidence by decision class; suggest prompt adjustments | TODO | `src/evolver.py` — add `scan_calibration_log()` signal scanner | S |
+| ~~**Tier 2: Calibration review loop**~~ | Periodic scan of calibration.jsonl to detect systematic over/under-confidence by decision class; suggest prompt adjustments | ✅ DONE — `scan_calibration_log()` in evolver.py; wired into `run_evolver(scan_calibration=True)`. 10 tests. (2026-04-04) | `src/evolver.py` | S |
 
 ---
 

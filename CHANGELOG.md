@@ -32,6 +32,27 @@ Session 10: GStack Tier 1 steals (decision taxonomy + confidence gates + anti-sy
 - `_PrefixResult` dataclass carries all parsed flags cleanly into `handle()`
 - 11 new tests: single prefix, stacking, effort model tier, ultraplan max_steps, verify=ralph alias, case-insensitive, registry completeness check
 
+## [1.10.2] - 2026-04-04
+
+GStack Tier 2 calibration review loop. 2443 tests, 5 skipped.
+
+### Added — Calibration review loop (GStack Tier 2)
+- `src/evolver.py` — `CalibrationFinding` dataclass (decision_class, entry_count, override_count, override_rate, mean_confidence, suggestion)
+- `scan_calibration_log(cal_path, min_entries, high_override_threshold, low_confidence_threshold)` — reads `memory/calibration.jsonl`, groups by decision_class, flags override_rate > 40% or mean_confidence < 6/10 as actionable findings
+- `run_evolver()` — `scan_calibration: bool = True` parameter; calibration findings become `prompt_tweak` / `escalation` suggestions in the evolver report
+- 10 new tests in `tests/test_evolver.py`: empty file, missing file, insufficient entries, high override rate, no override, low confidence, multiple classes, malformed lines, wired into run_evolver, scan_calibration=False skip
+
+## [1.10.1] - 2026-04-04
+
+Team-level SharedMemory (open-multi-agent steal). 2433 tests, 5 skipped.
+
+### Added — Team-level SharedMemory
+- `src/agent_loop.py` — `_loop_shared_ctx: Dict[str, Any] = {}` initialized before fan-out block; passed to both `_run_steps_parallel` call sites (fan-out and parallel batch) and to serial `_execute_step`
+- `src/step_exec.py` — `shared_ctx` parameter added to `execute_step()`; passed to `create_team_worker`; successful worker results written back keyed by `"{role}:{task[:40]}"`
+- `src/team.py` — `shared_ctx` parameter added to `create_team_worker()`; non-empty dict injects "Shared context from prior team workers" block (last 5 entries, each capped at 200 chars) into worker user message before the task
+- `_run_steps_parallel()` — `shared_ctx` parameter added; threaded into each `_run_one` closure
+- 8 new tests in `tests/test_shared_ctx.py`: shared_ctx injection, empty/None no-op, last-5-entries cap, writeback on success, no-writeback on blocked, None-safe execute_step
+
 ## [1.9.1] - 2026-04-03
 
 Codex review feedback: fix subprocess timeout handling. Three bugs found via adversarial repo review run (step 9/13 "run pytest and analyze" timing out at 300s and retrying uselessly).
