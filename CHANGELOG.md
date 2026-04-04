@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.9.1] - 2026-04-03
+
+Codex review feedback: fix subprocess timeout handling. Three bugs found via adversarial repo review run (step 9/13 "run pytest and analyze" timing out at 300s and retrying uselessly).
+
+### Fixed — CodexAdapter ignores timeout kwarg
+- `src/llm.py` `CodexAdapter.complete()`: add `timeout: Optional[int] = None` parameter; use `_timeout = timeout or self.timeout` instead of always using `self.timeout`. Previously, step_exec's `_step_timeout=600` for long-running steps had no effect on Codex runs — now it does.
+
+### Fixed — Retry on subprocess timeout burns time with no progress
+- `src/agent_loop.py` `_handle_blocked_step()`: detect `"timed out"` in `stuck_reason` and return `retry=False` immediately, regardless of `prior_retries`. Retrying an identical timed-out step just burns another timeout window. The stuck_reason now includes a split hint for the recovery planner: "split this step into (1) run command + save output, (2) read file and analyze."
+- Added 5 tests covering: both adapter timeout messages, network timeout still retries, split hint in stuck_reason.
+
+### Changed — Long-running step timeout bumped
+- `src/step_exec.py`: 600s → 900s for long-running steps (pytest on large suites + LLM analysis needs headroom). Added `cargo` and `mvn` to long-running keywords.
+
 ## [1.9.0] - 2026-04-03
 
 Session 9: Pi steal — remaining NEXT items. Runtime tool extension, human-readable session export, session branching. 47 new tests (2329 total, 0 failures, 1 pre-existing flaky).

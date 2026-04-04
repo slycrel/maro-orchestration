@@ -417,10 +417,12 @@ class CodexCLIAdapter(LLMAdapter):
         tool_choice: str = "auto",
         max_tokens: int = 4096,
         temperature: float = 0.3,
+        timeout: Optional[int] = None,
         **kwargs,
     ) -> LLMResponse:
         prompt = self._build_prompt(messages, tools)
         model_str = resolve_model("codex", self.model_key)
+        _timeout = timeout or self.timeout
 
         cmd = [
             self.codex_bin,
@@ -437,10 +439,10 @@ class CodexCLIAdapter(LLMAdapter):
                 input=prompt,
                 capture_output=True,
                 text=True,
-                timeout=self.timeout,
+                timeout=_timeout,
             )
         except subprocess.TimeoutExpired:
-            raise RuntimeError(f"codex subprocess timed out after {self.timeout}s")
+            raise RuntimeError(f"codex subprocess timed out after {_timeout}s")
         except FileNotFoundError:
             raise RuntimeError(f"codex binary not found at {self.codex_bin}")
 

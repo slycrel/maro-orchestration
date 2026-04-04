@@ -536,12 +536,15 @@ def execute_step(
         f"Complete this step now. Call complete_step when done or flag_stuck if blocked."
     )
 
-    # Detect steps that run external commands — give them a longer timeout
+    # Detect steps that run external commands — give them a longer timeout.
+    # 900s covers: pytest on large suites (90s) + LLM analysis time.
+    # These timeout values are passed to the adapter; CodexAdapter and
+    # ClaudeSubprocessAdapter both respect the timeout kwarg.
     _long_running_keywords = {"pytest", "test suite", "npm run", "make ", "docker ", "pip install",
-                              "git clone", "build ", "compile", "deploy"}
+                              "git clone", "build ", "compile", "deploy", "cargo ", "mvn "}
     _step_lower = step_text.lower()
     _is_long_running = any(kw in _step_lower for kw in _long_running_keywords)
-    _step_timeout = 600 if _is_long_running else None
+    _step_timeout = 900 if _is_long_running else None
 
     # Phase 41 step 6: inject tool_search if any deferred tools are in the list
     _active_tools = list(tools)

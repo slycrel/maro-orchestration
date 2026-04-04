@@ -464,6 +464,26 @@ def _handle_blocked_step(
     block_reason = outcome.get("stuck_reason", "blocked")
     step_result = outcome.get("result", "")
 
+    # Timeout failures must not be retried identically — the subprocess will
+    # just time out again, burning wall-clock time with zero progress.
+    # Give up immediately and produce a stuck_reason that guides the recovery
+    # planner to split the step into: (1) run command + save output, (2) analyze.
+    _is_timeout = "timed out" in block_reason.lower()
+    if _is_timeout:
+        _split_hint = (
+            f"TIMEOUT: step exceeded subprocess time limit ({block_reason}). "
+            "Recovery: split this step into two — "
+            "(1) run the command and save output to a file, "
+            "(2) read the file and analyze the output as a separate step. "
+            "Never combine execution and analysis in one step."
+        )
+        return _BlockDecision(
+            retry=False,
+            hint="",
+            loop_status="stuck",
+            stuck_reason=_split_hint,
+        )
+
     if prior_retries < 2:
         if prior_retries == 0:
             # Round 1: generic fallback hint

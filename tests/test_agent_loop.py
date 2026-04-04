@@ -810,6 +810,57 @@ def test_handle_blocked_step_missing_reason_uses_fallback():
     assert isinstance(decision.stuck_reason, str)
 
 
+def test_handle_blocked_step_timeout_no_retry():
+    """Subprocess timeout → retry=False immediately, regardless of prior_retries."""
+    decision = _handle_blocked_step(
+        step_text="run pytest and analyze",
+        outcome={"stuck_reason": "codex subprocess timed out after 300s", "result": ""},
+        prior_retries=0,  # First attempt — normally would retry, but timeout skips that
+        adapter=None,
+    )
+    assert decision.retry is False
+    assert decision.loop_status == "stuck"
+
+
+def test_handle_blocked_step_timeout_reason_includes_split_hint():
+    """Timeout stuck_reason should guide recovery planner to split the step."""
+    decision = _handle_blocked_step(
+        step_text="run full test suite and analyze results",
+        outcome={"stuck_reason": "claude subprocess timed out after 600s", "result": ""},
+        prior_retries=0,
+        adapter=None,
+    )
+    assert "split" in decision.stuck_reason.lower() or "separate" in decision.stuck_reason.lower()
+    assert "file" in decision.stuck_reason.lower()
+
+
+def test_handle_blocked_step_timeout_matches_both_adapters():
+    """Both claude and codex timeout messages trigger the no-retry path."""
+    for reason in [
+        "claude subprocess timed out after 300s",
+        "codex subprocess timed out after 300s",
+        "LLM call failed: claude subprocess timed out after 900s",
+    ]:
+        decision = _handle_blocked_step(
+            step_text="run tests",
+            outcome={"stuck_reason": reason, "result": ""},
+            prior_retries=0,
+            adapter=None,
+        )
+        assert decision.retry is False, f"Expected no retry for: {reason!r}"
+
+
+def test_handle_blocked_step_network_timeout_still_retries():
+    """'network timeout' (one word) is NOT a subprocess timeout — still retries."""
+    decision = _handle_blocked_step(
+        step_text="fetch data from API",
+        outcome={"stuck_reason": "network timeout after 30s", "result": ""},
+        prior_retries=0,
+        adapter=None,
+    )
+    assert decision.retry is True
+
+
 # ---------------------------------------------------------------------------
 # _finalize_loop
 # ---------------------------------------------------------------------------
