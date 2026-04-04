@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.10.10] - 2026-04-04
+
+Three execution modes + decompose_to_dag. 2521 passed, 5 skipped.
+
+### Added — Three execution modes (open-multi-agent steal)
+- `team:` prefix: routes to AGENDA with `parallel_fan_out=4`, activating `_run_steps_dag` when the LLM emits `[after:N]` parallelism; defaults to `mid` model tier; stacks with `strict:`, `ralph:`, etc.
+- `pipeline:` prefix: now actually implemented (was registered but never wired); parses goal as pipe-separated steps (`step1 | step2 | step3`), falls back to newline-split; bypasses LLM decomposition via new `preset_steps` parameter
+- `run_agent_loop(preset_steps=...)`: optional pre-specified step list; when non-empty, skips `_decompose()` entirely; blank entries filtered
+- `decompose_to_dag(goal, adapter, ...)` in `planner.py`: coordinator-as-agent API — calls `decompose()`, parses deps, builds execution levels; returns `(clean_steps, deps, levels, parallel_levels)` ready to feed into `_run_steps_dag()`
+- 19 new tests in `tests/test_execution_modes.py`
+
 ## [1.10.9] - 2026-04-04
 
 inject_steps step-shaper fix. 2506 tests, 5 skipped.
