@@ -63,6 +63,7 @@ class _PrefixResult:
     ralph_mode: bool = False
     pipeline_mode: bool = False
     strict_mode: bool = False
+    team_mode: bool = False
 
 
 _PREFIX_REGISTRY: List[_PrefixRule] = [
@@ -80,6 +81,7 @@ _PREFIX_REGISTRY: List[_PrefixRule] = [
     _PrefixRule("verify:",      flag="ralph_mode"),   # alias for ralph:
     _PrefixRule("pipeline:",    flag="pipeline_mode"),
     _PrefixRule("strict:",      flag="strict_mode"),
+    _PrefixRule("team:",        flag="team_mode",  model_tier="mid"),
 ]
 
 
@@ -307,6 +309,7 @@ def handle(
     _ralph_prefix = _pfx.ralph_mode
     _pipeline_prefix = _pfx.pipeline_mode
     _strict_prefix = _pfx.strict_mode
+    _team_prefix = _pfx.team_mode
 
     # Build adapter
     if adapter is None and not dry_run:
@@ -482,6 +485,83 @@ def handle(
             except Exception as _thin_exc:
                 log.warning("mode:thin failed, falling back to Mode 2: %s", _thin_exc)
                 # Fall through to run_agent_loop below
+
+        # pipeline: prefix — user specifies explicit steps as "step1 | step2 | step3".
+        # Bypasses LLM decomposition entirely; runs the given steps in order.
+        if _pipeline_prefix:
+            _pipe_raw = _pfx.message
+            _pipe_steps = [s.strip() for s in _pipe_raw.split("|") if s.strip()]
+            if not _pipe_steps:
+                _pipe_steps = [s.strip() for s in _pipe_raw.splitlines() if s.strip()]
+            if _pipe_steps:
+                if verbose:
+                    print(f"[poe] pipeline: {len(_pipe_steps)} steps: {_pipe_steps}", file=sys.stderr, flush=True)
+                _pipe_result = run_agent_loop(
+                    _pipe_raw,
+                    project=project,
+                    model=model,
+                    adapter=adapter,
+                    dry_run=dry_run,
+                    verbose=verbose,
+                    preset_steps=_pipe_steps,
+                )
+                elapsed = int((time.monotonic() - started_at) * 1000)
+                _pipe_parts = []
+                for s in _pipe_result.steps:
+                    if s.status == "done" and s.result:
+                        _pipe_parts.append(f"**Step {s.index}: {s.text}**\n{s.result}")
+                _pipe_text = "\n\n---\n\n".join(_pipe_parts) if _pipe_parts else "[no output]"
+                if _pipe_result.status == "stuck":
+                    _pipe_text += f"\n\n⚠️ Stuck: {_pipe_result.stuck_reason}"
+                return HandleResult(
+                    handle_id=handle_id,
+                    lane="agenda",
+                    lane_confidence=confidence,
+                    classification_reason=reason + " [pipeline]",
+                    message=message,
+                    status=_pipe_result.status,
+                    result=_pipe_text,
+                    project=_pipe_result.project or project or "",
+                    tokens_in=_pipe_result.total_tokens_in,
+                    tokens_out=_pipe_result.total_tokens_out,
+                    elapsed_ms=elapsed,
+                )
+
+        # team: prefix — decompose into DAG and execute with dep-aware parallel pool.
+        # Uses parallel_fan_out=4 so _run_steps_dag fires when [after:N] parallelism is found.
+        if _team_prefix:
+            if verbose:
+                print("[poe] team: dag execution mode (parallel_fan_out=4)", file=sys.stderr, flush=True)
+            _team_result = run_agent_loop(
+                _pfx.message,
+                project=project,
+                model=model,
+                adapter=adapter,
+                dry_run=dry_run,
+                verbose=verbose,
+                parallel_fan_out=4,
+            )
+            elapsed = int((time.monotonic() - started_at) * 1000)
+            _team_parts = []
+            for s in _team_result.steps:
+                if s.status == "done" and s.result:
+                    _team_parts.append(f"**Step {s.index}: {s.text}**\n{s.result}")
+            _team_text = "\n\n---\n\n".join(_team_parts) if _team_parts else "[no output]"
+            if _team_result.status == "stuck":
+                _team_text += f"\n\n⚠️ Stuck: {_team_result.stuck_reason}"
+            return HandleResult(
+                handle_id=handle_id,
+                lane="agenda",
+                lane_confidence=confidence,
+                classification_reason=reason + " [team]",
+                message=message,
+                status=_team_result.status,
+                result=_team_text,
+                project=_team_result.project or project or "",
+                tokens_in=_team_result.total_tokens_in,
+                tokens_out=_team_result.total_tokens_out,
+                elapsed_ms=elapsed,
+            )
 
         # direct: prefix — skip quality gate and escalation, route straight to run_agent_loop.
         # Bitter Lesson experiment: for simple goals, scaffolding overhead doesn't improve output.

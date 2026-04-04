@@ -940,6 +940,7 @@ def run_agent_loop(
     resume_from_loop_id: Optional[str] = None,
     permission_context=None,
     continuation_depth: int = 0,
+    preset_steps: Optional[List[str]] = None,
 ) -> LoopResult:
     """Run the autonomous loop for a goal.
 
@@ -1079,7 +1080,12 @@ def run_agent_loop(
     )
 
     # Stage 5: rule hit — use deterministic steps, skip LLM decompose
-    if _matched_rule is not None and _matched_rule.steps_template:
+    if preset_steps is not None and preset_steps:
+        # pipeline: mode or caller-specified steps — bypass decomposition entirely
+        steps = [str(s).strip() for s in preset_steps if str(s).strip()]
+        if verbose:
+            print(f"[poe] pipeline: using {len(steps)} preset steps (no decompose)", file=sys.stderr, flush=True)
+    elif _matched_rule is not None and _matched_rule.steps_template:
         steps = list(_matched_rule.steps_template)
         if verbose:
             print(f"[poe] using {len(steps)} rule steps from {_matched_rule.name!r}", file=sys.stderr, flush=True)

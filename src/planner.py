@@ -378,6 +378,54 @@ def decompose(
 
 
 # ---------------------------------------------------------------------------
+# Structured DAG decomposition
+# ---------------------------------------------------------------------------
+
+def decompose_to_dag(
+    goal: str,
+    adapter,
+    max_steps: int = 8,
+    verbose: bool = False,
+    **kwargs,
+) -> tuple:
+    """Decompose a goal into a structured DAG with explicit dependency metadata.
+
+    Calls ``decompose()`` (which already instructs the LLM to emit ``[after:N]``
+    tags for parallel steps) then parses the result with ``parse_dependencies``
+    and ``build_execution_levels`` so callers get a fully structured graph rather
+    than raw strings.
+
+    This is the coordinator-as-agent pattern from open-multi-agent: an LLM agent
+    decomposes the goal into a dependency graph at runtime. The returned metadata
+    is ready to feed directly into ``_run_steps_dag()``.
+
+    Args:
+        goal:      The high-level goal to decompose.
+        adapter:   LLM adapter to use for decomposition.
+        max_steps: Maximum number of steps to produce.
+        **kwargs:  Forwarded to ``decompose()`` (lessons_context, ancestry_context, etc.).
+
+    Returns:
+        Tuple of (clean_steps, deps, levels, parallel_levels):
+          - clean_steps:     List[str] — step texts with [after:N] tags stripped.
+          - deps:            Dict[int, Set[int]] — 1-based step → set of dep indices.
+          - levels:          List[List[int]] — steps grouped by topological level.
+          - parallel_levels: List[List[int]] — levels that contain >1 step (parallelizable).
+    """
+    raw_steps = decompose(goal, adapter, max_steps=max_steps, verbose=verbose, **kwargs)
+    clean_steps, deps = parse_dependencies(raw_steps)
+    levels = build_execution_levels(deps)
+    parallel_levels = [lvl for lvl in levels if len(lvl) > 1]
+    if verbose and parallel_levels:
+        import logging
+        logging.getLogger("poe.planner").info(
+            "decompose_to_dag: %d steps, %d levels, %d parallelizable",
+            len(clean_steps), len(levels), len(parallel_levels),
+        )
+    return clean_steps, deps, levels, parallel_levels
+
+
+# ---------------------------------------------------------------------------
 # Verification step injection
 # ---------------------------------------------------------------------------
 
