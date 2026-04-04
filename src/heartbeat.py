@@ -609,6 +609,21 @@ def heartbeat_loop(
         except Exception as e:
             if verbose:
                 print(f"[heartbeat] scheduler check failed: {e}", file=sys.stderr)
+
+        # Task store drain: pick up loop_continuation and loop_escalation tasks every tick.
+        # These are enqueued by budget-ceiling logic and need to be processed promptly.
+        # Uses a background thread so a slow continuation doesn't block the heartbeat tick.
+        if not _mission_active:
+            try:
+                from handle import drain_task_store as _drain_task_store
+                _n_tasks = _drain_task_store(dry_run=dry_run, verbose=verbose)
+                if _n_tasks and verbose:
+                    print(f"[heartbeat] task store drain: processed {_n_tasks} task(s)",
+                          file=sys.stderr)
+            except Exception as e:
+                if verbose:
+                    print(f"[heartbeat] task store drain failed: {e}", file=sys.stderr)
+
         time.sleep(interval)
 
 

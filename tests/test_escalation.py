@@ -135,7 +135,28 @@ class TestHandleEscalationWithLLM:
 # handle.handle_task routing
 # ---------------------------------------------------------------------------
 
-from handle import handle_task, drain_task_store
+from handle import handle_task, drain_task_store, _parse_continuation_reason
+
+
+class TestParseContinuationReason:
+    def test_extracts_goal_from_prefix(self):
+        reason = "CONTINUATION of: review the auth module\n\nPass 2 of a multi-pass task.\n\nRemaining:\n- step 3"
+        goal, ctx = _parse_continuation_reason(reason)
+        assert goal == "review the auth module"
+        assert "Pass 2" in ctx
+        assert "step 3" in ctx
+
+    def test_fallback_on_no_prefix(self):
+        reason = "just a plain goal string"
+        goal, ctx = _parse_continuation_reason(reason)
+        assert goal == "just a plain goal string"
+        assert ctx == ""
+
+    def test_empty_context_when_single_line(self):
+        reason = "CONTINUATION of: do the thing"
+        goal, ctx = _parse_continuation_reason(reason)
+        assert goal == "do the thing"
+        assert ctx == ""
 
 
 class TestHandleTask:
@@ -164,19 +185,24 @@ class TestHandleTask:
         def _fake_run_agent_loop(goal, **kw):
             called["goal"] = goal
             called["depth"] = kw.get("continuation_depth", -1)
+            called["ctx"] = kw.get("ancestry_context_extra", "")
             return _FakeLoopResult()
 
         with mock.patch("agent_loop.run_agent_loop", _fake_run_agent_loop):
             task = {
                 "job_id": "cont-t-001",
                 "source": "loop_continuation",
-                "reason": "CONTINUATION of: review auth module",
+                "reason": "CONTINUATION of: review auth module\n\nPass 2.\n\nRemaining:\n- step 3",
                 "continuation_depth": 2,
                 "status": "claimed",
             }
             handle_task(task, dry_run=True)
 
+        # Goal should be extracted cleanly — not the full blob
+        assert called["goal"] == "review auth module"
         assert called["depth"] == 2
+        # Context block passed as ancestry_context_extra
+        assert "Remaining" in called["ctx"] or "Pass 2" in called["ctx"]
 
     def test_unknown_source_routes_to_handle(self, monkeypatch, tmp_path):
         monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))

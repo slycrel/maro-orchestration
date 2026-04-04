@@ -621,6 +621,30 @@ def _write_now_artifact(
 # Task store routing — escalation and continuation consumers
 # ---------------------------------------------------------------------------
 
+def _parse_continuation_reason(reason: str):
+    """Extract (goal, context) from a loop_continuation reason string.
+
+    Continuation reasons have the format:
+        CONTINUATION of: <original goal>
+
+        Pass N of a multi-pass task. Previous pass completed...
+        Remaining work (M steps):
+        - step text
+        ...
+
+    Returns (original_goal, context_block) where context_block is the
+    "Accomplished / Remaining" detail passed as ancestry_context_extra
+    so the planner knows what's already done and what's left.
+    """
+    if reason.startswith("CONTINUATION of:"):
+        parts = reason.split("\n", 1)
+        goal = parts[0].replace("CONTINUATION of:", "").strip()
+        context = parts[1].strip() if len(parts) > 1 else ""
+        return goal, context
+    # Fallback: treat the whole reason as the goal
+    return reason, ""
+
+
 def handle_task(
     task: dict,
     *,
@@ -649,18 +673,22 @@ def handle_task(
 
     elif source == "loop_continuation":
         # Continuations are already classified AGENDA — skip intent classification overhead.
-        # Pass continuation_depth so the planner reasons narrowly (not re-planning the full scope).
+        # Extract the original goal cleanly; pass accomplished/remaining context as ancestry
+        # so the planner gets focused decomposition ("this is pass N, remaining work is X")
+        # rather than treating the full blob as a new goal to plan from scratch.
         log.info("handle_task routing continuation job_id=%s depth=%d", job_id, depth)
+        _cont_goal, _cont_ctx = _parse_continuation_reason(reason)
         from agent_loop import run_agent_loop
         if adapter is None and not dry_run:
             from llm import build_adapter, MODEL_CHEAP
             adapter = build_adapter(model=MODEL_CHEAP)
         return run_agent_loop(
-            reason,
+            _cont_goal,
             adapter=adapter,
             dry_run=dry_run,
             verbose=verbose,
             continuation_depth=depth,
+            ancestry_context_extra=_cont_ctx[:600] if _cont_ctx else "",
         )
 
     else:
