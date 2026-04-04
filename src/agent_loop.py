@@ -294,6 +294,7 @@ class _BlockDecision:
     hint: str              # context to prepend on retry
     loop_status: str       # "stuck" on terminate, unchanged on retry
     stuck_reason: str      # non-empty on terminate
+    split_into: List[str] = field(default_factory=list)  # non-empty → replace stuck step with these
 
 
 def _build_loop_context(
@@ -442,6 +443,53 @@ def _build_loop_context(
     return lessons_context, skills_context, cost_context, had_no_matching_skill, matched_rule
 
 
+_EXEC_KEYWORDS = frozenset([
+    "pytest", "python", "run ", "execute", "make ", "npm ", "yarn ", "docker",
+    "git ", "bash ", "sh ", "cargo ", "go test", "mvn ", "gradle",
+    "install ", "build ", "compile", "lint ", "mypy ", "ruff ",
+])
+_ANALYZE_KEYWORDS = frozenset([
+    "analyz", "summariz", "review", "identify failure", "check result",
+    "interpret", "categoriz", "parse output", "parse result",
+    "count pass", "count fail", "report on", "describe result",
+])
+
+
+def _is_combined_exec_analyze(step: str) -> bool:
+    """Return True if a step combines command execution with output analysis.
+
+    These are the steps that routinely fail on long-running commands because
+    the executor can't fit both the command timeout and analysis into one call.
+    """
+    low = step.lower()
+    has_exec = any(kw in low for kw in _EXEC_KEYWORDS)
+    has_analyze = any(kw in low for kw in _ANALYZE_KEYWORDS)
+    return has_exec and has_analyze
+
+
+def _split_exec_analyze(step: str) -> List[str]:
+    """Split a combined exec+analyze step into two atomic steps.
+
+    Returns a list of two step strings: [run_step, analyze_step].
+    """
+    low = step.lower()
+    # Find which exec keyword matched to build a clean run step
+    exec_kw = next((kw.strip() for kw in _EXEC_KEYWORDS if kw in low), "command")
+    # Trim trailing clauses that describe analysis
+    run_part = step
+    for sep in (" and ", " then ", ", then ", " to ", "; "):
+        if sep in low:
+            idx = low.find(sep)
+            candidate = step[:idx].strip()
+            if any(kw in candidate.lower() for kw in _EXEC_KEYWORDS):
+                run_part = candidate
+                break
+
+    run_step = f"Run {run_part.lstrip('Rr un').strip()[:120]} and save output to a file"
+    analyze_step = f"Read the captured output and analyze results: {step[:80]}"
+    return [run_step, analyze_step]
+
+
 def _handle_blocked_step(
     step_text: str,
     outcome: dict,
@@ -466,10 +514,19 @@ def _handle_blocked_step(
 
     # Timeout failures must not be retried identically — the subprocess will
     # just time out again, burning wall-clock time with zero progress.
-    # Give up immediately and produce a stuck_reason that guides the recovery
-    # planner to split the step into: (1) run command + save output, (2) analyze.
+    # If the step is a combined exec+analyze, split it and inject both halves.
+    # Otherwise terminate so Phase 45 recovery can handle it.
     _is_timeout = "timed out" in block_reason.lower()
     if _is_timeout:
+        if _is_combined_exec_analyze(step_text):
+            _parts = _split_exec_analyze(step_text)
+            return _BlockDecision(
+                retry=False,
+                hint="",
+                loop_status="",          # not stuck — split recovers
+                stuck_reason="",
+                split_into=_parts,
+            )
         _split_hint = (
             f"TIMEOUT: step exceeded subprocess time limit ({block_reason}). "
             "Recovery: split this step into two — "
@@ -1004,6 +1061,29 @@ def run_agent_loop(
             elapsed_ms=elapsed,
             stuck_reason=_fanout_stuck_reason,
         )
+
+    # Pre-execution step-shape check: split combined exec+analyze steps before they run.
+    # The decompose prompt forbids these but the LLM occasionally violates the rule.
+    # Catching them here is cheaper than a timeout + recovery cycle.
+    # Must run BEFORE append_next_items so shaped steps are what gets written to NEXT.md.
+    _shaped_steps: List[str] = []
+    for _raw_step in steps:
+        if _is_combined_exec_analyze(_raw_step):
+            _parts = _split_exec_analyze(_raw_step)
+            _shaped_steps.extend(_parts)
+            log.info("step-shape: split combined exec+analyze step into %d: %r → %r",
+                     len(_parts), _raw_step[:60], [p[:40] for p in _parts])
+        else:
+            _shaped_steps.append(_raw_step)
+    if len(_shaped_steps) != len(steps):
+        if verbose:
+            print(
+                f"[poe] step-shape: {len(steps)} planned → {len(_shaped_steps)} after splitting "
+                f"combined exec+analyze steps",
+                file=sys.stderr, flush=True,
+            )
+        steps = _shaped_steps
+        _manifest_steps = list(steps)  # update manifest to reflect shaped plan
 
     # Add steps to project NEXT.md
     step_indices = o.append_next_items(project, steps)
@@ -1540,6 +1620,32 @@ def run_agent_loop(
                     _br = outcome.get("stuck_reason", "blocked")
                     print(f"[poe] step {step_idx+1} blocked ({_br[:80]}), retrying with fallback hint", file=sys.stderr, flush=True)
                 # Record the blocked attempt but don't terminate
+                step_outcomes.append(StepOutcome(
+                    index=item_index,
+                    text=step_text,
+                    status="blocked",
+                    result=step_result,
+                    iteration=iteration,
+                    tokens_in=outcome.get("tokens_in", 0),
+                    tokens_out=outcome.get("tokens_out", 0),
+                    elapsed_ms=step_elapsed,
+                ))
+                continue
+            elif _decision.split_into:
+                # Step-shape violation: inject the split steps in place of the stuck one.
+                # E.g. a combined "run tests and analyze failures" becomes two atomic steps.
+                for _new_step in reversed(_decision.split_into):
+                    remaining_steps.insert(0, _new_step)
+                    remaining_indices.insert(0, -1)
+                _manifest_steps.extend(_decision.split_into)
+                _replan_count += 1
+                if verbose:
+                    print(
+                        f"[poe] step {step_idx} timed out — split into {len(_decision.split_into)} steps "
+                        f"(step-shape replan #{_replan_count})",
+                        file=sys.stderr, flush=True,
+                    )
+                # Record the failed combined step in outcomes before moving on
                 step_outcomes.append(StepOutcome(
                     index=item_index,
                     text=step_text,

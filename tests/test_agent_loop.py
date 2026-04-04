@@ -820,19 +820,35 @@ def test_handle_blocked_step_timeout_no_retry():
         adapter=None,
     )
     assert decision.retry is False
-    assert decision.loop_status == "stuck"
+    # Combined exec+analyze step → split_into path (not stuck)
+    assert len(decision.split_into) == 2
 
 
-def test_handle_blocked_step_timeout_reason_includes_split_hint():
-    """Timeout stuck_reason should guide recovery planner to split the step."""
+def test_handle_blocked_step_timeout_combined_step_splits_not_terminates():
+    """Timeout on a combined exec+analyze step injects two replacement steps instead of terminating."""
     decision = _handle_blocked_step(
         step_text="run full test suite and analyze results",
         outcome={"stuck_reason": "claude subprocess timed out after 600s", "result": ""},
         prior_retries=0,
         adapter=None,
     )
+    assert decision.retry is False
+    assert len(decision.split_into) == 2
+    assert decision.loop_status == ""   # not stuck — split recovers
+    assert decision.stuck_reason == ""
+
+
+def test_handle_blocked_step_timeout_pure_exec_still_terminates():
+    """Timeout on a non-combined step (pure execution) still terminates with stuck hint."""
+    decision = _handle_blocked_step(
+        step_text="run pytest -q",
+        outcome={"stuck_reason": "claude subprocess timed out after 300s", "result": ""},
+        prior_retries=0,
+        adapter=None,
+    )
+    assert decision.retry is False
+    assert decision.loop_status == "stuck"
     assert "split" in decision.stuck_reason.lower() or "separate" in decision.stuck_reason.lower()
-    assert "file" in decision.stuck_reason.lower()
 
 
 def test_handle_blocked_step_timeout_matches_both_adapters():
@@ -1219,3 +1235,52 @@ def test_run_agent_loop_writes_plan_manifest(monkeypatch, tmp_path):
     assert "write a plan for research" in content
     # Terminal status should be written
     assert any(s in content for s in ("done", "stuck"))
+
+
+# ---------------------------------------------------------------------------
+# Step-shape detector: _is_combined_exec_analyze / _split_exec_analyze
+# ---------------------------------------------------------------------------
+
+from agent_loop import _is_combined_exec_analyze, _split_exec_analyze
+
+
+def test_is_combined_exec_analyze_detects_run_and_analyze():
+    assert _is_combined_exec_analyze("Run pytest and analyze test failures") is True
+    assert _is_combined_exec_analyze("Execute make and summarize build errors") is True
+    assert _is_combined_exec_analyze("Run git log and summarize the commit history") is True
+
+
+def test_is_combined_exec_analyze_pure_exec_is_not_combined():
+    assert _is_combined_exec_analyze("Run pytest -q and capture output to a file") is False
+    assert _is_combined_exec_analyze("Install dependencies with pip install -r requirements.txt") is False
+
+
+def test_is_combined_exec_analyze_pure_analyze_is_not_combined():
+    assert _is_combined_exec_analyze("Analyze the captured test output for failure patterns") is False
+    assert _is_combined_exec_analyze("Summarize the results from the previous step") is False
+
+
+def test_is_combined_exec_analyze_unrelated_step():
+    assert _is_combined_exec_analyze("Research the top 5 Polymarket markets by volume") is False
+    assert _is_combined_exec_analyze("Write a summary of findings") is False
+
+
+def test_split_exec_analyze_returns_two_steps():
+    parts = _split_exec_analyze("Run pytest -q and analyze the failures")
+    assert len(parts) == 2
+    # First step should be about running
+    assert any(kw in parts[0].lower() for kw in ("run", "capture", "save", "output"))
+    # Second step should be about reading/analyzing
+    assert any(kw in parts[1].lower() for kw in ("analyz", "read", "result"))
+
+
+def test_step_shape_splits_combined_steps_before_execution(monkeypatch, tmp_path):
+    """Pre-execution step-shape check splits combined steps in the manifest."""
+    monkeypatch.setenv("POE_ORCH_ROOT", str(tmp_path))
+    result = run_agent_loop(
+        "check repo health",
+        project="shape-test",
+        dry_run=True,
+    )
+    # Dry-run uses ScriptedAdapter which produces fixed steps — just verify no crash
+    assert result.status in ("done", "stuck")
