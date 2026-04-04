@@ -118,6 +118,7 @@ def create_team_worker(
     persona: Optional[str] = None,
     adapter=None,
     dry_run: bool = False,
+    shared_ctx: Optional[Dict[str, Any]] = None,
 ) -> TeamResult:
     """Spin up a specialist worker with the given role and task.
 
@@ -149,7 +150,11 @@ def create_team_worker(
         from workers import _WORKER_TOOLS
 
         tools = [LLMTool(**t) for t in _WORKER_TOOLS]
-        user_msg = f"Ticket: {task}\n\nComplete this ticket. Call deliver_result when done."
+        _shared_block = ""
+        if shared_ctx:
+            _entries = [f"  [{k}]: {v[:200]}" for k, v in list(shared_ctx.items())[-5:]]
+            _shared_block = "\n\nShared context from prior team workers:\n" + "\n".join(_entries)
+        user_msg = f"Ticket: {task}{_shared_block}\n\nComplete this ticket. Call deliver_result when done."
 
         resp = adapter.complete(
             [

@@ -509,6 +509,7 @@ def execute_step(
     verbose: bool = False,
     ancestry_context: str = "",
     project_dir: str = "",
+    shared_ctx: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Execute one step via the LLM. Returns outcome dict."""
     _step_t0 = time.monotonic()
@@ -779,8 +780,13 @@ def execute_step(
                     _tw_task,
                     persona=_tw_persona,
                     adapter=adapter,
+                    shared_ctx=shared_ctx,
                 )
                 _tw_result_text = format_team_result_for_injection(_tw_res)
+                # Write result into shared_ctx so subsequent workers in this loop don't re-fetch
+                if shared_ctx is not None and _tw_res.status == "done" and _tw_res.result:
+                    _sm_key = f"{_tw_role}:{_tw_task[:40]}"
+                    shared_ctx[_sm_key] = _tw_res.result[:600]
             except Exception as _tw_exc:
                 _tw_result_text = f"[team-worker failed: {_tw_exc}]"
                 log.warning("step %d create_team_worker failed role=%r: %s", step_num, _tw_role, _tw_exc)

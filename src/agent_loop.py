@@ -197,6 +197,7 @@ def _run_steps_parallel(
     verbose: bool,
     max_workers: int,
     project_dir: str = "",
+    shared_ctx: Optional[Dict[str, Any]] = None,
 ) -> List[dict]:
     """Execute steps concurrently using ThreadPoolExecutor.
 
@@ -228,6 +229,7 @@ def _run_steps_parallel(
             verbose=verbose,
             ancestry_context=ancestry_context,
             project_dir=project_dir,
+            shared_ctx=shared_ctx,
         )
         if verbose:
             status_label = outcome.get("status", "?")
@@ -1028,6 +1030,10 @@ def run_agent_loop(
         except Exception:
             pass
 
+    # Shared state accessible to all team workers across the lifetime of this loop.
+    # Workers can read prior findings and write their own results without re-fetching.
+    _loop_shared_ctx: Dict[str, Any] = {}
+
     # Phase 35 P1: parallel fan-out — run independent steps concurrently
     if parallel_fan_out > 0 and len(steps) > 1 and _steps_are_independent(steps):
         if verbose:
@@ -1047,6 +1053,7 @@ def run_agent_loop(
             verbose=verbose,
             max_workers=parallel_fan_out,
             project_dir=_fanout_proj_dir,
+            shared_ctx=_loop_shared_ctx,
         )
         # Build LoopResult directly from parallel outcomes
         _fanout_step_outcomes: List[StepOutcome] = []
@@ -1337,6 +1344,7 @@ def run_agent_loop(
                 verbose=verbose,
                 max_workers=min(parallel_fan_out, len(_batch_steps)),
                 project_dir=_proj_artifact_dir,
+                shared_ctx=_loop_shared_ctx,
             )
 
             # Process batch outcomes
@@ -1459,6 +1467,7 @@ def run_agent_loop(
             verbose=verbose,
             ancestry_context=_step_ancestry,
             project_dir=_proj_artifact_dir,
+            shared_ctx=_loop_shared_ctx,
         )
         step_elapsed = int((time.monotonic() - step_start) * 1000)
 
