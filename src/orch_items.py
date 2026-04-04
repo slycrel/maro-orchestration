@@ -141,8 +141,9 @@ def orch_root() -> Path:
     Resolution order:
       1. POE_ORCH_ROOT env var — explicit override for containers / CI
       2. Traditional prototype path (ws_root/prototypes/poe-orchestration) if it exists
-      3. The mainline repo root — detected by presence of src/agent_loop.py
-      4. Traditional path regardless (original behaviour; may fail on bad environments)
+      3. Mainline repo root (src/agent_loop.py present) — only when NO workspace
+         env var is set (preserves test isolation when OPENCLAW_WORKSPACE is pinned)
+      4. Traditional path regardless (original fallback)
     """
     override = os.environ.get("POE_ORCH_ROOT")
     if override:
@@ -152,11 +153,15 @@ def orch_root() -> Path:
     if traditional.exists():
         return traditional
 
-    # Auto-detect mainline repo: src/orch_items.py lives two levels inside it
-    here = Path(__file__).resolve()
-    repo_root = here.parents[1]  # one up from src/
-    if (repo_root / "src" / "agent_loop.py").exists():
-        return repo_root
+    # Only fall through to repo-root detection when no explicit workspace is pinned.
+    # If a workspace env var IS set, the caller expects isolation to that workspace
+    # (e.g. tests use OPENCLAW_WORKSPACE=tmp_path) — don't escape to the real repo.
+    _ws_pinned = any(os.environ.get(v) for v in ("POE_WORKSPACE", "OPENCLAW_WORKSPACE", "WORKSPACE_ROOT"))
+    if not _ws_pinned:
+        here = Path(__file__).resolve()
+        repo_root = here.parents[1]  # one up from src/
+        if (repo_root / "src" / "agent_loop.py").exists():
+            return repo_root
 
     return traditional
 
@@ -387,6 +392,11 @@ def append_next_items(slug: str, items: List[str]) -> List[int]:
     if not items:
         return []
     p = next_path(slug)
+    if not p.exists():
+        # Defensive: create minimal NEXT.md rather than crashing on FileNotFoundError.
+        # Normally ensure_project() handles this; this guard covers partial-init cases.
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(f"# NEXT — {slug}\n\n", encoding="utf-8")
     lines = p.read_text(encoding="utf-8").splitlines()
     start = len(lines)
     next_lines = [f"- [ ] {i}" for i in items]

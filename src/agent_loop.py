@@ -780,18 +780,22 @@ def run_agent_loop(
         pass
 
     # Resolve or create project
+    # Always call ensure_project (idempotent) — guards against partially-initialized
+    # projects where the dir exists but NEXT.md was never written (e.g. after a
+    # crashed previous run or permission error during bootstrap).
     o = _orch()
-    if project and not o.project_dir(project).exists():
+    if project:
+        _proj_existed = o.project_dir(project).exists()
         o.ensure_project(project, goal[:80])
-        if verbose:
+        if verbose and not _proj_existed:
             print(f"[poe] created project={project}", file=sys.stderr, flush=True)
-    elif not project:
+    else:
         slug = _goal_to_slug(goal)
         project = slug
-        if not o.project_dir(project).exists():
-            o.ensure_project(project, goal[:80])
-            if verbose:
-                print(f"[poe] created project={project}", file=sys.stderr, flush=True)
+        _proj_existed = o.project_dir(project).exists()
+        o.ensure_project(project, goal[:80])
+        if verbose and not _proj_existed:
+            print(f"[poe] created project={project}", file=sys.stderr, flush=True)
 
     # Load goal ancestry for prompt injection
     try:

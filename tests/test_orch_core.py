@@ -928,3 +928,66 @@ def test_chain_validation_bridge_stops_on_review_failure(monkeypatch, tmp_path):
     assert tick.validation.status == "blocked"
     assert tick.run.status == "blocked"
     assert "review failed" in (tick.run.note or "")
+
+
+# ---------------------------------------------------------------------------
+# Bootstrap fixes: append_next_items creates NEXT.md if missing (BFix-NEXT-01)
+# ---------------------------------------------------------------------------
+
+def test_append_next_items_creates_next_md_when_missing(monkeypatch, tmp_path):
+    """append_next_items should not raise when NEXT.md is missing — creates it instead."""
+    monkeypatch.setenv("POE_ORCH_ROOT", str(tmp_path))
+    # Create just the project dir (no NEXT.md — simulates partially-initialised project)
+    proj_dir = tmp_path / "projects" / "partial-proj"
+    proj_dir.mkdir(parents=True)
+
+    # append_next_items should not raise FileNotFoundError or ValueError
+    indices = orch.append_next_items("partial-proj", ["step one", "step two"])
+    assert len(indices) == 2
+    next_md = proj_dir / "NEXT.md"
+    assert next_md.exists()
+    content = next_md.read_text(encoding="utf-8")
+    assert "step one" in content
+    assert "step two" in content
+
+
+def test_append_next_items_empty_creates_nothing(monkeypatch, tmp_path):
+    """append_next_items with empty list returns [] without touching the filesystem."""
+    monkeypatch.setenv("POE_ORCH_ROOT", str(tmp_path))
+    proj_dir = tmp_path / "projects" / "empty-proj"
+    proj_dir.mkdir(parents=True)
+
+    result = orch.append_next_items("empty-proj", [])
+    assert result == []
+    # NEXT.md should NOT be created
+    assert not (proj_dir / "NEXT.md").exists()
+
+
+def test_ensure_project_is_idempotent(monkeypatch, tmp_path):
+    """ensure_project called twice does not overwrite NEXT.md with user content."""
+    monkeypatch.setenv("POE_ORCH_ROOT", str(tmp_path))
+    orch.ensure_project("idempotent-test", "first mission")
+    proj_dir = tmp_path / "projects" / "idempotent-test"
+    # Write custom content to NEXT.md
+    (proj_dir / "NEXT.md").write_text("# Custom\n\n- [ ] my item\n", encoding="utf-8")
+    # Call again — should not overwrite
+    orch.ensure_project("idempotent-test", "second mission")
+    content = (proj_dir / "NEXT.md").read_text(encoding="utf-8")
+    assert "my item" in content
+
+
+def test_dir_exists_no_next_md_is_handled(monkeypatch, tmp_path):
+    """Project dir exists but NEXT.md missing: append_next_items recovers gracefully."""
+    monkeypatch.setenv("POE_ORCH_ROOT", str(tmp_path))
+    # Create project via ensure_project so NEXT.md exists, then delete it
+    orch.ensure_project("ghost-next", "test mission")
+    proj_dir = tmp_path / "projects" / "ghost-next"
+    next_md = proj_dir / "NEXT.md"
+    assert next_md.exists()
+    next_md.unlink()
+    assert not next_md.exists()
+
+    # Now append_next_items should recreate NEXT.md
+    indices = orch.append_next_items("ghost-next", ["recover step"])
+    assert len(indices) == 1
+    assert next_md.exists()

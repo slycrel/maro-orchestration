@@ -1073,3 +1073,41 @@ def test_execute_step_read_tier_proceeds_silently(capsys):
     captured = capsys.readouterr()
     assert "HITL" not in captured.err
     assert "EXTERNAL" not in captured.err
+
+
+# ---------------------------------------------------------------------------
+# Bootstrap fix: run_agent_loop always calls ensure_project (BFix-NEXT-02)
+# ---------------------------------------------------------------------------
+
+def test_run_agent_loop_recovers_from_partial_project(monkeypatch, tmp_path):
+    """Loop runs without error when project dir exists but NEXT.md is missing."""
+    monkeypatch.setenv("POE_ORCH_ROOT", str(tmp_path))
+    # Pre-create the project dir WITHOUT NEXT.md to simulate a crashed previous run
+    slug = _goal_to_slug("check out this repo at http://example.com")
+    proj_dir = tmp_path / "projects" / slug
+    proj_dir.mkdir(parents=True)
+    assert not (proj_dir / "NEXT.md").exists()
+
+    result = run_agent_loop(
+        "check out this repo at http://example.com",
+        dry_run=True,
+    )
+    # Should not raise; NEXT.md should now exist
+    assert (proj_dir / "NEXT.md").exists()
+    assert result.status in ("done", "stuck")
+
+
+def test_run_agent_loop_ensure_project_always_called_even_when_dir_exists(monkeypatch, tmp_path):
+    """ensure_project is called even when project dir already exists."""
+    monkeypatch.setenv("POE_ORCH_ROOT", str(tmp_path))
+    # Create via ensure_project to get a fully-initialised dir
+    orch.ensure_project("pre-existing", "initial mission")
+    proj_dir = tmp_path / "projects" / "pre-existing"
+    assert (proj_dir / "NEXT.md").exists()
+    # Delete NEXT.md to simulate corruption
+    (proj_dir / "NEXT.md").unlink()
+
+    result = run_agent_loop("pre-existing goal text", project="pre-existing", dry_run=True)
+    # ensure_project must have run again and recreated NEXT.md
+    assert (proj_dir / "NEXT.md").exists()
+    assert result.status in ("done", "stuck")
