@@ -76,9 +76,9 @@ Flagged by @dexhorthy. Full synthesis: `research/PI_CODING_AGENT_SYNTHESIS.md`.
 |------|------|--------|----------------|--------|
 | ~~**System prompt token audit**~~ | Measure + cut EXECUTE_SYSTEM + DECOMPOSE_SYSTEM token overhead. Pi: <1k combined. | ✅ DONE — 1892→936 tokens (-51%). `src/step_exec.py` + `src/planner.py`. | `src/step_exec.py`, `src/planner.py` | S |
 | ~~**Architecture non-goals doc**~~ | Document what Poe deliberately doesn't do — prevents scope creep. | ✅ DONE — `docs/ARCHITECTURE_NON_GOALS.md`, 8 non-goals with rationale and revisit conditions. | `docs/ARCHITECTURE_NON_GOALS.md` | XS |
-| **Runtime tool extension** | Agent generates + registers new ToolDefinition at runtime. Self-extending system. | TODO | Phase 41 step_exec.py + tool_registry.py — agent writes a ToolDefinition dict, calls register, tool becomes available next step. | M |
-| **Human-readable session export** | `poe export` produces markdown summary of a completed loop (steps, results, context). | TODO | `src/checkpoint.py` — add `export_human()` that renders checkpoint JSONL as readable markdown. | S |
-| **Session branching** | Checkpoint creates branch instead of overwriting — enables experimental paths without consuming main context. | LATER | `src/checkpoint.py` — branch_from_loop_id() + loop ancestry tree in observe dashboard | L |
+| ~~**Runtime tool extension**~~ | Agent generates + registers new ToolDefinition at runtime. Self-extending system. | ✅ DONE — `src/runtime_tools.py`; `register_tool` in EXECUTE_TOOLS (WORKER only); `_resolve_tools()` per-step in agent_loop. (2026-04-03) | `src/runtime_tools.py`, `src/step_exec.py`, `src/agent_loop.py` | M |
+| ~~**Human-readable session export**~~ | `poe export` produces markdown summary of a completed loop (steps, results, context). | ✅ DONE — `export_human()` in checkpoint.py; `poe-checkpoint export <loop_id>`. (2026-04-03) | `src/checkpoint.py` | S |
+| ~~**Session branching**~~ | Checkpoint creates branch instead of overwriting — enables experimental paths without consuming main context. | ✅ DONE — `branch_checkpoint()` in checkpoint.py; `parent_loop_id` field; `poe-checkpoint branch <loop_id>`. (2026-04-03) | `src/checkpoint.py` | M |
 
 **What NOT to steal:** 4-tool minimalism (wrong use case — Poe is an orchestrator, not a coding REPL), TypeScript monorepo, flicker-free terminal UI.
 

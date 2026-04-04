@@ -206,6 +206,7 @@ def _build_default_registry() -> ToolRegistry:
         "flag_stuck":         [ROLE_WORKER, ROLE_SHORT, ROLE_INSPECTOR, ROLE_VERIFIER],
         "create_team_worker": [ROLE_WORKER],
         "schedule_run":       [ROLE_WORKER],
+        "register_tool":      [ROLE_WORKER],
     }
 
     reg = ToolRegistry()

@@ -1,5 +1,26 @@
 # Changelog
 
+## [1.9.0] - 2026-04-03
+
+Session 9: Pi steal — remaining NEXT items. Runtime tool extension, human-readable session export, session branching. 47 new tests (2329 total, 0 failures, 1 pre-existing flaky).
+
+### Added — Runtime Tool Extension (Pi self-extending agent pattern)
+- `src/runtime_tools.py` — `RuntimeTool` dataclass (name, description, bash_template, parameters); `_RuntimeToolStore` with lazy disk load + auto-register into `tool_registry` singleton; `register_runtime_tool()`, `dispatch_runtime_tool()`, `list_runtime_tools()`, `clear_runtime_tools()`. Persists to `memory/runtime_tools.json` across sessions.
+- `register_tool` added to `EXECUTE_TOOLS` (WORKER role only) — agent provides name, description, bash_template, optional parameters_json; handler in step_exec.py registers the tool and injects it into `_active_tools` immediately.
+- `dispatch_runtime_tool()` called in the `else` branch of step_exec tool dispatch — unknown tool names now check runtime registry before blocking.
+- `src/agent_loop.py` — `_active_tools` replaced with `_resolve_tools()` closure re-queried per step; newly registered tools appear in subsequent steps without restarting.
+- `tool_registry.py` — `register_tool` added to `_ROLE_MAP` as WORKER-only.
+- `tests/test_runtime_tools.py` — 20 tests: RuntimeTool unit, register/dispatch, persistence round-trip, global registry integration.
+
+### Added — Human-Readable Session Export
+- `src/checkpoint.py` — `export_human(loop_id) -> Optional[str]`: renders checkpoint as markdown with goal, loop_id, progress summary, per-step sections (icon, status, truncated result). Returns None if checkpoint not found.
+- `poe-checkpoint export <loop_id>` CLI subcommand; `-o FILE` flag writes to file instead of stdout.
+
+### Added — Session Branching
+- `src/checkpoint.py` — `parent_loop_id: str` field on `Checkpoint` dataclass; included in `to_dict()` only when set; `from_dict()` handles missing key. `branch_checkpoint(loop_id) -> Optional[str]`: copies checkpoint with new loop_id + parent tracked; returns new loop_id.
+- `poe-checkpoint branch <loop_id>` CLI subcommand; prints new loop_id and resume command.
+- `tests/test_checkpoint_extended.py` — 27 tests: parent_loop_id field, export_human (content, truncation, markdown structure, missing), branch_checkpoint (independence, parent tracking, chain), CLI integration.
+
 ## [1.8.0] - 2026-04-03
 
 Session 8: Pi coding agent synthesis + steal execution. System prompt token audit (1892→936 tokens, -51%). Architecture non-goals doc. STEAL_LIST.md updated with Pi items. BACKLOG.md updated.

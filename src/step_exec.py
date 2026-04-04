@@ -219,6 +219,49 @@ EXECUTE_TOOLS = [
             "required": ["goal", "when"],
         },
     },
+    {
+        "name": "register_tool",
+        "description": (
+            "Register a new reusable bash-backed tool that becomes available in "
+            "subsequent steps. Use this when you need a custom capability that "
+            "doesn't exist yet (e.g. a project-specific data filter, a CLI wrapper, "
+            "a recurring transformation). The tool persists across sessions."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": (
+                        "Tool name — snake_case, lowercase alphanumeric + underscores only. "
+                        "Example: 'filter_markets', 'fetch_price', 'parse_logs'."
+                    ),
+                },
+                "description": {
+                    "type": "string",
+                    "description": "What the tool does (shown in system prompt for future steps).",
+                },
+                "bash_template": {
+                    "type": "string",
+                    "description": (
+                        "Shell command with {placeholder} substitution. "
+                        "Placeholders must match parameter names. "
+                        "Example: 'jq {filter} {file}' — call with filter='.[]' file='data.json'."
+                        "For a single freeform argument, use {args}: 'python3 script.py {args}'."
+                    ),
+                },
+                "parameters_json": {
+                    "type": "string",
+                    "description": (
+                        "Optional JSON Schema string for tool parameters. "
+                        "If omitted, defaults to a single freeform 'args' string parameter. "
+                        "Example: '{\"type\":\"object\",\"properties\":{\"filter\":{\"type\":\"string\"},\"file\":{\"type\":\"string\"}},\"required\":[\"filter\",\"file\"]}'"
+                    ),
+                },
+            },
+            "required": ["name", "description", "bash_template"],
+        },
+    },
 ]
 
 # Role-specific subsets — reduces hallucinated calls and prompt noise.
@@ -673,15 +716,68 @@ def execute_step(
                 "tokens_in": resp.input_tokens,
                 "tokens_out": resp.output_tokens,
             }
-        else:
-            # Unknown tool name — treat as blocked
+        elif tc.name == "register_tool":
+            _rt_name = tc.arguments.get("name", "").strip()
+            _rt_desc = tc.arguments.get("description", "")
+            _rt_bash = tc.arguments.get("bash_template", "")
+            _rt_params_json = tc.arguments.get("parameters_json", "") or ""
+            _rt_params = None
+            if _rt_params_json:
+                try:
+                    import json as _json
+                    _rt_params = _json.loads(_rt_params_json)
+                except Exception as _pje:
+                    log.warning("step %d register_tool: invalid parameters_json: %s", step_num, _pje)
+            _rt_result = "[register_tool failed]"
+            try:
+                from runtime_tools import register_runtime_tool
+                _rt_schema = register_runtime_tool(_rt_name, _rt_desc, _rt_bash, _rt_params)
+                # Inject into _active_tools so the new tool is available if re-called this step
+                _active_tools.append(_rt_schema)
+                _rt_result = (
+                    f"Tool '{_rt_name}' registered. "
+                    f"Available in all subsequent steps. "
+                    f"bash_template: {_rt_bash[:100]}"
+                )
+            except Exception as _rt_exc:
+                _rt_result = f"[register_tool failed: {_rt_exc}]"
+                log.warning("step %d register_tool %r failed: %s", step_num, _rt_name, _rt_exc)
+            log.info("step %d DONE (register_tool) name=%r tokens=%d elapsed=%.1fs",
+                     step_num, _rt_name, _tok, time.monotonic() - _step_t0)
             _outcome = {
-                "status": "blocked",
-                "stuck_reason": f"unrecognised tool: {tc.name}",
-                "result": "",
+                "status": "done",
+                "result": _rt_result,
+                "summary": f"Registered tool: {_rt_name}",
                 "tokens_in": resp.input_tokens,
                 "tokens_out": resp.output_tokens,
             }
+        else:
+            # Check runtime tools before giving up — agent may have registered one earlier
+            _rt_output: Optional[str] = None
+            try:
+                from runtime_tools import dispatch_runtime_tool
+                _rt_output = dispatch_runtime_tool(tc.name, tc.arguments)
+            except Exception:
+                pass
+            if _rt_output is not None:
+                log.info("step %d DONE (runtime_tool:%r) tokens=%d elapsed=%.1fs",
+                         step_num, tc.name, _tok, time.monotonic() - _step_t0)
+                _outcome = {
+                    "status": "done",
+                    "result": _rt_output,
+                    "summary": f"Tool {tc.name}: {_rt_output[:60]}",
+                    "tokens_in": resp.input_tokens,
+                    "tokens_out": resp.output_tokens,
+                }
+            else:
+                # Unknown tool name — treat as blocked
+                _outcome = {
+                    "status": "blocked",
+                    "stuck_reason": f"unrecognised tool: {tc.name}",
+                    "result": "",
+                    "tokens_in": resp.input_tokens,
+                    "tokens_out": resp.output_tokens,
+                }
     elif resp.content and len(resp.content) > 20:
         # No tool call — treat content as result (some models don't always call tools)
         log.info("step %d DONE (content fallback, %d chars) tokens=%d elapsed=%.1fs",

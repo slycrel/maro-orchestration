@@ -732,10 +732,13 @@ def run_agent_loop(
     _perm_ctx = permission_context
     if _perm_ctx is None and _PermissionContext is not None:
         _perm_ctx = _PermissionContext(role=_ROLE_WORKER)
-    _active_tools = (
-        _get_tools_for_role(_perm_ctx.role, _perm_ctx.deny_patterns)
-        if _perm_ctx is not None else list(_EXECUTE_TOOLS)
-    )
+
+    def _resolve_tools() -> list:
+        """Re-query tool registry on each call to pick up runtime-registered tools."""
+        return (
+            _get_tools_for_role(_perm_ctx.role, _perm_ctx.deny_patterns)
+            if _perm_ctx is not None else list(_EXECUTE_TOOLS)
+        )
 
     # Build adapter — worker role uses MODEL_MID by default (role-semantic selection)
     if adapter is None and not dry_run:
@@ -913,7 +916,7 @@ def run_agent_loop(
             steps=steps,
             adapter=adapter,
             ancestry_context=_ancestry_context,
-            tools=[LLMTool(**t) for t in _active_tools],
+            tools=[LLMTool(**t) for t in _resolve_tools()],
             verbose=verbose,
             max_workers=parallel_fan_out,
             project_dir=_fanout_proj_dir,
@@ -1085,7 +1088,7 @@ def run_agent_loop(
                 steps=_batch_steps,
                 adapter=adapter,
                 ancestry_context=_ancestry_context,
-                tools=[LLMTool(**t) for t in _active_tools],
+                tools=[LLMTool(**t) for t in _resolve_tools()],
                 verbose=verbose,
                 max_workers=min(parallel_fan_out, len(_batch_steps)),
                 project_dir=_proj_artifact_dir,
@@ -1187,7 +1190,7 @@ def run_agent_loop(
             total_steps=step_idx + len(remaining_steps),
             completed_context=completed_context,
             adapter=_step_adapter,
-            tools=[LLMTool(**t) for t in _active_tools],
+            tools=[LLMTool(**t) for t in _resolve_tools()],
             verbose=verbose,
             ancestry_context=_step_ancestry,
             project_dir=_proj_artifact_dir,

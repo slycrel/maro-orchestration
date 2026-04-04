@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import json
 import logging
+import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -80,6 +81,7 @@ class Checkpoint:
     steps: List[str]
     completed: List[CompletedStep]
     timestamp: str = ""
+    parent_loop_id: str = ""  # Set when this checkpoint is a branch of another
 
     def __post_init__(self):
         if not self.timestamp:
@@ -103,7 +105,7 @@ class Checkpoint:
         return len(self.completed) >= len(self.steps)
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        d: Dict[str, Any] = {
             "loop_id": self.loop_id,
             "goal": self.goal,
             "project": self.project,
@@ -111,6 +113,9 @@ class Checkpoint:
             "completed": [asdict(c) for c in self.completed],
             "timestamp": self.timestamp,
         }
+        if self.parent_loop_id:
+            d["parent_loop_id"] = self.parent_loop_id
+        return d
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "Checkpoint":
@@ -125,6 +130,7 @@ class Checkpoint:
             steps=d.get("steps", []),
             completed=completed,
             timestamp=d.get("timestamp", ""),
+            parent_loop_id=d.get("parent_loop_id", ""),
         )
 
 
@@ -227,6 +233,105 @@ def resume_from(ckpt: Checkpoint) -> tuple[List[str], List[CompletedStep]]:
     return ckpt.remaining_steps, ckpt.completed
 
 
+def export_human(loop_id: str) -> Optional[str]:
+    """Render a checkpoint as human-readable markdown.
+
+    Returns the markdown string, or None if the checkpoint is not found.
+
+    The output is suitable for reading in a terminal, saving as a .md file,
+    or injecting into a follow-up mission as context.
+    """
+    ckpt = load_checkpoint(loop_id)
+    if ckpt is None:
+        return None
+
+    done_count = sum(1 for s in ckpt.completed if s.status == "done")
+    blocked_count = sum(1 for s in ckpt.completed if s.status == "blocked")
+    total = len(ckpt.steps)
+    completed_indices = {s.index for s in ckpt.completed}
+
+    status_parts = [f"{done_count}/{total} steps done"]
+    if blocked_count:
+        status_parts.append(f"{blocked_count} blocked")
+    if ckpt.parent_loop_id:
+        status_parts.append(f"branched from {ckpt.parent_loop_id}")
+
+    lines = [
+        f"# Mission: {ckpt.goal}",
+        "",
+        f"**Loop ID:** `{ckpt.loop_id}`  ",
+        f"**Project:** {ckpt.project or '(none)'}  ",
+        f"**Timestamp:** {ckpt.timestamp[:19].replace('T', ' ')}  ",
+        f"**Progress:** {', '.join(status_parts)}",
+        "",
+        "---",
+        "",
+        "## Steps",
+        "",
+    ]
+
+    # Build an index of completed steps by their 1-based index
+    completed_by_index: Dict[int, CompletedStep] = {s.index: s for s in ckpt.completed}
+
+    for i, step_text in enumerate(ckpt.steps, 1):
+        cs = completed_by_index.get(i)
+        if cs is not None:
+            icon = "✓" if cs.status == "done" else "✗"
+            status_label = cs.status
+        else:
+            icon = "·"
+            status_label = "pending"
+
+        lines.append(f"### Step {i} · {step_text}")
+        lines.append(f"**Status:** {icon} {status_label}")
+        if cs is not None and cs.result:
+            lines.append("")
+            # Truncate very long results for readability
+            result_text = cs.result
+            if len(result_text) > 800:
+                result_text = result_text[:800] + "\n…[truncated]"
+            lines.append(result_text)
+        lines.append("")
+        lines.append("---")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+def branch_checkpoint(loop_id: str) -> Optional[str]:
+    """Create a branch of an existing checkpoint with a new loop_id.
+
+    The branch is an independent copy starting from the same completed steps.
+    The original checkpoint is unchanged. The branch records its origin via
+    parent_loop_id for traceability.
+
+    Use this to explore an alternative approach from a mid-mission state without
+    affecting the main session.
+
+    Returns:
+        New loop_id string, or None if the source checkpoint is not found.
+    """
+    ckpt = load_checkpoint(loop_id)
+    if ckpt is None:
+        log.warning("branch_checkpoint: no checkpoint found for %s", loop_id)
+        return None
+
+    new_loop_id = uuid.uuid4().hex[:8]
+    branch = Checkpoint(
+        loop_id=new_loop_id,
+        goal=ckpt.goal,
+        project=ckpt.project,
+        steps=list(ckpt.steps),
+        completed=list(ckpt.completed),
+        parent_loop_id=loop_id,
+    )
+    path = _checkpoint_path(new_loop_id)
+    path.write_text(json.dumps(branch.to_dict(), indent=2), encoding="utf-8")
+    log.info("branch_checkpoint: %s -> %s (%d/%d steps carried over)",
+             loop_id, new_loop_id, len(branch.completed), len(branch.steps))
+    return new_loop_id
+
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -239,8 +344,15 @@ def _cli_main() -> None:
 
     sub.add_parser("list", help="List all saved checkpoints")
 
-    load_p = sub.add_parser("show", help="Show checkpoint details")
+    load_p = sub.add_parser("show", help="Show checkpoint details (raw JSON)")
     load_p.add_argument("loop_id", help="Loop ID to show")
+
+    exp_p = sub.add_parser("export", help="Export a checkpoint as human-readable markdown")
+    exp_p.add_argument("loop_id", help="Loop ID to export")
+    exp_p.add_argument("-o", "--output", help="Write to file instead of stdout")
+
+    branch_p = sub.add_parser("branch", help="Branch a checkpoint with a new loop_id")
+    branch_p.add_argument("loop_id", help="Loop ID to branch from")
 
     del_p = sub.add_parser("delete", help="Delete a checkpoint")
     del_p.add_argument("loop_id", help="Loop ID to delete")
@@ -255,13 +367,31 @@ def _cli_main() -> None:
         for c in ckpts:
             done = len(c.completed)
             total = len(c.steps)
-            print(f"{c.loop_id}  {done}/{total}  {c.timestamp[:19]}  {c.goal[:60]}")
+            branch_tag = f"  [branch of {c.parent_loop_id}]" if c.parent_loop_id else ""
+            print(f"{c.loop_id}  {done}/{total}  {c.timestamp[:19]}  {c.goal[:55]}{branch_tag}")
     elif args.cmd == "show":
         c = load_checkpoint(args.loop_id)
         if c is None:
             print(f"No checkpoint found for {args.loop_id}")
             return
         print(json.dumps(c.to_dict(), indent=2))
+    elif args.cmd == "export":
+        md = export_human(args.loop_id)
+        if md is None:
+            print(f"No checkpoint found for {args.loop_id}")
+            return
+        if args.output:
+            Path(args.output).write_text(md, encoding="utf-8")
+            print(f"Exported to {args.output}")
+        else:
+            print(md)
+    elif args.cmd == "branch":
+        new_id = branch_checkpoint(args.loop_id)
+        if new_id is None:
+            print(f"No checkpoint found for {args.loop_id}")
+            return
+        print(f"Branch created: {new_id}  (parent: {args.loop_id})")
+        print(f"Resume with: poe-run --resume {new_id}")
     elif args.cmd == "delete":
         delete_checkpoint(args.loop_id)
         print(f"Deleted checkpoint {args.loop_id}")
