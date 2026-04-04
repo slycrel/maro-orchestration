@@ -1438,3 +1438,108 @@ def test_continuation_depth_in_ancestry_context(monkeypatch, tmp_path):
     ctx = captured_ancestry.get("ctx", "")
     assert "CONTINUATION PASS 2" in ctx
     assert "narrowly" in ctx.lower()
+
+
+# ---------------------------------------------------------------------------
+# Mutable task graph: inject_steps
+# ---------------------------------------------------------------------------
+
+def test_inject_steps_inserted_into_plan(monkeypatch, tmp_path):
+    """When a step returns inject_steps, those steps run before the original plan resumes."""
+    import unittest.mock as mock
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+
+    from agent_loop import _DryRunAdapter
+    from llm import LLMResponse, ToolCall
+
+    step_count = [0]
+
+    class _InjectingAdapter(_DryRunAdapter):
+        def complete(self, messages, *, tools=None, tool_choice="auto", **kw):
+            n = step_count[0]
+            step_count[0] += 1
+            if tools and tool_choice == "required":
+                if n == 0:
+                    # Step 1 — injects a new step
+                    return LLMResponse(
+                        content="",
+                        tool_calls=[ToolCall(
+                            name="complete_step",
+                            arguments={
+                                "result": "step 1 done",
+                                "summary": "step 1 done",
+                                "inject_steps": ["injected: verify the finding"],
+                            },
+                        )],
+                        stop_reason="tool_use",
+                        input_tokens=5, output_tokens=10,
+                    )
+                else:
+                    return LLMResponse(
+                        content="",
+                        tool_calls=[ToolCall(
+                            name="complete_step",
+                            arguments={"result": "done", "summary": "done"},
+                        )],
+                        stop_reason="tool_use",
+                        input_tokens=5, output_tokens=10,
+                    )
+            # Decompose or other calls → delegate to parent
+            return super().complete(messages, tools=tools, tool_choice=tool_choice, **kw)
+
+    with mock.patch("agent_loop._decompose",
+                    return_value=["step 1: do first thing", "step 2: do second thing"]):
+        from agent_loop import run_agent_loop
+        result = run_agent_loop(
+            "test inject goal",
+            adapter=_InjectingAdapter(),
+            max_iterations=10,
+        )
+
+    # The injected step should appear in the outcome steps
+    all_step_texts = [s.text for s in result.steps]
+    assert any("injected" in t.lower() or "verify" in t.lower() for t in all_step_texts), \
+        f"Injected step not found in: {all_step_texts}"
+    # Original steps should still be present
+    assert any("step 2" in t.lower() for t in all_step_texts), \
+        f"Original step 2 missing from: {all_step_texts}"
+    # 3 total steps: original step 1, injected step, original step 2
+    assert len(all_step_texts) >= 3, f"Expected ≥3 steps, got: {all_step_texts}"
+
+
+def test_inject_steps_capped_at_three(monkeypatch, tmp_path):
+    """inject_steps are capped at 3 even if the worker returns more."""
+    from step_exec import execute_step, EXECUTE_TOOLS
+    from llm import LLMResponse, ToolCall
+
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+
+    class _ManyInjectAdapter:
+        model_key = "test"
+        def complete(self, messages, tools=None, **kw):
+            return LLMResponse(
+                content="",
+                tool_calls=[ToolCall(
+                    name="complete_step",
+                    arguments={
+                        "result": "done",
+                        "summary": "ok",
+                        "inject_steps": ["step a", "step b", "step c", "step d", "step e"],
+                    },
+                )],
+                stop_reason="tool_use",
+                input_tokens=5, output_tokens=10,
+            )
+
+    outcome = execute_step(
+        goal="test goal",
+        step_text="test step",
+        step_num=1,
+        total_steps=1,
+        completed_context=[],
+        adapter=_ManyInjectAdapter(),
+        tools=EXECUTE_TOOLS,
+    )
+    # inject_steps should be capped at 3
+    injected = outcome.get("inject_steps", [])
+    assert len(injected) <= 3

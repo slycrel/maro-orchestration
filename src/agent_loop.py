@@ -93,7 +93,8 @@ class StepOutcome:
     tokens_in: int = 0
     tokens_out: int = 0
     elapsed_ms: int = 0
-    confidence: str = ""  # "strong" | "weak" | "inferred" | "unverified" | ""
+    confidence: str = ""         # "strong" | "weak" | "inferred" | "unverified" | ""
+    injected_steps: List[str] = field(default_factory=list)  # steps added mid-plan by this step
 
 
 @dataclass
@@ -1666,6 +1667,24 @@ def run_agent_loop(
             _ctx_entry = f"Step {step_idx} ({step_text[:80]}){_confidence_tag}:\n{_ctx_excerpt}"
             completed_context.append(_ctx_entry)
 
+            # Mutable task graph: insert any steps the worker discovered mid-execution.
+            # Injected steps are prepended to remaining_steps so they run before the
+            # original plan resumes. This allows workers to surface dependencies,
+            # fetch missing data, or add verification steps without requiring a full
+            # re-plan from the director.
+            _injected = outcome.get("inject_steps", [])
+            if _injected and isinstance(_injected, list):
+                _clean_injected = [str(s).strip() for s in _injected if str(s).strip()][:3]
+                if _clean_injected:
+                    remaining_steps[:0] = _clean_injected
+                    remaining_indices[:0] = [-1] * len(_clean_injected)
+                    log.info("step %d injected %d step(s) into plan: %s",
+                             step_idx, len(_clean_injected),
+                             [s[:40] for s in _clean_injected])
+                    if verbose:
+                        for _s in _clean_injected:
+                            print(f"[poe] injected step: {_s[:80]}", file=sys.stderr, flush=True)
+
             # Completed context compression (BACKLOG: prevent linear growth).
             # Keep last 3 entries at full length; compress older ones to a one-liner.
             # Older steps matter less — recent context dominates step execution quality.
@@ -1820,6 +1839,7 @@ def run_agent_loop(
             tokens_out=outcome.get("tokens_out", 0),
             elapsed_ms=step_elapsed,
             confidence=outcome.get("confidence", ""),
+            injected_steps=outcome.get("inject_steps", []),
         ))
 
         # GAP 3: write checkpoint after each step so loop is resumable

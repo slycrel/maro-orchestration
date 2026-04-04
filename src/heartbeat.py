@@ -398,6 +398,61 @@ _backlog_drain_lock = threading.Lock()
 _task_store_drain_active = False
 _task_store_drain_lock = threading.Lock()
 
+_evolver_active = False
+_evolver_lock = threading.Lock()
+
+_inspector_active = False
+_inspector_lock = threading.Lock()
+
+_eval_active = False
+_eval_lock = threading.Lock()
+
+
+def _run_evolver_bg(*, dry_run: bool = False, verbose: bool = False,
+                    escalate: bool = True) -> None:
+    """Run evolver in background thread. Clears flag in finally."""
+    global _evolver_active
+    try:
+        from evolver import run_evolver
+        run_evolver(dry_run=dry_run, verbose=verbose, notify=escalate, min_outcomes=5)
+    except Exception as e:
+        if verbose:
+            print(f"[heartbeat] evolver failed: {e}", file=sys.stderr)
+    finally:
+        with _evolver_lock:
+            _evolver_active = False
+
+
+def _run_inspector_bg(*, dry_run: bool = False, verbose: bool = False) -> None:
+    """Run inspector in background thread. Clears flag in finally."""
+    global _inspector_active
+    try:
+        from inspector import run_inspector
+        run_inspector(dry_run=dry_run, verbose=verbose)
+    except Exception as e:
+        if verbose:
+            print(f"[heartbeat] inspector failed: {e}", file=sys.stderr)
+    finally:
+        with _inspector_lock:
+            _inspector_active = False
+
+
+def _run_eval_bg(*, dry_run: bool = False, verbose: bool = False) -> None:
+    """Run nightly eval in background thread. Clears flag in finally."""
+    global _eval_active
+    try:
+        from eval import run_nightly_eval
+        n_regressions = run_nightly_eval(dry_run=dry_run, verbose=verbose)
+        if n_regressions and verbose:
+            print(f"[heartbeat] nightly eval: {n_regressions} regression suggestion(s)",
+                  file=sys.stderr)
+    except Exception as e:
+        if verbose:
+            print(f"[heartbeat] nightly eval failed: {e}", file=sys.stderr)
+    finally:
+        with _eval_lock:
+            _eval_active = False
+
 
 def _run_task_store_drain(*, dry_run: bool = False, verbose: bool = False) -> None:
     """Drain loop_continuation and loop_escalation tasks from the task store.
@@ -555,18 +610,41 @@ def heartbeat_loop(
                   file=sys.stderr)
 
         if tick % evolver_every == 0 and not _mission_active:
-            try:
-                from evolver import run_evolver
-                run_evolver(dry_run=dry_run, verbose=verbose, notify=escalate, min_outcomes=5)
-            except Exception as e:
-                print(f"[heartbeat] evolver failed: {e}", file=sys.stderr)
+            with _evolver_lock:
+                _ev_running = _evolver_active
+            if not _ev_running:
+                with _evolver_lock:
+                    _evolver_active = True
+                _et = threading.Thread(
+                    target=_run_evolver_bg,
+                    kwargs={"dry_run": dry_run, "verbose": verbose, "escalate": escalate},
+                    daemon=True,
+                    name="evolver-bg",
+                )
+                _et.start()
+                if verbose:
+                    print("[heartbeat] evolver started in background", file=sys.stderr)
+            elif verbose:
+                print("[heartbeat] evolver already active — skipping tick", file=sys.stderr)
+
         if tick % inspector_every == 0 and not _mission_active:
             # Phase 12: Inspector — quality oversight, separate from health (heartbeat)
-            try:
-                from inspector import run_inspector
-                run_inspector(dry_run=dry_run, verbose=verbose)
-            except Exception as e:
-                print(f"[heartbeat] inspector failed: {e}", file=sys.stderr)
+            with _inspector_lock:
+                _insp_running = _inspector_active
+            if not _insp_running:
+                with _inspector_lock:
+                    _inspector_active = True
+                _it = threading.Thread(
+                    target=_run_inspector_bg,
+                    kwargs={"dry_run": dry_run, "verbose": verbose},
+                    daemon=True,
+                    name="inspector-bg",
+                )
+                _it.start()
+                if verbose:
+                    print("[heartbeat] inspector started in background", file=sys.stderr)
+            elif verbose:
+                print("[heartbeat] inspector already active — skipping tick", file=sys.stderr)
         if tick % mission_check_every == 0:
             # Phase 34: Check for pending missions and drain autonomously
             try:
@@ -616,14 +694,22 @@ def heartbeat_loop(
 
         # Phase 42: nightly eval — run once per ~24h cycle (skip if mission active)
         if tick % eval_every == 0 and tick > 0 and not _mission_active:
-            try:
-                from eval import run_nightly_eval
-                _n_regressions = run_nightly_eval(dry_run=dry_run, verbose=verbose)
-                if _n_regressions and verbose:
-                    print(f"[heartbeat] nightly eval: {_n_regressions} regression suggestion(s)", file=sys.stderr)
-            except Exception as e:
+            with _eval_lock:
+                _eval_running = _eval_active
+            if not _eval_running:
+                with _eval_lock:
+                    _eval_active = True
+                _evalt = threading.Thread(
+                    target=_run_eval_bg,
+                    kwargs={"dry_run": dry_run, "verbose": verbose},
+                    daemon=True,
+                    name="nightly-eval",
+                )
+                _evalt.start()
                 if verbose:
-                    print(f"[heartbeat] nightly eval failed: {e}", file=sys.stderr)
+                    print("[heartbeat] nightly eval started in background", file=sys.stderr)
+            elif verbose:
+                print("[heartbeat] nightly eval already active — skipping tick", file=sys.stderr)
         # Cron persistence: check for due scheduler jobs every tick
         try:
             from scheduler import drain_due_jobs

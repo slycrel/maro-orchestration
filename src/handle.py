@@ -621,6 +621,50 @@ def _write_now_artifact(
 # Task store routing — escalation and continuation consumers
 # ---------------------------------------------------------------------------
 
+def _context_firewall(reason: str, depth: int, cap: int = 600) -> str:
+    """Filter a continuation/escalation reason blob for passing to a sub-loop.
+
+    At depth ≤ 1: pass the full reason (capped) — the first continuation should
+    have full context of what came before.
+
+    At depth ≥ 2: strip accomplished steps (they're done and irrelevant to the
+    sub-loop's planner). Extract only:
+      - Original goal (one line)
+      - Remaining steps (the work that actually needs to happen)
+    This prevents context contamination and token bloat at depth 3, 4, etc.
+
+    Always caps at `cap` characters.
+    """
+    if depth <= 1:
+        return reason[:cap]
+
+    # Deep continuation: extract only what matters to the next executor
+    lines = reason.split("\n")
+    goal_line = ""
+    remaining_lines: list = []
+    in_remaining = False
+
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("Original goal:"):
+            goal_line = stripped
+        elif stripped == "Remaining:" or stripped.startswith("Remaining:"):
+            in_remaining = True
+            remaining_lines.append(line)
+        elif in_remaining:
+            if stripped.startswith("Accomplished:") or stripped.startswith("ESCALATION"):
+                in_remaining = False
+            else:
+                remaining_lines.append(line)
+
+    if goal_line or remaining_lines:
+        filtered = "\n".join(filter(None, [goal_line] + remaining_lines)).strip()
+        return filtered[:cap]
+
+    # Fallback: just cap it
+    return reason[:cap]
+
+
 def _parse_continuation_reason(reason: str):
     """Extract (goal, context) from a loop_continuation or loop_escalation reason string.
 
@@ -705,13 +749,14 @@ def handle_task(
         if adapter is None and not dry_run:
             from llm import build_adapter, MODEL_CHEAP
             adapter = build_adapter(model=MODEL_CHEAP)
+        _filtered_ctx = _context_firewall(_cont_ctx, depth=depth) if _cont_ctx else ""
         return run_agent_loop(
             _cont_goal,
             adapter=adapter,
             dry_run=dry_run,
             verbose=verbose,
             continuation_depth=depth,
-            ancestry_context_extra=_cont_ctx[:600] if _cont_ctx else "",
+            ancestry_context_extra=_filtered_ctx,
         )
 
     else:

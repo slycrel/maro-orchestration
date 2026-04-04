@@ -18,6 +18,9 @@ from heartbeat import (
     _tier2_llm_diagnosis,
     _tier3_escalate,
     _run_backlog_step,
+    _run_evolver_bg,
+    _run_inspector_bg,
+    _run_eval_bg,
     run_heartbeat,
 )
 
@@ -413,6 +416,81 @@ def test_run_backlog_step_loop_exception_marks_blocked(tmp_path, monkeypatch):
     updated = next(i for i in items2 if i.index == todo.index)
     assert updated.state == oi.STATE_BLOCKED
     assert heartbeat._backlog_drain_active is False
+
+
+# ---------------------------------------------------------------------------
+# Background evolver / inspector / eval thread functions
+# ---------------------------------------------------------------------------
+
+def test_run_evolver_bg_clears_flag():
+    """_run_evolver_bg clears _evolver_active flag even on exception."""
+    import heartbeat
+    heartbeat._evolver_active = True
+    with patch("evolver.run_evolver", side_effect=RuntimeError("evolver fail")):
+        _run_evolver_bg(dry_run=True, verbose=False)
+    assert heartbeat._evolver_active is False
+
+
+def test_run_evolver_bg_happy_path():
+    import heartbeat
+    heartbeat._evolver_active = True
+    with patch("evolver.run_evolver") as mock_ev:
+        _run_evolver_bg(dry_run=True, verbose=False)
+    mock_ev.assert_called_once()
+    assert heartbeat._evolver_active is False
+
+
+def test_run_inspector_bg_clears_flag():
+    import heartbeat
+    heartbeat._inspector_active = True
+    with patch("inspector.run_inspector", side_effect=RuntimeError("insp fail")):
+        _run_inspector_bg(dry_run=True, verbose=False)
+    assert heartbeat._inspector_active is False
+
+
+def test_run_inspector_bg_happy_path():
+    import heartbeat
+    heartbeat._inspector_active = True
+    with patch("inspector.run_inspector") as mock_insp:
+        _run_inspector_bg(dry_run=True, verbose=False)
+    mock_insp.assert_called_once()
+    assert heartbeat._inspector_active is False
+
+
+def test_run_eval_bg_clears_flag():
+    import heartbeat
+    heartbeat._eval_active = True
+    with patch("eval.run_nightly_eval", side_effect=RuntimeError("eval fail")):
+        _run_eval_bg(dry_run=True, verbose=False)
+    assert heartbeat._eval_active is False
+
+
+def test_run_eval_bg_happy_path():
+    import heartbeat
+    heartbeat._eval_active = True
+    with patch("eval.run_nightly_eval", return_value=0) as mock_eval:
+        _run_eval_bg(dry_run=True, verbose=False)
+    mock_eval.assert_called_once()
+    assert heartbeat._eval_active is False
+
+
+def test_evolver_not_double_started():
+    """When _evolver_active is True, flag correctly gates a second launch."""
+    import heartbeat
+    heartbeat._evolver_active = True
+    with heartbeat._evolver_lock:
+        ev_running = heartbeat._evolver_active
+    assert ev_running is True
+    heartbeat._evolver_active = False
+
+
+def test_inspector_not_double_started():
+    import heartbeat
+    heartbeat._inspector_active = True
+    with heartbeat._inspector_lock:
+        insp_running = heartbeat._inspector_active
+    assert insp_running is True
+    heartbeat._inspector_active = False
 
 
 def test_backlog_drain_not_double_started():

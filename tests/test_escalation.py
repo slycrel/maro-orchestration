@@ -193,7 +193,7 @@ class TestHandleEscalationWithLLM:
 # handle.handle_task routing
 # ---------------------------------------------------------------------------
 
-from handle import handle_task, drain_task_store, _parse_continuation_reason
+from handle import handle_task, drain_task_store, _parse_continuation_reason, _context_firewall
 
 
 class TestParseContinuationReason:
@@ -231,6 +231,45 @@ class TestParseContinuationReason:
         goal, ctx = _parse_continuation_reason(reason)
         assert goal == "adversarial review of the entire codebase"
         assert ctx == reason  # full reason as context
+
+
+class TestContextFirewall:
+    def test_shallow_depth_passes_full_context(self):
+        reason = "X " * 200  # 400 chars
+        result = _context_firewall(reason, depth=1, cap=600)
+        assert result == reason.strip() or result == reason
+
+    def test_shallow_depth_capped_at_limit(self):
+        reason = "X " * 500  # 1000 chars
+        result = _context_firewall(reason, depth=1, cap=600)
+        assert len(result) <= 600
+
+    def test_deep_extracts_goal_and_remaining(self):
+        reason = (
+            "ESCALATION — task has been through 3 passes.\n\n"
+            "Original goal: adversarial review of the codebase\n\n"
+            "Accomplished: step 1, step 2, step 3\n\n"
+            "Remaining:\n- step 4\n- step 5\n"
+        )
+        result = _context_firewall(reason, depth=2, cap=600)
+        assert "Original goal: adversarial review of the codebase" in result
+        assert "step 4" in result
+        assert "step 5" in result
+        # Accomplished history should be stripped
+        assert "Accomplished" not in result
+
+    def test_deep_fallback_caps_on_no_structure(self):
+        reason = "plain blob without any known structure " * 30
+        result = _context_firewall(reason, depth=3, cap=100)
+        assert len(result) <= 100
+
+    def test_deep_result_always_within_cap(self):
+        reason = (
+            "Original goal: " + "long goal " * 20 + "\n\n"
+            "Remaining:\n" + "- step\n" * 100
+        )
+        result = _context_firewall(reason, depth=2, cap=300)
+        assert len(result) <= 300
 
 
 class TestHandleTask:

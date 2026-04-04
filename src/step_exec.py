@@ -196,6 +196,18 @@ EXECUTE_TOOLS = [
                         "inferred = reasoned from context; unverified = not independently confirmed."
                     ),
                 },
+                "inject_steps": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "Optional: list of additional steps to insert immediately after this step. "
+                        "Use when this step reveals unexpected work that must happen before "
+                        "the planned next step (e.g. a dependency is missing, a file needs "
+                        "fetching, a subtask was discovered mid-execution). "
+                        "Injected steps run in order before the original remaining plan resumes. "
+                        "Maximum 3 injected steps. Keep each under 20 words."
+                    ),
+                },
             },
             "required": ["result", "summary"],
         },
@@ -736,6 +748,14 @@ def execute_step(
             }
             if _confidence:
                 _outcome["confidence"] = _confidence
+            # Mutable task graph: pick up any injected steps from the worker
+            _raw_inject = tc.arguments.get("inject_steps") or []
+            if isinstance(_raw_inject, list):
+                _clean_inject = [str(s).strip() for s in _raw_inject if s and str(s).strip()][:3]
+                if _clean_inject:
+                    _outcome["inject_steps"] = _clean_inject
+                    log.info("step %d inject_steps: %d step(s) added to plan",
+                             step_num, len(_clean_inject))
         elif tc.name == "flag_stuck":
             _reason = tc.arguments.get("reason", "unknown")
             log.info("step %d BLOCKED (flag_stuck) reason=%r tokens=%d elapsed=%.1fs",
