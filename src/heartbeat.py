@@ -22,6 +22,7 @@ import json
 import logging
 import os
 import sys
+import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -387,12 +388,95 @@ def run_heartbeat(
 # Poll loop
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Autonomous backlog drain
+# ---------------------------------------------------------------------------
+
+_backlog_drain_active = False
+_backlog_drain_lock = threading.Lock()
+
+
+def _run_backlog_step(*, dry_run: bool = False, verbose: bool = False) -> None:
+    """Pick the highest-priority NEXT.md TODO and run one agent loop iteration.
+
+    Called from a daemon thread by heartbeat_loop. Marks items DOING on start,
+    DONE on loop success, BLOCKED on loop failure (to prevent infinite retry).
+    """
+    global _backlog_drain_active
+    try:
+        from orch_items import (
+            select_global_next,
+            mark_item,
+            STATE_DOING,
+            STATE_DONE,
+            STATE_BLOCKED,
+            STATE_TODO,
+        )
+
+        result = select_global_next()
+        if result is None:
+            if verbose:
+                print("[heartbeat] backlog drain: no TODO items found", file=sys.stderr)
+            return
+
+        slug, item = result
+        if verbose:
+            print(
+                f"[heartbeat] backlog drain: [{slug}] {item.text[:80]}",
+                file=sys.stderr,
+            )
+
+        # Claim the item by marking it in-progress
+        try:
+            mark_item(slug, item.index, STATE_DOING)
+        except Exception as exc:
+            print(f"[heartbeat] backlog drain mark_doing failed: {exc}", file=sys.stderr)
+            return
+
+        if dry_run:
+            # In dry-run, immediately mark done — used by tests to validate wiring
+            mark_item(slug, item.index, STATE_DONE)
+            if verbose:
+                print(f"[heartbeat] backlog drain: dry-run — marked done [{slug}] item {item.index}", file=sys.stderr)
+            return
+
+        try:
+            from agent_loop import run_agent_loop
+            loop_result = run_agent_loop(
+                goal=item.text,
+                project=slug,
+                dry_run=False,
+                verbose=verbose,
+            )
+            if loop_result.status == "done":
+                mark_item(slug, item.index, STATE_DONE)
+            else:
+                # stuck/error → block so we don't retry the same item on every tick
+                mark_item(slug, item.index, STATE_BLOCKED)
+                if verbose:
+                    print(
+                        f"[heartbeat] backlog drain: loop ended {loop_result.status!r} "
+                        f"for [{slug}] item {item.index} — marked blocked",
+                        file=sys.stderr,
+                    )
+        except Exception as exc:
+            print(f"[heartbeat] backlog drain loop failed: {exc}", file=sys.stderr)
+            try:
+                mark_item(slug, item.index, STATE_BLOCKED)
+            except Exception:
+                pass
+    finally:
+        with _backlog_drain_lock:
+            _backlog_drain_active = False
+
+
 def heartbeat_loop(
     *,
     interval: float = 60.0,
     evolver_every: int = 10,
     inspector_every: int = 20,
     mission_check_every: int = 5,
+    backlog_every: int = 3,       # autonomous NEXT.md drain every N ticks
     eval_every: int = 1440,   # Phase 42: ~24h at 60s interval
     dry_run: bool = False,
     verbose: bool = True,
@@ -409,6 +493,12 @@ def heartbeat_loop(
     Every `mission_check_every` cycles (Phase 34), checks for pending
     missions and logs/notifies if autonomous drain would be warranted.
 
+    Every `backlog_every` cycles, picks the highest-priority NEXT.md TODO
+    item across all projects and runs it via run_agent_loop (autonomous
+    backlog drain). Skipped if a mission drain or prior backlog drain is
+    already active. This is the primary mechanism for duty-cycle > 0 when
+    no missions are explicitly queued.
+
     Every `eval_every` cycles (Phase 42, default ~24h), runs the eval suite
     and converts any regressions to evolver Suggestion entries.
     """
@@ -416,7 +506,7 @@ def heartbeat_loop(
         print(
             f"[heartbeat] loop started interval={interval}s "
             f"evolver_every={evolver_every} inspector_every={inspector_every} "
-            f"mission_check_every={mission_check_every}",
+            f"mission_check_every={mission_check_every} backlog_every={backlog_every}",
             file=sys.stderr,
         )
     tick = 0
@@ -479,6 +569,27 @@ def heartbeat_loop(
             except Exception as e:
                 if verbose:
                     print(f"[heartbeat] mission check failed: {e}", file=sys.stderr)
+        # Autonomous backlog drain: pick up NEXT.md TODO items when idle.
+        # Fires every `backlog_every` ticks. Skips if a mission or prior backlog
+        # drain is already running (one active drain at a time).
+        if tick % backlog_every == 0 and not _mission_active:
+            with _backlog_drain_lock:
+                _bd_running = _backlog_drain_active
+            if not _bd_running:
+                with _backlog_drain_lock:
+                    _backlog_drain_active = True
+                _bt = threading.Thread(
+                    target=_run_backlog_step,
+                    kwargs={"dry_run": dry_run, "verbose": verbose},
+                    daemon=True,
+                    name="backlog-drain",
+                )
+                _bt.start()
+                if verbose:
+                    print("[heartbeat] autonomous backlog drain started", file=sys.stderr)
+            elif verbose:
+                print("[heartbeat] backlog drain already active — skipping tick", file=sys.stderr)
+
         # Phase 42: nightly eval — run once per ~24h cycle (skip if mission active)
         if tick % eval_every == 0 and tick > 0 and not _mission_active:
             try:

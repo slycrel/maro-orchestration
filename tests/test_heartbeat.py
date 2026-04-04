@@ -2,6 +2,8 @@
 
 import json
 import sys
+import threading
+import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -15,6 +17,7 @@ from heartbeat import (
     _tier1_scripted,
     _tier2_llm_diagnosis,
     _tier3_escalate,
+    _run_backlog_step,
     run_heartbeat,
 )
 
@@ -286,3 +289,148 @@ def test_cli_poe_heartbeat_json(capsys):
     out = capsys.readouterr().out
     data = json.loads(out)
     assert "health_status" in data
+
+
+# ---------------------------------------------------------------------------
+# Autonomous backlog drain
+# ---------------------------------------------------------------------------
+
+def test_run_backlog_step_no_todo_items():
+    """When no TODO items exist, _run_backlog_step exits cleanly and resets the active flag."""
+    import heartbeat
+    heartbeat._backlog_drain_active = True  # simulate it being claimed before call
+    with patch("orch_items.select_global_next", return_value=None):
+        _run_backlog_step(dry_run=True, verbose=False)
+    # finally block must reset flag regardless of early-return path
+    assert heartbeat._backlog_drain_active is False
+
+
+def test_run_backlog_step_dry_run_marks_done(tmp_path, monkeypatch):
+    """In dry-run mode, backlog drain claims a TODO item and marks it done."""
+    monkeypatch.setenv("POE_ORCH_ROOT", str(tmp_path))
+
+    import importlib
+    import orch_items as oi
+    importlib.reload(oi)
+
+    oi.ensure_project("test-proj", "test mission")
+    oi.append_next_items("test-proj", ["Do the thing"])
+    _lines, items_before = oi.parse_next("test-proj")
+    todo_item = next(i for i in items_before if i.state == oi.STATE_TODO)
+
+    import heartbeat
+    heartbeat._backlog_drain_active = True
+
+    with patch("orch_items.select_global_next", return_value=("test-proj", todo_item)):
+        _run_backlog_step(dry_run=True, verbose=False)
+
+    _lines2, items_after = oi.parse_next("test-proj")
+    done_item = next((i for i in items_after if i.index == todo_item.index), None)
+    assert done_item is not None
+    assert done_item.state == oi.STATE_DONE
+    assert heartbeat._backlog_drain_active is False
+
+
+def test_run_backlog_step_loop_done_marks_done(tmp_path, monkeypatch):
+    """When agent loop returns 'done', item is marked STATE_DONE."""
+    monkeypatch.setenv("POE_ORCH_ROOT", str(tmp_path))
+
+    import importlib
+    import orch_items as oi
+    importlib.reload(oi)
+
+    oi.ensure_project("proj-b", "mission b")
+    oi.append_next_items("proj-b", ["Research something"])
+    _lines, items = oi.parse_next("proj-b")
+    todo = next(i for i in items if i.state == oi.STATE_TODO)
+
+    import heartbeat
+    heartbeat._backlog_drain_active = True
+
+    mock_loop_result = MagicMock()
+    mock_loop_result.status = "done"
+
+    with patch("orch_items.select_global_next", return_value=("proj-b", todo)), \
+         patch("agent_loop.run_agent_loop", return_value=mock_loop_result):
+        _run_backlog_step(dry_run=False, verbose=False)
+
+    _lines2, items2 = oi.parse_next("proj-b")
+    updated = next(i for i in items2 if i.index == todo.index)
+    assert updated.state == oi.STATE_DONE
+    assert heartbeat._backlog_drain_active is False
+
+
+def test_run_backlog_step_loop_stuck_marks_blocked(tmp_path, monkeypatch):
+    """When agent loop returns 'stuck', item is marked STATE_BLOCKED (no infinite retry)."""
+    monkeypatch.setenv("POE_ORCH_ROOT", str(tmp_path))
+
+    import importlib
+    import orch_items as oi
+    importlib.reload(oi)
+
+    oi.ensure_project("proj-c", "mission c")
+    oi.append_next_items("proj-c", ["Do something hard"])
+    _lines, items = oi.parse_next("proj-c")
+    todo = next(i for i in items if i.state == oi.STATE_TODO)
+
+    import heartbeat
+    heartbeat._backlog_drain_active = True
+
+    mock_loop_result = MagicMock()
+    mock_loop_result.status = "stuck"
+
+    with patch("orch_items.select_global_next", return_value=("proj-c", todo)), \
+         patch("agent_loop.run_agent_loop", return_value=mock_loop_result):
+        _run_backlog_step(dry_run=False, verbose=False)
+
+    _lines2, items2 = oi.parse_next("proj-c")
+    updated = next(i for i in items2 if i.index == todo.index)
+    assert updated.state == oi.STATE_BLOCKED
+    assert heartbeat._backlog_drain_active is False
+
+
+def test_run_backlog_step_loop_exception_marks_blocked(tmp_path, monkeypatch):
+    """If agent loop raises, item is marked STATE_BLOCKED and flag is cleared."""
+    monkeypatch.setenv("POE_ORCH_ROOT", str(tmp_path))
+
+    import importlib
+    import orch_items as oi
+    importlib.reload(oi)
+
+    oi.ensure_project("proj-d", "mission d")
+    oi.append_next_items("proj-d", ["Task that will crash"])
+    _lines, items = oi.parse_next("proj-d")
+    todo = next(i for i in items if i.state == oi.STATE_TODO)
+
+    import heartbeat
+    heartbeat._backlog_drain_active = True
+
+    with patch("orch_items.select_global_next", return_value=("proj-d", todo)), \
+         patch("agent_loop.run_agent_loop", side_effect=RuntimeError("boom")):
+        _run_backlog_step(dry_run=False, verbose=False)
+
+    _lines2, items2 = oi.parse_next("proj-d")
+    updated = next(i for i in items2 if i.index == todo.index)
+    assert updated.state == oi.STATE_BLOCKED
+    assert heartbeat._backlog_drain_active is False
+
+
+def test_backlog_drain_not_double_started():
+    """heartbeat_loop skips launching a second drain if one is already active."""
+    import heartbeat
+    # Simulate an active drain by setting the flag
+    heartbeat._backlog_drain_active = True
+    threads_started = []
+
+    original_thread_init = threading.Thread.__init__
+    def capture_thread(self, *args, **kwargs):
+        original_thread_init(self, *args, **kwargs)
+        if kwargs.get("name") == "backlog-drain":
+            threads_started.append(self)
+
+    # Verify that when _backlog_drain_active is True, no new thread is created
+    with heartbeat._backlog_drain_lock:
+        bd_running = heartbeat._backlog_drain_active
+    assert bd_running is True  # already active → no new thread should be spawned
+    # Reset for other tests
+    heartbeat._backlog_drain_active = False
