@@ -32,6 +32,14 @@ Session 10: GStack Tier 1 steals (decision taxonomy + confidence gates + anti-sy
 - `_PrefixResult` dataclass carries all parsed flags cleanly into `handle()`
 - 11 new tests: single prefix, stacking, effort model tier, ultraplan max_steps, verify=ralph alias, case-insensitive, registry completeness check
 
+## [1.10.4] - 2026-04-04
+
+Auto-resume on rate limits — multi-cycle polling retry. 2461 tests, 5 skipped.
+
+### Changed — Rate limit multi-cycle polling retry
+- `src/llm.py` — adds `import logging` + `log = logging.getLogger("poe.llm")`; replaces single-retry rate-limit handler in `ClaudeSubprocessAdapter.complete()` with a configurable multi-cycle polling loop: up to `_rate_limit_max_retries` (default 6) attempts, exponential backoff starting from `_rate_limit_wait` (default 60s), capped at 1800s per cycle; stops early on non-rate-limit errors; backoff resets to 60s on success; persists to `self._rate_limit_wait` for next call
+- 5 new tests: succeeds on second attempt, retries up to max, backoff grows exponentially, non-rate-limit error stops retry, wait resets on success
+
 ## [1.10.3] - 2026-04-04
 
 Meta-Harness steal: proposer reads full execution traces. 2456 tests, 5 skipped.
