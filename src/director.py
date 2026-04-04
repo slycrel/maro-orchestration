@@ -790,6 +790,197 @@ def _write_director_log(
 
 
 # ---------------------------------------------------------------------------
+# Escalation consumer
+# ---------------------------------------------------------------------------
+
+_ESCALATION_SYSTEM = textwrap.dedent("""\
+    You are the Director for Poe, an autonomous orchestration system.
+    A task has been through multiple continuation passes without completing.
+    Your job: decide what happens next. You are not an executor — you are a judge.
+
+    You will receive:
+    - The original goal
+    - What has been accomplished (completed steps)
+    - What remains (incomplete steps)
+    - The continuation depth (how many passes have been attempted)
+
+    Decide ONE of:
+    - "continue": remaining work is valid and worth pursuing; spawn another focused pass
+    - "narrow": scope is still too broad; rewrite the goal to a smaller, achievable target
+      (provide a revised_goal in your response)
+    - "close": partial result is sufficient; accept what's been done
+    - "surface": requires human judgment; escalate to the operator with a summary
+
+    Rules:
+    - "continue" only if the remaining work is distinct and bounded (not the same breadth as the original)
+    - "narrow" when the original goal was genuinely too large but a smaller slice would be valuable
+    - "close" when the completed work already answers the core question even if incomplete
+    - "surface" when there is no clear automated path forward (contradictory signals, policy questions, etc.)
+    - Never "continue" indefinitely — prefer "close" or "surface" over a fifth+ continuation
+
+    Respond with a JSON object:
+    {
+      "action": "continue" | "narrow" | "close" | "surface",
+      "reasoning": "one or two sentences explaining the decision",
+      "revised_goal": "narrowed goal string (only if action == 'narrow')",
+      "summary_for_user": "brief status summary for operator/user (always include)"
+    }
+""").strip()
+
+
+@dataclass
+class EscalationDecision:
+    action: str                          # "continue" | "narrow" | "close" | "surface"
+    reasoning: str
+    followup_task_id: Optional[str] = None   # task enqueued as a result, if any
+    summary_for_user: str = ""
+
+
+def handle_escalation(
+    task: dict,
+    *,
+    adapter=None,
+    dry_run: bool = False,
+    verbose: bool = False,
+) -> EscalationDecision:
+    """Process a loop_escalation task and decide what happens next.
+
+    The director reads the escalation context (goal, accomplished, remaining,
+    depth) and makes one of four decisions:
+    - continue: spawn a focused continuation with depth+1
+    - narrow: rewrite the goal to a smaller target, spawn as new task
+    - close: accept the partial result, no further work
+    - surface: write a human-readable summary for operator review
+
+    This is the closure mechanism for the dynamic tree traversal — escalations
+    don't silently accumulate, they get a reasoned decision from a higher layer.
+    """
+    from llm import LLMMessage
+
+    reason = task.get("reason", "")
+    depth = task.get("continuation_depth", 0)
+    job_id = task.get("job_id", "unknown")
+    parent_id = task.get("parent_job_id", "")
+
+    log.info("escalation_start job_id=%s depth=%d", job_id, depth)
+
+    if verbose:
+        print(f"[poe:director:escalation] job={job_id} depth={depth}", file=sys.stderr, flush=True)
+
+    # Dry-run: close the escalation without further work
+    if dry_run or adapter is None:
+        return EscalationDecision(
+            action="close",
+            reasoning="[dry-run] escalation acknowledged, closing",
+            summary_for_user=f"Dry-run escalation for job {job_id} at depth {depth}",
+        )
+
+    try:
+        if adapter is None:
+            from llm import build_adapter
+            from poe import assign_model_by_role
+            adapter = build_adapter(model=assign_model_by_role("planner"))
+
+        resp = adapter.complete(
+            [
+                LLMMessage("system", _ESCALATION_SYSTEM),
+                LLMMessage("user",
+                    f"Escalation context:\n\n{reason}\n\n"
+                    f"Continuation depth: {depth}\n\n"
+                    "What should happen next? Respond with JSON only."),
+            ],
+            max_tokens=512,
+            temperature=0.1,
+        )
+        data = extract_json(content_or_empty(resp), dict, log_tag="director.handle_escalation")
+    except Exception as exc:
+        log.warning("escalation LLM call failed, defaulting to surface: %s", exc)
+        data = None
+
+    if not data:
+        return EscalationDecision(
+            action="surface",
+            reasoning="LLM call failed during escalation processing",
+            summary_for_user=f"Escalation for job {job_id} (depth {depth}) could not be processed automatically.",
+        )
+
+    action = safe_str(data.get("action", "surface")).strip().lower()
+    if action not in ("continue", "narrow", "close", "surface"):
+        action = "surface"
+    reasoning = safe_str(data.get("reasoning", ""))
+    summary_for_user = safe_str(data.get("summary_for_user", ""))
+    revised_goal = safe_str(data.get("revised_goal", ""))
+
+    log.info("escalation_decision job_id=%s action=%s reasoning=%r", job_id, action, reasoning[:80])
+
+    followup_task_id = None
+
+    if action == "continue":
+        # Spawn a focused continuation with depth+1
+        try:
+            from task_store import enqueue as _ts_enqueue
+            _cont_task = _ts_enqueue(
+                lane="agenda",
+                source="loop_continuation",
+                reason=reason,  # original escalation context becomes continuation context
+                parent_job_id=job_id,
+                continuation_depth=depth + 1,
+            )
+            followup_task_id = _cont_task["job_id"]
+            log.info("escalation_continue: enqueued %s depth=%d", followup_task_id, depth + 1)
+        except Exception as exc:
+            log.warning("escalation continue: failed to enqueue continuation: %s", exc)
+
+    elif action == "narrow" and revised_goal:
+        # Spawn a new task with the narrowed goal
+        try:
+            from task_store import enqueue as _ts_enqueue
+            _narrow_task = _ts_enqueue(
+                lane="agenda",
+                source="loop_continuation",
+                reason=f"NARROWED from escalation {job_id}:\n\n{revised_goal}",
+                parent_job_id=job_id,
+                continuation_depth=depth + 1,
+            )
+            followup_task_id = _narrow_task["job_id"]
+            log.info("escalation_narrow: enqueued %s with revised goal %r",
+                     followup_task_id, revised_goal[:60])
+        except Exception as exc:
+            log.warning("escalation narrow: failed to enqueue narrowed task: %s", exc)
+
+    elif action in ("close", "surface"):
+        # Write a summary artifact for the operator
+        try:
+            import os
+            from orch import project_dir as _proj_dir
+            _art_dir = _proj_dir(f"escalation-{job_id[:8]}") / "artifacts"
+            _art_dir.mkdir(parents=True, exist_ok=True)
+            _summary_path = _art_dir / f"escalation-{job_id[:8]}-{action}.md"
+            _summary_path.write_text(
+                f"# Escalation {action.title()} — {job_id}\n\n"
+                f"**Depth:** {depth}\n"
+                f"**Action:** {action}\n"
+                f"**Reasoning:** {reasoning}\n\n"
+                f"## Summary for operator\n{summary_for_user}\n\n"
+                f"## Full escalation context\n{reason}\n",
+                encoding="utf-8",
+            )
+            log.info("escalation_%s: wrote summary to %s", action, _summary_path)
+        except Exception as exc:
+            log.warning("escalation %s: failed to write summary: %s", action, exc)
+
+    if verbose:
+        print(f"[poe:director:escalation] {action}: {reasoning[:80]}", file=sys.stderr, flush=True)
+
+    return EscalationDecision(
+        action=action,
+        reasoning=reasoning,
+        followup_task_id=followup_task_id,
+        summary_for_user=summary_for_user,
+    )
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 

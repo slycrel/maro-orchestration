@@ -618,6 +618,116 @@ def _write_now_artifact(
 
 
 # ---------------------------------------------------------------------------
+# Task store routing — escalation and continuation consumers
+# ---------------------------------------------------------------------------
+
+def handle_task(
+    task: dict,
+    *,
+    adapter=None,
+    dry_run: bool = False,
+    verbose: bool = False,
+):
+    """Route a task_store task to the appropriate handler based on its source.
+
+    - loop_escalation → director.handle_escalation() (judgment call: continue/narrow/close/surface)
+    - loop_continuation → run_agent_loop() directly with continuation_depth (already classified AGENDA)
+    - all others → handle(reason) (standard text-based routing)
+
+    This is the closure mechanism: escalation tasks don't sit silently in the queue,
+    they route to the director for a reasoned decision.
+    """
+    source = task.get("source", "")
+    reason = task.get("reason", "")
+    depth = int(task.get("continuation_depth", 0))
+    job_id = task.get("job_id", "unknown")
+
+    if source == "loop_escalation":
+        from director import handle_escalation
+        log.info("handle_task routing escalation job_id=%s depth=%d", job_id, depth)
+        return handle_escalation(task, adapter=adapter, dry_run=dry_run, verbose=verbose)
+
+    elif source == "loop_continuation":
+        # Continuations are already classified AGENDA — skip intent classification overhead.
+        # Pass continuation_depth so the planner reasons narrowly (not re-planning the full scope).
+        log.info("handle_task routing continuation job_id=%s depth=%d", job_id, depth)
+        from agent_loop import run_agent_loop
+        if adapter is None and not dry_run:
+            from llm import build_adapter, MODEL_CHEAP
+            adapter = build_adapter(model=MODEL_CHEAP)
+        return run_agent_loop(
+            reason,
+            adapter=adapter,
+            dry_run=dry_run,
+            verbose=verbose,
+            continuation_depth=depth,
+        )
+
+    else:
+        log.info("handle_task routing %s job_id=%s via handle()", source or "unknown", job_id)
+        return handle(reason, adapter=adapter, dry_run=dry_run, verbose=verbose)
+
+
+def drain_task_store(
+    *,
+    adapter=None,
+    dry_run: bool = False,
+    verbose: bool = False,
+    max_tasks: int = 3,
+    sources: tuple = ("loop_continuation", "loop_escalation"),
+) -> int:
+    """Claim and process queued task_store tasks with known sources.
+
+    Called from the heartbeat or scheduler to consume continuation and
+    escalation tasks. Returns the number of tasks processed.
+
+    Args:
+        max_tasks: Max tasks to process per call (avoids monopolizing the heartbeat).
+        sources: Which task sources to drain. Default covers continuation + escalation.
+    """
+    try:
+        from task_store import list_tasks, claim, complete, fail as task_fail
+    except ImportError:
+        log.warning("drain_task_store: task_store not available")
+        return 0
+
+    queued = [
+        t for t in list_tasks(status_filter="queued")
+        if t.get("source") in sources
+    ]
+    if not queued:
+        return 0
+
+    log.info("drain_task_store: %d queued task(s) to process", len(queued))
+    processed = 0
+
+    for task in queued[:max_tasks]:
+        job_id = task.get("job_id", "unknown")
+        try:
+            claim(job_id)
+        except Exception as exc:
+            log.warning("drain_task_store: failed to claim %s: %s", job_id, exc)
+            continue
+
+        try:
+            handle_task(task, adapter=adapter, dry_run=dry_run, verbose=verbose)
+            try:
+                complete(job_id)
+            except Exception:
+                pass
+            processed += 1
+            log.info("drain_task_store: completed %s", job_id)
+        except Exception as exc:
+            log.warning("drain_task_store: task %s failed: %s", job_id, exc)
+            try:
+                task_fail(job_id, str(exc))
+            except Exception:
+                pass
+
+    return processed
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
