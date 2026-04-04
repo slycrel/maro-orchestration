@@ -287,6 +287,157 @@ def _run_steps_parallel(
     return [outcomes_by_idx[i + 1] for i in range(len(steps))]
 
 
+def _run_steps_dag(
+    *,
+    goal: str,
+    steps: List[str],
+    deps: Dict[str, Any],
+    adapter,
+    ancestry_context: str,
+    tools: list,
+    verbose: bool,
+    max_workers: int,
+    project_dir: str = "",
+    shared_ctx: Optional[Dict[str, Any]] = None,
+) -> List[dict]:
+    """Dep-aware parallel execution — semaphore-gated pool with auto-unblock.
+
+    Unlike _run_steps_parallel (which requires ALL steps to be independent),
+    this handles arbitrary DAG topologies:
+    - Tasks with no pending deps are submitted to the pool immediately.
+    - When a task completes, its dependents whose deps are now all satisfied
+      are submitted automatically (auto-unblock).
+    - Completed dep results are passed as completed_context to each step,
+      so downstream steps (e.g. "Synthesize [after:1,2]") get the actual
+      outputs of their upstream steps.
+
+    Args:
+        steps: Clean step strings (tags stripped by parse_dependencies).
+        deps:  1-based step index → set of dep indices (from parse_dependencies).
+
+    Returns outcomes list in step-index order.
+    """
+    from llm import build_adapter
+    import threading as _threading
+
+    n = len(steps)
+    results: Dict[int, dict] = {}
+    results_lock = _threading.Lock()
+
+    # Mutable copy — we discard entries as deps complete
+    remaining_deps: Dict[int, Any] = {
+        i: set(deps.get(i, set())) for i in range(1, n + 1)
+    }
+
+    _fanout_timeout = int(os.environ.get("POE_STEP_TIMEOUT", "600"))
+
+    def _run_one(step_idx: int) -> tuple:
+        step_text = steps[step_idx - 1]
+        # Build completed_context from direct dep results (already done when we start)
+        dep_ctx: List[str] = []
+        for dep_idx in sorted(deps.get(step_idx, set())):
+            with results_lock:
+                dep_oc = results.get(dep_idx, {})
+            dep_result = dep_oc.get("result", "")
+            dep_step_text = steps[dep_idx - 1] if 1 <= dep_idx <= n else ""
+            if dep_result:
+                dep_ctx.append(f"Step {dep_idx} ({dep_step_text[:60]}):\n{dep_result[:600]}")
+
+        try:
+            from poe import classify_step_model
+            step_model = classify_step_model(step_text)
+            step_adapter = build_adapter(model=step_model) if step_model != adapter.model_key else adapter
+        except Exception:
+            step_adapter = adapter
+
+        outcome = _execute_step(
+            goal=goal,
+            step_text=step_text,
+            step_num=step_idx,
+            total_steps=n,
+            completed_context=dep_ctx,
+            adapter=step_adapter,
+            tools=tools,
+            verbose=verbose,
+            ancestry_context=ancestry_context,
+            project_dir=project_dir,
+            shared_ctx=shared_ctx,
+        )
+        if verbose:
+            status_label = outcome.get("status", "?")
+            summary = outcome.get("summary", "")[:80]
+            print(f"[poe] dag step {step_idx} {status_label}: {summary}", file=sys.stderr, flush=True)
+        with results_lock:
+            results[step_idx] = outcome
+        return step_idx, outcome
+
+    active: Dict[Any, int] = {}  # Future → step_idx
+
+    def _submit_ready(pool) -> None:
+        """Submit all tasks whose deps are now fully satisfied."""
+        for step_idx in range(1, n + 1):
+            if step_idx in results:
+                continue  # already done
+            if step_idx in active.values():
+                continue  # already in-flight
+            if not remaining_deps.get(step_idx):  # no remaining deps
+                f = pool.submit(_run_one, step_idx)
+                active[f] = step_idx
+
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        _submit_ready(pool)
+
+        while active:
+            _completed_f = None
+            _timed_out = False
+            try:
+                for _f in as_completed(list(active), timeout=_fanout_timeout):
+                    _completed_f = _f
+                    break
+            except TimeoutError:
+                _timed_out = True
+
+            if _timed_out:
+                for _f, _idx in list(active.items()):
+                    if _idx not in results:
+                        results[_idx] = {
+                            "status": "blocked",
+                            "stuck_reason": f"dag timeout ({_fanout_timeout}s)",
+                            "result": "", "tokens_in": 0, "tokens_out": 0,
+                        }
+                        log.warning("dag step %d timed out after %ds", _idx, _fanout_timeout)
+                break
+
+            completed_idx = active.pop(_completed_f)
+            try:
+                _completed_f.result(timeout=30)
+            except Exception as exc:
+                with results_lock:
+                    results[completed_idx] = {
+                        "status": "blocked",
+                        "stuck_reason": f"dag execution error: {exc}",
+                        "result": "", "tokens_in": 0, "tokens_out": 0,
+                    }
+
+            # Unblock tasks whose only remaining dep was the just-completed one
+            for step_idx in range(1, n + 1):
+                if step_idx not in results and step_idx not in active.values():
+                    remaining_deps.get(step_idx, set()).discard(completed_idx)
+
+            _submit_ready(pool)
+
+    # Fill any unreached tasks (deps of a timed-out step)
+    for i in range(1, n + 1):
+        if i not in results:
+            results[i] = {
+                "status": "blocked",
+                "stuck_reason": "dag: upstream dep did not complete",
+                "result": "", "tokens_in": 0, "tokens_out": 0,
+            }
+
+    return [results[i] for i in range(1, n + 1)]
+
+
 # ---------------------------------------------------------------------------
 # Loop context / decompose helpers
 # ---------------------------------------------------------------------------
@@ -1001,10 +1152,11 @@ def run_agent_loop(
         except ImportError:
             pass
 
-    # Parse step dependencies for level-based parallel execution
+    # Parse step dependencies for level-based and DAG-aware parallel execution
     _clean_steps = steps
-    _deps = {}
-    _levels = None
+    _deps: Dict[int, Any] = {}
+    _levels: Optional[List[Any]] = None
+    _parallel_levels: List[Any] = []
     try:
         from planner import parse_dependencies, build_execution_levels
         _clean_steps, _deps = parse_dependencies(steps)
@@ -1046,34 +1198,66 @@ def run_agent_loop(
     # Workers can read prior findings and write their own results without re-fetching.
     _loop_shared_ctx: Dict[str, Any] = {}
 
-    # Phase 35 P1: parallel fan-out — run independent steps concurrently
-    if parallel_fan_out > 0 and len(steps) > 1 and _steps_are_independent(steps):
-        if verbose:
-            print(f"[poe] fan-out: running {len(steps)} steps in parallel (max_workers={parallel_fan_out})", file=sys.stderr, flush=True)
-        _fanout_proj_dir = ""
-        if project:
-            try:
-                _fanout_proj_dir = str(o.orch_root() / "prototypes" / "poe-orchestration" / "projects" / project)
-            except Exception:
-                pass
-        _fanout_outcomes = _run_steps_parallel(
-            goal=goal,
-            steps=steps,
-            adapter=adapter,
-            ancestry_context=_ancestry_context,
-            tools=[LLMTool(**t) for t in _resolve_tools()],
-            verbose=verbose,
-            max_workers=parallel_fan_out,
-            project_dir=_fanout_proj_dir,
-            shared_ctx=_loop_shared_ctx,
-        )
-        # Build LoopResult directly from parallel outcomes
+    # DAG-aware parallel execution (preferred when dep graph has explicit parallelism).
+    # Steps start as soon as their specific deps complete; dep results passed as context.
+    # Falls back to heuristic fan-out for plans with no explicit [after:N] dep tags.
+    _proj_fanout_dir = ""
+    if project:
+        try:
+            _proj_fanout_dir = str(o.orch_root() / "prototypes" / "poe-orchestration" / "projects" / project)
+        except Exception:
+            pass
+
+    _use_dag = parallel_fan_out > 0 and len(_clean_steps) > 1 and bool(_parallel_levels)
+    _use_fanout = (not _use_dag and parallel_fan_out > 0
+                  and len(steps) > 1 and _steps_are_independent(steps))
+
+    if _use_dag or _use_fanout:
+        if _use_dag:
+            if verbose:
+                print(
+                    f"[poe] dag: running {len(_clean_steps)} steps with dep-aware scheduling "
+                    f"(max_workers={parallel_fan_out}, levels={len(_levels)}, "
+                    f"parallel_levels={len(_parallel_levels)})",
+                    file=sys.stderr, flush=True,
+                )
+            _fanout_outcomes = _run_steps_dag(
+                goal=goal,
+                steps=_clean_steps,
+                deps=_deps,
+                adapter=adapter,
+                ancestry_context=_ancestry_context,
+                tools=[LLMTool(**t) for t in _resolve_tools()],
+                verbose=verbose,
+                max_workers=parallel_fan_out,
+                project_dir=_proj_fanout_dir,
+                shared_ctx=_loop_shared_ctx,
+            )
+            _fanout_step_texts = _clean_steps
+        else:
+            # Phase 35 P1: legacy heuristic fan-out — all steps heuristically independent
+            if verbose:
+                print(f"[poe] fan-out: running {len(steps)} steps in parallel (max_workers={parallel_fan_out})", file=sys.stderr, flush=True)
+            _fanout_outcomes = _run_steps_parallel(
+                goal=goal,
+                steps=steps,
+                adapter=adapter,
+                ancestry_context=_ancestry_context,
+                tools=[LLMTool(**t) for t in _resolve_tools()],
+                verbose=verbose,
+                max_workers=parallel_fan_out,
+                project_dir=_proj_fanout_dir,
+                shared_ctx=_loop_shared_ctx,
+            )
+            _fanout_step_texts = steps
+
+        # Build LoopResult from parallel/dag outcomes
         _fanout_step_outcomes: List[StepOutcome] = []
         _fanout_tokens_in = 0
         _fanout_tokens_out = 0
         _fanout_loop_status = "done"
         _fanout_stuck_reason = None
-        for _i, (_step_text, _oc) in enumerate(zip(steps, _fanout_outcomes), 1):
+        for _i, (_step_text, _oc) in enumerate(zip(_fanout_step_texts, _fanout_outcomes), 1):
             _st = _oc.get("status", "blocked")
             _fanout_step_outcomes.append(StepOutcome(
                 index=_i,
