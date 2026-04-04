@@ -1670,6 +1670,14 @@ def run_agent_loop(
                 _proj_artifact_dir = str(o.orch_root() / "prototypes" / "poe-orchestration" / "projects" / project)
             except Exception:
                 pass
+        # Invariant guard: if a compound step still reaches execution, log it so we
+        # can trace which path introduced it (shaper gap detection — Codex Priority 1).
+        if _is_combined_exec_analyze(step_text):
+            log.warning(
+                "step-shape-LEAK step=%d: compound exec+analyze step reached executor "
+                "(shaper did not catch this — check injection path): %r",
+                step_idx, step_text[:120],
+            )
         outcome = _execute_step(
             goal=goal,
             step_text=step_text,
