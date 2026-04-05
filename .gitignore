@@ -20,6 +20,10 @@ memory/
 # Temporary
 tmp/
 
+# Runtime test/artifact directories
+checkpoints/
+prototypes/
+
 # Playwright CLI session artifacts
 .playwright-cli/
 **/.playwright-cli/

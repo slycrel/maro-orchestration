@@ -1,0 +1,6 @@
+# Ignore all test/runtime project directories except tracked content
+*
+!.gitignore
+!.gitkeep
+!find-10-highly-profitable-polymarket/
+!find-10-highly-profitable-polymarket/**
