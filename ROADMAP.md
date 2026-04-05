@@ -446,7 +446,7 @@ Fluid LLM → Lesson (tiered memory) → Identity (canon/AGENTS.md) → Skill (P
 
 ---
 
-### Phase 23: Observability — Execution Visualization *(PARTIAL)*
+### Phase 23: Observability — Execution Visualization *(DONE)*
 
 Currently no real-time view of what Poe is doing. `loop.lock` shows the active goal; `heartbeat-state.json` shows health; but no timeline, step trace, or resource graph.
 
@@ -1158,7 +1158,7 @@ Three-tier self-improving memory: raw observation → hypothesis (2+ confirmatio
 
 ---
 
-### Phase 48: Conversation Mining — Idea Archaeology *(TODO)*
+### Phase 48: Conversation Mining — Idea Archaeology *(DONE)*
 
 *"Revisiting ideas with current maturity yields perspectives we missed the first time."*
 

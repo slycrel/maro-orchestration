@@ -1,6 +1,7 @@
 [console_scripts]
 poe-bootstrap = bootstrap:main
 poe-bughunter = bughunter:main
+poe-checkpoint = checkpoint:_cli_main
 poe-cross-ref = cross_ref:_cli_main
 poe-doctor = doctor:main
 poe-factory-minimal = factory_minimal:main
@@ -12,6 +13,7 @@ poe-inspector = inspector:main
 poe-introspect = introspect:main
 poe-knowledge = knowledge:main
 poe-memory = cli:_memory_main
+poe-mine = convo_miner:main
 poe-observe = observe:main
 poe-passes = passes:_cli_main
 poe-persona = cli:_persona_main
@@ -20,6 +22,7 @@ poe-sandbox = cli:_sandbox_main
 poe-schedule = scheduler:main
 poe-skills = cli:_skills_main
 poe-slack = slack_listener:main
+poe-stop = killswitch:main
 poe-task = task_store:main
 poe-test = bootstrap:_smoke_main
 poe-thinkback = thinkback:_cli_main

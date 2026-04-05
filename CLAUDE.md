@@ -64,7 +64,7 @@ deploy/              systemd service files
 | Phase | Name | Status |
 |-------|------|--------|
 | 0–22 | Foundation through Knowledge Crystallization | DONE |
-| 23 | Observability Dashboard | PARTIAL |
+| 23 | Observability Dashboard | DONE |
 | 24 | Messaging Integrations (Slack, Signal) | PARTIAL |
 | 25 | Ops Hardening | PARTIAL |
 | 27 | Prerequisite Knowledge Sub-Goals | DONE |
@@ -79,7 +79,7 @@ deploy/              systemd service files
 | 45 | Self-Reflection — Recovery Planner | DONE |
 | 46 | Self-Reflection — Intervention Graduation | DONE |
 | 47 | Kill Switch (poe-stop) | DONE |
-| 48 | Conversation Mining — Idea Archaeology | TODO |
+| 48 | Conversation Mining — Idea Archaeology | DONE |
 | 50 | Thinkback Replay | DONE |
 | 51 | Passes — Unified Multi-Pass Review | DONE |
 | 52 | Cross-Reference Check | DONE |

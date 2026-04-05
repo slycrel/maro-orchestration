@@ -46,6 +46,7 @@ poe-passes = "passes:_cli_main"
 poe-cross-ref = "cross_ref:_cli_main"
 poe-checkpoint = "checkpoint:_cli_main"
 poe-stop = "killswitch:main"
+poe-mine = "convo_miner:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
