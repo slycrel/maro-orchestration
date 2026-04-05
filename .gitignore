@@ -23,6 +23,7 @@ tmp/
 # Runtime test/artifact directories
 checkpoints/
 prototypes/
+artifacts/
 
 # Playwright CLI session artifacts
 .playwright-cli/

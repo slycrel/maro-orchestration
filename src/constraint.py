@@ -212,7 +212,11 @@ def _load_dynamic_constraints() -> List[tuple]:
                 risk = entry.get("risk", "MEDIUM")
                 detail = entry.get("detail", f"dynamic guardrail: {pat[:60]}")
                 if pat:
-                    patterns.append((pat, risk, detail))
+                    try:
+                        re.compile(pat, re.I)
+                        patterns.append((pat, risk, detail))
+                    except re.error:
+                        pass  # skip malformed dynamic patterns
             except Exception:
                 continue
     except Exception:
