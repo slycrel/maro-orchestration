@@ -520,7 +520,10 @@ def select_global_next() -> Optional[Tuple[str, NextItem]]:
 def list_blocked_projects() -> List[ProjectStatus]:
     out: List[ProjectStatus] = []
     for slug in list_projects():
-        status = project_status(slug)
+        try:
+            status = project_status(slug)
+        except ValueError:
+            continue  # Skip projects with missing NEXT.md
         if status.blocked > 0:
             out.append(status)
     return sorted(out, key=lambda s: (s.priority, s.blocked, s.slug), reverse=True)

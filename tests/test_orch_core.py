@@ -991,3 +991,25 @@ def test_dir_exists_no_next_md_is_handled(monkeypatch, tmp_path):
     indices = orch.append_next_items("ghost-next", ["recover step"])
     assert len(indices) == 1
     assert next_md.exists()
+
+
+def test_write_operator_status_skips_missing_next_md(monkeypatch, tmp_path):
+    """write_operator_status must not crash when a project dir exists but NEXT.md is missing.
+
+    Regression test for the spawn_persona bootstrap failure:
+    write_operator_status() is called at the end of run_agent_loop. If any project
+    directory exists without NEXT.md (from a prior crashed init or path mismatch),
+    the old code raised ValueError which propagated as "Spawn failed: project X has no NEXT.md".
+    """
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    # Create a well-formed project
+    _mkproj(tmp_path, "good-project", "- [ ] step one\n", priority=1)
+    # Create a project directory WITHOUT NEXT.md (simulates partial init / crashed run)
+    broken_dir = tmp_path / "prototypes" / "poe-orchestration" / "projects" / "broken-project"
+    broken_dir.mkdir(parents=True)
+    # No NEXT.md written — this is the broken state
+
+    # Should not raise despite the broken project
+    status = orch.write_operator_status()
+    assert "good-project" in status["active_projects"] or status["queue"]["todo"] >= 1
+    # broken-project is silently skipped — its missing NEXT.md is not propagated

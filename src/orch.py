@@ -225,7 +225,17 @@ def _pending_salvage_count(active_runs: Optional[List[dict]] = None) -> int:
 
 
 def write_operator_status() -> dict:
-    statuses = [project_status(slug) for slug in list_projects()]
+    statuses = []
+    for slug in list_projects():
+        try:
+            statuses.append(project_status(slug))
+        except ValueError:
+            # Project directory exists but NEXT.md is missing — skip rather than crash.
+            # Can happen if a previous run crashed during project init or if workspace
+            # paths are inconsistent (e.g. orch_root mismatch between runs).
+            import logging as _log
+            _log.getLogger("poe.orch").warning("write_operator_status: skipping %r — no NEXT.md", slug)
+            continue
     active = [s for s in statuses if s.doing > 0]
     blocked = [s for s in statuses if s.blocked > 0]
     next_sel = select_global_next()
