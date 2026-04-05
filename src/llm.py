@@ -167,7 +167,24 @@ class LLMAdapter:
 # ClaudeSubprocessAdapter — uses `claude -p` (no API key needed)
 # ---------------------------------------------------------------------------
 
-_CLAUDE_BIN = "/home/clawd/.local/bin/claude"
+def _find_claude_bin() -> str:
+    """Resolve the claude binary path. Checks CLAUDE_BIN env, then PATH, then common locations."""
+    import shutil
+    if env := os.environ.get("CLAUDE_BIN"):
+        return env
+    if found := shutil.which("claude"):
+        return found
+    # Common install locations as last resort
+    for candidate in (
+        Path.home() / ".local" / "bin" / "claude",
+        Path("/usr/local/bin/claude"),
+        Path("/opt/homebrew/bin/claude"),
+    ):
+        if candidate.is_file():
+            return str(candidate)
+    return str(Path.home() / ".local" / "bin" / "claude")  # best guess fallback
+
+_CLAUDE_BIN = _find_claude_bin()
 
 # When tools are requested, embed them in the prompt as JSON instructions.
 # The subprocess adapter simulates native tool calls by asking the model

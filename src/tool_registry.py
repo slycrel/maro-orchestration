@@ -183,6 +183,143 @@ class ToolRegistry:
         """All registered tool names (unsorted)."""
         return list(self._tools.keys())
 
+    def resolve_and_call(self, tool_name: str, input_data: Dict[str, Any]) -> Any:
+        """Resolve a registered tool by name and invoke it with input_data.
+
+        For MCP tools (registered via load_mcp_server / register_mcp_server),
+        this dispatches through the tool's MCPServerClient.call_tool().
+
+        For non-MCP tools that expose a callable via a ``_handler`` attribute,
+        that handler is called with input_data.
+
+        Raises:
+            KeyError:   tool_name not found in the registry.
+            TypeError:  tool is registered but has no callable handler.
+        """
+        td = self._tools.get(tool_name)
+        if td is None:
+            raise KeyError(f"Tool not found in registry: {tool_name!r}")
+
+        # MCP tools attach _mcp_caller at registration time
+        caller = getattr(td, "_mcp_caller", None)
+        if caller is not None:
+            return caller(input_data)
+
+        # Generic handler hook (non-MCP tools may attach _handler)
+        handler = getattr(td, "_handler", None)
+        if handler is not None:
+            return handler(input_data)
+
+        raise TypeError(
+            f"Tool {tool_name!r} is registered but has no callable handler "
+            f"(_mcp_caller or _handler). Cannot invoke via resolve_and_call()."
+        )
+
+    def load_mcp_server(
+        self,
+        cmd_or_url: "str | List[str]",
+        server_name: Optional[str] = None,
+        roles_allowed: Optional[List[str]] = None,
+        defer: bool = True,
+        http_headers: Optional[Dict[str, str]] = None,
+    ) -> int:
+        """Connect to an MCP tool server and register its tools as deferred stubs.
+
+        Detects transport from cmd_or_url:
+          - str starting with 'http://' or 'https://' → HTTP transport
+          - str or List[str] otherwise → stdio transport (subprocess command)
+
+        Tools are registered as mcp__<server_name>__<tool_name> with
+        should_defer=True by default (only name+description in initial prompt).
+
+        Args:
+            cmd_or_url:    HTTP URL, shell command string, or argv list.
+            server_name:   Override auto-derived server name.
+            roles_allowed: Roles that can see these tools (empty = all roles).
+            defer:         Register tools as deferred stubs (default True).
+            http_headers:  Extra HTTP headers (HTTP transport only).
+
+        Returns:
+            Number of tools registered.
+
+        Raises:
+            MCPTransportError: if the server cannot be reached.
+            MCPProtocolError:  if the initialize handshake fails.
+        """
+        # Late import — mcp_client imports from tool_registry, so we defer to
+        # break the circular dependency at module load time.
+        from mcp_client import MCPServerClient, register_mcp_server  # noqa: PLC0415
+
+        # ---- transport selection ----------------------------------------
+        if isinstance(cmd_or_url, str) and cmd_or_url.startswith(("http://", "https://")):
+            derived_name = _server_name_from_url(cmd_or_url)
+            client = MCPServerClient.http(
+                server_name or derived_name,
+                cmd_or_url,
+                headers=http_headers,
+            )
+        else:
+            # stdio — accept both a bare string and an argv list
+            argv: List[str] = (
+                cmd_or_url if isinstance(cmd_or_url, list) else cmd_or_url.split()
+            )
+            derived_name = _server_name_from_argv(argv)
+            client = MCPServerClient.stdio(server_name or derived_name, argv)
+
+        return register_mcp_server(
+            client,
+            self,
+            roles_allowed=roles_allowed,
+            defer=defer,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Helpers for load_mcp_server name derivation
+# ---------------------------------------------------------------------------
+
+def _server_name_from_url(url: str) -> str:
+    """Derive a stable server name from an HTTP URL.
+
+    Examples:
+        'http://localhost:3001'         → 'localhost'
+        'https://mcp.example.com/mem'  → 'example'
+    """
+    try:
+        from urllib.parse import urlparse
+        host = urlparse(url).hostname or "mcp"
+        # Use the second-level domain label if hostname is multi-part
+        parts = host.split(".")
+        return parts[-2] if len(parts) >= 2 else parts[0]
+    except Exception:
+        return "mcp"
+
+
+def _server_name_from_argv(argv: List[str]) -> str:
+    """Derive a stable server name from a stdio command argv list.
+
+    Examples:
+        ['npx', '-y', '@modelcontextprotocol/server-memory']  → 'memory'
+        ['python', 'filesystem_server.py']                    → 'filesystem_server'
+        ['/usr/local/bin/mcp-brave-search']                   → 'mcp_brave_search'
+    """
+    import os
+    import re
+    # Walk argv in reverse to find the first non-flag positional argument
+    for token in reversed(argv):
+        if token.startswith("-"):
+            continue
+        # Strip npm package scope (e.g. @scope/server-foo → server-foo)
+        token = re.sub(r"^@[^/]+/", "", token)
+        # Strip file extension and path
+        token = os.path.splitext(os.path.basename(token))[0]
+        # Normalise: strip common prefixes like 'server-' or 'mcp-server-'
+        token = re.sub(r"^(?:mcp-server-|server-)", "", token, flags=re.IGNORECASE)
+        token = token.replace("-", "_").lower()
+        if token:
+            return token
+    return "mcp"
+
 
 # ---------------------------------------------------------------------------
 # Default registry — populated from step_exec.py tool definitions

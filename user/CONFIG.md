@@ -68,3 +68,16 @@ quality_gate_action: escalate
 # Send Telegram notification when a mission finishes.
 # Requires Telegram bot token + chat ID in openclaw.json.
 notify_on_complete: true
+
+---
+
+## MCP Servers
+
+# Comma-separated list of MCP servers to load at heartbeat startup.
+# Each entry is either:
+#   - A shell command (stdio transport):  npx -y @modelcontextprotocol/server-memory
+#   - An HTTP URL (HTTP transport):       http://localhost:3001
+# Leave empty (or comment out) to disable MCP tool loading.
+# Example:
+#   mcp_servers: npx -y @modelcontextprotocol/server-memory, http://localhost:3001
+# mcp_servers:

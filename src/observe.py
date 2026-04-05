@@ -153,6 +153,15 @@ def _read_recent_diagnoses(limit: int = 8) -> List[Dict[str, Any]]:
         return []
 
 
+def _read_slow_scheduler() -> Dict[str, Any]:
+    try:
+        from slow_update_scheduler import SlowUpdateScheduler
+        s = SlowUpdateScheduler()
+        return s.status()
+    except Exception as e:
+        return {"error": str(e)}
+
+
 def _read_memory_stats() -> Dict[str, Any]:
     try:
         from memory import memory_status
@@ -543,6 +552,11 @@ _DASHBOARD_HTML = """\
     <div id="memory-status"></div>
   </div>
 
+  <div class="panel">
+    <h2>Slow Scheduler</h2>
+    <div id="scheduler-status"></div>
+  </div>
+
   <div class="panel full">
     <h2>Recent Outcomes</h2>
     <div id="outcomes-status"></div>
@@ -670,6 +684,23 @@ async function refresh() {
       document.getElementById('cost-status').innerHTML = costHtml;
     }
 
+    // Slow Scheduler
+    const sched = d.scheduler || {};
+    if (sched.error) {
+      document.getElementById('scheduler-status').innerHTML = `<span class="status-stuck">${esc(sched.error)}</span>`;
+    } else {
+      const st = sched.state || '?';
+      const clsMap = {IDLE_WAIT:'yellow', WINDOW_OPEN:'green', UPDATING:'blue', PAUSING:'yellow'};
+      const cls = clsMap[st] || 'dim';
+      let schedHtml = `${badge(st, cls)}`;
+      schedHtml += `<div class="kv" style="margin-top:4px">
+        <span><span class="key">workers</span> ${sched.active_workers||0}</span>
+        <span><span class="key">cooldown</span> ${sched.idle_cooldown||0}s</span>`;
+      if (sched.idle_since) schedHtml += `<span><span class="key">idle since</span> ${esc(sched.idle_since).slice(0,19)}</span>`;
+      schedHtml += `</div>`;
+      document.getElementById('scheduler-status').innerHTML = schedHtml;
+    }
+
     // Outcomes
     const outcomes = d.outcomes || [];
     if (!outcomes.length) {
@@ -761,6 +792,7 @@ def _snapshot_json(events_limit: int = 50) -> dict:
     diagnoses = _read_recent_diagnoses(limit=8)
     cost = _read_cost_summary(hours=24)
     ancestry = _read_ancestry_tree()
+    scheduler = _read_slow_scheduler()
 
     events: List[dict] = []
     path = _events_path()
@@ -785,6 +817,7 @@ def _snapshot_json(events_limit: int = 50) -> dict:
         "diagnoses": diagnoses,
         "cost": cost,
         "ancestry": ancestry,
+        "scheduler": scheduler,
         "events": events,
     }
 

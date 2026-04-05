@@ -73,7 +73,7 @@ deploy/              systemd service files
 | 30–39, 43 | Token visibility, skills auto-promotion, token self-improvement, overnight missions, dashboards, skill synthesis, OSS hygiene, structured logging | DONE |
 | 38 | Subpackage Structure | PARTIAL |
 | 40 | Pluggable Memory Backend | TODO |
-| 41 | Tool Registry + Function Calling | STEPS 1-6 DONE — step 7 (MCP) remains |
+| 41 | Tool Registry + Function Calling | DONE |
 | 42 | Nightly Eval Wired to Evolver | TODO |
 | 44 | Self-Reflection — Run Observer + Failure Classifier | DONE |
 | 45 | Self-Reflection — Recovery Planner | DONE |
@@ -101,7 +101,7 @@ These were identified from studying ClawTeam, MetaClaw, superpowers, oh-my-claud
 | `task_store.py` port | FileTaskStore: file-per-task JSON, fcntl locking, DAG dep resolution, stale claim recovery. Replaces bash task-queue.sh pattern. | DONE |
 | Ralph verify loop | `verify_step_id` on AGENDA steps — run verifier after step, retry if fails. Explicit quality gate complementing Inspector. | DONE |
 | Magic keyword triggers | `ralph:`, `pipeline:`, `verify:`, `strict:` prefixes in goal text mutate execution behavior. | DONE (2026-04-02) |
-| SlowUpdateScheduler | IDLE_WAIT → WINDOW_OPEN → UPDATING → PAUSING. Gates heavy background work to idle windows. Good for heartbeat consolidation. | NEXT |
+| SlowUpdateScheduler | IDLE_WAIT → WINDOW_OPEN → UPDATING → PAUSING. Gates heavy background work to idle windows. Good for heartbeat consolidation. | DONE (2026-04-04) |
 | `doctor` command | Check which tools/channels work in current environment. Useful for validate-environment before runs. | DONE (extended with Phase 41 checks, 2026-04-02) |
 
 Reference implementation: `~/.openclaw/workspace/prototypes/poe-orchestrator/` — that's the prototype where these were prototyped. Use it for reference only; do not develop there.

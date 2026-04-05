@@ -53,9 +53,14 @@ _UA_STANDARD = (
 # Minimal UA for redirect-following — t.co returns 301 with this, 200+JS with Chrome UA
 _UA_REDIRECT = "Mozilla/5.0 (compatible; PoeBot/1.0)"
 
-# Path to OpenClaw's authenticated X scraping CLI
+# Path to OpenClaw's authenticated X scraping CLI.
+# Override via X_CLI_SCRIPT env var; falls back to the standard OpenClaw install location.
 _X_CLI_SCRIPT = Path(
-    "/home/clawd/.openclaw/workspace/external/github-clean/poly-proto/scripts/x-twitter-cli.sh"
+    os.environ.get(
+        "X_CLI_SCRIPT",
+        str(Path.home() / ".openclaw" / "workspace" / "external" / "github-clean"
+            / "poly-proto" / "scripts" / "x-twitter-cli.sh"),
+    )
 )
 _X_CLI_TIMEOUT = 90  # seconds — Playwright can be slow
 

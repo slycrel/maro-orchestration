@@ -823,7 +823,7 @@ Current jsonl is simple and reliable for a single-box setup. The pain points hit
 
 ---
 
-### Phase 41: Tool Registry + Expanded Function Calling *(IN PROGRESS — steps 1-5 done)*
+### Phase 41: Tool Registry + Expanded Function Calling *(DONE)*
 
 *`web_fetch` and `sandbox` exist. Make tools discoverable by workers.*
 
@@ -867,8 +867,12 @@ Design doc: `research/PHASE41_TOOL_REGISTRY_DESIGN.md`
   - Wired into `step_exec.execute_step()`: deferred detection, `tool_search` call handling with LLM re-call with expanded tool list
   - 26 tests in `tests/test_tool_search.py`
 
-**Remaining steps:**
-- [ ] Step 7: MCP integration — external tool servers as deferred registry entries
+- [x] **Step 7: MCP integration** (`src/mcp_client.py`, `src/tool_registry.py`, `src/heartbeat.py`)
+  - `MCPServerClient` with stdio/HTTP transport, initialize handshake, `list_tools()`, `call_tool()`
+  - `ToolRegistry.load_mcp_server(cmd_or_url)` — connects client, registers all remote tools as deferred stubs
+  - `ToolRegistry.resolve_and_call(tool_name, input_data)` — unified dispatch (MCP + generic)
+  - `heartbeat_loop()` init reads `mcp_servers:` from `user/CONFIG.md`, connects each at startup
+  - 22 tests in `tests/test_mcp_loader.py`
 
 ---
 

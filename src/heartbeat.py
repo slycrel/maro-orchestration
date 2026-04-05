@@ -410,6 +410,14 @@ _eval_lock = threading.Lock()
 _harness_optimizer_active = False
 _harness_optimizer_lock = threading.Lock()
 
+# SlowUpdateScheduler: gates heavy background LLM work to idle windows.
+# Exposed at module level so poe-doctor can query its status.
+try:
+    from slow_update_scheduler import SlowUpdateScheduler as _SlowUpdateScheduler
+    _slow_update_sched = _SlowUpdateScheduler(idle_cooldown=30)
+except ImportError:  # pragma: no cover
+    _slow_update_sched = None  # type: ignore[assignment]
+
 
 def _run_harness_optimizer_bg(*, dry_run: bool = False, verbose: bool = False) -> None:
     """Run harness optimizer in background thread. Clears flag in finally."""
@@ -425,6 +433,8 @@ def _run_harness_optimizer_bg(*, dry_run: bool = False, verbose: bool = False) -
     finally:
         with _harness_optimizer_lock:
             _harness_optimizer_active = False
+        if _slow_update_sched is not None:
+            _slow_update_sched.finish_work()
 
 
 def _run_evolver_bg(*, dry_run: bool = False, verbose: bool = False,
@@ -440,6 +450,8 @@ def _run_evolver_bg(*, dry_run: bool = False, verbose: bool = False,
     finally:
         with _evolver_lock:
             _evolver_active = False
+        if _slow_update_sched is not None:
+            _slow_update_sched.finish_work()
 
 
 def _run_inspector_bg(*, dry_run: bool = False, verbose: bool = False) -> None:
@@ -454,6 +466,8 @@ def _run_inspector_bg(*, dry_run: bool = False, verbose: bool = False) -> None:
     finally:
         with _inspector_lock:
             _inspector_active = False
+        if _slow_update_sched is not None:
+            _slow_update_sched.finish_work()
 
 
 def _run_eval_bg(*, dry_run: bool = False, verbose: bool = False) -> None:
@@ -471,6 +485,8 @@ def _run_eval_bg(*, dry_run: bool = False, verbose: bool = False) -> None:
     finally:
         with _eval_lock:
             _eval_active = False
+        if _slow_update_sched is not None:
+            _slow_update_sched.finish_work()
 
 
 def _run_task_store_drain(*, dry_run: bool = False, verbose: bool = False) -> None:
@@ -613,6 +629,35 @@ def heartbeat_loop(
     global _evolver_active, _inspector_active, _backlog_drain_active
     global _task_store_drain_active, _eval_active, _harness_optimizer_active
 
+    # Phase 41 step 7 — MCP server init: load servers listed in user/CONFIG.md
+    try:
+        _cfg_path = Path(__file__).resolve().parent.parent / "user" / "CONFIG.md"
+        _mcp_raw = ""
+        if _cfg_path.exists():
+            for _line in _cfg_path.read_text(encoding="utf-8").splitlines():
+                _line = _line.strip()
+                if _line.startswith("#") or ":" not in _line:
+                    continue
+                _k, _, _v = _line.partition(":")
+                if _k.strip() == "mcp_servers":
+                    _mcp_raw = _v.split("#")[0].strip()
+                    break
+        if _mcp_raw:
+            from tool_registry import registry as _registry
+            for _entry in _mcp_raw.split(","):
+                _entry = _entry.strip()
+                if not _entry:
+                    continue
+                try:
+                    _registry.load_mcp_server(_entry)
+                    if verbose:
+                        print(f"[heartbeat] MCP server loaded: {_entry!r}", file=sys.stderr)
+                except Exception as _mcp_exc:
+                    print(f"[heartbeat] MCP server load failed ({_entry!r}): {_mcp_exc}",
+                          file=sys.stderr)
+    except Exception as _cfg_exc:
+        print(f"[heartbeat] MCP init error: {_cfg_exc}", file=sys.stderr)
+
     tick = 0
     while True:
         try:
@@ -634,12 +679,27 @@ def heartbeat_loop(
             print("[heartbeat] mission active — deferring heavy background work this tick",
                   file=sys.stderr)
 
-        if tick % evolver_every == 0 and not _mission_active:
+        # SlowUpdateScheduler gate: advance state machine + check if idle window is open.
+        # should_run() internally calls tick(), so we call it once and reuse the result.
+        _can_run = (
+            _slow_update_sched.should_run(is_busy=_mission_active)
+            if _slow_update_sched is not None
+            else not _mission_active
+        )
+        if verbose and _slow_update_sched is not None:
+            _sus_state = _slow_update_sched.state.value
+            if _sus_state != "WINDOW_OPEN" and not _mission_active:
+                print(f"[heartbeat] SlowUpdateScheduler: {_sus_state} — heavy work deferred",
+                      file=sys.stderr)
+
+        if tick % evolver_every == 0 and _can_run:
             with _evolver_lock:
                 _ev_running = _evolver_active
             if not _ev_running:
                 with _evolver_lock:
                     _evolver_active = True
+                if _slow_update_sched is not None:
+                    _slow_update_sched.start_work()
                 _et = threading.Thread(
                     target=_run_evolver_bg,
                     kwargs={"dry_run": dry_run, "verbose": verbose, "escalate": escalate},
@@ -652,13 +712,15 @@ def heartbeat_loop(
             elif verbose:
                 print("[heartbeat] evolver already active — skipping tick", file=sys.stderr)
 
-        if tick % inspector_every == 0 and not _mission_active:
+        if tick % inspector_every == 0 and _can_run:
             # Phase 12: Inspector — quality oversight, separate from health (heartbeat)
             with _inspector_lock:
                 _insp_running = _inspector_active
             if not _insp_running:
                 with _inspector_lock:
                     _inspector_active = True
+                if _slow_update_sched is not None:
+                    _slow_update_sched.start_work()
                 _it = threading.Thread(
                     target=_run_inspector_bg,
                     kwargs={"dry_run": dry_run, "verbose": verbose},
@@ -718,12 +780,14 @@ def heartbeat_loop(
                 print("[heartbeat] backlog drain already active — skipping tick", file=sys.stderr)
 
         # Phase 42: nightly eval — run once per ~24h cycle (skip if mission active)
-        if tick % eval_every == 0 and tick > 0 and not _mission_active:
+        if tick % eval_every == 0 and tick > 0 and _can_run:
             with _eval_lock:
                 _eval_running = _eval_active
             if not _eval_running:
                 with _eval_lock:
                     _eval_active = True
+                if _slow_update_sched is not None:
+                    _slow_update_sched.start_work()
                 _evalt = threading.Thread(
                     target=_run_eval_bg,
                     kwargs={"dry_run": dry_run, "verbose": verbose},
@@ -737,12 +801,14 @@ def heartbeat_loop(
                 print("[heartbeat] nightly eval already active — skipping tick", file=sys.stderr)
         # Harness optimizer: propose word-level improvements to EXECUTE_SYSTEM/DECOMPOSE_SYSTEM.
         # Runs every ~50 heartbeats (evolver_every * 5) — staggered from evolver to spread load.
-        if tick % (evolver_every * 5) == 0 and tick > 0 and not _mission_active:
+        if tick % (evolver_every * 5) == 0 and tick > 0 and _can_run:
             with _harness_optimizer_lock:
                 _ho_running = _harness_optimizer_active
             if not _ho_running:
                 with _harness_optimizer_lock:
                     _harness_optimizer_active = True
+                if _slow_update_sched is not None:
+                    _slow_update_sched.start_work()
                 _hot = threading.Thread(
                     target=_run_harness_optimizer_bg,
                     kwargs={"dry_run": dry_run, "verbose": verbose},

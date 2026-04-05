@@ -224,6 +224,20 @@ def run_doctor() -> bool:
     except Exception as exc:
         results.append(_check("Task store queue", True, f"skipped: {exc}"))  # optional
 
+    # SlowUpdateScheduler — verify import and snapshot API
+    try:
+        from slow_update_scheduler import SlowUpdateScheduler
+        _sched = SlowUpdateScheduler(idle_cooldown=30.0)
+        _snap = _sched.status()
+        _state = _snap.get("state", "unknown")
+        results.append(_check(
+            "SlowUpdateScheduler",
+            True,
+            f"state={_state}, cooldown={_snap.get('idle_cooldown')}s, workers={_snap.get('active_workers', 0)}",
+        ))
+    except Exception as exc:
+        results.append(_check("SlowUpdateScheduler", False, str(exc)[:80]))
+
     # Summary
     passed = sum(1 for r in results if r["ok"])
     total = len(results)
