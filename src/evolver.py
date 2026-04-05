@@ -717,6 +717,77 @@ def scan_calibration_log(
     return findings
 
 
+def scan_step_costs(
+    entries: Optional[List[dict]] = None,
+    *,
+    expensive_threshold_multiplier: float = 2.0,
+    min_entries: int = 5,
+) -> List[Suggestion]:
+    """Detect high-burn step patterns from step-costs.jsonl and propose cheaper alternatives.
+
+    No LLM calls — pure statistical analysis. Identifies step types whose average
+    token cost is more than `expensive_threshold_multiplier`× the median, and generates
+    a Suggestion recommending Haiku routing or output-size constraints.
+
+    Returns:
+        List of Suggestion objects (category="cost_optimization").
+    """
+    try:
+        from metrics import analyze_step_costs, load_step_costs
+    except ImportError:
+        return []
+
+    try:
+        if entries is None:
+            entries = load_step_costs(limit=200)
+        if len(entries) < min_entries:
+            return []
+
+        analysis = analyze_step_costs(entries)
+        expensive_types = analysis.get("expensive_types", [])
+        by_type = analysis.get("by_type", {})
+        total_cost = analysis.get("total_cost_usd", 0.0)
+
+        if not expensive_types:
+            return []
+
+        suggestions: List[Suggestion] = []
+        for step_type in expensive_types:
+            stats = by_type.get(step_type, {})
+            avg_tok = stats.get("avg_tokens", 0)
+            count = stats.get("count", 0)
+            if count < 2:
+                continue
+
+            # Estimate potential savings: routing to Haiku saves ~5× vs Sonnet
+            avg_cost = stats.get("avg_cost_usd", 0.0)
+            est_savings = avg_cost * count * 0.8  # conservative 80% savings via Haiku
+
+            suggestion_text = (
+                f"Step type '{step_type}' averages {avg_tok:,} tokens across {count} steps "
+                f"(~${avg_cost:.6f}/step, ~${est_savings:.4f} total savings potential). "
+                f"Consider routing these steps to MODEL_CHEAP (Haiku) via classify_step_model(), "
+                f"or adding a token-budget constraint in the step prompt."
+            )
+            suggestions.append(Suggestion(
+                suggestion_id=f"cost-{step_type[:12]}",
+                category="cost_optimization",
+                target=step_type,
+                suggestion=suggestion_text,
+                failure_pattern=f"high_burn_step: {step_type} avg={avg_tok}tok",
+                confidence=0.70,
+                outcomes_analyzed=count,
+            ))
+            log.info("scan_step_costs: high-burn step_type=%r avg=%d tok count=%d",
+                     step_type, avg_tok, count)
+
+        return suggestions
+
+    except Exception as exc:
+        log.debug("scan_step_costs failed (non-fatal): %s", exc)
+        return []
+
+
 def run_evolver(
     *,
     outcomes_window: int = 50,
@@ -726,6 +797,7 @@ def run_evolver(
     notify: bool = False,
     scan_signals: bool = True,
     scan_calibration: bool = True,
+    scan_costs: bool = True,
 ) -> EvolverReport:
     """Run one meta-evolution cycle.
 
@@ -831,6 +903,17 @@ def run_evolver(
             log.info("evolver calibration_scan findings=%d", len(cal_findings))
         except Exception as _cal_exc:
             log.debug("calibration scan failed (non-fatal): %s", _cal_exc)
+
+    # Step cost scan — detect high-burn step patterns, propose Haiku routing
+    if scan_costs:
+        try:
+            cost_suggestions = scan_step_costs()
+            suggestions.extend(cost_suggestions)
+            if verbose and cost_suggestions:
+                print(f"[evolver] cost_scan: {len(cost_suggestions)} high-burn suggestion(s)", file=sys.stderr)
+            log.info("evolver cost_scan suggestions=%d", len(cost_suggestions))
+        except Exception as _cost_exc:
+            log.debug("cost scan failed (non-fatal): %s", _cost_exc)
 
     report = EvolverReport(
         run_id=run_id,

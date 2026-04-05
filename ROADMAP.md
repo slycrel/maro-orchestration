@@ -576,7 +576,7 @@ The first is useful and healthy. The second is a line that should never be cross
 
 ---
 
-### Phase 29: Human Psychology / Neurology / Philosophy Research Track *(PARTIAL)*
+### Phase 29: Human Psychology / Neurology / Philosophy Research Track *(DONE)*
 
 *Jeremy, March 2026: "Human psychology, neurology, and philosophy ideas probably can come into play here. I'm definitely no expert in any of those areas, but seems like there are things we should learn about over time."*
 
@@ -600,9 +600,9 @@ Not a single phase but a research track that informs multiple phases:
 - `docs/research/spaced-repetition-confidence.md` — SM-2/FSRS confidence signals, optimal review timing; implications for decay model tuning (6/6, 97k tokens)
 - `docs/research/system1-system2-agents.md` — Kahneman dual-process theory; signals for deliberate vs. fast agent action; decompose/execute split implications (6/6, 174k tokens)
 
-**Still pending (research queue):**
-- Tacit vs. explicit knowledge in expertise research (crystallization Stage 4→5)
-- Enneagram 6w5 + INFJ communication failures (companion persona Phase 28)
+**Shipped (Phase 29 final research runs — 2026-04-05):**
+- `docs/research/tacit-vs-explicit.md` — Polanyi/Dreyfus/SECI synthesis; Stage 4→5 transition mechanics; 8 design implications for crystallization pipeline (6/6, 188k tokens)
+- `docs/research/enneagram-6w5-infj.md` — 6w5 communication patterns, trust calibration mechanics, INFJ communication failures; companion persona design principles (6/6, 276k tokens)
 
 ---
 
@@ -633,11 +633,13 @@ Not a single phase but a research track that informs multiple phases:
 - `src/agent_loop.py`: URL FETCHING POLICY + TOKEN EFFICIENCY sections in `_EXECUTE_SYSTEM`; `completed_context` passed as `extra_context` to `enrich_step_with_urls` (fixes step-3 context-carry bug)
 - Result: X/tweet research tasks: 789k → 67k tokens (91%), 0 blocked, 84s
 
+**Shipped (Phase 30 follow-on, 2026-04-05):**
+- **Per-model cost breakdown in `poe-metrics`**: `Outcome.model` field added; `record_outcome`/`reflect_and_record` accept `model=`; `agent_loop` passes `adapter.model_key`; `SystemMetrics.by_model` dict (ModelMetrics per tier); `format_metrics_report` emits "By Model" section. 4 new tests.
+- **Haiku routing for simple sub-tasks**: `assign_model_by_role()` already had `classifier → MODEL_CHEAP` tier. `classify_step_model()` routes cheap step types to Haiku. Both wired.
+- **Sub-agent token tracking**: `scan_step_costs()` in evolver.py — scans step-costs.jsonl for high-burn step types (avg > 2× median), generates `cost_optimization` Suggestion entries with Haiku routing recommendation. `run_evolver(scan_costs=True)` wires it in. 9 new tests.
+
 **Still pending:**
-- **Per-model cost breakdown in `poe-metrics`**: report should show actual cost by model across outcomes. Needs `model` field recorded in `outcomes.jsonl`.
-- **Haiku routing for simple sub-tasks**: `assign_model_by_role()` currently maps `worker → MID`. For classifier, summarizer, routing decisions, downgrade to `CHEAP`. Add a `classifier` role tier.
 - **Budget alerting**: configurable per-session token budget with Telegram alert when crossed.
-- **Sub-agent token tracking**: `StepOutcome.tokens_in/out` already populated — feed per-step costs into evolver so the system can detect high-burn step patterns and propose cheaper alternatives.
 
 ---
 

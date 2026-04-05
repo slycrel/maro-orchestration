@@ -69,7 +69,7 @@ deploy/              systemd service files
 | 25 | Ops Hardening | PARTIAL |
 | 27 | Prerequisite Knowledge Sub-Goals | DONE |
 | 28 | Poe Personality | PARTIAL |
-| 29 | Human Psychology Research Track | PARTIAL |
+| 29 | Human Psychology Research Track | DONE |
 | 30–39, 43 | Token visibility, skills auto-promotion, token self-improvement, overnight missions, dashboards, skill synthesis, OSS hygiene, structured logging | DONE |
 | 38 | Subpackage Structure | PARTIAL |
 | 40 | Pluggable Memory Backend | DONE |
@@ -88,7 +88,7 @@ deploy/              systemd service files
 | 55 | lat.md Knowledge Graph | DONE |
 | 56 | Promotion Cycle — Standing Rules + Decision Journal | DONE |
 
-**Active work (as of 2026-04-05):** Kill switch shipped — `killswitch.py` + `poe-stop` CLI; agent_loop refuses to start if sentinel present, checks at every step boundary, wall-clock timeout (default 2h via `POE_LOOP_TIMEOUT_SECS`); heartbeat drain skips when active. 2622 tests passing. Phase 42/46 corrected to DONE (already shipped 2026-03-31). Next: Phase 27 sub-goal knowledge acquisition, OpenRouter non-OAuth testing path.
+**Active work (as of 2026-04-05):** Phase 48 (convo_miner/poe-mine), Phase 29 research (tacit-vs-explicit + enneagram-6w5-infj), Phase 30 follow-on (per-model cost breakdown + sub-agent token tracking in evolver). 2695 tests passing. Pending: Phase 24 (Slack), Phase 25 ops hardening, Phase 28 (blocked on Jeremy's personas/jeremy.md), OpenRouter API key setup.
 
 See `ROADMAP.md` for full phase specs. See `CHANGELOG.md` for what shipped.
 

@@ -243,6 +243,8 @@ def test_run_evolver_generates_suggestions():
     with patch("evolver.load_outcomes", return_value=outcomes), \
          patch("evolver._llm_analyze", return_value=(["pattern 1"], raw_suggestions)), \
          patch("evolver.scan_outcomes_for_signals", return_value=[]), \
+         patch("evolver.scan_calibration_log", return_value=[]), \
+         patch("evolver.scan_step_costs", return_value=[]), \
          patch("evolver._save_suggestions") as mock_save:
         report = run_evolver(dry_run=False, verbose=False, notify=False)
 
@@ -1173,3 +1175,151 @@ class TestBuildOutcomesSummaryTraceEnrichment:
         # Should not raise
         result = _build_outcomes_summary(outcomes)
         assert isinstance(result, str)
+
+
+# ---------------------------------------------------------------------------
+# scan_step_costs
+# ---------------------------------------------------------------------------
+
+class TestScanStepCosts:
+    """Tests for scan_step_costs — per-step token cost pattern detection."""
+
+    def _make_entries(self, step_type: str, count: int, avg_tokens: int) -> list:
+        """Build synthetic step-cost entries."""
+        entries = []
+        for i in range(count):
+            entries.append({
+                "step_type": step_type,
+                "tokens_in": avg_tokens * 3 // 4,
+                "tokens_out": avg_tokens // 4,
+                "total_tokens": avg_tokens,
+                "cost_usd": avg_tokens * 0.000003,
+                "status": "done",
+                "model": "mid",
+            })
+        return entries
+
+    def test_returns_empty_when_too_few_entries(self, monkeypatch):
+        from evolver import scan_step_costs
+        result = scan_step_costs(entries=[])
+        assert result == []
+
+    def test_returns_empty_when_no_expensive_types(self, monkeypatch):
+        """When all step types have similar costs, no suggestions generated."""
+        from evolver import scan_step_costs
+        # All same avg — no expensive types
+        entries = (
+            self._make_entries("research", 3, 500) +
+            self._make_entries("verify", 3, 450) +
+            self._make_entries("analyze", 3, 480)
+        )
+        result = scan_step_costs(entries=entries)
+        assert result == []
+
+    def test_detects_expensive_step_type(self, monkeypatch):
+        """High-token step type generates a cost_optimization suggestion."""
+        from evolver import scan_step_costs
+        # research is 3x more expensive than verify
+        entries = (
+            self._make_entries("verify", 5, 200) +
+            self._make_entries("research", 5, 3000)
+        )
+        result = scan_step_costs(entries=entries)
+        assert len(result) >= 1
+        step_types = [s.target for s in result]
+        assert "research" in step_types
+
+    def test_suggestion_has_correct_category(self, monkeypatch):
+        from evolver import scan_step_costs
+        entries = (
+            self._make_entries("verify", 5, 200) +
+            self._make_entries("research", 5, 3000)
+        )
+        result = scan_step_costs(entries=entries)
+        assert all(s.category == "cost_optimization" for s in result)
+
+    def test_suggestion_mentions_haiku(self, monkeypatch):
+        from evolver import scan_step_costs
+        entries = (
+            self._make_entries("verify", 5, 200) +
+            self._make_entries("research", 5, 3000)
+        )
+        result = scan_step_costs(entries=entries)
+        assert any("Haiku" in s.suggestion or "MODEL_CHEAP" in s.suggestion for s in result)
+
+    def test_skips_types_with_single_entry(self, monkeypatch):
+        """Step types with only 1 entry are skipped (not enough data)."""
+        from evolver import scan_step_costs
+        entries = (
+            self._make_entries("verify", 5, 200) +
+            self._make_entries("research", 1, 9000)  # only 1 entry
+        )
+        result = scan_step_costs(entries=entries)
+        # research only has 1 entry, should be skipped
+        assert not any(s.target == "research" for s in result)
+
+    def test_import_error_returns_empty(self, monkeypatch):
+        """If metrics import fails, returns empty list without crashing."""
+        from evolver import scan_step_costs
+        import builtins
+        original_import = builtins.__import__
+
+        def mock_import(name, *args, **kwargs):
+            if name == "metrics":
+                raise ImportError("mocked")
+            return original_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", mock_import)
+        result = scan_step_costs(entries=[{"a": 1}] * 10)
+        assert result == []
+
+    def test_run_evolver_wires_cost_scan(self, monkeypatch, tmp_path):
+        """run_evolver calls scan_step_costs and merges suggestions."""
+        from evolver import run_evolver, scan_step_costs, Suggestion
+        from memory import Outcome
+
+        # Patch outcome loading
+        def _fake_outcomes(limit=50):
+            return [
+                Outcome(outcome_id=str(i), goal="g", task_type="research",
+                        status="done", summary="ok", lessons=[])
+                for i in range(5)
+            ]
+        monkeypatch.setattr("evolver.load_outcomes", _fake_outcomes)
+        monkeypatch.setattr("evolver._llm_analyze", lambda outcomes, dry_run=False: ([], []))
+        monkeypatch.setattr("evolver.scan_outcomes_for_signals", lambda *a, **kw: [])
+        monkeypatch.setattr("evolver.scan_calibration_log", lambda *a, **kw: [])
+        monkeypatch.setattr("evolver._suggestions_path", lambda: tmp_path / "suggestions.jsonl")
+
+        cost_sugg = [Suggestion(
+            suggestion_id="cost-test", category="cost_optimization",
+            target="research", suggestion="use haiku", failure_pattern="high_burn",
+            confidence=0.70, outcomes_analyzed=5,
+        )]
+        monkeypatch.setattr("evolver.scan_step_costs", lambda *a, **kw: cost_sugg)
+
+        report = run_evolver(dry_run=False, verbose=False, scan_costs=True,
+                             scan_signals=False, scan_calibration=False)
+        assert any(s.category == "cost_optimization" for s in report.suggestions)
+
+    def test_run_evolver_scan_costs_false_skips(self, monkeypatch):
+        from evolver import run_evolver
+        from memory import Outcome
+
+        def _fake_outcomes(limit=50):
+            return [
+                Outcome(outcome_id=str(i), goal="g", task_type="research",
+                        status="done", summary="ok", lessons=[])
+                for i in range(5)
+            ]
+        monkeypatch.setattr("evolver.load_outcomes", _fake_outcomes)
+        monkeypatch.setattr("evolver._llm_analyze", lambda outcomes, dry_run=False: ([], []))
+        monkeypatch.setattr("evolver.scan_outcomes_for_signals", lambda *a, **kw: [])
+        monkeypatch.setattr("evolver.scan_calibration_log", lambda *a, **kw: [])
+
+        called = []
+        monkeypatch.setattr("evolver.scan_step_costs", lambda *a, **kw: called.append(1) or [])
+
+        run_evolver(dry_run=True, verbose=False, scan_costs=False,
+                    scan_signals=False, scan_calibration=False)
+        assert called == []
