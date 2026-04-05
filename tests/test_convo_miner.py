@@ -296,3 +296,83 @@ class TestCLI:
         assert rc == 0
         assert out_file.exists()
         assert "Generated" in out_file.read_text()
+
+
+# ---------------------------------------------------------------------------
+# inject_into_backlog
+# ---------------------------------------------------------------------------
+
+class TestInjectIntoBacklog:
+    def _make_idea(self, text, conf=0.8):
+        from convo_miner import Idea
+        return Idea(text=text, source="session:test", confidence=conf)
+
+    def test_injects_high_confidence_ideas(self, tmp_path):
+        from convo_miner import inject_into_backlog
+        backlog = tmp_path / "BACKLOG.md"
+        backlog.write_text("# Backlog\n\n")
+        ideas = [self._make_idea("we should add a memory evolver agent loop system here", conf=0.9)]
+        n = inject_into_backlog(ideas, backlog_path=backlog)
+        assert n == 1
+        content = backlog.read_text()
+        assert "mined:" in content
+        assert "memory evolver agent loop" in content
+
+    def test_skips_below_threshold(self, tmp_path):
+        from convo_miner import inject_into_backlog
+        backlog = tmp_path / "BACKLOG.md"
+        backlog.write_text("# Backlog\n\n")
+        ideas = [self._make_idea("we should add a skill evolver loop memory", conf=0.5)]
+        n = inject_into_backlog(ideas, backlog_path=backlog, threshold=0.70)
+        assert n == 0
+        content = backlog.read_text()
+        assert "mined:" not in content
+
+    def test_skips_already_present_ideas(self, tmp_path):
+        from convo_miner import inject_into_backlog
+        backlog = tmp_path / "BACKLOG.md"
+        # Idea text already present in backlog
+        backlog.write_text("# Backlog\n\n- [x] memory evolver skill loop system already done\n")
+        ideas = [self._make_idea("memory evolver skill loop system already done", conf=0.9)]
+        n = inject_into_backlog(ideas, backlog_path=backlog)
+        assert n == 0
+
+    def test_creates_backlog_if_not_exists(self, tmp_path):
+        from convo_miner import inject_into_backlog
+        backlog = tmp_path / "BACKLOG.md"
+        assert not backlog.exists()
+        ideas = [self._make_idea("we should add memory agent loop evolver system", conf=0.9)]
+        n = inject_into_backlog(ideas, backlog_path=backlog)
+        assert n == 1
+        assert backlog.exists()
+
+    def test_caps_at_20_injections(self, tmp_path):
+        from convo_miner import inject_into_backlog
+        backlog = tmp_path / "BACKLOG.md"
+        backlog.write_text("")
+        ideas = [
+            self._make_idea(f"we should add agent loop feature {i} to the evolver memory system", conf=0.9)
+            for i in range(30)
+        ]
+        n = inject_into_backlog(ideas, backlog_path=backlog)
+        assert n <= 20
+
+    def test_cli_inject_backlog_flag(self, tmp_path, monkeypatch, capsys):
+        """--inject-backlog flag causes injection into BACKLOG.md."""
+        from convo_miner import Idea, main, inject_into_backlog
+        backlog = tmp_path / "BACKLOG.md"
+        backlog.write_text("# Backlog\n\n")
+
+        high_idea = Idea(text="we should add a memory evolver agent loop", source="test", confidence=0.9)
+        monkeypatch.setattr("convo_miner.scan_session_logs", lambda *a, **kw: [high_idea])
+        monkeypatch.setattr("convo_miner.scan_openclaw_docs", lambda *a, **kw: [])
+        monkeypatch.setattr("convo_miner.scan_git_log", lambda *a, **kw: [])
+        monkeypatch.setattr("convo_miner.scan_poe_memory", lambda *a, **kw: [])
+        monkeypatch.setattr("convo_miner.inject_into_backlog",
+                            lambda ideas, threshold=0.70: inject_into_backlog(ideas, backlog, threshold=threshold))
+
+        rc = main(["--no-git", "--inject-backlog"])
+        assert rc == 0
+        # stderr should mention injected count
+        err = capsys.readouterr().err
+        assert "Injected" in err

@@ -372,6 +372,56 @@ def generate_report(ideas: List[Idea], title: str = "Conversation Mining Report"
 # CLI
 # ---------------------------------------------------------------------------
 
+def inject_into_backlog(
+    ideas: List["Idea"],
+    backlog_path: Optional[Path] = None,
+    *,
+    threshold: float = 0.70,
+    section_header: str = "### Mined Ideas (poe-mine injection)",
+) -> int:
+    """Append high-confidence ideas to BACKLOG.md as unchecked items.
+
+    Only appends ideas whose text doesn't already appear in the backlog
+    (simple substring check to avoid duplicates). Returns count injected.
+    """
+    if backlog_path is None:
+        try:
+            from orch_items import orch_root
+            backlog_path = orch_root() / "BACKLOG.md"
+        except Exception:
+            backlog_path = Path(__file__).parent.parent / "BACKLOG.md"
+
+    high = [i for i in ideas if i.confidence >= threshold]
+    if not high:
+        return 0
+
+    existing = ""
+    if backlog_path.exists():
+        existing = backlog_path.read_text(encoding="utf-8", errors="replace")
+
+    new_items: List[str] = []
+    for idea in high[:20]:  # cap at 20 injections per run
+        snippet = idea.text[:80].lower()
+        # Skip if any 40-char chunk of this idea is already in the backlog
+        if snippet[:40] in existing.lower():
+            continue
+        new_items.append(f"- [ ] **[mined:{idea.source}]** {idea.text[:200]}")
+
+    if not new_items:
+        return 0
+
+    ts = datetime.now().strftime("%Y-%m-%d")
+    injection = f"\n\n{section_header} ({ts})\n\n" + "\n".join(new_items) + "\n"
+    try:
+        with open(backlog_path, "a", encoding="utf-8") as f:
+            f.write(injection)
+    except OSError as exc:
+        log.warning("inject_into_backlog: failed to write: %s", exc)
+        return 0
+
+    return len(new_items)
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     import sys
     import argparse
@@ -411,6 +461,17 @@ def main(argv: Optional[List[str]] = None) -> int:
         type=float,
         default=0.4,
         help="Minimum confidence to include in report (default: 0.4)",
+    )
+    parser.add_argument(
+        "--inject-backlog",
+        action="store_true",
+        help="Append high-confidence ideas (≥0.70) to BACKLOG.md as unchecked items",
+    )
+    parser.add_argument(
+        "--inject-threshold",
+        type=float,
+        default=0.70,
+        help="Minimum confidence for --inject-backlog (default: 0.70)",
     )
     parser.add_argument(
         "--verbose", "-v",
@@ -481,6 +542,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"Report written to {out}", file=sys.stderr)
     else:
         print(report)
+
+    if args.inject_backlog:
+        deduplicated = _deduplicate(all_ideas)
+        n = inject_into_backlog(
+            deduplicated,
+            threshold=args.inject_threshold,
+        )
+        print(f"Injected {n} ideas into BACKLOG.md", file=sys.stderr)
 
     return 0
 
