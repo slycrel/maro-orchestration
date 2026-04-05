@@ -561,6 +561,7 @@ _DASHBOARD_HTML = """\
     <h2>Recent Outcomes</h2>
     <div id="outcomes-status"></div>
     <button class="replay" id="replay-btn" onclick="replayLast()">&#9654; Replay Last Goal</button>
+    <button class="replay" id="factory-btn" onclick="replayFactory()" style="margin-left:8px;background:#1a1a3a;border-color:#66f;">&#9654; Factory Mode Replay</button>
   </div>
 
   <div class="panel full">
@@ -608,6 +609,26 @@ async function replayLast() {
   } catch(err) {
     btn.textContent = '✗ ' + err;
     setTimeout(() => { btn.disabled = false; btn.textContent = '▶ Replay Last Goal'; }, 3000);
+  }
+}
+
+async function replayFactory() {
+  const btn = document.getElementById('factory-btn');
+  btn.disabled = true;
+  btn.textContent = '⏳ Scanning signals...';
+  try {
+    const r = await fetch('/api/replay-factory', {method: 'POST'});
+    const d = await r.json();
+    if (r.ok) {
+      btn.textContent = '✓ Factory queued (' + (d.outcomes_scanned||0) + ' outcomes scanned)';
+      setTimeout(() => { btn.disabled = false; btn.textContent = '▶ Factory Mode Replay'; }, 8000);
+    } else {
+      btn.textContent = '✗ ' + (d.error||'failed');
+      setTimeout(() => { btn.disabled = false; btn.textContent = '▶ Factory Mode Replay'; }, 3000);
+    }
+  } catch(err) {
+    btn.textContent = '✗ ' + err;
+    setTimeout(() => { btn.disabled = false; btn.textContent = '▶ Factory Mode Replay'; }, 3000);
   }
 }
 
@@ -887,6 +908,41 @@ def serve_dashboard(host: str = "0.0.0.0", port: int = 7700) -> None:
                         traceback.print_exc()
                 threading.Thread(target=_run, daemon=True).start()
                 self._send_json(202, {"queued": True, "goal": goal})
+            elif self.path == "/api/replay-factory":
+                # Factory mode: run evolver signal scan on recent outcomes,
+                # then queue the highest-confidence suggested sub-goals as new missions.
+                # This closes the Mode 2 → Mode 3 loop: system proposes its own next work.
+                outcomes_raw = _read_recent_outcomes(limit=10)
+                if not outcomes_raw:
+                    self._send_json(404, {"error": "no outcomes to scan"})
+                    return
+                def _run_factory() -> None:
+                    try:
+                        import sys as _sys
+                        _sys.path.insert(0, str(Path(__file__).parent))
+                        from memory import load_outcomes, Outcome
+                        from evolver import scan_outcomes_for_signals
+                        from handle import handle
+                        outcomes = load_outcomes(limit=10)
+                        signals = scan_outcomes_for_signals(outcomes, min_confidence=0.70)
+                        if not signals:
+                            print("[factory-replay] no signals found from recent outcomes",
+                                  flush=True)
+                            return
+                        for sig in signals[:3]:  # cap at 3 to avoid token runaway
+                            print(f"[factory-replay] queuing: {sig.suggested_goal[:80]}",
+                                  flush=True)
+                            try:
+                                handle(sig.suggested_goal, dry_run=False, verbose=True)
+                            except Exception as _sig_exc:
+                                print(f"[factory-replay] goal failed: {_sig_exc}", flush=True)
+                    except Exception as exc:
+                        import traceback
+                        traceback.print_exc()
+                n_outcomes = len(outcomes_raw)
+                threading.Thread(target=_run_factory, daemon=True).start()
+                self._send_json(202, {"queued": True, "mode": "factory",
+                                      "outcomes_scanned": n_outcomes})
             else:
                 self.send_response(404)
                 self.end_headers()
