@@ -957,6 +957,7 @@ def run_agent_loop(
     *,
     project: Optional[str] = None,
     model: Optional[str] = None,
+    backend: Optional[str] = None,
     adapter=None,
     max_steps: int = 8,
     max_iterations: int = 40,
@@ -1061,7 +1062,10 @@ def run_agent_loop(
 
     # Build adapter — worker role uses MODEL_MID by default (role-semantic selection)
     if adapter is None and not dry_run:
-        adapter = build_adapter(model=model or assign_model_by_role("worker"))
+        _build_kw: dict = {"model": model or assign_model_by_role("worker")}
+        if backend:
+            _build_kw["backend"] = backend
+        adapter = build_adapter(**_build_kw)
     elif dry_run:
         adapter = _DryRunAdapter()
 
@@ -2755,6 +2759,12 @@ def main(argv=None):
     parser.add_argument("--max-iterations", type=int, default=20, help="Hard cap on LLM calls (default: 20)")
     parser.add_argument("--dry-run", action="store_true", help="Simulate without LLM API calls")
     parser.add_argument("--verbose", "-v", action="store_true", help="Print progress")
+    parser.add_argument(
+        "--backend", "-b",
+        choices=["auto", "anthropic", "openrouter", "openai", "subprocess", "codex"],
+        default=None,
+        help="LLM backend (default: auto-detect; POE_BACKEND env var also accepted)",
+    )
 
     args = parser.parse_args(argv)
     goal = " ".join(args.goal)
@@ -2763,6 +2773,7 @@ def main(argv=None):
         goal,
         project=args.project,
         model=args.model,
+        backend=args.backend,
         max_steps=args.max_steps,
         max_iterations=args.max_iterations,
         dry_run=args.dry_run,

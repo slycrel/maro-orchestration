@@ -59,7 +59,7 @@ deploy/              systemd service files
 
 ## Current state
 
-**As of 2026-04-01:**
+**As of 2026-04-05:**
 
 | Phase | Name | Status |
 |-------|------|--------|
@@ -74,10 +74,12 @@ deploy/              systemd service files
 | 38 | Subpackage Structure | PARTIAL |
 | 40 | Pluggable Memory Backend | DONE |
 | 41 | Tool Registry + Function Calling | DONE |
-| 42 | Nightly Eval Wired to Evolver | TODO |
+| 42 | Nightly Eval Wired to Evolver | DONE |
 | 44 | Self-Reflection — Run Observer + Failure Classifier | DONE |
 | 45 | Self-Reflection — Recovery Planner | DONE |
-| 46 | Self-Reflection — Intervention Graduation | TODO |
+| 46 | Self-Reflection — Intervention Graduation | DONE |
+| 47 | Kill Switch (poe-stop) | DONE |
+| 48 | Conversation Mining — Idea Archaeology | TODO |
 | 50 | Thinkback Replay | DONE |
 | 51 | Passes — Unified Multi-Pass Review | DONE |
 | 52 | Cross-Reference Check | DONE |
@@ -86,7 +88,7 @@ deploy/              systemd service files
 | 55 | lat.md Knowledge Graph | DONE |
 | 56 | Promotion Cycle — Standing Rules + Decision Journal | DONE |
 
-**Active work (as of 2026-04-02):** LLM parse robustness landed — `llm_parse.py` centralizes all JSON/float extraction across 17 modules; bughunter BH011/BH012 detectors prevent regression. Phase 41 steps 1-6 shipped: `tool_registry.py` (composition-time tool gating), `skill_loader.py` (SKILL.md format + progressive disclosure + skill auto-export from skills.jsonl), `step_events.py` (typed pre/post step events with glob matchers), `tool_search.py` (deferred tool resolution + LLM re-call). Magic keyword prefixes (`ralph:`, `verify:`, `pipeline:`, `strict:`) added to handle.py. `poe-doctor` extended with Phase 41 checks. 2282 tests passing. Phase 41 step 7 (MCP) remains.
+**Active work (as of 2026-04-05):** Kill switch shipped — `killswitch.py` + `poe-stop` CLI; agent_loop refuses to start if sentinel present, checks at every step boundary, wall-clock timeout (default 2h via `POE_LOOP_TIMEOUT_SECS`); heartbeat drain skips when active. 2622 tests passing. Phase 42/46 corrected to DONE (already shipped 2026-03-31). Next: Phase 27 sub-goal knowledge acquisition, OpenRouter non-OAuth testing path.
 
 See `ROADMAP.md` for full phase specs. See `CHANGELOG.md` for what shipped.
 

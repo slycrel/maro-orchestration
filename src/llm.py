@@ -72,9 +72,9 @@ _MODEL_MAP: Dict[str, Dict[str, str]] = {
         MODEL_POWER: "claude-opus-4-6",
     },
     "openrouter": {
-        MODEL_CHEAP: "anthropic/claude-haiku-4-5",
-        MODEL_MID:   "anthropic/claude-sonnet-4-5",
-        MODEL_POWER: "anthropic/claude-opus-4-5",
+        MODEL_CHEAP: "anthropic/claude-haiku-4-5-20251001",
+        MODEL_MID:   "anthropic/claude-sonnet-4-6",
+        MODEL_POWER: "anthropic/claude-opus-4-6",
     },
     "openai": {
         MODEL_CHEAP: "gpt-4o-mini",
@@ -926,6 +926,11 @@ def build_adapter(
 
     # Auto-detect
     assert backend == "auto", f"Unknown backend: {backend!r}"
+
+    # POE_BACKEND env var overrides auto-detection priority without forcing a specific key
+    _poe_backend = os.environ.get("POE_BACKEND", "").strip().lower()
+    if _poe_backend and _poe_backend != "auto":
+        return build_adapter(backend=_poe_backend, model=model, api_key=api_key, timeout=timeout)
 
     # Explicit api_key overrides — try Anthropic first, then OpenRouter
     if api_key:
