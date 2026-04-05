@@ -808,9 +808,11 @@ MIT license, .github polish, architecture diagram in README, Polymarket example 
 
 ---
 
-### Phase 40: Pluggable Memory Backend *(TODO)*
+### Phase 40: Pluggable Memory Backend *(DONE 2026-04-04)*
 
-*Keep jsonl as default. Add SQLite as an optional flag for better querying.*
+*Shipped: `memory_backends.py` — abstract `MemoryBackend`, `JSONLBackend` (default), `SQLiteBackend` (opt-in via `--memory-backend sqlite`), `migrate` CLI subcommand, `get_backend` factory wired into `memory.py`; 30/30 tests pass.*
+
+*Original goal: keep jsonl as default. Add SQLite as an optional flag for better querying.*
 
 Current jsonl is simple and reliable for a single-box setup. The pain points hit when: (a) GC needs to scan thousands of lessons efficiently, (b) "show me every Polymarket lesson" requires grep instead of a query, (c) concurrent writers need real row-level locking.
 

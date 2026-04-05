@@ -468,13 +468,27 @@ def _build_loop_context(
 
     All failures are swallowed — missing memory or skills never block a loop.
     """
-    # Lessons from tiered memory
+    # Lessons from tiered memory — backend abstraction with goal-ranked retrieval
     lessons_context = ""
     try:
-        from memory import inject_lessons_for_task
-        lessons_context = inject_lessons_for_task("agenda", goal, max_lessons=3)
+        from memory import load_lessons, _MAX_LESSON_INJECT_CHARS
+        _lessons = load_lessons(task_type="agenda", query=goal, limit=3)
+        if not _lessons:
+            _lessons = load_lessons(task_type="general", query=goal, limit=3)
+        if _lessons:
+            _lines = ["## Lessons from Prior Runs (apply these)"]
+            for _l in _lessons:
+                _icon = "✓" if _l.outcome == "done" else "✗"
+                _lines.append(f"- {_icon} {_l.lesson}")
+            lessons_context = "\n".join(_lines)
+            if len(lessons_context) > _MAX_LESSON_INJECT_CHARS:
+                lessons_context = lessons_context[:_MAX_LESSON_INJECT_CHARS].rsplit("\n", 1)[0]
     except Exception:
-        pass
+        try:
+            from memory import inject_lessons_for_task
+            lessons_context = inject_lessons_for_task("agenda", goal, max_lessons=3)
+        except Exception:
+            pass
 
     # Phase 56: Standing rules (top tier — apply unconditionally)
     try:

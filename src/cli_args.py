@@ -370,6 +370,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_mem_canon.add_argument("--min-hits", type=int, default=10, help="Minimum times_applied (default 10)")
     p_mem_canon.add_argument("--min-task-types", type=int, default=3, help="Minimum distinct task types seen (default 3)")
     p_mem_canon.add_argument("--format", choices=["text", "json"], default="text")
+    p_mem_migrate = memory_sub.add_parser("migrate", help="Migrate existing JSONL memory files to SQLite backend idempotently (Phase 40)")
+    p_mem_migrate.add_argument("--src-dir", default=None, help="Source directory containing JSONL files (default: memory_dir from config)")
+    p_mem_migrate.add_argument("--db-path", default=None, help="Destination SQLite database path (default: memory_dir/memory.db)")
+    p_mem_migrate.add_argument("--dry-run", action="store_true", help="Preview what would be migrated without writing to SQLite")
 
     p_poe_persona = sub.add_parser("poe-persona", help="Persona system — list, show, compose, and spawn agent personas (Phase 20)")
     persona_sub = p_poe_persona.add_subparsers(dest="persona_cmd")

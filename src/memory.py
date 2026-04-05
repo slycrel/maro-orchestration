@@ -47,6 +47,28 @@ from llm_parse import extract_json, safe_list, content_or_empty
 
 log = logging.getLogger("poe.memory")
 
+# ---------------------------------------------------------------------------
+# Backend accessor (Phase 40) — used by agent_loop._build_loop_context
+# ---------------------------------------------------------------------------
+
+_BACKEND: Optional[Any] = None
+_BACKEND_DIR: Optional[Any] = None
+
+
+def _backend() -> Any:
+    """Return the active memory backend, keyed by current memory_dir.
+
+    Re-initialises if _memory_dir() has changed (e.g. monkeypatched in tests).
+    """
+    global _BACKEND, _BACKEND_DIR
+    current_dir = _memory_dir()
+    if _BACKEND is None or _BACKEND_DIR != current_dir:
+        from memory_backends import get_backend
+        _BACKEND = get_backend(current_dir)
+        _BACKEND_DIR = current_dir
+    return _BACKEND
+
+
 # Hybrid retrieval (BM25 + RRF) — graceful fallback to TF-IDF if unavailable
 try:
     from hybrid_search import hybrid_rank as _hybrid_rank

@@ -889,6 +889,63 @@ def main(argv: list[str] | None = None) -> int:
                         print(f"  Lesson: {c['lesson']}")
                         print(f"  Score={c['score']} sessions={c['sessions_validated']} recorded={c['recorded_at']}")
                         print(f"  → {c['recommendation']}")
+        elif memory_cmd == "migrate":
+            import hashlib
+            from pathlib import Path as _Path
+            from memory_backends import JSONLBackend, SQLiteBackend
+            from orch_items import memory_dir as _memory_dir_fn
+
+            src_dir = _Path(args.src_dir) if getattr(args, "src_dir", None) else _memory_dir_fn()
+            db_path = _Path(args.db_path) if getattr(args, "db_path", None) else src_dir / "memory.db"
+            dry_run = getattr(args, "dry_run", False)
+
+            jsonl_backend = JSONLBackend(src_dir)
+            sqlite_backend = SQLiteBackend(db_path)
+
+            # Discover all collections from .jsonl files on disk
+            collections: list[str] = []
+            for p in sorted(src_dir.rglob("*.jsonl")):
+                rel = p.relative_to(src_dir)
+                parts = rel.parts
+                if len(parts) == 1:
+                    collections.append(parts[0].removesuffix(".jsonl"))
+                elif len(parts) == 3 and parts[2] == "lessons.jsonl":
+                    # tiered/<tier>/lessons.jsonl → "tiered/<tier>"
+                    collections.append(f"{parts[0]}/{parts[1]}")
+
+            total_skipped = 0
+            total_inserted = 0
+            for collection in collections:
+                records = jsonl_backend.read_all(collection)
+                if not records:
+                    continue
+
+                # Build fingerprint set of existing SQLite rows for this collection
+                existing_fps: set[str] = set()
+                existing_rows = sqlite_backend.read_all(collection)
+                for row in existing_rows:
+                    fp = hashlib.sha256(json.dumps(row, sort_keys=True).encode()).hexdigest()
+                    existing_fps.add(fp)
+
+                inserted = 0
+                skipped = 0
+                for record in records:
+                    fp = hashlib.sha256(json.dumps(record, sort_keys=True).encode()).hexdigest()
+                    if fp in existing_fps:
+                        skipped += 1
+                    else:
+                        if not dry_run:
+                            sqlite_backend.append(collection, record)
+                        existing_fps.add(fp)
+                        inserted += 1
+
+                label = "(dry-run) " if dry_run else ""
+                print(f"{label}collection={collection} inserted={inserted} skipped={skipped}")
+                total_inserted += inserted
+                total_skipped += skipped
+
+            label = "(dry-run) " if dry_run else ""
+            print(f"{label}total inserted={total_inserted} skipped={total_skipped} db={db_path}")
         else:
             print(f"Unknown poe-memory subcommand: {memory_cmd}")
             return 1
