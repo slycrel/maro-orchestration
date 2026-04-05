@@ -856,6 +856,7 @@ def _finalize_loop(
             tokens_in=total_tokens_in,
             tokens_out=total_tokens_out,
             elapsed_ms=elapsed_ms,
+            model=getattr(adapter, "model_key", ""),
             adapter=adapter if not dry_run else None,
             dry_run=dry_run,
         )

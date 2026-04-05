@@ -596,3 +596,63 @@ def test_analyze_step_costs_identifies_expensive(monkeypatch, tmp_path):
         record_step_cost("research the entire history of AI", 2500, 500, "done")
     result = analyze_step_costs()
     assert "research" in result["expensive_types"]
+
+
+# ---------------------------------------------------------------------------
+# Per-model breakdown (Phase 30 follow-on)
+# ---------------------------------------------------------------------------
+
+def test_compute_metrics_by_model_populated():
+    """compute_metrics populates by_model from outcome.model field."""
+    outcomes = [
+        Outcome(outcome_id="a", goal="g1", task_type="research", status="done",
+                summary="ok", lessons=[], tokens_in=1000, tokens_out=500, model="mid"),
+        Outcome(outcome_id="b", goal="g2", task_type="research", status="done",
+                summary="ok", lessons=[], tokens_in=500, tokens_out=200, model="cheap"),
+        Outcome(outcome_id="c", goal="g3", task_type="ops", status="done",
+                summary="ok", lessons=[], tokens_in=2000, tokens_out=1000, model="mid"),
+    ]
+    m = compute_metrics(outcomes)
+    assert "mid" in m.by_model
+    assert "cheap" in m.by_model
+    assert m.by_model["mid"].total_runs == 2
+    assert m.by_model["cheap"].total_runs == 1
+    assert m.by_model["mid"].total_tokens_in == 3000
+    assert m.by_model["mid"].total_cost_usd > 0
+
+
+def test_compute_metrics_by_model_unknown_model():
+    """Outcomes with no model field default to 'unknown' bucket."""
+    outcomes = [
+        Outcome(outcome_id="a", goal="g", task_type="research", status="done",
+                summary="ok", lessons=[], tokens_in=500, tokens_out=200),
+    ]
+    m = compute_metrics(outcomes)
+    assert "unknown" in m.by_model
+
+
+def test_format_metrics_report_includes_by_model():
+    """format_metrics_report includes a By Model section when data exists."""
+    outcomes = [
+        Outcome(outcome_id="a", goal="g", task_type="research", status="done",
+                summary="ok", lessons=[], tokens_in=1000, tokens_out=500, model="mid"),
+    ]
+    m = compute_metrics(outcomes)
+    report = format_metrics_report(m)
+    assert "By Model" in report
+    assert "mid" in report
+
+
+def test_record_outcome_stores_model(monkeypatch, tmp_path):
+    """record_outcome writes model field to outcomes.jsonl."""
+    import json
+    from memory import record_outcome
+    outcomes_file = tmp_path / "outcomes.jsonl"
+    monkeypatch.setattr("memory._outcomes_path", lambda: outcomes_file)
+    monkeypatch.setattr("memory._append_daily_log", lambda o: None)
+    monkeypatch.setattr("memory._store_lesson", lambda **kw: None)
+    monkeypatch.setattr("memory._update_memory_index", lambda: None)
+
+    record_outcome("test goal", "done", "summary", model="mid")
+    data = json.loads(outcomes_file.read_text().strip())
+    assert data["model"] == "mid"

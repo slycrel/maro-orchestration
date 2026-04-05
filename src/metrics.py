@@ -72,6 +72,15 @@ class GoalMetrics:
 
 
 @dataclass
+class ModelMetrics:
+    model: str
+    total_runs: int
+    total_cost_usd: float
+    total_tokens_in: int
+    total_tokens_out: int
+
+
+@dataclass
 class SystemMetrics:
     computed_at: str
     total_goals: int
@@ -80,6 +89,7 @@ class SystemMetrics:
     most_expensive_goals: List[Dict[str, Any]]   # top 5 by cost
     slowest_goals: List[Dict[str, Any]]           # top 5 by elapsed_ms
     failure_patterns: List[str]                    # from identify_expensive_patterns
+    by_model: Dict[str, "ModelMetrics"] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -356,6 +366,19 @@ def compute_metrics(outcomes: List[Outcome]) -> SystemMetrics:
     # Failure patterns
     failure_patterns = identify_expensive_patterns(outcomes)
 
+    # Per-model cost breakdown (from outcome.model field)
+    by_model: Dict[str, ModelMetrics] = {}
+    for o in outcomes:
+        m = getattr(o, "model", "") or "unknown"
+        if m not in by_model:
+            by_model[m] = ModelMetrics(model=m, total_runs=0, total_cost_usd=0.0,
+                                        total_tokens_in=0, total_tokens_out=0)
+        mm = by_model[m]
+        mm.total_runs += 1
+        mm.total_tokens_in += o.tokens_in
+        mm.total_tokens_out += o.tokens_out
+        mm.total_cost_usd += estimate_cost(o.tokens_in, o.tokens_out, model=m if m != "unknown" else None)
+
     return SystemMetrics(
         computed_at=now,
         total_goals=total_goals,
@@ -364,6 +387,7 @@ def compute_metrics(outcomes: List[Outcome]) -> SystemMetrics:
         most_expensive_goals=most_expensive,
         slowest_goals=slowest,
         failure_patterns=failure_patterns,
+        by_model=by_model,
     )
 
 
@@ -543,6 +567,16 @@ def format_metrics_report(metrics: SystemMetrics) -> str:
         lines.append("--- Cost Optimization Suggestions ---")
         for p in metrics.failure_patterns:
             lines.append(f"  ! {p}")
+        lines.append("")
+
+    if metrics.by_model:
+        lines.append("--- By Model ---")
+        for model, mm in sorted(metrics.by_model.items(), key=lambda x: -x[1].total_cost_usd):
+            lines.append(
+                f"  {model}: {mm.total_runs} runs, "
+                f"${mm.total_cost_usd:.6f} total, "
+                f"{mm.total_tokens_in + mm.total_tokens_out:,} tokens"
+            )
         lines.append("")
 
     return "\n".join(lines)

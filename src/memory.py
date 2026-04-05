@@ -94,6 +94,7 @@ class Outcome:
     tokens_out: int = 0
     elapsed_ms: int = 0
     cost_usd: float = 0.0
+    model: str = ""          # model tier used ("cheap" | "mid" | "power" | raw model string)
     recorded_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 
@@ -233,6 +234,7 @@ def record_outcome(
     tokens_in: int = 0,
     tokens_out: int = 0,
     elapsed_ms: int = 0,
+    model: str = "",
 ) -> Outcome:
     """Record the outcome of a completed run.
 
@@ -240,7 +242,7 @@ def record_outcome(
     """
     import uuid
     from metrics import estimate_cost
-    cost_usd = estimate_cost(tokens_in, tokens_out)
+    cost_usd = estimate_cost(tokens_in, tokens_out, model=model or None)
     outcome = Outcome(
         outcome_id=str(uuid.uuid4())[:8],
         goal=goal,
@@ -253,6 +255,7 @@ def record_outcome(
         tokens_out=tokens_out,
         elapsed_ms=elapsed_ms,
         cost_usd=cost_usd,
+        model=model,
     )
 
     # Append to outcomes ledger
@@ -571,6 +574,7 @@ def reflect_and_record(
     tokens_in: int = 0,
     tokens_out: int = 0,
     elapsed_ms: int = 0,
+    model: str = "",
     adapter=None,
     dry_run: bool = False,
 ) -> Outcome:
@@ -600,6 +604,7 @@ def reflect_and_record(
         tokens_in=tokens_in,
         tokens_out=tokens_out,
         elapsed_ms=elapsed_ms,
+        model=model,
     )
 
 
