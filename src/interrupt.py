@@ -127,6 +127,13 @@ class InterruptQueue:
             replacement_goal=replacement_goal,
         )
         self._append(intr)
+        # Wake the heartbeat loop immediately so it processes the interrupt
+        # on the next tick rather than waiting for the next interval.
+        try:
+            from heartbeat import post_heartbeat_event
+            post_heartbeat_event(event_type=f"interrupt:{source}", payload=message[:80])
+        except Exception:
+            pass  # heartbeat may not be running — non-fatal
         return intr
 
     # ------------------------------------------------------------------

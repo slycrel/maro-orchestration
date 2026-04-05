@@ -120,7 +120,7 @@ Claude Code architecture reverse-engineered into a standalone in-process multi-a
 | Item | What | Status | Where it lands | Effort |
 |------|------|--------|----------------|--------|
 | ~~**Mutable task graph**~~ | Static DAGs break when reality diverges from plan. Tasks can spawn new tasks and update deps mid-execution. | ✅ DONE — `inject_steps` array field on `complete_step` tool; serial and parallel agent_loop both prepend injected steps to remaining_steps. (2026-04-04) | `src/step_exec.py`, `src/agent_loop.py` | M |
-| **Event-reactive heartbeat (LLM + code + events)** | Heartbeat isn't just a timer — external events (Telegram, file change, API response) trigger the reasoning cycle. | TODO | `src/heartbeat.py` — add event queue alongside timer; events from interrupt.py unblock heartbeat immediately instead of waiting for next tick | M |
+| ~~**Event-reactive heartbeat (LLM + code + events)**~~ | Heartbeat isn't just a timer — external events (Telegram, file change, API response) trigger the reasoning cycle. | ✅ DONE — `post_heartbeat_event()` in heartbeat.py; `_wakeup_event` replaces `time.sleep(interval)`; `InterruptQueue.post()` calls it automatically after posting. 5 tests. (2026-04-05) | `src/heartbeat.py`, `src/interrupt.py` | M |
 | **Events as first-class graph nodes** | An incoming message is an event node that can unblock a waiting task or inject a branch — not just interrupt the loop. | TODO | `src/interrupt.py` + `src/heartbeat.py` — model interrupts as typed events; route to waiting dep slots in task graph | L |
 
 ### @garrytan / @ryancarson — Operational philosophy (not architecture)

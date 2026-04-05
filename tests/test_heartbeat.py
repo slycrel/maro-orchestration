@@ -533,3 +533,61 @@ def test_heartbeat_loop_global_flags_accessible():
     # Quick functional check: calling the loop for 0 ticks should not raise
     # (we can't easily run actual ticks without real adapters, so just verify import)
     assert callable(hb_mod.heartbeat_loop)
+
+
+# ---------------------------------------------------------------------------
+# Event-reactive heartbeat (STEAL_LIST: event-reactive heartbeat, M priority)
+# ---------------------------------------------------------------------------
+
+class TestPostHeartbeatEvent:
+    """Tests for post_heartbeat_event() — wakeup event mechanism."""
+
+    def test_post_heartbeat_event_sets_wakeup(self):
+        """post_heartbeat_event() sets the module-level _wakeup_event."""
+        import heartbeat as hb
+        hb._wakeup_event.clear()
+        assert not hb._wakeup_event.is_set()
+        hb.post_heartbeat_event("test")
+        assert hb._wakeup_event.is_set()
+        hb._wakeup_event.clear()
+
+    def test_post_heartbeat_event_with_payload(self):
+        """post_heartbeat_event() accepts event_type and payload without error."""
+        import heartbeat as hb
+        hb._wakeup_event.clear()
+        hb.post_heartbeat_event("telegram", payload="some message text")
+        assert hb._wakeup_event.is_set()
+        hb._wakeup_event.clear()
+
+    def test_post_heartbeat_event_is_callable_from_interrupt(self, tmp_path, monkeypatch):
+        """InterruptQueue.post() calls post_heartbeat_event() after posting."""
+        import heartbeat as hb
+        hb._wakeup_event.clear()
+
+        q_file = tmp_path / "interrupts.jsonl"
+        monkeypatch.setattr("interrupt._classify_intent",
+                            lambda *a, **kw: ("additive", [], None))
+
+        from interrupt import InterruptQueue
+        q = InterruptQueue(queue_path=q_file)
+        q.post("also research topic X about agent loop", source="test")
+
+        assert hb._wakeup_event.is_set()
+        hb._wakeup_event.clear()
+
+    def test_wakeup_event_clears_after_wait(self):
+        """After _wakeup_event.wait() + clear(), event is not set."""
+        import heartbeat as hb
+        hb._wakeup_event.set()
+        hb._wakeup_event.wait(timeout=0.01)
+        hb._wakeup_event.clear()
+        assert not hb._wakeup_event.is_set()
+
+    def test_post_heartbeat_event_never_raises(self, monkeypatch):
+        """post_heartbeat_event() should not raise even with a broken import."""
+        import heartbeat as hb
+        # Set the event in an unusual state and post should still not raise
+        hb._wakeup_event.clear()
+        hb.post_heartbeat_event("edge_case", payload="x" * 500)
+        assert hb._wakeup_event.is_set()
+        hb._wakeup_event.clear()

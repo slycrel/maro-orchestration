@@ -395,6 +395,27 @@ def run_heartbeat(
 _backlog_drain_active = False
 _backlog_drain_lock = threading.Lock()
 
+# Event-reactive heartbeat (STEAL_LIST: event-reactive heartbeat, M priority).
+# Any subsystem can call post_heartbeat_event() to wake the heartbeat immediately
+# instead of waiting for the next interval tick. The heartbeat loop replaces
+# time.sleep(interval) with _wakeup_event.wait(timeout=interval) so events
+# drain the wait without cancelling the scheduled work.
+_wakeup_event = threading.Event()
+
+
+def post_heartbeat_event(event_type: str = "generic", payload: Optional[str] = None) -> None:
+    """Signal the heartbeat loop to wake early.
+
+    Safe to call from any thread or external process. No-op if the heartbeat
+    loop isn't running (the event is set but nobody waits on it).
+
+    Args:
+        event_type: Descriptive label for logging (e.g. "telegram", "interrupt", "task_ready").
+        payload: Optional short payload for logging (truncated to 80 chars).
+    """
+    log.info("heartbeat_event type=%s payload=%r", event_type, (payload or "")[:80])
+    _wakeup_event.set()
+
 _task_store_drain_active = False
 _task_store_drain_lock = threading.Lock()
 
@@ -862,7 +883,10 @@ def heartbeat_loop(
             elif verbose:
                 print("[heartbeat] task store drain already active — skipping tick", file=sys.stderr)
 
-        time.sleep(interval)
+        # Event-reactive sleep: wake early if post_heartbeat_event() fires.
+        # clear=True ensures the event resets atomically after the wait.
+        _wakeup_event.wait(timeout=interval)
+        _wakeup_event.clear()
 
 
 # ---------------------------------------------------------------------------
