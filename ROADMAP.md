@@ -526,7 +526,7 @@ Goal: `docker run poe-orchestration` on any Linux/macOS with Docker.
 
 ---
 
-### Phase 27: Prerequisite Knowledge Sub-Goals and Graveyard Query *(PARTIAL)*
+### Phase 27: Prerequisite Knowledge Sub-Goals and Graveyard Query *(DONE)*
 
 *From Jeremy's "kanji painting → learn Japanese" scenario, March 2026.*
 

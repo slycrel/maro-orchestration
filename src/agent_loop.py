@@ -959,6 +959,7 @@ def run_agent_loop(
     model: Optional[str] = None,
     backend: Optional[str] = None,
     adapter=None,
+    knowledge_sub_goals: bool = False,
     max_steps: int = 8,
     max_iterations: int = 40,
     dry_run: bool = False,
@@ -1169,6 +1170,29 @@ def run_agent_loop(
         print(f"[poe] plan ({len(steps)} steps) loop_id={loop_id}:", file=sys.stderr, flush=True)
         for _pi, _ps in enumerate(steps, 1):
             print(f"  {_pi}. {_ps[:100]}", file=sys.stderr, flush=True)
+
+    # Phase 27: Per-step knowledge prerequisite check.
+    # Resurrects matching graveyard lessons (free); optionally spawns research
+    # sub-loops when graveyard is empty (only if knowledge_sub_goals=True).
+    _prereq_context: dict = {}
+    if not dry_run:
+        try:
+            from prereq import check_prerequisites as _check_prereqs
+            _prereq_context = _check_prereqs(
+                steps,
+                goal_id=loop_id,
+                adapter=adapter,
+                continuation_depth=continuation_depth,
+                knowledge_sub_goals=knowledge_sub_goals,
+                verbose=verbose,
+            )
+            if _prereq_context and verbose:
+                print(
+                    f"[poe] prereq: {len(_prereq_context)} step(s) have injected knowledge context",
+                    file=sys.stderr, flush=True,
+                )
+        except Exception:
+            pass  # prereq failures must never break the main loop
 
     # GAP 3: Session resume — load checkpoint and skip completed steps
     _resume_completed: List[StepOutcome] = []
@@ -1707,6 +1731,14 @@ def run_agent_loop(
                 pass  # Model selection failures must never break the loop
 
         # _next_step_injected is set by the previous iteration's hook run
+        # Phase 27: merge per-step prereq context (graveyard / sub-loop acquired)
+        _prereq_for_step = _prereq_context.get(step_idx, "")
+        if _prereq_for_step:
+            _next_step_injected_context = (
+                (_next_step_injected_context + "\n\n" + _prereq_for_step).strip()
+                if _next_step_injected_context
+                else _prereq_for_step
+            )
         _step_ancestry = (
             (_ancestry_context + "\n\n" + _next_step_injected_context)
             if _next_step_injected_context

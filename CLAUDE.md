@@ -67,7 +67,7 @@ deploy/              systemd service files
 | 23 | Observability Dashboard | PARTIAL |
 | 24 | Messaging Integrations (Slack, Signal) | PARTIAL |
 | 25 | Ops Hardening | PARTIAL |
-| 27 | Prerequisite Knowledge Sub-Goals | PARTIAL |
+| 27 | Prerequisite Knowledge Sub-Goals | DONE |
 | 28 | Poe Personality | PARTIAL |
 | 29 | Human Psychology Research Track | PARTIAL |
 | 30–39, 43 | Token visibility, skills auto-promotion, token self-improvement, overnight missions, dashboards, skill synthesis, OSS hygiene, structured logging | DONE |
