@@ -518,6 +518,15 @@ def _run_backlog_step(*, dry_run: bool = False, verbose: bool = False) -> None:
     """
     global _backlog_drain_active
     try:
+        from killswitch import is_active as _ks_active, read_reason as _ks_reason
+        if _ks_active():
+            if verbose:
+                print(f"[heartbeat] kill switch active ({_ks_reason()}) — skipping backlog drain", file=sys.stderr)
+            return
+    except Exception:
+        pass
+
+    try:
         from orch_items import (
             select_global_next,
             mark_item,

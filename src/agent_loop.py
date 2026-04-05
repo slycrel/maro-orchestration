@@ -1014,6 +1014,36 @@ def run_agent_loop(
     log.info("loop_start loop_id=%s goal=%r project=%s max_steps=%d",
              loop_id, goal[:80], project or "(auto)", max_steps)
 
+    # Kill switch check — refuse to start if sentinel is present
+    try:
+        from killswitch import is_active as _ks_active, read_reason as _ks_reason
+        if _ks_active():
+            _ks_msg = _ks_reason() or "kill switch engaged"
+            log.warning("loop refused to start — kill switch active: %s", _ks_msg)
+            return LoopResult(
+                loop_id=loop_id,
+                goal=goal,
+                project=project or "",
+                steps=[],
+                status="interrupted",
+                stuck_reason=f"kill switch active: {_ks_msg}",
+                total_tokens_in=0,
+                total_tokens_out=0,
+                total_cost=0.0,
+                elapsed_ms=0,
+                log_path=None,
+            )
+    except Exception:
+        pass  # killswitch import failure must never block execution
+
+    # Wall-clock timeout — default 2 hours, override via POE_LOOP_TIMEOUT_SECS
+    import os as _os
+    _loop_timeout_secs: Optional[float] = None
+    try:
+        _loop_timeout_secs = float(_os.environ.get("POE_LOOP_TIMEOUT_SECS", "7200"))
+    except (ValueError, TypeError):
+        _loop_timeout_secs = 7200.0
+
     if verbose:
         print(f"[poe] loop_id={loop_id} goal={goal!r}", file=sys.stderr, flush=True)
 
@@ -2176,6 +2206,31 @@ def run_agent_loop(
 
         # Phase 11: carry injected_context forward to next step
         _next_step_injected_context = _step_injected_context
+
+        # --- Kill switch + wall-clock timeout check ---
+        try:
+            from killswitch import is_active as _ks_active, read_reason as _ks_reason
+            if _ks_active():
+                _ks_msg = _ks_reason() or "kill switch engaged"
+                log.warning("loop %s stopping — kill switch active: %s", loop_id, _ks_msg)
+                loop_status = "interrupted"
+                stuck_reason = f"kill switch: {_ks_msg}"
+                if verbose:
+                    print(f"[poe] kill switch active — stopping loop", file=sys.stderr, flush=True)
+        except Exception:
+            pass
+
+        if _loop_timeout_secs is not None:
+            _elapsed_secs = time.monotonic() - started_at
+            if _elapsed_secs >= _loop_timeout_secs:
+                log.warning("loop %s wall-clock timeout after %.0fs", loop_id, _elapsed_secs)
+                loop_status = "interrupted"
+                stuck_reason = f"wall-clock timeout ({_loop_timeout_secs:.0f}s)"
+                if verbose:
+                    print(f"[poe] wall-clock timeout after {_elapsed_secs:.0f}s — stopping", file=sys.stderr, flush=True)
+
+        if loop_status == "interrupted":
+            break
 
         # --- Interrupt polling: check for new instructions between steps ---
         if interrupt_queue is not None:

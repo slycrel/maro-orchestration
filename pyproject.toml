@@ -45,6 +45,7 @@ poe-thinkback = "thinkback:_cli_main"
 poe-passes = "passes:_cli_main"
 poe-cross-ref = "cross_ref:_cli_main"
 poe-checkpoint = "checkpoint:_cli_main"
+poe-stop = "killswitch:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
