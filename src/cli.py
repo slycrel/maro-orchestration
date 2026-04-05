@@ -1753,3 +1753,28 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+# ---------------------------------------------------------------------------
+# Entry-point shims for pyproject.toml console_scripts
+# Each injects the subcommand name as argv[0] so main() can dispatch correctly.
+# ---------------------------------------------------------------------------
+
+def _memory_main() -> None:
+    import sys
+    raise SystemExit(main(["poe-memory"] + sys.argv[1:]))
+
+
+def _persona_main() -> None:
+    import sys
+    raise SystemExit(main(["poe-persona"] + sys.argv[1:]))
+
+
+def _sandbox_main() -> None:
+    import sys
+    raise SystemExit(main(["poe-sandbox"] + sys.argv[1:]))
+
+
+def _skills_main() -> None:
+    import sys
+    raise SystemExit(main(["poe-skills"] + sys.argv[1:]))

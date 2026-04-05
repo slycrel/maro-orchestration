@@ -72,7 +72,7 @@ deploy/              systemd service files
 | 29 | Human Psychology Research Track | PARTIAL |
 | 30–39, 43 | Token visibility, skills auto-promotion, token self-improvement, overnight missions, dashboards, skill synthesis, OSS hygiene, structured logging | DONE |
 | 38 | Subpackage Structure | PARTIAL |
-| 40 | Pluggable Memory Backend | TODO |
+| 40 | Pluggable Memory Backend | DONE |
 | 41 | Tool Registry + Function Calling | DONE |
 | 42 | Nightly Eval Wired to Evolver | TODO |
 | 44 | Self-Reflection — Run Observer + Failure Classifier | DONE |
