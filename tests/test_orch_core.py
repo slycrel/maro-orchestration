@@ -1013,3 +1013,34 @@ def test_write_operator_status_skips_missing_next_md(monkeypatch, tmp_path):
     status = orch.write_operator_status()
     assert "good-project" in status["active_projects"] or status["queue"]["todo"] >= 1
     # broken-project is silently skipped — its missing NEXT.md is not propagated
+
+
+def test_worker_session_bridge_supports_cwd_alias(monkeypatch, tmp_path):
+    import json as _json
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    _mkproj(tmp_path, "demo", "- [ ] first\n", priority=3)
+
+    workers = tmp_path / "prototypes" / "poe-orchestration" / "workers"
+    worker_dir = workers / "worker-dir"
+    worker_dir.mkdir(parents=True, exist_ok=True)
+    manifest = workers / "runner-cwd.json"
+    manifest.write_text(
+        _json.dumps({
+            "command": 'printf "%s" "$ORCH_SESSION_WORKING_DIR" > "$ORCH_RUN_ARTIFACT_DIR/cwd.txt"',
+            "cwd": "workers/worker-dir",
+        }),
+        encoding="utf-8",
+    )
+
+    tick = orch.run_tick(
+        "demo",
+        worker="runner-cwd",
+        execution=orch.worker_session_bridge("runner-cwd"),
+    )
+
+    assert tick is not None
+    assert tick.validation.status == "done"
+    assert tick.run.status == "done"
+    artifact_root = tmp_path / "prototypes" / "poe-orchestration" / tick.run.artifact_path
+    expected = str(worker_dir)
+    assert (artifact_root / "cwd.txt").read_text(encoding="utf-8") == expected

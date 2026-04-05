@@ -216,8 +216,9 @@ def _load_worker_session_manifest(path: Path) -> WorkerSessionSpec:
         default="worker-result.json",
         field_name="result_name",
     )
+    _raw_wd = data.get("working_directory") or data.get("working_dir") or data.get("cwd")
     working_directory = _coerce_session_directory_name(
-        data.get("working_directory") if "working_directory" in data else data.get("working_dir"),
+        _raw_wd,
         field_name="working_directory",
     )
     worker_name = path.stem if path.name else "worker_session"
