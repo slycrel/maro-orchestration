@@ -1,6 +1,6 @@
 # Poe — Success Criteria
 
-*Version 2.0 | 2026-04-04 | Synthesized from BACKLOG.md, ROADMAP.md phases 40–56, inspector.py, evolver.py, POE_IDENTITY.md, lat.md, CHANGELOG.md*
+*Version 2.1 | 2026-04-04 | Synthesized from BACKLOG.md, ROADMAP.md phases 40–56, inspector.py, evolver.py, POE_IDENTITY.md, lat.md, CHANGELOG.md*
 
 ---
 
@@ -9,6 +9,33 @@
 > "A self-improving, autonomous agent that wakes up with tasks, executes them without hand-holding, and gets measurably better over time."
 
 Success = the system reliably executes missions, improves from experience, and costs predictably — without requiring human intervention except for genuine exceptions.
+
+---
+
+## Quick-Reference: Pass/Fail Thresholds by Phase
+
+Binary gates — **PASS** requires ALL columns met; any miss = **FAIL**.
+
+| Phase | Metric | Baseline (current) | Target (PASS) | FAIL condition |
+|-------|--------|--------------------|---------------|----------------|
+| P23 Observability | Dashboard renders live friction signals | Not tracked | Dashboard live; `poe-observe` returns data without manual query | Not queryable OR requires manual log parsing |
+| P23 Observability | 7-day rolling inspector good% | Not measured | ≥70% good, ≤10% poor | good% < 70% OR poor% > 10% over any 7-day window |
+| P24 Messaging | Slack/Signal round-trip latency | Not measured | message → goal → response ≤30s in ≥9/10 tests | Any run > 30s OR < 9/10 pass |
+| P25 Ops Hardening | Unhandled exceptions in 48h soak | Unknown | 0 unhandled exceptions | ≥1 unhandled exception |
+| P25 Ops Hardening | Restart recovery time | Unknown | ≤60s from crash to operational | > 60s recovery time |
+| P27 Sub-Goals | Sub-goal dependency resolution | Manual | Auto-resolves without human intervention | Any sub-goal requires manual step to unblock |
+| P28 Personality | Persona consistency across runs | Not measured | Score ≥0.80 over 10 consecutive runs | Score < 0.80 in any 10-run window |
+| P29 Psychology | Research outputs with confidence | Not measured | ≥3 outputs at confidence ≥0.70 stored in memory | Fewer than 3 qualifying outputs |
+| P38 Subpackage | Entry-points importable; poe-doctor clean | Partial | All entry-points import cleanly; `poe-doctor` exits 0 | Any import error OR poe-doctor failure |
+| P42 Nightly Eval | Evolver firing mode | Count-based (not trend) | Trend-based nightly eval fires and adjusts evolver | Still count-based after P42 ships |
+| P46 Intervention | Autonomy ratio (no mid-run escalation) | Not logged | ≥90% of AGENDA steps complete without human relay | < 90% autonomy rate over any 10-run window |
+| ALL runs | Task completion rate | Not aggregated | ≥85% of planned steps complete per session | < 85% completion in any session |
+| ALL runs | Cost — NOW goal | Not computed | ≤$0.25/session (acceptable ≤$1.00) | > $1.00/session |
+| ALL runs | Cost — AGENDA goal | Not computed | ≤$1.50/session (acceptable ≤$3.00) | > $3.00/session |
+| ALL runs | Inspector alignment_score | Not tracked cross-session | ≥0.70 per run | < 0.70 alignment_score |
+| ALL runs | Lesson extraction | `times_applied` always 0 | ≥1 lesson/run; applied_rate ≥0.30 over 30 days | 0 lessons extracted OR applied_rate < 0.30 |
+| ALL runs | Session summary coverage | 0% | session_summary.json present for 100% of sessions | Any session without session_summary.json |
+| Monthly | Total cost | Not computed | ≤$50/month | > $50/month |
 
 ---
 

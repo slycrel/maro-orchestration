@@ -93,6 +93,7 @@ class Outcome:
     tokens_in: int = 0
     tokens_out: int = 0
     elapsed_ms: int = 0
+    cost_usd: float = 0.0
     recorded_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 
@@ -238,6 +239,8 @@ def record_outcome(
     Appends to outcomes.jsonl and daily log. Also extracts lessons if provided.
     """
     import uuid
+    from metrics import estimate_cost
+    cost_usd = estimate_cost(tokens_in, tokens_out)
     outcome = Outcome(
         outcome_id=str(uuid.uuid4())[:8],
         goal=goal,
@@ -249,6 +252,7 @@ def record_outcome(
         tokens_in=tokens_in,
         tokens_out=tokens_out,
         elapsed_ms=elapsed_ms,
+        cost_usd=cost_usd,
     )
 
     # Append to outcomes ledger
@@ -279,12 +283,13 @@ def _append_daily_log(outcome: Outcome):
     path = _daily_path()
     status_icon = "✓" if outcome.status == "done" else "✗"
     tokens = f"{outcome.tokens_in}in+{outcome.tokens_out}out"
+    cost_str = f" (${outcome.cost_usd:.6f})" if outcome.cost_usd else ""
     entry = (
         f"\n## [{outcome.recorded_at[:10]}] {status_icon} {outcome.goal[:80]}\n"
         f"- **Status**: {outcome.status}\n"
         f"- **Type**: {outcome.task_type}\n"
         f"- **Summary**: {outcome.summary}\n"
-        f"- **Tokens**: {tokens} in {outcome.elapsed_ms}ms\n"
+        f"- **Tokens**: {tokens} in {outcome.elapsed_ms}ms{cost_str}\n"
     )
     if outcome.lessons:
         entry += "- **Lessons**:\n" + "".join(f"  - {l}\n" for l in outcome.lessons)
