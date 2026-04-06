@@ -118,11 +118,19 @@ DECOMPOSE_SYSTEM = textwrap.dedent("""\
       "run X and analyze"    "execute X and interpret"   "run X and check results"
       "grep X and identify"  "fetch X and evaluate"      "run X and count failures"
       "invoke X and assess"  "call X and determine"      "run X and see if"
+      "run X and read Y"     "run X and review Y"        "run X and establish"
     REQUIRED pattern:
       Step N:   Run <command> and save output to artifacts/<name>.txt
       Step N+1: Read artifacts/<name>.txt and <analysis goal>
     This applies to: pytest, make, npm, docker, git, grep, find, curl, rg,
     and ANY shell command whose output needs to be reasoned about.
+
+    TIME BUDGET (guideline, not a gate):
+    A subprocess step has roughly 5 minutes before it times out. Warning signs:
+    - Reading more than 3 files in one step (likely too large — split by area)
+    - Running a script AND reading any additional file in the same step
+    - A "setup" action (clone, install, configure) bundled with "explore" (read, analyze)
+    When in doubt, split. An extra step costs nothing; a timeout wastes the whole budget.
 
     OUTCOME-FIRST (Bitter Lesson principle):
     Decompose into OUTCOMES, not procedures. Ask: what is the desired end state?

@@ -1317,6 +1317,21 @@ def run_agent_loop(
         except ImportError:
             pass
 
+    # Pre-run observability: always emit step count + cost estimate as a hint.
+    # This is a recommendation, not a gate — it fires regardless of budget setting.
+    try:
+        from metrics import estimate_loop_cost as _elc
+        _pre_est = _elc(len(steps), step_texts=steps)
+        if _pre_est > 0:
+            log.info("pre-run estimate: %d steps, ~$%.2f", len(steps), _pre_est)
+            if verbose:
+                import sys as _sys
+                print(f"[poe] pre-run: {len(steps)} steps, estimated ~${_pre_est:.2f}", file=_sys.stderr, flush=True)
+        else:
+            log.info("pre-run: %d steps (no cost estimate available)", len(steps))
+    except Exception:
+        log.info("pre-run: %d steps", len(steps))
+
     # Parse step dependencies for level-based and DAG-aware parallel execution
     _clean_steps = steps
     _deps: Dict[int, Any] = {}
@@ -1783,6 +1798,22 @@ def run_agent_loop(
                 if _next_step_injected_context
                 else _reorient
             )
+
+        # Context snowball observation — log size so degradation is visible, not silent.
+        # Guideline: warn above 50K chars (rough proxy for ~12K tokens of accumulated context).
+        _ctx_chars = sum(len(c) for c in completed_context)
+        if _ctx_chars > 0:
+            _ctx_level = "warn" if _ctx_chars > 50_000 else "info"
+            getattr(log, _ctx_level)(
+                "step %d context: %d chars across %d prior steps%s",
+                step_idx, _ctx_chars, len(completed_context),
+                " [large — synthesis quality may degrade]" if _ctx_chars > 50_000 else "",
+            )
+            if verbose and _ctx_chars > 50_000:
+                import sys as _sys
+                print(f"[poe] step {step_idx}: accumulated context {_ctx_chars:,} chars "
+                      f"({len(completed_context)} entries) — synthesis quality may degrade",
+                      file=_sys.stderr, flush=True)
 
         step_start = time.monotonic()
         # Phase 35 P1: per-step model selection — cheap retrieval/classify steps use Haiku
