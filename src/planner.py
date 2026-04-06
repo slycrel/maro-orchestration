@@ -40,10 +40,21 @@ ANTI_SYCOPHANCY_RULES = textwrap.dedent("""\
 
 
 # ---------------------------------------------------------------------------
-# Large-scope review detection
+# Goal scope estimation (Phase 58: pre-decompose classifier)
+# ---------------------------------------------------------------------------
+# Classifies goal complexity BEFORE decomposition so the planner can route
+# accordingly: skip multi-plan for narrow goals, use staged-pass for wide goals.
+# Zero-LLM heuristic — cheap, always available, <1ms.
 # ---------------------------------------------------------------------------
 
-_LARGE_SCOPE_KEYWORDS = frozenset({
+_NARROW_SCOPE_KEYWORDS = frozenset({
+    "what is", "what are", "list the", "show me", "find the", "look up",
+    "check if", "does the", "is there", "how many", "which file",
+    "what value", "what's the", "print the", "get the", "read the config",
+    "check the", "what does", "who is",
+})
+
+_WIDE_SCOPE_KEYWORDS = frozenset({
     "entire codebase", "whole codebase", "full codebase",
     "entire repo", "whole repo", "full repo",
     "adversarial review", "comprehensive review", "complete review",
@@ -51,13 +62,51 @@ _LARGE_SCOPE_KEYWORDS = frozenset({
     "review the codebase", "review the repo", "audit the codebase",
     "audit the repo", "review all", "review every", "all modules",
     "all files", "every module",
+    "research and analyze", "research and build", "research and implement",
+    "weeks of", "months of", "long-term", "multi-day", "multi-week",
+})
+
+_DEEP_SCOPE_KEYWORDS = frozenset({
+    "build a complete", "build a full", "design and implement", "architect and build",
+    "from scratch", "production-ready", "enterprise-grade",
+    "self-improving", "autonomous system", "learn everything about",
 })
 
 
-def _is_large_scope_review(goal: str) -> bool:
-    """Return True if the goal covers a scope too large for a single flat step list."""
+def estimate_goal_scope(goal: str) -> str:
+    """Classify goal as narrow / medium / wide / deep using zero-LLM heuristics.
+
+    Returns:
+        "narrow"  — simple lookup, 1-3 steps expected
+        "medium"  — moderate multi-step work, standard decompose
+        "wide"    — larger than it looks, staged-pass preferred
+        "deep"    — sub-goal recursion required, milestone decomposition
+
+    Used by decompose() to route planning strategy before the LLM call.
+    """
     low = goal.lower()
-    return any(kw in low for kw in _LARGE_SCOPE_KEYWORDS)
+    word_count = len(goal.split())
+
+    if any(kw in low for kw in _DEEP_SCOPE_KEYWORDS):
+        return "deep"
+    if any(kw in low for kw in _WIDE_SCOPE_KEYWORDS):
+        return "wide"
+    if word_count <= 8 and any(kw in low for kw in _NARROW_SCOPE_KEYWORDS):
+        return "narrow"
+    if word_count <= 12 and not any(
+        kw in low for kw in ("research", "analyze", "implement", "build", "create", "design")
+    ):
+        return "narrow"
+    # Default to medium for everything else
+    return "medium"
+
+
+def _is_large_scope_review(goal: str) -> bool:
+    """Return True if the goal covers a scope too large for a single flat step list.
+
+    Delegates to estimate_goal_scope for consistency — goal is wide or deep.
+    """
+    return estimate_goal_scope(goal) in ("wide", "deep")
 
 
 # Staged-pass decomposition prompt: when a goal is too broad for 8 flat steps,
@@ -284,17 +333,31 @@ def decompose(
     except Exception:
         pass
 
+    # Phase 58: pre-decompose scope estimate. Classifies goal complexity before the
+    # LLM planner runs so we can route accordingly (skip multi-plan for narrow goals,
+    # use staged-pass for wide/deep goals, inject scope hint for medium goals).
+    _goal_scope = estimate_goal_scope(goal)
+    if verbose:
+        import sys
+        print(f"[poe] decompose scope estimate: {_goal_scope}", file=sys.stderr, flush=True)
+
     if extras:
         system = DECOMPOSE_SYSTEM + "\n\n" + "\n\n".join(extras)
 
+    # Inject scope hint into system prompt for medium goals so the planner calibrates step count.
+    if _goal_scope == "medium":
+        system += "\n\nSCOPE HINT: This goal is medium complexity — expect 5-10 steps."
+    elif _goal_scope == "narrow":
+        system += "\n\nSCOPE HINT: This goal is narrow — expect 1-4 steps. Do not over-decompose."
+
     user_msg = f"Goal: {goal}\n\nDecompose into {max_steps} or fewer concrete steps."
 
-    # --- Large-scope review: staged-pass decomposition ---
-    # When the goal spans a scope too broad for 8 flat steps (e.g. "review the entire codebase"),
-    # decompose into domain-area passes. Each pass is independently executable within budget.
-    # This is the first level of the dynamic tree traversal — the director or subsequent loops
-    # handle each pass as its own sub-goal.
-    if _is_large_scope_review(goal):
+    # --- Wide/deep goals: staged-pass decomposition ---
+    # When scope estimate is wide or deep, decompose into domain-area passes.
+    # Each pass is independently executable within budget.
+    # Previously gated on _is_large_scope_review (keyword match). Now uses the
+    # general scope estimator (Phase 58: scope estimation before decomposition).
+    if _goal_scope in ("wide", "deep"):
         try:
             resp = adapter.complete(
                 [LLMMessage("system", _STAGED_PASS_SYSTEM),
@@ -314,6 +377,21 @@ def decompose(
             log.info("staged-pass decomposition failed, falling back to multi-plan: %s", exc)
 
     # --- Multi-plan: generate 3 candidates and compose ---
+    # Skip multi-plan for narrow goals — single shot is sufficient and saves 3 LLM calls.
+    if _goal_scope == "narrow":
+        try:
+            resp = adapter.complete(
+                [LLMMessage("system", system), LLMMessage("user", user_msg)],
+                max_tokens=512,
+                temperature=0.3,
+            )
+            simple_steps = parse_steps(resp.content.strip(), max_steps)
+            if simple_steps:
+                log.info("decompose narrow: single-shot %d steps", len(simple_steps))
+                return simple_steps
+        except Exception as exc:
+            log.info("narrow single-shot failed, falling back to multi-plan: %s", exc)
+
     try:
         candidates: List[List[str]] = []
         for i in range(3):

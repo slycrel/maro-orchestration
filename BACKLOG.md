@@ -3,7 +3,7 @@
 Single canonical location for everything we've identified but haven't done yet.
 Read this at the start of every session. Update it as items are completed or new ones emerge.
 
-Last reviewed: 2026-04-06 (session 11)
+Last reviewed: 2026-04-06 (session 12)
 
 ---
 
@@ -122,16 +122,28 @@ Last reviewed: 2026-04-06 (session 11)
   - **Hermes steal: Persistent user modeling** — Honcho-style user preference tracking across sessions. Jeremy-specific knowledge compounding over time. Partial overlap with Phase 28 companion persona.
   - **Hermes steal: Terminal persistence backends** — SSH/Modal backends for long-lived sandboxed execution separate from the primary process. Complements Phase 18 sandbox hardening.
 
+## Self-Review Quality (from 2026-04-06 haiku adversarial run — vetted)
+
+Findings from the haiku blind run ($7.87, 11 steps, adaptive tiering). Hallucinations discarded; only verified findings listed.
+
+- [x] **CRITICAL: Evolver dry-run gate bug** — `_run_skill_test_gate` passed `adapter=None` to `validate_skill_mutation`, causing `dry_run=True` → `blocked=False` always. Gate never blocked any mutation. **Fixed 2026-04-06**: gate now builds a cheap adapter; heuristic fallback only if adapter unavailable.
+- [x] **Skill backup before mutation** — `_apply_suggestion_action` wrote to `skills.jsonl` with no backup. Bad mutations had no automated rollback. **Fixed 2026-04-06**: `skills.jsonl.bak` written before any skill_pattern mutation.
+- [x] **Memory decay scores not persisted** — `run_decay_cycle` computed decayed scores in memory, then reloaded from disk for the rewrite, losing all score changes. Middle-ground decay (above GC, below promote threshold) was silently lost on restart. **Fixed 2026-04-06**: rewrite uses in-memory lesson list with updated scores.
+- [x] **No real LLM coverage in tests** — Added `tests/integration/test_integration.py` (23 mocked-LLM integration scenarios) and `tests/regression/test_regression.py` (7 golden-path scenarios). Both trace handle() end-to-end with ScriptedAdapter. Live Haiku integration still TODO (infrastructure cost). (2026-04-06)
+- [x] **No coverage measurement** — `pytest-cov` installed, `.coveragerc` configured, `dev` extras updated in pyproject.toml. Run with `python3 -m pytest --cov=src tests/`. (2026-04-06)
+- [x] **Memory decay persistence across restarts** — Non-issue (investigated 2026-04-06): `record_tiered_lesson` → `_append_tiered_lesson` persists immediately; `reinforce_lesson` → `_rewrite_tiered_lessons` also persists immediately. Decay is recomputed from `last_reinforced` date on every `load_tiered_lessons` call (inline, line ~1272), so no decay is lost across restarts. Scores used for injection are always correct. Only cosmetic gap: inline-computed decay scores aren't written back unless `run_decay_cycle` runs (fixed in prior session for that path). No action needed.
+- [x] **Skill rollback CLI** — `poe-skills --rollback <skill_name>` restores `skills.jsonl` from `.bak` backup. `--dry-run` supported. (2026-04-06)
+
 ## Self-Review Quality (from 2026-04-06 blind adversarial run)
 
 Real findings from the run — hallucinations already vetted and discarded:
 
-- [ ] **Evolver audit trail** — `evolver.py` + `memory.py` write to `memory/` (gitignored) with no record of what changed. Before any write, append a log entry to `memory/change_log.jsonl`: timestamp, module, key, old-value hash, new value. Creates rollback surface without requiring git tracking of runtime files. (MEDIUM risk)
-- [ ] **No end-to-end integration test** — all tests are unit-level. No test instantiates `handle()` with a real goal string, traces through `intent → director → workers`, and asserts on output shape. Inter-module wiring only tested in production. Add `tests/integration/` with 5-10 mocked-LLM scenarios covering both lanes, magic keywords, constraint enforcement. (MEDIUM risk)
-- [ ] **`tests/regression/` has spec but no tests** — `adversarial-self-review-spec.md` documents what the regression suite should be; the executable tests don't exist. Implement the spec: 3-5 golden-path scenarios with expected output shapes. (HIGH — spec without tests is just documentation)
+- [x] **Evolver audit trail** — `evolver.py` appends to `memory/change_log.jsonl` before any suggestion mutation. `memory.py` logs decay cycle (promoted_ids + gc_ids) before rewriting lesson store. Creates rollback surface without requiring git tracking of runtime files. (2026-04-06)
+- [x] **No end-to-end integration test** — `tests/integration/test_integration.py` added: 23 mocked-LLM scenarios covering both lanes, magic keywords, constraint enforcement. `tests/regression/test_regression.py` added: 7 golden-path scenarios. (2026-04-06)
+- [x] **`tests/regression/` has spec but no tests** — `tests/regression/test_regression.py` implements 7 golden-path scenarios (NOW, AGENDA, direct:, btw:, pipeline:, stuck, prefix stacking). (2026-04-06)
 - [ ] **Phase 24 (Slack) still PARTIAL** — primary async human interface, no `slack.py`, no tests. (known, noted again)
-- [ ] **`lat.md` knowledge graph has no runtime integration** — it's markdown documentation, not queried at runtime. Decide: either wire it into Director planning context or acknowledge it's reference-only and remove the "runtime" framing. (LOW — clarify status)
-- [ ] **Adversarial review hallucination rate too high** — blind run's body hallucinated `lat.py` (doesn't exist), `test_workers.py` (doesn't exist), and claimed `agent_loop.py` had no tests (86 exist). Cost $4, 28min, ~3 wrong specific facts out of ~20 checkable claims (~15% hallucination on concrete claims). Hallucination checker caught 2/3. Root cause: synthesis step reads large accumulated context from prior steps → confabulation under load. Options: (a) file-existence verification pass before synthesis, (b) smaller module groups per step, (c) haiku-only pass as cheap/fast sanity check. See flowchart in `docs/EXECUTION_FLOW.md`.
+- [ ] **`lat.md` knowledge graph — reference-only (decided 2026-04-06)** — Declared reference-only. No src/ code queries it. Future: TF-IDF select relevant nodes → inject into director planning context based on goal keywords. Same retrieval pattern as memory.py's `_tfidf_rank`. Design: `lat_inject.py` with `inject_relevant_nodes(goal, max_nodes=2)` → markdown snippets for director prompt. (LOW — correctness gap, not a blocker)
+- [x] **Adversarial review hallucination rate too high (partial)** — `src/claim_verifier.py` shipped (2026-04-06). Zero-LLM file-path extractor checks synthesis step results against filesystem; annotates NOT_FOUND claims. Wired into agent_loop.py on synthesis steps. Addresses option (a). Options (b) stream decompose (done via decompose prompt 2026-04-06) and (c) haiku sanity pass (pre_flight.py, done 2026-04-06) also shipped. Remaining: claim verifier only catches file paths — function/module existence and "X has no tests" type claims still undetected. Future: extend to grep-based function existence check.
 
 ## Test Ideas
 

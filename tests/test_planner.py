@@ -157,3 +157,56 @@ class TestStagedPassDecomposition:
         result = decompose("review the auth module for injection risks", adapter, max_steps=8)
         # Should return the multi-plan result (all 3 steps, since adapter always returns same JSON)
         assert len(result) == 3
+
+
+# ---------------------------------------------------------------------------
+# estimate_goal_scope (Phase 58)
+# ---------------------------------------------------------------------------
+
+from planner import estimate_goal_scope
+
+
+class TestEstimateGoalScope:
+    def test_narrow_what_question(self):
+        assert estimate_goal_scope("what is the timeout value") == "narrow"
+
+    def test_narrow_short_lookup(self):
+        assert estimate_goal_scope("list the active skills") == "narrow"
+
+    def test_narrow_check(self):
+        assert estimate_goal_scope("check if the scheduler is enabled") == "narrow"
+
+    def test_wide_codebase_review(self):
+        assert estimate_goal_scope("do a full audit of the entire codebase") == "wide"
+
+    def test_wide_comprehensive_review(self):
+        assert estimate_goal_scope("adversarial review of the repo") == "wide"
+
+    def test_deep_build_from_scratch(self):
+        assert estimate_goal_scope("build a complete self-improving AI system from scratch") == "deep"
+
+    def test_medium_research_task(self):
+        # Research + analyze goal → medium (not narrow, not wide)
+        scope = estimate_goal_scope("research winning Polymarket strategies from last month")
+        assert scope == "medium"
+
+    def test_medium_implement_feature(self):
+        scope = estimate_goal_scope("implement rate limit retry logic in llm.py")
+        assert scope == "medium"
+
+    def test_empty_goal_is_narrow_or_medium(self):
+        # Edge case: empty string
+        scope = estimate_goal_scope("")
+        assert scope in ("narrow", "medium")
+
+    def test_is_large_scope_review_wide(self):
+        from planner import _is_large_scope_review
+        assert _is_large_scope_review("review the entire repo") is True
+
+    def test_is_large_scope_review_narrow(self):
+        from planner import _is_large_scope_review
+        assert _is_large_scope_review("check the config") is False
+
+    def test_is_large_scope_review_deep(self):
+        from planner import _is_large_scope_review
+        assert _is_large_scope_review("build a complete production-ready agent from scratch") is True
