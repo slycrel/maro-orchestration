@@ -1228,11 +1228,14 @@ is what's missing.
   multi-plan (saves 4 LLM calls); wide/deep route to staged-pass; scope hint injected
   for medium goals. (DONE)
 
+**Shipped (2026-04-06):**
+- Multiple philosopher perspectives: `multi_lens_review()` in `pre_flight.py` — 3 focused
+  Haiku passes (scope-detector, dependency-spider, assumption-auditor), merged into one
+  PlanReview. Opt-in for high-stakes goals. (DONE)
+
 **Not yet shipped (see ARCHITECTURE.md for full design note):**
 - Milestone-aware execution: when pre-flight flags milestone candidates, treat them as
-  sub-loops with their own planning pass, not single steps.
-- Multiple philosopher perspectives: scope-detector, dependency-spider, assumption-auditor
-  as distinct lenses on the same plan. Currently collapsed into one critic call.
+  sub-loops with their own planning pass, not single steps. (Architecturally complex.)
 - Acting on pre-flight output: surface scope=wide to the user before starting, offer to
   clarify or re-scope. Currently just logged.
 - Feedback loop: track whether pre-flight flags predicted actual execution problems.
