@@ -35,7 +35,7 @@ src/                 All production Python (50+ modules)
   evolver.py         Meta-improvement every ~10 heartbeats
   memory.py          Outcome recording, lesson extraction, Reflexion
   skills.py          Skill library: auto-promote, score, test
-  introspect.py      Phase 44: failure classifier + lenses (IN PROGRESS)
+  introspect.py      Phases 44–46: failure classifier, lenses, recovery planner, intervention graduation (DONE)
   llm.py             LLM adapter suite (Anthropic, OpenRouter, OpenAI, subprocess)
   web_fetch.py       Jina Reader + X/tweet fetching (Phase 30 — token saver)
   metrics.py         Cost + token tracking per model
