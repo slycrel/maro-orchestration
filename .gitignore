@@ -25,6 +25,9 @@ checkpoints/
 prototypes/
 artifacts/
 
+# Runtime skill library (auto-generated, not source-controlled)
+skills/
+
 # Playwright CLI session artifacts
 .playwright-cli/
 **/.playwright-cli/
