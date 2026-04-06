@@ -1219,9 +1219,13 @@ is what's missing.
 - Wired into `agent_loop.py` after decompose and pre-run cost estimate. Flags logged at
   WARNING level if scope=wide or milestone candidates found.
 
+**Shipped (2026-04-06):**
+- Scope estimation *before* decomposition: `estimate_goal_scope(goal)` in `planner.py`
+  classifies as narrow/medium/wide/deep using zero-LLM heuristics. Narrow goals skip
+  multi-plan (saves 4 LLM calls); wide/deep route to staged-pass; scope hint injected
+  for medium goals. (DONE)
+
 **Not yet shipped (see ARCHITECTURE.md for full design note):**
-- Scope estimation *before* decomposition: classify goal as narrow/medium/wide/deep and
-  route accordingly (wide → milestone decomposition, not flat step list).
 - Milestone-aware execution: when pre-flight flags milestone candidates, treat them as
   sub-loops with their own planning pass, not single steps.
 - Multiple philosopher perspectives: scope-detector, dependency-spider, assumption-auditor
