@@ -197,6 +197,26 @@ def _apply_suggestion_action(d: dict) -> None:
     suggestion_id = d.get("suggestion_id", "")
     confidence = float(d.get("confidence", 0.5))
 
+    # Audit trail: log every mutation before it happens so changes are recoverable.
+    try:
+        from orch_items import memory_dir as _memory_dir
+        import hashlib as _hashlib
+        _cl_path = _memory_dir() / "change_log.jsonl"
+        _cl_entry = {
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "module": "evolver",
+            "action": "_apply_suggestion_action",
+            "category": category,
+            "suggestion_id": suggestion_id,
+            "target": target,
+            "suggestion_hash": _hashlib.sha256(suggestion_text.encode()).hexdigest()[:12],
+        }
+        _cl_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(_cl_path, "a", encoding="utf-8") as _clf:
+            _clf.write(json.dumps(_cl_entry) + "\n")
+    except Exception:
+        pass  # audit trail must never block execution
+
     try:
         if category == "skill_pattern":
             # Write or update the skill in skills.jsonl

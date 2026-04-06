@@ -265,6 +265,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_poe_skills.add_argument("--outcomes-window", type=int, default=50, help="How many recent outcomes to analyze (default: 50)")
     p_poe_skills.add_argument("--dry-run", action="store_true", help="Analyze without writing skills")
     p_poe_skills.add_argument("--format", choices=["text", "json"], default="text")
+    p_poe_skills.add_argument("--rollback", metavar="SKILL_NAME", help="Restore skills.jsonl from .bak (restores last-good state before evolver mutation)")
 
     # Phase 14 CLI subcommands
     p_poe_attribution = sub.add_parser("poe-attribution", help="Run failure attribution on recent stuck outcomes (Phase 14)")

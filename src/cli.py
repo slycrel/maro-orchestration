@@ -1341,8 +1341,24 @@ def main(argv: list[str] | None = None) -> int:
                         print(f"extracted: [{s.id}] {s.name} — {s.description}")
             return 0
 
+        if getattr(args, "rollback", None):
+            from skills import _skills_path as _sp
+            import shutil as _shutil
+            _src = _sp()
+            _bak = Path(str(_src) + ".bak")
+            if not _bak.exists():
+                print(f"No backup found at {_bak}. Nothing to restore.")
+                return 1
+            if args.dry_run:
+                print(f"dry_run: would restore {_bak} → {_src}")
+                return 0
+            _shutil.copy2(str(_bak), str(_src))
+            restored = _skills_mod.load_skills()
+            print(f"Restored skills.jsonl from .bak ({len(restored)} skills).")
+            return 0
+
         # Default: show usage hint
-        print("Use --status for health dashboard, --list to list skills, or --extract to extract from recent outcomes.")
+        print("Use --status for health dashboard, --list to list skills, --extract to extract from recent outcomes, or --rollback <name> to restore from backup.")
         return 0
 
     if args.cmd == "poe-inspector":

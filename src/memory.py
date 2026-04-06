@@ -1430,6 +1430,27 @@ def run_decay_cycle(
                 gc_ids.append(tl.lesson_id)
 
     if not dry_run:
+        # Audit trail: log the decay cycle before mutating lesson store.
+        try:
+            from datetime import datetime as _dt, timezone as _tz
+            _cl_path = _tiered_lessons_path(tier).parent / "change_log.jsonl"
+            _cl_entry = {
+                "ts": _dt.now(_tz.utc).isoformat(),
+                "module": "memory",
+                "action": "run_decay_cycle",
+                "tier": tier,
+                "total": len(lessons),
+                "decayed": decayed,
+                "promoted": len(promoted_ids),
+                "gc": len(gc_ids),
+                "promoted_ids": promoted_ids,
+                "gc_ids": gc_ids,
+            }
+            with open(_cl_path, "a", encoding="utf-8") as _clf:
+                _clf.write(json.dumps(_cl_entry) + "\n")
+        except Exception:
+            pass  # audit trail must never block execution
+
         # Promote eligible lessons
         for lid in promoted_ids:
             promote_lesson(lid)
