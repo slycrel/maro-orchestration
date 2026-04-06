@@ -1176,7 +1176,7 @@ Extract orchestration-related ideas, patterns, deferred concepts, and "what if" 
 
 ---
 
-### Phase 57: Adaptive Model Tiering *(PARTIAL)*
+### Phase 57: Adaptive Model Tiering *(DONE)*
 
 *"Haiku-first with system-driven upgrades — spend the expensive tokens where they compound."*
 
@@ -1187,11 +1187,14 @@ Extract orchestration-related ideas, patterns, deferred concepts, and "what if" 
 
 **Design intent:** Haiku as the cheap execution baseline, `classify_step_model` for content-based upgrades (synthesis/planning → Sonnet), retry escalation for quality failures. The system shakes out the right tier from signals, not brute-force.
 
-**Not yet shipped (revisit):**
-- Ralph verify failure → tier escalation. Signal is already there (`verify FAIL` → marks blocked → retry machinery); just needs to set `_step_tier_overrides` on verify failure path, same as block retry.
-- Session-level lagging signal: if verify pass rate over last N steps is low, raise the default tier for remaining steps.
-- Synthesis step always uses mid or higher regardless of loop adapter (synthesis on Haiku is highest-risk quality degradation point).
-- Adaptive decompose: escalate decompose to power only for large-scope/ambiguous goals (currently always mid — Sonnet may be enough for most goals, Opus overkill).
+**All shipped (2026-04-06):**
+- Ralph verify failure → tier escalation: `_step_tier_overrides` set on verify fail.
+- Session-level lagging signal: `_session_verify_failures` counter; ≥3 consecutive verify
+  failures raises `_session_tier_floor` to mid for remaining steps. (DONE)
+- Synthesis step always uses mid or higher: `classify_step_model` already returns MODEL_MID
+  for synthesis/analyze/research keywords; session floor also applies. (CONFIRMED WORKING)
+- Adaptive decompose: narrow goals skip multi-plan (4 LLM calls → 1 via `estimate_goal_scope`).
+  Wide/deep still route to staged-pass. (DONE via Phase 58 scope estimator)
 
 ---
 
