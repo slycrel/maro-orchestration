@@ -293,6 +293,22 @@ def handle(
     if verbose:
         print(f"[poe:{handle_id}] handle: {message!r}", file=sys.stderr, flush=True)
 
+    # Persist raw input before any prefix stripping — visibility hole fix.
+    # Writes to memory/handle_inputs.jsonl so every goal + its prefixes are recoverable.
+    _raw_input = message
+    try:
+        _inputs_path = Path(__file__).resolve().parent.parent / "memory" / "handle_inputs.jsonl"
+        _inputs_path.parent.mkdir(parents=True, exist_ok=True)
+        _inputs_path.open("a", encoding="utf-8").write(
+            json.dumps({
+                "handle_id": handle_id,
+                "raw_input": _raw_input,
+                "ts": datetime.now(timezone.utc).isoformat(),
+            }) + "\n"
+        )
+    except Exception:
+        pass  # never block on logging
+
     # Apply user/CONFIG.md defaults (non-fatal — bad config never blocks a run)
     _cfg = _load_user_config()
     if model is None:
