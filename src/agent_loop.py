@@ -689,6 +689,55 @@ def _shape_steps(steps: List[str], *, label: str = "") -> List[str]:
     return shaped
 
 
+def _generate_timeout_split(step_text: str, adapter) -> List[str]:
+    """Ask the cheap model to split a timed-out step into smaller atomic steps.
+
+    Uses a short 45s timeout so a struggling adapter doesn't compound the delay.
+    Falls back to a simple heuristic split (one sentence per line) if the LLM
+    call fails. Returns [] only if both attempts produce nothing usable.
+    """
+    if adapter is not None:
+        try:
+            from llm import LLMMessage, MODEL_CHEAP, build_adapter
+            _prompt = (
+                f"An autonomous agent step timed out because it was too large to complete in time.\n\n"
+                f"Timed-out step: {step_text}\n\n"
+                f"Rewrite this as 2-4 smaller, atomic steps that together accomplish the same goal. "
+                f"Each step must be self-contained and completable independently. "
+                f"Return ONLY a numbered list, one step per line, no explanation."
+            )
+            try:
+                _split_adapter = build_adapter(model=MODEL_CHEAP)
+            except Exception:
+                _split_adapter = adapter
+            resp = _split_adapter.complete(
+                [LLMMessage("user", _prompt)],
+                max_tokens=300,
+                temperature=0.2,
+                timeout=45,
+            )
+            lines = [
+                ln.lstrip("0123456789.-) ").strip()
+                for ln in resp.content.strip().splitlines()
+                if ln.strip() and not ln.strip().startswith("#")
+            ]
+            steps = [ln for ln in lines if len(ln) > 10]
+            if len(steps) >= 2:
+                return steps
+        except Exception as exc:
+            log.debug("timeout split LLM call failed: %s", exc)
+
+    # Heuristic fallback: split on sentence boundaries / conjunctions in the step text.
+    import re as _re
+    parts = _re.split(r"\s*;\s*|\s+and\s+then\s+|\s*\band\b\s*(?=[A-Z])", step_text)
+    parts = [p.strip().rstrip(",") for p in parts if len(p.strip()) > 10]
+    if len(parts) >= 2:
+        log.debug("timeout split heuristic: %d parts from %r", len(parts), step_text[:60])
+        return parts
+
+    return []
+
+
 def _handle_blocked_step(
     step_text: str,
     outcome: dict,
@@ -728,20 +777,29 @@ def _handle_blocked_step(
 
     # Timeout failures must not be retried identically — the subprocess will
     # just time out again, burning wall-clock time with zero progress.
+    # Instead: ask the cheap model to reason about how to split the step, then
+    # inject the resulting steps via split_into so execution continues.
     _is_timeout = "timed out" in block_reason.lower()
     if _is_timeout:
-        _split_hint = (
-            f"TIMEOUT: step exceeded subprocess time limit ({block_reason}). "
-            "Recovery: split this step into two — "
-            "(1) run the command and save output to a file, "
-            "(2) read the file and analyze the output as a separate step. "
-            "Never combine execution and analysis in one step."
-        )
+        _split_steps = _generate_timeout_split(step_text, adapter)
+        if _split_steps:
+            log.info("step-shape: timeout on %r — LLM split into %d steps", step_text[:60], len(_split_steps))
+            return _BlockDecision(
+                retry=False,
+                hint="",
+                loop_status="",          # not stuck — split recovers
+                stuck_reason="",
+                split_into=_split_steps,
+            )
+        # Split generation itself failed — hard stop to avoid infinite spin.
         return _BlockDecision(
             retry=False,
             hint="",
             loop_status="stuck",
-            stuck_reason=_split_hint,
+            stuck_reason=(
+                f"TIMEOUT and split-recovery failed: {block_reason}. "
+                "Consider narrowing the step scope or switching to an API adapter."
+            ),
         )
 
     if prior_retries < 2:

@@ -213,7 +213,7 @@ class ClaudeSubprocessAdapter(LLMAdapter):
 
     backend = "subprocess"
 
-    def __init__(self, model: str = MODEL_CHEAP, claude_bin: str = _CLAUDE_BIN, timeout: int = 300):
+    def __init__(self, model: str = MODEL_CHEAP, claude_bin: str = _CLAUDE_BIN, timeout: int = 600):
         self.model_key = model
         self.claude_bin = claude_bin
         self.timeout = timeout
