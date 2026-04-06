@@ -2034,6 +2034,21 @@ def run_agent_loop(
             except Exception:
                 pass  # Security scan failures must never break the loop
 
+        # Claim verifier: on synthesis steps, check file-path claims in the result.
+        # Synthesis steps are highest hallucination risk — they aggregate prior findings
+        # and can confabulate file paths that don't exist. Annotate but never block.
+        if step_status == "done" and step_result:
+            try:
+                from claim_verifier import is_synthesis_step as _is_synth, annotate_result as _annotate
+                if _is_synth(step_text):
+                    _annotated = _annotate(step_result, only_if_hallucinations=True)
+                    if _annotated != step_result:
+                        log.warning("step %d [claim-verifier] hallucinated file paths detected", step_idx)
+                        step_result = _annotated
+                        outcome["result"] = step_result
+            except Exception:
+                pass  # claim verifier must never block loop progress
+
         # Phase 11: Step-level hooks
         _step_injected_context = ""
         if _hook_registry is not None:
