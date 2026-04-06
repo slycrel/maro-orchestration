@@ -93,22 +93,31 @@ DECOMPOSE_SYSTEM = textwrap.dedent("""\
     Decompose a goal into 3-8 concrete, independently-executable steps.
     Each step is a clear action or deliverable, not a vague meta-step.
 
-    STEP GRANULARITY:
-    Each step must complete in under 60 seconds of LLM thinking time.
-    Never combine "acquire X and analyze X" into one step.
+    STEP GRANULARITY — STREAM, DON'T BATCH:
+    Think of steps as a pipeline, not a monolith. Each step reads ONE thing, emits
+    a finding, and hands off. Synthesis reads accumulated findings — not the sources again.
+
+    The atomic unit is: ONE file read OR one command execution. Never two files in one step.
+    Steps are cheap. Timeouts are expensive. Always split when uncertain.
+
+    BAD:  "Read agent_loop.py, memory.py, and skills.py and summarize their APIs"
+    GOOD: "Read agent_loop.py and note its entry points and state machine"
+          "Read memory.py and note lesson extraction and reflection patterns"
+          "Read skills.py and note scoring, promotion, and stemmer logic"
+          "Synthesize findings from prior steps into architecture summary"
 
     BAD:  "Research topic X and compile a report"
-    GOOD: "Identify 3-5 key sources for topic X"
-          "Extract key findings from each source"
-          "Synthesize findings into a structured summary"
+    GOOD: "List the 3-5 most relevant sources for topic X"
+          "Read source 1 and extract key findings"
+          "Read source 2 and extract key findings"
+          "Synthesize findings from all sources into a structured summary"
 
-    BAD:  "Read all Python source files in src/"
-    GOOD: "Read the main entry point and map the module dependency graph"
-          "Read core modules (agent_loop, memory, skills) and summarize their APIs"
-          "Read the I/O layer (telegram, slack, gateway) and note integration points"
+    SURVEY FIRST: If you don't know the file list or scope, make the first step a survey:
+    "List all modules in src/ and categorize by function" — then subsequent steps
+    read one file at a time based on what the survey found.
 
-    CODE REVIEW: Never read "all" files in a directory. Target 3-5 related files
-    per step, at most ~2000 lines. Split 20+ file directories by functional area.
+    CODE REVIEW: Never read more than ONE file per step. Split 20+ file directories
+    by having a survey step first, then one read step per file of interest.
     Setup steps (clone, fetch, install) are their own step — never bundled.
 
     HARD RULE — exec and analyze are ALWAYS separate steps (no exceptions):
@@ -127,7 +136,7 @@ DECOMPOSE_SYSTEM = textwrap.dedent("""\
 
     TIME BUDGET (guideline, not a gate):
     A subprocess step has roughly 5 minutes before it times out. Warning signs:
-    - Reading more than 3 files in one step (likely too large — split by area)
+    - Reading more than ONE file in one step
     - Running a script AND reading any additional file in the same step
     - A "setup" action (clone, install, configure) bundled with "explore" (read, analyze)
     When in doubt, split. An extra step costs nothing; a timeout wastes the whole budget.
@@ -329,7 +338,9 @@ def decompose(
                         "You are a plan reviewer. Given multiple candidate step plans for the same goal, "
                         "produce the single best plan by selecting the strongest steps from each. "
                         "Prefer plans with: (1) concrete file/module names over vague descriptions, "
-                        "(2) separation of commands from analysis, (3) balanced step sizes. "
+                        "(2) separation of commands from analysis, (3) atomic steps — one file or one "
+                        "command per step, never merged. MORE steps is better than FEWER larger steps. "
+                        "NEVER merge two steps that read different files, even if they seem related. "
                         "Output ONLY a JSON array of step strings."),
                     LLMMessage("user",
                         f"Goal: {goal}\n\n{plans_text}\n\n"
