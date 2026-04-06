@@ -1074,6 +1074,9 @@ def run_agent_loop(
     from interrupt import InterruptQueue, apply_interrupt_to_steps, set_loop_running, clear_loop_running
     from poe import assign_model_by_role
 
+    # Tier ordering for floor comparisons (Phase 57: session-level tier floor)
+    _TIER_ORDER = {MODEL_CHEAP: 0, MODEL_MID: 1, MODEL_POWER: 2}
+
     loop_id = str(uuid.uuid4())[:8]
     started_at = time.monotonic()
     start_ts = datetime.now(timezone.utc).isoformat()
@@ -1545,6 +1548,11 @@ def run_agent_loop(
     _march_of_nines_alert = False  # Phase 19: cumulative step success rate alert
     _step_retries: Dict[str, int] = {}  # roadblock resilience: retries per step text
     _step_tier_overrides: Dict[str, str] = {}  # step_text → escalated tier on retry
+    # Phase 57: session-level lagging signal — if verify failures cluster, raise the global tier.
+    # Tracks consecutive verify failures; at threshold, adapter baseline escalates.
+    _session_verify_failures: int = 0
+    _SESSION_VERIFY_FAIL_THRESHOLD = 3  # 3 consecutive verify failures → global tier-up
+    _session_tier_floor: str = ""       # non-empty when global tier has been raised
     # Agent0 steal: failure-chain recording — every retry/recovery is a training signal
     _failure_chain: List[str] = []
     _recovery_step_count: int = 0
@@ -1862,6 +1870,10 @@ def run_agent_loop(
                 try:
                     from poe import classify_step_model
                     _step_model = classify_step_model(step_text)
+                    # Phase 57: apply session-level floor — if session saw ≥3 verify failures,
+                    # don't let any step run cheaper than the raised floor tier.
+                    if _session_tier_floor and _TIER_ORDER.get(_step_model, 0) < _TIER_ORDER.get(_session_tier_floor, 0):
+                        _step_model = _session_tier_floor
                     if _step_model != adapter.model_key:
                         _step_adapter = build_adapter(model=_step_model)
                         if verbose:
@@ -1976,8 +1988,7 @@ def run_agent_loop(
                 if not _vr["passed"]:
                     log.info("ralph verify FAIL step=%d reason=%r — marking blocked for retry",
                              step_idx, _vr["reason"][:80])
-                    # Tier escalation on verify failure — same signal→response pattern as
-                    # block retry. The result wasn't good enough; try a stronger model.
+                    # Per-step tier escalation on verify failure.
                     _vf_tier = getattr(_step_adapter, "model_key", MODEL_CHEAP)
                     if _vf_tier == MODEL_CHEAP:
                         _step_tier_overrides[step_text] = MODEL_MID
@@ -1985,6 +1996,21 @@ def run_agent_loop(
                     elif _vf_tier == MODEL_MID:
                         _step_tier_overrides[step_text] = MODEL_POWER
                         log.info("step %d verify-fail tier-up: mid → power", step_idx)
+                    # Phase 57: session-level lagging signal — cluster of verify failures
+                    # indicates the loop adapter is systematically too weak. Raise floor.
+                    _session_verify_failures += 1
+                    if (_session_verify_failures >= _SESSION_VERIFY_FAIL_THRESHOLD
+                            and not _session_tier_floor):
+                        _current_tier = getattr(adapter, "model_key", MODEL_CHEAP)
+                        if _current_tier == MODEL_CHEAP:
+                            _session_tier_floor = MODEL_MID
+                            log.warning("session-level tier-up: %d consecutive verify failures → "
+                                        "raising floor to mid for remaining steps",
+                                        _session_verify_failures)
+                            if verbose:
+                                print(f"[poe] session tier-up: {_session_verify_failures} verify "
+                                      "failures → floor raised to mid",
+                                      file=sys.stderr, flush=True)
                     if verbose:
                         print(f"[poe] ralph verify: step {step_idx} RETRY — {_vr['reason'][:80]}",
                               file=sys.stderr, flush=True)
@@ -1993,6 +2019,9 @@ def run_agent_loop(
                     outcome["stuck_reason"] = f"[ralph verify] {_vr['reason']}"
                     step_status = "blocked"
                     step_result = outcome.get("result", "")
+                else:
+                    # Verify pass — reset consecutive failure counter
+                    _session_verify_failures = 0
             except Exception:
                 pass  # verify never blocks loop progress
 
