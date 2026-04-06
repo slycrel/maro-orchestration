@@ -337,12 +337,12 @@ def _describe_goal_relationships(goal_query: str, adapter=None) -> str:
 _STATUS_KEYWORDS = {
     "/status", "status", "what's happening", "what is happening",
     "what are you working on", "update me", "progress report",
-    "how are things", "executive summary", "summary",
+    "how are things", "executive summary",
 }
 
 _INSPECT_KEYWORDS = {
-    "/inspect", "/quality", "quality", "how well", "how good",
-    "inspection", "friction", "alignment", "inspector",
+    "/inspect", "/quality", "how well", "how good",
+    "inspection", "friction", "inspector",
 }
 
 _GOAL_MAP_KEYWORDS = {
