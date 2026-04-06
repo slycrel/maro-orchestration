@@ -1510,6 +1510,8 @@ def run_agent_loop(
     total_tokens_out = 0
     stuck_streak = 0
     last_action: Optional[str] = None
+    _consecutive_max_timeouts = 0  # ceiling-hit timeouts across different steps — adapter health signal
+    _MAX_CONSECUTIVE_TIMEOUTS = 3  # bail out if adapter appears hung, not just steps being too large
     iteration = 0
     loop_status = "done"
     stuck_reason = None
@@ -2168,6 +2170,7 @@ def run_agent_loop(
                     _compressed.append(f"{_header} [summary]: {_body_short}")
                 completed_context = _compressed + list(_new_entries)
 
+            _consecutive_max_timeouts = 0  # successful step — adapter is healthy
             if verbose:
                 print(f"[poe] step {step_idx} done: {step_summary[:120]}", file=sys.stderr, flush=True)
             # Phase 32: update utility score for any matching skills
@@ -2260,6 +2263,28 @@ def run_agent_loop(
                     f"step {step_idx} split: combined step split into {len(_decision.split_into)} parts"
                 )
                 _recovery_step_count += 1
+                # Adapter health check: if the split was triggered by a timeout (not a shape
+                # violation), count it. N consecutive ceiling-hit timeouts across different
+                # steps means the adapter is likely hung, not just that steps are too large.
+                _split_reason = outcome.get("stuck_reason", "")
+                if "timed out" in _split_reason.lower() or "timeout" in _split_reason.lower():
+                    _consecutive_max_timeouts += 1
+                    if _consecutive_max_timeouts >= _MAX_CONSECUTIVE_TIMEOUTS:
+                        loop_status = "stuck"
+                        stuck_reason = (
+                            f"Adapter appears hung: {_consecutive_max_timeouts} consecutive steps all "
+                            f"timed out at the {600}s ceiling across different step texts. "
+                            "This is an adapter/transport failure, not a step-size issue. "
+                            "Check that 'claude -p' is functional and authenticated."
+                        )
+                        log.warning("adapter-hung detection: %d consecutive max-timeouts — bailing out",
+                                    _consecutive_max_timeouts)
+                        if verbose:
+                            print(f"[poe] adapter appears hung ({_consecutive_max_timeouts} consecutive "
+                                  f"ceiling timeouts) — stopping loop", file=sys.stderr, flush=True)
+                        break
+                else:
+                    _consecutive_max_timeouts = 0  # shape violation split, not a timeout — reset
                 _split_shaped = _shape_steps(list(_decision.split_into), label="replan-split")
                 for _new_step in reversed(_split_shaped):
                     remaining_steps.insert(0, _new_step)
