@@ -944,7 +944,26 @@ def build_adapter(
     if key:
         return AnthropicSDKAdapter(api_key=key, model=model)
 
-    # 2. Claude subprocess — always available on this box, no credits needed.
+    # 2. For power-tier (Opus): prefer API over subprocess.
+    #    claude -p --dangerously-skip-permissions exposes real tools; Opus uses them
+    #    and does genuine multi-step work that routinely exceeds the subprocess timeout.
+    #    Cheap/mid models follow the JSON injection template and respond quickly — subprocess
+    #    is fine for them. Opus through subprocess is reliably broken for complex tasks.
+    if model == MODEL_POWER:
+        key = _get_key("OPENROUTER_API_KEY", env)
+        if key:
+            return OpenRouterAdapter(api_key=key, model=model)
+        key = _get_key("OPENAI_API_KEY", env)
+        if key:
+            return OpenAIAdapter(api_key=key, model=model)
+        # No API key — fall through to subprocess with a logged warning
+        import logging as _logging
+        _logging.getLogger("poe.llm").warning(
+            "build_adapter: MODEL_POWER requested but no API key available — "
+            "falling back to subprocess (Opus via claude -p is unreliable for complex steps)"
+        )
+
+    # 3. Claude subprocess — always available on this box, no credits needed.
     #    CodexCLIAdapter exists but is NOT in auto-detection: it wraps `codex exec`
     #    which is an agentic subprocess (same fundamental cost model as claude -p)
     #    and the OAuth token does not work with the public OpenAI API directly.
