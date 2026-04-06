@@ -699,6 +699,9 @@ def handle(
         result_text = "\n\n---\n\n".join(result_parts) if result_parts else "[no output produced]"
         if loop_result.status == "stuck":
             result_text += f"\n\n⚠️ Stuck: {loop_result.stuck_reason}"
+        _pf = getattr(loop_result, "pre_flight_review", None)
+        if _pf and getattr(_pf, "scope", None) == "wide":
+            result_text += f"\n\n⚠️ Pre-flight: scope=wide — {_pf.scope_note}"
         if _contested_claims:
             _claims_text = "\n".join(
                 f"- [{c.get('verdict', '?')}] {c.get('claim', '')} — {c.get('reason', '')}"

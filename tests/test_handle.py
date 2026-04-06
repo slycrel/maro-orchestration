@@ -530,3 +530,66 @@ class TestApplyPrefixes:
                           "btw:", "ultraplan:", "direct:", "ralph:", "verify:",
                           "pipeline:", "strict:"]:
             assert expected in prefixes, f"Missing prefix: {expected}"
+
+
+# ---------------------------------------------------------------------------
+# Phase 58: pre_flight_review surfaced on LoopResult
+# ---------------------------------------------------------------------------
+
+class TestPreFlightReviewSurfacing:
+    def test_loop_result_has_pre_flight_review_field(self, monkeypatch, tmp_path):
+        """LoopResult has a pre_flight_review field (may be None for dry_run)."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        result = handle("research market trends for five industries", dry_run=True, force_lane="agenda")
+        assert hasattr(result.loop_result, "pre_flight_review")
+
+    def test_wide_scope_appends_warning_to_result_text(self, monkeypatch, tmp_path):
+        """When pre_flight_review.scope == 'wide', result text gets a warning."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        from unittest.mock import MagicMock, patch
+        from agent_loop import LoopResult, StepOutcome
+
+        # Build a LoopResult with a scope=wide pre_flight_review
+        _fake_pf = MagicMock()
+        _fake_pf.scope = "wide"
+        _fake_pf.scope_note = "goal hides many sub-tasks"
+        _fake_lr = LoopResult(
+            loop_id="test-lr",
+            project="test-proj",
+            goal="analyze everything",
+            status="done",
+            steps=[StepOutcome(index=0, text="step 1", status="done", result="output", iteration=0)],
+            pre_flight_review=_fake_pf,
+        )
+
+        # Patch run_agent_loop to return our fake result
+        with patch("agent_loop.run_agent_loop", return_value=_fake_lr):
+            with patch("intent.check_goal_clarity", return_value={"clear": True}):
+                result = handle("analyze everything", force_lane="agenda")
+
+        assert "scope=wide" in result.result or "Pre-flight" in result.result
+
+    def test_non_wide_scope_no_warning(self, monkeypatch, tmp_path):
+        """scope=narrow/medium doesn't add a pre-flight warning."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        from unittest.mock import MagicMock, patch
+        from agent_loop import LoopResult, StepOutcome
+
+        _fake_pf = MagicMock()
+        _fake_pf.scope = "narrow"
+        _fake_pf.scope_note = "small goal"
+        _fake_lr = LoopResult(
+            loop_id="test-lr2",
+            project="test-proj2",
+            goal="write a haiku",
+            status="done",
+            steps=[StepOutcome(index=0, text="write", status="done", result="haiku output", iteration=0)],
+            pre_flight_review=_fake_pf,
+        )
+
+        with patch("agent_loop.run_agent_loop", return_value=_fake_lr):
+            with patch("intent.check_goal_clarity", return_value={"clear": True}):
+                result = handle("write a haiku", force_lane="agenda")
+
+        assert "Pre-flight" not in result.result
+        assert "scope=wide" not in result.result

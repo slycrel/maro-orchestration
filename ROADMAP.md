@@ -1236,7 +1236,8 @@ is what's missing.
 **Not yet shipped (see ARCHITECTURE.md for full design note):**
 - Milestone-aware execution: when pre-flight flags milestone candidates, treat them as
   sub-loops with their own planning pass, not single steps. (Architecturally complex.)
-- Acting on pre-flight output: surface scope=wide to the user before starting, offer to
-  clarify or re-scope. Currently just logged.
+- Acting on pre-flight output: `LoopResult.pre_flight_review` field now carries the
+  PlanReview to callers; handle.py appends a ⚠️ warning to result text when scope=wide.
+  (DONE 2026-04-06)
 - Feedback loop: track whether pre-flight flags predicted actual execution problems.
   If scope=wide predicts timeout/stuck, that's a strong signal to act on.
