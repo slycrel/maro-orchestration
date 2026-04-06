@@ -333,6 +333,17 @@ def decompose(
     except Exception:
         pass
 
+    # lat.md architecture context: inject relevant knowledge graph nodes for meta-work
+    # (goals touching Poe's own systems). TF-IDF selection, zero-LLM, zero cost.
+    # Only injects if relevant (score > 0). Empty string = no injection (no noise).
+    try:
+        from lat_inject import inject_relevant_nodes as _lat_inject
+        _lat_ctx = _lat_inject(goal)
+        if _lat_ctx:
+            extras.append(_lat_ctx)
+    except Exception:
+        pass
+
     # Phase 58: pre-decompose scope estimate. Classifies goal complexity before the
     # LLM planner runs so we can route accordingly (skip multi-plan for narrow goals,
     # use staged-pass for wide/deep goals, inject scope hint for medium goals).
