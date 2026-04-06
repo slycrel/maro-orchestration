@@ -1198,3 +1198,35 @@ Extract orchestration-related ideas, patterns, deferred concepts, and "what if" 
 ## Superseded Plans
 
 The original M0-M4 milestones and N1-N4 roadmap items focused on infrastructure plumbing (adapters, scheduling, CI). That work was valuable scaffolding, but it didn't address the core need: making Poe autonomous. This roadmap replaces N1-N4 entirely.
+
+---
+
+### Phase 58: Pre-Flight Plan Review *(PARTIAL)*
+
+*"System 1 proxy: fast pattern recognition over the plan before System 2 commits to executing it."*
+
+**The problem**: the planner (System 2) decomposes a goal into steps without knowing the true
+scope, hidden assumptions, or which steps are sub-goals in disguise. By the time these surface
+during execution, budget has been wasted. Taste — the intuitive sense that a plan smells right —
+is what's missing.
+
+**Shipped:**
+- `src/pre_flight.py`: cheap Haiku call that reviews the proposed step list before execution
+  starts. Returns scope estimate (narrow/medium/wide), assumption flags, milestone candidates,
+  and unknown-unknown warnings. Advisory only — never blocks execution.
+- `personas/plan-critic.md`: System 1 proxy persona — fast, adversarial, verdict-first.
+  Asks: is the scope honest? What assumptions could be wrong? Which steps are sub-goals?
+- Wired into `agent_loop.py` after decompose and pre-run cost estimate. Flags logged at
+  WARNING level if scope=wide or milestone candidates found.
+
+**Not yet shipped (see ARCHITECTURE.md for full design note):**
+- Scope estimation *before* decomposition: classify goal as narrow/medium/wide/deep and
+  route accordingly (wide → milestone decomposition, not flat step list).
+- Milestone-aware execution: when pre-flight flags milestone candidates, treat them as
+  sub-loops with their own planning pass, not single steps.
+- Multiple philosopher perspectives: scope-detector, dependency-spider, assumption-auditor
+  as distinct lenses on the same plan. Currently collapsed into one critic call.
+- Acting on pre-flight output: surface scope=wide to the user before starting, offer to
+  clarify or re-scope. Currently just logged.
+- Feedback loop: track whether pre-flight flags predicted actual execution problems.
+  If scope=wide predicts timeout/stuck, that's a strong signal to act on.

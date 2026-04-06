@@ -884,3 +884,83 @@ the active zone and are injected into the decomposition prompt.
 
 Heartbeat alerts: `critical` or `degraded` health, or stuck projects.
 Inspector alerts: friction patterns crossing threshold (batched, not per-run).
+
+---
+
+## Planning vs Execution: The System 1 / System 2 Tension
+
+*Captured 2026-04-06. This is an open design problem, not a solved one.*
+
+### The core tension
+
+The planner (Director + decompose) operates like System 2 (Kahneman): slow,
+deliberate, explicit. It reasons from the goal forward, produces a step list,
+and commits to it. This works well for goals where the scope is known upfront.
+
+What's missing is a System 1 analog: fast pattern recognition that looks at a
+goal and immediately knows "this is a 40-step job disguised as an 8-step job,"
+or "step 4 depends on something step 2 won't actually produce." This is what
+humans call *taste* — the intuitive sense that a plan smells right or wrong
+before you execute it.
+
+### Why this matters
+
+Two failure modes both trace back to this gap:
+
+1. **Scope explosion**: The planner decomposes "review this codebase" into 8
+   steps. In reality it's 40 file reads + synthesis. The plan is optimistic
+   because the planner doesn't know what it doesn't know (the scope is hidden
+   until you start walking).
+
+2. **The 95% tangent**: Some goals require acquiring knowledge or capability
+   before the actual work can begin. "Analyze trading patterns" might require
+   building a data pipeline first. The planner can't see this upfront; it only
+   becomes visible during execution.
+
+### The maze analogy (and why it breaks down)
+
+In a 2D maze you have complete information — the graph is fully visible. Here
+the graph is *partially hidden*: you don't know the file sizes, the dependency
+graph, the credential requirements, or the emergent sub-problems until you start.
+
+This is why fixed step budgets (max_steps=8) create the wrong pressure: the
+planner bundles work to fit, producing over-large steps that then timeout or
+hallucinate. The budget should be on *complexity* (time/cost/tokens), not step
+count.
+
+### The milestone topology problem
+
+When a goal requires sub-goals that themselves require planning, you get a tree
+not a list. The current system handles this via continuation loops and step
+injection, but the *topology* (which steps feed which other steps, which steps
+are actually sub-loops) isn't planned upfront — it emerges. This emergence is
+costly (wasted steps, replanning, timeouts) when it could be partially anticipated.
+
+### Current mitigations (as of Phase 58)
+
+- **Pre-flight review** (`pre_flight.py`): cheap Haiku pass over the proposed
+  plan before execution starts. Flags scope explosion, hidden assumptions, and
+  milestone candidates. Advisory only — doesn't block execution. The "System 1
+  proxy": fast pattern recognition, not deep reasoning.
+- **Stream-not-batch decomposition**: one file per step, survey-first pattern,
+  scratchpad as the accumulation buffer. Reduces scope explosion by making steps
+  atomic.
+- **Timeout split + adapter health detection**: catches execution-time failures
+  from over-large steps.
+
+### What's still missing
+
+- **Philosopher personas**: lightweight critic perspectives that can stress-test
+  a plan from different angles (scope, assumptions, dependency topology) before
+  execution. The plan-critic persona is a first approximation.
+- **Taste**: the ability to recognize from partial evidence that a goal is
+  structurally similar to past goals that had specific failure modes. This is
+  where the lat.md knowledge graph and lesson injection are meant to help, but
+  the signal is weak today.
+- **Milestone-aware decomposition**: the director should be able to identify
+  upfront that a goal has sub-goals requiring their own planning pass, and
+  structure the execution as a tree (each milestone gets its own loop) rather
+  than a flat step list. This is the "recursion of milestones" problem.
+- **Scope estimation before decomposition**: a pre-decompose pass that estimates
+  effort class (narrow/medium/wide/deep) and routes accordingly — wide goals
+  get milestone decomposition, narrow goals get direct execution.

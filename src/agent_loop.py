@@ -1342,6 +1342,19 @@ def run_agent_loop(
     except Exception:
         log.info("pre-run: %d steps", len(steps))
 
+    # Pre-flight plan review — cheap skeptic pass before we spend execution budget.
+    # Flags scope explosion, hidden assumptions, and milestone candidates.
+    # Advisory only: loop proceeds regardless of findings.
+    if not dry_run:
+        try:
+            from pre_flight import review_plan as _review_plan
+            _pf = _review_plan(goal, steps, adapter, verbose=verbose)
+            if _pf.milestone_step_indices:
+                log.info("pre-flight: steps %s flagged as milestone candidates — "
+                         "may need own planning pass", _pf.milestone_step_indices)
+        except Exception:
+            pass  # pre-flight failure must never block execution
+
     # Parse step dependencies for level-based and DAG-aware parallel execution
     _clean_steps = steps
     _deps: Dict[int, Any] = {}
