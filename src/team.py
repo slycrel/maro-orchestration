@@ -17,6 +17,7 @@ unknown roles get a generic specialist persona built from the role name.
 from __future__ import annotations
 
 import logging
+import re
 import textwrap
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
@@ -98,6 +99,57 @@ class TeamResult:
 
 
 # ---------------------------------------------------------------------------
+# Subagent context firewall (systematicls harness steal)
+# ---------------------------------------------------------------------------
+
+def firewall_shared_ctx(
+    task: str,
+    shared_ctx: Dict[str, Any],
+    *,
+    max_entries: int = 5,
+    max_chars_per_entry: int = 200,
+) -> Dict[str, str]:
+    """Filter shared_ctx to the most task-relevant entries (subagent context firewall).
+
+    Team workers should receive only context they actually need — not the full
+    accumulated history of the parent loop. This prevents context contamination
+    and reduces tokens passed to sub-loops at depth ≥ 1.
+
+    Strategy: simple word-overlap relevance ranking (no deps). Each shared_ctx
+    entry is scored by how many unique task words appear in its key or value.
+    Top-ranked entries are returned, capped at max_chars_per_entry each.
+
+    Args:
+        task:                The specific task for this worker.
+        shared_ctx:          Full shared context dict from the parent loop.
+        max_entries:         Maximum number of entries to pass to the worker.
+        max_chars_per_entry: Cap on each entry's value before passing.
+
+    Returns:
+        Filtered dict with the most relevant entries (truncated values).
+    """
+    if not shared_ctx:
+        return {}
+
+    def _tok(text: str) -> set:
+        return set(re.sub(r"[^a-z0-9]+", " ", text.lower()).split())
+
+    stop = {"the", "a", "an", "and", "or", "for", "to", "in", "of", "is", "it", "this", "that", "step"}
+    task_words = _tok(task) - stop
+
+    scored: List[tuple] = []
+    for k, v in shared_ctx.items():
+        v_str = str(v)[:max_chars_per_entry]
+        entry_words = _tok(k + " " + v_str)
+        overlap = len(task_words & entry_words)
+        scored.append((overlap, k, v_str))
+
+    # Sort descending by overlap, then by insertion order (chronological for ties)
+    scored.sort(key=lambda x: -x[0])
+    return {k: v for _, k, v in scored[:max_entries]}
+
+
+# ---------------------------------------------------------------------------
 # Core function
 # ---------------------------------------------------------------------------
 
@@ -152,8 +204,11 @@ def create_team_worker(
         tools = [LLMTool(**t) for t in _WORKER_TOOLS]
         _shared_block = ""
         if shared_ctx:
-            _entries = [f"  [{k}]: {v[:200]}" for k, v in list(shared_ctx.items())[-5:]]
-            _shared_block = "\n\nShared context from prior team workers:\n" + "\n".join(_entries)
+            # Subagent context firewall: pass only task-relevant entries, not full history
+            _filtered_ctx = firewall_shared_ctx(task, shared_ctx, max_entries=5, max_chars_per_entry=200)
+            _entries = [f"  [{k}]: {v}" for k, v in _filtered_ctx.items()]
+            if _entries:
+                _shared_block = "\n\nRelevant context from prior steps:\n" + "\n".join(_entries)
         user_msg = f"Ticket: {task}{_shared_block}\n\nComplete this ticket. Call deliver_result when done."
 
         resp = adapter.complete(

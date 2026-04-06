@@ -1323,3 +1323,88 @@ class TestScanStepCosts:
         run_evolver(dry_run=True, verbose=False, scan_costs=False,
                     scan_signals=False, scan_calibration=False)
         assert called == []
+
+
+# ---------------------------------------------------------------------------
+# _compactness_adjusted_score / _top_peer_skills (FunSearch-inspired)
+# ---------------------------------------------------------------------------
+
+class TestCompactnessAdjustedScore:
+    def _make_skill(self, utility_score=0.9, desc="Do something", steps=None):
+        from skills import Skill
+        return Skill(
+            id="s1", name="test", description=desc,
+            trigger_patterns=["test"], steps_template=steps or ["step one", "step two"],
+            source_loop_ids=[], created_at="2026-01-01T00:00:00+00:00",
+            utility_score=utility_score,
+        )
+
+    def test_score_decreases_with_longer_description(self):
+        from evolver import _compactness_adjusted_score
+        short = self._make_skill(utility_score=0.9, desc="Short", steps=["s1"])
+        long_ = self._make_skill(utility_score=0.9, desc="A" * 500, steps=["s1", "s2", "s3", "s4", "s5"])
+        assert _compactness_adjusted_score(short) > _compactness_adjusted_score(long_)
+
+    def test_score_with_zero_utility_is_zero(self):
+        from evolver import _compactness_adjusted_score
+        skill = self._make_skill(utility_score=0.0)
+        assert _compactness_adjusted_score(skill) == 0.0
+
+    def test_score_never_exceeds_utility_score(self):
+        from evolver import _compactness_adjusted_score
+        skill = self._make_skill(utility_score=0.8)
+        assert _compactness_adjusted_score(skill) <= 0.8
+
+    def test_score_is_positive_for_normal_skill(self):
+        from evolver import _compactness_adjusted_score
+        skill = self._make_skill(utility_score=0.7)
+        assert _compactness_adjusted_score(skill) > 0.0
+
+
+class TestTopPeerSkills:
+    def _make_skill(self, id_, utility_score=0.9, circuit_state="closed"):
+        from skills import Skill
+        return Skill(
+            id=id_, name=f"skill_{id_}", description="desc",
+            trigger_patterns=["t"], steps_template=["do it"],
+            source_loop_ids=[], created_at="2026-01-01T00:00:00+00:00",
+            utility_score=utility_score, circuit_state=circuit_state,
+        )
+
+    def test_excludes_failing_skill(self, monkeypatch):
+        from evolver import _top_peer_skills
+        failing = self._make_skill("fail", utility_score=0.1, circuit_state="open")
+        healthy = self._make_skill("good", utility_score=0.9)
+        monkeypatch.setattr("evolver._top_peer_skills.__globals__['__builtins__']", None, raising=False)
+        with patch("evolver.load_outcomes", return_value=[]):
+            # Patch skills.load_skills at the right import path
+            pass
+        # Direct patch via monkeypatch
+        import evolver
+        with patch("skills.load_skills", return_value=[failing, healthy]):
+            peers = _top_peer_skills(failing, k=2)
+        assert all(p.id != "fail" for p in peers)
+
+    def test_excludes_open_circuit_skills(self, monkeypatch):
+        from evolver import _top_peer_skills
+        failing = self._make_skill("fail", utility_score=0.2, circuit_state="open")
+        open_peer = self._make_skill("open_peer", utility_score=0.9, circuit_state="open")
+        closed = self._make_skill("closed", utility_score=0.8, circuit_state="closed")
+        with patch("skills.load_skills", return_value=[failing, open_peer, closed]):
+            peers = _top_peer_skills(failing, k=5)
+        assert all(p.circuit_state != "open" for p in peers)
+
+    def test_returns_at_most_k(self, monkeypatch):
+        from evolver import _top_peer_skills
+        failing = self._make_skill("fail")
+        others = [self._make_skill(f"s{i}", utility_score=0.9 - i * 0.05) for i in range(10)]
+        with patch("skills.load_skills", return_value=[failing] + others):
+            peers = _top_peer_skills(failing, k=2)
+        assert len(peers) <= 2
+
+    def test_empty_pool_returns_empty(self):
+        from evolver import _top_peer_skills
+        failing = self._make_skill("fail")
+        with patch("skills.load_skills", return_value=[failing]):
+            peers = _top_peer_skills(failing)
+        assert peers == []

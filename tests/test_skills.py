@@ -1288,3 +1288,410 @@ class TestOptimizationObjective:
         assert path is not None
         content = path.read_text()
         assert "optimization_objective" not in content
+
+
+# ---------------------------------------------------------------------------
+# _stem + _skill_tokens (MetaClaw steal: lightweight stemmer)
+# ---------------------------------------------------------------------------
+
+class TestStemmer:
+    def _stem(self, token):
+        from skills import _stem
+        return _stem(token)
+
+    def test_strips_ing(self):
+        assert self._stem("researching") == "research"
+
+    def test_strips_er(self):
+        assert self._stem("builder") == "build"
+
+    def test_strips_tion(self):
+        assert self._stem("execution") == "execu"  # "execution"[:-4] = "execu" (strips "tion")
+
+    def test_strips_ed(self):
+        assert self._stem("analysed") == "analys"
+
+    def test_short_roots_preserved(self):
+        # "run" → strip 'ing' → "r" (2 chars < 4) → should NOT strip
+        assert self._stem("run") == "run"
+
+    def test_no_suffix_unchanged(self):
+        assert self._stem("memory") == "memory"
+
+    def test_skill_tokens_stemmed(self):
+        from skills import _skill_tokens
+        tokens = _skill_tokens("researching memory")
+        assert "research" in tokens
+
+    def test_tfidf_finds_morphological_match(self):
+        """'research' in goal should match a skill with 'researching' in trigger.
+
+        Two skills are needed to avoid IDF=0 (single-doc IDF cancels all terms).
+        """
+        from skills import _tfidf_skill_rank, Skill
+
+        def _make(id_, name, desc, triggers):
+            return Skill(
+                id=id_, name=name, description=desc,
+                trigger_patterns=triggers, steps_template=["step"],
+                source_loop_ids=[], created_at="2026-01-01T00:00:00+00:00",
+            )
+
+        research_skill = _make("s1", "research_tool",
+                               "Tool for researching topics online",
+                               ["researching", "information gathering"])
+        other_skill = _make("s2", "scheduler", "Schedule future tasks",
+                            ["schedule", "future", "cron"])
+
+        results = _tfidf_skill_rank("research topics online", [research_skill, other_skill])
+        assert any(s.id == "s1" for s in results)
+
+
+# ---------------------------------------------------------------------------
+# Island model (FunSearch steal: anti-monoculture diversity)
+# ---------------------------------------------------------------------------
+
+class TestIslandModel:
+    def _make_skill(self, id_, name, desc, triggers=None, circuit_state="closed", utility_score=1.0, island=""):
+        from skills import Skill
+        return Skill(
+            id=id_, name=name, description=desc,
+            trigger_patterns=triggers or [],
+            steps_template=["step"],
+            source_loop_ids=[],
+            created_at="2026-01-01T00:00:00+00:00",
+            circuit_state=circuit_state,
+            utility_score=utility_score,
+            island=island,
+        )
+
+    def test_assign_island_research(self):
+        from skills import assign_island
+        skill = self._make_skill("s1", "web_search", "search the web for information",
+                                 triggers=["search", "fetch data"])
+        assert assign_island(skill) == "research"
+
+    def test_assign_island_build(self):
+        from skills import assign_island
+        skill = self._make_skill("s2", "code_gen", "write and implement code",
+                                 triggers=["write code", "implement feature"])
+        assert assign_island(skill) == "build"
+
+    def test_assign_island_analysis(self):
+        from skills import assign_island
+        skill = self._make_skill("s3", "code_review", "review and inspect code",
+                                 triggers=["review", "inspect"])
+        assert assign_island(skill) == "analysis"
+
+    def test_assign_island_general_fallback(self):
+        from skills import assign_island
+        skill = self._make_skill("s4", "misc", "does something miscellaneous",
+                                 triggers=["run"])
+        assert assign_island(skill) == "general"
+
+    def test_ensure_island_assigned_sets_island(self):
+        from skills import ensure_island_assigned
+        skill = self._make_skill("s5", "web_fetch", "fetch web content for research",
+                                 triggers=["fetch"])
+        assert skill.island == ""
+        result = ensure_island_assigned(skill)
+        assert result.island != ""
+        assert result is skill  # mutates in place
+
+    def test_ensure_island_assigned_skips_if_set(self):
+        from skills import ensure_island_assigned
+        skill = self._make_skill("s6", "build_thing", "builds things", island="build")
+        result = ensure_island_assigned(skill)
+        assert result.island == "build"  # unchanged
+
+    def test_get_skills_by_island_groups_correctly(self):
+        from skills import get_skills_by_island
+        skills = [
+            self._make_skill("s1", "searcher", "search web information", island="research"),
+            self._make_skill("s2", "builder", "write and build code", island="build"),
+            self._make_skill("s3", "checker", "review and check things", island="analysis"),
+            self._make_skill("s4", "thinker", "does something general", island="general"),
+        ]
+        grouped = get_skills_by_island(skills)
+        assert "s1" in [s.id for s in grouped.get("research", [])]
+        assert "s2" in [s.id for s in grouped.get("build", [])]
+        assert "s3" in [s.id for s in grouped.get("analysis", [])]
+
+    def test_get_skills_by_island_auto_assigns(self):
+        from skills import get_skills_by_island
+        # No island set — should be auto-assigned
+        skills = [
+            self._make_skill("s1", "searcher", "search the web", triggers=["search", "fetch"]),
+        ]
+        grouped = get_skills_by_island(skills)
+        assert any("s1" in [s.id for s in v] for v in grouped.values())
+
+    def test_cull_island_skips_small_island(self):
+        """Island with fewer than min_island_size skills is not culled."""
+        from skills import cull_island_bottom_half
+        from unittest.mock import patch
+        skills = [
+            self._make_skill("s1", "a", "search fetch", island="research",
+                             circuit_state="open", utility_score=0.1),
+            self._make_skill("s2", "b", "search web", island="research",
+                             circuit_state="open", utility_score=0.2),
+        ]
+        with patch("skills.load_skills", return_value=skills):
+            result = cull_island_bottom_half("research", min_island_size=4, dry_run=True)
+        assert result == []
+
+    def test_cull_island_only_open_circuit(self):
+        """Only open-circuit skills are eligible for culling."""
+        from skills import cull_island_bottom_half
+        from unittest.mock import patch
+        skills = [
+            self._make_skill("s1", "a", "search", island="research",
+                             circuit_state="closed", utility_score=0.1),
+            self._make_skill("s2", "b", "search", island="research",
+                             circuit_state="closed", utility_score=0.2),
+            self._make_skill("s3", "c", "search", island="research",
+                             circuit_state="open", utility_score=0.3),
+            self._make_skill("s4", "d", "search", island="research",
+                             circuit_state="open", utility_score=0.4),
+            self._make_skill("s5", "e", "search", island="research",
+                             circuit_state="closed", utility_score=0.5),
+        ]
+        with patch("skills.load_skills", return_value=skills):
+            result = cull_island_bottom_half("research", min_island_size=4, dry_run=True)
+        # Only s3/s4 are open; bottom half of 2 = 1 culled
+        assert len(result) == 1
+        assert result[0] in {"s3", "s4"}
+
+    def test_run_island_cycle_dry_run(self):
+        """dry_run returns counts without saving."""
+        from skills import run_island_cycle
+        from unittest.mock import patch, MagicMock
+        skills = [
+            self._make_skill("s1", "searcher", "fetch web data", island="research",
+                             circuit_state="closed"),
+        ]
+        with patch("skills.load_skills", return_value=skills), \
+             patch("skills._save_skills") as mock_save:
+            result = run_island_cycle(dry_run=True)
+        mock_save.assert_not_called()
+        assert "assigned" in result
+        assert "total_culled" in result
+
+
+# ---------------------------------------------------------------------------
+# Skill validation harness (Voyager/Agent0 steal)
+# ---------------------------------------------------------------------------
+
+class TestSkillValidationHarness:
+    def _make_skill(self, id_="v1", tier="provisional", use_count=5, utility_score=0.8,
+                    name="test_skill", desc="search the web for information", island="research"):
+        from skills import Skill
+        return Skill(
+            id=id_, name=name, description=desc,
+            trigger_patterns=["search", "fetch data"],
+            steps_template=["fetch URL", "parse result", "return summary"],
+            source_loop_ids=[],
+            created_at="2026-01-01T00:00:00+00:00",
+            tier=tier,
+            use_count=use_count,
+            utility_score=utility_score,
+            island=island,
+        )
+
+    def test_validate_skill_pass(self, monkeypatch):
+        from skills import validate_skill_for_promotion, Skill
+        import types
+
+        class FakeAdapter:
+            def complete(self, messages, **kw):
+                return types.SimpleNamespace(content='{"valid": true, "reason": "clear and actionable", "repair_hint": ""}')
+
+        result = validate_skill_for_promotion(self._make_skill(), FakeAdapter())
+        assert result["valid"] is True
+        assert "repair_hint" in result
+
+    def test_validate_skill_fail(self, monkeypatch):
+        from skills import validate_skill_for_promotion
+        import types
+
+        class FakeAdapter:
+            def complete(self, messages, **kw):
+                return types.SimpleNamespace(content='{"valid": false, "reason": "steps are too vague", "repair_hint": "make steps concrete"}')
+
+        result = validate_skill_for_promotion(self._make_skill(), FakeAdapter())
+        assert result["valid"] is False
+        assert result["repair_hint"] == "make steps concrete"
+
+    def test_validate_fail_open_on_error(self):
+        from skills import validate_skill_for_promotion
+
+        class BrokenAdapter:
+            def complete(self, messages, **kw):
+                raise RuntimeError("connection refused")
+
+        result = validate_skill_for_promotion(self._make_skill(), BrokenAdapter())
+        # Fail-open: validation unavailable → allow promotion
+        assert result["valid"] is True
+
+    def test_promote_without_adapter_skips_validation(self, monkeypatch, tmp_path):
+        from skills import maybe_auto_promote_skills
+        from unittest.mock import patch
+
+        skill = self._make_skill(use_count=10, utility_score=0.9)
+        with patch("skills.load_skills", return_value=[skill]), \
+             patch("skills._save_skills") as mock_save, \
+             patch("skills.compute_skill_hash", return_value="hash123"), \
+             patch("skills.validate_skill_for_promotion") as mock_validate:
+            result = maybe_auto_promote_skills(adapter=None)
+
+        mock_validate.assert_not_called()  # no adapter → no validation
+        assert skill.id in result
+
+    def test_promote_with_adapter_validates_skill(self, monkeypatch, tmp_path):
+        from skills import maybe_auto_promote_skills
+        from unittest.mock import patch, MagicMock
+        import types
+
+        skill = self._make_skill(use_count=10, utility_score=0.9)
+
+        fake_adapter = MagicMock()
+        fake_adapter.complete.return_value = types.SimpleNamespace(
+            content='{"valid": true, "reason": "passes", "repair_hint": ""}'
+        )
+
+        with patch("skills.load_skills", return_value=[skill]), \
+             patch("skills._save_skills"), \
+             patch("skills.compute_skill_hash", return_value="hash123"):
+            result = maybe_auto_promote_skills(adapter=fake_adapter)
+
+        assert skill.id in result
+
+    def test_promote_repair_loop_on_failure(self, monkeypatch, tmp_path):
+        from skills import maybe_auto_promote_skills
+        from unittest.mock import patch, MagicMock, call
+        import types
+
+        skill = self._make_skill(use_count=10, utility_score=0.9)
+
+        # First call fails, second succeeds
+        fake_adapter = MagicMock()
+        fail_resp = types.SimpleNamespace(content='{"valid": false, "reason": "vague steps", "repair_hint": "be specific"}')
+        pass_resp = types.SimpleNamespace(content='{"valid": true, "reason": "fixed", "repair_hint": ""}')
+        fake_adapter.complete.side_effect = [fail_resp, pass_resp]
+
+        repaired_skill = self._make_skill(id_="v1", desc="revised search skill with specific steps")
+
+        with patch("skills.load_skills", return_value=[skill]), \
+             patch("skills._save_skills"), \
+             patch("skills.compute_skill_hash", return_value="hash123"), \
+             patch("evolver.rewrite_skill", return_value=repaired_skill):
+            result = maybe_auto_promote_skills(adapter=fake_adapter, max_repair_attempts=3)
+
+        assert skill.id in result  # promoted after repair
+
+    def test_promote_held_provisional_after_max_repairs(self, monkeypatch, tmp_path):
+        from skills import maybe_auto_promote_skills
+        from unittest.mock import patch, MagicMock
+        import types
+
+        skill = self._make_skill(use_count=10, utility_score=0.9)
+
+        # Always fail validation
+        fake_adapter = MagicMock()
+        fake_adapter.complete.return_value = types.SimpleNamespace(
+            content='{"valid": false, "reason": "still vague", "repair_hint": "try again"}'
+        )
+
+        with patch("skills.load_skills", return_value=[skill]), \
+             patch("skills._save_skills") as mock_save, \
+             patch("skills.compute_skill_hash", return_value="hash123"), \
+             patch("evolver.rewrite_skill", return_value=None):  # rewrite returns None
+            result = maybe_auto_promote_skills(adapter=fake_adapter, max_repair_attempts=2)
+
+        assert skill.id not in result  # not promoted
+        mock_save.assert_not_called()  # no write since nothing changed
+
+    def test_below_threshold_not_promoted(self, monkeypatch, tmp_path):
+        from skills import maybe_auto_promote_skills
+        from unittest.mock import patch
+
+        skill = self._make_skill(use_count=1, utility_score=0.3)  # below thresholds
+        with patch("skills.load_skills", return_value=[skill]), \
+             patch("skills._save_skills") as mock_save:
+            result = maybe_auto_promote_skills()
+
+        assert result == []
+        mock_save.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Frontier task targeting (Agent0 steal)
+# ---------------------------------------------------------------------------
+
+class TestFrontierSkills:
+    def _make_skill(self, id_, utility_score, use_count=5, circuit_state="closed"):
+        from skills import Skill
+        return Skill(
+            id=id_, name=f"skill_{id_}", description=f"skill {id_}",
+            trigger_patterns=["test"],
+            steps_template=["step"],
+            source_loop_ids=[],
+            created_at="2026-01-01T00:00:00+00:00",
+            utility_score=utility_score,
+            use_count=use_count,
+            circuit_state=circuit_state,
+        )
+
+    def test_returns_frontier_zone_skills(self):
+        from skills import frontier_skills, FRONTIER_LOW, FRONTIER_HIGH
+        skills = [
+            self._make_skill("low", 0.1),    # below frontier — not included
+            self._make_skill("frontier", 0.55),  # in frontier zone — included
+            self._make_skill("high", 0.9),   # above frontier — not included
+        ]
+        result = frontier_skills(skills)
+        ids = [s.id for s in result]
+        assert "frontier" in ids
+        assert "low" not in ids
+        assert "high" not in ids
+
+    def test_excludes_open_circuit(self):
+        from skills import frontier_skills
+        skills = [
+            self._make_skill("open_frontier", 0.55, circuit_state="open"),
+            self._make_skill("closed_frontier", 0.55, circuit_state="closed"),
+        ]
+        result = frontier_skills(skills)
+        ids = [s.id for s in result]
+        assert "open_frontier" not in ids  # open-circuit handled by skills_needing_rewrite
+        assert "closed_frontier" in ids
+
+    def test_excludes_below_min_uses(self):
+        from skills import frontier_skills
+        skills = [
+            self._make_skill("new", 0.55, use_count=1),   # not enough data
+            self._make_skill("mature", 0.55, use_count=5), # enough data
+        ]
+        result = frontier_skills(skills, min_uses=3)
+        ids = [s.id for s in result]
+        assert "new" not in ids
+        assert "mature" in ids
+
+    def test_sorted_ascending_by_utility(self):
+        from skills import frontier_skills
+        skills = [
+            self._make_skill("s1", 0.65),
+            self._make_skill("s2", 0.45),
+            self._make_skill("s3", 0.55),
+        ]
+        result = frontier_skills(skills)
+        scores = [s.utility_score for s in result]
+        assert scores == sorted(scores)  # ascending = hardest first
+
+    def test_loads_from_disk_if_none(self):
+        from skills import frontier_skills
+        from unittest.mock import patch
+        skills = [self._make_skill("disk_skill", 0.55)]
+        with patch("skills.load_skills", return_value=skills):
+            result = frontier_skills(None)
+        assert any(s.id == "disk_skill" for s in result)

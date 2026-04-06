@@ -970,6 +970,18 @@ def run_evolver(
         except Exception as _grad_exc:
             log.debug("graduation pass failed (non-fatal): %s", _grad_exc)
 
+    # FunSearch island model — anti-monoculture selection pressure on skill pool
+    try:
+        from skills import run_island_cycle
+        _island_result = run_island_cycle(dry_run=dry_run, verbose=verbose)
+        if _island_result.get("total_culled") and verbose:
+            print(f"[evolver] island_cycle: culled {_island_result['total_culled']} underperforming skills",
+                  file=sys.stderr)
+        log.debug("evolver island_cycle: assigned=%d total_culled=%d",
+                  _island_result.get("assigned", 0), _island_result.get("total_culled", 0))
+    except Exception as _island_exc:
+        log.debug("island cycle failed (non-fatal): %s", _island_exc)
+
     return report
 
 
@@ -1051,6 +1063,49 @@ def receive_inspector_tickets(tickets: List[dict]) -> int:
     return len(suggestions)
 
 
+def _compactness_adjusted_score(skill: "Skill") -> float:
+    """Brevity-penalized utility score (FunSearch-inspired).
+
+    Favors compact skills over verbose ones with the same utility. Uses a
+    log-penalty so very short skills aren't unfairly favored over medium ones.
+
+    char_count = len(description) + sum of step lengths
+    adjusted = utility_score / log(1 + char_count / 200)
+
+    A skill with utility_score=0.9 and 400 chars scores ~0.66.
+    A skill with utility_score=0.9 and 100 chars scores ~0.86.
+    """
+    import math
+    char_count = len(skill.description) + sum(len(s) for s in skill.steps_template)
+    penalty = math.log(1.0 + char_count / 200.0)
+    return skill.utility_score / max(penalty, 1.0)
+
+
+def _top_peer_skills(failing_skill: "Skill", k: int = 2) -> List["Skill"]:
+    """Return up to k healthy peer skills with the highest compactness-adjusted score.
+
+    Used to build ranked-candidate context for rewrite_skill (FunSearch pattern:
+    LLM sees "here is v0 (score=X), v1 (score=Y) — generate v2").
+    """
+    try:
+        from skills import load_skills
+    except ImportError:
+        return []
+
+    all_skills = load_skills()
+    # Exclude the failing skill and any with open circuit
+    candidates = [
+        s for s in all_skills
+        if s.id != failing_skill.id and s.circuit_state != "open" and s.utility_score > 0.5
+    ]
+    if not candidates:
+        return []
+
+    # Score by compactness-adjusted utility
+    scored = sorted(candidates, key=_compactness_adjusted_score, reverse=True)
+    return scored[:k]
+
+
 def rewrite_skill(skill: "Skill", adapter) -> Optional["Skill"]:
     """LLM-rewrite a skill whose circuit breaker is OPEN.
 
@@ -1077,6 +1132,20 @@ def rewrite_skill(skill: "Skill", adapter) -> Optional["Skill"]:
         else "(no specific failure reasons recorded)"
     )
 
+    # Build ranked-candidate context (FunSearch pattern: show top performers so LLM
+    # can recombine their approaches rather than starting from scratch)
+    peer_skills = _top_peer_skills(skill)
+    peer_context = ""
+    if peer_skills:
+        lines = ["Top-performing peer skills for reference (compactness-adjusted):"]
+        for i, peer in enumerate(peer_skills):
+            steps_preview = "; ".join(peer.steps_template[:3])
+            lines.append(
+                f"  v{i} (score={peer.utility_score:.2f}): {peer.name} — {peer.description[:100]}"
+                f"\n    Steps: {steps_preview}"
+            )
+        peer_context = "\n" + "\n".join(lines) + "\n"
+
     prompt = f"""You are improving a skill definition for an autonomous agent system.
 
 The skill "{skill.name}" has a tripped circuit breaker (consecutive_failures={skill.consecutive_failures},
@@ -1089,7 +1158,7 @@ Current skill description:
 
 Current steps template:
 {chr(10).join(f"{i+1}. {s}" for i, s in enumerate(skill.steps_template))}
-
+{peer_context}
 Based on the failure pattern, rewrite the skill. Output ONLY valid JSON with these keys:
 {{
   "description": "<revised one-sentence description of what this skill does>",
@@ -1122,11 +1191,25 @@ Rules:
         return None
 
     new_desc = str(parsed.get("description", skill.description)).strip()
-    new_steps = [str(s) for s in parsed.get("steps_template", skill.steps_template)]
-    new_triggers = [str(t) for t in parsed.get("trigger_patterns", skill.trigger_patterns)]
+    new_steps = [str(s).strip() for s in parsed.get("steps_template", skill.steps_template) if str(s).strip()]
+    new_triggers = [str(t).strip() for t in parsed.get("trigger_patterns", skill.trigger_patterns) if str(t).strip()]
 
+    # Pre-save sanity gate (FunSearch pattern: discard invalid candidates before storing)
+    # Silently discard if the rewrite fails basic structural requirements.
     if not new_steps or not new_desc:
+        log.debug("rewrite_skill discard: empty steps or description for skill %s", skill.id)
         return None
+    if len(new_desc) > 400:
+        log.debug("rewrite_skill discard: description too long (%d chars) for skill %s",
+                  len(new_desc), skill.id)
+        return None
+    if len(new_steps) > 10:
+        log.debug("rewrite_skill discard: too many steps (%d) for skill %s",
+                  len(new_steps), skill.id)
+        return None
+    if not new_triggers:
+        # Inherit existing triggers rather than discarding
+        new_triggers = skill.trigger_patterns
 
     # Apply rewrite — set to half_open (probationary) not closed
     skills = load_skills()
@@ -1303,6 +1386,9 @@ def run_skill_maintenance(
         maybe_auto_promote_skills,
         maybe_demote_skills,
         skills_needing_rewrite,
+        frontier_skills,
+        retire_losing_variants,
+        create_skill_variant,
     )
 
     promoted: list = []
@@ -1341,6 +1427,62 @@ def run_skill_maintenance(
     except Exception as e:
         if verbose:
             print(f"[evolver] rewrite scan failed: {e}", file=sys.stderr)
+
+    # Agent0 steal: frontier task targeting — also rewrite skills in the 40-70% zone.
+    # These are neither trivially successful nor circuit-broken; they're the hardest
+    # to diagnose without trying an improved version. Cap at 2 per cycle to avoid
+    # over-spending LLM budget on exploratory rewrites.
+    try:
+        _frontier = frontier_skills()
+        if _frontier and verbose:
+            print(f"[evolver] frontier skills (40-70% utility): {[s.id for s in _frontier[:2]]}", file=sys.stderr)
+        if not dry_run and adapter is not None:
+            for skill in _frontier[:2]:  # max 2 frontier rewrites per cycle
+                if skill.id not in rewrite_candidates:  # don't double-rewrite
+                    # Pre-score candidate with replay-based fitness oracle before rewriting
+                    try:
+                        from strategy_evaluator import evaluate_skill as _eval_skill
+                        _fitness = _eval_skill(skill)
+                        log.info(
+                            "evolver frontier_prescore: skill %s fitness=%.2f confidence=%.2f verdict=%s",
+                            skill.id, _fitness.fitness_score, _fitness.confidence, _fitness.verdict,
+                        )
+                        if _fitness.verdict == "PASS" and _fitness.confidence >= 0.3:
+                            if verbose:
+                                print(
+                                    f"[evolver] frontier skill {skill.id} scores PASS — skipping rewrite",
+                                    file=sys.stderr,
+                                )
+                            continue
+                    except Exception as _pe:
+                        log.debug("strategy pre-score failed (non-fatal): %s", _pe)
+                    _updated = rewrite_skill(skill, adapter=adapter, verbose=verbose)
+                    if _updated is not None:
+                        # A/B variant: frontier rewrites become challengers, not replacements
+                        try:
+                            _challenger = create_skill_variant(skill, _updated)
+                            from skills import save_skill as _save_skill
+                            _save_skill(_challenger)
+                            rewritten.append(skill.id)
+                            log.info(
+                                "evolver frontier_ab: created challenger %s for parent %s (utility=%.2f)",
+                                _challenger.id, skill.id, skill.utility_score,
+                            )
+                        except Exception as _ve:
+                            log.debug("ab variant save failed (non-fatal): %s", _ve)
+    except Exception as _fe:
+        log.debug("frontier rewrite scan failed (non-fatal): %s", _fe)
+
+    # A/B retirement: check existing variants for sufficient evidence and retire losers
+    try:
+        _ab_result = retire_losing_variants(dry_run=dry_run)
+        if _ab_result.get("retired") and verbose:
+            print(
+                f"[evolver] ab_variants: promoted={_ab_result['promoted']} retired={_ab_result['retired']}",
+                file=sys.stderr,
+            )
+    except Exception as _ab_e:
+        log.debug("ab variant retirement failed (non-fatal): %s", _ab_e)
 
     return {
         "promoted": promoted,

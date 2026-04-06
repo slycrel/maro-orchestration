@@ -538,15 +538,20 @@ def _build_loop_context(
     skills_context = ""
     had_no_matching_skill = False
     try:
-        from skills import find_matching_skills, format_skills_for_prompt
+        from skills import find_matching_skills, format_skills_for_prompt, select_variant_for_task
         _matching_skills = find_matching_skills(goal)
-        skills_context = format_skills_for_prompt(_matching_skills)
-        if _matching_skills and verbose:
+        # A/B routing: for each matched skill, select parent or active challenger
+        # using a hash of the goal as a stable routing key (loop_id not yet assigned)
+        import hashlib as _hashlib
+        _routing_key = _hashlib.sha1(goal.encode()).hexdigest()[:8]
+        _matched_and_routed = [select_variant_for_task(s, _routing_key) for s in _matching_skills]
+        skills_context = format_skills_for_prompt(_matched_and_routed)
+        if _matched_and_routed and verbose:
             print(
-                f"[poe] injecting {len(_matching_skills)} skill(s) into decompose",
+                f"[poe] injecting {len(_matched_and_routed)} skill(s) into decompose",
                 file=sys.stderr, flush=True,
             )
-        had_no_matching_skill = not _matching_skills
+        had_no_matching_skill = not _matched_and_routed
     except Exception:
         had_no_matching_skill = True
 
@@ -779,6 +784,8 @@ def _finalize_loop(
     total_tokens_out: int,
     elapsed_ms: int,
     had_no_matching_skill: bool,
+    failure_chain: Optional[List[str]] = None,
+    recovery_steps: int = 0,
 ) -> None:
     """Run all post-loop side effects after the main execution loop ends.
 
@@ -859,6 +866,8 @@ def _finalize_loop(
             model=getattr(adapter, "model_key", ""),
             adapter=adapter if not dry_run else None,
             dry_run=dry_run,
+            failure_chain=failure_chain or [],
+            recovery_steps=recovery_steps,
         )
         # Meta-Harness steal: persist step-level traces so the evolver proposer
         # sees full execution context, not just aggregate summaries.
@@ -1437,6 +1446,9 @@ def run_agent_loop(
     _next_step_injected_context: str = ""  # Phase 11: injected context from previous step's hooks
     _march_of_nines_alert = False  # Phase 19: cumulative step success rate alert
     _step_retries: Dict[str, int] = {}  # roadblock resilience: retries per step text
+    # Agent0 steal: failure-chain recording — every retry/recovery is a training signal
+    _failure_chain: List[str] = []
+    _recovery_step_count: int = 0
 
     # Lazy import for injection scanning (security.py)
     try:
@@ -2048,9 +2060,12 @@ def run_agent_loop(
                 print(f"[poe] step {step_idx} done: {step_summary[:120]}", file=sys.stderr, flush=True)
             # Phase 32: update utility score for any matching skills
             try:
-                from skills import find_matching_skills, update_skill_utility
+                from skills import find_matching_skills, update_skill_utility, record_variant_outcome
                 for _sk in find_matching_skills(step_text + " " + goal, use_router=False):
                     update_skill_utility(_sk.id, success=True)
+                    # A/B: record win for any variant that was selected for this step
+                    if getattr(_sk, "variant_of", None) is not None:
+                        record_variant_outcome(_sk.id, success=True)
             except Exception:
                 pass
             # Phase 33: record per-step cost
@@ -2077,6 +2092,11 @@ def run_agent_loop(
             _decision = _handle_blocked_step(step_text, outcome, _prior_retries, adapter)
             if _decision.retry:
                 _step_retries[step_text] = _prior_retries + 1
+                _recovery_step_count += 1
+                _br_reason = outcome.get("stuck_reason", "blocked")
+                _failure_chain.append(
+                    f"step {step_idx} blocked ({_br_reason[:60]}); retry {_prior_retries + 1} with hint"
+                )
                 # vtrivedy10: re-inject original goal on retry to counter instruction fade-out
                 _retry_reminder = (
                     f"RETRY REMINDER — ORIGINAL GOAL: {goal}\n"
@@ -2115,6 +2135,10 @@ def run_agent_loop(
                 # Step-shape violation: inject the split steps in place of the stuck one.
                 # E.g. a combined "run tests and analyze failures" becomes two atomic steps.
                 # Apply shaper so recovery-generated steps are also guaranteed atomic.
+                _failure_chain.append(
+                    f"step {step_idx} split: combined step split into {len(_decision.split_into)} parts"
+                )
+                _recovery_step_count += 1
                 _split_shaped = _shape_steps(list(_decision.split_into), label="replan-split")
                 for _new_step in reversed(_split_shaped):
                     remaining_steps.insert(0, _new_step)
@@ -2142,14 +2166,19 @@ def run_agent_loop(
             else:
                 loop_status = _decision.loop_status
                 stuck_reason = _decision.stuck_reason
+                _failure_chain.append(f"step {step_idx} terminal: {stuck_reason[:80]}")
                 if item_index >= 0:
                     o.mark_item(project, item_index, o.STATE_BLOCKED)
                 if verbose:
                     print(f"[poe] step {step_idx} stuck after retry: {stuck_reason}", file=sys.stderr, flush=True)
                 # Phase 32: attribute failure to any matching skills
                 try:
-                    from skills import attribute_failure_to_skills
+                    from skills import attribute_failure_to_skills, find_matching_skills, record_variant_outcome
                     attribute_failure_to_skills(step_text, stuck_reason, goal=goal)
+                    # A/B: record loss for any variant that was selected for this terminal failure
+                    for _sk in find_matching_skills(step_text + " " + goal, use_router=False):
+                        if getattr(_sk, "variant_of", None) is not None:
+                            record_variant_outcome(_sk.id, success=False)
                 except Exception:
                     pass
                 # Phase 33: record per-step cost (blocked)
@@ -2441,6 +2470,8 @@ def run_agent_loop(
         total_tokens_out=total_tokens_out,
         elapsed_ms=elapsed_total,
         had_no_matching_skill=_had_no_matching_skill,
+        failure_chain=_failure_chain,
+        recovery_steps=_recovery_step_count,
     )
 
     # GAP 3: delete checkpoint on successful completion (keep on stuck/partial for resume)

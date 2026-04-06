@@ -238,6 +238,31 @@ def run_doctor() -> bool:
     except Exception as exc:
         results.append(_check("SlowUpdateScheduler", False, str(exc)[:80]))
 
+    # channels (GitHub / Reddit / YouTube)
+    try:
+        from channels import channels_health_check
+        _ch = channels_health_check()
+        _ch_ok = _ch.get("any_available", False)
+        _ch_detail = ", ".join(
+            f"{k}={'✓' if v else '✗'}" for k, v in _ch.get("channels", {}).items()
+        )
+        results.append(_check("channels (GitHub/Reddit/YouTube)", _ch_ok, _ch_detail))
+    except Exception as _exc:
+        results.append(_check("channels", False, str(_exc)[:80]))
+
+    # polymarket-cli availability
+    try:
+        from polymarket import polymarket_health_check
+        _pm = polymarket_health_check()
+        results.append(_check(
+            "polymarket-cli",
+            _pm["available"],
+            f"{len(_pm['functions'])} functions available" if _pm["available"]
+            else "not found — pip install polymarket-cli",
+        ))
+    except Exception as _exc:
+        results.append(_check("polymarket-cli", False, str(_exc)[:80]))
+
     # Summary
     passed = sum(1 for r in results if r["ok"])
     total = len(results)

@@ -415,6 +415,14 @@ def post_heartbeat_event(event_type: str = "generic", payload: Optional[str] = N
     """
     log.info("heartbeat_event type=%s payload=%r", event_type, (payload or "")[:80])
     _wakeup_event.set()
+    # Also fire a typed event so DAG tasks awaiting this kind are unblocked.
+    # For example: a Telegram message "data is ready" fires event_type="telegram:data_ready"
+    # and a step "await:telegram" will receive the payload and continue.
+    try:
+        from interrupt import post_typed_event
+        post_typed_event(kind=event_type, payload=(payload or ""), source="heartbeat")
+    except Exception:
+        pass  # non-fatal — interrupt module may not be available
 
 _task_store_drain_active = False
 _task_store_drain_lock = threading.Lock()

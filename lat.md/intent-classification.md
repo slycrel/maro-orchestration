@@ -28,6 +28,9 @@ Magic keyword prefixes that modify routing, model tier, or execution behavior be
 | `yolo:` | Skip clarification gate |
 | `btw:` | Non-blocking observation mode |
 | `mode:thin` | Lightweight loop variant |
+| `ralph:` / `verify:` | Enable ralph_mode — verify each step after execution, retry if fails |
+| `pipeline:` | pipeline_mode — parse `step1 \| step2 \| step3` as explicit step list |
+| `strict:` | strict_mode — tighter quality gates throughout execution |
 
 ## Related Concepts
 

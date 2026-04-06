@@ -1,5 +1,221 @@
 # Changelog
 
+## [1.10.26] - 2026-04-05
+
+Phase 29 research complete — tacit knowledge + Enneagram 6w5/INFJ companion design.
+
+### Added — Phase 29 final research artifacts
+- `docs/research/tacit-vs-explicit.md`: Polanyi/Dreyfus/SECI synthesis; tacit→explicit conversion loss; Stage 4→5 transition mechanics (chunking, subsidization, schema formation); 8 design implications for crystallization pipeline (Fluid/Lesson/Identity/Skill/Rule stages); failure modes to avoid. 6/6 steps, 188k tokens.
+- `docs/research/enneagram-6w5-infj.md`: 6w5 trust calibration mechanics; INFJ Ni-Fe assumption gap + door slam; 7 combined failure modes (trust collapse cascade, double withdrawal loop, subtext overload, etc.); companion AI persona design principles (predictability > polish, acknowledge before advancing, calibrated honesty, no over-promising). 6/6 steps, 276k tokens. Informs Phase 28 persona design.
+
+## [1.10.25] - 2026-04-05
+
+Rule A/B variant system (Agent0 steal). 2917 tests passing.
+
+### Added — Skill A/B variant competition (`src/skills.py`, `src/evolver.py`)
+- `Skill` fields: `variant_of: Optional[str]` (parent ID), `variant_wins: int`, `variant_losses: int` — serialized to/from skills.jsonl; legacy skills load with safe defaults
+- `create_skill_variant(original, rewritten)` — marks rewritten skill as challenger of original, resets win/loss counters; parent unchanged
+- `get_skill_variants(parent_id, skills)` — returns all active challengers for a parent
+- `select_variant_for_task(parent, task_id, skills)` — deterministic 50/50 routing via `sha1(task_id) % pool_size`; returns parent if no challengers
+- `record_variant_outcome(skill_id, success)` — increments `variant_wins`/`variant_losses` for variant skills only; no-op for non-variants; full skills rewrite for thread safety
+- `retire_losing_variants(*, dry_run, min_uses)` — evaluates all (parent, challengers) groups; requires ≥ `min_uses` total trials before acting; challenger wins → parent content replaced, challenger retired; parent wins/tie → challenger retired; dry_run returns result without saving; `MIN_VARIANT_USES = 5`
+- Frontier rewrites in `run_skill_maintenance()` now create challenger variants (saved alongside parent) instead of immediately replacing — no skill is overwritten without competition
+- `retire_losing_variants()` wired into `run_skill_maintenance()` on every evolver cycle (non-fatal)
+- 25 new tests: `TestCreateSkillVariant`, `TestGetSkillVariants`, `TestSelectVariantForTask` (deterministic/covers-both/multiple-variants), `TestRecordVariantOutcome` (wins/losses/noop), `TestRetireLosingVariants` (promote/retire/insufficient-data/dry-run/no-variants/missing-parent/tie), `TestSkillVariantFields` (roundtrip/legacy)
+
+## [1.10.24] - 2026-04-05
+
+Events as first-class graph nodes (@_overment steal). 2892 tests passing.
+
+### Added — Typed event graph nodes (`src/interrupt.py`, `src/step_exec.py`, `src/heartbeat.py`)
+- `TypedEvent` dataclass: `id`, `kind`, `payload`, `source`, `timestamp` — first-class event with `to_dict()`/`from_dict()` serialization
+- `EventRouter` class: thread-safe in-memory event bus with `post(kind, payload, source)` and `wait_for(kind, timeout=300.0)` (blocks until matching event arrives or timeout); events consumed at most once per kind (first-come first-served); ring buffer capped at 200 events, stale events (>1h) ignored; `pending_count(kind)` and `recent_events(kind)` for inspection
+- `_ROUTER` module-level singleton; `get_event_router()` accessor; `post_typed_event(kind, payload, source)` convenience function
+- `await:<kind>` step shorthand in `execute_step`: steps matching `^await(?:_event)?:<kind>(\[timeout=Ns\])?` are intercepted before any LLM call; blocks on `EventRouter.wait_for(kind, timeout)`; returns `done` with event payload as result (0 LLM tokens), or `blocked` on timeout; optional `[timeout=Ns]` override (default 300s)
+- `post_heartbeat_event()` now also fires typed events — Telegram/Slack messages routed through heartbeat automatically unblock any `await:telegram` or `await:slack` DAG step
+- 26 new tests: `TestTypedEvent`, `TestEventRouterBasic` (concurrent waiters, post-before/after-wait, consume-once), `TestGlobalRouter`, `TestAwaitEventInExecuteStep` (done/blocked/timeout-param/case-insensitive), `TestHeartbeatFiresTypedEvent`
+
+## [1.10.23] - 2026-04-05
+
+Replay-based fitness oracle (FunSearch steal). 2866 tests passing.
+
+### Added — Replay-based fitness oracle (`src/strategy_evaluator.py`)
+- `SimilarOutcome` dataclass: past outcome match with `outcome_id`, `goal`, `status`, `similarity`, `weight`, `summary`
+- `StrategyFitnessReport` dataclass: full evaluation result — `fitness_score`, `confidence`, `verdict` (PASS/FAIL/UNCERTAIN), `similar_outcomes`, `done_count`, `stuck_count`, `above_threshold`, `notes`
+- `_tokenize(text)`: stop-word-filtered alphanumeric tokenizer (no deps)
+- `_tfidf_cosine(query_terms, docs)`: TF-IDF cosine similarity engine (pure stdlib)
+- `evaluate_strategy(strategy, *, outcomes, max_outcomes, top_k, pass_threshold, fail_threshold)`: TF-IDF ranks past outcomes by similarity to strategy text; computes similarity-weighted pass-rate as `fitness_score`; confidence scales with count and quality of similar outcomes; no LLM in the eval path
+- `evaluate_skill(skill)`: convenience wrapper — builds strategy text from skill description + trigger_patterns + steps_template
+- `evaluate_suggestion(suggestion)`: convenience wrapper — uses `suggestion.suggestion` text
+- CLI entry point: `python strategy_evaluator.py "strategy text"` prints report + top-5 similar outcomes
+- 35 new tests: `TestTokenize`, `TestTfidfCosine`, `TestEvaluateStrategyNoOutcomes`, `TestEvaluateStrategyWithOutcomes`, `TestEvaluateStrategyThresholds`, `TestEvaluateSkill`, `TestEvaluateSuggestion`, `TestStrategyFitnessReportSummary`
+
+### Changed — Frontier rewrite pre-scoring (`src/evolver.py`)
+- `run_skill_maintenance()` frontier rewrite loop now calls `evaluate_skill()` before rewriting a frontier skill; if verdict is PASS with confidence ≥ 0.3, rewrite is skipped (skill is already performing well historically); pre-score failure is non-fatal
+
+## [1.10.22] - 2026-04-05
+
+Subagent context firewall — TeamCreateTool version. 2831 tests passing.
+
+### Added — Subagent context firewall for TeamCreateTool (`src/team.py`)
+- `firewall_shared_ctx(task, shared_ctx, *, max_entries=5, max_chars_per_entry=200)`: relevance-ranks shared_ctx entries by word-overlap with task description (regex tokenizer, stops removed); returns top-ranked entries only. Prevents team workers from being overwhelmed by irrelevant parent context.
+- Wired into `create_team_worker()`: replaces the naive `[-5:]` chronological slice; prompt label updated to "Relevant context from prior steps"
+- 5 new tests: `TestFirewallSharedCtx` — relevance ranking, max_entries cap, value truncation, empty ctx, irrelevant entry exclusion
+
+## [1.10.21] - 2026-04-05
+
+Majority-vote pseudo-labels (Agent0 steal). 2826 tests passing.
+
+### Added — Majority-vote lesson extraction (`src/memory.py`)
+- `_jaccard_similarity(a, b)`: word-level Jaccard similarity for lesson dedup/agreement detection
+- `majority_vote_lessons(all_samples, *, threshold=0.4)`: filters lesson lists to only include lessons agreed on by strict majority of k samples; returns top-3 deduplicated
+- `extract_lessons_via_llm()` extended with `k_samples` kwarg (default: 1, backwards-compatible). When `k_samples ≥ 2`, draws k independent LLM samples at temperature 0.3, passes all to `majority_vote_lessons` — only agreed-on lessons enter the lesson store
+- 7 new tests: `TestMajorityVoteLessons` — k=1 pass-through, empty samples, majority accepted, minority rejected, cap-at-3, k_samples multi-path, k_samples=1 unchanged
+
+## [1.10.20] - 2026-04-05
+
+Frontier task targeting (Agent0 steal). 2819 tests passing.
+
+### Added — Frontier task targeting (`src/skills.py`, `src/evolver.py`)
+- `FRONTIER_LOW = 0.40`, `FRONTIER_HIGH = 0.70`: define the frontier zone (skills challenging but not circuit-broken)
+- `frontier_skills(skills=None, *, min_uses=3)`: returns skills with `FRONTIER_LOW ≤ utility_score ≤ FRONTIER_HIGH`, not circuit-open, sorted ascending by utility (hardest first)
+- Wired into `run_evolver_with_friction()`: after open-circuit rewrites, rewrites up to 2 frontier skills per cycle (doesn't double-rewrite open-circuit skills); non-fatal
+- 5 new tests: `TestFrontierSkills` — frontier zone filter, open-circuit exclusion, min_uses guard, sort order, disk-load path
+
+## [1.10.19] - 2026-04-05
+
+Skill validation harness (Voyager/Agent0 steal). 2814 tests passing.
+
+### Added — Skill validation harness with repair loop (`src/skills.py`)
+- `_SKILL_VALIDATION_SYSTEM`: LLM system prompt for skill quality evaluation (3 criteria: description clarity, step actionability, trigger relevance)
+- `validate_skill_for_promotion(skill, adapter)`: LLM quality gate returning `{valid, reason, repair_hint}`; fail-open on error (returns valid=True if LLM unavailable)
+- `maybe_auto_promote_skills(adapter=None, max_repair_attempts=3)`: replaces old version; with `adapter` — validates before each promotion, retries up to `max_repair_attempts` times via `evolver.rewrite_skill()`; skills failing all attempts stay provisional; without `adapter` — original behavior preserved (no validation overhead)
+- 8 new tests: `TestSkillValidationHarness` covering pass/fail/error/repair-loop/max-attempts/threshold-guard
+
+## [1.10.18] - 2026-04-05
+
+Agent0 synthesis + Failure-Chain Lesson Recording. 2806 tests passing.
+
+### Added — Agent0 research synthesis
+- `docs/research/agent0-synthesis.md`: full synthesis of Agent0 (arxiv 2511.16043), FunSearch, EUREKA, Voyager research run. 3 laws of cross-paper convergence, Agent0 mechanism (two-agent co-evolution, R_unc frontier reward, GRPO optimizer), Poe gap analysis table, 5 prioritized recommendations.
+- **Problem generation (Agent0)** backlog item marked DONE — research processed.
+
+### Added — Failure-Chain Lesson Recording (`src/memory.py`, `src/agent_loop.py`) — Agent0 steal
+- `Outcome.failure_chain: List[str]` — ordered list of failure/diagnosis/recovery strings stored per run
+- `Outcome.recovery_steps: int` — count of retry/recovery actions
+- `record_outcome()` and `reflect_and_record()` accept `failure_chain` and `recovery_steps` kwargs; persisted to `outcomes.jsonl`
+- `_finalize_loop()` extended with same parameters
+- `run_agent_loop()` accumulates `_failure_chain` list: one entry per retry (`blocked; retry N with hint`), split (`split into N parts`), and terminal stuck (`terminal: reason`); `_recovery_step_count` incremented on each recovery
+- Every retry in the execution loop is now a training signal stored alongside the outcome — turns error paths into structured lessons
+
+## [1.10.17] - 2026-04-05
+
+Three-layer memory compression (724-office steal). 2806 tests passing.
+
+### Added — Three-layer memory compression (`src/memory.py`)
+- `CompressedBatch` dataclass: `batch_id`, `summary`, `task_types`, `outcome_ids`, `batch_size`, `oldest_at`, `newest_at`, `compressed_at`
+- `compress_old_outcomes(threshold, batch_size, keep_recent, dry_run, adapter)`: when `outcomes.jsonl` exceeds `threshold`, compresses the oldest `batch_size` entries (respecting `keep_recent` floor) via LLM or heuristic fallback → saves to `compressed_outcomes.jsonl` → rewrites `outcomes.jsonl` without compressed entries
+- `load_compressed_batches(limit)`: loads most-recent-first from `compressed_outcomes.jsonl`
+- `_tfidf_rank_batches(query, batches)`: TF-IDF cosine similarity ranking of CompressedBatch objects by summary text (no deps)
+- `load_outcomes_with_context(goal, limit, compressed_limit)`: three-layer retrieval — recent raw outcomes + top TF-IDF-ranked compressed batches + merged `context_text` string ready for prompt injection
+- 11 new tests in `tests/test_memory.py`: `TestCompressOldOutcomes` (6 tests), `TestLoadCompressedBatches` (2 tests), `TestLoadOutcomesWithContext` (3 tests)
+
+## [1.10.16] - 2026-04-05
+
+Island model diversity (FunSearch steal). 2795 tests passing.
+
+### Added — Island model for anti-monoculture skill diversity (FunSearch steal)
+- `src/skills.py`: `Skill.island` field (persisted in JSON); `_ISLAND_KEYWORDS` keyword bank (research/build/analysis); `_ISLAND_DEFAULT = "general"`
+- `assign_island(skill)`: classifies skill into research/build/analysis/general via keyword scoring on name + description + trigger_patterns — no LLM, no deps
+- `ensure_island_assigned(skill)`: mutates `.island` in place if unset
+- `get_skills_by_island(skills=None)`: groups skills by island (loads from disk if None); auto-assigns untagged skills
+- `cull_island_bottom_half(island_name, *, min_island_size, dry_run)`: removes bottom half of **open-circuit** skills per island; respects min_island_size floor; dry_run mode returns IDs without deleting
+- `run_island_cycle(*, min_island_size, dry_run, verbose)`: full cycle — assigns untagged skills, then culls open-circuit bottom half per island; returns `{assigned, culled, total_culled}`
+- Wired into `run_evolver()`: island cycle runs on every evolver invocation (non-fatal, non-blocking)
+- 11 new tests: `TestIslandModel` class covering classification, grouping, culling guards (min_island_size, open-circuit filter), dry_run
+
+## [1.10.11] - 2026-04-05
+
+Phase 48 (poe-mine/convo_miner) complete. Phase 29 research DONE. Phase 30 follow-on: per-model cost tracking + evolver cost scanning. Event-reactive heartbeat. Factory mode replay. 2710 tests passing.
+
+### Added — Phase 48: Conversation Mining (poe-mine)
+- `src/convo_miner.py`: `Idea` dataclass, `_score_line()` (keyword signals + domain gate + noise filter), `_extract_ideas_from_text()`, `scan_session_logs()` (JSONL session log scanning with `since=` filter), `scan_openclaw_docs()`, `scan_poe_memory()` (BACKLOG.md unchecked items → high-confidence ideas), `scan_git_log()`, `_deduplicate()` (Jaccard similarity, keeps highest confidence), `generate_report()` (markdown with tier sections + source breakdown)
+- `inject_into_backlog()`: appends high-confidence mined ideas as `- [ ]` items to BACKLOG.md; 40-char substring dedup; caps at 20 injections per run
+- CLI flags: `--inject-backlog`, `--inject-threshold FLOAT`; stderr reports injected count
+- Registered as `poe-mine` entry point
+
+### Added — Phase 30 follow-on: per-model cost tracking
+- `src/memory.py`: `model: str = ""` field on `Outcome`; `record_outcome()` + `reflect_and_record()` accept `model=`; `estimate_cost()` is model-aware
+- `src/agent_loop.py`: passes `model=getattr(adapter, "model_key", "")` to `reflect_and_record()`
+- `src/metrics.py`: `ModelMetrics` dataclass; `by_model: Dict[str, ModelMetrics]` on `SystemMetrics`; `compute_metrics()` populates it; `format_metrics_report()` emits "By Model" section sorted by spend
+
+### Added — Phase 30 follow-on: evolver cost scanning
+- `src/evolver.py`: `scan_step_costs()` — pure statistical analysis of `step-costs.jsonl`; identifies step types with avg tokens >2× median; emits `cost_optimization` `Suggestion` entries recommending MODEL_CHEAP routing; `run_evolver(scan_costs=True)` wired
+
+### Added — Event-reactive heartbeat (steal list item M)
+- `src/heartbeat.py`: `_wakeup_event = threading.Event()`; replaces `time.sleep(interval)` with `_wakeup_event.wait(timeout=interval)` + `clear()`; `post_heartbeat_event(event_type, payload)` public API
+- `src/interrupt.py`: `InterruptQueue.post()` calls `post_heartbeat_event()` after persisting — new interrupts immediately wake the heartbeat loop
+
+### Added — Factory mode replay
+- `src/observe.py`: `/api/replay-factory` POST endpoint — reads 10 recent outcomes, calls `scan_outcomes_for_signals()`, queues up to 3 suggested sub-missions via `handle()` in a daemon thread; returns 202 immediately
+- Dashboard: "Factory Mode Replay" button + `replayFactory()` JS function
+
+### Added — Phase 29: Human Psychology Research (DONE)
+- `docs/research/tacit-vs-explicit.md`: Polanyi tacit dimension, Dreyfus 5-stage model, SECI model, Stage 4→5 transition mechanics, 8 design implications for crystallization pipeline
+- `docs/research/enneagram-6w5-infj.md`: 6w5 communication patterns, INFJ failure modes, trust calibration mechanics, companion persona design principles
+
+## [1.10.15] - 2026-04-05
+
+Skill stemmer + pre-scoring discard gate. 2784 tests passing.
+
+### Added — Lightweight skill stemmer (MetaClaw steal)
+- `src/skills.py`: `_stem(token)` — suffix-stripping porter-style stemmer (no deps); strips "ing", "tion", "ed", "er", "ers", "es", "ly", "s", "ness", "ment" with 4-char root minimum
+- Applied inside `_skill_tokens()` → TF-IDF skill retrieval now matches morphological variants ("researching" ↔ "research", "builder" ↔ "build")
+- 8 new tests: `TestStemmer` class
+
+### Added — Pre-scoring discard gate in rewrite_skill (FunSearch steal)
+- `src/evolver.py:rewrite_skill()`: invalid LLM-generated rewrites are silently discarded before saving — empty steps/desc → discard; description >400 chars → discard; >10 steps → discard; empty triggers → inherit from existing skill. Prevents bad candidates from entering the skill gene pool.
+
+## [1.10.14] - 2026-04-05
+
+Channels architecture + dogfood research artifacts. 2776 tests passing.
+
+### Added — `src/channels.py` (Agent-Reach steal: pluggable data channels)
+- `ChannelResult` dataclass: `channel`, `query`, `items`, `error`, `truncated`; `to_text()` + `to_json()`
+- `GitHubChannel`: `search_repositories()`, `search_code()`, `search_issues()` — GitHub REST API v3, no auth required
+- `RedditChannel`: `posts()`, `search()` — Reddit public JSON API, no auth required
+- `YouTubeChannel`: `transcript()` — uses youtube-transcript-api if installed, falls back to oEmbed metadata
+- `fetch_channel(url_or_query)` — auto-dispatches to right channel based on URL pattern
+- Agent-callable functions: `github_search()`, `reddit_posts()`, `reddit_search()`, `youtube_transcript()`
+- `channels_health_check()` wired into `poe-doctor`
+- 33 new tests
+
+### Added — Research artifacts (dogfood runs 2026-04-05)
+- `docs/research/nootropic-stack-verified.md`: 10-compound reference table with RCT evidence grades, doses, synergies, contraindications, verification notes. Produced by `verify:` prefix run (6/6 steps, 679k tokens, cross-reference pass applied).
+
+## [1.10.13] - 2026-04-05
+
+Polymarket CLI integration. 2743 tests passing.
+
+### Added — `src/polymarket.py` (STEAL_LIST: Polymarket CLI integration)
+- Wraps all `polymarket-cli` subcommands as Python functions: `polymarket_search()`, `polymarket_list()`, `polymarket_market()`, `polymarket_price()`, `polymarket_midpoint()`, `polymarket_history()`, `polymarket_trades()`
+- Read-only; no wallet required; structured JSON output; error handling returns `{"error": ...}` objects (no exceptions to caller)
+- `polymarket_health_check()` — availability probe; wired into `poe-doctor` as a new check
+- 25 new tests
+
+## [1.10.12] - 2026-04-05
+
+FunSearch steal items + research docs. 2718 tests passing.
+
+### Added — FunSearch-inspired evolver improvements (score-weighted mutation context)
+- `src/evolver.py`: `_compactness_adjusted_score(skill)` — brevity-penalized utility: `utility_score / log(1 + char_count/200)`. Favors compact skills at selection time without modifying the EMA utility_score.
+- `src/evolver.py`: `_top_peer_skills(failing_skill, k=2)` — returns up to k healthy peer skills ranked by compactness-adjusted score; excludes open-circuit skills and utility_score < 0.5. Used to build ranked-candidate mutation context.
+- `src/evolver.py`: `rewrite_skill()` now includes peer context block in prompt — LLM sees top-K performers as version-tagged context ("v0 score=X: …, v1 score=Y: …") before generating rewrite. FunSearch pattern: informed recombination, not fresh generation.
+- 9 new tests: `TestCompactnessAdjustedScore` (4) + `TestTopPeerSkills` (5)
+
+### Added — Research docs
+- `docs/research/funsearch-agent-design.md`: FunSearch/EUREKA/Voyager synthesis — 7 shared primitives, gap analysis vs Poe's existing modules, concrete design sketch for agent self-improvement via FunSearch loop. Critical gap documented: generator/evaluator separation.
+
 ## [1.10.10] - 2026-04-04
 
 Three execution modes + decompose_to_dag. 2521 passed, 5 skipped.

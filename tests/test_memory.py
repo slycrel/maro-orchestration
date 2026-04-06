@@ -499,3 +499,290 @@ class TestLoadStepTraces:
             f.write(json.dumps({"outcome_id": "o-good", "goal": "g", "steps": []}) + "\n")
         traces = load_step_traces(["o-good"])
         assert "o-good" in traces
+
+
+# ---------------------------------------------------------------------------
+# Three-layer memory compression (724-office steal)
+# ---------------------------------------------------------------------------
+
+class TestCompressOldOutcomes:
+    def _make_outcome_line(self, i, status="done"):
+        import uuid
+        return json.dumps({
+            "outcome_id": f"o-{i:04d}",
+            "goal": f"Test goal number {i}",
+            "task_type": "research",
+            "status": status,
+            "summary": f"Completed task {i} successfully",
+            "lessons": [],
+            "recorded_at": f"2026-01-{(i % 28) + 1:02d}T00:00:00+00:00",
+        })
+
+    def test_skips_when_below_threshold(self, monkeypatch, tmp_path):
+        from memory import compress_old_outcomes
+        path = tmp_path / "outcomes.jsonl"
+        with open(path, "w") as f:
+            for i in range(10):
+                f.write(self._make_outcome_line(i) + "\n")
+        monkeypatch.setattr("memory._outcomes_path", lambda: path)
+        monkeypatch.setattr("memory._compressed_outcomes_path", lambda: tmp_path / "compressed.jsonl")
+        result = compress_old_outcomes(threshold=100, dry_run=False)
+        assert result is None
+
+    def test_dry_run_returns_dummy_batch(self):
+        from memory import compress_old_outcomes, CompressedBatch
+        result = compress_old_outcomes(dry_run=True)
+        assert isinstance(result, CompressedBatch)
+        assert "dry-run" in result.summary
+
+    def test_compresses_when_above_threshold(self, monkeypatch, tmp_path):
+        from memory import compress_old_outcomes, CompressedBatch
+        path = tmp_path / "outcomes.jsonl"
+        compressed_path = tmp_path / "compressed.jsonl"
+        with open(path, "w") as f:
+            for i in range(120):
+                f.write(self._make_outcome_line(i) + "\n")
+        monkeypatch.setattr("memory._outcomes_path", lambda: path)
+        monkeypatch.setattr("memory._compressed_outcomes_path", lambda: compressed_path)
+        result = compress_old_outcomes(threshold=100, batch_size=50, keep_recent=50)
+        assert isinstance(result, CompressedBatch)
+        assert result.batch_size == 50
+        # outcomes.jsonl should now have 70 entries (120 - 50 compressed)
+        remaining = [l for l in path.read_text().splitlines() if l.strip()]
+        assert len(remaining) == 70
+        # compressed_outcomes.jsonl should have 1 entry
+        assert compressed_path.exists()
+
+    def test_respects_keep_recent(self, monkeypatch, tmp_path):
+        from memory import compress_old_outcomes
+        path = tmp_path / "outcomes.jsonl"
+        compressed_path = tmp_path / "compressed.jsonl"
+        with open(path, "w") as f:
+            for i in range(110):
+                f.write(self._make_outcome_line(i) + "\n")
+        monkeypatch.setattr("memory._outcomes_path", lambda: path)
+        monkeypatch.setattr("memory._compressed_outcomes_path", lambda: compressed_path)
+        # batch_size=200 but keep_recent=80 → should only compress 30 (110 - 80)
+        result = compress_old_outcomes(threshold=100, batch_size=200, keep_recent=80)
+        assert result is not None
+        assert result.batch_size == 30
+        remaining = [l for l in path.read_text().splitlines() if l.strip()]
+        assert len(remaining) == 80
+
+    def test_no_adapter_uses_heuristic_summary(self, monkeypatch, tmp_path):
+        from memory import compress_old_outcomes
+        path = tmp_path / "outcomes.jsonl"
+        compressed_path = tmp_path / "compressed.jsonl"
+        with open(path, "w") as f:
+            for i in range(110):
+                f.write(self._make_outcome_line(i) + "\n")
+        monkeypatch.setattr("memory._outcomes_path", lambda: path)
+        monkeypatch.setattr("memory._compressed_outcomes_path", lambda: compressed_path)
+        result = compress_old_outcomes(threshold=100, adapter=None)
+        assert result is not None
+        assert len(result.summary) > 10  # heuristic summary is non-empty
+
+    def test_returns_none_if_no_file(self, monkeypatch, tmp_path):
+        from memory import compress_old_outcomes
+        monkeypatch.setattr("memory._outcomes_path", lambda: tmp_path / "nonexistent.jsonl")
+        result = compress_old_outcomes(threshold=100)
+        assert result is None
+
+
+class TestLoadCompressedBatches:
+    def _make_batch(self, batch_id, summary):
+        from memory import CompressedBatch
+        return CompressedBatch(
+            batch_id=batch_id,
+            summary=summary,
+            task_types=["research"],
+            outcome_ids=["o-1", "o-2"],
+            batch_size=2,
+            oldest_at="2026-01-01T00:00:00+00:00",
+            newest_at="2026-01-05T00:00:00+00:00",
+        )
+
+    def test_empty_when_no_file(self, monkeypatch, tmp_path):
+        from memory import load_compressed_batches
+        monkeypatch.setattr("memory._compressed_outcomes_path", lambda: tmp_path / "compressed.jsonl")
+        assert load_compressed_batches() == []
+
+    def test_loads_batches_most_recent_first(self, monkeypatch, tmp_path):
+        from memory import load_compressed_batches, _save_compressed_batch
+        path = tmp_path / "compressed.jsonl"
+        monkeypatch.setattr("memory._compressed_outcomes_path", lambda: path)
+        b1 = self._make_batch("b1", "First batch summary")
+        b2 = self._make_batch("b2", "Second batch summary")
+        _save_compressed_batch(b1)
+        _save_compressed_batch(b2)
+        batches = load_compressed_batches(limit=10)
+        assert batches[0].batch_id == "b2"  # most recent first
+        assert batches[1].batch_id == "b1"
+
+
+class TestLoadOutcomesWithContext:
+    def test_returns_dict_with_required_keys(self, monkeypatch, tmp_path):
+        from memory import load_outcomes_with_context
+        monkeypatch.setattr("memory._outcomes_path", lambda: tmp_path / "empty.jsonl")
+        monkeypatch.setattr("memory._compressed_outcomes_path", lambda: tmp_path / "compressed.jsonl")
+        result = load_outcomes_with_context()
+        assert "recent" in result
+        assert "compressed" in result
+        assert "context_text" in result
+
+    def test_context_text_includes_both_layers(self, monkeypatch, tmp_path):
+        from memory import load_outcomes_with_context, _save_compressed_batch, CompressedBatch
+        outcomes_path = tmp_path / "outcomes.jsonl"
+        compressed_path = tmp_path / "compressed.jsonl"
+        monkeypatch.setattr("memory._outcomes_path", lambda: outcomes_path)
+        monkeypatch.setattr("memory._compressed_outcomes_path", lambda: compressed_path)
+
+        # Add one raw outcome
+        outcomes_path.write_text(json.dumps({
+            "outcome_id": "o-1",
+            "goal": "Test research goal",
+            "task_type": "research",
+            "status": "done",
+            "summary": "Found key results",
+            "lessons": [],
+            "recorded_at": "2026-01-10T00:00:00+00:00",
+        }) + "\n")
+
+        # Add one compressed batch
+        batch = CompressedBatch(
+            batch_id="b1",
+            summary="Older missions showed improvement in research tasks",
+            task_types=["research"],
+            outcome_ids=["o-old"],
+            batch_size=10,
+            oldest_at="2025-12-01T00:00:00+00:00",
+            newest_at="2025-12-31T00:00:00+00:00",
+        )
+        _save_compressed_batch(batch)
+
+        result = load_outcomes_with_context(goal="research topics")
+        assert "Compressed Memory" in result["context_text"]
+        assert "Recent Outcomes" in result["context_text"]
+        assert len(result["recent"]) == 1
+        assert len(result["compressed"]) == 1
+
+    def test_tfidf_ranks_compressed_by_relevance(self, monkeypatch, tmp_path):
+        from memory import load_outcomes_with_context, _save_compressed_batch, CompressedBatch
+        outcomes_path = tmp_path / "outcomes.jsonl"
+        compressed_path = tmp_path / "compressed.jsonl"
+        monkeypatch.setattr("memory._outcomes_path", lambda: outcomes_path)
+        monkeypatch.setattr("memory._compressed_outcomes_path", lambda: compressed_path)
+        outcomes_path.write_text("")
+
+        # Two batches — one about research, one about deployment
+        b1 = CompressedBatch(
+            batch_id="b1",
+            summary="Research tasks improved: web scraping and information retrieval worked well",
+            task_types=["research"],
+            outcome_ids=["o-1"],
+            batch_size=5,
+            oldest_at="2025-11-01T00:00:00+00:00",
+            newest_at="2025-11-15T00:00:00+00:00",
+        )
+        b2 = CompressedBatch(
+            batch_id="b2",
+            summary="Deployment tasks failed due to missing environment variables and config errors",
+            task_types=["ops"],
+            outcome_ids=["o-2"],
+            batch_size=5,
+            oldest_at="2025-12-01T00:00:00+00:00",
+            newest_at="2025-12-15T00:00:00+00:00",
+        )
+        _save_compressed_batch(b1)
+        _save_compressed_batch(b2)
+
+        # Query about research — b1 should rank higher
+        result = load_outcomes_with_context(goal="research web scraping information", compressed_limit=2)
+        assert result["compressed"][0].batch_id == "b1"
+
+
+# ---------------------------------------------------------------------------
+# Majority-vote pseudo-labels (Agent0 steal)
+# ---------------------------------------------------------------------------
+
+class TestMajorityVoteLessons:
+    def test_k1_returns_all(self):
+        from memory import majority_vote_lessons
+        samples = [["lesson A", "lesson B"]]
+        result = majority_vote_lessons(samples)
+        assert result == ["lesson A", "lesson B"]
+
+    def test_empty_samples(self):
+        from memory import majority_vote_lessons
+        assert majority_vote_lessons([]) == []
+
+    def test_majority_agreement_accepted(self):
+        from memory import majority_vote_lessons
+        samples = [
+            ["use retry on rate limit errors"],
+            ["use retry on rate limit errors", "something else"],
+            ["retry on rate limit is important"],
+        ]
+        result = majority_vote_lessons(samples)
+        # "retry on rate limit" appears in all 3 samples — should be accepted
+        assert any("retry" in r.lower() for r in result)
+
+    def test_minority_lesson_rejected(self):
+        from memory import majority_vote_lessons
+        samples = [
+            ["always validate input"],
+            ["rate limit retry needed"],
+            ["rate limit retry needed"],
+        ]
+        result = majority_vote_lessons(samples)
+        # "always validate input" only in 1 of 3 — should be rejected
+        assert not any("validate" in r.lower() for r in result)
+
+    def test_caps_at_3_lessons(self):
+        from memory import majority_vote_lessons
+        samples = [
+            ["lesson A", "lesson B", "lesson C", "lesson D"],
+            ["lesson A", "lesson B", "lesson C", "lesson D"],
+            ["lesson A", "lesson B", "lesson C", "lesson D"],
+        ]
+        result = majority_vote_lessons(samples)
+        assert len(result) <= 3
+
+    def test_k_samples_multi_sample_path(self, monkeypatch):
+        from memory import extract_lessons_via_llm
+        import types
+
+        call_count = [0]
+        all_lessons = [
+            ["retry on failure is key"],
+            ["retry on failure is key"],
+            ["unrelated lesson about something else"],
+        ]
+
+        class FakeAdapter:
+            def complete(self, messages, **kw):
+                idx = call_count[0]
+                call_count[0] += 1
+                import json
+                return types.SimpleNamespace(content=json.dumps(all_lessons[idx]))
+
+        result = extract_lessons_via_llm(
+            "some goal", "done", "some summary", "research",
+            adapter=FakeAdapter(), k_samples=3
+        )
+        assert call_count[0] == 3
+        assert any("retry" in r.lower() for r in result)
+
+    def test_k1_path_unchanged(self, monkeypatch):
+        from memory import extract_lessons_via_llm
+        import types, json
+
+        class FakeAdapter:
+            def complete(self, messages, **kw):
+                return types.SimpleNamespace(content=json.dumps(["single lesson"]))
+
+        result = extract_lessons_via_llm(
+            "goal", "done", "summary", "general",
+            adapter=FakeAdapter(), k_samples=1
+        )
+        assert result == ["single lesson"]

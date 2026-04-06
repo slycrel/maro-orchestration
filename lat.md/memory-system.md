@@ -20,15 +20,16 @@ Modules implementing memory recording, skill promotion, and failure classificati
 - `src/evolver.py` — meta-improvement every ~10 heartbeats; scans outcomes for signals
 - `src/introspect.py` — failure classification; feeds recovery planner
 
-## Pending: Promotion Cycle (Phase 56)
+## Promotion Cycle (Phase 56 — DONE)
 
-The gap Poe has: lessons recorded but not systematically promoted to standing rules applied by default.
+Observation → hypothesis (2+ confirmations) → standing rule. Contradictions demote. Decision journal (ADR-style) searched before new decisions.
 
-**Implementation plan:**
-- `src/memory.py` — add `promote_lesson()` + hypothesis tracking (observation → 2+ confirmations → standing rule; contradiction demotes)
-- `src/memory.py` — add decision journal: ADR-style log searched before new decisions
-- `src/evolver.py` — wire promotion cycle into meta-improvement loop
-- `src/inspector.py` — quality gate trigger history → self-tightening (triggers promote, never-fires prune)
+- `observe_pattern()` — records an observation; promotes to standing rule after 2+ confirmations
+- `contradict_pattern()` — demotes a hypothesis; prevents false standing rules
+- `inject_standing_rules()` — injects promoted rules into every decompose call
+- `record_decision()` / `inject_decisions()` — decision journal; both injected at decompose time
+
+Wired into evolver meta-improvement loop. Standing rules and decisions live in `memory/standing_rules.jsonl` and `memory/decisions.jsonl`.
 
 ## Related Concepts
 

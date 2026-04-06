@@ -514,6 +514,39 @@ def execute_step(
     """Execute one step via the LLM. Returns outcome dict."""
     _step_t0 = time.monotonic()
     log.info("step_start %d/%d: %s", step_num, total_steps, step_text[:100])
+
+    # Events as first-class graph nodes: if step_text starts with "await:<kind>"
+    # block this step until a typed event of that kind arrives (or timeout).
+    # This makes external signals (Telegram, API, timer) first-class DAG nodes —
+    # downstream steps that depend on this step receive the event payload as context.
+    _await_match = re.match(r"^await(?:_event)?:([^\s\[]+)\s*(?:\[timeout=(\d+)s\])?", step_text.strip(), re.IGNORECASE)
+    if _await_match:
+        _event_kind = _await_match.group(1).lower()
+        _timeout_s = float(_await_match.group(2) or 300)
+        log.info("step %d/%d: awaiting typed event kind=%r timeout=%.0fs", step_num, total_steps, _event_kind, _timeout_s)
+        try:
+            from interrupt import get_event_router
+            _ev = get_event_router().wait_for(_event_kind, timeout=_timeout_s)
+        except Exception as _er:
+            log.warning("step %d event router error: %s", step_num, _er)
+            _ev = None
+        if _ev is not None:
+            return {
+                "status": "done",
+                "result": f"[event:{_event_kind}] {_ev.payload or '(no payload)'}",
+                "summary": f"Received {_event_kind} event from {_ev.source}",
+                "tokens_in": 0,
+                "tokens_out": 0,
+                "inject_steps": [],
+            }
+        return {
+            "status": "blocked",
+            "stuck_reason": f"timeout after {_timeout_s:.0f}s waiting for event kind={_event_kind!r}",
+            "result": "",
+            "tokens_in": 0,
+            "tokens_out": 0,
+        }
+
     from llm import LLMMessage
 
     context_block = ""

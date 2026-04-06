@@ -88,7 +88,7 @@ deploy/              systemd service files
 | 55 | lat.md Knowledge Graph | DONE |
 | 56 | Promotion Cycle — Standing Rules + Decision Journal | DONE |
 
-**Active work (as of 2026-04-05):** Phase 48 (convo_miner/poe-mine), Phase 29 research (tacit-vs-explicit + enneagram-6w5-infj), Phase 30 follow-on (per-model cost breakdown + sub-agent token tracking in evolver). 2695 tests passing. Pending: Phase 24 (Slack), Phase 25 ops hardening, Phase 28 (blocked on Jeremy's personas/jeremy.md), OpenRouter API key setup.
+**Active work (as of 2026-04-05):** All phases through 56 DONE. Channels (GitHub/Reddit/YouTube), Polymarket CLI, FunSearch steal items (stemmer, pre-scoring gate, compactness scoring, ranked-candidate mutation), skill stemmer shipped. 2784 tests passing. Pending: Phase 24 (Slack), Phase 25 ops hardening, Phase 28 (blocked on Jeremy's personas/jeremy.md). Open steal items: island model diversity (M), replay-based fitness oracle (L), events as first-class graph nodes (L).
 
 See `ROADMAP.md` for full phase specs. See `CHANGELOG.md` for what shipped.
 

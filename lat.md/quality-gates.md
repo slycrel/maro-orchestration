@@ -21,11 +21,9 @@ poe-passes --goal "..." --passes council,debate
 poe-passes --goal "..." --preset thorough
 ```
 
-## Self-Tightening Gates (Phase 56 — pending)
+## Self-Tightening Gates (Phase 56 — DONE)
 
-Current state: quality criteria are static.
-Goal: gates that trigger frequently → promoted to always-on; gates that never trigger → pruned.
-Implementation via [[memory-system#Pending: Promotion Cycle (Phase 56)]].
+Quality criteria are now dynamic via the promotion cycle in [[memory-system]]. Gates that trigger frequently → promoted to standing rules injected at decompose. Gates that never fire → candidates for pruning via `contradict_pattern()`. Inspector trigger history feeds `observe_pattern()` in `memory.py`.
 
 ## Related Concepts
 

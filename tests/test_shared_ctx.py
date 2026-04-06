@@ -47,7 +47,7 @@ class TestCreateTeamWorkerSharedCtx:
         shared = {"market-analyst:get prices": "BTC is at 80k"}
         create_team_worker("synthesizer", "summarize findings", adapter=_Adapter(), shared_ctx=shared)
         assert "BTC is at 80k" in captured["user_msg"]
-        assert "Shared context from prior team workers" in captured["user_msg"]
+        assert "Relevant context from prior steps" in captured["user_msg"]
 
     def test_empty_shared_ctx_no_extra_block(self):
         """Empty shared_ctx should not inject any block."""
@@ -68,7 +68,7 @@ class TestCreateTeamWorkerSharedCtx:
                 )
 
         create_team_worker("analyst", "do something", adapter=_Adapter(), shared_ctx={})
-        assert "Shared context from prior team workers" not in captured["user_msg"]
+        assert "Relevant context from prior steps" not in captured["user_msg"]
 
     def test_none_shared_ctx_no_extra_block(self):
         captured = {}
@@ -252,3 +252,47 @@ class TestStepExecSharedCtxWriteback:
             shared_ctx=None,
         )
         assert outcome["status"] == "done"
+
+
+# ---------------------------------------------------------------------------
+# firewall_shared_ctx (subagent context firewall for TeamCreateTool)
+# ---------------------------------------------------------------------------
+
+class TestFirewallSharedCtx:
+    def test_returns_relevant_entries(self):
+        from team import firewall_shared_ctx
+        ctx = {
+            "step:1:fetch BTC prices": "BTC price is 80000",
+            "step:2:analyze portfolio": "portfolio has 3 assets",
+            "step:3:compute ETH volume": "ETH volume 1M",
+        }
+        result = firewall_shared_ctx("BTC price analysis", ctx)
+        # BTC-related entry should rank highest
+        assert "step:1:fetch BTC prices" in result
+
+    def test_max_entries_respected(self):
+        from team import firewall_shared_ctx
+        ctx = {f"key{i}": f"value about topic {i}" for i in range(20)}
+        result = firewall_shared_ctx("some task", ctx, max_entries=3)
+        assert len(result) <= 3
+
+    def test_values_capped_at_max_chars(self):
+        from team import firewall_shared_ctx
+        ctx = {"key": "x" * 1000}
+        result = firewall_shared_ctx("task", ctx, max_chars_per_entry=100)
+        assert all(len(v) <= 100 for v in result.values())
+
+    def test_empty_ctx_returns_empty(self):
+        from team import firewall_shared_ctx
+        assert firewall_shared_ctx("any task", {}) == {}
+
+    def test_irrelevant_entries_excluded_when_cap_small(self):
+        from team import firewall_shared_ctx
+        ctx = {
+            "step:1:BTC market data": "bitcoin price 80k",
+            "step:2:ETH market data": "ethereum price 4k",
+            "step:3:deploy kubernetes": "k8s pod started",
+        }
+        result = firewall_shared_ctx("analyze ETH price", ctx, max_entries=1)
+        # ETH-related should rank higher than k8s for an ETH task
+        assert "step:2:ETH market data" in result

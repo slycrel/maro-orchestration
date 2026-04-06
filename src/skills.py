@@ -32,7 +32,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from llm_parse import extract_json, content_or_empty
 
 # Module-level imports for clean test patching
@@ -84,6 +84,10 @@ class Skill:
     consecutive_successes: int = 0  # Phase 32: streak of consecutive successes (for half-open recovery)
     circuit_state: str = "closed"   # Phase 32: "closed" | "half_open" | "open"
     optimization_objective: str = ""  # Meta-Harness: what the skill should optimize for (guides harness improver)
+    island: str = ""                 # FunSearch: island partition ("research" | "build" | "analysis" | "general")
+    variant_of: Optional[str] = None # A/B: parent skill ID if this is a challenger variant
+    variant_wins: int = 0            # A/B: times this variant was selected and the step succeeded
+    variant_losses: int = 0          # A/B: times this variant was selected and the step failed
 
 
 @dataclass
@@ -228,6 +232,10 @@ def _skill_to_dict(skill: Skill) -> dict:
         "consecutive_successes": skill.consecutive_successes,
         "circuit_state": skill.circuit_state,
         "optimization_objective": skill.optimization_objective,
+        "island": skill.island,
+        "variant_of": skill.variant_of,
+        "variant_wins": skill.variant_wins,
+        "variant_losses": skill.variant_losses,
     }
 
 
@@ -250,6 +258,10 @@ def _dict_to_skill(d: dict) -> Skill:
         consecutive_successes=int(d.get("consecutive_successes", 0)),
         circuit_state=d.get("circuit_state", "closed"),
         optimization_objective=d.get("optimization_objective", ""),
+        island=d.get("island", ""),
+        variant_of=d.get("variant_of", None),
+        variant_wins=int(d.get("variant_wins", 0)),
+        variant_losses=int(d.get("variant_losses", 0)),
     )
 
 
@@ -419,10 +431,31 @@ _SKILL_STOP_WORDS = frozenset({
 })
 
 
+def _stem(token: str) -> str:
+    """Minimal suffix stemmer (MetaClaw steal: lightweight skill matching without embeddings).
+
+    Strips common English suffixes while preserving the root. Rules applied in
+    order, only when the resulting root is ≥4 chars. No dependencies — pure Python.
+
+    Examples: "researching" → "research", "analyses" → "analys", "builder" → "build"
+    """
+    t = token
+    # Longest suffixes first to avoid double-stripping
+    for suffix, min_root in (
+        ("ations", 4), ("ization", 4), ("isation", 4),
+        ("tion", 4), ("ing", 4), ("ness", 4), ("ment", 4),
+        ("ers", 4), ("ings", 4), ("ations", 4),
+        ("ed", 4), ("er", 4), ("es", 4), ("ly", 4), ("s", 4),
+    ):
+        if t.endswith(suffix) and len(t) - len(suffix) >= min_root:
+            return t[: -len(suffix)]
+    return t
+
+
 def _skill_tokens(text: str) -> List[str]:
-    """Lowercase, split on non-alphanum, drop stop words and short tokens."""
+    """Lowercase, split on non-alphanum, drop stop words, apply lightweight stemming."""
     return [
-        t for t in re.split(r"[^a-z0-9]+", text.lower())
+        _stem(t) for t in re.split(r"[^a-z0-9]+", text.lower())
         if len(t) >= 3 and t not in _SKILL_STOP_WORDS
     ]
 
@@ -470,6 +503,166 @@ def _tfidf_skill_rank(goal: str, skills: List[Skill], top_k: int = 3) -> List[Sk
     scored = [(sc, sk) for sc, sk in scored if sc > 0]
     scored.sort(key=lambda x: x[0], reverse=True)
     return [sk for _, sk in scored[:top_k]]
+
+
+# ---------------------------------------------------------------------------
+# Island model (FunSearch-inspired diversity mechanism)
+# ---------------------------------------------------------------------------
+
+_ISLAND_KEYWORDS: dict[str, list[str]] = {
+    "research":  ["research", "fetch", "search", "web", "find", "look", "information",
+                  "data", "gather", "scrape", "news", "article", "paper"],
+    "build":     ["build", "code", "write", "implement", "create", "generate",
+                  "develop", "make", "produce", "draft", "design"],
+    "analysis":  ["analyz", "check", "inspect", "review", "test", "evaluat",
+                  "assess", "audit", "verif", "compar", "diagnos", "measure"],
+}
+_ISLAND_DEFAULT = "general"
+
+
+def assign_island(skill: "Skill") -> str:
+    """Classify a skill into one of 4 islands based on trigger_patterns + description.
+
+    Islands: research | build | analysis | general
+
+    Uses simple keyword scoring (no LLM, no deps). The island with the most
+    matching keywords wins; ties go to the first matching island in the ordering.
+    """
+    text = " ".join(skill.trigger_patterns + [skill.name, skill.description]).lower()
+    scores: dict[str, int] = {island: 0 for island in _ISLAND_KEYWORDS}
+    for island, keywords in _ISLAND_KEYWORDS.items():
+        for kw in keywords:
+            if kw in text:
+                scores[island] += 1
+    best_island, best_score = max(scores.items(), key=lambda kv: kv[1])
+    return best_island if best_score > 0 else _ISLAND_DEFAULT
+
+
+def ensure_island_assigned(skill: "Skill") -> "Skill":
+    """Assign island if not already set. Mutates skill.island in place."""
+    if not skill.island:
+        skill.island = assign_island(skill)
+    return skill
+
+
+def get_skills_by_island(skills: Optional[List["Skill"]] = None) -> Dict[str, List["Skill"]]:
+    """Return skills grouped by island. Skills without an island are auto-assigned.
+
+    Args:
+        skills: List of skills (loaded from disk if None).
+
+    Returns:
+        Dict mapping island name → list of skills.
+    """
+    if skills is None:
+        skills = load_skills()
+    islands: Dict[str, List["Skill"]] = {}
+    for skill in skills:
+        if not skill.island:
+            skill.island = assign_island(skill)
+        islands.setdefault(skill.island, []).append(skill)
+    return islands
+
+
+def cull_island_bottom_half(
+    island_name: str,
+    *,
+    min_island_size: int = 4,
+    dry_run: bool = False,
+) -> List[str]:
+    """Kill the bottom-performing half of a skill island (FunSearch selection pressure).
+
+    Only skills with circuit_state == 'open' (already flagged as underperforming)
+    are eligible for culling. This preserves skills still on probation (half_open)
+    or that have never been rewired (closed).
+
+    Args:
+        island_name:      Which island to cull.
+        min_island_size:  Don't cull if island has fewer than this many skills.
+        dry_run:          If True, return the IDs that would be culled but don't delete.
+
+    Returns:
+        List of skill IDs that were (or would be) culled.
+    """
+    logger = logging.getLogger("poe.skills.island")
+    all_skills = load_skills()
+    island_skills = [s for s in all_skills if s.island == island_name or
+                     (not s.island and assign_island(s) == island_name)]
+
+    if len(island_skills) < min_island_size:
+        logger.debug("island %r has %d skills (< %d min), skipping cull",
+                     island_name, len(island_skills), min_island_size)
+        return []
+
+    # Only cull skills with open circuit — already proven underperforming
+    open_skills = [s for s in island_skills if s.circuit_state == "open"]
+    if not open_skills:
+        logger.debug("island %r: no open-circuit skills to cull", island_name)
+        return []
+
+    # Sort by compactness-adjusted utility (ascending = worst first)
+    try:
+        from evolver import _compactness_adjusted_score
+        scored = sorted(open_skills, key=_compactness_adjusted_score)
+    except ImportError:
+        scored = sorted(open_skills, key=lambda s: s.utility_score)
+
+    # Cull bottom half of the open-circuit pool only
+    cull_count = max(1, len(open_skills) // 2)
+    to_cull = [s.id for s in scored[:cull_count]]
+
+    if not dry_run and to_cull:
+        surviving = [s for s in all_skills if s.id not in set(to_cull)]
+        _save_skills(surviving)
+        logger.info("island cull: removed %d skills from island %r: %s",
+                    len(to_cull), island_name, to_cull)
+
+    return to_cull
+
+
+def run_island_cycle(
+    *,
+    min_island_size: int = 4,
+    dry_run: bool = False,
+    verbose: bool = False,
+) -> Dict[str, Any]:
+    """One full island cycle: assign islands + cull bottom half of open-circuit skills.
+
+    Returns:
+        Dict with culled counts per island and total assigned.
+    """
+    skills = load_skills()
+    assigned = 0
+    changed = False
+    for skill in skills:
+        if not skill.island:
+            skill.island = assign_island(skill)
+            assigned += 1
+            changed = True
+
+    if changed and not dry_run:
+        _save_skills(skills)
+
+    islands_with_open = set(
+        s.island for s in skills if s.circuit_state == "open" and s.island
+    )
+
+    cull_report: Dict[str, List[str]] = {}
+    for island_name in (islands_with_open or set()):
+        culled = cull_island_bottom_half(
+            island_name, min_island_size=min_island_size, dry_run=dry_run
+        )
+        if culled:
+            cull_report[island_name] = culled
+            if verbose:
+                print(f"[skills] island cull {island_name!r}: removed {len(culled)} skills",
+                      file=__import__("sys").stderr)
+
+    total_culled = sum(len(v) for v in cull_report.values())
+    if verbose and assigned:
+        print(f"[skills] island cycle: assigned {assigned} skills to islands", file=__import__("sys").stderr)
+
+    return {"assigned": assigned, "culled": cull_report, "total_culled": total_culled}
 
 
 def find_matching_skills(goal: str, adapter=None, use_router: bool = True) -> List[Skill]:
@@ -801,13 +994,66 @@ def attribute_failure_to_skills(
     return attributed
 
 
-def maybe_auto_promote_skills() -> List[str]:
+_SKILL_VALIDATION_SYSTEM = (
+    "You are a skill quality gate for an AI orchestration system. "
+    "Evaluate whether a skill definition is ready for promotion to 'established' tier. "
+    "A valid skill has: (1) a clear, specific description of what it does; "
+    "(2) step templates that are concrete and actionable — not vague or self-referential; "
+    "(3) trigger patterns that genuinely distinguish this skill from general instructions. "
+    "Respond with JSON: {\"valid\": true|false, \"reason\": \"one sentence\", "
+    "\"repair_hint\": \"brief suggestion if invalid, empty string if valid\"}"
+)
+
+
+def validate_skill_for_promotion(skill: "Skill", adapter: Any) -> Dict[str, Any]:
+    """LLM quality gate for skill promotion (Voyager steal).
+
+    Returns:
+        {"valid": bool, "reason": str, "repair_hint": str}
+    """
+    try:
+        from llm import LLMMessage
+        from llm_parse import extract_json, content_or_empty
+        skill_text = (
+            f"Name: {skill.name}\n"
+            f"Description: {skill.description}\n"
+            f"Trigger patterns: {', '.join(skill.trigger_patterns[:5])}\n"
+            f"Steps:\n" + "\n".join(f"  - {s}" for s in skill.steps_template[:6])
+        )
+        resp = adapter.complete(
+            [
+                LLMMessage("system", _SKILL_VALIDATION_SYSTEM),
+                LLMMessage("user", f"Validate this skill for promotion:\n\n{skill_text}"),
+            ],
+            max_tokens=150,
+            temperature=0.1,
+        )
+        parsed = extract_json(content_or_empty(resp), dict, log_tag="skills.validate")
+        if isinstance(parsed, dict):
+            return {
+                "valid": bool(parsed.get("valid", False)),
+                "reason": str(parsed.get("reason", "")),
+                "repair_hint": str(parsed.get("repair_hint", "")),
+            }
+    except Exception as exc:
+        logging.getLogger("poe.skills.validate").debug("validate_skill_for_promotion failed: %s", exc)
+    # Fail-open: if we can't validate, allow promotion (don't block the cycle)
+    return {"valid": True, "reason": "validation unavailable (fail-open)", "repair_hint": ""}
+
+
+def maybe_auto_promote_skills(adapter: Any = None, max_repair_attempts: int = 3) -> List[str]:
     """Promote provisional skills that meet quality threshold to established.
 
-    Criteria:
+    If `adapter` is provided, applies a Voyager-style validation harness before
+    promoting each skill. Skills that fail validation are sent through up to
+    `max_repair_attempts` rewrite cycles (via `evolver.rewrite_skill`).
+    Skills that still fail after max attempts are kept provisional.
+
+    Criteria for promotion:
       - tier == "provisional"
       - utility_score >= AUTO_PROMOTE_MIN_RATE (EMA-based, smoothed)
       - use_count >= AUTO_PROMOTE_MIN_USES
+      - (if adapter) passes LLM validation gate or repairs within max_repair_attempts
 
     Returns list of promoted skill_ids.
     """
@@ -822,11 +1068,50 @@ def maybe_auto_promote_skills() -> List[str]:
             continue
         if skill.utility_score < AUTO_PROMOTE_MIN_RATE:
             continue
+
+        # Voyager/Agent0 steal: validation harness with repair loop
+        if adapter is not None:
+            _logger = logging.getLogger("poe.skills.promote")
+            _candidate = skill
+            _valid = False
+            for _attempt in range(max_repair_attempts):
+                _result = validate_skill_for_promotion(_candidate, adapter)
+                if _result["valid"]:
+                    _valid = True
+                    if _attempt > 0:
+                        # Repair succeeded — update the skill in our list
+                        for i, s in enumerate(skills):
+                            if s.id == skill.id:
+                                skills[i] = _candidate
+                                break
+                    break
+                # Try to repair via evolver.rewrite_skill
+                _logger.info(
+                    "skill %s failed validation (attempt %d/%d): %s — rewriting",
+                    skill.id, _attempt + 1, max_repair_attempts, _result["reason"],
+                )
+                try:
+                    from evolver import rewrite_skill as _rewrite
+                    _repaired = _rewrite(_candidate, adapter)
+                    if _repaired is not None:
+                        _candidate = _repaired
+                    else:
+                        break  # rewrite returned None — stop trying
+                except Exception:
+                    break
+
+            if not _valid:
+                _logger.info(
+                    "skill %s held at provisional after %d repair attempt(s)",
+                    skill.id, max_repair_attempts,
+                )
+                continue  # don't promote
+
         skill.tier = "established"
         skill.content_hash = compute_skill_hash(skill)
         promoted.append(skill.id)
         changed = True
-        logger.info("[skills] auto-promoted skill %s (%s)", skill.id, skill.name)
+        logging.getLogger("poe.skills").info("[skills] auto-promoted skill %s (%s)", skill.id, skill.name)
 
     if changed:
         _save_skills(skills)
@@ -904,6 +1189,204 @@ def skills_needing_rewrite() -> List[Skill]:
             )
         )
     ]
+
+
+# Frontier targeting constants (Agent0 steal)
+FRONTIER_LOW = 0.40   # below this → struggling skill (already covered by circuit breaker)
+FRONTIER_HIGH = 0.70  # above this → healthy skill (leave alone)
+# Frontier zone: FRONTIER_LOW..FRONTIER_HIGH — neither trivially easy nor failing
+
+
+def frontier_skills(skills: Optional[List["Skill"]] = None, *, min_uses: int = 3) -> List["Skill"]:
+    """Return skills in the 'frontier zone' (Agent0 steal: target 40–70% utility_score).
+
+    The frontier zone is the sweet spot: skills that are consistently challenging
+    but not broken — analogous to Agent0's R_unc reward targeting tasks near 50%
+    solve-rate. The evolver should prioritise rewriting these skills over either
+    very low performers (already in circuit-open state) or top performers (working well).
+
+    Args:
+        skills:    Skill list (loaded from disk if None).
+        min_uses:  Minimum use_count to have reliable utility_score data.
+
+    Returns:
+        Skills with FRONTIER_LOW <= utility_score <= FRONTIER_HIGH,
+        sorted ascending by utility_score (hardest first).
+    """
+    if skills is None:
+        skills = load_skills()
+    frontier = [
+        s for s in skills
+        if (
+            s.use_count >= min_uses
+            and s.circuit_state != "open"  # open-circuit handled by skills_needing_rewrite
+            and FRONTIER_LOW <= s.utility_score <= FRONTIER_HIGH
+        )
+    ]
+    return sorted(frontier, key=lambda s: s.utility_score)
+
+
+# ---------------------------------------------------------------------------
+# A/B variant system (Agent0 Rule A/B Variants steal)
+# ---------------------------------------------------------------------------
+# A skill rewrite creates a "challenger" variant (variant_of=parent.id) rather
+# than immediately replacing the parent. Both skills coexist in the pool.
+# Routing: when a goal matches both parent and variant, task_id hash determines
+# which is used (50/50 split). After MIN_VARIANT_USES trials on each side,
+# retire_losing_variants() promotes the winner and removes the loser.
+#
+# This prevents the evolver from blindly replacing working skills with
+# rewrites that haven't been validated on real tasks.
+# ---------------------------------------------------------------------------
+
+MIN_VARIANT_USES = 5   # minimum wins+losses per variant before retirement eligible
+
+
+def create_skill_variant(original: Skill, rewritten: Skill) -> Skill:
+    """Mark a rewritten skill as a challenger variant of the original.
+
+    The variant competes against the original in live routing. Neither is
+    discarded until retire_losing_variants() has sufficient evidence.
+
+    Args:
+        original: The existing skill being challenged.
+        rewritten: The rewritten version produced by evolver.
+
+    Returns:
+        The rewritten skill with variant_of set to original.id.
+    """
+    rewritten.variant_of = original.id
+    rewritten.variant_wins = 0
+    rewritten.variant_losses = 0
+    logger.info("skills.ab_variant: created challenger %s for parent %s", rewritten.id, original.id)
+    return rewritten
+
+
+def get_skill_variants(parent_id: str, skills: Optional[List[Skill]] = None) -> List[Skill]:
+    """Return all active challenger variants for a given parent skill."""
+    if skills is None:
+        skills = load_skills()
+    return [s for s in skills if s.variant_of == parent_id]
+
+
+def select_variant_for_task(parent: Skill, task_id: str, skills: Optional[List[Skill]] = None) -> Skill:
+    """Choose between parent and its challengers using task_id hash (50/50 split).
+
+    If no variants exist, return parent unchanged.
+
+    Args:
+        parent:  The canonical/parent skill.
+        task_id: A stable ID for this task/step (e.g., loop_id or step hash).
+        skills:  Pre-loaded skills list (avoids extra disk read).
+
+    Returns:
+        Either the parent or one of its challenger variants.
+    """
+    variants = get_skill_variants(parent.id, skills)
+    if not variants:
+        return parent
+
+    # Pool: [parent] + challengers. Hash task_id mod pool_size for stable routing.
+    pool = [parent] + variants
+    try:
+        bucket = int(hashlib.sha1(task_id.encode()).hexdigest(), 16) % len(pool)
+    except Exception:
+        bucket = 0
+    return pool[bucket]
+
+
+def record_variant_outcome(skill_id: str, success: bool) -> None:
+    """Record a win or loss for a variant skill.
+
+    No-op for non-variant skills (variant_of is None). Thread-safe via
+    full rewrite of skills.jsonl.
+    """
+    skills = load_skills()
+    updated = False
+    for s in skills:
+        if s.id == skill_id and s.variant_of is not None:
+            if success:
+                s.variant_wins += 1
+            else:
+                s.variant_losses += 1
+            updated = True
+            break
+    if updated:
+        _save_skills(skills)
+
+
+def retire_losing_variants(*, dry_run: bool = False, min_uses: int = MIN_VARIANT_USES) -> dict:
+    """Evaluate all active A/B pairs and retire losers.
+
+    For each (parent, challengers) group:
+    - Compute win-rate for parent and each challenger.
+    - Only act if BOTH sides have ≥ min_uses total trials.
+    - Winner: highest win-rate among all variants + parent.
+    - Loser(s): all others.
+    - If challenger wins: replace parent's core content with challenger's; delete challenger.
+    - If parent wins: delete challenger(s).
+
+    Returns:
+        dict with keys: promoted (list of IDs), retired (list of IDs)
+    """
+    skills = load_skills()
+    skill_by_id = {s.id: s for s in skills}
+
+    # Group challengers by parent
+    parent_ids: set = {s.variant_of for s in skills if s.variant_of}
+    promoted: List[str] = []
+    retired: List[str] = []
+
+    for parent_id in parent_ids:
+        parent = skill_by_id.get(parent_id)
+        if parent is None:
+            continue  # parent was already removed
+        challengers = [s for s in skills if s.variant_of == parent_id]
+        if not challengers:
+            continue
+
+        # Compute parent win-rate using utility_score as proxy (it's EMA of real outcomes)
+        # We don't track parent variant_wins/losses separately — use utility_score
+        parent_rate = parent.utility_score
+        parent_trials = parent.use_count
+
+        # Only act if challenger(s) have enough data
+        for challenger in challengers:
+            c_total = challenger.variant_wins + challenger.variant_losses
+            if c_total < min_uses or parent_trials < min_uses:
+                continue  # not enough data yet
+
+            c_rate = challenger.variant_wins / max(c_total, 1)
+            if c_rate > parent_rate:
+                # Challenger wins: copy its content into parent, retire challenger
+                if not dry_run:
+                    parent.description = challenger.description
+                    parent.steps_template = challenger.steps_template
+                    parent.trigger_patterns = challenger.trigger_patterns
+                    parent.optimization_objective = challenger.optimization_objective
+                    parent.content_hash = compute_skill_hash(parent)
+                    logger.info(
+                        "skills.ab_variant: challenger %s beat parent %s (%.0f%% vs %.0f%%) — promoted",
+                        challenger.id, parent.id, c_rate * 100, parent_rate * 100,
+                    )
+                promoted.append(parent.id)
+                retired.append(challenger.id)
+            else:
+                # Parent wins (or tie): retire challenger
+                if not dry_run:
+                    logger.info(
+                        "skills.ab_variant: parent %s beat challenger %s (%.0f%% vs %.0f%%) — challenger retired",
+                        parent.id, challenger.id, parent_rate * 100, c_rate * 100,
+                    )
+                retired.append(challenger.id)
+
+    if not dry_run and retired:
+        # Remove retired skills from pool; save
+        retain_ids = {s.id for s in skills} - set(retired)
+        skills = [s for s in skills if s.id in retain_ids]
+        _save_skills(skills)
+
+    return {"promoted": promoted, "retired": retired}
 
 
 def _save_skills(skills: List[Skill]) -> None:

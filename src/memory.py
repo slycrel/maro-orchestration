@@ -96,6 +96,9 @@ class Outcome:
     cost_usd: float = 0.0
     model: str = ""          # model tier used ("cheap" | "mid" | "power" | raw model string)
     recorded_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    # Agent0 steal: failure-chain recording — turns every retry into a training signal
+    failure_chain: List[str] = field(default_factory=list)   # [failure_desc, diagnosis, recovery_action, ...]
+    recovery_steps: int = 0  # how many retries/recoveries were needed
 
 
 @dataclass
@@ -235,10 +238,19 @@ def record_outcome(
     tokens_out: int = 0,
     elapsed_ms: int = 0,
     model: str = "",
+    failure_chain: Optional[List[str]] = None,
+    recovery_steps: int = 0,
 ) -> Outcome:
     """Record the outcome of a completed run.
 
     Appends to outcomes.jsonl and daily log. Also extracts lessons if provided.
+
+    Args:
+        failure_chain: Agent0 steal — list of failure/diagnosis/recovery strings describing
+                       the error-recovery trajectory (e.g. ["step 3 failed: timeout",
+                       "diagnosis: rate limit", "recovery: waited 60s and retried"]).
+                       Turns retries into training signal for future runs.
+        recovery_steps: How many retries or recovery actions were needed.
     """
     import uuid
     from metrics import estimate_cost
@@ -256,6 +268,8 @@ def record_outcome(
         elapsed_ms=elapsed_ms,
         cost_usd=cost_usd,
         model=model,
+        failure_chain=failure_chain or [],
+        recovery_steps=recovery_steps,
     )
 
     # Append to outcomes ledger
@@ -440,6 +454,320 @@ def load_outcomes(limit: int = 20) -> List[Outcome]:
 
 
 # ---------------------------------------------------------------------------
+# Three-layer memory compression (724-office steal)
+# Session raw → LLM compress → TF-IDF retrieval
+# ---------------------------------------------------------------------------
+
+@dataclass
+class CompressedBatch:
+    """LLM-compressed summary of a batch of older outcomes."""
+    batch_id: str
+    summary: str            # One compact paragraph summarising the batch
+    task_types: List[str]   # Unique task types present in the batch
+    outcome_ids: List[str]  # IDs of the outcomes that were compressed
+    batch_size: int
+    oldest_at: str
+    newest_at: str
+    compressed_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+
+def _compressed_outcomes_path() -> Path:
+    return _memory_dir() / "compressed_outcomes.jsonl"
+
+
+def _save_compressed_batch(batch: CompressedBatch) -> None:
+    path = _compressed_outcomes_path()
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(json.dumps({
+            "batch_id": batch.batch_id,
+            "summary": batch.summary,
+            "task_types": batch.task_types,
+            "outcome_ids": batch.outcome_ids,
+            "batch_size": batch.batch_size,
+            "oldest_at": batch.oldest_at,
+            "newest_at": batch.newest_at,
+            "compressed_at": batch.compressed_at,
+        }) + "\n")
+
+
+def load_compressed_batches(limit: int = 20) -> List[CompressedBatch]:
+    """Load recently compressed outcome batches (most recent first)."""
+    path = _compressed_outcomes_path()
+    if not path.exists():
+        return []
+    batches = []
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                d = json.loads(line)
+                batches.append(CompressedBatch(**{
+                    k: d[k] for k in CompressedBatch.__dataclass_fields__ if k in d
+                }))
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return list(reversed(batches))[:limit]
+
+
+_COMPRESS_SYSTEM = (
+    "You are a memory archivist. Given a batch of AI agent mission outcomes, "
+    "write a single compact paragraph (≤120 words) that captures the key patterns, "
+    "recurring failures, and lessons learned. Focus on actionable insights that would "
+    "help an agent avoid repeating mistakes or build on successes. Be specific about "
+    "task types and failure modes. Do not list individual missions — synthesise."
+)
+
+
+def compress_old_outcomes(
+    *,
+    threshold: int = 100,
+    batch_size: int = 50,
+    keep_recent: int = 50,
+    dry_run: bool = False,
+    adapter: Any = None,
+) -> Optional[CompressedBatch]:
+    """LLM-compress oldest outcomes when total count exceeds threshold.
+
+    Reads outcomes.jsonl. If total > threshold, takes the oldest `batch_size`
+    outcomes (up to total - keep_recent), compresses them with an LLM call,
+    saves the CompressedBatch to compressed_outcomes.jsonl, and removes the
+    compressed entries from outcomes.jsonl.
+
+    Args:
+        threshold:    Only compress if total outcomes exceed this.
+        batch_size:   How many old outcomes to compress per call.
+        keep_recent:  Always keep at least this many raw outcomes untouched.
+        dry_run:      Return a dummy batch without reading/writing files.
+        adapter:      LLM adapter for the compression call. If None, uses
+                      a no-LLM placeholder (useful for dry_run or testing).
+
+    Returns:
+        CompressedBatch if compression happened, None otherwise.
+    """
+    import uuid as _uuid
+
+    if dry_run:
+        return CompressedBatch(
+            batch_id=_uuid.uuid4().hex[:8],
+            summary="[dry-run] compressed batch placeholder",
+            task_types=["general"],
+            outcome_ids=["dry-run-1"],
+            batch_size=1,
+            oldest_at="2026-01-01T00:00:00+00:00",
+            newest_at="2026-01-02T00:00:00+00:00",
+        )
+
+    path = _outcomes_path()
+    if not path.exists():
+        return None
+
+    try:
+        raw_lines = [l for l in path.read_text(encoding="utf-8").splitlines() if l.strip()]
+    except Exception:
+        return None
+
+    total = len(raw_lines)
+    if total <= threshold:
+        log.debug("compress_old_outcomes: %d outcomes (threshold %d), skipping", total, threshold)
+        return None
+
+    # Take oldest batch_size, but never dip below keep_recent recent entries
+    compress_count = min(batch_size, max(0, total - keep_recent))
+    if compress_count <= 0:
+        return None
+
+    to_compress_lines = raw_lines[:compress_count]
+    surviving_lines = raw_lines[compress_count:]
+
+    # Parse outcomes for metadata
+    parsed: List[Dict[str, Any]] = []
+    for line in to_compress_lines:
+        try:
+            parsed.append(json.loads(line))
+        except Exception:
+            pass
+
+    if not parsed:
+        return None
+
+    task_types = list({d.get("task_type", "general") for d in parsed})
+    outcome_ids = [d.get("outcome_id", "") for d in parsed if d.get("outcome_id")]
+    oldest_at = parsed[0].get("recorded_at", "")
+    newest_at = parsed[-1].get("recorded_at", "")
+
+    # Build LLM compression prompt
+    lines_for_llm = []
+    for d in parsed:
+        goal = d.get("goal", "")[:80]
+        status = d.get("status", "")
+        summary = d.get("summary", "")[:120]
+        lines_for_llm.append(f"- [{status}] {goal}: {summary}")
+    batch_text = "\n".join(lines_for_llm[:batch_size])
+
+    # LLM compress or fallback to heuristic
+    if adapter is not None:
+        try:
+            from llm import LLMMessage
+            resp = adapter.complete(
+                [
+                    LLMMessage("system", _COMPRESS_SYSTEM),
+                    LLMMessage("user", f"Compress these {len(parsed)} mission outcomes:\n\n{batch_text}"),
+                ],
+                max_tokens=200,
+                temperature=0.2,
+            )
+            compressed_text = content_or_empty(resp).strip()[:600]
+        except Exception as exc:
+            log.debug("compress_old_outcomes: LLM failed (%s), using heuristic", exc)
+            compressed_text = f"[heuristic] {len(parsed)} missions ({', '.join(task_types)}). Oldest: {oldest_at[:10]}. Newest: {newest_at[:10]}."
+    else:
+        # No adapter — build a keyword-based summary without LLM
+        done_count = sum(1 for d in parsed if d.get("status") == "done")
+        stuck_count = len(parsed) - done_count
+        goals_sample = "; ".join(d.get("goal", "")[:40] for d in parsed[:3])
+        compressed_text = (
+            f"{len(parsed)} missions ({done_count} done, {stuck_count} stuck) "
+            f"in task types: {', '.join(task_types)}. "
+            f"Sample goals: {goals_sample}."
+        )
+
+    batch = CompressedBatch(
+        batch_id=_uuid.uuid4().hex[:8],
+        summary=compressed_text,
+        task_types=task_types,
+        outcome_ids=outcome_ids,
+        batch_size=len(parsed),
+        oldest_at=oldest_at,
+        newest_at=newest_at,
+    )
+
+    # Persist: save compressed batch, rewrite outcomes.jsonl without old entries
+    _save_compressed_batch(batch)
+    try:
+        path.write_text("\n".join(surviving_lines) + ("\n" if surviving_lines else ""), encoding="utf-8")
+    except Exception as exc:
+        log.warning("compress_old_outcomes: failed to rewrite outcomes.jsonl: %s", exc)
+
+    log.info("compress_old_outcomes: compressed %d outcomes → batch %s", len(parsed), batch.batch_id)
+    return batch
+
+
+def _tfidf_rank_batches(
+    query: str,
+    batches: List[CompressedBatch],
+    *,
+    top_k: Optional[int] = None,
+) -> List[CompressedBatch]:
+    """Rank compressed batches by TF-IDF cosine similarity to query.
+
+    Re-uses the same no-dependency TF-IDF pattern from _tfidf_rank.
+    """
+    if not batches or not query:
+        return batches
+
+    stop_words = {
+        "the", "and", "for", "was", "this", "that", "with", "from", "are",
+        "were", "have", "has", "had", "its", "but", "not", "you", "all",
+        "can", "will", "more", "than", "been", "into",
+    }
+
+    def _tok(text: str) -> List[str]:
+        return [
+            t for t in re.sub(r"[^a-z0-9]+", " ", text.lower()).split()
+            if t not in stop_words and len(t) > 2
+        ]
+
+    query_terms = _tok(query)
+    if not query_terms:
+        return batches
+
+    docs = [query_terms] + [_tok(b.summary) for b in batches]
+    n = len(docs)
+    df: Counter = Counter()
+    for doc in docs:
+        for term in set(doc):
+            df[term] += 1
+
+    def _idf(t: str) -> float:
+        return math.log(n / (df.get(t, 0) + 1)) + 1.0
+
+    def _vec(terms: List[str]) -> Dict[str, float]:
+        tf = Counter(terms)
+        total = max(len(terms), 1)
+        return {t: (c / total) * _idf(t) for t, c in tf.items()}
+
+    def _cos(v1: Dict[str, float], v2: Dict[str, float]) -> float:
+        dot = sum(v1.get(t, 0.0) * v2.get(t, 0.0) for t in v1)
+        n1 = math.sqrt(sum(x * x for x in v1.values())) or 1.0
+        n2 = math.sqrt(sum(x * x for x in v2.values())) or 1.0
+        return dot / (n1 * n2)
+
+    qvec = _vec(query_terms)
+    scored = sorted(
+        [(b, _cos(qvec, _vec(_tok(b.summary)))) for b in batches],
+        key=lambda x: x[1],
+        reverse=True,
+    )
+    ranked = [b for b, _ in scored]
+    return ranked[:top_k] if top_k is not None else ranked
+
+
+def load_outcomes_with_context(
+    goal: str = "",
+    *,
+    limit: int = 20,
+    compressed_limit: int = 5,
+) -> Dict[str, Any]:
+    """Three-layer outcome retrieval.
+
+    Layer 1 (raw recent): last `limit` outcomes from outcomes.jsonl.
+    Layer 2 (compressed): top `compressed_limit` compressed batches ranked by
+                          TF-IDF similarity to `goal` (or most recent if no goal).
+    Layer 3 (injection): returns a merged context string for prompt injection.
+
+    Returns:
+        {
+            "recent": List[Outcome],
+            "compressed": List[CompressedBatch],
+            "context_text": str,  # ready to inject into a prompt
+        }
+    """
+    recent = load_outcomes(limit=limit)
+    raw_batches = load_compressed_batches(limit=20)
+
+    if goal and raw_batches:
+        compressed = _tfidf_rank_batches(goal, raw_batches, top_k=compressed_limit)
+    else:
+        compressed = raw_batches[:compressed_limit]
+
+    # Build context text
+    parts: List[str] = []
+
+    if compressed:
+        parts.append("## Compressed Memory (older missions)")
+        for b in compressed:
+            parts.append(f"- [{b.oldest_at[:10]}→{b.newest_at[:10]}, {b.batch_size} missions] {b.summary}")
+
+    if recent:
+        parts.append("## Recent Outcomes")
+        for o in recent:
+            icon = "✓" if o.status == "done" else "✗"
+            parts.append(f"- {icon} {o.goal[:60]} ({o.task_type}, {o.recorded_at[:10]}): {o.summary[:80]}")
+
+    context_text = "\n".join(parts) if parts else ""
+
+    return {
+        "recent": recent,
+        "compressed": compressed,
+        "context_text": context_text,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Session bootstrap
 # ---------------------------------------------------------------------------
 
@@ -517,6 +845,64 @@ _REFLECT_SYSTEM = textwrap.dedent("""\
 """).strip()
 
 
+def _jaccard_similarity(a: str, b: str) -> float:
+    """Jaccard similarity between two lesson strings (word-level)."""
+    ta = set(re.sub(r"[^a-z0-9]+", " ", a.lower()).split())
+    tb = set(re.sub(r"[^a-z0-9]+", " ", b.lower()).split())
+    if not ta or not tb:
+        return 0.0
+    return len(ta & tb) / len(ta | tb)
+
+
+def majority_vote_lessons(
+    all_samples: List[List[str]],
+    *,
+    threshold: float = 0.4,
+) -> List[str]:
+    """Agent0 steal: return only lessons that appear in majority of k samples.
+
+    Two lessons are considered "the same" if their Jaccard similarity ≥ threshold.
+    For each candidate lesson, count how many samples contain a similar lesson.
+    Only return lessons with count > len(all_samples) / 2 (strict majority).
+
+    Args:
+        all_samples:  List of k lesson lists (one list per LLM sample call).
+        threshold:    Jaccard similarity threshold for "same lesson" matching.
+
+    Returns:
+        Deduplicated list of lessons that appear in majority of samples.
+        Falls back to all lessons from sample 0 if k == 1 (no filtering).
+    """
+    k = len(all_samples)
+    if k <= 1:
+        return all_samples[0] if all_samples else []
+
+    # Collect all unique candidates from all samples
+    all_candidates: List[str] = []
+    seen: set = set()
+    for sample in all_samples:
+        for lesson in sample:
+            lesson = lesson.strip()
+            if lesson and lesson not in seen:
+                seen.add(lesson)
+                all_candidates.append(lesson)
+
+    majority_threshold = k / 2.0  # strict majority: > 50%
+    accepted: List[str] = []
+    for candidate in all_candidates:
+        count = 0
+        for sample in all_samples:
+            # Count this sample as agreeing if any lesson in it is "similar enough"
+            for s_lesson in sample:
+                if _jaccard_similarity(candidate, s_lesson) >= threshold:
+                    count += 1
+                    break
+        if count > majority_threshold:
+            accepted.append(candidate)
+
+    return accepted[:3]  # cap at 3 (same as single-sample limit)
+
+
 def extract_lessons_via_llm(
     goal: str,
     status: str,
@@ -525,8 +911,14 @@ def extract_lessons_via_llm(
     *,
     adapter=None,
     dry_run: bool = False,
+    k_samples: int = 1,
 ) -> List[str]:
     """Use LLM to extract generalizable lessons from a completed run.
+
+    Args:
+        k_samples: Agent0 steal — number of LLM samples to draw. When k_samples ≥ 3,
+                   only lessons that appear in majority of samples are returned
+                   (majority-vote pseudo-labels). Default: 1 (original behaviour).
 
     Returns list of lesson strings. Falls back to empty list on failure.
     """
@@ -545,23 +937,30 @@ def extract_lessons_via_llm(
         "Extract 1-3 generalizable lessons."
     )
 
-    try:
-        resp = adapter.complete(
-            [
-                LLMMessage("system", _REFLECT_SYSTEM),
-                LLMMessage("user", user_msg),
-            ],
-            max_tokens=256,
-            temperature=0.3,
-        )
-        lessons = extract_json(content_or_empty(resp), list, log_tag="memory.extract_lessons")
-        validated = safe_list(lessons, element_type=str, max_items=3)
-        if validated:
+    def _one_sample() -> List[str]:
+        try:
+            resp = adapter.complete(
+                [
+                    LLMMessage("system", _REFLECT_SYSTEM),
+                    LLMMessage("user", user_msg),
+                ],
+                max_tokens=256,
+                temperature=0.3,
+            )
+            raw = extract_json(content_or_empty(resp), list, log_tag="memory.extract_lessons")
+            validated = safe_list(raw, element_type=str, max_items=3)
             return [l.strip() for l in validated if l.strip()]
-    except Exception:
-        pass
+        except Exception:
+            return []
 
-    return []
+    if k_samples <= 1:
+        return _one_sample()
+
+    # Multi-sample majority vote (Agent0 pseudo-label pattern)
+    samples = [_one_sample() for _ in range(k_samples)]
+    agreed = majority_vote_lessons(samples)
+    log.debug("extract_lessons k=%d samples=%d agreed=%d", k_samples, len(samples), len(agreed))
+    return agreed
 
 
 def reflect_and_record(
@@ -577,10 +976,18 @@ def reflect_and_record(
     model: str = "",
     adapter=None,
     dry_run: bool = False,
+    failure_chain: Optional[List[str]] = None,
+    recovery_steps: int = 0,
 ) -> Outcome:
     """Reflect on a completed run and record the outcome + lessons.
 
     This is the main hook to call after run_agent_loop or handle() completes.
+
+    Args:
+        failure_chain: Agent0 steal — ordered list of failure/diagnosis/recovery strings
+                       (e.g. ["step 3 timed out", "diagnosed rate-limit", "retried after 60s"]).
+                       Turns every retry into a training signal stored alongside the outcome.
+        recovery_steps: How many recovery actions were required.
     """
     log.info("reflect_and_record goal=%r status=%s tokens=%d elapsed=%dms",
              goal[:60], status, tokens_in + tokens_out, elapsed_ms)
@@ -605,6 +1012,8 @@ def reflect_and_record(
         tokens_out=tokens_out,
         elapsed_ms=elapsed_ms,
         model=model,
+        failure_chain=failure_chain or [],
+        recovery_steps=recovery_steps,
     )
 
 

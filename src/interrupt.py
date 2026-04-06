@@ -25,6 +25,7 @@ Usage (consumer side — agent loop):
 from __future__ import annotations
 
 import json
+import logging
 import os
 import threading
 import time
@@ -32,8 +33,183 @@ import uuid
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 from llm_parse import extract_json, content_or_empty
+
+log = logging.getLogger("poe.interrupt")
+
+# ---------------------------------------------------------------------------
+# Typed event graph nodes (STEAL_LIST: events as first-class graph nodes)
+# ---------------------------------------------------------------------------
+# An incoming message or external trigger is a TypedEvent that can:
+#   1. Unblock a DAG task that declared "await:<kind>" as its step text
+#   2. Carry a payload injected into that task's context
+# This makes external signals first-class graph nodes, not just loop interrupts.
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class TypedEvent:
+    """A typed event that can unblock a waiting DAG task."""
+    id: str
+    kind: str          # e.g. "telegram", "timer", "api_response", "data_ready"
+    payload: str       # event content; injected as task result when awaited
+    source: str        # who fired it: "telegram", "cli", "heartbeat", "api"
+    timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "TypedEvent":
+        return cls(**{k: v for k, v in d.items() if k in cls.__dataclass_fields__})
+
+
+class EventRouter:
+    """Thread-safe event bus: post typed events, wait for specific kinds.
+
+    Design:
+    - Events are appended to an in-memory ring buffer (capped at _MAX_EVENTS).
+    - Waiters block on a Condition until a matching event appears.
+    - Each event can be consumed by one waiter (first-come first-served by kind).
+    - Events older than _MAX_AGE_SECONDS are not returned to new waiters.
+    """
+
+    _MAX_EVENTS = 200
+    _MAX_AGE_SECONDS = 3600  # 1 hour — stale events are ignored
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._condition = threading.Condition(self._lock)
+        self._events: List[TypedEvent] = []
+        self._consumed: set = set()      # IDs of events already given to a waiter
+
+    # ------------------------------------------------------------------
+    # Producer API
+    # ------------------------------------------------------------------
+
+    def post(
+        self,
+        kind: str,
+        payload: str = "",
+        source: str = "system",
+    ) -> TypedEvent:
+        """Fire a typed event. Wakes all threads waiting on any event kind."""
+        event = TypedEvent(
+            id=uuid.uuid4().hex[:8],
+            kind=kind.lower().strip(),
+            payload=payload,
+            source=source,
+        )
+        with self._condition:
+            self._events.append(event)
+            # Trim ring buffer
+            if len(self._events) > self._MAX_EVENTS:
+                self._events = self._events[-self._MAX_EVENTS:]
+            self._condition.notify_all()
+        log.info("event_router.post kind=%r id=%s source=%r", event.kind, event.id, source)
+        return event
+
+    # ------------------------------------------------------------------
+    # Consumer API
+    # ------------------------------------------------------------------
+
+    def wait_for(
+        self,
+        kind: str,
+        *,
+        timeout: float = 300.0,
+    ) -> Optional[TypedEvent]:
+        """Block until an event of the given kind arrives (or timeout).
+
+        Returns the TypedEvent, or None on timeout. Each event is delivered
+        to at most one waiter of matching kind (consumed once).
+        """
+        kind = kind.lower().strip()
+        deadline = time.monotonic() + timeout
+        with self._condition:
+            while True:
+                # Check buffer for an unconsumed matching event
+                ev = self._first_available(kind)
+                if ev is not None:
+                    self._consumed.add(ev.id)
+                    log.info(
+                        "event_router.wait_for: kind=%r matched id=%s after %.1fs",
+                        kind, ev.id, timeout - (deadline - time.monotonic()),
+                    )
+                    return ev
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    log.info("event_router.wait_for: kind=%r timeout after %.1fs", kind, timeout)
+                    return None
+                self._condition.wait(timeout=min(remaining, 5.0))
+
+    def pending_count(self, kind: Optional[str] = None) -> int:
+        """Return count of unconsumed events, optionally filtered by kind."""
+        with self._lock:
+            events = self._available_events()
+            if kind is not None:
+                events = [e for e in events if e.kind == kind.lower().strip()]
+            return len(events)
+
+    def recent_events(self, kind: Optional[str] = None, limit: int = 20) -> List[TypedEvent]:
+        """Return recent events (including consumed) for inspection/logging."""
+        with self._lock:
+            evs = list(self._events)
+        if kind is not None:
+            evs = [e for e in evs if e.kind == kind.lower().strip()]
+        return evs[-limit:]
+
+    # ------------------------------------------------------------------
+    # Internal
+    # ------------------------------------------------------------------
+
+    def _available_events(self) -> List[TypedEvent]:
+        """Unconsumed, non-stale events. Must hold _lock."""
+        now = time.time()
+        result = []
+        for ev in self._events:
+            if ev.id in self._consumed:
+                continue
+            try:
+                from datetime import datetime, timezone
+                ts = datetime.fromisoformat(ev.timestamp)
+                age = now - ts.timestamp()
+                if age > self._MAX_AGE_SECONDS:
+                    continue
+            except Exception:
+                pass  # can't parse timestamp — include it
+            result.append(ev)
+        return result
+
+    def _first_available(self, kind: str) -> Optional[TypedEvent]:
+        """First available event matching kind. Must hold _condition."""
+        for ev in self._available_events():
+            if ev.kind == kind:
+                return ev
+        return None
+
+
+# Module-level singleton — shared across all agent loops in this process.
+_ROUTER = EventRouter()
+
+
+def get_event_router() -> EventRouter:
+    """Return the process-level EventRouter singleton."""
+    return _ROUTER
+
+
+def post_typed_event(kind: str, payload: str = "", source: str = "system") -> TypedEvent:
+    """Convenience: post a typed event to the global router.
+
+    Call from any interface (Telegram handler, API webhook, scheduler) to
+    unblock agent DAG tasks that are awaiting this event kind.
+
+    Example:
+        post_typed_event("data_ready", payload="BTC price updated: 82k", source="api")
+    """
+    return _ROUTER.post(kind, payload, source)
+
 
 # ---------------------------------------------------------------------------
 # Data types
