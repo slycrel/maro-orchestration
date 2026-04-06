@@ -4,11 +4,13 @@
 # Pass A (default): blind — only gives repo URL, system must figure out setup.
 # Pass B (--seeded): pre-checks out repo locally, separates setup from thinking.
 # Garrytan pass (--garrytan): forces garrytan persona (power model, phase-gated).
+# Haiku pass (--haiku): forces effort:low (cheap model) — fast/cheap sanity check.
 #
 # Historical results (runs against this repo):
 #   Run 1-3: 30-50% file accuracy (sequential)
 #   Run 4:   100% file accuracy (multi-plan + anti-hallucination guards)
 #   Run 6:   100%, ~6.5min, 1.65M tokens (parallel + cost tracking)
+#   2026-04-06 blind: 8/8 done, 28min, $4.12, ~15% hallucination on concrete claims
 #
 # See tests/regression/adversarial-self-review-spec.md for full test spec.
 #
@@ -17,6 +19,7 @@
 #   bash scripts/adversarial-review.sh --seeded             # Pass B (local checkout)
 #   bash scripts/adversarial-review.sh --garrytan           # Pass A + garrytan persona
 #   bash scripts/adversarial-review.sh --seeded --garrytan  # Pass B + garrytan
+#   bash scripts/adversarial-review.sh --haiku              # cheap/fast sanity pass
 #   bash scripts/adversarial-review.sh --dry-run            # plan only, no execution
 
 set -euo pipefail
@@ -24,16 +27,18 @@ cd "$(dirname "$0")/.."
 
 MODE="blind"
 GARRYTAN=""
+HAIKU=""
 DRY_RUN=""
 for arg in "$@"; do
     case "$arg" in
         --seeded)   MODE="seeded" ;;
         --garrytan) GARRYTAN="1" ;;
+        --haiku)    HAIKU="1" ;;
         --dry-run)  DRY_RUN="1" ;;
     esac
 done
 
-LABEL="${MODE}$([ -n "$GARRYTAN" ] && echo '-garrytan' || echo '')"
+LABEL="${MODE}$([ -n "$GARRYTAN" ] && echo '-garrytan' || echo '')$([ -n "$HAIKU" ] && echo '-haiku' || echo '')"
 TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 LOG_FILE="output/self-review-${TIMESTAMP}-${LABEL}.log"
 REPORT_FILE="output/self-review-report-${TIMESTAMP}-${LABEL}.md"
@@ -49,10 +54,12 @@ echo "--- Pre-flight: test suite ---"
 python3 -m pytest tests/ -q --tb=line 2>&1 | tail -5
 echo
 
-# Build goal prefix (garrytan: forces power model + phase-gated persona)
+# Build goal prefix
 PREFIX=""
 if [[ -n "$GARRYTAN" ]]; then
     PREFIX="garrytan: "
+elif [[ -n "$HAIKU" ]]; then
+    PREFIX="effort:low "   # cheap model, fast sanity check — expect rougher output
 fi
 
 # Build the goal based on mode

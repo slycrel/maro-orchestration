@@ -3,7 +3,7 @@
 Single canonical location for everything we've identified but haven't done yet.
 Read this at the start of every session. Update it as items are completed or new ones emerge.
 
-Last reviewed: 2026-04-04 (session 10)
+Last reviewed: 2026-04-06 (session 11)
 
 ---
 
@@ -121,6 +121,17 @@ Last reviewed: 2026-04-04 (session 10)
   - **Hermes steal: Skill Document auto-extraction** — formalize lessons.jsonl into SKILL.md files that get FTS-searched automatically (vs. manual lesson injection). Maps to Phase 32 skill synthesis.
   - **Hermes steal: Persistent user modeling** — Honcho-style user preference tracking across sessions. Jeremy-specific knowledge compounding over time. Partial overlap with Phase 28 companion persona.
   - **Hermes steal: Terminal persistence backends** — SSH/Modal backends for long-lived sandboxed execution separate from the primary process. Complements Phase 18 sandbox hardening.
+
+## Self-Review Quality (from 2026-04-06 blind adversarial run)
+
+Real findings from the run — hallucinations already vetted and discarded:
+
+- [ ] **Evolver audit trail** — `evolver.py` + `memory.py` write to `memory/` (gitignored) with no record of what changed. Before any write, append a log entry to `memory/change_log.jsonl`: timestamp, module, key, old-value hash, new value. Creates rollback surface without requiring git tracking of runtime files. (MEDIUM risk)
+- [ ] **No end-to-end integration test** — all tests are unit-level. No test instantiates `handle()` with a real goal string, traces through `intent → director → workers`, and asserts on output shape. Inter-module wiring only tested in production. Add `tests/integration/` with 5-10 mocked-LLM scenarios covering both lanes, magic keywords, constraint enforcement. (MEDIUM risk)
+- [ ] **`tests/regression/` has spec but no tests** — `adversarial-self-review-spec.md` documents what the regression suite should be; the executable tests don't exist. Implement the spec: 3-5 golden-path scenarios with expected output shapes. (HIGH — spec without tests is just documentation)
+- [ ] **Phase 24 (Slack) still PARTIAL** — primary async human interface, no `slack.py`, no tests. (known, noted again)
+- [ ] **`lat.md` knowledge graph has no runtime integration** — it's markdown documentation, not queried at runtime. Decide: either wire it into Director planning context or acknowledge it's reference-only and remove the "runtime" framing. (LOW — clarify status)
+- [ ] **Adversarial review hallucination rate too high** — blind run's body hallucinated `lat.py` (doesn't exist), `test_workers.py` (doesn't exist), and claimed `agent_loop.py` had no tests (86 exist). Cost $4, 28min, ~3 wrong specific facts out of ~20 checkable claims (~15% hallucination on concrete claims). Hallucination checker caught 2/3. Root cause: synthesis step reads large accumulated context from prior steps → confabulation under load. Options: (a) file-existence verification pass before synthesis, (b) smaller module groups per step, (c) haiku-only pass as cheap/fast sanity check. See flowchart in `docs/EXECUTION_FLOW.md`.
 
 ## Test Ideas
 
