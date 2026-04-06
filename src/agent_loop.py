@@ -1070,7 +1070,7 @@ def run_agent_loop(
     Returns:
         LoopResult with full outcome.
     """
-    from llm import LLMMessage, LLMTool, build_adapter, MODEL_CHEAP
+    from llm import LLMMessage, LLMTool, build_adapter, MODEL_CHEAP, MODEL_MID, MODEL_POWER
     from interrupt import InterruptQueue, apply_interrupt_to_steps, set_loop_running, clear_loop_running
     from poe import assign_model_by_role
 
@@ -1229,8 +1229,18 @@ def run_agent_loop(
         steps = None  # computed by _decompose below
 
     if steps is None:
+        # Decompose uses at least mid (Sonnet) — a weak planner compounds across every step.
+        # If the loop adapter is cheap (Haiku), silently lift decompose to mid.
+        # Opus stays Opus (garrytan/power loops get the best planner they asked for).
+        _decompose_adapter = adapter
+        if getattr(adapter, "model_key", "") == MODEL_CHEAP:
+            try:
+                _decompose_adapter = build_adapter(model=MODEL_MID)
+                log.debug("decompose: lifted adapter cheap → mid for plan quality")
+            except Exception:
+                _decompose_adapter = adapter  # fall back gracefully
         steps = _decompose(
-            goal, adapter, max_steps=max_steps, verbose=verbose,
+            goal, _decompose_adapter, max_steps=max_steps, verbose=verbose,
             lessons_context=_lessons_context, ancestry_context=_ancestry_context,
             skills_context=_skills_context, cost_context=_cost_context,
         )
@@ -1519,6 +1529,7 @@ def run_agent_loop(
     _next_step_injected_context: str = ""  # Phase 11: injected context from previous step's hooks
     _march_of_nines_alert = False  # Phase 19: cumulative step success rate alert
     _step_retries: Dict[str, int] = {}  # roadblock resilience: retries per step text
+    _step_tier_overrides: Dict[str, str] = {}  # step_text → escalated tier on retry
     # Agent0 steal: failure-chain recording — every retry/recovery is a training signal
     _failure_chain: List[str] = []
     _recovery_step_count: int = 0
@@ -1816,21 +1827,33 @@ def run_agent_loop(
                       file=_sys.stderr, flush=True)
 
         step_start = time.monotonic()
-        # Phase 35 P1: per-step model selection — cheap retrieval/classify steps use Haiku
-        # Skip if caller explicitly specified a non-tier model string (e.g. --model claude-haiku-...)
+        # Per-step model selection: cheap baseline, upgraded by two mechanisms:
+        #   1. classify_step_model — content-based (synthesis/planning → mid)
+        #   2. _step_tier_overrides — retry-based escalation (blocked on cheap → mid → power)
+        # Skip both if caller specified a raw model string (not a tier key).
         _step_adapter = adapter
         _explicit_model = getattr(adapter, "model_key", "") not in ("cheap", "mid", "power", "")
         if not _explicit_model:
-            try:
-                from poe import classify_step_model
-                _step_model = classify_step_model(step_text)
-                if _step_model != adapter.model_key:
-                    _step_adapter = build_adapter(model=_step_model)
+            _tier_override = _step_tier_overrides.get(step_text)
+            if _tier_override:
+                try:
+                    _step_adapter = build_adapter(model=_tier_override)
                     if verbose:
-                        _tier = "haiku" if _step_model == MODEL_CHEAP else "sonnet"
-                        print(f"[poe] step {step_idx}: routing to {_tier} (classify_step_model)", file=sys.stderr, flush=True)
-            except Exception:
-                pass  # Model selection failures must never break the loop
+                        _tier_name = {"cheap": "haiku", "mid": "sonnet", "power": "opus"}.get(_tier_override, _tier_override)
+                        print(f"[poe] step {step_idx}: escalated to {_tier_name} (retry tier-up)", file=sys.stderr, flush=True)
+                except Exception:
+                    pass
+            else:
+                try:
+                    from poe import classify_step_model
+                    _step_model = classify_step_model(step_text)
+                    if _step_model != adapter.model_key:
+                        _step_adapter = build_adapter(model=_step_model)
+                        if verbose:
+                            _tier = "haiku" if _step_model == MODEL_CHEAP else "sonnet"
+                            print(f"[poe] step {step_idx}: routing to {_tier} (classify_step_model)", file=sys.stderr, flush=True)
+                except Exception:
+                    pass  # Model selection failures must never break the loop
 
         # _next_step_injected is set by the previous iteration's hook run
         # Phase 27: merge per-step prereq context (graveyard / sub-loop acquired)
@@ -2182,6 +2205,15 @@ def run_agent_loop(
             if _decision.retry:
                 _step_retries[step_text] = _prior_retries + 1
                 _recovery_step_count += 1
+                # Tier escalation on retry: cheap → mid on first retry, mid → power on second.
+                # System-driven, not model-driven. Opus is the ceiling; never escalate past it.
+                _cur_tier = getattr(_step_adapter, "model_key", MODEL_CHEAP)
+                if _cur_tier == MODEL_CHEAP:
+                    _step_tier_overrides[step_text] = MODEL_MID
+                    log.info("step %d retry tier-up: cheap → mid", step_idx)
+                elif _cur_tier == MODEL_MID:
+                    _step_tier_overrides[step_text] = MODEL_POWER
+                    log.info("step %d retry tier-up: mid → power", step_idx)
                 _br_reason = outcome.get("stuck_reason", "blocked")
                 _failure_chain.append(
                     f"step {step_idx} blocked ({_br_reason[:60]}); retry {_prior_retries + 1} with hint"

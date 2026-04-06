@@ -1176,6 +1176,25 @@ Extract orchestration-related ideas, patterns, deferred concepts, and "what if" 
 
 ---
 
+### Phase 57: Adaptive Model Tiering *(PARTIAL)*
+
+*"Haiku-first with system-driven upgrades — spend the expensive tokens where they compound."*
+
+**Shipped:**
+- Decompose always uses at least mid (Sonnet) even when loop adapter is cheap. A weak planner produces a bad plan that costs you across every step; Sonnet is ~10x cheaper than Opus and much stronger than Haiku for decomposition.
+- Retry-based tier escalation: when a step is blocked and retried, the system automatically bumps it — cheap → mid on first retry, mid → power on second. System-driven, not model-driven (the model that failed doesn't decide it needs help).
+- Opus reserved for explicit `garrytan:` / power-tier requests, not the default path.
+
+**Design intent:** Haiku as the cheap execution baseline, `classify_step_model` for content-based upgrades (synthesis/planning → Sonnet), retry escalation for quality failures. The system shakes out the right tier from signals, not brute-force.
+
+**Not yet shipped (revisit):**
+- Ralph verify failure → tier escalation. Signal is already there (`verify FAIL` → marks blocked → retry machinery); just needs to set `_step_tier_overrides` on verify failure path, same as block retry.
+- Session-level lagging signal: if verify pass rate over last N steps is low, raise the default tier for remaining steps.
+- Synthesis step always uses mid or higher regardless of loop adapter (synthesis on Haiku is highest-risk quality degradation point).
+- Adaptive decompose: escalate decompose to power only for large-scope/ambiguous goals (currently always mid — Sonnet may be enough for most goals, Opus overkill).
+
+---
+
 ## Superseded Plans
 
 The original M0-M4 milestones and N1-N4 roadmap items focused on infrastructure plumbing (adapters, scheduling, CI). That work was valuable scaffolding, but it didn't address the core need: making Poe autonomous. This roadmap replaces N1-N4 entirely.
