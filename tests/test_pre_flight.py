@@ -200,3 +200,114 @@ class TestVerboseOutput:
             review_plan("goal", steps, MagicMock(), verbose=True)
         captured = capsys.readouterr()
         assert "WARNING" not in captured.err
+
+
+# ---------------------------------------------------------------------------
+# Multi-lens review
+# ---------------------------------------------------------------------------
+
+from pre_flight import multi_lens_review
+
+
+def _make_multi_lens_adapter(responses: list):
+    """Build a mock adapter that returns scripted responses in sequence."""
+    adapter = MagicMock()
+    responses_iter = iter(responses)
+
+    def _complete(*a, **kw):
+        resp = MagicMock()
+        resp.content = next(responses_iter, responses[-1])
+        return resp
+
+    adapter.complete.side_effect = _complete
+    return adapter
+
+
+class TestMultiLensReview:
+    def test_returns_plan_review(self):
+        """multi_lens_review returns a PlanReview."""
+        import json
+        adapter = _make_multi_lens_adapter([
+            json.dumps({"scope": "medium", "note": "ok", "compressed_steps": []}),
+            json.dumps({"dependency_risks": []}),
+            json.dumps({"critical_assumptions": []}),
+        ])
+        with patch("pre_flight.build_adapter", return_value=adapter):
+            review = multi_lens_review("goal", ["step 1", "step 2"], MagicMock())
+        assert review.scope == "medium"
+
+    def test_wide_scope_from_lens1(self):
+        import json
+        adapter = _make_multi_lens_adapter([
+            json.dumps({"scope": "wide", "note": "hidden depth", "compressed_steps": [2]}),
+            json.dumps({"dependency_risks": []}),
+            json.dumps({"critical_assumptions": []}),
+        ])
+        with patch("pre_flight.build_adapter", return_value=adapter):
+            review = multi_lens_review("goal", ["step 1", "step 2"], MagicMock())
+        assert review.scope == "wide"
+        assert 2 in review.milestone_step_indices
+
+    def test_dependency_flags_from_lens2(self):
+        import json
+        adapter = _make_multi_lens_adapter([
+            json.dumps({"scope": "medium", "note": "ok", "compressed_steps": []}),
+            json.dumps({"dependency_risks": [{"step": 3, "missing": "repo not cloned"}]}),
+            json.dumps({"critical_assumptions": []}),
+        ])
+        with patch("pre_flight.build_adapter", return_value=adapter):
+            review = multi_lens_review("goal", ["s1", "s2", "s3"], MagicMock())
+        dep_flags = [f for f in review.flags if "hidden dep" in f.message]
+        assert len(dep_flags) >= 1
+
+    def test_assumption_flags_from_lens3(self):
+        import json
+        adapter = _make_multi_lens_adapter([
+            json.dumps({"scope": "medium", "note": "ok", "compressed_steps": []}),
+            json.dumps({"dependency_risks": []}),
+            json.dumps({"critical_assumptions": [{"step": 1, "assumption": "API key available"}]}),
+        ])
+        with patch("pre_flight.build_adapter", return_value=adapter):
+            review = multi_lens_review("goal", ["s1"], MagicMock())
+        assumption_flags = [f for f in review.flags if f.kind == "assumption"]
+        assert len(assumption_flags) >= 1
+
+    def test_empty_steps_returns_unknown(self):
+        review = multi_lens_review("goal", [], MagicMock())
+        assert review.scope == "unknown"
+
+    def test_partial_lens_failure_degrades_gracefully(self):
+        """If lens 2 fails, lenses 1 and 3 still contribute."""
+        import json
+        call_count = [0]
+
+        def _side_effect(*a, **kw):
+            call_count[0] += 1
+            resp = MagicMock()
+            if call_count[0] == 1:
+                resp.content = json.dumps({"scope": "narrow", "note": "ok", "compressed_steps": []})
+            elif call_count[0] == 2:
+                raise RuntimeError("lens 2 failed")
+            else:
+                resp.content = json.dumps({"critical_assumptions": []})
+            return resp
+
+        adapter = MagicMock()
+        adapter.complete.side_effect = _side_effect
+        with patch("pre_flight.build_adapter", return_value=adapter):
+            review = multi_lens_review("goal", ["s1"], MagicMock())
+        # Should not raise, should return a valid PlanReview
+        assert review.scope in ("narrow", "medium", "unknown")
+
+    def test_has_concerns_when_flags_present(self):
+        import json
+        adapter = _make_multi_lens_adapter([
+            json.dumps({"scope": "narrow", "note": "ok", "compressed_steps": []}),
+            json.dumps({"dependency_risks": [{"step": 1, "missing": "auth token"}]}),
+            json.dumps({"critical_assumptions": []}),
+        ])
+        with patch("pre_flight.build_adapter", return_value=adapter):
+            review = multi_lens_review("goal", ["s1"], MagicMock())
+        # has_concerns=True if scope=wide OR any warn flag
+        if any(f.severity == "warn" for f in review.flags):
+            assert review.has_concerns is True

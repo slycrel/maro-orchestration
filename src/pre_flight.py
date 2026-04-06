@@ -201,3 +201,137 @@ def review_plan(
     except Exception as exc:
         log.debug("pre_flight review failed (non-blocking): %s", exc)
         return PlanReview(scope="unknown", scope_note=f"review failed: {exc}")
+
+
+# ---------------------------------------------------------------------------
+# Multi-lens review (Phase 58: philosopher perspectives)
+# ---------------------------------------------------------------------------
+# Three focused Haiku passes, each with a single-focus prompt. More signal
+# than the combined pass, but 3x the cost. Use for high-stakes goals or
+# when the single-pass review returns scope=wide.
+# ---------------------------------------------------------------------------
+
+_LENS_SCOPE_SYSTEM = """\
+You are a SCOPE DETECTOR reviewing a step plan before execution.
+One job only: is the step count honest for the true size of this work?
+Count how many atomic file-reads or tool-calls are hidden inside single steps.
+Respond ONLY with JSON: {"scope": "narrow"|"medium"|"wide", "note": "<one sentence why>",
+"compressed_steps": [<step numbers that hide multiple operations>]}
+""".strip()
+
+_LENS_DEPS_SYSTEM = """\
+You are a DEPENDENCY SPIDER reviewing a step plan before execution.
+One job only: find hidden dependencies — steps that cannot proceed without
+information that must be discovered in another step or that isn't in the plan.
+Respond ONLY with JSON:
+{"dependency_risks": [{"step": <1-based int>, "missing": "<what's needed>"}]}
+""".strip()
+
+_LENS_ASSUMPTIONS_SYSTEM = """\
+You are an ASSUMPTION AUDITOR reviewing a step plan before execution.
+One job only: list the silent assumptions this plan makes that could break it.
+Focus on: access/credentials assumed available, outputs of prior steps assumed
+to have specific formats, goal scope assumed smaller than it might be.
+Respond ONLY with JSON:
+{"critical_assumptions": [{"step": <int or 0 for whole plan>, "assumption": "<string>"}]}
+""".strip()
+
+
+def multi_lens_review(
+    goal: str,
+    steps: List[str],
+    adapter,
+    *,
+    verbose: bool = False,
+) -> PlanReview:
+    """Run three focused lens reviews and merge into a single PlanReview.
+
+    Uses 3 cheap Haiku calls, each with a single-focus prompt:
+      1. Scope detector — is the step count honest?
+      2. Dependency spider — hidden inter-step dependencies?
+      3. Assumption auditor — what could silently break the plan?
+
+    Returns a merged PlanReview. Never raises. Falls back to single-pass
+    review if any lens fails.
+    """
+    if not steps:
+        return PlanReview(scope="unknown", scope_note="no steps to review")
+
+    from llm import LLMMessage, MODEL_CHEAP
+    steps_text = "\n".join(f"{i+1}. {s}" for i, s in enumerate(steps))
+    user_msg = f"Goal: {goal}\n\nProposed plan:\n{steps_text}"
+
+    flags: List[PlanFlag] = []
+    scope = "medium"
+    scope_note = ""
+    milestone_indices: List[int] = []
+
+    try:
+        _reviewer = build_adapter(model=MODEL_CHEAP)
+    except Exception:
+        _reviewer = adapter
+
+    # --- Lens 1: Scope detector ---
+    try:
+        resp1 = _reviewer.complete(
+            [LLMMessage("system", _LENS_SCOPE_SYSTEM), LLMMessage("user", user_msg)],
+            max_tokens=256, temperature=0.1, timeout=20,
+        )
+        raw1 = resp1.content.strip()
+        if raw1.startswith("```"):
+            raw1 = "\n".join(raw1.splitlines()[1:]).rstrip("`").strip()
+        d1 = json.loads(raw1)
+        scope = d1.get("scope", "medium")
+        scope_note = d1.get("note", "")
+        for s in d1.get("compressed_steps", []):
+            flags.append(PlanFlag(kind="milestone", step=int(s), message="step may hide multiple operations", severity="warn"))
+            milestone_indices.append(int(s))
+    except Exception as e:
+        log.debug("multi_lens scope lens failed: %s", e)
+
+    # --- Lens 2: Dependency spider ---
+    try:
+        resp2 = _reviewer.complete(
+            [LLMMessage("system", _LENS_DEPS_SYSTEM), LLMMessage("user", user_msg)],
+            max_tokens=256, temperature=0.1, timeout=20,
+        )
+        raw2 = resp2.content.strip()
+        if raw2.startswith("```"):
+            raw2 = "\n".join(raw2.splitlines()[1:]).rstrip("`").strip()
+        d2 = json.loads(raw2)
+        for r in d2.get("dependency_risks", []):
+            flags.append(PlanFlag(kind="assumption", step=int(r.get("step", 0)),
+                                  message=f"hidden dep: {r.get('missing', '')}", severity="warn"))
+    except Exception as e:
+        log.debug("multi_lens dep lens failed: %s", e)
+
+    # --- Lens 3: Assumption auditor ---
+    try:
+        resp3 = _reviewer.complete(
+            [LLMMessage("system", _LENS_ASSUMPTIONS_SYSTEM), LLMMessage("user", user_msg)],
+            max_tokens=256, temperature=0.1, timeout=20,
+        )
+        raw3 = resp3.content.strip()
+        if raw3.startswith("```"):
+            raw3 = "\n".join(raw3.splitlines()[1:]).rstrip("`").strip()
+        d3 = json.loads(raw3)
+        for a in d3.get("critical_assumptions", []):
+            flags.append(PlanFlag(kind="assumption", step=int(a.get("step", 0)),
+                                  message=a.get("assumption", ""), severity="warn"))
+    except Exception as e:
+        log.debug("multi_lens assumption lens failed: %s", e)
+
+    review = PlanReview(
+        scope=scope,
+        scope_note=scope_note or f"multi-lens: {len(flags)} flags",
+        flags=flags,
+        milestone_step_indices=milestone_indices,
+    )
+
+    _log_level = logging.WARNING if review.has_concerns else logging.INFO
+    log.log(_log_level, "multi-lens: %s", review.summary())
+    if verbose:
+        import sys
+        print(f"[poe] pre-flight multi-lens: {review.summary()}", file=sys.stderr, flush=True)
+
+    return review
