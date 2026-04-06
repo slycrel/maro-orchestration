@@ -200,11 +200,20 @@ def _apply_suggestion_action(d: dict) -> None:
     try:
         if category == "skill_pattern":
             # Write or update the skill in skills.jsonl
-            from skills import load_skills, save_skill, Skill
+            from skills import load_skills, save_skill, Skill, _skills_path as _sp
             import uuid as _uuid
             skills = load_skills()
             existing = next((s for s in skills if s.name == target or s.id == target), None)
             if existing is not None:
+                # Backup the skill file before mutating so rollback is possible.
+                # .bak is overwritten on each suggestion — keeps last-good state.
+                try:
+                    import shutil as _shutil
+                    _src = _sp()
+                    if _src.exists():
+                        _shutil.copy2(str(_src), str(_src) + ".bak")
+                except Exception as _be:
+                    print(f"[evolver] skill backup failed (non-blocking): {_be}", file=sys.stderr)
                 # Update description with the suggestion; keep rest intact
                 existing.description = suggestion_text[:500]
                 save_skill(existing)
@@ -345,8 +354,16 @@ def _run_skill_test_gate(suggestion_dict: dict) -> Optional[dict]:
             success_rate=original_skill.success_rate,
         )
 
-        # Run the gate (heuristic path — no adapter in apply_suggestion)
-        result = validate_skill_mutation(original_skill, mutated_skill, adapter=None)
+        # Build a cheap adapter for the gate so it actually runs tests rather
+        # than falling through as a dry-run (adapter=None → blocked=False always).
+        _gate_adapter = None
+        try:
+            from llm import build_adapter as _build_adapter, MODEL_CHEAP as _MODEL_CHEAP
+            _gate_adapter = _build_adapter(model=_MODEL_CHEAP)
+        except Exception:
+            pass  # fall back to heuristic path if adapter unavailable
+
+        result = validate_skill_mutation(original_skill, mutated_skill, adapter=_gate_adapter)
         return {"blocked": result.blocked, "block_reason": result.block_reason}
 
     except Exception as e:

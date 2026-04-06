@@ -1976,6 +1976,15 @@ def run_agent_loop(
                 if not _vr["passed"]:
                     log.info("ralph verify FAIL step=%d reason=%r — marking blocked for retry",
                              step_idx, _vr["reason"][:80])
+                    # Tier escalation on verify failure — same signal→response pattern as
+                    # block retry. The result wasn't good enough; try a stronger model.
+                    _vf_tier = getattr(_step_adapter, "model_key", MODEL_CHEAP)
+                    if _vf_tier == MODEL_CHEAP:
+                        _step_tier_overrides[step_text] = MODEL_MID
+                        log.info("step %d verify-fail tier-up: cheap → mid", step_idx)
+                    elif _vf_tier == MODEL_MID:
+                        _step_tier_overrides[step_text] = MODEL_POWER
+                        log.info("step %d verify-fail tier-up: mid → power", step_idx)
                     if verbose:
                         print(f"[poe] ralph verify: step {step_idx} RETRY — {_vr['reason'][:80]}",
                               file=sys.stderr, flush=True)

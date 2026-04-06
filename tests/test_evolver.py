@@ -1408,3 +1408,78 @@ class TestTopPeerSkills:
         with patch("skills.load_skills", return_value=[failing]):
             peers = _top_peer_skills(failing)
         assert peers == []
+
+
+# ===========================================================================
+# _run_skill_test_gate — adapter injection fix (not dry-run)
+# ===========================================================================
+
+class TestRunSkillTestGate:
+    """Verify _run_skill_test_gate builds a real adapter instead of passing
+    adapter=None (which caused validate_skill_mutation to always return
+    blocked=False in dry-run mode)."""
+
+    def _make_suggestion(self):
+        return {
+            "suggestion_id": "gate-unit-00",
+            "category": "skill_pattern",
+            "target": "test_skill",
+            "suggestion": "improved trigger pattern",
+            "failure_pattern": "drift",
+            "confidence": 0.8,
+            "outcomes_analyzed": 3,
+            "generated_at": "2026-04-06T00:00:00+00:00",
+            "applied": False,
+        }
+
+    def test_gate_builds_adapter_not_none(self):
+        """Gate must call validate_skill_mutation with a non-None adapter."""
+        from unittest.mock import patch, MagicMock, call
+        from evolver import _run_skill_test_gate
+        from skills import Skill
+        from datetime import datetime, timezone
+
+        skill = Skill(
+            id="test_skill",
+            name="test_skill",
+            description="original description",
+            trigger_patterns=["test pattern"],
+            steps_template=["do the thing"],
+            source_loop_ids=[],
+            created_at=datetime.now(timezone.utc).isoformat(),
+        )
+
+        mock_adapter = MagicMock()
+        mock_result = MagicMock()
+        mock_result.blocked = False
+        mock_result.block_reason = ""
+
+        called_with_adapter = []
+
+        def capture_validate(original, mutated, adapter=None):
+            called_with_adapter.append(adapter)
+            return mock_result
+
+        with patch("evolver.build_adapter", return_value=mock_adapter):
+            with patch("skills.load_skills", return_value=[skill]):
+                with patch("evolver.validate_skill_mutation", side_effect=capture_validate):
+                    with patch("skills.generate_skill_tests", return_value=[{"input": "x", "expected": "y"}]):
+                        with patch("skills.run_skill_tests", return_value=(1, 1)):
+                            _run_skill_test_gate(self._make_suggestion())
+
+        # The critical assertion: adapter must NOT be None
+        assert len(called_with_adapter) == 1, "validate_skill_mutation should have been called once"
+        assert called_with_adapter[0] is not None, (
+            "validate_skill_mutation called with adapter=None — gate is in permanent dry-run mode"
+        )
+
+    def test_gate_returns_none_when_skill_not_found(self):
+        """Gate returns None (allow through) when target skill doesn't exist."""
+        from unittest.mock import patch
+        from evolver import _run_skill_test_gate
+
+        with patch("skills.load_skills", return_value=[]):
+            with patch("evolver.build_adapter", return_value=None):
+                result = _run_skill_test_gate(self._make_suggestion())
+
+        assert result is None or result == {"blocked": False, "block_reason": ""}

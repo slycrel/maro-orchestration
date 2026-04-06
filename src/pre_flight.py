@@ -24,6 +24,11 @@ import textwrap
 from dataclasses import dataclass, field
 from typing import List, Optional
 
+try:
+    from llm import build_adapter
+except Exception:
+    build_adapter = None  # type: ignore[assignment]
+
 log = logging.getLogger("poe.pre_flight")
 
 _REVIEW_SYSTEM = textwrap.dedent("""\
@@ -120,10 +125,10 @@ def review_plan(
         return PlanReview(scope="unknown", scope_note="no steps to review")
 
     try:
-        from llm import LLMMessage, MODEL_CHEAP, build_adapter as _build_adapter
+        from llm import LLMMessage, MODEL_CHEAP
         # Always use cheap model — this is a fast pattern-match, not deep reasoning
         try:
-            _reviewer = _build_adapter(model=MODEL_CHEAP)
+            _reviewer = build_adapter(model=MODEL_CHEAP)
         except Exception:
             _reviewer = adapter
 

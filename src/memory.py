@@ -1434,9 +1434,11 @@ def run_decay_cycle(
         for lid in promoted_ids:
             promote_lesson(lid)
 
-        # GC below threshold (reload after promotions)
-        remaining = load_tiered_lessons(tier=tier, min_score=0.0)
-        remaining = [l for l in remaining if l.lesson_id not in gc_ids]
+        # Rewrite remaining lessons using the in-memory list (with updated decay scores).
+        # Do NOT reload from disk here — a reload would lose the score changes computed above.
+        promoted_set = set(promoted_ids)
+        gc_set = set(gc_ids)
+        remaining = [l for l in lessons if l.lesson_id not in promoted_set and l.lesson_id not in gc_set]
         _rewrite_tiered_lessons(tier=tier, lessons=remaining)
 
     return {"decayed": decayed, "promoted": len(promoted_ids), "gc": len(gc_ids)}
