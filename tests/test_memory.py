@@ -786,3 +786,76 @@ class TestMajorityVoteLessons:
             adapter=FakeAdapter(), k_samples=1
         )
         assert result == ["single lesson"]
+
+
+# ---------------------------------------------------------------------------
+# load_tiered_lessons max_age_days staleness filter
+# ---------------------------------------------------------------------------
+
+class TestLoadTieredLessonsMaxAge:
+    def _write_lessons(self, path, lessons):
+        import json as _json
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w") as f:
+            for tl in lessons:
+                f.write(_json.dumps({
+                    "lesson_id": tl.lesson_id,
+                    "lesson": tl.lesson,
+                    "tier": tl.tier.value if hasattr(tl.tier, "value") else str(tl.tier),
+                    "task_type": tl.task_type,
+                    "outcome": tl.outcome,
+                    "source_goal": tl.source_goal,
+                    "confidence": tl.confidence,
+                    "score": tl.score,
+                    "last_reinforced": tl.last_reinforced,
+                }) + "\n")
+
+    def test_max_age_days_filters_stale(self, monkeypatch, tmp_path):
+        """Lessons older than max_age_days should be excluded."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        import datetime as dt
+        from memory import load_tiered_lessons, _tiered_lessons_path, MemoryTier, TieredLesson
+
+        old_date = (dt.date.today() - dt.timedelta(days=60)).isoformat()
+        new_date = dt.date.today().isoformat()
+
+        old_lesson = TieredLesson(
+            lesson_id="old1", lesson="stale lesson", tier=MemoryTier.MEDIUM,
+            task_type="research", outcome="done", source_goal="g",
+            confidence=0.9, score=0.9, last_reinforced=old_date,
+        )
+        new_lesson = TieredLesson(
+            lesson_id="new1", lesson="fresh lesson", tier=MemoryTier.MEDIUM,
+            task_type="research", outcome="done", source_goal="g",
+            confidence=0.9, score=0.9, last_reinforced=new_date,
+        )
+
+        path = _tiered_lessons_path("medium")
+        self._write_lessons(path, [old_lesson, new_lesson])
+
+        # Without max_age_days: both returned
+        all_lessons = load_tiered_lessons("medium")
+        assert len(all_lessons) == 2
+
+        # With max_age_days=30: only fresh lesson returned
+        filtered = load_tiered_lessons("medium", max_age_days=30)
+        assert len(filtered) == 1
+        assert filtered[0].lesson_id == "new1"
+
+    def test_max_age_days_none_no_filter(self, monkeypatch, tmp_path):
+        """max_age_days=None (default) returns all lessons regardless of age."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        import datetime as dt
+        from memory import load_tiered_lessons, _tiered_lessons_path, MemoryTier, TieredLesson
+
+        old_date = (dt.date.today() - dt.timedelta(days=365)).isoformat()
+        lesson = TieredLesson(
+            lesson_id="ancient", lesson="very old lesson", tier=MemoryTier.LONG,
+            task_type="general", outcome="done", source_goal="g",
+            confidence=0.9, score=0.9, last_reinforced=old_date,
+        )
+        path = _tiered_lessons_path("long")
+        self._write_lessons(path, [lesson])
+
+        results = load_tiered_lessons("long", max_age_days=None)
+        assert len(results) == 1

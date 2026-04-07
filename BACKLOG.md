@@ -140,8 +140,8 @@ Findings from Sonnet seeded run (full code read). Vetted; hallucinations discard
 
 - [x] **Director review exhaustion silent** — after MAX_REVIEW_ROUNDS, director fell through silently. **Fixed 2026-04-07**: added WARNING log + `for-else` branch in review loop; 2 tests added. (11c05c3)
 - [ ] **No WorkerResult schema validation** — `dispatch_worker` returns WorkerResult; director doesn't validate it matches the input Ticket schema. Workers could silently ignore context. Low priority (workers work in practice), but a spot-check assertion would help.
-- [ ] **Prefix combination validation** — `effort:high + effort:low` silently ignores the second; no validation or warning. Could confuse users. Add a log.warning in `_apply_prefixes` when two conflicting tiers detected.
-- [ ] **Lesson staleness detection** — lessons from months ago have same weight as recent ones. Could add `days_since_reinforced` filter to `get_tiered_lessons()` with configurable max_age. Low complexity.
+- [x] **Prefix combination validation** — added log.warning in `_apply_prefixes` when conflicting model tiers detected (e.g. effort:high + effort:low). (2026-04-07)
+- [x] **Lesson staleness detection** — `load_tiered_lessons()` now accepts `max_age_days` parameter; lessons older than N days skipped at load time. 2 tests. (2026-04-07)
 - [ ] **Introspection lens determinism** — `run_lenses()` has no deterministic mode. Hard to test lens quality or verify diagnosis→recovery mappings. Add `deterministic=True` flag that uses temperature=0. Medium complexity.
 - [x] **LLM schema hallucination crash** — when Haiku returned a JSON schema dict instead of string for `summary` field, `step_summary[:200]` raised `KeyError: slice(None,200,None)`. **Fixed 2026-04-07**: coerce summary to str in `step_exec.py` + defensive guard in `agent_loop.py`. (df8375b)
 

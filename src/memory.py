@@ -1252,8 +1252,14 @@ def load_tiered_lessons(
     task_type: Optional[str] = None,
     min_score: float = 0.0,
     limit: int = 50,
+    max_age_days: Optional[int] = None,
 ) -> List[TieredLesson]:
-    """Load tiered lessons from disk, applying current-day decay inline."""
+    """Load tiered lessons from disk, applying current-day decay inline.
+
+    Args:
+        max_age_days: If set, skip lessons last reinforced more than this many days ago.
+                      Useful for pruning stale lessons in retrieval contexts.
+    """
     path = _tiered_lessons_path(tier)
     if not path.exists():
         return []
@@ -1270,6 +1276,8 @@ def load_tiered_lessons(
                 tl = TieredLesson(**{k: d[k] for k in TieredLesson.__dataclass_fields__ if k in d})
                 # Apply decay inline (days since last reinforcement)
                 days = _days_since(tl.last_reinforced)
+                if max_age_days is not None and days > max_age_days:
+                    continue  # lesson too stale
                 if days > 0:
                     tl.score = decay_score(tl.score, days)
                 if tl.score < min_score:
