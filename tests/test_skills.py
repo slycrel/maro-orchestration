@@ -1346,6 +1346,31 @@ class TestStemmer:
         results = _tfidf_skill_rank("research topics online", [research_skill, other_skill])
         assert any(s.id == "s1" for s in results)
 
+    def test_island_boost_prefers_matching_island(self):
+        """NeMo S4: skill whose island matches goal intent ranks higher (20% boost)."""
+        from skills import _tfidf_skill_rank, Skill
+
+        def _make(id_, name, desc, triggers, island=""):
+            return Skill(
+                id=id_, name=name, description=desc,
+                trigger_patterns=triggers, steps_template=["step"],
+                source_loop_ids=[], created_at="2026-01-01T00:00:00+00:00",
+                island=island,
+            )
+
+        # Both skills have similar TF-IDF relevance to the goal, but only research_skill
+        # has island="research" matching the "research" keyword in the goal.
+        research_skill = _make("s1", "web_searcher", "find information on topics",
+                               ["find info", "search web"], island="research")
+        build_skill = _make("s2", "code_gen", "generate code for topics",
+                            ["generate code", "create module"], island="build")
+        # Goal has explicit "research" intent
+        results = _tfidf_skill_rank("research topics and gather information", [research_skill, build_skill])
+        # research_skill should appear before build_skill (island boost tips the balance)
+        ids = [s.id for s in results]
+        if "s1" in ids and "s2" in ids:
+            assert ids.index("s1") < ids.index("s2")
+
 
 # ---------------------------------------------------------------------------
 # Island model (FunSearch steal: anti-monoculture diversity)

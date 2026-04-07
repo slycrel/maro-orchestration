@@ -490,6 +490,10 @@ def _skill_tokens(text: str) -> List[str]:
 def _tfidf_skill_rank(goal: str, skills: List[Skill], top_k: int = 3) -> List[Skill]:
     """TF-IDF cosine similarity ranking for skills against a goal string.
 
+    Phase 59 NeMo S4: island-aware ranking — skills whose island matches the
+    goal's detected intent get a +20% score boost. No model dependency; uses
+    the same keyword scoring as assign_island().
+
     Used as a middle tier between the trained router (Phase 17) and raw
     keyword substring matching — better quality than keyword, no training data
     required. Returns up to top_k skills with non-zero similarity.
@@ -497,6 +501,17 @@ def _tfidf_skill_rank(goal: str, skills: List[Skill], top_k: int = 3) -> List[Sk
     query_tokens = _skill_tokens(goal)
     if not query_tokens or not skills:
         return []
+
+    # Detect goal's island intent for type-aware boost (NeMo S4)
+    # Inline the same keyword scoring as assign_island() — goal text only
+    _island_scores: dict = {isl: 0 for isl in _ISLAND_KEYWORDS}
+    goal_lower_rank = goal.lower()
+    for isl, kws in _ISLAND_KEYWORDS.items():
+        for kw in kws:
+            if kw in goal_lower_rank:
+                _island_scores[isl] += 1
+    _best_isl, _best_sc = max(_island_scores.items(), key=lambda kv: kv[1])
+    goal_island = _best_isl if _best_sc > 0 else ""
 
     # Build skill documents: name + description + trigger_patterns
     def skill_doc(s: Skill) -> str:
@@ -524,10 +539,16 @@ def _tfidf_skill_rank(goal: str, skills: List[Skill], top_k: int = 3) -> List[Sk
         norm_b = math.sqrt(sum(v * v for v in b.values())) or 1.0
         return dot / (norm_a * norm_b)
 
+    _ISLAND_BOOST = 0.20  # +20% score bonus for island match (NeMo S4)
     q_vec = tfidf_vec(query_tokens)
-    scored = [(cosine(q_vec, tfidf_vec(tokens)), skill)
-              for tokens, skill in zip(doc_tokens, skills)]
-    scored = [(sc, sk) for sc, sk in scored if sc > 0]
+    scored = []
+    for tokens, skill in zip(doc_tokens, skills):
+        sc = cosine(q_vec, tfidf_vec(tokens))
+        if sc > 0:
+            # Apply island-type boost when skill island matches goal intent
+            if goal_island and getattr(skill, "island", "") == goal_island:
+                sc = sc * (1.0 + _ISLAND_BOOST)
+            scored.append((sc, skill))
     scored.sort(key=lambda x: x[0], reverse=True)
     return [sk for _, sk in scored[:top_k]]
 
