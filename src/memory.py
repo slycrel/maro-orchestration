@@ -1110,8 +1110,9 @@ def extract_lessons_via_llm(
                 temperature=0.3,
             )
             # F6: token transparency — track per-call token usage
-            _total_tokens_in += getattr(resp, "tokens_in", 0) or 0
-            _total_tokens_out += getattr(resp, "tokens_out", 0) or 0
+            # LLMResponse uses input_tokens/output_tokens; accept either naming convention
+            _total_tokens_in += (getattr(resp, "input_tokens", 0) or getattr(resp, "tokens_in", 0) or 0)
+            _total_tokens_out += (getattr(resp, "output_tokens", 0) or getattr(resp, "tokens_out", 0) or 0)
             raw = extract_json(content_or_empty(resp), list, log_tag="memory.extract_lessons")
             return _parse_typed(raw)
         except Exception:
