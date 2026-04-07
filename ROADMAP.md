@@ -1270,8 +1270,8 @@ is what's missing.
 - **AIMD throttling** (NeMo Steal 5) — per-worker concurrency self-tuning. Low complexity once parallel workers are enabled.
 - **Sampler constraints for skill A/B testing** (NeMo Steal 7) — conditional skill parameterization. Medium complexity.
 - ~~**Task ledger + verification log** (Feynman Steal 8)~~ — **DONE** (2026-04-07). `TaskLedgerEntry`, `append_task_ledger()`, `load_task_ledger()` in memory.py. Wired into agent_loop.py after each step. 5 tests.
-- **Evidence table + claim tracing** (Feynman Steal 9) — lesson records linked to source evidence. Medium complexity.
+- ~~**Evidence table + claim tracing** (Feynman Steal 9)~~ — **DONE** (2026-04-07). `evidence_sources: List[str]` field added to `TieredLesson`; `record_tiered_lesson()` accepts `evidence_sources` kwarg. Backward compatible. 3 tests.
 - **Multi-round gap analysis** (Feynman Steal 10) — targeted research round spawning on identified gaps. Medium complexity.
-- **Verifier agent** (Feynman Steal 11) — inline citation + URL verification post-skill-generation. Medium complexity.
+- ~~**Verifier agent** (Feynman Steal 11)~~ — **DONE** (2026-04-07). `verify_skill_description()` in skills.py: heuristic regex check for absolute claims, unsourced metrics, version-specific claims, internal API references. Returns `SkillVerificationResult` with suspicious claims + confidence score. No LLM call, zero cost. 5 tests.
 - ~~**Provenance records** (Feynman Steal 12)~~ — **DONE** (2026-04-07). `write_skill_provenance()` + `load_skill_provenance()` in skills.py. Wired into promote and demote. 4 tests.
 
