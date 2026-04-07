@@ -1288,13 +1288,36 @@ is what's missing.
 **Phase 59 summary:** 15+ steal items shipped. test_memory: 109, test_skills: 137, test_introspect: 38, test_inspector: 82.
 
 
-### Phase 60: Adversarial Verification Layer *(CANDIDATE)*
+### Phase 60: Adversarial Verification Layer *(DONE)*
 
 *"Make verification adversarial by design — not an afterthought."*
 
-**Candidate items (not yet started):**
-- Multi-model adversarial review — extends `_adversarial_lens()` (Phase 59 F3) into the core execution path.
-- Verification calibration loop — use `verification_accuracy()` (Phase 59 F4) to auto-tune confidence thresholds per claim type.
-- Cross-agent claim challenge — spawn reviewer agent (persona B) to challenge worker claims; disagreement triggers retry.
-- Citation requirement enforcement — lessons with `evidence_sources=[]` downgraded in `query_lessons()`.
+Shipped 2026-04-07. 4 systemic steal items, all pattern-driven (no new if-else branches).
+
+- [x] **Citation enforcement** (`_CITATION_PENALTY = 0.90`): uncited lessons discounted 10% in `_tfidf_rank()` — cited lessons rank higher on ties. Evidence quality is now a first-class ranking signal. (`memory.py`)
+- [x] **Verification calibration loop** (`calibrated_alignment_threshold()`): derives alignment pass/fail threshold from `verification_accuracy()` history. Conservative verifier → lower threshold; strict verifier → raise. Wired into `check_alignment()`. (`memory.py`, `inspector.py`)
+- [x] **Multi-model adversarial review** (`adversarial_sample()`): mid-run entry point for adversarial lens — no LoopDiagnosis needed. `model` kwarg enables cross-model verification (adversarial call runs on a different model than the primary loop). (`introspect.py`)
+- [x] **Heartbeat session guard** (`_is_interactive_session_active()`): detects `claude --continue` in process table and skips ALL autonomous LLM work (backlog drain, task-store drain, evolver, inspector). Prevents double-burning during interactive sessions. Backlog drain interval 3→30 ticks. (`heartbeat.py`)
+
+**Tests:** test_memory=118, test_introspect=42, test_inspector=84.
+
+**Deferred (Phase 61 candidates):**
+- Cross-agent claim challenge — persona B challenges worker claims; disagreement triggers retry.
+
+---
+
+### Phase 61: Integration Depth *(CANDIDATE)*
+
+*"3061 unit tests and only 31 integration tests — close the gap."*
+
+Self-review identified 15 integration tests needed that aren't covered by the unit suite:
+
+**Candidate items:**
+- NOW lane end-to-end: goal → intent → handle → agent_loop → memory reflects
+- AGENDA lane end-to-end: enqueue → heartbeat picks up → agent_loop runs → outcome recorded
+- Checkpoint recovery: loop interrupted mid-run → resume restores correct step index
+- Adapter switching: Anthropic API → OpenRouter fallback → subprocess fallback chain
+- Memory injection: lessons from prior run surface in next run's injection string
+- Cross-agent claim challenge: persona B challenges worker claim; disagreement triggers retry (deferred from Phase 60)
+
 
