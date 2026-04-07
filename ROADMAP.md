@@ -1264,14 +1264,16 @@ is what's missing.
 
 **Not yet shipped:**
 
-- **Discriminated union config for skill types** (NeMo Steal 1) — Pydantic schema for skill metadata. Medium complexity. Makes skill parameters type-safe and validates on deserialization.
-- **Processor pipeline for skill generation** (NeMo Steal 2) — PRE/POST/AFTER lifecycle stages. Medium-high complexity. Decouples constraint injection, generation, and verification.
+- ~~**Typed lesson taxonomy + seed/ATIF/cross-type cap** (NeMo S1/S2/S3/S5)~~ — **DONE** (2026-04-07). `lesson_type` field on `TieredLesson`; `load_tiered_lessons()` + `query_lessons()` filter by type. `_REFLECT_SYSTEM` prompt updated to elicit typed lessons. Seed-reader bootstrapping: top-1 long-tier lesson prepended as style guide. ATIF feedback: avg reinforcement stats injected into prompt. Cross-type cap: max 1 lesson per type per extraction. `return_typed` kwarg. 9 tests.
+- **SEED_READER / plugin injection** (NeMo Steal 2 residual) — `inject_into_processor_config_type_union` pattern: skill types register into a shared dispatch table without touching core routing. Low priority; current island-based routing covers 90% of use cases.
+- ~~**Skill type-aware ranking** (NeMo S4)~~ — **DONE** (2026-04-07). `_tfidf_skill_rank()` detects goal intent via inline island keyword scoring; applies +20% boost to skills whose island matches. 1 test. (`src/skills.py`)
 - ~~**ViolationType enum config** (NeMo Steal 4)~~ — **DONE** (2026-04-07). `ViolationType` class + `ViolationReport` dataclass in constraint.py. 12 typed violation constants (DESTRUCTIVE_COMMAND, HALLUCINATED_CLAIM, etc.) with (category, description, severity). `ConstraintResult.to_violation_reports()` + `has_fatal_violations()`. 10 tests.
 - **AIMD throttling** (NeMo Steal 5) — per-worker concurrency self-tuning. Low complexity once parallel workers are enabled.
 - ~~**Sampler constraints for skill A/B testing** (NeMo Steal 7)~~ — **DONE** (2026-04-07). `SkillConstraint` dataclass + `apply_skill_constraints()` in skills.py. Condition/exclusion keyword matching; parameter_overrides noted in optimization_objective. 6 tests.
 - ~~**Task ledger + verification log** (Feynman Steal 8)~~ — **DONE** (2026-04-07). `TaskLedgerEntry`, `append_task_ledger()`, `load_task_ledger()` in memory.py. Wired into agent_loop.py after each step. 5 tests.
 - ~~**Evidence table + claim tracing** (Feynman Steal 9)~~ — **DONE** (2026-04-07). `evidence_sources: List[str]` field added to `TieredLesson`; `record_tiered_lesson()` accepts `evidence_sources` kwarg. Backward compatible. 3 tests.
-- **Multi-round gap analysis** (Feynman Steal 10) — targeted research round spawning on identified gaps. Medium complexity.
+- ~~**Multi-round gap analysis** (Feynman Steal 10)~~ — **DONE** (2026-04-07). `GoalGap` dataclass + `detect_goal_gaps()` in memory.py. Heuristic detection: blocked steps (high), uncovered goal keywords (medium), unused lessons (low). Sorted by severity, capped by max_gaps. 8 tests.
 - ~~**Verifier agent** (Feynman Steal 11)~~ — **DONE** (2026-04-07). `verify_skill_description()` in skills.py: heuristic regex check for absolute claims, unsourced metrics, version-specific claims, internal API references. Returns `SkillVerificationResult` with suspicious claims + confidence score. No LLM call, zero cost. 5 tests.
 - ~~**Provenance records** (Feynman Steal 12)~~ — **DONE** (2026-04-07). `write_skill_provenance()` + `load_skill_provenance()` in skills.py. Wired into promote and demote. 4 tests.
+- ~~**Confidence tier standardization** (Feynman F5)~~ — **DONE** (2026-04-07). `confidence_from_k_samples()`: single=0.5, 2-sample=0.6, majority-vote=0.7. `record_tiered_lesson(k_samples=N)` auto-computes. `reinforce_lesson()` + `_reinforce_tiered_lesson()` bump to 0.9+ at sessions_validated≥3. 6 tests; test_memory at 103.
 

@@ -1095,7 +1095,11 @@ def extract_lessons_via_llm(
                 results.append((lesson_text, lesson_type))
         return results
 
+    _total_tokens_in = 0
+    _total_tokens_out = 0
+
     def _one_sample() -> "List[tuple]":
+        nonlocal _total_tokens_in, _total_tokens_out
         try:
             resp = adapter.complete(
                 [
@@ -1105,6 +1109,9 @@ def extract_lessons_via_llm(
                 max_tokens=320,
                 temperature=0.3,
             )
+            # F6: token transparency — track per-call token usage
+            _total_tokens_in += getattr(resp, "tokens_in", 0) or 0
+            _total_tokens_out += getattr(resp, "tokens_out", 0) or 0
             raw = extract_json(content_or_empty(resp), list, log_tag="memory.extract_lessons")
             return _parse_typed(raw)
         except Exception:
@@ -1138,6 +1145,18 @@ def extract_lessons_via_llm(
             type_seen.add(lesson_type)
             capped.append((lesson_text, lesson_type))
     typed = capped
+
+    # F6: Token transparency — log extraction cost so expensive paths are visible
+    if _total_tokens_in or _total_tokens_out:
+        log.info(
+            "extract_lessons tokens: in=%d out=%d k_samples=%d lessons=%d",
+            _total_tokens_in, _total_tokens_out, max(k_samples, 1), len(typed),
+        )
+        try:
+            from metrics import record_cost
+            record_cost("memory.extract_lessons", tokens_in=_total_tokens_in, tokens_out=_total_tokens_out)
+        except Exception:
+            pass
 
     if return_typed:
         return typed

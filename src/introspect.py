@@ -877,6 +877,67 @@ def aggregate_lenses(
 # Default lens registry
 # ---------------------------------------------------------------------------
 
+def _adversarial_lens(
+    diag: LoopDiagnosis,
+    profiles: List[StepProfile],
+    *,
+    deterministic: bool = False,
+) -> LensResult:
+    """LLM-backed: devil's advocate review — find flaws, edge cases, failure modes.
+
+    Phase 59 Feynman F3: multi-perspective adversarial review. After a loop
+    completes, asks a second LLM call to challenge the plan and surface risks
+    that the primary quality lens might miss. Cost: "mid" — opt-in only.
+
+    Args:
+        deterministic: If True, use temperature=0 for reproducible outputs.
+    """
+    findings: List[str] = []
+    action = None
+
+    done_profiles = [p for p in profiles if p.status == "done" and p.tokens > 0]
+    if not done_profiles or not diag.steps_done:
+        return LensResult(lens_name="adversarial", cost="mid")
+
+    step_summaries = [f"Step {p.step_idx}: {p.text[:80]}" for p in done_profiles[:6]]
+
+    try:
+        from llm import build_adapter, MODEL_CHEAP, LLMMessage
+        adapter = build_adapter(model=MODEL_CHEAP)
+
+        prompt = (
+            "You are a critical adversary reviewing a completed AI agent run.\n"
+            "Your job: find flaws, edge cases, and failure modes the agent may have missed.\n"
+            "Be specific, concrete, and adversarial — do not give benefit of the doubt.\n\n"
+            f"Loop: {diag.loop_id}\n"
+            f"Steps completed ({diag.steps_done}/{diag.steps_total}):\n"
+            + "\n".join(f"  {s}" for s in step_summaries)
+            + "\n\nIdentify:\n"
+            "1. What could go wrong that wasn't checked?\n"
+            "2. What assumption is most likely to be wrong?\n"
+            "3. What edge case was probably not handled?\n"
+            "Answer in 3 short bullet points. Be adversarial."
+        )
+        _temp = 0.0 if deterministic else 0.4  # slightly higher temp for creative adversarial thinking
+        resp = adapter.complete(
+            [LLMMessage("user", prompt)],
+            max_tokens=300,
+            temperature=_temp,
+        )
+        if resp.content and len(resp.content) > 20:
+            findings.append(resp.content.strip())
+            _lower = resp.content.lower()
+            # Flag if adversarial review found real concerns
+            _risk_words = ["wrong", "miss", "fail", "unchecked", "assume", "edge", "gap", "skip"]
+            if sum(1 for w in _risk_words if w in _lower) >= 2:
+                action = "Adversarial review found potential gaps — verify assumptions before accepting results"
+    except Exception as exc:
+        log.debug("adversarial lens LLM call failed: %s", exc)
+
+    confidence = 0.65 if action else 0.45
+    return LensResult(lens_name="adversarial", findings=findings, action=action, confidence=confidence, cost="mid")
+
+
 _default_registry: Optional[LensRegistry] = None
 
 def get_lens_registry() -> LensRegistry:
@@ -890,6 +951,7 @@ def get_lens_registry() -> LensRegistry:
         _default_registry.register("operator", _operator_lens, cost="free")
         _default_registry.register("forensics", _forensics_lens, cost="free")
         _default_registry.register("quality", _quality_lens, cost="cheap")
+        _default_registry.register("adversarial", _adversarial_lens, cost="mid")
     return _default_registry
 
 

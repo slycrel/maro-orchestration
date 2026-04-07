@@ -296,13 +296,14 @@ def _make_profiles(specs):
     ]
 
 
-def test_lens_registry_has_four_builtin():
+def test_lens_registry_has_builtin_lenses():
     registry = get_lens_registry()
     names = registry.list()
     assert "cost" in names
     assert "architecture" in names
     assert "operator" in names
     assert "forensics" in names
+    assert "adversarial" in names  # Phase 59 F3
 
 
 def test_cost_lens_flags_expensive_step():
@@ -562,3 +563,103 @@ def test_find_recurring_patterns_ignores_healthy(tmp_path, monkeypatch):
         ))
     patterns = find_recurring_patterns()
     assert patterns == []
+
+
+# ---------------------------------------------------------------------------
+# Phase 59 F3: Adversarial lens
+# ---------------------------------------------------------------------------
+
+def test_adversarial_lens_returns_empty_on_no_done_steps():
+    """Adversarial lens returns empty LensResult when no done steps with tokens."""
+    from introspect import _adversarial_lens, LoopDiagnosis, StepProfile
+    diag = LoopDiagnosis(loop_id="x", failure_class="healthy", severity="info")
+    profiles = [StepProfile(step_idx=1, text="step 1", status="stuck", tokens=0, elapsed_ms=0)]
+    result = _adversarial_lens(diag, profiles)
+    assert result.lens_name == "adversarial"
+    assert result.findings == []
+    assert result.action is None
+
+
+def test_adversarial_lens_registered_as_mid_cost():
+    """Adversarial lens is registered with cost='mid' in the default registry."""
+    from introspect import get_lens_registry
+    registry = get_lens_registry()
+    assert "adversarial" in registry.list()
+    assert registry._costs.get("adversarial") == "mid"
+
+
+def test_adversarial_lens_llm_returns_findings():
+    """Adversarial lens produces findings when adapter returns content."""
+    from introspect import _adversarial_lens, LoopDiagnosis, StepProfile
+
+    class FakeAdapter:
+        def complete(self, messages, **kwargs):
+            class R:
+                content = "• Assumption X may be wrong\n• Edge case Y not handled\n• Risk Z unchecked"
+                tokens_in = 100
+                tokens_out = 50
+            return R()
+
+    diag = LoopDiagnosis(loop_id="loop1", failure_class="healthy", severity="info",
+                         steps_done=2, steps_total=3)
+    profiles = [
+        StepProfile(step_idx=1, text="research topic", status="done", tokens=1000, elapsed_ms=500),
+        StepProfile(step_idx=2, text="analyze results", status="done", tokens=800, elapsed_ms=400),
+    ]
+
+    # Monkeypatch llm.build_adapter
+    import sys, types
+    fake_llm = types.ModuleType("llm")
+    fake_llm.build_adapter = lambda **kw: FakeAdapter()
+    fake_llm.MODEL_CHEAP = "haiku"
+    from llm import LLMMessage as _lm
+    fake_llm.LLMMessage = _lm
+    old = sys.modules.get("llm")
+    sys.modules["llm"] = fake_llm
+    try:
+        result = _adversarial_lens(diag, profiles)
+    finally:
+        if old is None:
+            del sys.modules["llm"]
+        else:
+            sys.modules["llm"] = old
+
+    assert len(result.findings) >= 1
+    assert result.lens_name == "adversarial"
+
+
+def test_adversarial_lens_deterministic_uses_zero_temp():
+    """deterministic=True is passed through to the adapter."""
+    from introspect import _adversarial_lens, LoopDiagnosis, StepProfile
+
+    captured_kwargs = {}
+
+    class FakeAdapter:
+        def complete(self, messages, **kwargs):
+            captured_kwargs.update(kwargs)
+            class R:
+                content = "• All good"
+                tokens_in = 50
+                tokens_out = 30
+            return R()
+
+    import sys, types
+    fake_llm = types.ModuleType("llm")
+    fake_llm.build_adapter = lambda **kw: FakeAdapter()
+    fake_llm.MODEL_CHEAP = "haiku"
+    from llm import LLMMessage as _lm
+    fake_llm.LLMMessage = _lm
+    old = sys.modules.get("llm")
+    sys.modules["llm"] = fake_llm
+    try:
+        diag = LoopDiagnosis(loop_id="lx", failure_class="healthy", severity="info",
+                             steps_done=1, steps_total=1)
+        profiles = [StepProfile(step_idx=1, text="do something", status="done", tokens=500, elapsed_ms=200)]
+        _adversarial_lens(diag, profiles, deterministic=True)
+    finally:
+        if old is None:
+            del sys.modules["llm"]
+        else:
+            sys.modules["llm"] = old
+
+    assert captured_kwargs.get("temperature") == 0.0
