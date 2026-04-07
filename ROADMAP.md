@@ -1276,4 +1276,9 @@ is what's missing.
 - ~~**Verifier agent** (Feynman Steal 11)~~ — **DONE** (2026-04-07). `verify_skill_description()` in skills.py: heuristic regex check for absolute claims, unsourced metrics, version-specific claims, internal API references. Returns `SkillVerificationResult` with suspicious claims + confidence score. No LLM call, zero cost. 5 tests.
 - ~~**Provenance records** (Feynman Steal 12)~~ — **DONE** (2026-04-07). `write_skill_provenance()` + `load_skill_provenance()` in skills.py. Wired into promote and demote. 4 tests.
 - ~~**Confidence tier standardization** (Feynman F5)~~ — **DONE** (2026-04-07). `confidence_from_k_samples()`: single=0.5, 2-sample=0.6, majority-vote=0.7. `record_tiered_lesson(k_samples=N)` auto-computes. `reinforce_lesson()` + `_reinforce_tiered_lesson()` bump to 0.9+ at sessions_validated≥3. 6 tests; test_memory at 103.
+- ~~**Accumulating verifier memory** (Feynman F4)~~ — **DONE** (2026-04-07). `VerificationOutcome` dataclass + `record_verification()` + `load_verification_outcomes()` + `verification_accuracy()` in memory.py. Wired into `inspector.check_alignment()`. Enables per-claim-type accuracy trends. 6 tests; test_memory at 109.
+- ~~**Adversarial lens** (Feynman F3)~~ — **DONE** (2026-04-07). `_adversarial_lens()` in introspect.py — devil's advocate LLM review, cost='mid'. Registered in default LensRegistry. 4 tests; test_introspect at 38.
+- ~~**Token transparency in extraction** (Feynman F6)~~ — **DONE** (2026-04-07). Per-call `tokens_in/out` tracked in `extract_lessons_via_llm()`, logged at INFO + forwarded to `metrics.record_cost`. Zero breaking change.
+- ~~**Typed lesson taxonomy + seed/ATIF/cross-type cap** (NeMo S1/S2/S3/S5)~~ — **DONE** (2026-04-07). See above entry. test_memory at 97 after S1-S5 merge.
+- ~~**Island-aware TF-IDF skill ranking** (NeMo S4)~~ — **DONE** (2026-04-07). See above entry. test_skills at 137.
 
