@@ -663,3 +663,132 @@ def test_adversarial_lens_deterministic_uses_zero_temp():
             sys.modules["llm"] = old
 
     assert captured_kwargs.get("temperature") == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Phase 60: adversarial_sample mid-run entry point + model kwarg
+# ---------------------------------------------------------------------------
+
+def test_adversarial_sample_returns_empty_on_no_steps():
+    """adversarial_sample returns empty LensResult when no steps provided."""
+    from introspect import adversarial_sample
+    result = adversarial_sample("do stuff", [])
+    assert result.lens_name == "adversarial"
+    assert result.findings == []
+    assert result.action is None
+
+
+def test_adversarial_sample_calls_llm_with_steps():
+    """adversarial_sample calls LLM when steps are present."""
+    import sys, types
+    from introspect import adversarial_sample
+
+    calls = []
+
+    class FakeResp:
+        content = "• wrong assumption • edge case missed • unchecked fail path"
+
+    class FakeAdapter:
+        def complete(self, msgs, **kw):
+            calls.append({"msgs": msgs, "kwargs": kw})
+            return FakeResp()
+
+    fake_llm = types.ModuleType("llm")
+    fake_llm.build_adapter = lambda **kw: FakeAdapter()
+    fake_llm.MODEL_CHEAP = "haiku"
+    from llm import LLMMessage as _lm
+    fake_llm.LLMMessage = _lm
+    old = sys.modules.get("llm")
+    sys.modules["llm"] = fake_llm
+    try:
+        result = adversarial_sample(
+            "build a pipeline",
+            ["step 1: fetch data", "step 2: transform"],
+        )
+    finally:
+        if old is None:
+            del sys.modules["llm"]
+        else:
+            sys.modules["llm"] = old
+
+    assert len(calls) == 1
+    assert len(result.findings) == 1
+    # risk words present → action set
+    assert result.action is not None
+
+
+def test_adversarial_sample_model_kwarg_passed_to_adapter():
+    """adversarial_sample passes model kwarg to build_adapter."""
+    import sys, types
+    from introspect import adversarial_sample
+
+    captured_model = {}
+
+    class FakeResp:
+        content = "short"
+
+    class FakeAdapter:
+        def complete(self, msgs, **kw):
+            return FakeResp()
+
+    fake_llm = types.ModuleType("llm")
+
+    def fake_build(**kw):
+        captured_model["model"] = kw.get("model")
+        return FakeAdapter()
+
+    fake_llm.build_adapter = fake_build
+    fake_llm.MODEL_CHEAP = "haiku"
+    from llm import LLMMessage as _lm
+    fake_llm.LLMMessage = _lm
+    old = sys.modules.get("llm")
+    sys.modules["llm"] = fake_llm
+    try:
+        adversarial_sample("goal", ["step 1"], model="sonnet")
+    finally:
+        if old is None:
+            del sys.modules["llm"]
+        else:
+            sys.modules["llm"] = old
+
+    assert captured_model["model"] == "sonnet"
+
+
+def test_adversarial_lens_model_kwarg_overrides_cheap():
+    """_adversarial_lens model kwarg is passed to build_adapter."""
+    import sys, types
+    from introspect import _adversarial_lens, LoopDiagnosis, StepProfile
+
+    captured_model = {}
+
+    class FakeResp:
+        content = "short"
+
+    class FakeAdapter:
+        def complete(self, msgs, **kw):
+            return FakeResp()
+
+    fake_llm = types.ModuleType("llm")
+
+    def fake_build(**kw):
+        captured_model["model"] = kw.get("model")
+        return FakeAdapter()
+
+    fake_llm.build_adapter = fake_build
+    fake_llm.MODEL_CHEAP = "haiku"
+    from llm import LLMMessage as _lm
+    fake_llm.LLMMessage = _lm
+    old = sys.modules.get("llm")
+    sys.modules["llm"] = fake_llm
+    try:
+        diag = LoopDiagnosis(loop_id="lx", failure_class="healthy", severity="info",
+                             steps_done=1, steps_total=1)
+        profiles = [StepProfile(step_idx=1, text="do work", status="done", tokens=100, elapsed_ms=50)]
+        _adversarial_lens(diag, profiles, model="opus")
+    finally:
+        if old is None:
+            del sys.modules["llm"]
+        else:
+            sys.modules["llm"] = old
+
+    assert captured_model["model"] == "opus"

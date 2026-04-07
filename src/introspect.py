@@ -908,6 +908,7 @@ def _adversarial_lens(
     profiles: List[StepProfile],
     *,
     deterministic: bool = False,
+    model: Optional[str] = None,
 ) -> LensResult:
     """LLM-backed: devil's advocate review — find flaws, edge cases, failure modes.
 
@@ -915,8 +916,12 @@ def _adversarial_lens(
     completes, asks a second LLM call to challenge the plan and surface risks
     that the primary quality lens might miss. Cost: "mid" — opt-in only.
 
+    Phase 60: ``model`` kwarg enables multi-model review — caller can specify a
+    different model than the one that ran the primary loop. Defaults to MODEL_CHEAP.
+
     Args:
         deterministic: If True, use temperature=0 for reproducible outputs.
+        model: Override model for the adversarial call. None → MODEL_CHEAP.
     """
     findings: List[str] = []
     action = None
@@ -929,7 +934,8 @@ def _adversarial_lens(
 
     try:
         from llm import build_adapter, MODEL_CHEAP, LLMMessage
-        adapter = build_adapter(model=MODEL_CHEAP)
+        _model = model or MODEL_CHEAP
+        adapter = build_adapter(model=_model)
 
         prompt = (
             "You are a critical adversary reviewing a completed AI agent run.\n"
@@ -959,6 +965,75 @@ def _adversarial_lens(
                 action = "Adversarial review found potential gaps — verify assumptions before accepting results"
     except Exception as exc:
         log.debug("adversarial lens LLM call failed: %s", exc)
+
+    confidence = 0.65 if action else 0.45
+    return LensResult(lens_name="adversarial", findings=findings, action=action, confidence=confidence, cost="mid")
+
+
+def adversarial_sample(
+    goal: str,
+    completed_steps: List[str],
+    *,
+    model: Optional[str] = None,
+    deterministic: bool = False,
+) -> LensResult:
+    """Run adversarial review directly from step text — no LoopDiagnosis required.
+
+    Phase 60: mid-run entry point for the adversarial lens. Can be called after
+    any milestone step to get a real-time devil's advocate review using a
+    (optionally different) model from the one running the primary loop.
+
+    This makes multi-model adversarial review available to agent_loop, director,
+    and any other caller without needing a full post-loop diagnosis.
+
+    Args:
+        goal:            The overall goal being executed.
+        completed_steps: List of step texts completed so far.
+        model:           Model to use for the adversarial call (None → MODEL_CHEAP).
+        deterministic:   If True, temperature=0 for reproducible output.
+
+    Returns:
+        LensResult with findings and optional action recommendation.
+    """
+    if not completed_steps:
+        return LensResult(lens_name="adversarial", cost="mid")
+
+    summaries = completed_steps[-6:]  # last 6 steps max
+    findings: List[str] = []
+    action = None
+
+    try:
+        from llm import build_adapter, MODEL_CHEAP, LLMMessage
+        _model = model or MODEL_CHEAP
+        adapter = build_adapter(model=_model)
+
+        prompt = (
+            "You are a critical adversary reviewing an AI agent's progress.\n"
+            "Your job: find flaws, gaps, and failure modes the agent may have missed.\n"
+            "Be specific, concrete, and adversarial — do not give benefit of the doubt.\n\n"
+            f"Goal: {goal[:200]}\n"
+            f"Steps completed so far ({len(summaries)}):\n"
+            + "\n".join(f"  {i+1}. {s[:100]}" for i, s in enumerate(summaries))
+            + "\n\nIdentify:\n"
+            "1. What could go wrong that wasn't checked?\n"
+            "2. What assumption is most likely to be wrong?\n"
+            "3. What edge case was probably not handled?\n"
+            "Answer in 3 short bullet points. Be adversarial."
+        )
+        _temp = 0.0 if deterministic else 0.4
+        resp = adapter.complete(
+            [LLMMessage("user", prompt)],
+            max_tokens=300,
+            temperature=_temp,
+        )
+        if resp.content and len(resp.content) > 20:
+            findings.append(resp.content.strip())
+            _lower = resp.content.lower()
+            _risk_words = ["wrong", "miss", "fail", "unchecked", "assume", "edge", "gap", "skip"]
+            if sum(1 for w in _risk_words if w in _lower) >= 2:
+                action = "Adversarial review found potential gaps — verify assumptions before accepting results"
+    except Exception as exc:
+        log.debug("adversarial_sample LLM call failed: %s", exc)
 
     confidence = 0.65 if action else 0.45
     return LensResult(lens_name="adversarial", findings=findings, action=action, confidence=confidence, cost="mid")
