@@ -558,10 +558,23 @@ def _produce_spec(
         _large_scope = _is_large_scope_review(directive)
         _spec_system = _LARGE_SCOPE_SPEC_SYSTEM if _large_scope else _SPEC_SYSTEM
         _max_tickets = 6 if _large_scope else 4
+
+        # Inject lat.md knowledge graph nodes relevant to this directive (same TF-IDF
+        # pattern as planner.py). Silently skipped if lat.md has no relevant nodes.
+        _lat_ctx = ""
+        try:
+            from lat_inject import inject_relevant_nodes as _lat_inject
+            _lat_ctx = _lat_inject(directive)
+        except Exception:
+            pass
+        _user_msg = f"Directive: {directive}"
+        if _lat_ctx:
+            _user_msg += f"\n\n{_lat_ctx}"
+
         resp = adapter.complete(
             [
                 LLMMessage("system", _spec_system),
-                LLMMessage("user", f"Directive: {directive}"),
+                LLMMessage("user", _user_msg),
             ],
             max_tokens=1024,
             temperature=0.2,

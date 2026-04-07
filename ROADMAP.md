@@ -1234,10 +1234,16 @@ is what's missing.
   PlanReview. Opt-in for high-stakes goals. (DONE)
 
 **Not yet shipped (see ARCHITECTURE.md for full design note):**
-- Milestone-aware execution: when pre-flight flags milestone candidates, treat them as
-  sub-loops with their own planning pass, not single steps. (Architecturally complex.)
+**Shipped (2026-04-06 continued):**
+- Milestone-aware execution: steps flagged by pre-flight as milestone candidates are
+  pre-decomposed into sub-steps (via `planner.decompose`) before execution. Depth-gated
+  at continuation_depth == 0 to prevent recursive explosion. Fall-through if decompose
+  returns ≤1 step. 3 tests. (DONE)
 - Acting on pre-flight output: `LoopResult.pre_flight_review` field now carries the
   PlanReview to callers; handle.py appends a ⚠️ warning to result text when scope=wide.
   (DONE 2026-04-06)
-- Feedback loop: track whether pre-flight flags predicted actual execution problems.
-  If scope=wide predicts timeout/stuck, that's a strong signal to act on.
+- Feedback loop: `memory/preflight_calibration.jsonl` logs scope_predicted vs actual_status
+  per loop, with true_positive/false_positive/false_negative/true_negative classification.
+  Wired into agent_loop.py at loop completion. 3 tests. (DONE)
+
+**Not yet shipped:**

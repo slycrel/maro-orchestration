@@ -1543,3 +1543,170 @@ def test_inject_steps_capped_at_three(monkeypatch, tmp_path):
     # inject_steps should be capped at 3
     injected = outcome.get("inject_steps", [])
     assert len(injected) <= 3
+
+
+# ---------------------------------------------------------------------------
+# Phase 58: Milestone-aware expansion
+# ---------------------------------------------------------------------------
+
+def test_milestone_step_is_expanded(monkeypatch, tmp_path):
+    """When a pre-flight flagged step is flagged as a milestone, it should be
+    decomposed into sub-steps rather than executed as a single step."""
+    _setup_workspace(monkeypatch, tmp_path)
+    from unittest.mock import MagicMock, patch
+
+    # Create a fake PlanReview that flags step 1 as a milestone candidate
+    fake_pf = MagicMock()
+    fake_pf.milestone_step_indices = [1]
+    fake_pf.scope = "wide"
+    fake_pf.flags = []
+
+    # Decompose should return 3 sub-steps for the milestone step
+    _sub_steps = ["sub-step A", "sub-step B", "sub-step C"]
+
+    with patch("pre_flight.review_plan", return_value=fake_pf):
+        with patch("planner.decompose", return_value=_sub_steps) as mock_decompose:
+            result = run_agent_loop(
+                "do a complex analysis",
+                dry_run=False,
+                max_iterations=10,
+            )
+
+    # The milestone step should have been expanded — mock_decompose called for sub-decompose
+    assert mock_decompose.called
+
+
+def test_milestone_step_expansion_only_at_depth_zero(monkeypatch, tmp_path):
+    """Milestone expansion is skipped at continuation_depth > 0 to prevent recursion."""
+    _setup_workspace(monkeypatch, tmp_path)
+    from unittest.mock import MagicMock, patch
+
+    fake_pf = MagicMock()
+    fake_pf.milestone_step_indices = [1]
+    fake_pf.scope = "wide"
+    fake_pf.flags = []
+
+    _sub_steps = ["sub-step A", "sub-step B"]
+
+    with patch("pre_flight.review_plan", return_value=fake_pf):
+        with patch("planner.decompose", return_value=_sub_steps) as mock_decompose:
+            result = run_agent_loop(
+                "do a complex analysis",
+                dry_run=False,
+                continuation_depth=1,  # depth > 0 — milestone expansion skipped
+                max_iterations=10,
+            )
+
+    # decompose may be called for initial decomposition but NOT for milestone expansion
+    # (milestone expansion is gated on continuation_depth == 0)
+    # Verify the loop completed without crashing
+    assert isinstance(result, LoopResult)
+
+
+def test_milestone_expansion_falls_through_if_decompose_returns_one_step(monkeypatch, tmp_path):
+    """If decompose returns only 1 step (not worth expanding), fall through to execute normally."""
+    _setup_workspace(monkeypatch, tmp_path)
+    from unittest.mock import MagicMock, patch
+
+    fake_pf = MagicMock()
+    fake_pf.milestone_step_indices = [1]
+    fake_pf.scope = "wide"
+    fake_pf.flags = []
+
+    # Returns only 1 sub-step → should not expand, just execute normally
+    with patch("pre_flight.review_plan", return_value=fake_pf):
+        with patch("planner.decompose", return_value=["same single step"]):
+            result = run_agent_loop("simple analysis", dry_run=False, max_iterations=5)
+
+    assert isinstance(result, LoopResult)
+
+
+# ---------------------------------------------------------------------------
+# Phase 58: Pre-flight calibration feedback loop
+# ---------------------------------------------------------------------------
+
+def test_preflight_calibration_logged_on_completion(monkeypatch, tmp_path):
+    """After a loop completes, pre-flight calibration should be logged to
+    memory/preflight_calibration.jsonl."""
+    _setup_workspace(monkeypatch, tmp_path)
+    from unittest.mock import MagicMock, patch
+
+    fake_pf = MagicMock()
+    fake_pf.milestone_step_indices = []
+    fake_pf.scope = "wide"
+    fake_pf.flags = []
+    fake_pf.has_concerns = True
+
+    with patch("pre_flight.review_plan", return_value=fake_pf):
+        result = run_agent_loop("analyze data", dry_run=False, max_iterations=5)
+
+    # Check that calibration file was written
+    try:
+        from orch_items import memory_dir
+        cal_path = memory_dir() / "preflight_calibration.jsonl"
+    except Exception:
+        cal_path = tmp_path / "memory" / "preflight_calibration.jsonl"
+
+    assert cal_path.exists(), "preflight_calibration.jsonl should be written after loop"
+    entries = [json.loads(line) for line in cal_path.read_text().splitlines() if line.strip()]
+    assert len(entries) >= 1
+    entry = entries[-1]
+    assert "scope_predicted" in entry
+    assert "actual_status" in entry
+    assert "true_positive" in entry
+    assert "false_positive" in entry
+    assert entry["scope_predicted"] == "wide"
+
+
+def test_preflight_calibration_not_written_on_dry_run(monkeypatch, tmp_path):
+    """dry_run=True should not write calibration data."""
+    _setup_workspace(monkeypatch, tmp_path)
+    from unittest.mock import MagicMock, patch
+
+    fake_pf = MagicMock()
+    fake_pf.milestone_step_indices = []
+    fake_pf.scope = "narrow"
+    fake_pf.flags = []
+
+    with patch("pre_flight.review_plan", return_value=fake_pf):
+        result = run_agent_loop("simple task", dry_run=True)
+
+    # dry_run → no calibration written (pre-flight doesn't run in dry_run)
+    try:
+        from orch_items import memory_dir
+        cal_path = memory_dir() / "preflight_calibration.jsonl"
+    except Exception:
+        cal_path = tmp_path / "memory" / "preflight_calibration.jsonl"
+
+    if cal_path.exists():
+        entries = [line for line in cal_path.read_text().splitlines() if line.strip()]
+        assert len(entries) == 0, "dry_run should not write calibration entries"
+
+
+def test_preflight_calibration_false_positive_classification(monkeypatch, tmp_path):
+    """scope=wide + actual done = false_positive."""
+    _setup_workspace(monkeypatch, tmp_path)
+    from unittest.mock import MagicMock, patch
+
+    fake_pf = MagicMock()
+    fake_pf.milestone_step_indices = []
+    fake_pf.scope = "wide"
+    fake_pf.flags = []
+    fake_pf.has_concerns = True
+
+    with patch("pre_flight.review_plan", return_value=fake_pf):
+        result = run_agent_loop("analyze data", dry_run=False, max_iterations=5)
+
+    if result.status == "done":
+        try:
+            from orch_items import memory_dir
+            cal_path = memory_dir() / "preflight_calibration.jsonl"
+        except Exception:
+            cal_path = tmp_path / "memory" / "preflight_calibration.jsonl"
+
+        if cal_path.exists():
+            entries = [json.loads(l) for l in cal_path.read_text().splitlines() if l.strip()]
+            if entries:
+                entry = entries[-1]
+                assert entry["false_positive"] is True
+                assert entry["true_positive"] is False

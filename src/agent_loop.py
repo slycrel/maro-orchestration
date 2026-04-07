@@ -1558,6 +1558,9 @@ def run_agent_loop(
     # Agent0 steal: failure-chain recording — every retry/recovery is a training signal
     _failure_chain: List[str] = []
     _recovery_step_count: int = 0
+    # Phase 58: milestone-aware expansion — track which milestone steps have been expanded
+    # so we don't re-expand sub-steps that happen to share the same 1-based index.
+    _milestone_expanded: set = set()
 
     # Lazy import for injection scanning (security.py)
     try:
@@ -1712,6 +1715,33 @@ def run_agent_loop(
 
         step_text = remaining_steps.pop(0)
         item_index = remaining_indices.pop(0) if remaining_indices else -1
+
+        # Phase 58: Milestone-aware expansion — if pre-flight flagged this step as a
+        # milestone candidate, pre-decompose it into sub-steps before executing.
+        # Only at depth 0 to prevent recursive explosion. Skip if already expanded.
+        _would_be_step_idx = step_idx + 1  # 1-based index this step will get
+        if (_pf_review is not None
+                and continuation_depth == 0
+                and _would_be_step_idx in _pf_review.milestone_step_indices
+                and _would_be_step_idx not in _milestone_expanded):
+            _milestone_expanded.add(_would_be_step_idx)
+            try:
+                from planner import decompose as _ms_decompose
+                _ms_sub = _ms_decompose(step_text, adapter, max_steps=5)
+                if _ms_sub and len(_ms_sub) >= 2:
+                    remaining_steps[:0] = _ms_sub
+                    remaining_indices[:0] = [-1] * len(_ms_sub)
+                    log.info("milestone-aware: step %d %r → %d sub-steps",
+                             _would_be_step_idx, step_text[:60], len(_ms_sub))
+                    if verbose:
+                        import sys as _ms_sys
+                        print(f"[poe] milestone step {_would_be_step_idx} expanded → "
+                              f"{len(_ms_sub)} sub-steps", file=_ms_sys.stderr, flush=True)
+                    continue  # Run sub-steps instead of this milestone step directly
+            except Exception as _ms_exc:
+                log.debug("milestone-aware: expand failed for step %d: %s",
+                          _would_be_step_idx, _ms_exc)
+            # Fall through to execute normally if decompose fails or returns 1 step
 
         # Check for parallel peers: if this step has siblings at the same
         # dependency level, batch them for parallel execution
@@ -2594,6 +2624,39 @@ def run_agent_loop(
         f"[loop:{loop_id}] finished status={loop_status} steps={len(step_outcomes)} tokens={total_tokens_in}+{total_tokens_out}",
     ])
     o.write_operator_status()
+
+    # Phase 58: Pre-flight calibration feedback — log prediction vs actual outcome.
+    # Builds a training signal: did scope=wide correctly predict stuck? False positives?
+    if _pf_review is not None and not dry_run:
+        try:
+            from orch_items import memory_dir as _fb_memory_dir
+            _pf_predicted_wide = _pf_review.scope in ("wide", "deep")
+            _actual_stuck = loop_status == "stuck"
+            _steps_done = sum(1 for s in step_outcomes if s.status == "done")
+            _fb_entry = {
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "loop_id": loop_id,
+                "scope_predicted": _pf_review.scope,
+                "milestone_candidates": len(_pf_review.milestone_step_indices),
+                "milestones_expanded": len(_milestone_expanded),
+                "flag_count": len(_pf_review.flags),
+                "actual_status": loop_status,
+                "steps_done": _steps_done,
+                "steps_total": len(step_outcomes),
+                "true_positive": _pf_predicted_wide and _actual_stuck,
+                "false_positive": _pf_predicted_wide and not _actual_stuck,
+                "false_negative": not _pf_predicted_wide and _actual_stuck,
+                "true_negative": not _pf_predicted_wide and not _actual_stuck,
+            }
+            _fb_path = _fb_memory_dir() / "preflight_calibration.jsonl"
+            with open(_fb_path, "a") as _fb_f:
+                _fb_f.write(json.dumps(_fb_entry) + "\n")
+            log.info("pre-flight calibration: scope=%s actual=%s tp=%s fp=%s fn=%s",
+                     _pf_review.scope, loop_status,
+                     _fb_entry["true_positive"], _fb_entry["false_positive"],
+                     _fb_entry["false_negative"])
+        except Exception:
+            pass
 
     # Phase 36: emit loop_done event
     try:
