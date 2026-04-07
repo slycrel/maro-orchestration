@@ -108,8 +108,15 @@ def _apply_prefixes(message: str) -> _PrefixResult:
                 result.message = result.message[len(rule.prefix):].lstrip()
                 if rule.flag:
                     setattr(result, rule.flag, True)
-                if rule.model_tier and not result.model_tier:
-                    result.model_tier = rule.model_tier
+                if rule.model_tier:
+                    if result.model_tier and result.model_tier != rule.model_tier:
+                        import logging as _logging
+                        _logging.getLogger("poe.handle").warning(
+                            "conflicting model tiers: %r already set, ignoring %r (from prefix %r)",
+                            result.model_tier, rule.model_tier, rule.prefix,
+                        )
+                    elif not result.model_tier:
+                        result.model_tier = rule.model_tier
                 if rule.max_steps:
                     result.max_steps = rule.max_steps
                 if rule.persona and not result.forced_persona:

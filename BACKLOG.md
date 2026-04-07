@@ -134,6 +134,17 @@ Findings from the haiku blind run ($7.87, 11 steps, adaptive tiering). Hallucina
 - [x] **Memory decay persistence across restarts** — Non-issue (investigated 2026-04-06): `record_tiered_lesson` → `_append_tiered_lesson` persists immediately; `reinforce_lesson` → `_rewrite_tiered_lessons` also persists immediately. Decay is recomputed from `last_reinforced` date on every `load_tiered_lessons` call (inline, line ~1272), so no decay is lost across restarts. Scores used for injection are always correct. Only cosmetic gap: inline-computed decay scores aren't written back unless `run_decay_cycle` runs (fixed in prior session for that path). No action needed.
 - [x] **Skill rollback CLI** — `poe-skills --rollback <skill_name>` restores `skills.jsonl` from `.bak` backup. `--dry-run` supported. (2026-04-06)
 
+## Self-Review Quality (from 2026-04-07 Sonnet seeded run)
+
+Findings from Sonnet seeded run (full code read). Vetted; hallucinations discarded.
+
+- [x] **Director review exhaustion silent** — after MAX_REVIEW_ROUNDS, director fell through silently. **Fixed 2026-04-07**: added WARNING log + `for-else` branch in review loop; 2 tests added. (11c05c3)
+- [ ] **No WorkerResult schema validation** — `dispatch_worker` returns WorkerResult; director doesn't validate it matches the input Ticket schema. Workers could silently ignore context. Low priority (workers work in practice), but a spot-check assertion would help.
+- [ ] **Prefix combination validation** — `effort:high + effort:low` silently ignores the second; no validation or warning. Could confuse users. Add a log.warning in `_apply_prefixes` when two conflicting tiers detected.
+- [ ] **Lesson staleness detection** — lessons from months ago have same weight as recent ones. Could add `days_since_reinforced` filter to `get_tiered_lessons()` with configurable max_age. Low complexity.
+- [ ] **Introspection lens determinism** — `run_lenses()` has no deterministic mode. Hard to test lens quality or verify diagnosis→recovery mappings. Add `deterministic=True` flag that uses temperature=0. Medium complexity.
+- [x] **LLM schema hallucination crash** — when Haiku returned a JSON schema dict instead of string for `summary` field, `step_summary[:200]` raised `KeyError: slice(None,200,None)`. **Fixed 2026-04-07**: coerce summary to str in `step_exec.py` + defensive guard in `agent_loop.py`. (df8375b)
+
 ## Self-Review Quality (from 2026-04-06 blind adversarial run)
 
 Real findings from the run — hallucinations already vetted and discarded:
@@ -150,8 +161,8 @@ Real findings from the run — hallucinations already vetted and discarded:
 - [ ] **`estimate_goal_scope` debug CLI** — expose via `poe-preflight-stats --scope-check "your goal"` or `poe-doctor scope "your goal"` so Jeremy can inspect scope classification without running a full loop. Trivial addition.
 - [ ] **RAG query API for workers** — `memory.py` has hybrid retrieval (BM25+RRF) but workers can't query it directly. A `query_lessons(query, n=3)` function workers could call in step context would let them pull relevant past outcomes without burning tokens on full lesson injection. Medium complexity.
 - [ ] **Replay mode for A/B testing** — re-run a specific LoopResult (by loop_id) with different model tier or injected lessons. Useful for debugging and quantifying pre-flight + lesson impact on stuck rate. Replay oracle already shipped (strategy_evaluator.py); need a CLI wrapper.
-- [ ] **NVIDIA NeMo DataDesigner** — (goodhunt tweet, 95K views) "more people should be talking about this": github.com/NVIDIA-NeMo/DataDesigner. Synthetic data generation framework. Research pass: what steal items apply to Poe's lesson/skill generation pipeline?
-- [ ] **Feynman research agent** — (aigleeson tweet) Open source AI research agent: searches papers, synthesizes findings, verifies every claim against real sources, produces cited research brief. Directly relevant to Poe's research goals. Research pass: steal items for claim verification + source grounding. Repo: look up from tweet link.
+- [x] **NVIDIA NeMo DataDesigner** — (goodhunt tweet, 95K views) Research complete (2026-04-07). 7 steal items identified: (1) discriminated union config for skills, (2) processor pipeline for skill generation, (3) Jinja2 dependency injection in personas, (4) ViolationType enum config, (5) AIMD throttling for workers, (6) skill usage telemetry, (7) sampler constraints for skill A/B testing. Full report: `output/x-research-20260407T063015Z.md`. Est. 1-2 weeks to implement Phase 57.
+- [x] **Feynman research agent** — Research complete (2026-04-07). 6 steal items identified: (8) task ledger + verification log, (9) evidence table + claim tracing, (10) multi-round loop with gap analysis, (11) verifier agent (inline citation), (12) reviewer agent with severity levels, (13) provenance records for skills. Full report: `output/x-research-20260407T063015Z.md`. Est. 2-3 weeks to implement Phase 58.
 - [ ] **SERV model family** — (open_founder tweet) "SERV-nano matched GPT-5.4 at 20x lower cost and 3x speed." New model family worth tracking as potential OpenRouter routing option. Research: is there an API? What benchmarks? Low priority until available.
 - [x] **Claude Code / OpenClaw / Hermes misconception thread** — (exm7777 tweet) Good framing: these are general-purpose agents not just coding tools. Example: academic research skills for Claude Code (literature review, etc.). Confirms the direction; no new steal items.
 
