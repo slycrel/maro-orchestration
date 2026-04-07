@@ -363,6 +363,11 @@ class TestE2EAmbiguous:
         # Disable Phase 45 auto-recovery: it re-calls run_agent_loop with an exhausted
         # adapter, which produces 0 done steps and overwrites the result we want to check.
         monkeypatch.setattr(_al.run_agent_loop, "_recovery_in_progress", True, raising=False)
+        # Disable Phase 58 milestone-aware expansion: pre-flight may flag abstract goals as
+        # wide-scope milestones, causing planner.decompose to consume adapter responses that
+        # this test expects for step execution. Return [] to suppress expansion.
+        import planner as _planner
+        monkeypatch.setattr(_planner, "decompose", lambda *a, **kw: [])
         from agent_loop import run_agent_loop
 
         adapter = ScriptedAdapter([
