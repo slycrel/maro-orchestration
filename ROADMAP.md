@@ -1250,7 +1250,7 @@ is what's missing.
 
 ---
 
-### Phase 59: Systemic Quality — NeMo DataDesigner + Feynman Research Steals *(PARTIAL)*
+### Phase 59: Systemic Quality — NeMo DataDesigner + Feynman Research Steals *(DONE)*
 
 *"Steal the best patterns from production systems that solved the same problems."*
 
@@ -1281,4 +1281,20 @@ is what's missing.
 - ~~**Token transparency in extraction** (Feynman F6)~~ — **DONE** (2026-04-07). Per-call `tokens_in/out` tracked in `extract_lessons_via_llm()`, logged at INFO + forwarded to `metrics.record_cost`. Zero breaking change.
 - ~~**Typed lesson taxonomy + seed/ATIF/cross-type cap** (NeMo S1/S2/S3/S5)~~ — **DONE** (2026-04-07). See above entry. test_memory at 97 after S1-S5 merge.
 - ~~**Island-aware TF-IDF skill ranking** (NeMo S4)~~ — **DONE** (2026-04-07). See above entry. test_skills at 137.
+- ~~**Tiered source fallback for claim verification** (Feynman F1)~~ — **DONE** (2026-04-07). `verify_claim_tiered()` + `TieredVerificationResult` in inspector.py. P1: lessons; P2: standing_rules; P3: heuristic. 4 tests; test_inspector at 82.
+- **Typed lessons wired through reflect_and_record()**: `reflect_and_record()` now uses `return_typed=True` and auto-records each typed lesson to MEDIUM tier (k_samples=1 → 0.5 confidence). Closes the S1 loop — types flow from extraction through tiered storage to future type-filtered injection.
+- **Remaining (deferred):** AIMD throttling (NeMo Steal 5, needs parallel workers), SEED_READER plugin injection (low priority).
+
+**Phase 59 summary:** 15+ steal items shipped. test_memory: 109, test_skills: 137, test_introspect: 38, test_inspector: 82.
+
+
+### Phase 60: Adversarial Verification Layer *(CANDIDATE)*
+
+*"Make verification adversarial by design — not an afterthought."*
+
+**Candidate items (not yet started):**
+- Multi-model adversarial review — extends `_adversarial_lens()` (Phase 59 F3) into the core execution path.
+- Verification calibration loop — use `verification_accuracy()` (Phase 59 F4) to auto-tune confidence thresholds per claim type.
+- Cross-agent claim challenge — spawn reviewer agent (persona B) to challenge worker claims; disagreement triggers retry.
+- Citation requirement enforcement — lessons with `evidence_sources=[]` downgraded in `query_lessons()`.
 
