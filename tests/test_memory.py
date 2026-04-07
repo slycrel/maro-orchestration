@@ -1229,3 +1229,140 @@ class TestDetectGoalGaps:
         assert g.gap_type == "single_source"
         assert g.severity == "medium"
         assert "source" in g.description
+
+
+class TestTypedLessonTaxonomy:
+    """Tests for NeMo S1/S2/S3/S5 — typed lesson taxonomy + seed/ATIF steals."""
+
+    def test_tiered_lesson_has_lesson_type_field(self):
+        """TieredLesson.lesson_type defaults to empty string."""
+        from memory import TieredLesson, MemoryTier
+        import datetime as dt
+
+        tl = TieredLesson(
+            lesson_id="t1", lesson="test lesson", tier=MemoryTier.MEDIUM,
+            task_type="research", outcome="done", source_goal="g",
+            confidence=0.9, score=0.9, last_reinforced=dt.date.today().isoformat(),
+        )
+        assert tl.lesson_type == ""
+
+    def test_record_tiered_lesson_stores_lesson_type(self, monkeypatch, tmp_path):
+        """record_tiered_lesson persists lesson_type to disk."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        from memory import record_tiered_lesson, load_tiered_lessons, MemoryTier
+
+        record_tiered_lesson(
+            "verify outputs before committing", "build", "done", "ship feature X",
+            tier=MemoryTier.MEDIUM, lesson_type="verification",
+        )
+
+        lessons = load_tiered_lessons(MemoryTier.MEDIUM)
+        assert lessons[0].lesson_type == "verification"
+
+    def test_record_tiered_lesson_normalizes_invalid_type(self, monkeypatch, tmp_path):
+        """Invalid lesson_type is stored as empty string (not an error)."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        from memory import record_tiered_lesson, load_tiered_lessons, MemoryTier
+
+        record_tiered_lesson(
+            "some lesson", "general", "done", "goal",
+            tier=MemoryTier.MEDIUM, lesson_type="bogus_type",
+        )
+        lessons = load_tiered_lessons(MemoryTier.MEDIUM)
+        assert lessons[0].lesson_type == ""
+
+    def test_load_tiered_lessons_filters_by_lesson_type(self, monkeypatch, tmp_path):
+        """load_tiered_lessons(lesson_type=...) filters correctly."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        from memory import record_tiered_lesson, load_tiered_lessons, MemoryTier
+
+        record_tiered_lesson("plan better", "research", "done", "g", tier=MemoryTier.MEDIUM, lesson_type="planning")
+        record_tiered_lesson("recover faster", "research", "done", "g", tier=MemoryTier.MEDIUM, lesson_type="recovery")
+        record_tiered_lesson("save tokens", "research", "done", "g", tier=MemoryTier.MEDIUM, lesson_type="cost")
+
+        planning = load_tiered_lessons(MemoryTier.MEDIUM, lesson_type="planning")
+        assert len(planning) == 1
+        assert planning[0].lesson_type == "planning"
+
+    def test_query_lessons_filters_by_lesson_type(self, monkeypatch, tmp_path):
+        """query_lessons(lesson_type=...) only returns matching type."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        from memory import record_tiered_lesson, query_lessons, MemoryTier
+
+        record_tiered_lesson("verify outputs carefully", "build", "done", "g",
+                              tier=MemoryTier.LONG, lesson_type="verification")
+        record_tiered_lesson("plan scope carefully", "build", "done", "g",
+                              tier=MemoryTier.LONG, lesson_type="planning")
+
+        results = query_lessons("build feature", lesson_type="verification")
+        assert all(r.lesson_type == "verification" for r in results)
+
+    def test_extract_lessons_via_llm_dry_run_returns_strings(self, monkeypatch, tmp_path):
+        """Dry-run returns List[str] by default (backward compat)."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        from memory import extract_lessons_via_llm
+
+        result = extract_lessons_via_llm("my goal", "done", "all good", "research", dry_run=True)
+        assert isinstance(result, list)
+        assert all(isinstance(r, str) for r in result)
+
+    def test_extract_lessons_via_llm_dry_run_return_typed(self, monkeypatch, tmp_path):
+        """Dry-run with return_typed=True returns List[Tuple[str, str]]."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        from memory import extract_lessons_via_llm
+
+        result = extract_lessons_via_llm(
+            "my goal", "done", "all good", "research",
+            dry_run=True, return_typed=True,
+        )
+        assert isinstance(result, list)
+        assert len(result) == 1
+        lesson_text, lesson_type = result[0]
+        assert isinstance(lesson_text, str)
+        assert isinstance(lesson_type, str)
+        assert "execution" == lesson_type  # dry-run defaults to "execution"
+
+    def test_extract_lessons_cross_type_cap(self, monkeypatch, tmp_path):
+        """S5: Cross-type cap ensures at most 1 lesson per lesson_type."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        from memory import extract_lessons_via_llm
+
+        class FakeAdapter:
+            def complete(self, messages, **kwargs):
+                class R:
+                    def __init__(self): self.content = (
+                        '[{"lesson": "lesson A", "type": "execution"}, '
+                        '{"lesson": "lesson B", "type": "execution"}, '
+                        '{"lesson": "lesson C", "type": "planning"}]'
+                    )
+                return R()
+
+        result = extract_lessons_via_llm(
+            "goal", "done", "summary", "general",
+            adapter=FakeAdapter(), return_typed=True,
+        )
+        types_returned = [t for _, t in result]
+        # Only 1 "execution" allowed despite 2 in the response
+        assert types_returned.count("execution") <= 1
+
+    def test_lesson_type_roundtrip_serialization(self, monkeypatch, tmp_path):
+        """lesson_type survives JSON serialization in load_tiered_lessons."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        from memory import TieredLesson, MemoryTier, _tiered_lessons_path
+        import json, datetime as dt
+        from dataclasses import asdict
+
+        lesson = TieredLesson(
+            lesson_id="x1", lesson="use retries", tier=MemoryTier.LONG,
+            task_type="ops", outcome="done", source_goal="g",
+            confidence=0.8, score=0.8, last_reinforced=dt.date.today().isoformat(),
+            lesson_type="recovery",
+        )
+        path = _tiered_lessons_path(MemoryTier.LONG)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w") as f:
+            f.write(json.dumps(asdict(lesson)) + "\n")
+
+        from memory import load_tiered_lessons
+        loaded = load_tiered_lessons(MemoryTier.LONG)
+        assert loaded[0].lesson_type == "recovery"

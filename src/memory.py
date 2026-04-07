@@ -928,10 +928,16 @@ _REFLECT_SYSTEM = textwrap.dedent("""\
     Good lessons are: specific, actionable, and generalize beyond this one case.
     Bad lessons are: too specific to this one task, or trivially obvious.
 
-    Respond with a JSON array of 1-3 lesson strings.
-    Each lesson should be a single sentence.
-    Example: ["Research tasks produce better output when the goal includes success criteria",
-              "Stuck detection triggers prematurely on research tasks that need multiple iterations"]
+    Lesson types (pick the best fit for each lesson):
+    - "execution": how to carry out steps more effectively (tools, sequencing, parallelism)
+    - "planning": how to decompose or scope goals better
+    - "recovery": how to handle failure, retries, or stuck states
+    - "verification": how to validate output quality or catch errors early
+    - "cost": how to reduce token spend or latency without sacrificing quality
+
+    Respond with a JSON array of 1-3 lesson objects, each with "lesson" (string) and "type" (one of the above).
+    Example: [{"lesson": "Research tasks produce better output when the goal includes success criteria", "type": "planning"},
+              {"lesson": "Stuck detection triggers prematurely on research tasks that need multiple iterations", "type": "recovery"}]
 """).strip()
 
 
@@ -993,6 +999,9 @@ def majority_vote_lessons(
     return accepted[:3]  # cap at 3 (same as single-sample limit)
 
 
+_LESSON_TYPES = frozenset({"execution", "planning", "recovery", "verification", "cost"})
+
+
 def extract_lessons_via_llm(
     goal: str,
     status: str,
@@ -1002,55 +1011,137 @@ def extract_lessons_via_llm(
     adapter=None,
     dry_run: bool = False,
     k_samples: int = 1,
-) -> List[str]:
+    return_typed: bool = False,
+) -> "List":
     """Use LLM to extract generalizable lessons from a completed run.
 
-    Args:
-        k_samples: Agent0 steal — number of LLM samples to draw. When k_samples ≥ 3,
-                   only lessons that appear in majority of samples are returned
-                   (majority-vote pseudo-labels). Default: 1 (original behaviour).
+    Phase 59 NeMo steals:
+    - S1: Returns typed lessons (lesson_type per lesson) when return_typed=True.
+    - S2: Seed-reader bootstrapping — prepends top-1 long-tier lesson as style guide.
+    - S3: ATIF feedback — passes times_reinforced + times_applied stats into prompt.
 
-    Returns list of lesson strings. Falls back to empty list on failure.
+    Args:
+        k_samples:    Agent0 steal — number of LLM samples to draw. When k_samples ≥ 3,
+                      only lessons that appear in majority of samples are returned
+                      (majority-vote pseudo-labels). Default: 1 (original behaviour).
+        return_typed: If True, return List[Tuple[str, str]] (lesson_text, lesson_type).
+                      If False (default), return List[str] for backward compat.
+
+    Returns list of lesson strings (or typed tuples). Falls back to empty list on failure.
     """
     if dry_run or adapter is None:
         # Generate a dry-run lesson
         icon = "succeeded" if status == "done" else "failed"
-        return [f"[dry-run lesson] {task_type} task {icon}: {goal[:40]}"]
+        lesson = f"[dry-run lesson] {task_type} task {icon}: {goal[:40]}"
+        return [(lesson, "execution")] if return_typed else [lesson]
 
     from llm import LLMMessage
+
+    # S2: Seed-reader bootstrapping — load top-1 long-tier lesson as style example
+    seed_block = ""
+    try:
+        seed_lessons = load_tiered_lessons(MemoryTier.LONG, task_type=task_type, min_score=0.7, limit=1)
+        if seed_lessons:
+            seed = seed_lessons[0]
+            seed_block = (
+                f"\nHigh-quality lesson example (emulate this style and specificity):\n"
+                f'  {{"lesson": "{seed.lesson[:120]}", "type": "{seed.lesson_type or "execution"}"}}'
+                f"  [reinforced {seed.times_reinforced}x, applied {seed.times_applied}x, score={seed.score:.2f}]"
+            )
+    except Exception:
+        pass
+
+    # S3: ATIF feedback — pass reinforcement stats for this task_type
+    atif_block = ""
+    try:
+        recent = load_tiered_lessons(MemoryTier.MEDIUM, task_type=task_type, min_score=0.0, limit=5)
+        if recent:
+            avg_reinforced = sum(l.times_reinforced for l in recent) / len(recent)
+            avg_applied = sum(l.times_applied for l in recent) / len(recent)
+            atif_block = (
+                f"\nRecent lesson stats for task_type={task_type!r}: "
+                f"avg_reinforced={avg_reinforced:.1f}, avg_applied={avg_applied:.1f}. "
+                f"Prefer lessons that generalize (high applied count)."
+            )
+    except Exception:
+        pass
+
+    system_prompt = _REFLECT_SYSTEM + seed_block + atif_block
 
     user_msg = (
         f"Task type: {task_type}\n"
         f"Goal: {goal}\n"
         f"Outcome: {status}\n"
         f"Summary: {result_summary[:500]}\n\n"
-        "Extract 1-3 generalizable lessons."
+        "Extract 1-3 generalizable lessons as typed JSON objects."
     )
 
-    def _one_sample() -> List[str]:
+    def _parse_typed(raw: object) -> "List[tuple]":
+        """Parse [{"lesson": ..., "type": ...}] or ["plain string", ...] — both accepted."""
+        results = []
+        items = safe_list(raw, max_items=3)
+        for item in items:
+            if isinstance(item, dict):
+                lesson_text = str(item.get("lesson", "")).strip()
+                lesson_type = str(item.get("type", "execution")).strip().lower()
+                if lesson_type not in _LESSON_TYPES:
+                    lesson_type = "execution"
+            elif isinstance(item, str):
+                lesson_text = item.strip()
+                lesson_type = "execution"  # legacy fallback
+            else:
+                continue
+            if lesson_text:
+                results.append((lesson_text, lesson_type))
+        return results
+
+    def _one_sample() -> "List[tuple]":
         try:
             resp = adapter.complete(
                 [
-                    LLMMessage("system", _REFLECT_SYSTEM),
+                    LLMMessage("system", system_prompt),
                     LLMMessage("user", user_msg),
                 ],
-                max_tokens=256,
+                max_tokens=320,
                 temperature=0.3,
             )
             raw = extract_json(content_or_empty(resp), list, log_tag="memory.extract_lessons")
-            validated = safe_list(raw, element_type=str, max_items=3)
-            return [l.strip() for l in validated if l.strip()]
+            return _parse_typed(raw)
         except Exception:
             return []
 
     if k_samples <= 1:
-        return _one_sample()
+        typed = _one_sample()
+    else:
+        # Multi-sample majority vote (Agent0 pseudo-label pattern)
+        typed_samples = [_one_sample() for _ in range(k_samples)]
+        # Extract plain strings for majority vote, then reattach types
+        str_samples = [[t for t, _ in s] for s in typed_samples]
+        agreed_strs = set(majority_vote_lessons(str_samples))
+        # Collect typed tuples for agreed lessons (first occurrence wins)
+        seen: set = set()
+        typed = []
+        for sample in typed_samples:
+            for lesson_text, lesson_type in sample:
+                if lesson_text in agreed_strs and lesson_text not in seen:
+                    seen.add(lesson_text)
+                    typed.append((lesson_text, lesson_type))
+        log.debug("extract_lessons k=%d samples=%d agreed=%d typed=%d",
+                  k_samples, len(typed_samples), len(agreed_strs), len(typed))
 
-    # Multi-sample majority vote (Agent0 pseudo-label pattern)
-    samples = [_one_sample() for _ in range(k_samples)]
-    agreed = majority_vote_lessons(samples)
-    log.debug("extract_lessons k=%d samples=%d agreed=%d", k_samples, len(samples), len(agreed))
-    return agreed
+    # S5: Cross-type cap — at most 1 lesson per lesson_type prevents any single
+    # type crowding out others (e.g., 3 "execution" lessons drowning out "recovery").
+    type_seen: set = set()
+    capped: list = []
+    for lesson_text, lesson_type in typed:
+        if lesson_type not in type_seen:
+            type_seen.add(lesson_type)
+            capped.append((lesson_text, lesson_type))
+    typed = capped
+
+    if return_typed:
+        return typed
+    return [text for text, _ in typed]
 
 
 def reflect_and_record(
@@ -1216,6 +1307,8 @@ class TieredLesson:
     acquired_for: Optional[str] = None  # goal_id that triggered this lesson (incidental flag)
     # Phase 59: evidence sources for claim tracing (URLs, outcome_ids, paper refs)
     evidence_sources: List[str] = field(default_factory=list)
+    # Phase 59 NeMo S1: typed lesson taxonomy — "execution" | "planning" | "recovery" | "verification" | "cost"
+    lesson_type: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -1297,6 +1390,7 @@ def record_tiered_lesson(
     confidence: float = 0.7,
     acquired_for: Optional[str] = None,
     evidence_sources: Optional[List[str]] = None,
+    lesson_type: str = "",
 ) -> TieredLesson:
     """Record a new lesson at the given tier.
 
@@ -1304,8 +1398,10 @@ def record_tiered_lesson(
     Pass ``acquired_for=goal_id`` to tag incidental knowledge (e.g. lessons acquired
     as a prerequisite sub-goal rather than as the primary task outcome).
 
+    Phase 59 NeMo S1: ``lesson_type`` classifies the lesson — "execution" | "planning" |
+        "recovery" | "verification" | "cost". Enables type-filtered retrieval.
     Phase 59: ``evidence_sources`` accepts a list of URLs/outcome_ids/paper refs
-    that back the lesson's claim, enabling post-hoc claim tracing.
+        that back the lesson's claim, enabling post-hoc claim tracing.
     """
     import uuid
 
@@ -1326,6 +1422,7 @@ def record_tiered_lesson(
         last_reinforced=_current_date(),
         acquired_for=acquired_for,
         evidence_sources=evidence_sources or [],
+        lesson_type=lesson_type if lesson_type in _LESSON_TYPES else "",
     )
     _append_tiered_lesson(tl, tier=tier)
     return tl
@@ -1351,6 +1448,7 @@ def load_tiered_lessons(
     tier: str,
     *,
     task_type: Optional[str] = None,
+    lesson_type: Optional[str] = None,
     min_score: float = 0.0,
     limit: int = 50,
     max_age_days: Optional[int] = None,
@@ -1358,6 +1456,8 @@ def load_tiered_lessons(
     """Load tiered lessons from disk, applying current-day decay inline.
 
     Args:
+        lesson_type:  If set, only return lessons with this lesson_type
+                      (Phase 59 NeMo S1 typed taxonomy filter).
         max_age_days: If set, skip lessons last reinforced more than this many days ago.
                       Useful for pruning stale lessons in retrieval contexts.
     """
@@ -1384,6 +1484,8 @@ def load_tiered_lessons(
                 if tl.score < min_score:
                     continue
                 if task_type and tl.task_type != task_type:
+                    continue
+                if lesson_type and tl.lesson_type != lesson_type:
                     continue
                 results.append(tl)
             except Exception:
@@ -1846,6 +1948,7 @@ def query_lessons(
     *,
     n: int = 3,
     task_type: Optional[str] = None,
+    lesson_type: Optional[str] = None,
     tiers: Optional[List[str]] = None,
     min_score: float = 0.0,
 ) -> "List[TieredLesson]":
@@ -1855,11 +1958,13 @@ def query_lessons(
     without burning tokens on full lesson injection.
 
     Args:
-        query:     Goal text or step description to match against.
-        n:         Maximum number of lessons to return.
-        task_type: If set, only search lessons for this task type.
-        tiers:     Which tiers to search. Default: [LONG, MEDIUM].
-        min_score: Minimum lesson confidence/score to include.
+        query:       Goal text or step description to match against.
+        n:           Maximum number of lessons to return.
+        task_type:   If set, only search lessons for this task type.
+        lesson_type: If set, only return lessons of this type (NeMo S1 filter).
+                     Values: "execution" | "planning" | "recovery" | "verification" | "cost"
+        tiers:       Which tiers to search. Default: [LONG, MEDIUM].
+        min_score:   Minimum lesson confidence/score to include.
 
     Returns:
         List of TieredLesson objects (most relevant first).
@@ -1874,6 +1979,7 @@ def query_lessons(
         pool = load_tiered_lessons(
             tier=tier,
             task_type=task_type,
+            lesson_type=lesson_type,
             min_score=min_score,
             limit=n * 5,
         )
