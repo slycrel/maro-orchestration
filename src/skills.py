@@ -823,7 +823,89 @@ def promote_skill_tier(skill_name: str) -> bool:
 
     target.tier = "established"
     save_skill(target)
+    # Phase 59: provenance record
+    try:
+        write_skill_provenance(
+            skill_name=target.name,
+            decision="promote",
+            reason=f"pass^3={pass_all_3:.3f} >= 0.7; promoted to established",
+            success_rate=target.success_rate,
+            source_loop_ids=target.source_loop_ids,
+        )
+    except Exception:
+        pass
     return True
+
+
+# ---------------------------------------------------------------------------
+# Phase 59 (Feynman steal): Provenance records for skill decisions
+# ---------------------------------------------------------------------------
+
+def write_skill_provenance(
+    skill_name: str,
+    decision: str,
+    *,
+    reason: str = "",
+    success_rate: float = 0.0,
+    efficiency_score: float = 0.0,
+    source_loop_ids: Optional[List[str]] = None,
+    extra: Optional[Dict[str, Any]] = None,
+) -> Path:
+    """Write a provenance record alongside a skill decision.
+
+    Provenance records are sidecar JSON files in memory/skill_provenance/
+    named `{skill_name}_{timestamp}.json`. They document what decision was
+    made, why, and what data informed it — enabling post-hoc audit.
+
+    Args:
+        skill_name:       Name of the skill affected.
+        decision:         One of "promote" | "demote" | "rewrite" | "create" | "delete".
+        reason:           Human-readable rationale.
+        success_rate:     Success rate at decision time.
+        efficiency_score: Cost-adjusted score at decision time.
+        source_loop_ids:  Loop IDs that contributed to this skill.
+        extra:            Any additional metadata to record.
+
+    Returns:
+        Path to the written provenance file.
+    """
+    from orch_items import memory_dir
+    prov_dir = memory_dir() / "skill_provenance"
+    prov_dir.mkdir(parents=True, exist_ok=True)
+
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    filename = f"{skill_name}_{ts}.json"
+    record = {
+        "skill_name": skill_name,
+        "decision": decision,
+        "reason": reason,
+        "decided_at": datetime.now(timezone.utc).isoformat(),
+        "success_rate": success_rate,
+        "efficiency_score": efficiency_score,
+        "source_loop_ids": source_loop_ids or [],
+        **(extra or {}),
+    }
+    path = prov_dir / filename
+    try:
+        path.write_text(json.dumps(record, indent=2), encoding="utf-8")
+    except Exception as exc:
+        logger.debug("write_skill_provenance: write failed for %s: %s", skill_name, exc)
+    return path
+
+
+def load_skill_provenance(skill_name: str) -> List[Dict[str, Any]]:
+    """Load all provenance records for a skill, sorted newest first."""
+    from orch_items import memory_dir
+    prov_dir = memory_dir() / "skill_provenance"
+    if not prov_dir.exists():
+        return []
+    records = []
+    for p in sorted(prov_dir.glob(f"{skill_name}_*.json"), reverse=True):
+        try:
+            records.append(json.loads(p.read_text(encoding="utf-8")))
+        except Exception:
+            continue
+    return records
 
 
 # ---------------------------------------------------------------------------
@@ -1210,6 +1292,24 @@ def maybe_demote_skills() -> List[str]:
         demoted.append(skill.id)
         changed = True
         logger.info("[skills] demoted skill %s (%s) utility=%.2f", skill.id, skill.name, skill.utility_score)
+        # Phase 59: provenance record
+        try:
+            reason = (
+                "circuit breaker open (sustained failures)"
+                if skill.circuit_state == "open"
+                else f"utility_score={skill.utility_score:.3f} < {REWRITE_TRIGGER_RATE}"
+            )
+            write_skill_provenance(
+                skill_name=skill.name,
+                decision="demote",
+                reason=reason,
+                success_rate=skill.success_rate,
+                efficiency_score=0.0,
+                source_loop_ids=skill.source_loop_ids,
+                extra={"utility_score": skill.utility_score, "circuit_state": skill.circuit_state},
+            )
+        except Exception:
+            pass
 
     if changed:
         _save_skills(skills)

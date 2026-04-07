@@ -1790,3 +1790,64 @@ def test_efficiency_score_high_cost_reduces_score(monkeypatch, tmp_path):
     )
     score = stats.efficiency_score()
     assert score < 0.8  # penalized by high cost
+
+
+# ---------------------------------------------------------------------------
+# Phase 59: Provenance records (Feynman steal)
+# ---------------------------------------------------------------------------
+
+def test_write_skill_provenance_creates_file(monkeypatch, tmp_path):
+    """write_skill_provenance writes a JSON file in skill_provenance/."""
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    from skills import write_skill_provenance
+    from memory import _memory_dir
+    import json
+
+    path = write_skill_provenance(
+        "my_skill", "promote",
+        reason="pass^3 >= 0.7",
+        success_rate=0.95,
+        efficiency_score=0.90,
+    )
+    assert path.exists()
+    data = json.loads(path.read_text())
+    assert data["skill_name"] == "my_skill"
+    assert data["decision"] == "promote"
+    assert data["success_rate"] == 0.95
+
+
+def test_load_skill_provenance_returns_records(monkeypatch, tmp_path):
+    """load_skill_provenance returns all records for a skill, newest first."""
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    from skills import write_skill_provenance, load_skill_provenance
+
+    write_skill_provenance("skill_x", "promote", reason="first")
+    write_skill_provenance("skill_x", "demote", reason="second")
+
+    records = load_skill_provenance("skill_x")
+    assert len(records) == 2
+    # Newest first
+    assert records[0]["decision"] == "demote"
+    assert records[1]["decision"] == "promote"
+
+
+def test_load_skill_provenance_empty_when_no_records(monkeypatch, tmp_path):
+    """load_skill_provenance returns [] when no records exist."""
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    from skills import load_skill_provenance
+    assert load_skill_provenance("nonexistent_skill") == []
+
+
+def test_write_provenance_extra_fields(monkeypatch, tmp_path):
+    """write_skill_provenance includes extra fields in JSON output."""
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    from skills import write_skill_provenance
+    import json
+
+    path = write_skill_provenance(
+        "sk", "rewrite",
+        extra={"utility_score": 0.25, "circuit_state": "open"}
+    )
+    data = json.loads(path.read_text())
+    assert data["utility_score"] == 0.25
+    assert data["circuit_state"] == "open"
