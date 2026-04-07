@@ -1266,7 +1266,7 @@ is what's missing.
 
 - **Discriminated union config for skill types** (NeMo Steal 1) — Pydantic schema for skill metadata. Medium complexity. Makes skill parameters type-safe and validates on deserialization.
 - **Processor pipeline for skill generation** (NeMo Steal 2) — PRE/POST/AFTER lifecycle stages. Medium-high complexity. Decouples constraint injection, generation, and verification.
-- **ViolationType enum config** (NeMo Steal 4) — structured violation reporting with severity levels (error/warning). Medium complexity. Replaces scattered constraint checks.
+- ~~**ViolationType enum config** (NeMo Steal 4)~~ — **DONE** (2026-04-07). `ViolationType` class + `ViolationReport` dataclass in constraint.py. 12 typed violation constants (DESTRUCTIVE_COMMAND, HALLUCINATED_CLAIM, etc.) with (category, description, severity). `ConstraintResult.to_violation_reports()` + `has_fatal_violations()`. 10 tests.
 - **AIMD throttling** (NeMo Steal 5) — per-worker concurrency self-tuning. Low complexity once parallel workers are enabled.
 - **Sampler constraints for skill A/B testing** (NeMo Steal 7) — conditional skill parameterization. Medium complexity.
 - ~~**Task ledger + verification log** (Feynman Steal 8)~~ — **DONE** (2026-04-07). `TaskLedgerEntry`, `append_task_ledger()`, `load_task_ledger()` in memory.py. Wired into agent_loop.py after each step. 5 tests.
