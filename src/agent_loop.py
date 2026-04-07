@@ -2168,6 +2168,20 @@ def run_agent_loop(
         # Write artifact
         _write_step_artifact(project, loop_id, step_idx, step_text, step_result)
 
+        # Phase 59 (Feynman steal): Task ledger entry — per-step audit trail
+        try:
+            from memory import append_task_ledger as _atl, TaskLedgerEntry as _TLE
+            _atl(_TLE(
+                task_id=f"step_{step_idx}",
+                owner="agent_loop",
+                task=step_text[:200],
+                status=step_status,
+                loop_id=loop_id,
+                result_summary=(step_result or "")[:200],
+            ))
+        except Exception:
+            pass  # ledger must never block loop progress
+
         # Lightweight verification: check if .py filenames cited in the result
         # actually exist. Append a correction note if hallucinated files found.
         if step_status == "done" and step_result and ".py" in step_result:

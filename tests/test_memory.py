@@ -964,3 +964,79 @@ class TestQueryLessons:
         ids = [l.lesson_id for l in results]
         assert "b1" not in ids
         assert "r1" in ids
+
+
+class TestTaskLedger:
+    """Tests for append_task_ledger() + load_task_ledger() — Feynman steal."""
+
+    def test_append_and_load_basic(self, monkeypatch, tmp_path):
+        """append_task_ledger writes, load_task_ledger reads back."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        from memory import append_task_ledger, load_task_ledger, TaskLedgerEntry
+
+        entry = TaskLedgerEntry(
+            task_id="step_1",
+            owner="agent_loop",
+            task="research Polymarket trends",
+            status="done",
+            loop_id="abc12345",
+            result_summary="Found 5 relevant markets",
+        )
+        append_task_ledger(entry)
+
+        entries = load_task_ledger()
+        assert len(entries) == 1
+        assert entries[0].task_id == "step_1"
+        assert entries[0].status == "done"
+        assert entries[0].loop_id == "abc12345"
+
+    def test_load_filters_by_loop_id(self, monkeypatch, tmp_path):
+        """load_task_ledger(loop_id=X) returns only entries for loop X."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        from memory import append_task_ledger, load_task_ledger, TaskLedgerEntry
+
+        append_task_ledger(TaskLedgerEntry(
+            task_id="s1", owner="agent_loop", task="step A",
+            status="done", loop_id="loop1",
+        ))
+        append_task_ledger(TaskLedgerEntry(
+            task_id="s2", owner="agent_loop", task="step B",
+            status="done", loop_id="loop2",
+        ))
+
+        entries = load_task_ledger(loop_id="loop1")
+        assert len(entries) == 1
+        assert entries[0].task_id == "s1"
+
+    def test_load_empty_returns_empty(self, monkeypatch, tmp_path):
+        """load_task_ledger returns [] when no ledger file exists."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        from memory import load_task_ledger
+        assert load_task_ledger() == []
+
+    def test_multiple_entries_ordered_most_recent_first(self, monkeypatch, tmp_path):
+        """load_task_ledger returns entries most recent first."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        from memory import append_task_ledger, load_task_ledger, TaskLedgerEntry
+
+        for i in range(3):
+            append_task_ledger(TaskLedgerEntry(
+                task_id=f"step_{i}", owner="agent_loop",
+                task=f"task {i}", status="done", loop_id="loop1",
+            ))
+
+        entries = load_task_ledger()
+        assert entries[0].task_id == "step_2"  # most recent first
+
+    def test_blocked_status_recorded(self, monkeypatch, tmp_path):
+        """Blocked steps are recorded correctly in ledger."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        from memory import append_task_ledger, load_task_ledger, TaskLedgerEntry
+
+        append_task_ledger(TaskLedgerEntry(
+            task_id="s1", owner="agent_loop", task="stuck step",
+            status="blocked", loop_id="loopX",
+        ))
+
+        entries = load_task_ledger(loop_id="loopX")
+        assert entries[0].status == "blocked"

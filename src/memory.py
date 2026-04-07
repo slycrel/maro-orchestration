@@ -144,6 +144,96 @@ def _step_traces_path() -> Path:
     return _memory_dir() / "step_traces.jsonl"
 
 
+def _task_ledger_path() -> Path:
+    return _memory_dir() / "task_ledger.jsonl"
+
+
+# ---------------------------------------------------------------------------
+# Phase 59 (Feynman steal): Task ledger — per-step audit trail
+# ---------------------------------------------------------------------------
+
+@dataclass
+class TaskLedgerEntry:
+    """One entry in the per-session task ledger.
+
+    Every executed step gets a ledger row: who did it, what was the task,
+    and when it finished. Enables post-session auditing without grep'ing logs.
+
+    Fields mirror the Feynman research agent's task ledger pattern:
+        task_id   — step label (e.g. "step_3") or loop_id+index
+        owner     — who executed it ("agent_loop", worker name, etc.)
+        task      — the step text as given to the executor
+        status    — "todo" | "in_progress" | "done" | "blocked"
+        loop_id   — parent loop_id for traceability
+        result_summary — first 200 chars of the step result (optional)
+        completed_at   — UTC ISO timestamp when finished
+    """
+    task_id: str
+    owner: str
+    task: str
+    status: str    # "todo" | "in_progress" | "done" | "blocked"
+    loop_id: str = ""
+    result_summary: str = ""
+    completed_at: str = ""
+    created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+
+def append_task_ledger(entry: TaskLedgerEntry) -> None:
+    """Append one entry to the task ledger (task_ledger.jsonl)."""
+    path = _task_ledger_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    row = {
+        "task_id": entry.task_id,
+        "owner": entry.owner,
+        "task": entry.task,
+        "status": entry.status,
+        "loop_id": entry.loop_id,
+        "result_summary": entry.result_summary,
+        "completed_at": entry.completed_at or datetime.now(timezone.utc).isoformat(),
+        "created_at": entry.created_at,
+    }
+    try:
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(row) + "\n")
+    except Exception as exc:
+        log.debug("append_task_ledger: write failed: %s", exc)
+
+
+def load_task_ledger(
+    loop_id: str = "",
+    limit: int = 100,
+) -> List[TaskLedgerEntry]:
+    """Load recent task ledger entries, optionally filtered by loop_id."""
+    path = _task_ledger_path()
+    if not path.exists():
+        return []
+    entries = []
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                d = json.loads(line)
+                if loop_id and d.get("loop_id", "") != loop_id:
+                    continue
+                entries.append(TaskLedgerEntry(
+                    task_id=d.get("task_id", ""),
+                    owner=d.get("owner", ""),
+                    task=d.get("task", ""),
+                    status=d.get("status", ""),
+                    loop_id=d.get("loop_id", ""),
+                    result_summary=d.get("result_summary", ""),
+                    completed_at=d.get("completed_at", ""),
+                    created_at=d.get("created_at", ""),
+                ))
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return list(reversed(entries))[:limit]
+
+
 # ---------------------------------------------------------------------------
 # Step trace recording (Meta-Harness steal: proposer reads full execution traces)
 # ---------------------------------------------------------------------------
