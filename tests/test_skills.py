@@ -1926,3 +1926,85 @@ def test_verify_skill_result_fields():
     assert isinstance(result.suspicious_claims, list)
     assert isinstance(result.is_clean, bool)
     assert 0.0 <= result.confidence <= 1.0
+
+
+# ---------------------------------------------------------------------------
+# Phase 59: Skill sampler constraints (NeMo Steal 7)
+# ---------------------------------------------------------------------------
+
+class TestSkillConstraints:
+    """Tests for SkillConstraint and apply_skill_constraints()."""
+
+    def _make_skill_with_id(self, sid, name="test"):
+        return Skill(
+            id=sid, name=name, description="a skill",
+            trigger_patterns=[], steps_template=[],
+            source_loop_ids=[], created_at="2026-04-07T00:00:00Z",
+        )
+
+    def test_no_constraints_returns_all_skills(self):
+        from skills import apply_skill_constraints
+        skills = [self._make_skill_with_id("s1"), self._make_skill_with_id("s2")]
+        result = apply_skill_constraints("some goal", skills, constraints=None)
+        assert result == skills
+
+    def test_constraint_matches_by_keyword(self):
+        """Constraint with matching keyword annotates the skill."""
+        from skills import apply_skill_constraints, SkillConstraint
+        skill = self._make_skill_with_id("s1", "research-skill")
+        constraint = SkillConstraint(
+            skill_id="s1",
+            condition_keywords=["research", "investigate"],
+            parameter_overrides={"approach": "analytical"},
+        )
+        result = apply_skill_constraints("research polymarket trends", [skill], [constraint])
+        assert len(result) == 1
+        assert "constraint_overrides" in result[0].optimization_objective
+        assert "analytical" in result[0].optimization_objective
+
+    def test_constraint_no_match_skill_unchanged(self):
+        """Constraint without matching keyword leaves skill unchanged."""
+        from skills import apply_skill_constraints, SkillConstraint
+        skill = self._make_skill_with_id("s1")
+        constraint = SkillConstraint(
+            skill_id="s1",
+            condition_keywords=["build", "compile"],
+            parameter_overrides={"mode": "strict"},
+        )
+        result = apply_skill_constraints("research AI papers", [skill], [constraint])
+        assert result[0].optimization_objective == ""  # untouched
+
+    def test_constraint_excluded_keyword_skips(self):
+        """Excluded keyword prevents constraint from applying."""
+        from skills import apply_skill_constraints, SkillConstraint
+        skill = self._make_skill_with_id("s1")
+        constraint = SkillConstraint(
+            skill_id="s1",
+            condition_keywords=["research"],
+            excluded_keywords=["polymarket"],  # excluded
+            parameter_overrides={"mode": "fast"},
+        )
+        result = apply_skill_constraints("research polymarket data", [skill], [constraint])
+        assert "constraint_overrides" not in result[0].optimization_objective
+
+    def test_multiple_constraints_merge_overrides(self):
+        """Multiple constraints for same skill merge their overrides."""
+        from skills import apply_skill_constraints, SkillConstraint
+        skill = self._make_skill_with_id("s1")
+        constraints = [
+            SkillConstraint("s1", ["research"], {"depth": "deep"}),
+            SkillConstraint("s1", ["urgent"], {"speed": "fast"}),
+        ]
+        result = apply_skill_constraints("urgent research needed", [skill], constraints)
+        obj = result[0].optimization_objective
+        assert "deep" in obj
+        assert "fast" in obj
+
+    def test_constraint_does_not_modify_original_skill(self):
+        """apply_skill_constraints returns a copy when modifying (original unchanged)."""
+        from skills import apply_skill_constraints, SkillConstraint
+        skill = self._make_skill_with_id("s1")
+        original_obj = skill.optimization_objective
+        constraint = SkillConstraint("s1", ["test"], {"key": "val"})
+        apply_skill_constraints("test goal", [skill], [constraint])
+        assert skill.optimization_objective == original_obj  # original unchanged

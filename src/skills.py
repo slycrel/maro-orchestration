@@ -1380,6 +1380,90 @@ def frontier_skills(skills: Optional[List["Skill"]] = None, *, min_uses: int = 3
 
 
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Phase 59 (NeMo Steal 7): Skill sampler constraints for conditional parameterization
+# ---------------------------------------------------------------------------
+
+@dataclass
+class SkillConstraint:
+    """Conditional constraint on skill selection and parameterization.
+
+    NeMo DataDesigner steal: skills can carry constraints that determine when they
+    apply and how their parameters should be adjusted for specific contexts. This
+    enables one skill definition to adapt to different goal types without duplication.
+
+    Fields:
+        condition_keywords: Goal/step must contain at least one of these keywords
+                            for the constraint to activate.
+        excluded_keywords:  If the goal/step contains any of these, constraint is skipped.
+        skill_id:           Which skill this constraint applies to.
+        parameter_overrides: Dict of parameter adjustments when constraint activates.
+                             Stored in skill.optimization_objective (as metadata hint).
+        description:        Human-readable explanation of what this constraint does.
+    """
+    skill_id: str
+    condition_keywords: List[str]
+    parameter_overrides: Dict[str, Any] = field(default_factory=dict)
+    excluded_keywords: List[str] = field(default_factory=list)
+    description: str = ""
+
+
+def apply_skill_constraints(
+    goal: str,
+    skills: "List[Skill]",
+    constraints: Optional[List[SkillConstraint]] = None,
+) -> "List[Skill]":
+    """Filter and adapt skills based on goal context using SkillConstraints.
+
+    Phase 59 (NeMo Steal 7): Applies conditional skill constraints to:
+    1. Filter skills whose constraints don't match the current goal
+    2. Annotate matched skills with parameter override hints
+
+    Args:
+        goal:        Current goal or step text.
+        skills:      Available skills to filter.
+        constraints: Constraints to apply. If None, returns skills unchanged.
+
+    Returns:
+        Filtered skills with parameter_overrides noted in optimization_objective.
+    """
+    if not constraints:
+        return skills
+
+    goal_lower = goal.lower()
+    skill_by_id = {s.id: s for s in skills}
+    applied_overrides: Dict[str, Dict[str, Any]] = {}
+
+    for c in constraints:
+        # Check if any condition keyword matches
+        if not any(kw.lower() in goal_lower for kw in c.condition_keywords):
+            continue
+        # Check exclusions
+        if any(kw.lower() in goal_lower for kw in c.excluded_keywords):
+            continue
+        # Constraint matches — record override for this skill_id
+        if c.skill_id in skill_by_id:
+            applied_overrides.setdefault(c.skill_id, {}).update(c.parameter_overrides)
+
+    # Apply overrides as optimization_objective annotations
+    result = []
+    for skill in skills:
+        if skill.id in applied_overrides:
+            import copy as _copy
+            adapted = _copy.copy(skill)
+            overrides_str = "; ".join(f"{k}={v}" for k, v in applied_overrides[skill.id].items())
+            adapted.optimization_objective = (
+                (adapted.optimization_objective + "; " if adapted.optimization_objective else "")
+                + f"constraint_overrides: {overrides_str}"
+            )
+            result.append(adapted)
+        else:
+            result.append(skill)
+
+    return result
+
+
+# ---------------------------------------------------------------------------
 # A/B variant system (Agent0 Rule A/B Variants steal)
 # ---------------------------------------------------------------------------
 # A skill rewrite creates a "challenger" variant (variant_of=parent.id) rather
