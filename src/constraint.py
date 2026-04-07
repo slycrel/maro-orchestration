@@ -40,6 +40,91 @@ log = logging.getLogger("poe.constraint")
 
 
 # ---------------------------------------------------------------------------
+# Phase 59 (NeMo DataDesigner steal): ViolationType enum
+# ---------------------------------------------------------------------------
+
+class ViolationType:
+    """Structured violation type taxonomy with category + severity metadata.
+
+    NeMo DataDesigner pattern: violations are first-class config, not inline
+    strings. Each type carries its category, description, and severity level.
+    Enables structured escalation, audit, and reporting.
+
+    Violation severity levels:
+        "error"   → should block or escalate (HIGH risk equivalent)
+        "warning" → should log and proceed (MEDIUM risk equivalent)
+        "info"    → note only (LOW risk equivalent)
+    """
+    # Runtime / execution safety
+    DESTRUCTIVE_COMMAND = ("destructive", "Step may delete, overwrite, or irreversibly modify data", "error")
+    EXTERNAL_CALL = ("network", "Step reaches out to an external service or API", "warning")
+    CREDENTIAL_EXPOSURE = ("security", "Step may expose secrets, tokens, or credentials", "error")
+    SYSTEM_MODIFICATION = ("system", "Step modifies system-level configuration or processes", "error")
+    DATA_EXFILTRATION = ("security", "Step may transmit data to an external location", "error")
+
+    # Skill / lesson quality
+    HALLUCINATED_CLAIM = ("quality", "Claim references unverified or fabricated information", "error")
+    UNSOURCED_METRIC = ("quality", "Metric presented without source or evidence", "warning")
+    ABSOLUTE_STATEMENT = ("quality", "Absolute claim (always/never/100%) without qualification", "warning")
+    CONFLICTS_WITH_RULE = ("policy", "Violates a standing rule or escalation policy", "error")
+    WEAK_CONFIDENCE = ("quality", "Success rate or confidence below acceptable threshold", "warning")
+
+    # Scope / planning
+    SCOPE_EXCEEDS_BUDGET = ("scope", "Estimated scope exceeds time/cost budget", "warning")
+    UNDECLARED_DEPENDENCY = ("scope", "Step depends on an undeclared prior step or resource", "warning")
+
+    @classmethod
+    def all_types(cls) -> list:
+        """Return all violation type tuples (category, description, severity)."""
+        return [
+            v for k, v in vars(cls).items()
+            if not k.startswith("_") and isinstance(v, tuple) and len(v) == 3
+        ]
+
+    @classmethod
+    def from_risk_level(cls, risk: str) -> tuple:
+        """Map legacy risk level string to ViolationType severity."""
+        return {
+            "LOW": ("general", "Low-risk constraint flag", "info"),
+            "MEDIUM": ("general", "Medium-risk constraint flag", "warning"),
+            "HIGH": ("general", "High-risk constraint flag", "error"),
+        }.get(risk.upper(), ("general", "Unknown risk level", "warning"))
+
+
+@dataclass
+class ViolationReport:
+    """A structured violation report with ViolationType metadata.
+
+    Extends ConstraintFlag with formal category and severity from ViolationType.
+    Can be constructed from an existing ConstraintFlag or directly.
+    """
+    name: str
+    category: str
+    description: str
+    severity: str     # "error" | "warning" | "info"
+    detail: str       # context-specific detail for this instance
+    pattern: str = ""
+
+    @property
+    def is_fatal(self) -> bool:
+        """Error-severity violations are fatal — should block execution."""
+        return self.severity == "error"
+
+    @classmethod
+    def from_constraint_flag(cls, flag: "ConstraintFlag") -> "ViolationReport":
+        """Wrap a ConstraintFlag in a structured ViolationReport."""
+        cat, desc, sev = ViolationType.from_risk_level(flag.risk)
+        return cls(
+            name=flag.name,
+            category=cat,
+            description=desc,
+            severity=sev,
+            detail=flag.detail,
+            pattern=flag.pattern,
+        )
+
+
+# ---------------------------------------------------------------------------
 # Data model
 # ---------------------------------------------------------------------------
 
@@ -78,6 +163,14 @@ class ConstraintResult:
             "risk_level": self.risk_level,
             "flags": [{"name": f.name, "risk": f.risk, "detail": f.detail} for f in self.flags],
         }
+
+    def to_violation_reports(self) -> "List[ViolationReport]":
+        """Convert all flags to structured ViolationReport objects (Phase 59)."""
+        return [ViolationReport.from_constraint_flag(f) for f in self.flags]
+
+    def has_fatal_violations(self) -> bool:
+        """Return True if any flag maps to an error-severity ViolationReport (Phase 59)."""
+        return any(r.is_fatal for r in self.to_violation_reports())
 
 
 # ---------------------------------------------------------------------------

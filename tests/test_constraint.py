@@ -330,3 +330,102 @@ def test_hitl_policy_flags_are_dicts():
     if p["flags"]:
         assert "name" in p["flags"][0]
         assert "risk" in p["flags"][0]
+
+
+# ---------------------------------------------------------------------------
+# Phase 59: ViolationType enum + ViolationReport (NeMo DataDesigner steal)
+# ---------------------------------------------------------------------------
+
+class TestViolationType:
+    """Tests for ViolationType enum and ViolationReport."""
+
+    def test_all_types_returns_non_empty(self):
+        """ViolationType.all_types() returns a list of (cat, desc, severity) tuples."""
+        from constraint import ViolationType
+        types = ViolationType.all_types()
+        assert len(types) > 0
+        for t in types:
+            assert isinstance(t, tuple)
+            assert len(t) == 3
+
+    def test_from_risk_level_high_is_error(self):
+        """HIGH risk maps to error severity."""
+        from constraint import ViolationType
+        cat, desc, sev = ViolationType.from_risk_level("HIGH")
+        assert sev == "error"
+
+    def test_from_risk_level_medium_is_warning(self):
+        from constraint import ViolationType
+        _, _, sev = ViolationType.from_risk_level("MEDIUM")
+        assert sev == "warning"
+
+    def test_from_risk_level_low_is_info(self):
+        from constraint import ViolationType
+        _, _, sev = ViolationType.from_risk_level("LOW")
+        assert sev == "info"
+
+    def test_violation_report_is_fatal_for_error(self):
+        """ViolationReport.is_fatal is True for error severity."""
+        from constraint import ViolationReport
+        r = ViolationReport(
+            name="test", category="security", description="test",
+            severity="error", detail="something bad",
+        )
+        assert r.is_fatal is True
+
+    def test_violation_report_not_fatal_for_warning(self):
+        from constraint import ViolationReport
+        r = ViolationReport(
+            name="test", category="quality", description="test",
+            severity="warning", detail="minor issue",
+        )
+        assert r.is_fatal is False
+
+    def test_from_constraint_flag_wraps_flag(self):
+        """ViolationReport.from_constraint_flag() wraps a ConstraintFlag."""
+        from constraint import ViolationReport, ConstraintFlag
+        flag = ConstraintFlag(
+            name="destructive_op",
+            risk="HIGH",
+            detail="rm -rf detected",
+            pattern="rm -rf",
+        )
+        report = ViolationReport.from_constraint_flag(flag)
+        assert report.name == "destructive_op"
+        assert report.is_fatal is True
+        assert "rm -rf" in report.detail
+
+    def test_constraint_result_to_violation_reports(self):
+        """ConstraintResult.to_violation_reports() returns ViolationReports."""
+        from constraint import ConstraintResult, ConstraintFlag, ViolationReport
+        result = ConstraintResult(
+            allowed=False,
+            risk_level="HIGH",
+            flags=[
+                ConstraintFlag(name="op1", risk="HIGH", detail="d1", pattern="p1"),
+                ConstraintFlag(name="op2", risk="MEDIUM", detail="d2", pattern="p2"),
+            ],
+        )
+        reports = result.to_violation_reports()
+        assert len(reports) == 2
+        assert all(isinstance(r, ViolationReport) for r in reports)
+
+    def test_has_fatal_violations_true_for_high(self):
+        """has_fatal_violations() is True when HIGH-risk flags exist."""
+        from constraint import ConstraintResult, ConstraintFlag
+        result = ConstraintResult(
+            allowed=False,
+            risk_level="HIGH",
+            flags=[ConstraintFlag(name="op1", risk="HIGH", detail="d", pattern="p")],
+        )
+        assert result.has_fatal_violations() is True
+
+    def test_has_fatal_violations_false_for_medium_only(self):
+        """has_fatal_violations() is False when only MEDIUM/LOW flags exist."""
+        from constraint import ConstraintResult, ConstraintFlag
+        result = ConstraintResult(
+            allowed=True,
+            risk_level="MEDIUM",
+            flags=[ConstraintFlag(name="op1", risk="MEDIUM", detail="d", pattern="p")],
+        )
+        assert result.has_fatal_violations() is False
