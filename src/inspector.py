@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import sys
 import time
 import uuid
@@ -676,6 +677,113 @@ def check_alignment(session: Any, adapter=None) -> AlignmentResult:
 
     # LLM failed — heuristic fallback
     return check_alignment(session, adapter=None)
+
+
+# ---------------------------------------------------------------------------
+# Phase 59 Feynman F1: Tiered source fallback for claim verification
+# ---------------------------------------------------------------------------
+
+@dataclass
+class TieredVerificationResult:
+    """Result from verify_claim_tiered() — includes which tier answered the claim.
+
+    Feynman F1: confidence_tier indicates how strongly grounded the verdict is:
+    - tier 1 (lesson-based):       high-confidence, seen before, reinforced
+    - tier 2 (standing_rule):      authoritative, durable rules
+    - tier 3 (heuristic/fallback): low-confidence, no coverage found
+    """
+    claim: str
+    verdict: str         # "supported" | "unsupported" | "uncertain"
+    confidence: float    # 0.0–1.0
+    confidence_tier: int  # 1 (lesson) | 2 (rule) | 3 (heuristic)
+    source: str          # "lesson" | "standing_rule" | "heuristic"
+    passage: str         # relevant excerpt from the source
+
+
+def verify_claim_tiered(
+    claim: str,
+    *,
+    goal: str = "",
+    task_type: str = "general",
+    min_lesson_score: float = 0.7,
+) -> TieredVerificationResult:
+    """Verify a claim against stored knowledge before falling back to LLM.
+
+    Phase 59 Feynman F1: tiered source fallback hierarchy:
+      P1. query_lessons() — check if a high-confidence lesson addresses the claim
+      P2. load_standing_rules() — check if a standing rule is relevant
+      P3. Heuristic — no stored knowledge covers the claim (LLM needed)
+
+    Args:
+        claim:             The claim to verify (short text or assertion).
+        goal:              Original goal context for relevance matching.
+        task_type:         Task type for lesson retrieval filtering.
+        min_lesson_score:  Minimum lesson score for P1 tier (default: 0.7).
+
+    Returns:
+        TieredVerificationResult indicating which tier answered and at what confidence.
+    """
+    claim_lower = claim.lower()
+
+    # P1: Check tiered lessons — high-confidence lessons about similar topics
+    try:
+        from memory import query_lessons
+        lessons = query_lessons(
+            query=f"{goal} {claim}",
+            task_type=task_type,
+            min_score=min_lesson_score,
+            n=3,
+        )
+        for lesson in lessons:
+            # Weak text overlap: if the lesson mentions key claim terms, it's relevant
+            lesson_lower = lesson.lesson.lower()
+            claim_words = set(w for w in re.findall(r"[a-z]{4,}", claim_lower)
+                              if w not in {"this", "that", "with", "from", "have"})
+            if len(claim_words) >= 2:
+                matched = sum(1 for w in claim_words if w in lesson_lower)
+                if matched >= max(2, len(claim_words) // 2):
+                    verdict = "supported" if lesson.outcome == "done" else "unsupported"
+                    return TieredVerificationResult(
+                        claim=claim,
+                        verdict=verdict,
+                        confidence=min(lesson.confidence, lesson.score),
+                        confidence_tier=1,
+                        source="lesson",
+                        passage=lesson.lesson[:200],
+                    )
+    except Exception:
+        pass
+
+    # P2: Check standing rules — authoritative durable constraints
+    try:
+        from memory import load_standing_rules
+        rules = load_standing_rules()
+        for rule in rules:
+            rule_text = rule.rule.lower()
+            claim_words = set(w for w in re.findall(r"[a-z]{4,}", claim_lower))
+            if len(claim_words) >= 2:
+                matched = sum(1 for w in claim_words if w in rule_text)
+                if matched >= 2:
+                    return TieredVerificationResult(
+                        claim=claim,
+                        verdict="uncertain",  # StandingRule doesn't track enforcement — mark uncertain
+                        confidence=0.75,     # rules are authoritative but not claim-specific
+                        confidence_tier=2,
+                        source="standing_rule",
+                        passage=rule.rule[:200],
+                    )
+    except Exception:
+        pass
+
+    # P3: Heuristic fallback — no stored knowledge covers the claim
+    return TieredVerificationResult(
+        claim=claim,
+        verdict="uncertain",
+        confidence=0.3,
+        confidence_tier=3,
+        source="heuristic",
+        passage="No stored lesson or rule covers this claim — LLM verification recommended.",
+    )
 
 
 _CLUSTER_SYSTEM = """\
