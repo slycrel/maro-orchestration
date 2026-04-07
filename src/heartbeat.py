@@ -402,8 +402,14 @@ def run_heartbeat(
     report.recovery_actions.extend(tier1)
 
     # --- Tier 2: LLM diagnosis for stuck projects ---
-    tier2 = _tier2_llm_diagnosis(stuck_projects, dry_run=dry_run)
-    report.recovery_actions.extend(tier2)
+    # Skip if an interactive Claude Code session is active to avoid double-burning.
+    # The cooldown in _tier2_llm_diagnosis() provides per-project rate limiting;
+    # this session guard adds a session-level gate on top.
+    if not _is_interactive_session_active():
+        tier2 = _tier2_llm_diagnosis(stuck_projects, dry_run=dry_run)
+        report.recovery_actions.extend(tier2)
+    else:
+        log.debug("interactive session active — skipping tier-2 LLM diagnosis")
 
     # --- Tier 3: Escalate if needed ---
     if escalate and not dry_run:

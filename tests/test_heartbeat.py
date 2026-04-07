@@ -249,6 +249,7 @@ def test_run_heartbeat_stuck_projects_trigger_tier2():
          patch("heartbeat.check_all_projects", return_value=[stuck]), \
          patch("heartbeat.write_heartbeat_state"), \
          patch("heartbeat._log_heartbeat"), \
+         patch("heartbeat._is_interactive_session_active", return_value=False), \
          patch("heartbeat._tier2_llm_diagnosis", return_value=[
              RecoveryAction(tier=2, target="proj-x", action="reset task", outcome="suggested")
          ]) as mock_diag:
