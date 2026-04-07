@@ -1191,15 +1191,35 @@ def reflect_and_record(
     """
     log.info("reflect_and_record goal=%r status=%s tokens=%d elapsed=%dms",
              goal[:60], status, tokens_in + tokens_out, elapsed_ms)
-    lessons = extract_lessons_via_llm(
+    # Phase 59 NeMo S1: use return_typed=True to capture lesson_type per lesson
+    typed_lessons = extract_lessons_via_llm(
         goal=goal,
         status=status,
         result_summary=result_summary,
         task_type=task_type,
         adapter=adapter,
         dry_run=dry_run,
+        return_typed=True,
     )
+    lessons = [text for text, _ in typed_lessons]
     log.debug("extracted %d lessons from reflection", len(lessons))
+
+    # Auto-record each typed lesson to the tiered system (MEDIUM tier, k_samples=1 → 0.5 confidence)
+    # This closes the loop: lesson_type is preserved from extraction → tiered storage → injection.
+    if not dry_run and typed_lessons:
+        for lesson_text, lesson_type in typed_lessons:
+            try:
+                record_tiered_lesson(
+                    lesson_text=lesson_text,
+                    task_type=task_type,
+                    outcome=status,
+                    source_goal=goal[:120],
+                    tier=MemoryTier.MEDIUM,
+                    k_samples=1,  # single extraction → 0.5 confidence (F5)
+                    lesson_type=lesson_type,
+                )
+            except Exception:
+                pass  # tiered recording must never block the main reflection path
 
     return record_outcome(
         goal=goal,
