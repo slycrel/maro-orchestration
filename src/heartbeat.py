@@ -192,6 +192,23 @@ def _tier1_scripted(checks: Dict[str, str]) -> List[RecoveryAction]:
 # Tier 2: LLM-assisted diagnosis
 # ---------------------------------------------------------------------------
 
+# Cooldown: minimum seconds between tier-2 diagnosis calls per stuck project.
+# At 60s heartbeat interval, 1800s = 30 min = at most 2 diagnoses/hour per project.
+# Without this, 6 stuck projects × 60s = 360 LLM calls/hour (the overnight runaway).
+_DIAGNOSIS_COOLDOWN_SECS = 1800
+_diagnosis_last_ran: Dict[str, float] = {}  # project → epoch time of last diagnosis
+
+
+def _diagnosis_due(project: str) -> bool:
+    """Return True if enough time has passed to diagnose this project again."""
+    last = _diagnosis_last_ran.get(project, 0.0)
+    return (time.monotonic() - last) >= _DIAGNOSIS_COOLDOWN_SECS
+
+
+def _mark_diagnosis_ran(project: str) -> None:
+    _diagnosis_last_ran[project] = time.monotonic()
+
+
 _DIAGNOSIS_SYSTEM = """\
 You are Poe's diagnostic agent. A project loop appears to be stuck or unhealthy.
 Analyze the provided project state and suggest ONE specific recovery action.
@@ -228,6 +245,15 @@ def _tier2_llm_diagnosis(stuck_projects: List[str], *, dry_run: bool = False) ->
         return actions
 
     for project in stuck_projects:
+        # Cooldown: skip LLM call if this project was diagnosed recently.
+        # Prevents 6 stuck projects × 60s = 360 LLM calls/hour runaway.
+        if not _diagnosis_due(project):
+            actions.append(RecoveryAction(
+                tier=2, target=project,
+                action="[cooldown] diagnosis deferred",
+                outcome="skipped",
+            ))
+            continue
         try:
             _lines, items = parse_next(project)
             doing = [i.text for i in items if i.state == ">"]
@@ -249,6 +275,7 @@ def _tier2_llm_diagnosis(stuck_projects: List[str], *, dry_run: bool = False) ->
                 max_tokens=512,
                 temperature=0.2,
             )
+            _mark_diagnosis_ran(project)
             actions.append(RecoveryAction(
                 tier=2, target=project,
                 action=resp.content.strip(),
