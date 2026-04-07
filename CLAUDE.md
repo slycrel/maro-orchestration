@@ -43,7 +43,7 @@ src/                 All production Python (50+ modules)
   constraint.py      Pre-execution constraint enforcement
   ...
 
-tests/               55+ test files, 2013 tests
+tests/               60+ test files, ~3,195 tests
 scripts/             smoke.sh, audit-phases.sh, enqueue.sh
 personas/            YAML persona specs
 docs/                Architecture, memory systems, self-reflection design
@@ -59,7 +59,7 @@ deploy/              systemd service files
 
 ## Current state
 
-**As of 2026-04-05:**
+**As of 2026-04-07:**
 
 | Phase | Name | Status |
 |-------|------|--------|
@@ -87,8 +87,13 @@ deploy/              systemd service files
 | 54 | Session Checkpointing / Loop Resume (GAP 3) | DONE |
 | 55 | lat.md Knowledge Graph | DONE |
 | 56 | Promotion Cycle — Standing Rules + Decision Journal | DONE |
+| 57 | Adaptive Model Tiering | DONE |
+| 58 | Pre-Flight Plan Review | DONE |
+| 59 | NeMo/Feynman Steal Items — typed lessons, island TF-IDF, confidence tiers, verifier memory | DONE |
+| 60 | Adversarial Verification Layer — citation enforcement, calibration loop, multi-model adversarial review | DONE |
+| 61 | Integration Depth — 14 integration tests: memory injection, checkpoint resume, adapter fallback | DONE |
 
-**Active work (as of 2026-04-07):** All phases through 58 DONE. Phase 57 (adaptive model tiering), Phase 58 (pre-flight plan review) complete. query_lessons RAG API for workers, poe-replay CLI, WorkerResult schema validation, lens determinism shipped. Tests: ~2850+. Pending: Phase 24 (Slack skeleton shipped, Signal/iMessage deferred), Phase 25 ops hardening, Phase 28 (blocked on Jeremy's personas/jeremy.md). Open steal items: island model diversity (M), events as first-class graph nodes (L), NeMo/Feynman steal items (Phase 59 candidates).
+**Active work (as of 2026-04-07):** Phases 0–61 complete. Tests: ~3,195. Heartbeat fixes deployed: diagnosis cooldown (30 min/project), session guard, backlog drain interval 3→30 ticks — resolved overnight token runaway. Project lifecycle state: `.poe-failed`/`.poe-paused` marker files; `poe-observe projects` board added to default snapshot. Compact notation skill (`skills/compact_notation.md`) created — shorthand vocabulary for token-efficient reasoning. Pending: Phase 24 (Slack skeleton shipped, Signal deferred), Phase 25 ops hardening, Phase 28 (blocked on personas/jeremy.md), compact notation A/B testing, cross-agent claim challenge (deferred from P60).
 
 See `ROADMAP.md` for full phase specs. See `CHANGELOG.md` for what shipped.
 

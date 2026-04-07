@@ -3,7 +3,7 @@
 Single canonical location for everything we've identified but haven't done yet.
 Read this at the start of every session. Update it as items are completed or new ones emerge.
 
-Last reviewed: 2026-04-06 (session 12)
+Last reviewed: 2026-04-07 (session 13)
 
 ---
 
@@ -30,6 +30,7 @@ Last reviewed: 2026-04-06 (session 12)
 - [x] **Lesson injection overhead** — Fixed: capped inject output at 1200 chars in memory.py. (`low-hanging-fruit`)
 - [x] **System prompt token audit (Pi steal)** — Audited EXECUTE_SYSTEM and DECOMPOSE_SYSTEM against Pi coding agent's <1k target. Cut redundant negatives, editorial commentary, and duplicate BAD/GOOD examples. Result: EXECUTE_SYSTEM 844→333 tokens (-61%), DECOMPOSE_SYSTEM 1048→603 tokens (-42%), combined 1892→936 tokens (-51%). All behavior-changing content preserved. (2026-04-03)
 - [x] **Architecture non-goals doc (Pi steal)** — `docs/ARCHITECTURE_NON_GOALS.md` documents 8 deliberate non-goals with rationale: tool minimalism, MCP-as-default, interactive gating, hidden sub-agents, Neo4j, plugin marketplace, provider portability contracts, headless UI. Helps say no cleanly to scope creep. (2026-04-03)
+- [ ] **Compact notation / shorthand vocabulary** — `skills/compact_notation.md` created (2026-04-07). Next: write A/B tests measuring token reduction vs output quality on the heartbeat diagnosis prompt (single-turn, safe to measure). If ≥15% reduction with no quality loss, enable `always_inject=true` for execution contexts. Track: `compact_notation_enabled` flag in `config.py`. Consider LLMLingua (pip installable, 4-20x compression) as complement if vocabulary approach hits limits.
 
 ### Self-Improvement Loop
 - [x] **Evolver signal scanning** — `scan_outcomes_for_signals()` in `evolver.py`. Scans done outcomes for actionable leads/opportunities, converts to `sub_mission` Suggestion entries. Wired into `run_evolver(scan_signals=True)`. 8 tests. (2026-03-31)

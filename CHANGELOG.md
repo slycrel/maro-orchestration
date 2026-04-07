@@ -1,5 +1,54 @@
 # Changelog
 
+## [1.11.0] - 2026-04-07
+
+Phases 59–61 + token runaway fix. ~3200 tests passing.
+
+### Fixed — Token runaway (overnight gorge diagnosis)
+- `heartbeat.py`: `_tier2_llm_diagnosis()` was called every 60s × N stuck projects.
+  With 6 stuck zombie projects, that was 360 LLM calls/hour overnight.
+  Fixed with `_DIAGNOSIS_COOLDOWN_SECS = 1800` (max 2 diagnoses/hour per project).
+- `heartbeat.py`: Session guard `_is_interactive_session_active()` detects running
+  `claude --continue` process and skips ALL autonomous LLM work: tier-2 diagnosis,
+  backlog drain, task-store drain, mission check, evolver, inspector.
+- `heartbeat.py`: `backlog_every` default 3 → 30 ticks (~30 min between drains).
+- 7 zombie projects marked `.poe-failed` — sheriff now reports `stuck=[]`.
+
+### Added — Phase 59: NeMo + Feynman steal items (DONE)
+- **Typed lesson taxonomy** (NeMo S1): `lesson_type` field on `TieredLesson`;
+  type-filtered retrieval; `extract_lessons_via_llm()` returns `(text, type)` pairs;
+  `reflect_and_record()` auto-records typed lessons. Types: execution/planning/recovery/verification/cost.
+- **Seed-reader bootstrapping** (NeMo S2): top-1 LONG lesson as style guide before extraction.
+- **ATIF feedback** (NeMo S3): `avg_times_reinforced` + `avg_times_applied` injected into extraction prompt.
+- **Island-aware TF-IDF** (NeMo S4): `_ISLAND_BOOST = 0.20` for matching skill island in `_tfidf_skill_rank()`.
+- **Cross-type cap** (NeMo S5): at most 1 lesson per `lesson_type` per extraction call.
+- **Confidence tiers** (Feynman F5): `confidence_from_k_samples()` — k=1→0.5, k=2→0.6, k≥3→0.7; `sessions_validated≥3`→0.9+.
+- **Adversarial lens** (Feynman F3): `_adversarial_lens()` in lens registry, cost="mid", deterministic flag.
+- **Token transparency** (Feynman F6): `input_tokens`/`output_tokens` tracked per `extract_lessons_via_llm()` call.
+- **Named threshold constants** (Feynman self-review): `_BROAD_STEP_TOKEN_LIMIT`, `_TOKEN_EXPLOSION_RATIO`, etc.
+- **Tiered source fallback** (Feynman F1): `verify_claim_tiered()` in inspector.py — P1 lessons → P2 standing rules → P3 heuristic.
+- **Accumulating verifier memory** (Feynman F4): `VerificationOutcome` + `record_verification()` + `verification_accuracy()`.
+- **GoalGap detection** (Feynman F10): `detect_goal_gaps()` from outcomes.
+- **Evidence tracing** (Feynman F11): `evidence_sources` field on `TieredLesson`.
+- Tests: test_memory=118, test_introspect=42, test_inspector=84, test_skills=137.
+
+### Added — Phase 60: Adversarial Verification Layer (DONE)
+- **Citation enforcement** (`_CITATION_PENALTY = 0.90`): uncited lessons discounted 10% in `_tfidf_rank()`.
+- **Verification calibration loop** (`calibrated_alignment_threshold()`): derives alignment threshold from verifier history; wired into `check_alignment()`.
+- **Multi-model adversarial review** (`adversarial_sample()`): mid-run entry point, no `LoopDiagnosis` needed; `model` kwarg for cross-model verification; `_adversarial_lens()` gains `model` kwarg.
+- Tests: +9 (TestCitationEnforcementPenalty ×3, TestCalibrationLoop ×6).
+
+### Added — Phase 61: Integration depth (DONE)
+- `tests/test_integration.py`: 14 integration tests across 5 scenarios — memory injection, checkpoint pipeline, adapter fallback chain, adversarial_sample mid-run, calibration→inspector wiring.
+
+### Added — Project visibility + lifecycle state
+- `poe-observe projects`: per-project status board (ACTIVE/STUCK/OK/FAILED/PAUSED) with ANSI colour. Included in default `poe-observe` snapshot.
+- `sheriff.py`: `.poe-failed` / `.poe-paused` marker files; `mark_project_failed()`, `mark_project_paused()`, `project_lifecycle_state()`; `check_project()` short-circuits on marker.
+- `orch_items.py`: `select_global_next()` skips failed/paused projects from backlog drain.
+
+### Added — Compact notation skill
+- `skills/compact_notation.md`: shorthand vocabulary for token-efficient agent reasoning (ok/err/blk, r:/bld:/exec:, w/, n=). Opt-in via skill injection. Shorthand testing deferred to backlog.
+
 ## [1.10.26] - 2026-04-05
 
 Phase 29 research complete — tacit knowledge + Enneagram 6w5/INFJ companion design.
