@@ -1676,27 +1676,100 @@ def run_evolver_with_friction(
 
 
 # ---------------------------------------------------------------------------
-# CLI entry point
+# CLI entry point (poe-evolver)
 # ---------------------------------------------------------------------------
 
-if __name__ == "__main__":
+def main() -> int:
+    """CLI entry point for poe-evolver."""
     import argparse
 
-    parser = argparse.ArgumentParser(description="Poe meta-evolver")
-    parser.add_argument("--dry-run", action="store_true", help="Analyze without writing suggestions")
-    parser.add_argument("--min-outcomes", type=int, default=3, help="Minimum outcomes needed to run")
-    parser.add_argument("--window", type=int, default=50, help="How many recent outcomes to analyze")
-    parser.add_argument("--notify", action="store_true", help="Send Telegram summary")
-    parser.add_argument("--format", choices=["text", "json"], default="text")
+    parser = argparse.ArgumentParser(description="Poe meta-evolver — analyze outcomes, manage suggestions")
+    subparsers = parser.add_subparsers(dest="cmd")
+
+    # Default: run evolver analysis
+    run_p = subparsers.add_parser("run", help="Run evolver analysis on recent outcomes")
+    run_p.add_argument("--dry-run", action="store_true", help="Analyze without writing suggestions")
+    run_p.add_argument("--min-outcomes", type=int, default=3)
+    run_p.add_argument("--window", type=int, default=50)
+    run_p.add_argument("--notify", action="store_true")
+    run_p.add_argument("--format", choices=["text", "json"], default="text")
+
+    # List pending suggestions
+    subparsers.add_parser("list", help="List pending (unapplied) suggestions")
+
+    # Apply pending suggestions
+    apply_p = subparsers.add_parser("apply", help="Apply pending suggestions (human-in-loop)")
+    apply_p.add_argument("--all", action="store_true", help="Apply all pending (no confirmation)")
+    apply_p.add_argument("--dry-run", action="store_true", help="Show what would be applied without doing it")
+    apply_p.add_argument("id", nargs="?", help="Suggestion ID to apply (omit for interactive mode)")
+
     args = parser.parse_args()
 
+    if args.cmd == "list" or args.cmd is None:
+        # List pending suggestions (also default when no subcommand)
+        pending = list_pending_suggestions(limit=50)
+        if not pending:
+            print("No pending suggestions.")
+            return 0
+        print(f"\nPending suggestions ({len(pending)}):\n")
+        for s in pending:
+            print(f"  [{s.suggestion_id}] {s.category:15s} conf={s.confidence:.0%}  {s.suggestion[:80]}")
+        return 0
+
+    if args.cmd == "apply":
+        pending = list_pending_suggestions(limit=50)
+        if not pending:
+            print("No pending suggestions to apply.")
+            return 0
+
+        to_apply = pending
+        if hasattr(args, "id") and args.id:
+            to_apply = [s for s in pending if s.suggestion_id == args.id]
+            if not to_apply:
+                print(f"Suggestion {args.id!r} not found in pending list.")
+                return 1
+
+        if args.dry_run:
+            print(f"dry_run: would apply {len(to_apply)} suggestion(s):")
+            for s in to_apply:
+                print(f"  [{s.suggestion_id}] {s.category}: {s.suggestion[:100]}")
+            return 0
+
+        if not getattr(args, "all", False):
+            # Interactive review
+            applied = 0
+            for s in to_apply:
+                print(f"\n[{s.suggestion_id}] {s.category} (conf={s.confidence:.0%})")
+                print(f"  {s.suggestion}")
+                resp = input("Apply? [y/N/q]: ").strip().lower()
+                if resp == "q":
+                    break
+                if resp == "y":
+                    if apply_suggestion(s.suggestion_id):
+                        print(f"  Applied.")
+                        applied += 1
+                    else:
+                        print(f"  Apply failed (gate blocked or not found).")
+            print(f"\nApplied {applied} suggestion(s).")
+        else:
+            applied = sum(1 for s in to_apply if apply_suggestion(s.suggestion_id))
+            print(f"Applied {applied}/{len(to_apply)} suggestions.")
+        return 0
+
+    # run subcommand
     report = run_evolver(
-        outcomes_window=args.window,
-        min_outcomes=args.min_outcomes,
-        dry_run=args.dry_run,
-        notify=args.notify,
+        outcomes_window=getattr(args, "window", 50),
+        min_outcomes=getattr(args, "min_outcomes", 3),
+        dry_run=getattr(args, "dry_run", False),
+        notify=getattr(args, "notify", False),
     )
-    if args.format == "json":
+    fmt = getattr(args, "format", "text")
+    if fmt == "json":
         print(json.dumps(report.to_dict(), indent=2))
     else:
         print(report.summary())
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

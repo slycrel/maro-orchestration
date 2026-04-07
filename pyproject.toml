@@ -48,6 +48,7 @@ poe-checkpoint = "checkpoint:_cli_main"
 poe-stop = "killswitch:main"
 poe-mine = "convo_miner:main"
 poe-preflight-stats = "pre_flight:_preflight_stats_main"
+poe-evolver = "evolver:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

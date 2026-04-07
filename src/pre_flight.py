@@ -413,7 +413,28 @@ def _preflight_stats_main():
     )
     parser.add_argument("--cal-path", default=None, help="Path to preflight_calibration.jsonl")
     parser.add_argument("--json", action="store_true", help="Output raw JSON")
+    parser.add_argument("--scope-check", metavar="GOAL",
+                        help="Classify a goal's scope without running a loop (debug)")
     args = parser.parse_args()
+
+    if args.scope_check:
+        # Quick scope classification without any LLM call
+        try:
+            from planner import estimate_goal_scope
+            scope = estimate_goal_scope(args.scope_check)
+        except Exception as e:
+            print(f"Error: {e}")
+            return 1
+        print(f"scope: {scope}")
+        print(f"goal:  {args.scope_check!r}")
+        _hints = {
+            "narrow": "→ single-shot decompose (skips multi-plan comparison)",
+            "medium": "→ standard multi-plan (3 candidates, best selected)",
+            "wide":   "→ staged-pass (multi-lens pre-flight review triggered)",
+            "deep":   "→ staged-pass (milestone-aware execution likely)",
+        }
+        print(f"effect: {_hints.get(scope, '')}")
+        return 0
 
     stats = preflight_calibration_stats(cal_path=args.cal_path)
 
