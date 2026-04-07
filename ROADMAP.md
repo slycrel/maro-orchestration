@@ -1269,9 +1269,9 @@ is what's missing.
 - **ViolationType enum config** (NeMo Steal 4) — structured violation reporting with severity levels (error/warning). Medium complexity. Replaces scattered constraint checks.
 - **AIMD throttling** (NeMo Steal 5) — per-worker concurrency self-tuning. Low complexity once parallel workers are enabled.
 - **Sampler constraints for skill A/B testing** (NeMo Steal 7) — conditional skill parameterization. Medium complexity.
-- **Task ledger + verification log** (Feynman Steal 8) — structured per-step audit trail. Low complexity.
+- ~~**Task ledger + verification log** (Feynman Steal 8)~~ — **DONE** (2026-04-07). `TaskLedgerEntry`, `append_task_ledger()`, `load_task_ledger()` in memory.py. Wired into agent_loop.py after each step. 5 tests.
 - **Evidence table + claim tracing** (Feynman Steal 9) — lesson records linked to source evidence. Medium complexity.
 - **Multi-round gap analysis** (Feynman Steal 10) — targeted research round spawning on identified gaps. Medium complexity.
 - **Verifier agent** (Feynman Steal 11) — inline citation + URL verification post-skill-generation. Medium complexity.
-- **Provenance records** (Feynman Steal 12) — sidecar `.provenance.md` for skill decisions. Low complexity.
+- ~~**Provenance records** (Feynman Steal 12)~~ — **DONE** (2026-04-07). `write_skill_provenance()` + `load_skill_provenance()` in skills.py. Wired into promote and demote. 4 tests.
 
