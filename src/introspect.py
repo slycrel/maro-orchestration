@@ -47,6 +47,32 @@ FAILURE_CLASSES = {
 
 
 # ---------------------------------------------------------------------------
+# Diagnosis thresholds — named constants (not magic numbers)
+# Self-review identified these as undocumented. Centralizing enables calibration.
+# ---------------------------------------------------------------------------
+
+# decomposition_too_broad: a single step consuming this many tokens indicates
+# the step should have been broken into sub-steps before execution.
+_BROAD_STEP_TOKEN_LIMIT = 200_000
+
+# decomposition_too_broad (time-based): a step taking this long with significant
+# token consumption is a "wall clock too broad" signal.
+_BROAD_STEP_ELAPSED_MS = 120_000   # 120 seconds
+_BROAD_STEP_ELAPSED_MIN_TOKENS = 50_000  # only flag if also > 50K tokens
+
+# token_explosion: if any step costs N× the average step cost, flag it.
+# 3× catches obvious runaway steps without flagging normal step variance.
+_TOKEN_EXPLOSION_RATIO = 3.0
+
+# retry_churn: flag when the same step is attempted this many times or more.
+_RETRY_CHURN_LIMIT = 2
+
+# cost_lens: flag a step as a "major cost spike" when it exceeds this fraction
+# of total loop token spend.
+_COST_SPIKE_FRACTION = 0.90   # step consumed 90%+ of total loop tokens
+
+
+# ---------------------------------------------------------------------------
 # Data model
 # ---------------------------------------------------------------------------
 
@@ -248,17 +274,17 @@ def diagnose_loop(loop_id: str) -> LoopDiagnosis:
                 evidence.append(f"  Step {p.step_idx}: {p.text[:80]}")
             recommendation = "Review constraint tier patterns — likely overly broad for natural language steps"
 
-    # 4. Decomposition too broad: single step > 200K tokens or > 120s
+    # 4. Decomposition too broad: single step > _BROAD_STEP_TOKEN_LIMIT tokens or > _BROAD_STEP_ELAPSED_MS ms
     if failure_class == "healthy":
         for p in profiles:
-            if p.tokens > 200000:
+            if p.tokens > _BROAD_STEP_TOKEN_LIMIT:
                 failure_class = "decomposition_too_broad"
                 severity = "warning"
                 evidence.append(f"Step {p.step_idx} consumed {p.tokens} tokens ({p.elapsed_ms}ms)")
                 evidence.append(f"Step text: {p.text[:100]}")
                 recommendation = "Decompose further — cap code review at 3-5 files / ~2000 lines per step"
                 break
-            if p.elapsed_ms > 120000 and p.tokens > 50000:
+            if p.elapsed_ms > _BROAD_STEP_ELAPSED_MS and p.tokens > _BROAD_STEP_ELAPSED_MIN_TOKENS:
                 failure_class = "decomposition_too_broad"
                 severity = "warning"
                 evidence.append(f"Step {p.step_idx} took {p.elapsed_ms}ms with {p.tokens} tokens")
@@ -266,12 +292,12 @@ def diagnose_loop(loop_id: str) -> LoopDiagnosis:
                 recommendation = "Step is too large — split into smaller focused substeps"
                 break
 
-    # 5. Token explosion: > 3x growth between consecutive steps
+    # 5. Token explosion: > _TOKEN_EXPLOSION_RATIO× growth between consecutive steps
     if failure_class == "healthy" and len(profiles) >= 3:
         for i in range(1, len(profiles)):
             prev_tok = profiles[i-1].tokens
             curr_tok = profiles[i].tokens
-            if prev_tok > 1000 and curr_tok > prev_tok * 3:
+            if prev_tok > 1000 and curr_tok > prev_tok * _TOKEN_EXPLOSION_RATIO:
                 failure_class = "token_explosion"
                 severity = "warning"
                 evidence.append(
@@ -305,7 +331,7 @@ def diagnose_loop(loop_id: str) -> LoopDiagnosis:
     for t in step_texts:
         key = t[:60]
         seen[key] = seen.get(key, 0) + 1
-    churned = {k: v for k, v in seen.items() if v >= 2}
+    churned = {k: v for k, v in seen.items() if v >= _RETRY_CHURN_LIMIT}
     if churned and failure_class == "healthy":
         failure_class = "retry_churn"
         severity = "warning"
@@ -520,7 +546,7 @@ def _cost_lens(diag: LoopDiagnosis, profiles: List[StepProfile]) -> LensResult:
     top = max(profiles, key=lambda p: p.tokens)
     top_pct = (top.tokens / total * 100) if total > 0 else 0
 
-    if top_pct > 50:
+    if top_pct > 50:  # flag when a single step dominates > 50% of loop spend
         findings.append(
             f"Step {top.step_idx} consumed {top_pct:.0f}% of total tokens "
             f"({top.tokens:,} / {total:,})"
@@ -592,10 +618,10 @@ def _architecture_lens(diag: LoopDiagnosis, profiles: List[StepProfile]) -> Lens
     tokens = [p.tokens for p in profiles if p.tokens > 0]
     if tokens and len(tokens) >= 3:
         avg = sum(tokens) // len(tokens)
-        outliers = [p for p in profiles if p.tokens > avg * 3 and p.tokens > 50000]
+        outliers = [p for p in profiles if p.tokens > avg * _TOKEN_EXPLOSION_RATIO and p.tokens > 50000]
         if outliers:
             findings.append(
-                f"{len(outliers)} step(s) are 3x+ the average token cost — "
+                f"{len(outliers)} step(s) are {_TOKEN_EXPLOSION_RATIO:.0f}x+ the average token cost — "
                 f"decomposition is uneven"
             )
             if action is None:
