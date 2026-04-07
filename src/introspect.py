@@ -477,12 +477,24 @@ class LensRegistry:
                     log.debug("lens %s failed: %s", name, exc)
         return results
 
-    def run_all(self, diag: LoopDiagnosis, profiles: List[StepProfile]) -> List[LensResult]:
-        """Run all lenses (heuristic + LLM)."""
+    def run_all(self, diag: LoopDiagnosis, profiles: List[StepProfile],
+                *, deterministic: bool = False) -> List[LensResult]:
+        """Run all lenses (heuristic + LLM).
+
+        Args:
+            deterministic: If True, pass temperature=0 to LLM-based lenses that support it.
+        """
+        import inspect as _inspect
         results = []
-        for name in self._lenses:
+        for name, fn in self._lenses.items():
             try:
-                results.append(self.run(name, diag, profiles))
+                sig = _inspect.signature(fn)
+                if "deterministic" in sig.parameters:
+                    result = fn(diag, profiles, deterministic=deterministic)
+                else:
+                    result = fn(diag, profiles)
+                result.cost = self._costs.get(name, "free")
+                results.append(result)
             except Exception as exc:
                 log.debug("lens %s failed: %s", name, exc)
         return results
@@ -717,11 +729,19 @@ def _execution_lens(diag: LoopDiagnosis, profiles: List[StepProfile]) -> LensRes
     )
 
 
-def _quality_lens(diag: LoopDiagnosis, profiles: List[StepProfile]) -> LensResult:
+def _quality_lens(
+    diag: LoopDiagnosis,
+    profiles: List[StepProfile],
+    *,
+    deterministic: bool = False,
+) -> LensResult:
     """LLM-backed: does the output actually answer the goal? Uses reviewer persona.
 
     Only runs when explicitly requested (include_llm=True). Uses the cheapest
     model available to minimize token cost.
+
+    Args:
+        deterministic: If True, use temperature=0 for reproducible outputs (useful for testing).
     """
     findings: List[str] = []
     action = None
@@ -750,10 +770,11 @@ def _quality_lens(diag: LoopDiagnosis, profiles: List[StepProfile]) -> LensResul
             "3. What's the single most important gap?\n"
             "Answer in 3 short bullet points."
         )
+        _temp = 0.0 if deterministic else 0.2
         resp = adapter.complete(
             [LLMMessage("user", prompt)],
             max_tokens=300,
-            temperature=0.2,
+            temperature=_temp,
         )
         if resp.content and len(resp.content) > 20:
             findings.append(resp.content.strip())
@@ -877,6 +898,7 @@ def run_lenses(
     profiles: List[StepProfile],
     *,
     include_llm: bool = False,
+    deterministic: bool = False,
 ) -> List[LensResult]:
     """Run all applicable lenses on a diagnosis.
 
@@ -884,12 +906,13 @@ def run_lenses(
         diag: The LoopDiagnosis from diagnose_loop()
         profiles: Step profiles from the same loop
         include_llm: If True, also run LLM-based lenses (costs tokens)
+        deterministic: If True, use temperature=0 for LLM-based lenses (useful for testing)
 
     Returns list of LensResult, one per lens that had findings.
     """
     registry = get_lens_registry()
     if include_llm:
-        results = registry.run_all(diag, profiles)
+        results = registry.run_all(diag, profiles, deterministic=deterministic)
     else:
         results = registry.run_heuristic(diag, profiles)
 

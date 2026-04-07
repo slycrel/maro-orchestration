@@ -142,7 +142,7 @@ Findings from Sonnet seeded run (full code read). Vetted; hallucinations discard
 - [ ] **No WorkerResult schema validation** — `dispatch_worker` returns WorkerResult; director doesn't validate it matches the input Ticket schema. Workers could silently ignore context. Low priority (workers work in practice), but a spot-check assertion would help.
 - [x] **Prefix combination validation** — added log.warning in `_apply_prefixes` when conflicting model tiers detected (e.g. effort:high + effort:low). (2026-04-07)
 - [x] **Lesson staleness detection** — `load_tiered_lessons()` now accepts `max_age_days` parameter; lessons older than N days skipped at load time. 2 tests. (2026-04-07)
-- [ ] **Introspection lens determinism** — `run_lenses()` has no deterministic mode. Hard to test lens quality or verify diagnosis→recovery mappings. Add `deterministic=True` flag that uses temperature=0. Medium complexity.
+- [x] **Introspection lens determinism** — `run_lenses(deterministic=True)` uses `temperature=0` for LLM-based lenses. `LensRegistry.run_all()` uses `inspect.signature` to pass kwarg only to supporting lenses. `_quality_lens()` accepts `deterministic` kwarg. (2026-04-06)
 - [x] **LLM schema hallucination crash** — when Haiku returned a JSON schema dict instead of string for `summary` field, `step_summary[:200]` raised `KeyError: slice(None,200,None)`. **Fixed 2026-04-07**: coerce summary to str in `step_exec.py` + defensive guard in `agent_loop.py`. (df8375b)
 
 ## Self-Review Quality (from 2026-04-06 blind adversarial run)
