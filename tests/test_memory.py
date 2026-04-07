@@ -859,3 +859,108 @@ class TestLoadTieredLessonsMaxAge:
 
         results = load_tiered_lessons("long", max_age_days=None)
         assert len(results) == 1
+
+
+class TestQueryLessons:
+    """Tests for query_lessons() — RAG retrieval API for workers."""
+
+    def _write_lessons(self, path: Path, lessons) -> None:
+        import json
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w") as f:
+            for l in lessons:
+                from dataclasses import asdict as _asdict
+                f.write(json.dumps(_asdict(l)) + "\n")
+
+    def test_query_returns_ranked_lessons(self, monkeypatch, tmp_path):
+        """query_lessons returns lessons ranked by relevance."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        from memory import query_lessons, _tiered_lessons_path, MemoryTier, TieredLesson
+        import datetime as dt
+
+        today = dt.date.today().isoformat()
+
+        lessons = [
+            TieredLesson(
+                lesson_id="l1", lesson="use web search for research tasks",
+                tier=MemoryTier.LONG, task_type="research", outcome="done",
+                source_goal="g1", confidence=0.9, score=0.9, last_reinforced=today,
+            ),
+            TieredLesson(
+                lesson_id="l2", lesson="avoid running build commands as root",
+                tier=MemoryTier.LONG, task_type="build", outcome="done",
+                source_goal="g2", confidence=0.8, score=0.8, last_reinforced=today,
+            ),
+            TieredLesson(
+                lesson_id="l3", lesson="research tasks benefit from multiple sources",
+                tier=MemoryTier.MEDIUM, task_type="research", outcome="done",
+                source_goal="g3", confidence=0.7, score=0.7, last_reinforced=today,
+            ),
+        ]
+        for tier in ["long", "medium"]:
+            path = _tiered_lessons_path(tier)
+            tier_lessons = [l for l in lessons if l.tier == tier]
+            if tier_lessons:
+                self._write_lessons(path, tier_lessons)
+
+        results = query_lessons("find research sources for goal", n=3)
+        assert len(results) >= 1
+        # Research-related lessons should rank higher than build lesson
+        ids = [l.lesson_id for l in results]
+        assert "l2" not in ids[:1]  # build lesson not first for research query
+
+    def test_query_respects_n_limit(self, monkeypatch, tmp_path):
+        """query_lessons returns at most n results."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        from memory import query_lessons, _tiered_lessons_path, MemoryTier, TieredLesson
+        import datetime as dt
+
+        today = dt.date.today().isoformat()
+        lessons = [
+            TieredLesson(
+                lesson_id=f"l{i}", lesson=f"lesson {i} about research",
+                tier=MemoryTier.LONG, task_type="general", outcome="done",
+                source_goal="g", confidence=0.9, score=0.9, last_reinforced=today,
+            )
+            for i in range(10)
+        ]
+        path = _tiered_lessons_path("long")
+        self._write_lessons(path, lessons)
+
+        results = query_lessons("research task", n=3)
+        assert len(results) <= 3
+
+    def test_query_empty_store_returns_empty(self, monkeypatch, tmp_path):
+        """query_lessons returns [] when no lessons exist."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        from memory import query_lessons
+
+        results = query_lessons("any query", n=5)
+        assert results == []
+
+    def test_query_filters_by_task_type(self, monkeypatch, tmp_path):
+        """query_lessons with task_type=X excludes non-X lessons."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        from memory import query_lessons, _tiered_lessons_path, MemoryTier, TieredLesson
+        import datetime as dt
+
+        today = dt.date.today().isoformat()
+        lessons = [
+            TieredLesson(
+                lesson_id="r1", lesson="research tip",
+                tier=MemoryTier.LONG, task_type="research", outcome="done",
+                source_goal="g", confidence=0.9, score=0.9, last_reinforced=today,
+            ),
+            TieredLesson(
+                lesson_id="b1", lesson="build tip",
+                tier=MemoryTier.LONG, task_type="build", outcome="done",
+                source_goal="g", confidence=0.9, score=0.9, last_reinforced=today,
+            ),
+        ]
+        path = _tiered_lessons_path("long")
+        self._write_lessons(path, lessons)
+
+        results = query_lessons("tip", n=5, task_type="research")
+        ids = [l.lesson_id for l in results]
+        assert "b1" not in ids
+        assert "r1" in ids

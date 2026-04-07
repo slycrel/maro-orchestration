@@ -344,19 +344,119 @@ def evaluate_suggestion(suggestion: Any) -> StrategyFitnessReport:
 
 
 # ---------------------------------------------------------------------------
-# CLI
+# CLI — poe-replay
 # ---------------------------------------------------------------------------
+
+def main() -> int:  # noqa: C901
+    """CLI entry point: poe-replay.
+
+    Usage:
+        poe-replay "research Polymarket trends"
+        poe-replay "fix build failures" --compare
+        poe-replay --outcome-id ab12cd34
+        poe-replay --outcome-id ab12cd34 --compare
+
+    --compare mode runs evaluation twice: once without lessons injected into
+    the strategy text, once with lessons prepended. Shows the fitness delta
+    so you can quantify lesson injection value.
+    """
+    import argparse
+    import sys
+
+    parser = argparse.ArgumentParser(
+        prog="poe-replay",
+        description="Replay-based fitness oracle for goals/strategies/outcomes",
+    )
+    parser.add_argument("goal", nargs="*", help="Goal or strategy text to evaluate")
+    parser.add_argument(
+        "--outcome-id", "-o",
+        help="Look up a past outcome by outcome_id and evaluate its goal",
+    )
+    parser.add_argument(
+        "--compare", "-c",
+        action="store_true",
+        help="Compare fitness with vs. without lesson injection",
+    )
+    parser.add_argument(
+        "--top", "-n",
+        type=int,
+        default=5,
+        help="Number of similar outcomes to display (default: 5)",
+    )
+    args = parser.parse_args()
+
+    # Resolve strategy text
+    strategy_text = ""
+    if args.outcome_id:
+        try:
+            from memory import load_outcomes
+            outcomes_pool = load_outcomes(limit=500)
+            match = next(
+                (o for o in outcomes_pool if o.outcome_id == args.outcome_id),
+                None,
+            )
+            if match is None:
+                print(f"outcome_id {args.outcome_id!r} not found in outcomes.jsonl", file=sys.stderr)
+                return 1
+            strategy_text = match.goal
+            if match.summary:
+                strategy_text += " " + match.summary
+            print(f"Loaded outcome: [{match.status}] {match.goal!r}")
+        except Exception as exc:
+            print(f"Failed to load outcome: {exc}", file=sys.stderr)
+            return 1
+    elif args.goal:
+        strategy_text = " ".join(args.goal)
+    else:
+        parser.print_help()
+        return 1
+
+    # Baseline evaluation
+    baseline = evaluate_strategy(strategy_text)
+    print(f"\n{'='*60}")
+    print(f"Strategy: {strategy_text[:80]!r}")
+    print(f"{'='*60}")
+    print(baseline.summary())
+    print(f"\nTop {args.top} similar outcomes:")
+    for s in baseline.similar_outcomes[:args.top]:
+        print(f"  [{s.status}] sim={s.similarity:.3f} — {s.goal[:60]}")
+
+    if args.compare:
+        # Inject lessons and re-evaluate
+        try:
+            from memory import inject_tiered_lessons
+            task_type = "general"
+            lessons_text = inject_tiered_lessons(task_type, strategy_text)
+        except Exception as exc:
+            print(f"\n[compare] failed to load lessons: {exc}", file=sys.stderr)
+            return 0
+
+        if not lessons_text:
+            print("\n[compare] no lessons available — comparison not possible")
+            return 0
+
+        augmented = f"{strategy_text}\n\n{lessons_text}"
+        augmented_report = evaluate_strategy(augmented)
+
+        delta = augmented_report.fitness_score - baseline.fitness_score
+        delta_str = f"+{delta:.3f}" if delta >= 0 else f"{delta:.3f}"
+
+        print(f"\n{'='*60}")
+        print(f"With lessons injected:")
+        print(f"{'='*60}")
+        print(f"  fitness:  {augmented_report.fitness_score:.3f}  (baseline: {baseline.fitness_score:.3f}, delta: {delta_str})")
+        print(f"  verdict:  {augmented_report.verdict}  (baseline: {baseline.verdict})")
+        print(f"  confidence: {augmented_report.confidence:.3f}  (baseline: {baseline.confidence:.3f})")
+        if delta > 0.05:
+            print("  → lessons IMPROVE predicted fitness")
+        elif delta < -0.05:
+            print("  → lessons DEGRADE predicted fitness (inspect lesson quality)")
+        else:
+            print("  → no significant fitness change from lesson injection")
+
+    return 0
+
 
 if __name__ == "__main__":
     import sys
-
-    if len(sys.argv) < 2:
-        print("Usage: python strategy_evaluator.py <strategy text>", file=sys.stderr)
-        sys.exit(1)
-
-    strategy_text = " ".join(sys.argv[1:])
-    report = evaluate_strategy(strategy_text)
-    print(report.summary())
-    print(f"\nTop similar outcomes:")
-    for s in report.similar_outcomes[:5]:
-        print(f"  [{s.status}] sim={s.similarity:.3f} — {s.goal}")
+    sys.exit(main())

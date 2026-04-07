@@ -434,6 +434,18 @@ def run_director(
         total_tokens_in += result.tokens_in
         total_tokens_out += result.tokens_out
 
+        # Spot-check: worker result should reference the requested worker_type
+        if result.worker_type != ticket.worker_type:
+            log.warning(
+                "WorkerResult.worker_type mismatch: expected %r, got %r for ticket=%s",
+                ticket.worker_type, result.worker_type, ticket.ticket_id,
+            )
+        if not result.ticket:
+            log.warning(
+                "WorkerResult.ticket is empty for ticket=%s worker=%s",
+                ticket.ticket_id, ticket.worker_type,
+            )
+
         # Review worker output
         review, rev_tokens = _review_worker_output(
             directive=directive,

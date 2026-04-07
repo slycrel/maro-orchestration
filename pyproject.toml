@@ -49,6 +49,7 @@ poe-stop = "killswitch:main"
 poe-mine = "convo_miner:main"
 poe-preflight-stats = "pre_flight:_preflight_stats_main"
 poe-evolver = "evolver:main"
+poe-replay = "strategy_evaluator:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

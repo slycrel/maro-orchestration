@@ -449,3 +449,91 @@ class TestStrategyFitnessReportSummary:
         s = report.summary()
         assert "UNCERTAIN" in s
         assert "note:" not in s
+
+
+class TestReplayCLI:
+    """Tests for the poe-replay CLI (main() function)."""
+
+    def _make_outcome(self, outcome_id, goal, status, summary=""):
+        from memory import Outcome
+        return Outcome(
+            outcome_id=outcome_id,
+            goal=goal,
+            task_type="research",
+            status=status,
+            summary=summary,
+            lessons=[],
+        )
+
+    def test_main_no_args_prints_help(self, capsys):
+        from strategy_evaluator import main
+        import sys
+        sys.argv = ["poe-replay"]
+        rc = main()
+        captured = capsys.readouterr()
+        assert rc == 1
+        assert "usage" in captured.out.lower() or "usage" in captured.err.lower()
+
+    def test_main_basic_evaluation(self, monkeypatch, capsys, tmp_path):
+        """main() evaluates a goal and prints fitness report."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        import sys
+        sys.argv = ["poe-replay", "research polymarket trends"]
+        from strategy_evaluator import main
+        rc = main()
+        captured = capsys.readouterr()
+        assert rc == 0
+        assert "fitness" in captured.out.lower() or "UNCERTAIN" in captured.out or "PASS" in captured.out
+
+    def test_main_outcome_id_not_found(self, monkeypatch, capsys, tmp_path):
+        """--outcome-id with unknown ID returns exit code 1."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        import sys
+        sys.argv = ["poe-replay", "--outcome-id", "deadbeef"]
+        from strategy_evaluator import main
+        rc = main()
+        assert rc == 1
+        captured = capsys.readouterr()
+        assert "not found" in captured.err
+
+    def test_main_outcome_id_found(self, monkeypatch, capsys, tmp_path):
+        """--outcome-id finds matching outcome and evaluates its goal."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        import json
+        from dataclasses import asdict
+        from memory import Outcome
+        from pathlib import Path
+
+        outcome = Outcome(
+            outcome_id="test1234",
+            goal="research AI research papers",
+            task_type="research",
+            status="done",
+            summary="found 5 papers",
+            lessons=["check arxiv first"],
+        )
+        from memory import _memory_dir
+        mdir = _memory_dir()
+        mdir.mkdir(parents=True, exist_ok=True)
+        outcomes_file = mdir / "outcomes.jsonl"
+        outcomes_file.write_text(json.dumps(asdict(outcome)) + "\n")
+
+        import sys
+        sys.argv = ["poe-replay", "--outcome-id", "test1234"]
+        from strategy_evaluator import main
+        rc = main()
+        captured = capsys.readouterr()
+        assert rc == 0
+        assert "test1234" in captured.out or "AI research" in captured.out
+
+    def test_main_compare_mode(self, monkeypatch, capsys, tmp_path):
+        """--compare mode prints delta between baseline and lesson-augmented fitness."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        import sys
+        sys.argv = ["poe-replay", "research polymarket trends", "--compare"]
+        from strategy_evaluator import main
+        rc = main()
+        captured = capsys.readouterr()
+        assert rc == 0
+        # Should show comparison output (either delta or "no lessons available")
+        assert "compare" in captured.out.lower() or "lesson" in captured.out.lower() or "baseline" in captured.out.lower()

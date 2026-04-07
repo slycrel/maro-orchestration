@@ -1637,6 +1637,51 @@ def inject_tiered_lessons(
     return "## Tiered Lessons\n\n" + "\n".join(parts)
 
 
+def query_lessons(
+    query: str,
+    *,
+    n: int = 3,
+    task_type: Optional[str] = None,
+    tiers: Optional[List[str]] = None,
+    min_score: float = 0.0,
+) -> "List[TieredLesson]":
+    """Retrieve the top-N lessons most relevant to `query` via hybrid retrieval.
+
+    Workers can call this directly in step context to get relevant past insights
+    without burning tokens on full lesson injection.
+
+    Args:
+        query:     Goal text or step description to match against.
+        n:         Maximum number of lessons to return.
+        task_type: If set, only search lessons for this task type.
+        tiers:     Which tiers to search. Default: [LONG, MEDIUM].
+        min_score: Minimum lesson confidence/score to include.
+
+    Returns:
+        List of TieredLesson objects (most relevant first).
+    """
+    if tiers is None:
+        tiers = [MemoryTier.LONG, MemoryTier.MEDIUM]
+
+    _ranker = _hybrid_rank if _USE_HYBRID else _tfidf_rank
+
+    candidates: "List[TieredLesson]" = []
+    for tier in tiers:
+        pool = load_tiered_lessons(
+            tier=tier,
+            task_type=task_type,
+            min_score=min_score,
+            limit=n * 5,
+        )
+        candidates.extend(pool)
+
+    if not candidates:
+        return []
+
+    ranked = _ranker(query, candidates, top_k=n)
+    return ranked[:n]
+
+
 def _increment_times_applied(
     lesson_ids: List[tuple],
     *,
