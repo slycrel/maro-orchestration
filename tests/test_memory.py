@@ -1430,3 +1430,92 @@ class TestConfidenceTierStandardization:
         target = next(l for l in loaded if l.lesson_id == tl.lesson_id)
         assert target.sessions_validated >= 3
         assert target.confidence >= 0.9
+
+
+class TestVerificationOutcomes:
+    """Tests for Feynman F4 — accumulating verifier memory."""
+
+    def test_record_verification_writes_to_disk(self, monkeypatch, tmp_path):
+        """record_verification() writes VerificationOutcome to jsonl."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        from memory import record_verification, load_verification_outcomes
+
+        vo = record_verification(
+            claim_type="alignment",
+            verdict="pass",
+            source="llm",
+            confidence=0.85,
+            goal="research polymarket",
+            outcome_id="o1",
+        )
+        assert vo.claim_type == "alignment"
+        assert vo.verdict == "pass"
+        assert vo.confidence == 0.85
+
+        loaded = load_verification_outcomes()
+        assert len(loaded) == 1
+        assert loaded[0].verification_id == vo.verification_id
+
+    def test_load_verification_outcomes_filters_by_claim_type(self, monkeypatch, tmp_path):
+        """load_verification_outcomes(claim_type=...) filters correctly."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        from memory import record_verification, load_verification_outcomes
+
+        record_verification("alignment", "pass", "llm", 0.8)
+        record_verification("quality", "fail", "llm", 0.6)
+        record_verification("alignment", "uncertain", "heuristic", 0.5)
+
+        alignment = load_verification_outcomes(claim_type="alignment")
+        assert len(alignment) == 2
+        assert all(v.claim_type == "alignment" for v in alignment)
+
+    def test_load_verification_outcomes_newest_first(self, monkeypatch, tmp_path):
+        """load_verification_outcomes returns newest records first."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        from memory import record_verification, load_verification_outcomes
+
+        v1 = record_verification("quality", "pass", "llm", 0.9)
+        v2 = record_verification("quality", "fail", "heuristic", 0.4)
+
+        loaded = load_verification_outcomes()
+        # Newest (v2) should be first
+        assert loaded[0].verification_id == v2.verification_id
+
+    def test_verification_accuracy_computes_rates(self, monkeypatch, tmp_path):
+        """verification_accuracy() returns correct pass/fail rates."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        from memory import record_verification, verification_accuracy
+
+        record_verification("alignment", "pass", "llm", 0.9)
+        record_verification("alignment", "pass", "llm", 0.85)
+        record_verification("alignment", "fail", "llm", 0.3)
+
+        stats = verification_accuracy(claim_type="alignment")
+        assert stats["total"] == 3
+        assert abs(stats["pass_rate"] - 2/3) < 0.01
+        assert abs(stats["fail_rate"] - 1/3) < 0.01
+        assert stats["avg_confidence"] > 0.6
+
+    def test_verification_accuracy_empty_returns_zeros(self, monkeypatch, tmp_path):
+        """verification_accuracy() on empty store returns zero rates."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        from memory import verification_accuracy
+
+        stats = verification_accuracy()
+        assert stats["total"] == 0
+        assert stats["pass_rate"] == 0.0
+
+    def test_verification_outcome_dataclass_fields(self):
+        """VerificationOutcome has expected fields."""
+        from memory import VerificationOutcome
+
+        vo = VerificationOutcome(
+            verification_id="abc123",
+            claim_type="quality",
+            verdict="uncertain",
+            source="lesson",
+            confidence=0.65,
+        )
+        assert vo.goal == ""
+        assert vo.outcome_id == ""
+        assert vo.notes == ""

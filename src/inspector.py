@@ -653,6 +653,19 @@ def check_alignment(session: Any, adapter=None) -> AlignmentResult:
             score = safe_float(data.get("score"), default=0.5, min_val=0.0, max_val=1.0)
             aligned = bool(data.get("aligned", score >= 0.6))
             gaps = [str(g) for g in data.get("gaps", [])]
+            # F4: Record verifier outcome for accumulating verifier memory
+            try:
+                from memory import record_verification
+                record_verification(
+                    claim_type="alignment",
+                    verdict="pass" if aligned else "fail",
+                    source="llm",
+                    confidence=score,
+                    goal=goal,
+                    outcome_id=session_id,
+                )
+            except Exception:
+                pass
             return AlignmentResult(
                 session_id=session_id, mission_goal=goal, work_summary=summary,
                 aligned=aligned, alignment_score=score, gaps=gaps,

@@ -2593,3 +2593,140 @@ def inject_decisions(goal: str, domain: str = "") -> str:
         alts = f" Alternatives considered: {', '.join(d.alternatives)}." if d.alternatives else ""
         lines.append(f"- **{d.decision}** — {d.rationale}{alts}")
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Feynman F4: Accumulating verifier memory
+# ---------------------------------------------------------------------------
+
+@dataclass
+class VerificationOutcome:
+    """Record of a claim verification attempt — builds over time for calibration.
+
+    Phase 59 Feynman F4: tracking verifier outputs enables post-hoc accuracy
+    analysis and per-claim-type confidence threshold calibration. Each time
+    the inspector or adversarial lens assesses a claim, we record it.
+    """
+    verification_id: str
+    claim_type: str   # "quality" | "alignment" | "step_correctness" | "adversarial" | ...
+    verdict: str      # "pass" | "fail" | "uncertain"
+    source: str       # "llm" | "heuristic" | "lesson" | "standing_rule"
+    confidence: float  # 0.0–1.0
+    goal: str = ""
+    outcome_id: str = ""
+    recorded_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    notes: str = ""   # optional free-form context
+
+
+def _verification_outcomes_path() -> Path:
+    return _memory_dir() / "verification_outcomes.jsonl"
+
+
+def record_verification(
+    claim_type: str,
+    verdict: str,
+    source: str,
+    confidence: float,
+    *,
+    goal: str = "",
+    outcome_id: str = "",
+    notes: str = "",
+) -> VerificationOutcome:
+    """Record a verification outcome to disk.
+
+    Phase 59 Feynman F4: builds the accumulating verifier memory.
+    Called by inspector.check_alignment(), adversarial lens, and any
+    other verification path. Over time, enables per-claim-type calibration.
+
+    Args:
+        claim_type:  Category of claim verified ("quality" | "alignment" | ...).
+        verdict:     Verifier's verdict ("pass" | "fail" | "uncertain").
+        source:      What answered the query ("llm" | "heuristic" | "lesson" | "standing_rule").
+        confidence:  Verifier's confidence (0.0–1.0).
+        goal:        Original goal text (for traceability).
+        outcome_id:  Outcome/loop_id if available.
+        notes:       Free-form context.
+    """
+    import uuid
+    vo = VerificationOutcome(
+        verification_id=str(uuid.uuid4())[:8],
+        claim_type=claim_type,
+        verdict=verdict,
+        source=source,
+        confidence=confidence,
+        goal=goal[:200] if goal else "",
+        outcome_id=outcome_id,
+        notes=notes[:200] if notes else "",
+    )
+    path = _verification_outcomes_path()
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(asdict(vo)) + "\n")
+    return vo
+
+
+def load_verification_outcomes(
+    claim_type: Optional[str] = None,
+    *,
+    limit: int = 100,
+    source: Optional[str] = None,
+) -> List[VerificationOutcome]:
+    """Load verifier history from disk.
+
+    Phase 59 Feynman F4: enables analysis of verifier accuracy trends.
+
+    Args:
+        claim_type: If set, only return outcomes for this claim type.
+        limit:      Maximum number of records to return (newest first).
+        source:     If set, only return outcomes from this source tier.
+    """
+    path = _verification_outcomes_path()
+    if not path.exists():
+        return []
+
+    results: List[VerificationOutcome] = []
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                d = json.loads(line)
+                vo = VerificationOutcome(**{
+                    k: d[k] for k in VerificationOutcome.__dataclass_fields__ if k in d
+                })
+                if claim_type and vo.claim_type != claim_type:
+                    continue
+                if source and vo.source != source:
+                    continue
+                results.append(vo)
+            except Exception:
+                continue
+    except Exception:
+        pass
+
+    results.reverse()  # newest first
+    return results[:limit]
+
+
+def verification_accuracy(claim_type: Optional[str] = None) -> Dict[str, float]:
+    """Compute per-verdict distribution for verifier calibration.
+
+    Returns dict: {"pass_rate": float, "fail_rate": float, "uncertain_rate": float,
+                   "total": int, "avg_confidence": float}
+    """
+    outcomes = load_verification_outcomes(claim_type=claim_type, limit=500)
+    if not outcomes:
+        return {"pass_rate": 0.0, "fail_rate": 0.0, "uncertain_rate": 0.0,
+                "total": 0, "avg_confidence": 0.0}
+    total = len(outcomes)
+    passes = sum(1 for o in outcomes if o.verdict == "pass")
+    fails = sum(1 for o in outcomes if o.verdict == "fail")
+    uncertain = sum(1 for o in outcomes if o.verdict == "uncertain")
+    avg_conf = sum(o.confidence for o in outcomes) / total
+    return {
+        "pass_rate": passes / total,
+        "fail_rate": fails / total,
+        "uncertain_rate": uncertain / total,
+        "total": total,
+        "avg_confidence": avg_conf,
+    }
