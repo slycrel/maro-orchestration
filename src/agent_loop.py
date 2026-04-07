@@ -2007,8 +2007,12 @@ def run_agent_loop(
                 run_agent_loop._cost_warned = True  # type: ignore[attr-defined]
 
         step_status = outcome["status"]
-        step_result = outcome.get("result", "")
-        step_summary = outcome.get("summary", step_text)
+        _raw_result = outcome.get("result", "")
+        # Guard: LLM can return a JSON schema object instead of a string value for
+        # result/summary fields. If non-string, convert to empty string (result) or step_text (summary).
+        step_result = _raw_result if isinstance(_raw_result, str) else str(_raw_result) if _raw_result else ""
+        _raw_summary = outcome.get("summary", step_text)
+        step_summary = _raw_summary if isinstance(_raw_summary, str) else step_text
 
         # Ralph verify loop — check that a "done" step actually addressed its goal.
         # Triggered by "ralph:" or "verify:" prefix in goal text, or ralph_verify=True kwarg

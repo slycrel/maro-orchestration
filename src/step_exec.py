@@ -773,10 +773,12 @@ def execute_step(
                 _result_text = "[RAW_OUTPUT_DETECTED] " + _result_text
             log.info("step %d DONE (complete_step) tokens=%d elapsed=%.1fs confidence=%s",
                      step_num, _tok, time.monotonic() - _step_t0, _confidence or "unset")
+            _raw_summary = tc.arguments.get("summary", step_text)
+            _summary_str = _raw_summary if isinstance(_raw_summary, str) else step_text
             _outcome = {
                 "status": "done",
                 "result": _result_text,
-                "summary": tc.arguments.get("summary", step_text),
+                "summary": _summary_str,
                 "tokens_in": resp.input_tokens,
                 "tokens_out": resp.output_tokens,
             }
