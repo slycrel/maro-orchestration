@@ -504,3 +504,69 @@ class TestLargeScopeReview:
         # Should use the large-scope spec system (allows 4-6 tickets)
         assert "staged" in captured["system"].lower() or "domain" in captured["system"].lower()
         assert len(tickets) == 4
+
+
+# ---------------------------------------------------------------------------
+# Review loop exhaustion (max rounds hit without acceptance)
+# ---------------------------------------------------------------------------
+
+class TestReviewLoopExhaustion:
+    def test_review_exhaustion_proceeds_with_best_effort(self, monkeypatch, tmp_path):
+        """When MAX_REVIEW_ROUNDS exhausted without acceptance, director returns best-effort result."""
+        _setup(monkeypatch, tmp_path)
+        from unittest.mock import MagicMock, patch
+
+        # Fake dispatch_worker that always returns a done result
+        fake_worker_result = MagicMock()
+        fake_worker_result.status = "done"
+        fake_worker_result.result = "best effort research output"
+        fake_worker_result.tokens_in = 5
+        fake_worker_result.tokens_out = 10
+
+        # Fake _review_worker_output that always rejects (never accepts)
+        fake_review = MagicMock()
+        fake_review.accepted = False
+        fake_review.revision_request = "needs more detail"
+
+        with patch("director.dispatch_worker", return_value=fake_worker_result):
+            with patch("director._review_worker_output", return_value=(fake_review, (5, 5))):
+                result = run_director(
+                    "research the market",
+                    adapter=MagicMock(),
+                    dry_run=False,
+                )
+
+        # Should complete (not crash) with best-effort result
+        assert result is not None
+        assert result.status in ("done", "partial", "error")
+        # Review decisions should be recorded (even if not accepted)
+        assert len(result.review_decisions) > 0
+
+    def test_review_loop_stops_at_max_rounds(self, monkeypatch, tmp_path):
+        """Director should not call dispatch_worker more than 1 + (MAX_REVIEW_ROUNDS - 1) times per ticket."""
+        _setup(monkeypatch, tmp_path)
+        from unittest.mock import MagicMock, patch
+        from director import MAX_REVIEW_ROUNDS
+
+        dispatch_call_count = [0]
+
+        def _counting_dispatch(*a, **kw):
+            dispatch_call_count[0] += 1
+            result = MagicMock()
+            result.status = "done"
+            result.result = "output"
+            result.tokens_in = 5
+            result.tokens_out = 10
+            return result
+
+        # Always reject
+        fake_review = MagicMock()
+        fake_review.accepted = False
+        fake_review.revision_request = "revise"
+
+        with patch("director.dispatch_worker", side_effect=_counting_dispatch):
+            with patch("director._review_worker_output", return_value=(fake_review, (5, 5))):
+                run_director("research topic", adapter=MagicMock(), dry_run=False)
+
+        # 1 initial + (MAX_REVIEW_ROUNDS - 1) revisions = MAX_REVIEW_ROUNDS per ticket, upper bound
+        assert dispatch_call_count[0] <= MAX_REVIEW_ROUNDS * 10

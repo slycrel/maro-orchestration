@@ -479,6 +479,12 @@ def run_director(
                 review_decisions.append(review)
                 if review.accepted:
                     break
+            else:
+                # Exhausted MAX_REVIEW_ROUNDS without acceptance.
+                # Proceed with best-effort (last revision) rather than blocking.
+                log.warning("director review loop exhausted %d rounds for ticket=%s — using best-effort result",
+                            MAX_REVIEW_ROUNDS, ticket.ticket_id)
+                _log(f"review exhausted ({MAX_REVIEW_ROUNDS} rounds) — best-effort result accepted")
 
         worker_results.append(result)
         if result.status == "done" and result.result:
