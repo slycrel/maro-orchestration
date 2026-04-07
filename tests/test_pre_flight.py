@@ -311,3 +311,88 @@ class TestMultiLensReview:
         # has_concerns=True if scope=wide OR any warn flag
         if any(f.severity == "warn" for f in review.flags):
             assert review.has_concerns is True
+
+
+# ---------------------------------------------------------------------------
+# preflight_calibration_stats
+# ---------------------------------------------------------------------------
+
+from pre_flight import preflight_calibration_stats
+
+
+class TestPreflightCalibrationStats:
+    def test_no_file_returns_zero_total(self, tmp_path):
+        result = preflight_calibration_stats(cal_path=tmp_path / "nonexistent.jsonl")
+        assert result["total"] == 0
+
+    def test_empty_file_returns_zero_total(self, tmp_path):
+        cal = tmp_path / "preflight_calibration.jsonl"
+        cal.write_text("")
+        result = preflight_calibration_stats(cal_path=cal)
+        assert result["total"] == 0
+
+    def test_single_true_positive_entry(self, tmp_path):
+        cal = tmp_path / "preflight_calibration.jsonl"
+        entry = {
+            "ts": "2026-04-06T00:00:00Z",
+            "scope_predicted": "wide",
+            "actual_status": "stuck",
+            "true_positive": True,
+            "false_positive": False,
+            "false_negative": False,
+            "true_negative": False,
+        }
+        cal.write_text(json.dumps(entry) + "\n")
+        result = preflight_calibration_stats(cal_path=cal)
+        assert result["total"] == 1
+        assert result["true_positive"] == 1
+        assert result["false_positive"] == 0
+        assert result["precision"] == 1.0
+        assert result["recall"] == 1.0
+
+    def test_false_positive_classification(self, tmp_path):
+        """scope=wide + actual done = false positive."""
+        cal = tmp_path / "preflight_calibration.jsonl"
+        entry = {
+            "ts": "2026-04-06T00:00:00Z",
+            "scope_predicted": "wide",
+            "actual_status": "done",
+            "true_positive": False,
+            "false_positive": True,
+            "false_negative": False,
+            "true_negative": False,
+        }
+        cal.write_text(json.dumps(entry) + "\n")
+        result = preflight_calibration_stats(cal_path=cal)
+        assert result["false_positive"] == 1
+        assert result["precision"] == 0.0  # tp=0, fp=1
+
+    def test_scope_breakdown_populated(self, tmp_path):
+        cal = tmp_path / "preflight_calibration.jsonl"
+        entries = [
+            {"scope_predicted": "wide", "actual_status": "stuck",
+             "true_positive": True, "false_positive": False,
+             "false_negative": False, "true_negative": False},
+            {"scope_predicted": "narrow", "actual_status": "done",
+             "true_positive": False, "false_positive": False,
+             "false_negative": False, "true_negative": True},
+        ]
+        cal.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
+        result = preflight_calibration_stats(cal_path=cal)
+        assert result["total"] == 2
+        assert "wide" in result["scope_breakdown"]
+        assert "narrow" in result["scope_breakdown"]
+        assert result["scope_breakdown"]["wide"]["stuck"] == 1
+        assert result["scope_breakdown"]["narrow"]["done"] == 1
+
+    def test_skips_malformed_lines(self, tmp_path):
+        """Malformed JSON lines are skipped gracefully."""
+        cal = tmp_path / "preflight_calibration.jsonl"
+        good_entry = json.dumps({
+            "scope_predicted": "medium", "actual_status": "done",
+            "true_positive": False, "false_positive": False,
+            "false_negative": False, "true_negative": True,
+        })
+        cal.write_text("not-json\n" + good_entry + "\n{broken\n")
+        result = preflight_calibration_stats(cal_path=cal)
+        assert result["total"] == 1  # only the valid entry

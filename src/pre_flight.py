@@ -335,3 +335,114 @@ def multi_lens_review(
         print(f"[poe] pre-flight multi-lens: {review.summary()}", file=sys.stderr, flush=True)
 
     return review
+
+
+# ---------------------------------------------------------------------------
+# Calibration stats CLI (poe-preflight-stats)
+# ---------------------------------------------------------------------------
+
+def preflight_calibration_stats(cal_path=None) -> dict:
+    """Read memory/preflight_calibration.jsonl and return accuracy metrics.
+
+    Returns dict with: total, true_positive, false_positive, false_negative,
+    true_negative, precision, recall, scope_breakdown.
+    """
+    import json
+    from pathlib import Path
+
+    if cal_path is None:
+        try:
+            from orch_items import memory_dir
+            cal_path = memory_dir() / "preflight_calibration.jsonl"
+        except Exception:
+            return {"error": "cannot locate memory_dir"}
+
+    cal_path = Path(cal_path)
+    if not cal_path.exists():
+        return {"total": 0, "note": "no calibration data yet"}
+
+    entries = []
+    for line in cal_path.read_text().splitlines():
+        line = line.strip()
+        if line:
+            try:
+                entries.append(json.loads(line))
+            except Exception:
+                pass
+
+    if not entries:
+        return {"total": 0, "note": "file exists but no valid entries"}
+
+    tp = sum(1 for e in entries if e.get("true_positive"))
+    fp = sum(1 for e in entries if e.get("false_positive"))
+    fn = sum(1 for e in entries if e.get("false_negative"))
+    tn = sum(1 for e in entries if e.get("true_negative"))
+
+    precision = tp / (tp + fp) if (tp + fp) > 0 else None
+    recall = tp / (tp + fn) if (tp + fn) > 0 else None
+
+    scope_breakdown: dict = {}
+    for e in entries:
+        sc = e.get("scope_predicted", "unknown")
+        scope_breakdown.setdefault(sc, {"count": 0, "stuck": 0, "done": 0})
+        scope_breakdown[sc]["count"] += 1
+        if e.get("actual_status") == "stuck":
+            scope_breakdown[sc]["stuck"] += 1
+        else:
+            scope_breakdown[sc]["done"] += 1
+
+    return {
+        "total": len(entries),
+        "true_positive": tp,
+        "false_positive": fp,
+        "false_negative": fn,
+        "true_negative": tn,
+        "precision": round(precision, 3) if precision is not None else None,
+        "recall": round(recall, 3) if recall is not None else None,
+        "scope_breakdown": scope_breakdown,
+    }
+
+
+def _preflight_stats_main():
+    """CLI entry point for poe-preflight-stats."""
+    import argparse
+    import json as _json
+
+    parser = argparse.ArgumentParser(
+        description="Show pre-flight scope prediction accuracy vs actual loop outcomes."
+    )
+    parser.add_argument("--cal-path", default=None, help="Path to preflight_calibration.jsonl")
+    parser.add_argument("--json", action="store_true", help="Output raw JSON")
+    args = parser.parse_args()
+
+    stats = preflight_calibration_stats(cal_path=args.cal_path)
+
+    if args.json:
+        print(_json.dumps(stats, indent=2))
+        return 0
+
+    total = stats.get("total", 0)
+    if total == 0:
+        print(f"No calibration data yet. Run some AGENDA loops to accumulate data.")
+        print(f"Data stored at: memory/preflight_calibration.jsonl")
+        return 0
+
+    print(f"\nPre-flight calibration stats ({total} loops)\n")
+    print(f"  True positives  (wide → stuck):  {stats['true_positive']}")
+    print(f"  False positives (wide → done):   {stats['false_positive']}")
+    print(f"  False negatives (narrow → stuck): {stats['false_negative']}")
+    print(f"  True negatives  (narrow → done):  {stats['true_negative']}")
+    print()
+    prec = stats.get("precision")
+    rec = stats.get("recall")
+    print(f"  Precision: {prec:.0%}" if prec is not None else "  Precision: n/a")
+    print(f"  Recall:    {rec:.0%}" if rec is not None else "  Recall:    n/a")
+    print()
+    print("  Scope breakdown:")
+    for scope, data in sorted(stats.get("scope_breakdown", {}).items()):
+        stuck_pct = data["stuck"] / data["count"] * 100 if data["count"] > 0 else 0
+        print(f"    {scope:8s}: {data['count']:3d} loops  "
+              f"{data['stuck']:2d} stuck / {data['done']:2d} done  "
+              f"({stuck_pct:.0f}% stuck rate)")
+    print()
+    return 0

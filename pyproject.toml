@@ -47,6 +47,7 @@ poe-cross-ref = "cross_ref:_cli_main"
 poe-checkpoint = "checkpoint:_cli_main"
 poe-stop = "killswitch:main"
 poe-mine = "convo_miner:main"
+poe-preflight-stats = "pre_flight:_preflight_stats_main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
