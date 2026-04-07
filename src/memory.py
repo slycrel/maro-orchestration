@@ -1380,6 +1380,27 @@ def _current_date() -> str:
 # CRUD for tiered lessons
 # ---------------------------------------------------------------------------
 
+# Phase 59 Feynman F5: Standardized confidence tiers.
+# Confidence reflects extraction reliability, not just domain certainty.
+_CONFIDENCE_SINGLE_CALL = 0.5    # single LLM call — not independently verified
+_CONFIDENCE_MAJORITY_VOTE = 0.7  # majority-vote across k_samples ≥ 3
+_CONFIDENCE_MULTI_SESSION = 0.9  # sessions_validated ≥ 3 — independently confirmed
+
+
+def confidence_from_k_samples(k_samples: int) -> float:
+    """Map extraction method to standardized initial confidence (Feynman F5).
+
+    - k_samples == 1: single LLM call → 0.5 (unverified)
+    - k_samples >= 3: majority-vote → 0.7 (consensus)
+    - k_samples == 2: in-between → 0.6
+    """
+    if k_samples >= 3:
+        return _CONFIDENCE_MAJORITY_VOTE
+    if k_samples == 2:
+        return 0.6
+    return _CONFIDENCE_SINGLE_CALL
+
+
 def record_tiered_lesson(
     lesson_text: str,
     task_type: str,
@@ -1387,7 +1408,8 @@ def record_tiered_lesson(
     source_goal: str,
     *,
     tier: str = MemoryTier.MEDIUM,
-    confidence: float = 0.7,
+    confidence: float = _CONFIDENCE_MAJORITY_VOTE,
+    k_samples: int = 0,
     acquired_for: Optional[str] = None,
     evidence_sources: Optional[List[str]] = None,
     lesson_type: str = "",
@@ -1398,12 +1420,19 @@ def record_tiered_lesson(
     Pass ``acquired_for=goal_id`` to tag incidental knowledge (e.g. lessons acquired
     as a prerequisite sub-goal rather than as the primary task outcome).
 
+    Phase 59 Feynman F5: when ``k_samples`` is set (> 0), initial confidence is
+        computed from the extraction method rather than the caller's estimate:
+        k_samples=1 → 0.5, k_samples=2 → 0.6, k_samples≥3 → 0.7.
+        Explicit ``confidence`` kwarg overrides this when k_samples=0.
     Phase 59 NeMo S1: ``lesson_type`` classifies the lesson — "execution" | "planning" |
         "recovery" | "verification" | "cost". Enables type-filtered retrieval.
     Phase 59: ``evidence_sources`` accepts a list of URLs/outcome_ids/paper refs
         that back the lesson's claim, enabling post-hoc claim tracing.
     """
     import uuid
+
+    if k_samples > 0:
+        confidence = confidence_from_k_samples(k_samples)
 
     existing = load_tiered_lessons(tier=tier, task_type=task_type)
     for ex in existing:
@@ -1435,11 +1464,18 @@ def _append_tiered_lesson(tl: TieredLesson, *, tier: str) -> None:
 
 
 def _reinforce_tiered_lesson(tl: TieredLesson, *, tier: str) -> TieredLesson:
-    """Reinforce an existing lesson: bump score and sessions_validated, rewrite file."""
+    """Reinforce an existing lesson: bump score and sessions_validated, rewrite file.
+
+    Phase 59 Feynman F5: once sessions_validated reaches 3, confidence is bumped
+    to _CONFIDENCE_MULTI_SESSION (0.9+) — independently confirmed across sessions.
+    """
     tl.score = reinforce_score(tl.score)
     tl.sessions_validated += 1
     tl.times_reinforced += 1
     tl.last_reinforced = _current_date()
+    # F5: multi-session confidence promotion
+    if tl.sessions_validated >= 3:
+        tl.confidence = max(tl.confidence, _CONFIDENCE_MULTI_SESSION)
     _rewrite_tiered_lessons(tier)
     return tl
 
@@ -1512,7 +1548,11 @@ def _rewrite_tiered_lessons(tier: str, lessons: Optional[List[TieredLesson]] = N
 # ---------------------------------------------------------------------------
 
 def reinforce_lesson(lesson_id: str, tier: str = MemoryTier.MEDIUM) -> Optional[TieredLesson]:
-    """Find lesson by ID in the given tier and reinforce it (score + sessions)."""
+    """Find lesson by ID in the given tier and reinforce it (score + sessions).
+
+    Phase 59 Feynman F5: once sessions_validated reaches 3, confidence is
+    promoted to >= _CONFIDENCE_MULTI_SESSION (0.9).
+    """
     lessons = load_tiered_lessons(tier=tier, min_score=0.0)
     target = next((l for l in lessons if l.lesson_id == lesson_id), None)
     if not target:
@@ -1521,6 +1561,8 @@ def reinforce_lesson(lesson_id: str, tier: str = MemoryTier.MEDIUM) -> Optional[
     target.sessions_validated += 1
     target.times_reinforced += 1
     target.last_reinforced = _current_date()
+    if target.sessions_validated >= 3:
+        target.confidence = max(target.confidence, _CONFIDENCE_MULTI_SESSION)
     _rewrite_tiered_lessons(tier=tier, lessons=lessons)
     return target
 

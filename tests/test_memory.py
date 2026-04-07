@@ -1366,3 +1366,67 @@ class TestTypedLessonTaxonomy:
         from memory import load_tiered_lessons
         loaded = load_tiered_lessons(MemoryTier.LONG)
         assert loaded[0].lesson_type == "recovery"
+
+
+class TestConfidenceTierStandardization:
+    """Tests for Feynman F5 — standardized confidence from k_samples + session count."""
+
+    def test_confidence_single_call(self):
+        """k_samples=1 → 0.5 confidence (single, unverified LLM call)."""
+        from memory import confidence_from_k_samples
+        assert confidence_from_k_samples(1) == 0.5
+
+    def test_confidence_two_samples(self):
+        """k_samples=2 → 0.6 confidence (partial consensus)."""
+        from memory import confidence_from_k_samples
+        assert confidence_from_k_samples(2) == 0.6
+
+    def test_confidence_majority_vote(self):
+        """k_samples >= 3 → 0.7 confidence (majority consensus)."""
+        from memory import confidence_from_k_samples
+        assert confidence_from_k_samples(3) == 0.7
+        assert confidence_from_k_samples(5) == 0.7
+
+    def test_k_samples_kwarg_overrides_confidence(self, monkeypatch, tmp_path):
+        """record_tiered_lesson(k_samples=1) uses 0.5 regardless of confidence kwarg."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        from memory import record_tiered_lesson, load_tiered_lessons, MemoryTier
+
+        # k_samples=1 should override the default confidence=0.7
+        tl = record_tiered_lesson(
+            "check preconditions", "build", "done", "goal",
+            tier=MemoryTier.MEDIUM, k_samples=1,
+        )
+        assert tl.confidence == 0.5
+
+    def test_k_samples_zero_uses_confidence_kwarg(self, monkeypatch, tmp_path):
+        """k_samples=0 (default) uses explicit confidence kwarg."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        from memory import record_tiered_lesson, MemoryTier
+
+        tl = record_tiered_lesson(
+            "verify before deploy", "ops", "done", "goal",
+            tier=MemoryTier.MEDIUM, confidence=0.85,
+        )
+        assert tl.confidence == 0.85
+
+    def test_confidence_bumped_at_three_sessions(self, monkeypatch, tmp_path):
+        """sessions_validated reaching 3 promotes confidence to >= 0.9."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        from memory import record_tiered_lesson, reinforce_lesson, load_tiered_lessons, MemoryTier
+
+        # Record with low confidence (k_samples=1)
+        tl = record_tiered_lesson(
+            "unique reinforcement lesson here", "research", "done", "goal",
+            tier=MemoryTier.MEDIUM, k_samples=1,
+        )
+        assert tl.confidence == 0.5
+
+        # Reinforce 3 times to reach sessions_validated >= 3
+        for _ in range(3):
+            reinforce_lesson(tl.lesson_id, tier=MemoryTier.MEDIUM)
+
+        loaded = load_tiered_lessons(MemoryTier.MEDIUM)
+        target = next(l for l in loaded if l.lesson_id == tl.lesson_id)
+        assert target.sessions_validated >= 3
+        assert target.confidence >= 0.9
