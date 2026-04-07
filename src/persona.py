@@ -437,6 +437,95 @@ def compose_persona(
 
 
 # ---------------------------------------------------------------------------
+# Phase 59 (NeMo DataDesigner steal): Persona template variable injection
+# ---------------------------------------------------------------------------
+
+_TEMPLATE_VAR_RE = re.compile(r"\{\{\s*(\w+)\s*\}\}")
+
+
+def extract_template_variables(template: str) -> set:
+    """Extract {{ variable }} references from a persona template string.
+
+    Enables lazy context fetching — only inject what the template needs.
+    Pure regex, no Jinja2 dependency.
+
+    Returns:
+        Set of variable name strings found in `{{ ... }}` blocks.
+
+    Example:
+        >>> extract_template_variables("Use {{ standing_rules }}. Goal: {{ goal }}.")
+        {'standing_rules', 'goal'}
+    """
+    return set(_TEMPLATE_VAR_RE.findall(template))
+
+
+def render_persona_template(template: str, goal: str = "") -> str:
+    """Render a persona template by substituting {{ variable }} references.
+
+    Supported variables (lazy-fetched — only loaded if referenced):
+        {{ goal }}             — the current goal text
+        {{ standing_rules }}   — formatted standing rules from memory
+        {{ recent_lessons }}   — top-3 tiered lessons for this goal
+        {{ task_type }}        — inferred task type (research/build/ops/general)
+
+    Unrecognised variables are left as-is (no crash on unknown refs).
+
+    Args:
+        template: Persona system_prompt body with optional {{ var }} references.
+        goal:     Current goal text.
+
+    Returns:
+        Rendered string with all known variables substituted.
+    """
+    variables = extract_template_variables(template)
+    if not variables:
+        return template  # fast path — no template vars, return as-is
+
+    context: Dict[str, str] = {}
+
+    if "goal" in variables:
+        context["goal"] = goal or ""
+
+    if "task_type" in variables:
+        try:
+            from intent import classify_intent
+            context["task_type"] = classify_intent(goal).lower() if goal else "general"
+        except Exception:
+            context["task_type"] = "general"
+
+    if "standing_rules" in variables:
+        try:
+            from memory import load_standing_rules
+            rules = load_standing_rules()
+            context["standing_rules"] = "\n".join(
+                f"- {r.rule}" for r in rules[:5]
+            ) if rules else "(none)"
+        except Exception:
+            context["standing_rules"] = "(unavailable)"
+
+    if "recent_lessons" in variables:
+        try:
+            from memory import query_lessons
+            task_type = context.get("task_type", "general")
+            lessons = query_lessons(goal, n=3)
+            if lessons:
+                context["recent_lessons"] = "\n".join(
+                    f"- {'✓' if l.outcome == 'done' else '✗'} {l.lesson}"
+                    for l in lessons
+                )
+            else:
+                context["recent_lessons"] = "(none)"
+        except Exception:
+            context["recent_lessons"] = "(unavailable)"
+
+    def _sub(match: re.Match) -> str:
+        var = match.group(1).strip()
+        return context.get(var, match.group(0))  # leave unknown vars as-is
+
+    return _TEMPLATE_VAR_RE.sub(_sub, template)
+
+
+# ---------------------------------------------------------------------------
 # Persona-aware system prompt builder
 # ---------------------------------------------------------------------------
 
@@ -445,6 +534,9 @@ def build_persona_system_prompt(spec: PersonaSpec, *, goal: str = "") -> str:
 
     Prepends a persona header (name, role, style, goal) to the spec's
     system_prompt body. This is what gets passed to the LLM as system context.
+
+    Phase 59: if the persona body contains {{ variable }} references, they are
+    rendered via render_persona_template before building the final prompt.
     """
     header = textwrap.dedent(f"""\
         # Persona: {spec.role}
@@ -459,6 +551,7 @@ def build_persona_system_prompt(spec: PersonaSpec, *, goal: str = "") -> str:
 
     body = spec.system_prompt.strip()
     if body:
+        body = render_persona_template(body, goal=goal)
         return header + "\n\n" + body
     return header
 

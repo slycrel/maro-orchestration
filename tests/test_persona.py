@@ -677,3 +677,116 @@ def test_poe_persona_manifest_json_cli(monkeypatch, tmp_path, capsys):
     data = json.loads(out)
     assert "agents" in data
     assert len(data["agents"]) > 0
+
+
+# ---------------------------------------------------------------------------
+# Phase 59: Persona template variable injection (NeMo DataDesigner steal)
+# ---------------------------------------------------------------------------
+
+class TestExtractTemplateVariables:
+    """Tests for extract_template_variables()."""
+
+    def test_no_variables(self):
+        from persona import extract_template_variables
+        assert extract_template_variables("plain text no vars") == set()
+
+    def test_single_variable(self):
+        from persona import extract_template_variables
+        assert extract_template_variables("use {{ goal }} here") == {"goal"}
+
+    def test_multiple_variables(self):
+        from persona import extract_template_variables
+        result = extract_template_variables("{{ standing_rules }}\n{{ recent_lessons }}")
+        assert result == {"standing_rules", "recent_lessons"}
+
+    def test_duplicate_variable_counted_once(self):
+        from persona import extract_template_variables
+        result = extract_template_variables("{{ goal }} then {{ goal }} again")
+        assert result == {"goal"}
+
+    def test_whitespace_inside_braces(self):
+        from persona import extract_template_variables
+        result = extract_template_variables("{{  goal  }}")
+        assert "goal" in result
+
+
+class TestRenderPersonaTemplate:
+    """Tests for render_persona_template()."""
+
+    def test_no_variables_returns_unchanged(self):
+        from persona import render_persona_template
+        tmpl = "You are a research assistant. Be precise."
+        assert render_persona_template(tmpl) == tmpl
+
+    def test_goal_variable_substituted(self):
+        from persona import render_persona_template
+        tmpl = "Work on: {{ goal }}"
+        result = render_persona_template(tmpl, goal="research polymarket")
+        assert "research polymarket" in result
+        assert "{{ goal }}" not in result
+
+    def test_unknown_variable_left_as_is(self):
+        from persona import render_persona_template
+        tmpl = "Use {{ unknown_var }} here"
+        result = render_persona_template(tmpl, goal="test")
+        assert "{{ unknown_var }}" in result
+
+    def test_standing_rules_injected(self, monkeypatch, tmp_path):
+        from persona import render_persona_template
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        monkeypatch.setattr(
+            "memory.load_standing_rules",
+            lambda: [],
+            raising=False,
+        )
+        tmpl = "Rules: {{ standing_rules }}"
+        result = render_persona_template(tmpl, goal="test goal")
+        assert "Rules:" in result
+        # No crash — either "(none)" or injected rules
+        assert "{{ standing_rules }}" not in result
+
+    def test_recent_lessons_injected(self, monkeypatch, tmp_path):
+        from persona import render_persona_template
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        monkeypatch.setattr(
+            "memory.query_lessons",
+            lambda *a, **kw: [],
+            raising=False,
+        )
+        tmpl = "Lessons: {{ recent_lessons }}"
+        result = render_persona_template(tmpl, goal="test goal")
+        assert "{{ recent_lessons }}" not in result
+
+
+class TestBuildPersonaSystemPromptWithTemplate:
+    """Tests for build_persona_system_prompt with template variable rendering."""
+
+    def _make_spec(self, body: str) -> "PersonaSpec":
+        from persona import PersonaSpec
+        return PersonaSpec(
+            name="test",
+            role="Test Role",
+            model_tier="mid",
+            tool_access=[],
+            memory_scope="session",
+            communication_style="precise",
+            system_prompt=body,
+            hooks=[],
+            composes=[],
+        )
+
+    def test_template_rendered_in_body(self, monkeypatch, tmp_path):
+        """{{ goal }} in body is replaced with the actual goal."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        from persona import build_persona_system_prompt
+        spec = self._make_spec("Focus on: {{ goal }}")
+        result = build_persona_system_prompt(spec, goal="improve test coverage")
+        assert "improve test coverage" in result
+        assert "{{ goal }}" not in result
+
+    def test_no_template_vars_body_unchanged(self):
+        """Body without template vars passes through unchanged."""
+        from persona import build_persona_system_prompt
+        spec = self._make_spec("Be precise. Be brief. Be right.")
+        result = build_persona_system_prompt(spec, goal="any goal")
+        assert "Be precise. Be brief. Be right." in result
