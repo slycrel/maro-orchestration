@@ -1851,3 +1851,78 @@ def test_write_provenance_extra_fields(monkeypatch, tmp_path):
     data = json.loads(path.read_text())
     assert data["utility_score"] == 0.25
     assert data["circuit_state"] == "open"
+
+
+# ---------------------------------------------------------------------------
+# Phase 59: Skill description verifier (Feynman Steal 11)
+# ---------------------------------------------------------------------------
+
+def _make_full_skill(name="test", description="", trigger_patterns=None, steps_template=None):
+    """Build a Skill with all required fields for verifier tests."""
+    from skills import Skill
+    return Skill(
+        id="sk1",
+        name=name,
+        description=description,
+        trigger_patterns=trigger_patterns or [],
+        steps_template=steps_template or [],
+        source_loop_ids=[],
+        created_at="2026-04-07T00:00:00Z",
+    )
+
+
+def test_verify_skill_clean_description():
+    """Clean skill description returns is_clean=True and high confidence."""
+    from skills import verify_skill_description
+    skill = _make_full_skill(
+        description="Search the web for information and return structured results",
+        steps_template=["identify key terms", "run search", "parse top 5 results"],
+    )
+    result = verify_skill_description(skill)
+    assert result.is_clean is True
+    assert result.confidence > 0.9
+
+
+def test_verify_skill_absolute_claim():
+    """Absolute claims ('always', '100%') are flagged as suspicious."""
+    from skills import verify_skill_description
+    skill = _make_full_skill(
+        description="This skill always succeeds and provides 100% accurate results."
+    )
+    result = verify_skill_description(skill)
+    assert result.is_clean is False
+    categories = [s["category"] for s in result.suspicious_claims]
+    assert "absolute_claim" in categories
+
+
+def test_verify_skill_unsourced_metric():
+    """Unsourced percentage metrics are flagged as suspicious."""
+    from skills import verify_skill_description
+    skill = _make_full_skill(
+        description="Achieves 40% improvement in query efficiency with no setup."
+    )
+    result = verify_skill_description(skill)
+    assert any(s["category"] == "unsourced_metric" for s in result.suspicious_claims)
+
+
+def test_verify_skill_confidence_decrements_per_finding():
+    """Confidence decrements by 0.2 per suspicious finding."""
+    from skills import verify_skill_description
+    # Two absolute claims
+    skill = _make_full_skill(
+        description="This always works and is guaranteed to be perfect."
+    )
+    result = verify_skill_description(skill)
+    assert result.confidence <= 0.6  # at least 2 suspicious findings
+
+
+def test_verify_skill_result_fields():
+    """SkillVerificationResult has expected fields."""
+    from skills import verify_skill_description, SkillVerificationResult
+    skill = _make_full_skill(name="my-skill", description="Clean description here")
+    result = verify_skill_description(skill)
+    assert isinstance(result, SkillVerificationResult)
+    assert result.skill_name == "my-skill"
+    assert isinstance(result.suspicious_claims, list)
+    assert isinstance(result.is_clean, bool)
+    assert 0.0 <= result.confidence <= 1.0

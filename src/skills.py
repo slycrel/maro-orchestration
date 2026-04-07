@@ -1900,3 +1900,69 @@ def validate_skill_mutation(
         blocked=blocked,
         block_reason=block_reason,
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 59 (Feynman Steal 11): Skill description verifier
+# ---------------------------------------------------------------------------
+
+_SUSPICIOUS_CLAIM_PATTERNS = [
+    # Absolute performance claims without sourcing
+    (r'\b(always|never|100%|guaranteed|perfect|flawless)\b', "absolute_claim"),
+    # Invented or unverifiable percentage claims
+    (r'\b(\d+)%\s+(improvement|faster|better|more accurate|reduction)\b', "unsourced_metric"),
+    # Claims about unverifiable version-specific behavior
+    (r'\b(version \d+\.\d+|v\d+\.\d+)\b', "version_specific"),
+    # Claims referencing non-existent internal APIs
+    (r'\b(internal API|private endpoint|undocumented)\b', "internal_api"),
+]
+
+
+@dataclass
+class SkillVerificationResult:
+    """Result of verifying a skill's description for suspicious claims."""
+    skill_name: str
+    suspicious_claims: List[Dict[str, str]]  # [{"text": ..., "category": ..., "pattern": ...}]
+    is_clean: bool                           # True if no suspicious claims found
+    confidence: float                        # 0.0–1.0 based on how clean the description is
+
+
+def verify_skill_description(skill: "Skill") -> SkillVerificationResult:
+    """Heuristic verification of a skill's description for suspicious claims.
+
+    Phase 59 (Feynman Steal 11): Post-generation verifier pattern.
+    Checks for absolute claims, unsourced metrics, and patterns common in
+    hallucinated skill descriptions. No LLM call — pure regex heuristics.
+
+    Args:
+        skill: Skill object to verify.
+
+    Returns:
+        SkillVerificationResult with list of suspicious patterns found.
+    """
+    text = " ".join([
+        skill.description or "",
+        " ".join(skill.trigger_patterns or []),
+        " ".join(skill.steps_template or []),
+    ])
+
+    suspicious = []
+    for pattern, category in _SUSPICIOUS_CLAIM_PATTERNS:
+        matches = re.findall(pattern, text, re.IGNORECASE)
+        for match in matches:
+            match_str = match if isinstance(match, str) else str(match)
+            suspicious.append({
+                "text": match_str,
+                "category": category,
+                "pattern": pattern,
+            })
+
+    # Confidence: starts at 1.0, decrements per suspicious finding (min 0.0)
+    confidence = max(0.0, 1.0 - len(suspicious) * 0.2)
+
+    return SkillVerificationResult(
+        skill_name=skill.name,
+        suspicious_claims=suspicious,
+        is_clean=len(suspicious) == 0,
+        confidence=confidence,
+    )
