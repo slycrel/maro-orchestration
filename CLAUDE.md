@@ -88,7 +88,7 @@ deploy/              systemd service files
 | 55 | lat.md Knowledge Graph | DONE |
 | 56 | Promotion Cycle — Standing Rules + Decision Journal | DONE |
 
-**Active work (as of 2026-04-05):** All phases through 56 DONE. Channels (GitHub/Reddit/YouTube), Polymarket CLI, FunSearch steal items (stemmer, pre-scoring gate, compactness scoring, ranked-candidate mutation), skill stemmer shipped. 2784 tests passing. Pending: Phase 24 (Slack), Phase 25 ops hardening, Phase 28 (blocked on Jeremy's personas/jeremy.md). Open steal items: island model diversity (M), replay-based fitness oracle (L), events as first-class graph nodes (L).
+**Active work (as of 2026-04-07):** All phases through 58 DONE. Phase 57 (adaptive model tiering), Phase 58 (pre-flight plan review) complete. query_lessons RAG API for workers, poe-replay CLI, WorkerResult schema validation, lens determinism shipped. Tests: ~2850+. Pending: Phase 24 (Slack skeleton shipped, Signal/iMessage deferred), Phase 25 ops hardening, Phase 28 (blocked on Jeremy's personas/jeremy.md). Open steal items: island model diversity (M), events as first-class graph nodes (L), NeMo/Feynman steal items (Phase 59 candidates).
 
 See `ROADMAP.md` for full phase specs. See `CHANGELOG.md` for what shipped.
 
