@@ -1268,7 +1268,7 @@ is what's missing.
 - **Processor pipeline for skill generation** (NeMo Steal 2) — PRE/POST/AFTER lifecycle stages. Medium-high complexity. Decouples constraint injection, generation, and verification.
 - ~~**ViolationType enum config** (NeMo Steal 4)~~ — **DONE** (2026-04-07). `ViolationType` class + `ViolationReport` dataclass in constraint.py. 12 typed violation constants (DESTRUCTIVE_COMMAND, HALLUCINATED_CLAIM, etc.) with (category, description, severity). `ConstraintResult.to_violation_reports()` + `has_fatal_violations()`. 10 tests.
 - **AIMD throttling** (NeMo Steal 5) — per-worker concurrency self-tuning. Low complexity once parallel workers are enabled.
-- **Sampler constraints for skill A/B testing** (NeMo Steal 7) — conditional skill parameterization. Medium complexity.
+- ~~**Sampler constraints for skill A/B testing** (NeMo Steal 7)~~ — **DONE** (2026-04-07). `SkillConstraint` dataclass + `apply_skill_constraints()` in skills.py. Condition/exclusion keyword matching; parameter_overrides noted in optimization_objective. 6 tests.
 - ~~**Task ledger + verification log** (Feynman Steal 8)~~ — **DONE** (2026-04-07). `TaskLedgerEntry`, `append_task_ledger()`, `load_task_ledger()` in memory.py. Wired into agent_loop.py after each step. 5 tests.
 - ~~**Evidence table + claim tracing** (Feynman Steal 9)~~ — **DONE** (2026-04-07). `evidence_sources: List[str]` field added to `TieredLesson`; `record_tiered_lesson()` accepts `evidence_sources` kwarg. Backward compatible. 3 tests.
 - **Multi-round gap analysis** (Feynman Steal 10) — targeted research round spawning on identified gaps. Medium complexity.
