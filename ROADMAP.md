@@ -1246,4 +1246,32 @@ is what's missing.
   per loop, with true_positive/false_positive/false_negative/true_negative classification.
   Wired into agent_loop.py at loop completion. 3 tests. (DONE)
 
+**Not yet shipped:** (all items complete — Phase 58 DONE)
+
+---
+
+### Phase 59: Systemic Quality — NeMo DataDesigner + Feynman Research Steals *(PARTIAL)*
+
+*"Steal the best patterns from production systems that solved the same problems."*
+
+**Source research:** `output/x-research-20260407T063015Z.md` — 10 steal candidates from NVIDIA NeMo DataDesigner and Feynman AI Research Agent.
+
+**Shipped (2026-04-07):**
+
+- **Skill cost/latency telemetry** (NeMo Steal 6) — `SkillStats` extended with `total_cost_usd`, `avg_latency_ms`, `avg_confidence` fields. `record_skill_outcome()` accepts optional `cost_usd`, `latency_ms`, `confidence` kwargs. `efficiency_score()` method: cost-adjusted success rate for evolver promotion decisions. 7 tests. (`src/skills.py`)
+
+- **Persona template variable injection** (NeMo Steal 3) — `extract_template_variables()` and `render_persona_template()` in `persona.py`. Persona system_prompt can now use `{{ goal }}`, `{{ standing_rules }}`, `{{ recent_lessons }}`, `{{ task_type }}` — lazy-fetched (only loads what the template references). Wired into `build_persona_system_prompt()`. 12 tests.
+
 **Not yet shipped:**
+
+- **Discriminated union config for skill types** (NeMo Steal 1) — Pydantic schema for skill metadata. Medium complexity. Makes skill parameters type-safe and validates on deserialization.
+- **Processor pipeline for skill generation** (NeMo Steal 2) — PRE/POST/AFTER lifecycle stages. Medium-high complexity. Decouples constraint injection, generation, and verification.
+- **ViolationType enum config** (NeMo Steal 4) — structured violation reporting with severity levels (error/warning). Medium complexity. Replaces scattered constraint checks.
+- **AIMD throttling** (NeMo Steal 5) — per-worker concurrency self-tuning. Low complexity once parallel workers are enabled.
+- **Sampler constraints for skill A/B testing** (NeMo Steal 7) — conditional skill parameterization. Medium complexity.
+- **Task ledger + verification log** (Feynman Steal 8) — structured per-step audit trail. Low complexity.
+- **Evidence table + claim tracing** (Feynman Steal 9) — lesson records linked to source evidence. Medium complexity.
+- **Multi-round gap analysis** (Feynman Steal 10) — targeted research round spawning on identified gaps. Medium complexity.
+- **Verifier agent** (Feynman Steal 11) — inline citation + URL verification post-skill-generation. Medium complexity.
+- **Provenance records** (Feynman Steal 12) — sidecar `.provenance.md` for skill decisions. Low complexity.
+
