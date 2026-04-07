@@ -92,7 +92,11 @@ class Skill:
 
 @dataclass
 class SkillStats:
-    """Per-skill success/failure tracking (Phase 14)."""
+    """Per-skill success/failure tracking (Phase 14).
+
+    NeMo DataDesigner steal (Phase 59): extended with cost + latency telemetry
+    so evolver can score skills on efficiency (success_rate / cost) not just rate.
+    """
     skill_id: str
     skill_name: str
     total_uses: int = 0
@@ -101,6 +105,10 @@ class SkillStats:
     last_used: str = ""
     success_rate: float = 1.0    # computed: successes / max(total_uses, 1)
     needs_escalation: bool = False  # success_rate < ESCALATION_THRESHOLD
+    # Phase 59: cost + latency telemetry
+    total_cost_usd: float = 0.0
+    avg_latency_ms: float = 0.0
+    avg_confidence: float = 1.0   # average confidence tag across uses (1.0 = no data yet)
 
     def to_dict(self) -> dict:
         return {
@@ -112,6 +120,9 @@ class SkillStats:
             "last_used": self.last_used,
             "success_rate": self.success_rate,
             "needs_escalation": self.needs_escalation,
+            "total_cost_usd": self.total_cost_usd,
+            "avg_latency_ms": self.avg_latency_ms,
+            "avg_confidence": self.avg_confidence,
         }
 
     @classmethod
@@ -125,7 +136,23 @@ class SkillStats:
             last_used=d.get("last_used", ""),
             success_rate=float(d.get("success_rate", 1.0)),
             needs_escalation=bool(d.get("needs_escalation", False)),
+            total_cost_usd=float(d.get("total_cost_usd", 0.0)),
+            avg_latency_ms=float(d.get("avg_latency_ms", 0.0)),
+            avg_confidence=float(d.get("avg_confidence", 1.0)),
         )
+
+    def efficiency_score(self) -> float:
+        """Cost-adjusted success rate — higher is better.
+
+        Normalises cost per run and weights success rate heavily.
+        Returns 0.0 if less than 3 uses (not enough data).
+        """
+        if self.total_uses < 3:
+            return 0.0
+        cost_per_run = self.total_cost_usd / max(self.total_uses, 1)
+        # Penalty: each cent of cost per run reduces score by 0.01 (capped at 0.5)
+        cost_penalty = min(0.5, cost_per_run * 100)
+        return max(0.0, self.success_rate - cost_penalty)
 
 
 @dataclass
@@ -840,10 +867,24 @@ def get_skill_stats(skill_id: str) -> Optional[SkillStats]:
     return None
 
 
-def record_skill_outcome(skill_id: str, success: bool) -> None:
+def record_skill_outcome(
+    skill_id: str,
+    success: bool,
+    *,
+    cost_usd: float = 0.0,
+    latency_ms: float = 0.0,
+    confidence: float = 1.0,
+) -> None:
     """Record a skill invocation outcome (upsert by skill_id in skill-stats.jsonl).
 
     Recomputes success_rate and needs_escalation after updating counts.
+
+    Args:
+        skill_id:    Skill ID to record against.
+        success:     Whether the invocation succeeded.
+        cost_usd:    LLM cost for this invocation (optional, for efficiency scoring).
+        latency_ms:  Wall-clock latency in ms (optional, for efficiency scoring).
+        confidence:  Confidence tag from step outcome (optional, 0.0–1.0).
     """
     path = _skill_stats_path()
 
@@ -882,6 +923,7 @@ def record_skill_outcome(skill_id: str, success: bool) -> None:
         stats = SkillStats(skill_id=skill_id, skill_name=skill_name)
 
     # Update counts
+    prev_uses = stats.total_uses
     stats.total_uses += 1
     if success:
         stats.successes += 1
@@ -890,6 +932,17 @@ def record_skill_outcome(skill_id: str, success: bool) -> None:
     stats.last_used = datetime.now(timezone.utc).isoformat()
     stats.success_rate = stats.successes / max(stats.total_uses, 1)
     stats.needs_escalation = stats.success_rate < ESCALATION_THRESHOLD
+
+    # Phase 59: update cost + latency telemetry (incremental EMA)
+    if cost_usd:
+        stats.total_cost_usd += cost_usd
+    if latency_ms:
+        # EMA update: new_avg = old_avg * (n-1)/n + latency_ms / n
+        n = stats.total_uses
+        stats.avg_latency_ms = stats.avg_latency_ms * (prev_uses / n) + latency_ms / n
+    if confidence != 1.0:
+        n = stats.total_uses
+        stats.avg_confidence = stats.avg_confidence * (prev_uses / n) + confidence / n
 
     # Update the map and write back (full rewrite for consistency)
     all_records[skill_id] = stats.to_dict()

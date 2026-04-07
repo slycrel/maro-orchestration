@@ -1695,3 +1695,98 @@ class TestFrontierSkills:
         with patch("skills.load_skills", return_value=skills):
             result = frontier_skills(None)
         assert any(s.id == "disk_skill" for s in result)
+
+
+# ---------------------------------------------------------------------------
+# Phase 59: SkillStats cost + latency telemetry (NeMo DataDesigner steal)
+# ---------------------------------------------------------------------------
+
+def test_skill_stats_cost_latency_fields_default(monkeypatch, tmp_path):
+    """SkillStats initializes cost/latency/confidence fields to zero/1.0."""
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    from skills import SkillStats
+    stats = SkillStats(skill_id="s1", skill_name="test skill")
+    assert stats.total_cost_usd == 0.0
+    assert stats.avg_latency_ms == 0.0
+    assert stats.avg_confidence == 1.0
+
+
+def test_skill_stats_roundtrip_with_telemetry(monkeypatch, tmp_path):
+    """SkillStats.to_dict / from_dict preserves cost + latency fields."""
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    from skills import SkillStats
+    stats = SkillStats(
+        skill_id="s1", skill_name="test",
+        total_cost_usd=0.42, avg_latency_ms=1200.0, avg_confidence=0.85,
+    )
+    d = stats.to_dict()
+    restored = SkillStats.from_dict(d)
+    assert restored.total_cost_usd == 0.42
+    assert restored.avg_latency_ms == 1200.0
+    assert restored.avg_confidence == 0.85
+
+
+def test_record_skill_outcome_accumulates_cost(monkeypatch, tmp_path):
+    """record_skill_outcome accumulates cost_usd across calls."""
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    from skills import record_skill_outcome, get_all_skill_stats
+
+    record_skill_outcome("sk1", True, cost_usd=0.01, latency_ms=500.0)
+    record_skill_outcome("sk1", True, cost_usd=0.02, latency_ms=700.0)
+
+    stats_list = get_all_skill_stats()
+    sk = next((s for s in stats_list if s.skill_id == "sk1"), None)
+    assert sk is not None
+    assert abs(sk.total_cost_usd - 0.03) < 1e-9
+    assert sk.avg_latency_ms > 0
+
+
+def test_record_skill_outcome_updates_avg_latency(monkeypatch, tmp_path):
+    """avg_latency_ms EMA update moves toward recent latency."""
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    from skills import record_skill_outcome, get_all_skill_stats
+
+    record_skill_outcome("sk2", True, latency_ms=1000.0)
+    record_skill_outcome("sk2", True, latency_ms=500.0)
+
+    stats_list = get_all_skill_stats()
+    sk = next((s for s in stats_list if s.skill_id == "sk2"), None)
+    assert sk is not None
+    # avg should be between 500 and 1000
+    assert 500.0 <= sk.avg_latency_ms <= 1000.0
+
+
+def test_efficiency_score_below_three_uses_returns_zero(monkeypatch, tmp_path):
+    """efficiency_score() returns 0.0 when total_uses < 3."""
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    from skills import SkillStats
+    stats = SkillStats(skill_id="s1", skill_name="test", total_uses=2, successes=2)
+    assert stats.efficiency_score() == 0.0
+
+
+def test_efficiency_score_high_success_low_cost(monkeypatch, tmp_path):
+    """efficiency_score() is high for good success rate and low cost."""
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    from skills import SkillStats
+    # 10 uses, all success, $0.001 total → cost_per_run = 0.0001
+    stats = SkillStats(
+        skill_id="s1", skill_name="test",
+        total_uses=10, successes=10, success_rate=1.0,
+        total_cost_usd=0.001,
+    )
+    score = stats.efficiency_score()
+    assert score > 0.9  # near-perfect
+
+
+def test_efficiency_score_high_cost_reduces_score(monkeypatch, tmp_path):
+    """efficiency_score() is lower when cost per run is high."""
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    from skills import SkillStats
+    # 5 uses, all success, $1.00 total → cost_per_run = 0.20 → penalty = 0.20
+    stats = SkillStats(
+        skill_id="s1", skill_name="test",
+        total_uses=5, successes=5, success_rate=1.0,
+        total_cost_usd=1.0,
+    )
+    score = stats.efficiency_score()
+    assert score < 0.8  # penalized by high cost
