@@ -1001,6 +1001,10 @@ def majority_vote_lessons(
 
 _LESSON_TYPES = frozenset({"execution", "planning", "recovery", "verification", "cost"})
 
+# Phase 60: citation enforcement — uncited lessons are gently penalised in ranking.
+# A 10% discount means a clearly-better uncited lesson still wins; this is a tie-breaker.
+_CITATION_PENALTY = 0.90
+
 
 def extract_lessons_via_llm(
     goal: str,
@@ -1839,6 +1843,11 @@ def _tfidf_rank(
     for lesson, doc_terms in zip(lessons, docs[1:]):
         doc_vec = tfidf_vec(doc_terms)
         sim = cosine(query_vec, doc_vec)
+        # Phase 60: citation enforcement — lessons without evidence_sources
+        # are penalised by _CITATION_PENALTY so cited lessons rank higher on ties.
+        _has_cite = bool(getattr(lesson, "evidence_sources", None))
+        if not _has_cite:
+            sim *= _CITATION_PENALTY
         scores.append((sim, lesson))
 
     scores.sort(key=lambda x: x[0], reverse=True)
@@ -2751,3 +2760,49 @@ def verification_accuracy(claim_type: Optional[str] = None) -> Dict[str, float]:
         "total": total,
         "avg_confidence": avg_conf,
     }
+
+
+# ---------------------------------------------------------------------------
+# Phase 60: Verification calibration loop
+# ---------------------------------------------------------------------------
+
+_ALIGNMENT_THRESHOLD_BASE = 0.60
+_ALIGNMENT_THRESHOLD_MIN = 0.45
+_ALIGNMENT_THRESHOLD_MAX = 0.75
+_CALIBRATION_MIN_SAMPLES = 10  # don't adjust until we have enough data
+
+
+def calibrated_alignment_threshold(claim_type: str = "alignment") -> float:
+    """Return an evidence-based alignment threshold derived from verifier history.
+
+    Phase 60: Uses ``verification_accuracy()`` stats to auto-tune the pass/fail
+    threshold that ``check_alignment()`` uses to label a session as aligned.
+
+    Logic (requires ≥ _CALIBRATION_MIN_SAMPLES outcomes):
+    - If verifier avg_confidence is low AND uncertain_rate is high → lower threshold
+      (the verifier is being overly conservative; we're probably rejecting good work).
+    - If fail_rate is high AND avg_confidence is high → raise threshold
+      (the verifier is confidently saying many things fail; raise bar for "pass").
+    - Otherwise → return _ALIGNMENT_THRESHOLD_BASE (0.60).
+
+    Returns a float in [_ALIGNMENT_THRESHOLD_MIN, _ALIGNMENT_THRESHOLD_MAX].
+    """
+    stats = verification_accuracy(claim_type=claim_type)
+    if stats["total"] < _CALIBRATION_MIN_SAMPLES:
+        return _ALIGNMENT_THRESHOLD_BASE
+
+    avg_conf: float = stats["avg_confidence"]
+    fail_rate: float = stats["fail_rate"]
+    uncertain_rate: float = stats["uncertain_rate"]
+
+    threshold = _ALIGNMENT_THRESHOLD_BASE
+
+    # Conservative verifier: lots of uncertainty + low confidence → relax threshold
+    if avg_conf < 0.55 and uncertain_rate > 0.30:
+        threshold = _ALIGNMENT_THRESHOLD_BASE - 0.10
+
+    # Strict verifier: high confidence + high fail rate → tighten threshold
+    elif avg_conf > 0.70 and fail_rate > 0.40:
+        threshold = _ALIGNMENT_THRESHOLD_BASE + 0.10
+
+    return max(_ALIGNMENT_THRESHOLD_MIN, min(_ALIGNMENT_THRESHOLD_MAX, threshold))

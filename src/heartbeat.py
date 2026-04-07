@@ -22,6 +22,7 @@ import json
 import logging
 import os
 import sys
+import subprocess
 import threading
 import time
 from dataclasses import dataclass, field
@@ -30,6 +31,33 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 log = logging.getLogger("poe.heartbeat")
+
+
+# ---------------------------------------------------------------------------
+# Interactive session detection
+# ---------------------------------------------------------------------------
+
+def _is_interactive_session_active() -> bool:
+    """Return True if a `claude --continue` interactive session is running.
+
+    When an interactive Claude Code session is active, the heartbeat should
+    skip all autonomous LLM work (backlog drain, evolver, inspector, task-store
+    drain) to avoid double-burning tokens. Health checks still run every tick.
+
+    Detection: scan the process table for 'claude --continue' processes owned
+    by the current user. The subprocess adapter processes (claude -p) spawned
+    by the heartbeat itself are excluded since they don't use --continue.
+    """
+    try:
+        result = subprocess.run(
+            ["pgrep", "-u", str(os.getuid()), "-f", "claude --continue"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+        return result.returncode == 0 and bool(result.stdout.strip())
+    except Exception:
+        return False  # if we can't tell, don't block work
 
 # Module-level imports so tests can patch them cleanly
 try:
@@ -628,7 +656,7 @@ def heartbeat_loop(
     evolver_every: int = 10,
     inspector_every: int = 20,
     mission_check_every: int = 5,
-    backlog_every: int = 3,       # autonomous NEXT.md drain every N ticks
+    backlog_every: int = 30,      # autonomous NEXT.md drain every N ticks (~30 min at 60s)
     eval_every: int = 1440,   # Phase 42: ~24h at 60s interval
     dry_run: bool = False,
     verbose: bool = True,
@@ -645,11 +673,11 @@ def heartbeat_loop(
     Every `mission_check_every` cycles (Phase 34), checks for pending
     missions and logs/notifies if autonomous drain would be warranted.
 
-    Every `backlog_every` cycles, picks the highest-priority NEXT.md TODO
-    item across all projects and runs it via run_agent_loop (autonomous
-    backlog drain). Skipped if a mission drain or prior backlog drain is
-    already active. This is the primary mechanism for duty-cycle > 0 when
-    no missions are explicitly queued.
+    Every `backlog_every` cycles (default ~30 min), picks the highest-priority
+    NEXT.md TODO item across all projects and runs it via run_agent_loop
+    (autonomous backlog drain). Skipped if a mission drain, prior backlog drain,
+    or an interactive Claude Code session is already active. This is the primary
+    mechanism for duty-cycle > 0 when no missions are explicitly queued.
 
     Every `eval_every` cycles (Phase 42, default ~24h), runs the eval suite
     and converts any regressions to evolver Suggestion entries.
@@ -717,16 +745,27 @@ def heartbeat_loop(
             print("[heartbeat] mission active — deferring heavy background work this tick",
                   file=sys.stderr)
 
+        # Interactive session guard: if `claude --continue` is running, ALL autonomous
+        # LLM work is skipped this tick. Health checks still run (run_heartbeat above).
+        # This prevents double-burning tokens when a human/autonomous session is active.
+        _interactive_active = _is_interactive_session_active()
+        if _interactive_active and verbose:
+            print("[heartbeat] interactive session active — deferring all autonomous LLM work",
+                  file=sys.stderr)
+
+        # Combined busy signal for SlowUpdateScheduler
+        _any_busy = _mission_active or _interactive_active
+
         # SlowUpdateScheduler gate: advance state machine + check if idle window is open.
         # should_run() internally calls tick(), so we call it once and reuse the result.
         _can_run = (
-            _slow_update_sched.should_run(is_busy=_mission_active)
+            _slow_update_sched.should_run(is_busy=_any_busy)
             if _slow_update_sched is not None
-            else not _mission_active
+            else not _any_busy
         )
         if verbose and _slow_update_sched is not None:
             _sus_state = _slow_update_sched.state.value
-            if _sus_state != "WINDOW_OPEN" and not _mission_active:
+            if _sus_state != "WINDOW_OPEN" and not _any_busy:
                 print(f"[heartbeat] SlowUpdateScheduler: {_sus_state} — heavy work deferred",
                       file=sys.stderr)
 
@@ -770,7 +809,7 @@ def heartbeat_loop(
                     print("[heartbeat] inspector started in background", file=sys.stderr)
             elif verbose:
                 print("[heartbeat] inspector already active — skipping tick", file=sys.stderr)
-        if tick % mission_check_every == 0:
+        if tick % mission_check_every == 0 and not _interactive_active:
             # Phase 34: Check for pending missions and drain autonomously
             try:
                 from mission import pending_missions, is_drain_running, drain_next_mission
@@ -797,9 +836,9 @@ def heartbeat_loop(
                 if verbose:
                     print(f"[heartbeat] mission check failed: {e}", file=sys.stderr)
         # Autonomous backlog drain: pick up NEXT.md TODO items when idle.
-        # Fires every `backlog_every` ticks. Skips if a mission or prior backlog
-        # drain is already running (one active drain at a time).
-        if tick % backlog_every == 0 and not _mission_active:
+        # Fires every `backlog_every` ticks (~30 min default). Skips if a mission,
+        # prior backlog drain, or an interactive Claude Code session is running.
+        if tick % backlog_every == 0 and not _any_busy:
             with _backlog_drain_lock:
                 _bd_running = _backlog_drain_active
             if not _bd_running:
@@ -872,8 +911,8 @@ def heartbeat_loop(
         # Task store drain: pick up loop_continuation and loop_escalation tasks every tick.
         # Runs in a background thread (via _run_task_store_drain) so a slow continuation loop
         # (which may run dozens of LLM iterations) doesn't block the heartbeat tick.
-        # The _task_store_drain_active flag prevents stacking if a prior drain is still running.
-        if not _mission_active:
+        # Skipped if an interactive Claude Code session is active (to avoid double-burning tokens).
+        if not _any_busy:
             with _task_store_drain_lock:
                 _ts_running = _task_store_drain_active
             if not _ts_running:

@@ -652,7 +652,13 @@ def check_alignment(session: Any, adapter=None) -> AlignmentResult:
         data = extract_json(content_or_empty(resp), dict, log_tag="inspector.check_alignment")
         if data:
             score = safe_float(data.get("score"), default=0.5, min_val=0.0, max_val=1.0)
-            aligned = bool(data.get("aligned", score >= 0.6))
+            # Phase 60: use calibrated threshold derived from verifier history
+            try:
+                from memory import calibrated_alignment_threshold
+                _threshold = calibrated_alignment_threshold("alignment")
+            except Exception:
+                _threshold = 0.6
+            aligned = bool(data.get("aligned", score >= _threshold))
             gaps = [str(g) for g in data.get("gaps", [])]
             # F4: Record verifier outcome for accumulating verifier memory
             try:

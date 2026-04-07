@@ -1519,3 +1519,137 @@ class TestVerificationOutcomes:
         assert vo.goal == ""
         assert vo.outcome_id == ""
         assert vo.notes == ""
+
+
+# ---------------------------------------------------------------------------
+# Phase 60: Citation enforcement + calibration loop
+# ---------------------------------------------------------------------------
+
+class TestCitationEnforcementPenalty:
+    """Phase 60: uncited lessons rank below cited ones on equal text similarity."""
+
+    def _make_lesson(self, lesson_id, text, evidence_sources=None):
+        from memory import TieredLesson, MemoryTier
+        return TieredLesson(
+            lesson_id=lesson_id,
+            lesson=text,
+            task_type="general",
+            outcome="done",
+            tier=MemoryTier.MEDIUM,
+            source_goal="test goal",
+            confidence=0.7,
+            score=1.0,
+            last_reinforced="2026-04-07",
+            evidence_sources=evidence_sources or [],
+        )
+
+    def test_cited_lesson_ranks_above_uncited_on_equal_content(self):
+        """A cited lesson should outrank a nearly-identical uncited lesson."""
+        from memory import _tfidf_rank
+        text = "always validate input before passing to downstream"
+        cited = self._make_lesson("cited1", text, evidence_sources=["https://example.com/ref"])
+        uncited = self._make_lesson("uncited1", text, evidence_sources=[])
+        ranked = _tfidf_rank("validate input downstream", [uncited, cited], top_k=2)
+        # cited should come first
+        assert ranked[0].lesson_id == "cited1"
+
+    def test_uncited_lesson_still_wins_on_clearly_better_content(self):
+        """Citation penalty (10%) must not block uncited lessons with far better content."""
+        from memory import _tfidf_rank
+        good_uncited = self._make_lesson(
+            "uncited_good",
+            "retry with exponential backoff on rate limit errors",
+            evidence_sources=[],
+        )
+        poor_cited = self._make_lesson(
+            "cited_poor",
+            "always do things carefully and consider options",
+            evidence_sources=["https://example.com"],
+        )
+        ranked = _tfidf_rank("rate limit retry backoff", [poor_cited, good_uncited], top_k=2)
+        assert ranked[0].lesson_id == "uncited_good"
+
+    def test_citation_penalty_constant_is_reasonable(self):
+        """_CITATION_PENALTY should be in (0.8, 1.0) — a gentle nudge, not a block."""
+        from memory import _CITATION_PENALTY
+        assert 0.80 < _CITATION_PENALTY < 1.0
+
+
+class TestCalibrationLoop:
+    """Phase 60: calibrated_alignment_threshold() auto-tunes based on verifier history."""
+
+    def test_returns_base_when_insufficient_samples(self, monkeypatch, tmp_path):
+        """With < _CALIBRATION_MIN_SAMPLES outcomes, return base threshold."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        from memory import calibrated_alignment_threshold, _ALIGNMENT_THRESHOLD_BASE, record_verification
+
+        # Only 2 records — below the minimum
+        record_verification("alignment", "pass", "llm", 0.9)
+        record_verification("alignment", "fail", "llm", 0.3)
+
+        result = calibrated_alignment_threshold("alignment")
+        assert result == _ALIGNMENT_THRESHOLD_BASE
+
+    def test_lowers_threshold_when_verifier_is_conservative(self, monkeypatch, tmp_path):
+        """Low avg_confidence + high uncertain_rate → lower threshold."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        from memory import calibrated_alignment_threshold, _ALIGNMENT_THRESHOLD_BASE, record_verification
+
+        # Simulate conservative verifier: low confidence, lots of uncertain
+        for _ in range(8):
+            record_verification("alignment", "uncertain", "llm", 0.50)
+        for _ in range(4):
+            record_verification("alignment", "pass", "llm", 0.52)
+
+        result = calibrated_alignment_threshold("alignment")
+        assert result < _ALIGNMENT_THRESHOLD_BASE
+
+    def test_raises_threshold_when_verifier_is_confident_and_strict(self, monkeypatch, tmp_path):
+        """High avg_confidence + high fail_rate → raised threshold."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        from memory import calibrated_alignment_threshold, _ALIGNMENT_THRESHOLD_BASE, record_verification
+
+        # Simulate strict verifier: high confidence, mostly fail
+        for _ in range(8):
+            record_verification("alignment", "fail", "llm", 0.82)
+        for _ in range(4):
+            record_verification("alignment", "pass", "llm", 0.78)
+
+        result = calibrated_alignment_threshold("alignment")
+        assert result > _ALIGNMENT_THRESHOLD_BASE
+
+    def test_threshold_stays_within_bounds(self, monkeypatch, tmp_path):
+        """Calibrated threshold must stay in [_ALIGNMENT_THRESHOLD_MIN, _ALIGNMENT_THRESHOLD_MAX]."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        from memory import (
+            calibrated_alignment_threshold, record_verification,
+            _ALIGNMENT_THRESHOLD_MIN, _ALIGNMENT_THRESHOLD_MAX,
+        )
+
+        for _ in range(15):
+            record_verification("alignment", "uncertain", "llm", 0.1)
+
+        result = calibrated_alignment_threshold("alignment")
+        assert _ALIGNMENT_THRESHOLD_MIN <= result <= _ALIGNMENT_THRESHOLD_MAX
+
+    def test_returns_base_on_empty_store(self, monkeypatch, tmp_path):
+        """With no verifier history at all, return base threshold."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        from memory import calibrated_alignment_threshold, _ALIGNMENT_THRESHOLD_BASE
+
+        result = calibrated_alignment_threshold("alignment")
+        assert result == _ALIGNMENT_THRESHOLD_BASE
+
+    def test_normal_distribution_returns_base(self, monkeypatch, tmp_path):
+        """Mixed healthy verifier history → no adjustment (return base)."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        from memory import calibrated_alignment_threshold, _ALIGNMENT_THRESHOLD_BASE, record_verification
+
+        # Balanced distribution at moderate confidence
+        for _ in range(6):
+            record_verification("alignment", "pass", "llm", 0.70)
+        for _ in range(4):
+            record_verification("alignment", "fail", "llm", 0.65)
+
+        result = calibrated_alignment_threshold("alignment")
+        assert result == _ALIGNMENT_THRESHOLD_BASE
