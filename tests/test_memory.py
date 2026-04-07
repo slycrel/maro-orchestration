@@ -1099,3 +1099,133 @@ class TestTieredLessonEvidenceSources:
         from memory import load_tiered_lessons
         loaded = load_tiered_lessons("medium")
         assert loaded[0].evidence_sources == ["url1", "url2"]
+
+
+class TestDetectGoalGaps:
+    """Tests for detect_goal_gaps() — Feynman Steal 10."""
+
+    def test_blocked_steps_produce_high_severity_gaps(self, monkeypatch, tmp_path):
+        """Blocked steps become high-severity GoalGap entries."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        from memory import detect_goal_gaps, GoalGap
+
+        gaps = detect_goal_gaps(
+            "research polymarket predictions",
+            outcomes=[],
+            blocked_steps=["Fetch data from API"],
+        )
+        assert any(g.gap_type == "blocked_step" and g.severity == "high" for g in gaps)
+
+    def test_multiple_blocked_steps_all_recorded(self, monkeypatch, tmp_path):
+        """Each blocked step produces its own gap."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        from memory import detect_goal_gaps
+
+        gaps = detect_goal_gaps(
+            "analyze sentiment trends",
+            outcomes=[],
+            blocked_steps=["Step A failed", "Step B failed"],
+        )
+        blocked = [g for g in gaps if g.gap_type == "blocked_step"]
+        assert len(blocked) == 2
+
+    def test_no_coverage_gap_when_keywords_missing_from_outcomes(self, monkeypatch, tmp_path):
+        """Goal keywords absent from all outcomes produce a no_coverage gap."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        from memory import detect_goal_gaps, Outcome
+
+        outcomes = [
+            Outcome(
+                outcome_id="o1", goal="something else entirely",
+                status="done", summary="unrelated content here",
+                task_type="general", lessons=[],
+            )
+        ]
+        gaps = detect_goal_gaps(
+            "analyze sentiment trends bitcoin prices",
+            outcomes=outcomes,
+        )
+        no_cov = [g for g in gaps if g.gap_type == "no_coverage"]
+        assert len(no_cov) >= 1
+        assert no_cov[0].severity == "medium"
+
+    def test_no_gap_when_keywords_covered(self, monkeypatch, tmp_path):
+        """No no_coverage gap when goal keywords appear in outcomes."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        from memory import detect_goal_gaps, Outcome
+
+        outcomes = [
+            Outcome(
+                outcome_id="o1",
+                goal="analyze sentiment trends bitcoin prices",
+                status="done",
+                summary="sentiment analysis of bitcoin price trends completed successfully",
+                task_type="research", lessons=[],
+            )
+        ]
+        gaps = detect_goal_gaps(
+            "analyze sentiment trends bitcoin prices",
+            outcomes=outcomes,
+        )
+        no_cov = [g for g in gaps if g.gap_type == "no_coverage"]
+        assert len(no_cov) == 0
+
+    def test_max_gaps_limits_output(self, monkeypatch, tmp_path):
+        """max_gaps parameter caps the returned list."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        from memory import detect_goal_gaps
+
+        gaps = detect_goal_gaps(
+            "research polymarket sentiment bitcoin analysis trends",
+            outcomes=[],
+            blocked_steps=["Step A", "Step B", "Step C", "Step D"],
+            max_gaps=2,
+        )
+        assert len(gaps) <= 2
+
+    def test_gaps_sorted_high_before_medium(self, monkeypatch, tmp_path):
+        """High-severity gaps appear before medium-severity gaps."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        from memory import detect_goal_gaps, Outcome
+
+        outcomes = [
+            Outcome(
+                outcome_id="o1", goal="unrelated topic",
+                status="done", summary="nothing about the goal",
+                task_type="general", lessons=[],
+            )
+        ]
+        gaps = detect_goal_gaps(
+            "analyze bitcoin sentiment trends predictions",
+            outcomes=outcomes,
+            blocked_steps=["Some blocked step"],
+        )
+        severities = [g.severity for g in gaps]
+        assert "high" in severities
+        high_idx = severities.index("high")
+        for i, sev in enumerate(severities):
+            if sev == "medium":
+                assert i > high_idx
+
+    def test_empty_goal_returns_empty(self, monkeypatch, tmp_path):
+        """Empty goal string produces no keyword gaps."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        from memory import detect_goal_gaps
+
+        gaps = detect_goal_gaps("", outcomes=[])
+        # blocked_steps=None, no outcomes, no keywords → no gaps
+        assert gaps == []
+
+    def test_goalgap_dataclass_fields(self):
+        """GoalGap has expected fields."""
+        from memory import GoalGap
+
+        g = GoalGap(
+            gap_type="single_source",
+            description="Only one source found",
+            severity="medium",
+            suggested_step="Find corroborating sources",
+        )
+        assert g.gap_type == "single_source"
+        assert g.severity == "medium"
+        assert "source" in g.description

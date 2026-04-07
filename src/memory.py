@@ -1738,6 +1738,109 @@ def inject_tiered_lessons(
     return "## Tiered Lessons\n\n" + "\n".join(parts)
 
 
+# ---------------------------------------------------------------------------
+# Phase 59 (Feynman Steal 10): Multi-round gap analysis
+# ---------------------------------------------------------------------------
+
+@dataclass
+class GoalGap:
+    """A detected gap in goal coverage — motivates a targeted follow-up step.
+
+    Feynman pattern: after each research round, assess gaps and spawn targeted
+    steps to fill them. GoalGap describes what evidence or coverage is missing.
+    """
+    gap_type: str          # "single_source" | "blocked_step" | "lesson_gap" | "no_coverage"
+    description: str       # human-readable gap description
+    severity: str          # "high" | "medium" | "low"
+    suggested_step: str    # what follow-up step to spawn (empty = no suggestion)
+
+
+def detect_goal_gaps(
+    goal: str,
+    outcomes: Optional[List["Outcome"]] = None,
+    *,
+    blocked_steps: Optional[List[str]] = None,
+    max_gaps: int = 5,
+) -> List[GoalGap]:
+    """Detect coverage gaps in a set of outcomes relative to a goal.
+
+    Phase 59 (Feynman Steal 10): Heuristic gap detection — no LLM call.
+    Identifies:
+    1. Blocked/stuck steps that were attempted but not completed
+    2. Lessons that mention key terms in the goal but weren't applied
+    3. Goal keywords with zero outcome coverage
+    4. Outcomes with no evidence sources (single-source claims)
+
+    Args:
+        goal:          The original goal text.
+        outcomes:      List of completed Outcomes. Loads recent if None.
+        blocked_steps: List of step texts that were blocked/stuck.
+        max_gaps:      Maximum number of gaps to return.
+
+    Returns:
+        List of GoalGap objects, most severe first.
+    """
+    gaps: List[GoalGap] = []
+    goal_lower = goal.lower()
+
+    # Gap 1: Blocked steps → high-severity gaps
+    for step in (blocked_steps or []):
+        gaps.append(GoalGap(
+            gap_type="blocked_step",
+            description=f"Step was blocked and not completed: {step[:100]}",
+            severity="high",
+            suggested_step=f"Retry with different approach: {step[:80]}",
+        ))
+
+    # Gap 2: Load outcomes if not provided
+    if outcomes is None:
+        try:
+            outcomes = load_outcomes(limit=20)
+        except Exception:
+            outcomes = []
+
+    # Gap 3: Check goal keywords against outcome coverage
+    # Extract meaningful keywords from goal (skip stopwords)
+    _STOP = {"the", "a", "an", "and", "or", "for", "to", "in", "of", "is",
+              "it", "this", "that", "with", "from", "are", "were", "have"}
+    goal_words = set(
+        w for w in re.findall(r"[a-z]{4,}", goal_lower) if w not in _STOP
+    )
+    covered_words: set = set()
+    for o in outcomes:
+        text = (o.goal + " " + o.summary).lower()
+        covered_words.update(w for w in goal_words if w in text)
+
+    uncovered = goal_words - covered_words
+    if uncovered and len(uncovered) >= 2:
+        sample = list(uncovered)[:3]
+        gaps.append(GoalGap(
+            gap_type="no_coverage",
+            description=f"Goal concepts not addressed in outcomes: {', '.join(sample)}",
+            severity="medium",
+            suggested_step=f"Research specifically: {', '.join(sample)}",
+        ))
+
+    # Gap 4: Recent lessons about similar topics that weren't applied
+    try:
+        relevant_lessons = query_lessons(goal, n=3)
+        unused_lessons = [l for l in relevant_lessons if l.times_applied == 0]
+        if unused_lessons:
+            gaps.append(GoalGap(
+                gap_type="lesson_gap",
+                description=f"Relevant past lessons not applied: {unused_lessons[0].lesson[:80]}",
+                severity="low",
+                suggested_step="",  # no specific step — just apply the lesson
+            ))
+    except Exception:
+        pass
+
+    # Sort by severity and truncate
+    _sev_order = {"high": 0, "medium": 1, "low": 2}
+    gaps.sort(key=lambda g: _sev_order.get(g.severity, 3))
+    return gaps[:max_gaps]
+
+
 def query_lessons(
     query: str,
     *,
