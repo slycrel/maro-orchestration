@@ -3,6 +3,7 @@
 poe-observe              → full snapshot (loop state, heartbeat, recent outcomes, audit tail)
 poe-observe loop         → active goal / loop lock only
 poe-observe heartbeat    → heartbeat health only
+poe-observe projects     → per-project status at a glance (ACTIVE/STUCK/HEALTHY/UNKNOWN)
 poe-observe outcomes     → recent task outcomes
 poe-observe audit        → sandbox audit log tail
 poe-observe memory       → memory tier stats (same data as Stage 2 of poe-knowledge status)
@@ -366,6 +367,99 @@ def print_memory_stats() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Project status board
+# ---------------------------------------------------------------------------
+
+_STATUS_LABEL = {
+    "stuck":   "STUCK  ",
+    "warning": "WARN   ",
+    "healthy": "OK     ",
+    "unknown": "UNKN   ",
+    "active":  "ACTIVE ",
+    "failed":  "FAILED ",
+    "paused":  "PAUSED ",
+}
+_STATUS_COLOUR = {
+    "stuck":   "\033[31m",   # red
+    "warning": "\033[33m",   # yellow
+    "healthy": "\033[32m",   # green
+    "active":  "\033[36m",   # cyan
+    "unknown": "\033[90m",   # grey
+    "failed":  "\033[35m",   # magenta
+    "paused":  "\033[90m",   # grey
+}
+_RESET = "\033[0m"
+
+
+def _project_status_rows() -> List[dict]:
+    """Return per-project status dicts using sheriff + heartbeat data.
+
+    Each row: {"project": str, "status": str, "detail": str, "since": str}
+    No LLM calls — all data is from local JSONL/JSON files.
+    """
+    rows: List[dict] = []
+
+    # Check if the current loop is tied to a project
+    loop = _read_loop_state()
+    active_project = loop.get("project") if loop else None
+
+    try:
+        from sheriff import check_all_projects
+        reports = check_all_projects()
+        for r in reports:
+            st = r.status if r.status in _STATUS_LABEL else "unknown"
+            if r.project == active_project:
+                st = "active"
+            rows.append({
+                "project": r.project,
+                "status": st,
+                "detail": r.diagnosis or "",
+                "since": "",
+            })
+    except Exception:
+        pass
+
+    # Heartbeat stuck list as fallback / supplement
+    hb = _read_heartbeat()
+    hb_stuck = hb.get("stuck_projects", []) if hb else []
+    known = {r["project"] for r in rows}
+    for proj in hb_stuck:
+        if proj not in known:
+            rows.append({"project": proj, "status": "stuck",
+                         "detail": "flagged by heartbeat", "since": ""})
+
+    return rows
+
+
+def print_project_status(use_colour: bool = True) -> None:
+    """Print a one-line-per-project status board.
+
+    Format:
+      ACTIVE  openclaw-orchestration   Phase 60 running
+      STUCK   do-something             repeated decisions
+      OK      skills-research          no issues
+    """
+    rows = _project_status_rows()
+
+    if not rows:
+        print("Projects: no data (sheriff unavailable or no projects configured)")
+        return
+
+    print("Projects")
+    max_proj = max(len(r["project"]) for r in rows)
+    for r in rows:
+        st = r["status"]
+        label = _STATUS_LABEL.get(st, "UNKN   ")
+        detail = r["detail"][:60] if r["detail"] else ""
+        proj = r["project"].ljust(max_proj)
+        if use_colour:
+            col = _STATUS_COLOUR.get(st, "")
+            print(f"  {col}{label}{_RESET} {proj}  {detail}")
+        else:
+            print(f"  {label} {proj}  {detail}")
+
+
+# ---------------------------------------------------------------------------
 # Full snapshot
 # ---------------------------------------------------------------------------
 
@@ -381,6 +475,8 @@ def print_snapshot(outcomes_limit: int = 10, audit_limit: int = 5) -> None:
     print()
     print_heartbeat(hb)
     print()
+    print_project_status()
+    print()
     print_recent_outcomes(limit=outcomes_limit)
     print()
     print_audit_tail(limit=audit_limit)
@@ -388,7 +484,7 @@ def print_snapshot(outcomes_limit: int = 10, audit_limit: int = 5) -> None:
     print_memory_stats()
     print()
     print("──────────────────────────────────────────────────────")
-    print("Tip: poe-observe loop | heartbeat | outcomes | audit | memory")
+    print("Tip: poe-observe loop | heartbeat | projects | outcomes | audit | memory")
     print("     poe-knowledge status  for crystallization view")
 
 
@@ -972,6 +1068,7 @@ def main(argv: list[str] | None = None) -> None:
     sub = parser.add_subparsers(dest="cmd")
     sub.add_parser("loop", help="Active goal / loop lock")
     sub.add_parser("heartbeat", help="Heartbeat health status")
+    sub.add_parser("projects", help="Per-project status board (ACTIVE/STUCK/OK)")
     p_out = sub.add_parser("outcomes", help="Recent task outcomes")
     p_out.add_argument("--limit", type=int, default=20, help="Number of outcomes (default: 20)")
     p_audit = sub.add_parser("audit", help="Sandbox audit log tail")
@@ -991,6 +1088,8 @@ def main(argv: list[str] | None = None) -> None:
         print_loop_state()
     elif args.cmd == "heartbeat":
         print_heartbeat()
+    elif args.cmd == "projects":
+        print_project_status()
     elif args.cmd == "outcomes":
         print_recent_outcomes(limit=args.limit)
     elif args.cmd == "audit":

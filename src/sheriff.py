@@ -99,10 +99,59 @@ STUCK_REPETITION_THRESHOLD = 3
 DECISION_WINDOW = 20
 
 
+_FAILED_MARKER = ".poe-failed"
+_PAUSED_MARKER = ".poe-paused"
+
+
+def mark_project_failed(slug: str, reason: str = "") -> Path:
+    """Write a .poe-failed marker in the project directory.
+
+    Sheriff, backlog drain, and heartbeat diagnosis all skip failed projects.
+    The marker persists until manually removed. Returns the marker path.
+    """
+    import sys as _sys
+    _sys.path.insert(0, str(Path(__file__).parent))
+    from orch import project_dir
+    proj_dir = project_dir(slug)
+    marker = proj_dir / _FAILED_MARKER
+    content = f"failed: {reason}\n" if reason else "failed\n"
+    marker.write_text(content, encoding="utf-8")
+    return marker
+
+
+def mark_project_paused(slug: str, reason: str = "") -> Path:
+    """Write a .poe-paused marker — sheriff monitors but backlog drain skips."""
+    import sys as _sys
+    _sys.path.insert(0, str(Path(__file__).parent))
+    from orch import project_dir
+    proj_dir = project_dir(slug)
+    marker = proj_dir / _PAUSED_MARKER
+    content = f"paused: {reason}\n" if reason else "paused\n"
+    marker.write_text(content, encoding="utf-8")
+    return marker
+
+
+def project_lifecycle_state(slug: str) -> str:
+    """Return 'failed' | 'paused' | 'active' based on marker files."""
+    import sys as _sys
+    _sys.path.insert(0, str(Path(__file__).parent))
+    from orch import project_dir
+    try:
+        proj_dir = project_dir(slug)
+        if (proj_dir / _FAILED_MARKER).exists():
+            return "failed"
+        if (proj_dir / _PAUSED_MARKER).exists():
+            return "paused"
+    except Exception:
+        pass
+    return "active"
+
+
 def check_project(slug: str, *, window_minutes: int = 30) -> SheriffReport:
     """Check a single project for loop health.
 
     Checks:
+    0. Lifecycle markers: .poe-failed → status=failed (skip all other checks)
     1. Repetition: same TODO selected multiple times with no progress
     2. Artifact freshness: artifacts changing?
     3. Decision log freshness: new decisions being appended?
@@ -121,6 +170,23 @@ def check_project(slug: str, *, window_minutes: int = 30) -> SheriffReport:
                 project=slug,
                 status="unknown",
                 diagnosis="Project directory does not exist",
+                evidence=[],
+            )
+
+        # Check lifecycle markers first — short-circuit before expensive checks
+        _lc = project_lifecycle_state(slug)
+        if _lc == "failed":
+            return SheriffReport(
+                project=slug,
+                status="failed",
+                diagnosis="Marked failed (.poe-failed)",
+                evidence=[],
+            )
+        if _lc == "paused":
+            return SheriffReport(
+                project=slug,
+                status="paused",
+                diagnosis="Marked paused (.poe-paused)",
                 evidence=[],
             )
 

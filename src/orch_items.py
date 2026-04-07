@@ -508,6 +508,13 @@ def select_global_next() -> Optional[Tuple[str, NextItem]]:
             mtime = p.stat().st_mtime
         except FileNotFoundError:
             continue
+        # Skip failed or paused projects — they don't participate in backlog drain
+        try:
+            from sheriff import project_lifecycle_state
+            if project_lifecycle_state(slug) in ("failed", "paused"):
+                continue
+        except Exception:
+            pass
         candidates.append((project_priority(slug), mtime, slug))
 
     for _priority, _mtime, slug in sorted(candidates, key=lambda row: (row[0], row[1]), reverse=True):
