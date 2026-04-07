@@ -1195,7 +1195,11 @@ class MemoryTier:
 
 @dataclass
 class TieredLesson:
-    """A lesson with decay score and tier placement (Phase 16)."""
+    """A lesson with decay score and tier placement (Phase 16).
+
+    Phase 59 (Feynman steal): evidence_sources field enables claim tracing —
+    every lesson can carry the URLs/papers/outcomes that back its claim.
+    """
     lesson_id: str
     task_type: str
     outcome: str
@@ -1210,6 +1214,8 @@ class TieredLesson:
     times_reinforced: int = 0
     recorded_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     acquired_for: Optional[str] = None  # goal_id that triggered this lesson (incidental flag)
+    # Phase 59: evidence sources for claim tracing (URLs, outcome_ids, paper refs)
+    evidence_sources: List[str] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -1290,12 +1296,16 @@ def record_tiered_lesson(
     tier: str = MemoryTier.MEDIUM,
     confidence: float = 0.7,
     acquired_for: Optional[str] = None,
+    evidence_sources: Optional[List[str]] = None,
 ) -> TieredLesson:
     """Record a new lesson at the given tier.
 
     Checks for near-duplicates before writing; reinforces existing if match found.
     Pass ``acquired_for=goal_id`` to tag incidental knowledge (e.g. lessons acquired
     as a prerequisite sub-goal rather than as the primary task outcome).
+
+    Phase 59: ``evidence_sources`` accepts a list of URLs/outcome_ids/paper refs
+    that back the lesson's claim, enabling post-hoc claim tracing.
     """
     import uuid
 
@@ -1315,6 +1325,7 @@ def record_tiered_lesson(
         score=1.0,
         last_reinforced=_current_date(),
         acquired_for=acquired_for,
+        evidence_sources=evidence_sources or [],
     )
     _append_tiered_lesson(tl, tier=tier)
     return tl

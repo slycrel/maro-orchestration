@@ -1040,3 +1040,62 @@ class TestTaskLedger:
 
         entries = load_task_ledger(loop_id="loopX")
         assert entries[0].status == "blocked"
+
+
+class TestTieredLessonEvidenceSources:
+    """Tests for TieredLesson.evidence_sources (Feynman claim tracing)."""
+
+    def _write_lessons(self, path: Path, lessons) -> None:
+        import json
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w") as f:
+            for l in lessons:
+                from dataclasses import asdict as _asdict
+                f.write(json.dumps(_asdict(l)) + "\n")
+
+    def test_evidence_sources_default_empty(self):
+        """TieredLesson.evidence_sources defaults to empty list."""
+        from memory import TieredLesson, MemoryTier
+        import datetime as dt
+        l = TieredLesson(
+            lesson_id="l1", lesson="test lesson", tier=MemoryTier.LONG,
+            task_type="research", outcome="done", source_goal="g",
+            confidence=0.9, score=0.9, last_reinforced=dt.date.today().isoformat(),
+        )
+        assert l.evidence_sources == []
+
+    def test_record_tiered_lesson_stores_evidence_sources(self, monkeypatch, tmp_path):
+        """record_tiered_lesson persists evidence_sources to disk."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        from memory import record_tiered_lesson, load_tiered_lessons, MemoryTier
+
+        record_tiered_lesson(
+            "use multiple sources", "research", "done", "research polymarket",
+            tier=MemoryTier.LONG,
+            evidence_sources=["https://example.com/paper1", "outcome_abc123"],
+        )
+
+        lessons = load_tiered_lessons(MemoryTier.LONG)
+        assert len(lessons) == 1
+        assert "https://example.com/paper1" in lessons[0].evidence_sources
+        assert "outcome_abc123" in lessons[0].evidence_sources
+
+    def test_evidence_sources_roundtrip(self, monkeypatch, tmp_path):
+        """Evidence sources survive serialization/deserialization."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        from memory import TieredLesson, MemoryTier, _tiered_lessons_path
+        import json, datetime as dt
+        from dataclasses import asdict
+
+        lesson = TieredLesson(
+            lesson_id="l1", lesson="test", tier=MemoryTier.MEDIUM,
+            task_type="general", outcome="done", source_goal="g",
+            confidence=0.8, score=0.8, last_reinforced=dt.date.today().isoformat(),
+            evidence_sources=["url1", "url2"],
+        )
+        path = _tiered_lessons_path("medium")
+        self._write_lessons(path, [lesson])
+
+        from memory import load_tiered_lessons
+        loaded = load_tiered_lessons("medium")
+        assert loaded[0].evidence_sources == ["url1", "url2"]
