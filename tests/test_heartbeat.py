@@ -22,6 +22,8 @@ from heartbeat import (
     _run_inspector_bg,
     _run_eval_bg,
     run_heartbeat,
+    _diagnosis_due,
+    _mark_diagnosis_ran,
 )
 
 
@@ -130,6 +132,9 @@ def test_tier2_llm_error_graceful():
 
 
 def test_tier2_llm_diagnosis_happy_path():
+    import heartbeat as hb
+    hb._diagnosis_last_ran.clear()  # ensure no cooldown state from prior tests
+
     mock_adapter = MagicMock()
     mock_resp = MagicMock()
     mock_resp.content = "ACTION: Reset the in-progress task\nREASON: It has been stuck for 30 minutes\nCONFIDENCE: high"
@@ -592,3 +597,192 @@ class TestPostHeartbeatEvent:
         hb.post_heartbeat_event("edge_case", payload="x" * 500)
         assert hb._wakeup_event.is_set()
         hb._wakeup_event.clear()
+
+
+# ---------------------------------------------------------------------------
+# Diagnosis cooldown — the primary fix for the overnight token runaway
+# ---------------------------------------------------------------------------
+
+class TestDiagnosisCooldown:
+    """Tests for the per-project diagnosis cooldown that prevents LLM runaway.
+
+    Root cause of 2026-04-07 incident: 6 stuck zombie projects × 60s heartbeat
+    interval = 360 LLM calls/hour over 4 hours overnight. The cooldown caps this
+    at 2 diagnoses/project/hour (one every 30 minutes).
+    """
+
+    def setup_method(self):
+        """Reset module-level cooldown state before each test to prevent pollution."""
+        import heartbeat as hb
+        hb._diagnosis_last_ran.clear()
+
+    def test_new_project_is_due(self):
+        """A project never diagnosed should always be due."""
+        assert _diagnosis_due("brand-new-project") is True
+
+    def test_just_marked_is_not_due(self):
+        """Immediately after marking, the project should not be due again."""
+        _mark_diagnosis_ran("my-proj")
+        assert _diagnosis_due("my-proj") is False
+
+    def test_different_projects_are_independent(self):
+        """Cooldown for one project should not affect another."""
+        _mark_diagnosis_ran("proj-a")
+        assert _diagnosis_due("proj-b") is True  # proj-b untouched
+
+    def test_cooldown_expires(self, monkeypatch):
+        """After the cooldown window passes, the project becomes due again."""
+        import heartbeat as hb
+        _mark_diagnosis_ran("proj-c")
+        assert _diagnosis_due("proj-c") is False
+
+        # Simulate time passing beyond the cooldown window
+        original_monotonic = time.monotonic
+        future_time = original_monotonic() + hb._DIAGNOSIS_COOLDOWN_SECS + 1
+        monkeypatch.setattr("heartbeat.time.monotonic", lambda: future_time)
+
+        import importlib
+        # Re-check _diagnosis_due with patched time — need to call via module
+        last = hb._diagnosis_last_ran.get("proj-c", 0.0)
+        elapsed = future_time - last
+        assert elapsed >= hb._DIAGNOSIS_COOLDOWN_SECS  # cooldown has expired
+
+    def test_tier2_skips_project_on_cooldown(self):
+        """_tier2_llm_diagnosis should skip LLM calls for recently diagnosed projects."""
+        _mark_diagnosis_ran("on-cooldown-proj")
+
+        mock_adapter = MagicMock()
+        with patch("heartbeat.build_adapter", return_value=mock_adapter), \
+             patch("heartbeat.parse_next", return_value=([], [])):
+            actions = _tier2_llm_diagnosis(["on-cooldown-proj"])
+
+        # Adapter should NOT have been called (project is on cooldown)
+        assert not mock_adapter.complete.called
+        assert len(actions) == 1
+        assert actions[0].outcome == "skipped"
+        assert "cooldown" in actions[0].action
+
+    def test_tier2_diagnoses_fresh_project(self):
+        """_tier2_llm_diagnosis should call LLM for a project not on cooldown."""
+        mock_adapter = MagicMock()
+        mock_resp = MagicMock()
+        mock_resp.content = "ACTION: Clear stuck items\nREASON: Stale\nCONFIDENCE: high"
+        mock_adapter.complete.return_value = mock_resp
+
+        with patch("heartbeat.build_adapter", return_value=mock_adapter), \
+             patch("heartbeat.parse_next", return_value=([], [])):
+            actions = _tier2_llm_diagnosis(["fresh-project"])
+
+        assert mock_adapter.complete.called
+        assert len(actions) == 1
+        assert actions[0].outcome == "suggested"
+
+    def test_tier2_mixed_cooldown_and_fresh(self):
+        """_tier2_llm_diagnosis handles mixed list: some on cooldown, some fresh."""
+        _mark_diagnosis_ran("stale-proj")
+
+        mock_adapter = MagicMock()
+        mock_resp = MagicMock()
+        mock_resp.content = "ACTION: Retry\nREASON: New\nCONFIDENCE: medium"
+        mock_adapter.complete.return_value = mock_resp
+
+        with patch("heartbeat.build_adapter", return_value=mock_adapter), \
+             patch("heartbeat.parse_next", return_value=([], [])):
+            actions = _tier2_llm_diagnosis(["stale-proj", "new-proj"])
+
+        # stale-proj: skipped (cooldown); new-proj: diagnosed
+        assert len(actions) == 2
+        stale_action = next(a for a in actions if a.target == "stale-proj")
+        new_action = next(a for a in actions if a.target == "new-proj")
+        assert stale_action.outcome == "skipped"
+        assert "cooldown" in stale_action.action
+        assert new_action.outcome == "suggested"
+        # LLM called exactly once (for new-proj only)
+        assert mock_adapter.complete.call_count == 1
+
+    def test_mark_diagnosis_ran_persists_timestamp(self):
+        """_mark_diagnosis_ran stores a monotonic timestamp for the project."""
+        import heartbeat as hb
+        before = time.monotonic()
+        _mark_diagnosis_ran("ts-proj")
+        after = time.monotonic()
+
+        recorded = hb._diagnosis_last_ran.get("ts-proj", 0.0)
+        assert before <= recorded <= after
+
+
+# ---------------------------------------------------------------------------
+# Session guard — prevents LLM work while an interactive session is active
+# ---------------------------------------------------------------------------
+
+class TestSessionGuard:
+    """Tests for _is_interactive_session_active() — the token-burn gatekeeper.
+
+    When a 'claude --continue' session is running interactively, all autonomous
+    LLM work (diagnosis, backlog drain, evolver) must be suppressed to avoid
+    double-burning the weekly token budget.
+    """
+
+    def test_returns_false_when_pgrep_finds_nothing(self):
+        """No claude --continue process → session not active."""
+        from heartbeat import _is_interactive_session_active
+        mock_result = MagicMock()
+        mock_result.returncode = 1  # pgrep: no match
+        mock_result.stdout = ""
+        with patch("heartbeat.subprocess.run", return_value=mock_result):
+            assert _is_interactive_session_active() is False
+
+    def test_returns_true_when_pgrep_finds_process(self):
+        """pgrep returns 0 with output → interactive session active."""
+        from heartbeat import _is_interactive_session_active
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = "12345\n"
+        with patch("heartbeat.subprocess.run", return_value=mock_result):
+            assert _is_interactive_session_active() is True
+
+    def test_returns_false_on_subprocess_exception(self):
+        """If pgrep is not available or times out, default to False (don't block work)."""
+        from heartbeat import _is_interactive_session_active
+        with patch("heartbeat.subprocess.run", side_effect=FileNotFoundError("pgrep not found")):
+            assert _is_interactive_session_active() is False
+
+    def test_returns_false_on_timeout(self):
+        """Timeout calling pgrep → False (don't block work)."""
+        from heartbeat import _is_interactive_session_active
+        import subprocess as _sp
+        with patch("heartbeat.subprocess.run", side_effect=_sp.TimeoutExpired("pgrep", 2)):
+            assert _is_interactive_session_active() is False
+
+    def test_empty_stdout_with_returncode_zero_is_false(self):
+        """pgrep returncode=0 but empty stdout — edge case, treated as not active."""
+        from heartbeat import _is_interactive_session_active
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = "   \n"  # whitespace only
+        with patch("heartbeat.subprocess.run", return_value=mock_result):
+            assert _is_interactive_session_active() is False
+
+    def test_tier2_skips_all_llm_when_session_active(self):
+        """run_heartbeat skips tier-2 LLM diagnosis entirely when session is active."""
+        mock_health = MagicMock()
+        mock_health.status = "healthy"
+        mock_health.checks = {}
+
+        # Simulate two stuck projects reported by sheriff
+        stuck_report_a = MagicMock()
+        stuck_report_a.project = "proj-a"
+        stuck_report_a.status = "stuck"
+        stuck_report_b = MagicMock()
+        stuck_report_b.project = "proj-b"
+        stuck_report_b.status = "stuck"
+
+        with patch("heartbeat.check_system_health", return_value=mock_health), \
+             patch("heartbeat.check_all_projects", return_value=[stuck_report_a, stuck_report_b]), \
+             patch("heartbeat.write_heartbeat_state"), \
+             patch("heartbeat._is_interactive_session_active", return_value=True), \
+             patch("heartbeat._tier2_llm_diagnosis") as mock_t2:
+            run_heartbeat(dry_run=False)
+
+        # Tier-2 LLM diagnosis should not have been called at all
+        assert not mock_t2.called

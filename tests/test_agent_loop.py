@@ -1588,19 +1588,21 @@ def test_milestone_step_expansion_only_at_depth_zero(monkeypatch, tmp_path):
 
     _sub_steps = ["sub-step A", "sub-step B"]
 
+    # Pass _DryRunAdapter explicitly to avoid real HTTP calls — pre_flight path still
+    # runs (gated on dry_run flag, not adapter type) so milestone_step_indices still applies.
     with patch("pre_flight.review_plan", return_value=fake_pf):
-        with patch("planner.decompose", return_value=_sub_steps) as mock_decompose:
+        with patch("planner.decompose", return_value=_sub_steps):
             result = run_agent_loop(
                 "do a complex analysis",
+                adapter=_DryRunAdapter(),
                 dry_run=False,
                 continuation_depth=1,  # depth > 0 — milestone expansion skipped
                 max_iterations=10,
             )
 
-    # decompose may be called for initial decomposition but NOT for milestone expansion
-    # (milestone expansion is gated on continuation_depth == 0)
-    # Verify the loop completed without crashing
+    # Milestone expansion is gated on continuation_depth == 0; loop should complete.
     assert isinstance(result, LoopResult)
+    assert result.status in ("done", "stuck", "blocked")
 
 
 def test_milestone_expansion_falls_through_if_decompose_returns_one_step(monkeypatch, tmp_path):
@@ -1613,12 +1615,19 @@ def test_milestone_expansion_falls_through_if_decompose_returns_one_step(monkeyp
     fake_pf.scope = "wide"
     fake_pf.flags = []
 
-    # Returns only 1 sub-step → should not expand, just execute normally
+    # Returns only 1 sub-step → should not expand, just execute normally.
+    # Pass _DryRunAdapter explicitly to avoid real HTTP calls.
     with patch("pre_flight.review_plan", return_value=fake_pf):
         with patch("planner.decompose", return_value=["same single step"]):
-            result = run_agent_loop("simple analysis", dry_run=False, max_iterations=5)
+            result = run_agent_loop(
+                "simple analysis",
+                adapter=_DryRunAdapter(),
+                dry_run=False,
+                max_iterations=5,
+            )
 
     assert isinstance(result, LoopResult)
+    assert result.status in ("done", "stuck", "blocked")
 
 
 # ---------------------------------------------------------------------------
