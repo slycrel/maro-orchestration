@@ -170,6 +170,7 @@ class TestPresetSteps:
     def test_preset_steps_executed_in_order(self):
         """preset_steps are executed in the order given."""
         from agent_loop import run_agent_loop
+        from pre_flight import PlanReview
 
         executed = []
 
@@ -180,9 +181,14 @@ class TestPresetSteps:
                 "tokens_in": 5, "tokens_out": 5, "inject_steps": [],
             }
 
+        # Mock pre_flight so vague step names don't trigger milestone expansion
+        # (milestone expansion would call the real LLM and rewrite the step list)
+        _no_milestones = PlanReview(scope="narrow", scope_note="test")
+
         with (
             patch("agent_loop._decompose"),
             patch("agent_loop._execute_step", side_effect=_fake_execute),
+            patch("pre_flight.review_plan", return_value=_no_milestones),
         ):
             run_agent_loop(
                 "test",
