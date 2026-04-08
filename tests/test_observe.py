@@ -603,3 +603,112 @@ class TestFactoryReplay:
         import inspect, observe as obs_mod
         src = inspect.getsource(obs_mod)
         assert "/api/replay-factory" in src
+
+
+# ---------------------------------------------------------------------------
+# Project status board (Phase 61 — poe-observe projects)
+# ---------------------------------------------------------------------------
+
+class TestProjectStatusBoard:
+    """Tests for _project_status_rows() and print_project_status().
+
+    The project status board surfaces per-project health without requiring LLM
+    calls — all data comes from sheriff JSONL/JSON files.
+    """
+
+    def _make_sheriff_report(self, project: str, status: str, diagnosis: str = ""):
+        """Build a minimal SheriffReport-like mock."""
+        from unittest.mock import MagicMock
+        r = MagicMock()
+        r.project = project
+        r.status = status
+        r.diagnosis = diagnosis
+        return r
+
+    def test_empty_rows_when_no_projects(self, monkeypatch, tmp_path):
+        """When sheriff finds no projects, rows is empty list."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        with __import__("unittest.mock", fromlist=["patch"]).patch(
+            "sheriff.check_all_projects", return_value=[]
+        ):
+            rows = observe._project_status_rows()
+        assert rows == []
+
+    def test_healthy_project_appears_as_healthy(self, monkeypatch, tmp_path):
+        """A healthy project shows 'healthy' status in rows."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        report = self._make_sheriff_report("my-proj", "healthy", "All checks pass")
+        with __import__("unittest.mock", fromlist=["patch"]).patch(
+            "sheriff.check_all_projects", return_value=[report]
+        ):
+            rows = observe._project_status_rows()
+        assert len(rows) == 1
+        assert rows[0]["project"] == "my-proj"
+        assert rows[0]["status"] == "healthy"
+
+    def test_stuck_project_appears_as_stuck(self, monkeypatch, tmp_path):
+        """A stuck project shows 'stuck' status in rows."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        report = self._make_sheriff_report("zombie-proj", "stuck", "No progress in 2h")
+        with __import__("unittest.mock", fromlist=["patch"]).patch(
+            "sheriff.check_all_projects", return_value=[report]
+        ):
+            rows = observe._project_status_rows()
+        assert rows[0]["status"] == "stuck"
+        assert "No progress" in rows[0]["detail"]
+
+    def test_failed_project_appears_as_failed(self, monkeypatch, tmp_path):
+        """A failed project shows 'failed' status in rows."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        report = self._make_sheriff_report("dead-proj", "failed", "Marked failed (.poe-failed)")
+        with __import__("unittest.mock", fromlist=["patch"]).patch(
+            "sheriff.check_all_projects", return_value=[report]
+        ):
+            rows = observe._project_status_rows()
+        assert rows[0]["status"] == "failed"
+
+    def test_print_project_status_outputs_label(self, monkeypatch, tmp_path, capsys):
+        """print_project_status() writes STUCK / OK / FAILED labels to stdout."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        reports = [
+            self._make_sheriff_report("live-proj", "healthy", ""),
+            self._make_sheriff_report("bad-proj", "stuck", "stuck"),
+        ]
+        with __import__("unittest.mock", fromlist=["patch"]).patch(
+            "sheriff.check_all_projects", return_value=reports
+        ):
+            observe.print_project_status(use_colour=False)
+        out = capsys.readouterr().out
+        assert "OK" in out
+        assert "STUCK" in out
+        assert "live-proj" in out
+        assert "bad-proj" in out
+
+    def test_print_project_status_no_data(self, monkeypatch, tmp_path, capsys):
+        """print_project_status() prints a graceful 'no data' message when empty."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        with __import__("unittest.mock", fromlist=["patch"]).patch(
+            "sheriff.check_all_projects", side_effect=ImportError("no sheriff")
+        ):
+            observe.print_project_status(use_colour=False)
+        out = capsys.readouterr().out
+        assert "no data" in out.lower() or out.strip() == ""
+
+    def test_main_projects_subcommand(self, monkeypatch, tmp_path, capsys):
+        """'poe-observe projects' CLI subcommand calls print_project_status."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        with __import__("unittest.mock", fromlist=["patch"]).patch(
+            "observe.print_project_status"
+        ) as mock_print:
+            observe.main(["projects"])
+        assert mock_print.called
+
+    def test_unknown_status_shown_as_unknown(self, monkeypatch, tmp_path):
+        """An unrecognized status string falls back to 'unknown' in rows."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        report = self._make_sheriff_report("weird-proj", "something-new", "")
+        with __import__("unittest.mock", fromlist=["patch"]).patch(
+            "sheriff.check_all_projects", return_value=[report]
+        ):
+            rows = observe._project_status_rows()
+        assert rows[0]["status"] == "unknown"

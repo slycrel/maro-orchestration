@@ -20,6 +20,9 @@ from sheriff import (
     fingerprint_project_state,
     write_heartbeat_state,
     read_heartbeat_state,
+    mark_project_failed,
+    mark_project_paused,
+    project_lifecycle_state,
 )
 
 
@@ -314,3 +317,76 @@ def test_cli_sheriff_all_json(monkeypatch, tmp_path, capsys):
     data = json.loads(out)
     assert isinstance(data, list)
     assert len(data) == 2
+
+
+# ---------------------------------------------------------------------------
+# Project lifecycle state (.poe-failed / .poe-paused marker files)
+# ---------------------------------------------------------------------------
+
+class TestProjectLifecycleState:
+    """Tests for mark_project_failed, mark_project_paused, project_lifecycle_state.
+
+    These marker files are the primary mechanism for stopping zombie projects
+    from consuming resources (heartbeat diagnosis, backlog drain, sheriff checks).
+    """
+
+    def test_active_project_has_active_state(self, monkeypatch, tmp_path):
+        """A project with no markers is 'active'."""
+        _setup(monkeypatch, tmp_path)
+        _mkproj(tmp_path, "live-proj")
+        assert project_lifecycle_state("live-proj") == "active"
+
+    def test_failed_marker_returns_failed(self, monkeypatch, tmp_path):
+        """After mark_project_failed(), project_lifecycle_state returns 'failed'."""
+        _setup(monkeypatch, tmp_path)
+        _mkproj(tmp_path, "dead-proj")
+        mark_project_failed("dead-proj", reason="zombie — no progress for 48h")
+        assert project_lifecycle_state("dead-proj") == "failed"
+
+    def test_paused_marker_returns_paused(self, monkeypatch, tmp_path):
+        """After mark_project_paused(), project_lifecycle_state returns 'paused'."""
+        _setup(monkeypatch, tmp_path)
+        _mkproj(tmp_path, "paused-proj")
+        mark_project_paused("paused-proj", reason="waiting on external dependency")
+        assert project_lifecycle_state("paused-proj") == "paused"
+
+    def test_failed_takes_precedence_over_paused(self, monkeypatch, tmp_path):
+        """If both markers exist (corrupt state), 'failed' takes precedence."""
+        _setup(monkeypatch, tmp_path)
+        proj_dir = _mkproj(tmp_path, "both-markers")
+        # Write both markers manually
+        (proj_dir / ".poe-failed").write_text("failed\n", encoding="utf-8")
+        (proj_dir / ".poe-paused").write_text("paused\n", encoding="utf-8")
+        assert project_lifecycle_state("both-markers") == "failed"
+
+    def test_failed_marker_writes_reason(self, monkeypatch, tmp_path):
+        """mark_project_failed writes the reason into the marker file."""
+        _setup(monkeypatch, tmp_path)
+        _mkproj(tmp_path, "reason-proj")
+        marker = mark_project_failed("reason-proj", reason="too many retries")
+        content = marker.read_text(encoding="utf-8")
+        assert "too many retries" in content
+
+    def test_failed_marker_without_reason(self, monkeypatch, tmp_path):
+        """mark_project_failed with no reason writes minimal marker content."""
+        _setup(monkeypatch, tmp_path)
+        _mkproj(tmp_path, "no-reason-proj")
+        marker = mark_project_failed("no-reason-proj")
+        assert marker.exists()
+        assert "failed" in marker.read_text(encoding="utf-8")
+
+    def test_check_project_short_circuits_on_failed(self, monkeypatch, tmp_path):
+        """check_project returns status='failed' immediately for failed projects."""
+        _setup(monkeypatch, tmp_path)
+        _mkproj(tmp_path, "marked-failed")
+        mark_project_failed("marked-failed", reason="stalled")
+        report = check_project("marked-failed")
+        assert report.status == "failed"
+        assert "failed" in report.diagnosis.lower()
+
+    def test_unknown_project_returns_active(self, monkeypatch, tmp_path):
+        """project_lifecycle_state returns 'active' for nonexistent projects (safe default)."""
+        _setup(monkeypatch, tmp_path)
+        # Do NOT create the project — lifecycle state should gracefully return active
+        result = project_lifecycle_state("nonexistent-ghost-project")
+        assert result == "active"
