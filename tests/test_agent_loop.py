@@ -1596,6 +1596,7 @@ def test_milestone_step_is_expanded(monkeypatch, tmp_path):
         with patch("planner.decompose", return_value=_sub_steps) as mock_decompose:
             result = run_agent_loop(
                 "do a complex analysis",
+                adapter=_DryRunAdapter(),
                 dry_run=False,
                 max_iterations=10,
             )
@@ -1678,7 +1679,7 @@ def test_preflight_calibration_logged_on_completion(monkeypatch, tmp_path):
     fake_pf.has_concerns = True
 
     with patch("pre_flight.review_plan", return_value=fake_pf):
-        result = run_agent_loop("analyze data", dry_run=False, max_iterations=5)
+        result = run_agent_loop("analyze data", adapter=_DryRunAdapter(), dry_run=False, max_iterations=5)
 
     # Check that calibration file was written
     try:
@@ -1735,7 +1736,7 @@ def test_preflight_calibration_false_positive_classification(monkeypatch, tmp_pa
     fake_pf.has_concerns = True
 
     with patch("pre_flight.review_plan", return_value=fake_pf):
-        result = run_agent_loop("analyze data", dry_run=False, max_iterations=5)
+        result = run_agent_loop("analyze data", adapter=_DryRunAdapter(), dry_run=False, max_iterations=5)
 
     if result.status == "done":
         try:
