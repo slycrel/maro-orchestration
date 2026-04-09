@@ -59,43 +59,18 @@ deploy/              systemd service files
 
 ## Current state
 
-**As of 2026-04-07:**
+**As of 2026-04-09.** Phases 0–61 complete. Tests: 3,235 passing (92s sequential).
 
-| Phase | Name | Status |
-|-------|------|--------|
-| 0–22 | Foundation through Knowledge Crystallization | DONE |
-| 23 | Observability Dashboard | DONE |
-| 24 | Messaging Integrations (Slack, Signal) | PARTIAL |
-| 25 | Ops Hardening | PARTIAL |
-| 27 | Prerequisite Knowledge Sub-Goals | DONE |
-| 28 | Poe Personality | PARTIAL |
-| 29 | Human Psychology Research Track | DONE |
-| 30–39, 43 | Token visibility, skills auto-promotion, token self-improvement, overnight missions, dashboards, skill synthesis, OSS hygiene, structured logging | DONE |
-| 38 | Subpackage Structure | PARTIAL |
-| 40 | Pluggable Memory Backend | DONE |
-| 41 | Tool Registry + Function Calling | DONE |
-| 42 | Nightly Eval Wired to Evolver | DONE |
-| 44 | Self-Reflection — Run Observer + Failure Classifier | DONE |
-| 45 | Self-Reflection — Recovery Planner | DONE |
-| 46 | Self-Reflection — Intervention Graduation | DONE |
-| 47 | Kill Switch (poe-stop) | DONE |
-| 48 | Conversation Mining — Idea Archaeology | DONE |
-| 50 | Thinkback Replay | DONE |
-| 51 | Passes — Unified Multi-Pass Review | DONE |
-| 52 | Cross-Reference Check | DONE |
-| 53 | Persistent Identity Block (GAP 1) | DONE |
-| 54 | Session Checkpointing / Loop Resume (GAP 3) | DONE |
-| 55 | lat.md Knowledge Graph | DONE |
-| 56 | Promotion Cycle — Standing Rules + Decision Journal | DONE |
-| 57 | Adaptive Model Tiering | DONE |
-| 58 | Pre-Flight Plan Review | DONE |
-| 59 | NeMo/Feynman Steal Items — typed lessons, island TF-IDF, confidence tiers, verifier memory | DONE |
-| 60 | Adversarial Verification Layer — citation enforcement, calibration loop, multi-model adversarial review | DONE |
-| 61 | Integration Depth — 14 integration tests: memory injection, checkpoint resume, adapter fallback | DONE |
+| Status | Phases |
+|--------|--------|
+| DONE | 0–23, 26–27, 29–37, 39–48, 50–61 |
+| PARTIAL | 24 (Slack skeleton, Signal deferred), 25 (ops hardening — heartbeat-ctl.sh shipped), 28 (persona — blocked on personas/jeremy.md), 38 (subpackage) |
 
-**Active work (as of 2026-04-07):** Phases 0–61 complete. Tests: ~3,195. Heartbeat fixes deployed: diagnosis cooldown (30 min/project), session guard, backlog drain interval 3→30 ticks — resolved overnight token runaway. Project lifecycle state: `.poe-failed`/`.poe-paused` marker files; `poe-observe projects` board added to default snapshot. Compact notation skill (`skills/compact_notation.md`) created — shorthand vocabulary for token-efficient reasoning. Pending: Phase 24 (Slack skeleton shipped, Signal deferred), Phase 25 ops hardening, Phase 28 (blocked on personas/jeremy.md), compact notation A/B testing, cross-agent claim challenge (deferred from P60).
+**Recent (Apr 7-9):** Pre-flight subprocess hang fixed (skip ClaudeSubprocessAdapter). Heartbeat ops hardening: diagnosis cooldown, session guard, `heartbeat-ctl.sh` with 4h auto-stop. Project lifecycle state (`.poe-failed`/`.poe-paused`). Compact notation skill. Full test suite sealed against HTTP leaks + hanging subprocess calls. xdist disabled (sequential is <2min).
 
-See `ROADMAP.md` for full phase specs. See `CHANGELOG.md` for what shipped.
+**Next:** Auto persona+skill packaging (Phase 62 candidate). Compact notation A/B testing. Doc cleanup in progress.
+
+See `ROADMAP.md` for active phases (57+). See `docs/ROADMAP_ARCHIVE.md` for completed phases (0–56).
 
 ---
 

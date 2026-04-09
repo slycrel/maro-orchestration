@@ -58,7 +58,7 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
-addopts = "-q -n auto -m 'not slow'"
+addopts = "-q -m 'not slow'"
 markers = [
     "slow: tests that take >2s (agent loop integration, background waits, CLI subprocess)",
 ]
