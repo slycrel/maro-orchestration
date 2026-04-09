@@ -188,3 +188,6 @@ Items moved here when done, for reference:
 - [x] Outcome-first decomposition (Bitter Lesson) — 2026-03-30
 - [x] User context injection (user/ folder) — 2026-03-30
 - [x] Agent-generated tools (backtester) — 2026-03-30
+
+From jeremy (clean up and integrate with the above later)
+- [ ] Examine the research in research/orchestration-knowledge-layer, and the follow-up research in docs/knowledge-layer (and consolidate into one or the other location). document proper implementation paths and implement the framework, with notes on how to flesh this out as needed.
