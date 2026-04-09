@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.11.1] - 2026-04-08
+
+AXI-inspired first-pass orchestration observability.
+
+### Added — NOW-lane tool-cost telemetry (prototype bridge)
+- `prototypes/poe-orchestrator/scripts/now_run.py` now appends per-run measurement events to `prototypes/poe-orchestrator/metrics/tool-costs.jsonl`
+- Captures backend, persona, model, source/reason, wall-clock duration, stdout/stderr byte size, command return code, artifact paths, and a task hash/preview for grouping repeated workloads
+- This is the first slice of task-class benchmarking inspired by the AXI/X research thread, so tool choice can be evaluated on evidence instead of vibes
+
+### History / reference
+- Trigger link reviewed through orchestration: `https://x.com/nummanali/status/2041946642484433283?s=52&t=oyt18pxjw6B2HjYA5b2mrA`
+
 ## [1.11.0] - 2026-04-07
 
 Phases 59–61 + token runaway fix. ~3200 tests passing.
