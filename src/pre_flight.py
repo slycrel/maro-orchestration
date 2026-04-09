@@ -126,11 +126,20 @@ def review_plan(
 
     try:
         from llm import LLMMessage, MODEL_CHEAP
-        # Always use cheap model — this is a fast pattern-match, not deep reasoning
-        try:
-            _reviewer = build_adapter(model=MODEL_CHEAP)
-        except Exception:
-            _reviewer = adapter
+        # Build a separate adapter — must NOT consume from the main adapter's
+        # response queue (ScriptedAdapter in tests has ordered responses).
+        # Explicitly exclude subprocess backend to avoid hanging during
+        # interactive sessions (claude -p blocks while claude --continue runs).
+        _reviewer = None
+        if build_adapter is not None:
+            for _backend in ("openrouter", "anthropic"):
+                try:
+                    _reviewer = build_adapter(model=MODEL_CHEAP, backend=_backend)
+                    break
+                except Exception:
+                    continue
+        if _reviewer is None:
+            return PlanReview(scope="unknown", scope_note="no API adapter for review")
 
         steps_text = "\n".join(f"{i+1}. {s}" for i, s in enumerate(steps))
         user_msg = f"Goal: {goal}\n\nProposed plan:\n{steps_text}"
@@ -266,10 +275,17 @@ def multi_lens_review(
     scope_note = ""
     milestone_indices: List[int] = []
 
-    try:
-        _reviewer = build_adapter(model=MODEL_CHEAP)
-    except Exception:
-        _reviewer = adapter
+    # Build a separate adapter (see review_plan for rationale).
+    _reviewer = None
+    if build_adapter is not None:
+        for _backend in ("openrouter", "anthropic"):
+            try:
+                _reviewer = build_adapter(model=MODEL_CHEAP, backend=_backend)
+                break
+            except Exception:
+                continue
+    if _reviewer is None:
+        return PlanReview(scope="unknown", scope_note="no API adapter for multi-lens review")
 
     # --- Lens 1: Scope detector ---
     try:
