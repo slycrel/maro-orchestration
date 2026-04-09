@@ -1487,8 +1487,12 @@ def test_inject_steps_inserted_into_plan(monkeypatch, tmp_path):
             # Decompose or other calls → delegate to parent
             return super().complete(messages, tools=tools, tool_choice=tool_choice, **kw)
 
+    from pre_flight import PlanReview as _PlanReview
+    _no_milestones = _PlanReview(scope="narrow", scope_note="test — no milestone expansion")
+
     with mock.patch("agent_loop._decompose",
-                    return_value=["step 1: do first thing", "step 2: do second thing"]):
+                    return_value=["step 1: do first thing", "step 2: do second thing"]), \
+         mock.patch("pre_flight.review_plan", return_value=_no_milestones):
         from agent_loop import run_agent_loop
         result = run_agent_loop(
             "test inject goal",

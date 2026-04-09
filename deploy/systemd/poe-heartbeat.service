@@ -1,0 +1,28 @@
+[Unit]
+Description=Poe Heartbeat — periodic health check + tiered self-healing
+Documentation=file:///home/clawd/claude/openclaw-orchestration/CLAUDE.md
+After=network.target
+
+[Service]
+Type=simple
+User=clawd
+WorkingDirectory=/home/clawd/claude/openclaw-orchestration
+ExecStart=/usr/bin/python3 src/heartbeat.py --loop --interval 60
+Restart=on-failure
+RestartSec=30
+
+# Token budget safety: stop after 4 hours, require manual restart.
+# Prevents multi-day unattended token burn like the Apr 7-9 incident.
+RuntimeMaxSec=14400
+
+# Environment
+Environment=PYTHONPATH=/home/clawd/claude/openclaw-orchestration/src
+Environment=OPENCLAW_WORKSPACE=/home/clawd/.openclaw/workspace
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=poe-heartbeat
+
+[Install]
+WantedBy=default.target
