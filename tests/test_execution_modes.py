@@ -141,9 +141,13 @@ class TestPresetSteps:
             elapsed_ms=100,
         )
 
+    def _no_milestones(self):
+        from pre_flight import PlanReview
+        return PlanReview(scope="narrow", scope_note="test")
+
     def test_preset_steps_bypasses_decompose(self):
         """When preset_steps is provided, _decompose should not be called."""
-        from agent_loop import run_agent_loop
+        from agent_loop import run_agent_loop, _DryRunAdapter
 
         decompose_called = []
 
@@ -157,9 +161,11 @@ class TestPresetSteps:
                 "status": "done", "result": "ok", "summary": "done",
                 "tokens_in": 5, "tokens_out": 5, "inject_steps": [],
             }),
+            patch("pre_flight.review_plan", return_value=self._no_milestones()),
         ):
             result = run_agent_loop(
                 "test goal",
+                adapter=_DryRunAdapter(),
                 dry_run=False,
                 preset_steps=["do step A", "do step B"],
             )
@@ -169,7 +175,7 @@ class TestPresetSteps:
 
     def test_preset_steps_executed_in_order(self):
         """preset_steps are executed in the order given."""
-        from agent_loop import run_agent_loop
+        from agent_loop import run_agent_loop, _DryRunAdapter
         from pre_flight import PlanReview
 
         executed = []
@@ -192,6 +198,7 @@ class TestPresetSteps:
         ):
             run_agent_loop(
                 "test",
+                adapter=_DryRunAdapter(),
                 dry_run=False,
                 preset_steps=["alpha", "beta", "gamma"],
             )
@@ -200,7 +207,7 @@ class TestPresetSteps:
 
     def test_empty_preset_steps_falls_through_to_decompose(self):
         """Empty preset_steps list should fall through to normal decomposition."""
-        from agent_loop import run_agent_loop
+        from agent_loop import run_agent_loop, _DryRunAdapter
 
         decompose_called = []
 
@@ -214,14 +221,15 @@ class TestPresetSteps:
                 "status": "done", "result": "ok", "summary": "done",
                 "tokens_in": 5, "tokens_out": 5, "inject_steps": [],
             }),
+            patch("pre_flight.review_plan", return_value=self._no_milestones()),
         ):
-            run_agent_loop("test goal", dry_run=False, preset_steps=[])
+            run_agent_loop("test goal", adapter=_DryRunAdapter(), dry_run=False, preset_steps=[])
 
         assert decompose_called, "empty preset_steps should fall through to decompose"
 
     def test_preset_steps_strips_blank_entries(self):
         """Blank entries in preset_steps are filtered out."""
-        from agent_loop import run_agent_loop
+        from agent_loop import run_agent_loop, _DryRunAdapter
 
         executed = []
 
@@ -235,9 +243,11 @@ class TestPresetSteps:
         with (
             patch("agent_loop._decompose"),
             patch("agent_loop._execute_step", side_effect=_fake_execute),
+            patch("pre_flight.review_plan", return_value=self._no_milestones()),
         ):
             run_agent_loop(
                 "test",
+                adapter=_DryRunAdapter(),
                 dry_run=False,
                 preset_steps=["  ", "real step", "", "another step"],
             )

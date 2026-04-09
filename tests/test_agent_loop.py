@@ -460,9 +460,10 @@ def test_march_of_nines_alert_set_on_low_success(monkeypatch, tmp_path):
 
     class _MostlyBlockedAdapter:
         """Returns flag_stuck for most steps."""
+        model_key = "test"
         call_count = 0
 
-        def complete(self, messages, *, tools=None, tool_choice="auto", max_tokens=4096, temperature=0.3):
+        def complete(self, messages, *, tools=None, tool_choice="auto", max_tokens=4096, temperature=0.3, **kw):
             from llm import LLMResponse, ToolCall
             user_content = next(
                 (m.content for m in reversed(messages) if m.role == "user"), ""
@@ -490,12 +491,16 @@ def test_march_of_nines_alert_set_on_low_success(monkeypatch, tmp_path):
                 )
             return LLMResponse(content="[ok]", stop_reason="end_turn", input_tokens=10, output_tokens=5)
 
-    result = run_agent_loop(
-        "multi step goal that keeps failing",
-        project="march-nines-alert",
-        adapter=_MostlyBlockedAdapter(),
-        dry_run=False,
-    )
+    from pre_flight import PlanReview
+    from unittest.mock import patch as _patch
+    _pf = PlanReview(scope="narrow", scope_note="test")
+    with _patch("pre_flight.review_plan", return_value=_pf):
+        result = run_agent_loop(
+            "multi step goal that keeps failing",
+            project="march-nines-alert",
+            adapter=_MostlyBlockedAdapter(),
+            dry_run=False,
+        )
     # With all steps blocked, chain_success should be < 0.5 after enough steps
     # Note: the loop stops on first stuck, so we need to check if the alert was set
     # The alert is set after 3+ steps have been attempted with low success
@@ -519,8 +524,9 @@ def test_dead_ends_written_on_block(monkeypatch, tmp_path):
 
     class _StuckAdapter:
         """Decomposes into steps, blocks on first execution."""
+        model_key = "test"
 
-        def complete(self, messages, *, tools=None, tool_choice="auto", max_tokens=4096, temperature=0.3):
+        def complete(self, messages, *, tools=None, tool_choice="auto", max_tokens=4096, temperature=0.3, **kw):
             from llm import LLMResponse, ToolCall
             user_content = next(
                 (m.content for m in reversed(messages) if m.role == "user"), ""
@@ -545,13 +551,18 @@ def test_dead_ends_written_on_block(monkeypatch, tmp_path):
                 )
             return LLMResponse(content="ok", stop_reason="end_turn", input_tokens=10, output_tokens=5)
 
+    from pre_flight import PlanReview
+    from unittest.mock import patch as _patch
+    _pf = PlanReview(scope="narrow", scope_note="test")
+
     project = "dead-ends-write-test"
-    result = run_agent_loop(
-        "do the thing that will fail",
-        project=project,
-        adapter=_StuckAdapter(),
-        dry_run=False,
-    )
+    with _patch("pre_flight.review_plan", return_value=_pf):
+        result = run_agent_loop(
+            "do the thing that will fail",
+            project=project,
+            adapter=_StuckAdapter(),
+            dry_run=False,
+        )
     assert result.status == "stuck"
     # Check DEAD_ENDS.md was written
     project_path = orch.project_dir(project)
@@ -987,12 +998,17 @@ def test_generate_refinement_hint_uses_llm_response():
 def test_cost_budget_stops_loop(monkeypatch, tmp_path):
     """Loop stops when estimated USD cost exceeds cost_budget + slush."""
     _setup_workspace(monkeypatch, tmp_path)
-    result = run_agent_loop(
-        "expensive task",
-        project="cost-test",
-        dry_run=False,
-        cost_budget=0.0001,  # tiny budget — will be exceeded immediately
-    )
+    from pre_flight import PlanReview
+    from unittest.mock import patch as _patch
+    _pf = PlanReview(scope="narrow", scope_note="test")
+    with _patch("pre_flight.review_plan", return_value=_pf):
+        result = run_agent_loop(
+            "expensive task",
+            project="cost-test",
+            adapter=_DryRunAdapter(),
+            dry_run=False,
+            cost_budget=0.0001,  # tiny budget — will be exceeded immediately
+        )
     assert result.status == "stuck" or result.status == "done"
     # If it ran at all with dry_run=False, the cost check should fire
     # (exact behavior depends on adapter availability)
@@ -1360,7 +1376,11 @@ def test_budget_ceiling_enqueues_continuation(monkeypatch, tmp_path):
         enqueued["depth"] = continuation_depth
         return {"job_id": "cont-001"}
 
-    with mock.patch("task_store.enqueue", _fake_enqueue):
+    from pre_flight import PlanReview
+    _pf = PlanReview(scope="narrow", scope_note="test")
+
+    with mock.patch("task_store.enqueue", _fake_enqueue), \
+         mock.patch("pre_flight.review_plan", return_value=_pf):
         from agent_loop import run_agent_loop, _DryRunAdapter
         result = run_agent_loop(
             "adversarial review of the entire codebase",
@@ -1394,7 +1414,11 @@ def test_budget_ceiling_escalates_at_depth_limit(monkeypatch, tmp_path):
         enqueued["depth"] = continuation_depth
         return {"job_id": "esc-001"}
 
-    with mock.patch("task_store.enqueue", _fake_enqueue):
+    from pre_flight import PlanReview
+    _pf = PlanReview(scope="narrow", scope_note="test")
+
+    with mock.patch("task_store.enqueue", _fake_enqueue), \
+         mock.patch("pre_flight.review_plan", return_value=_pf):
         from agent_loop import run_agent_loop, _DryRunAdapter
         result = run_agent_loop(
             "adversarial review of the entire codebase",
