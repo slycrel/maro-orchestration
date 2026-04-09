@@ -361,6 +361,21 @@ def diagnose_loop(loop_id: str) -> LoopDiagnosis:
     log.info("diagnosis loop_id=%s class=%s severity=%s steps=%d/%d tokens=%d",
              loop_id, failure_class, severity, len(done), len(profiles), total_tokens)
 
+    # Captain's log: non-healthy diagnoses
+    if failure_class != "healthy":
+        try:
+            from captains_log import log_event, DIAGNOSIS
+            log_event(
+                event_type=DIAGNOSIS,
+                subject=failure_class,
+                summary=f"Loop {loop_id}: {failure_class} ({severity}). {len(done)}/{len(profiles)} steps done.",
+                context={"severity": severity, "steps_done": len(done), "steps_blocked": len(blocked), "tokens": total_tokens},
+                loop_id=loop_id,
+                note=recommendation[:200] if recommendation else None,
+            )
+        except Exception:
+            pass
+
     return diag
 
 

@@ -259,6 +259,18 @@ def graduate_skill_to_rule(skill_id: str) -> Optional[Rule]:
             graduated_at=datetime.now(timezone.utc).isoformat(),
         )
         save_rule(rule)
+        # Captain's log
+        try:
+            from captains_log import log_event, RULE_GRADUATED
+            log_event(
+                event_type=RULE_GRADUATED,
+                subject=skill.name,
+                summary=f"Skill graduated to rule. pass^3={pass3:.3f}, use_count={skill.use_count}.",
+                context={"rule_id": rule.id, "skill_id": skill.id, "pass3": round(pass3, 3)},
+                related_ids=[f"skill:{skill.id}", f"rule:{rule.id}"],
+            )
+        except Exception:
+            pass
         return rule
 
     except Exception as e:
@@ -299,5 +311,17 @@ def demote_rule_to_skill(rule_id: str) -> bool:
         if r.id == rule_id:
             r.active = False
             save_rule(r)
+            # Captain's log
+            try:
+                from captains_log import log_event, RULE_DEMOTED
+                log_event(
+                    event_type=RULE_DEMOTED,
+                    subject=r.name,
+                    summary=f"Rule demoted to skill (active=False). wrong_answers={r.wrong_answer_count}.",
+                    context={"rule_id": rule_id, "wrong_answers": r.wrong_answer_count},
+                    related_ids=[f"rule:{rule_id}"],
+                )
+            except Exception:
+                pass
             return True
     return False

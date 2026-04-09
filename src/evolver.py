@@ -278,6 +278,18 @@ def _apply_suggestion_action(d: dict) -> None:
 
         # observation: no action needed
 
+        # Captain's log: evolver applied a suggestion
+        try:
+            from captains_log import log_event, EVOLVER_APPLIED
+            log_event(
+                event_type=EVOLVER_APPLIED,
+                subject=target or category,
+                summary=f"Applied {category} suggestion (confidence: {confidence:.2f}). {suggestion_text[:100]}",
+                context={"suggestion_id": suggestion_id, "category": category, "confidence": confidence},
+            )
+        except Exception:
+            pass
+
     except Exception as e:
         print(f"[evolver] _apply_suggestion_action({category}) failed: {e}", file=sys.stderr)
 
@@ -989,6 +1001,32 @@ def run_evolver(
     log.info("evolver_done run_id=%s patterns=%d suggestions=%d auto_applied=%d elapsed=%dms",
              run_id, len(patterns), len(suggestions), auto_applied, report.elapsed_ms)
 
+    # Captain's log: evolver cycle summary
+    try:
+        from captains_log import log_event, EVOLVER_GENERATED, EVOLVER_APPLIED, EVOLVER_SKIPPED
+        if suggestions:
+            log_event(
+                event_type=EVOLVER_GENERATED,
+                subject=f"run-{run_id}",
+                summary=f"Generated {len(suggestions)} suggestions from {len(outcomes)} outcomes. {auto_applied} auto-applied.",
+                context={
+                    "run_id": run_id,
+                    "outcomes_reviewed": len(outcomes),
+                    "suggestions": len(suggestions),
+                    "auto_applied": auto_applied,
+                    "patterns": len(patterns),
+                },
+            )
+        elif not report.skipped:
+            log_event(
+                event_type=EVOLVER_SKIPPED,
+                subject=f"run-{run_id}",
+                summary=f"No suggestions from {len(outcomes)} outcomes.",
+                context={"run_id": run_id, "outcomes_reviewed": len(outcomes)},
+            )
+    except Exception:
+        pass
+
     # Phase 17: check if router retraining is needed
     try:
         from router import maybe_retrain
@@ -1396,6 +1434,20 @@ def synthesize_skill(
 
     if verbose:
         print(f"[evolver] synthesized new skill: {new_skill.name} ({new_skill.id})", file=sys.stderr)
+
+    # Captain's log
+    try:
+        from captains_log import log_event, SKILL_SYNTHESIZED
+        log_event(
+            event_type=SKILL_SYNTHESIZED,
+            subject=new_skill.name,
+            summary=f"New skill synthesized from goal: {goal[:80]}.",
+            context={"skill_id": new_skill.id, "goal": goal[:200], "outcome": outcome_summary[:200]},
+            loop_id=source_loop_id or None,
+            related_ids=[f"skill:{new_skill.id}"],
+        )
+    except Exception:
+        pass
 
     return new_skill
 

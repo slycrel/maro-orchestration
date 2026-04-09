@@ -97,6 +97,34 @@ class StepOutcome:
     injected_steps: List[str] = field(default_factory=list)  # steps added mid-plan by this step
 
 
+def step_from_decompose(
+    text: str,
+    index: int,
+    *,
+    status: str = "pending",
+    result: str = "",
+    iteration: int = 0,
+    tokens_in: int = 0,
+    tokens_out: int = 0,
+    elapsed_ms: int = 0,
+    confidence: str = "unverified",
+    injected_steps: Optional[List[str]] = None,
+) -> StepOutcome:
+    """Factory for StepOutcome — centralises defaults so inline construction sites stay DRY."""
+    return StepOutcome(
+        index=index,
+        text=text,
+        status=status,
+        result=result,
+        iteration=iteration,
+        tokens_in=tokens_in,
+        tokens_out=tokens_out,
+        elapsed_ms=elapsed_ms,
+        confidence=confidence,
+        injected_steps=injected_steps if injected_steps is not None else [],
+    )
+
+
 @dataclass
 class LoopResult:
     loop_id: str
@@ -1286,14 +1314,16 @@ def run_agent_loop(
                 _remaining, _done = _resume_from(_ckpt)
                 # Reconstruct StepOutcome objects from completed checkpoint data
                 for _cs in _done:
-                    _resume_completed.append(StepOutcome(
-                        index=_cs.index,
-                        text=_cs.text,
+                    _resume_completed.append(step_from_decompose(
+                        _cs.text, _cs.index,
                         status=_cs.status,
                         result=_cs.result,
+                        iteration=getattr(_cs, "iteration", 0),
                         tokens_in=_cs.tokens_in,
                         tokens_out=_cs.tokens_out,
                         elapsed_ms=_cs.elapsed_ms,
+                        confidence=getattr(_cs, "confidence", ""),
+                        injected_steps=list(getattr(_cs, "injected_steps", [])),
                     ))
                 steps = _remaining
                 if verbose:
@@ -1467,14 +1497,15 @@ def run_agent_loop(
         _fanout_stuck_reason = None
         for _i, (_step_text, _oc) in enumerate(zip(_fanout_step_texts, _fanout_outcomes), 1):
             _st = _oc.get("status", "blocked")
-            _fanout_step_outcomes.append(StepOutcome(
-                index=_i,
-                text=_step_text,
+            _fanout_step_outcomes.append(step_from_decompose(
+                _step_text, _i,
                 status=_st,
                 result=_oc.get("result", ""),
                 iteration=_i,
                 tokens_in=_oc.get("tokens_in", 0),
                 tokens_out=_oc.get("tokens_out", 0),
+                confidence=_oc.get("confidence", "unverified"),
+                injected_steps=_oc.get("inject_steps", []),
             ))
             _fanout_tokens_in += _oc.get("tokens_in", 0)
             _fanout_tokens_out += _oc.get("tokens_out", 0)
@@ -1793,13 +1824,15 @@ def run_agent_loop(
                 total_tokens_in += _batch_oc.get("tokens_in", 0)
                 total_tokens_out += _batch_oc.get("tokens_out", 0)
 
-                step_outcomes.append(StepOutcome(
-                    index=-1, text=_batch_text, status=_b_status,
+                step_outcomes.append(step_from_decompose(
+                    _batch_text, -1,
+                    status=_b_status,
                     result=_batch_oc.get("result", ""),
                     iteration=iteration,
                     tokens_in=_batch_oc.get("tokens_in", 0),
                     tokens_out=_batch_oc.get("tokens_out", 0),
                     elapsed_ms=_b_elapsed,
+                    confidence=_batch_oc.get("confidence", "unverified"),
                     injected_steps=_batch_oc.get("inject_steps", []),
                 ))
 
@@ -2150,9 +2183,8 @@ def run_agent_loop(
         if stuck_streak >= 2:  # 3rd repeat
             loop_status = "stuck"
             stuck_reason = f"same outcome '{step_status}' on '{step_text}' repeated 3 times"
-            step_outcomes.append(StepOutcome(
-                index=item_index,
-                text=step_text,
+            step_outcomes.append(step_from_decompose(
+                step_text, item_index,
                 status="blocked",
                 result=step_result,
                 iteration=iteration,
@@ -2360,9 +2392,8 @@ def run_agent_loop(
                     _br = outcome.get("stuck_reason", "blocked")
                     print(f"[poe] step {step_idx+1} blocked ({_br[:80]}), retrying with fallback hint", file=sys.stderr, flush=True)
                 # Record the blocked attempt but don't terminate
-                step_outcomes.append(StepOutcome(
-                    index=item_index,
-                    text=step_text,
+                step_outcomes.append(step_from_decompose(
+                    step_text, item_index,
                     status="blocked",
                     result=step_result,
                     iteration=iteration,
@@ -2414,9 +2445,8 @@ def run_agent_loop(
                         file=sys.stderr, flush=True,
                     )
                 # Record the failed combined step in outcomes before moving on
-                step_outcomes.append(StepOutcome(
-                    index=item_index,
-                    text=step_text,
+                step_outcomes.append(step_from_decompose(
+                    step_text, item_index,
                     status="blocked",
                     result=step_result,
                     iteration=iteration,
@@ -2463,9 +2493,8 @@ def run_agent_loop(
                     except Exception:
                         pass
 
-        step_outcomes.append(StepOutcome(
-            index=item_index,
-            text=step_text,
+        step_outcomes.append(step_from_decompose(
+            step_text, item_index,
             status=step_status,
             result=step_result,
             iteration=iteration,
@@ -2794,6 +2823,18 @@ def run_agent_loop(
             _recovery = _plan_fn(_diag)
             if _recovery and _recovery.auto_apply and _recovery.risk == "low":
                 log.info("auto-recovery: %s (class=%s)", _recovery.action, _diag.failure_class)
+                # Captain's log
+                try:
+                    from captains_log import log_event, AUTO_RECOVERY
+                    log_event(
+                        event_type=AUTO_RECOVERY,
+                        subject=_diag.failure_class,
+                        summary=f"Auto-recovery triggered: {_recovery.action}. Class: {_diag.failure_class}.",
+                        context={"action": _recovery.action, "risk": _recovery.risk, "params": dict(_recovery.params)},
+                        loop_id=loop_id,
+                    )
+                except Exception:
+                    pass
                 _new_params = dict(_recovery.params)
                 _new_max_steps = _new_params.pop("max_steps", max_steps)
                 _new_max_iter = _new_params.pop("max_iterations", max_iterations)

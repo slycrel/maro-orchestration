@@ -1498,6 +1498,19 @@ def record_tiered_lesson(
         lesson_type=lesson_type if lesson_type in _LESSON_TYPES else "",
     )
     _append_tiered_lesson(tl, tier=tier)
+
+    # Captain's log
+    try:
+        from captains_log import log_event, LESSON_RECORDED
+        log_event(
+            event_type=LESSON_RECORDED,
+            subject=tl.lesson_id,
+            summary=f"New {tier} lesson (confidence: {confidence:.2f}): {lesson_text[:100]}",
+            context={"tier": tier, "task_type": task_type, "confidence": confidence, "lesson_type": lesson_type},
+        )
+    except Exception:
+        pass
+
     return tl
 
 
@@ -1608,6 +1621,19 @@ def reinforce_lesson(lesson_id: str, tier: str = MemoryTier.MEDIUM) -> Optional[
     if target.sessions_validated >= 3:
         target.confidence = max(target.confidence, _CONFIDENCE_MULTI_SESSION)
     _rewrite_tiered_lessons(tier=tier, lessons=lessons)
+
+    # Captain's log
+    try:
+        from captains_log import log_event, LESSON_REINFORCED
+        log_event(
+            event_type=LESSON_REINFORCED,
+            subject=lesson_id,
+            summary=f"Reinforced (sessions: {target.sessions_validated}, score: {target.score:.2f}): {target.lesson[:80]}",
+            context={"tier": tier, "sessions_validated": target.sessions_validated, "score": round(target.score, 3)},
+        )
+    except Exception:
+        pass
+
     return target
 
 
@@ -2410,6 +2436,17 @@ def observe_pattern(lesson: str, domain: str, *, source_lesson_id: str = "") -> 
         )
         hyps.append(target_hyp)
         _rewrite_hypotheses(hyps)
+        # Captain's log
+        try:
+            from captains_log import log_event, HYPOTHESIS_CREATED
+            log_event(
+                event_type=HYPOTHESIS_CREATED,
+                subject=target_hyp.hyp_id,
+                summary=f"New hypothesis in {domain}: {lesson[:100]}",
+                context={"domain": domain, "hyp_id": target_hyp.hyp_id},
+            )
+        except Exception:
+            pass
         return None
 
     # Existing hypothesis — confirm
@@ -2437,6 +2474,18 @@ def observe_pattern(lesson: str, domain: str, *, source_lesson_id: str = "") -> 
         _rewrite_hypotheses(hyps)
         log.info("standing rule promoted: %s (domain=%s, confirmations=%d)",
                  rule.rule_id, rule.domain, rule.confirmations)
+        # Captain's log
+        try:
+            from captains_log import log_event, HYPOTHESIS_PROMOTED
+            log_event(
+                event_type=HYPOTHESIS_PROMOTED,
+                subject=rule.rule_id,
+                summary=f"Hypothesis promoted to standing rule ({rule.confirmations} confirmations): {rule.rule[:100]}",
+                context={"domain": rule.domain, "confirmations": rule.confirmations, "rule_id": rule.rule_id},
+                related_ids=[f"rule:{rule.rule_id}"],
+            )
+        except Exception:
+            pass
         return rule
 
     _rewrite_hypotheses(hyps)
@@ -2458,6 +2507,17 @@ def contradict_pattern(lesson: str, domain: str) -> bool:
             r.contradictions += 1
             _rewrite_rules(rules)
             log.warning("standing rule contradicted: rule_id=%s contradictions=%d", r.rule_id, r.contradictions)
+            try:
+                from captains_log import log_event, STANDING_RULE_CONTRADICTED
+                log_event(
+                    event_type=STANDING_RULE_CONTRADICTED,
+                    subject=r.rule_id,
+                    summary=f"Contradicted (now {r.contradictions} vs {r.confirmations} confirmations): {r.rule[:100]}",
+                    context={"contradictions": r.contradictions, "confirmations": r.confirmations},
+                    related_ids=[f"rule:{r.rule_id}"],
+                )
+            except Exception:
+                pass
             return True
 
     # Check hypotheses
@@ -2465,11 +2525,23 @@ def contradict_pattern(lesson: str, domain: str) -> bool:
     for h in hyps:
         if h.lesson.lower().strip() == lesson_lower or _text_similarity(h.lesson, lesson) > 0.85:
             h.contradictions += 1
-            if h.contradictions > h.confirmations:
+            _demoted = h.contradictions > h.confirmations
+            if _demoted:
                 # Demote — remove hypothesis
                 hyps = [x for x in hyps if x.hyp_id != h.hyp_id]
                 log.info("hypothesis demoted (contradictions > confirmations): %s", h.hyp_id)
             _rewrite_hypotheses(hyps)
+            try:
+                from captains_log import log_event, HYPOTHESIS_CONTRADICTED
+                _action = "Demoted and removed" if _demoted else "Contradicted"
+                log_event(
+                    event_type=HYPOTHESIS_CONTRADICTED,
+                    subject=h.hyp_id,
+                    summary=f"{_action} ({h.contradictions} contradictions vs {h.confirmations} confirmations): {h.lesson[:100]}",
+                    context={"contradictions": h.contradictions, "confirmations": h.confirmations},
+                )
+            except Exception:
+                pass
             return True
 
     return False
@@ -2570,6 +2642,19 @@ def record_decision(
             f.write(json.dumps(d.to_dict()) + "\n")
     except Exception as exc:
         log.warning("decision journal write failed: %s", exc)
+
+    # Captain's log
+    try:
+        from captains_log import log_event, DECISION_RECORDED
+        log_event(
+            event_type=DECISION_RECORDED,
+            subject=d.decision_id,
+            summary=f"Decision ({domain or 'general'}): {decision[:100]}",
+            context={"domain": domain, "alternatives": len(alternatives or [])},
+        )
+    except Exception:
+        pass
+
     return d
 
 

@@ -332,6 +332,18 @@ def run_graduation(
             for s in new_suggestions:
                 f.write(json.dumps(s) + "\n")
         log.info("graduation: wrote %d suggestions to %s", len(new_suggestions), path)
+        # Captain's log
+        try:
+            from captains_log import log_event, GRADUATION_PROPOSED
+            for s in new_suggestions:
+                log_event(
+                    event_type=GRADUATION_PROPOSED,
+                    subject=s.get("failure_pattern", ""),
+                    summary=f"Graduation proposed: {s['suggestion'][:120]}",
+                    context={"category": s["category"], "confidence": s["confidence"]},
+                )
+        except Exception:
+            pass
     except Exception as exc:
         log.warning("graduation: failed to write suggestions: %s", exc)
         return 0

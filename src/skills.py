@@ -710,6 +710,21 @@ def run_island_cycle(
     if verbose and assigned:
         print(f"[skills] island cycle: assigned {assigned} skills to islands", file=__import__("sys").stderr)
 
+    # Captain's log: island culling
+    if total_culled > 0 and not dry_run:
+        try:
+            from captains_log import log_event, ISLAND_CULLED
+            for island_name, culled_ids in cull_report.items():
+                log_event(
+                    event_type=ISLAND_CULLED,
+                    subject=island_name,
+                    summary=f"Culled {len(culled_ids)} bottom-half skills from island.",
+                    context={"culled_ids": culled_ids},
+                    related_ids=[f"skill:{sid}" for sid in culled_ids],
+                )
+        except Exception:
+            pass
+
     return {"assigned": assigned, "culled": cull_report, "total_culled": total_culled}
 
 
@@ -1099,6 +1114,8 @@ def update_skill_utility(skill_id: str, success: bool, failure_reason: str = "")
     )
 
     # Circuit breaker state transitions
+    old_circuit_state = target.circuit_state
+    old_utility = target.utility_score
     if success:
         target.consecutive_failures = 0
         target.consecutive_successes += 1
@@ -1123,6 +1140,28 @@ def update_skill_utility(skill_id: str, success: bool, failure_reason: str = "")
         # closed + 1 or 2 failures → stays closed (blip tolerance)
         if failure_reason:
             target.failure_notes = (target.failure_notes + [failure_reason[:200]])[-5:]
+
+    # Captain's log: circuit-breaker state transitions
+    if target.circuit_state != old_circuit_state:
+        try:
+            from captains_log import log_event, SKILL_CIRCUIT_OPEN, SKILL_CIRCUIT_HALF_OPEN, SKILL_CIRCUIT_CLOSED
+            _circuit_events = {"open": SKILL_CIRCUIT_OPEN, "half_open": SKILL_CIRCUIT_HALF_OPEN, "closed": SKILL_CIRCUIT_CLOSED}
+            log_event(
+                event_type=_circuit_events.get(target.circuit_state, "SKILL_CIRCUIT_OPEN"),
+                subject=target.name,
+                summary=f"Circuit {old_circuit_state} -> {target.circuit_state}. Utility: {old_utility:.2f} -> {target.utility_score:.2f}.",
+                context={
+                    "skill_id": skill_id,
+                    "utility_before": round(old_utility, 3),
+                    "utility_after": round(target.utility_score, 3),
+                    "consecutive_failures": target.consecutive_failures,
+                    "consecutive_successes": target.consecutive_successes,
+                },
+                note=failure_reason[:200] if failure_reason else None,
+                related_ids=[f"skill:{skill_id}"],
+            )
+        except Exception:
+            pass
 
     # Recompute content hash after mutation
     target.content_hash = compute_skill_hash(target)
@@ -1268,6 +1307,17 @@ def maybe_auto_promote_skills(adapter: Any = None, max_repair_attempts: int = 3)
         promoted.append(skill.id)
         changed = True
         logging.getLogger("poe.skills").info("[skills] auto-promoted skill %s (%s)", skill.id, skill.name)
+        try:
+            from captains_log import log_event, SKILL_PROMOTED
+            log_event(
+                event_type=SKILL_PROMOTED,
+                subject=skill.name,
+                summary=f"Promoted provisional -> established. Utility: {skill.utility_score:.2f} over {skill.use_count} uses.",
+                context={"skill_id": skill.id, "utility": round(skill.utility_score, 3), "use_count": skill.use_count},
+                related_ids=[f"skill:{skill.id}"],
+            )
+        except Exception:
+            pass
 
     if changed:
         _save_skills(skills)
@@ -1313,6 +1363,22 @@ def maybe_demote_skills() -> List[str]:
         demoted.append(skill.id)
         changed = True
         logger.info("[skills] demoted skill %s (%s) utility=%.2f", skill.id, skill.name, skill.utility_score)
+        try:
+            from captains_log import log_event, SKILL_DEMOTED
+            _reason = (
+                "circuit breaker open (sustained failures)"
+                if skill.circuit_state == "open"
+                else f"utility_score={skill.utility_score:.3f} < {REWRITE_TRIGGER_RATE}"
+            )
+            log_event(
+                event_type=SKILL_DEMOTED,
+                subject=skill.name,
+                summary=f"Demoted established -> provisional. {_reason}.",
+                context={"skill_id": skill.id, "utility": round(skill.utility_score, 3), "circuit_state": skill.circuit_state},
+                related_ids=[f"skill:{skill.id}"],
+            )
+        except Exception:
+            pass
         # Phase 59: provenance record
         try:
             reason = (
@@ -1517,6 +1583,17 @@ def create_skill_variant(original: Skill, rewritten: Skill) -> Skill:
     rewritten.variant_wins = 0
     rewritten.variant_losses = 0
     logger.info("skills.ab_variant: created challenger %s for parent %s", rewritten.id, original.id)
+    try:
+        from captains_log import log_event, SKILL_VARIANT_CREATED
+        log_event(
+            event_type=SKILL_VARIANT_CREATED,
+            subject=original.name,
+            summary=f"A/B challenger {rewritten.id[:8]} created for parent {original.id[:8]}.",
+            context={"parent_id": original.id, "challenger_id": rewritten.id},
+            related_ids=[f"skill:{original.id}", f"skill:{rewritten.id}"],
+        )
+    except Exception:
+        pass
     return rewritten
 
 
@@ -1643,6 +1720,18 @@ def retire_losing_variants(*, dry_run: bool = False, min_uses: int = MIN_VARIANT
         retain_ids = {s.id for s in skills} - set(retired)
         skills = [s for s in skills if s.id in retain_ids]
         _save_skills(skills)
+        # Captain's log: A/B retirement
+        try:
+            from captains_log import log_event, AB_RETIRED
+            log_event(
+                event_type=AB_RETIRED,
+                subject=", ".join(retired),
+                summary=f"A/B resolved: {len(promoted)} promoted, {len(retired)} retired.",
+                context={"promoted": promoted, "retired": retired},
+                related_ids=[f"skill:{sid}" for sid in promoted + retired],
+            )
+        except Exception:
+            pass
 
     return {"promoted": promoted, "retired": retired}
 

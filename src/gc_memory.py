@@ -186,6 +186,17 @@ def _gc_tiered_lessons(*, dry_run: bool = True) -> int:
         removed = len(all_lessons) - len(above_threshold)
         if removed > 0 and not dry_run:
             _rewrite_tiered_lessons(tier, above_threshold)
+            # Captain's log: lesson decay
+            try:
+                from captains_log import log_event, LESSON_DECAYED
+                log_event(
+                    event_type=LESSON_DECAYED,
+                    subject=f"{tier} tier",
+                    summary=f"GC removed {removed} lessons below threshold from {tier} tier.",
+                    context={"tier": tier, "removed": removed, "remaining": len(above_threshold)},
+                )
+            except Exception:
+                pass
         removed_total += removed
 
     return removed_total
