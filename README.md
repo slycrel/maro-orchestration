@@ -149,10 +149,51 @@ poe-tool-costs \
   --output-dir output/benchmarks
 ```
 
+Run the append/read lessons slice (the simple case JSONL currently wins):
+
+```bash
+python3 src/backend_benchmark.py \
+  --slice memory-backend \
+  --output-dir output/benchmarks \
+  --iterations 7 \
+  --records 250
+# or after install
+poe-benchmark --slice memory-backend --output-dir output/benchmarks
+```
+
+Run the filtered lookup slice (the first case where SQLite can justify itself):
+
+```bash
+python3 src/backend_benchmark.py \
+  --slice memory-backend-filtered-lookup \
+  --output-dir output/benchmarks \
+  --iterations 7 \
+  --records 20000 \
+  --limit 25 \
+  --min-confidence 0.8
+# or after install
+poe-benchmark --slice memory-backend-filtered-lookup --output-dir output/benchmarks
+```
+
+Run the concurrent append contention slice (2–4 workers appending to the same collection):
+
+```bash
+python3 src/backend_benchmark.py \
+  --slice memory-backend-append-contention \
+  --output-dir output/benchmarks \
+  --workers 2 4 \
+  --writes-per-worker 200
+# or after install
+poe-benchmark --slice memory-backend-append-contention --output-dir output/benchmarks
+```
+
 What it gives you:
 - grouping by inferred task class, step type, model, and status
 - sample count, ok/error split, median latency, p95-ish latency, median tokens, p95 tokens, and total cost
 - a deterministic three-workload smoke path for X-link research, document summary, and structured analysis
+- one real comparative append/read slice for the low-friction default path
+- one filtered retrieval slice that checks whether SQLite earns its overhead when the workload wants selective reads instead of whole-file parsing
+- one concurrent append contention slice that measures elapsed time, observed writes, and whether contention causes lost writes, corrupt rows, or lock/failure events
 
 | Logger | What it covers |
 |--------|---------------|
