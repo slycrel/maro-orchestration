@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.11.2] - 2026-04-09
+
+Tool-cost reporting ported into the canonical orchestration repo.
+
+### Added — Step-cost report + fixture benchmark
+- `src/tool_cost_report.py` summarizes `memory/step-costs.jsonl` into grouped tables by inferred task class, step type, model, and status
+- Reports sample count, ok/error split, median latency, p95-ish latency, median tokens, p95 tokens, and total cost
+- `benchmarks/fixture-workloads.json` adds a deterministic three-workload smoke path: X-link research, document summary, structured analysis
+- `pyproject.toml` now exposes `poe-tool-costs`
+
+### Documentation
+- `README.md` now documents live reporting and fixture benchmark usage from the canonical repo
+
 ## [1.11.1] - 2026-04-08
 
 AXI-inspired first-pass orchestration observability.

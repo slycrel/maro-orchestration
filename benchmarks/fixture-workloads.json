@@ -1,0 +1,32 @@
+[
+  {
+    "task_class": "x-link-research",
+    "step_text": "Research the linked X thread, extract three concrete claims, and note any quoted-post follow-up.",
+    "goal": "x-link research fixture",
+    "model": "mid",
+    "tokens_in": 700,
+    "tokens_out": 260,
+    "elapsed_ms": 2400,
+    "status": "done"
+  },
+  {
+    "task_class": "document-summary",
+    "step_text": "Summarize the provided document into four terse bullets and one recommendation.",
+    "goal": "document summary fixture",
+    "model": "mid",
+    "tokens_in": 480,
+    "tokens_out": 180,
+    "elapsed_ms": 1500,
+    "status": "done"
+  },
+  {
+    "task_class": "structured-analysis",
+    "step_text": "Analyze the structured input, identify two patterns, and return a one-line JSON recommendation.",
+    "goal": "structured analysis fixture",
+    "model": "mid",
+    "tokens_in": 520,
+    "tokens_out": 140,
+    "elapsed_ms": 1700,
+    "status": "done"
+  }
+]

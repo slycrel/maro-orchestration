@@ -17,6 +17,7 @@ Works standalone or alongside OpenClaw, Telegram, Slack, or any other interface 
 - **Skill library**: reusable step patterns extracted from successful runs; scored, tested, and promoted automatically
 - **Interface-agnostic**: Telegram, Slack, CLI, or call `run_agent_loop()` directly from Python — same behavior regardless of how a goal arrives
 - **Token-efficient research**: pre-fetch layer intercepts URLs before LLM calls, uses Jina Reader for clean markdown, authenticated X/Twitter access via CLI
+- **Cost reporting**: summarize `memory/step-costs.jsonl` into grouped latency/token/cost tables instead of eyeballing raw JSONL
 
 ---
 
@@ -119,6 +120,39 @@ POE_LOG_LEVEL=DEBUG python3 src/agent_loop.py "your goal"
 ```
 
 The `--verbose` CLI flag is equivalent to `POE_LOG_LEVEL=DEBUG`. Output goes to stderr so it doesn't interfere with result output.
+
+### Tool-cost reporting
+
+Summarize recorded step telemetry:
+
+```bash
+python3 src/tool_cost_report.py --metrics memory/step-costs.jsonl
+# or after install
+poe-tool-costs --metrics memory/step-costs.jsonl
+```
+
+Write markdown + JSON artifacts:
+
+```bash
+poe-tool-costs \
+  --metrics memory/step-costs.jsonl \
+  --write-report output/benchmarks/tool-cost-report-live.md \
+  --write-json output/benchmarks/tool-cost-report-live.json
+```
+
+Run the lean fixture benchmark and summarize that run:
+
+```bash
+poe-tool-costs \
+  --run-fixtures \
+  --fixtures benchmarks/fixture-workloads.json \
+  --output-dir output/benchmarks
+```
+
+What it gives you:
+- grouping by inferred task class, step type, model, and status
+- sample count, ok/error split, median latency, p95-ish latency, median tokens, p95 tokens, and total cost
+- a deterministic three-workload smoke path for X-link research, document summary, and structured analysis
 
 | Logger | What it covers |
 |--------|---------------|
