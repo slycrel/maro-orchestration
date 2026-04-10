@@ -1595,9 +1595,16 @@ def _rewrite_tiered_lessons(tier: str, lessons: Optional[List[TieredLesson]] = N
     if lessons is None:
         lessons = load_tiered_lessons(tier=tier, min_score=0.0)
     path = _tiered_lessons_path(tier)
-    with open(path, "w", encoding="utf-8") as f:
-        for tl in lessons:
-            f.write(json.dumps(asdict(tl)) + "\n")
+    try:
+        from file_lock import locked_write
+        with locked_write(path):
+            with open(path, "w", encoding="utf-8") as f:
+                for tl in lessons:
+                    f.write(json.dumps(asdict(tl)) + "\n")
+    except ImportError:
+        with open(path, "w", encoding="utf-8") as f:
+            for tl in lessons:
+                f.write(json.dumps(asdict(tl)) + "\n")
 
 
 # ---------------------------------------------------------------------------
@@ -2383,20 +2390,26 @@ def load_hypotheses(domain: Optional[str] = None) -> List[Hypothesis]:
 
 def _rewrite_rules(rules: List[StandingRule]) -> None:
     try:
-        _rules_path().write_text(
-            "\n".join(json.dumps(r.to_dict()) for r in rules) + ("\n" if rules else ""),
-            encoding="utf-8",
-        )
+        from file_lock import locked_write
+        path = _rules_path()
+        with locked_write(path):
+            path.write_text(
+                "\n".join(json.dumps(r.to_dict()) for r in rules) + ("\n" if rules else ""),
+                encoding="utf-8",
+            )
     except Exception:
         pass
 
 
 def _rewrite_hypotheses(hyps: List[Hypothesis]) -> None:
     try:
-        _hypotheses_path().write_text(
-            "\n".join(json.dumps(h.to_dict()) for h in hyps) + ("\n" if hyps else ""),
-            encoding="utf-8",
-        )
+        from file_lock import locked_write
+        path = _hypotheses_path()
+        with locked_write(path):
+            path.write_text(
+                "\n".join(json.dumps(h.to_dict()) for h in hyps) + ("\n" if hyps else ""),
+                encoding="utf-8",
+            )
     except Exception:
         pass
 

@@ -1740,11 +1740,13 @@ def _save_skills(skills: List[Skill]) -> None:
     """Overwrite skills.jsonl with the current list (full rewrite for consistency)."""
     path = _skills_path()
     try:
+        from file_lock import locked_write
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            "\n".join(json.dumps(_skill_to_dict(s)) for s in skills) + "\n",
-            encoding="utf-8",
-        )
+        with locked_write(path):
+            path.write_text(
+                "\n".join(json.dumps(_skill_to_dict(s)) for s in skills) + "\n",
+                encoding="utf-8",
+            )
     except Exception as e:
         logger.warning("[skills] _save_skills failed: %s", e)
 

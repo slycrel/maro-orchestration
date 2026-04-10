@@ -485,6 +485,7 @@ def _build_loop_context(
     goal: str,
     verbose: bool = False,
     permission_context=None,
+    project: str = "",
 ) -> tuple:
     """Load all context needed before decomposing a goal.
 
@@ -520,9 +521,10 @@ def _build_loop_context(
             pass
 
     # Phase 56: Standing rules (top tier — apply unconditionally)
+    # Scoped to project domain when available to prevent cross-project bleed
     try:
         from memory import inject_standing_rules
-        _rules = inject_standing_rules()
+        _rules = inject_standing_rules(domain=project)
         if _rules:
             lessons_context = _rules + ("\n\n" + lessons_context if lessons_context else "")
     except Exception:
@@ -531,7 +533,7 @@ def _build_loop_context(
     # Phase 56: Decision journal (relevant prior decisions)
     try:
         from memory import inject_decisions
-        _decisions = inject_decisions(goal)
+        _decisions = inject_decisions(goal, domain=project)
         if _decisions:
             lessons_context = (lessons_context + "\n\n" + _decisions) if lessons_context else _decisions
     except Exception:
@@ -1244,7 +1246,7 @@ def run_agent_loop(
     if verbose:
         print(f"[poe] decomposing goal...", file=sys.stderr, flush=True)
     _lessons_context, _skills_context, _cost_context, _had_no_matching_skill, _matched_rule = (
-        _build_loop_context(goal, verbose=verbose, permission_context=permission_context)
+        _build_loop_context(goal, verbose=verbose, permission_context=permission_context, project=project or "")
     )
 
     # Stage 5: rule hit — use deterministic steps, skip LLM decompose

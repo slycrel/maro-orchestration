@@ -64,6 +64,9 @@ Last reviewed: 2026-04-07 (session 13)
 ### Conversation Mining (Phase 48 idea)
 - [x] **Research pass through Telegram + Claude session data** — DONE (2026-04-05). `poe-mine --no-git` scanned 902 session log ideas → 336 unique after dedup. High-confidence (11): mostly already in BACKLOG. No new ideas injected above threshold. Notable finding from sessions: "knowledge graveyard" concept (temp storage for sub-goal learnings), "positive mid-IQ agent" (ralph approach, done), context size concern for sub-agents (done via context_firewall). Scan tool: `src/convo_miner.py`.
 
+### Concurrent Run Safety (hardening)
+- [ ] **First-class project isolation** — Currently: file locking on full-rewrite paths (skills, tiered lessons, hypotheses, rules) prevents data corruption; standing rules and decisions are domain-filtered during injection. Still needed for true concurrent runs: per-project skill pools (or project tag on skills + filtered matching), project-scoped lesson injection (currently filters by task_type but not project), per-project lockfile in set_loop_running(), concurrent run safety audit across all write paths. Add project field to Skill dataclass and wire through find_matching_skills(). Captain's Log should tag entries with project for filtered views. Low priority while runs are sequential; required before enabling parallel missions.
+
 ### Infrastructure
 - [ ] **Phase 38 subpackage move** — src/ is flat with 49 modules. Deferred (33+ imports per group), revisit when it causes real problems.
 - [x] **Phase 42 nightly eval** — wire eval suite to evolver on a schedule. Done: `run_nightly_eval()` in eval.py; fires via `eval_every=1440` in heartbeat_loop(); failures → evolver Suggestion entries. (2026-03-31)

@@ -119,10 +119,18 @@ def save_rule(rule: Rule) -> None:
             except Exception:
                 continue
     lines.append(rule.__dict__)
-    path.write_text(
-        "\n".join(json.dumps(e) for e in lines) + "\n",
-        encoding="utf-8",
-    )
+    try:
+        from file_lock import locked_write
+        with locked_write(path):
+            path.write_text(
+                "\n".join(json.dumps(e) for e in lines) + "\n",
+                encoding="utf-8",
+            )
+    except ImportError:
+        path.write_text(
+            "\n".join(json.dumps(e) for e in lines) + "\n",
+            encoding="utf-8",
+        )
 
 
 # ---------------------------------------------------------------------------
