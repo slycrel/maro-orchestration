@@ -109,6 +109,26 @@ class PlanReview:
         return "\n".join(lines)
 
 
+_WIDE_KEYWORDS = {"deploy", "refactor", "migrate", "rewrite", "redesign", "overhaul", "all"}
+_NARROW_KEYWORDS = {"fetch", "check", "read", "list", "get", "show", "status"}
+
+
+def _heuristic_scope(steps: List[str]) -> str:
+    """Estimate plan scope from step count and keywords when no LLM is available."""
+    n = len(steps)
+    text_lower = " ".join(steps).lower()
+    has_wide = any(kw in text_lower for kw in _WIDE_KEYWORDS)
+    has_narrow = any(kw in text_lower for kw in _NARROW_KEYWORDS)
+
+    if n <= 3 and not has_wide:
+        return "narrow"
+    if n >= 8 or has_wide:
+        return "wide"
+    if has_narrow and n <= 5:
+        return "narrow"
+    return "medium"
+
+
 def review_plan(
     goal: str,
     steps: List[str],
@@ -139,7 +159,14 @@ def review_plan(
                 except Exception:
                     continue
         if _reviewer is None:
-            return PlanReview(scope="unknown", scope_note="no API adapter for review")
+            # No API adapter available (subprocess-only environment).
+            # Fall back to heuristic scope estimate rather than returning unknown.
+            _scope = _heuristic_scope(steps)
+            log.info("pre_flight: no API adapter, using heuristic scope estimate: %s", _scope)
+            return PlanReview(
+                scope=_scope,
+                scope_note="heuristic estimate (no API adapter available for LLM review)",
+            )
 
         steps_text = "\n".join(f"{i+1}. {s}" for i, s in enumerate(steps))
         user_msg = f"Goal: {goal}\n\nProposed plan:\n{steps_text}"

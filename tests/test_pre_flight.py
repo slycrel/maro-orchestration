@@ -119,10 +119,12 @@ class TestReviewPlan:
         assert review.scope == "unknown"
         assert "no steps" in review.scope_note
 
-    def test_adapter_failure_returns_unknown(self):
+    def test_adapter_failure_returns_heuristic(self):
+        """When no API adapter is available, fall back to heuristic scope estimate."""
         with patch("pre_flight.build_adapter", side_effect=RuntimeError("no adapter")):
             review = review_plan("goal", ["step 1"], MagicMock())
-        assert review.scope == "unknown"
+        assert review.scope in ("narrow", "medium", "wide")
+        assert "heuristic" in review.scope_note
 
     def test_malformed_json_returns_unknown(self):
         mock_adapter = MagicMock()

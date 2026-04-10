@@ -13,8 +13,12 @@
 set -euo pipefail
 
 HEARTBEAT_PID_FILE="/tmp/poe-heartbeat.pid"
-HEARTBEAT_CMD="python3 /home/clawd/claude/openclaw-orchestration/src/heartbeat.py --loop --interval 60"
 MAX_RUNTIME_SECS=14400  # 4 hours
+
+# Resolve repo root from this script's location (scripts/ is one level down)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+HEARTBEAT_CMD="python3 ${REPO_ROOT}/src/heartbeat.py --loop --interval 60"
 
 _is_running() {
     if [[ -f "$HEARTBEAT_PID_FILE" ]]; then
@@ -68,8 +72,8 @@ cmd_start() {
         exit 1
     fi
     echo "starting heartbeat (max ${MAX_RUNTIME_SECS}s / $((MAX_RUNTIME_SECS / 3600))h)..."
-    cd /home/clawd/claude/openclaw-orchestration
-    export PYTHONPATH=src
+    cd "$REPO_ROOT"
+    export PYTHONPATH="${REPO_ROOT}/src"
     nohup timeout "${MAX_RUNTIME_SECS}" $HEARTBEAT_CMD > /dev/null 2>&1 &
     local new_pid=$!
     echo "$new_pid" > "$HEARTBEAT_PID_FILE"

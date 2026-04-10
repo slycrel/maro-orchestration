@@ -1,11 +1,14 @@
 [Unit]
 Description=Poe Heartbeat — periodic health check + tiered self-healing
+# Update Documentation path if repo location changes
 Documentation=file:///home/clawd/claude/openclaw-orchestration/CLAUDE.md
 After=network.target
 
 [Service]
 Type=simple
 User=clawd
+# NOTE: Update WorkingDirectory/PYTHONPATH if repo is moved.
+# Use `scripts/heartbeat-ctl.sh` for path-independent startup instead.
 WorkingDirectory=/home/clawd/claude/openclaw-orchestration
 ExecStart=/usr/bin/python3 src/heartbeat.py --loop --interval 60
 Restart=on-failure
@@ -15,7 +18,7 @@ RestartSec=30
 # Prevents multi-day unattended token burn like the Apr 7-9 incident.
 RuntimeMaxSec=14400
 
-# Environment
+# Environment — PYTHONPATH must match WorkingDirectory
 Environment=PYTHONPATH=/home/clawd/claude/openclaw-orchestration/src
 Environment=OPENCLAW_WORKSPACE=/home/clawd/.openclaw/workspace
 

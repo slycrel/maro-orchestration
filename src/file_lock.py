@@ -7,6 +7,13 @@ concurrent corruption when multiple agent loops run simultaneously.
 Append-only files (outcomes.jsonl, captains_log.jsonl, events.jsonl)
 don't need this — small appends are atomic on Linux.
 
+Behavior: best-effort lock with explicit warning on fallback. The lock
+is advisory — it prevents concurrent Poe processes from corrupting each
+other's writes, but can't enforce against external tools. If the lock
+can't be acquired within ~5s, the write proceeds with a WARNING log.
+This is a deliberate tradeoff: blocking indefinitely is worse than a
+rare unlocked write, but the warning makes degradation visible.
+
 Usage:
     from file_lock import locked_write
 
@@ -41,9 +48,12 @@ def locked_write(path: Path) -> Generator[None, None, None]:
     """Acquire an exclusive lock on path.lock, yield, then release.
 
     Uses a separate .lock file so the data file can be safely rewritten.
-    Blocks up to ~5s waiting for the lock. On any lock failure (timeout,
-    OS error, or reentrant call), proceeds without the lock (fail-open)
-    to avoid blocking execution.
+    Blocks up to ~5s waiting for the lock. If the lock cannot be acquired
+    (timeout, OS error), logs a WARNING and proceeds — this makes the
+    degradation visible in logs rather than silently dropping protection.
+
+    For reentrant calls (same thread already holds the lock), skips
+    acquisition to avoid deadlock.
     """
     lock_path = path.parent / (path.name + ".lock")
     lock_key = str(lock_path.resolve())
@@ -68,12 +78,19 @@ def locked_write(path: Path) -> Generator[None, None, None]:
             except BlockingIOError:
                 time.sleep(0.5)
         if not acquired:
-            # Last resort: proceed without lock (fail-open)
-            logger.debug("file_lock: timeout acquiring lock on %s, proceeding unlocked", lock_path)
+            logger.warning(
+                "file_lock: timeout acquiring lock on %s after 5s — "
+                "proceeding with UNLOCKED write. Another process may hold the lock. "
+                "Data corruption is possible if concurrent writes overlap.",
+                lock_path,
+            )
             lock_fd.close()
             lock_fd = None
     except Exception as exc:
-        logger.debug("file_lock: failed to acquire lock on %s: %s", lock_path, exc)
+        logger.warning(
+            "file_lock: failed to acquire lock on %s: %s — proceeding unlocked",
+            lock_path, exc,
+        )
         if lock_fd is not None:
             try:
                 lock_fd.close()
