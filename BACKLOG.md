@@ -67,6 +67,16 @@ Last reviewed: 2026-04-07 (session 13)
 ### Concurrent Run Safety (hardening)
 - [ ] **First-class project isolation** — Currently: file locking on full-rewrite paths (skills, tiered lessons, hypotheses, rules) prevents data corruption; standing rules and decisions are domain-filtered during injection. Still needed for true concurrent runs: per-project skill pools (or project tag on skills + filtered matching), project-scoped lesson injection (currently filters by task_type but not project), per-project lockfile in set_loop_running(), concurrent run safety audit across all write paths. Add project field to Skill dataclass and wire through find_matching_skills(). Captain's Log should tag entries with project for filtered views. Low priority while runs are sequential; required before enabling parallel missions.
 
+### From X research runs (2026-04-09)
+
+Six X posts researched via live Poe missions. Actionable items extracted:
+
+- [ ] **markitdown integration** — Microsoft's `markitdown` (96K stars) converts PDF/Word/Excel/Audio/HTML → Markdown for LLMs. `pip install 'markitdown[all]'`. Evaluate for `web_fetch.py` or new `file_ingest.py` module. MCP server available (`markitdown-mcp`). Source: @_vmlops post.
+- [ ] **TOOLS.md + STYLE.md gaps** — @imjustinbrooke's "7 files to run your business" framework maps to Poe: SOUL.md ✓, AGENTS.md ✓, USER.md ✓, MEMORY.md ✓, HEARTBEAT.md ≈ heartbeat scripts. Missing: explicit TOOLS.md (tool registry covers this partially) and STYLE.md (persona covers this partially). Consider whether explicit files add value.
+- [ ] **Eval-driven harness hill-climbing** — @mr_r0b0t + @ashpreetbedi both endorse @Vtrivedy10's LangChain article on using evals as autonomous learning signal. This IS evolver.py's pattern. Read full article when available — may have concrete recipes to improve the eval→lesson→skill pipeline.
+- [ ] **Letta API comparison** — @carsonfarmer/@sarahwooders: Anthropic's Managed Agents API mirrors Letta's 1yr-old API. Provider-managed memory = lock-in. Poe's file-based memory is aligned with "memory outside providers" thesis. Monitor Managed Agents API for useful features without adopting their memory model.
+- [ ] **Team OS / shared context layer** — @aakashgupta: 250+ structured docs/quarter compound into organizational knowledge. Validates knowledge layer K1-K2 investment. The "learning flywheel" pattern (each commit makes the repo smarter) is the vision for standing rules + lesson promotion.
+
 ### Infrastructure
 - [ ] **Phase 38 subpackage move** — src/ is flat with 49 modules. Deferred (33+ imports per group), revisit when it causes real problems.
 - [x] **Phase 42 nightly eval** — wire eval suite to evolver on a schedule. Done: `run_nightly_eval()` in eval.py; fires via `eval_every=1440` in heartbeat_loop(); failures → evolver Suggestion entries. (2026-03-31)
