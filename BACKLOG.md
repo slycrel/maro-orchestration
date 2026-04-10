@@ -64,6 +64,13 @@ Last reviewed: 2026-04-07 (session 13)
 ### Conversation Mining (Phase 48 idea)
 - [x] **Research pass through Telegram + Claude session data** — DONE (2026-04-05). `poe-mine --no-git` scanned 902 session log ideas → 336 unique after dedup. High-confidence (11): mostly already in BACKLOG. No new ideas injected above threshold. Notable finding from sessions: "knowledge graveyard" concept (temp storage for sub-goal learnings), "positive mid-IQ agent" (ralph approach, done), context size concern for sub-agents (done via context_firewall). Scan tool: `src/convo_miner.py`.
 
+### Architectural (from self-review pass 5, 2026-04-10)
+- [ ] **Extract LoopStateMachine from agent_loop.py** — 1,800-line monolith. State transitions scattered inline. Extract explicit LoopState enum + transition table `{(from_state, event) → to_state}`. Each transition becomes unit-testable. The outer function becomes ~100-line orchestrator. This is the biggest maintainability risk.
+- [ ] **Evolver drift detection** — Evolver modifies prompts/thresholds but can't detect if prior evolutions made things worse. Track rolling quality metric per cycle. If metric drops below pre-evolution baseline for N consecutive cycles, flag for rollback.
+- [ ] **Lesson contradiction check** — Before promoting any lesson to standing rule, compare against existing rules for contradiction. "Always skip verification" contradicts "always verify." LLM-based comparison at promotion time.
+- [ ] **Inspector threshold calibration** — Hardcoded thresholds (`_BREACH_THRESHOLD=0.30`, friction scores, etc.) not validated against real run distribution. Move to config file, add calibration mode that reports false-positive/negative rates against historical outcomes.
+- [ ] **Director planner unification** — `plan_NOW`, `plan_AGENDA`, `replan` are 3 separate implementations. Bug fixes in one don't propagate. Extract common `BasePlanner` with parameterized behavior.
+
 ### Self-Extensibility / Decision Point Hooks (design exploration)
 - [ ] **Composable decision-point hooks** — The system currently has pre/post step hooks (step_events.py), inspector observation, quality gate, and prompt injection (standing rules/lessons/skills into decompose). But these aren't composable: you can't say "after decompose, before execution, run extra verification on steps 3 and 5." MTG-style stack where effects can be intercepted at targeted points. For now, prompt-stage injection is sufficient. Revisit when operational experience shows which decision points actually need interception. Key constraint: any self-extensibility must be human-gated (see evolver guardrail auto-apply fix).
 
