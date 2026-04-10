@@ -39,7 +39,7 @@ FAILURE_CLASSES = {
     "empty_model_output":         "Model returned tokens but content < 20 chars with no tool call",
     "retry_churn":                "Same step retried 2+ times with different block reasons",
     "budget_exhaustion":          "max_iterations reached with remaining steps undone",
-    "token_explosion":            "Token growth rate > 3x between consecutive steps",
+    "token_explosion":            "Token growth rate > 3x between consecutive steps (research tasks exempt for moderate growth)",
     "artifact_missing":           "Loop completed but no readable output in done steps",
     "integration_drift":          "ImportError or AttributeError caught in execution path",
     "healthy":                    "No pathology detected",
@@ -293,18 +293,40 @@ def diagnose_loop(loop_id: str) -> LoopDiagnosis:
                 break
 
     # 5. Token explosion: > _TOKEN_EXPLOSION_RATIO× growth between consecutive steps
+    # Research/fetch tasks naturally grow as they accumulate external content —
+    # only flag if the loop also had blocked steps or excessive total cost.
     if failure_class == "healthy" and len(profiles) >= 3:
+        _loop_goal = ""
+        _loop_start = [e for e in events if e.get("event_type") == "loop_start"]
+        if _loop_start:
+            _loop_goal = _loop_start[0].get("goal", "").lower()
+        _is_research = any(kw in _loop_goal for kw in ("research", "summarize", "fetch", "analyze", "extract"))
+
         for i in range(1, len(profiles)):
             prev_tok = profiles[i-1].tokens
             curr_tok = profiles[i].tokens
             if prev_tok > 1000 and curr_tok > prev_tok * _TOKEN_EXPLOSION_RATIO:
+                # Research tasks: token growth from fetching external content is expected.
+                # Only flag if growth is extreme (>6x) or steps also blocked.
+                if _is_research and not blocked and curr_tok < prev_tok * 6:
+                    # Expected growth for research — note but don't classify as pathology
+                    evidence.append(
+                        f"Step {profiles[i].step_idx}: {curr_tok} tokens "
+                        f"(vs {prev_tok} for step {profiles[i-1].step_idx} — {curr_tok/prev_tok:.1f}x growth, "
+                        f"expected for research task)"
+                    )
+                    break
                 failure_class = "token_explosion"
                 severity = "warning"
                 evidence.append(
                     f"Step {profiles[i].step_idx}: {curr_tok} tokens "
                     f"(vs {prev_tok} for step {profiles[i-1].step_idx} — {curr_tok/prev_tok:.1f}x growth)"
                 )
-                recommendation = "Truncate completed_context or limit step output size"
+                recommendation = (
+                    "Distill prior step outputs into summaries before injecting as context. "
+                    "Full output should remain in artifacts but only key findings "
+                    "should carry forward to subsequent steps."
+                )
                 break
 
     # 6. Empty model output: tokens > 0 but blocked
@@ -1162,9 +1184,9 @@ _RECOVERY_TABLE: Dict[str, List[RecoveryPlan]] = {
     "token_explosion": [
         RecoveryPlan(
             failure_class="token_explosion",
-            action="Truncate completed_context to summaries and re-run from explosion point",
+            action="Distill prior step outputs to key findings before continuing. Keep full output in artifacts.",
             auto_apply=False, risk="medium",
-            params={"suggestion": "cap completed_context entries at 200 chars"},
+            params={"suggestion": "summarize completed_context entries to key findings, not raw truncation"},
         ),
     ],
     "retry_churn": [
