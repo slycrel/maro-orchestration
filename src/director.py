@@ -722,11 +722,11 @@ def _review_worker_output(
                 ),
                 (resp.input_tokens, resp.output_tokens),
             )
-    except Exception:
-        pass
+    except Exception as exc:
+        log.warning("director review parse failed: %s — rejecting (not auto-accepting)", exc)
 
-    # Default: accept (don't get stuck in review loops)
-    return (ReviewDecision(accepted=True, reason="review parse failed, auto-accepting"), (0, 0))
+    # Default: reject on parse failure. Auto-accepting hides bad output.
+    return (ReviewDecision(accepted=False, reason="review parse failed, rejecting for safety"), (0, 0))
 
 
 def _compile_report(

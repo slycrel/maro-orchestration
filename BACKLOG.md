@@ -67,6 +67,11 @@ Last reviewed: 2026-04-07 (session 13)
 ### Concurrent Run Safety (hardening)
 - [ ] **First-class project isolation** — Currently: file locking on full-rewrite paths (skills, tiered lessons, hypotheses, rules) prevents data corruption; standing rules and decisions are domain-filtered during injection. Still needed for true concurrent runs: per-project skill pools (or project tag on skills + filtered matching), project-scoped lesson injection (currently filters by task_type but not project), per-project lockfile in set_loop_running(), concurrent run safety audit across all write paths. Add project field to Skill dataclass and wire through find_matching_skills(). Captain's Log should tag entries with project for filtered views. Low priority while runs are sequential; required before enabling parallel missions.
 
+### Captain's Log extensions (from Grok Round 5 feedback, 2026-04-10)
+- [ ] **Input classification tag** — Extend `context` field in log entries with input characteristics (URL type, content type, source). Prevents circuit breakers from firing on domain mismatches (the Jina scenario). Log `INPUT_MISMATCH` when a skill is invoked on out-of-domain input.
+- [ ] **Director context hook** — Let the Director query last N captain's log entries during decompose. "What has the learning system been doing?" context injection. Stubbed in spec, not yet wired.
+- [ ] **Dashboard captain's log panel** — When dashboard becomes command center (Jeremy's vision), captain's log is natural sidebar/tab. Scrollable, filterable, linked to artifacts.
+
 ### From X research runs (2026-04-09)
 
 Six X posts researched via live Poe missions. Actionable items extracted:

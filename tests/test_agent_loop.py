@@ -1009,9 +1009,10 @@ def test_cost_budget_stops_loop(monkeypatch, tmp_path):
             dry_run=False,
             cost_budget=0.0001,  # tiny budget — will be exceeded immediately
         )
-    assert result.status == "stuck" or result.status == "done"
-    # If it ran at all with dry_run=False, the cost check should fire
-    # (exact behavior depends on adapter availability)
+    # Budget enforcement must stop the loop — 'done' would mean budget was ignored
+    assert result.status in ("stuck", "budget_exceeded"), (
+        f"Expected stuck/budget_exceeded but got {result.status!r} — budget enforcement may be broken"
+    )
 
 
 # ---------------------------------------------------------------------------

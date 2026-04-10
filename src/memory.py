@@ -411,6 +411,19 @@ def _append_daily_log(outcome: Outcome):
 # Lesson storage + retrieval
 # ---------------------------------------------------------------------------
 
+_INJECTION_PATTERNS = (
+    "ignore previous", "ignore above", "disregard", "system:", "[INST]", "[/INST]",
+    "<|system|>", "<|im_start|>", "you are now", "new instructions:", "override:",
+    "forget everything", "act as if",
+)
+
+
+def _lesson_looks_adversarial(text: str) -> bool:
+    """Reject lessons that look like prompt injection attempts."""
+    lower = text.lower()
+    return any(p in lower for p in _INJECTION_PATTERNS)
+
+
 def _store_lesson(
     task_type: str,
     outcome: str,
@@ -418,18 +431,30 @@ def _store_lesson(
     source_goal: str,
     confidence: float = 0.7,
 ) -> Lesson:
-    """Append a lesson to the lessons ledger."""
+    """Append a lesson to the lessons ledger, or reinforce existing near-duplicate."""
     import uuid
+
+    # Sanitize: reject lessons that look like prompt injection
+    if _lesson_looks_adversarial(lesson):
+        log.warning("lesson rejected (injection pattern detected): %s", lesson[:100])
+        # Return a dummy lesson so callers don't break, but don't persist it
+        return Lesson(
+            lesson_id="rejected",
+            task_type=task_type,
+            outcome=outcome,
+            lesson="[rejected: injection pattern]",
+            source_goal=source_goal,
+            confidence=0.0,
+        )
     # Check for near-duplicate (same lesson text for same task type)
     existing = load_lessons(task_type=task_type, limit=50)
     for ex in existing:
         if _text_similarity(ex.lesson, lesson) > 0.8:
-            # Reinforce existing lesson
+            # Reinforce existing lesson and persist the update
             ex.times_reinforced += 1
             ex.confidence = min(1.0, ex.confidence + 0.05)
-            # We'd need to rewrite the file to update — keep simple for now
-            # (just append the new one; dedup on load)
-            break
+            _rewrite_lessons_file(task_type, existing)
+            return ex
 
     l = Lesson(
         lesson_id=str(uuid.uuid4())[:8],
@@ -442,6 +467,43 @@ def _store_lesson(
     with open(_lessons_path(), "a", encoding="utf-8") as f:
         f.write(json.dumps(asdict(l)) + "\n")
     return l
+
+
+def _rewrite_lessons_file(task_type: str, updated_lessons: List[Lesson]) -> None:
+    """Rewrite the lessons file, replacing entries for the given task_type with updated versions."""
+    path = _lessons_path()
+    if not path.exists():
+        return
+    try:
+        from file_lock import locked_write
+    except ImportError:
+        locked_write = None
+
+    # Read all lines, replace matching task_type entries, keep others
+    all_lines = []
+    updated_ids = {l.lesson_id for l in updated_lessons}
+    updated_by_id = {l.lesson_id: l for l in updated_lessons}
+
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            d = json.loads(line)
+            lid = d.get("lesson_id", "")
+            if lid in updated_ids:
+                all_lines.append(json.dumps(asdict(updated_by_id[lid])))
+            else:
+                all_lines.append(line)
+        except Exception:
+            all_lines.append(line)  # preserve unparseable lines
+
+    content = "\n".join(all_lines) + ("\n" if all_lines else "")
+    if locked_write:
+        with locked_write(path):
+            path.write_text(content, encoding="utf-8")
+    else:
+        path.write_text(content, encoding="utf-8")
 
 
 def load_lessons(

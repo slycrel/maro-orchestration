@@ -155,8 +155,13 @@ def test_load_lessons_deduplicates(monkeypatch, tmp_path):
         record_outcome("goal", "done", "summary", task_type="general", lessons=["the same lesson text here"])
     lessons = load_lessons()
     lesson_texts = [l.lesson for l in lessons]
-    # Should be deduplicated
-    assert len(set(lesson_texts)) <= len(lesson_texts)
+    # Near-duplicates should be reinforced, not duplicated — expect 1 unique entry
+    unique_texts = set(lesson_texts)
+    assert len(unique_texts) == 1, f"Expected 1 unique lesson, got {len(unique_texts)}: {lesson_texts}"
+    # The file should also have at most 1 line for this lesson (dedup persists)
+    from memory import _lessons_path
+    line_count = len(_lessons_path().read_text().strip().splitlines())
+    assert line_count <= 1, f"Expected <=1 lesson lines, got {line_count} (dedup not persisting)"
 
 
 # ---------------------------------------------------------------------------
