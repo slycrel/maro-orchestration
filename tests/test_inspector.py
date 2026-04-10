@@ -825,8 +825,8 @@ def test_check_alignment_fields_populated():
     assert result.timestamp != ""
 
 
-def test_check_alignment_bad_json_falls_back():
-    """Adapter returning non-JSON falls back to heuristic."""
+def test_check_alignment_bad_json_returns_unverified():
+    """Adapter returning non-JSON → unverified (aligned=False), not silent pass."""
     session = _make_spec_outcome(status="done", goal="goal", summary="done it")
     mock_adapter = MagicMock()
     mock_resp = MagicMock()
@@ -834,8 +834,9 @@ def test_check_alignment_bad_json_falls_back():
     mock_adapter.complete.return_value = mock_resp
 
     result = check_alignment(session, adapter=mock_adapter)
-    # Fallback heuristic: status=done → aligned
-    assert result.aligned is True
+    # Bad JSON = unverified. Must NOT silently pass.
+    assert result.aligned is False
+    assert any("quality_check_unavailable" in g for g in result.gaps)
 
 
 # ---------------------------------------------------------------------------

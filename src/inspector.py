@@ -678,11 +678,15 @@ def check_alignment(session: Any, adapter=None) -> AlignmentResult:
                 aligned=aligned, alignment_score=score, gaps=gaps,
             )
     except Exception as e:
-        if __debug__:
-            print(f"[inspector] check_alignment LLM call failed: {e}", file=sys.stderr)
+        log.warning("check_alignment LLM call failed: %s — returning unverified (not aligned)", e)
 
-    # LLM failed — heuristic fallback
-    return check_alignment(session, adapter=None)
+    # LLM failed — do NOT fall back to heuristic that returns aligned=True.
+    # Returning aligned=False forces the caller to decide whether to retry or proceed.
+    return AlignmentResult(
+        session_id=session_id, mission_goal=goal, work_summary=summary,
+        aligned=False, alignment_score=0.0,
+        gaps=["quality_check_unavailable: LLM alignment check failed, result unverified"],
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -142,6 +142,47 @@ class LLMTool:
 # Base adapter
 # ---------------------------------------------------------------------------
 
+def _is_retryable(exc: Exception) -> bool:
+    """Return True if the exception is a transient error worth retrying."""
+    msg = str(exc).lower()
+    # HTTP 429, 5xx, rate limit, overloaded, timeout
+    for pattern in ("429", "rate limit", "rate_limit", "overloaded", "502", "503", "529",
+                    "timeout", "timed out", "connection", "temporarily unavailable"):
+        if pattern in msg:
+            return True
+    # Anthropic SDK specific
+    exc_type = type(exc).__name__
+    if exc_type in ("RateLimitError", "APIStatusError", "APIConnectionError",
+                     "InternalServerError", "OverloadedError"):
+        return True
+    return False
+
+
+def _retry_complete(fn, *args, max_retries: int = 3, **kwargs) -> "LLMResponse":
+    """Wrap an adapter .complete() call with retry on transient errors.
+
+    Exponential backoff: 5s, 15s, 45s. Only retries on rate limits,
+    server errors, and connection failures. Non-retryable errors propagate
+    immediately.
+    """
+    last_exc = None
+    for attempt in range(max_retries + 1):
+        try:
+            return fn(*args, **kwargs)
+        except Exception as exc:
+            if not _is_retryable(exc) or attempt == max_retries:
+                raise
+            last_exc = exc
+            wait = 5 * (3 ** attempt)  # 5, 15, 45
+            log.warning(
+                "llm retry: %s (attempt %d/%d, waiting %ds)",
+                type(exc).__name__, attempt + 1, max_retries, wait,
+            )
+            import time
+            time.sleep(wait)
+    raise last_exc  # unreachable, but satisfies type checker
+
+
 class LLMAdapter:
     """Abstract base. Subclass and implement `complete`."""
 
@@ -603,6 +644,7 @@ class AnthropicSDKAdapter(LLMAdapter):
     def __init__(self, api_key: str, model: str = MODEL_CHEAP):
         self._api_key = api_key
         self.model_key = model
+        self._client = None  # lazy-init, reused across calls
 
     def complete(
         self,
@@ -616,7 +658,9 @@ class AnthropicSDKAdapter(LLMAdapter):
     ) -> LLMResponse:
         import anthropic
 
-        client = anthropic.Anthropic(api_key=self._api_key)
+        if self._client is None:
+            self._client = anthropic.Anthropic(api_key=self._api_key)
+        client = self._client
         model_str = resolve_model("anthropic", self.model_key)
 
         system = "\n\n".join(m.content for m in messages if m.role == "system")
@@ -643,7 +687,7 @@ class AnthropicSDKAdapter(LLMAdapter):
             elif tool_choice != "auto":
                 kwargs["tool_choice"] = {"type": tool_choice}
 
-        resp = client.messages.create(**kwargs)
+        resp = _retry_complete(client.messages.create, **kwargs)
 
         content = ""
         tool_calls: List[ToolCall] = []
@@ -716,8 +760,11 @@ class OpenRouterAdapter(LLMAdapter):
             ]
             payload["tool_choice"] = tool_choice
 
-        resp = requests.post(_OPENROUTER_URL, headers=headers, json=payload, timeout=120)
-        resp.raise_for_status()
+        def _do_request():
+            r = requests.post(_OPENROUTER_URL, headers=headers, json=payload, timeout=120)
+            r.raise_for_status()
+            return r
+        resp = _retry_complete(_do_request)
         data = resp.json()
 
         choice = data["choices"][0]
@@ -791,8 +838,11 @@ class OpenAIAdapter(LLMAdapter):
             ]
             payload["tool_choice"] = tool_choice
 
-        resp = requests.post(f"{self._base_url}/chat/completions", headers=headers, json=payload, timeout=120)
-        resp.raise_for_status()
+        def _do_request():
+            r = requests.post(f"{self._base_url}/chat/completions", headers=headers, json=payload, timeout=120)
+            r.raise_for_status()
+            return r
+        resp = _retry_complete(_do_request)
         data = resp.json()
 
         choice = data["choices"][0]
