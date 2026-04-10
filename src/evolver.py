@@ -321,7 +321,9 @@ def apply_suggestion(suggestion_id: str) -> bool:
             if d.get("suggestion_id") == suggestion_id:
                 found = True
                 # Phase 14: skill_pattern suggestions go through test gate
-                if d.get("category") == "skill_pattern" and validate_skill_mutation is not None:
+                category = d.get("category", "observation")
+
+                if category == "skill_pattern" and validate_skill_mutation is not None:
                     gate_result = _run_skill_test_gate(d)
                     if gate_result is not None and gate_result.get("blocked"):
                         d["applied"] = False
@@ -331,7 +333,24 @@ def apply_suggestion(suggestion_id: str) -> bool:
                         d["applied"] = True
                         d.pop("status", None)
                         _apply_suggestion_action(d)
+                elif category == "new_guardrail":
+                    # Guardrails can permanently block execution — require explicit opt-in.
+                    # Set POE_AUTO_APPLY_GUARDRAILS=1 to enable, otherwise hold for human review.
+                    if os.environ.get("POE_AUTO_APPLY_GUARDRAILS") == "1":
+                        d["applied"] = True
+                        _apply_suggestion_action(d)
+                    else:
+                        d["applied"] = False
+                        d["status"] = "held_for_review"
+                        d["block_reason"] = "new_guardrail requires POE_AUTO_APPLY_GUARDRAILS=1 or manual review"
+                        log.info("evolver: guardrail held for review (not auto-applied): %s", d.get("suggestion", "")[:100])
+                elif category == "prompt_tweak":
+                    # Prompt tweaks are lower risk (just a lesson) but log prominently
+                    d["applied"] = True
+                    _apply_suggestion_action(d)
+                    log.info("evolver: auto-applied prompt_tweak: %s", d.get("suggestion", "")[:100])
                 else:
+                    # observation, sub_mission, etc. — safe to apply
                     d["applied"] = True
                     _apply_suggestion_action(d)
             new_lines.append(json.dumps(d))

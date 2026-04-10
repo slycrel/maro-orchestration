@@ -119,6 +119,24 @@ class FrictionSignal:
     evidence: str = ""    # anonymized evidence snippet (no raw user content — max 80 chars)
     session_id: str = ""
 
+    # Severity string ↔ float mapping for interop with SpecFrictionSignal
+    _SEVERITY_TO_FLOAT = {"low": 0.3, "medium": 0.6, "high": 0.9}
+    _FLOAT_TO_SEVERITY = [(0.5, "low"), (0.75, "medium"), (1.0, "high")]
+
+    @property
+    def severity_float(self) -> float:
+        """Convert string severity to float for comparison with SpecFrictionSignal."""
+        return self._SEVERITY_TO_FLOAT.get(self.severity, 0.5)
+
+    def to_spec(self) -> "SpecFrictionSignal":
+        """Convert to SpecFrictionSignal for unified processing."""
+        return SpecFrictionSignal(
+            session_id=self.session_id,
+            signal_type=self.signal_type,
+            severity=self.severity_float,
+            evidence=self.evidence,
+        )
+
     def to_dict(self) -> dict:
         return {
             "signal_type": self.signal_type,
@@ -140,9 +158,9 @@ class FrictionSignal:
 
 
 # ---------------------------------------------------------------------------
-# Phase 12 spec dataclasses (new in this phase — alongside existing ones above)
-# FrictionSignal below uses float severity (spec); existing FrictionSignal uses str.
-# They coexist under different usage paths.
+# Phase 12 spec dataclasses
+# SpecFrictionSignal uses float severity (0.0–1.0), FrictionSignal uses str.
+# Both have .to_spec() / .to_legacy() conversion for unified processing.
 # ---------------------------------------------------------------------------
 
 @dataclass
@@ -153,6 +171,25 @@ class SpecFrictionSignal:
     severity: float          # 0.0–1.0
     evidence: str
     timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+    @property
+    def severity_str(self) -> str:
+        """Convert float severity to string for interop with FrictionSignal."""
+        if self.severity < 0.5:
+            return "low"
+        if self.severity < 0.75:
+            return "medium"
+        return "high"
+
+    def to_legacy(self) -> "FrictionSignal":
+        """Convert to FrictionSignal for code paths that expect string severity."""
+        return FrictionSignal(
+            signal_type=self.signal_type,
+            severity=self.severity_str,
+            count=1,
+            evidence=self.evidence,
+            session_id=self.session_id,
+        )
 
     def to_dict(self) -> dict:
         return {
