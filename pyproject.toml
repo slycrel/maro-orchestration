@@ -52,6 +52,7 @@ poe-evolver = "evolver:main"
 poe-replay = "strategy_evaluator:main"
 poe-tool-costs = "tool_cost_report:main"
 poe-benchmark = "backend_benchmark:main"
+poe-log = "captains_log:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
