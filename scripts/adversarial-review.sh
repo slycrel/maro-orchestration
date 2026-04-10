@@ -49,9 +49,9 @@ echo "Log:    ${LOG_FILE}"
 echo "Report: ${REPORT_FILE}"
 echo
 
-# Pre-flight: run the test suite
+# Pre-flight: run the test suite (non-fatal — pre-existing failures shouldn't block the review)
 echo "--- Pre-flight: test suite ---"
-python3 -m pytest tests/ -q --tb=line 2>&1 | tail -5
+python3 -m pytest tests/ -q --tb=line 2>&1 | tail -5 || true
 echo
 
 # Build goal prefix
