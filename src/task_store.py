@@ -21,9 +21,16 @@ from contextlib import contextmanager
 from typing import Any, Dict, List, Optional
 
 from config import workspace_root as _workspace_root
-ROOT = _workspace_root()
-TASKS_DIR = ROOT / "output" / "queues" / "tasks"
-ARCHIVE_DIR = ROOT / "output" / "queues" / "archive"
+
+
+def _tasks_dir() -> pathlib.Path:
+    """Resolve tasks dir at call time, not import time. Respects env var changes."""
+    return _workspace_root() / "output" / "queues" / "tasks"
+
+
+def _archive_dir() -> pathlib.Path:
+    """Resolve archive dir at call time, not import time."""
+    return _workspace_root() / "output" / "queues" / "archive"
 
 VALID_STATUSES = ("queued", "claimed", "done", "failed", "archived")
 
@@ -39,7 +46,7 @@ def new_job_id() -> str:
 
 
 def task_path(job_id: str) -> pathlib.Path:
-    return TASKS_DIR / f"{job_id}.json"
+    return _tasks_dir() / f"{job_id}.json"
 
 
 def make_task(
@@ -237,8 +244,8 @@ def fail(job_id: str, error: str = "") -> Dict[str, Any]:
 def _resolve_dependents(completed_job_id: str) -> None:
     """Scan all tasks; for any that list completed_job_id in blocked_by, remove it.
     If blocked_by becomes empty, task stays queued and is now claimable."""
-    TASKS_DIR.mkdir(parents=True, exist_ok=True)
-    for p in TASKS_DIR.glob("*.json"):
+    _tasks_dir().mkdir(parents=True, exist_ok=True)
+    for p in _tasks_dir().glob("*.json"):
         with _lock_task(p):
             task = _read_task(p)
             if task is None:
@@ -252,9 +259,9 @@ def _resolve_dependents(completed_job_id: str) -> None:
 
 def list_tasks(status_filter: Optional[str] = None) -> List[Dict[str, Any]]:
     """List all tasks, optionally filtered by status."""
-    TASKS_DIR.mkdir(parents=True, exist_ok=True)
+    _tasks_dir().mkdir(parents=True, exist_ok=True)
     tasks = []
-    for p in sorted(TASKS_DIR.glob("*.json")):
+    for p in sorted(_tasks_dir().glob("*.json")):
         task = _read_task(p)
         if task is None:
             continue
@@ -267,8 +274,8 @@ def list_tasks(status_filter: Optional[str] = None) -> List[Dict[str, Any]]:
 def status_summary() -> Dict[str, int]:
     """Return counts by status."""
     counts: Dict[str, int] = {}
-    TASKS_DIR.mkdir(parents=True, exist_ok=True)
-    for p in TASKS_DIR.glob("*.json"):
+    _tasks_dir().mkdir(parents=True, exist_ok=True)
+    for p in _tasks_dir().glob("*.json"):
         task = _read_task(p)
         if task is None:
             continue
@@ -287,8 +294,8 @@ def archive(job_id: str) -> Dict[str, Any]:
         if task["status"] not in ("done", "failed"):
             raise RuntimeError(f"task {job_id} has status '{task['status']}', can only archive done/failed")
         task["status"] = "archived"
-        ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
-        archive_path = ARCHIVE_DIR / f"{job_id}.json"
+        _archive_dir().mkdir(parents=True, exist_ok=True)
+        archive_path = _archive_dir() / f"{job_id}.json"
         _atomic_write(archive_path, task)
         path.unlink(missing_ok=True)
         # Clean up lock file
@@ -299,8 +306,8 @@ def archive(job_id: str) -> Dict[str, Any]:
 def recover_stale_claims() -> List[str]:
     """Find claimed tasks whose PID is dead and reset them to queued."""
     recovered = []
-    TASKS_DIR.mkdir(parents=True, exist_ok=True)
-    for p in TASKS_DIR.glob("*.json"):
+    _tasks_dir().mkdir(parents=True, exist_ok=True)
+    for p in _tasks_dir().glob("*.json"):
         with _lock_task(p):
             task = _read_task(p)
             if task is None:
