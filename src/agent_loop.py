@@ -163,6 +163,89 @@ class LoopResult:
 
 
 # ---------------------------------------------------------------------------
+# Loop state machine types
+# ---------------------------------------------------------------------------
+
+class LoopPhase:
+    """Named constants for the major phases of run_agent_loop.
+
+    Not a formal enum — just named strings for clarity in logging and
+    transition tracking. The function is too large for a single-dispatch
+    FSM, but naming the phases makes the flow auditable.
+
+    Extraction plan: each phase corresponds to a future method on a
+    LoopStateMachine class. For now, these are documentation anchors.
+    """
+    INIT = "init"                    # Phase A: setup, adapter, project
+    DECOMPOSE = "decompose"          # Phase B: goal → steps
+    PRE_FLIGHT = "pre_flight"        # Phase C: gates, resume, cost estimate
+    PARALLEL = "parallel"            # Phase D: parallel fan-out (early return)
+    PREPARE = "prepare"              # Phase E: shape steps, NEXT.md
+    EXECUTE = "execute"              # Phase F: main while loop
+    FINALIZE = "finalize"            # Phase G: reflection, recovery, return
+
+
+@dataclass
+class LoopContext:
+    """Mutable state bundle for run_agent_loop.
+
+    Instead of 30+ local variables threaded through 1,800 lines, all
+    mutable loop state lives here. Passed to extracted phase methods.
+
+    Architecture note: this is step 1 of the monolith decomposition.
+    Once all phases are extracted as methods taking LoopContext, the
+    natural next step is a LoopStateMachine class with LoopContext as
+    self-state. But that refactor can happen incrementally.
+    """
+    # Identity
+    loop_id: str = ""
+    project: str = ""
+    goal: str = ""
+
+    # Execution state
+    step_outcomes: List[StepOutcome] = field(default_factory=list)
+    remaining_steps: List[str] = field(default_factory=list)
+    remaining_indices: List[int] = field(default_factory=list)
+    completed_context: List[str] = field(default_factory=list)
+    iteration: int = 0
+    step_idx: int = 0
+
+    # Status
+    loop_status: str = "done"  # "done" | "stuck" | "interrupted" | "error"
+    stuck_reason: Optional[str] = None
+    phase: str = LoopPhase.INIT
+
+    # Token/cost tracking
+    total_tokens_in: int = 0
+    total_tokens_out: int = 0
+
+    # Stuck detection
+    stuck_streak: int = 0
+    last_action: Optional[str] = None
+
+    # Budget
+    cost_budget: Optional[float] = None
+    token_budget: Optional[int] = None
+
+    # Retry state
+    step_retries: Dict[str, int] = field(default_factory=dict)
+    step_tier_overrides: Dict[str, str] = field(default_factory=dict)
+    session_verify_failures: int = 0
+    session_tier_floor: str = ""
+    failure_chain: List[str] = field(default_factory=list)
+    recovery_step_count: int = 0
+    consecutive_max_timeouts: int = 0
+
+    # Hooks & interrupts
+    next_step_injected_context: str = ""
+    interrupts_applied: int = 0
+
+    # Flags
+    march_of_nines_alert: bool = False
+    milestone_expanded: set = field(default_factory=set)
+
+
+# ---------------------------------------------------------------------------
 # System prompts
 # ---------------------------------------------------------------------------
 
