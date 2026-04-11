@@ -410,6 +410,108 @@ def _handle_budget_ceiling(
     return _suffix
 
 
+def _run_parallel_batch(
+    ctx: LoopContext,
+    step_text: str,
+    parallel_peers: List[str],
+    *,
+    step_outcomes: List[StepOutcome],
+    completed_context: List[str],
+    remaining_steps: List[str],
+    remaining_indices: List[int],
+    loop_shared_ctx: Dict[str, Any],
+    resolve_tools_fn,
+    parallel_fan_out: int,
+    proj_artifact_dir: str,
+    iteration: int,
+    step_idx: int,
+) -> tuple:
+    """Phase F4: Run this step + peers in parallel batch.
+
+    Returns (iteration, step_idx, total_tokens_in_delta, total_tokens_out_delta).
+    Mutates step_outcomes, completed_context, remaining_steps/indices in place.
+    """
+    from llm import LLMTool
+
+    _batch_steps = [step_text] + parallel_peers
+    iteration += len(_batch_steps)
+    _batch_start = time.monotonic()
+    if ctx.verbose:
+        print(f"[poe] parallel batch: {len(_batch_steps)} steps at level", file=sys.stderr, flush=True)
+
+    _batch_outcomes = _run_steps_parallel(
+        goal=ctx.goal,
+        steps=_batch_steps,
+        adapter=ctx.adapter,
+        ancestry_context=ctx.ancestry_context,
+        tools=[LLMTool(**t) for t in resolve_tools_fn()],
+        verbose=ctx.verbose,
+        max_workers=min(parallel_fan_out, len(_batch_steps)),
+        project_dir=proj_artifact_dir,
+        shared_ctx=loop_shared_ctx,
+    )
+
+    # Process batch outcomes
+    _tokens_in_delta = 0
+    _tokens_out_delta = 0
+    _batch_injected: List[str] = []
+    for _bi, (_batch_text, _batch_oc) in enumerate(zip(_batch_steps, _batch_outcomes)):
+        step_idx += 1
+        _b_status = _batch_oc.get("status", "blocked")
+        _b_elapsed = int((time.monotonic() - _batch_start) * 1000)
+        _tokens_in_delta += _batch_oc.get("tokens_in", 0)
+        _tokens_out_delta += _batch_oc.get("tokens_out", 0)
+
+        step_outcomes.append(step_from_decompose(
+            _batch_text, -1,
+            status=_b_status,
+            result=_batch_oc.get("result", ""),
+            iteration=iteration,
+            tokens_in=_batch_oc.get("tokens_in", 0),
+            tokens_out=_batch_oc.get("tokens_out", 0),
+            elapsed_ms=_b_elapsed,
+            confidence=_batch_oc.get("confidence", "unverified"),
+            injected_steps=_batch_oc.get("inject_steps", []),
+        ))
+
+        if _b_status == "done":
+            _b_result = _batch_oc.get("result", "")
+            _b_excerpt = _b_result[:800] if _b_result else ""
+            completed_context.append(f"Step {step_idx} ({_batch_text[:80]}):\n{_b_excerpt}")
+            if ctx.verbose:
+                print(f"[poe] step {step_idx} done (parallel): {_batch_oc.get('summary', '')[:80]}", file=sys.stderr, flush=True)
+            _bi_inject = _batch_oc.get("inject_steps", [])
+            if _bi_inject and isinstance(_bi_inject, list):
+                _batch_injected.extend(
+                    str(s).strip() for s in _bi_inject if str(s).strip()
+                )
+        elif _b_status == "blocked":
+            if ctx.verbose:
+                print(f"[poe] step {step_idx} blocked (parallel): {_batch_oc.get('stuck_reason', '')[:80]}", file=sys.stderr, flush=True)
+
+    # Inject collected steps from batch
+    if _batch_injected:
+        _capped_inject = _shape_steps(_batch_injected[:6], label="parallel-inject")
+        remaining_steps[:0] = _capped_inject
+        remaining_indices[:0] = [-1] * len(_capped_inject)
+        log.info("parallel batch: injected %d step(s) from batch into plan",
+                 len(_capped_inject))
+        if ctx.verbose:
+            for _s in _capped_inject:
+                print(f"[poe] injected step (from parallel batch): {_s[:80]}",
+                      file=sys.stderr, flush=True)
+
+    # Log batch cost
+    try:
+        _batch_tokens = sum(o.get("tokens_in", 0) + o.get("tokens_out", 0) for o in _batch_outcomes)
+        log.info("parallel batch done: %d steps, %d tokens, %dms",
+                 len(_batch_steps), _batch_tokens, int((time.monotonic() - _batch_start) * 1000))
+    except Exception:
+        pass
+
+    return iteration, step_idx, _tokens_in_delta, _tokens_out_delta
+
+
 def _process_done_step(
     ctx: LoopContext,
     step_text: str,
@@ -2376,6 +2478,14 @@ def run_agent_loop(
     except ImportError:
         _dead_ends_available = False
 
+    # Pre-compute project artifact dir (used by both parallel batch and single-step paths)
+    _proj_artifact_dir = ""
+    if project:
+        try:
+            _proj_artifact_dir = str(o.orch_root() / "prototypes" / "poe-orchestration" / "projects" / project)
+        except Exception:
+            pass
+
     while remaining_steps:
         if iteration >= max_iterations:
             loop_status = "stuck"
@@ -2477,84 +2587,21 @@ def run_agent_loop(
                     break
 
         if _parallel_peers:
-            # Run this step + peers in parallel
-            _batch_steps = [step_text] + _parallel_peers
-            iteration += len(_batch_steps)
-            _batch_start = time.monotonic()
-            if verbose:
-                print(f"[poe] parallel batch: {len(_batch_steps)} steps at level", file=sys.stderr, flush=True)
-
-            _batch_outcomes = _run_steps_parallel(
-                goal=goal,
-                steps=_batch_steps,
-                adapter=adapter,
-                ancestry_context=_ancestry_context,
-                tools=[LLMTool(**t) for t in _resolve_tools()],
-                verbose=verbose,
-                max_workers=min(parallel_fan_out, len(_batch_steps)),
-                project_dir=_proj_artifact_dir,
-                shared_ctx=_loop_shared_ctx,
+            iteration, step_idx, _tin, _tout = _run_parallel_batch(
+                ctx, step_text, _parallel_peers,
+                step_outcomes=step_outcomes,
+                completed_context=completed_context,
+                remaining_steps=remaining_steps,
+                remaining_indices=remaining_indices,
+                loop_shared_ctx=_loop_shared_ctx,
+                resolve_tools_fn=_resolve_tools,
+                parallel_fan_out=parallel_fan_out,
+                proj_artifact_dir=_proj_artifact_dir,
+                iteration=iteration,
+                step_idx=step_idx,
             )
-
-            # Process batch outcomes
-            _batch_injected: List[str] = []  # collect inject_steps from all batch members
-            for _bi, (_batch_text, _batch_oc) in enumerate(zip(_batch_steps, _batch_outcomes)):
-                step_idx += 1
-                _b_status = _batch_oc.get("status", "blocked")
-                _b_elapsed = int((time.monotonic() - _batch_start) * 1000)
-                total_tokens_in += _batch_oc.get("tokens_in", 0)
-                total_tokens_out += _batch_oc.get("tokens_out", 0)
-
-                step_outcomes.append(step_from_decompose(
-                    _batch_text, -1,
-                    status=_b_status,
-                    result=_batch_oc.get("result", ""),
-                    iteration=iteration,
-                    tokens_in=_batch_oc.get("tokens_in", 0),
-                    tokens_out=_batch_oc.get("tokens_out", 0),
-                    elapsed_ms=_b_elapsed,
-                    confidence=_batch_oc.get("confidence", "unverified"),
-                    injected_steps=_batch_oc.get("inject_steps", []),
-                ))
-
-                if _b_status == "done":
-                    _b_result = _batch_oc.get("result", "")
-                    _b_excerpt = _b_result[:800] if _b_result else ""
-                    completed_context.append(f"Step {step_idx} ({_batch_text[:80]}):\n{_b_excerpt}")
-                    if verbose:
-                        print(f"[poe] step {step_idx} done (parallel): {_batch_oc.get('summary', '')[:80]}", file=sys.stderr, flush=True)
-                    # Collect inject_steps from this batch member
-                    _bi_inject = _batch_oc.get("inject_steps", [])
-                    if _bi_inject and isinstance(_bi_inject, list):
-                        _batch_injected.extend(
-                            str(s).strip() for s in _bi_inject if str(s).strip()
-                        )
-                elif _b_status == "blocked":
-                    if verbose:
-                        print(f"[poe] step {step_idx} blocked (parallel): {_batch_oc.get('stuck_reason', '')[:80]}", file=sys.stderr, flush=True)
-
-            # Mutable task graph: inject collected steps from parallel batch into plan.
-            # Apply step-shaper before injecting — same guard as pre-execution shaper.
-            if _batch_injected:
-                _capped_inject = _shape_steps(_batch_injected[:6], label="parallel-inject")
-                remaining_steps[:0] = _capped_inject
-                remaining_indices[:0] = [-1] * len(_capped_inject)
-                log.info("parallel batch: injected %d step(s) from batch into plan",
-                         len(_capped_inject))
-                if verbose:
-                    for _s in _capped_inject:
-                        print(f"[poe] injected step (from parallel batch): {_s[:80]}",
-                              file=sys.stderr, flush=True)
-
-            # Log batch cost
-            try:
-                from metrics import estimate_cost
-                _batch_tokens = sum(o.get("tokens_in", 0) + o.get("tokens_out", 0) for o in _batch_outcomes)
-                log.info("parallel batch done: %d steps, %d tokens, %dms",
-                         len(_batch_steps), _batch_tokens, int((time.monotonic() - _batch_start) * 1000))
-            except ImportError:
-                pass
-
+            total_tokens_in += _tin
+            total_tokens_out += _tout
             continue  # Skip the single-step execution below
 
         iteration += 1
@@ -2618,12 +2665,6 @@ def run_agent_loop(
             if _next_step_injected_context
             else _ancestry_context
         )
-        _proj_artifact_dir = ""
-        if project:
-            try:
-                _proj_artifact_dir = str(o.orch_root() / "prototypes" / "poe-orchestration" / "projects" / project)
-            except Exception:
-                pass
         # Invariant guard: if a compound step still reaches execution, log it so we
         # can trace which path introduced it (shaper gap detection — Codex Priority 1).
         if _is_combined_exec_analyze(step_text):
