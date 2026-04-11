@@ -608,3 +608,120 @@ class TestAdvisorCall:
         # Advisor prompt should be focused and short
         assert len(_ADVISOR_SYSTEM) < 500
         assert "concise" in _ADVISOR_SYSTEM.lower() or "CONCISE" in _ADVISOR_SYSTEM
+
+
+# ---------------------------------------------------------------------------
+# Thinking token budget
+# ---------------------------------------------------------------------------
+
+class TestThinkingBudget:
+    """Tests for the thinking_budget parameter on adapters."""
+
+    def test_thinking_budget_constants_exported(self):
+        from llm import THINKING_HIGH, THINKING_MID, THINKING_LOW
+        assert THINKING_HIGH == 10_000
+        assert THINKING_MID == 4_000
+        assert THINKING_LOW == 1_024
+
+    def test_base_adapter_accepts_thinking_budget(self):
+        """Base LLMAdapter.complete() signature includes thinking_budget."""
+        import inspect
+        sig = inspect.signature(LLMAdapter.complete)
+        assert "thinking_budget" in sig.parameters
+
+    def test_anthropic_adapter_passes_thinking_to_api(self):
+        """AnthropicSDKAdapter should pass thinking param when budget > 0."""
+        mock_anthropic = MagicMock()
+        with patch.dict("sys.modules", {"anthropic": mock_anthropic}):
+            adapter = AnthropicSDKAdapter(api_key="sk-ant-test", model=MODEL_MID)
+            mock_client = MagicMock()
+            mock_resp = MagicMock()
+            mock_resp.content = [MagicMock(type="text", text="result")]
+            mock_resp.stop_reason = "end_turn"
+            mock_resp.model = "claude-sonnet-4-6"
+            mock_resp.usage = MagicMock(input_tokens=100, output_tokens=50)
+            mock_resp.content[0].text = "result"
+            mock_client.messages.create.return_value = mock_resp
+            adapter._client = mock_client
+
+            adapter.complete(
+                [LLMMessage("user", "test")],
+                thinking_budget=5000,
+            )
+
+            call_kwargs = mock_client.messages.create.call_args
+            assert call_kwargs[1]["thinking"] == {"type": "enabled", "budget_tokens": 5000}
+            # max_tokens should be bumped to accommodate thinking + output
+            assert call_kwargs[1]["max_tokens"] >= 5000 + 4096
+            # temperature should NOT be in kwargs when thinking is enabled
+            assert "temperature" not in call_kwargs[1]
+
+    def test_anthropic_adapter_no_thinking_when_none(self):
+        """No thinking param when thinking_budget is None."""
+        mock_anthropic = MagicMock()
+        with patch.dict("sys.modules", {"anthropic": mock_anthropic}):
+            adapter = AnthropicSDKAdapter(api_key="sk-ant-test", model=MODEL_MID)
+            mock_client = MagicMock()
+            mock_resp = MagicMock()
+            mock_resp.content = [MagicMock(type="text", text="result")]
+            mock_resp.stop_reason = "end_turn"
+            mock_resp.model = "claude-sonnet-4-6"
+            mock_resp.usage = MagicMock(input_tokens=100, output_tokens=50)
+            mock_resp.content[0].text = "result"
+            mock_client.messages.create.return_value = mock_resp
+            adapter._client = mock_client
+
+            adapter.complete(
+                [LLMMessage("user", "test")],
+                thinking_budget=None,
+            )
+
+            call_kwargs = mock_client.messages.create.call_args
+            assert "thinking" not in call_kwargs[1]
+            assert "temperature" in call_kwargs[1]
+
+    def test_anthropic_adapter_thinking_extracts_content(self):
+        """Thinking blocks should be logged but not included in content."""
+        mock_anthropic = MagicMock()
+        with patch.dict("sys.modules", {"anthropic": mock_anthropic}):
+            adapter = AnthropicSDKAdapter(api_key="sk-ant-test", model=MODEL_MID)
+            mock_client = MagicMock()
+            # Simulate response with thinking block + text block
+            thinking_block = MagicMock(type="thinking", thinking="internal reasoning here")
+            thinking_block.text = None  # thinking blocks don't have .text in normal sense
+            delattr(thinking_block, "text")  # remove .text so hasattr returns False
+            text_block = MagicMock(type="text", text="the actual response")
+            mock_resp = MagicMock()
+            mock_resp.content = [thinking_block, text_block]
+            mock_resp.stop_reason = "end_turn"
+            mock_resp.model = "claude-sonnet-4-6"
+            mock_resp.usage = MagicMock(input_tokens=100, output_tokens=50)
+            mock_client.messages.create.return_value = mock_resp
+            adapter._client = mock_client
+
+            result = adapter.complete(
+                [LLMMessage("user", "test")],
+                thinking_budget=5000,
+            )
+
+            assert result.content == "the actual response"
+            assert "internal reasoning" not in result.content
+
+    def test_decompose_passes_thinking_budget(self):
+        """planner.decompose() should forward thinking_budget to adapter."""
+        from planner import decompose
+        mock_adapter = MagicMock()
+        mock_adapter.complete.return_value = LLMResponse(
+            content='["step 1", "step 2"]',
+            stop_reason="end_turn",
+        )
+        # Narrow goal → single-shot, but thinking_budget should be forwarded
+        steps = decompose(
+            "fix the login bug",
+            mock_adapter,
+            max_steps=8,
+            thinking_budget=5000,
+        )
+        # At least one complete() call should have been made
+        assert mock_adapter.complete.called
+        assert len(steps) == 2

@@ -78,16 +78,16 @@ deploy/              systemd service files
 
 ## Current state
 
-**As of 2026-04-11.** Phases 0–61 complete. Tests: 3,436 passing (~90s sequential).
+**As of 2026-04-11.** Phases 0–61 complete. Tests: 3,469 passing (~87s sequential).
 
 | Status | Phases |
 |--------|--------|
 | DONE | 0–23, 26–27, 29–37, 39–48, 50–61 |
 | PARTIAL | 24 (Slack skeleton, Signal deferred), 25 (ops hardening — heartbeat-ctl.sh shipped), 28 (persona — blocked on personas/jeremy.md), 38 (subpackage) |
 
-**Recent (Apr 11, session 15):** Workspace consolidated on `~/.poe/workspace/` (fixed `memory_dir()` split-brain — captain's log was in different location from outcomes/lessons). Two-tier YAML config (`~/.poe/config.yml` + workspace `config.yml`). Captain's log read bridge (K3 partial — 11K events now injected into decompose + evolver). Advisor Pattern shipped (`advisor_call()` in llm.py). 5 adversarial bugs fixed + meta-command detection rewrite (hard syntactic gate). 10 X links researched via live orchestration. `poe-enqueue` CLI. 3436 tests.
+**Recent (Apr 11, session 16):** Workspace routing complete — `output_root()` + `projects_root()` now route to `~/.poe/workspace/` with safe `relative_display_path()` helper. Thinking Token Budget shipped (`THINKING_HIGH/MID/LOW`, wired into decompose + advisor). Advisor Pattern wired into evolver (medium-confidence gate), milestone boundaries, and recovery planning. K2 knowledge node infrastructure built (schema, storage, query, injection, wiki-link graph). 3469 tests (+33).
 
-**Next:** See MILESTONES.md for prioritized queue. Top items: Advisor Pattern wiring (more decision points), Thinking Token Budget, output/projects workspace routing, K2 knowledge nodes.
+**Next:** See MILESTONES.md for prioritized queue. Top items: Evals-as-Training-Data flywheel, real-world regression tests, K2 links import, knowledge injection wiring.
 
 See `ROADMAP.md` for active phases (57+). See `docs/ROADMAP_ARCHIVE.md` for completed phases (0–56).
 

@@ -211,15 +211,60 @@ def memory_dir() -> Path:
 
 
 def projects_root() -> Path:
-    return orch_root() / "projects"
+    """Canonical projects directory — aligns with config.projects_dir().
+
+    Resolution order:
+      1. config.projects_dir() when no workspace env var is pinned
+         (defaults to ~/.poe/workspace/projects)
+      2. orch_root()/projects when a workspace env var IS set (tests, CI)
+    """
+    _ws_pinned = any(os.environ.get(v) for v in (
+        "POE_WORKSPACE", "OPENCLAW_WORKSPACE", "WORKSPACE_ROOT", "POE_ORCH_ROOT",
+    ))
+    if not _ws_pinned:
+        from config import projects_dir
+        return projects_dir()
+    p = orch_root() / "projects"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
 
 
 def output_root() -> Path:
-    # TODO: route to workspace (like memory_dir) once relative_to(orch_root)
-    # assumptions are audited in orch.py, agent_loop.py, observe.py.
+    """Canonical output directory — aligns with config.output_dir().
+
+    Resolution order:
+      1. config.output_dir() when no workspace env var is pinned
+         (defaults to ~/.poe/workspace/output)
+      2. orch_root()/output when a workspace env var IS set (tests, CI)
+    """
+    _ws_pinned = any(os.environ.get(v) for v in (
+        "POE_WORKSPACE", "OPENCLAW_WORKSPACE", "WORKSPACE_ROOT", "POE_ORCH_ROOT",
+    ))
+    if not _ws_pinned:
+        from config import output_dir
+        return output_dir()
     p = orch_root() / "output"
     p.mkdir(parents=True, exist_ok=True)
     return p
+
+
+def relative_display_path(path: Path) -> str:
+    """Return a short relative path for display/logging purposes.
+
+    Tries orch_root() first (repo-relative), then workspace_root(),
+    then falls back to the absolute path. Never raises.
+    """
+    p = Path(path).resolve()
+    try:
+        return str(p.relative_to(orch_root()))
+    except ValueError:
+        pass
+    try:
+        from config import workspace_root
+        return "~workspace/" + str(p.relative_to(workspace_root()))
+    except (ValueError, Exception):
+        pass
+    return str(p)
 
 
 def runs_root() -> Path:

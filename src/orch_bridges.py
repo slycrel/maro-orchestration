@@ -30,6 +30,7 @@ from orch_items import (
     orch_root,
     output_root,
     runs_root,
+    relative_display_path,
     validation_summary_path,
     workers_root,
 )
@@ -351,7 +352,7 @@ def _read_jsonl_records(path: Path) -> List[dict]:
 def _resolve_review_artifact_root(run: RunRecord, artifact_path: Optional[str]) -> Path:
     if not artifact_path:
         return _run_artifact_root(run)
-    relative = _coerce_artifact_path(artifact_path, default=str(_run_artifact_root(run).relative_to(orch_root())))
+    relative = _coerce_artifact_path(artifact_path, default=relative_display_path(_run_artifact_root(run)))
     return orch_root() / relative
 
 
@@ -528,7 +529,7 @@ def command_execution_bridge(command: str) -> ExecutionBridge:
         stdout_path.write_text(proc.stdout or "", encoding="utf-8")
         stderr_path.write_text(proc.stderr or "", encoding="utf-8")
 
-        artifact_path = str(artifact_dir.relative_to(orch_root()))
+        artifact_path = relative_display_path(artifact_dir)
         if proc.returncode == 0:
             note = f"command succeeded: {command}"
             if proc.stdout.strip():
@@ -661,7 +662,7 @@ def session_execution_bridge(
                     "status": run.status,
                     "source": run.source,
                     "worker": run.worker,
-                    "artifact_path": str(artifact_dir.relative_to(orch_root())),
+                    "artifact_path": relative_display_path(artifact_dir),
                 },
                 indent=2,
             )
@@ -669,7 +670,7 @@ def session_execution_bridge(
             encoding="utf-8",
         )
 
-        default_artifact_path = str(artifact_dir.relative_to(orch_root()))
+        default_artifact_path = relative_display_path(artifact_dir)
         env = os.environ.copy()
         env.update(
             {
@@ -950,7 +951,7 @@ def x_capture_salvage_validation_bridge(*, max_auth_retries: int = 3) -> Validat
             return ValidationResult(
                 status=resolved_status,
                 passed=False,
-                note=f"x capture salvage hint: {detail}; evidence={salvage_path.relative_to(orch_root())}",
+                note=f"x capture salvage hint: {detail}; evidence={relative_display_path(salvage_path)}",
             )
         return ValidationResult(
             status=resolved_status,

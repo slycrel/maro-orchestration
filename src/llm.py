@@ -183,6 +183,16 @@ def _retry_complete(fn, *args, max_retries: int = 3, **kwargs) -> "LLMResponse":
     raise last_exc  # unreachable, but satisfies type checker
 
 
+
+# ---------------------------------------------------------------------------
+# Thinking budget presets (tokens).  Pass to complete(thinking_budget=...).
+# ---------------------------------------------------------------------------
+THINKING_HIGH = 10_000    # Planning, decomposition, complex synthesis
+THINKING_MID  = 4_000     # Advisory calls, moderate reasoning
+THINKING_LOW  = 1_024     # Light reasoning, simple analysis
+# None = disabled (default).  Backends that don't support thinking ignore it.
+
+
 class LLMAdapter:
     """Abstract base. Subclass and implement `complete`."""
 
@@ -196,6 +206,7 @@ class LLMAdapter:
         tool_choice: str = "auto",
         max_tokens: int = 4096,
         temperature: float = 0.3,
+        thinking_budget: Optional[int] = None,
         **kwargs,
     ) -> LLMResponse:
         raise NotImplementedError
@@ -666,15 +677,31 @@ class AnthropicSDKAdapter(LLMAdapter):
         system = "\n\n".join(m.content for m in messages if m.role == "system")
         msgs = [{"role": m.role, "content": m.content} for m in messages if m.role != "system"]
 
-        kwargs: Dict[str, Any] = {
+        api_kwargs: Dict[str, Any] = {
             "model": model_str,
             "max_tokens": max_tokens,
             "messages": msgs,
         }
         if system:
-            kwargs["system"] = system
+            api_kwargs["system"] = system
+
+        # Extended thinking: pass budget to Anthropic API when requested
+        _thinking = kwargs.get("thinking_budget") if "thinking_budget" in kwargs else thinking_budget
+        if _thinking and _thinking > 0:
+            api_kwargs["thinking"] = {
+                "type": "enabled",
+                "budget_tokens": _thinking,
+            }
+            # Thinking requires max_tokens large enough for thinking + output
+            if max_tokens < _thinking + 4096:
+                api_kwargs["max_tokens"] = _thinking + 4096
+            # Extended thinking doesn't support custom temperature
+            # (API rejects temperature with thinking enabled)
+        else:
+            api_kwargs["temperature"] = temperature
+
         if tools:
-            kwargs["tools"] = [
+            api_kwargs["tools"] = [
                 {
                     "name": t.name,
                     "description": t.description,
@@ -683,16 +710,19 @@ class AnthropicSDKAdapter(LLMAdapter):
                 for t in tools
             ]
             if tool_choice == "required":
-                kwargs["tool_choice"] = {"type": "any"}
+                api_kwargs["tool_choice"] = {"type": "any"}
             elif tool_choice != "auto":
-                kwargs["tool_choice"] = {"type": tool_choice}
+                api_kwargs["tool_choice"] = {"type": tool_choice}
 
-        resp = _retry_complete(client.messages.create, **kwargs)
+        resp = _retry_complete(client.messages.create, **api_kwargs)
 
         content = ""
+        thinking_content = ""
         tool_calls: List[ToolCall] = []
         for block in resp.content:
-            if hasattr(block, "text"):
+            if hasattr(block, "type") and block.type == "thinking":
+                thinking_content += getattr(block, "thinking", "")
+            elif hasattr(block, "text"):
                 content += block.text
             elif hasattr(block, "type") and block.type == "tool_use":
                 tool_calls.append(ToolCall(
@@ -700,6 +730,12 @@ class AnthropicSDKAdapter(LLMAdapter):
                     arguments=block.input,
                     call_id=block.id,
                 ))
+
+        # If thinking was used, prepend a brief note (the thinking itself
+        # isn't returned to callers — it's internal reasoning).
+        # Log it for observability.
+        if thinking_content:
+            log.debug("thinking (%d chars) for model=%s", len(thinking_content), model_str)
 
         return LLMResponse(
             content=content,
@@ -1115,8 +1151,12 @@ def advisor_call(
     ]
 
     try:
+        _adv_kwargs: Dict[str, Any] = {"max_tokens": 1024, "temperature": 0.2}
+        # Enable mid-level thinking for advisory calls (strategic decisions)
+        if getattr(adapter, "backend", "") == "anthropic":
+            _adv_kwargs["thinking_budget"] = THINKING_MID
         response = _retry_complete(
-            adapter.complete, messages, max_tokens=1024, temperature=0.2,
+            adapter.complete, messages, **_adv_kwargs,
         )
         log.info(
             "advisor_call: %d in + %d out tokens, model=%s",

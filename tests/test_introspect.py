@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from unittest.mock import patch, MagicMock
 
 import pytest
 
@@ -792,3 +793,54 @@ def test_adversarial_lens_model_kwarg_overrides_cheap():
             sys.modules["llm"] = old
 
     assert captured_model["model"] == "opus"
+
+
+# ---------------------------------------------------------------------------
+# plan_recovery advisor integration tests
+# ---------------------------------------------------------------------------
+
+class TestPlanRecoveryAdvisor:
+    """Tests for plan_recovery(use_advisor=True)."""
+
+    def test_plan_recovery_without_advisor(self):
+        """Default: no advisor call."""
+        diag = LoopDiagnosis(
+            loop_id="test-loop-001",
+            failure_class="adapter_timeout",
+            severity="medium",
+            recommendation="retry with smaller scope",
+            evidence=["step timed out at 300s"],
+        )
+        plan = plan_recovery(diag)
+        assert plan is not None
+        assert plan.risk == "medium"
+        assert plan.auto_apply is False
+
+    def test_plan_recovery_advisor_confirms_plan(self):
+        """Advisor says proceed → returns same plan."""
+        diag = LoopDiagnosis(
+            loop_id="test-loop-002",
+            failure_class="adapter_timeout",
+            severity="medium",
+            recommendation="retry with smaller scope",
+            evidence=["step timed out at 300s"],
+        )
+        mock_advisor = MagicMock(return_value="(a) Proceed with this plan, it's appropriate.")
+        with patch.dict("sys.modules", {"llm": MagicMock(advisor_call=mock_advisor)}):
+            plan = plan_recovery(diag, use_advisor=True)
+        assert plan is not None
+        assert plan.failure_class == "adapter_timeout"
+
+    def test_plan_recovery_low_risk_skips_advisor(self):
+        """Low-risk plans don't invoke advisor even when use_advisor=True."""
+        diag = LoopDiagnosis(
+            loop_id="test-loop-003",
+            failure_class="decomposition_too_broad",
+            severity="low",
+            recommendation="reduce scope",
+            evidence=[],
+        )
+        plan = plan_recovery(diag, use_advisor=True)
+        assert plan is not None
+        assert plan.risk == "low"
+        assert plan.auto_apply is True

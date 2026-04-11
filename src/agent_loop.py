@@ -1693,7 +1693,7 @@ def _decompose_goal(
 
     Returns (steps, prereq_context, lessons_context, skills_context, cost_context).
     """
-    from llm import build_adapter, MODEL_CHEAP, MODEL_MID
+    from llm import build_adapter, MODEL_CHEAP, MODEL_MID, THINKING_HIGH
 
     if ctx.verbose:
         print(f"[poe] decomposing goal...", file=sys.stderr, flush=True)
@@ -1722,10 +1722,16 @@ def _decompose_goal(
                 log.debug("decompose: lifted adapter cheap → mid for plan quality")
             except Exception:
                 _decompose_adapter = ctx.adapter
+        # Enable extended thinking for decomposition when using Anthropic SDK
+        # (planning benefits most from deeper reasoning)
+        _decompose_thinking = None
+        if getattr(_decompose_adapter, "backend", "") == "anthropic":
+            _decompose_thinking = THINKING_HIGH
         steps = _decompose(
             ctx.goal, _decompose_adapter, max_steps=max_steps, verbose=ctx.verbose,
             lessons_context=_lessons_context, ancestry_context=ctx.ancestry_context,
             skills_context=_skills_context, cost_context=_cost_context,
+            thinking_budget=_decompose_thinking,
         )
     if ctx.verbose:
         print(f"[poe] plan ({len(steps)} steps) loop_id={ctx.loop_id}:", file=sys.stderr, flush=True)
@@ -2670,7 +2676,7 @@ def _finalize_loop(
                 log.info("synthesis: confidence=%.0f%% agreement=%d action=%s",
                          _agg.confidence * 100, _agg.lens_agreement, _agg.primary_action)
             # Recovery plan
-            _recovery = _plan_recovery(_diag)
+            _recovery = _plan_recovery(_diag, use_advisor=True)
             if _recovery:
                 _tag = "AUTO-RECOVERABLE" if _recovery.auto_apply else "NEEDS-REVIEW"
                 log.warning("recovery[%s] risk=%s: %s", _tag, _recovery.risk, _recovery.action)
@@ -3108,6 +3114,34 @@ def run_agent_loop(
             except Exception as _ms_exc:
                 log.debug("milestone-aware: expand failed for step %d: %s",
                           _would_be_step_idx, _ms_exc)
+                # Advisor Pattern: consult Opus when a milestone can't be decomposed
+                try:
+                    from llm import advisor_call as _ms_advisor
+                    _ms_advice = _ms_advisor(
+                        goal=ctx.goal,
+                        context=(
+                            f"Milestone step {_would_be_step_idx}: {step_text}\n"
+                            f"Decomposition failed: {_ms_exc}\n"
+                            f"Completed {len(step_outcomes)} of ~{len(remaining_steps) + len(step_outcomes) + 1} steps."
+                        ),
+                        question=(
+                            "This step was flagged as a complex milestone but can't be decomposed into sub-steps. "
+                            "Should we: (a) execute it as-is (may be too broad), (b) skip it and continue with "
+                            "remaining steps, or (c) rephrase it to be more concrete? If (c), suggest the rephrased text."
+                        ),
+                    )
+                    if _ms_advice:
+                        if "(b)" in _ms_advice.lower():
+                            log.info("milestone advisor: skip step %d on advice", _would_be_step_idx)
+                            continue  # skip this step
+                        elif "(c)" in _ms_advice.lower():
+                            # Try to extract rephrased text — advisor should lead with it
+                            _rephrase_lines = [l.strip() for l in _ms_advice.split("\n") if l.strip() and not l.strip().startswith("(")]
+                            if _rephrase_lines:
+                                step_text = _rephrase_lines[-1][:200]
+                                log.info("milestone advisor: rephrased step %d → %s", _would_be_step_idx, step_text[:80])
+                except Exception:
+                    pass  # advisor is optional
             # Fall through to execute normally if decompose fails or returns 1 step
 
         # Check for parallel peers: if this step has siblings at the same
@@ -3587,12 +3621,14 @@ def run_agent_loop(
 
 
 def _decompose(goal, adapter, max_steps, verbose=False, lessons_context="",
-               ancestry_context="", skills_context="", cost_context=""):
+               ancestry_context="", skills_context="", cost_context="",
+               thinking_budget=None):
     """Delegate to planner.decompose(). See planner.py for full implementation."""
     from planner import maybe_add_verification_step
     steps = _decompose_impl(goal, adapter, max_steps, verbose=verbose,
                             lessons_context=lessons_context, ancestry_context=ancestry_context,
-                            skills_context=skills_context, cost_context=cost_context)
+                            skills_context=skills_context, cost_context=cost_context,
+                            thinking_budget=thinking_budget)
     return maybe_add_verification_step(steps, goal, max_steps=max_steps)
 
 # _execute_step and _generate_refinement_hint are imported from step_exec at module top.
@@ -3618,7 +3654,7 @@ def _write_step_artifact(
         path = artifacts_dir / fname
         content = f"# Step {step_num}: {step_text}\n\n{result}\n"
         path.write_text(content, encoding="utf-8")
-        return str(path.relative_to(o.orch_root()))
+        return o.relative_display_path(path)
     except Exception:
         return None
 
@@ -3726,7 +3762,7 @@ def _write_plan_manifest(
         path.write_text(content, encoding="utf-8")
         try:
             o = _orch()
-            return str(path.relative_to(o.orch_root()))
+            return o.relative_display_path(path)
         except Exception:
             return str(path)
     except Exception:
@@ -3779,7 +3815,7 @@ def _write_loop_log(
             },
         }
         path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-        return str(path.relative_to(o.orch_root()))
+        return o.relative_display_path(path)
     except Exception:
         return None
 

@@ -1229,14 +1229,51 @@ def run_evolver(
                 print(f"[evolver] failed to save suggestions: {e}", file=sys.stderr)
 
     # Auto-apply high-confidence suggestions (closes the feedback loop)
+    # Advisor Pattern: for medium-confidence suggestions (0.6–0.79), consult
+    # Opus before applying. High-confidence (≥0.8) still auto-apply directly.
     auto_applied = 0
+    advisor_promoted = 0
     if not dry_run and suggestions:
         for s in suggestions:
-            if s.confidence >= 0.8 and not s.applied:
+            if s.applied:
+                continue
+            if s.confidence >= 0.8:
                 if apply_suggestion(s.suggestion_id):
                     auto_applied += 1
+            elif 0.6 <= s.confidence < 0.8:
+                # Advisor gate: let Opus decide on medium-confidence suggestions
+                try:
+                    from llm import advisor_call as _adv_call
+                    _adv_context = (
+                        f"Category: {s.category}\n"
+                        f"Suggestion: {s.text[:300]}\n"
+                        f"Confidence: {s.confidence:.2f}\n"
+                        f"Target: {getattr(s, 'target', 'all')}\n"
+                        f"Based on {len(outcomes)} recent outcomes."
+                    )
+                    _advice = _adv_call(
+                        goal="meta-improvement: should this suggestion be auto-applied?",
+                        context=_adv_context,
+                        question=(
+                            "This suggestion has medium confidence (0.6-0.79). "
+                            "Should we auto-apply it? Consider: (a) could it degrade existing behavior, "
+                            "(b) is the evidence strong enough, (c) is it reversible? "
+                            "Answer YES to apply, NO to defer for human review."
+                        ),
+                    )
+                    if _advice and "yes" in _advice.lower().split()[:5]:
+                        if apply_suggestion(s.suggestion_id):
+                            auto_applied += 1
+                            advisor_promoted += 1
+                            log.info("evolver advisor: promoted suggestion %s (confidence %.2f)",
+                                     s.suggestion_id, s.confidence)
+                    else:
+                        log.info("evolver advisor: deferred suggestion %s (confidence %.2f): %s",
+                                 s.suggestion_id, s.confidence, (_advice or "no response")[:100])
+                except Exception:
+                    pass  # advisor is optional — never block evolver
         if verbose and auto_applied:
-            print(f"[evolver] auto-applied {auto_applied} high-confidence suggestions", file=sys.stderr)
+            print(f"[evolver] auto-applied {auto_applied} suggestions ({advisor_promoted} via advisor)", file=sys.stderr)
 
     # Telegram notification
     if notify and suggestions and not dry_run:

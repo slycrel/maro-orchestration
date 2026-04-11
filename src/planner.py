@@ -303,12 +303,17 @@ def decompose(
     ancestry_context: str = "",
     skills_context: str = "",
     cost_context: str = "",
+    thinking_budget: Optional[int] = None,
 ) -> List[str]:
     """Decompose a goal into steps.
 
     Uses multi-plan comparison: generates 3 candidate plans at higher temperature,
     then picks the best one (or composes from all three). Falls back to single
     plan at low temperature, then to heuristic.
+
+    Args:
+        thinking_budget: If set, enables extended thinking on the composition
+            call (the final plan merge). Passed through to adapter.complete().
     """
     from llm import LLMMessage
 
@@ -370,11 +375,13 @@ def decompose(
     # general scope estimator (Phase 58: scope estimation before decomposition).
     if _goal_scope in ("wide", "deep"):
         try:
+            _staged_kwargs: dict = {"max_tokens": 512, "temperature": 0.2}
+            if thinking_budget:
+                _staged_kwargs["thinking_budget"] = thinking_budget
             resp = adapter.complete(
                 [LLMMessage("system", _STAGED_PASS_SYSTEM),
                  LLMMessage("user", f"Goal: {goal}\n\nDecompose into 3-5 staged passes.")],
-                max_tokens=512,
-                temperature=0.2,
+                **_staged_kwargs,
             )
             staged = parse_steps(resp.content.strip(), max_steps)
             if staged:
@@ -421,6 +428,12 @@ def decompose(
                 f"Plan {i+1}:\n" + json.dumps(c, indent=2)
                 for i, c in enumerate(candidates)
             )
+            _compose_kwargs: dict = {
+                "max_tokens": 1024,
+                "temperature": 0.1,
+            }
+            if thinking_budget:
+                _compose_kwargs["thinking_budget"] = thinking_budget
             compose_resp = adapter.complete(
                 [
                     LLMMessage("system",
@@ -435,8 +448,7 @@ def decompose(
                         f"Goal: {goal}\n\n{plans_text}\n\n"
                         f"Compose the best plan ({max_steps} steps max). JSON array only."),
                 ],
-                max_tokens=1024,
-                temperature=0.1,
+                **_compose_kwargs,
             )
             composed = parse_steps(compose_resp.content.strip(), max_steps)
             if composed:

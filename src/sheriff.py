@@ -289,8 +289,8 @@ def check_project(slug: str, *, window_minutes: int = 30) -> SheriffReport:
 def check_all_projects(*, window_minutes: int = 30) -> List[SheriffReport]:
     """Check all projects in the workspace."""
     try:
-        from orch import orch_root
-        projects_dir = orch_root() / "projects"
+        from orch import projects_root
+        projects_dir = projects_root()
         if not projects_dir.exists():
             return []
         slugs = [d.name for d in projects_dir.iterdir() if d.is_dir()]

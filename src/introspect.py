@@ -1224,18 +1224,52 @@ _RECOVERY_TABLE: Dict[str, List[RecoveryPlan]] = {
 }
 
 
-def plan_recovery(diag: LoopDiagnosis) -> Optional[RecoveryPlan]:
+def plan_recovery(diag: LoopDiagnosis, *, use_advisor: bool = False) -> Optional[RecoveryPlan]:
     """Given a diagnosis, return the best recovery plan (if any).
 
     Returns the first applicable plan from the decision table.
     Plans with auto_apply=True are safe for the system to execute without
     human review. Plans with auto_apply=False should be surfaced as
     suggestions.
+
+    Args:
+        use_advisor: If True, consult Opus for medium/high-risk plans before
+            returning them. Advisor can confirm the plan or suggest alternatives.
     """
     plans = _RECOVERY_TABLE.get(diag.failure_class, [])
     if not plans:
         return None
-    return plans[0]
+
+    best = plans[0]
+    if use_advisor and best.risk in ("medium", "high") and not best.auto_apply:
+        try:
+            from llm import advisor_call
+            _evidence = "; ".join(diag.evidence[:3]) if diag.evidence else "no evidence"
+            advice = advisor_call(
+                goal=f"recovery for {diag.failure_class}",
+                context=(
+                    f"Failure class: {diag.failure_class}\n"
+                    f"Severity: {diag.severity}\n"
+                    f"Evidence: {_evidence}\n"
+                    f"Recovery plan: {best.action}\n"
+                    f"Risk level: {best.risk}"
+                ),
+                question=(
+                    f"Is this recovery plan appropriate for the failure? "
+                    f"Should we: (a) proceed with this plan, (b) try a safer alternative, "
+                    f"or (c) defer to human review? If (b), what specific alternative?"
+                ),
+            )
+            if advice:
+                log.info("recovery advisor (%s): %s", diag.failure_class, advice[:120])
+                # If advisor recommends a safer alternative, check if we have one
+                if "(b)" in advice.lower() and len(plans) > 1:
+                    # Return the next plan in the table (safer alternative)
+                    return plans[1]
+        except Exception:
+            pass  # advisor is optional
+
+    return best
 
 
 def plan_recovery_all(diag: LoopDiagnosis) -> List[RecoveryPlan]:

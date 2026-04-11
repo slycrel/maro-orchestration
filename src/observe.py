@@ -220,8 +220,8 @@ def _read_ancestry_tree() -> List[Dict[str, Any]]:
       slug, parent_id, depth, ancestry (breadcrumb list of {id, title})
     """
     try:
-        from orch_items import orch_root
-        projects_root = orch_root() / "projects"
+        from orch_items import projects_root as _projects_root
+        projects_root = _projects_root()
         if not projects_root.exists():
             return []
 

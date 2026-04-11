@@ -27,6 +27,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+log = logging.getLogger(__name__)
+
 from memory_ledger import _memory_dir, _text_similarity
 
 # Hybrid retrieval (BM25 + RRF) — graceful fallback to TF-IDF if unavailable
@@ -1033,3 +1035,296 @@ def memory_status() -> Dict[str, Any]:
         "promote_min_score": PROMOTE_MIN_SCORE,
         "promote_min_sessions": PROMOTE_MIN_SESSIONS,
     }
+
+
+# ===========================================================================
+# Phase K2: Knowledge Nodes — Structured, Queryable Knowledge
+# ===========================================================================
+#
+# Knowledge nodes are the building blocks of the Web (associative) view.
+# Each node represents a reusable piece of knowledge (principle, pattern,
+# technique, tool, decision) with evidence tracing and temporal metadata.
+#
+# Schema designed for:
+#   - Import from external collections (links, research, steal-list items)
+#   - LLM-assisted extraction (batch-process sources → principle candidates)
+#   - Query by domain, type, or goal-relevance (TF-IDF ranked)
+#   - Injection into decompose/evolver context alongside tiered lessons
+#   - Provenance: every node traces to ≥1 source
+# ===========================================================================
+
+# Node types — what kind of knowledge this represents
+NODE_TYPES = frozenset({
+    "principle",      # Reusable design/engineering principle
+    "pattern",        # Recurring solution pattern (like a design pattern)
+    "technique",      # Specific approach or method
+    "tool",           # External tool, library, or service
+    "insight",        # Observation or finding (less prescriptive than principle)
+    "decision",       # Architectural decision record (ADR-style)
+    "concept",        # Core concept definition (lat.md-style)
+})
+
+# Node statuses
+NODE_ACTIVE = "active"
+NODE_SUPERSEDED = "superseded"
+NODE_DEPRECATED = "deprecated"
+NODE_CANDIDATE = "candidate"     # Not yet validated
+
+
+@dataclass
+class KnowledgeNode:
+    """A single unit of structured knowledge in the Web layer.
+
+    Every node has provenance (sources), domain tags, and temporal metadata.
+    Nodes can link to each other via wiki-links ([[concept-name]]) in their
+    description field, matching the lat.md convention.
+    """
+    node_id: str                       # Unique identifier (uuid hex[:12])
+    node_type: str                     # One of NODE_TYPES
+    title: str                         # Short descriptive title
+    description: str                   # Full text, may contain [[wiki-links]]
+    domain: str = ""                   # Domain tag (e.g., "orchestration", "memory", "quality")
+    sources: List[str] = field(default_factory=list)   # URLs, file paths, outcome IDs
+    tags: List[str] = field(default_factory=list)       # Freeform tags for filtering
+    status: str = NODE_ACTIVE
+    confidence: float = 0.5            # How validated is this knowledge (0-1)
+    times_applied: int = 0             # How often injected into context
+    superseded_by: Optional[str] = None  # node_id of replacement (if superseded)
+    created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    validated_at: Optional[str] = None   # Last validation timestamp
+    author: str = ""                   # Who contributed this (handle, system, etc.)
+
+
+@dataclass
+class KnowledgeEdge:
+    """A directed relationship between two knowledge nodes."""
+    source_id: str                     # From node
+    target_id: str                     # To node
+    relation: str                      # "supports", "contradicts", "extends", "implements", "related"
+    weight: float = 1.0                # Relationship strength (0-1)
+    created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+
+# ---------------------------------------------------------------------------
+# Storage
+# ---------------------------------------------------------------------------
+
+def _knowledge_nodes_path() -> Path:
+    return _memory_dir() / "knowledge_nodes.jsonl"
+
+
+def _knowledge_edges_path() -> Path:
+    return _memory_dir() / "knowledge_edges.jsonl"
+
+
+def append_knowledge_node(node: KnowledgeNode) -> None:
+    """Append a knowledge node to the store."""
+    p = _knowledge_nodes_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with p.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(asdict(node), sort_keys=True) + "\n")
+    log.info("knowledge_node: added %s (%s) %r", node.node_id, node.node_type, node.title[:60])
+
+
+def append_knowledge_edge(edge: KnowledgeEdge) -> None:
+    """Append a knowledge edge to the store."""
+    p = _knowledge_edges_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with p.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(asdict(edge), sort_keys=True) + "\n")
+
+
+def load_knowledge_nodes(
+    *,
+    node_type: Optional[str] = None,
+    domain: Optional[str] = None,
+    status: str = NODE_ACTIVE,
+    tag: Optional[str] = None,
+) -> List[KnowledgeNode]:
+    """Load knowledge nodes with optional filtering."""
+    p = _knowledge_nodes_path()
+    if not p.exists():
+        return []
+
+    nodes: List[KnowledgeNode] = []
+    for line in p.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            d = json.loads(line)
+            if status and d.get("status", NODE_ACTIVE) != status:
+                continue
+            if node_type and d.get("node_type") != node_type:
+                continue
+            if domain and d.get("domain", "") != domain:
+                continue
+            if tag and tag not in d.get("tags", []):
+                continue
+            nodes.append(KnowledgeNode(**{
+                k: v for k, v in d.items()
+                if k in KnowledgeNode.__dataclass_fields__
+            }))
+        except (json.JSONDecodeError, TypeError):
+            continue
+    return nodes
+
+
+def load_knowledge_edges(*, node_id: Optional[str] = None) -> List[KnowledgeEdge]:
+    """Load knowledge edges, optionally filtered by source or target node."""
+    p = _knowledge_edges_path()
+    if not p.exists():
+        return []
+
+    edges: List[KnowledgeEdge] = []
+    for line in p.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            d = json.loads(line)
+            if node_id and d.get("source_id") != node_id and d.get("target_id") != node_id:
+                continue
+            edges.append(KnowledgeEdge(**{
+                k: v for k, v in d.items()
+                if k in KnowledgeEdge.__dataclass_fields__
+            }))
+        except (json.JSONDecodeError, TypeError):
+            continue
+    return edges
+
+
+def find_knowledge_node(node_id: str) -> Optional[KnowledgeNode]:
+    """Find a single node by ID."""
+    for node in load_knowledge_nodes(status=""):  # all statuses
+        if node.node_id == node_id:
+            return node
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Query — TF-IDF ranked retrieval
+# ---------------------------------------------------------------------------
+
+def query_knowledge(
+    goal: str,
+    *,
+    domain: Optional[str] = None,
+    node_type: Optional[str] = None,
+    max_results: int = 5,
+    min_confidence: float = 0.0,
+) -> List[KnowledgeNode]:
+    """Query knowledge nodes by goal relevance (TF-IDF ranked).
+
+    Returns the most relevant active nodes for a given goal/query string.
+    """
+    nodes = load_knowledge_nodes(domain=domain, node_type=node_type)
+    if not nodes:
+        return []
+
+    # Filter by confidence
+    nodes = [n for n in nodes if n.confidence >= min_confidence]
+    if not nodes:
+        return []
+
+    # Build corpus for TF-IDF
+    goal_tokens = _tokenize(goal)
+    if not goal_tokens:
+        return nodes[:max_results]
+
+    scored: List[tuple] = []
+    for node in nodes:
+        doc = f"{node.title} {node.description} {' '.join(node.tags)}"
+        doc_tokens = _tokenize(doc)
+        if not doc_tokens:
+            continue
+        # Simple TF-IDF score
+        tf = Counter(doc_tokens)
+        doc_len = len(doc_tokens)
+        score = 0.0
+        for token in goal_tokens:
+            if token in tf:
+                score += tf[token] / doc_len
+        # Boost by confidence and application count
+        score *= (0.5 + 0.5 * node.confidence)
+        if node.times_applied > 0:
+            score *= 1.0 + 0.1 * min(node.times_applied, 5)
+        scored.append((score, node))
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return [node for _, node in scored[:max_results]]
+
+
+# ---------------------------------------------------------------------------
+# Injection — format knowledge for context injection
+# ---------------------------------------------------------------------------
+
+def inject_knowledge_for_goal(
+    goal: str,
+    *,
+    domain: Optional[str] = None,
+    max_chars: int = 1200,
+    max_nodes: int = 5,
+) -> str:
+    """Build a knowledge injection string for a goal.
+
+    Returns a formatted block of the most relevant knowledge nodes,
+    suitable for prepending to decompose/evolver context.
+    """
+    nodes = query_knowledge(goal, domain=domain, max_results=max_nodes, min_confidence=0.3)
+    if not nodes:
+        return ""
+
+    lines: List[str] = ["## Relevant Knowledge"]
+    chars = 0
+    for node in nodes:
+        entry = f"- [{node.node_type}] {node.title}: {node.description[:200]}"
+        if node.sources:
+            entry += f" (source: {node.sources[0][:60]})"
+        if chars + len(entry) > max_chars:
+            break
+        lines.append(entry)
+        chars += len(entry)
+        # Track application
+        node.times_applied += 1
+
+    return "\n".join(lines) if len(lines) > 1 else ""
+
+
+# ---------------------------------------------------------------------------
+# Wiki-link extraction — parse [[concept]] references from node descriptions
+# ---------------------------------------------------------------------------
+
+_WIKI_LINK_RE = re.compile(r"\[\[([^\]]+)\]\]")
+
+
+def extract_wiki_links(text: str) -> List[str]:
+    """Extract [[wiki-link]] references from text."""
+    return _WIKI_LINK_RE.findall(text)
+
+
+def build_wiki_link_edges(nodes: List[KnowledgeNode]) -> List[KnowledgeEdge]:
+    """Build edges from wiki-links in node descriptions.
+
+    If node A's description references [[concept-B]] and a node with
+    title matching "concept-B" exists, create a "related" edge A→B.
+    """
+    title_to_id: Dict[str, str] = {}
+    for node in nodes:
+        # Normalize title for matching: lowercase, hyphens/spaces equivalent
+        key = node.title.lower().replace(" ", "-").replace("_", "-")
+        title_to_id[key] = node.node_id
+
+    edges: List[KnowledgeEdge] = []
+    for node in nodes:
+        refs = extract_wiki_links(node.description)
+        for ref in refs:
+            ref_key = ref.lower().replace(" ", "-").replace("_", "-")
+            target_id = title_to_id.get(ref_key)
+            if target_id and target_id != node.node_id:
+                edges.append(KnowledgeEdge(
+                    source_id=node.node_id,
+                    target_id=target_id,
+                    relation="related",
+                ))
+    return edges

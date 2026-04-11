@@ -79,6 +79,7 @@ from orch_items import (
     append_risk,
     append_provenance,
     ensure_project,
+    relative_display_path,
 )
 
 
@@ -260,7 +261,7 @@ def write_operator_status() -> dict:
             "active_runs": active_salvage_runs,
             "active_count": 0,
             "pending_count": 0,
-            "index_path": str(_run_status_summary_record_path().relative_to(orch_root())),
+            "index_path": relative_display_path(_run_status_summary_record_path()),
         },
     }
     payload["salvage"]["active_count"] = len(active_salvage_runs)
@@ -300,7 +301,7 @@ def start_item(
         index=item.index,
         text=item.text,
         status="running",
-        artifact_path=str((runs_root() / run_id).relative_to(orch_root())),
+        artifact_path=relative_display_path(runs_root() / run_id),
         attempt=_next_attempt(slug, item.index),
         source=source,
         worker=worker,
@@ -340,7 +341,7 @@ def finalize_run(run_id: str, status: str, *, note: Optional[str] = None) -> Run
         artifact_root = orch_root() / run.artifact_path
         validation_summary = artifact_root / "validation-summary.json"
         if validation_summary.exists():
-            provenance_lines.append(f"Validation: `{validation_summary.relative_to(orch_root())}`")
+            provenance_lines.append(f"Validation: `{relative_display_path(validation_summary)}`")
     append_provenance(run.project, provenance_lines)
     write_operator_status()
     return run
@@ -413,7 +414,7 @@ def _write_validation_summary(
     if validation_trace:
         summary["validation_trace"] = validation_trace
     summary_path.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
-    return str(summary_path.relative_to(orch_root()))
+    return relative_display_path(summary_path)
 
 
 def run_tick(

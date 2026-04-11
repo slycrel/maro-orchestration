@@ -2,30 +2,35 @@
 
 What to do next, in what order. Updated each session. Strategic phases live in ROADMAP.md; deferred ideas live in BACKLOG.md. This file is the bridge — the executable queue.
 
-Last updated: 2026-04-11 (session 15)
+Last updated: 2026-04-11 (session 16)
 
 ---
 
 ## Next Up
 
-1. **Advisor Pattern integration** — Sonnet executes, Opus advises at decision points. `advisor_call()` shipped in `llm.py`, wired into stuck detection. Next: wire into evolver meta-improvement triggers and milestone boundaries. (9/10 from X research)
+1. **Evals-as-Training-Data flywheel** — Mine prod failures → auto-generate evals → harness tweaks. (9/10, medium effort)
 
-2. **Thinking Token Budget** — `thinking_budget: int` in `llm.py`; high for planning, low for execution. Immediate win. (8/10)
+2. **Real-world regression tests** — Polymarket behavioral analysis, nootropic re-run.
 
-3. **Route output + projects to workspace** — `output_root()` and `projects_root()` still use `orch_root()` (the repo). Needs `relative_to(orch_root())` audit. Then `poe-export/import` becomes a simple tar.
+3. **K2 follow-up: Import links collection** — Knowledge node infrastructure is built (schema, storage, query, injection, wiki-link graph). Next: import 301 enriched posts as knowledge nodes. Requires Jeremy's external links data.
 
-4. **K2: Migrate links → knowledge nodes** — Transform existing knowledge into Ledger/Web/Lens architecture. K0, K1 DONE. K3 partially done (captain's log read bridge shipped).
-
-5. **Evals-as-Training-Data flywheel** — Mine prod failures → auto-generate evals → harness tweaks. (9/10, medium effort)
-
-6. **Real-world regression tests** — Polymarket behavioral analysis, nootropic re-run.
+4. **Wire knowledge injection into decompose** — `inject_knowledge_for_goal()` exists; wire into `_build_loop_context()` alongside tiered lessons.
 
 ## Queued
 
-7. **Event-driven subprocess wakeup** — Replace polling with asyncio.Queue signal. (7/10)
-8. **Phase 62: Auto persona+skill packaging**
-9. **Codebase Graph + LSP** — Pre-build call graph; LSP-guided context slicing. (9/10, longer term)
-10. **Remaining adversarial findings** — BUG-2 (lock file mode), BUG-3 (project starvation sort)
+5. **Event-driven subprocess wakeup** — Replace polling with asyncio.Queue signal. (7/10)
+6. **Phase 62: Auto persona+skill packaging**
+7. **Codebase Graph + LSP** — Pre-build call graph; LSP-guided context slicing. (9/10, longer term)
+8. **Remaining adversarial findings** — BUG-2 (lock file mode), BUG-3 (project starvation sort)
+
+## Done (session 16)
+
+- [x] **Workspace routing** — `output_root()` and `projects_root()` now route to `~/.poe/workspace/` (via config.py) instead of repo dir. `relative_display_path()` helper for safe path display. Fixed 12 `relative_to(orch_root())` calls across orch.py, orch_bridges.py, agent_loop.py.
+- [x] **Thinking Token Budget** — `THINKING_HIGH/MID/LOW` constants, `thinking_budget` param on all adapters. Wired into: AnthropicSDK (extended thinking API), decompose (THINKING_HIGH for plan quality), advisor_call (THINKING_MID for decisions). Temperature auto-disabled when thinking enabled.
+- [x] **Advisor Pattern wiring** — 3 new integration points: (1) evolver auto-apply gate for medium-confidence suggestions (0.6-0.79), (2) milestone boundary decompose failures, (3) introspect recovery plan wisdom check for medium/high-risk plans.
+- [x] **K2: Knowledge node infrastructure** — `KnowledgeNode` + `KnowledgeEdge` schema, JSONL storage, TF-IDF query, `inject_knowledge_for_goal()`, wiki-link extraction + graph building. 24 tests.
+- [x] Fixed missing logger in knowledge_web.py (pre-existing bug, adversarial rejection path)
+- [x] 3469 tests passing (up 33 from 3436)
 
 ## Done (session 15)
 
