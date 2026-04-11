@@ -12,6 +12,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 import memory as mem_module
+import knowledge_lens as _kl_module
 from memory import (
     Decision,
     Hypothesis,
@@ -37,6 +38,7 @@ from memory import (
 def tmp_memory(tmp_path, monkeypatch):
     """Redirect all memory file paths to a temp directory."""
     monkeypatch.setattr(mem_module, "_memory_dir", lambda: tmp_path)
+    monkeypatch.setattr(_kl_module, "_memory_dir", lambda: tmp_path)
     yield tmp_path
 
 
