@@ -36,3 +36,5 @@ src/poe_orchestration.egg-info/
 step_data.json
 test_output.txt
 analyze-data-output/
+.playwright-cli/
+src/memory/
