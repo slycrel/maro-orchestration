@@ -73,7 +73,7 @@ Last reviewed: 2026-04-10 (session 14)
 
 ### Memory / Knowledge Layer (K stages — from research/orchestration-knowledge-layer)
 - [x] **memory.py decomposition (K1-aligned)** — DONE (2026-04-10). 2,968→530 lines (82% reduction). Split into: `memory_ledger.py` (944L — outcomes, lessons, compression, step traces), `knowledge_web.py` (1,006L — tiered lessons, decay/promotion, TF-IDF, canon tracking), `knowledge_lens.py` (758L — rules, hypotheses, decisions, verification). memory.py is now a thin public API with re-exports + coordination functions (bootstrap_context, reflect_and_record, inject_lessons_for_task).
-- [ ] **Consolidate knowledge layer research** — Two locations: `research/orchestration-knowledge-layer/` (original architecture + K0-K8 phases) and `docs/knowledge-layer/` (K0 baseline). Merge into one canonical location with implementation paths documented.
+- [x] **Consolidate knowledge layer research** — (2026-04-10) Merged into `docs/knowledge-layer/` as canonical location. Architecture, K-stages, research landscape, gaps docs moved from research/. Raw transcripts archived. README with K-stage status table added. K0 (baseline) and K1 (module split) marked DONE.
 - [x] **llm_parse.py test coverage** — (2026-04-10) 68 unit tests added. Covers all 6 public functions + edge cases (None, NaN, fences, type mismatch unwrapping).
 
 ### Test Coverage Gaps (from 2026-04-10 audit)

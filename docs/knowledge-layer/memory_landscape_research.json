@@ -1,0 +1,475 @@
+{
+  "metadata": {
+    "research_date": "2026-04-09",
+    "scope": "Persistent memory and knowledge systems for multi-agent AI orchestration",
+    "focus_areas": [
+      "Agent integration (not chatbot-only)",
+      "Relational/graph-like structures (not flat RAG)",
+      "Session persistence with knowledge compounding",
+      "Active participation in reasoning, not just archive search",
+      "Bridge between different AI tools/contexts"
+    ]
+  },
+  "projects": [
+    {
+      "name": "Mem0",
+      "url": "https://github.com/mem0ai/mem0",
+      "stars": "52400",
+      "maturity": "production",
+      "architecture": "Dual-store hybrid: vector database (semantic search) + knowledge graph (entity relationships). Multi-level memory tracking user preferences, session state, and agent behavior.",
+      "how_it_works": "Extracts entities and relationships from interactions, stores in vector + graph layers. Offers selective pipeline with 91% faster responses and 90% fewer tokens than full-context, while maintaining 26% accuracy improvement over OpenAI memory. Mem0g variant adds graph layer, achieving 5-point accuracy gap to full-context baseline.",
+      "strengths": [
+        "Mature ecosystem with 52.4K stars, 21+ framework integrations",
+        "Dual-store design balances semantic search with relational knowledge",
+        "Production-grade performance benchmarks (26% accuracy boost vs OpenAI)",
+        "Drop-in memory for LangGraph, CrewAI, LangChain",
+        "26% accuracy improvement over vector-only approaches",
+        "Comprehensive documentation and managed hosting options"
+      ],
+      "limitations": [
+        "Less specialized in temporal reasoning than Zep (49% vs 63.8% on LongMemEval)",
+        "Cloud-first design; local-only alternatives exist (e.g., SuperLocalMemory)",
+        "Knowledge graph less specialized than native graph solutions",
+        "Requires external vector store and database infrastructure",
+        "Graph construction less transparent than explicit entity extraction"
+      ],
+      "agent_integration": "Strong. Designed explicitly for agent memory with multi-turn support, semantic extraction, and framework hooks. Works with autonomous multi-agent systems.",
+      "obsidian_compatibility": "No direct Obsidian integration; exports to JSON but not markdown-native.",
+      "fit_score": 7,
+      "fit_rationale": "Excellent for general agent memory with proven production benchmarks and graph-aware architecture. Dual-store design supports relational knowledge. Weakness: less temporal-reasoning capability and not Obsidian-native. Good choice if you want mature, managed solution with strong accuracy metrics."
+    },
+    {
+      "name": "Letta (formerly MemGPT)",
+      "url": "https://github.com/letta-ai/letta",
+      "stars": "22000",
+      "maturity": "production",
+      "architecture": "OS-inspired tiered memory: core memory (always in-context, RAM-like), archival memory (external vector store, disk-like), recall memory (conversation history). Self-editing memory where agents actively manage their own memory.",
+      "how_it_works": "Agents move data between in-context and external storage to simulate unlimited memory within fixed context windows. Introduces self-editing where agents use tools to modify their own memory. Two default external tables: archival (long-running) and recall (conversation history). Model-agnostic framework supporting autonomous reasoning.",
+      "strengths": [
+        "Pioneering OS-inspired architecture with clear semantic separation",
+        "Agents can actively edit/manage their own memory (self-improvement signal)",
+        "Strong theoretical foundation from MemGPT research",
+        "Stateful design enables continuous learning across sessions",
+        "Good for building persistent agent personas",
+        "22K stars shows strong community interest",
+        "Open-source and self-hostable"
+      ],
+      "limitations": [
+        "Three-tier model can be complex to orchestrate optimally",
+        "Less emphasis on graph/relational structure compared to dedicated graph systems",
+        "Temporal reasoning not primary focus",
+        "Archival memory is still vector-based, not graph-based",
+        "Requires explicit configuration for different memory types"
+      ],
+      "agent_integration": "Excellent. Designed for stateful agents with self-improvement. Pre-built skills for advanced memory and learning. Works well in multi-agent coordination.",
+      "obsidian_compatibility": "No direct Obsidian integration.",
+      "fit_score": 8,
+      "fit_rationale": "Strong fit for multi-agent orchestration with learning. Self-editing memory aligns with lesson extraction and skill evolution. Weakness: relational/graph structure is secondary to archival vector storage. Best if you want agents that actively improve their own memory over time."
+    },
+    {
+      "name": "Zep (with Graphiti)",
+      "url": "https://github.com/getzep/graphiti",
+      "stars": "~15000",
+      "maturity": "production",
+      "architecture": "Temporal knowledge graph engine (Graphiti) with bi-temporal modeling. Three subgraph networks: episode (conversational), semantic entity (facts), and community (themes). Every edge has explicit validity intervals (t_valid, t_invalid).",
+      "how_it_works": "Graphiti synthesizes unstructured conversation and structured business data into temporal graph. Tracks when facts occurred AND when they were ingested (bi-temporal). When new information contradicts old, invalidates old facts without discarding history. Automatic community detection and summarization. LongMemEval: 63.8% accuracy (15-point lead over Mem0).",
+      "strengths": [
+        "Only system with explicit temporal modeling of facts",
+        "Bi-temporal model preserves historical record while updating truth",
+        "Superior performance on temporal reasoning (63.8% vs 49% Mem0 on LongMemEval)",
+        "Community detection and summarization built-in",
+        "Handles fact evolution naturally (e.g., 'Alice was budget owner until February, then Bob took over')",
+        "Graphiti framework open-source",
+        "90% latency reduction vs baselines while maintaining 18.5% accuracy improvement"
+      ],
+      "limitations": [
+        "More complex architecture than vector-only systems",
+        "Temporal modeling adds computational overhead",
+        "Less mature ecosystem than Mem0 (fewer integrations)",
+        "Community-focused retrieval may miss granular details",
+        "Graph construction still requires LLM extraction pipeline"
+      ],
+      "agent_integration": "Strong. Explicitly designed for agent memory with temporal reasoning at core. Supports multi-turn, multi-session reasoning.",
+      "obsidian_compatibility": "No direct Obsidian integration.",
+      "fit_score": 9,
+      "fit_rationale": "Best-in-class for temporal reasoning and knowledge evolution. The only system that explicitly models time as first-class citizen. Ideal for orchestrators that need to reason about when things happened and how facts change. Weakness: more complex to deploy than simpler solutions. Top choice if temporal reasoning is critical."
+    },
+    {
+      "name": "Cognee",
+      "url": "https://github.com/topoteretes/cognee",
+      "stars": "15100",
+      "maturity": "production",
+      "architecture": "Graph-vector hybrid. Six-stage pipeline: classify, permission-check, extract chunks, LLM entity/relationship extraction, summarize, embed+commit to graph. Self-improving via pruning stale nodes, strengthening frequent connections, reweighting edges by usage signals, adding derived facts.",
+      "how_it_works": "Ingest any data format. Pipeline extracts entities and relationships into graph. Vector embeddings capture semantics. 14 retrieval modes from RAG to graph traversal. System learns from feedback: prunes weak edges, amplifies strong patterns, builds new derived facts. Graph is not static but continuously refines based on agent usage.",
+      "strengths": [
+        "Explicit graph construction with LLM extraction (transparent)",
+        "Self-improvement through usage-driven graph refinement",
+        "Hybrid retrieval (14 modes) from simple RAG to complex traversal",
+        "Fast ingestion pipeline for multi-format data (PDFs, web, etc.)",
+        "Memory is evolving structure, not static archive",
+        "$7.5M funding (backed by OpenAI, Facebook AI founders)",
+        "Designed for agent skill structuring"
+      ],
+      "limitations": [
+        "Self-improvement requires feedback signals (not automatic)",
+        "Graph construction still LLM-dependent (expensive at scale)",
+        "Less mature than Mem0 in production deployments",
+        "Temporal reasoning not explicit (unlike Zep)",
+        "Requires setup of ontology/entities for best results"
+      ],
+      "agent_integration": "Strong. Designed specifically for agent memory with skill structuring and multi-agent capability.",
+      "obsidian_compatibility": "No direct Obsidian integration.",
+      "fit_score": 8,
+      "fit_rationale": "Excellent for knowledge-centric multi-agent systems. Self-improving graph structure aligns well with lesson extraction and skill evolution. Transparent entity extraction appeals to orchestrators that need explainability. Weakness: requires feedback loop for self-improvement and temporal reasoning is implicit. Strong pick if you want observable, explainable knowledge graphs."
+    },
+    {
+      "name": "Basic Memory",
+      "url": "https://github.com/basicmachines-co/basic-memory",
+      "stars": "2800",
+      "maturity": "production",
+      "architecture": "Markdown + SQLite. Files stored as human-readable Markdown with YAML frontmatter. Observations use annotated list format `[category] content #tag`. Relations use wiki-link syntax `[[WikiLink]]`. SQLite indexes for search.",
+      "how_it_works": "Dual-format: humans edit Markdown files directly; AI reads/writes via MCP server tools. Semantic search combines full-text and vector similarity (FastEmbed). Markdown metadata enables both human and machine understanding. Obsidian-native design.",
+      "strengths": [
+        "Perfect Obsidian integration (human-readable, graph visualization)",
+        "Human-editable format (markdown + wiki links = standard knowledge management)",
+        "MCP server enables any compatible LLM to read/write",
+        "Local-first with just SQLite indexing",
+        "Lightweight infrastructure, no databases needed",
+        "FastMCP 3.0 upgrade with better tool integration",
+        "Per-project cloud routing option"
+      ],
+      "limitations": [
+        "Smallest ecosystem (2.8K stars vs 52K for Mem0)",
+        "Markdown-based structure less efficient for complex queries than native graphs",
+        "Vector search via FastEmbed is basic compared to specialized engines",
+        "No explicit temporal modeling",
+        "Requires user to manage markdown structure",
+        "Single SQLite index backend (not distributed)"
+      ],
+      "agent_integration": "Moderate. Works as agent memory via MCP but not purpose-built for multi-agent reasoning. Better for single-agent with human oversight.",
+      "obsidian_compatibility": "Excellent. Seamless Obsidian integration with graph visualization and wiki-link navigation.",
+      "fit_score": 6,
+      "fit_rationale": "Best choice if Obsidian integration is requirement and human editability is priority. Bridge between human knowledge management and AI. Weakness: not optimized for multi-agent orchestration or complex relational queries. Good if you want markdown+wiki-links as single source of truth."
+    },
+    {
+      "name": "Hindsight",
+      "url": "https://github.com/vectorize-io/hindsight",
+      "stars": "~8000",
+      "maturity": "production",
+      "architecture": "Four parallel memory networks: World (objective facts), Experience (first-person actions), Opinion (beliefs with confidence scores), Temporal (time-aware). Biomimetic data structures with entity/relationship/time-series representations and sparse/dense vectors.",
+      "how_it_works": "Four parallel retrieval strategies: semantic (embedding), BM25 (keyword), graph traversal (relationships), temporal (recency). Multi-strategy retrieval outperforms single-approach. LongMemEval: 91.4% (state-of-the-art as of Jan 2026). Used in production at Fortune 500s.",
+      "strengths": [
+        "State-of-the-art performance (91.4% on LongMemEval)",
+        "Four-network separation mirrors human memory architecture",
+        "Multi-strategy retrieval (4 in parallel) catches what single strategies miss",
+        "Strong production adoption (Fortune 500 enterprises)",
+        "Confidence scoring on beliefs enables reasoned disagreement",
+        "Temporal reasoning as core feature"
+      ],
+      "limitations": [
+        "Less transparent about underlying architecture than explicit graph systems",
+        "Smaller ecosystem than Mem0",
+        "Biomimetic approach may be harder to debug/introspect",
+        "No explicit Obsidian or markdown compatibility",
+        "Complex setup and tuning required for optimal performance"
+      ],
+      "agent_integration": "Excellent. Designed for long-horizon agent reasoning across sessions. Works well with LangGraph and AutoGen.",
+      "obsidian_compatibility": "No direct Obsidian integration.",
+      "fit_score": 9,
+      "fit_rationale": "Top choice if accuracy and multi-session reasoning are paramount. Four-network design elegant for complex agent orchestration. Weakness: more black-box than explicit graph systems. Best if you want maximum recall accuracy and confidence scores on beliefs."
+    },
+    {
+      "name": "SuperLocalMemory",
+      "url": "https://github.com/qualixar/superlocalmemory",
+      "stars": "~6000",
+      "maturity": "research+production",
+      "architecture": "Local-only SQLite with mathematical foundations (Fisher-Rao geometry, sheaf cohomology, Langevin dynamics). Three operating modes: Mode A (local-only, 74.8% LoCoMo), Mode B (local LLM augmented), Mode C (cloud LLM).",
+      "how_it_works": "All storage on-device SQLite. Zero cloud calls, EU AI Act compliant by architecture. Mathematical guarantees on retrieval and consistency. Hybrid search (BM25 + semantic). Integrates with 17+ tools (Claude Code, Cursor, VS Code, ChatGPT Desktop, etc.) via MCP.",
+      "strengths": [
+        "Privacy-first architecture with zero external calls",
+        "Mathematical guarantees on retrieval (unique among systems)",
+        "Outstanding local-only performance (74.8% beats Mem0's 58.8%)",
+        "17+ IDE integrations via MCP",
+        "EU AI Act compliant by design",
+        "MCP + agent-native CLI",
+        "Biologically-inspired forgetting mechanism"
+      ],
+      "limitations": [
+        "Limited documentation compared to commercial systems",
+        "Research-backed but smaller production user base",
+        "Mathematical complexity may deter average users",
+        "No explicit temporal modeling (like Zep)",
+        "Limited to local infrastructure"
+      ],
+      "agent_integration": "Strong. Agent-native CLI and MCP make it natural for multi-agent systems. Works in fully local setups.",
+      "obsidian_compatibility": "No direct Obsidian integration.",
+      "fit_score": 8,
+      "fit_rationale": "Best choice if privacy, mathematical rigor, and local deployment are requirements. Ideal for orchestrators running on-device without cloud dependency. Weakness: smaller ecosystem and less mature than Mem0. Top pick for privacy-conscious or compliance-heavy environments."
+    },
+    {
+      "name": "Supermemory",
+      "url": "https://github.com/supermemoryai/supermemory",
+      "stars": "~4500",
+      "maturity": "production",
+      "architecture": "Five-layer stack: custom vector graph engine with ontology-aware edges, hybrid search (vector + keyword), semantic chunking, fact extraction/tracking, data connectors (Notion, Slack, Gmail, S3).",
+      "how_it_works": "Multi-format ingestion (PDFs, web, images, audio). Custom vector graph with ontology-aware edges that understand when facts supersede others (e.g., 'just moved to SF' overrides 'live in NYC'). Hybrid search sub-300ms latency with reranking. Automatic data sync from Notion, Slack, etc.",
+      "strengths": [
+        "Ontology-aware edges understand fact supersession",
+        "Multi-format ingestion (PDFs, audio, images)",
+        "Smart chunking preserves semantic boundaries",
+        "Fast retrieval (sub-300ms) with reranking",
+        "Automatic data connectors (Notion, Slack, Gmail, S3)",
+        "Profile building from behavior patterns",
+        "TypeScript, Python, REST API support"
+      ],
+      "limitations": [
+        "Smaller user base than Mem0",
+        "Less benchmarked than Mem0 or Zep",
+        "Ontology-aware design requires setup",
+        "No explicit temporal reasoning",
+        "Documentation less comprehensive"
+      ],
+      "agent_integration": "Strong. Multi-format ingestion and data connectors suit multi-agent scenarios with external data sources.",
+      "obsidian_compatibility": "No direct Obsidian integration.",
+      "fit_score": 7,
+      "fit_rationale": "Good choice if you need multi-format ingestion and automatic data sync from platforms like Slack/Notion. Ontology-aware edges align with structured knowledge. Weakness: less proven at scale than Mem0 or Zep. Best for teams already on Notion/Slack ecosystem."
+    },
+    {
+      "name": "Khoj",
+      "url": "https://github.com/khoj-ai/khoj",
+      "stars": "~15000",
+      "maturity": "production",
+      "architecture": "Self-hostable personal AI with local document indexing, web search integration, and agent framework. Supports file formats: image, PDF, markdown, org-mode, word, notion. Local or cloud LLM backends.",
+      "how_it_works": "Index documents locally, query across them with semantic search. Build custom agents with knowledge, persona, chat model, tools. Schedule automations. Supports local LLM (Ollama) or cloud models (OpenAI, Claude, Gemini, Llama, Qwen, Mistral).",
+      "strengths": [
+        "True self-hosted option with privacy emphasis",
+        "Broad file format support",
+        "Integrates web search with document search",
+        "Custom agent builder",
+        "Automation scheduling",
+        "Local-first with cloud option"
+      ],
+      "limitations": [
+        "More personal-AI focused than enterprise agent coordination",
+        "No explicit graph/relational structure",
+        "Less mature than Mem0 or Zep for enterprise use",
+        "Documentation focused on personal use cases",
+        "No temporal reasoning"
+      ],
+      "agent_integration": "Moderate. Works for single agents but less optimized for multi-agent orchestration.",
+      "obsidian_compatibility": "Available as Obsidian plugin for note integration.",
+      "fit_score": 5,
+      "fit_rationale": "Better suited for personal knowledge management than multi-agent orchestration. Obsidian plugin is nice but knowledge storage is not graph-native. Weakness: lacks explicit relational/graph design for complex agent reasoning. Only choose if personal AI + Obsidian plugin is primary requirement."
+    },
+    {
+      "name": "Memvid (Portable AI Memory)",
+      "url": "https://github.com/memvid/memvid",
+      "stars": "~2000",
+      "maturity": "early-production",
+      "architecture": "Single-file memory layer. Hybrid search (BM25 + semantic vectors). Portable, versioned, no database backend. Fast retrieval from single file.",
+      "how_it_works": "All memory in single portable file. Hybrid BM25 + semantic search. Lightning-fast retrieval. Instant sharing via file transfer. No database infrastructure.",
+      "strengths": [
+        "Ultra-simple: single file, no databases",
+        "Portable (shareable as file)",
+        "Hybrid search with BM25",
+        "Low friction for simple use cases",
+        "MCP server option"
+      ],
+      "limitations": [
+        "Smallest ecosystem of reviewed projects",
+        "No explicit graph/relational structure",
+        "No temporal reasoning",
+        "Single-file design limits scalability",
+        "Less suitable for complex multi-agent orchestration",
+        "Minimal documentation"
+      ],
+      "agent_integration": "Minimal. Works as memory layer but not agent-aware.",
+      "obsidian_compatibility": "No direct Obsidian integration.",
+      "fit_score": 3,
+      "fit_rationale": "Only suitable for simple agent memory needs with emphasis on portability. Not recommended for sophisticated multi-agent orchestration. Weakness: lacks graph structure, temporal reasoning, and agent-specific optimizations."
+    },
+    {
+      "name": "Claude Memory Tool (Anthropic Native)",
+      "url": "https://platform.claude.com/docs/en/agents-and-tools/tool-use/memory-tool",
+      "stars": "native",
+      "maturity": "beta",
+      "architecture": "Client-side memory via file directory. Memory tool stores/retrieves files in /memories directory. Supports custom backends (file, database, cloud storage).",
+      "how_it_works": "Claude automatically checks memory before tasks, creates/reads/updates/deletes files in memory directory. Users/SDKs control storage backend. Beta header: context-management-2025-06-27. Subclass BetaAbstractMemoryTool (Python) or betaMemoryTool (TypeScript).",
+      "strengths": [
+        "Native Anthropic solution for Claude-based agents",
+        "Client-controlled storage (you decide backend)",
+        "Auto memory (Claude writes notes about corrections/preferences)",
+        "Works with Claude Code for persistent project context",
+        "CLAUDE.md for human-written instructions",
+        "File-based is simple and transparent"
+      ],
+      "limitations": [
+        "Beta status with API changes possible",
+        "No relational/graph structure in base implementation",
+        "File-based storage less efficient than databases for complex queries",
+        "Auto memory is basic (notes, not structured knowledge)",
+        "Not a full knowledge graph solution",
+        "Limited to Claude ecosystem"
+      ],
+      "agent_integration": "Good for Claude-specific agents. Less suitable for multi-agent orchestration across tools.",
+      "obsidian_compatibility": "Could work with markdown files in memory directory but not integrated.",
+      "fit_score": 5,
+      "fit_rationale": "Use only if you're building exclusively with Claude and want native integration. Weakness: not a sophisticated knowledge graph, more basic file-based memory. File-based approach is transparent but lacks relational structure needed for complex orchestration."
+    },
+    {
+      "name": "GraphRAG (Microsoft Open-Source)",
+      "url": "https://github.com/microsoft/graphrag",
+      "stars": "~8500",
+      "maturity": "production",
+      "architecture": "Graph-based RAG via entity-centric knowledge graph extraction. Extracts entities and relationships, builds community hierarchy, generates summaries, performs RAG on graph structure. Supports Neo4j backend.",
+      "how_it_works": "Extract KG from text via LLM. Build community hierarchy. Generate summaries for communities. RAG queries search graph structure (nodes, edges, communities). Originally $33K for large datasets; now cost-competitive via LazyGraphRAG and other optimizations.",
+      "strengths": [
+        "Mature framework from Microsoft Research",
+        "3.4x better accuracy than traditional RAG (80% vs 50%)",
+        "Community detection handles thematic clustering",
+        "Neo4j integration for enterprise deployments",
+        "Rich literature and case studies",
+        "Works well for factual knowledge extraction"
+      ],
+      "limitations": [
+        "Originally expensive ($33K indexing cost) though optimized versions exist",
+        "Entity extraction still LLM-dependent (hallucination risk)",
+        "No temporal modeling (unlike Zep)",
+        "Designed for document RAG, not agent memory specifically",
+        "Community hierarchy less suitable for continuous updates"
+      ],
+      "agent_integration": "Moderate. Better as retrieval backend than agent memory system. Neo4j integration helps but requires setup.",
+      "obsidian_compatibility": "No direct Obsidian integration.",
+      "fit_score": 6,
+      "fit_rationale": "Use as retrieval/grounding layer for agent systems, not primary memory. Good for large document corpora with community-based reasoning. Weakness: not optimized for session persistence or evolving knowledge. Works best combined with dedicated agent memory system."
+    },
+    {
+      "name": "Neo4j Agent Memory Library",
+      "url": "https://github.com/neo4j-labs/agent-memory",
+      "stars": "~3500",
+      "maturity": "production",
+      "architecture": "Graph-native memory backed by Neo4j. Multi-stage entity and relationship extraction. MCP server with 16 tools. Integration with LangChain, Pydantic AI, Google ADK, CrewAI.",
+      "how_it_works": "Conversations flow to entity/relationship extraction. Results written to Neo4j graph. Bidirectional: retrieves context before invocation, saves memories after responses. Integrates with Microsoft Agent Framework and multiple LLM frameworks.",
+      "strengths": [
+        "True graph-native (uses Neo4j as core store)",
+        "Bidirectional memory flow (retrieve before, save after)",
+        "16 MCP tools for agent operations",
+        "Multi-framework support (LangChain, CrewAI, Pydantic AI)",
+        "Enterprise-grade (Neo4j backing)",
+        "Entity extraction with background enrichment"
+      ],
+      "limitations": [
+        "Requires Neo4j instance (operational overhead)",
+        "Less mature than Mem0 (smaller community)",
+        "No temporal reasoning built-in",
+        "MCP server has 16 tools (may be overwhelming)",
+        "Documentation less comprehensive"
+      ],
+      "agent_integration": "Excellent. Designed specifically for agent memory with framework integrations.",
+      "obsidian_compatibility": "Neo4j has visualization tools but no Obsidian integration.",
+      "fit_score": 7,
+      "fit_rationale": "Strong choice if you're already on Neo4j and want graph-native agent memory. Bidirectional flow aligns with orchestrator needs. Weakness: operational complexity of Neo4j instance. Best for enterprises with graph DB infrastructure."
+    }
+  ],
+  "emerging_patterns": [
+    "Temporal modeling is increasingly critical: Zep's bi-temporal edges and Hindsight's temporal networks outperform vector-only systems by 15-20 points on long-horizon tasks.",
+    "Hybrid retrieval dominates: every production system combines semantic (embedding) + keyword (BM25) + graph traversal in some form. Single-strategy retrieval is abandoned.",
+    "Graph-aware edges are evolving: ontology-aware edges (Supermemory), bi-temporal edges (Zep), usage-weighted edges (Cognee) replace simple relationship links.",
+    "Self-improvement is a differentiator: Cognee (usage-driven refinement), Letta (agent self-editing), and Hindsight (multi-network learning) show knowledge as living structure, not static archive.",
+    "Local-first is gaining: SuperLocalMemory, Khoj, and Basic Memory represent privacy-focused counter-movement. Regulatory pressure (EU AI Act) accelerating this trend.",
+    "MCP integration is table-stakes: Every new system (Basic Memory, SuperLocalMemory, Memvid, Neo4j) offers MCP server. Standard protocol for agent memory.",
+    "Benchmarks stabilizing: LongMemEval and LoCoMo are becoming canonical for memory systems (like MLPerf for ML). Performance gaps are now measurable and significant.",
+    "Multi-format ingestion is expected: Supermemory, Cognee, Khoj all support PDFs, web, audio, images. Single-format systems are obsolete.",
+    "Cost optimization wave: GraphRAG originally $33K for large corpora, now competitive via LazyGraphRAG and other methods. Infrastructure cost is active optimization frontier.",
+    "Explicit vs. implicit: Tension between transparent systems (Cognee's LLM extraction, Basic Memory's markdown) and black-box systems (Hindsight's biomimetic networks). No clear winner."
+  ],
+  "recommendation": {
+    "primary": {
+      "name": "Zep (with Graphiti)",
+      "reason": "Best fit for sophisticated multi-agent orchestration with learning and lesson extraction. Temporal knowledge graph with bi-temporal edges elegantly models how knowledge evolves. Superior temporal reasoning (63.8% vs 49% on LongMemEval) directly supports decision-making across sessions. Graphiti's episode/semantic/community separation mirrors human memory architecture, enabling complex orchestration patterns.",
+      "use_case": "Multi-agent systems where temporal reasoning matters (e.g., 'what changed between session 1 and 2?', 'who had authority at time T?', 'resolve conflicting facts from different sessions')",
+      "implementation_notes": "Requires Neo4j or equivalent graph backend. Community detection provides natural clustering for multi-agent coordination. Export/integration with markdown possible but not native.",
+      "risk": "More complex than vector-only solutions; temporal modeling adds computational overhead."
+    },
+    "secondary_if_temporal_not_priority": {
+      "name": "Cognee",
+      "reason": "Self-improving knowledge graph with transparent entity extraction. Explicitly designed for agent skill structuring. Usage-driven refinement aligns with lesson extraction and skill evolution. Hybrid 14-retrieval-mode architecture provides flexibility for different reasoning patterns.",
+      "use_case": "Orchestrators focused on observable, explainable knowledge. Agents that learn from feedback. Skill-evolution pipelines where knowledge graph should be introspectable.",
+      "implementation_notes": "Set up ontology/entity taxonomy upfront. Requires feedback signals for self-improvement loop. LLM extraction pipeline is the bottleneck at scale.",
+      "risk": "Less mature production deployments than Mem0; temporal reasoning is implicit."
+    },
+    "alternative_if_privacy_critical": {
+      "name": "SuperLocalMemory",
+      "reason": "Only option with mathematical guarantees and zero cloud dependency. EU AI Act compliant. Local-only 74.8% LoCoMo performance beats cloud-dependent Mem0. 17+ IDE integrations via MCP enable seamless agent integration.",
+      "use_case": "Privacy-sensitive orchestration. Compliance-heavy environments (healthcare, finance). On-device multi-agent systems.",
+      "implementation_notes": "Integrate via MCP. Agent-native CLI for structured queries. Mathematical foundations may be difficult to debug.",
+      "risk": "Smaller community; less battle-tested at scale."
+    },
+    "alternative_if_obsidian_native": {
+      "name": "Basic Memory",
+      "reason": "Only system with seamless Obsidian integration. Markdown + wiki-links as single source of truth bridges human knowledge management and AI reasoning. Lightweight infrastructure (SQLite only). Suitable if knowledge base must be human-editable.",
+      "use_case": "Orchestrators where humans and AI collaborate on knowledge. Personal knowledge management bridges to agent memory.",
+      "implementation_notes": "Design markdown structure to represent agent roles/capabilities. Wiki-link graph mirrors orchestration patterns. All content remains human-readable.",
+      "risk": "Not optimized for complex relational queries. SQLite-backed graph less efficient than native graph databases."
+    },
+    "not_recommended": {
+      "justification": "Mem0, while mature and well-integrated, lacks temporal reasoning and graph-native design relative to Zep and Cognee. Claude Memory Tool is too basic for sophisticated orchestration. GraphRAG is retrieval-focused, not memory-focused. Letta is strong but less graph-focused than Zep/Cognee. Hindsight is excellent but less observable/explainable than Cognee for learning systems.",
+      "reasoning": "Your requirements emphasize relational/graph structure, temporal reasoning, and visible lesson/skill evolution. Zep's temporal modeling and Cognee's explainability directly address these. Mem0 is solid but generic; Hindsight is accurate but black-box."
+    }
+  },
+  "architecture_patterns": {
+    "hybrid_retrieval": "All production systems use 3+ retrieval strategies in parallel: semantic (embedding), keyword (BM25/lexical), graph (traversal), temporal (recency). Single-strategy systems lag 10-20 points.",
+    "multi_memory_tier": "Separation of episodic (conversation), semantic (facts/entities), procedural (skills/tools), temporal (when). Each tier needs different storage/retrieval logic.",
+    "self_editing_vs_auto_extraction": "Letta's self-editing (agents modify own memory) vs Cognee's auto-extraction (LLM extracts knowledge) represent two philosophies. Self-editing is more controllable; auto-extraction is more scalable.",
+    "graph_edge_semantics": "Simple 'is_related_to' edges are obsolete. Modern systems use: ontology-aware edges (fact supersession), temporal edges (validity intervals), weighted edges (confidence/usage), typed edges (relationship semantics).",
+    "stream_vs_batch": "Zep/Graphiti enable real-time streaming updates (incremental graph construction). Traditional GraphRAG requires batch recomputation. Streaming is critical for living knowledge bases.",
+    "local_vs_managed": "SuperLocalMemory/Basic Memory = full local control. Mem0/Cognee = managed SaaS with synced local. Zep/Neo4j = on-prem graph. Choose based on data sovereignty vs operational burden tradeoff."
+  },
+  "benchmark_summary": {
+    "LongMemEval_top_scores": [
+      "Hindsight: 91.4%",
+      "Zep: 63.8%",
+      "Supermemory: 85.4%",
+      "Mem0: 49.0%"
+    ],
+    "LoCoMo_top_scores": [
+      "SuperLocalMemory (Mode A, no cloud): 74.8%",
+      "Supermemory (Mode C, cloud): 87.7%",
+      "Hindsight (backbone-scaled): 89.61%"
+    ],
+    "accuracy_vs_latency": "Mem0's selective pipeline: 91% faster (1.44s vs 17.12s p95) for 6-point accuracy tradeoff. Mem0g (graph-enhanced) closes gap to 5 points at 2.59s.",
+    "token_efficiency": "Mem0's selective pipeline: 90% fewer tokens than full-context. SuperLocalMemory: 60-80% token reduction in extended interactions."
+  },
+  "integration_checklist": {
+    "required_for_orchestrator": [
+      "[ ] Multi-turn session tracking (all systems)",
+      "[ ] Entity/relationship extraction (Zep/Cognee/Neo4j extract explicitly; others implicit)",
+      "[ ] Temporal reasoning support (Zep/Hindsight native; others approximate)",
+      "[ ] Graph export/introspection for learning pipeline (Cognee/Neo4j/Zep have good APIs; Mem0 less transparent)",
+      "[ ] Feedback loop for self-improvement (Cognee/Letta/Hindsight have hooks; Mem0/Zep require custom wiring)",
+      "[ ] MCP or equivalent agent protocol (all modern systems support)",
+      "[ ] Multi-agent scoping (namespace by agent; most systems support)",
+      "[ ] Observability/logging for learning signal (Zep/Neo4j/Cognee better; Mem0 requires custom instrumentation)"
+    ]
+  },
+  "research_sources": [
+    "https://github.com/mem0ai/mem0 — 52.4K stars, production memory layer",
+    "https://github.com/letta-ai/letta — 22K stars, OS-inspired memory management",
+    "https://github.com/getzep/graphiti — Temporal knowledge graph engine",
+    "https://github.com/topoteretes/cognee — 15.1K stars, self-improving knowledge graphs",
+    "https://github.com/basicmachines-co/basic-memory — 2.8K stars, Obsidian-native markdown memory",
+    "https://github.com/vectorize-io/hindsight — Biomimetic agent memory, state-of-the-art accuracy",
+    "https://github.com/qualixar/superlocalmemory — Local-only privacy-first memory with mathematical guarantees",
+    "https://github.com/supermemoryai/supermemory — 4.5K stars, ontology-aware memory layer",
+    "https://github.com/khoj-ai/khoj — 15K stars, self-hostable personal AI",
+    "https://github.com/memvid/memvid — Single-file portable agent memory",
+    "https://github.com/microsoft/graphrag — Microsoft's open-source graph-based RAG",
+    "https://github.com/neo4j-labs/agent-memory — Graph-native Neo4j memory for agents",
+    "https://www.mem0.ai/blog/state-of-ai-agent-memory-2026 — State of AI Agent Memory 2026 analysis",
+    "https://www.getzep.com/ — Zep long-term memory platform",
+    "https://dev.to/varun_pratapbhardwaj_b13/5-ai-agent-memory-systems-compared-mem0-zep-letta-supermemory-superlocalmemory-2026-benchmark-59p3 — 2026 Comparative Benchmarks",
+    "https://vectorize.io/articles/best-ai-agent-memory-systems — 8 frameworks comparison",
+    "https://medium.com/graph-praxis/graph-rag-in-2026-a-practitioners-guide-to-what-actually-works-dca4962e7517 — GraphRAG Practitioner's Guide",
+    "https://learn.microsoft.com/en-us/agent-framework/integrations/neo4j-memory — Neo4j Agent Framework Integration"
+  ]
+}
