@@ -244,6 +244,24 @@ class LoopContext:
     march_of_nines_alert: bool = False
     milestone_expanded: set = field(default_factory=set)
 
+    # Configuration (set during init, read-only after)
+    adapter: Any = None
+    verbose: bool = False
+    dry_run: bool = False
+    max_iterations: int = 40
+    continuation_depth: int = 0
+    ralph_verify: bool = False
+    step_callback: Optional[Callable] = None
+    interrupt_queue: Any = None
+    hook_registry: Any = None
+    perm_ctx: Any = None
+
+    # Computed during init
+    ancestry_context: str = ""
+    started_at: float = 0.0
+    start_ts: str = ""
+    loop_timeout_secs: Optional[float] = None
+
 
 # ---------------------------------------------------------------------------
 # System prompts
@@ -297,6 +315,174 @@ def _steps_are_independent(steps: List[str]) -> bool:
     because we require ALL steps to pass the check.
     """
     return not any(_DEP_RE.search(s) for s in steps)
+
+
+def _initialize_loop(
+    goal: str,
+    *,
+    project: Optional[str],
+    model: Optional[str],
+    backend: Optional[str],
+    adapter,
+    dry_run: bool,
+    verbose: bool,
+    interrupt_queue,
+    hook_registry,
+    ancestry_context_extra: str,
+    permission_context,
+    continuation_depth: int,
+    cost_budget: Optional[float],
+    token_budget: Optional[int],
+    ralph_verify: bool,
+    max_steps: int,
+    max_iterations: int,
+    step_callback,
+) -> tuple:
+    """Phase A: Initialize loop — setup adapter, project, ancestry, hooks.
+
+    Returns (ctx: LoopContext, early_return: Optional[LoopResult]).
+    If early_return is not None, caller should return it immediately.
+    """
+    from llm import build_adapter
+    from interrupt import InterruptQueue, set_loop_running
+    from poe import assign_model_by_role
+
+    ctx = LoopContext()
+    ctx.goal = goal
+    ctx.verbose = verbose
+    ctx.dry_run = dry_run
+    ctx.max_iterations = max_iterations
+    ctx.continuation_depth = continuation_depth
+    ctx.ralph_verify = ralph_verify
+    ctx.step_callback = step_callback
+    ctx.cost_budget = cost_budget
+    ctx.token_budget = token_budget
+
+    ctx.loop_id = str(uuid.uuid4())[:8]
+    ctx.started_at = time.monotonic()
+    ctx.start_ts = datetime.now(timezone.utc).isoformat()
+
+    _configure_logging(verbose)
+
+    log.info("loop_start loop_id=%s goal=%r project=%s max_steps=%d",
+             ctx.loop_id, goal[:80], project or "(auto)", max_steps)
+
+    # Kill switch check — refuse to start if sentinel is present
+    try:
+        from killswitch import is_active as _ks_active, read_reason as _ks_reason
+        if _ks_active():
+            _ks_msg = _ks_reason() or "kill switch engaged"
+            log.warning("loop refused to start — kill switch active: %s", _ks_msg)
+            return ctx, LoopResult(
+                loop_id=ctx.loop_id,
+                goal=goal,
+                project=project or "",
+                steps=[],
+                status="interrupted",
+                stuck_reason=f"kill switch active: {_ks_msg}",
+                total_tokens_in=0,
+                total_tokens_out=0,
+                elapsed_ms=0,
+                log_path=None,
+            )
+    except Exception:
+        pass  # killswitch import failure must never block execution
+
+    # Wall-clock timeout — default 2 hours, override via POE_LOOP_TIMEOUT_SECS
+    try:
+        ctx.loop_timeout_secs = float(os.environ.get("POE_LOOP_TIMEOUT_SECS", "7200"))
+    except (ValueError, TypeError):
+        ctx.loop_timeout_secs = 7200.0
+
+    if verbose:
+        print(f"[poe] loop_id={ctx.loop_id} goal={goal!r}", file=sys.stderr, flush=True)
+
+    # Resolve tool set from PermissionContext (Phase 41 — prompt-composition-time gating)
+    ctx.perm_ctx = permission_context
+    if ctx.perm_ctx is None and _PermissionContext is not None:
+        ctx.perm_ctx = _PermissionContext(role=_ROLE_WORKER)
+
+    # Build adapter — worker role uses MODEL_MID by default (role-semantic selection)
+    if adapter is None and not dry_run:
+        _build_kw: dict = {"model": model or assign_model_by_role("worker")}
+        if backend:
+            _build_kw["backend"] = backend
+        ctx.adapter = build_adapter(**_build_kw)
+    elif dry_run:
+        ctx.adapter = _DryRunAdapter()
+    else:
+        ctx.adapter = adapter
+
+    # Set up interrupt queue — auto-create if not provided
+    if interrupt_queue is None:
+        try:
+            ctx.interrupt_queue = InterruptQueue()
+        except Exception:
+            ctx.interrupt_queue = None  # Non-fatal: run without interrupt support
+    else:
+        ctx.interrupt_queue = interrupt_queue
+
+    # Advertise this loop as running so other interfaces can route interrupts
+    try:
+        set_loop_running(ctx.loop_id, goal)
+    except Exception:
+        pass
+
+    # Resolve or create project
+    # Always call ensure_project (idempotent) — guards against partially-initialized
+    # projects where the dir exists but NEXT.md was never written.
+    o = _orch()
+    if project:
+        _proj_existed = o.project_dir(project).exists()
+        o.ensure_project(project, goal[:80])
+        if verbose and not _proj_existed:
+            print(f"[poe] created project={project}", file=sys.stderr, flush=True)
+    else:
+        project = _goal_to_slug(goal)
+        _proj_existed = o.project_dir(project).exists()
+        o.ensure_project(project, goal[:80])
+        if verbose and not _proj_existed:
+            print(f"[poe] created project={project}", file=sys.stderr, flush=True)
+    ctx.project = project
+
+    # Load goal ancestry for prompt injection
+    try:
+        from ancestry import get_project_ancestry, build_ancestry_prompt
+        _proj_dir = o.project_dir(project)
+        _ancestry = get_project_ancestry(_proj_dir)
+        ctx.ancestry_context = build_ancestry_prompt(_ancestry, current_task=goal)
+    except Exception:
+        ctx.ancestry_context = ""
+
+    # Continuation depth awareness: let the planner know this is pass N of a large task.
+    if continuation_depth > 0:
+        _depth_note = (
+            f"CONTINUATION PASS {continuation_depth}: This loop is a continuation of a larger "
+            f"task that exceeded budget in a prior pass. Decompose narrowly — focus on the "
+            f"remaining work described in the goal, not the full original scope."
+        )
+        ctx.ancestry_context = (
+            (ctx.ancestry_context + "\n\n" + _depth_note) if ctx.ancestry_context else _depth_note
+        )
+
+    # Merge injected context from mission-level notification hooks (Phase 11)
+    if ancestry_context_extra:
+        ctx.ancestry_context = (
+            (ctx.ancestry_context + "\n\n" + ancestry_context_extra)
+            if ctx.ancestry_context
+            else ancestry_context_extra
+        )
+
+    # Load hook registry for step-level hooks (Phase 11)
+    ctx.hook_registry = hook_registry
+    if ctx.hook_registry is None:
+        try:
+            from hooks import load_registry as _load_registry
+            ctx.hook_registry = _load_registry()
+        except Exception:
+            ctx.hook_registry = None
+
+    return ctx, None
 
 
 def _run_steps_parallel(
@@ -1184,60 +1370,49 @@ def run_agent_loop(
     Returns:
         LoopResult with full outcome.
     """
+    # Phase A: Initialize loop state
+    ctx, _early_return = _initialize_loop(
+        goal,
+        project=project,
+        model=model,
+        backend=backend,
+        adapter=adapter,
+        dry_run=dry_run,
+        verbose=verbose,
+        interrupt_queue=interrupt_queue,
+        hook_registry=hook_registry,
+        ancestry_context_extra=ancestry_context_extra,
+        permission_context=permission_context,
+        continuation_depth=continuation_depth,
+        cost_budget=cost_budget,
+        token_budget=token_budget,
+        ralph_verify=ralph_verify,
+        max_steps=max_steps,
+        max_iterations=max_iterations,
+        step_callback=step_callback,
+    )
+    if _early_return is not None:
+        return _early_return
+
+    # Re-import lazy deps used by subsequent phases (same lazy-import pattern)
     from llm import LLMMessage, LLMTool, build_adapter, MODEL_CHEAP, MODEL_MID, MODEL_POWER
     from interrupt import InterruptQueue, apply_interrupt_to_steps, set_loop_running, clear_loop_running
-    from poe import assign_model_by_role
 
     # Tier ordering for floor comparisons (Phase 57: session-level tier floor)
     _TIER_ORDER = {MODEL_CHEAP: 0, MODEL_MID: 1, MODEL_POWER: 2}
 
-    loop_id = str(uuid.uuid4())[:8]
-    started_at = time.monotonic()
-    start_ts = datetime.now(timezone.utc).isoformat()
-
-    # Configure logging if verbose or POE_LOG_LEVEL is set
-    _configure_logging(verbose)
-
-    log.info("loop_start loop_id=%s goal=%r project=%s max_steps=%d",
-             loop_id, goal[:80], project or "(auto)", max_steps)
-
-    # Kill switch check — refuse to start if sentinel is present
-    try:
-        from killswitch import is_active as _ks_active, read_reason as _ks_reason
-        if _ks_active():
-            _ks_msg = _ks_reason() or "kill switch engaged"
-            log.warning("loop refused to start — kill switch active: %s", _ks_msg)
-            return LoopResult(
-                loop_id=loop_id,
-                goal=goal,
-                project=project or "",
-                steps=[],
-                status="interrupted",
-                stuck_reason=f"kill switch active: {_ks_msg}",
-                total_tokens_in=0,
-                total_tokens_out=0,
-                total_cost=0.0,
-                elapsed_ms=0,
-                log_path=None,
-            )
-    except Exception:
-        pass  # killswitch import failure must never block execution
-
-    # Wall-clock timeout — default 2 hours, override via POE_LOOP_TIMEOUT_SECS
-    import os as _os
-    _loop_timeout_secs: Optional[float] = None
-    try:
-        _loop_timeout_secs = float(_os.environ.get("POE_LOOP_TIMEOUT_SECS", "7200"))
-    except (ValueError, TypeError):
-        _loop_timeout_secs = 7200.0
-
-    if verbose:
-        print(f"[poe] loop_id={loop_id} goal={goal!r}", file=sys.stderr, flush=True)
-
-    # Resolve tool set from PermissionContext (Phase 41 — prompt-composition-time gating)
-    _perm_ctx = permission_context
-    if _perm_ctx is None and _PermissionContext is not None:
-        _perm_ctx = _PermissionContext(role=_ROLE_WORKER)
+    # Unpack ctx into locals used by subsequent phases.
+    # These aliases will be eliminated as phases B-G are extracted to use ctx directly.
+    loop_id = ctx.loop_id
+    started_at = ctx.started_at
+    start_ts = ctx.start_ts
+    project = ctx.project
+    adapter = ctx.adapter
+    interrupt_queue = ctx.interrupt_queue
+    _hook_registry = ctx.hook_registry
+    _ancestry_context = ctx.ancestry_context
+    _loop_timeout_secs = ctx.loop_timeout_secs
+    _perm_ctx = ctx.perm_ctx
 
     def _resolve_tools() -> list:
         """Re-query tool registry on each call to pick up runtime-registered tools."""
@@ -1246,84 +1421,7 @@ def run_agent_loop(
             if _perm_ctx is not None else list(_EXECUTE_TOOLS)
         )
 
-    # Build adapter — worker role uses MODEL_MID by default (role-semantic selection)
-    if adapter is None and not dry_run:
-        _build_kw: dict = {"model": model or assign_model_by_role("worker")}
-        if backend:
-            _build_kw["backend"] = backend
-        adapter = build_adapter(**_build_kw)
-    elif dry_run:
-        adapter = _DryRunAdapter()
-
-    # Set up interrupt queue — auto-create if not provided
-    if interrupt_queue is None:
-        try:
-            interrupt_queue = InterruptQueue()
-        except Exception:
-            interrupt_queue = None  # Non-fatal: run without interrupt support
-
-    # Advertise this loop as running so other interfaces can route interrupts
-    try:
-        set_loop_running(loop_id, goal)
-    except Exception:
-        pass
-
-    # Resolve or create project
-    # Always call ensure_project (idempotent) — guards against partially-initialized
-    # projects where the dir exists but NEXT.md was never written (e.g. after a
-    # crashed previous run or permission error during bootstrap).
     o = _orch()
-    if project:
-        _proj_existed = o.project_dir(project).exists()
-        o.ensure_project(project, goal[:80])
-        if verbose and not _proj_existed:
-            print(f"[poe] created project={project}", file=sys.stderr, flush=True)
-    else:
-        slug = _goal_to_slug(goal)
-        project = slug
-        _proj_existed = o.project_dir(project).exists()
-        o.ensure_project(project, goal[:80])
-        if verbose and not _proj_existed:
-            print(f"[poe] created project={project}", file=sys.stderr, flush=True)
-
-    # Load goal ancestry for prompt injection
-    try:
-        from ancestry import get_project_ancestry, build_ancestry_prompt
-        _proj_dir = o.project_dir(project)
-        _ancestry = get_project_ancestry(_proj_dir)
-        _ancestry_context = build_ancestry_prompt(_ancestry, current_task=goal)
-    except Exception:
-        _ancestry_context = ""
-
-    # Continuation depth awareness: let the planner know this is pass N of a large task.
-    # This allows the LLM to decompose more narrowly ("this is attempt 2, focus on remaining
-    # items") rather than re-planning from scratch each time.
-    if continuation_depth > 0:
-        _depth_note = (
-            f"CONTINUATION PASS {continuation_depth}: This loop is a continuation of a larger "
-            f"task that exceeded budget in a prior pass. Decompose narrowly — focus on the "
-            f"remaining work described in the goal, not the full original scope."
-        )
-        _ancestry_context = (
-            (_ancestry_context + "\n\n" + _depth_note) if _ancestry_context else _depth_note
-        )
-
-    # Merge injected context from mission-level notification hooks (Phase 11)
-    if ancestry_context_extra:
-        _ancestry_context = (
-            (_ancestry_context + "\n\n" + ancestry_context_extra)
-            if _ancestry_context
-            else ancestry_context_extra
-        )
-
-    # Load hook registry for step-level hooks (Phase 11)
-    _hook_registry = hook_registry
-    if _hook_registry is None:
-        try:
-            from hooks import load_registry as _load_registry
-            _hook_registry = _load_registry()
-        except Exception:
-            _hook_registry = None
 
     # Step 1: Decompose goal into steps (inject memory + ancestry context)
     if verbose:
