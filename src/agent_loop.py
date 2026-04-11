@@ -3043,6 +3043,7 @@ def run_agent_loop(
                 from planner import decompose as _ms_decompose
                 _ms_sub = _ms_decompose(step_text, adapter, max_steps=5)
                 if _ms_sub and len(_ms_sub) >= 2:
+                    _ms_sub = _shape_steps(_ms_sub, label="milestone-expand")
                     remaining_steps[:0] = _ms_sub
                     remaining_indices[:0] = [-1] * len(_ms_sub)
                     log.info("milestone-aware: step %d %r → %d sub-steps",
