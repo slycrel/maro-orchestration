@@ -317,6 +317,143 @@ def _steps_are_independent(steps: List[str]) -> bool:
     return not any(_DEP_RE.search(s) for s in steps)
 
 
+def _handle_budget_ceiling(
+    ctx: LoopContext,
+    step_outcomes: List[StepOutcome],
+    remaining_steps: List[str],
+    total_tokens_in: int,
+    total_tokens_out: int,
+    iteration: int,
+    max_iterations: int,
+    continuation_depth: int,
+) -> Optional[str]:
+    """Phase F1: Handle max_iterations budget ceiling.
+
+    Returns stuck_reason suffix if continuation/escalation was enqueued, empty string otherwise.
+    """
+    log.warning("max_iterations reached: %d/%d steps done, %d remaining, tokens=%d",
+                len(step_outcomes), len(step_outcomes) + len(remaining_steps),
+                len(remaining_steps), total_tokens_in + total_tokens_out)
+
+    _suffix = ""
+    if remaining_steps:
+        try:
+            from task_store import enqueue as _ts_enqueue
+            _done_count = sum(1 for s in step_outcomes if s.status == "done")
+            _done_summary = "; ".join(
+                s.text[:80] for s in step_outcomes if s.status == "done"
+            )
+            _remaining_summary = "\n".join(
+                f"- {s[:120]}" for s in remaining_steps[:10]
+            )
+            _next_depth = continuation_depth + 1
+
+            _max_depth = int(os.environ.get("POE_MAX_CONTINUATION_DEPTH", "4"))
+
+            if continuation_depth >= _max_depth:
+                _esc_reason = (
+                    f"ESCALATION — task has been through {continuation_depth} continuation "
+                    f"pass(es) without completing.\n\n"
+                    f"Original goal: {ctx.goal}\n\n"
+                    f"Accomplished ({_done_count} steps):\n{_done_summary or '(none)'}\n\n"
+                    f"Remaining ({len(remaining_steps)} steps):\n{_remaining_summary}\n\n"
+                    f"Options: (1) enqueue a new continuation with continuation_depth="
+                    f"{_next_depth} to keep going; (2) rewrite the goal to reduce scope; "
+                    f"(3) accept the partial result as-is.\n"
+                    f"Parent loop: {ctx.loop_id}"
+                )
+                _esc_task = _ts_enqueue(
+                    lane="agenda",
+                    source="loop_escalation",
+                    reason=_esc_reason,
+                    parent_job_id=ctx.loop_id,
+                    continuation_depth=continuation_depth,
+                )
+                log.warning(
+                    "budget_ceiling_escalation: depth=%d >= max=%d, escalated to %s "
+                    "(parent=%s, %d steps done, %d remaining)",
+                    continuation_depth, _max_depth, _esc_task["job_id"],
+                    ctx.loop_id, _done_count, len(remaining_steps),
+                )
+                _suffix = (
+                    f"; escalated (depth {continuation_depth} >= max {_max_depth}) "
+                    f"as {_esc_task['job_id']}"
+                )
+            else:
+                _cont_reason = (
+                    f"CONTINUATION of: {ctx.goal}\n\n"
+                    f"Pass {continuation_depth + 1} of a multi-pass task. "
+                    f"Previous pass completed {_done_count}/{len(step_outcomes)} steps "
+                    f"before hitting budget ceiling (max_iterations={max_iterations}).\n\n"
+                    f"Accomplished so far:\n{_done_summary or '(none)'}\n\n"
+                    f"Remaining work ({len(remaining_steps)} steps):\n{_remaining_summary}"
+                )
+                _cont_task = _ts_enqueue(
+                    lane="agenda",
+                    source="loop_continuation",
+                    reason=_cont_reason,
+                    parent_job_id=ctx.loop_id,
+                    continuation_depth=_next_depth,
+                )
+                log.info(
+                    "budget_ceiling_continuation: enqueued %s depth=%d with %d remaining "
+                    "steps (parent=%s)",
+                    _cont_task["job_id"], _next_depth, len(remaining_steps), ctx.loop_id,
+                )
+                _suffix = (
+                    f"; continuation (depth {_next_depth}) enqueued as "
+                    f"{_cont_task['job_id']}"
+                )
+        except Exception as _ce:
+            log.warning("failed to enqueue continuation/escalation task: %s", _ce)
+
+    return _suffix
+
+
+def _select_step_adapter(
+    ctx: LoopContext,
+    step_text: str,
+    step_idx: int,
+    *,
+    step_tier_overrides: Dict[str, str],
+    session_tier_floor: str,
+    tier_order: dict,
+):
+    """Phase F5: Per-step model selection.
+
+    Returns the adapter to use for this step (may be different from ctx.adapter).
+    """
+    from llm import build_adapter, MODEL_CHEAP, MODEL_MID
+
+    adapter = ctx.adapter
+    _step_adapter = adapter
+    _explicit_model = getattr(adapter, "model_key", "") not in ("cheap", "mid", "power", "")
+    if not _explicit_model:
+        _tier_override = step_tier_overrides.get(step_text)
+        if _tier_override:
+            try:
+                _step_adapter = build_adapter(model=_tier_override)
+                if ctx.verbose:
+                    _tier_name = {"cheap": "haiku", "mid": "sonnet", "power": "opus"}.get(_tier_override, _tier_override)
+                    print(f"[poe] step {step_idx}: escalated to {_tier_name} (retry tier-up)", file=sys.stderr, flush=True)
+            except Exception:
+                pass
+        else:
+            try:
+                from poe import classify_step_model
+                _step_model = classify_step_model(step_text)
+                if session_tier_floor and tier_order.get(_step_model, 0) < tier_order.get(session_tier_floor, 0):
+                    _step_model = session_tier_floor
+                if _step_model != adapter.model_key:
+                    _step_adapter = build_adapter(model=_step_model)
+                    if ctx.verbose:
+                        _tier = "haiku" if _step_model == MODEL_CHEAP else "sonnet"
+                        print(f"[poe] step {step_idx}: routing to {_tier} (classify_step_model)", file=sys.stderr, flush=True)
+            except Exception:
+                pass
+    return _step_adapter
+
+
 def _build_result_and_finalize(
     ctx: LoopContext,
     *,
@@ -2108,101 +2245,13 @@ def run_agent_loop(
         if iteration >= max_iterations:
             loop_status = "stuck"
             stuck_reason = f"hit max_iterations={max_iterations} before completing all steps"
-            log.warning("max_iterations reached: %d/%d steps done, %d remaining, tokens=%d",
-                        len(step_outcomes), len(step_outcomes) + len(remaining_steps),
-                        len(remaining_steps), total_tokens_in + total_tokens_out)
-
-            # Budget ceiling: enqueue a continuation or escalation task.
-            #
-            # Dynamic tree traversal: the soft depth limit (POE_MAX_CONTINUATION_DEPTH,
-            # default 4) is not a hard failure — it's a "kick up" threshold. Below the
-            # limit, spawn a continuation and keep walking the tree. At the limit, write
-            # an escalation that surfaces the situation: "this task has been through N
-            # passes, here's what's done, here's what's left — continue or find an
-            # alternative?" The escalation is a durable, inspectable record that can be
-            # resumed, reprioritized, or closed, rather than silently dropped work.
-            if remaining_steps:
-                try:
-                    from task_store import enqueue as _ts_enqueue
-                    _done_count = sum(1 for s in step_outcomes if s.status == "done")
-                    _done_summary = "; ".join(
-                        s.text[:80] for s in step_outcomes if s.status == "done"
-                    )
-                    _remaining_summary = "\n".join(
-                        f"- {s[:120]}" for s in remaining_steps[:10]
-                    )
-                    _next_depth = continuation_depth + 1
-
-                    # Read the soft escalation threshold from env (not a hardcoded constant).
-                    # Default 4: allows up to 4 continuation passes before asking "is this
-                    # worth continuing?". Operators can raise this for known deep tasks.
-                    import os as _os
-                    _max_depth = int(_os.environ.get("POE_MAX_CONTINUATION_DEPTH", "4"))
-
-                    if continuation_depth >= _max_depth:
-                        # Escalation path: don't silently continue — kick up.
-                        # The escalation task is a dead-end-with-feedback record that a
-                        # higher-level system (director, operator, user) can resolve:
-                        #   - enqueue a new continuation (continue)
-                        #   - rewrite the goal (pivot)
-                        #   - mark it done with the partial result (close)
-                        _esc_reason = (
-                            f"ESCALATION — task has been through {continuation_depth} continuation "
-                            f"pass(es) without completing.\n\n"
-                            f"Original goal: {goal}\n\n"
-                            f"Accomplished ({_done_count} steps):\n{_done_summary or '(none)'}\n\n"
-                            f"Remaining ({len(remaining_steps)} steps):\n{_remaining_summary}\n\n"
-                            f"Options: (1) enqueue a new continuation with continuation_depth="
-                            f"{_next_depth} to keep going; (2) rewrite the goal to reduce scope; "
-                            f"(3) accept the partial result as-is.\n"
-                            f"Parent loop: {loop_id}"
-                        )
-                        _esc_task = _ts_enqueue(
-                            lane="agenda",
-                            source="loop_escalation",
-                            reason=_esc_reason,
-                            parent_job_id=loop_id,
-                            continuation_depth=continuation_depth,
-                        )
-                        log.warning(
-                            "budget_ceiling_escalation: depth=%d >= max=%d, escalated to %s "
-                            "(parent=%s, %d steps done, %d remaining)",
-                            continuation_depth, _max_depth, _esc_task["job_id"],
-                            loop_id, _done_count, len(remaining_steps),
-                        )
-                        stuck_reason += (
-                            f"; escalated (depth {continuation_depth} >= max {_max_depth}) "
-                            f"as {_esc_task['job_id']}"
-                        )
-                    else:
-                        # Continuation path: keep walking the tree.
-                        _cont_reason = (
-                            f"CONTINUATION of: {goal}\n\n"
-                            f"Pass {continuation_depth + 1} of a multi-pass task. "
-                            f"Previous pass completed {_done_count}/{len(step_outcomes)} steps "
-                            f"before hitting budget ceiling (max_iterations={max_iterations}).\n\n"
-                            f"Accomplished so far:\n{_done_summary or '(none)'}\n\n"
-                            f"Remaining work ({len(remaining_steps)} steps):\n{_remaining_summary}"
-                        )
-                        _cont_task = _ts_enqueue(
-                            lane="agenda",
-                            source="loop_continuation",
-                            reason=_cont_reason,
-                            parent_job_id=loop_id,
-                            continuation_depth=_next_depth,
-                        )
-                        log.info(
-                            "budget_ceiling_continuation: enqueued %s depth=%d with %d remaining "
-                            "steps (parent=%s)",
-                            _cont_task["job_id"], _next_depth, len(remaining_steps), loop_id,
-                        )
-                        stuck_reason += (
-                            f"; continuation (depth {_next_depth}) enqueued as "
-                            f"{_cont_task['job_id']}"
-                        )
-                except Exception as _ce:
-                    log.warning("failed to enqueue continuation/escalation task: %s", _ce)
-
+            _ceiling_suffix = _handle_budget_ceiling(
+                ctx, step_outcomes, remaining_steps,
+                total_tokens_in, total_tokens_out,
+                iteration, max_iterations, continuation_depth,
+            )
+            if _ceiling_suffix:
+                stuck_reason += _ceiling_suffix
             break
 
         # Budget-aware landing: when only 2 iterations remain and there are
@@ -2412,37 +2461,13 @@ def run_agent_loop(
                       file=_sys.stderr, flush=True)
 
         step_start = time.monotonic()
-        # Per-step model selection: cheap baseline, upgraded by two mechanisms:
-        #   1. classify_step_model — content-based (synthesis/planning → mid)
-        #   2. _step_tier_overrides — retry-based escalation (blocked on cheap → mid → power)
-        # Skip both if caller specified a raw model string (not a tier key).
-        _step_adapter = adapter
-        _explicit_model = getattr(adapter, "model_key", "") not in ("cheap", "mid", "power", "")
-        if not _explicit_model:
-            _tier_override = _step_tier_overrides.get(step_text)
-            if _tier_override:
-                try:
-                    _step_adapter = build_adapter(model=_tier_override)
-                    if verbose:
-                        _tier_name = {"cheap": "haiku", "mid": "sonnet", "power": "opus"}.get(_tier_override, _tier_override)
-                        print(f"[poe] step {step_idx}: escalated to {_tier_name} (retry tier-up)", file=sys.stderr, flush=True)
-                except Exception:
-                    pass
-            else:
-                try:
-                    from poe import classify_step_model
-                    _step_model = classify_step_model(step_text)
-                    # Phase 57: apply session-level floor — if session saw ≥3 verify failures,
-                    # don't let any step run cheaper than the raised floor tier.
-                    if _session_tier_floor and _TIER_ORDER.get(_step_model, 0) < _TIER_ORDER.get(_session_tier_floor, 0):
-                        _step_model = _session_tier_floor
-                    if _step_model != adapter.model_key:
-                        _step_adapter = build_adapter(model=_step_model)
-                        if verbose:
-                            _tier = "haiku" if _step_model == MODEL_CHEAP else "sonnet"
-                            print(f"[poe] step {step_idx}: routing to {_tier} (classify_step_model)", file=sys.stderr, flush=True)
-                except Exception:
-                    pass  # Model selection failures must never break the loop
+        # Per-step model selection (Phase F5)
+        _step_adapter = _select_step_adapter(
+            ctx, step_text, step_idx,
+            step_tier_overrides=_step_tier_overrides,
+            session_tier_floor=_session_tier_floor,
+            tier_order=_TIER_ORDER,
+        )
 
         # _next_step_injected is set by the previous iteration's hook run
         # Phase 27: merge per-step prereq context (graveyard / sub-loop acquired)
