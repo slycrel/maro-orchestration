@@ -23,6 +23,24 @@ North star: self-improving, autonomous agent. Visible → Reliable → Replayabl
 
 ---
 
+## Architecture (5 subsystems)
+
+See `docs/ARCHITECTURE_OVERVIEW.md` for the full map with intent-vs-implementation gaps.
+
+| Subsystem | What | Key files | Skill |
+|-----------|------|-----------|-------|
+| **Interface** | Goal entry, classification, routing | handle.py, intent.py, director.py, workers.py, persona.py | `skills/arch-interface-routing.md` |
+| **Core Loop** | Decompose → execute → introspect | agent_loop.py, planner.py, step_exec.py, pre_flight.py | `skills/arch-core-loop.md` |
+| **Memory/Knowledge** | Recording, retrieval, crystallization | memory.py, knowledge_web.py, knowledge_lens.py, memory_ledger.py | `skills/arch-memory-knowledge.md` |
+| **Quality + Self-Improvement** | Validation AND getting better over time | inspector.py, evolver.py, graduation.py, introspect.py, skills.py | `skills/arch-quality-selfimprove.md` |
+| **Platform** | LLM adapters, config, heartbeat, projects, tasks, metrics | llm.py, config.py, heartbeat.py, orch_items.py, task_store.py | `skills/arch-platform.md` |
+
+**Two things, often conflated:**
+- **Poe-as-tool**: Execute tasks autonomously. *Works today.*
+- **Poe-as-self-improving-system**: Detect friction → change behavior → verify it worked → learn. *Infrastructure 80% built; verify→learn loop not closed.*
+
+---
+
 ## Repo layout
 
 ```
