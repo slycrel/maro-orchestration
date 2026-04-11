@@ -410,6 +410,141 @@ def _handle_budget_ceiling(
     return _suffix
 
 
+def _process_done_step(
+    ctx: LoopContext,
+    step_text: str,
+    step_idx: int,
+    step_result: str,
+    step_summary: str,
+    step_elapsed: int,
+    outcome: dict,
+    item_index: int,
+    iteration: int,
+    *,
+    completed_context: List[str],
+    remaining_steps: List[str],
+    remaining_indices: List[int],
+    loop_shared_ctx: Dict[str, Any],
+    scratchpad: Dict[str, Any],
+    scratchpad_lock,
+) -> str:
+    """Phase F10: Process a completed step — scratchpad, context, injection, skills.
+
+    Returns the (possibly updated) step_result.
+    """
+    o = _orch()
+    if item_index >= 0:
+        o.mark_item(ctx.project, item_index, o.STATE_DONE)
+
+    # Write to scratchpad
+    if not isinstance(step_result, str):
+        step_result = json.dumps(step_result)
+        outcome["result"] = step_result
+    _result_excerpt = step_result[:2000] if step_result else ""
+    _cited_files: List[str] = []
+    try:
+        import re as _scratchpad_re
+        _cited_files = sorted(set(
+            _scratchpad_re.findall(r'\b([a-z_]+\.py)\b', step_result or "")
+        ))
+    except Exception:
+        pass
+    with scratchpad_lock:
+        scratchpad[f"step_{step_idx}"] = {
+            "text": step_text[:200],
+            "summary": step_summary[:200],
+            "result_excerpt": _result_excerpt,
+            "files_cited": _cited_files[:20],
+        }
+        _all_files = scratchpad.get("shared", {}).get("files_found", [])
+        _src_files = set(f.name for f in Path("src").glob("*.py")) if Path("src").exists() else set()
+        _real_cited = [f for f in _cited_files if f in _src_files]
+        _all_files = sorted(set(_all_files + _real_cited))
+        scratchpad.setdefault("shared", {})["files_found"] = _all_files
+
+    # Build context entry
+    _ctx_excerpt = step_result[:800] if step_result else ""
+    if len(step_result) > 800:
+        _ctx_excerpt += f"\n... ({len(step_result)} chars total — full result in scratchpad step_{step_idx})"
+    _step_confidence = outcome.get("confidence", "")
+    _confidence_tag = f" [confidence:{_step_confidence}]" if _step_confidence else ""
+    _ctx_entry = f"Step {step_idx} ({step_text[:80]}){_confidence_tag}:\n{_ctx_excerpt}"
+    completed_context.append(_ctx_entry)
+
+    # Environment snapshot
+    _snap_key = f"step:{step_idx}:{step_text[:40]}"
+    _snap_val = step_summary[:200] if step_summary else (step_result[:200] if step_result else "")
+    if _snap_val:
+        loop_shared_ctx[_snap_key] = _snap_val
+
+    # Mutable task graph: inject discovered steps
+    _injected = outcome.get("inject_steps", [])
+    if _injected and isinstance(_injected, list):
+        _raw_injected = [str(s).strip() for s in _injected if str(s).strip()][:3]
+        _clean_injected = _shape_steps(_raw_injected, label="inject")
+        if _clean_injected:
+            remaining_steps[:0] = _clean_injected
+            remaining_indices[:0] = [-1] * len(_clean_injected)
+            log.info("step %d injected %d step(s) into plan: %s",
+                     step_idx, len(_clean_injected),
+                     [s[:40] for s in _clean_injected])
+            if ctx.verbose:
+                for _s in _clean_injected:
+                    print(f"[poe] injected step: {_s[:80]}", file=sys.stderr, flush=True)
+
+    # Context compression
+    _CTX_KEEP_FULL = 3
+    _CTX_COMPRESS_AFTER = 5
+    if len(completed_context) > _CTX_COMPRESS_AFTER:
+        _old_entries = completed_context[:-_CTX_KEEP_FULL]
+        _new_entries = completed_context[-_CTX_KEEP_FULL:]
+        _compressed = []
+        for _e in _old_entries:
+            _header = _e.split("\n", 1)[0]
+            _body_raw = _e.split("\n", 1)[1] if "\n" in _e else ""
+            _body_short = _body_raw[:100].replace("\n", " ")
+            if len(_body_raw) > 100:
+                _body_short += "..."
+            _compressed.append(f"{_header} [summary]: {_body_short}")
+        completed_context[:] = _compressed + list(_new_entries)
+
+    if ctx.verbose:
+        print(f"[poe] step {step_idx} done: {step_summary[:120]}", file=sys.stderr, flush=True)
+
+    # Phase 32: update skill utility
+    try:
+        from skills import find_matching_skills, update_skill_utility, record_variant_outcome
+        for _sk in find_matching_skills(step_text + " " + ctx.goal, use_router=False):
+            update_skill_utility(_sk.id, success=True)
+            if getattr(_sk, "variant_of", None) is not None:
+                record_variant_outcome(_sk.id, success=True)
+    except Exception:
+        pass
+
+    # Phase 33: record per-step cost
+    try:
+        from metrics import record_step_cost
+        record_step_cost(
+            step_text=step_text,
+            tokens_in=outcome.get("tokens_in", 0),
+            tokens_out=outcome.get("tokens_out", 0),
+            status="done",
+            goal=ctx.goal,
+            model=getattr(ctx.adapter, "model_key", ""),
+            elapsed_ms=step_elapsed,
+        )
+    except Exception:
+        pass
+
+    if ctx.step_callback is not None:
+        try:
+            ctx.step_callback(step_idx, step_text, step_summary, "done")
+        except Exception:
+            pass
+
+    return step_result
+
+
 def _select_step_adapter(
     ctx: LoopContext,
     step_text: str,
@@ -2756,122 +2891,17 @@ def run_agent_loop(
                 pass  # verification must never break the loop
 
         if step_status == "done":
-            if item_index >= 0:
-                o.mark_item(project, item_index, o.STATE_DONE)
-
-            # Write to scratchpad: structured data for subsequent steps
-            if not isinstance(step_result, str):
-                step_result = json.dumps(step_result)
-                outcome["result"] = step_result
-            _result_excerpt = step_result[:2000] if step_result else ""
-            _cited_files: List[str] = []
-            try:
-                import re as _scratchpad_re
-                _cited_files = sorted(set(
-                    _scratchpad_re.findall(r'\b([a-z_]+\.py)\b', step_result or "")
-                ))
-            except Exception:
-                pass
-            with _scratchpad_lock:
-                _scratchpad[f"step_{step_idx}"] = {
-                    "text": step_text[:200],
-                    "summary": step_summary[:200],
-                    "result_excerpt": _result_excerpt,
-                    "files_cited": _cited_files[:20],
-                }
-                # Update shared state: accumulate all real files found across steps
-                _all_files = _scratchpad.get("shared", {}).get("files_found", [])
-                _src_files = set(f.name for f in Path("src").glob("*.py")) if Path("src").exists() else set()
-                _real_cited = [f for f in _cited_files if f in _src_files]
-                _all_files = sorted(set(_all_files + _real_cited))
-                _scratchpad.setdefault("shared", {})["files_found"] = _all_files
-
-            # Build context entry: summary + truncated result for inline use
-            _ctx_excerpt = step_result[:800] if step_result else ""
-            if len(step_result) > 800:
-                _ctx_excerpt += f"\n... ({len(step_result)} chars total — full result in scratchpad step_{step_idx})"
-            _step_confidence = outcome.get("confidence", "")
-            _confidence_tag = f" [confidence:{_step_confidence}]" if _step_confidence else ""
-            _ctx_entry = f"Step {step_idx} ({step_text[:80]}){_confidence_tag}:\n{_ctx_excerpt}"
-            completed_context.append(_ctx_entry)
-
-            # Environment snapshot: cache step result in shared_ctx so team workers
-            # created in later steps can read what earlier steps discovered without
-            # re-fetching. Key is "step:N:text" for human-readable disambiguation.
-            _snap_key = f"step:{step_idx}:{step_text[:40]}"
-            _snap_val = step_summary[:200] if step_summary else (step_result[:200] if step_result else "")
-            if _snap_val:
-                _loop_shared_ctx[_snap_key] = _snap_val
-
-            # Mutable task graph: insert any steps the worker discovered mid-execution.
-            # Injected steps are prepended to remaining_steps so they run before the
-            # original plan resumes. This allows workers to surface dependencies,
-            # fetch missing data, or add verification steps without requiring a full
-            # re-plan from the director.
-            _injected = outcome.get("inject_steps", [])
-            if _injected and isinstance(_injected, list):
-                _raw_injected = [str(s).strip() for s in _injected if str(s).strip()][:3]
-                _clean_injected = _shape_steps(_raw_injected, label="inject")
-                if _clean_injected:
-                    remaining_steps[:0] = _clean_injected
-                    remaining_indices[:0] = [-1] * len(_clean_injected)
-                    log.info("step %d injected %d step(s) into plan: %s",
-                             step_idx, len(_clean_injected),
-                             [s[:40] for s in _clean_injected])
-                    if verbose:
-                        for _s in _clean_injected:
-                            print(f"[poe] injected step: {_s[:80]}", file=sys.stderr, flush=True)
-
-            # Completed context compression (BACKLOG: prevent linear growth).
-            # Keep last 3 entries at full length; compress older ones to a one-liner.
-            # Older steps matter less — recent context dominates step execution quality.
-            _CTX_KEEP_FULL = 3
-            _CTX_COMPRESS_AFTER = 5
-            if len(completed_context) > _CTX_COMPRESS_AFTER:
-                _old_entries = completed_context[:-_CTX_KEEP_FULL]
-                _new_entries = completed_context[-_CTX_KEEP_FULL:]
-                _compressed = []
-                for _e in _old_entries:
-                    _header = _e.split("\n", 1)[0]
-                    _body_raw = _e.split("\n", 1)[1] if "\n" in _e else ""
-                    _body_short = _body_raw[:100].replace("\n", " ")
-                    if len(_body_raw) > 100:
-                        _body_short += "..."
-                    _compressed.append(f"{_header} [summary]: {_body_short}")
-                completed_context = _compressed + list(_new_entries)
-
+            step_result = _process_done_step(
+                ctx, step_text, step_idx, step_result, step_summary, step_elapsed,
+                outcome, item_index, iteration,
+                completed_context=completed_context,
+                remaining_steps=remaining_steps,
+                remaining_indices=remaining_indices,
+                loop_shared_ctx=_loop_shared_ctx,
+                scratchpad=_scratchpad,
+                scratchpad_lock=_scratchpad_lock,
+            )
             _consecutive_max_timeouts = 0  # successful step — adapter is healthy
-            if verbose:
-                print(f"[poe] step {step_idx} done: {step_summary[:120]}", file=sys.stderr, flush=True)
-            # Phase 32: update utility score for any matching skills
-            try:
-                from skills import find_matching_skills, update_skill_utility, record_variant_outcome
-                for _sk in find_matching_skills(step_text + " " + goal, use_router=False):
-                    update_skill_utility(_sk.id, success=True)
-                    # A/B: record win for any variant that was selected for this step
-                    if getattr(_sk, "variant_of", None) is not None:
-                        record_variant_outcome(_sk.id, success=True)
-            except Exception:
-                pass
-            # Phase 33: record per-step cost
-            try:
-                from metrics import record_step_cost
-                record_step_cost(
-                    step_text=step_text,
-                    tokens_in=outcome.get("tokens_in", 0),
-                    tokens_out=outcome.get("tokens_out", 0),
-                    status="done",
-                    goal=goal,
-                    model=getattr(adapter, "model_key", ""),
-                    elapsed_ms=step_elapsed,
-                )
-            except Exception:
-                pass
-            if step_callback is not None:
-                try:
-                    step_callback(step_idx, step_text, step_summary, "done")
-                except Exception:
-                    pass
         else:
             _prior_retries = _step_retries.get(step_text, 0)
             _decision = _handle_blocked_step(step_text, outcome, _prior_retries, adapter)
