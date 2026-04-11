@@ -317,6 +317,106 @@ def _steps_are_independent(steps: List[str]) -> bool:
     return not any(_DEP_RE.search(s) for s in steps)
 
 
+def _run_parallel_path(
+    ctx: LoopContext,
+    steps: List[str],
+    *,
+    clean_steps: List[str],
+    deps: Dict[int, Any],
+    levels: Optional[List[Any]],
+    parallel_levels: List[Any],
+    parallel_fan_out: int,
+    proj_fanout_dir: str,
+    loop_shared_ctx: Dict[str, Any],
+    use_dag: bool,
+    resolve_tools_fn,
+) -> Optional[LoopResult]:
+    """Phase D: Parallel fan-out early return path.
+
+    Returns LoopResult if parallel execution was used, None otherwise
+    (caller falls through to sequential execution).
+    """
+    from llm import LLMTool
+
+    if use_dag:
+        if ctx.verbose:
+            print(
+                f"[poe] dag: running {len(clean_steps)} steps with dep-aware scheduling "
+                f"(max_workers={parallel_fan_out}, levels={len(levels)}, "
+                f"parallel_levels={len(parallel_levels)})",
+                file=sys.stderr, flush=True,
+            )
+        _fanout_outcomes = _run_steps_dag(
+            goal=ctx.goal,
+            steps=clean_steps,
+            deps=deps,
+            adapter=ctx.adapter,
+            ancestry_context=ctx.ancestry_context,
+            tools=[LLMTool(**t) for t in resolve_tools_fn()],
+            verbose=ctx.verbose,
+            max_workers=parallel_fan_out,
+            project_dir=proj_fanout_dir,
+            shared_ctx=loop_shared_ctx,
+        )
+        _fanout_step_texts = clean_steps
+    else:
+        if ctx.verbose:
+            print(f"[poe] fan-out: running {len(steps)} steps in parallel (max_workers={parallel_fan_out})", file=sys.stderr, flush=True)
+        _fanout_outcomes = _run_steps_parallel(
+            goal=ctx.goal,
+            steps=steps,
+            adapter=ctx.adapter,
+            ancestry_context=ctx.ancestry_context,
+            tools=[LLMTool(**t) for t in resolve_tools_fn()],
+            verbose=ctx.verbose,
+            max_workers=parallel_fan_out,
+            project_dir=proj_fanout_dir,
+            shared_ctx=loop_shared_ctx,
+        )
+        _fanout_step_texts = steps
+
+    # Build LoopResult from parallel/dag outcomes
+    _fanout_step_outcomes: List[StepOutcome] = []
+    _fanout_tokens_in = 0
+    _fanout_tokens_out = 0
+    _fanout_loop_status = "done"
+    _fanout_stuck_reason = None
+    for _i, (_step_text, _oc) in enumerate(zip(_fanout_step_texts, _fanout_outcomes), 1):
+        _st = _oc.get("status", "blocked")
+        _fanout_step_outcomes.append(step_from_decompose(
+            _step_text, _i,
+            status=_st,
+            result=_oc.get("result", ""),
+            iteration=_i,
+            tokens_in=_oc.get("tokens_in", 0),
+            tokens_out=_oc.get("tokens_out", 0),
+            confidence=_oc.get("confidence", "unverified"),
+            injected_steps=_oc.get("inject_steps", []),
+        ))
+        _fanout_tokens_in += _oc.get("tokens_in", 0)
+        _fanout_tokens_out += _oc.get("tokens_out", 0)
+        if _st == "blocked":
+            _fanout_loop_status = "stuck"
+            _fanout_stuck_reason = _oc.get("stuck_reason", f"step {_i} blocked")
+        if ctx.step_callback is not None:
+            try:
+                ctx.step_callback(_i, _step_text, _oc.get("result", "")[:120], _st)
+            except Exception:
+                pass
+    elapsed = int((time.monotonic() - ctx.started_at) * 1000)
+    return LoopResult(
+        loop_id=ctx.loop_id,
+        project=ctx.project,
+        goal=ctx.goal,
+        status=_fanout_loop_status,
+        steps=_fanout_step_outcomes,
+        total_tokens_in=_fanout_tokens_in,
+        total_tokens_out=_fanout_tokens_out,
+        elapsed_ms=elapsed,
+        stuck_reason=_fanout_stuck_reason,
+    )
+
+
 def _preflight_checks(
     ctx: LoopContext,
     steps: List[str],
@@ -1700,85 +1800,22 @@ def run_agent_loop(
     _use_dag = _pf["use_dag"]
     _use_fanout = _pf["use_fanout"]
 
+    # Phase D: Parallel fan-out (early return if applicable)
     if _use_dag or _use_fanout:
-        if _use_dag:
-            if verbose:
-                print(
-                    f"[poe] dag: running {len(_clean_steps)} steps with dep-aware scheduling "
-                    f"(max_workers={parallel_fan_out}, levels={len(_levels)}, "
-                    f"parallel_levels={len(_parallel_levels)})",
-                    file=sys.stderr, flush=True,
-                )
-            _fanout_outcomes = _run_steps_dag(
-                goal=goal,
-                steps=_clean_steps,
-                deps=_deps,
-                adapter=adapter,
-                ancestry_context=_ancestry_context,
-                tools=[LLMTool(**t) for t in _resolve_tools()],
-                verbose=verbose,
-                max_workers=parallel_fan_out,
-                project_dir=_proj_fanout_dir,
-                shared_ctx=_loop_shared_ctx,
-            )
-            _fanout_step_texts = _clean_steps
-        else:
-            # Phase 35 P1: legacy heuristic fan-out — all steps heuristically independent
-            if verbose:
-                print(f"[poe] fan-out: running {len(steps)} steps in parallel (max_workers={parallel_fan_out})", file=sys.stderr, flush=True)
-            _fanout_outcomes = _run_steps_parallel(
-                goal=goal,
-                steps=steps,
-                adapter=adapter,
-                ancestry_context=_ancestry_context,
-                tools=[LLMTool(**t) for t in _resolve_tools()],
-                verbose=verbose,
-                max_workers=parallel_fan_out,
-                project_dir=_proj_fanout_dir,
-                shared_ctx=_loop_shared_ctx,
-            )
-            _fanout_step_texts = steps
-
-        # Build LoopResult from parallel/dag outcomes
-        _fanout_step_outcomes: List[StepOutcome] = []
-        _fanout_tokens_in = 0
-        _fanout_tokens_out = 0
-        _fanout_loop_status = "done"
-        _fanout_stuck_reason = None
-        for _i, (_step_text, _oc) in enumerate(zip(_fanout_step_texts, _fanout_outcomes), 1):
-            _st = _oc.get("status", "blocked")
-            _fanout_step_outcomes.append(step_from_decompose(
-                _step_text, _i,
-                status=_st,
-                result=_oc.get("result", ""),
-                iteration=_i,
-                tokens_in=_oc.get("tokens_in", 0),
-                tokens_out=_oc.get("tokens_out", 0),
-                confidence=_oc.get("confidence", "unverified"),
-                injected_steps=_oc.get("inject_steps", []),
-            ))
-            _fanout_tokens_in += _oc.get("tokens_in", 0)
-            _fanout_tokens_out += _oc.get("tokens_out", 0)
-            if _st == "blocked":
-                _fanout_loop_status = "stuck"
-                _fanout_stuck_reason = _oc.get("stuck_reason", f"step {_i} blocked")
-            if step_callback is not None:
-                try:
-                    step_callback(_i, _step_text, _oc.get("result", "")[:120], _st)
-                except Exception:
-                    pass
-        elapsed = int((time.monotonic() - started_at) * 1000)
-        return LoopResult(
-            loop_id=loop_id,
-            project=project,
-            goal=goal,
-            status=_fanout_loop_status,
-            steps=_fanout_step_outcomes,
-            total_tokens_in=_fanout_tokens_in,
-            total_tokens_out=_fanout_tokens_out,
-            elapsed_ms=elapsed,
-            stuck_reason=_fanout_stuck_reason,
+        _parallel_result = _run_parallel_path(
+            ctx, steps,
+            clean_steps=_clean_steps,
+            deps=_deps,
+            levels=_levels,
+            parallel_levels=_parallel_levels,
+            parallel_fan_out=parallel_fan_out,
+            proj_fanout_dir=_proj_fanout_dir,
+            loop_shared_ctx=_loop_shared_ctx,
+            use_dag=_use_dag,
+            resolve_tools_fn=_resolve_tools,
         )
+        if _parallel_result is not None:
+            return _parallel_result
 
     # Pre-execution step-shape check: split combined exec+analyze steps before they run.
     # The decompose prompt forbids these but the LLM occasionally violates the rule.
