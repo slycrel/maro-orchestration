@@ -8,13 +8,13 @@ Last updated: 2026-04-11 (session 16)
 
 ## Next Up
 
-1. **Evals-as-Training-Data flywheel** — Mine prod failures → auto-generate evals → harness tweaks. (9/10, medium effort)
+1. **Real-world regression tests** — Polymarket behavioral analysis, nootropic re-run. Now backed by eval flywheel for auto-generating targeted evals from failures.
 
-2. **Real-world regression tests** — Polymarket behavioral analysis, nootropic re-run.
+2. **K2 follow-up: Import links collection** — Knowledge node infrastructure is built (schema, storage, query, injection, wiki-link graph). Next: import enriched posts as knowledge nodes. Jeremy setting up links repo.
 
-3. **K2 follow-up: Import links collection** — Knowledge node infrastructure is built (schema, storage, query, injection, wiki-link graph). Next: import 301 enriched posts as knowledge nodes. Requires Jeremy's external links data.
+3. **Wire knowledge injection into decompose** — `inject_knowledge_for_goal()` exists; wire into `_build_loop_context()` alongside tiered lessons.
 
-4. **Wire knowledge injection into decompose** — `inject_knowledge_for_goal()` exists; wire into `_build_loop_context()` alongside tiered lessons.
+4. **Eval flywheel hardening** — Current flywheel works end-to-end. Next: failure clustering (dedup related patterns), train/test split validation, eval pass-rate dashboard.
 
 ## Queued
 
@@ -29,8 +29,9 @@ Last updated: 2026-04-11 (session 16)
 - [x] **Thinking Token Budget** — `THINKING_HIGH/MID/LOW` constants, `thinking_budget` param on all adapters. Wired into: AnthropicSDK (extended thinking API), decompose (THINKING_HIGH for plan quality), advisor_call (THINKING_MID for decisions). Temperature auto-disabled when thinking enabled.
 - [x] **Advisor Pattern wiring** — 3 new integration points: (1) evolver auto-apply gate for medium-confidence suggestions (0.6-0.79), (2) milestone boundary decompose failures, (3) introspect recovery plan wisdom check for medium/high-risk plans.
 - [x] **K2: Knowledge node infrastructure** — `KnowledgeNode` + `KnowledgeEdge` schema, JSONL storage, TF-IDF query, `inject_knowledge_for_goal()`, wiki-link extraction + graph building. 24 tests.
+- [x] **Evals-as-Training-Data flywheel** — Full pipeline: `mine_failure_patterns()` → `generate_evals_from_patterns()` → `run_eval_flywheel()`. Failure-class-specific scoring (9 failure types), eval persistence with dedup, pass-rate trend tracking, auto-suggestion generation for evolver. Wired into `run_nightly_eval()`. 29 new tests.
 - [x] Fixed missing logger in knowledge_web.py (pre-existing bug, adversarial rejection path)
-- [x] 3469 tests passing (up 33 from 3436)
+- [x] 3489 tests passing (up 53 from 3436)
 
 ## Done (session 15)
 
