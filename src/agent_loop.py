@@ -317,6 +317,175 @@ def _steps_are_independent(steps: List[str]) -> bool:
     return not any(_DEP_RE.search(s) for s in steps)
 
 
+def _preflight_checks(
+    ctx: LoopContext,
+    steps: List[str],
+    *,
+    resume_from_loop_id: Optional[str],
+    parallel_fan_out: int,
+) -> tuple:
+    """Phase C: Pre-flight — resume, cost gate, plan review, dep parsing, manifest.
+
+    Returns (steps, preflight_results: dict, early_return: Optional[LoopResult]).
+    If early_return is not None, caller should return it immediately.
+    steps may be modified by checkpoint resume.
+    """
+    # Session resume — load checkpoint and skip completed steps
+    resume_completed: List[StepOutcome] = []
+    if resume_from_loop_id:
+        try:
+            from checkpoint import load_checkpoint, resume_from as _resume_from
+            _ckpt = load_checkpoint(resume_from_loop_id)
+            if _ckpt is not None:
+                _remaining, _done = _resume_from(_ckpt)
+                for _cs in _done:
+                    resume_completed.append(step_from_decompose(
+                        _cs.text, _cs.index,
+                        status=_cs.status,
+                        result=_cs.result,
+                        iteration=getattr(_cs, "iteration", 0),
+                        tokens_in=_cs.tokens_in,
+                        tokens_out=_cs.tokens_out,
+                        elapsed_ms=_cs.elapsed_ms,
+                        confidence=getattr(_cs, "confidence", ""),
+                        injected_steps=list(getattr(_cs, "injected_steps", [])),
+                    ))
+                steps = _remaining
+                if ctx.verbose:
+                    print(
+                        f"[poe] resuming from checkpoint {resume_from_loop_id}: "
+                        f"{len(resume_completed)} steps already done, {len(steps)} remaining",
+                        file=sys.stderr, flush=True,
+                    )
+                log.info("checkpoint resume: loop_id=%s done=%d remaining=%d",
+                         resume_from_loop_id, len(resume_completed), len(steps))
+            else:
+                log.warning("checkpoint not found for resume_from_loop_id=%s, starting fresh", resume_from_loop_id)
+        except Exception as _ckpt_err:
+            log.warning("checkpoint resume failed (%s), starting fresh", _ckpt_err)
+
+    # Upfront cost estimation — fail fast if estimate exceeds budget
+    if ctx.cost_budget is not None:
+        try:
+            from metrics import estimate_loop_cost
+            _estimated = estimate_loop_cost(len(steps), step_texts=steps)
+            if _estimated > 0:
+                _slush = ctx.cost_budget * 0.2
+                if _estimated > ctx.cost_budget + _slush:
+                    log.warning("cost estimate $%.2f exceeds budget $%.2f + slush $%.2f — aborting",
+                                _estimated, ctx.cost_budget, _slush)
+                    return steps, {}, LoopResult(
+                        loop_id=ctx.loop_id, project=ctx.project or "", goal=ctx.goal,
+                        status="stuck",
+                        stuck_reason=f"Estimated cost ${_estimated:.2f} exceeds budget ${ctx.cost_budget:.2f} "
+                                     f"(with ${_slush:.2f} slush). Reduce step count or use cheaper models.",
+                    )
+                elif _estimated > ctx.cost_budget * 0.8:
+                    log.info("cost estimate $%.2f approaching budget $%.2f (%.0f%%)",
+                             _estimated, ctx.cost_budget, _estimated / ctx.cost_budget * 100)
+        except ImportError:
+            pass
+
+    # Pre-run observability
+    try:
+        from metrics import estimate_loop_cost as _elc
+        _pre_est = _elc(len(steps), step_texts=steps)
+        if _pre_est > 0:
+            log.info("pre-run estimate: %d steps, ~$%.2f", len(steps), _pre_est)
+            if ctx.verbose:
+                print(f"[poe] pre-run: {len(steps)} steps, estimated ~${_pre_est:.2f}", file=sys.stderr, flush=True)
+        else:
+            log.info("pre-run: %d steps (no cost estimate available)", len(steps))
+    except Exception:
+        log.info("pre-run: %d steps", len(steps))
+
+    # Pre-flight plan review
+    pf_review = None
+    if not ctx.dry_run:
+        try:
+            from pre_flight import review_plan as _review_plan
+            pf_review = _review_plan(ctx.goal, steps, ctx.adapter, verbose=ctx.verbose)
+            if pf_review.milestone_step_indices:
+                log.info("pre-flight: steps %s flagged as milestone candidates — "
+                         "may need own planning pass", pf_review.milestone_step_indices)
+        except Exception:
+            pass
+
+    # Parse step dependencies for level-based and DAG-aware parallel execution
+    clean_steps = steps
+    deps: Dict[int, Any] = {}
+    levels: Optional[List[Any]] = None
+    parallel_levels: List[Any] = []
+    try:
+        from planner import parse_dependencies, build_execution_levels
+        clean_steps, deps = parse_dependencies(steps)
+        levels = build_execution_levels(deps)
+        parallel_levels = [l for l in levels if len(l) > 1]
+        if parallel_levels:
+            log.info("dependency graph: %d levels, %d parallelizable (%s)",
+                     len(levels), len(parallel_levels),
+                     ", ".join(f"L{i+1}={len(l)}" for i, l in enumerate(levels)))
+    except ImportError:
+        pass
+
+    # Phase 36: emit loop_start event
+    try:
+        from observe import write_event as _write_event
+        _write_event("loop_start", goal=ctx.goal, project=ctx.project or "", loop_id=ctx.loop_id, status="start")
+    except Exception:
+        pass
+
+    # Emit plan manifest
+    manifest_steps: List[str] = list(steps)
+    manifest_path_str: Optional[str] = None
+    if ctx.project:
+        try:
+            manifest_path_str = _write_plan_manifest(
+                project=ctx.project,
+                loop_id=ctx.loop_id,
+                goal=ctx.goal,
+                planned_steps=manifest_steps,
+                start_ts=ctx.start_ts,
+            )
+            if ctx.verbose and manifest_path_str:
+                print(f"[poe] plan manifest: {manifest_path_str}", file=sys.stderr, flush=True)
+        except Exception:
+            pass
+
+    # Shared state for team workers
+    loop_shared_ctx: Dict[str, Any] = {}
+
+    # Compute parallel path info
+    o = _orch()
+    proj_fanout_dir = ""
+    if ctx.project:
+        try:
+            proj_fanout_dir = str(o.orch_root() / "prototypes" / "poe-orchestration" / "projects" / ctx.project)
+        except Exception:
+            pass
+
+    use_dag = parallel_fan_out > 0 and len(clean_steps) > 1 and bool(parallel_levels)
+    use_fanout = (not use_dag and parallel_fan_out > 0
+                  and len(steps) > 1 and _steps_are_independent(steps))
+
+    pf = {
+        "resume_completed": resume_completed,
+        "pf_review": pf_review,
+        "clean_steps": clean_steps,
+        "deps": deps,
+        "levels": levels,
+        "parallel_levels": parallel_levels,
+        "manifest_steps": manifest_steps,
+        "replan_count": 0,
+        "manifest_path_str": manifest_path_str,
+        "loop_shared_ctx": loop_shared_ctx,
+        "proj_fanout_dir": proj_fanout_dir,
+        "use_dag": use_dag,
+        "use_fanout": use_fanout,
+    }
+    return steps, pf, None
+
+
 def _decompose_goal(
     ctx: LoopContext,
     *,
@@ -1507,151 +1676,29 @@ def run_agent_loop(
         permission_context=permission_context,
     )
 
-    # GAP 3: Session resume — load checkpoint and skip completed steps
-    _resume_completed: List[StepOutcome] = []
-    if resume_from_loop_id:
-        try:
-            from checkpoint import load_checkpoint, resume_from as _resume_from
-            _ckpt = load_checkpoint(resume_from_loop_id)
-            if _ckpt is not None:
-                _remaining, _done = _resume_from(_ckpt)
-                # Reconstruct StepOutcome objects from completed checkpoint data
-                for _cs in _done:
-                    _resume_completed.append(step_from_decompose(
-                        _cs.text, _cs.index,
-                        status=_cs.status,
-                        result=_cs.result,
-                        iteration=getattr(_cs, "iteration", 0),
-                        tokens_in=_cs.tokens_in,
-                        tokens_out=_cs.tokens_out,
-                        elapsed_ms=_cs.elapsed_ms,
-                        confidence=getattr(_cs, "confidence", ""),
-                        injected_steps=list(getattr(_cs, "injected_steps", [])),
-                    ))
-                steps = _remaining
-                if verbose:
-                    print(
-                        f"[poe] resuming from checkpoint {resume_from_loop_id}: "
-                        f"{len(_resume_completed)} steps already done, {len(steps)} remaining",
-                        file=sys.stderr, flush=True,
-                    )
-                log.info("checkpoint resume: loop_id=%s done=%d remaining=%d",
-                         resume_from_loop_id, len(_resume_completed), len(steps))
-            else:
-                log.warning("checkpoint not found for resume_from_loop_id=%s, starting fresh", resume_from_loop_id)
-        except Exception as _ckpt_err:
-            log.warning("checkpoint resume failed (%s), starting fresh", _ckpt_err)
+    # Phase C: Pre-flight checks
+    steps, _pf, _pf_early_return = _preflight_checks(
+        ctx, steps,
+        resume_from_loop_id=resume_from_loop_id,
+        parallel_fan_out=parallel_fan_out,
+    )
+    if _pf_early_return is not None:
+        return _pf_early_return
 
-    # Upfront cost estimation — fail fast if estimate exceeds budget
-    if cost_budget is not None:
-        try:
-            from metrics import estimate_loop_cost
-            _estimated = estimate_loop_cost(len(steps), step_texts=steps)
-            if _estimated > 0:
-                _slush = cost_budget * 0.2  # 20% overage allowance
-                if _estimated > cost_budget + _slush:
-                    log.warning("cost estimate $%.2f exceeds budget $%.2f + slush $%.2f — aborting",
-                                _estimated, cost_budget, _slush)
-                    return LoopResult(
-                        loop_id=loop_id, project=project or "", goal=goal,
-                        status="stuck",
-                        stuck_reason=f"Estimated cost ${_estimated:.2f} exceeds budget ${cost_budget:.2f} "
-                                     f"(with ${_slush:.2f} slush). Reduce step count or use cheaper models.",
-                    )
-                elif _estimated > cost_budget * 0.8:
-                    log.info("cost estimate $%.2f approaching budget $%.2f (%.0f%%)",
-                             _estimated, cost_budget, _estimated / cost_budget * 100)
-        except ImportError:
-            pass
-
-    # Pre-run observability: always emit step count + cost estimate as a hint.
-    # This is a recommendation, not a gate — it fires regardless of budget setting.
-    try:
-        from metrics import estimate_loop_cost as _elc
-        _pre_est = _elc(len(steps), step_texts=steps)
-        if _pre_est > 0:
-            log.info("pre-run estimate: %d steps, ~$%.2f", len(steps), _pre_est)
-            if verbose:
-                import sys as _sys
-                print(f"[poe] pre-run: {len(steps)} steps, estimated ~${_pre_est:.2f}", file=_sys.stderr, flush=True)
-        else:
-            log.info("pre-run: %d steps (no cost estimate available)", len(steps))
-    except Exception:
-        log.info("pre-run: %d steps", len(steps))
-
-    # Pre-flight plan review — cheap skeptic pass before we spend execution budget.
-    # Flags scope explosion, hidden assumptions, and milestone candidates.
-    # Advisory only: loop proceeds regardless of findings.
-    _pf_review: Optional[Any] = None
-    if not dry_run:
-        try:
-            from pre_flight import review_plan as _review_plan
-            _pf_review = _review_plan(goal, steps, adapter, verbose=verbose)
-            if _pf_review.milestone_step_indices:
-                log.info("pre-flight: steps %s flagged as milestone candidates — "
-                         "may need own planning pass", _pf_review.milestone_step_indices)
-        except Exception:
-            pass  # pre-flight failure must never block execution
-
-    # Parse step dependencies for level-based and DAG-aware parallel execution
-    _clean_steps = steps
-    _deps: Dict[int, Any] = {}
-    _levels: Optional[List[Any]] = None
-    _parallel_levels: List[Any] = []
-    try:
-        from planner import parse_dependencies, build_execution_levels
-        _clean_steps, _deps = parse_dependencies(steps)
-        _levels = build_execution_levels(_deps)
-        _parallel_levels = [l for l in _levels if len(l) > 1]
-        if _parallel_levels:
-            log.info("dependency graph: %d levels, %d parallelizable (%s)",
-                     len(_levels), len(_parallel_levels),
-                     ", ".join(f"L{i+1}={len(l)}" for i, l in enumerate(_levels)))
-    except ImportError:
-        pass
-
-    # Phase 36: emit loop_start event
-    try:
-        from observe import write_event as _write_event
-        _write_event("loop_start", goal=goal, project=project or "", loop_id=loop_id, status="start")
-    except Exception:
-        pass
-
-    # Emit plan manifest up front — full plan readable before execution begins
-    _manifest_steps: List[str] = list(steps)  # tracks plan including any mid-run replans
-    _replan_count = 0
-    _manifest_path_str: Optional[str] = None
-    if project:
-        try:
-            _manifest_path_str = _write_plan_manifest(
-                project=project,
-                loop_id=loop_id,
-                goal=goal,
-                planned_steps=_manifest_steps,
-                start_ts=start_ts,
-            )
-            if verbose and _manifest_path_str:
-                print(f"[poe] plan manifest: {_manifest_path_str}", file=sys.stderr, flush=True)
-        except Exception:
-            pass
-
-    # Shared state accessible to all team workers across the lifetime of this loop.
-    # Workers can read prior findings and write their own results without re-fetching.
-    _loop_shared_ctx: Dict[str, Any] = {}
-
-    # DAG-aware parallel execution (preferred when dep graph has explicit parallelism).
-    # Steps start as soon as their specific deps complete; dep results passed as context.
-    # Falls back to heuristic fan-out for plans with no explicit [after:N] dep tags.
-    _proj_fanout_dir = ""
-    if project:
-        try:
-            _proj_fanout_dir = str(o.orch_root() / "prototypes" / "poe-orchestration" / "projects" / project)
-        except Exception:
-            pass
-
-    _use_dag = parallel_fan_out > 0 and len(_clean_steps) > 1 and bool(_parallel_levels)
-    _use_fanout = (not _use_dag and parallel_fan_out > 0
-                  and len(steps) > 1 and _steps_are_independent(steps))
+    # Unpack pre-flight results into locals used by subsequent phases
+    _resume_completed = _pf["resume_completed"]
+    _pf_review = _pf["pf_review"]
+    _clean_steps = _pf["clean_steps"]
+    _deps = _pf["deps"]
+    _levels = _pf["levels"]
+    _parallel_levels = _pf["parallel_levels"]
+    _manifest_steps = _pf["manifest_steps"]
+    _replan_count = _pf["replan_count"]
+    _manifest_path_str = _pf["manifest_path_str"]
+    _loop_shared_ctx = _pf["loop_shared_ctx"]
+    _proj_fanout_dir = _pf["proj_fanout_dir"]
+    _use_dag = _pf["use_dag"]
+    _use_fanout = _pf["use_fanout"]
 
     if _use_dag or _use_fanout:
         if _use_dag:
