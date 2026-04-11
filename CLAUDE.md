@@ -9,6 +9,18 @@
 4. Check ROADMAP.md for phase status
 5. Check `~/claude/grok-response-*.txt` for unprocessed feedback
 
+**Before modifying a subsystem, load its architecture skill.** The `skills/arch-*.md` files describe intent, interfaces, gaps, and file maps for each subsystem. Read the relevant one before making design decisions:
+
+| Working on... | Load this skill |
+|--------------|----------------|
+| Goal entry, routing, intent, director, workers, personas | `skills/arch-interface-routing.md` |
+| Core loop, decompose, step execution, pre-flight | `skills/arch-core-loop.md` |
+| Memory, knowledge, lessons, captain's log, crystallization | `skills/arch-memory-knowledge.md` |
+| Inspector, evolver, graduation, introspect, skills, constraints | `skills/arch-quality-selfimprove.md` |
+| LLM adapters, config, heartbeat, projects, tasks, metrics | `skills/arch-platform.md` |
+
+These skills document **intent vs implementation gaps** — what the system is supposed to do vs what's actually coded. They prevent accidental regressions and surface the real design constraints.
+
 - GitHub: https://github.com/slycrel/openclaw-orchestration
 - Machine: Ubuntu headless, user `clawd`, `/home/clawd/claude/openclaw-orchestration/`
 - Owner: Jeremy Stone (`slycrel`) — 25+ years engineering, AI orchestration
@@ -118,7 +130,21 @@ Reference implementation: `~/.openclaw/workspace/prototypes/poe-orchestrator/` �
 | `~/.openclaw/workspace/prototypes/poe-orchestrator/` | Old prototype — reference only, do not continue work here |
 | `~/.openclaw/workspace/scripts/` | ~80 shell scripts: heartbeat, task queue, X/Telegram/email |
 | `~/.claude/projects/.../memory/` | Claude Code persistent memory across sessions |
-| `/home/clawd/.poe/workspace/` | **Stable runtime workspace** — captain's log (11K+ entries), outcomes, lessons, skills, events all live here. This is the default for both `config.memory_dir()` and `orch_items.memory_dir()`. No env vars needed for manual runs. |
+| `/home/clawd/.poe/workspace/` | **Stable runtime workspace** — all learning data, self-evolved artifacts, and runtime state. Not in git. |
+
+**Workspace layout (`~/.poe/workspace/`):**
+
+| Path | What | Written by |
+|------|------|-----------|
+| `memory/` | Outcomes, lessons, knowledge nodes, captain's log, diagnoses | reflect_and_record, learning pipeline |
+| `skills/` | Self-created/evolved skill .md files (override repo skills) | evolver |
+| `personas/` | Self-created/evolved persona specs (override repo personas) | evolver |
+| `playbook.md` | Director's operational wisdom (auto-maintained) | evolver, append_to_playbook() |
+| `output/` | Run artifacts, operator status, research outputs | agent_loop, orch |
+| `projects/` | Per-project NEXT.md, decisions, risks | orch_items |
+| `config.yml` | Workspace-level config | manual |
+
+**Resolution order** for skills and personas: workspace → repo. When the system evolves a better version of a shipped skill/persona, the workspace version wins. Repo versions are the shipped defaults.
 
 ---
 
