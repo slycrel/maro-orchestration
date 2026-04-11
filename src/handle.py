@@ -306,13 +306,14 @@ def handle(
     try:
         _inputs_path = Path(__file__).resolve().parent.parent / "memory" / "handle_inputs.jsonl"
         _inputs_path.parent.mkdir(parents=True, exist_ok=True)
-        _inputs_path.open("a", encoding="utf-8").write(
-            json.dumps({
-                "handle_id": handle_id,
-                "raw_input": _raw_input,
-                "ts": datetime.now(timezone.utc).isoformat(),
-            }) + "\n"
-        )
+        with _inputs_path.open("a", encoding="utf-8") as _fh:
+            _fh.write(
+                json.dumps({
+                    "handle_id": handle_id,
+                    "raw_input": _raw_input,
+                    "ts": datetime.now(timezone.utc).isoformat(),
+                }) + "\n"
+            )
     except Exception:
         pass  # never block on logging
 

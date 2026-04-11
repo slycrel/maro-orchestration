@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import sys
 import time
 from dataclasses import dataclass, field
@@ -732,8 +733,8 @@ def scan_calibration_log(
     """
     if cal_path is None:
         try:
-            import o
-            cal_path = o.orch_root() / "memory" / "calibration.jsonl"
+            from orch_items import memory_dir
+            cal_path = memory_dir() / "calibration.jsonl"
         except Exception:
             return []
 

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import logging
+import shlex
 import subprocess
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -66,17 +67,21 @@ class RuntimeTool:
         }
 
     def execute(self, arguments: Dict[str, Any]) -> str:
-        """Run bash_template with substituted arguments. Returns stdout+stderr."""
+        """Run bash_template with substituted arguments. Returns stdout+stderr.
+
+        All arguments are shell-quoted before substitution to prevent injection.
+        """
+        # Sanitize all arguments with shlex.quote to prevent shell injection
+        safe_args = {k: shlex.quote(str(v)) for k, v in arguments.items()}
         try:
-            cmd = self.bash_template.format(**arguments)
+            cmd = self.bash_template.format(**safe_args)
         except KeyError as exc:
             return f"[runtime_tool error: missing argument {exc}]"
         except Exception as exc:
             return f"[runtime_tool error: template format failed: {exc}]"
         try:
             result = subprocess.run(
-                cmd,
-                shell=True,
+                shlex.split(cmd),
                 capture_output=True,
                 text=True,
                 timeout=60,

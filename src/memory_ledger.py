@@ -236,10 +236,9 @@ def record_step_trace(
     steps_data = []
     for s in step_outcomes:
         entry: Dict[str, Any] = {
-            "step": getattr(s, "step", ""),
+            "step": getattr(s, "text", "") or getattr(s, "step", ""),
             "status": getattr(s, "status", ""),
             "result": (getattr(s, "result", "") or "")[:500],
-            "summary": getattr(s, "summary", "") or "",
         }
         sr = getattr(s, "stuck_reason", None)
         if sr:

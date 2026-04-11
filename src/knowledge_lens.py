@@ -206,7 +206,7 @@ def observe_pattern(lesson: str, domain: str, *, source_lesson_id: str = "") -> 
     target_hyp: Optional[Hypothesis] = None
     lesson_lower = lesson.lower().strip()
     for h in hyps:
-        if h.lesson.lower().strip() == lesson_lower or h.domain == domain and _text_similarity(h.lesson, lesson) > 0.85:
+        if h.lesson.lower().strip() == lesson_lower or (h.domain == domain and domain and _text_similarity(h.lesson, lesson) > 0.85):
             target_hyp = h
             break
 

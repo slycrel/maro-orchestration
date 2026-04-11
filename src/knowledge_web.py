@@ -213,6 +213,21 @@ def record_tiered_lesson(
     if k_samples > 0:
         confidence = confidence_from_k_samples(k_samples)
 
+    # Reject lessons that look like prompt injection attempts
+    try:
+        from memory_ledger import _lesson_looks_adversarial
+        if _lesson_looks_adversarial(lesson_text):
+            log.warning("tiered lesson rejected (adversarial): %s", lesson_text[:80])
+            # Return a dummy TieredLesson so callers don't crash
+            return TieredLesson(
+                lesson_id="rejected", lesson=lesson_text[:50], task_type=task_type,
+                outcome=outcome, source_goal=source_goal, tier=tier,
+                score=0.0, confidence=0.0, sessions_validated=0,
+                times_reinforced=0, last_reinforced=_current_date(),
+            )
+    except ImportError:
+        pass
+
     existing = load_tiered_lessons(tier=tier, task_type=task_type)
     for ex in existing:
         if _text_similarity(ex.lesson, lesson_text) > 0.8:
@@ -268,7 +283,12 @@ def _reinforce_tiered_lesson(tl: TieredLesson, *, tier: str) -> TieredLesson:
     # F5: multi-session confidence promotion
     if tl.sessions_validated >= 3:
         tl.confidence = max(tl.confidence, _CONFIDENCE_MULTI_SESSION)
-    _rewrite_tiered_lessons(tier)
+    # Reload all lessons, replace the mutated one, and rewrite.
+    # Without this, _rewrite_tiered_lessons(tier) re-reads from disk and loses
+    # the in-memory mutations above.
+    all_lessons = load_tiered_lessons(tier=tier, min_score=0.0)
+    updated = [tl if l.lesson_id == tl.lesson_id else l for l in all_lessons]
+    _rewrite_tiered_lessons(tier, lessons=updated)
     return tl
 
 
