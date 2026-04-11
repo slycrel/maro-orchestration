@@ -534,26 +534,10 @@ def handle(
                     verbose=verbose,
                     preset_steps=_pipe_steps,
                 )
-                elapsed = int((time.monotonic() - started_at) * 1000)
-                _pipe_parts = []
-                for s in _pipe_result.steps:
-                    if s.status == "done" and s.result:
-                        _pipe_parts.append(f"**Step {s.index}: {s.text}**\n{s.result}")
-                _pipe_text = "\n\n---\n\n".join(_pipe_parts) if _pipe_parts else "[no output]"
-                if _pipe_result.status == "stuck":
-                    _pipe_text += f"\n\n⚠️ Stuck: {_pipe_result.stuck_reason}"
-                return HandleResult(
-                    handle_id=handle_id,
-                    lane="agenda",
-                    lane_confidence=confidence,
-                    classification_reason=reason + " [pipeline]",
-                    message=message,
-                    status=_pipe_result.status,
-                    result=_pipe_text,
-                    project=_pipe_result.project or project or "",
-                    tokens_in=_pipe_result.total_tokens_in,
-                    tokens_out=_pipe_result.total_tokens_out,
-                    elapsed_ms=elapsed,
+                return _loop_result_to_handle(
+                    _pipe_result, handle_id=handle_id, message=message,
+                    confidence=confidence, reason=reason, started_at=started_at,
+                    project=project, reason_suffix=" [pipeline]",
                 )
 
         # team: prefix — decompose into DAG and execute with dep-aware parallel pool.
@@ -570,26 +554,10 @@ def handle(
                 verbose=verbose,
                 parallel_fan_out=4,
             )
-            elapsed = int((time.monotonic() - started_at) * 1000)
-            _team_parts = []
-            for s in _team_result.steps:
-                if s.status == "done" and s.result:
-                    _team_parts.append(f"**Step {s.index}: {s.text}**\n{s.result}")
-            _team_text = "\n\n---\n\n".join(_team_parts) if _team_parts else "[no output]"
-            if _team_result.status == "stuck":
-                _team_text += f"\n\n⚠️ Stuck: {_team_result.stuck_reason}"
-            return HandleResult(
-                handle_id=handle_id,
-                lane="agenda",
-                lane_confidence=confidence,
-                classification_reason=reason + " [team]",
-                message=message,
-                status=_team_result.status,
-                result=_team_text,
-                project=_team_result.project or project or "",
-                tokens_in=_team_result.total_tokens_in,
-                tokens_out=_team_result.total_tokens_out,
-                elapsed_ms=elapsed,
+            return _loop_result_to_handle(
+                _team_result, handle_id=handle_id, message=message,
+                confidence=confidence, reason=reason, started_at=started_at,
+                project=project, reason_suffix=" [team]",
             )
 
         # direct: prefix — skip quality gate and escalation, route straight to run_agent_loop.
@@ -603,26 +571,10 @@ def handle(
                 dry_run=dry_run,
                 verbose=verbose,
             )
-            elapsed = int((time.monotonic() - started_at) * 1000)
-            _direct_parts = []
-            for s in _direct_result.steps:
-                if s.status == "done" and s.result:
-                    _direct_parts.append(f"**Step {s.index}: {s.text}**\n{s.result}")
-            _direct_text = "\n\n---\n\n".join(_direct_parts) if _direct_parts else "[no output]"
-            if _direct_result.status == "stuck":
-                _direct_text += f"\n\n⚠️ Stuck: {_direct_result.stuck_reason}"
-            return HandleResult(
-                handle_id=handle_id,
-                lane="agenda",
-                lane_confidence=confidence,
-                classification_reason=reason + " [direct]",
-                message=message,
-                status=_direct_result.status,
-                result=_direct_text,
-                project=_direct_result.project or project or "",
-                tokens_in=_direct_result.total_tokens_in,
-                tokens_out=_direct_result.total_tokens_out,
-                elapsed_ms=elapsed,
+            return _loop_result_to_handle(
+                _direct_result, handle_id=handle_id, message=message,
+                confidence=confidence, reason=reason, started_at=started_at,
+                project=project, reason_suffix=" [direct]",
             )
 
         _ralph_from_cfg = _cfg.get("ralph_verify", "").strip().lower() == "true"
@@ -698,46 +650,75 @@ def handle(
             except Exception:
                 pass  # gate never blocks delivery of results
 
-        # Build result text from completed steps
-        result_parts = []
-        for s in loop_result.steps:
-            if s.status == "done" and s.result:
-                result_parts.append(f"**Step {s.index}: {s.text}**\n{s.result}")
-        result_text = "\n\n---\n\n".join(result_parts) if result_parts else "[no output produced]"
-        if loop_result.status == "stuck":
-            result_text += f"\n\n⚠️ Stuck: {loop_result.stuck_reason}"
+        # Build extra annotations from quality gate / pre-flight
+        _extra = ""
         _pf = getattr(loop_result, "pre_flight_review", None)
         if _pf and getattr(_pf, "scope", None) == "wide":
-            result_text += f"\n\n⚠️ Pre-flight: scope=wide — {_pf.scope_note}"
+            _extra += f"\n\n⚠️ Pre-flight: scope=wide — {_pf.scope_note}"
         if _contested_claims:
             _claims_text = "\n".join(
                 f"- [{c.get('verdict', '?')}] {c.get('claim', '')} — {c.get('reason', '')}"
                 for c in _contested_claims
             )
-            result_text += f"\n\n---\n\n**⚠️ Adversarial review — contested claims:**\n{_claims_text}"
+            _extra += f"\n\n---\n\n**⚠️ Adversarial review — contested claims:**\n{_claims_text}"
         if _gate_note:
-            result_text += _gate_note
+            _extra += _gate_note
 
-        return HandleResult(
-            handle_id=handle_id,
-            lane="agenda",
-            lane_confidence=confidence,
-            classification_reason=reason,
-            message=message,
-            status=loop_result.status,
-            result=result_text,
-            project=loop_result.project,
-            loop_result=loop_result,
-            tokens_in=loop_result.total_tokens_in,
-            tokens_out=loop_result.total_tokens_out,
-            elapsed_ms=elapsed,
-            artifact_path=loop_result.log_path,
+        return _loop_result_to_handle(
+            loop_result, handle_id=handle_id, message=message,
+            confidence=confidence, reason=reason, started_at=started_at,
+            project=project, extra_text=_extra,
         )
 
 
 # ---------------------------------------------------------------------------
 # Artifact writing
 # ---------------------------------------------------------------------------
+
+def _loop_result_to_handle(
+    loop_result,
+    *,
+    handle_id: str,
+    message: str,
+    confidence: float,
+    reason: str,
+    started_at: float,
+    project: Optional[str] = None,
+    reason_suffix: str = "",
+    extra_text: str = "",
+) -> "HandleResult":
+    """Convert a LoopResult into a HandleResult with formatted step text.
+
+    Deduplicates the pipeline/team/direct/default AGENDA paths that all
+    format steps identically.
+    """
+    elapsed = int((time.monotonic() - started_at) * 1000)
+    result_parts = []
+    for s in loop_result.steps:
+        if s.status == "done" and s.result:
+            result_parts.append(f"**Step {s.index}: {s.text}**\n{s.result}")
+    result_text = "\n\n---\n\n".join(result_parts) if result_parts else "[no output]"
+    if loop_result.status == "stuck":
+        result_text += f"\n\n⚠️ Stuck: {loop_result.stuck_reason}"
+    if extra_text:
+        result_text += extra_text
+    _class_reason = reason + reason_suffix if reason_suffix else reason
+    return HandleResult(
+        handle_id=handle_id,
+        lane="agenda",
+        lane_confidence=confidence,
+        classification_reason=_class_reason,
+        message=message,
+        status=loop_result.status,
+        result=result_text,
+        project=loop_result.project or project or "",
+        loop_result=loop_result,
+        tokens_in=loop_result.total_tokens_in,
+        tokens_out=loop_result.total_tokens_out,
+        elapsed_ms=elapsed,
+        artifact_path=getattr(loop_result, "log_path", None),
+    )
+
 
 def _write_now_artifact(
     handle_id: str,
