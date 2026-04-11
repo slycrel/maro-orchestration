@@ -11,11 +11,17 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
+from unittest.mock import patch, MagicMock
+
 from captains_log import (
     log_event,
     load_log,
+    query_log,
+    timeline,
+    correlate_with_git,
     render_entry,
     render_log,
+    render_correlated_entry,
     set_log_path,
     EVENT_TYPES,
     SKILL_CIRCUIT_OPEN,
@@ -265,3 +271,164 @@ class TestCallSiteImports:
     def test_gc_memory_imports(self):
         import gc_memory
         assert hasattr(gc_memory, "_gc_tiered_lessons")
+
+
+# ===========================================================================
+# Historical query + git correlation tests
+# ===========================================================================
+
+class TestQueryLog:
+
+    def test_full_text_search_summary(self, tmp_path):
+        log_event(DIAGNOSIS, "token_explosion", "Loop abc: token_explosion detected",
+                  context={"tokens": 432924})
+        log_event(DIAGNOSIS, "healthy", "Loop def: all healthy")
+        entries = query_log("token_explosion")
+        assert len(entries) == 1
+        assert "token_explosion" in entries[0]["summary"]
+
+    def test_full_text_search_note(self, tmp_path):
+        log_event(EVOLVER_APPLIED, "test", "Applied suggestion",
+                  note="distill context before injection")
+        entries = query_log("distill")
+        assert len(entries) == 1
+
+    def test_full_text_search_context_values(self, tmp_path):
+        log_event(DIAGNOSIS, "test", "Loop result",
+                  context={"severity": "critical", "tokens": 500000})
+        entries = query_log("critical")
+        assert len(entries) == 1
+
+    def test_empty_query_returns_all(self, tmp_path):
+        log_event(SKILL_PROMOTED, "a", "first")
+        log_event(SKILL_DEMOTED, "b", "second")
+        entries = query_log("")
+        assert len(entries) == 2
+
+    def test_date_range_filter(self, tmp_path):
+        # Write entries with controlled timestamps via direct file write
+        path = tmp_path / "captains_log.jsonl"
+        entries_data = [
+            {"timestamp": "2026-04-09T12:00:00+00:00", "event_type": "DIAGNOSIS",
+             "subject": "old", "summary": "old event"},
+            {"timestamp": "2026-04-10T12:00:00+00:00", "event_type": "DIAGNOSIS",
+             "subject": "mid", "summary": "mid event"},
+            {"timestamp": "2026-04-11T12:00:00+00:00", "event_type": "DIAGNOSIS",
+             "subject": "new", "summary": "new event"},
+        ]
+        with path.open("w") as f:
+            for e in entries_data:
+                f.write(json.dumps(e) + "\n")
+
+        entries = query_log("", since="2026-04-10", until="2026-04-11")
+        assert len(entries) == 1
+        assert entries[0]["subject"] == "mid"
+
+    def test_limit_zero_returns_all(self, tmp_path):
+        for i in range(5):
+            log_event(DIAGNOSIS, f"s{i}", f"event {i}")
+        entries = query_log("", limit=0)
+        assert len(entries) == 5
+
+    def test_query_with_event_type_filter(self, tmp_path):
+        log_event(DIAGNOSIS, "diag", "a diagnosis")
+        log_event(EVOLVER_APPLIED, "evo", "an evolver event")
+        entries = query_log("", event_type="EVOLVER")
+        assert len(entries) == 1
+        assert entries[0]["event_type"] == "EVOLVER_APPLIED"
+
+
+class TestTimeline:
+
+    def test_timeline_by_day(self, tmp_path):
+        path = tmp_path / "captains_log.jsonl"
+        entries = [
+            {"timestamp": "2026-04-10T08:00:00+00:00", "event_type": "DIAGNOSIS", "subject": "a", "summary": ""},
+            {"timestamp": "2026-04-10T09:00:00+00:00", "event_type": "EVOLVER_APPLIED", "subject": "b", "summary": ""},
+            {"timestamp": "2026-04-11T08:00:00+00:00", "event_type": "DIAGNOSIS", "subject": "c", "summary": ""},
+        ]
+        with path.open("w") as f:
+            for e in entries:
+                f.write(json.dumps(e) + "\n")
+
+        tl = timeline()
+        assert len(tl) == 2
+        assert tl[0]["date"] == "2026-04-10"
+        assert tl[0]["total"] == 2
+        assert tl[1]["date"] == "2026-04-11"
+        assert tl[1]["total"] == 1
+
+    def test_timeline_empty_log(self, tmp_path):
+        tl = timeline()
+        assert tl == []
+
+    def test_timeline_by_hour(self, tmp_path):
+        path = tmp_path / "captains_log.jsonl"
+        entries = [
+            {"timestamp": "2026-04-10T08:00:00+00:00", "event_type": "DIAGNOSIS", "subject": "a", "summary": ""},
+            {"timestamp": "2026-04-10T08:30:00+00:00", "event_type": "DIAGNOSIS", "subject": "b", "summary": ""},
+            {"timestamp": "2026-04-10T09:00:00+00:00", "event_type": "DIAGNOSIS", "subject": "c", "summary": ""},
+        ]
+        with path.open("w") as f:
+            for e in entries:
+                f.write(json.dumps(e) + "\n")
+
+        tl = timeline(bucket="hour")
+        assert len(tl) == 2  # 08 and 09
+
+
+class TestGitCorrelation:
+
+    def test_correlation_adds_nearby_commits(self, tmp_path):
+        git_output = (
+            "abcdef123456|2026-04-10T08:30:00-06:00|Fix token explosion bug\n"
+            "fedcba654321|2026-04-10T07:00:00-06:00|Add evolver threshold\n"
+        )
+        entries = [
+            {"timestamp": "2026-04-10T14:25:00+00:00", "event_type": "DIAGNOSIS",
+             "subject": "token_explosion", "summary": "detected"},
+        ]
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = git_output
+
+        with patch("subprocess.run", return_value=mock_result):
+            correlated = correlate_with_git(entries, window_hours=2, repo_path="/tmp")
+
+        assert len(correlated) == 1
+        assert "nearby_commits" in correlated[0]
+        assert correlated[0]["nearby_commits"][0]["hash"] == "abcdef123456"
+
+    def test_correlation_no_nearby_commits(self, tmp_path):
+        git_output = "abcdef123456|2026-04-01T08:30:00-06:00|Very old commit\n"
+        entries = [
+            {"timestamp": "2026-04-10T14:25:00+00:00", "event_type": "DIAGNOSIS",
+             "subject": "test", "summary": "recent event"},
+        ]
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = git_output
+
+        with patch("subprocess.run", return_value=mock_result):
+            correlated = correlate_with_git(entries, window_hours=2, repo_path="/tmp")
+
+        assert "nearby_commits" not in correlated[0]
+
+    def test_correlation_empty_entries(self):
+        result = correlate_with_git([])
+        assert result == []
+
+    def test_render_correlated_entry(self):
+        entry = {
+            "timestamp": "2026-04-10T14:25:00+00:00",
+            "event_type": "DIAGNOSIS",
+            "subject": "token_explosion",
+            "summary": "Loop abc: token explosion detected",
+            "nearby_commits": [
+                {"hash": "abcdef12", "message": "Fix token bug", "timestamp": "2026-04-10T14:20:00", "delta_hours": 0.1},
+            ],
+        }
+        rendered = render_correlated_entry(entry)
+        assert "Git:" in rendered
+        assert "abcdef12" in rendered
+        assert "Fix token bug" in rendered

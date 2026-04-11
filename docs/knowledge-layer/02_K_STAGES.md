@@ -107,15 +107,27 @@ Different personas query the same knowledge differently.
 
 ## Phase K6: Temporal Intelligence — The Ledger
 
-Make time a first-class dimension.
+Make time a first-class dimension. The captain's log (14K+ events) and git commit history are the two primary temporal data sources.
+
+### Foundation (shipped 2026-04-11)
+
+- [x] `query_log()` — full-text search across all captain's log fields (summary, note, context values, related_ids). Date range filtering (since/until). Unlimited mode for full-history archaeology.
+- [x] `timeline()` — aggregate event counts by day or hour. Shows when failure patterns emerged and how event types shift over time.
+- [x] `correlate_with_git()` — cross-reference captain's log events with git commits by timestamp (±N hours). Reveals what code changes landed around the time failures or improvements appeared.
+- [x] CLI: `poe-log "search term" --git --timeline` — all modes accessible from command line.
+
+### Remaining items
 
 - [ ] Add bi-temporal fields to knowledge nodes: `t_valid` (when true in world), `t_learned` (when we learned it), `t_superseded` (when replaced)
-- [ ] Implement temporal queries: "what did we learn last week?", "what's changed since March?", "what was our understanding of X at time T?"
-- [ ] Explore git-as-ledger: can commit history serve as the temporal backbone? Structured commits, parseable diffs?
+- [ ] **Failure archaeology** — mine captain's log for "when did failure_class X first appear?" and correlate with git commits that landed in that window. Answer "what change introduced this regression?"
+- [ ] **Self-improvement validation** — for every EVOLVER_APPLIED event, check subsequent outcomes/diagnoses to determine if the applied change actually fixed the problem. Close the verify→learn gap.
+- [ ] **Decision provenance chain** — trace backward from a current behavior to the EVOLVER_APPLIED, GRADUATION_PROPOSED, and DECISION_RECORDED events that created it. Answer "why does the system behave this way?"
+- [ ] **Seasonal pattern detection** — are certain failure classes more common after evolver cycles? Do token costs spike after certain goal types? Automated anomaly detection over the timeline.
 - [ ] Track knowledge evolution: how has our understanding of "harness engineering" changed over 6 months?
 - [ ] Implement knowledge decay: old, unreinforced knowledge gets lower confidence scores
+- [ ] Explore git-as-ledger: can commit history serve as the temporal backbone? Structured commits, parseable diffs → automatic knowledge node generation.
 
-**Artifact:** Temporal queries working, knowledge evolution visible
+**Artifact:** Temporal queries working, knowledge evolution visible, git correlation answering "what change caused this?"
 
 ---
 
