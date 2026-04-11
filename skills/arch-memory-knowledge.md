@@ -35,6 +35,8 @@ Stage 5: Rule      → Hardcoded path (zero inference cost)
 | captains_log.jsonl | Event stream (11K+ entries) | Various — lifecycle events | captain's log read bridge |
 | task_ledger.jsonl | Per-step execution trace | record_step_trace() | evolver context |
 | verification_outcomes.jsonl | Claim verification history | record_verification() | calibration threshold |
+| knowledge_nodes.jsonl | Structured knowledge (K2) | import_link_farm, append_knowledge_node() | query_knowledge(), inject_knowledge_for_goal() |
+| knowledge_edges.jsonl | Node relationships (K2) | import_link_farm, append_knowledge_edge() | load_knowledge_edges() |
 
 ## Write Flow (after each run)
 
