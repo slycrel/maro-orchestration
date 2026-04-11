@@ -317,6 +317,205 @@ def _steps_are_independent(steps: List[str]) -> bool:
     return not any(_DEP_RE.search(s) for s in steps)
 
 
+def _build_result_and_finalize(
+    ctx: LoopContext,
+    *,
+    step_outcomes: List[StepOutcome],
+    loop_status: str,
+    stuck_reason: Optional[str],
+    total_tokens_in: int,
+    total_tokens_out: int,
+    interrupts_applied: int,
+    march_of_nines_alert: bool,
+    pf_review,
+    manifest_steps: List[str],
+    replan_count: int,
+    start_ts: str,
+    milestone_expanded: set,
+    had_no_matching_skill: bool,
+    failure_chain: List[str],
+    recovery_step_count: int,
+    scratchpad: Dict[str, Any],
+    scratchpad_lock,
+) -> LoopResult:
+    """Phase G: Build final LoopResult, write artifacts, run finalize side-effects."""
+    elapsed_total = int((time.monotonic() - ctx.started_at) * 1000)
+    o = _orch()
+
+    # Write final plan manifest with terminal status and elapsed time
+    if ctx.project and manifest_steps:
+        try:
+            _write_plan_manifest(
+                project=ctx.project,
+                loop_id=ctx.loop_id,
+                goal=ctx.goal,
+                planned_steps=manifest_steps,
+                start_ts=start_ts,
+                step_outcomes=step_outcomes,
+                status=loop_status,
+                elapsed_ms=elapsed_total,
+                replan_count=replan_count,
+            )
+        except Exception:
+            pass
+
+    log_path = _write_loop_log(
+        project=ctx.project,
+        loop_id=ctx.loop_id,
+        goal=ctx.goal,
+        status=loop_status,
+        steps=step_outcomes,
+        start_ts=start_ts,
+        elapsed_ms=elapsed_total,
+        stuck_reason=stuck_reason,
+    )
+
+    o.append_decision(ctx.project, [
+        f"[loop:{ctx.loop_id}] finished status={loop_status} steps={len(step_outcomes)} tokens={total_tokens_in}+{total_tokens_out}",
+    ])
+    o.write_operator_status()
+
+    # Phase 58: Pre-flight calibration feedback
+    if pf_review is not None and not ctx.dry_run:
+        try:
+            from orch_items import memory_dir as _fb_memory_dir
+            _pf_predicted_wide = pf_review.scope in ("wide", "deep")
+            _actual_stuck = loop_status == "stuck"
+            _steps_done = sum(1 for s in step_outcomes if s.status == "done")
+            _fb_entry = {
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "loop_id": ctx.loop_id,
+                "scope_predicted": pf_review.scope,
+                "milestone_candidates": len(pf_review.milestone_step_indices),
+                "milestones_expanded": len(milestone_expanded),
+                "flag_count": len(pf_review.flags),
+                "actual_status": loop_status,
+                "steps_done": _steps_done,
+                "steps_total": len(step_outcomes),
+                "true_positive": _pf_predicted_wide and _actual_stuck,
+                "false_positive": _pf_predicted_wide and not _actual_stuck,
+                "false_negative": not _pf_predicted_wide and _actual_stuck,
+                "true_negative": not _pf_predicted_wide and not _actual_stuck,
+            }
+            _fb_path = _fb_memory_dir() / "preflight_calibration.jsonl"
+            with open(_fb_path, "a") as _fb_f:
+                _fb_f.write(json.dumps(_fb_entry) + "\n")
+            log.info("pre-flight calibration: scope=%s actual=%s tp=%s fp=%s fn=%s",
+                     pf_review.scope, loop_status,
+                     _fb_entry["true_positive"], _fb_entry["false_positive"],
+                     _fb_entry["false_negative"])
+        except Exception:
+            pass
+
+    # Phase 36: emit loop_done event
+    try:
+        from observe import write_event as _write_event_done
+        _write_event_done(
+            "loop_done",
+            goal=ctx.goal,
+            project=ctx.project or "",
+            loop_id=ctx.loop_id,
+            status=loop_status,
+            tokens_in=total_tokens_in,
+            tokens_out=total_tokens_out,
+            elapsed_ms=elapsed_total,
+            detail=stuck_reason or "",
+        )
+    except Exception:
+        pass
+
+    result = LoopResult(
+        loop_id=ctx.loop_id,
+        project=ctx.project,
+        goal=ctx.goal,
+        status=loop_status,
+        steps=step_outcomes,
+        interrupts_applied=interrupts_applied,
+        stuck_reason=stuck_reason,
+        total_tokens_in=total_tokens_in,
+        total_tokens_out=total_tokens_out,
+        elapsed_ms=elapsed_total,
+        log_path=log_path,
+        march_of_nines_alert=march_of_nines_alert,
+        pre_flight_review=pf_review,
+    )
+
+    # Write partial-result artifact
+    _done_steps = [s for s in step_outcomes if s.status == "done"]
+    if _done_steps:
+        try:
+            _partial_lines = [f"# Partial result: {ctx.goal}\n"]
+            _partial_lines.append(f"Status: {loop_status} | "
+                                  f"{len(_done_steps)}/{len(step_outcomes)} steps done | "
+                                  f"tokens: {total_tokens_in+total_tokens_out} | "
+                                  f"elapsed: {elapsed_total}ms\n")
+            if stuck_reason:
+                _partial_lines.append(f"Stuck reason: {stuck_reason}\n")
+            _partial_lines.append("---\n")
+            for s in step_outcomes:
+                _icon = "Done" if s.status == "done" else "BLOCKED"
+                _partial_lines.append(f"\n## Step {s.index if s.index >= 0 else '?'}: {s.text[:100]}")
+                _partial_lines.append(f"*[{_icon}]*\n")
+                if s.result:
+                    _partial_lines.append(s.result[:2000])
+                    if len(s.result) > 2000:
+                        _partial_lines.append(f"\n... (truncated, {len(s.result)} chars total)")
+                _partial_lines.append("")
+            _art_dir = o.orch_root() / "prototypes" / "poe-orchestration" / "projects" / ctx.project / "artifacts"
+            _art_dir.mkdir(parents=True, exist_ok=True)
+            (_art_dir / f"loop-{ctx.loop_id}-PARTIAL.md").write_text(
+                "\n".join(_partial_lines), encoding="utf-8")
+            log.info("wrote partial result: %s (%d steps)", f"loop-{ctx.loop_id}-PARTIAL.md", len(_done_steps))
+            # Persist scratchpad
+            _scratch_dir = _art_dir / f"loop-{ctx.loop_id}-scratchpad"
+            _scratch_dir.mkdir(exist_ok=True)
+            with scratchpad_lock:
+                for _sk, _sv in scratchpad.items():
+                    (_scratch_dir / f"{_sk}.json").write_text(
+                        json.dumps(_sv, indent=2, default=str), encoding="utf-8")
+                (_scratch_dir / "index.json").write_text(
+                    json.dumps({"keys": list(scratchpad.keys())}, indent=2), encoding="utf-8")
+        except Exception as exc:
+            log.debug("partial result write failed: %s", exc)
+
+    if ctx.verbose:
+        print(f"[poe] {result.summary()}", file=sys.stderr, flush=True)
+
+    _finalize_loop(
+        loop_id=ctx.loop_id,
+        goal=ctx.goal,
+        project=ctx.project,
+        loop_status=loop_status,
+        step_outcomes=step_outcomes,
+        adapter=ctx.adapter,
+        dry_run=ctx.dry_run,
+        verbose=ctx.verbose,
+        total_tokens_in=total_tokens_in,
+        total_tokens_out=total_tokens_out,
+        elapsed_ms=elapsed_total,
+        had_no_matching_skill=had_no_matching_skill,
+        failure_chain=failure_chain,
+        recovery_steps=recovery_step_count,
+    )
+
+    # Delete checkpoint on successful completion
+    if result.status == "done":
+        try:
+            from checkpoint import delete_checkpoint as _del_ckpt
+            _del_ckpt(ctx.loop_id)
+        except Exception:
+            pass
+
+    # Release loop lock
+    try:
+        from interrupt import clear_loop_running
+        clear_loop_running()
+    except Exception:
+        pass
+
+    return result
+
+
 def _prepare_execution(
     ctx: LoopContext,
     steps: List[str],
@@ -2934,182 +3133,27 @@ def run_agent_loop(
             except Exception:
                 pass  # Interrupt failures must never break the loop
 
-    # Final summary artifact
-    elapsed_total = int((time.monotonic() - started_at) * 1000)
-
-    # Write final plan manifest with terminal status and elapsed time
-    if project and _manifest_steps:
-        try:
-            _write_plan_manifest(
-                project=project,
-                loop_id=loop_id,
-                goal=goal,
-                planned_steps=_manifest_steps,
-                start_ts=start_ts,
-                step_outcomes=step_outcomes,
-                status=loop_status,
-                elapsed_ms=elapsed_total,
-                replan_count=_replan_count,
-            )
-        except Exception:
-            pass
-
-    log_path = _write_loop_log(
-        project=project,
-        loop_id=loop_id,
-        goal=goal,
-        status=loop_status,
-        steps=step_outcomes,
-        start_ts=start_ts,
-        elapsed_ms=elapsed_total,
-        stuck_reason=stuck_reason,
-    )
-
-    o.append_decision(project, [
-        f"[loop:{loop_id}] finished status={loop_status} steps={len(step_outcomes)} tokens={total_tokens_in}+{total_tokens_out}",
-    ])
-    o.write_operator_status()
-
-    # Phase 58: Pre-flight calibration feedback — log prediction vs actual outcome.
-    # Builds a training signal: did scope=wide correctly predict stuck? False positives?
-    if _pf_review is not None and not dry_run:
-        try:
-            from orch_items import memory_dir as _fb_memory_dir
-            _pf_predicted_wide = _pf_review.scope in ("wide", "deep")
-            _actual_stuck = loop_status == "stuck"
-            _steps_done = sum(1 for s in step_outcomes if s.status == "done")
-            _fb_entry = {
-                "ts": datetime.now(timezone.utc).isoformat(),
-                "loop_id": loop_id,
-                "scope_predicted": _pf_review.scope,
-                "milestone_candidates": len(_pf_review.milestone_step_indices),
-                "milestones_expanded": len(_milestone_expanded),
-                "flag_count": len(_pf_review.flags),
-                "actual_status": loop_status,
-                "steps_done": _steps_done,
-                "steps_total": len(step_outcomes),
-                "true_positive": _pf_predicted_wide and _actual_stuck,
-                "false_positive": _pf_predicted_wide and not _actual_stuck,
-                "false_negative": not _pf_predicted_wide and _actual_stuck,
-                "true_negative": not _pf_predicted_wide and not _actual_stuck,
-            }
-            _fb_path = _fb_memory_dir() / "preflight_calibration.jsonl"
-            with open(_fb_path, "a") as _fb_f:
-                _fb_f.write(json.dumps(_fb_entry) + "\n")
-            log.info("pre-flight calibration: scope=%s actual=%s tp=%s fp=%s fn=%s",
-                     _pf_review.scope, loop_status,
-                     _fb_entry["true_positive"], _fb_entry["false_positive"],
-                     _fb_entry["false_negative"])
-        except Exception:
-            pass
-
-    # Phase 36: emit loop_done event
-    try:
-        from observe import write_event as _write_event_done
-        _write_event_done(
-            "loop_done",
-            goal=goal,
-            project=project or "",
-            loop_id=loop_id,
-            status=loop_status,
-            tokens_in=total_tokens_in,
-            tokens_out=total_tokens_out,
-            elapsed_ms=elapsed_total,
-            detail=stuck_reason or "",
-        )
-    except Exception:
-        pass
-
-    result = LoopResult(
-        loop_id=loop_id,
-        project=project,
-        goal=goal,
-        status=loop_status,
-        steps=step_outcomes,
-        interrupts_applied=interrupts_applied,
-        stuck_reason=stuck_reason,
-        total_tokens_in=total_tokens_in,
-        total_tokens_out=total_tokens_out,
-        elapsed_ms=elapsed_total,
-        log_path=log_path,
-        march_of_nines_alert=_march_of_nines_alert,
-        pre_flight_review=_pf_review,
-    )
-
-    # Write a combined partial-result artifact so completed work is never lost
-    _done_steps = [s for s in step_outcomes if s.status == "done"]
-    if _done_steps:
-        try:
-            _partial_lines = [f"# Partial result: {goal}\n"]
-            _partial_lines.append(f"Status: {loop_status} | "
-                                  f"{len(_done_steps)}/{len(step_outcomes)} steps done | "
-                                  f"tokens: {total_tokens_in+total_tokens_out} | "
-                                  f"elapsed: {elapsed_total}ms\n")
-            if stuck_reason:
-                _partial_lines.append(f"Stuck reason: {stuck_reason}\n")
-            _partial_lines.append("---\n")
-            for s in step_outcomes:
-                _icon = "Done" if s.status == "done" else "BLOCKED"
-                _partial_lines.append(f"\n## Step {s.index if s.index >= 0 else '?'}: {s.text[:100]}")
-                _partial_lines.append(f"*[{_icon}]*\n")
-                if s.result:
-                    _partial_lines.append(s.result[:2000])
-                    if len(s.result) > 2000:
-                        _partial_lines.append(f"\n... (truncated, {len(s.result)} chars total)")
-                _partial_lines.append("")
-            o = _orch()
-            _art_dir = o.orch_root() / "prototypes" / "poe-orchestration" / "projects" / project / "artifacts"
-            _art_dir.mkdir(parents=True, exist_ok=True)
-            (_art_dir / f"loop-{loop_id}-PARTIAL.md").write_text(
-                "\n".join(_partial_lines), encoding="utf-8")
-            log.info("wrote partial result: %s (%d steps)", f"loop-{loop_id}-PARTIAL.md", len(_done_steps))
-            # Persist scratchpad: one index file + per-step detail files
-            # Index maps to individual step files so parallel writes don't collide
-            _scratch_dir = _art_dir / f"loop-{loop_id}-scratchpad"
-            _scratch_dir.mkdir(exist_ok=True)
-            with _scratchpad_lock:
-                for _sk, _sv in _scratchpad.items():
-                    (_scratch_dir / f"{_sk}.json").write_text(
-                        json.dumps(_sv, indent=2, default=str), encoding="utf-8")
-                # Write index
-                (_scratch_dir / "index.json").write_text(
-                    json.dumps({"keys": list(_scratchpad.keys())}, indent=2), encoding="utf-8")
-        except Exception as exc:
-            log.debug("partial result write failed: %s", exc)
-
-    if verbose:
-        print(f"[poe] {result.summary()}", file=sys.stderr, flush=True)
-
-    _finalize_loop(
-        loop_id=loop_id,
-        goal=goal,
-        project=project,
-        loop_status=loop_status,
+    # Phase G: Build result, write artifacts, run finalize side-effects
+    result = _build_result_and_finalize(
+        ctx,
         step_outcomes=step_outcomes,
-        adapter=adapter,
-        dry_run=dry_run,
-        verbose=verbose,
+        loop_status=loop_status,
+        stuck_reason=stuck_reason,
         total_tokens_in=total_tokens_in,
         total_tokens_out=total_tokens_out,
-        elapsed_ms=elapsed_total,
+        interrupts_applied=interrupts_applied,
+        march_of_nines_alert=_march_of_nines_alert,
+        pf_review=_pf_review,
+        manifest_steps=_manifest_steps,
+        replan_count=_replan_count,
+        start_ts=start_ts,
+        milestone_expanded=_milestone_expanded,
         had_no_matching_skill=_had_no_matching_skill,
         failure_chain=_failure_chain,
-        recovery_steps=_recovery_step_count,
+        recovery_step_count=_recovery_step_count,
+        scratchpad=_scratchpad,
+        scratchpad_lock=_scratchpad_lock,
     )
-
-    # GAP 3: delete checkpoint on successful completion (keep on stuck/partial for resume)
-    if result.status == "done":
-        try:
-            from checkpoint import delete_checkpoint as _del_ckpt
-            _del_ckpt(loop_id)
-        except Exception:
-            pass
-
-    # Release loop lock so interfaces know we're idle
-    try:
-        clear_loop_running()
-    except Exception:
-        pass
 
     # Phase 45: Auto-recovery — if loop stuck with a low-risk auto-apply recovery,
     # retry once with adjusted parameters. Only fires on first attempt (no recursion).
