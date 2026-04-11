@@ -317,6 +317,36 @@ def _steps_are_independent(steps: List[str]) -> bool:
     return not any(_DEP_RE.search(s) for s in steps)
 
 
+def _prepare_execution(
+    ctx: LoopContext,
+    steps: List[str],
+    manifest_steps: List[str],
+) -> tuple:
+    """Phase E: Shape steps and write NEXT.md.
+
+    Returns (steps, step_indices, manifest_steps) — steps may be reshaped.
+    """
+    _shaped_steps = _shape_steps(steps, label="initial-plan")
+    if len(_shaped_steps) != len(steps):
+        if ctx.verbose:
+            print(
+                f"[poe] step-shape: {len(steps)} planned → {len(_shaped_steps)} after splitting "
+                f"combined exec+analyze steps",
+                file=sys.stderr, flush=True,
+            )
+        steps = _shaped_steps
+        manifest_steps = list(steps)
+
+    o = _orch()
+    step_indices = o.append_next_items(ctx.project, steps)
+    o.append_decision(ctx.project, [
+        f"[loop:{ctx.loop_id}] Goal: {ctx.goal}",
+        *[f"- step {i}: {s}" for i, s in enumerate(steps, 1)],
+    ])
+
+    return steps, step_indices, manifest_steps
+
+
 def _run_parallel_path(
     ctx: LoopContext,
     steps: List[str],
@@ -1817,27 +1847,8 @@ def run_agent_loop(
         if _parallel_result is not None:
             return _parallel_result
 
-    # Pre-execution step-shape check: split combined exec+analyze steps before they run.
-    # The decompose prompt forbids these but the LLM occasionally violates the rule.
-    # Catching them here is cheaper than a timeout + recovery cycle.
-    # Must run BEFORE append_next_items so shaped steps are what gets written to NEXT.md.
-    _shaped_steps = _shape_steps(steps, label="initial-plan")
-    if len(_shaped_steps) != len(steps):
-        if verbose:
-            print(
-                f"[poe] step-shape: {len(steps)} planned → {len(_shaped_steps)} after splitting "
-                f"combined exec+analyze steps",
-                file=sys.stderr, flush=True,
-            )
-        steps = _shaped_steps
-        _manifest_steps = list(steps)  # update manifest to reflect shaped plan
-
-    # Add steps to project NEXT.md
-    step_indices = o.append_next_items(project, steps)
-    o.append_decision(project, [
-        f"[loop:{loop_id}] Goal: {goal}",
-        *[f"- step {i}: {s}" for i, s in enumerate(steps, 1)],
-    ])
+    # Phase E: Shape steps and write to NEXT.md
+    steps, step_indices, _manifest_steps = _prepare_execution(ctx, steps, _manifest_steps)
 
     # Step 2: Execute each step in order (dynamic — interrupts may add/replace steps)
     # Pre-populate with any completed steps from a checkpoint resume
