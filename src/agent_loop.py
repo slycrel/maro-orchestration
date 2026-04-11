@@ -410,6 +410,175 @@ def _handle_budget_ceiling(
     return _suffix
 
 
+def _process_blocked_step(
+    ctx: LoopContext,
+    step_text: str,
+    step_idx: int,
+    step_result: str,
+    step_elapsed: int,
+    outcome: dict,
+    item_index: int,
+    iteration: int,
+    step_adapter,
+    *,
+    step_retries: Dict[str, int],
+    step_tier_overrides: Dict[str, str],
+    failure_chain: List[str],
+    step_outcomes: List[StepOutcome],
+    remaining_steps: List[str],
+    remaining_indices: List[int],
+    manifest_steps: List[str],
+    next_step_injected_context: str,
+    consecutive_max_timeouts: int,
+    max_consecutive_timeouts: int,
+    replan_count: int,
+) -> tuple:
+    """Phase F11: Process a blocked step — retry, split, or terminal.
+
+    Returns (flow: str, step_idx, loop_status, stuck_reason, next_step_injected_context,
+             consecutive_max_timeouts, recovery_step_count_delta, replan_count).
+    flow is "continue" (retry/split), "break" (adapter hung), or "normal" (terminal, fall through).
+    Mutates step_retries, step_tier_overrides, failure_chain, step_outcomes,
+    remaining_steps/indices, manifest_steps in place.
+    """
+    from llm import MODEL_CHEAP, MODEL_MID, MODEL_POWER
+
+    o = _orch()
+    _prior_retries = step_retries.get(step_text, 0)
+    _decision = _handle_blocked_step(step_text, outcome, _prior_retries, ctx.adapter)
+    _recovery_delta = 0
+
+    if _decision.retry:
+        step_retries[step_text] = _prior_retries + 1
+        _recovery_delta = 1
+        # Tier escalation
+        _cur_tier = getattr(step_adapter, "model_key", MODEL_CHEAP)
+        if _cur_tier == MODEL_CHEAP:
+            step_tier_overrides[step_text] = MODEL_MID
+            log.info("step %d retry tier-up: cheap → mid", step_idx)
+        elif _cur_tier == MODEL_MID:
+            step_tier_overrides[step_text] = MODEL_POWER
+            log.info("step %d retry tier-up: mid → power", step_idx)
+        _br_reason = outcome.get("stuck_reason", "blocked")
+        failure_chain.append(
+            f"step {step_idx} blocked ({_br_reason[:60]}); retry {_prior_retries + 1} with hint"
+        )
+        _retry_reminder = (
+            f"RETRY REMINDER — ORIGINAL GOAL: {ctx.goal}\n"
+            "Focus only on completing the step above. "
+            "Use data already in context. Target <500 tokens."
+        )
+        _hint_with_reminder = (
+            (_decision.hint + "\n\n" + _retry_reminder).strip()
+            if _decision.hint
+            else _retry_reminder
+        )
+        next_step_injected_context = (
+            (next_step_injected_context + "\n\n" + _hint_with_reminder).strip()
+            if next_step_injected_context
+            else _hint_with_reminder
+        )
+        remaining_steps.insert(0, step_text)
+        remaining_indices.insert(0, item_index)
+        step_idx -= 1
+        if ctx.verbose:
+            _br = outcome.get("stuck_reason", "blocked")
+            print(f"[poe] step {step_idx+1} blocked ({_br[:80]}), retrying with fallback hint", file=sys.stderr, flush=True)
+        step_outcomes.append(step_from_decompose(
+            step_text, item_index,
+            status="blocked", result=step_result, iteration=iteration,
+            tokens_in=outcome.get("tokens_in", 0),
+            tokens_out=outcome.get("tokens_out", 0),
+            elapsed_ms=step_elapsed,
+        ))
+        return ("continue", step_idx, "", None, next_step_injected_context,
+                consecutive_max_timeouts, _recovery_delta, replan_count)
+
+    elif _decision.split_into:
+        failure_chain.append(
+            f"step {step_idx} split: combined step split into {len(_decision.split_into)} parts"
+        )
+        _recovery_delta = 1
+        _split_reason = outcome.get("stuck_reason", "")
+        if "timed out" in _split_reason.lower() or "timeout" in _split_reason.lower():
+            consecutive_max_timeouts += 1
+            if consecutive_max_timeouts >= max_consecutive_timeouts:
+                _stuck_reason = (
+                    f"Adapter appears hung: {consecutive_max_timeouts} consecutive steps all "
+                    f"timed out at the {600}s ceiling across different step texts. "
+                    "This is an adapter/transport failure, not a step-size issue. "
+                    "Check that 'claude -p' is functional and authenticated."
+                )
+                log.warning("adapter-hung detection: %d consecutive max-timeouts — bailing out",
+                            consecutive_max_timeouts)
+                if ctx.verbose:
+                    print(f"[poe] adapter appears hung ({consecutive_max_timeouts} consecutive "
+                          f"ceiling timeouts) — stopping loop", file=sys.stderr, flush=True)
+                return ("break", step_idx, "stuck", _stuck_reason, next_step_injected_context,
+                        consecutive_max_timeouts, _recovery_delta, replan_count)
+        else:
+            consecutive_max_timeouts = 0
+        _split_shaped = _shape_steps(list(_decision.split_into), label="replan-split")
+        for _new_step in reversed(_split_shaped):
+            remaining_steps.insert(0, _new_step)
+            remaining_indices.insert(0, -1)
+        manifest_steps.extend(_split_shaped)
+        replan_count += 1
+        if ctx.verbose:
+            print(
+                f"[poe] step {step_idx} timed out — split into {len(_decision.split_into)} steps "
+                f"(step-shape replan #{replan_count})",
+                file=sys.stderr, flush=True,
+            )
+        step_outcomes.append(step_from_decompose(
+            step_text, item_index,
+            status="blocked", result=step_result, iteration=iteration,
+            tokens_in=outcome.get("tokens_in", 0),
+            tokens_out=outcome.get("tokens_out", 0),
+            elapsed_ms=step_elapsed,
+        ))
+        return ("continue", step_idx, "", None, next_step_injected_context,
+                consecutive_max_timeouts, _recovery_delta, replan_count)
+
+    else:
+        # Terminal failure
+        _loop_status = _decision.loop_status
+        _stuck_reason = _decision.stuck_reason
+        failure_chain.append(f"step {step_idx} terminal: {_stuck_reason[:80]}")
+        if item_index >= 0:
+            o.mark_item(ctx.project, item_index, o.STATE_BLOCKED)
+        if ctx.verbose:
+            print(f"[poe] step {step_idx} stuck after retry: {_stuck_reason}", file=sys.stderr, flush=True)
+        try:
+            from skills import attribute_failure_to_skills, find_matching_skills, record_variant_outcome
+            attribute_failure_to_skills(step_text, _stuck_reason, goal=ctx.goal)
+            for _sk in find_matching_skills(step_text + " " + ctx.goal, use_router=False):
+                if getattr(_sk, "variant_of", None) is not None:
+                    record_variant_outcome(_sk.id, success=False)
+        except Exception:
+            pass
+        try:
+            from metrics import record_step_cost
+            record_step_cost(
+                step_text=step_text,
+                tokens_in=outcome.get("tokens_in", 0),
+                tokens_out=outcome.get("tokens_out", 0),
+                status="blocked",
+                goal=ctx.goal,
+                model=getattr(ctx.adapter, "model_key", ""),
+                elapsed_ms=step_elapsed,
+            )
+        except Exception:
+            pass
+        if ctx.step_callback is not None:
+            try:
+                ctx.step_callback(step_idx, step_text, _stuck_reason or "blocked", "blocked")
+            except Exception:
+                pass
+        return ("normal", step_idx, _loop_status, _stuck_reason, next_step_injected_context,
+                consecutive_max_timeouts, _recovery_delta, replan_count)
+
+
 def _write_iteration_artifacts(
     ctx: LoopContext,
     step_text: str,
@@ -3161,147 +3330,33 @@ def run_agent_loop(
             )
             _consecutive_max_timeouts = 0  # successful step — adapter is healthy
         else:
-            _prior_retries = _step_retries.get(step_text, 0)
-            _decision = _handle_blocked_step(step_text, outcome, _prior_retries, adapter)
-            if _decision.retry:
-                _step_retries[step_text] = _prior_retries + 1
-                _recovery_step_count += 1
-                # Tier escalation on retry: cheap → mid on first retry, mid → power on second.
-                # System-driven, not model-driven. Opus is the ceiling; never escalate past it.
-                _cur_tier = getattr(_step_adapter, "model_key", MODEL_CHEAP)
-                if _cur_tier == MODEL_CHEAP:
-                    _step_tier_overrides[step_text] = MODEL_MID
-                    log.info("step %d retry tier-up: cheap → mid", step_idx)
-                elif _cur_tier == MODEL_MID:
-                    _step_tier_overrides[step_text] = MODEL_POWER
-                    log.info("step %d retry tier-up: mid → power", step_idx)
-                _br_reason = outcome.get("stuck_reason", "blocked")
-                _failure_chain.append(
-                    f"step {step_idx} blocked ({_br_reason[:60]}); retry {_prior_retries + 1} with hint"
-                )
-                # vtrivedy10: re-inject original goal on retry to counter instruction fade-out
-                _retry_reminder = (
-                    f"RETRY REMINDER — ORIGINAL GOAL: {goal}\n"
-                    "Focus only on completing the step above. "
-                    "Use data already in context. Target <500 tokens."
-                )
-                _hint_with_reminder = (
-                    (_decision.hint + "\n\n" + _retry_reminder).strip()
-                    if _decision.hint
-                    else _retry_reminder
-                )
-                _next_step_injected_context = (
-                    (_next_step_injected_context + "\n\n" + _hint_with_reminder).strip()
-                    if _next_step_injected_context
-                    else _hint_with_reminder
-                )
-                remaining_steps.insert(0, step_text)
-                remaining_indices.insert(0, item_index)
-                step_idx -= 1  # will be re-incremented at top of iteration
-                if verbose:
-                    _br = outcome.get("stuck_reason", "blocked")
-                    print(f"[poe] step {step_idx+1} blocked ({_br[:80]}), retrying with fallback hint", file=sys.stderr, flush=True)
-                # Record the blocked attempt but don't terminate
-                step_outcomes.append(step_from_decompose(
-                    step_text, item_index,
-                    status="blocked",
-                    result=step_result,
-                    iteration=iteration,
-                    tokens_in=outcome.get("tokens_in", 0),
-                    tokens_out=outcome.get("tokens_out", 0),
-                    elapsed_ms=step_elapsed,
-                ))
+            (_blk_flow, step_idx, _blk_status, _blk_reason,
+             _next_step_injected_context, _consecutive_max_timeouts,
+             _blk_recovery_delta, _replan_count) = _process_blocked_step(
+                ctx, step_text, step_idx, step_result, step_elapsed,
+                outcome, item_index, iteration, _step_adapter,
+                step_retries=_step_retries,
+                step_tier_overrides=_step_tier_overrides,
+                failure_chain=_failure_chain,
+                step_outcomes=step_outcomes,
+                remaining_steps=remaining_steps,
+                remaining_indices=remaining_indices,
+                manifest_steps=_manifest_steps,
+                next_step_injected_context=_next_step_injected_context,
+                consecutive_max_timeouts=_consecutive_max_timeouts,
+                max_consecutive_timeouts=_MAX_CONSECUTIVE_TIMEOUTS,
+                replan_count=_replan_count,
+            )
+            _recovery_step_count += _blk_recovery_delta
+            if _blk_flow == "continue":
                 continue
-            elif _decision.split_into:
-                # Step-shape violation: inject the split steps in place of the stuck one.
-                # E.g. a combined "run tests and analyze failures" becomes two atomic steps.
-                # Apply shaper so recovery-generated steps are also guaranteed atomic.
-                _failure_chain.append(
-                    f"step {step_idx} split: combined step split into {len(_decision.split_into)} parts"
-                )
-                _recovery_step_count += 1
-                # Adapter health check: if the split was triggered by a timeout (not a shape
-                # violation), count it. N consecutive ceiling-hit timeouts across different
-                # steps means the adapter is likely hung, not just that steps are too large.
-                _split_reason = outcome.get("stuck_reason", "")
-                if "timed out" in _split_reason.lower() or "timeout" in _split_reason.lower():
-                    _consecutive_max_timeouts += 1
-                    if _consecutive_max_timeouts >= _MAX_CONSECUTIVE_TIMEOUTS:
-                        loop_status = "stuck"
-                        stuck_reason = (
-                            f"Adapter appears hung: {_consecutive_max_timeouts} consecutive steps all "
-                            f"timed out at the {600}s ceiling across different step texts. "
-                            "This is an adapter/transport failure, not a step-size issue. "
-                            "Check that 'claude -p' is functional and authenticated."
-                        )
-                        log.warning("adapter-hung detection: %d consecutive max-timeouts — bailing out",
-                                    _consecutive_max_timeouts)
-                        if verbose:
-                            print(f"[poe] adapter appears hung ({_consecutive_max_timeouts} consecutive "
-                                  f"ceiling timeouts) — stopping loop", file=sys.stderr, flush=True)
-                        break
-                else:
-                    _consecutive_max_timeouts = 0  # shape violation split, not a timeout — reset
-                _split_shaped = _shape_steps(list(_decision.split_into), label="replan-split")
-                for _new_step in reversed(_split_shaped):
-                    remaining_steps.insert(0, _new_step)
-                    remaining_indices.insert(0, -1)
-                _manifest_steps.extend(_split_shaped)
-                _replan_count += 1
-                if verbose:
-                    print(
-                        f"[poe] step {step_idx} timed out — split into {len(_decision.split_into)} steps "
-                        f"(step-shape replan #{_replan_count})",
-                        file=sys.stderr, flush=True,
-                    )
-                # Record the failed combined step in outcomes before moving on
-                step_outcomes.append(step_from_decompose(
-                    step_text, item_index,
-                    status="blocked",
-                    result=step_result,
-                    iteration=iteration,
-                    tokens_in=outcome.get("tokens_in", 0),
-                    tokens_out=outcome.get("tokens_out", 0),
-                    elapsed_ms=step_elapsed,
-                ))
-                continue
-            else:
-                loop_status = _decision.loop_status
-                stuck_reason = _decision.stuck_reason
-                _failure_chain.append(f"step {step_idx} terminal: {stuck_reason[:80]}")
-                if item_index >= 0:
-                    o.mark_item(project, item_index, o.STATE_BLOCKED)
-                if verbose:
-                    print(f"[poe] step {step_idx} stuck after retry: {stuck_reason}", file=sys.stderr, flush=True)
-                # Phase 32: attribute failure to any matching skills
-                try:
-                    from skills import attribute_failure_to_skills, find_matching_skills, record_variant_outcome
-                    attribute_failure_to_skills(step_text, stuck_reason, goal=goal)
-                    # A/B: record loss for any variant that was selected for this terminal failure
-                    for _sk in find_matching_skills(step_text + " " + goal, use_router=False):
-                        if getattr(_sk, "variant_of", None) is not None:
-                            record_variant_outcome(_sk.id, success=False)
-                except Exception:
-                    pass
-                # Phase 33: record per-step cost (blocked)
-                try:
-                    from metrics import record_step_cost
-                    record_step_cost(
-                        step_text=step_text,
-                        tokens_in=outcome.get("tokens_in", 0),
-                        tokens_out=outcome.get("tokens_out", 0),
-                        status="blocked",
-                        goal=goal,
-                        model=getattr(adapter, "model_key", ""),
-                        elapsed_ms=step_elapsed,
-                    )
-                except Exception:
-                    pass
-                if step_callback is not None:
-                    try:
-                        step_callback(step_idx, step_text, stuck_reason or "blocked", "blocked")
-                    except Exception:
-                        pass
+            elif _blk_flow == "break":
+                loop_status = _blk_status
+                stuck_reason = _blk_reason
+                break
+            else:  # "normal" — terminal failure, fall through
+                loop_status = _blk_status
+                stuck_reason = _blk_reason
 
         step_outcomes.append(step_from_decompose(
             step_text, item_index,
