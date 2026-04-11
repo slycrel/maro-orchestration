@@ -67,6 +67,34 @@ from memory_ledger import (  # noqa: F401, E402
     compress_old_outcomes, _tfidf_rank_batches,
     load_outcomes_with_context, _update_memory_index,
 )
+from knowledge_web import (  # noqa: F401, E402
+    MemoryTier, TieredLesson, GoalGap,
+    DECAY_FACTOR, REINFORCE_BONUS, PROMOTE_MIN_SCORE, PROMOTE_MIN_SESSIONS, GC_THRESHOLD,
+    CANON_APPLY_THRESHOLD, CANON_TASK_TYPE_MIN,
+    _STOP_WORDS, _CITATION_PENALTY, _CONFIDENCE_SINGLE_CALL, _CONFIDENCE_MAJORITY_VOTE,
+    _CONFIDENCE_MULTI_SESSION,
+    short_set, short_get, short_clear, short_all,
+    _tiered_lessons_path, _days_since, decay_score, reinforce_score, _current_date,
+    confidence_from_k_samples, _tokenize, _tfidf_rank,
+    record_tiered_lesson, _append_tiered_lesson, _reinforce_tiered_lesson,
+    load_tiered_lessons, _rewrite_tiered_lessons,
+    reinforce_lesson, search_graveyard, forget_lesson, promote_lesson,
+    run_decay_cycle, inject_tiered_lessons, detect_goal_gaps, query_lessons,
+    _increment_times_applied, _canon_stats_path, _record_canon_hit,
+    _load_canon_stats, get_canon_candidates, memory_status,
+)
+from knowledge_lens import (  # noqa: F401, E402
+    StandingRule, Hypothesis, Decision, VerificationOutcome,
+    RULE_PROMOTE_CONFIRMATIONS, DECISION_SEARCH_LIMIT,
+    _ALIGNMENT_THRESHOLD_BASE, _ALIGNMENT_THRESHOLD_MIN, _ALIGNMENT_THRESHOLD_MAX,
+    _CALIBRATION_MIN_SAMPLES,
+    _rules_path, _hypotheses_path, _decisions_path, _verification_outcomes_path,
+    load_standing_rules, load_hypotheses, _rewrite_rules, _rewrite_hypotheses,
+    observe_pattern, contradict_pattern, inject_standing_rules,
+    record_decision, search_decisions, inject_decisions,
+    record_verification, load_verification_outcomes,
+    verification_accuracy, calibrated_alignment_threshold,
+)
 
 # ---------------------------------------------------------------------------
 # Backend accessor (Phase 40) — used by agent_loop._build_loop_context
