@@ -150,6 +150,31 @@ def test_looks_like_goal_map_slash():
     assert _looks_like_goal_map("/map") is True
 
 
+def test_looks_like_inspect_does_not_match_inspector_py():
+    """'inspector.py' in a research goal must not trigger inspect meta-command."""
+    goal = (
+        "Research these 10 X posts and evaluate relevance to our stack "
+        "(handle.py, agent_loop.py, memory.py, evolver.py, skills.py, inspector.py)"
+    )
+    assert _looks_like_inspect(goal) is False
+
+
+def test_looks_like_status_does_not_match_status_eq_done():
+    """'status=done' style technical text must not trigger status meta-command."""
+    assert _looks_like_status("lane=agenda (confidence=0.95) status=done") is False
+
+
+def test_looks_like_inspect_friction_word_boundary():
+    """Long natural-language phrase with 'friction' is NOT a meta-command.
+
+    Under the new hard-gate design, only short exact phrases or slash-commands
+    are meta-commands. A phrase like 'is there friction in the pipeline?' is
+    long enough and specific enough that it could be a mission goal — not a
+    meta-command. Use /inspect instead.
+    """
+    assert _looks_like_inspect("is there friction in the current pipeline?") is False
+
+
 def test_looks_like_multi_day_build():
     assert _looks_like_multi_day("build a complete polymarket research pipeline with monitoring") is True
 

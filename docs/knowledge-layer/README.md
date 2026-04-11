@@ -20,7 +20,7 @@ The knowledge layer has three views (Ledger / Web / Lens) implemented across thr
 | K0 | DONE | Baseline audit (K0_BASELINE.md) |
 | K1 | DONE | Module split (memory_ledger, knowledge_web, knowledge_lens) |
 | K2 | TODO | Migrate links — transform knowledge into graph nodes |
-| K3 | TODO | Read path — wire into decompose context, standing rules |
+| K3 | PARTIAL | Read path — captain's log wired into decompose + evolver (2026-04-11). Full knowledge node injection TODO. |
 | K4 | TODO | Write path — outcomes update knowledge layer |
 | K5 | TODO | Lens/persona — different personas query differently |
 | K6 | TODO | Temporal intelligence — bi-temporal fields, decay |

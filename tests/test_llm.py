@@ -554,3 +554,57 @@ def test_poe_run_cli_accepts_backend_flag():
         default=None)
     args = parser.parse_args(["--backend", "openrouter"])
     assert args.backend == "openrouter"
+
+
+# ---------------------------------------------------------------------------
+# Advisor Pattern tests
+# ---------------------------------------------------------------------------
+
+class TestAdvisorCall:
+
+    def test_returns_advice_from_mock_adapter(self):
+        from llm import advisor_call, LLMResponse, LLMAdapter
+        class MockPowerAdapter(LLMAdapter):
+            def complete(self, messages, **kwargs):
+                return LLMResponse(
+                    content="(b) Rephrase: try fetching via alternate URL",
+                    input_tokens=500, output_tokens=50,
+                )
+        advice = advisor_call(
+            goal="Research topic X",
+            context="Step 3 failed twice.",
+            question="Should we continue?",
+            adapter=MockPowerAdapter(),
+        )
+        assert "(b)" in advice
+        assert "Rephrase" in advice
+
+    def test_returns_empty_on_adapter_failure(self):
+        from llm import advisor_call, LLMAdapter
+        class FailingAdapter(LLMAdapter):
+            def complete(self, messages, **kwargs):
+                raise RuntimeError("model unavailable")
+        advice = advisor_call(
+            goal="test",
+            context="test",
+            question="test",
+            adapter=FailingAdapter(),
+        )
+        assert advice == ""
+
+    def test_returns_empty_when_no_adapter_available(self):
+        from llm import advisor_call
+        from unittest.mock import patch
+        with patch("llm.build_adapter", side_effect=RuntimeError("no backend")):
+            advice = advisor_call(
+                goal="test",
+                context="test",
+                question="test",
+            )
+        assert advice == ""
+
+    def test_advisor_system_prompt_is_concise(self):
+        from llm import _ADVISOR_SYSTEM
+        # Advisor prompt should be focused and short
+        assert len(_ADVISOR_SYSTEM) < 500
+        assert "concise" in _ADVISOR_SYSTEM.lower() or "CONCISE" in _ADVISOR_SYSTEM

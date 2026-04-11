@@ -4,9 +4,10 @@
 
 **Start-of-session checklist:**
 1. Read this file (CLAUDE.md)
-2. Read BACKLOG.md — deferred items, bugs, ideas. Update as you work.
-3. Check ROADMAP.md for phase status
-4. Check `~/claude/grok-response-*.txt` for unprocessed feedback
+2. Read MILESTONES.md — prioritized work queue. This is what to do next.
+3. Read BACKLOG.md — deferred items, bugs, ideas. Update as you work.
+4. Check ROADMAP.md for phase status
+5. Check `~/claude/grok-response-*.txt` for unprocessed feedback
 
 - GitHub: https://github.com/slycrel/openclaw-orchestration
 - Machine: Ubuntu headless, user `clawd`, `/home/clawd/claude/openclaw-orchestration/`
@@ -48,8 +49,8 @@ scripts/             smoke.sh, audit-phases.sh, enqueue.sh
 personas/            YAML persona specs
 docs/                Architecture, memory systems, self-reflection design
 lat.md/              Knowledge graph: 9 cross-linked concept nodes + index
-memory/              Runtime: outcomes.jsonl, lessons.jsonl, standing_rules.jsonl, decisions.jsonl
-output/              Runtime: phase audits, self-review reports
+memory/              Repo-local: stale copies (tests write here via OPENCLAW_WORKSPACE). Real data is in ~/.poe/workspace/memory/
+output/              Repo-local output (real output in ~/.poe/workspace/output/)
 research/            Research outputs: X link synthesis, Polymarket validation, Phase 41 design
 user/                POE_IDENTITY.md — durable Poe identity (editable)
 deploy/              systemd service files
@@ -59,16 +60,16 @@ deploy/              systemd service files
 
 ## Current state
 
-**As of 2026-04-09.** Phases 0–61 complete. Tests: 3,235 passing (92s sequential).
+**As of 2026-04-11.** Phases 0–61 complete. Tests: 3,436 passing (~90s sequential).
 
 | Status | Phases |
 |--------|--------|
 | DONE | 0–23, 26–27, 29–37, 39–48, 50–61 |
 | PARTIAL | 24 (Slack skeleton, Signal deferred), 25 (ops hardening — heartbeat-ctl.sh shipped), 28 (persona — blocked on personas/jeremy.md), 38 (subpackage) |
 
-**Recent (Apr 7-9):** Pre-flight subprocess hang fixed (skip ClaudeSubprocessAdapter). Heartbeat ops hardening: diagnosis cooldown, session guard, `heartbeat-ctl.sh` with 4h auto-stop. Project lifecycle state (`.poe-failed`/`.poe-paused`). Compact notation skill. Full test suite sealed against HTTP leaks + hanging subprocess calls. xdist disabled (sequential is <2min).
+**Recent (Apr 11, session 15):** Workspace consolidated on `~/.poe/workspace/` (fixed `memory_dir()` split-brain — captain's log was in different location from outcomes/lessons). Two-tier YAML config (`~/.poe/config.yml` + workspace `config.yml`). Captain's log read bridge (K3 partial — 11K events now injected into decompose + evolver). Advisor Pattern shipped (`advisor_call()` in llm.py). 5 adversarial bugs fixed + meta-command detection rewrite (hard syntactic gate). 10 X links researched via live orchestration. `poe-enqueue` CLI. 3436 tests.
 
-**Next:** Auto persona+skill packaging (Phase 62 candidate). Compact notation A/B testing. Doc cleanup in progress.
+**Next:** See MILESTONES.md for prioritized queue. Top items: Advisor Pattern wiring (more decision points), Thinking Token Budget, output/projects workspace routing, K2 knowledge nodes.
 
 See `ROADMAP.md` for active phases (57+). See `docs/ROADMAP_ARCHIVE.md` for completed phases (0–56).
 
@@ -99,6 +100,24 @@ Reference implementation: `~/.openclaw/workspace/prototypes/poe-orchestrator/` �
 | `~/.openclaw/workspace/prototypes/poe-orchestrator/` | Old prototype — reference only, do not continue work here |
 | `~/.openclaw/workspace/scripts/` | ~80 shell scripts: heartbeat, task queue, X/Telegram/email |
 | `~/.claude/projects/.../memory/` | Claude Code persistent memory across sessions |
+| `/home/clawd/.poe/workspace/` | **Stable runtime workspace** — captain's log (11K+ entries), outcomes, lessons, skills, events all live here. This is the default for both `config.memory_dir()` and `orch_items.memory_dir()`. No env vars needed for manual runs. |
+
+---
+
+## Configuration
+
+Two-tier YAML config (like git's `~/.gitconfig` vs `.git/config`):
+
+| File | Scope | What goes here |
+|------|-------|---------------|
+| `~/.poe/config.yml` | User-level | API keys, model prefs, yolo mode, notifications |
+| `~/.poe/workspace/config.yml` | Workspace-level | Evolver, inspector thresholds, constraint settings, quality gate |
+
+Workspace inherits from user; workspace keys override. Nested dicts merge one level deep.
+
+Access in code: `from config import get; get("inspector.breach_threshold", 0.30)`
+
+Priority: env var > config.yml > hardcoded default. Tests are isolated (config reads from tmp paths).
 
 ---
 
@@ -114,6 +133,10 @@ bash scripts/smoke.sh
 
 # Phase audit
 bash scripts/audit-phases.sh
+
+# Run a goal (defaults to ~/.poe/workspace/ — no env vars needed)
+cd /home/clawd/claude/openclaw-orchestration
+PYTHONPATH=src python3 -m handle "your goal here"
 
 # Introspection (Phase 44)
 poe-introspect --latest

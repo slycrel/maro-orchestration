@@ -1968,6 +1968,33 @@ def _run_steps_parallel(
             project_dir=project_dir,
             shared_ctx=shared_ctx,
         )
+
+        # Post-step security scan — parallel fan-out skips the main loop's
+        # _post_step_checks, so we do a lightweight scan here.  Ralph verify
+        # is not run in parallel mode (it requires session-level state).
+        if outcome.get("status") == "done":
+            _result_text = outcome.get("result", "") or ""
+            if _result_text:
+                try:
+                    from security import scan_external_content as _sec_scan, InjectionRisk as _IRisk
+                    _sec_result = _sec_scan(_result_text)
+                    if _sec_result.risk >= _IRisk.HIGH:
+                        outcome["status"] = "blocked"
+                        outcome["stuck_reason"] = (
+                            f"parallel step {step_idx}: security scan flagged HIGH-risk "
+                            f"content in result ({', '.join(_sec_result.signals)})"
+                        )
+                        outcome["result"] = ""
+                        log.warning(
+                            "parallel step %d blocked by security scan: %s",
+                            step_idx, ", ".join(_sec_result.signals),
+                        )
+                    elif _sec_result.risk > _IRisk.NONE:
+                        # Sanitize in-place for lower risk levels
+                        outcome["result"] = _sec_result.sanitized
+                except Exception:
+                    pass  # security module optional; never block legitimate parallel work
+
         if verbose:
             status_label = outcome.get("status", "?")
             summary = outcome.get("summary", "")[:80]
@@ -2270,6 +2297,31 @@ def _build_loop_context(
             lessons_context += "\n\nKnown failure patterns for similar goals:\n" + "\n".join(
                 f"- {note}" for note in _failure_notes
             )
+    except Exception:
+        pass
+
+    # Captain's log context: what has the learning system been doing recently?
+    # This is the K3 "read bridge" — the first consumer of the captain's log
+    # for reasoning-time context injection. Surfaces recent skill changes,
+    # evolver actions, and diagnoses so the planner can account for them.
+    try:
+        from captains_log import load_log
+        # Focus on actionable events, not noise (skip LESSON_REINFORCED, DECISION_RECORDED)
+        _actionable_types = {
+            "SKILL_PROMOTED", "SKILL_DEMOTED", "SKILL_CIRCUIT_OPEN",
+            "SKILL_REWRITE", "EVOLVER_APPLIED", "DIAGNOSIS",
+            "HYPOTHESIS_PROMOTED", "STANDING_RULE_CONTRADICTED",
+            "RULE_GRADUATED",
+        }
+        _recent = load_log(limit=30)  # last 30 entries
+        _actionable = [e for e in _recent if e.get("event_type") in _actionable_types]
+        if _actionable:
+            _log_lines = [
+                f"- [{e.get('event_type', '?')}] {e.get('summary', '')[:100]}"
+                for e in _actionable[-5:]  # inject at most 5
+            ]
+            _log_ctx = "## Recent Learning System Activity\n" + "\n".join(_log_lines)
+            lessons_context = (lessons_context + "\n\n" + _log_ctx) if lessons_context else _log_ctx
     except Exception:
         pass
 
@@ -3266,6 +3318,33 @@ def run_agent_loop(
             last_action = action_key
 
         if stuck_streak >= 2:  # 3rd repeat
+            # Advisor Pattern: before giving up, ask Opus for strategic guidance
+            try:
+                from llm import advisor_call as _advisor_call
+                _ctx_summary = "\n".join(
+                    f"  step {i+1}: {o_s.get('status','?')} — {o_s.get('summary','')[:60]}"
+                    for i, o_s in enumerate(step_outcomes[-5:])
+                )
+                _advice = _advisor_call(
+                    goal=goal,
+                    context=f"Completed {len(step_outcomes)} steps.\nRecent:\n{_ctx_summary}\n\nCurrent stuck step: {step_text}",
+                    question=f"Step '{step_text}' has failed 3 times with status '{step_status}'. Should we: (a) skip this step and continue, (b) rephrase the step and retry, or (c) abort the mission? If (b), suggest the rephrased step.",
+                )
+                if _advice and "(b)" in _advice.lower():
+                    # Advisor says rephrase — extract suggestion and retry once
+                    log.info("advisor: suggests rephrasing stuck step %d — trying once more", step_idx)
+                    if verbose:
+                        print(f"[poe] advisor (Opus): rephrase step {step_idx}", file=sys.stderr)
+                    stuck_streak = 0  # reset streak to give one more attempt
+                    # Don't break — let the loop continue with the same step
+                    # The advisor's advice is logged but the step text stays the same
+                    # (rephrasing would require plan mutation which is a bigger change)
+                    continue
+                elif _advice:
+                    log.info("advisor on stuck step %d: %s", step_idx, _advice[:120])
+            except Exception:
+                pass  # advisor is optional — never block on failure
+
             loop_status = "stuck"
             stuck_reason = f"same outcome '{step_status}' on '{step_text}' repeated 3 times"
             step_outcomes.append(step_from_decompose(

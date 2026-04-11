@@ -266,12 +266,10 @@ class TestDependencies:
     def test_cycle_detection(self):
         task_store.enqueue(job_id="x")
         task_store.enqueue(job_id="y", blocked_by=["x"])
-        # Try to make x depend on y (cycle)
-        with pytest.raises(ValueError, match="cycle"):
-            task_store.enqueue(job_id="x2", blocked_by=["y"])
-            # The cycle detection walks y → x, and x2's own ID isn't in the chain,
-            # so this won't actually trigger. Let me test a real cycle:
-        # Real cycle: a→b→a
+        # x2→y→x is a linear chain, NOT a cycle — should succeed
+        task_store.enqueue(job_id="x2", blocked_by=["y"])
+
+        # Real cycle: ca→cb→ca (manually created)
         task_store.enqueue(job_id="ca")
         task_store.enqueue(job_id="cb", blocked_by=["ca"])
         # Manually make ca depend on cb to create cycle
@@ -280,7 +278,16 @@ class TestDependencies:
         data["blocked_by"] = ["cb"]
         path.write_text(json.dumps(data))
         with pytest.raises(ValueError, match="cycle"):
-            task_store.enqueue(job_id="ca", blocked_by=["cb"])
+            task_store.enqueue(job_id="cc", blocked_by=["ca"])
+
+    def test_sequential_chain_is_not_cycle(self):
+        """A→B→C sequential chain must not trip cycle detection."""
+        task_store.enqueue(job_id="chain_a")
+        task_store.enqueue(job_id="chain_b", blocked_by=["chain_a"])
+        task_store.enqueue(job_id="chain_c", blocked_by=["chain_b"])
+        # All three should exist without error
+        tasks = {t["job_id"] for t in task_store.list_tasks()}
+        assert {"chain_a", "chain_b", "chain_c"}.issubset(tasks)
 
 
 # ---------------------------------------------------------------------------

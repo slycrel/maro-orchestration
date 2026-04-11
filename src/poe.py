@@ -31,9 +31,6 @@ CLI:
 
 from __future__ import annotations
 
-import sys
-import time
-import uuid
 from dataclasses import dataclass
 from typing import Optional
 
@@ -334,37 +331,117 @@ def _describe_goal_relationships(goal_query: str, adapter=None) -> str:
 # Status keyword detection
 # ---------------------------------------------------------------------------
 
-_STATUS_KEYWORDS = {
-    "/status", "status", "what's happening", "what is happening",
-    "what are you working on", "update me", "progress report",
-    "how are things", "executive summary",
+# ---------------------------------------------------------------------------
+# Meta-command detection — hard syntactic gate
+#
+# Problem: soft keyword matching against arbitrary user goals causes collisions.
+# Any word that appears in a meta-command keyword set can appear legitimately
+# in user content — file paths (inspector.py), URLs (/status/123), structured
+# output (status=done), long research goals. This is the same problem as
+# template placeholder collision: you can't use '{' as a delimiter when user
+# data contains '{'.
+#
+# Solution: two-tier gate.
+#   Tier 1 (hard): message must be SHORT (≤ _META_MAX_WORDS after URL-strip)
+#                  and contain no URLs.  Long messages are missions, not commands.
+#   Tier 2 (match): slash-commands are exact prefix only.
+#                   plain phrases are short, specific, exact (no substring tricks).
+#
+# If we ever need richer NL meta-commands, the right answer is a dedicated
+# command prefix (e.g. "poe: status" or "!status") not more regex cleverness.
+# ---------------------------------------------------------------------------
+
+#: Maximum word-count for a message to be considered a meta-command candidate.
+#: Anything longer is a mission goal — never a meta-command.
+_META_MAX_WORDS = 12
+
+_STATUS_EXACT = {
+    "/status",
+    "status",
+    "what's happening",
+    "what is happening",
+    "what are you working on",
+    "update me",
+    "progress report",
+    "how are things",
+    "executive summary",
 }
 
-_INSPECT_KEYWORDS = {
-    "/inspect", "/quality", "how well", "how good",
-    "inspection", "friction", "inspector",
+_INSPECT_EXACT = {
+    "/inspect",
+    "/quality",
+    "how well",          # "how well is the system doing?" etc.
+    "inspection",
 }
 
-_GOAL_MAP_KEYWORDS = {
-    "/map", "goal map", "mission map", "relates to",
-    "relationship between", "how do these relate",
-    "how does this relate", "how does poe relate",
+_GOAL_MAP_EXACT = {
+    "/map",
+    "goal map",
+    "mission map",
+    "how do these relate",
+    "how does this relate",
+    "how does poe relate",
 }
+
+
+def _meta_command_candidate(message: str) -> tuple[bool, str]:
+    """Return (is_candidate, url_stripped_lower).
+
+    A message is only a meta-command candidate if:
+    1. It contains no URLs (missions contain URLs; commands don't)
+    2. It's short (≤ _META_MAX_WORDS words)
+    """
+    import re
+    ml = message.lower().strip()
+    # Reject immediately if message contains URLs — missions, not commands
+    if re.search(r"https?://", ml):
+        return False, ml
+    url_stripped = ml
+    word_count = len(url_stripped.split())
+    if word_count > _META_MAX_WORDS:
+        return False, url_stripped
+    return True, url_stripped
+
+
+def _meta_match(url_stripped: str, exact_phrases: set) -> bool:
+    """Match against exact phrase set.
+
+    Rules:
+    - Slash-commands (/status, /inspect): exact prefix match
+    - Plain phrases: exact equality OR message starts with phrase (+ space/punct)
+    - Trailing punctuation is stripped from the message before matching
+    """
+    # Strip trailing punctuation (?, !, .) before comparing
+    import re
+    cleaned = re.sub(r"[?!.]+$", "", url_stripped).strip()
+    for phrase in exact_phrases:
+        if phrase.startswith("/"):
+            if cleaned.startswith(phrase) or url_stripped.startswith(phrase):
+                return True
+        elif cleaned == phrase or cleaned.startswith(phrase + " "):
+            return True
+    return False
 
 
 def _looks_like_status(message: str) -> bool:
-    ml = message.lower().strip()
-    return any(kw in ml for kw in _STATUS_KEYWORDS)
+    is_candidate, url_stripped = _meta_command_candidate(message)
+    if not is_candidate:
+        return False
+    return _meta_match(url_stripped, _STATUS_EXACT)
 
 
 def _looks_like_inspect(message: str) -> bool:
-    ml = message.lower().strip()
-    return any(kw in ml for kw in _INSPECT_KEYWORDS)
+    is_candidate, url_stripped = _meta_command_candidate(message)
+    if not is_candidate:
+        return False
+    return _meta_match(url_stripped, _INSPECT_EXACT)
 
 
 def _looks_like_goal_map(message: str) -> bool:
-    ml = message.lower().strip()
-    return any(kw in ml for kw in _GOAL_MAP_KEYWORDS)
+    is_candidate, url_stripped = _meta_command_candidate(message)
+    if not is_candidate:
+        return False
+    return _meta_match(url_stripped, _GOAL_MAP_EXACT)
 
 
 def _looks_like_multi_day(goal: str) -> bool:

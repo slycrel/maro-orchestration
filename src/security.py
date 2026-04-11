@@ -199,7 +199,10 @@ def scan_external_content(
             if risk > max_risk:
                 max_risk = risk
 
-    sanitized = _redact(scan_target, signals) if signals else text
+    # Always bound sanitized to scan_target (max_length chars).
+    # Without this, an attacker could pad 50K clean chars before an injection
+    # to defeat pattern matching while still returning the full payload.
+    sanitized = _redact(scan_target, signals) if signals else scan_target
 
     result = ScanResult(
         text=text,

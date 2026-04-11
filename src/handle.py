@@ -23,13 +23,13 @@ from __future__ import annotations
 
 import json
 import logging
-import os
+
 import sys
 import time
 import uuid
 
 log = logging.getLogger("poe.handle")
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -381,7 +381,6 @@ def handle(
     # The result is prefixed with "[Observation]" to distinguish from work products.
     if _btw_mode:
         from llm import LLMMessage
-        _btw_t0 = time.monotonic()
         try:
             _btw_resp = adapter.complete(
                 [LLMMessage("system", _BTW_SYSTEM), LLMMessage("user", message)],
@@ -926,16 +925,17 @@ def drain_task_store(
     dry_run: bool = False,
     verbose: bool = False,
     max_tasks: int = 3,
-    sources: tuple = ("loop_continuation", "loop_escalation"),
+    sources: tuple = ("loop_continuation", "loop_escalation", "user_goal"),
 ) -> int:
     """Claim and process queued task_store tasks with known sources.
 
-    Called from the heartbeat or scheduler to consume continuation and
-    escalation tasks. Returns the number of tasks processed.
+    Called from the heartbeat or scheduler to consume continuation,
+    escalation, and user-enqueued goals. Returns the number processed.
 
     Args:
         max_tasks: Max tasks to process per call (avoids monopolizing the heartbeat).
-        sources: Which task sources to drain. Default covers continuation + escalation.
+        sources: Which task sources to drain. Includes user_goal for
+                 ad-hoc goals enqueued via ``poe-enqueue``.
     """
     try:
         from task_store import list_tasks, claim, complete, fail as task_fail
@@ -993,6 +993,47 @@ def drain_task_store(
 
 
 # ---------------------------------------------------------------------------
+# Goal queue — user-facing mission enqueue
+# ---------------------------------------------------------------------------
+
+def enqueue_goal(
+    goal: str,
+    *,
+    reason: str = "",
+    blocked_by: Optional[List[str]] = None,
+) -> str:
+    """Enqueue a user goal for the director to process sequentially.
+
+    Returns the job_id. The goal will be picked up by ``drain_task_store``
+    on the next heartbeat tick (or can be drained manually).
+
+    This is the user-facing "drop goals here" API. Each goal runs through
+    ``handle()`` in order — the director gets full discretion over how to
+    decompose and execute each one.
+    """
+    from task_store import enqueue
+    task = enqueue(
+        lane="agenda",
+        source="user_goal",
+        reason=reason or goal,
+        blocked_by=blocked_by,
+    )
+    job_id = task["job_id"]
+    log.info("enqueue_goal: queued %s — %s", job_id, goal[:80])
+    return job_id
+
+
+def enqueue_goals(goals: List[str], *, sequential: bool = True) -> List[str]:
+    """Enqueue multiple goals. If sequential=True, each goal is blocked_by the previous."""
+    job_ids = []
+    for goal in goals:
+        blocked = [job_ids[-1]] if sequential and job_ids else None
+        jid = enqueue_goal(goal, blocked_by=blocked)
+        job_ids.append(jid)
+    return job_ids
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -1017,11 +1058,45 @@ def main(argv=None):
         model=args.model,
         force_lane=args.lane,
         dry_run=args.dry_run,
-        verbose=args.verbose or True,
+        verbose=args.verbose,
     )
 
     print(result.format(mode=args.format))
     return 0 if result.status == "done" else 1
+
+
+def enqueue_main(argv=None):
+    """CLI entry point for ``poe-enqueue``."""
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        prog="poe-enqueue",
+        description="Enqueue goals for the director to process sequentially.",
+    )
+    parser.add_argument("goals", nargs="+", help="Goal(s) to enqueue. Each arg is one goal.")
+    parser.add_argument(
+        "--parallel", action="store_true",
+        help="Allow goals to run in parallel (default: sequential, each waits for previous)",
+    )
+    parser.add_argument(
+        "--drain", action="store_true",
+        help="After enqueueing, immediately drain the queue (run goals now).",
+    )
+    parser.add_argument("--verbose", "-v", action="store_true")
+
+    args = parser.parse_args(argv)
+    job_ids = enqueue_goals(args.goals, sequential=not args.parallel)
+
+    for i, (goal, jid) in enumerate(zip(args.goals, job_ids)):
+        print(f"  [{i+1}] {jid} — {goal[:80]}")
+    print(f"\n{len(job_ids)} goal(s) queued ({'sequential' if not args.parallel else 'parallel'})")
+
+    if args.drain:
+        print("\nDraining queue...")
+        n = drain_task_store(verbose=args.verbose, max_tasks=len(job_ids))
+        print(f"Processed {n} task(s)")
+
+    return 0
 
 
 if __name__ == "__main__":

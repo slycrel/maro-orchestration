@@ -112,21 +112,47 @@ def _env_int(key: str, default: int) -> int:
     return default
 
 
-# Threshold: signal appearing in this fraction of sessions → threshold breach
-_BREACH_THRESHOLD = _env_float("INSPECTOR_BREACH_THRESHOLD", 0.30)
+# Thresholds: loaded from config.yml with env var and hardcoded fallbacks.
+# Priority: env var > config.yml > hardcoded default.
+def _cfg_float(config_key: str, env_key: str, default: float) -> float:
+    """Load a float threshold: env var → config.yml → hardcoded default."""
+    env_val = os.environ.get(env_key)
+    if env_val is not None:
+        try:
+            return float(env_val)
+        except (ValueError, TypeError):
+            pass
+    try:
+        from config import get as _cfg_get
+        val = _cfg_get(config_key)
+        if val is not None:
+            return float(val)
+    except Exception:
+        pass
+    return default
 
-# Escalation tone: minimum keyword hits to trigger signal
-_ESCALATION_MIN_HITS = _env_int("INSPECTOR_ESCALATION_MIN_HITS", 3)
+def _cfg_int(config_key: str, env_key: str, default: int) -> int:
+    env_val = os.environ.get(env_key)
+    if env_val is not None:
+        try:
+            return int(env_val)
+        except (ValueError, TypeError):
+            pass
+    try:
+        from config import get as _cfg_get
+        val = _cfg_get(config_key)
+        if val is not None:
+            return int(val)
+    except Exception:
+        pass
+    return default
 
-# Context churn: token threshold for "too much context" signal
-_CONTEXT_CHURN_TOKEN_THRESHOLD = _env_int("INSPECTOR_CONTEXT_CHURN_TOKENS", 10000)
-
-# Alignment score thresholds for quality classification
-_ALIGNMENT_GOOD = _env_float("INSPECTOR_ALIGNMENT_GOOD", 0.7)
-_ALIGNMENT_POOR = _env_float("INSPECTOR_ALIGNMENT_POOR", 0.4)
-
-# Repeated rephrasing: minimum stuck count to trigger
-_REPHRASING_MIN_COUNT = _env_int("INSPECTOR_REPHRASING_MIN_COUNT", 2)
+_BREACH_THRESHOLD = _cfg_float("inspector.breach_threshold", "INSPECTOR_BREACH_THRESHOLD", 0.30)
+_ESCALATION_MIN_HITS = _cfg_int("inspector.escalation_min_hits", "INSPECTOR_ESCALATION_MIN_HITS", 3)
+_CONTEXT_CHURN_TOKEN_THRESHOLD = _cfg_int("inspector.context_churn_tokens", "INSPECTOR_CONTEXT_CHURN_TOKENS", 10000)
+_ALIGNMENT_GOOD = _cfg_float("inspector.alignment_good", "INSPECTOR_ALIGNMENT_GOOD", 0.7)
+_ALIGNMENT_POOR = _cfg_float("inspector.alignment_poor", "INSPECTOR_ALIGNMENT_POOR", 0.4)
+_REPHRASING_MIN_COUNT = _cfg_int("inspector.rephrasing_min_count", "INSPECTOR_REPHRASING_MIN_COUNT", 2)
 
 
 def inspector_thresholds() -> Dict[str, Any]:

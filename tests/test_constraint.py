@@ -429,3 +429,129 @@ class TestViolationType:
             flags=[ConstraintFlag(name="op1", risk="MEDIUM", detail="d", pattern="p")],
         )
         assert result.has_fatal_violations() is False
+
+
+# ---------------------------------------------------------------------------
+# Fix 3: _check_patterns uses step_text only (not combined with goal)
+# ---------------------------------------------------------------------------
+
+class TestGoalTextNotChecked:
+    """Goal text must not trigger operational constraints.
+
+    Before the fix, (step_text + goal).lower() caused goal-keyword false-positives.
+    A goal like "research cancer treatments" would match a dynamic constraint
+    pattern for "research" on every step, even harmless ones.
+    """
+
+    def test_goal_keyword_does_not_block_step(self):
+        """A HIGH-risk keyword in the goal must not block a clean step."""
+        # The goal contains "rm -rf" but the step_text is safe.
+        # Built-in destroy patterns check for destructive shell idioms.
+        result = check_step_constraints(
+            "Summarize the research findings",
+            goal="Clean up all old files using rm -rf and delete logs",
+        )
+        # Step should be allowed because the dangerous text is in goal, not step
+        assert result.allowed is True
+
+    def test_step_keyword_still_blocks(self):
+        """A HIGH-risk keyword in step_text still blocks (sanity check)."""
+        result = check_step_constraints(
+            "rm -rf /var/log/production",
+            goal="normal goal with no dangerous words",
+        )
+        assert result.allowed is False
+
+
+# ---------------------------------------------------------------------------
+# Fix 1: Dynamic constraint circuit breaker + TTL
+# ---------------------------------------------------------------------------
+
+class TestDynamicConstraintCircuitBreaker:
+    """Circuit breaker opens after N consecutive dynamic-only blocks."""
+
+    def setup_method(self):
+        import constraint as c
+        # Reset circuit breaker state before each test
+        c._dynamic_consecutive_blocks = 0
+        c._dynamic_circuit_open_until = 0
+        c._dynamic_step_counter = 0
+
+    def test_circuit_opens_after_threshold(self):
+        import constraint as c
+        threshold = c._DYNAMIC_BLOCK_CIRCUIT_BREAKER
+        for _ in range(threshold):
+            c._record_dynamic_block(True)
+        assert c._dynamic_circuit_is_open() is True
+
+    def test_circuit_stays_closed_below_threshold(self):
+        import constraint as c
+        threshold = c._DYNAMIC_BLOCK_CIRCUIT_BREAKER
+        for _ in range(threshold - 1):
+            c._record_dynamic_block(True)
+        assert c._dynamic_circuit_is_open() is False
+
+    def test_non_block_resets_streak(self):
+        import constraint as c
+        threshold = c._DYNAMIC_BLOCK_CIRCUIT_BREAKER
+        for _ in range(threshold - 1):
+            c._record_dynamic_block(True)
+        c._record_dynamic_block(False)  # streak resets
+        # Now need threshold more consecutive blocks to open
+        for _ in range(threshold - 1):
+            c._record_dynamic_block(True)
+        assert c._dynamic_circuit_is_open() is False
+
+    def test_circuit_closes_after_cooldown(self):
+        import constraint as c
+        threshold = c._DYNAMIC_BLOCK_CIRCUIT_BREAKER
+        for _ in range(threshold):
+            c._record_dynamic_block(True)
+        assert c._dynamic_circuit_is_open() is True
+        # Advance step counter past cooldown
+        c._dynamic_step_counter = c._dynamic_circuit_open_until
+        assert c._dynamic_circuit_is_open() is False
+
+
+class TestDynamicConstraintTTL:
+    """Expired dynamic constraints are skipped."""
+
+    def _write_constraint_file(self, tmp_path, entry_json: str):
+        """Write a dynamic-constraints.jsonl under tmp_path/memory/ (fallback path)."""
+        mem_dir = tmp_path / "memory"
+        mem_dir.mkdir(exist_ok=True)
+        (mem_dir / "dynamic-constraints.jsonl").write_text(entry_json + "\n")
+
+    def _load_with_tmp_path(self, c, tmp_path):
+        """Call _load_dynamic_constraints with orch_items disabled + cwd → tmp_path."""
+        import builtins
+        from unittest.mock import patch
+        real_import = builtins.__import__
+        def _no_orch(name, *args, **kwargs):
+            if name == "orch_items":
+                raise ImportError
+            return real_import(name, *args, **kwargs)
+        with patch("constraint.Path.cwd", return_value=tmp_path):
+            with patch("builtins.__import__", side_effect=_no_orch):
+                return c._load_dynamic_constraints()
+
+    def test_expired_constraint_not_loaded(self, tmp_path, monkeypatch):
+        import constraint as c
+        import json, time
+        monkeypatch.setattr(c, "_DYNAMIC_CONSTRAINT_TTL_DAYS", 7)
+        stale_ts = time.time() - (8 * 86400)  # 8 days ago
+        entry = json.dumps({"pattern": "research", "risk": "HIGH", "added_at": stale_ts})
+        self._write_constraint_file(tmp_path, entry)
+        loaded = self._load_with_tmp_path(c, tmp_path)
+        assert loaded == []
+
+    def test_fresh_constraint_is_loaded(self, tmp_path, monkeypatch):
+        import constraint as c
+        import json, time
+        monkeypatch.setattr(c, "_DYNAMIC_CONSTRAINT_TTL_DAYS", 7)
+        fresh_ts = time.time() - (1 * 86400)  # 1 day ago
+        entry = json.dumps({"pattern": "research_banned", "risk": "HIGH", "added_at": fresh_ts})
+        self._write_constraint_file(tmp_path, entry)
+        loaded = self._load_with_tmp_path(c, tmp_path)
+        assert len(loaded) == 1
+        assert loaded[0][1][0][0] == "research_banned"

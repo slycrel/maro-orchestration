@@ -1047,3 +1047,82 @@ def detect_available_backends() -> Dict[str, bool]:
         "openrouter": bool(_get_key("OPENROUTER_API_KEY", env)),
         "openai":     bool(_get_key("OPENAI_API_KEY", env)),
     }
+
+
+# ---------------------------------------------------------------------------
+# Advisor Pattern — Opus at decision points
+#
+# Sonnet executes every step; at decision points (milestone boundaries,
+# stuck detection, evolver meta-improvement) a focused advisory call goes
+# to Opus for strategic guidance. Same context window approach: Opus reads
+# the current state and returns advice that Sonnet acts on.
+#
+# Cost profile: one Opus call per decision point (2-5 per mission) vs
+# Opus on every step. Estimated 60-80% cost reduction vs full-Opus runs.
+# Source: @aakashgupta X research 2026-04-11.
+# ---------------------------------------------------------------------------
+
+_ADVISOR_SYSTEM = (
+    "You are a strategic advisor. You see the full context of an autonomous "
+    "agent's mission: the goal, plan, completed steps, current state, and the "
+    "specific decision point where advice is needed.\n\n"
+    "Respond with CONCISE, ACTIONABLE advice. No preamble. Lead with the "
+    "recommendation, then one line of reasoning. Max 200 words."
+)
+
+
+def advisor_call(
+    *,
+    goal: str,
+    context: str,
+    question: str,
+    adapter: Optional["LLMAdapter"] = None,
+    model: str = MODEL_POWER,
+) -> str:
+    """Call a power-tier model for strategic advice at a decision point.
+
+    This is NOT the execution model. It's a focused advisory call that reads
+    the current context and returns guidance. The execution model (cheap/mid)
+    acts on the advice.
+
+    Args:
+        goal:     The overall mission goal.
+        context:  Current state — completed steps, remaining steps, stuck reasons.
+        question: The specific decision: "should we continue, narrow, or abort?"
+        adapter:  Optional pre-built power-tier adapter. Built on demand if None.
+        model:    Model tier (default: MODEL_POWER / Opus).
+
+    Returns:
+        Advisor response text, or empty string if the call fails.
+    """
+    if adapter is None:
+        try:
+            adapter = build_adapter(model=model)
+        except Exception as exc:
+            log.warning("advisor_call: failed to build %s adapter: %s", model, exc)
+            return ""
+
+    messages = [
+        LLMMessage(role="system", content=_ADVISOR_SYSTEM),
+        LLMMessage(
+            role="user",
+            content=(
+                f"GOAL: {goal}\n\n"
+                f"CURRENT STATE:\n{context}\n\n"
+                f"DECISION POINT: {question}"
+            ),
+        ),
+    ]
+
+    try:
+        response = _retry_complete(
+            adapter.complete, messages, max_tokens=1024, temperature=0.2,
+        )
+        log.info(
+            "advisor_call: %d in + %d out tokens, model=%s",
+            response.input_tokens, response.output_tokens, response.model or model,
+        )
+        return response.content.strip()
+    except Exception as exc:
+        log.warning("advisor_call failed: %s", exc)
+        return ""

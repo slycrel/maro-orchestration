@@ -155,17 +155,29 @@ def enqueue(
 
 
 def _check_cycle(job_id: str, blocked_by: List[str], visited: Optional[set] = None) -> None:
-    """Detect cycles in dependency graph."""
+    """Detect cycles in dependency graph.
+
+    Walks blocked_by chains transitively starting from ``job_id``.
+    Raises if ``job_id`` appears as its own transitive dependency, OR if
+    any cycle exists in the reachable chain (which would cause infinite
+    loops at drain time).
+
+    ``visited`` tracks nodes on the CURRENT path (not all seen nodes)
+    so that revisiting a node on the same DFS path signals a cycle.
+    """
     if visited is None:
-        visited = set()
-    if job_id in visited:
-        raise ValueError(f"cycle detected: {job_id} appears in its own dependency chain")
-    visited.add(job_id)
+        visited = {job_id}  # seed with the new task's ID
     for dep_id in blocked_by:
+        if dep_id in visited:
+            raise ValueError(
+                f"cycle detected: {dep_id} appears in dependency chain of {job_id}"
+            )
+        visited.add(dep_id)
         dep_path = task_path(dep_id)
         dep = _read_task(dep_path)
         if dep and dep.get("blocked_by"):
             _check_cycle(job_id, dep["blocked_by"], visited)
+        visited.discard(dep_id)  # backtrack for other branches
 
 
 def claim(job_id: str, pid: Optional[int] = None) -> Dict[str, Any]:

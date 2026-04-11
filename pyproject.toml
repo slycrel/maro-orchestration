@@ -22,6 +22,7 @@ dev = ["pytest>=7.0", "pytest-cov>=7.0", "requests>=2.28", "beautifulsoup4>=4.12
 poe-bootstrap = "bootstrap:main"
 poe-run = "agent_loop:main"
 poe-handle = "handle:main"
+poe-enqueue = "handle:enqueue_main"
 poe-memory = "cli:_memory_main"
 poe-persona = "cli:_persona_main"
 poe-sandbox = "cli:_sandbox_main"

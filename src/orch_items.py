@@ -9,9 +9,9 @@ import os
 import re
 import time
 import uuid
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Callable, Iterable, List, Optional, Tuple
+from typing import Callable, Iterable, List, Optional, Tuple
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -170,9 +170,16 @@ def memory_dir() -> Path:
     """Canonical memory directory — used by memory.py, observe.py, gc_memory.py, router.py.
 
     Resolution order:
-      1. orch_root()/memory  (standard layout)
-      2. $POE_MEMORY_DIR     (explicit override)
-      3. cwd/memory          (fallback for tests / portable use)
+      1. $POE_MEMORY_DIR     (explicit override — tests use this)
+      2. config.memory_dir() (aligns with captains_log.py — defaults to ~/.poe/workspace/memory)
+      3. orch_root()/memory  (fallback for containers/CI)
+      4. cwd/memory          (last resort)
+
+    IMPORTANT: This must resolve to the SAME directory as config.memory_dir()
+    so that captain's log, outcomes, lessons, and skills all live together.
+    Previous bug: orch_items.memory_dir() → repo/memory while config.memory_dir()
+    → ~/.poe/workspace/memory, causing captain's log to live in a different
+    location from the rest of the learning data.
 
     Always creates the directory.  Never raises.
     """
@@ -181,6 +188,18 @@ def memory_dir() -> Path:
         p = Path(override).expanduser().resolve()
         p.mkdir(parents=True, exist_ok=True)
         return p
+
+    # Align with config.py — the canonical workspace path
+    _ws_pinned = any(os.environ.get(v) for v in (
+        "POE_WORKSPACE", "OPENCLAW_WORKSPACE", "WORKSPACE_ROOT", "POE_ORCH_ROOT",
+    ))
+    if not _ws_pinned:
+        # Default: ~/.poe/workspace/memory (matches config.memory_dir())
+        p = Path.home() / ".poe" / "workspace" / "memory"
+        p.mkdir(parents=True, exist_ok=True)
+        return p
+
+    # Workspace env var is set (tests, CI) — use orch_root layout
     p = orch_root() / "memory"
     try:
         p.mkdir(parents=True, exist_ok=True)
@@ -196,6 +215,8 @@ def projects_root() -> Path:
 
 
 def output_root() -> Path:
+    # TODO: route to workspace (like memory_dir) once relative_to(orch_root)
+    # assumptions are audited in orch.py, agent_loop.py, observe.py.
     p = orch_root() / "output"
     p.mkdir(parents=True, exist_ok=True)
     return p

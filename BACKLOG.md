@@ -3,7 +3,7 @@
 Single canonical location for everything we've identified but haven't done yet.
 Read this at the start of every session. Update it as items are completed or new ones emerge.
 
-Last reviewed: 2026-04-10 (session 14)
+Last reviewed: 2026-04-11 (session 15)
 
 ---
 
@@ -61,11 +61,34 @@ Last reviewed: 2026-04-10 (session 14)
 - [x] **Factory branch merge decision** — Adversarial patterns already merged to main. Factory files (factory_minimal.py, factory_thin.py) available as standalone modules. Full merge (factory to main) done 2026-03-31.
 - [x] **Factory overnight experiment** — Ran factory_minimal on PAI goal (overnight 2026-03-31→04-01). Result: subprocess adapter timed out at 300s on first call — factory_minimal is a single-call approach and the PAI goal is too complex for one 300s window. Key insight: factory_minimal's single-call architecture has a hard ceiling at the subprocess timeout; complex research goals need factory_thin's loop approach or Mode 2. Documents the Phase 49 prerequisite: need timeout config to make factory experiments reliable.
 
+### From X research (2026-04-11 — 10 posts, live orchestration, 2 loops)
+
+Full report: `~/.poe/workspace/output/x-research-20260411T081706Z.md`
+
+- [ ] **Advisor Pattern** — Sonnet executes, Opus advises at decision points via tool call. 60-80% cost reduction claimed (numbers unverified — steal the pattern, not the numbers). Add `advisor_call()` wrapper to `llm.py`; wire into milestone boundaries in `agent_loop.py` and evolver meta-improvement triggers. **Priority 9/10.** Source: @aakashgupta.
+- [ ] **Codebase Graph + LSP** — Pre-build ranked call graph before agent reads any file. Use real LSP (go-to-definition, call hierarchy) for surgical context. Multi-agent coordination via context bus. Claimed 1.8x faster, 2.1x cheaper (unverified). **Priority 9/10.** Source: @bniwael / SoulForge.
+- [ ] **Evals-as-Training-Data flywheel** — Mine prod failures → auto-generate evals → auto-tweak harness → validate with train/test splits. Extends evolver.py + inspector.py. **Priority 9/10.** Source: @realsigridjin.
+- [ ] **Thinking Token Budget** — `thinking_budget: int` per call type; high (8000+) for planning, low (1000) for execution/tool calls. Add to `llm.py` call signature. **Priority 8/10.** Source: @av1dlive.
+- [ ] **Harness Is the Problem** — "Models are fine, the harness isn't good enough." Evolver should target harness code paths, not just prompts. Friction = harness quality signal. Strategic validation of project direction. **Priority 8/10.** Source: @sebgoddijn / Ramp Glass.
+- [ ] **Harness Architecture Spectrum** — Thin (Anthropic) vs thick (LangChain) loop — best products live in the middle. Validate NOW/AGENDA checkpoint placement; inspector at all checkpoints. **Priority 7/10.** Source: @akshay_pachaar.
+- [ ] **Event-driven subprocess wakeup** — Replace polling with event-driven wakeup (asyncio.Queue or file-based event). Workers post completion signals. **Priority 7/10.** Source: @teknium / NousResearch hermes-agent.
+- [ ] **Large Memory Models (LMMs)** — Engramme: new architecture beyond RAG. Watch list — monitor for API release. **Priority 6/10.** Source: @svpino.
+- [ ] **Google MCP Toolbox** — Opinionated MCP server for data tools. Forward-looking; adopt when JSONL memory needs structured DB. **Priority 5/10.** Source: @_vmlops.
+- [ ] **Polymarket 36GB dataset + backtester** — 72M trades, free on GitHub. Useful for polymarket-backtest skill. **Priority 4/10.** Source: @recogard.
+
+### Session 15 bugs (2026-04-11)
+- [x] **memory_dir split-brain** — `orch_items.memory_dir()` and `config.memory_dir()` resolved to different locations. Captain's log went to `~/.poe/workspace/memory/` while everything else went to the repo's `memory/`. Fixed: `orch_items.memory_dir()` now defaults to `~/.poe/workspace/memory/` (same as config.py) when no workspace env var is set. Tests unaffected (they pin OPENCLAW_WORKSPACE).
+- [x] **_check_cycle false-positive** — task_store cycle detection raised on linear A→B→C chains. Root cause: added job_id to visited set then found it on first recursive call. Fixed: track visited deps, not the job being checked.
+- [x] **user_goal queue** — `enqueue_goal()`, `enqueue_goals()`, `poe-enqueue` CLI. Director-level queue for user-submitted missions. Sequential blocking via task_store DAG deps.
+
 ### Conversation Mining (Phase 48 idea)
 - [x] **Research pass through Telegram + Claude session data** — DONE (2026-04-05). `poe-mine --no-git` scanned 902 session log ideas → 336 unique after dedup. High-confidence (11): mostly already in BACKLOG. No new ideas injected above threshold. Notable finding from sessions: "knowledge graveyard" concept (temp storage for sub-goal learnings), "positive mid-IQ agent" (ralph approach, done), context size concern for sub-agents (done via context_firewall). Scan tool: `src/convo_miner.py`.
 
 ### Architectural (from self-review pass 5, 2026-04-10)
 - [x] **Extract LoopStateMachine from agent_loop.py** — DONE (2026-04-10). 16 methods extracted across 14 commits. run_agent_loop reduced from ~1,800 to ~470 lines. While loop body is ~300 lines of orchestration (budget checks, step execution call, extracted method dispatch). All heavy logic in standalone functions. Next: convert to LoopStateMachine class where LoopContext becomes `self`.
+### Session bugs (2026-04-11)
+- [x] **Meta-command detection false-positives** — (2026-04-11) Rebuilt with two-tier hard gate: (1) reject if message contains URLs or is >12 words — missions are long; commands aren't. (2) exact phrase match only — no substring tricks. Slash-commands are prefix-only. Eliminates the template-placeholder collision class: `inspector.py`, `/status/123`, `status=done` all correctly rejected. 3 tests added, 1 test updated. (`src/poe.py`)
+
 ### From adversarial review (2026-04-11 seeded-haiku, escalated to sonnet)
 - [x] **platform_confusion detection stub** — (2026-04-11) Added to batch `detect_friction()` with expanded 6-keyword set (summary, stuck_reason, result_summary). Was only in heuristic `detect_friction_signals()`.
 - [x] **Evolver auto-apply audit trail** — (2026-04-11) Enriched `change_log.jsonl` with `suggestion_text`, `confidence`, and `before_state` (old skill description on updates, mutation type for creates/appends). Enables rollback without guessing from a hash.
@@ -86,12 +109,20 @@ Last reviewed: 2026-04-10 (session 14)
 - [x] **Operator precedence bug in observe_pattern** — (2026-04-11) MEDIUM. `or` vs `and` precedence caused empty-domain hypotheses to match across unrelated domains. Fixed: explicit parens + require non-empty domain for fuzzy match.
 - [x] **Tiered lessons missing adversarial check** — (2026-04-11) MEDIUM. `record_tiered_lesson()` had no `_lesson_looks_adversarial()` check (flat-tier did). Fixed: added check at entry.
 - [x] **Wrong attribute in record_step_trace** — (2026-04-11) LOW. `getattr(s, "step")` should be `getattr(s, "text")` per StepOutcome dataclass. Removed phantom `summary` field.
-- [ ] **Dynamic constraint DoS potential** — Evolver writes arbitrary regex to dynamic-constraints.jsonl. A bad pattern (e.g., `"research"`) could block all steps. Needs: false-positive test against recent successes, TTL on constraints, circuit breaker on consecutive blocks.
-- [ ] **Parallel fan-out skips constraint checks** — `_run_steps_parallel()` bypasses hitl_policy, security scanning, and ralph verify. Steps that would be blocked sequentially run unchecked in parallel mode.
-- [ ] **Constraint checker combines goal text** — `(step_text + goal).lower()` means goal keywords trigger operational constraints. Should check step_text only.
-- [ ] **Security scanner 50K truncation bypass** — `scan_target = text[:max_length]` but `result.text` preserves full payload. Attacker pads 50K clean chars before injection.
+- [x] **Dynamic constraint DoS potential** — (2026-04-11) TTL on dynamic constraints (`added_at` + `_DYNAMIC_CONSTRAINT_TTL_DAYS`, default 30d). Circuit breaker opens after N consecutive dynamic-only blocks (`_DYNAMIC_BLOCK_CIRCUIT_BREAKER`, default 5), disables for cooldown window. 8 tests.
+- [x] **Parallel fan-out skips security scanning** — (2026-04-11) `_run_steps_parallel()._run_one` now runs `scan_external_content` on step result; HIGH-risk → blocked, lower risk → sanitized in-place. Ralph verify not added (requires session-level state incompatible with fan-out).
+- [x] **Constraint checker combines goal text** — (2026-04-11) `_check_patterns` changed to `step_text.lower()` only. Goal text excluded to prevent goal-keyword false-positives (e.g. goal containing "research" blocking every research step). 2 tests.
+- [x] **Security scanner 50K truncation bypass** — (2026-04-11) `sanitized` now always bounded to `scan_target` (max_length chars). Before: no-signal path returned full `text`, allowing injection past position 50K. 2 tests.
+
+### Adversarial review (2026-04-11, session 15 self-review via orchestration)
+- [x] **BUG-1: verbose always True** — `verbose=args.verbose or True` → `verbose=args.verbose`. Two call sites in handle.py.
+- [x] **Dead imports/vars** — 7 items cleaned: sys/time/uuid from poe.py, os/field/_btw_t0 from handle.py, field/Any from orch_items.py.
+- [ ] **BUG-2: lock file open mode** — `_lock_task` opens with `'r'` mode; inode deletion breaks mutual exclusion. Fix: open `'a'` or `'r+'`.
+- [ ] **BUG-3: project starvation sort** — `select_global_next` sort starves older equal-priority projects. Fix: invert mtime tiebreak or round-robin.
+- [ ] **SEC-2/SEC-3: f-string + swallowed exc** — poe.py cosmetic; f-string without placeholder, captured exc never logged.
 
 ### Memory / Knowledge Layer (K stages — from research/orchestration-knowledge-layer)
+- [x] **K3 partial: Captain's log read bridge** — (2026-04-11) Captain's log (11K events, write-only since creation) now wired as read source into: (1) decompose context injection in `agent_loop.py` — planner sees last 5 actionable learning events; (2) evolver LLM analysis in `evolver.py` — evolver sees recent skill/rule changes before generating suggestions. Filters: SKILL_PROMOTED/DEMOTED/CIRCUIT_OPEN, EVOLVER_APPLIED, DIAGNOSIS, HYPOTHESIS_PROMOTED, STANDING_RULE_CONTRADICTED, RULE_GRADUATED. (`captains_log.load_log()` API already existed — just had zero consumers.)
 - [x] **memory.py decomposition (K1-aligned)** — DONE (2026-04-10). 2,968→530 lines (82% reduction). Split into: `memory_ledger.py` (944L — outcomes, lessons, compression, step traces), `knowledge_web.py` (1,006L — tiered lessons, decay/promotion, TF-IDF, canon tracking), `knowledge_lens.py` (758L — rules, hypotheses, decisions, verification). memory.py is now a thin public API with re-exports + coordination functions (bootstrap_context, reflect_and_record, inject_lessons_for_task).
 - [x] **Consolidate knowledge layer research** — (2026-04-10) Merged into `docs/knowledge-layer/` as canonical location. Architecture, K-stages, research landscape, gaps docs moved from research/. Raw transcripts archived. README with K-stage status table added. K0 (baseline) and K1 (module split) marked DONE.
 - [x] **llm_parse.py test coverage** — (2026-04-10) 68 unit tests added. Covers all 6 public functions + edge cases (None, NaN, fences, type mismatch unwrapping).
@@ -106,8 +137,11 @@ Last reviewed: 2026-04-10 (session 14)
 ### Phase Transition Contracts (architecture — revisit after operational data)
 - [ ] **Formal stage contracts between pipeline phases** — Currently phase transitions are implicit: decompose outputs strings, execute takes strings, finalize takes outcomes. No typed contracts, no hard validation gates between phases. Pre-flight is advisory-only (loop proceeds regardless). Trajectory check is the first real mid-pipeline gate. Need: (1) typed output contracts per phase (not just "a list of strings" but "atomic steps that cover the goal scope"); (2) hard gates that re-plan or abort instead of proceeding with garbage input; (3) audit which existing checks are load-bearing vs noise. The Starship optimization: delete the advisory checks that never change behavior and replace with fewer, harder gates. Defer until operational data shows which gates actually matter.
 
-### Data Portability (hardening)
-- [ ] **poe-export / poe-import for learning data** — Runtime data is scattered across 20+ jsonl files in memory/, memory/medium/, memory/long/, output/, plus ~70 independent `_*_path()` functions across 40 modules. Need a manifest-based export/import that distinguishes shareable learning (lessons, rules, skills, canon stats, standing rules, decisions, verification outcomes) from operational state (lock files, PIDs, heartbeat status). Enables: backup, second-machine bootstrap, sharing learned patterns. Implementation: catalog of data paths + tar/zip archiver + restore with conflict resolution. Medium effort.
+### Data Portability / Workspace Consolidation (hardening)
+- [x] **memory_dir consolidated** — (2026-04-11) `orch_items.memory_dir()` and `config.memory_dir()` now both default to `~/.poe/workspace/memory/`. Captain's log + all learning data in one place.
+- [x] **Two-tier YAML config** — (2026-04-11) `~/.poe/config.yml` (user) + `~/.poe/workspace/config.yml` (workspace). Inspector thresholds and constraint settings wired to config. 17 tests.
+- [ ] **Route output + projects to workspace** — `output_root()` and `projects_root()` still use `orch_root()` (the repo). Moving them to `~/.poe/workspace/` requires auditing `relative_to(orch_root())` assumptions in orch.py, agent_loop.py, observe.py. Medium effort.
+- [ ] **poe-export / poe-import for learning data** — `poe-export` should tar `~/.poe/workspace/` (memory/, config.yml, skills/) minus secrets. Enables: backup, second-machine bootstrap, sharing learned patterns. Simpler now that memory is consolidated.
 
 ### Concurrent Run Safety (hardening)
 - [ ] **First-class project isolation** — Currently: file locking on full-rewrite paths (skills, tiered lessons, hypotheses, rules) prevents data corruption; standing rules and decisions are domain-filtered during injection. Still needed for true concurrent runs: per-project skill pools (or project tag on skills + filtered matching), project-scoped lesson injection (currently filters by task_type but not project), per-project lockfile in set_loop_running(), concurrent run safety audit across all write paths. Add project field to Skill dataclass and wire through find_matching_skills(). Captain's Log should tag entries with project for filtered views. Low priority while runs are sequential; required before enabling parallel missions.
@@ -121,7 +155,7 @@ Last reviewed: 2026-04-10 (session 14)
 
 Six X posts researched via live Poe missions. Actionable items extracted:
 
-- [ ] **markitdown integration** — Microsoft's `markitdown` (96K stars) converts PDF/Word/Excel/Audio/HTML → Markdown for LLMs. `pip install 'markitdown[all]'`. Evaluate for `web_fetch.py` or new `file_ingest.py` module. MCP server available (`markitdown-mcp`). Source: @_vmlops post.
+- [x] **markitdown installed** — `pip install --user markitdown` done (Python 3.14). HTML→MD confirmed working. High-value use case: PDF/Word/Excel ingestion (Jina can't handle these). Wiring into `web_fetch.py` or `file_ingest.py` is next step — needs `fetch_file(path_or_url)` that falls back to markitdown for non-HTML content types.
 - [ ] **TOOLS.md + STYLE.md gaps** — @imjustinbrooke's "7 files to run your business" framework maps to Poe: SOUL.md ✓, AGENTS.md ✓, USER.md ✓, MEMORY.md ✓, HEARTBEAT.md ≈ heartbeat scripts. Missing: explicit TOOLS.md (tool registry covers this partially) and STYLE.md (persona covers this partially). Consider whether explicit files add value.
 - [ ] **Eval-driven harness hill-climbing** — @mr_r0b0t + @ashpreetbedi both endorse @Vtrivedy10's LangChain article on using evals as autonomous learning signal. This IS evolver.py's pattern. Read full article when available — may have concrete recipes to improve the eval→lesson→skill pipeline.
 - [ ] **Letta API comparison** — @carsonfarmer/@sarahwooders: Anthropic's Managed Agents API mirrors Letta's 1yr-old API. Provider-managed memory = lock-in. Poe's file-based memory is aligned with "memory outside providers" thesis. Monitor Managed Agents API for useful features without adopting their memory model.

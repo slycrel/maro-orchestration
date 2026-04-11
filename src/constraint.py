@@ -32,11 +32,67 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, List, Optional
 
 log = logging.getLogger("poe.constraint")
+
+# ---------------------------------------------------------------------------
+# Dynamic constraint circuit breaker
+# ---------------------------------------------------------------------------
+
+# Load from config.yml with env var fallback
+def _constraint_cfg_int(config_key: str, env_key: str, default: int) -> int:
+    import os as _os
+    env_val = _os.environ.get(env_key)
+    if env_val is not None:
+        try:
+            return int(env_val)
+        except (ValueError, TypeError):
+            pass
+    try:
+        from config import get as _cfg_get
+        val = _cfg_get(config_key)
+        if val is not None:
+            return int(val)
+    except Exception:
+        pass
+    return default
+
+_DYNAMIC_BLOCK_CIRCUIT_BREAKER = _constraint_cfg_int("constraints.circuit_breaker", "POE_DYNAMIC_CONSTRAINT_CIRCUIT_BREAKER", 5)
+_DYNAMIC_CIRCUIT_COOLDOWN_STEPS = _constraint_cfg_int("constraints.circuit_cooldown", "POE_DYNAMIC_CIRCUIT_COOLDOWN", 50)
+_DYNAMIC_CONSTRAINT_TTL_DAYS = _constraint_cfg_int("constraints.ttl_days", "POE_DYNAMIC_CONSTRAINT_TTL_DAYS", 30)
+
+_dynamic_consecutive_blocks: int = 0   # steps blocked solely by dynamic constraints
+_dynamic_circuit_open_until: int = 0   # step counter; 0 = closed (normal)
+_dynamic_step_counter: int = 0         # incremented per check_step_constraints call
+
+
+def _record_dynamic_block(blocked: bool) -> None:
+    """Track consecutive dynamic-constraint blocks; open circuit if threshold exceeded."""
+    global _dynamic_consecutive_blocks, _dynamic_circuit_open_until, _dynamic_step_counter
+    _dynamic_step_counter += 1
+    if blocked:
+        _dynamic_consecutive_blocks += 1
+        if _dynamic_consecutive_blocks >= _DYNAMIC_BLOCK_CIRCUIT_BREAKER:
+            _dynamic_circuit_open_until = _dynamic_step_counter + _DYNAMIC_CIRCUIT_COOLDOWN_STEPS
+            log.warning(
+                "dynamic constraint circuit OPEN: %d consecutive blocks; "
+                "disabled for %d steps (step %d → %d)",
+                _dynamic_consecutive_blocks,
+                _DYNAMIC_CIRCUIT_COOLDOWN_STEPS,
+                _dynamic_step_counter,
+                _dynamic_circuit_open_until,
+            )
+            _dynamic_consecutive_blocks = 0
+    else:
+        _dynamic_consecutive_blocks = 0
+
+
+def _dynamic_circuit_is_open() -> bool:
+    return _dynamic_step_counter < _dynamic_circuit_open_until
 
 
 # ---------------------------------------------------------------------------
@@ -254,8 +310,13 @@ def _check_patterns(
     step_text: str,
     goal: str,
 ) -> List[ConstraintFlag]:
-    """Run a list of (regex, risk, detail) patterns against step + goal text."""
-    combined = (step_text + " " + goal).lower()
+    """Run a list of (regex, risk, detail) patterns against step text.
+
+    Only step_text is checked; goal is accepted for signature compatibility
+    but intentionally excluded to prevent goal-keyword false-positives (e.g.
+    a goal containing "research" blocking every research step).
+    """
+    combined = step_text.lower()
     flags = []
     for pattern_str, risk, detail in patterns:
         m = re.search(pattern_str, combined, re.I)
@@ -294,6 +355,9 @@ def _load_dynamic_constraints() -> List[tuple]:
         return []
 
     patterns: List[tuple] = []
+    now_ts = time.time()
+    ttl_cutoff = now_ts - (_DYNAMIC_CONSTRAINT_TTL_DAYS * 86400)
+
     try:
         for line in path.read_text(encoding="utf-8").splitlines():
             line = line.strip()
@@ -304,6 +368,10 @@ def _load_dynamic_constraints() -> List[tuple]:
                 pat = entry.get("pattern", "")
                 risk = entry.get("risk", "MEDIUM")
                 detail = entry.get("detail", f"dynamic guardrail: {pat[:60]}")
+                added_at = entry.get("added_at", now_ts)  # missing = current (no expiry)
+                if added_at < ttl_cutoff:
+                    log.debug("dynamic constraint %r expired (added_at=%s)", pat[:40], added_at)
+                    continue
                 if pat:
                     try:
                         re.compile(pat, re.I)
@@ -336,9 +404,18 @@ def check_step_constraints(step_text: str, goal: str = "") -> ConstraintResult:
     for constraint_name, patterns in _ALL_PATTERNS:
         all_flags.extend(_check_patterns(constraint_name, patterns, step_text, goal))
 
-    # Evolver-generated dynamic constraints (loaded from memory/dynamic-constraints.jsonl)
-    for constraint_name, patterns in _load_dynamic_constraints():
-        all_flags.extend(_check_patterns(constraint_name, patterns, step_text, goal))
+    # Evolver-generated dynamic constraints — guarded by circuit breaker.
+    # If the dynamic constraints have blocked >N consecutive steps (misconfigured
+    # pattern like "research" blocking all research steps), the circuit opens and
+    # they are skipped for _DYNAMIC_CIRCUIT_COOLDOWN_STEPS steps.
+    _dynamic_flags: List[ConstraintFlag] = []
+    if not _dynamic_circuit_is_open():
+        for constraint_name, patterns in _load_dynamic_constraints():
+            _dynamic_flags.extend(_check_patterns(constraint_name, patterns, step_text, goal))
+    else:
+        log.debug("dynamic constraint circuit is open — skipping dynamic patterns this step")
+
+    all_flags.extend(_dynamic_flags)
 
     # Pluggable constraint extensions
     for checker in CONSTRAINT_REGISTRY:
@@ -349,6 +426,7 @@ def check_step_constraints(step_text: str, goal: str = "") -> ConstraintResult:
 
     # Determine worst risk level
     if not all_flags:
+        _record_dynamic_block(False)
         return ConstraintResult(allowed=True, risk_level="LOW", flags=[])
 
     risk_order = {"HIGH": 3, "MEDIUM": 2, "LOW": 1}
@@ -357,6 +435,14 @@ def check_step_constraints(step_text: str, goal: str = "") -> ConstraintResult:
 
     # HIGH flags block execution; MEDIUM/LOW are logged but allowed
     allowed = worst_level != "HIGH"
+
+    # Track whether the block came from dynamic constraints (to avoid false-positive
+    # circuit trips from legitimate built-in constraint hits)
+    _dynamic_caused_block = (
+        not allowed
+        and any(f in _dynamic_flags for f in all_flags if f.risk == "HIGH")
+    )
+    _record_dynamic_block(_dynamic_caused_block)
 
     return ConstraintResult(allowed=allowed, risk_level=worst_level, flags=all_flags)
 
