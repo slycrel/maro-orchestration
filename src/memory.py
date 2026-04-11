@@ -48,6 +48,27 @@ from llm_parse import extract_json, safe_list, content_or_empty
 log = logging.getLogger("poe.memory")
 
 # ---------------------------------------------------------------------------
+# Re-exports from memory_ledger.py (decomposition Phase 1)
+# All data types and CRUD functions live in memory_ledger now.
+# Re-exported here for backward compatibility — external code imports from memory.
+# ---------------------------------------------------------------------------
+from memory_ledger import (  # noqa: F401, E402
+    Outcome, Lesson, TaskLedgerEntry, CompressedBatch,
+    _memory_dir, _outcomes_path, _lessons_path, _daily_path,
+    _memory_index_path, _step_traces_path, _task_ledger_path,
+    _compressed_outcomes_path, _text_similarity,
+    append_task_ledger, load_task_ledger,
+    record_step_trace, load_step_traces,
+    record_outcome, _append_daily_log,
+    _INJECTION_PATTERNS, _lesson_looks_adversarial,
+    _store_lesson, _rewrite_lessons_file,
+    load_lessons, load_outcomes,
+    _save_compressed_batch, load_compressed_batches,
+    compress_old_outcomes, _tfidf_rank_batches,
+    load_outcomes_with_context, _update_memory_index,
+)
+
+# ---------------------------------------------------------------------------
 # Backend accessor (Phase 40) — used by agent_loop._build_loop_context
 # ---------------------------------------------------------------------------
 
