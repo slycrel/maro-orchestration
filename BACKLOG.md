@@ -30,7 +30,7 @@ Last reviewed: 2026-04-10 (session 14)
 - [x] **Lesson injection overhead** — Fixed: capped inject output at 1200 chars in memory.py. (`low-hanging-fruit`)
 - [x] **System prompt token audit (Pi steal)** — Audited EXECUTE_SYSTEM and DECOMPOSE_SYSTEM against Pi coding agent's <1k target. Cut redundant negatives, editorial commentary, and duplicate BAD/GOOD examples. Result: EXECUTE_SYSTEM 844→333 tokens (-61%), DECOMPOSE_SYSTEM 1048→603 tokens (-42%), combined 1892→936 tokens (-51%). All behavior-changing content preserved. (2026-04-03)
 - [x] **Architecture non-goals doc (Pi steal)** — `docs/ARCHITECTURE_NON_GOALS.md` documents 8 deliberate non-goals with rationale: tool minimalism, MCP-as-default, interactive gating, hidden sub-agents, Neo4j, plugin marketplace, provider portability contracts, headless UI. Helps say no cleanly to scope creep. (2026-04-03)
-- [ ] **Compact notation / shorthand vocabulary** — `skills/compact_notation.md` created (2026-04-07). Next: write A/B tests measuring token reduction vs output quality on the heartbeat diagnosis prompt (single-turn, safe to measure). If ≥15% reduction with no quality loss, enable `always_inject=true` for execution contexts. Track: `compact_notation_enabled` flag in `config.py`. Consider LLMLingua (pip installable, 4-20x compression) as complement if vocabulary approach hits limits.
+- [ ] **Compact notation / shorthand vocabulary** — `skills/compact_notation.md` created (2026-04-07). A/B test harness built (2026-04-10): `compact_ab.py` with green/blue per-step comparison, 11 tests. CLI: `python3 -m compact_ab --model cheap --rounds 3`. Pending: run live test, evaluate results. If ≥15% output token reduction with no quality loss, enable `always_inject=true`. Consider LLMLingua as complement if vocabulary approach hits limits.
 
 ### Self-Improvement Loop
 - [x] **Evolver signal scanning** — `scan_outcomes_for_signals()` in `evolver.py`. Scans done outcomes for actionable leads/opportunities, converts to `sub_mission` Suggestion entries. Wired into `run_evolver(scan_signals=True)`. 8 tests. (2026-03-31)
@@ -74,7 +74,7 @@ Last reviewed: 2026-04-10 (session 14)
 ### Memory / Knowledge Layer (K stages — from research/orchestration-knowledge-layer)
 - [x] **memory.py decomposition (K1-aligned)** — DONE (2026-04-10). 2,968→530 lines (82% reduction). Split into: `memory_ledger.py` (944L — outcomes, lessons, compression, step traces), `knowledge_web.py` (1,006L — tiered lessons, decay/promotion, TF-IDF, canon tracking), `knowledge_lens.py` (758L — rules, hypotheses, decisions, verification). memory.py is now a thin public API with re-exports + coordination functions (bootstrap_context, reflect_and_record, inject_lessons_for_task).
 - [ ] **Consolidate knowledge layer research** — Two locations: `research/orchestration-knowledge-layer/` (original architecture + K0-K8 phases) and `docs/knowledge-layer/` (K0 baseline). Merge into one canonical location with implementation paths documented.
-- [ ] **llm_parse.py test coverage** — 17 importers, zero direct tests. Single point of failure if it regresses. Critical shared utility.
+- [x] **llm_parse.py test coverage** — (2026-04-10) 68 unit tests added. Covers all 6 public functions + edge cases (None, NaN, fences, type mismatch unwrapping).
 
 ### Test Coverage Gaps (from 2026-04-10 audit)
 - [x] **task_store.py tests** — (2026-04-10) 36 unit tests added. Covers enqueue/claim/complete/fail/archive, dependency resolution, cycle detection, stale claim recovery, atomic writes.
