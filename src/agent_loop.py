@@ -2331,6 +2331,24 @@ def _build_loop_context(
     except Exception:
         pass
 
+    # Director's operational playbook — evolved wisdom about how to do the job
+    try:
+        from playbook import inject_playbook
+        _playbook = inject_playbook(max_chars=800)
+        if _playbook:
+            lessons_context = (lessons_context + "\n\n" + _playbook) if lessons_context else _playbook
+    except Exception:
+        pass
+
+    # Knowledge nodes — structured knowledge from imported sources (K2)
+    try:
+        from knowledge_web import inject_knowledge_for_goal
+        _knowledge = inject_knowledge_for_goal(goal, max_chars=600)
+        if _knowledge:
+            lessons_context = (lessons_context + "\n\n" + _knowledge) if lessons_context else _knowledge
+    except Exception:
+        pass
+
     # Matching skills for decompose prompt injection
     skills_context = ""
     had_no_matching_skill = False

@@ -311,6 +311,23 @@ def _apply_suggestion_action(d: dict) -> None:
         except Exception:
             pass
 
+        # Update director's playbook with the applied insight
+        if category in ("prompt_tweak", "new_guardrail", "observation") and confidence >= 0.7:
+            try:
+                from playbook import append_to_playbook
+                _section_map = {
+                    "prompt_tweak": "Execution",
+                    "new_guardrail": "Quality",
+                    "observation": "Learned",
+                }
+                append_to_playbook(
+                    suggestion_text[:200],
+                    section=_section_map.get(category, "Learned"),
+                    source=f"evolver:{suggestion_id}",
+                )
+            except Exception:
+                pass
+
     except Exception as e:
         print(f"[evolver] _apply_suggestion_action({category}) failed: {e}", file=sys.stderr)
 

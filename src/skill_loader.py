@@ -35,7 +35,17 @@ log = logging.getLogger("poe.skill_loader")
 # ---------------------------------------------------------------------------
 
 _REPO_ROOT = Path(__file__).parent.parent
-SKILLS_DIR = _REPO_ROOT / "skills"
+SKILLS_DIR = _REPO_ROOT / "skills"   # Repo skills (architecture docs, checked in)
+
+
+def _workspace_skills_dir() -> Optional[Path]:
+    """Workspace skills directory — self-created/evolved skills (not in repo)."""
+    try:
+        from config import skills_dir
+        p = skills_dir()
+        return p if p.exists() else None
+    except Exception:
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -143,7 +153,11 @@ def load_skill_file(path: Path) -> Optional[SkillSummary]:
 # ---------------------------------------------------------------------------
 
 class SkillLoader:
-    """Loads SKILL.md files from the skills/ directory.
+    """Loads SKILL.md files from workspace + repo skills/ directories.
+
+    Resolution order (workspace wins on name collisions):
+      1. ~/.poe/workspace/skills/  — self-created/evolved skills
+      2. repo/skills/              — architecture docs, curated skills
 
     Usage:
         loader = SkillLoader()
@@ -153,23 +167,42 @@ class SkillLoader:
     """
 
     def __init__(self, skills_dir: Optional[Path] = None) -> None:
-        self._dir = skills_dir or SKILLS_DIR
+        self._repo_dir = skills_dir or SKILLS_DIR
         self._cache: Optional[Dict[str, SkillSummary]] = None
 
+    @property
+    def _dir(self) -> Path:
+        """Backward compat: return repo dir (primary scan dir)."""
+        return self._repo_dir
+
     def _all_summaries(self) -> Dict[str, SkillSummary]:
-        """Load and cache all skills from disk. Keyed by name."""
+        """Load and cache all skills from disk. Keyed by name.
+
+        Scans repo dir first, then workspace dir. Workspace skills
+        override repo skills with the same name (self-evolved version wins).
+        """
         if self._cache is not None:
             return self._cache
         result: Dict[str, SkillSummary] = {}
-        if not self._dir.exists():
-            log.debug("skill_loader: skills dir %s not found", self._dir)
-            self._cache = result
-            return result
-        for path in sorted(self._dir.glob("*.md")):
-            skill = load_skill_file(path)
-            if skill is not None:
-                result[skill.name] = skill
-                log.debug("skill_loader: loaded skill %r from %s", skill.name, path.name)
+
+        # 1. Load from repo skills/ (architecture docs + curated)
+        if self._repo_dir.exists():
+            for path in sorted(self._repo_dir.glob("*.md")):
+                skill = load_skill_file(path)
+                if skill is not None:
+                    result[skill.name] = skill
+                    log.debug("skill_loader: loaded skill %r from repo %s", skill.name, path.name)
+
+        # 2. Load from workspace skills/ (self-created, override repo)
+        ws_dir = _workspace_skills_dir()
+        if ws_dir and ws_dir.exists():
+            for path in sorted(ws_dir.glob("*.md")):
+                skill = load_skill_file(path)
+                if skill is not None:
+                    if skill.name in result:
+                        log.debug("skill_loader: workspace skill %r overrides repo version", skill.name)
+                    result[skill.name] = skill
+
         self._cache = result
         return result
 

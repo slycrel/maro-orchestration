@@ -61,6 +61,25 @@ def projects_dir() -> Path:
     return p
 
 
+def skills_dir() -> Path:
+    """Workspace skills directory — self-created/evolved skill .md files."""
+    p = workspace_root() / "skills"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def personas_dir() -> Path:
+    """Workspace personas directory — self-created/evolved persona specs."""
+    p = workspace_root() / "personas"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def playbook_path() -> Path:
+    """Director's operational playbook — evolving wisdom about how to do the job."""
+    return workspace_root() / "playbook.md"
+
+
 # ---------------------------------------------------------------------------
 # YAML config — two-tier (user + workspace)
 # ---------------------------------------------------------------------------

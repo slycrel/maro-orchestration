@@ -160,29 +160,68 @@ def _parse_persona_file(path: Path) -> PersonaSpec:
 # ---------------------------------------------------------------------------
 
 class PersonaRegistry:
-    """Scans the personas/ directory and provides load/list operations."""
+    """Scans workspace + repo personas/ directories.
+
+    Resolution order (workspace wins on name collisions):
+      1. ~/.poe/workspace/personas/  — self-created/evolved personas
+      2. repo/personas/              — shipped persona specs
+    """
 
     def __init__(self, personas_dir: Optional[Path] = None):
-        if personas_dir is None:
+        self._repo_dir: Optional[Path] = None
+        self._ws_dir: Optional[Path] = None
+
+        if personas_dir is not None:
+            # Explicit dir (tests) — use only that
+            self._repo_dir = personas_dir
+        else:
+            # Auto-detect: workspace first, then repo
+            try:
+                from config import personas_dir as _ws_personas
+                ws = _ws_personas()
+                if ws.exists():
+                    self._ws_dir = ws
+            except Exception:
+                pass
             try:
                 from orch import orch_root
                 candidate = orch_root() / "personas"
                 if candidate.exists():
-                    personas_dir = candidate
+                    self._repo_dir = candidate
             except Exception:
                 pass
-            if personas_dir is None:
-                # Repo-relative fallback: personas/ sibling of src/
-                personas_dir = Path(__file__).resolve().parent.parent / "personas"
-                if not personas_dir.exists():
-                    personas_dir = Path.cwd() / "personas"
-        self._dir = personas_dir
+            if self._repo_dir is None:
+                self._repo_dir = Path(__file__).resolve().parent.parent / "personas"
+                if not self._repo_dir.exists():
+                    self._repo_dir = Path.cwd() / "personas"
+
         self._cache: Dict[str, PersonaSpec] = {}
 
+    @property
+    def _dir(self) -> Path:
+        """Backward compat: return the repo dir."""
+        return self._repo_dir or Path("personas")
+
     def _persona_files(self) -> List[Path]:
-        if not self._dir.exists():
-            return []
-        return sorted(p for p in self._dir.glob("*.md") if p.name != "README.md")
+        """Collect persona files from repo + workspace (workspace wins)."""
+        seen_names: set = set()
+        files: List[Path] = []
+
+        # Workspace first (self-created/evolved — takes precedence)
+        if self._ws_dir and self._ws_dir.exists():
+            for p in sorted(self._ws_dir.glob("*.md")):
+                if p.name != "README.md":
+                    files.append(p)
+                    seen_names.add(p.stem)
+
+        # Repo second (shipped personas — skipped if workspace has same name)
+        repo = self._repo_dir
+        if repo and repo.exists():
+            for p in sorted(repo.glob("*.md")):
+                if p.name != "README.md" and p.stem not in seen_names:
+                    files.append(p)
+
+        return files
 
     def list(self) -> List[str]:
         """Return list of available persona names (sorted)."""
