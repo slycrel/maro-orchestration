@@ -3,7 +3,7 @@
 Single canonical location for everything we've identified but haven't done yet.
 Read this at the start of every session. Update it as items are completed or new ones emerge.
 
-Last reviewed: 2026-04-07 (session 13)
+Last reviewed: 2026-04-10 (session 14)
 
 ---
 
@@ -70,6 +70,15 @@ Last reviewed: 2026-04-07 (session 13)
 - [ ] **Lesson contradiction check** — Before promoting any lesson to standing rule, compare against existing rules for contradiction. "Always skip verification" contradicts "always verify." LLM-based comparison at promotion time.
 - [ ] **Inspector threshold calibration** — Hardcoded thresholds (`_BREACH_THRESHOLD=0.30`, friction scores, etc.) not validated against real run distribution. Move to config file, add calibration mode that reports false-positive/negative rates against historical outcomes.
 - [x] **Handle result formatting unification** — (2026-04-10) pipeline/team/direct/default AGENDA paths in handle.py had 4 near-identical LoopResult→HandleResult formatting blocks. Extracted `_loop_result_to_handle()` helper. Original BACKLOG framing ("plan_NOW/plan_AGENDA/replan are 3 implementations") was inaccurate — they're architecturally different planning modes (NOW=1-shot, Director=multi-ticket, decompose=step pipeline), not duplicated code.
+
+### Memory / Knowledge Layer (K stages — from research/orchestration-knowledge-layer)
+- [ ] **memory.py decomposition (K1-aligned)** — 2,968-line monolith. Split into: `memory_ledger.py` (temporal: outcomes + lessons + bi-temporal fields), `knowledge_web.py` (associative: graph + principles + evidence edges), `knowledge_lens.py` (contextual: persona-parameterized retrieval). Keep `memory.py` as public API coordinating all three. K0 baseline audit complete (docs/knowledge-layer/K0_BASELINE.md) — all stores contain test-fixture data only, no real operational learning yet.
+- [ ] **Consolidate knowledge layer research** — Two locations: `research/orchestration-knowledge-layer/` (original architecture + K0-K8 phases) and `docs/knowledge-layer/` (K0 baseline). Merge into one canonical location with implementation paths documented.
+- [ ] **llm_parse.py test coverage** — 17 importers, zero direct tests. Single point of failure if it regresses. Critical shared utility.
+
+### Test Coverage Gaps (from 2026-04-10 audit)
+- [x] **task_store.py tests** — (2026-04-10) 36 unit tests added. Covers enqueue/claim/complete/fail/archive, dependency resolution, cycle detection, stale claim recovery, atomic writes.
+- [ ] **orch.py tests** — Orchestration hub, no direct tests. Integration-covered via agent_loop tests but core adapter selection logic untested in isolation.
 
 ### Self-Extensibility / Decision Point Hooks (design exploration)
 - [ ] **Composable decision-point hooks** — The system currently has pre/post step hooks (step_events.py), inspector observation, quality gate, and prompt injection (standing rules/lessons/skills into decompose). But these aren't composable: you can't say "after decompose, before execution, run extra verification on steps 3 and 5." MTG-style stack where effects can be intercepted at targeted points. For now, prompt-stage injection is sufficient. Revisit when operational experience shows which decision points actually need interception. Key constraint: any self-extensibility must be human-gated (see evolver guardrail auto-apply fix).
@@ -219,4 +228,4 @@ Items moved here when done, for reference:
 - [x] Agent-generated tools (backtester) — 2026-03-30
 
 From jeremy (clean up and integrate with the above later)
-- [ ] Examine the research in research/orchestration-knowledge-layer, and the follow-up research in docs/knowledge-layer (and consolidate into one or the other location). document proper implementation paths and implement the framework, with notes on how to flesh this out as needed.
+- [ ] Examine the research in research/orchestration-knowledge-layer, and the follow-up research in docs/knowledge-layer (and consolidate into one or the other location). document proper implementation paths and implement the framework, with notes on how to flesh this out as needed. **Note (2026-04-10):** Tracked above in "Memory / Knowledge Layer" section. K0 baseline done; memory.py decomposition + K1-K8 implementation plan needed.
