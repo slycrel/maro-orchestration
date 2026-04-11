@@ -410,6 +410,69 @@ def _handle_budget_ceiling(
     return _suffix
 
 
+def _run_ralph_verify(
+    ctx: LoopContext,
+    step_text: str,
+    step_idx: int,
+    step_result: str,
+    step_status: str,
+    outcome: dict,
+    step_adapter,
+    *,
+    step_tier_overrides: Dict[str, str],
+    session_verify_failures: int,
+    session_tier_floor: str,
+    verify_fail_threshold: int,
+) -> tuple:
+    """Phase F8: Ralph verify loop — check done step actually addressed its goal.
+
+    Returns (step_status, step_result, session_verify_failures, session_tier_floor).
+    May mutate outcome and step_tier_overrides dicts in place.
+    """
+    from llm import MODEL_CHEAP, MODEL_MID, MODEL_POWER
+
+    try:
+        _vr = _verify_step(step_text, step_result, step_adapter)
+        if not _vr["passed"]:
+            log.info("ralph verify FAIL step=%d reason=%r — marking blocked for retry",
+                     step_idx, _vr["reason"][:80])
+            # Per-step tier escalation on verify failure
+            _vf_tier = getattr(step_adapter, "model_key", MODEL_CHEAP)
+            if _vf_tier == MODEL_CHEAP:
+                step_tier_overrides[step_text] = MODEL_MID
+                log.info("step %d verify-fail tier-up: cheap → mid", step_idx)
+            elif _vf_tier == MODEL_MID:
+                step_tier_overrides[step_text] = MODEL_POWER
+                log.info("step %d verify-fail tier-up: mid → power", step_idx)
+            # Session-level lagging signal
+            session_verify_failures += 1
+            if (session_verify_failures >= verify_fail_threshold
+                    and not session_tier_floor):
+                _current_tier = getattr(ctx.adapter, "model_key", MODEL_CHEAP)
+                if _current_tier == MODEL_CHEAP:
+                    session_tier_floor = MODEL_MID
+                    log.warning("session-level tier-up: %d consecutive verify failures → "
+                                "raising floor to mid for remaining steps",
+                                session_verify_failures)
+                    if ctx.verbose:
+                        print(f"[poe] session tier-up: {session_verify_failures} verify "
+                              "failures → floor raised to mid",
+                              file=sys.stderr, flush=True)
+            if ctx.verbose:
+                print(f"[poe] ralph verify: step {step_idx} RETRY — {_vr['reason'][:80]}",
+                      file=sys.stderr, flush=True)
+            outcome["status"] = "blocked"
+            outcome["stuck_reason"] = f"[ralph verify] {_vr['reason']}"
+            step_status = "blocked"
+            step_result = outcome.get("result", "")
+        else:
+            session_verify_failures = 0
+    except Exception:
+        pass  # verify never blocks loop progress
+
+    return step_status, step_result, session_verify_failures, session_tier_floor
+
+
 def _run_parallel_batch(
     ctx: LoopContext,
     step_text: str,
@@ -2745,52 +2808,16 @@ def run_agent_loop(
         _raw_summary = outcome.get("summary", step_text)
         step_summary = _raw_summary if isinstance(_raw_summary, str) else step_text
 
-        # Ralph verify loop — check that a "done" step actually addressed its goal.
-        # Triggered by "ralph:" or "verify:" prefix in goal text, or ralph_verify=True kwarg
-        # (handle.py passes this from user/CONFIG.md ralph_verify: true).
+        # Ralph verify loop (Phase F8)
         _ralph_active = ralph_verify or goal.lower().startswith(("ralph:", "verify:"))
         if step_status == "done" and _ralph_active and step_result:
-            try:
-                _vr = _verify_step(step_text, step_result, _step_adapter)
-                if not _vr["passed"]:
-                    log.info("ralph verify FAIL step=%d reason=%r — marking blocked for retry",
-                             step_idx, _vr["reason"][:80])
-                    # Per-step tier escalation on verify failure.
-                    _vf_tier = getattr(_step_adapter, "model_key", MODEL_CHEAP)
-                    if _vf_tier == MODEL_CHEAP:
-                        _step_tier_overrides[step_text] = MODEL_MID
-                        log.info("step %d verify-fail tier-up: cheap → mid", step_idx)
-                    elif _vf_tier == MODEL_MID:
-                        _step_tier_overrides[step_text] = MODEL_POWER
-                        log.info("step %d verify-fail tier-up: mid → power", step_idx)
-                    # Phase 57: session-level lagging signal — cluster of verify failures
-                    # indicates the loop adapter is systematically too weak. Raise floor.
-                    _session_verify_failures += 1
-                    if (_session_verify_failures >= _SESSION_VERIFY_FAIL_THRESHOLD
-                            and not _session_tier_floor):
-                        _current_tier = getattr(adapter, "model_key", MODEL_CHEAP)
-                        if _current_tier == MODEL_CHEAP:
-                            _session_tier_floor = MODEL_MID
-                            log.warning("session-level tier-up: %d consecutive verify failures → "
-                                        "raising floor to mid for remaining steps",
-                                        _session_verify_failures)
-                            if verbose:
-                                print(f"[poe] session tier-up: {_session_verify_failures} verify "
-                                      "failures → floor raised to mid",
-                                      file=sys.stderr, flush=True)
-                    if verbose:
-                        print(f"[poe] ralph verify: step {step_idx} RETRY — {_vr['reason'][:80]}",
-                              file=sys.stderr, flush=True)
-                    # Treat as blocked so the loop's existing retry machinery handles it
-                    outcome["status"] = "blocked"
-                    outcome["stuck_reason"] = f"[ralph verify] {_vr['reason']}"
-                    step_status = "blocked"
-                    step_result = outcome.get("result", "")
-                else:
-                    # Verify pass — reset consecutive failure counter
-                    _session_verify_failures = 0
-            except Exception:
-                pass  # verify never blocks loop progress
+            step_status, step_result, _session_verify_failures, _session_tier_floor = _run_ralph_verify(
+                ctx, step_text, step_idx, step_result, step_status, outcome, _step_adapter,
+                step_tier_overrides=_step_tier_overrides,
+                session_verify_failures=_session_verify_failures,
+                session_tier_floor=_session_tier_floor,
+                verify_fail_threshold=_SESSION_VERIFY_FAIL_THRESHOLD,
+            )
 
         # Phase 36: emit step event to events.jsonl for live observability
         try:
