@@ -410,6 +410,101 @@ def _handle_budget_ceiling(
     return _suffix
 
 
+def _post_step_checks(
+    ctx: LoopContext,
+    step_text: str,
+    step_idx: int,
+    step_status: str,
+    step_result: str,
+    step_summary: str,
+    step_elapsed: int,
+    outcome: dict,
+    *,
+    security_available: bool,
+    scan_content_fn=None,
+    injection_risk_cls=None,
+) -> tuple:
+    """Phase F9: Post-step observability, security, claim verification, hooks.
+
+    Returns (step_status, step_result, step_injected_context).
+    May mutate outcome dict in place.
+    """
+    # Emit step event
+    try:
+        from observe import write_event
+        write_event(
+            "step_done" if step_status == "done" else "step_stuck",
+            goal=ctx.goal,
+            project=ctx.project or "",
+            loop_id=ctx.loop_id,
+            step=step_text,
+            step_idx=step_idx,
+            status=step_status,
+            tokens_in=outcome.get("tokens_in", 0),
+            tokens_out=outcome.get("tokens_out", 0),
+            elapsed_ms=step_elapsed,
+            detail=step_summary[:200] if step_summary else "",
+        )
+    except Exception:
+        pass
+
+    # Security scan for prompt injection
+    _has_external = "PRE-FETCHED" in step_text or "http" in step_text.lower()
+    if security_available and _has_external and step_status == "done" and len(step_result) > 200:
+        try:
+            _scan = scan_content_fn(
+                step_result,
+                log_fn=lambda msg: print(f"[poe] {msg}", file=sys.stderr, flush=True),
+            )
+            if _scan.risk >= injection_risk_cls.HIGH:
+                log.warning("step %d injection HIGH in result — redacting before context injection (signals=%s)",
+                            step_idx, _scan.signals)
+                step_result = _scan.sanitized
+                outcome["result"] = step_result
+        except Exception:
+            pass
+
+    # Claim verifier on synthesis steps
+    if step_status == "done" and step_result:
+        try:
+            from claim_verifier import is_synthesis_step as _is_synth, annotate_result as _annotate
+            if _is_synth(step_text):
+                _annotated = _annotate(step_result, only_if_hallucinations=True)
+                if _annotated != step_result:
+                    log.warning("step %d [claim-verifier] hallucinated file paths detected", step_idx)
+                    step_result = _annotated
+                    outcome["result"] = step_result
+        except Exception:
+            pass
+
+    # Step-level hooks
+    _step_injected_context = ""
+    if ctx.hook_registry is not None:
+        try:
+            from hooks import run_hooks as _run_hooks, any_blocking as _any_blocking, get_injected_context as _get_injected_ctx, SCOPE_STEP as _SCOPE_STEP
+            _step_hook_ctx = {
+                "goal": ctx.goal,
+                "step": step_text,
+                "step_result": step_result,
+                "project": ctx.project,
+                "step_num": step_idx,
+            }
+            _step_results = _run_hooks(
+                _SCOPE_STEP, _step_hook_ctx,
+                registry=ctx.hook_registry, adapter=ctx.adapter,
+                dry_run=ctx.dry_run, fire_on="after",
+            )
+            if _any_blocking(_step_results):
+                step_status = "blocked"
+                _block_outputs = [r.output for r in _step_results if r.should_block]
+                outcome["stuck_reason"] = "blocked by hook reviewer: " + "; ".join(_block_outputs[:2])
+            _step_injected_context = _get_injected_ctx(_step_results)
+        except Exception:
+            pass
+
+    return step_status, step_result, _step_injected_context
+
+
 def _run_ralph_verify(
     ctx: LoopContext,
     step_text: str,
@@ -2819,83 +2914,13 @@ def run_agent_loop(
                 verify_fail_threshold=_SESSION_VERIFY_FAIL_THRESHOLD,
             )
 
-        # Phase 36: emit step event to events.jsonl for live observability
-        try:
-            from observe import write_event
-            write_event(
-                "step_done" if step_status == "done" else "step_stuck",
-                goal=goal,
-                project=project or "",
-                loop_id=loop_id,
-                step=step_text,
-                step_idx=step_idx,
-                status=step_status,
-                tokens_in=outcome.get("tokens_in", 0),
-                tokens_out=outcome.get("tokens_out", 0),
-                elapsed_ms=step_elapsed,
-                detail=step_summary[:200] if step_summary else "",
-            )
-        except Exception:
-            pass  # Event failures must never break the loop
-
-        # Security: scan step result for prompt injection signals (external content defense).
-        # Only scan results that contain pre-fetched external content (URLs, API responses).
-        # LLM-generated analysis (code reviews, summaries) should NOT be scanned — it
-        # false-positives on security terminology in reviewed code and corrupts the output.
-        _has_external = "PRE-FETCHED" in step_text or "http" in step_text.lower()
-        if _security_available and _has_external and step_status == "done" and len(step_result) > 200:
-            try:
-                _scan = _scan_content(
-                    step_result,
-                    log_fn=lambda msg: print(f"[poe] {msg}", file=sys.stderr, flush=True),
-                )
-                if _scan.risk >= _InjectionRisk.HIGH:
-                    log.warning("step %d injection HIGH in result — redacting before context injection (signals=%s)",
-                                step_idx, _scan.signals)
-                    step_result = _scan.sanitized
-                    outcome["result"] = step_result
-            except Exception:
-                pass  # Security scan failures must never break the loop
-
-        # Claim verifier: on synthesis steps, check file-path claims in the result.
-        # Synthesis steps are highest hallucination risk — they aggregate prior findings
-        # and can confabulate file paths that don't exist. Annotate but never block.
-        if step_status == "done" and step_result:
-            try:
-                from claim_verifier import is_synthesis_step as _is_synth, annotate_result as _annotate
-                if _is_synth(step_text):
-                    _annotated = _annotate(step_result, only_if_hallucinations=True)
-                    if _annotated != step_result:
-                        log.warning("step %d [claim-verifier] hallucinated file paths detected", step_idx)
-                        step_result = _annotated
-                        outcome["result"] = step_result
-            except Exception:
-                pass  # claim verifier must never block loop progress
-
-        # Phase 11: Step-level hooks
-        _step_injected_context = ""
-        if _hook_registry is not None:
-            try:
-                from hooks import run_hooks as _run_hooks, any_blocking as _any_blocking, get_injected_context as _get_injected_ctx, SCOPE_STEP as _SCOPE_STEP
-                _step_hook_ctx = {
-                    "goal": goal,
-                    "step": step_text,
-                    "step_result": step_result,
-                    "project": project,
-                    "step_num": step_idx,
-                }
-                _step_results = _run_hooks(
-                    _SCOPE_STEP, _step_hook_ctx,
-                    registry=_hook_registry, adapter=adapter,
-                    dry_run=dry_run, fire_on="after",
-                )
-                if _any_blocking(_step_results):
-                    step_status = "blocked"
-                    _block_outputs = [r.output for r in _step_results if r.should_block]
-                    outcome["stuck_reason"] = "blocked by hook reviewer: " + "; ".join(_block_outputs[:2])
-                _step_injected_context = _get_injected_ctx(_step_results)
-            except Exception:
-                pass  # Hook failures must never break the loop
+        # Post-step checks: observability, security, claim verifier, hooks (Phase F9)
+        step_status, step_result, _step_injected_context = _post_step_checks(
+            ctx, step_text, step_idx, step_status, step_result, step_summary, step_elapsed, outcome,
+            security_available=_security_available,
+            scan_content_fn=_scan_content if _security_available else None,
+            injection_risk_cls=_InjectionRisk if _security_available else None,
+        )
 
         # Stuck detection: same action repeated 3x
         action_key = f"{step_text}:{step_status}"
