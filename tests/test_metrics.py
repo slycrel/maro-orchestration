@@ -648,10 +648,10 @@ def test_record_outcome_stores_model(monkeypatch, tmp_path):
     import json
     from memory import record_outcome
     outcomes_file = tmp_path / "outcomes.jsonl"
-    monkeypatch.setattr("memory._outcomes_path", lambda: outcomes_file)
-    monkeypatch.setattr("memory._append_daily_log", lambda o: None)
-    monkeypatch.setattr("memory._store_lesson", lambda **kw: None)
-    monkeypatch.setattr("memory._update_memory_index", lambda: None)
+    monkeypatch.setattr("memory_ledger._outcomes_path", lambda: outcomes_file)
+    monkeypatch.setattr("memory_ledger._append_daily_log", lambda o: None)
+    monkeypatch.setattr("memory_ledger._store_lesson", lambda **kw: None)
+    monkeypatch.setattr("memory_ledger._update_memory_index", lambda: None)
 
     record_outcome("test goal", "done", "summary", model="mid")
     data = json.loads(outcomes_file.read_text().strip())

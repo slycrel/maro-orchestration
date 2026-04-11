@@ -405,7 +405,7 @@ def test_load_lessons_query_reranks(monkeypatch, tmp_path):
     ]
     lessons_file = tmp_path / "lessons.jsonl"
     lessons_file.write_text("\n".join(json.dumps(l) for l in lines))
-    monkeypatch.setattr("memory._lessons_path", lambda: lessons_file)
+    monkeypatch.setattr("memory_ledger._lessons_path", lambda: lessons_file)
 
     result = load_lessons(query="polymarket prediction research", limit=3)
     # Both polymarket lessons should rank above systemd
@@ -430,7 +430,7 @@ def _make_step_outcome(step="do something", status="done", result="result text",
 
 class TestRecordStepTrace:
     def test_writes_to_step_traces_jsonl(self, monkeypatch, tmp_path):
-        monkeypatch.setattr("memory._step_traces_path", lambda: tmp_path / "step_traces.jsonl")
+        monkeypatch.setattr("memory_ledger._step_traces_path", lambda: tmp_path / "step_traces.jsonl")
         step_outcomes = [
             _make_step_outcome("fetch data", "done", "data fetched"),
             _make_step_outcome("analyze", "stuck", stuck_reason="LLM timed out"),
@@ -445,7 +445,7 @@ class TestRecordStepTrace:
         assert len(trace["steps"]) == 2
 
     def test_stuck_reason_included(self, monkeypatch, tmp_path):
-        monkeypatch.setattr("memory._step_traces_path", lambda: tmp_path / "step_traces.jsonl")
+        monkeypatch.setattr("memory_ledger._step_traces_path", lambda: tmp_path / "step_traces.jsonl")
         step_outcomes = [_make_step_outcome("risky step", "stuck", stuck_reason="rate limit hit")]
         record_step_trace("o-001", "goal", step_outcomes)
         trace = json.loads((tmp_path / "step_traces.jsonl").read_text().strip())
@@ -453,21 +453,21 @@ class TestRecordStepTrace:
         assert stuck_step["stuck_reason"] == "rate limit hit"
 
     def test_done_step_no_stuck_reason_key(self, monkeypatch, tmp_path):
-        monkeypatch.setattr("memory._step_traces_path", lambda: tmp_path / "step_traces.jsonl")
+        monkeypatch.setattr("memory_ledger._step_traces_path", lambda: tmp_path / "step_traces.jsonl")
         step_outcomes = [_make_step_outcome("do thing", "done", stuck_reason=None)]
         record_step_trace("o-002", "goal", step_outcomes)
         trace = json.loads((tmp_path / "step_traces.jsonl").read_text().strip())
         assert "stuck_reason" not in trace["steps"][0]
 
     def test_result_truncated_to_500(self, monkeypatch, tmp_path):
-        monkeypatch.setattr("memory._step_traces_path", lambda: tmp_path / "step_traces.jsonl")
+        monkeypatch.setattr("memory_ledger._step_traces_path", lambda: tmp_path / "step_traces.jsonl")
         step_outcomes = [_make_step_outcome(result="x" * 1000)]
         record_step_trace("o-003", "goal", step_outcomes)
         trace = json.loads((tmp_path / "step_traces.jsonl").read_text().strip())
         assert len(trace["steps"][0]["result"]) <= 500
 
     def test_empty_step_outcomes_writes_empty_trace(self, monkeypatch, tmp_path):
-        monkeypatch.setattr("memory._step_traces_path", lambda: tmp_path / "step_traces.jsonl")
+        monkeypatch.setattr("memory_ledger._step_traces_path", lambda: tmp_path / "step_traces.jsonl")
         record_step_trace("o-004", "goal", [])
         trace = json.loads((tmp_path / "step_traces.jsonl").read_text().strip())
         assert trace["steps"] == []
@@ -475,12 +475,12 @@ class TestRecordStepTrace:
 
 class TestLoadStepTraces:
     def test_returns_empty_when_file_missing(self, monkeypatch, tmp_path):
-        monkeypatch.setattr("memory._step_traces_path", lambda: tmp_path / "nonexistent.jsonl")
+        monkeypatch.setattr("memory_ledger._step_traces_path", lambda: tmp_path / "nonexistent.jsonl")
         assert load_step_traces(["o-001"]) == {}
 
     def test_loads_matching_outcome_id(self, monkeypatch, tmp_path):
         path = tmp_path / "step_traces.jsonl"
-        monkeypatch.setattr("memory._step_traces_path", lambda: path)
+        monkeypatch.setattr("memory_ledger._step_traces_path", lambda: path)
         step_outcomes = [_make_step_outcome("step1", "done")]
         record_step_trace("o-abc", "test goal", step_outcomes)
         traces = load_step_traces(["o-abc"])
@@ -489,7 +489,7 @@ class TestLoadStepTraces:
 
     def test_filters_to_requested_ids(self, monkeypatch, tmp_path):
         path = tmp_path / "step_traces.jsonl"
-        monkeypatch.setattr("memory._step_traces_path", lambda: path)
+        monkeypatch.setattr("memory_ledger._step_traces_path", lambda: path)
         record_step_trace("o-1", "goal 1", [_make_step_outcome()])
         record_step_trace("o-2", "goal 2", [_make_step_outcome()])
         traces = load_step_traces(["o-1"])
@@ -498,7 +498,7 @@ class TestLoadStepTraces:
 
     def test_malformed_lines_skipped(self, monkeypatch, tmp_path):
         path = tmp_path / "step_traces.jsonl"
-        monkeypatch.setattr("memory._step_traces_path", lambda: path)
+        monkeypatch.setattr("memory_ledger._step_traces_path", lambda: path)
         with open(path, "w") as f:
             f.write("not json\n")
             f.write(json.dumps({"outcome_id": "o-good", "goal": "g", "steps": []}) + "\n")
@@ -529,8 +529,8 @@ class TestCompressOldOutcomes:
         with open(path, "w") as f:
             for i in range(10):
                 f.write(self._make_outcome_line(i) + "\n")
-        monkeypatch.setattr("memory._outcomes_path", lambda: path)
-        monkeypatch.setattr("memory._compressed_outcomes_path", lambda: tmp_path / "compressed.jsonl")
+        monkeypatch.setattr("memory_ledger._outcomes_path", lambda: path)
+        monkeypatch.setattr("memory_ledger._compressed_outcomes_path", lambda: tmp_path / "compressed.jsonl")
         result = compress_old_outcomes(threshold=100, dry_run=False)
         assert result is None
 
@@ -547,8 +547,8 @@ class TestCompressOldOutcomes:
         with open(path, "w") as f:
             for i in range(120):
                 f.write(self._make_outcome_line(i) + "\n")
-        monkeypatch.setattr("memory._outcomes_path", lambda: path)
-        monkeypatch.setattr("memory._compressed_outcomes_path", lambda: compressed_path)
+        monkeypatch.setattr("memory_ledger._outcomes_path", lambda: path)
+        monkeypatch.setattr("memory_ledger._compressed_outcomes_path", lambda: compressed_path)
         result = compress_old_outcomes(threshold=100, batch_size=50, keep_recent=50)
         assert isinstance(result, CompressedBatch)
         assert result.batch_size == 50
@@ -565,8 +565,8 @@ class TestCompressOldOutcomes:
         with open(path, "w") as f:
             for i in range(110):
                 f.write(self._make_outcome_line(i) + "\n")
-        monkeypatch.setattr("memory._outcomes_path", lambda: path)
-        monkeypatch.setattr("memory._compressed_outcomes_path", lambda: compressed_path)
+        monkeypatch.setattr("memory_ledger._outcomes_path", lambda: path)
+        monkeypatch.setattr("memory_ledger._compressed_outcomes_path", lambda: compressed_path)
         # batch_size=200 but keep_recent=80 → should only compress 30 (110 - 80)
         result = compress_old_outcomes(threshold=100, batch_size=200, keep_recent=80)
         assert result is not None
@@ -581,15 +581,15 @@ class TestCompressOldOutcomes:
         with open(path, "w") as f:
             for i in range(110):
                 f.write(self._make_outcome_line(i) + "\n")
-        monkeypatch.setattr("memory._outcomes_path", lambda: path)
-        monkeypatch.setattr("memory._compressed_outcomes_path", lambda: compressed_path)
+        monkeypatch.setattr("memory_ledger._outcomes_path", lambda: path)
+        monkeypatch.setattr("memory_ledger._compressed_outcomes_path", lambda: compressed_path)
         result = compress_old_outcomes(threshold=100, adapter=None)
         assert result is not None
         assert len(result.summary) > 10  # heuristic summary is non-empty
 
     def test_returns_none_if_no_file(self, monkeypatch, tmp_path):
         from memory import compress_old_outcomes
-        monkeypatch.setattr("memory._outcomes_path", lambda: tmp_path / "nonexistent.jsonl")
+        monkeypatch.setattr("memory_ledger._outcomes_path", lambda: tmp_path / "nonexistent.jsonl")
         result = compress_old_outcomes(threshold=100)
         assert result is None
 
@@ -609,13 +609,13 @@ class TestLoadCompressedBatches:
 
     def test_empty_when_no_file(self, monkeypatch, tmp_path):
         from memory import load_compressed_batches
-        monkeypatch.setattr("memory._compressed_outcomes_path", lambda: tmp_path / "compressed.jsonl")
+        monkeypatch.setattr("memory_ledger._compressed_outcomes_path", lambda: tmp_path / "compressed.jsonl")
         assert load_compressed_batches() == []
 
     def test_loads_batches_most_recent_first(self, monkeypatch, tmp_path):
         from memory import load_compressed_batches, _save_compressed_batch
         path = tmp_path / "compressed.jsonl"
-        monkeypatch.setattr("memory._compressed_outcomes_path", lambda: path)
+        monkeypatch.setattr("memory_ledger._compressed_outcomes_path", lambda: path)
         b1 = self._make_batch("b1", "First batch summary")
         b2 = self._make_batch("b2", "Second batch summary")
         _save_compressed_batch(b1)
@@ -628,8 +628,8 @@ class TestLoadCompressedBatches:
 class TestLoadOutcomesWithContext:
     def test_returns_dict_with_required_keys(self, monkeypatch, tmp_path):
         from memory import load_outcomes_with_context
-        monkeypatch.setattr("memory._outcomes_path", lambda: tmp_path / "empty.jsonl")
-        monkeypatch.setattr("memory._compressed_outcomes_path", lambda: tmp_path / "compressed.jsonl")
+        monkeypatch.setattr("memory_ledger._outcomes_path", lambda: tmp_path / "empty.jsonl")
+        monkeypatch.setattr("memory_ledger._compressed_outcomes_path", lambda: tmp_path / "compressed.jsonl")
         result = load_outcomes_with_context()
         assert "recent" in result
         assert "compressed" in result
@@ -639,8 +639,8 @@ class TestLoadOutcomesWithContext:
         from memory import load_outcomes_with_context, _save_compressed_batch, CompressedBatch
         outcomes_path = tmp_path / "outcomes.jsonl"
         compressed_path = tmp_path / "compressed.jsonl"
-        monkeypatch.setattr("memory._outcomes_path", lambda: outcomes_path)
-        monkeypatch.setattr("memory._compressed_outcomes_path", lambda: compressed_path)
+        monkeypatch.setattr("memory_ledger._outcomes_path", lambda: outcomes_path)
+        monkeypatch.setattr("memory_ledger._compressed_outcomes_path", lambda: compressed_path)
 
         # Add one raw outcome
         outcomes_path.write_text(json.dumps({
@@ -675,8 +675,8 @@ class TestLoadOutcomesWithContext:
         from memory import load_outcomes_with_context, _save_compressed_batch, CompressedBatch
         outcomes_path = tmp_path / "outcomes.jsonl"
         compressed_path = tmp_path / "compressed.jsonl"
-        monkeypatch.setattr("memory._outcomes_path", lambda: outcomes_path)
-        monkeypatch.setattr("memory._compressed_outcomes_path", lambda: compressed_path)
+        monkeypatch.setattr("memory_ledger._outcomes_path", lambda: outcomes_path)
+        monkeypatch.setattr("memory_ledger._compressed_outcomes_path", lambda: compressed_path)
         outcomes_path.write_text("")
 
         # Two batches — one about research, one about deployment
