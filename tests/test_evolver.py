@@ -23,6 +23,10 @@ from evolver import (
     _dynamic_constraints_path,
     BusinessSignal,
     scan_outcomes_for_signals,
+    scan_quality_drift,
+    QualityDriftFinding,
+    _save_baseline,
+    _load_baselines,
 )
 
 
@@ -1535,3 +1539,89 @@ class TestRunSkillTestGate:
                 result = _run_skill_test_gate(self._make_suggestion())
 
         assert result is None or result == {"blocked": False, "block_reason": ""}
+
+
+# ---------------------------------------------------------------------------
+# Quality drift detection
+# ---------------------------------------------------------------------------
+
+class TestQualityDrift:
+    """Tests for scan_quality_drift and baselines."""
+
+    def test_no_findings_with_empty_outcomes(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("evolver._baselines_path", lambda: tmp_path / "baselines.jsonl")
+        assert scan_quality_drift([]) == []
+
+    def test_no_findings_without_enough_history(self, tmp_path, monkeypatch):
+        """Need at least 3 prior baselines to detect drift."""
+        monkeypatch.setattr("evolver._baselines_path", lambda: tmp_path / "baselines.jsonl")
+        outcomes = [{"status": "done"}, {"status": "stuck"}]
+        findings = scan_quality_drift(outcomes)
+        assert findings == []
+
+    def test_baseline_saved_on_each_call(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("evolver._baselines_path", lambda: tmp_path / "baselines.jsonl")
+        scan_quality_drift([{"status": "done"}])
+        baselines = _load_baselines()
+        assert len(baselines) == 1
+        assert baselines[0]["success_rate"] == 1.0
+
+    def test_drift_detected_after_consecutive_drops(self, tmp_path, monkeypatch):
+        """Sustained success_rate drop below threshold triggers finding."""
+        bl_path = tmp_path / "baselines.jsonl"
+        monkeypatch.setattr("evolver._baselines_path", lambda: bl_path)
+
+        # Seed 5 cycles of 80% success
+        for i in range(5):
+            _save_baseline({"ts": f"2026-01-0{i+1}", "success_rate": 0.8, "avg_cost_usd": 0.01, "outcomes_count": 10})
+
+        # Seed 3 cycles of sharp decline (below 15% drop from 0.8 = below 0.68)
+        for i in range(3):
+            _save_baseline({"ts": f"2026-01-1{i}", "success_rate": 0.4, "avg_cost_usd": 0.01, "outcomes_count": 10})
+
+        # Current cycle: also bad
+        outcomes = [{"status": "stuck"}] * 8 + [{"status": "done"}] * 2  # 20% success
+        findings = scan_quality_drift(outcomes, consecutive_alert=3)
+
+        sr_findings = [f for f in findings if f.metric == "success_rate"]
+        assert len(sr_findings) >= 1
+        assert sr_findings[0].consecutive_drops >= 3
+
+    def test_no_drift_when_quality_stable(self, tmp_path, monkeypatch):
+        """Stable success_rate produces no findings."""
+        bl_path = tmp_path / "baselines.jsonl"
+        monkeypatch.setattr("evolver._baselines_path", lambda: bl_path)
+
+        for i in range(5):
+            _save_baseline({"ts": f"2026-01-0{i+1}", "success_rate": 0.75, "avg_cost_usd": 0.01, "outcomes_count": 10})
+
+        outcomes = [{"status": "done"}] * 7 + [{"status": "stuck"}] * 3  # 70% - within threshold
+        findings = scan_quality_drift(outcomes)
+        sr_findings = [f for f in findings if f.metric == "success_rate"]
+        assert len(sr_findings) == 0
+
+    def test_cost_drift_detected(self, tmp_path, monkeypatch):
+        """Rising avg cost triggers finding when sustained."""
+        bl_path = tmp_path / "baselines.jsonl"
+        monkeypatch.setattr("evolver._baselines_path", lambda: bl_path)
+
+        for i in range(5):
+            _save_baseline({"ts": f"2026-01-0{i+1}", "success_rate": 0.8, "avg_cost_usd": 0.01, "outcomes_count": 10})
+
+        # 3 cycles of high cost
+        for i in range(3):
+            _save_baseline({"ts": f"2026-01-1{i}", "success_rate": 0.8, "avg_cost_usd": 0.05, "outcomes_count": 10})
+
+        # Current cycle: also high cost
+        outcomes = [{"status": "done", "cost_usd": 0.05}] * 10
+        findings = scan_quality_drift(outcomes, consecutive_alert=3)
+        cost_findings = [f for f in findings if f.metric == "avg_cost_usd"]
+        assert len(cost_findings) >= 1
+
+    def test_load_baselines_roundtrip(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("evolver._baselines_path", lambda: tmp_path / "baselines.jsonl")
+        _save_baseline({"ts": "2026-01-01", "success_rate": 0.9, "avg_cost_usd": 0.01, "outcomes_count": 5})
+        _save_baseline({"ts": "2026-01-02", "success_rate": 0.8, "avg_cost_usd": 0.02, "outcomes_count": 10})
+        loaded = _load_baselines()
+        assert len(loaded) == 2
+        assert loaded[0]["ts"] == "2026-01-02"  # newest first

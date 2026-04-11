@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import sys
 import time
@@ -86,8 +87,59 @@ ALL_SIGNALS = [
     SIGNAL_CONTEXT_CHURN,
 ]
 
+# ---------------------------------------------------------------------------
+# Configurable thresholds (override via env vars for calibration)
+# ---------------------------------------------------------------------------
+
+def _env_float(key: str, default: float) -> float:
+    """Read a float from env, falling back to default."""
+    val = os.environ.get(key)
+    if val is not None:
+        try:
+            return float(val)
+        except (ValueError, TypeError):
+            pass
+    return default
+
+
+def _env_int(key: str, default: int) -> int:
+    val = os.environ.get(key)
+    if val is not None:
+        try:
+            return int(val)
+        except (ValueError, TypeError):
+            pass
+    return default
+
+
 # Threshold: signal appearing in this fraction of sessions → threshold breach
-_BREACH_THRESHOLD = 0.30
+_BREACH_THRESHOLD = _env_float("INSPECTOR_BREACH_THRESHOLD", 0.30)
+
+# Escalation tone: minimum keyword hits to trigger signal
+_ESCALATION_MIN_HITS = _env_int("INSPECTOR_ESCALATION_MIN_HITS", 3)
+
+# Context churn: token threshold for "too much context" signal
+_CONTEXT_CHURN_TOKEN_THRESHOLD = _env_int("INSPECTOR_CONTEXT_CHURN_TOKENS", 10000)
+
+# Alignment score thresholds for quality classification
+_ALIGNMENT_GOOD = _env_float("INSPECTOR_ALIGNMENT_GOOD", 0.7)
+_ALIGNMENT_POOR = _env_float("INSPECTOR_ALIGNMENT_POOR", 0.4)
+
+# Repeated rephrasing: minimum stuck count to trigger
+_REPHRASING_MIN_COUNT = _env_int("INSPECTOR_REPHRASING_MIN_COUNT", 2)
+
+
+def inspector_thresholds() -> Dict[str, Any]:
+    """Return current threshold values for introspection/calibration."""
+    return {
+        "breach_threshold": _BREACH_THRESHOLD,
+        "escalation_min_hits": _ESCALATION_MIN_HITS,
+        "context_churn_token_threshold": _CONTEXT_CHURN_TOKEN_THRESHOLD,
+        "alignment_good": _ALIGNMENT_GOOD,
+        "alignment_poor": _ALIGNMENT_POOR,
+        "rephrasing_min_count": _REPHRASING_MIN_COUNT,
+    }
+
 
 # Escalation keywords for tone detection
 _ESCALATION_KEYWORDS = frozenset([
@@ -511,7 +563,7 @@ def detect_friction(
                     evidence=f"blocked/stuck with short result ({len(result.strip())} chars)",
                 ))
 
-    # --- repeated_rephrasing: same goal slug stuck 2+ times ---
+    # --- repeated_rephrasing: same goal slug stuck N+ times ---
     import re
     from collections import Counter
 
@@ -525,7 +577,7 @@ def detect_friction(
             slug_stuck[slug] = slug_stuck.get(slug, 0) + 1
 
     for slug, count in slug_stuck.items():
-        if count >= 2:
+        if count >= _REPHRASING_MIN_COUNT:
             signals.append(SpecFrictionSignal(
                 session_id="multiple",
                 signal_type=SIGNAL_REPEATED_REPHRASE,
@@ -1393,10 +1445,10 @@ def detect_friction_signals(outcome: dict) -> List[FrictionSignal]:
             session_id=session_id,
         ))
 
-    # escalation_tone: stuck + "critical" or "failed" appearing 3+ times
+    # escalation_tone: stuck + "critical" or "failed" appearing N+ times
     if status == "stuck":
         fail_count = summary_lower.count("critical") + summary_lower.count("failed")
-        if fail_count >= 3:
+        if fail_count >= _ESCALATION_MIN_HITS:
             signals.append(FrictionSignal(
                 signal_type=SIGNAL_ESCALATION_TONE,
                 severity="medium",
@@ -1406,7 +1458,7 @@ def detect_friction_signals(outcome: dict) -> List[FrictionSignal]:
             ))
 
     # context_churn: lots of input tokens + stuck = too much context, no progress
-    if status == "stuck" and tokens_in > 10000:
+    if status == "stuck" and tokens_in > _CONTEXT_CHURN_TOKEN_THRESHOLD:
         signals.append(FrictionSignal(
             signal_type=SIGNAL_CONTEXT_CHURN,
             severity="low",
@@ -1511,14 +1563,14 @@ def inspect_session(outcome: dict, adapter=None) -> SessionQuality:
 
     # Determine delight signals
     delight_signals: List[str] = []
-    if status == "done" and alignment_score >= 0.7:
+    if status == "done" and alignment_score >= _ALIGNMENT_GOOD:
         delight_signals.append("task_completed_successfully")
 
     # Determine overall_quality
     has_high_friction = any(s.severity == "high" for s in friction_signals)
-    if alignment_score >= 0.7 and not has_high_friction:
+    if alignment_score >= _ALIGNMENT_GOOD and not has_high_friction:
         overall_quality = "good"
-    elif alignment_score < 0.4 or has_high_friction:
+    elif alignment_score < _ALIGNMENT_POOR or has_high_friction:
         overall_quality = "poor"
     else:
         overall_quality = "fair"

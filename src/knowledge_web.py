@@ -458,6 +458,15 @@ def promote_lesson(lesson_id: str) -> bool:
     _rewrite_tiered_lessons(tier=MemoryTier.MEDIUM, lessons=lessons)
     target.tier = MemoryTier.LONG
     _append_tiered_lesson(target, tier=MemoryTier.LONG)
+
+    # Feed into standing-rule pipeline: observe the pattern for hypothesis tracking
+    try:
+        from knowledge_lens import observe_pattern
+        domain = getattr(target, "task_type", "") or ""
+        observe_pattern(target.lesson, domain, source_lesson_id=target.lesson_id)
+    except Exception:
+        pass  # standing-rule pipeline must not block lesson promotion
+
     return True
 
 

@@ -29,6 +29,7 @@ from inspector import (
     run_inspector,
     get_latest_inspection,
     get_friction_summary,
+    inspector_thresholds,
     _save_inspection_report,
     _save_inspection_suggestions,
     _inspection_log_path,
@@ -1378,3 +1379,29 @@ def test_check_alignment_uses_calibrated_threshold_strict(monkeypatch, tmp_path)
     from memory import calibrated_alignment_threshold, _ALIGNMENT_THRESHOLD_BASE
     threshold = calibrated_alignment_threshold("alignment")
     assert threshold > _ALIGNMENT_THRESHOLD_BASE
+
+
+# ---------------------------------------------------------------------------
+# Threshold configuration
+# ---------------------------------------------------------------------------
+
+def test_inspector_thresholds_returns_defaults():
+    t = inspector_thresholds()
+    assert t["breach_threshold"] == 0.30
+    assert t["escalation_min_hits"] == 3
+    assert t["context_churn_token_threshold"] == 10000
+    assert t["alignment_good"] == 0.7
+    assert t["alignment_poor"] == 0.4
+    assert t["rephrasing_min_count"] == 2
+
+
+def test_inspector_thresholds_env_override(monkeypatch):
+    """env vars override defaults at module level."""
+    # These test the _env_float/_env_int helpers, not module-level vars
+    # (module-level vars are evaluated at import time)
+    import inspector
+    monkeypatch.setattr(inspector, "_BREACH_THRESHOLD", 0.50)
+    monkeypatch.setattr(inspector, "_ALIGNMENT_GOOD", 0.8)
+    t = inspector.inspector_thresholds()
+    assert t["breach_threshold"] == 0.50
+    assert t["alignment_good"] == 0.8

@@ -17,6 +17,7 @@ from memory import (
     Decision,
     Hypothesis,
     StandingRule,
+    check_contradiction,
     contradict_pattern,
     inject_decisions,
     inject_standing_rules,
@@ -171,6 +172,85 @@ class TestContradictPattern:
         assert contradict_pattern("Cache responses.", "perf")
         rules = load_standing_rules()
         assert rules[0].contradictions == 1
+
+
+# ---------------------------------------------------------------------------
+# check_contradiction
+# ---------------------------------------------------------------------------
+
+
+class TestCheckContradiction:
+    def test_detects_always_vs_never(self, tmp_path):
+        """'Always verify' contradicts 'Never verify'."""
+        rules = [StandingRule(
+            rule_id="r1", rule="Always verify output before returning",
+            source_lesson_id="", domain="ops", confirmations=3,
+            contradictions=0, promoted_at="2026-01-01",
+        )]
+        result = check_contradiction("Never verify output before returning", rules)
+        assert result is not None
+        assert result.rule_id == "r1"
+
+    def test_detects_skip_vs_require(self, tmp_path):
+        """'Skip validation' contradicts 'Require validation'."""
+        rules = [StandingRule(
+            rule_id="r2", rule="Always require validation on research tasks",
+            source_lesson_id="", domain="research", confirmations=2,
+            contradictions=0, promoted_at="2026-01-01",
+        )]
+        result = check_contradiction("Skip validation on research tasks", rules)
+        assert result is not None
+
+    def test_no_contradiction_different_topics(self, tmp_path):
+        """Rules about different topics are not contradictions."""
+        rules = [StandingRule(
+            rule_id="r3", rule="Always verify output before returning",
+            source_lesson_id="", domain="ops", confirmations=3,
+            contradictions=0, promoted_at="2026-01-01",
+        )]
+        result = check_contradiction("Never deploy on Friday", rules)
+        assert result is None
+
+    def test_no_contradiction_same_direction(self, tmp_path):
+        """Rules in the same direction are not contradictions."""
+        rules = [StandingRule(
+            rule_id="r4", rule="Always verify output",
+            source_lesson_id="", domain="ops", confirmations=3,
+            contradictions=0, promoted_at="2026-01-01",
+        )]
+        result = check_contradiction("Always validate output", rules)
+        assert result is None
+
+    def test_empty_rules_no_contradiction(self, tmp_path):
+        assert check_contradiction("anything", []) is None
+
+
+class TestPromotionContradictionGate:
+    """observe_pattern blocks promotion when candidate contradicts existing rule."""
+
+    def test_promotion_blocked_by_contradiction(self, tmp_path):
+        """Hypothesis matching existing rule in opposite direction is blocked."""
+        # Create a standing rule first
+        observe_pattern("Always verify results", "ops")
+        observe_pattern("Always verify results", "ops")  # promoted
+        rules = load_standing_rules()
+        assert len(rules) == 1
+
+        # Try to promote a contradicting hypothesis
+        observe_pattern("Never verify results", "ops")
+        observe_pattern("Never verify results", "ops")  # would promote, but blocked
+        rules = load_standing_rules()
+        assert len(rules) == 1  # still just the original
+        assert rules[0].rule == "Always verify results"
+
+    def test_promotion_succeeds_without_contradiction(self, tmp_path):
+        """Non-contradicting hypothesis promotes normally."""
+        observe_pattern("Always verify results", "ops")
+        observe_pattern("Always verify results", "ops")
+        observe_pattern("Log all errors to disk", "ops")
+        observe_pattern("Log all errors to disk", "ops")
+        rules = load_standing_rules()
+        assert len(rules) == 2
 
 
 # ---------------------------------------------------------------------------

@@ -90,7 +90,7 @@ from knowledge_lens import (  # noqa: F401, E402
     _CALIBRATION_MIN_SAMPLES,
     _rules_path, _hypotheses_path, _decisions_path, _verification_outcomes_path,
     load_standing_rules, load_hypotheses, _rewrite_rules, _rewrite_hypotheses,
-    observe_pattern, contradict_pattern, inject_standing_rules,
+    observe_pattern, contradict_pattern, check_contradiction, inject_standing_rules,
     record_decision, search_decisions, inject_decisions,
     record_verification, load_verification_outcomes,
     verification_accuracy, calibrated_alignment_threshold,

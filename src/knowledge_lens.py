@@ -245,6 +245,33 @@ def observe_pattern(lesson: str, domain: str, *, source_lesson_id: str = "") -> 
         target_hyp.source_lesson_ids.append(source_lesson_id)
 
     if target_hyp.confirmations >= RULE_PROMOTE_CONFIRMATIONS:
+        # Check for contradiction with existing rules before promoting
+        existing_rules = load_standing_rules()
+        contradicting = check_contradiction(target_hyp.lesson, existing_rules)
+        if contradicting is not None:
+            log.warning(
+                "hypothesis %s contradicts standing rule %s — blocking promotion",
+                target_hyp.hyp_id, contradicting.rule_id,
+            )
+            try:
+                from captains_log import log_event, HYPOTHESIS_CONTRADICTED
+                log_event(
+                    event_type=HYPOTHESIS_CONTRADICTED,
+                    subject=target_hyp.hyp_id,
+                    summary=(
+                        f"Blocked promotion: '{target_hyp.lesson[:80]}' contradicts "
+                        f"rule {contradicting.rule_id}: '{contradicting.rule[:80]}'"
+                    ),
+                    context={
+                        "hyp_id": target_hyp.hyp_id,
+                        "conflicting_rule_id": contradicting.rule_id,
+                    },
+                )
+            except Exception:
+                pass
+            _rewrite_hypotheses(hyps)
+            return None
+
         # Promote to standing rule
         import uuid as _uuid
         rule = StandingRule(
@@ -334,6 +361,56 @@ def contradict_pattern(lesson: str, domain: str) -> bool:
             return True
 
     return False
+
+
+# Negation / opposition keywords that signal potential contradiction
+_NEGATION_PAIRS = [
+    ({"always", "must", "require"}, {"never", "skip", "avoid", "don't", "do not"}),
+    ({"verify", "validate", "check"}, {"skip", "omit", "bypass"}),
+    ({"include", "add", "use"}, {"exclude", "remove", "avoid", "don't use"}),
+    ({"fast", "quick", "speed"}, {"thorough", "comprehensive", "slow"}),
+    ({"simple", "minimal"}, {"detailed", "extensive", "comprehensive"}),
+]
+
+
+def check_contradiction(
+    candidate: str,
+    existing_rules: List[StandingRule],
+    *,
+    similarity_threshold: float = 0.5,
+) -> Optional[StandingRule]:
+    """Check if a candidate rule contradicts any existing standing rule.
+
+    Uses text similarity + negation keyword detection. Returns the first
+    contradicting rule found, or None if no contradiction detected.
+
+    A contradiction is: high topic similarity (rules about the same thing)
+    combined with opposing directives (one says "always X", the other "never X").
+    """
+    candidate_lower = candidate.lower().strip()
+    candidate_words = set(candidate_lower.split())
+
+    for rule in existing_rules:
+        rule_lower = rule.rule.lower().strip()
+        rule_words = set(rule_lower.split())
+
+        # Topic similarity: are these rules about the same thing?
+        topic_sim = _text_similarity(candidate, rule.rule)
+        if topic_sim < similarity_threshold:
+            continue
+
+        # Check for negation opposition
+        for group_a, group_b in _NEGATION_PAIRS:
+            cand_has_a = bool(candidate_words & group_a)
+            cand_has_b = bool(candidate_words & group_b)
+            rule_has_a = bool(rule_words & group_a)
+            rule_has_b = bool(rule_words & group_b)
+
+            # Contradiction: one has A-words and the other has B-words (or vice versa)
+            if (cand_has_a and rule_has_b) or (cand_has_b and rule_has_a):
+                return rule
+
+    return None
 
 
 def inject_standing_rules(domain: str = "") -> str:

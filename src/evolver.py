@@ -876,6 +876,163 @@ def scan_step_costs(
         return []
 
 
+# ---------------------------------------------------------------------------
+# Quality drift detection
+# ---------------------------------------------------------------------------
+
+@dataclass
+class QualityDriftFinding:
+    """One finding from the quality drift scan."""
+    metric: str                # e.g. "success_rate", "avg_cost_usd"
+    current_value: float
+    baseline_value: float      # rolling average of prior cycles
+    delta_pct: float           # percentage change from baseline
+    consecutive_drops: int     # how many consecutive cycles below baseline
+    suggestion: str
+
+
+def _baselines_path() -> Path:
+    from orch_items import memory_dir
+    return memory_dir() / "evolver-baselines.jsonl"
+
+
+def _load_baselines(limit: int = 20) -> List[dict]:
+    """Load recent evolver cycle baselines (newest first)."""
+    path = _baselines_path()
+    if not path.exists():
+        return []
+    lines = []
+    try:
+        for raw in path.read_text(encoding="utf-8").splitlines():
+            raw = raw.strip()
+            if raw:
+                try:
+                    lines.append(json.loads(raw))
+                except json.JSONDecodeError:
+                    pass
+    except OSError:
+        return []
+    return lines[-limit:][::-1]  # newest first
+
+
+def _save_baseline(entry: dict) -> None:
+    """Append a cycle quality snapshot to baselines."""
+    path = _baselines_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(entry) + "\n")
+
+
+def scan_quality_drift(
+    outcomes: List[dict],
+    *,
+    drop_threshold_pct: float = 15.0,
+    consecutive_alert: int = 3,
+) -> List[QualityDriftFinding]:
+    """Compare current cycle quality against rolling baseline from prior cycles.
+
+    Tracks success_rate and avg cost. Flags when current cycle is significantly
+    worse than the rolling average of prior cycles for N consecutive cycles.
+
+    Args:
+        outcomes: Current cycle's outcome dicts.
+        drop_threshold_pct: Percentage drop from baseline that counts as degradation.
+        consecutive_alert: Number of consecutive drops before generating a finding.
+
+    Returns:
+        List of QualityDriftFinding (empty if quality is stable or improving).
+    """
+    if not outcomes:
+        return []
+
+    # Compute current cycle metrics
+    total = len(outcomes)
+    done = sum(1 for o in outcomes if o.get("status") == "done")
+    current_success = done / total if total > 0 else 0.0
+
+    costs = [o.get("cost_usd", 0.0) for o in outcomes if isinstance(o.get("cost_usd"), (int, float))]
+    current_avg_cost = sum(costs) / len(costs) if costs else 0.0
+
+    now = datetime.now(timezone.utc).isoformat()
+    snapshot = {
+        "ts": now,
+        "success_rate": round(current_success, 4),
+        "avg_cost_usd": round(current_avg_cost, 6),
+        "outcomes_count": total,
+    }
+
+    # Save this cycle's snapshot
+    try:
+        _save_baseline(snapshot)
+    except Exception:
+        pass
+
+    # Load prior baselines
+    prior = _load_baselines(limit=20)
+    # Skip the one we just wrote (newest)
+    if prior and prior[0].get("ts") == now:
+        prior = prior[1:]
+
+    if len(prior) < 3:
+        return []  # not enough history to detect drift
+
+    findings: List[QualityDriftFinding] = []
+
+    # Check each metric for drift
+    for metric_key, current_val, higher_is_better in [
+        ("success_rate", current_success, True),
+        ("avg_cost_usd", current_avg_cost, False),
+    ]:
+        prior_values = [p.get(metric_key, 0.0) for p in prior if isinstance(p.get(metric_key), (int, float))]
+        if not prior_values:
+            continue
+        baseline = sum(prior_values) / len(prior_values)
+        if baseline == 0:
+            continue
+
+        if higher_is_better:
+            delta_pct = ((baseline - current_val) / baseline) * 100
+            is_worse = current_val < baseline * (1 - drop_threshold_pct / 100)
+        else:
+            delta_pct = ((current_val - baseline) / baseline) * 100
+            is_worse = current_val > baseline * (1 + drop_threshold_pct / 100)
+
+        if not is_worse:
+            continue
+
+        # Count consecutive drops (including this one)
+        consecutive = 1
+        for pv in prior_values:
+            if higher_is_better:
+                if pv < baseline * (1 - drop_threshold_pct / 100):
+                    consecutive += 1
+                else:
+                    break
+            else:
+                if pv > baseline * (1 + drop_threshold_pct / 100):
+                    consecutive += 1
+                else:
+                    break
+
+        if consecutive >= consecutive_alert:
+            direction = "dropped" if higher_is_better else "risen"
+            findings.append(QualityDriftFinding(
+                metric=metric_key,
+                current_value=current_val,
+                baseline_value=baseline,
+                delta_pct=delta_pct,
+                consecutive_drops=consecutive,
+                suggestion=(
+                    f"{metric_key} has {direction} {delta_pct:.1f}% from baseline "
+                    f"({current_val:.4f} vs {baseline:.4f}) for {consecutive} consecutive cycles. "
+                    f"Recent evolver changes may be degrading quality — consider rolling back "
+                    f"recent auto-applied suggestions."
+                ),
+            ))
+
+    return findings
+
+
 def run_evolver(
     *,
     outcomes_window: int = 50,
@@ -886,6 +1043,7 @@ def run_evolver(
     scan_signals: bool = True,
     scan_calibration: bool = True,
     scan_costs: bool = True,
+    scan_drift: bool = True,
 ) -> EvolverReport:
     """Run one meta-evolution cycle.
 
@@ -1002,6 +1160,29 @@ def run_evolver(
             log.info("evolver cost_scan suggestions=%d", len(cost_suggestions))
         except Exception as _cost_exc:
             log.debug("cost scan failed (non-fatal): %s", _cost_exc)
+
+    # Quality drift detection — compare this cycle to rolling baseline
+    if scan_drift:
+        try:
+            # Convert outcomes to dicts for scan_quality_drift
+            _outcome_dicts = [o if isinstance(o, dict) else (o.__dict__ if hasattr(o, "__dict__") else {}) for o in outcomes]
+            drift_findings = scan_quality_drift(_outcome_dicts)
+            for df in drift_findings:
+                import uuid as _drift_uuid
+                suggestions.append(Suggestion(
+                    suggestion_id=f"drift-{_drift_uuid.uuid4().hex[:8]}",
+                    category="observation",
+                    target=df.metric,
+                    suggestion=df.suggestion,
+                    failure_pattern=f"quality_drift: {df.metric} delta={df.delta_pct:.1f}% consecutive={df.consecutive_drops}",
+                    confidence=min(0.9, 0.6 + df.consecutive_drops * 0.1),
+                    outcomes_analyzed=len(outcomes),
+                ))
+            if verbose and drift_findings:
+                print(f"[evolver] drift_scan: {len(drift_findings)} quality drift finding(s)", file=sys.stderr)
+            log.info("evolver drift_scan findings=%d", len(drift_findings))
+        except Exception as _drift_exc:
+            log.debug("quality drift scan failed (non-fatal): %s", _drift_exc)
 
     report = EvolverReport(
         run_id=run_id,
