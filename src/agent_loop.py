@@ -410,6 +410,171 @@ def _handle_budget_ceiling(
     return _suffix
 
 
+def _write_iteration_artifacts(
+    ctx: LoopContext,
+    step_text: str,
+    step_status: str,
+    outcome: dict,
+    step_outcomes: List[StepOutcome],
+    steps: List[str],
+    manifest_steps: List[str],
+    replan_count: int,
+    start_ts: str,
+    dead_ends_available: bool,
+    update_dead_ends_fn=None,
+) -> bool:
+    """Write checkpoint, manifest, dead ends, march of nines after each step.
+
+    Returns True if march_of_nines_alert was triggered.
+    """
+    o = _orch()
+
+    # Checkpoint
+    try:
+        from checkpoint import write_checkpoint as _write_ckpt
+        _write_ckpt(ctx.loop_id, ctx.goal, ctx.project or "", steps, step_outcomes)
+    except Exception:
+        pass
+
+    # Update plan manifest
+    if ctx.project and manifest_steps:
+        try:
+            _write_plan_manifest(
+                project=ctx.project,
+                loop_id=ctx.loop_id,
+                goal=ctx.goal,
+                planned_steps=manifest_steps,
+                start_ts=start_ts,
+                step_outcomes=step_outcomes,
+                replan_count=replan_count,
+            )
+        except Exception:
+            pass
+
+    # Dead ends
+    if step_status == "blocked" and dead_ends_available:
+        try:
+            _reason = outcome.get("stuck_reason", f"step blocked: {step_text[:80]}")
+            _attempted = outcome.get("result", "")[:200]
+            _dead_end_text = (
+                f"Loop {ctx.loop_id} — Step: {step_text[:80]}\n"
+                f"Reason: {_reason}\n"
+                f"Attempted: {_attempted}"
+            )
+            update_dead_ends_fn(ctx.project, [_dead_end_text])
+        except Exception:
+            pass
+
+    # March of Nines
+    _alert = False
+    if len(step_outcomes) >= 3:
+        try:
+            _steps_completed = sum(1 for s in step_outcomes if s.status == "done")
+            _steps_attempted = len(step_outcomes)
+            _cumulative_rate = _steps_completed / _steps_attempted
+            _chain_success = _cumulative_rate ** _steps_attempted
+            if _chain_success < 0.5:
+                _alert = True
+                o.append_decision(ctx.project, [
+                    f"[loop:{ctx.loop_id}] March of Nines alert: "
+                    f"chain_success={_chain_success:.3f} "
+                    f"({_steps_completed}/{_steps_attempted} steps done)"
+                ])
+        except Exception:
+            pass
+
+    return _alert
+
+
+def _check_loop_interrupts(
+    ctx: LoopContext,
+    *,
+    remaining_steps: List[str],
+    remaining_indices: List[int],
+    interrupt_queue,
+    apply_interrupt_fn,
+    goal: str,
+    interrupts_applied: int,
+) -> tuple:
+    """Check kill switch, wall-clock timeout, and interrupt queue.
+
+    Returns (loop_status, stuck_reason, goal, interrupts_applied, remaining_steps, remaining_indices).
+    loop_status is "" if no interruption, "interrupted" if should break.
+    """
+    o = _orch()
+    loop_status = ""
+    stuck_reason = None
+
+    # Kill switch
+    try:
+        from killswitch import is_active as _ks_active, read_reason as _ks_reason
+        if _ks_active():
+            _ks_msg = _ks_reason() or "kill switch engaged"
+            log.warning("loop %s stopping — kill switch active: %s", ctx.loop_id, _ks_msg)
+            loop_status = "interrupted"
+            stuck_reason = f"kill switch: {_ks_msg}"
+            if ctx.verbose:
+                print(f"[poe] kill switch active — stopping loop", file=sys.stderr, flush=True)
+    except Exception:
+        pass
+
+    # Wall-clock timeout
+    if not loop_status and ctx.loop_timeout_secs is not None:
+        _elapsed_secs = time.monotonic() - ctx.started_at
+        if _elapsed_secs >= ctx.loop_timeout_secs:
+            log.warning("loop %s wall-clock timeout after %.0fs", ctx.loop_id, _elapsed_secs)
+            loop_status = "interrupted"
+            stuck_reason = f"wall-clock timeout ({ctx.loop_timeout_secs:.0f}s)"
+            if ctx.verbose:
+                print(f"[poe] wall-clock timeout after {_elapsed_secs:.0f}s — stopping", file=sys.stderr, flush=True)
+
+    if loop_status:
+        return loop_status, stuck_reason, goal, interrupts_applied, remaining_steps, remaining_indices
+
+    # Interrupt polling
+    if interrupt_queue is not None:
+        try:
+            pending = interrupt_queue.poll()
+            for intr in pending:
+                interrupts_applied += 1
+                new_remaining, goal, should_stop = apply_interrupt_fn(
+                    intr, remaining_steps, goal
+                )
+                if should_stop:
+                    loop_status = "interrupted"
+                    stuck_reason = f"stopped by {intr.source}: {intr.message[:80]}"
+                    if ctx.verbose:
+                        print(
+                            f"[poe] interrupt: stop requested by {intr.source}",
+                            file=sys.stderr, flush=True,
+                        )
+                    remaining_steps = []
+                    remaining_indices = []
+                    break
+                else:
+                    new_remaining = _shape_steps(new_remaining, label="interrupt")
+                    added = [s for s in new_remaining if s not in remaining_steps]
+                    if added:
+                        new_idxs = o.append_next_items(ctx.project, added)
+                        existing_count = len(remaining_steps)
+                        remaining_steps = new_remaining
+                        remaining_indices = remaining_indices[:existing_count] + new_idxs
+                    else:
+                        remaining_steps = new_remaining
+                    o.append_decision(ctx.project, [
+                        f"[loop:{ctx.loop_id}] interrupt({intr.intent}) from {intr.source}: {intr.message[:60]}",
+                    ])
+                    if ctx.verbose:
+                        print(
+                            f"[poe] interrupt({intr.intent}) from {intr.source}: {len(remaining_steps)} steps remaining",
+                            file=sys.stderr, flush=True,
+                        )
+        except Exception:
+            pass
+
+    return loop_status, stuck_reason, goal, interrupts_applied, remaining_steps, remaining_indices
+
+
 def _post_step_checks(
     ctx: LoopContext,
     step_text: str,
@@ -3150,136 +3315,36 @@ def run_agent_loop(
             injected_steps=outcome.get("inject_steps", []),
         ))
 
-        # GAP 3: write checkpoint after each step so loop is resumable
-        try:
-            from checkpoint import write_checkpoint as _write_ckpt
-            _write_ckpt(loop_id, goal, project or "", steps, step_outcomes)
-        except Exception:
-            pass
-
-        # Update plan manifest with this step's result — keeps it current mid-run
-        if project and _manifest_steps:
-            try:
-                _write_plan_manifest(
-                    project=project,
-                    loop_id=loop_id,
-                    goal=goal,
-                    planned_steps=_manifest_steps,
-                    start_ts=start_ts,
-                    step_outcomes=step_outcomes,
-                    replan_count=_replan_count,
-                )
-            except Exception:
-                pass
-
-        # Phase 19: write dead end to DEAD_ENDS.md when step is blocked
-        if step_status == "blocked" and _dead_ends_available:
-            try:
-                _reason = outcome.get("stuck_reason", f"step blocked: {step_text[:80]}")
-                _attempted = outcome.get("result", "")[:200]
-                _dead_end_text = (
-                    f"Loop {loop_id} — Step: {step_text[:80]}\n"
-                    f"Reason: {_reason}\n"
-                    f"Attempted: {_attempted}"
-                )
-                _update_dead_ends(project, [_dead_end_text])
-            except Exception:
-                pass
-
-        # Phase 19: March of Nines defense — track cumulative chain success rate
-        if len(step_outcomes) >= 3:
-            try:
-                _steps_completed = sum(1 for s in step_outcomes if s.status == "done")
-                _steps_attempted = len(step_outcomes)
-                _cumulative_rate = _steps_completed / _steps_attempted
-                _chain_success = _cumulative_rate ** _steps_attempted
-                if _chain_success < 0.5:
-                    _march_of_nines_alert = True
-                    o.append_decision(project, [
-                        f"[loop:{loop_id}] March of Nines alert: "
-                        f"chain_success={_chain_success:.3f} "
-                        f"({_steps_completed}/{_steps_attempted} steps done)"
-                    ])
-            except Exception:
-                pass
+        # End-of-iteration artifacts: checkpoint, manifest, dead ends, march of nines
+        _mon_alert = _write_iteration_artifacts(
+            ctx, step_text, step_status, outcome,
+            step_outcomes, steps, _manifest_steps, _replan_count, start_ts,
+            dead_ends_available=_dead_ends_available,
+            update_dead_ends_fn=_update_dead_ends if _dead_ends_available else None,
+        )
+        if _mon_alert:
+            _march_of_nines_alert = True
 
         if loop_status == "stuck":
             break
 
-        # Phase 11: carry injected_context forward to next step
+        # Carry injected context forward to next step
         _next_step_injected_context = _step_injected_context
 
-        # --- Kill switch + wall-clock timeout check ---
-        try:
-            from killswitch import is_active as _ks_active, read_reason as _ks_reason
-            if _ks_active():
-                _ks_msg = _ks_reason() or "kill switch engaged"
-                log.warning("loop %s stopping — kill switch active: %s", loop_id, _ks_msg)
-                loop_status = "interrupted"
-                stuck_reason = f"kill switch: {_ks_msg}"
-                if verbose:
-                    print(f"[poe] kill switch active — stopping loop", file=sys.stderr, flush=True)
-        except Exception:
-            pass
-
-        if _loop_timeout_secs is not None:
-            _elapsed_secs = time.monotonic() - started_at
-            if _elapsed_secs >= _loop_timeout_secs:
-                log.warning("loop %s wall-clock timeout after %.0fs", loop_id, _elapsed_secs)
-                loop_status = "interrupted"
-                stuck_reason = f"wall-clock timeout ({_loop_timeout_secs:.0f}s)"
-                if verbose:
-                    print(f"[poe] wall-clock timeout after {_elapsed_secs:.0f}s — stopping", file=sys.stderr, flush=True)
-
-        if loop_status == "interrupted":
+        # Kill switch, timeout, interrupt polling
+        _intr_status, _intr_reason, goal, interrupts_applied, remaining_steps, remaining_indices = _check_loop_interrupts(
+            ctx,
+            remaining_steps=remaining_steps,
+            remaining_indices=remaining_indices,
+            interrupt_queue=interrupt_queue,
+            apply_interrupt_fn=apply_interrupt_to_steps,
+            goal=goal,
+            interrupts_applied=interrupts_applied,
+        )
+        if _intr_status:
+            loop_status = _intr_status
+            stuck_reason = _intr_reason
             break
-
-        # --- Interrupt polling: check for new instructions between steps ---
-        if interrupt_queue is not None:
-            try:
-                pending = interrupt_queue.poll()
-                for intr in pending:
-                    interrupts_applied += 1
-                    new_remaining, goal, should_stop = apply_interrupt_to_steps(
-                        intr, remaining_steps, goal
-                    )
-                    if should_stop:
-                        loop_status = "interrupted"
-                        stuck_reason = f"stopped by {intr.source}: {intr.message[:80]}"
-                        if verbose:
-                            print(
-                                f"[poe] interrupt: stop requested by {intr.source}",
-                                file=sys.stderr, flush=True,
-                            )
-                        remaining_steps = []
-                        remaining_indices = []
-                        break
-                    else:
-                        # Shape interrupt-injected steps before they enter remaining_steps.
-                        new_remaining = _shape_steps(new_remaining, label="interrupt")
-                        # Inject new steps into NEXT.md and get their indices
-                        added = [s for s in new_remaining if s not in remaining_steps]
-                        if added:
-                            new_idxs = o.append_next_items(project, added)
-                            # Reconstruct remaining with proper indices
-                            # Keep existing indices for pre-existing steps, append new ones
-                            existing_count = len(remaining_steps)
-                            remaining_steps = new_remaining
-                            remaining_indices = remaining_indices[:existing_count] + new_idxs
-                        else:
-                            remaining_steps = new_remaining
-                        o.append_decision(project, [
-                            f"[loop:{loop_id}] interrupt({intr.intent}) from {intr.source}: {intr.message[:60]}",
-                        ])
-                        if verbose:
-                            print(
-                                f"[poe] interrupt({intr.intent}) from {intr.source}: {len(remaining_steps)} steps remaining",
-                                file=sys.stderr, flush=True,
-                            )
-                if loop_status == "interrupted":
-                    break
-            except Exception:
-                pass  # Interrupt failures must never break the loop
 
     # Phase G: Build result, write artifacts, run finalize side-effects
     result = _build_result_and_finalize(
