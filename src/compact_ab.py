@@ -54,7 +54,9 @@ def _load_compact_skill() -> str:
     text = skill_path.read_text(encoding="utf-8")
     # Strip YAML frontmatter
     if text.startswith("---"):
-        _, _, text = text.split("---", 2)
+        parts = text.split("---", 2)
+        if len(parts) >= 3:
+            text = parts[2]
     return text.strip()
 
 
@@ -216,13 +218,19 @@ def run_ab_test(
     # Aggregate
     reductions = [r.token_reduction_pct for r in all_rounds]
     sorted_reductions = sorted(reductions)
-    median_idx = len(sorted_reductions) // 2
+    n = len(sorted_reductions)
+    if n == 0:
+        median_val = 0.0
+    elif n % 2 == 1:
+        median_val = sorted_reductions[n // 2]
+    else:
+        median_val = (sorted_reductions[n // 2 - 1] + sorted_reductions[n // 2]) / 2
 
     report = ABReport(
         rounds=all_rounds,
         model=model if not dry_run else "dry-run",
         avg_token_reduction_pct=sum(reductions) / len(reductions) if reductions else 0,
-        median_token_reduction_pct=sorted_reductions[median_idx] if sorted_reductions else 0,
+        median_token_reduction_pct=median_val,
         total_control_tokens=sum(r.control_tokens_out for r in all_rounds),
         total_treatment_tokens=sum(r.treatment_tokens_out for r in all_rounds),
     )
