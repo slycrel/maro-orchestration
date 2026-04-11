@@ -317,6 +317,81 @@ def _steps_are_independent(steps: List[str]) -> bool:
     return not any(_DEP_RE.search(s) for s in steps)
 
 
+def _decompose_goal(
+    ctx: LoopContext,
+    *,
+    preset_steps: Optional[List[str]],
+    max_steps: int,
+    knowledge_sub_goals: bool,
+    permission_context,
+) -> tuple:
+    """Phase B: Decompose goal into steps, run prereq checks.
+
+    Returns (steps, prereq_context, lessons_context, skills_context, cost_context).
+    """
+    from llm import build_adapter, MODEL_CHEAP, MODEL_MID
+
+    if ctx.verbose:
+        print(f"[poe] decomposing goal...", file=sys.stderr, flush=True)
+    _lessons_context, _skills_context, _cost_context, _had_no_matching_skill, _matched_rule = (
+        _build_loop_context(ctx.goal, verbose=ctx.verbose, permission_context=permission_context, project=ctx.project or "")
+    )
+
+    # Stage 5: rule hit — use deterministic steps, skip LLM decompose
+    if preset_steps is not None and preset_steps:
+        steps = [str(s).strip() for s in preset_steps if str(s).strip()]
+        if ctx.verbose:
+            print(f"[poe] pipeline: using {len(steps)} preset steps (no decompose)", file=sys.stderr, flush=True)
+    elif _matched_rule is not None and _matched_rule.steps_template:
+        steps = list(_matched_rule.steps_template)
+        if ctx.verbose:
+            print(f"[poe] using {len(steps)} rule steps from {_matched_rule.name!r}", file=sys.stderr, flush=True)
+    else:
+        steps = None
+
+    if steps is None:
+        # Decompose uses at least mid (Sonnet) — a weak planner compounds across every step.
+        _decompose_adapter = ctx.adapter
+        if getattr(ctx.adapter, "model_key", "") == MODEL_CHEAP:
+            try:
+                _decompose_adapter = build_adapter(model=MODEL_MID)
+                log.debug("decompose: lifted adapter cheap → mid for plan quality")
+            except Exception:
+                _decompose_adapter = ctx.adapter
+        steps = _decompose(
+            ctx.goal, _decompose_adapter, max_steps=max_steps, verbose=ctx.verbose,
+            lessons_context=_lessons_context, ancestry_context=ctx.ancestry_context,
+            skills_context=_skills_context, cost_context=_cost_context,
+        )
+    if ctx.verbose:
+        print(f"[poe] plan ({len(steps)} steps) loop_id={ctx.loop_id}:", file=sys.stderr, flush=True)
+        for _pi, _ps in enumerate(steps, 1):
+            print(f"  {_pi}. {_ps[:100]}", file=sys.stderr, flush=True)
+
+    # Phase 27: Per-step knowledge prerequisite check.
+    _prereq_context: dict = {}
+    if not ctx.dry_run:
+        try:
+            from prereq import check_prerequisites as _check_prereqs
+            _prereq_context = _check_prereqs(
+                steps,
+                goal_id=ctx.loop_id,
+                adapter=ctx.adapter,
+                continuation_depth=ctx.continuation_depth,
+                knowledge_sub_goals=knowledge_sub_goals,
+                verbose=ctx.verbose,
+            )
+            if _prereq_context and ctx.verbose:
+                print(
+                    f"[poe] prereq: {len(_prereq_context)} step(s) have injected knowledge context",
+                    file=sys.stderr, flush=True,
+                )
+        except Exception:
+            pass  # prereq failures must never break the main loop
+
+    return steps, _prereq_context, _lessons_context, _skills_context, _cost_context, _had_no_matching_skill
+
+
 def _initialize_loop(
     goal: str,
     *,
@@ -1423,69 +1498,14 @@ def run_agent_loop(
 
     o = _orch()
 
-    # Step 1: Decompose goal into steps (inject memory + ancestry context)
-    if verbose:
-        print(f"[poe] decomposing goal...", file=sys.stderr, flush=True)
-    _lessons_context, _skills_context, _cost_context, _had_no_matching_skill, _matched_rule = (
-        _build_loop_context(goal, verbose=verbose, permission_context=permission_context, project=project or "")
+    # Phase B: Decompose goal into steps
+    steps, _prereq_context, _lessons_context, _skills_context, _cost_context, _had_no_matching_skill = _decompose_goal(
+        ctx,
+        preset_steps=preset_steps,
+        max_steps=max_steps,
+        knowledge_sub_goals=knowledge_sub_goals,
+        permission_context=permission_context,
     )
-
-    # Stage 5: rule hit — use deterministic steps, skip LLM decompose
-    if preset_steps is not None and preset_steps:
-        # pipeline: mode or caller-specified steps — bypass decomposition entirely
-        steps = [str(s).strip() for s in preset_steps if str(s).strip()]
-        if verbose:
-            print(f"[poe] pipeline: using {len(steps)} preset steps (no decompose)", file=sys.stderr, flush=True)
-    elif _matched_rule is not None and _matched_rule.steps_template:
-        steps = list(_matched_rule.steps_template)
-        if verbose:
-            print(f"[poe] using {len(steps)} rule steps from {_matched_rule.name!r}", file=sys.stderr, flush=True)
-    else:
-        steps = None  # computed by _decompose below
-
-    if steps is None:
-        # Decompose uses at least mid (Sonnet) — a weak planner compounds across every step.
-        # If the loop adapter is cheap (Haiku), silently lift decompose to mid.
-        # Opus stays Opus (garrytan/power loops get the best planner they asked for).
-        _decompose_adapter = adapter
-        if getattr(adapter, "model_key", "") == MODEL_CHEAP:
-            try:
-                _decompose_adapter = build_adapter(model=MODEL_MID)
-                log.debug("decompose: lifted adapter cheap → mid for plan quality")
-            except Exception:
-                _decompose_adapter = adapter  # fall back gracefully
-        steps = _decompose(
-            goal, _decompose_adapter, max_steps=max_steps, verbose=verbose,
-            lessons_context=_lessons_context, ancestry_context=_ancestry_context,
-            skills_context=_skills_context, cost_context=_cost_context,
-        )
-    if verbose:
-        print(f"[poe] plan ({len(steps)} steps) loop_id={loop_id}:", file=sys.stderr, flush=True)
-        for _pi, _ps in enumerate(steps, 1):
-            print(f"  {_pi}. {_ps[:100]}", file=sys.stderr, flush=True)
-
-    # Phase 27: Per-step knowledge prerequisite check.
-    # Resurrects matching graveyard lessons (free); optionally spawns research
-    # sub-loops when graveyard is empty (only if knowledge_sub_goals=True).
-    _prereq_context: dict = {}
-    if not dry_run:
-        try:
-            from prereq import check_prerequisites as _check_prereqs
-            _prereq_context = _check_prereqs(
-                steps,
-                goal_id=loop_id,
-                adapter=adapter,
-                continuation_depth=continuation_depth,
-                knowledge_sub_goals=knowledge_sub_goals,
-                verbose=verbose,
-            )
-            if _prereq_context and verbose:
-                print(
-                    f"[poe] prereq: {len(_prereq_context)} step(s) have injected knowledge context",
-                    file=sys.stderr, flush=True,
-                )
-        except Exception:
-            pass  # prereq failures must never break the main loop
 
     # GAP 3: Session resume — load checkpoint and skip completed steps
     _resume_completed: List[StepOutcome] = []
