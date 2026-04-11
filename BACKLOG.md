@@ -66,6 +66,11 @@ Last reviewed: 2026-04-10 (session 14)
 
 ### Architectural (from self-review pass 5, 2026-04-10)
 - [x] **Extract LoopStateMachine from agent_loop.py** — DONE (2026-04-10). 16 methods extracted across 14 commits. run_agent_loop reduced from ~1,800 to ~470 lines. While loop body is ~300 lines of orchestration (budget checks, step execution call, extracted method dispatch). All heavy logic in standalone functions. Next: convert to LoopStateMachine class where LoopContext becomes `self`.
+### From adversarial review (2026-04-11 seeded-haiku, escalated to sonnet)
+- [ ] **platform_confusion detection stub** — Signal declared in inspector.py (SIGNAL_PLATFORM_CONFUSION) but detection logic incomplete. Agent confused about environment (wrong Python path, missing dep) will never trigger recovery. Small fix.
+- [ ] **Evolver auto-apply audit trail** — auto_apply gated by risk=low in introspect.py, but no append-log of what was actually applied when. Need evolver-applied.jsonl for rollback surface. Skill .bak exists but is single-level.
+- [ ] **repeated_rephrasing threshold** — Currently requires 3+ stuck outcomes with same slug. 2-attempt failure loops (the most common pattern) never trigger it. Consider lowering to 2.
+- [ ] **Verify CLI enqueue disk write** — Adversarial review flagged test_cli_enqueue_project_task asserting tasks dir missing despite exit 0. May be test environment issue or real bug. Investigate.
 - [ ] **Evolver drift detection** — Evolver modifies prompts/thresholds but can't detect if prior evolutions made things worse. Track rolling quality metric per cycle. If metric drops below pre-evolution baseline for N consecutive cycles, flag for rollback.
 - [ ] **Lesson contradiction check** — Before promoting any lesson to standing rule, compare against existing rules for contradiction. "Always skip verification" contradicts "always verify." LLM-based comparison at promotion time.
 - [x] **Early model escalation on wide-scope goals** — (2026-04-11) Two-layer fix: (a) handle.py now lifts model to mid when pre-flight scope=wide/deep (zero-cost, <1ms heuristic check before adapter build); (b) agent_loop.py trajectory check after step 3 — if done-rate <50% on cheap model, raises session floor to mid for remaining steps. Both reuse existing infrastructure (estimate_goal_scope, _session_tier_floor). No new LLM calls.
