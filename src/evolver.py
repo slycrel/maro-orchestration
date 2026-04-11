@@ -197,6 +197,23 @@ def _apply_suggestion_action(d: dict) -> None:
     suggestion_id = d.get("suggestion_id", "")
     confidence = float(d.get("confidence", 0.5))
 
+    # Capture before-state for rollback surface.
+    before_state = None
+    try:
+        if category == "skill_pattern":
+            from skills import load_skills as _ls_audit, _skills_path as _sp_audit
+            _existing = next((s for s in _ls_audit() if s.name == target or s.id == target), None)
+            if _existing is not None:
+                before_state = {"type": "skill_update", "old_description": _existing.description[:500]}
+            else:
+                before_state = {"type": "skill_create"}
+        elif category == "new_guardrail":
+            before_state = {"type": "guardrail_append"}
+        elif category == "prompt_tweak":
+            before_state = {"type": "lesson_add"}
+    except Exception:
+        pass
+
     # Audit trail: log every mutation before it happens so changes are recoverable.
     try:
         from orch_items import memory_dir as _memory_dir
@@ -209,7 +226,10 @@ def _apply_suggestion_action(d: dict) -> None:
             "category": category,
             "suggestion_id": suggestion_id,
             "target": target,
+            "confidence": confidence,
+            "suggestion_text": suggestion_text[:500],
             "suggestion_hash": _hashlib.sha256(suggestion_text.encode()).hexdigest()[:12],
+            "before_state": before_state,
         }
         _cl_path.parent.mkdir(parents=True, exist_ok=True)
         with open(_cl_path, "a", encoding="utf-8") as _clf:

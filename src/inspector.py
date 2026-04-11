@@ -511,7 +511,7 @@ def detect_friction(
                     evidence=f"blocked/stuck with short result ({len(result.strip())} chars)",
                 ))
 
-    # --- repeated_rephrasing: same goal slug stuck 3+ times ---
+    # --- repeated_rephrasing: same goal slug stuck 2+ times ---
     import re
     from collections import Counter
 
@@ -525,7 +525,7 @@ def detect_friction(
             slug_stuck[slug] = slug_stuck.get(slug, 0) + 1
 
     for slug, count in slug_stuck.items():
-        if count >= 3:
+        if count >= 2:
             signals.append(SpecFrictionSignal(
                 session_id="multiple",
                 signal_type=SIGNAL_REPEATED_REPHRASE,
@@ -565,6 +565,25 @@ def detect_friction(
                     severity=0.5,
                     evidence=f"lessons loaded ({len(lessons)}) but outcome stuck",
                 ))
+
+    # --- platform_confusion: language about wrong context/environment ---
+    _pc_keywords = ("wrong platform", "not supported", "platform confusion",
+                    "wrong context", "capability mismatch", "environment mismatch")
+    for o in items:
+        text = " ".join([
+            str(o.get("summary", "")),
+            str(o.get("stuck_reason", "")),
+            str(o.get("result_summary", "")),
+        ]).lower()
+        found = [kw for kw in _pc_keywords if kw in text]
+        if found:
+            sid = o.get("outcome_id") or o.get("session_id", "?")
+            signals.append(SpecFrictionSignal(
+                session_id=sid,
+                signal_type=SIGNAL_PLATFORM_CONFUSION,
+                severity=0.6,
+                evidence=f"platform confusion keywords={found}",
+            ))
 
     return signals
 

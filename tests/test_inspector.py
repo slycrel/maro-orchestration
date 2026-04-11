@@ -706,7 +706,7 @@ def test_detect_friction_abandoned_tool_flow():
 
 
 def test_detect_friction_repeated_rephrasing():
-    """Same goal stuck 3+ times triggers repeated_rephrasing."""
+    """Same goal stuck 2+ times triggers repeated_rephrasing."""
     outcomes = [
         _make_spec_outcome(status="stuck", goal="write the report", outcome_id=f"r{i}")
         for i in range(4)
@@ -714,6 +714,41 @@ def test_detect_friction_repeated_rephrasing():
     signals = detect_friction(outcomes)
     types = [s.signal_type for s in signals]
     assert SIGNAL_REPEATED_REPHRASE in types
+
+
+def test_detect_friction_repeated_rephrasing_at_two():
+    """Exactly 2 stuck outcomes with same goal triggers repeated_rephrasing."""
+    outcomes = [
+        _make_spec_outcome(status="stuck", goal="write the report", outcome_id=f"r{i}")
+        for i in range(2)
+    ]
+    signals = detect_friction(outcomes)
+    types = [s.signal_type for s in signals]
+    assert SIGNAL_REPEATED_REPHRASE in types
+
+
+def test_detect_friction_repeated_rephrasing_single_no_trigger():
+    """A single stuck outcome should NOT trigger repeated_rephrasing."""
+    outcomes = [
+        _make_spec_outcome(status="stuck", goal="write the report", outcome_id="r0"),
+    ]
+    signals = detect_friction(outcomes)
+    types = [s.signal_type for s in signals]
+    assert SIGNAL_REPEATED_REPHRASE not in types
+
+
+def test_detect_friction_platform_confusion_batch():
+    """platform_confusion detected in batch detect_friction()."""
+    outcomes = [
+        _make_spec_outcome(
+            status="stuck",
+            summary="wrong platform for this task",
+            outcome_id="pc1",
+        ),
+    ]
+    signals = detect_friction(outcomes)
+    types = [s.signal_type for s in signals]
+    assert SIGNAL_PLATFORM_CONFUSION in types
 
 
 def test_detect_friction_no_signals_clean_outcomes():

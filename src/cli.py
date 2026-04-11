@@ -201,13 +201,15 @@ def main(argv: list[str] | None = None) -> int:
         if not task_text:
             return fail("E_TASK_REQUIRED", "task text cannot be empty")
         payload = f"project={args.project} :: {task_text}"
+        # Use explicit --reason if provided, otherwise use constructed payload
+        reason = args.reason if args.reason != "queued from orch" else payload
         blocked = [b.strip() for b in (args.blocked_by or "").split(",") if b.strip()]
         try:
             from task_store import enqueue as _enqueue
             task = _enqueue(
                 lane=args.lane,
                 source=args.source,
-                reason=payload,
+                reason=reason,
                 parent_job_id=getattr(args, "parent_job_id", ""),
                 blocked_by=blocked,
             )

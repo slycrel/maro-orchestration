@@ -793,6 +793,58 @@ def test_apply_action_observation_is_noop(tmp_path, monkeypatch):
     assert not (tmp_path / "skills.jsonl").exists()
 
 
+def test_apply_action_writes_enriched_audit_trail(tmp_path, monkeypatch):
+    """change_log.jsonl includes suggestion_text, confidence, and before_state."""
+    monkeypatch.setattr("evolver._dynamic_constraints_path", lambda: tmp_path / "dc.jsonl")
+    monkeypatch.setattr("skills._skills_path", lambda: tmp_path / "skills.jsonl")
+    monkeypatch.setattr("orch_items.memory_dir", lambda: tmp_path)
+
+    _apply_suggestion_action({
+        "category": "new_guardrail",
+        "target": "all",
+        "suggestion": r"\bdrop\s+table\b",
+        "suggestion_id": "audit-test-01",
+        "confidence": 0.9,
+    })
+
+    cl_path = tmp_path / "change_log.jsonl"
+    assert cl_path.exists()
+    entry = json.loads(cl_path.read_text().strip().split("\n")[-1])
+    assert entry["suggestion_text"] == r"\bdrop\s+table\b"
+    assert entry["confidence"] == 0.9
+    assert entry["before_state"] == {"type": "guardrail_append"}
+    assert "suggestion_hash" in entry
+    assert entry["category"] == "new_guardrail"
+
+
+def test_apply_action_audit_trail_captures_skill_before_state(tmp_path, monkeypatch):
+    """Audit trail captures old skill description when updating an existing skill."""
+    from skills import Skill
+    # Seed a skill file
+    skill = Skill(
+        id="sk01", name="test-skill", description="Original description",
+        trigger_patterns=[], steps_template=[], source_loop_ids=[],
+        created_at="2026-01-01T00:00:00+00:00", tier="provisional", utility_score=0.5,
+    )
+    skills_path = tmp_path / "skills.jsonl"
+    skills_path.write_text(json.dumps(skill.__dict__) + "\n")
+    monkeypatch.setattr("skills._skills_path", lambda: skills_path)
+    monkeypatch.setattr("orch_items.memory_dir", lambda: tmp_path)
+
+    _apply_suggestion_action({
+        "category": "skill_pattern",
+        "target": "test-skill",
+        "suggestion": "Updated description from evolver",
+        "suggestion_id": "audit-test-02",
+        "confidence": 0.85,
+    })
+
+    cl_path = tmp_path / "change_log.jsonl"
+    entry = json.loads(cl_path.read_text().strip().split("\n")[-1])
+    assert entry["before_state"]["type"] == "skill_update"
+    assert entry["before_state"]["old_description"] == "Original description"
+
+
 def test_dynamic_constraint_loaded_by_check(tmp_path, monkeypatch):
     """Patterns written to dynamic-constraints.jsonl are picked up by check_step_constraints."""
     from constraint import check_step_constraints

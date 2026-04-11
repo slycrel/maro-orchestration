@@ -91,7 +91,25 @@ def test_cli_enqueue_project_task(tmp_path):
     import json as _json
     task = _json.loads(task_files[0].read_text(encoding="utf-8"))
     assert task["lane"] == "manual"
-    assert "project=demo :: Draft queue adapter integration" in task["reason"]
+    assert task["reason"] == "queue adapter smoke"
+
+
+def test_cli_enqueue_default_reason_uses_payload(tmp_path):
+    """When --reason is not provided, reason should be the constructed payload."""
+    _run(tmp_path, "init", "demo", "Queue", "test", "--priority", "1")
+
+    queued = _run(
+        tmp_path, "enqueue", "demo", "Do", "the", "thing",
+        "--lane", "manual", "--source", "orch-test",
+    )
+    assert queued.returncode == 0
+
+    tasks_dir = tmp_path / "output" / "queues" / "tasks"
+    task_files = list(tasks_dir.glob("*.json"))
+    assert len(task_files) == 1
+    import json as _json
+    task = _json.loads(task_files[0].read_text(encoding="utf-8"))
+    assert task["reason"] == "project=demo :: Do the thing"
 
 
 def test_cli_run_start_finish_status(tmp_path):
