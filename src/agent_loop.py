@@ -3381,6 +3381,27 @@ def run_agent_loop(
         if _mon_alert:
             _march_of_nines_alert = True
 
+        # Trajectory-based tier escalation: if early steps show low success rate,
+        # raise the session floor so remaining steps use a stronger model.
+        # Fires once after 3+ steps if done-rate < 50% and floor not already raised.
+        _TRAJECTORY_CHECK_AFTER = 3
+        _TRAJECTORY_DONE_THRESHOLD = 0.5
+        if (len(step_outcomes) >= _TRAJECTORY_CHECK_AFTER
+                and not _session_tier_floor
+                and getattr(adapter, "model_key", "") in (MODEL_CHEAP, "")):
+            _traj_done = sum(1 for s in step_outcomes if s.status == "done")
+            _traj_rate = _traj_done / len(step_outcomes)
+            if _traj_rate < _TRAJECTORY_DONE_THRESHOLD:
+                _session_tier_floor = MODEL_MID
+                log.warning("trajectory check: done-rate %.0f%% (%d/%d) after %d steps → "
+                            "raising session floor to mid for remaining steps",
+                            _traj_rate * 100, _traj_done, len(step_outcomes),
+                            len(step_outcomes))
+                if verbose:
+                    print(f"[poe] trajectory check: {_traj_done}/{len(step_outcomes)} steps done "
+                          f"({_traj_rate:.0%}) → floor raised to mid",
+                          file=sys.stderr, flush=True)
+
         if loop_status == "stuck":
             break
 

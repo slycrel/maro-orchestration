@@ -340,6 +340,20 @@ def handle(
     _strict_prefix = _pfx.strict_mode
     _team_prefix = _pfx.team_mode
 
+    # Scope-based model floor: wide/deep goals shouldn't start on cheap.
+    # The pre-flight scope estimate is free (<1ms, zero LLM) and already exists.
+    # If no explicit model was requested (no prefix, no config), lift to mid.
+    if model is None or model == MODEL_CHEAP:
+        try:
+            from planner import estimate_goal_scope
+            _scope = estimate_goal_scope(message)
+            if _scope in ("wide", "deep"):
+                model = "mid"
+                log.info("handle: scope=%s → lifting model floor to mid (was %s)",
+                         _scope, model or "cheap")
+        except Exception:
+            pass
+
     # Build adapter
     if adapter is None and not dry_run:
         adapter = build_adapter(model=model or MODEL_CHEAP)
