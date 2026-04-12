@@ -90,16 +90,16 @@ deploy/              systemd service files
 
 ## Current state
 
-**As of 2026-04-12.** Phases 0–61 complete. Tests: 3,553 passing (~100s sequential).
+**As of 2026-04-12.** Phases 0–61 complete. Tests: 3,789 passing (~100s sequential).
 
 | Status | Phases |
 |--------|--------|
 | DONE | 0–23, 26–27, 29–37, 39–48, 50–61 |
 | PARTIAL | 24 (Slack skeleton, Signal deferred), 25 (ops hardening — heartbeat-ctl.sh shipped), 28 (persona — blocked on personas/jeremy.md), 38 (subpackage) |
 
-**Recent (Apr 12, session 17):** Test isolation overhaul (conftest.py — workspace, API keys, credential paths). Circular import skills↔evolver broken via skill_types.py. Director context truncation fix (500→2000 chars). Cost-warn persistence fix. Stuck detection test fix (all 6 slow tests pass). Workers.py test coverage (22 tests). README overhaul. 3 adversarial review rounds. 3553 tests (+84).
+**Recent (Apr 12, session 17):** Test isolation overhaul (conftest.py). Circular import skills↔evolver broken via skill_types.py. Verify→learn loop closed (_verify_post_apply). Constraint audit trail. Playbook validation. Evolver rollback API (revert_suggestion). Eval regression detection. knowledge_web + orch_bridges + workers tests. 3 adversarial review rounds. 3789 tests (+320).
 
-**Next:** See MILESTONES.md for prioritized queue. Top items: real-world regression tests, K2 links import, evolver auto-apply integration test, eval flywheel hardening.
+**Next:** See MILESTONES.md for prioritized queue. Top items: real-world regression tests, K2 links import, LoopStateMachine conversion, evolver confidence calibration.
 
 See `ROADMAP.md` for active phases (57+). See `docs/ROADMAP_ARCHIVE.md` for completed phases (0–56).
 
