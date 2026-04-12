@@ -86,6 +86,21 @@ Full report: `~/.poe/workspace/output/x-research-20260411T081706Z.md`
 
 ### Architectural (from self-review pass 5, 2026-04-10)
 - [x] **Extract LoopStateMachine from agent_loop.py** — DONE (2026-04-10). 16 methods extracted across 14 commits. run_agent_loop reduced from ~1,800 to ~470 lines. While loop body is ~300 lines of orchestration (budget checks, step execution call, extracted method dispatch). All heavy logic in standalone functions. Next: convert to LoopStateMachine class where LoopContext becomes `self`.
+- [x] **Break circular import skills.py ↔ evolver.py** — (2026-04-12) Extracted `Skill`, `SkillStats`, `SkillTestCase`, `SkillMutationResult`, `compute_skill_hash`, `verify_skill_hash`, `skill_to_dict`, `dict_to_skill` to `src/skill_types.py`. Both modules import types from there. skills.py re-exports for backward compat.
+
+### From adversarial review (2026-04-12, 3 rounds — haiku + full model)
+- [x] **Test isolation: workspace + API key leakage** — (2026-04-12) 62 test files had no workspace isolation. Added `tests/conftest.py` with autouse fixture: `POE_WORKSPACE` → tmp, API keys stripped, credential file paths redirected. Prevents tests from writing to `~/.poe/workspace/` or hitting real LLM endpoints.
+- [x] **Director 500-char context truncation** — (2026-04-12) `director.py:503` truncated worker results at 500 chars when building context for final report. Bumped to 2000.
+- [x] **agent_loop cost-warn flag persists across runs** — (2026-04-12) `_cost_warned` set on function object, never reset. Added reset at top of `run_agent_loop()`.
+- [x] **test_loop_stuck_detection failure** — (2026-04-12) `AlwaysStuckAdapter` had no `model_key`, so tier-up replaced it with real `ClaudeSubprocessAdapter`. Added `model_key = "explicit-test"` to prevent override.
+- [ ] **Evolver auto-apply integration test** — Temp workspace mutation + change_log verification + rollback. Most dangerous code path has no end-to-end test. P1.
+- [ ] **workers.py minimum viable tests** — Worker dispatch routing is untested. Add tests verifying each worker type dispatches correctly. P1.
+- [ ] **constraint.py enforcement tests** — Pre-execution constraint enforcement in critical path with zero tests. P1.
+- [ ] **Evolver confidence calibration** — Self-reported confidence (0.0-1.0) never validated against real outcomes. Track outcome of each applied suggestion, compute empirical confidence. P2.
+- [ ] **Evolver suggestion rollback API** — Audit trail exists (change_log.jsonl, .bak files), but no `revert_suggestion()` function. P2.
+- [ ] **Semantic memory deduplication** — Lesson dedup uses hash/first-100-chars, not semantic similarity. Embedding-based similarity check at write time would prevent unbounded growth. P2.
+- [ ] **LoopStateMachine conversion** — LoopContext becomes `self`. Enables exhaustive state coverage in tests. Eliminates context-threading complexity. P1 architectural.
+
 ### Session bugs (2026-04-11)
 - [x] **Meta-command detection false-positives** — (2026-04-11) Rebuilt with two-tier hard gate: (1) reject if message contains URLs or is >12 words — missions are long; commands aren't. (2) exact phrase match only — no substring tricks. Slash-commands are prefix-only. Eliminates the template-placeholder collision class: `inspector.py`, `/status/123`, `status=done` all correctly rejected. 3 tests added, 1 test updated. (`src/poe.py`)
 

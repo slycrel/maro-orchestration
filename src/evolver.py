@@ -241,7 +241,8 @@ def _apply_suggestion_action(d: dict) -> None:
     try:
         if category == "skill_pattern":
             # Write or update the skill in skills.jsonl
-            from skills import load_skills, save_skill, Skill, _skills_path as _sp
+            from skill_types import Skill
+            from skills import load_skills, save_skill, _skills_path as _sp
             import uuid as _uuid
             skills = load_skills()
             existing = next((s for s in skills if s.name == target or s.id == target), None)
@@ -411,7 +412,8 @@ def _run_skill_test_gate(suggestion_dict: dict) -> Optional[dict]:
         return None
 
     try:
-        from skills import load_skills, Skill
+        from skill_types import Skill
+        from skills import load_skills
         import uuid as _uuid
         from datetime import datetime, timezone
 
@@ -1492,7 +1494,8 @@ def rewrite_skill(skill: "Skill", adapter) -> Optional["Skill"]:
     The skill is saved to disk whether or not the caller uses the return value.
     """
     try:
-        from skills import _save_skills, load_skills, compute_skill_hash, _skill_to_dict
+        from skill_types import compute_skill_hash, skill_to_dict as _skill_to_dict
+        from skills import _save_skills, load_skills
         from llm import LLMMessage
     except ImportError:
         return None
@@ -1660,7 +1663,8 @@ def synthesize_skill(
     """
     log.info("synthesize_skill goal=%r source_loop=%s", goal[:60], source_loop_id)
     try:
-        from skills import Skill, save_skill, load_skills, compute_skill_hash
+        from skill_types import Skill, compute_skill_hash
+        from skills import save_skill, load_skills
         from llm import LLMMessage
     except ImportError:
         return None

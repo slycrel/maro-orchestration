@@ -14,14 +14,26 @@ Last updated: 2026-04-11 (session 16)
 
 3. **Wire knowledge injection into decompose** — `inject_knowledge_for_goal()` exists; wire into `_build_loop_context()` alongside tiered lessons.
 
-4. **Eval flywheel hardening** — Current flywheel works end-to-end. Next: failure clustering (dedup related patterns), train/test split validation, eval pass-rate dashboard.
+4. **Test coverage for dangerous paths** — workers.py dispatch, constraint.py enforcement, evolver auto-apply integration. See BACKLOG adversarial review section for details.
+
+5. **Eval flywheel hardening** — Current flywheel works end-to-end. Next: failure clustering (dedup related patterns), train/test split validation, eval pass-rate dashboard.
 
 ## Queued
 
-5. **Event-driven subprocess wakeup** — Replace polling with asyncio.Queue signal. (7/10)
-6. **Phase 62: Auto persona+skill packaging**
-7. **Codebase Graph + LSP** — Pre-build call graph; LSP-guided context slicing. (9/10, longer term)
-8. **Remaining adversarial findings** — BUG-2 (lock file mode), BUG-3 (project starvation sort)
+6. **Event-driven subprocess wakeup** — Replace polling with asyncio.Queue signal. (7/10)
+7. **Phase 62: Auto persona+skill packaging**
+8. **Codebase Graph + LSP** — Pre-build call graph; LSP-guided context slicing. (9/10, longer term)
+
+## Done (session 17)
+
+- [x] **Test isolation overhaul** — `tests/conftest.py` autouse fixture: workspace → tmp, API keys stripped, credential paths redirected. 62 previously un-isolated test files now safe. Skill hash mismatch warnings eliminated.
+- [x] **Adversarial review: 3 rounds** — haiku (round 1 + 2), full model (round 3 running). Round 1: found test isolation leak, confirmed 4/7 prior findings fixed. Round 2: cleaner findings — circular import, test coverage gaps for dangerous paths, evolver opacity.
+- [x] **Break circular import skills.py ↔ evolver.py** — Extracted shared types to `src/skill_types.py`. Both modules import types from there. Re-exports in skills.py for backward compat.
+- [x] **Fix director context truncation** — 500 → 2000 chars for worker result context in final report compilation.
+- [x] **Fix agent_loop cost-warn persistence** — `_cost_warned` flag now resets per `run_agent_loop()` call.
+- [x] **Fix test_loop_stuck_detection** — Added `model_key` to stub adapter; all 6 slow tests now pass.
+- [x] **README overhaul** — Prerequisites section, restructured quickstart, workspace layout docs, collapsed benchmark section, fixed stale test count.
+- [x] 3531 tests passing (all 6 slow tests now pass too)
 
 ## Done (session 16)
 
