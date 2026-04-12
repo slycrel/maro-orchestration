@@ -90,16 +90,16 @@ deploy/              systemd service files
 
 ## Current state
 
-**As of 2026-04-11.** Phases 0–61 complete. Tests: 3,469 passing (~87s sequential).
+**As of 2026-04-12.** Phases 0–61 complete. Tests: 3,553 passing (~100s sequential).
 
 | Status | Phases |
 |--------|--------|
 | DONE | 0–23, 26–27, 29–37, 39–48, 50–61 |
 | PARTIAL | 24 (Slack skeleton, Signal deferred), 25 (ops hardening — heartbeat-ctl.sh shipped), 28 (persona — blocked on personas/jeremy.md), 38 (subpackage) |
 
-**Recent (Apr 11, session 16):** Workspace routing complete — `output_root()` + `projects_root()` now route to `~/.poe/workspace/` with safe `relative_display_path()` helper. Thinking Token Budget shipped (`THINKING_HIGH/MID/LOW`, wired into decompose + advisor). Advisor Pattern wired into evolver (medium-confidence gate), milestone boundaries, and recovery planning. K2 knowledge node infrastructure built (schema, storage, query, injection, wiki-link graph). 3469 tests (+33).
+**Recent (Apr 12, session 17):** Test isolation overhaul (conftest.py — workspace, API keys, credential paths). Circular import skills↔evolver broken via skill_types.py. Director context truncation fix (500→2000 chars). Cost-warn persistence fix. Stuck detection test fix (all 6 slow tests pass). Workers.py test coverage (22 tests). README overhaul. 3 adversarial review rounds. 3553 tests (+84).
 
-**Next:** See MILESTONES.md for prioritized queue. Top items: Evals-as-Training-Data flywheel, real-world regression tests, K2 links import, knowledge injection wiring.
+**Next:** See MILESTONES.md for prioritized queue. Top items: real-world regression tests, K2 links import, evolver auto-apply integration test, eval flywheel hardening.
 
 See `ROADMAP.md` for active phases (57+). See `docs/ROADMAP_ARCHIVE.md` for completed phases (0–56).
 
