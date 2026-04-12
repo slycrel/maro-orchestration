@@ -444,7 +444,44 @@ def check_step_constraints(step_text: str, goal: str = "") -> ConstraintResult:
     )
     _record_dynamic_block(_dynamic_caused_block)
 
-    return ConstraintResult(allowed=allowed, risk_level=worst_level, flags=all_flags)
+    result = ConstraintResult(allowed=allowed, risk_level=worst_level, flags=all_flags)
+
+    # Audit trail: log constraint events for threshold tuning
+    if all_flags:
+        _log_constraint_event(step_text, goal, result)
+
+    return result
+
+
+def _log_constraint_event(step_text: str, goal: str, result: ConstraintResult) -> None:
+    """Write a structured constraint event to constraint_log.jsonl.
+
+    Enables data-driven threshold tuning by recording which constraints fire,
+    on what input, and whether they blocked execution.
+    """
+    try:
+        from orch_items import memory_dir
+        path = memory_dir() / "constraint_log.jsonl"
+    except ImportError:
+        return  # no workspace — skip silently
+
+    from datetime import datetime, timezone
+    event = {
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "allowed": result.allowed,
+        "risk_level": result.risk_level,
+        "step_text": step_text[:200],
+        "goal": goal[:100],
+        "flags": [
+            {"name": f.name, "risk": f.risk, "detail": f.detail[:120], "pattern": f.pattern}
+            for f in result.flags
+        ],
+    }
+    try:
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(event) + "\n")
+    except Exception:
+        pass  # audit trail must never block execution
 
 
 def register_constraint(fn: Callable[[str, str], List[ConstraintFlag]]) -> None:

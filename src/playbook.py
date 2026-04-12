@@ -152,6 +152,14 @@ def append_to_playbook(
         section: Which section to append under (created if missing).
         source: Where this insight came from (e.g., "evolver:suggestion-id").
     """
+    # Validate entry — reject empty or whitespace-only entries
+    entry = (entry or "").strip()
+    if not entry:
+        log.warning("playbook: rejected empty entry (section=%s, source=%s)", section, source)
+        return
+    if len(entry) > 500:
+        entry = entry[:500] + "…"
+
     path = _playbook_path()
     if not path.exists():
         seed_playbook()

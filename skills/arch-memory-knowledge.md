@@ -75,6 +75,11 @@ Append-only event stream tracking knowledge lifecycle:
 - LESSON_RECORDED → LESSON_REINFORCED → HYPOTHESIS_CREATED → HYPOTHESIS_PROMOTED → STANDING_RULE_CONTRADICTED
 - Read bridge (K3 partial): recent events injected into decompose + evolver prompts
 
+## Test Coverage
+
+- **knowledge_web.py**: 103 tests in test_knowledge_web.py (session 17) — covers decay, reinforcement, TF-IDF ranking, tiered lessons CRUD, near-duplicate detection, graveyard search, prompt injection formatting.
+- **playbook.py**: `append_to_playbook()` now rejects empty entries and truncates at 500 chars (session 17).
+
 ## Known Gaps (Intent vs Implementation)
 
 1. **No Stage 2→3 pathway.** Canon promotion (10+ applies, 3+ task types) is spec'd but not coded.

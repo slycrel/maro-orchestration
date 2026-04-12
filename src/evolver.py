@@ -1294,6 +1294,10 @@ def run_evolver(
         if verbose and auto_applied:
             print(f"[evolver] auto-applied {auto_applied} suggestions ({advisor_promoted} via advisor)", file=sys.stderr)
 
+    # Verify→learn: after mutations, check test suite health and record outcome
+    if auto_applied and not dry_run:
+        _verify_post_apply(auto_applied, run_id, verbose=verbose)
+
     # Telegram notification
     if notify and suggestions and not dry_run:
         _notify_telegram(report)
@@ -1364,6 +1368,77 @@ def run_evolver(
 # ---------------------------------------------------------------------------
 # Telegram notification
 # ---------------------------------------------------------------------------
+
+def _verify_post_apply(auto_applied: int, run_id: str, *, verbose: bool = False) -> None:
+    """Verify→learn: run test suite after auto-applying suggestions.
+
+    Closes the verify→learn loop by checking whether mutations broke anything.
+    Records the outcome as a lesson so future evolver cycles can learn from it.
+    On test failure, logs a warning (does not auto-revert — that's a future enhancement).
+    """
+    import subprocess
+    from pathlib import Path
+
+    repo_root = Path(__file__).parent.parent
+    test_dir = repo_root / "tests"
+    if not test_dir.is_dir():
+        return
+
+    log.info("verify_post_apply: running test suite after %d auto-applied mutations (run_id=%s)",
+             auto_applied, run_id)
+
+    try:
+        result = subprocess.run(
+            [sys.executable, "-m", "pytest", str(test_dir), "-q", "--tb=no", "-x"],
+            capture_output=True,
+            text=True,
+            timeout=300,
+            cwd=str(repo_root),
+        )
+        passed = result.returncode == 0
+        # Extract pass count from output (e.g. "3553 passed, 5 skipped")
+        summary = result.stdout.strip().splitlines()[-1] if result.stdout.strip() else ""
+    except subprocess.TimeoutExpired:
+        passed = False
+        summary = "test suite timed out (300s)"
+    except Exception as exc:
+        log.debug("verify_post_apply: test run failed: %s", exc)
+        return
+
+    if passed:
+        log.info("verify_post_apply: tests PASSED after %d mutations — %s", auto_applied, summary)
+    else:
+        log.warning("verify_post_apply: tests FAILED after %d mutations — %s", auto_applied, summary)
+
+    if verbose:
+        _icon = "✓" if passed else "✗"
+        print(f"[evolver] verify→learn: tests {_icon} after {auto_applied} mutations",
+              file=sys.stderr, flush=True)
+
+    # Record outcome as a lesson for the learning pipeline
+    try:
+        from memory_ledger import record_outcome
+        record_outcome(
+            goal=f"evolver auto-apply ({auto_applied} suggestions, run {run_id})",
+            status="done" if passed else "stuck",
+            summary=f"Post-mutation test suite: {'PASSED' if passed else 'FAILED'}. {summary}",
+            task_type="evolver_verify",
+        )
+    except Exception:
+        pass
+
+    # Captain's log
+    try:
+        from captains_log import log_event
+        log_event(
+            event_type="EVOLVER_VERIFY",
+            subject=f"run-{run_id}",
+            summary=f"Post-mutation tests {'PASSED' if passed else 'FAILED'} after {auto_applied} auto-applied suggestions. {summary}",
+            context={"run_id": run_id, "auto_applied": auto_applied, "passed": passed, "summary": summary},
+        )
+    except Exception:
+        pass
+
 
 def _notify_telegram(report: EvolverReport) -> None:
     try:

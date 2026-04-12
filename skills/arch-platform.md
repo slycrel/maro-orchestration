@@ -97,6 +97,14 @@ Per-model, per-step-type cost tracking to `memory/step-costs.jsonl`:
 
 **Gap:** Cost is recorded after-the-fact. No real-time budget enforcement ("stop, you've spent $5 on this goal") — only loop-level `cost_budget` parameter with coarse checking.
 
+## Test Isolation (session 17)
+
+`tests/conftest.py` provides an autouse fixture that isolates all tests from the real workspace and credentials:
+- `POE_WORKSPACE` → tmp directory
+- API keys stripped from environment
+- Credential file paths redirected to non-existent paths
+- 62 previously un-isolated test files now safe. No test can accidentally read/write `~/.poe/workspace/` or use live API keys.
+
 ## Workspace Routing (known issue)
 
 `~/.poe/workspace/` is the stable runtime workspace for memory and captain's log. But `output_root()` and `projects_root()` still resolve to the repo directory. This split needs consolidation.

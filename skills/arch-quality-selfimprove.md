@@ -25,7 +25,7 @@ Run completes
   → Loop closes
 ```
 
-**Current reality:** The loop runs from "detect" through "apply" but breaks at "verify." Nobody checks that applied changes fixed the diagnosed problem. This is the critical gap.
+**Current reality:** The loop runs from "detect" through "verify." Session 17 closed the verify→learn gap: `_verify_post_apply()` in evolver.py runs pytest after auto-applying suggestions, records outcome to memory_ledger and captain's log, and fires EVOLVER_VERIFY event. Graduation verification and proactive lesson testing remain open.
 
 ## Per-Run Quality (zoom in)
 
@@ -53,6 +53,8 @@ Lenses: infrastructure exists but not fully wired. Heuristic lenses (free) run a
 ### Constraint (constraint.py)
 Pre-execution enforcement. Tiered gates: READ (observe), WRITE (warn), DESTROY (block), EXTERNAL (confirm). Dynamic constraints from evolver (JSONL + TTL + circuit breaker).
 
+**Audit trail (session 17):** `_log_constraint_event()` writes to `constraint_log.jsonl` when flags are found. Records: timestamp, allowed, risk_level, step_text, goal, flags detail.
+
 ## Over-Time Improvement (zoom out)
 
 ### Evolver (evolver.py, ~2126 lines)
@@ -72,8 +74,8 @@ Scans diagnoses.jsonl for repeated failure classes (≥3 occurrences). Promotes 
 
 **Gap:** verify_graduation_rules() exists but isn't called automatically.
 
-### Skills (skills.py, ~2164 lines)
-Discovery, scoring, promotion/demotion with circuit breaker:
+### Skills (skills.py, ~2164 lines + skill_types.py)
+Discovery, scoring, promotion/demotion with circuit breaker. Shared types (`Skill`, `SkillStats`, `SkillTestCase`, `SkillMutationResult`, `compute_skill_hash`, `verify_skill_hash`, `skill_to_dict`, `dict_to_skill`) extracted to `src/skill_types.py` (session 17) to break circular import with evolver. `skills.py` re-exports for backward compat.
 - **Score:** use_count, success_rate, utility_score (EMA), consecutive streaks
 - **Circuit states:** closed (normal) → half_open (recovering) → open (rewrite eligible)
 - **Auto-promote:** ≥5 uses + ≥70% success → provisional→established
@@ -88,15 +90,17 @@ What's autonomous today:
 - ✅ Prompt tweaks auto-applied as lessons
 - ✅ Skills auto-promoted/demoted based on success rate
 - ✅ Low-risk recovery auto-applied (Phase 45)
+- ✅ Verify→learn loop closed (session 17): evolver runs pytest after auto-apply, records to memory_ledger + captain's log, fires EVOLVER_VERIFY
+- ✅ Constraint audit trail: flag events logged to constraint_log.jsonl
+- ✅ Playbook entry validation: empty entries rejected, truncation at 500 chars
 
 What requires humans:
 - ❌ Guardrails held for review (correct safety boundary)
-- ❌ No auto-verification of applied changes
 - ❌ No auto-enqueue of follow-up missions
 - ❌ Graduated rules not auto-verified in heartbeat
 - ❌ Inspector and evolver don't share data structures
 
-The infrastructure is 80% built. Closing the verify→learn loop is the 20% that makes it autonomous.
+The infrastructure is ~90% built. Main remaining gaps are graduation auto-verification and inspector↔evolver data sharing.
 
 ## File Map
 
@@ -107,6 +111,7 @@ The infrastructure is 80% built. Closing the verify→learn loop is the 20% that
 | src/graduation.py | ~482 | Repeated-pattern promotion |
 | src/introspect.py | ~1448 | Failure classification, lenses |
 | src/quality_gate.py | ~655 | Multi-pass review |
-| src/skills.py | ~2164 | Discovery, scoring, circuit breaker |
-| src/constraint.py | ~623 | Pre-execution enforcement |
+| src/skill_types.py | | Shared types (Skill, SkillStats, hash fns) — breaks circular import |
+| src/skills.py | ~2164 | Discovery, scoring, circuit breaker (re-exports skill_types) |
+| src/constraint.py | ~623 | Pre-execution enforcement, audit trail (constraint_log.jsonl) |
 | src/eval.py | ~979 | Evals-as-training-data flywheel |
