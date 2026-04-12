@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 from eval import (
     BUILTIN_BENCHMARKS,
     BenchmarkResult,
+    EvalRegression,
     EvalReport,
     FailurePattern,
     GeneratedEval,
@@ -25,6 +26,7 @@ from eval import (
     score_generated_eval,
     record_eval_trend,
     load_eval_trend,
+    detect_eval_regressions,
     run_eval_flywheel,
     _FAILURE_SCORING,
 )
@@ -516,3 +518,95 @@ class TestFlywheelIntegration:
         assert summary["patterns_mined"] >= 2
         assert summary["evals_generated"] > 0
         assert "generated_results" in summary
+        assert "regressions" in summary
+
+
+# ---------------------------------------------------------------------------
+# Regression detection
+# ---------------------------------------------------------------------------
+
+class TestRegressionDetection:
+
+    def _record_runs(self, scores):
+        """Record a series of eval runs with the given builtin scores."""
+        for i, score in enumerate(scores):
+            report = EvalReport(
+                run_id=f"run-{i:03d}",
+                benchmarks_run=10,
+                pass_count=int(score * 10),
+                fail_count=10 - int(score * 10),
+                overall_score=score,
+            )
+            record_eval_trend(report)
+
+    def test_no_regression_on_stable_scores(self, flywheel_workspace):
+        self._record_runs([0.80, 0.82, 0.79, 0.81, 0.80])
+        regressions = detect_eval_regressions()
+        assert len(regressions) == 0
+
+    def test_detects_drop(self, flywheel_workspace):
+        # Baseline ~0.80, then a drop to 0.50
+        self._record_runs([0.80, 0.82, 0.79, 0.81, 0.80, 0.50])
+        regressions = detect_eval_regressions()
+        assert len(regressions) >= 1
+        r = regressions[0]
+        assert r.metric == "builtin_score"
+        assert r.current == 0.50
+        assert r.drop_pct > 15
+
+    def test_no_regression_on_small_drop(self, flywheel_workspace):
+        # 5% drop — below 15% threshold
+        self._record_runs([0.80, 0.82, 0.79, 0.81, 0.80, 0.76])
+        regressions = detect_eval_regressions()
+        assert len(regressions) == 0
+
+    def test_severity_moderate_for_single_drop(self, flywheel_workspace):
+        self._record_runs([0.80, 0.82, 0.79, 0.81, 0.80, 0.60])
+        regressions = detect_eval_regressions()
+        assert len(regressions) >= 1
+        # Single run drop < 30% → moderate or high
+        assert regressions[0].severity in ("moderate", "high")
+
+    def test_severity_critical_for_large_drop(self, flywheel_workspace):
+        # 50% drop
+        self._record_runs([0.80, 0.82, 0.79, 0.81, 0.80, 0.35])
+        regressions = detect_eval_regressions()
+        assert len(regressions) >= 1
+        assert regressions[0].severity == "critical"
+
+    def test_insufficient_data_returns_empty(self, flywheel_workspace):
+        # Only 1 run — not enough for baseline
+        self._record_runs([0.80])
+        regressions = detect_eval_regressions()
+        assert len(regressions) == 0
+
+    def test_empty_trend_returns_empty(self, flywheel_workspace):
+        regressions = detect_eval_regressions()
+        assert len(regressions) == 0
+
+    def test_custom_threshold(self, flywheel_workspace):
+        # 10% drop, below default 15% but above custom 5%
+        self._record_runs([0.80, 0.82, 0.79, 0.81, 0.80, 0.73])
+        regressions = detect_eval_regressions(drop_threshold_pct=5.0)
+        assert len(regressions) >= 1
+
+    def test_generated_pass_rate_regression(self, flywheel_workspace):
+        # Record runs with generated pass rate declining
+        for i, (score, gen_rate) in enumerate([
+            (0.80, 0.90), (0.80, 0.88), (0.80, 0.85), (0.80, 0.87),
+            (0.80, 0.50),  # sharp drop in generated pass rate
+        ]):
+            report = EvalReport(
+                run_id=f"gen-{i:03d}", benchmarks_run=10,
+                pass_count=8, fail_count=2, overall_score=score,
+            )
+            ge = GeneratedEval(
+                eval_id="g", source_pattern_id="p",
+                failure_class="x", benchmark={}, scoring_check="x",
+            )
+            gen_results = [(ge, True)] * int(gen_rate * 10) + [(ge, False)] * (10 - int(gen_rate * 10))
+            record_eval_trend(report, generated_results=gen_results)
+
+        regressions = detect_eval_regressions()
+        gen_regs = [r for r in regressions if r.metric == "generated_pass_rate"]
+        assert len(gen_regs) >= 1

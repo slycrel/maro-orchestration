@@ -12,7 +12,7 @@ Last updated: 2026-04-11 (session 16)
 
 2. **K2 follow-up: Import links collection** — Knowledge node infrastructure is built (schema, storage, query, injection, wiki-link graph). Next: import enriched posts as knowledge nodes. Jeremy setting up links repo.
 
-3. **Test coverage for dangerous paths** — evolver auto-apply integration test. workers.py done (22 tests), constraint.py already had 62 tests. See BACKLOG adversarial review section.
+3. ~~**Test coverage for dangerous paths**~~ — DONE. evolver auto-apply already had 12 integration tests (tests/integration/test_evolver_apply.py). workers.py done (22). constraint.py had 62. knowledge_web.py (103). orch_bridges.py (111).
 
 4. **Eval flywheel hardening** — Current flywheel works end-to-end. Next: failure clustering (dedup related patterns), train/test split validation, eval pass-rate dashboard.
 

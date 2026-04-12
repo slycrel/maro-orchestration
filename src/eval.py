@@ -925,10 +925,27 @@ def run_eval_flywheel(
             suggestions_written = _write_flywheel_suggestions(failed_gen, builtin_report.run_id)
             summary["suggestions_written"] = suggestions_written
 
-    log.info("eval-flywheel: %d patterns, %d generated, %d/%d gen passed, %d suggestions",
+    # Step 7: Detect regressions in pass-rate trend
+    regressions = detect_eval_regressions()
+    summary["regressions"] = [
+        {"metric": r.metric, "current": r.current, "baseline": r.baseline,
+         "drop_pct": r.drop_pct, "severity": r.severity}
+        for r in regressions
+    ]
+    if regressions:
+        for r in regressions:
+            log.warning("eval-flywheel REGRESSION: %s dropped %.1f%% (%.3f → %.3f, %d consecutive) [%s]",
+                        r.metric, r.drop_pct, r.baseline, r.current, r.consecutive, r.severity)
+        if verbose:
+            for r in regressions:
+                print(f"[eval-flywheel] ⚠ REGRESSION: {r.metric} {r.baseline:.3f} → {r.current:.3f} "
+                      f"({r.drop_pct:.1f}% drop, {r.severity})",
+                      file=_sys.stderr, flush=True)
+
+    log.info("eval-flywheel: %d patterns, %d generated, %d/%d gen passed, %d suggestions, %d regressions",
              summary["patterns_mined"], summary["evals_generated"],
              sum(1 for _, p in gen_results if p), len(gen_results),
-             summary.get("suggestions_written", 0))
+             summary.get("suggestions_written", 0), len(regressions))
 
     return summary
 
@@ -977,3 +994,108 @@ def _write_flywheel_suggestions(
         return len(suggestions)
     except Exception:
         return 0
+
+
+# ---------------------------------------------------------------------------
+# Eval trend regression detection
+# ---------------------------------------------------------------------------
+
+@dataclass
+class EvalRegression:
+    """A detected regression in eval pass rates."""
+    metric: str          # "builtin_score" | "generated_pass_rate"
+    current: float       # current value
+    baseline: float      # rolling baseline (avg of prior N runs)
+    drop_pct: float      # percent drop from baseline
+    consecutive: int     # how many consecutive runs below threshold
+
+    @property
+    def severity(self) -> str:
+        if self.consecutive >= 3 or self.drop_pct >= 30:
+            return "critical"
+        if self.consecutive >= 2 or self.drop_pct >= 15:
+            return "high"
+        return "moderate"
+
+
+def detect_eval_regressions(
+    *,
+    baseline_window: int = 5,
+    drop_threshold_pct: float = 15.0,
+) -> List[EvalRegression]:
+    """Detect pass-rate regressions in eval trend data.
+
+    Compares the most recent run against a rolling baseline (avg of prior
+    N runs). Fires when any metric drops by more than drop_threshold_pct.
+
+    Args:
+        baseline_window: Number of prior runs to average for baseline.
+        drop_threshold_pct: Minimum percent drop to trigger a regression.
+
+    Returns:
+        List of EvalRegression findings. Empty means no regression detected.
+    """
+    entries = load_eval_trend(limit=baseline_window + 1)
+    if len(entries) < 2:
+        return []  # not enough data
+
+    current = entries[-1]
+    prior = entries[:-1]
+
+    regressions: List[EvalRegression] = []
+
+    # Check builtin score
+    _check_metric(
+        regressions, "builtin_score", current, prior,
+        drop_threshold_pct=drop_threshold_pct,
+    )
+
+    # Check generated pass rate (if available)
+    if "generated_pass_rate" in current:
+        _check_metric(
+            regressions, "generated_pass_rate", current, prior,
+            drop_threshold_pct=drop_threshold_pct,
+        )
+
+    return regressions
+
+
+def _check_metric(
+    regressions: List[EvalRegression],
+    metric: str,
+    current: dict,
+    prior: List[dict],
+    drop_threshold_pct: float,
+) -> None:
+    """Check a single metric for regression against its rolling baseline."""
+    cur_val = current.get(metric)
+    if cur_val is None:
+        return
+
+    prior_vals = [e.get(metric) for e in prior if e.get(metric) is not None]
+    if not prior_vals:
+        return
+
+    baseline = sum(prior_vals) / len(prior_vals)
+    if baseline <= 0:
+        return
+
+    drop_pct = (baseline - cur_val) / baseline * 100
+    if drop_pct >= drop_threshold_pct:
+        # Count consecutive runs below threshold
+        consecutive = 0
+        threshold = baseline * (1 - drop_threshold_pct / 100)
+        for entry in reversed(prior + [current]):
+            val = entry.get(metric)
+            if val is not None and val < threshold:
+                consecutive += 1
+            else:
+                break
+
+        regressions.append(EvalRegression(
+            metric=metric,
+            current=cur_val,
+            baseline=round(baseline, 3),
+            drop_pct=round(drop_pct, 1),
+            consecutive=consecutive,
+        ))

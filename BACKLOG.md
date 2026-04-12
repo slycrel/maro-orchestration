@@ -93,7 +93,7 @@ Full report: `~/.poe/workspace/output/x-research-20260411T081706Z.md`
 - [x] **Director 500-char context truncation** — (2026-04-12) `director.py:503` truncated worker results at 500 chars when building context for final report. Bumped to 2000.
 - [x] **agent_loop cost-warn flag persists across runs** — (2026-04-12) `_cost_warned` set on function object, never reset. Added reset at top of `run_agent_loop()`.
 - [x] **test_loop_stuck_detection failure** — (2026-04-12) `AlwaysStuckAdapter` had no `model_key`, so tier-up replaced it with real `ClaudeSubprocessAdapter`. Added `model_key = "explicit-test"` to prevent override.
-- [ ] **Evolver auto-apply integration test** — Temp workspace mutation + change_log verification + rollback. Most dangerous code path has no end-to-end test. P1.
+- [x] **Evolver auto-apply integration test** — Already exists at `tests/integration/test_evolver_apply.py` (12 tests, 350s). Covers skill mutation, change_log, backup, prompt_tweak→lesson, guardrail gating, confidence thresholds. Adversarial review missed it (looked only in `tests/`, not `tests/integration/`).
 - [ ] **workers.py minimum viable tests** — Worker dispatch routing is untested. Add tests verifying each worker type dispatches correctly. P1.
 - [ ] **constraint.py enforcement tests** — Pre-execution constraint enforcement in critical path with zero tests. P1.
 - [ ] **Evolver confidence calibration** — Self-reported confidence (0.0-1.0) never validated against real outcomes. Track outcome of each applied suggestion, compute empirical confidence. P2.
