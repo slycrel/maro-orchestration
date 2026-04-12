@@ -45,7 +45,7 @@ Multi-pass review system. 5 optional passes:
 
 All passes use cheap model. Defaults to PASS on any error. In practice, most runs only get pass 1 — the expensive passes are rarely triggered.
 
-### Introspect (introspect.py, ~1414 lines)
+### Introspect (introspect.py, ~1448 lines)
 Failure classification (11 types: setup_failure, adapter_timeout, token_explosion, etc.). Each diagnosis has severity, evidence, recommendation. Written to diagnoses.jsonl.
 
 Lenses: infrastructure exists but not fully wired. Heuristic lenses (free) run always; LLM lenses run selectively.
@@ -55,7 +55,7 @@ Pre-execution enforcement. Tiered gates: READ (observe), WRITE (warn), DESTROY (
 
 ## Over-Time Improvement (zoom out)
 
-### Evolver (evolver.py, ~2072 lines)
+### Evolver (evolver.py, ~2126 lines)
 Proposes improvements from outcome patterns. Triggered by heartbeat (~every 10 ticks) or manually.
 
 Suggestion types:
@@ -103,9 +103,10 @@ The infrastructure is 80% built. Closing the verify→learn loop is the 20% that
 | File | Lines | Role |
 |------|-------|------|
 | src/inspector.py | ~1964 | Friction detection, alignment check |
-| src/evolver.py | ~2072 | Improvement proposals, auto-apply |
-| src/graduation.py | ~400 | Repeated-pattern promotion |
-| src/introspect.py | ~1414 | Failure classification, lenses |
-| src/quality_gate.py | ~600 | Multi-pass review |
+| src/evolver.py | ~2126 | Improvement proposals, auto-apply, advisor wiring |
+| src/graduation.py | ~482 | Repeated-pattern promotion |
+| src/introspect.py | ~1448 | Failure classification, lenses |
+| src/quality_gate.py | ~655 | Multi-pass review |
 | src/skills.py | ~2164 | Discovery, scoring, circuit breaker |
-| src/constraint.py | ~400 | Pre-execution enforcement |
+| src/constraint.py | ~623 | Pre-execution enforcement |
+| src/eval.py | ~979 | Evals-as-training-data flywheel |

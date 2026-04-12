@@ -73,7 +73,7 @@ Pre-flight flags steps that are really sub-goals. At execution time, those steps
 
 | File | Lines | Role |
 |------|-------|------|
-| src/agent_loop.py | ~3938 | Core loop, all 7 phases |
-| src/step_exec.py | ~400 | Single step execution |
-| src/planner.py | ~350 | Goal decomposition + scope estimation |
-| src/pre_flight.py | ~320 | Plan review + multi-lens |
+| src/agent_loop.py | ~3992 | Core loop, all 7 phases |
+| src/step_exec.py | ~1042 | Single step execution |
+| src/planner.py | ~590 | Goal decomposition + scope estimation |
+| src/pre_flight.py | ~512 | Plan review + multi-lens |

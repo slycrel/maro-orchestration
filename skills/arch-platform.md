@@ -10,7 +10,7 @@ always_inject: false
 
 Operational substrate everything runs on. Model-agnostic, cost-aware, resilient.
 
-## LLM Adapter Hierarchy (llm.py, ~1128 lines)
+## LLM Adapter Hierarchy (llm.py, ~1168 lines)
 
 Unified `.complete(messages, tools, ...)` interface across backends:
 
@@ -105,10 +105,10 @@ Per-model, per-step-type cost tracking to `memory/step-costs.jsonl`:
 
 | File | Lines | Role |
 |------|-------|------|
-| src/llm.py | ~1128 | Adapter hierarchy, model abstraction, advisor |
-| src/config.py | ~200 | Two-tier YAML config |
+| src/llm.py | ~1168 | Adapter hierarchy, model abstraction, thinking budget, advisor |
+| src/config.py | ~243 | Two-tier YAML config |
 | src/heartbeat.py | ~998 | Health checks, session guard, backlog drain |
-| src/orch_items.py | ~600 | Project/item management, NEXT.md |
-| src/task_store.py | ~400 | File-per-task queue, DAG deps |
-| src/metrics.py | ~300 | Cost tracking, step classification |
+| src/orch_items.py | ~653 | Project/item management, NEXT.md |
+| src/task_store.py | ~419 | File-per-task queue, DAG deps |
+| src/metrics.py | ~582 | Cost tracking, step classification |
 | scripts/heartbeat-ctl.sh | | Lifecycle management (start/stop/status) |
