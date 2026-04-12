@@ -270,6 +270,8 @@ def test_loop_stuck_detection(monkeypatch, tmp_path):
     monkeypatch.setattr(_al.run_agent_loop, "_recovery_in_progress", True, raising=False)
 
     class AlwaysStuckAdapter:
+        model_key = "explicit-test"  # prevent tier-up from replacing this adapter
+
         def complete(self, messages, **kwargs):
             from llm import LLMResponse, ToolCall
             # execute: always flag stuck

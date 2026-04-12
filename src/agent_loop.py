@@ -2885,6 +2885,9 @@ def run_agent_loop(
     Returns:
         LoopResult with full outcome.
     """
+    # Reset per-run state (cost-warn flag persists across calls otherwise)
+    run_agent_loop._cost_warned = False  # type: ignore[attr-defined]
+
     # Phase A: Initialize loop state
     ctx, _early_return = _initialize_loop(
         goal,

@@ -500,7 +500,7 @@ def run_director(
 
         worker_results.append(result)
         if result.status == "done" and result.result:
-            completed_context += f"\n\n[{ticket.worker_type}] {ticket.task}:\n{result.result[:500]}"
+            completed_context += f"\n\n[{ticket.worker_type}] {ticket.task}:\n{result.result[:2000]}"
 
     # Phase 3: Compile final report
     _log("compiling final report...")

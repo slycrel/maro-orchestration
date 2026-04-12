@@ -6,6 +6,13 @@ Works standalone or alongside OpenClaw, Telegram, Slack, or any other interface 
 
 > **Status: personal infrastructure / active development.** This is a working system, not a polished library. APIs change, features are added fast, and some things are still sharp edges. It runs continuously on a headless Ubuntu box and gets iterated on daily. If you're reading this and it seems useful, it probably is — just go in eyes open.
 
+### Prerequisites
+
+- **Python 3.10+** (tested on 3.12–3.14)
+- **Linux or macOS** (Linux preferred for always-on deployments)
+- At least one LLM API key: `ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`, or `OPENAI_API_KEY`
+- Optional: `claude` CLI (Claude Code), `gh` CLI (GitHub), Telegram bot token
+
 ---
 
 ## What it does
@@ -76,20 +83,33 @@ All share one interface: `LLMAdapter.complete(messages, tools) → LLMResponse`
 ## Quickstart
 
 ```bash
-# Install (creates editable install with test + runtime deps)
+# 1. Clone and install
+git clone https://github.com/slycrel/openclaw-orchestration.git
+cd openclaw-orchestration
 pip install -e ".[dev]"
 
-# Bootstrap workspace + services
+# 2. Set your API key (at minimum, one of these)
+export ANTHROPIC_API_KEY=sk-ant-...
+# or: export OPENROUTER_API_KEY=...
+# or: export OPENAI_API_KEY=...
+
+# 3. Bootstrap workspace (creates ~/.poe/workspace/, systemd services)
 python3 src/cli.py poe-bootstrap install
 
-# Run an autonomous research loop
+# 4. Run your first goal
+PYTHONPATH=src python3 -m handle "what time is it in Tokyo?"          # quick answer (NOW lane)
+PYTHONPATH=src python3 -m handle "research the top 3 LLM frameworks"  # multi-step (AGENDA lane)
+
+# Or use the autonomous loop directly
 python3 src/agent_loop.py "research winning polymarket strategies"
+```
 
-# Route a message (auto-classifies NOW vs AGENDA)
-python3 src/cli.py poe-handle "what time is it in Tokyo?"
-python3 src/cli.py poe-handle "build me a research summary on LLM orchestration"
+No OpenClaw installation required. Set `POE_WORKSPACE` to any directory to use a custom workspace root.
 
-# Start Telegram listener
+### More commands
+
+```bash
+# Telegram listener (requires TELEGRAM_BOT_TOKEN)
 python3 src/telegram_listener.py           # run forever
 python3 src/telegram_listener.py --once    # process pending and exit
 
@@ -97,12 +117,10 @@ python3 src/telegram_listener.py --once    # process pending and exit
 python3 src/cli.py sheriff health
 python3 src/cli.py poe-observe
 
-# Memory
+# Memory status
 python3 src/cli.py memory context
 python3 src/cli.py poe-memory status
 ```
-
-No OpenClaw installation required. Set `POE_WORKSPACE` to any directory and run.
 
 ### Logging
 
@@ -121,79 +139,28 @@ POE_LOG_LEVEL=DEBUG python3 src/agent_loop.py "your goal"
 
 The `--verbose` CLI flag is equivalent to `POE_LOG_LEVEL=DEBUG`. Output goes to stderr so it doesn't interfere with result output.
 
-### Tool-cost reporting
-
-Summarize recorded step telemetry:
+### Benchmarking and cost reporting
 
 ```bash
-python3 src/tool_cost_report.py --metrics memory/step-costs.jsonl
-# or after install
+# Summarize step telemetry
 poe-tool-costs --metrics memory/step-costs.jsonl
-```
 
-Write markdown + JSON artifacts:
-
-```bash
+# Write markdown + JSON reports
 poe-tool-costs \
   --metrics memory/step-costs.jsonl \
   --write-report output/benchmarks/tool-cost-report-live.md \
   --write-json output/benchmarks/tool-cost-report-live.json
-```
 
-Run the lean fixture benchmark and summarize that run:
+# Run fixture benchmarks
+poe-tool-costs --run-fixtures --fixtures benchmarks/fixture-workloads.json --output-dir output/benchmarks
 
-```bash
-poe-tool-costs \
-  --run-fixtures \
-  --fixtures benchmarks/fixture-workloads.json \
-  --output-dir output/benchmarks
-```
-
-Run the append/read lessons slice (the simple case JSONL currently wins):
-
-```bash
-python3 src/backend_benchmark.py \
-  --slice memory-backend \
-  --output-dir output/benchmarks \
-  --iterations 7 \
-  --records 250
-# or after install
+# Backend benchmarks (memory append/read, filtered lookup, concurrent contention)
 poe-benchmark --slice memory-backend --output-dir output/benchmarks
-```
-
-Run the filtered lookup slice (the first case where SQLite can justify itself):
-
-```bash
-python3 src/backend_benchmark.py \
-  --slice memory-backend-filtered-lookup \
-  --output-dir output/benchmarks \
-  --iterations 7 \
-  --records 20000 \
-  --limit 25 \
-  --min-confidence 0.8
-# or after install
 poe-benchmark --slice memory-backend-filtered-lookup --output-dir output/benchmarks
+poe-benchmark --slice memory-backend-append-contention --output-dir output/benchmarks --workers 2 4
 ```
 
-Run the concurrent append contention slice (2–4 workers appending to the same collection):
-
-```bash
-python3 src/backend_benchmark.py \
-  --slice memory-backend-append-contention \
-  --output-dir output/benchmarks \
-  --workers 2 4 \
-  --writes-per-worker 200
-# or after install
-poe-benchmark --slice memory-backend-append-contention --output-dir output/benchmarks
-```
-
-What it gives you:
-- grouping by inferred task class, step type, model, and status
-- sample count, ok/error split, median latency, p95-ish latency, median tokens, p95 tokens, and total cost
-- a deterministic three-workload smoke path for X-link research, document summary, and structured analysis
-- one real comparative append/read slice for the low-friction default path
-- one filtered retrieval slice that checks whether SQLite earns its overhead when the workload wants selective reads instead of whole-file parsing
-- one concurrent append contention slice that measures elapsed time, observed writes, and whether contention causes lost writes, corrupt rows, or lock/failure events
+Reports include: task class grouping, ok/error split, median/p95 latency and tokens, total cost, and contention analysis.
 
 | Logger | What it covers |
 |--------|---------------|
@@ -287,6 +254,34 @@ Workspace root resolves as: `POE_WORKSPACE` → `OPENCLAW_WORKSPACE` → `WORKSP
 
 OpenClaw is fully optional. The system runs standalone on any machine with Python 3.10+ and a Claude/OpenAI API key.
 
+### Workspace layout
+
+The workspace (`~/.poe/workspace/` by default) holds all runtime state, learning data, and self-evolved artifacts. It is **not** checked into git — the repo ships defaults, and the workspace accumulates improvements over time.
+
+```
+~/.poe/workspace/
+├── memory/           # Outcomes, lessons, knowledge nodes, captain's log, diagnoses
+├── skills/           # Self-created/evolved skill .md files (override repo defaults)
+├── personas/         # Self-created/evolved persona specs (override repo defaults)
+├── playbook.md       # Director's operational wisdom (auto-maintained by evolver)
+├── output/           # Run artifacts, operator status, research outputs
+├── projects/         # Per-project NEXT.md, decisions, risks
+├── config.yml        # Workspace-level config overrides
+└── secrets/
+    └── .env          # API keys (auto-discovered by config.py)
+```
+
+**Resolution order** for skills and personas: workspace → repo. When the system evolves a better version of a shipped skill or persona, the workspace version wins. Repo versions are the shipped defaults.
+
+Two-tier YAML config (like git's `~/.gitconfig` vs `.git/config`):
+
+| File | Scope | What goes here |
+|------|-------|---------------|
+| `~/.poe/config.yml` | User-level | API keys, model prefs, yolo mode, notifications |
+| `~/.poe/workspace/config.yml` | Workspace-level | Evolver, inspector thresholds, constraint settings |
+
+Workspace inherits from user; workspace keys override. Access in code: `from config import get; get("inspector.breach_threshold", 0.30)`
+
 ---
 
 ## Source modules
@@ -379,7 +374,7 @@ Next run with similar task:
 ## Development
 
 ```bash
-# Run tests (2282+ passing, all LLM calls mocked)
+# Run tests (3500+ passing, all LLM calls mocked)
 python3 -m pytest tests/ -q
 
 # Dry-run (no LLM calls)
