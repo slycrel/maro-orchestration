@@ -3,7 +3,7 @@
 Single canonical location for everything we've identified but haven't done yet.
 Read this at the start of every session. Update it as items are completed or new ones emerge.
 
-Last reviewed: 2026-04-11 (session 15)
+Last reviewed: 2026-04-11 (session 16)
 
 ---
 
@@ -65,10 +65,10 @@ Last reviewed: 2026-04-11 (session 15)
 
 Full report: `~/.poe/workspace/output/x-research-20260411T081706Z.md`
 
-- [ ] **Advisor Pattern** — Sonnet executes, Opus advises at decision points via tool call. 60-80% cost reduction claimed (numbers unverified — steal the pattern, not the numbers). Add `advisor_call()` wrapper to `llm.py`; wire into milestone boundaries in `agent_loop.py` and evolver meta-improvement triggers. **Priority 9/10.** Source: @aakashgupta.
+- [x] **Advisor Pattern** — (2026-04-11 session 16) `advisor_call()` in llm.py. Wired into: stuck detection, evolver medium-confidence gate (0.6-0.79), milestone boundary decompose failures, recovery plan wisdom check. Source: @aakashgupta.
 - [ ] **Codebase Graph + LSP** — Pre-build ranked call graph before agent reads any file. Use real LSP (go-to-definition, call hierarchy) for surgical context. Multi-agent coordination via context bus. Claimed 1.8x faster, 2.1x cheaper (unverified). **Priority 9/10.** Source: @bniwael / SoulForge.
-- [ ] **Evals-as-Training-Data flywheel** — Mine prod failures → auto-generate evals → auto-tweak harness → validate with train/test splits. Extends evolver.py + inspector.py. **Priority 9/10.** Source: @realsigridjin.
-- [ ] **Thinking Token Budget** — `thinking_budget: int` per call type; high (8000+) for planning, low (1000) for execution/tool calls. Add to `llm.py` call signature. **Priority 8/10.** Source: @av1dlive.
+- [x] **Evals-as-Training-Data flywheel** — (2026-04-11 session 16) `mine_failure_patterns()` → `generate_evals_from_patterns()` → `run_eval_flywheel()`. Failure-class scoring for 9 types, trend tracking, auto-suggestions. Wired into `run_nightly_eval()`. 29 tests. Source: @realsigridjin.
+- [x] **Thinking Token Budget** — (2026-04-11 session 16) `THINKING_HIGH/MID/LOW` constants, `thinking_budget` param on all adapters. AnthropicSDK: extended thinking API. Wired into decompose (HIGH) and advisor_call (MID). Source: @av1dlive.
 - [ ] **Harness Is the Problem** — "Models are fine, the harness isn't good enough." Evolver should target harness code paths, not just prompts. Friction = harness quality signal. Strategic validation of project direction. **Priority 8/10.** Source: @sebgoddijn / Ramp Glass.
 - [ ] **Harness Architecture Spectrum** — Thin (Anthropic) vs thick (LangChain) loop — best products live in the middle. Validate NOW/AGENDA checkpoint placement; inspector at all checkpoints. **Priority 7/10.** Source: @akshay_pachaar.
 - [ ] **Event-driven subprocess wakeup** — Replace polling with event-driven wakeup (asyncio.Queue or file-based event). Workers post completion signals. **Priority 7/10.** Source: @teknium / NousResearch hermes-agent.
@@ -117,9 +117,9 @@ Full report: `~/.poe/workspace/output/x-research-20260411T081706Z.md`
 ### Adversarial review (2026-04-11, session 15 self-review via orchestration)
 - [x] **BUG-1: verbose always True** — `verbose=args.verbose or True` → `verbose=args.verbose`. Two call sites in handle.py.
 - [x] **Dead imports/vars** — 7 items cleaned: sys/time/uuid from poe.py, os/field/_btw_t0 from handle.py, field/Any from orch_items.py.
-- [ ] **BUG-2: lock file open mode** — `_lock_task` opens with `'r'` mode; inode deletion breaks mutual exclusion. Fix: open `'a'` or `'r+'`.
-- [ ] **BUG-3: project starvation sort** — `select_global_next` sort starves older equal-priority projects. Fix: invert mtime tiebreak or round-robin.
-- [ ] **SEC-2/SEC-3: f-string + swallowed exc** — poe.py cosmetic; f-string without placeholder, captured exc never logged.
+- [x] **BUG-2: lock file open mode** — (2026-04-11 session 16) `_lock_task` now opens with `'a'` mode. Prevents inode deletion race where another process could unlink+recreate between touch and open.
+- [x] **BUG-3: project starvation sort** — (2026-04-11 session 16) `select_global_next` now prefers oldest mtime for equal-priority projects (inverted tiebreak). Most neglected project gets picked.
+- [x] **SEC-2/SEC-3: f-string + swallowed exc** — (2026-04-11 session 16) Fixed 4 f-strings without placeholders in poe.py. Swallowed mission dispatch exception now logged at DEBUG.
 
 ### Memory / Knowledge Layer (K stages — from research/orchestration-knowledge-layer)
 - [x] **K3 partial: Captain's log read bridge** — (2026-04-11) Captain's log (11K events, write-only since creation) now wired as read source into: (1) decompose context injection in `agent_loop.py` — planner sees last 5 actionable learning events; (2) evolver LLM analysis in `evolver.py` — evolver sees recent skill/rule changes before generating suggestions. Filters: SKILL_PROMOTED/DEMOTED/CIRCUIT_OPEN, EVOLVER_APPLIED, DIAGNOSIS, HYPOTHESIS_PROMOTED, STANDING_RULE_CONTRADICTED, RULE_GRADUATED. (`captains_log.load_log()` API already existed — just had zero consumers.)
@@ -140,15 +140,15 @@ Full report: `~/.poe/workspace/output/x-research-20260411T081706Z.md`
 ### Data Portability / Workspace Consolidation (hardening)
 - [x] **memory_dir consolidated** — (2026-04-11) `orch_items.memory_dir()` and `config.memory_dir()` now both default to `~/.poe/workspace/memory/`. Captain's log + all learning data in one place.
 - [x] **Two-tier YAML config** — (2026-04-11) `~/.poe/config.yml` (user) + `~/.poe/workspace/config.yml` (workspace). Inspector thresholds and constraint settings wired to config. 17 tests.
-- [ ] **Route output + projects to workspace** — `output_root()` and `projects_root()` still use `orch_root()` (the repo). Moving them to `~/.poe/workspace/` requires auditing `relative_to(orch_root())` assumptions in orch.py, agent_loop.py, observe.py. Medium effort.
-- [ ] **poe-export / poe-import for learning data** — `poe-export` should tar `~/.poe/workspace/` (memory/, config.yml, skills/) minus secrets. Enables: backup, second-machine bootstrap, sharing learned patterns. Simpler now that memory is consolidated.
+- [x] **Route output + projects to workspace** — (2026-04-11 session 16) `output_root()` and `projects_root()` now route to `~/.poe/workspace/` via config.py. `relative_display_path()` helper for safe cross-root path display. 12 `relative_to(orch_root())` calls fixed.
+- [ ] **poe-export / poe-import for learning data** — `poe-export` should tar `~/.poe/workspace/` (memory/, skills/, personas/, playbook.md, config.yml) minus secrets. Enables: backup, second-machine bootstrap, sharing learned patterns. Simpler now that workspace separation is complete (all runtime state in one directory).
 
 ### Concurrent Run Safety (hardening)
 - [ ] **First-class project isolation** — Currently: file locking on full-rewrite paths (skills, tiered lessons, hypotheses, rules) prevents data corruption; standing rules and decisions are domain-filtered during injection. Still needed for true concurrent runs: per-project skill pools (or project tag on skills + filtered matching), project-scoped lesson injection (currently filters by task_type but not project), per-project lockfile in set_loop_running(), concurrent run safety audit across all write paths. Add project field to Skill dataclass and wire through find_matching_skills(). Captain's Log should tag entries with project for filtered views. Low priority while runs are sequential; required before enabling parallel missions.
 
 ### Captain's Log extensions (from Grok Round 5 feedback, 2026-04-10)
 - [ ] **Input classification tag** — Extend `context` field in log entries with input characteristics (URL type, content type, source). Prevents circuit breakers from firing on domain mismatches (the Jina scenario). Log `INPUT_MISMATCH` when a skill is invoked on out-of-domain input.
-- [ ] **Director context hook** — Let the Director query last N captain's log entries during decompose. "What has the learning system been doing?" context injection. Stubbed in spec, not yet wired.
+- [x] **Director context hook** — (2026-04-11 session 16) Captain's log context + playbook + knowledge nodes now injected into `_build_loop_context()`. Director sees recent learning events, operational wisdom, and relevant knowledge at decompose time.
 - [ ] **Dashboard captain's log panel** — When dashboard becomes command center (Jeremy's vision), captain's log is natural sidebar/tab. Scrollable, filterable, linked to artifacts.
 
 ### From X research runs (2026-04-09)

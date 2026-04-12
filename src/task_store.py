@@ -104,8 +104,10 @@ def _lock_task(path: pathlib.Path, shared: bool = False):
     """Advisory lock on the task file. Creates parent dirs if needed."""
     path.parent.mkdir(parents=True, exist_ok=True)
     lock_path = path.with_suffix(".lock")
-    lock_path.touch(exist_ok=True)
-    fp = open(lock_path, "r")
+    # Open in append mode: creates if missing, doesn't truncate, and — critically —
+    # the fd is bound to the inode at open time. 'r' mode was vulnerable to inode
+    # deletion race: another process could unlink+recreate between touch and open.
+    fp = open(lock_path, "a")
     try:
         fcntl.flock(fp.fileno(), fcntl.LOCK_SH if shared else fcntl.LOCK_EX)
         yield

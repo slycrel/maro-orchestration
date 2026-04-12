@@ -583,7 +583,9 @@ def select_global_next() -> Optional[Tuple[str, NextItem]]:
             pass
         candidates.append((project_priority(slug), mtime, slug))
 
-    for _priority, _mtime, slug in sorted(candidates, key=lambda row: (row[0], row[1]), reverse=True):
+    # Sort: highest priority first, then OLDEST mtime first (prevent starvation
+    # of older equal-priority projects — the most neglected project gets picked).
+    for _priority, _mtime, slug in sorted(candidates, key=lambda row: (row[0], -row[1]), reverse=True):
         it = select_next_item(slug)
         if it:
             return slug, it

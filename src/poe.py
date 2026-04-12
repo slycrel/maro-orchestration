@@ -318,7 +318,7 @@ def _describe_goal_relationships(goal_query: str, adapter=None) -> str:
 
         conflicts = gmap.find_conflicts()
         if conflicts:
-            lines.append(f"\nConflicts detected:")
+            lines.append("\nConflicts detected:")
             for c in conflicts:
                 lines.append(f"  ! {c}")
 
@@ -575,10 +575,10 @@ def poe_handle(
         if decision.requires_human:
             return PoeResponse(
                 message=(
-                    f"This action requires your approval before I proceed.\n"
+                    "This action requires your approval before I proceed.\n"
                     f"Action: {action_type}\n"
                     f"Reason: {decision.reason}\n"
-                    f"Reply 'approved' or 'go ahead' to proceed."
+                    "Reply 'approved' or 'go ahead' to proceed."
                 ),
                 routed_to="status",
             )
@@ -612,8 +612,9 @@ def poe_handle(
                 executive_summary=summary,
             )
         except Exception as exc:
-            # Fall through to agent loop
-            pass
+            # Fall through to agent loop — log so it's not invisible
+            import logging as _log_mod
+            _log_mod.getLogger(__name__).debug("mission dispatch failed, falling through: %s", exc)
 
     # Shorter AGENDA work → agent loop (with persona auto-selection)
     if run_agent_loop is not None:
@@ -667,7 +668,7 @@ def poe_handle(
 
             done_steps = sum(1 for s in loop_result.steps if s.status == "done")
             summary = (
-                f"Task completed.\n"
+                "Task completed.\n"
                 f"Steps: {done_steps}/{len(loop_result.steps)}\n"
                 f"Status: {loop_result.status}"
             )
