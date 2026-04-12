@@ -12,11 +12,9 @@ Last updated: 2026-04-11 (session 16)
 
 2. **K2 follow-up: Import links collection** — Knowledge node infrastructure is built (schema, storage, query, injection, wiki-link graph). Next: import enriched posts as knowledge nodes. Jeremy setting up links repo.
 
-3. **Wire knowledge injection into decompose** — `inject_knowledge_for_goal()` exists; wire into `_build_loop_context()` alongside tiered lessons.
+3. **Test coverage for dangerous paths** — evolver auto-apply integration test. workers.py done (22 tests), constraint.py already had 62 tests. See BACKLOG adversarial review section.
 
-4. **Test coverage for dangerous paths** — workers.py dispatch, constraint.py enforcement, evolver auto-apply integration. See BACKLOG adversarial review section for details.
-
-5. **Eval flywheel hardening** — Current flywheel works end-to-end. Next: failure clustering (dedup related patterns), train/test split validation, eval pass-rate dashboard.
+4. **Eval flywheel hardening** — Current flywheel works end-to-end. Next: failure clustering (dedup related patterns), train/test split validation, eval pass-rate dashboard.
 
 ## Queued
 
@@ -33,7 +31,10 @@ Last updated: 2026-04-11 (session 16)
 - [x] **Fix agent_loop cost-warn persistence** — `_cost_warned` flag now resets per `run_agent_loop()` call.
 - [x] **Fix test_loop_stuck_detection** — Added `model_key` to stub adapter; all 6 slow tests now pass.
 - [x] **README overhaul** — Prerequisites section, restructured quickstart, workspace layout docs, collapsed benchmark section, fixed stale test count.
-- [x] 3531 tests passing (all 6 slow tests now pass too)
+- [x] Knowledge injection already wired — `inject_knowledge_for_goal()` in `_build_loop_context()` since session 16. Marked MILESTONES #3 as done.
+- [x] workers.py test coverage — 22 tests for dispatch routing, type inference, crew sizing, mock adapters.
+- [x] Confirmed constraint.py already has 62 tests (adversarial review hallucinated this gap).
+- [x] 3553 tests passing (all 6 slow tests now pass too)
 
 ## Done (session 16)
 
