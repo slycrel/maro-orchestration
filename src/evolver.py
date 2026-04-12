@@ -402,6 +402,148 @@ def apply_suggestion(suggestion_id: str) -> bool:
     return found
 
 
+def revert_suggestion(suggestion_id: str) -> dict:
+    """Revert a previously applied suggestion using the change_log audit trail.
+
+    Reads change_log.jsonl to find the most recent entry for this suggestion_id,
+    then reverses the action based on the recorded before_state:
+
+        skill_update    → restore old description from before_state
+        skill_create    → remove the skill from skills.jsonl
+        lesson_add      → no-op (lessons are append-only; decay handles cleanup)
+        guardrail_append → remove the pattern from dynamic-constraints.jsonl
+
+    Also marks the suggestion as applied=False in suggestions.jsonl and logs
+    the revert to captain's log.
+
+    Returns:
+        dict with keys: reverted (bool), category, detail (str).
+    """
+    from orch_items import memory_dir
+
+    cl_path = memory_dir() / "change_log.jsonl"
+    if not cl_path.exists():
+        return {"reverted": False, "category": "", "detail": "no change_log.jsonl found"}
+
+    # Find the matching entry (most recent first)
+    entries = []
+    for line in cl_path.read_text(encoding="utf-8").splitlines():
+        try:
+            entries.append(json.loads(line))
+        except Exception:
+            continue
+
+    match = None
+    for entry in reversed(entries):
+        if entry.get("suggestion_id") == suggestion_id:
+            match = entry
+            break
+
+    if not match:
+        return {"reverted": False, "category": "", "detail": f"suggestion_id {suggestion_id} not found in change_log"}
+
+    category = match.get("category", "")
+    before_state = match.get("before_state") or {}
+    target = match.get("target", "")
+    detail = ""
+
+    try:
+        if category == "skill_pattern":
+            from skills import load_skills, _save_skills
+            skills = load_skills()
+            state_type = before_state.get("type", "")
+
+            if state_type == "skill_update":
+                # Restore old description
+                old_desc = before_state.get("old_description", "")
+                for s in skills:
+                    if s.name == target or s.id == target:
+                        s.description = old_desc
+                        detail = f"restored description for skill '{s.name}'"
+                        break
+                else:
+                    return {"reverted": False, "category": category,
+                            "detail": f"skill '{target}' not found for rollback"}
+                _save_skills(skills)
+
+            elif state_type == "skill_create":
+                # Remove the created skill
+                original_len = len(skills)
+                skills = [s for s in skills if s.name != target and s.id != target]
+                if len(skills) < original_len:
+                    _save_skills(skills)
+                    detail = f"removed created skill '{target}'"
+                else:
+                    return {"reverted": False, "category": category,
+                            "detail": f"skill '{target}' not found for removal"}
+
+        elif category == "new_guardrail":
+            # Remove matching pattern from dynamic-constraints.jsonl
+            dc_path = _dynamic_constraints_path()
+            if dc_path.exists():
+                suggestion_text = match.get("suggestion_text", "")
+                lines = dc_path.read_text(encoding="utf-8").splitlines()
+                new_lines = []
+                removed = False
+                for line in lines:
+                    try:
+                        d = json.loads(line)
+                        if d.get("source") == f"evolver:{suggestion_id}" or d.get("pattern", "") == suggestion_text[:200]:
+                            removed = True
+                            continue
+                    except Exception:
+                        pass
+                    new_lines.append(line)
+                if removed:
+                    dc_path.write_text("\n".join(new_lines) + "\n" if new_lines else "", encoding="utf-8")
+                    detail = "removed dynamic constraint"
+                else:
+                    detail = "dynamic constraint not found (may have expired)"
+
+        elif category == "prompt_tweak":
+            detail = "prompt_tweak lessons are append-only; lesson will decay naturally"
+
+        else:
+            detail = f"no revert action for category '{category}'"
+
+    except Exception as exc:
+        return {"reverted": False, "category": category, "detail": f"revert failed: {exc}"}
+
+    # Mark suggestion as not applied
+    try:
+        p = _suggestions_path()
+        if p.exists():
+            lines = p.read_text(encoding="utf-8").splitlines()
+            new_lines = []
+            for line in lines:
+                try:
+                    d = json.loads(line.strip())
+                    if d.get("suggestion_id") == suggestion_id:
+                        d["applied"] = False
+                        d["status"] = "reverted"
+                    new_lines.append(json.dumps(d))
+                except Exception:
+                    new_lines.append(line)
+            p.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+    except Exception:
+        pass
+
+    # Captain's log
+    try:
+        from captains_log import log_event
+        log_event(
+            event_type="EVOLVER_REVERTED",
+            subject=suggestion_id,
+            summary=f"Reverted suggestion {suggestion_id} ({category}): {detail}",
+            context={"suggestion_id": suggestion_id, "category": category, "target": target},
+        )
+    except Exception:
+        pass
+
+    log.info("revert_suggestion id=%s category=%s: %s", suggestion_id, category, detail)
+    return {"reverted": True, "category": category, "detail": detail}
+
+
 def _run_skill_test_gate(suggestion_dict: dict) -> Optional[dict]:
     """Run the unit-test gate for a skill_pattern suggestion.
 

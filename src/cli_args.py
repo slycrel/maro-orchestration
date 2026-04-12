@@ -133,6 +133,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_poe_evolver.add_argument("--notify", action="store_true", help="Send Telegram summary of suggestions")
     p_poe_evolver.add_argument("--list", action="store_true", dest="list_pending", help="List pending (unapplied) suggestions")
     p_poe_evolver.add_argument("--apply", dest="apply_id", help="Mark a suggestion as applied by ID")
+    p_poe_evolver.add_argument("--revert", dest="revert_id", help="Revert a previously applied suggestion by ID")
     p_poe_evolver.add_argument("--verbose", "-v", action="store_true", default=True)
     p_poe_evolver.add_argument("--format", choices=["text", "json"], default="text")
 

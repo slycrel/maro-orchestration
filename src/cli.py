@@ -513,6 +513,16 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 return fail("E_SUGGESTION_NOT_FOUND", args.apply_id)
 
+        if getattr(args, "revert_id", None):
+            from evolver import revert_suggestion
+            result = revert_suggestion(args.revert_id)
+            if result["reverted"]:
+                print(f"reverted={args.revert_id}: {result['detail']}")
+                return 0
+            else:
+                print(f"revert failed: {result['detail']}", file=sys.stderr)
+                return 1
+
         report = run_evolver(
             outcomes_window=args.window,
             min_outcomes=args.min_outcomes,

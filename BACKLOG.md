@@ -94,10 +94,10 @@ Full report: `~/.poe/workspace/output/x-research-20260411T081706Z.md`
 - [x] **agent_loop cost-warn flag persists across runs** — (2026-04-12) `_cost_warned` set on function object, never reset. Added reset at top of `run_agent_loop()`.
 - [x] **test_loop_stuck_detection failure** — (2026-04-12) `AlwaysStuckAdapter` had no `model_key`, so tier-up replaced it with real `ClaudeSubprocessAdapter`. Added `model_key = "explicit-test"` to prevent override.
 - [x] **Evolver auto-apply integration test** — Already exists at `tests/integration/test_evolver_apply.py` (12 tests, 350s). Covers skill mutation, change_log, backup, prompt_tweak→lesson, guardrail gating, confidence thresholds. Adversarial review missed it (looked only in `tests/`, not `tests/integration/`).
-- [ ] **workers.py minimum viable tests** — Worker dispatch routing is untested. Add tests verifying each worker type dispatches correctly. P1.
-- [ ] **constraint.py enforcement tests** — Pre-execution constraint enforcement in critical path with zero tests. P1.
+- [x] **workers.py minimum viable tests** — (2026-04-12 session 17) 22 tests: dispatch routing, type inference, crew sizing, mock adapters.
+- [x] **constraint.py enforcement tests** — Already had 62 tests. Adversarial review hallucinated this gap.
 - [ ] **Evolver confidence calibration** — Self-reported confidence (0.0-1.0) never validated against real outcomes. Track outcome of each applied suggestion, compute empirical confidence. P2.
-- [ ] **Evolver suggestion rollback API** — Audit trail exists (change_log.jsonl, .bak files), but no `revert_suggestion()` function. P2.
+- [x] **Evolver suggestion rollback API** — (2026-04-12 session 17) `revert_suggestion(suggestion_id)` reads change_log.jsonl, reverses action based on before_state (restore skill desc, remove created skill, remove dynamic constraint). CLI: `poe-evolver --revert <id>`. Logs EVOLVER_REVERTED to captain's log.
 - [ ] **Semantic memory deduplication** — Lesson dedup uses hash/first-100-chars, not semantic similarity. Embedding-based similarity check at write time would prevent unbounded growth. P2.
 - [ ] **LoopStateMachine conversion** — LoopContext becomes `self`. Enables exhaustive state coverage in tests. Eliminates context-threading complexity. P1 architectural.
 
