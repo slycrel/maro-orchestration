@@ -18,8 +18,6 @@ Last updated: 2026-04-13 (session 19, continued)
 
 4. **Output path resolution** — Files land in `/home/clawd/prototypes/poe-orchestration/prototypes/...` instead of `~/.poe/workspace/output/`. Subprocess cwd or project artifact_dir resolution bug.
 
-8. **Output path resolution** — Files land in `/home/clawd/prototypes/poe-orchestration/prototypes/...` instead of `~/.poe/workspace/output/`. Subprocess cwd or project artifact_dir resolution bug.
-
 9. **Artifact output routing cleanup** — Temp artifacts (per-step) → tmp dir (deleted by default, kept via config `keep_artifacts: true`). Permanent outputs → `~/.poe/workspace/output/`.
 
 10. **K2 follow-up: Import links collection** — Knowledge node infrastructure built. Next: import enriched posts.
