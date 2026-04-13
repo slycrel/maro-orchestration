@@ -432,20 +432,58 @@ def _process_blocked_step(
     consecutive_max_timeouts: int,
     max_consecutive_timeouts: int,
     replan_count: int,
+    error_fingerprints: Optional[Dict[str, List[str]]] = None,
 ) -> tuple:
-    """Phase F11: Process a blocked step — retry, split, or terminal.
+    """Phase F11: Process a blocked step — retry, split, redecompose, or terminal.
 
     Returns (flow: str, step_idx, loop_status, stuck_reason, next_step_injected_context,
              consecutive_max_timeouts, recovery_step_count_delta, replan_count).
-    flow is "continue" (retry/split), "break" (adapter hung), or "normal" (terminal, fall through).
+    flow is "continue" (retry/split/redecompose), "break" (adapter hung), or "normal" (terminal, fall through).
     Mutates step_retries, step_tier_overrides, failure_chain, step_outcomes,
-    remaining_steps/indices, manifest_steps in place.
+    remaining_steps/indices, manifest_steps, error_fingerprints in place.
     """
     from llm import MODEL_CHEAP, MODEL_MID, MODEL_POWER
 
     o = _orch()
     _prior_retries = step_retries.get(step_text, 0)
-    _decision = _handle_blocked_step(step_text, outcome, _prior_retries, ctx.adapter)
+    if error_fingerprints is None:
+        error_fingerprints = {}
+
+    # Phase 62: Track error fingerprint for convergence detection
+    _fp = _error_fingerprint(outcome)
+    _fps = error_fingerprints.setdefault(step_text, [])
+    _fps.append(_fp)
+
+    _decision = _handle_blocked_step(
+        step_text, outcome, _prior_retries, ctx.adapter,
+        error_fingerprints=_fps,
+        step_outcomes=step_outcomes,
+        replan_count=replan_count,
+    )
+
+    # Phase 62: Log metacognitive reasoning
+    if _decision.metacognitive_reason:
+        log.info("metacognitive decision: %s", _decision.metacognitive_reason)
+        try:
+            from captains_log import log_event
+            log_event(
+                event_type="METACOGNITIVE_DECISION",
+                subject=step_text[:80],
+                summary=_decision.metacognitive_reason,
+                context={
+                    "step_idx": step_idx,
+                    "retries": _prior_retries,
+                    "fingerprints": _fps[-3:],  # last 3
+                    "replan_count": replan_count,
+                    "action": "retry" if _decision.retry else (
+                        "redecompose" if _decision.redecompose else (
+                            "split" if _decision.split_into else "stuck"
+                        )
+                    ),
+                },
+            )
+        except Exception:
+            pass
     _recovery_delta = 0
 
     if _decision.retry:
@@ -494,6 +532,55 @@ def _process_blocked_step(
         return ("continue", step_idx, "", None, next_step_injected_context,
                 consecutive_max_timeouts, _recovery_delta, replan_count)
 
+    elif _decision.redecompose:
+        # Phase 62: Mid-loop re-decomposition — the step (or plan) needs
+        # to be broken down differently, not just retried.
+        _recovery_delta = 1
+        failure_chain.append(
+            f"step {step_idx} re-decomposing: {_decision.metacognitive_reason[:80]}"
+        )
+        try:
+            from planner import decompose
+            _sub_steps = decompose(
+                step_text,
+                ctx.adapter,
+                max_steps=5,
+            )
+            if _sub_steps and len(_sub_steps) >= 2:
+                _sub_shaped = _shape_steps(list(_sub_steps), label="redecompose")
+                for _new_step in reversed(_sub_shaped):
+                    remaining_steps.insert(0, _new_step)
+                    remaining_indices.insert(0, -1)
+                manifest_steps.extend(_sub_shaped)
+                replan_count += 1
+                log.info("mid-loop re-decompose: step %d → %d sub-steps (replan #%d)",
+                         step_idx, len(_sub_shaped), replan_count)
+                if ctx.verbose:
+                    print(
+                        f"[poe] step {step_idx} re-decomposed into {len(_sub_shaped)} sub-steps "
+                        f"(replan #{replan_count})",
+                        file=sys.stderr, flush=True,
+                    )
+                step_outcomes.append(step_from_decompose(
+                    step_text, item_index,
+                    status="blocked", result=step_result, iteration=iteration,
+                    tokens_in=outcome.get("tokens_in", 0),
+                    tokens_out=outcome.get("tokens_out", 0),
+                    elapsed_ms=step_elapsed,
+                ))
+                return ("continue", step_idx, "", None, next_step_injected_context,
+                        consecutive_max_timeouts, _recovery_delta, replan_count)
+        except Exception as exc:
+            log.warning("mid-loop re-decompose failed: %s — falling through to stuck", exc)
+
+        # Re-decompose failed — fall through to terminal
+        _decision = _BlockDecision(
+            retry=False, hint="", loop_status="stuck",
+            stuck_reason=f"re-decompose failed after {_prior_retries} retries: {outcome.get('stuck_reason', 'blocked')}",
+            metacognitive_reason="re-decompose failed — terminal",
+        )
+        # Fall through to terminal handler below
+
     elif _decision.split_into:
         failure_chain.append(
             f"step {step_idx} split: combined step split into {len(_decision.split_into)} parts"
@@ -540,43 +627,43 @@ def _process_blocked_step(
         return ("continue", step_idx, "", None, next_step_injected_context,
                 consecutive_max_timeouts, _recovery_delta, replan_count)
 
-    else:
-        # Terminal failure
-        _loop_status = _decision.loop_status
-        _stuck_reason = _decision.stuck_reason
-        failure_chain.append(f"step {step_idx} terminal: {_stuck_reason[:80]}")
-        if item_index >= 0:
-            o.mark_item(ctx.project, item_index, o.STATE_BLOCKED)
-        if ctx.verbose:
-            print(f"[poe] step {step_idx} stuck after retry: {_stuck_reason}", file=sys.stderr, flush=True)
+    # Terminal failure — reached when no branch returned (redecompose fallthrough, or
+    # explicit stuck decision from _handle_blocked_step)
+    _loop_status = _decision.loop_status or "stuck"
+    _stuck_reason = _decision.stuck_reason or block_reason
+    failure_chain.append(f"step {step_idx} terminal: {_stuck_reason[:80]}")
+    if item_index >= 0:
+        o.mark_item(ctx.project, item_index, o.STATE_BLOCKED)
+    if ctx.verbose:
+        print(f"[poe] step {step_idx} stuck after retry: {_stuck_reason}", file=sys.stderr, flush=True)
+    try:
+        from skills import attribute_failure_to_skills, find_matching_skills, record_variant_outcome
+        attribute_failure_to_skills(step_text, _stuck_reason, goal=ctx.goal)
+        for _sk in find_matching_skills(step_text + " " + ctx.goal, use_router=False):
+            if getattr(_sk, "variant_of", None) is not None:
+                record_variant_outcome(_sk.id, success=False)
+    except Exception:
+        pass
+    try:
+        from metrics import record_step_cost
+        record_step_cost(
+            step_text=step_text,
+            tokens_in=outcome.get("tokens_in", 0),
+            tokens_out=outcome.get("tokens_out", 0),
+            status="blocked",
+            goal=ctx.goal,
+            model=getattr(ctx.adapter, "model_key", ""),
+            elapsed_ms=step_elapsed,
+        )
+    except Exception:
+        pass
+    if ctx.step_callback is not None:
         try:
-            from skills import attribute_failure_to_skills, find_matching_skills, record_variant_outcome
-            attribute_failure_to_skills(step_text, _stuck_reason, goal=ctx.goal)
-            for _sk in find_matching_skills(step_text + " " + ctx.goal, use_router=False):
-                if getattr(_sk, "variant_of", None) is not None:
-                    record_variant_outcome(_sk.id, success=False)
+            ctx.step_callback(step_idx, step_text, _stuck_reason or "blocked", "blocked")
         except Exception:
             pass
-        try:
-            from metrics import record_step_cost
-            record_step_cost(
-                step_text=step_text,
-                tokens_in=outcome.get("tokens_in", 0),
-                tokens_out=outcome.get("tokens_out", 0),
-                status="blocked",
-                goal=ctx.goal,
-                model=getattr(ctx.adapter, "model_key", ""),
-                elapsed_ms=step_elapsed,
-            )
-        except Exception:
-            pass
-        if ctx.step_callback is not None:
-            try:
-                ctx.step_callback(step_idx, step_text, _stuck_reason or "blocked", "blocked")
-            except Exception:
-                pass
-        return ("normal", step_idx, _loop_status, _stuck_reason, next_step_injected_context,
-                consecutive_max_timeouts, _recovery_delta, replan_count)
+    return ("normal", step_idx, _loop_status, _stuck_reason, next_step_injected_context,
+            consecutive_max_timeouts, _recovery_delta, replan_count)
 
 
 def _write_iteration_artifacts(
@@ -2209,6 +2296,59 @@ def _run_steps_dag(
 
 
 # ---------------------------------------------------------------------------
+# Convergence tracking (Phase 62)
+# ---------------------------------------------------------------------------
+
+def _error_fingerprint(outcome: dict) -> str:
+    """Generate a stable fingerprint for a step failure.
+
+    Two failures with the same fingerprint indicate no convergence — the step
+    is failing identically. Different fingerprints indicate the error is
+    evolving, which is progress.
+    """
+    import hashlib
+    reason = outcome.get("stuck_reason", "")
+    result = outcome.get("result", "")
+    # Normalize: strip timestamps, whitespace, and take first 200 chars of each
+    _norm_reason = " ".join(reason.split())[:200]
+    _norm_result = " ".join(result.split())[:200]
+    _combined = f"{_norm_reason}|{_norm_result}"
+    return hashlib.md5(_combined.encode("utf-8")).hexdigest()[:12]
+
+
+def _is_converging(fingerprints: List[str]) -> bool:
+    """Check if a step's retries are converging (producing different errors).
+
+    Returns True if at least half the fingerprints are unique — the error
+    landscape is changing, so retries are making progress.
+    Returns False if most retries produce the same fingerprint — stuck in
+    a loop.
+    """
+    if len(fingerprints) < 2:
+        return True  # too few data points to judge
+    unique = len(set(fingerprints))
+    return unique / len(fingerprints) > 0.5
+
+
+def _sibling_failure_rate(step_outcomes: list) -> float:
+    """Fraction of completed steps that are blocked (not done).
+
+    Used to detect whether the decomposition itself is wrong — if most
+    siblings are failing, retrying individual steps won't help.
+    """
+    if not step_outcomes:
+        return 0.0
+    blocked = sum(1 for s in step_outcomes if s.status == "blocked")
+    return blocked / len(step_outcomes)
+
+
+# Phase 62 thresholds (from zoom-metacognition research)
+_RETRY_THRESHOLD = 3         # retries before considering redecompose
+_SIBLING_THRESHOLD = 0.5     # >50% sibling failure → redecompose parent
+_REDECOMPOSE_THRESHOLD = 2   # max re-decompositions before flagging stuck
+_NEED_INFO_PREFIX = "NEED_INFO:"  # step output prefix requesting more context
+
+# ---------------------------------------------------------------------------
 # Loop context / decompose helpers
 # ---------------------------------------------------------------------------
 
@@ -2220,6 +2360,8 @@ class _BlockDecision:
     loop_status: str       # "stuck" on terminate, unchanged on retry
     stuck_reason: str      # non-empty on terminate
     split_into: List[str] = field(default_factory=list)  # non-empty → replace stuck step with these
+    redecompose: bool = False  # True → re-decompose this step into sub-steps
+    metacognitive_reason: str = ""  # why we chose this action (Phase 62 logging)
 
 
 def _build_loop_context(
@@ -2558,22 +2700,49 @@ def _handle_blocked_step(
     outcome: dict,
     prior_retries: int,
     adapter,
+    *,
+    error_fingerprints: Optional[List[str]] = None,
+    step_outcomes: Optional[list] = None,
+    replan_count: int = 0,
 ) -> _BlockDecision:
     """Decide what to do when a step returns status != 'done'.
+
+    Phase 62: Implements the zoom-metacognition decision algorithm:
+    - Track error convergence (are retries producing different errors?)
+    - Check sibling failure rate (is the decomposition itself wrong?)
+    - Choose retry / redecompose / stuck based on evidence
 
     Does not mutate any loop state — returns a decision the caller applies.
 
     Args:
-        step_text:     The step text that failed.
-        outcome:       The raw outcome dict from _execute_step().
-        prior_retries: Number of times this step has already been retried.
-        adapter:       LLM adapter (used for round-2 refinement hint).
+        step_text:          The step text that failed.
+        outcome:            The raw outcome dict from _execute_step().
+        prior_retries:      Number of times this step has already been retried.
+        adapter:            LLM adapter (used for round-2 refinement hint).
+        error_fingerprints: List of error fingerprints from prior retries of this step.
+        step_outcomes:      All step outcomes so far (for sibling failure correlation).
+        replan_count:       Number of re-decompositions already attempted.
 
     Returns:
-        _BlockDecision — retry=True means re-queue; retry=False means terminate.
+        _BlockDecision — retry=True means re-queue; retry=False means terminate or redecompose.
     """
     block_reason = outcome.get("stuck_reason", "blocked")
     step_result = outcome.get("result", "")
+    fingerprints = error_fingerprints or []
+
+    # NEED_INFO: step explicitly requests more context (Phase 62 deliverable 4)
+    if block_reason.startswith(_NEED_INFO_PREFIX):
+        _info_needed = block_reason[len(_NEED_INFO_PREFIX):].strip()
+        log.info("step NEED_INFO: %s — generating research sub-steps", _info_needed[:80])
+        _research_steps = [f"Research: {_info_needed}"]
+        return _BlockDecision(
+            retry=False,
+            hint="",
+            loop_status="",
+            stuck_reason="",
+            split_into=_research_steps + [step_text],  # research first, then retry original
+            metacognitive_reason=f"step requested info: {_info_needed[:100]}",
+        )
 
     # Combined exec+analyze steps are structurally wrong — retrying identically
     # won't fix a bad step shape.  Split immediately on first block regardless
@@ -2588,6 +2757,7 @@ def _handle_blocked_step(
             loop_status="",      # not stuck — split recovers
             stuck_reason="",
             split_into=_parts,
+            metacognitive_reason="combined exec+analyze step shape — structural split",
         )
 
     # Timeout failures must not be retried identically — the subprocess will
@@ -2605,6 +2775,7 @@ def _handle_blocked_step(
                 loop_status="",          # not stuck — split recovers
                 stuck_reason="",
                 split_into=_split_steps,
+                metacognitive_reason="timeout — decomposed into smaller steps",
             )
         # Split generation itself failed — hard stop to avoid infinite spin.
         return _BlockDecision(
@@ -2615,32 +2786,90 @@ def _handle_blocked_step(
                 f"TIMEOUT and split-recovery failed: {block_reason}. "
                 "Consider narrowing the step scope or switching to an API adapter."
             ),
+            metacognitive_reason="timeout and split-recovery failed — terminal",
         )
 
-    if prior_retries < 2:
+    # Phase 62: Convergence-aware decision algorithm
+    # (from zoom-metacognition research: Argyris double-loop / Boyd OODA)
+    converging = _is_converging(fingerprints)
+    sibling_rate = _sibling_failure_rate(step_outcomes) if step_outcomes else 0.0
+
+    # Log the metacognitive state for every decision
+    _meta_ctx = (
+        f"retries={prior_retries}, converging={converging}, "
+        f"sibling_fail_rate={sibling_rate:.0%}, replan_count={replan_count}"
+    )
+
+    # Check sibling failure correlation first (zoom-metacognition §3.3)
+    # If most siblings are failing, the decomposition is wrong — redecompose
+    if (sibling_rate > _SIBLING_THRESHOLD
+            and len(step_outcomes or []) >= 3
+            and replan_count < _REDECOMPOSE_THRESHOLD):
+        log.info("sibling failure rate %.0f%% > %.0f%% — triggering re-decomposition "
+                 "(%s)", sibling_rate * 100, _SIBLING_THRESHOLD * 100, _meta_ctx)
+        return _BlockDecision(
+            retry=False,
+            hint="",
+            loop_status="",
+            stuck_reason="",
+            redecompose=True,
+            metacognitive_reason=(
+                f"sibling failure rate {sibling_rate:.0%} exceeds {_SIBLING_THRESHOLD:.0%} "
+                f"threshold — decomposition is likely wrong ({_meta_ctx})"
+            ),
+        )
+
+    # Standard retry path: retry if under threshold AND converging
+    if prior_retries < _RETRY_THRESHOLD and converging:
         if prior_retries == 0:
             # Round 1: generic fallback hint
             hint = (
                 f"[Previous attempt blocked: {block_reason[:120]}] "
                 "Try an alternative approach: use a different tool, rephrase the request, "
-                "work around the obstacle, or summarize what you know so far and mark complete."
+                "work around the obstacle, or summarize what you know so far and mark complete. "
+                "If you lack required information, say NEED_INFO: [what's missing] instead of guessing."
             )
         else:
-            # Round 2: LLM-assisted targeted refinement hint
+            # Round 2+: LLM-assisted targeted refinement hint
             hint = _generate_refinement_hint(
                 step_text=step_text,
                 block_reason=block_reason,
                 partial_result=step_result,
                 adapter=adapter,
             )
-        return _BlockDecision(retry=True, hint=hint, loop_status="", stuck_reason="")
-    else:
+        log.info("retry (converging): %s", _meta_ctx)
+        return _BlockDecision(
+            retry=True, hint=hint, loop_status="", stuck_reason="",
+            metacognitive_reason=f"retry — errors converging, under threshold ({_meta_ctx})",
+        )
+
+    # Not converging or threshold exceeded — try re-decomposition
+    if replan_count < _REDECOMPOSE_THRESHOLD:
+        log.info("not converging or threshold exceeded — re-decomposing step (%s)", _meta_ctx)
         return _BlockDecision(
             retry=False,
             hint="",
-            loop_status="stuck",
-            stuck_reason=block_reason,
+            loop_status="",
+            stuck_reason="",
+            redecompose=True,
+            metacognitive_reason=(
+                f"not converging after {prior_retries} retries — "
+                f"re-decomposing step ({_meta_ctx})"
+            ),
         )
+
+    # Exhausted all options — terminal failure
+    log.warning("terminal: exhausted retries and re-decompositions (%s)", _meta_ctx)
+    return _BlockDecision(
+        retry=False,
+        hint="",
+        loop_status="stuck",
+        stuck_reason=block_reason,
+        metacognitive_reason=(
+            f"exhausted: {prior_retries} retries, {replan_count} re-decompositions, "
+            f"converging={converging}, sibling_rate={sibling_rate:.0%}"
+        ),
+    )
 
 
 def _finalize_loop(
@@ -3022,6 +3251,7 @@ def run_agent_loop(
     _next_step_injected_context: str = ""  # Phase 11: injected context from previous step's hooks
     _march_of_nines_alert = False  # Phase 19: cumulative step success rate alert
     _step_retries: Dict[str, int] = {}  # roadblock resilience: retries per step text
+    _error_fingerprints: Dict[str, List[str]] = {}  # Phase 62: error fingerprints per step text
     _step_tier_overrides: Dict[str, str] = {}  # step_text → escalated tier on retry
     # Phase 57: session-level lagging signal — if verify failures cluster, raise the global tier.
     # Tracks consecutive verify failures; at threshold, adapter baseline escalates.
@@ -3481,6 +3711,7 @@ def run_agent_loop(
                 consecutive_max_timeouts=_consecutive_max_timeouts,
                 max_consecutive_timeouts=_MAX_CONSECUTIVE_TIMEOUTS,
                 replan_count=_replan_count,
+                error_fingerprints=_error_fingerprints,
             )
             _recovery_step_count += _blk_recovery_delta
             if _blk_flow == "continue":
