@@ -255,6 +255,56 @@ Tools:
 """)
 
 
+def _run_subprocess_safe(cmd, *, input=None, timeout=600):
+    """Run a subprocess in its own process group and clean up on timeout/completion.
+
+    Returns a subprocess.CompletedProcess-like object. On timeout, kills the
+    entire process group (not just the parent) to prevent zombie child processes.
+    """
+    import signal
+    proc = subprocess.Popen(
+        cmd,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,  # creates new process group
+    )
+    try:
+        stdout, stderr = proc.communicate(input=input, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        # Kill the entire process group
+        try:
+            os.killpg(proc.pid, signal.SIGTERM)
+        except OSError:
+            pass
+        # Give children 2s to exit, then SIGKILL
+        try:
+            proc.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except OSError:
+                pass
+            proc.wait(timeout=5)
+        raise subprocess.TimeoutExpired(cmd, timeout)
+    except Exception:
+        # On any error, clean up the process group
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except OSError:
+            pass
+        raise
+    finally:
+        # Ensure process group is dead even on normal completion
+        try:
+            os.killpg(proc.pid, signal.SIGTERM)
+        except OSError:
+            pass  # already exited — expected
+
+    return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
+
+
 class ClaudeSubprocessAdapter(LLMAdapter):
     """Adapter using `claude -p` subprocess. Works anywhere Claude Code is installed.
 
@@ -295,13 +345,7 @@ class ClaudeSubprocessAdapter(LLMAdapter):
 
         _timeout = timeout or self.timeout
         try:
-            result = subprocess.run(
-                cmd,
-                input=prompt,
-                capture_output=True,
-                text=True,
-                timeout=_timeout,
-            )
+            result = _run_subprocess_safe(cmd, input=prompt, timeout=_timeout)
         except subprocess.TimeoutExpired:
             raise RuntimeError(f"claude subprocess timed out after {_timeout}s")
         except FileNotFoundError:
@@ -330,9 +374,7 @@ class ClaudeSubprocessAdapter(LLMAdapter):
                     _time.sleep(_wait)
                     _wait = min(_wait * 2, _RATE_LIMIT_CYCLE_CAP)
                     try:
-                        result = subprocess.run(
-                            cmd, input=prompt, capture_output=True, text=True, timeout=_timeout,
-                        )
+                        result = _run_subprocess_safe(cmd, input=prompt, timeout=_timeout)
                     except subprocess.TimeoutExpired:
                         log.warning("rate limit retry timed out after %ds, will retry", _timeout)
                         continue
@@ -528,13 +570,7 @@ class CodexCLIAdapter(LLMAdapter):
         ]
 
         try:
-            result = subprocess.run(
-                cmd,
-                input=prompt,
-                capture_output=True,
-                text=True,
-                timeout=_timeout,
-            )
+            result = _run_subprocess_safe(cmd, input=prompt, timeout=_timeout)
         except subprocess.TimeoutExpired:
             raise RuntimeError(f"codex subprocess timed out after {_timeout}s")
         except FileNotFoundError:

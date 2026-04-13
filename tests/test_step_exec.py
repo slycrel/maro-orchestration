@@ -493,3 +493,55 @@ class TestArtifactMaterialization:
             project_dir=str(tmp_path / "projects" / "review-repo"),
         )
         assert "[exec_command]" in captured["user"]
+
+
+# ---------------------------------------------------------------------------
+# Phase 62: Anti-hallucination prompt + cross-ref detection
+# ---------------------------------------------------------------------------
+
+class TestAntiHallucinationPrompt:
+    """Verify EXECUTE_SYSTEM contains anti-hallucination and NEED_INFO instructions."""
+
+    def test_anti_hallucination_in_system_prompt(self):
+        from step_exec import EXECUTE_SYSTEM
+        assert "ANTI-HALLUCINATION" in EXECUTE_SYSTEM
+        assert "[UNVERIFIED]" in EXECUTE_SYSTEM
+        assert "NEVER guess file paths" in EXECUTE_SYSTEM
+
+    def test_need_info_in_system_prompt(self):
+        from step_exec import EXECUTE_SYSTEM
+        assert "NEED_INFO" in EXECUTE_SYSTEM
+        assert "inject_steps" in EXECUTE_SYSTEM
+
+    def test_prior_step_data_warning(self):
+        from step_exec import EXECUTE_SYSTEM
+        assert "never invent or guess" in EXECUTE_SYSTEM
+
+
+class TestSpecificClaimDetection:
+    """Test _has_specific_claims heuristic for cross-ref triggering."""
+
+    def test_detects_file_path_and_line_number(self):
+        from step_exec import _has_specific_claims
+        assert _has_specific_claims(
+            "The bug is in src/agent_loop.py at line 250. "
+            "The function _handle_blocked_step returns wrong value."
+        )
+
+    def test_detects_function_names_and_class(self):
+        from step_exec import _has_specific_claims
+        assert _has_specific_claims(
+            "The class LoopContext has a method called run_agent_loop "
+            "which calls the function decompose at line 500."
+        )
+
+    def test_ignores_generic_text(self):
+        from step_exec import _has_specific_claims
+        assert not _has_specific_claims(
+            "The system seems to work well overall. Performance is good."
+        )
+
+    def test_ignores_empty_and_short(self):
+        from step_exec import _has_specific_claims
+        assert not _has_specific_claims("")
+        assert not _has_specific_claims("short")

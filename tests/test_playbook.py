@@ -110,6 +110,31 @@ class TestPlaybookAppend:
         text = load_playbook()
         assert "*Last updated:" in text
 
+    def test_append_dedup_skips_duplicate(self, tmp_path):
+        """Identical entries should not be appended twice."""
+        seed_playbook()
+        append_to_playbook("Use lower token budgets for cheap tasks.", section="Learned")
+        append_to_playbook("Use lower token budgets for cheap tasks.", section="Learned")
+        text = load_playbook()
+        assert text.count("Use lower token budgets for cheap tasks.") == 1
+
+    def test_append_dedup_ignores_dash_prefix(self, tmp_path):
+        """Dedup should work regardless of '- ' prefix."""
+        seed_playbook()
+        append_to_playbook("- Unique insight here.", section="Learned")
+        append_to_playbook("Unique insight here.", section="Learned")
+        text = load_playbook()
+        assert text.count("Unique insight here.") == 1
+
+    def test_append_different_entries_both_kept(self, tmp_path):
+        """Different entries should both be kept."""
+        seed_playbook()
+        append_to_playbook("First insight.", section="Learned")
+        append_to_playbook("Second insight.", section="Learned")
+        text = load_playbook()
+        assert "First insight." in text
+        assert "Second insight." in text
+
 
 class TestWorkspaceSkillResolution:
     """Test that skill_loader scans workspace before repo."""

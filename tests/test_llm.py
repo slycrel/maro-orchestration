@@ -210,7 +210,7 @@ def test_subprocess_complete_plain(monkeypatch):
     mock_result.stdout = _make_subprocess_output("hello world")
     mock_result.stderr = ""
 
-    with patch("subprocess.run", return_value=mock_result) as mock_run:
+    with patch("llm._run_subprocess_safe", return_value=mock_result) as mock_run:
         resp = a.complete([LLMMessage("user", "say hi")])
 
     assert resp.content == "hello world"
@@ -230,7 +230,7 @@ def test_subprocess_complete_with_tool_call(monkeypatch):
 
     tools = [LLMTool("complete_step", "done", {"type": "object", "properties": {"result": {"type": "string"}}})]
 
-    with patch("subprocess.run", return_value=mock_result):
+    with patch("llm._run_subprocess_safe", return_value=mock_result):
         resp = a.complete([LLMMessage("user", "research X")], tools=tools, tool_choice="required")
 
     assert len(resp.tool_calls) == 1
@@ -247,7 +247,7 @@ def test_subprocess_complete_failure(monkeypatch):
     mock_result.stdout = ""
     mock_result.stderr = "authentication error"
 
-    with patch("subprocess.run", return_value=mock_result):
+    with patch("llm._run_subprocess_safe", return_value=mock_result):
         with pytest.raises(RuntimeError, match="failed"):
             a.complete([LLMMessage("user", "test")])
 
@@ -256,7 +256,7 @@ def test_subprocess_complete_timeout(monkeypatch):
     import subprocess as sp
     a = ClaudeSubprocessAdapter(timeout=1)
 
-    with patch("subprocess.run", side_effect=sp.TimeoutExpired(cmd="claude", timeout=1)):
+    with patch("llm._run_subprocess_safe", side_effect=sp.TimeoutExpired(cmd="claude", timeout=1)):
         with pytest.raises(RuntimeError, match="timed out"):
             a.complete([LLMMessage("user", "test")])
 
@@ -269,10 +269,54 @@ def test_subprocess_complete_plain_text_fallback(monkeypatch):
     mock_result.stdout = "just plain text response"
     mock_result.stderr = ""
 
-    with patch("subprocess.run", return_value=mock_result):
+    with patch("llm._run_subprocess_safe", return_value=mock_result):
         resp = a.complete([LLMMessage("user", "test")])
 
     assert resp.content == "just plain text response"
+
+
+# ---------------------------------------------------------------------------
+# _run_subprocess_safe — process group cleanup
+# ---------------------------------------------------------------------------
+
+def test_run_subprocess_safe_kills_process_group_on_timeout():
+    """On timeout, _run_subprocess_safe kills the entire process group."""
+    from llm import _run_subprocess_safe
+    import subprocess
+    import signal
+
+    with patch("subprocess.Popen") as mock_popen:
+        proc = MagicMock()
+        proc.pid = 12345
+        proc.communicate.side_effect = subprocess.TimeoutExpired(cmd="test", timeout=1)
+        proc.wait.return_value = None
+        mock_popen.return_value = proc
+
+        with pytest.raises(subprocess.TimeoutExpired):
+            _run_subprocess_safe(["test"], input="hello", timeout=1)
+
+        # Should have been called with start_new_session=True
+        mock_popen.assert_called_once()
+        assert mock_popen.call_args[1].get("start_new_session") is True
+
+
+def test_run_subprocess_safe_returns_completed_process():
+    """Normal completion returns CompletedProcess with correct fields."""
+    from llm import _run_subprocess_safe
+    import subprocess
+
+    with patch("subprocess.Popen") as mock_popen:
+        proc = MagicMock()
+        proc.pid = 12345
+        proc.communicate.return_value = ("output", "")
+        proc.returncode = 0
+        mock_popen.return_value = proc
+
+        result = _run_subprocess_safe(["test"], input="hello", timeout=10)
+
+        assert isinstance(result, subprocess.CompletedProcess)
+        assert result.stdout == "output"
+        assert result.returncode == 0
 
 
 # ---------------------------------------------------------------------------
@@ -411,7 +455,7 @@ class TestRateLimitMultiCycleRetry:
                 return _make_subprocess_result(1, stderr="You have hit your limit", stdout="You have hit your limit")
             return _make_subprocess_result(0, stdout=json.dumps({"result": "done", "usage": {}}))
 
-        monkeypatch.setattr("subprocess.run", _fake_run)
+        monkeypatch.setattr("llm._run_subprocess_safe", _fake_run)
         monkeypatch.setattr("time.sleep", lambda s: None)
 
         adapter = self._make_adapter(max_retries=3)
@@ -427,7 +471,7 @@ class TestRateLimitMultiCycleRetry:
             calls.append(1)
             return _make_subprocess_result(1, stderr="rate limit exceeded", stdout="rate limit exceeded")
 
-        monkeypatch.setattr("subprocess.run", _fake_run)
+        monkeypatch.setattr("llm._run_subprocess_safe", _fake_run)
         monkeypatch.setattr("time.sleep", lambda s: None)
 
         adapter = self._make_adapter(max_retries=3)
@@ -443,7 +487,7 @@ class TestRateLimitMultiCycleRetry:
         def _fake_run(cmd, **kw):
             return _make_subprocess_result(1, stderr="hit your limit", stdout="hit your limit")
 
-        monkeypatch.setattr("subprocess.run", _fake_run)
+        monkeypatch.setattr("llm._run_subprocess_safe", _fake_run)
         monkeypatch.setattr("time.sleep", lambda s: wait_times.append(s))
 
         adapter = self._make_adapter(max_retries=3)
@@ -465,7 +509,7 @@ class TestRateLimitMultiCycleRetry:
             # Second call: generic error, not rate-limit
             return _make_subprocess_result(1, stderr="internal error", stdout="internal error")
 
-        monkeypatch.setattr("subprocess.run", _fake_run)
+        monkeypatch.setattr("llm._run_subprocess_safe", _fake_run)
         monkeypatch.setattr("time.sleep", lambda s: None)
 
         adapter = self._make_adapter(max_retries=5)
@@ -484,7 +528,7 @@ class TestRateLimitMultiCycleRetry:
                 return _make_subprocess_result(1, stderr="hit your limit", stdout="hit your limit")
             return _make_subprocess_result(0, stdout=json.dumps({"result": "ok", "usage": {}}))
 
-        monkeypatch.setattr("subprocess.run", _fake_run)
+        monkeypatch.setattr("llm._run_subprocess_safe", _fake_run)
         monkeypatch.setattr("time.sleep", lambda s: None)
 
         adapter = self._make_adapter(max_retries=3)

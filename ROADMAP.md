@@ -166,7 +166,7 @@ Shipped 2026-04-07. 4 systemic steal items, all pattern-driven (no new if-else b
 
 ---
 
-### Phase 62: Adaptive Replanning — Close the Double-Loop *(NEXT)*
+### Phase 62: Adaptive Replanning — Close the Double-Loop *(IN PROGRESS)*
 
 *"Stop guessing when you can decompose further. Stop retrying when the plan is wrong."*
 
@@ -178,21 +178,21 @@ Shipped 2026-04-07. 4 systemic steal items, all pattern-driven (no new if-else b
 
 **Deliverables (ordered by dependency):**
 
-1. **Convergence tracking** — Track error fingerprints per retry. A step is converging if each retry produces a *different* error or more partial output. Identical failures = not converging. Add `error_fingerprint` and `convergence_score` to step tracking.
+1. **Convergence tracking** ✓ — `_error_fingerprint()` + `_is_converging()` in agent_loop.py. Tracks error fingerprints per retry via `_error_fingerprints` dict. Convergence = unique fingerprints > 50%.
 
-2. **Mid-loop re-decomposition** — When a step hits retry threshold with no convergence, call `decompose()` on that step's text to generate sub-steps, and inject them via `inject_steps`. The existing infrastructure supports this mechanically — the decision logic is what's missing.
+2. **Mid-loop re-decomposition** ✓ — `_handle_blocked_step()` now returns `redecompose=True` when retries are not converging. `_process_blocked_step()` calls `decompose()` on the stuck step to generate sub-steps, injected via existing mechanism.
 
-3. **Sibling failure correlation** — If >50% of steps under the same decomposition are failing, the decomposition itself is wrong. Trigger re-decompose of the parent goal, not individual steps. Requires tracking which steps came from the same decompose call.
+3. **Sibling failure correlation** ✓ — `_sibling_failure_rate()` checks blocked/total ratio. If >50% siblings failing and ≥3 steps completed, triggers re-decomposition of the plan instead of retrying individual steps.
 
-4. **"I don't have enough info" as valid step output** — Prompt change: steps can return `inject_steps` with verification/research sub-steps instead of guessing. Anti-guessing language in EXECUTE_SYSTEM prompt. Step can say "NEED_INFO: [what's missing]" and the loop injects a research step.
+4. **"I don't have enough info" as valid step output** ✓ — `NEED_INFO:` prefix in stuck_reason triggers research sub-step generation + re-queue of original step. EXECUTE_SYSTEM prompt updated with NEED_INFO instructions.
 
-5. **Shared artifact layer** — Steps write structured data (grep results, file contents, claim lists) to `loop_artifacts/` dict accessible by all subsequent steps. Not just string summaries in completed_context. Provides the "shared data payload" between steps.
+5. **Shared artifact layer** — *Deferred.* `loop_shared_ctx` dict exists but needs deeper integration with step_exec tools. Requires plumbing changes through execute_step to expose artifacts.
 
-6. **Cross-ref wired into step verification** — Wire `cross_ref.py` claim extraction into ralph verify for steps that make factual claims (detected by heuristic: step output contains file paths, line numbers, function names). Catches hallucinated specifics before they propagate.
+6. **Cross-ref wired into step verification** ✓ — `verify_step_with_cross_ref()` in step_exec.py. Heuristic `_has_specific_claims()` detects file paths, line numbers, function names. Triggers cross-ref claim extraction for steps with specific claims. Annotates (doesn't block) when disputes found.
 
-7. **Anti-hallucination prompt injection** — Add to EXECUTE_SYSTEM: "If you cannot verify a claim from code or data you have directly read in this step, do NOT state it as fact. Instead, use inject_steps to add a verification step, or mark the claim as [UNVERIFIED]."
+7. **Anti-hallucination prompt injection** ✓ — EXECUTE_SYSTEM updated with ANTI-HALLUCINATION section: never guess file paths/line numbers/function names, mark unverified claims as [UNVERIFIED], use inject_steps for verification sub-steps.
 
-8. **Metacognitive logging** — Log *why* the system chose retry vs redecompose at each decision point. Enables the deutero-learning loop (learning how to learn).
+8. **Metacognitive logging** ✓ — Every `_handle_blocked_step()` decision includes `metacognitive_reason` string. Logged to captain's log as `METACOGNITIVE_DECISION` event with step context, retry count, fingerprints, and chosen action.
 
 **Existing infrastructure to build on:**
 - `inject_steps` mechanism (step_exec.py + agent_loop.py) — mechanical step injection, working

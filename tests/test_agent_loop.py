@@ -788,13 +788,17 @@ def test_handle_blocked_step_retry_on_second_block():
     assert len(decision.hint) > 10
 
 
-def test_handle_blocked_step_terminates_after_two_retries():
-    """Third block (prior_retries=2) → retry=False, loop_status=stuck."""
+def test_handle_blocked_step_terminates_after_threshold_retries():
+    """At retry threshold (3) with non-converging errors → redecompose or stuck."""
+    # Same fingerprint repeated = not converging
+    same_fp = ["abc123"] * 3
     decision = _handle_blocked_step(
         step_text="write to database",
         outcome={"stuck_reason": "connection refused", "result": ""},
-        prior_retries=2,
+        prior_retries=3,
         adapter=None,
+        error_fingerprints=same_fp,
+        replan_count=2,  # already exhausted redecompose budget
     )
     assert decision.retry is False
     assert decision.loop_status == "stuck"
@@ -806,8 +810,10 @@ def test_handle_blocked_step_preserves_original_reason():
     decision = _handle_blocked_step(
         step_text="deploy service",
         outcome={"stuck_reason": "auth token expired", "result": ""},
-        prior_retries=2,
+        prior_retries=3,
         adapter=None,
+        error_fingerprints=["abc"] * 3,
+        replan_count=2,
     )
     assert "auth token expired" in decision.stuck_reason
 
@@ -817,11 +823,113 @@ def test_handle_blocked_step_missing_reason_uses_fallback():
     decision = _handle_blocked_step(
         step_text="run tests",
         outcome={},
-        prior_retries=2,
+        prior_retries=3,
         adapter=None,
+        error_fingerprints=["abc"] * 3,
+        replan_count=2,
     )
     assert decision.retry is False
     assert isinstance(decision.stuck_reason, str)
+
+
+# ---------------------------------------------------------------------------
+# Phase 62: Convergence tracking + metacognitive decisions
+# ---------------------------------------------------------------------------
+
+def test_convergence_tracking_converging_retries():
+    """Converging errors (different fingerprints) → retry allowed."""
+    decision = _handle_blocked_step(
+        step_text="fetch data from API",
+        outcome={"stuck_reason": "connection refused", "result": ""},
+        prior_retries=2,
+        adapter=None,
+        error_fingerprints=["aaa", "bbb", "ccc"],  # all different → converging
+    )
+    assert decision.retry is True
+    assert "converging" in decision.metacognitive_reason
+
+
+def test_convergence_tracking_not_converging_redecomposes():
+    """Non-converging errors (same fingerprint) → redecompose instead of retry."""
+    decision = _handle_blocked_step(
+        step_text="parse response data",
+        outcome={"stuck_reason": "invalid format", "result": ""},
+        prior_retries=3,
+        adapter=None,
+        error_fingerprints=["same", "same", "same"],  # identical → not converging
+        replan_count=0,
+    )
+    assert decision.retry is False
+    assert decision.redecompose is True
+    assert "not converging" in decision.metacognitive_reason
+
+
+def test_convergence_tracking_exhausted_redecompose_budget():
+    """After redecompose threshold exceeded → stuck (terminal)."""
+    decision = _handle_blocked_step(
+        step_text="deploy service",
+        outcome={"stuck_reason": "auth error", "result": ""},
+        prior_retries=3,
+        adapter=None,
+        error_fingerprints=["same", "same", "same"],
+        replan_count=2,  # at threshold
+    )
+    assert decision.retry is False
+    assert decision.redecompose is False
+    assert decision.loop_status == "stuck"
+
+
+def test_sibling_failure_triggers_redecompose():
+    """High sibling failure rate triggers re-decomposition."""
+    from agent_loop import StepOutcome
+    # 3 blocked, 1 done = 75% failure rate
+    fake_outcomes = [
+        StepOutcome(0, "s1", "blocked", "", 0, 0, 0),
+        StepOutcome(1, "s2", "blocked", "", 0, 0, 0),
+        StepOutcome(2, "s3", "done", "ok", 0, 0, 0),
+        StepOutcome(3, "s4", "blocked", "", 0, 0, 0),
+    ]
+    decision = _handle_blocked_step(
+        step_text="another step",
+        outcome={"stuck_reason": "failed again", "result": ""},
+        prior_retries=1,
+        adapter=None,
+        step_outcomes=fake_outcomes,
+        replan_count=0,
+    )
+    assert decision.redecompose is True
+    assert "sibling failure rate" in decision.metacognitive_reason
+
+
+def test_need_info_generates_research_substeps():
+    """NEED_INFO: prefix generates research sub-steps + re-queues original."""
+    decision = _handle_blocked_step(
+        step_text="verify function signatures in auth module",
+        outcome={"stuck_reason": "NEED_INFO: cannot access source code of auth.py", "result": ""},
+        prior_retries=0,
+        adapter=None,
+    )
+    assert decision.retry is False
+    assert len(decision.split_into) >= 2
+    assert any("Research" in s for s in decision.split_into)
+    # Original step should be re-queued after research
+    assert decision.split_into[-1] == "verify function signatures in auth module"
+
+
+def test_error_fingerprint_deterministic():
+    """Same outcome → same fingerprint."""
+    from agent_loop import _error_fingerprint
+    fp1 = _error_fingerprint({"stuck_reason": "connection refused", "result": "partial"})
+    fp2 = _error_fingerprint({"stuck_reason": "connection refused", "result": "partial"})
+    assert fp1 == fp2
+
+
+def test_error_fingerprint_differs_on_different_errors():
+    """Different outcomes → different fingerprints."""
+    from agent_loop import _error_fingerprint
+    fp1 = _error_fingerprint({"stuck_reason": "connection refused", "result": ""})
+    fp2 = _error_fingerprint({"stuck_reason": "timeout after 30s", "result": ""})
+    assert fp1 != fp2
 
 
 def test_handle_blocked_step_timeout_no_retry():

@@ -35,6 +35,21 @@ EXECUTE_SYSTEM = textwrap.dedent("""\
       - flag_stuck: genuinely blocked (explain precisely)
     Do NOT flag_stuck for solvable problems — work through them first.
 
+    ANTI-HALLUCINATION:
+    If you cannot verify a claim from code or data you have directly read in
+    this step, do NOT state it as fact. Mark unverified claims as [UNVERIFIED]
+    or use inject_steps to add a verification sub-step.
+    NEVER guess file paths, line numbers, function names, or variable names.
+    If the step requires information you don't have, use NEED_INFO (see below).
+
+    NEED_INFO — WHEN YOU LACK REQUIRED INFORMATION:
+    If a step requires data, code, or context that you do not have access to
+    in this execution context, you have two options:
+    1. Use inject_steps in your complete_step call to add 1-3 research/verification
+       sub-steps that will gather the missing information.
+    2. Call flag_stuck with reason "NEED_INFO: [describe what's missing]".
+    Do NOT guess or fabricate information to fill gaps.
+
     URL FETCHING:
     Use ONLY the pre-fetched content in PRE-FETCHED URL CONTENT below.
     If a URL is missing from that block, note it as unavailable and proceed.
@@ -1040,3 +1055,64 @@ def verify_step(
         log.debug("verify_step failed (non-fatal): %s", exc)
 
     return {"passed": True, "reason": "verify skipped (error)", "confidence": 0.0}
+
+
+# ---------------------------------------------------------------------------
+# Phase 62: Cross-ref claim verification for steps with specific claims
+# ---------------------------------------------------------------------------
+
+# Heuristics for detecting steps likely to contain hallucinated specifics
+_SPECIFIC_CLAIM_PATTERNS = (
+    "line ", "L:", "at line", ".py:", ".js:", ".ts:",
+    "function ", "def ", "class ", "method ",
+    "variable ", "returns ", "calls ",
+)
+
+
+def _has_specific_claims(result: str) -> bool:
+    """Quick heuristic: does the step result contain file paths, line numbers,
+    or function names that could be hallucinated?"""
+    if not result or len(result) < 50:
+        return False
+    _lower = result.lower()
+    return sum(1 for p in _SPECIFIC_CLAIM_PATTERNS if p.lower() in _lower) >= 2
+
+
+def verify_step_with_cross_ref(
+    step_text: str,
+    result: str,
+    adapter,
+    *,
+    confidence_threshold: float = 0.75,
+) -> dict:
+    """Enhanced verification: standard verify + optional cross-ref for specific claims.
+
+    Only triggers cross-ref when the step result contains patterns suggesting
+    specific factual claims (file paths, line numbers, function names).
+    Returns same dict as verify_step with additional 'cross_ref' key if checked.
+    """
+    base_verdict = verify_step(step_text, result, adapter, confidence_threshold=confidence_threshold)
+
+    # Only cross-ref if base verification passed AND result has specific claims
+    if base_verdict.get("passed") and _has_specific_claims(result):
+        try:
+            from cross_ref import run_cross_ref
+            report = run_cross_ref(result, adapter=adapter, max_claims=3, dry_run=False)
+            if report.disputed_claims:
+                # Cross-ref found disputed claims — flag as needing verification
+                disputed_summary = "; ".join(
+                    f"[{c.claim[:60]}] ({c.status})" for c in report.disputed_claims[:3]
+                )
+                base_verdict["cross_ref_disputes"] = disputed_summary
+                base_verdict["reason"] = (
+                    f"cross-ref disputed {len(report.disputed_claims)} claim(s): "
+                    + disputed_summary[:200]
+                )
+                # Don't fail the step — just annotate. The claim might be correct
+                # and the cross-ref wrong. Log for metacognitive learning.
+                log.info("cross-ref flagged %d disputed claims in step result",
+                         len(report.disputed_claims))
+        except Exception as exc:
+            log.debug("cross-ref check failed (non-fatal): %s", exc)
+
+    return base_verdict

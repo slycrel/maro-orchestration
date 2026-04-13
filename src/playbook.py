@@ -160,70 +160,82 @@ def append_to_playbook(
     if len(entry) > 500:
         entry = entry[:500] + "…"
 
+    from file_lock import locked_write
+
     path = _playbook_path()
     if not path.exists():
         seed_playbook()
 
-    text = path.read_text(encoding="utf-8")
-    entry_line = entry if entry.startswith("- ") else f"- {entry}"
+    entry_line = None  # set under lock if we actually append
 
-    # Add source attribution if provided
-    if source:
-        entry_line += f" *(from {source})*"
+    with locked_write(path):
+        text = path.read_text(encoding="utf-8")
+        entry_line = entry if entry.startswith("- ") else f"- {entry}"
 
-    section_header = f"## {section}"
+        # Add source attribution if provided
+        if source:
+            entry_line += f" *(from {source})*"
 
-    if section_header in text:
-        # Append after the section header
-        parts = text.split(section_header, 1)
-        # Find the end of this section (next ## or end of file)
-        remainder = parts[1]
-        next_section = remainder.find("\n## ")
-        if next_section >= 0:
-            insert_point = next_section
-        else:
-            # Before the "Last updated" line if it exists
-            last_updated = remainder.find("\n*Last updated:")
-            insert_point = last_updated if last_updated >= 0 else len(remainder)
+        # Dedup: skip if the core entry text already exists in the playbook
+        _core = entry.lstrip("- ").strip()
+        if _core and _core in text:
+            log.debug("playbook: skipping duplicate entry: %s", _core[:80])
+            return
 
-        updated = (
-            parts[0] + section_header +
-            remainder[:insert_point].rstrip() + "\n" + entry_line + "\n" +
-            remainder[insert_point:]
-        )
-    else:
-        # Create new section before "Last updated" or at end
-        last_updated = text.find("\n*Last updated:")
-        if last_updated >= 0:
+        section_header = f"## {section}"
+
+        if section_header in text:
+            # Append after the section header
+            parts = text.split(section_header, 1)
+            # Find the end of this section (next ## or end of file)
+            remainder = parts[1]
+            next_section = remainder.find("\n## ")
+            if next_section >= 0:
+                insert_point = next_section
+            else:
+                # Before the "Last updated" line if it exists
+                last_updated = remainder.find("\n*Last updated:")
+                insert_point = last_updated if last_updated >= 0 else len(remainder)
+
             updated = (
-                text[:last_updated].rstrip() + "\n\n" +
-                section_header + "\n\n" + entry_line + "\n" +
-                text[last_updated:]
+                parts[0] + section_header +
+                remainder[:insert_point].rstrip() + "\n" + entry_line + "\n" +
+                remainder[insert_point:]
             )
         else:
-            updated = text.rstrip() + f"\n\n{section_header}\n\n{entry_line}\n"
+            # Create new section before "Last updated" or at end
+            last_updated = text.find("\n*Last updated:")
+            if last_updated >= 0:
+                updated = (
+                    text[:last_updated].rstrip() + "\n\n" +
+                    section_header + "\n\n" + entry_line + "\n" +
+                    text[last_updated:]
+                )
+            else:
+                updated = text.rstrip() + f"\n\n{section_header}\n\n{entry_line}\n"
 
-    # Update timestamp
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    if "*Last updated:" in updated:
-        import re
-        updated = re.sub(
-            r"\*Last updated:.*\*",
-            f"*Last updated: {now}*",
-            updated,
-        )
+        # Update timestamp
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        if "*Last updated:" in updated:
+            import re
+            updated = re.sub(
+                r"\*Last updated:.*\*",
+                f"*Last updated: {now}*",
+                updated,
+            )
 
-    path.write_text(updated, encoding="utf-8")
-    log.info("playbook: appended to [%s]: %s", section, entry_line[:80])
+        path.write_text(updated, encoding="utf-8")
+        log.info("playbook: appended to [%s]: %s", section, entry_line[:80])
 
-    # Captain's log
-    try:
-        from captains_log import log_event
-        log_event(
-            event_type="PLAYBOOK_UPDATED",
-            subject=section,
-            summary=entry_line[:200],
-            context={"source": source, "section": section},
-        )
-    except Exception:
-        pass
+    # Captain's log (outside lock — doesn't need file exclusivity)
+    if entry_line:
+        try:
+            from captains_log import log_event
+            log_event(
+                event_type="PLAYBOOK_UPDATED",
+                subject=section,
+                summary=entry_line[:200],
+                context={"source": source, "section": section},
+            )
+        except Exception:
+            pass

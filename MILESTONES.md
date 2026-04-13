@@ -2,21 +2,15 @@
 
 What to do next, in what order. Updated each session. Strategic phases live in ROADMAP.md; deferred ideas live in BACKLOG.md. This file is the bridge — the executable queue.
 
-Last updated: 2026-04-13 (session 18)
+Last updated: 2026-04-13 (session 19)
 
 ---
 
 ## Next Up
 
-1. **Phase 62: Adaptive Replanning — Close the Double-Loop** — The zoom-metacognition research designed a complete retry-vs-redecompose algorithm. Phases 44-45 built diagnosis but the action side was never implemented. Session 18 regression tests proved this is the #1 gap: self-audit hallucinated 6/10 findings because steps guessed instead of decomposing further. See ROADMAP.md Phase 62 for full deliverables. Start with: convergence tracking, anti-guessing prompt, shared artifact layer.
+1. **Phase 62: Shared artifact layer** — Remaining deliverable from Phase 62. `loop_shared_ctx` dict exists but needs deeper integration with step_exec tools to let steps write/read structured data.
 
-2. **Fix subprocess process leak** — CRITICAL. Child `claude -p` processes not killed on goal completion. Recipe site goal leaked 160 zombie pytest workers (12GB RAM). Needs os.killpg in ClaudeSubprocessAdapter.
-
-3. **Fix playbook dedup bug** — `append_to_playbook()` has no dedup guard. 80 duplicate rules in playbook.md, ~30% token tax on every director/decompose call. 20-minute fix.
-
-4. **Fix skills.py bare writes** — `save_skill()` L194 and `record_skill_outcome()` L889 use `path.write_text()` without `locked_write()`. Silent data loss under concurrent access. 10-minute fix.
-
-5. **Clean stale workspace skills** — 41 orphan skills in `~/.poe/workspace/memory/skills.jsonl` with wrong hashes, generating ~100 lines of log spam per goal. One-shot cleanup + add poe-doctor check.
+2. **Clean stale workspace skills** — 41 orphan skills in `~/.poe/workspace/memory/skills.jsonl` with wrong hashes, generating ~100 lines of log spam per goal. One-shot cleanup + add poe-doctor check.
 
 ## Queued
 
@@ -37,6 +31,14 @@ Last updated: 2026-04-13 (session 18)
 13. **Event-driven subprocess wakeup** — Replace polling with asyncio.Queue signal. (7/10)
 14. **Phase 63: Auto persona+skill packaging**
 15. **Codebase Graph + LSP** — Pre-build call graph; LSP-guided context slicing. (9/10, longer term)
+
+## Done (session 19)
+
+- [x] **Phase 62: Adaptive Replanning (7/8 deliverables)** — Convergence tracking (`_error_fingerprint`, `_is_converging`), mid-loop re-decomposition via `decompose()`, sibling failure correlation (`_sibling_failure_rate`), NEED_INFO mechanism, anti-hallucination prompt in EXECUTE_SYSTEM, cross-ref wired into verification (`verify_step_with_cross_ref`), metacognitive logging to captain's log. Shared artifact layer deferred.
+- [x] **Fix subprocess process leak** — `_run_subprocess_safe()` with `start_new_session=True` and `os.killpg()` on timeout/completion. Applied to ClaudeSubprocessAdapter + CodexCLIAdapter.
+- [x] **Fix playbook dedup bug** — Dedup guard in `append_to_playbook()`: checks if core entry text exists before appending. Also wrapped with `locked_write()`.
+- [x] **Fix skills.py bare writes** — `save_skill()` and `record_skill_outcome()` now use `locked_write()` from file_lock.py. 
+- [x] New tests: convergence tracking (8), anti-hallucination prompt (3), cross-ref detection (4), subprocess process group (2), playbook dedup (3)
 
 ## Done (session 17)
 

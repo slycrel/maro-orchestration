@@ -173,28 +173,31 @@ def save_skill(skill: Skill) -> None:
 
     Phase 14: always computes and stores content_hash before writing.
     """
+    from file_lock import locked_write
+
     # Always recompute the hash on save
     skill.content_hash = compute_skill_hash(skill)
 
     path = _skills_path()
-    lines: List[dict] = []
-    if path.exists():
-        for line in path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                entry = json.loads(line)
-                if entry.get("id") == skill.id:
-                    continue  # replaced below
-                lines.append(entry)
-            except Exception:
-                continue
-    lines.append(_skill_to_dict(skill))
-    path.write_text(
-        "\n".join(json.dumps(e) for e in lines) + "\n",
-        encoding="utf-8",
-    )
+    with locked_write(path):
+        lines: List[dict] = []
+        if path.exists():
+            for line in path.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                    if entry.get("id") == skill.id:
+                        continue  # replaced below
+                    lines.append(entry)
+                except Exception:
+                    continue
+        lines.append(_skill_to_dict(skill))
+        path.write_text(
+            "\n".join(json.dumps(e) for e in lines) + "\n",
+            encoding="utf-8",
+        )
 
 
 def increment_use(skill_id: str) -> None:
@@ -825,73 +828,76 @@ def record_skill_outcome(
         latency_ms:  Wall-clock latency in ms (optional, for efficiency scoring).
         confidence:  Confidence tag from step outcome (optional, 0.0–1.0).
     """
+    from file_lock import locked_write
+
     path = _skill_stats_path()
 
-    # Load all existing records
-    all_records: dict = {}
-    if path.exists():
+    with locked_write(path):
+        # Load all existing records
+        all_records: dict = {}
+        if path.exists():
+            try:
+                for line in path.read_text(encoding="utf-8").splitlines():
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        d = json.loads(line)
+                        sid = d.get("skill_id", "")
+                        if sid:
+                            all_records[sid] = d
+                    except Exception:
+                        continue
+            except Exception:
+                pass
+
+        # Find or create the record
+        if skill_id in all_records:
+            stats = SkillStats.from_dict(all_records[skill_id])
+        else:
+            # Try to get the skill name
+            skill_name = skill_id
+            try:
+                skills = load_skills()
+                for sk in skills:
+                    if sk.id == skill_id:
+                        skill_name = sk.name
+                        break
+            except Exception:
+                pass
+            stats = SkillStats(skill_id=skill_id, skill_name=skill_name)
+
+        # Update counts
+        prev_uses = stats.total_uses
+        stats.total_uses += 1
+        if success:
+            stats.successes += 1
+        else:
+            stats.failures += 1
+        stats.last_used = datetime.now(timezone.utc).isoformat()
+        stats.success_rate = stats.successes / max(stats.total_uses, 1)
+        stats.needs_escalation = stats.success_rate < ESCALATION_THRESHOLD
+
+        # Phase 59: update cost + latency telemetry (incremental EMA)
+        if cost_usd:
+            stats.total_cost_usd += cost_usd
+        if latency_ms:
+            # EMA update: new_avg = old_avg * (n-1)/n + latency_ms / n
+            n = stats.total_uses
+            stats.avg_latency_ms = stats.avg_latency_ms * (prev_uses / n) + latency_ms / n
+        if confidence != 1.0:
+            n = stats.total_uses
+            stats.avg_confidence = stats.avg_confidence * (prev_uses / n) + confidence / n
+
+        # Update the map and write back (full rewrite for consistency)
+        all_records[skill_id] = stats.to_dict()
         try:
-            for line in path.read_text(encoding="utf-8").splitlines():
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    d = json.loads(line)
-                    sid = d.get("skill_id", "")
-                    if sid:
-                        all_records[sid] = d
-                except Exception:
-                    continue
-        except Exception:
-            pass
-
-    # Find or create the record
-    if skill_id in all_records:
-        stats = SkillStats.from_dict(all_records[skill_id])
-    else:
-        # Try to get the skill name
-        skill_name = skill_id
-        try:
-            skills = load_skills()
-            for sk in skills:
-                if sk.id == skill_id:
-                    skill_name = sk.name
-                    break
-        except Exception:
-            pass
-        stats = SkillStats(skill_id=skill_id, skill_name=skill_name)
-
-    # Update counts
-    prev_uses = stats.total_uses
-    stats.total_uses += 1
-    if success:
-        stats.successes += 1
-    else:
-        stats.failures += 1
-    stats.last_used = datetime.now(timezone.utc).isoformat()
-    stats.success_rate = stats.successes / max(stats.total_uses, 1)
-    stats.needs_escalation = stats.success_rate < ESCALATION_THRESHOLD
-
-    # Phase 59: update cost + latency telemetry (incremental EMA)
-    if cost_usd:
-        stats.total_cost_usd += cost_usd
-    if latency_ms:
-        # EMA update: new_avg = old_avg * (n-1)/n + latency_ms / n
-        n = stats.total_uses
-        stats.avg_latency_ms = stats.avg_latency_ms * (prev_uses / n) + latency_ms / n
-    if confidence != 1.0:
-        n = stats.total_uses
-        stats.avg_confidence = stats.avg_confidence * (prev_uses / n) + confidence / n
-
-    # Update the map and write back (full rewrite for consistency)
-    all_records[skill_id] = stats.to_dict()
-    try:
-        path.write_text(
-            "\n".join(json.dumps(d) for d in all_records.values()) + "\n",
-            encoding="utf-8",
-        )
-    except Exception as e:
-        logger.warning("[skills] record_skill_outcome write failed: %s", e)
+            path.write_text(
+                "\n".join(json.dumps(d) for d in all_records.values()) + "\n",
+                encoding="utf-8",
+            )
+        except Exception as e:
+            logger.warning("[skills] record_skill_outcome write failed: %s", e)
 
 
 def get_skills_needing_escalation() -> List[SkillStats]:
