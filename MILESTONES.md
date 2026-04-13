@@ -2,7 +2,7 @@
 
 What to do next, in what order. Updated each session. Strategic phases live in ROADMAP.md; deferred ideas live in BACKLOG.md. This file is the bridge — the executable queue.
 
-Last updated: 2026-04-13 (session 19)
+Last updated: 2026-04-13 (session 19, continued)
 
 ---
 
@@ -10,13 +10,13 @@ Last updated: 2026-04-13 (session 19)
 
 1. **Phase 62: Shared artifact layer** — Remaining deliverable from Phase 62. `loop_shared_ctx` dict exists but needs deeper integration with step_exec tools to let steps write/read structured data.
 
-2. **Clean stale workspace skills** — 41 orphan skills in `~/.poe/workspace/memory/skills.jsonl` with wrong hashes, generating ~100 lines of log spam per goal. One-shot cleanup + add poe-doctor check.
+2. **Phase audit: verify "done" phases against current code** — Jeremy suspects multiple phases marked done are only surface-level implemented. Run the orchestrator against each phase's ROADMAP description and verify claims match current code. High priority for honest status tracking.
 
 ## Queued
 
-6. ~~**Real-world regression tests**~~ — DONE (session 18). 4 goals run, PM + dev agents tested. Results documented.
+3. ~~**Real-world regression tests**~~ — DONE (session 18). 4 goals run, PM + dev agents tested. Results documented.
 
-7. **Phase audit: verify "done" phases against current code** — Jeremy suspects multiple phases marked done are only surface-level implemented. Run the orchestrator against each phase's ROADMAP description and verify claims match current code. High priority for honest status tracking.
+4. **Output path resolution** — Files land in `/home/clawd/prototypes/poe-orchestration/prototypes/...` instead of `~/.poe/workspace/output/`. Subprocess cwd or project artifact_dir resolution bug.
 
 8. **Output path resolution** — Files land in `/home/clawd/prototypes/poe-orchestration/prototypes/...` instead of `~/.poe/workspace/output/`. Subprocess cwd or project artifact_dir resolution bug.
 
@@ -31,6 +31,12 @@ Last updated: 2026-04-13 (session 19)
 13. **Event-driven subprocess wakeup** — Replace polling with asyncio.Queue signal. (7/10)
 14. **Phase 63: Auto persona+skill packaging**
 15. **Codebase Graph + LSP** — Pre-build call graph; LSP-guided context slicing. (9/10, longer term)
+
+## Done (session 19, continued)
+
+- [x] **Clean workspace skills** — 41 orphan skills in ~/.poe/workspace/memory/skills.jsonl, 4 content_hash groups with duplicates. One-shot cleanup (kept 31 unique), grouped by content_hash, scored by creation time + success metrics. Added `poe-doctor --cleanup-skills` flag. Reduces ~100 lines log spam per goal.
+- [x] **Add poe-doctor check for workspace skills duplicates** — Phase 62 enhancement, detects duplicate content_hash in workspace skills, reports findings with cleanup command. Validates dedup after each run.
+- [x] **Relax timing tolerance in DAG parallel test** — test_dag_executor.py::TestDagWithParsedDeps::test_parallel_after_tags timing flake (25ms→50ms window). System scheduling variability allowed, parallelism still validated.
 
 ## Done (session 19)
 
