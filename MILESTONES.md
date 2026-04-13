@@ -2,25 +2,41 @@
 
 What to do next, in what order. Updated each session. Strategic phases live in ROADMAP.md; deferred ideas live in BACKLOG.md. This file is the bridge — the executable queue.
 
-Last updated: 2026-04-11 (session 16)
+Last updated: 2026-04-13 (session 18)
 
 ---
 
 ## Next Up
 
-1. **Real-world regression tests** — Polymarket behavioral analysis, nootropic re-run. Now backed by eval flywheel for auto-generating targeted evals from failures.
+1. **Phase 62: Adaptive Replanning — Close the Double-Loop** — The zoom-metacognition research designed a complete retry-vs-redecompose algorithm. Phases 44-45 built diagnosis but the action side was never implemented. Session 18 regression tests proved this is the #1 gap: self-audit hallucinated 6/10 findings because steps guessed instead of decomposing further. See ROADMAP.md Phase 62 for full deliverables. Start with: convergence tracking, anti-guessing prompt, shared artifact layer.
 
-2. **K2 follow-up: Import links collection** — Knowledge node infrastructure is built (schema, storage, query, injection, wiki-link graph). Next: import enriched posts as knowledge nodes. Jeremy setting up links repo.
+2. **Fix subprocess process leak** — CRITICAL. Child `claude -p` processes not killed on goal completion. Recipe site goal leaked 160 zombie pytest workers (12GB RAM). Needs os.killpg in ClaudeSubprocessAdapter.
 
-3. ~~**Test coverage for dangerous paths**~~ — DONE. evolver auto-apply already had 12 integration tests (tests/integration/test_evolver_apply.py). workers.py done (22). constraint.py had 62. knowledge_web.py (103). orch_bridges.py (111).
+3. **Fix playbook dedup bug** — `append_to_playbook()` has no dedup guard. 80 duplicate rules in playbook.md, ~30% token tax on every director/decompose call. 20-minute fix.
 
-4. **Eval flywheel hardening** — Current flywheel works end-to-end. Next: failure clustering (dedup related patterns), train/test split validation, eval pass-rate dashboard.
+4. **Fix skills.py bare writes** — `save_skill()` L194 and `record_skill_outcome()` L889 use `path.write_text()` without `locked_write()`. Silent data loss under concurrent access. 10-minute fix.
+
+5. **Clean stale workspace skills** — 41 orphan skills in `~/.poe/workspace/memory/skills.jsonl` with wrong hashes, generating ~100 lines of log spam per goal. One-shot cleanup + add poe-doctor check.
 
 ## Queued
 
-6. **Event-driven subprocess wakeup** — Replace polling with asyncio.Queue signal. (7/10)
-7. **Phase 62: Auto persona+skill packaging**
-8. **Codebase Graph + LSP** — Pre-build call graph; LSP-guided context slicing. (9/10, longer term)
+6. ~~**Real-world regression tests**~~ — DONE (session 18). 4 goals run, PM + dev agents tested. Results documented.
+
+7. **Phase audit: verify "done" phases against current code** — Jeremy suspects multiple phases marked done are only surface-level implemented. Run the orchestrator against each phase's ROADMAP description and verify claims match current code. High priority for honest status tracking.
+
+8. **Output path resolution** — Files land in `/home/clawd/prototypes/poe-orchestration/prototypes/...` instead of `~/.poe/workspace/output/`. Subprocess cwd or project artifact_dir resolution bug.
+
+9. **Artifact output routing cleanup** — Temp artifacts (per-step) → tmp dir (deleted by default, kept via config `keep_artifacts: true`). Permanent outputs → `~/.poe/workspace/output/`.
+
+10. **K2 follow-up: Import links collection** — Knowledge node infrastructure built. Next: import enriched posts.
+
+11. **Eval flywheel hardening** — Failure clustering, train/test split, pass-rate dashboard.
+
+12. **Local LLM research** — Tiny LLMs for bundling with orchestrator or self-hosting on cheap hardware. Reduce API dependency for cheap-tier work.
+
+13. **Event-driven subprocess wakeup** — Replace polling with asyncio.Queue signal. (7/10)
+14. **Phase 63: Auto persona+skill packaging**
+15. **Codebase Graph + LSP** — Pre-build call graph; LSP-guided context slicing. (9/10, longer term)
 
 ## Done (session 17)
 

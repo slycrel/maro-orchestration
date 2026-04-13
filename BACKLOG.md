@@ -84,6 +84,40 @@ Full report: `~/.poe/workspace/output/x-research-20260411T081706Z.md`
 ### Conversation Mining (Phase 48 idea)
 - [x] **Research pass through Telegram + Claude session data** — DONE (2026-04-05). `poe-mine --no-git` scanned 902 session log ideas → 336 unique after dedup. High-confidence (11): mostly already in BACKLOG. No new ideas injected above threshold. Notable finding from sessions: "knowledge graveyard" concept (temp storage for sub-goal learnings), "positive mid-IQ agent" (ralph approach, done), context size concern for sub-agents (done via context_firewall). Scan tool: `src/convo_miner.py`.
 
+### From real-world regression runs (2026-04-12, session 18 — 4 parallel goals)
+
+Ran 4 live goals: Polymarket research, nootropic synthesis, recipe site build, self-audit.
+
+**Bugs found:**
+- [ ] **Output path resolution** — Subprocess adapter writes output files to unexpected locations. Goals requesting `output/foo.md` produced files at `/home/clawd/prototypes/poe-orchestration/prototypes/poe-orchestration/projects/<slug>/output/foo.md` instead of `~/.poe/workspace/output/` or repo-relative `output/`. Root cause: subprocess cwd or project artifact_dir resolution. P1 — every real run drops files somewhere unpredictable.
+- [ ] **Subprocess adapter orphan process leak** — CRITICAL. When a goal finishes (done/stuck), child `claude -p` processes and their descendants are not killed. Recipe site goal spawned `claude -p --model sonnet` which ran pytest on the *orchestration* codebase (not the recipe site), spawning 160+ parallel workers consuming 12GB RAM. The parent python handle process reported stuck but the subprocess tree lived on. Fix: `ClaudeSubprocessAdapter` needs process group cleanup (os.killpg) on completion/timeout. Also needs: (a) subprocess cwd pinning so `claude -p` doesn't run tests on wrong codebase, (b) process count guard in heartbeat.
+- [ ] **Stale test skills in workspace** — 41 skills in `~/.poe/workspace/memory/skills.jsonl` with wrong hashes, generating ~100 lines of log spam per goal. Left over from pre-conftest test runs that leaked to real workspace. Fix: clean the file, or add a `poe-doctor` check that detects and offers to prune stale skills.
+- [ ] **Playbook deduplication bug** — Self-audit found `append_to_playbook()` in evolver has no dedup check. `~/.poe/workspace/playbook.md` has 20+ duplicate rules. P1 — unbounded growth, wasted context tokens on injection.
+- [ ] **skills.py read-modify-write race** — `save_skill()` and `record_skill_outcome()` load full JSONL, mutate in memory, rewrite entire file. Concurrent runs will lose updates. Self-audit identified as highest-severity concurrency bug. P2 (sequential runs for now, required before parallel missions).
+- [ ] **Constraint false-positive on step descriptions** — Constraint system scans step *text* (from decomposer), not just LLM output. Decomposer wrote "Clone repo (rm -rf first)" → DESTROY-tier constraint blocked step before LLM ran (0 tokens, 8ms). Two fixes needed: (a) decomposer prompt should avoid shell commands in step text, (b) constraint pre-scan should be softer on step descriptions vs actual tool calls. Found during dev agent test.
+- [ ] **11 unlocked bare-append JSONL paths** — captain-log, outcomes, step-costs, calibration, etc. all do bare `open('a').write()` without file locking. Safe for single-writer but will corrupt under concurrent appends. P3.
+
+**Architectural gaps surfaced:**
+- [ ] **Phase audit: verify "done" phases against current code** — Multiple phases likely marked done that are only surface-level implemented. Phase 45 (recovery planner) is the proven example: diagnosis built, action side never closed. Run orchestrator against each phase's ROADMAP description, verify claims match code. Jeremy's priority.
+- [ ] **Cross-ref not wired into step execution** — `cross_ref.py` does second-source claim verification but only runs via CLI or optional quality gate pass. Should be wired into ralph verify for steps making factual claims (file paths, line numbers, function names). Infrastructure built, just needs connecting.
+- [ ] **No anti-hallucination prompt in EXECUTE_SYSTEM** — Steps freely guess about code they haven't read. Add: "If you cannot verify a claim from code or data you have directly read in this step, do NOT state it as fact. Use inject_steps to add a verification step, or mark as [UNVERIFIED]."
+- [ ] **Shared artifact layer for step context** — Steps only see compressed string summaries of prior results (800 chars, compressed after step 5). No structured data sharing. Need `loop_artifacts/` dict where steps write grep results, file contents, claim lists — accessible by all subsequent steps. `loop_shared_ctx` exists but is barely used.
+- [ ] **PAT missing pull_requests:write** — Dev agent pushed branch but couldn't create PR. Token 2 needs PR write permission added. (Fixed mid-session by Jeremy but document for future tokens.)
+
+**Test goal results:**
+- Polymarket: 8/8 done, 1.47M tokens, 16min, quality gate PASS (0.85), 3 contested claims
+- Nootropic: 8/8 done, 544K tokens, 12min, quality gate PASS (0.80), 5 contested claims
+- Recipe site: 10/10 done (pending confirmation)
+- Self-audit: 11/11 done, found 5 contradictions + structural bugs, 2 critical races
+
+**Test goals (future runs):**
+- [ ] **Local LLM research** — Research tiny LLMs suitable for bundling with the orchestrator or self-hosting on cheap hardware (e.g. local network). Evaluate: inference speed, quality at orchestration tasks (step decomposition, lesson extraction), memory footprint, quantization options. Goal: reduce API dependency for cheap-tier work.
+- [ ] **Recipe site PM agent** — Recurring goal against slycrel/orchestrator-test-recipes: review code, open issues for missing features, review PRs, suggest architectural improvements. Tests GitHub integration + multi-step judgment.
+- [ ] **Recipe site dev agent** — Recurring goal: pick open issues, implement on branches, open PRs, maintain running Docker instance on this machine. Tests code generation + git workflow + deployment.
+
+**Output routing policy:**
+- [ ] **Artifact output routing cleanup** — Temp artifacts (per-step intermediaries) should go to a tmp dir, deleted by default, optionally kept via config flag (`keep_artifacts: true` — flip to true during testing). Semi-permanent outputs (final reports, research results) should route to `~/.poe/workspace/output/`. Currently everything mixes together unpredictably.
+
 ### Architectural (from self-review pass 5, 2026-04-10)
 - [x] **Extract LoopStateMachine from agent_loop.py** — DONE (2026-04-10). 16 methods extracted across 14 commits. run_agent_loop reduced from ~1,800 to ~470 lines. While loop body is ~300 lines of orchestration (budget checks, step execution call, extracted method dispatch). All heavy logic in standalone functions. Next: convert to LoopStateMachine class where LoopContext becomes `self`.
 - [x] **Break circular import skills.py ↔ evolver.py** — (2026-04-12) Extracted `Skill`, `SkillStats`, `SkillTestCase`, `SkillMutationResult`, `compute_skill_hash`, `verify_skill_hash`, `skill_to_dict`, `dict_to_skill` to `src/skill_types.py`. Both modules import types from there. skills.py re-exports for backward compat.

@@ -166,6 +166,44 @@ Shipped 2026-04-07. 4 systemic steal items, all pattern-driven (no new if-else b
 
 ---
 
+### Phase 62: Adaptive Replanning — Close the Double-Loop *(NEXT)*
+
+*"Stop guessing when you can decompose further. Stop retrying when the plan is wrong."*
+
+**The gap:** The zoom-metacognition research (`docs/research/zoom-metacognition.md`, 2026-03-27) designed a complete retry-vs-redecompose algorithm. Phases 44-45 built the diagnosis side. The action side — mid-loop replanning triggered by blocked steps — was never implemented. Steps currently retry with tier escalation until stuck, then the whole goal re-runs. No mid-loop re-decomposition, no convergence tracking, no sibling failure correlation, no "I don't know" step output.
+
+**Found during session 18:** Self-audit hallucinated 6/10 findings because steps guessed about code they hadn't read instead of requesting sub-steps to verify. Dev agent hit constraint false-positive because decomposer put shell commands in step text. Both failures trace to the same root: steps can't say "I need to break this down further" or "I need more context before proceeding."
+
+**Design source:** `docs/research/zoom-metacognition.md` — Argyris double-loop, Boyd OODA, adaptive expertise. The `on_step_failure()` algorithm with `RETRY_THRESHOLD=3`, `SIBLING_THRESHOLD=50%`, `REDECOMPOSE_THRESHOLD=2`.
+
+**Deliverables (ordered by dependency):**
+
+1. **Convergence tracking** — Track error fingerprints per retry. A step is converging if each retry produces a *different* error or more partial output. Identical failures = not converging. Add `error_fingerprint` and `convergence_score` to step tracking.
+
+2. **Mid-loop re-decomposition** — When a step hits retry threshold with no convergence, call `decompose()` on that step's text to generate sub-steps, and inject them via `inject_steps`. The existing infrastructure supports this mechanically — the decision logic is what's missing.
+
+3. **Sibling failure correlation** — If >50% of steps under the same decomposition are failing, the decomposition itself is wrong. Trigger re-decompose of the parent goal, not individual steps. Requires tracking which steps came from the same decompose call.
+
+4. **"I don't have enough info" as valid step output** — Prompt change: steps can return `inject_steps` with verification/research sub-steps instead of guessing. Anti-guessing language in EXECUTE_SYSTEM prompt. Step can say "NEED_INFO: [what's missing]" and the loop injects a research step.
+
+5. **Shared artifact layer** — Steps write structured data (grep results, file contents, claim lists) to `loop_artifacts/` dict accessible by all subsequent steps. Not just string summaries in completed_context. Provides the "shared data payload" between steps.
+
+6. **Cross-ref wired into step verification** — Wire `cross_ref.py` claim extraction into ralph verify for steps that make factual claims (detected by heuristic: step output contains file paths, line numbers, function names). Catches hallucinated specifics before they propagate.
+
+7. **Anti-hallucination prompt injection** — Add to EXECUTE_SYSTEM: "If you cannot verify a claim from code or data you have directly read in this step, do NOT state it as fact. Instead, use inject_steps to add a verification step, or mark the claim as [UNVERIFIED]."
+
+8. **Metacognitive logging** — Log *why* the system chose retry vs redecompose at each decision point. Enables the deutero-learning loop (learning how to learn).
+
+**Existing infrastructure to build on:**
+- `inject_steps` mechanism (step_exec.py + agent_loop.py) — mechanical step injection, working
+- `_handle_blocked_step()` in agent_loop.py — current retry logic, needs convergence check added
+- `plan_recovery()` in introspect.py — currently fires at loop-end, needs mid-loop trigger
+- `replan_count` tracking — exists, needs to gate re-decompose decisions
+- `loop_shared_ctx` dict — exists but barely used, expand into artifact layer
+- `cross_ref.py` — built, tested, not wired into step path
+
+---
+
 ### Phase 61: Integration Depth *(CANDIDATE)*
 
 *"3061 unit tests and only 31 integration tests — close the gap."*
