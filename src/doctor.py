@@ -117,6 +117,41 @@ def run_doctor() -> bool:
         f"{skills_path} ({'exists' if skills_path.exists() else 'will be created on first run'})",
     ))
 
+    # Phase 62: Check workspace skills for duplicates (same content_hash)
+    try:
+        workspace_skills = Path.home() / ".poe" / "workspace" / "memory" / "skills.jsonl"
+        if workspace_skills.exists():
+            from collections import defaultdict
+            all_skills = []
+            for line in workspace_skills.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if line:
+                    try:
+                        all_skills.append(json.loads(line))
+                    except Exception:
+                        pass
+            if all_skills:
+                by_hash = defaultdict(list)
+                for skill in all_skills:
+                    hash_val = skill.get("content_hash", "")
+                    if hash_val:
+                        by_hash[hash_val].append(skill)
+                duplicates = sum(1 for h, skills in by_hash.items() if len(skills) > 1)
+                if duplicates > 0:
+                    results.append(_check(
+                        "Workspace skills (duplicates)",
+                        False,
+                        f"{duplicates} hash group(s) with duplicates — run: python3 -c \"from doctor import cleanup_workspace_skills; cleanup_workspace_skills()\"",
+                    ))
+                else:
+                    results.append(_check("Workspace skills (duplicates)", True, "clean"))
+            else:
+                results.append(_check("Workspace skills (duplicates)", True, "no skills yet"))
+        else:
+            results.append(_check("Workspace skills (duplicates)", True, "workspace not initialized"))
+    except Exception as exc:
+        results.append(_check("Workspace skills (duplicates)", True, f"skipped: {exc}"))
+
     # Output directory
     output_dir = Path(__file__).resolve().parent.parent / "output"
     results.append(_check(
@@ -277,13 +312,78 @@ def run_doctor() -> bool:
     return True
 
 
+def cleanup_workspace_skills() -> None:
+    """Remove duplicate skills (same content_hash) from workspace skills.jsonl.
+
+    Keeps the best copy based on creation date and success metrics.
+    """
+    from collections import defaultdict
+    workspace_skills = Path.home() / ".poe" / "workspace" / "memory" / "skills.jsonl"
+
+    if not workspace_skills.exists():
+        print("Workspace skills file not found — nothing to clean")
+        return
+
+    # Load all skills
+    all_skills = []
+    for line in workspace_skills.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line:
+            try:
+                all_skills.append(json.loads(line))
+            except Exception as e:
+                print(f"Skipped unparseable line: {e}")
+
+    print(f"Loaded {len(all_skills)} skills")
+
+    # Group by content_hash
+    by_hash = defaultdict(list)
+    for skill in all_skills:
+        hash_val = skill.get("content_hash", "")
+        if hash_val:
+            by_hash[hash_val].append(skill)
+
+    # Find duplicates
+    duplicates = {h: skills for h, skills in by_hash.items() if len(skills) > 1}
+    if not duplicates:
+        print("No duplicates found")
+        return
+
+    print(f"Found {len(duplicates)} hash group(s) with duplicates:")
+
+    # Scoring: prefer recent + high success rate + high use count
+    def score_skill(skill):
+        created_at = skill.get("created_at", "")
+        success_rate = float(skill.get("success_rate", 0))
+        use_count = int(skill.get("use_count", 0))
+        return (created_at, success_rate, use_count)
+
+    total_removed = 0
+    for hash_val, skills in duplicates.items():
+        best = max(skills, key=score_skill)
+        removed = len(skills) - 1
+        total_removed += removed
+        print(f"  {hash_val[:16]}... : keeping best of {len(skills)} copies of '{best.get('name', '?')}'")
+
+    # Rewrite with deduped set
+    kept = [max(skills, key=score_skill) for skills in by_hash.values()]
+    output_lines = [json.dumps(skill) for skill in kept]
+    workspace_skills.write_text("\n".join(output_lines) + "\n", encoding="utf-8")
+    print(f"Cleaned: {len(kept)} skills remain ({total_removed} duplicates removed)")
+
+
 def main():
     import argparse
     parser = argparse.ArgumentParser(description="Poe environment health check")
     parser.add_argument("--json", action="store_true", help="JSON output (not yet implemented, use text)")
+    parser.add_argument("--cleanup-skills", action="store_true", help="Remove duplicate skills from workspace")
     args = parser.parse_args()
-    ok = run_doctor()
-    sys.exit(0 if ok else 1)
+
+    if args.cleanup_skills:
+        cleanup_workspace_skills()
+    else:
+        ok = run_doctor()
+        sys.exit(0 if ok else 1)
 
 
 if __name__ == "__main__":
