@@ -79,6 +79,16 @@ def _orch():
     return orch
 
 
+def _project_dir_root():
+    """Canonical projects root — delegates to orch_items.projects_root().
+
+    Replaces the hardcoded `orch_root() / "prototypes" / "poe-orchestration" / "projects"`
+    that previously caused output files to land in wrong directories.
+    """
+    from orch_items import projects_root
+    return projects_root()
+
+
 # ---------------------------------------------------------------------------
 # Data types
 # ---------------------------------------------------------------------------
@@ -637,11 +647,17 @@ def _process_blocked_step(
     if ctx.verbose:
         print(f"[poe] step {step_idx} stuck after retry: {_stuck_reason}", file=sys.stderr, flush=True)
     try:
-        from skills import attribute_failure_to_skills, find_matching_skills, record_variant_outcome
+        from skills import attribute_failure_to_skills, find_matching_skills, record_variant_outcome, record_skill_outcome
         attribute_failure_to_skills(step_text, _stuck_reason, goal=ctx.goal)
         for _sk in find_matching_skills(step_text + " " + ctx.goal, use_router=False):
             if getattr(_sk, "variant_of", None) is not None:
                 record_variant_outcome(_sk.id, success=False)
+            # Phase 59: record failure telemetry per skill
+            record_skill_outcome(
+                _sk.id,
+                success=False,
+                latency_ms=float(step_elapsed),
+            )
     except Exception:
         pass
     try:
@@ -1158,6 +1174,14 @@ def _process_done_step(
     if _snap_val:
         loop_shared_ctx[_snap_key] = _snap_val
 
+    # Phase 62: Store structured artifacts in shared context
+    _artifacts = outcome.get("artifacts")
+    if _artifacts and isinstance(_artifacts, dict):
+        for _art_name, _art_val in _artifacts.items():
+            _art_key = f"artifact:{step_idx}:{_art_name}"
+            loop_shared_ctx[_art_key] = _art_val
+        log.info("step %d: stored %d artifact(s) in shared context", step_idx, len(_artifacts))
+
     # Mutable task graph: inject discovered steps
     _injected = outcome.get("inject_steps", [])
     if _injected and isinstance(_injected, list):
@@ -1192,13 +1216,24 @@ def _process_done_step(
     if ctx.verbose:
         print(f"[poe] step {step_idx} done: {step_summary[:120]}", file=sys.stderr, flush=True)
 
-    # Phase 32: update skill utility
+    # Phase 32: update skill utility + Phase 59: record skill cost/latency telemetry
     try:
-        from skills import find_matching_skills, update_skill_utility, record_variant_outcome
+        from skills import find_matching_skills, update_skill_utility, record_variant_outcome, record_skill_outcome
+        _confidence_val = {"strong": 1.0, "weak": 0.5, "inferred": 0.3, "unverified": 0.1}.get(
+            outcome.get("confidence", ""), 1.0
+        )
         for _sk in find_matching_skills(step_text + " " + ctx.goal, use_router=False):
             update_skill_utility(_sk.id, success=True)
             if getattr(_sk, "variant_of", None) is not None:
                 record_variant_outcome(_sk.id, success=True)
+            # Phase 59: record cost/latency per skill invocation
+            record_skill_outcome(
+                _sk.id,
+                success=True,
+                cost_usd=0.0,  # TODO: compute from token counts + model pricing
+                latency_ms=float(step_elapsed),
+                confidence=_confidence_val,
+            )
     except Exception:
         pass
 
@@ -1414,7 +1449,7 @@ def _build_result_and_finalize(
                     if len(s.result) > 2000:
                         _partial_lines.append(f"\n... (truncated, {len(s.result)} chars total)")
                 _partial_lines.append("")
-            _art_dir = o.orch_root() / "prototypes" / "poe-orchestration" / "projects" / ctx.project / "artifacts"
+            _art_dir = _project_dir_root() / ctx.project / "artifacts"
             _art_dir.mkdir(parents=True, exist_ok=True)
             (_art_dir / f"loop-{ctx.loop_id}-PARTIAL.md").write_text(
                 "\n".join(_partial_lines), encoding="utf-8")
@@ -1742,7 +1777,7 @@ def _preflight_checks(
     proj_fanout_dir = ""
     if ctx.project:
         try:
-            proj_fanout_dir = str(o.orch_root() / "prototypes" / "poe-orchestration" / "projects" / ctx.project)
+            proj_fanout_dir = str(_project_dir_root() / ctx.project)
         except Exception:
             pass
 
@@ -3283,7 +3318,7 @@ def run_agent_loop(
     _proj_artifact_dir = ""
     if project:
         try:
-            _proj_artifact_dir = str(o.orch_root() / "prototypes" / "poe-orchestration" / "projects" / project)
+            _proj_artifact_dir = str(_project_dir_root() / project)
         except Exception:
             pass
 
@@ -3900,7 +3935,7 @@ def _write_step_artifact(
     """Write a step's result to the project artifacts directory."""
     try:
         o = _orch()
-        artifacts_dir = o.orch_root() / "prototypes" / "poe-orchestration" / "projects" / project / "artifacts"
+        artifacts_dir = _project_dir_root() / project / "artifacts"
         artifacts_dir.mkdir(parents=True, exist_ok=True)
         fname = f"loop-{loop_id}-step-{step_num:02d}.md"
         path = artifacts_dir / fname
@@ -4034,7 +4069,7 @@ def _write_loop_log(
     """Write the full loop log JSON to the project artifacts directory."""
     try:
         o = _orch()
-        artifacts_dir = o.orch_root() / "prototypes" / "poe-orchestration" / "projects" / project / "artifacts"
+        artifacts_dir = _project_dir_root() / project / "artifacts"
         artifacts_dir.mkdir(parents=True, exist_ok=True)
         fname = f"loop-{loop_id}-log.json"
         path = artifacts_dir / fname

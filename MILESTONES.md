@@ -8,15 +8,11 @@ Last updated: 2026-04-13 (session 19, continued)
 
 ## Next Up
 
-1. **Phase 62: Shared artifact layer** — Remaining deliverable from Phase 62. `loop_shared_ctx` dict exists but needs deeper integration with step_exec tools to let steps write/read structured data.
-
-2. **Phase audit: verify "done" phases against current code** — Jeremy suspects multiple phases marked done are only surface-level implemented. Run the orchestrator against each phase's ROADMAP description and verify claims match current code. High priority for honest status tracking.
+1. **Wire diagnosis into mid-loop blocking** — Phase 44-45 diagnosis only fires at loop-end. Should also trigger during step blocking to inform retry-vs-redecompose decisions. Phase 62 `_handle_blocked_step` uses heuristics; should consult `diagnose_loop()` / `plan_recovery()` for richer decisions.
 
 ## Queued
 
 3. ~~**Real-world regression tests**~~ — DONE (session 18). 4 goals run, PM + dev agents tested. Results documented.
-
-4. **Output path resolution** — Files land in `/home/clawd/prototypes/poe-orchestration/prototypes/...` instead of `~/.poe/workspace/output/`. Subprocess cwd or project artifact_dir resolution bug.
 
 9. **Artifact output routing cleanup** — Temp artifacts (per-step) → tmp dir (deleted by default, kept via config `keep_artifacts: true`). Permanent outputs → `~/.poe/workspace/output/`.
 
@@ -38,7 +34,9 @@ Last updated: 2026-04-13 (session 19, continued)
 
 ## Done (session 19)
 
-- [x] **Phase 62: Adaptive Replanning (7/8 deliverables)** — Convergence tracking (`_error_fingerprint`, `_is_converging`), mid-loop re-decomposition via `decompose()`, sibling failure correlation (`_sibling_failure_rate`), NEED_INFO mechanism, anti-hallucination prompt in EXECUTE_SYSTEM, cross-ref wired into verification (`verify_step_with_cross_ref`), metacognitive logging to captain's log. Shared artifact layer deferred.
+- [x] **Phase 62: Adaptive Replanning (ALL 8 deliverables)** — Convergence tracking, mid-loop re-decomposition, sibling failure correlation, NEED_INFO mechanism, anti-hallucination prompt, cross-ref in verification, metacognitive logging, shared artifact layer (complete_step `artifacts` field → loop_shared_ctx → injected into subsequent steps).
+- [x] **Fix output path resolution** — Replaced 5 hardcoded `orch_root() / "prototypes" / "poe-orchestration" / "projects"` with `_project_dir_root()` → `orch_items.projects_root()`. Output now goes to `~/.poe/workspace/projects/<slug>/`.
+- [x] **Phase audit (8 high-risk phases)** — 5 confirmed working (graduation, tier escalation, milestone expansion, dashboard, skills synthesis). 2 loop-end only (diagnosis, recovery). 1 ghost feature fixed: Phase 59 skill telemetry wired (`record_skill_outcome()` now called from success + failure paths).
 - [x] **Fix subprocess process leak** — `_run_subprocess_safe()` with `start_new_session=True` and `os.killpg()` on timeout/completion. Applied to ClaudeSubprocessAdapter + CodexCLIAdapter.
 - [x] **Fix playbook dedup bug** — Dedup guard in `append_to_playbook()`: checks if core entry text exists before appending. Also wrapped with `locked_write()`.
 - [x] **Fix skills.py bare writes** — `save_skill()` and `record_skill_outcome()` now use `locked_write()` from file_lock.py. 

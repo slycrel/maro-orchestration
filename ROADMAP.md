@@ -166,7 +166,7 @@ Shipped 2026-04-07. 4 systemic steal items, all pattern-driven (no new if-else b
 
 ---
 
-### Phase 62: Adaptive Replanning — Close the Double-Loop *(IN PROGRESS)*
+### Phase 62: Adaptive Replanning — Close the Double-Loop *(DONE)*
 
 *"Stop guessing when you can decompose further. Stop retrying when the plan is wrong."*
 
@@ -186,7 +186,7 @@ Shipped 2026-04-07. 4 systemic steal items, all pattern-driven (no new if-else b
 
 4. **"I don't have enough info" as valid step output** ✓ — `NEED_INFO:` prefix in stuck_reason triggers research sub-step generation + re-queue of original step. EXECUTE_SYSTEM prompt updated with NEED_INFO instructions.
 
-5. **Shared artifact layer** — *Deferred.* `loop_shared_ctx` dict exists but needs deeper integration with step_exec tools. Requires plumbing changes through execute_step to expose artifacts.
+5. **Shared artifact layer** ✓ — `complete_step` tool extended with `artifacts` field (key-value string pairs, max 5, 2000 chars each). Stored in `loop_shared_ctx` as `artifact:{step_idx}:{name}`. Injected into subsequent steps as "Artifacts from prior steps" block. EXECUTE_SYSTEM updated with artifact documentation.
 
 6. **Cross-ref wired into step verification** ✓ — `verify_step_with_cross_ref()` in step_exec.py. Heuristic `_has_specific_claims()` detects file paths, line numbers, function names. Triggers cross-ref claim extraction for steps with specific claims. Annotates (doesn't block) when disputes found.
 

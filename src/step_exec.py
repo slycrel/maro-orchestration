@@ -58,6 +58,10 @@ EXECUTE_SYSTEM = textwrap.dedent("""\
     PRIOR STEP DATA:
     "Completed steps so far" is real execution data. Reference ONLY the exact file
     names, function names, and values shown there — never invent or guess.
+    "Artifacts from prior steps" contains structured data (JSON, lists, file contents)
+    written by earlier steps. Use artifacts for precise data; use completed steps for context.
+    When your step produces structured data that later steps need, use the "artifacts"
+    field in complete_step to share it (key-value pairs, values as strings).
 
     TOKEN EFFICIENCY:
     1. Extract 2-3 key facts from sources; never quote long passages verbatim.
@@ -222,6 +226,18 @@ EXECUTE_TOOLS = [
                         "Injected steps run in order before the original remaining plan resumes. "
                         "Maximum 3 injected steps. Keep each under 20 words."
                     ),
+                },
+                "artifacts": {
+                    "type": "object",
+                    "description": (
+                        "Optional: structured data to share with subsequent steps. "
+                        "Keys are artifact names (e.g. 'file_list', 'grep_results', 'claim_list'). "
+                        "Values are strings (JSON-encode complex data). "
+                        "Later steps can read these as 'Artifacts from prior steps' in their context. "
+                        "Use for data that subsequent steps need to reference precisely — "
+                        "not for general summaries (put those in 'result')."
+                    ),
+                    "additionalProperties": {"type": "string"},
                 },
             },
             "required": ["result", "summary"],
@@ -570,6 +586,22 @@ def execute_step(
             f"  - {c}" for c in completed_context
         )
 
+    # Phase 62: Inject structured artifacts from prior steps
+    artifacts_block = ""
+    if shared_ctx:
+        _art_entries = []
+        for _k, _v in shared_ctx.items():
+            if _k.startswith("artifact:"):
+                # Format: "artifact:{step_idx}:{name}" → "{name} (from step {step_idx})"
+                _parts = _k.split(":", 2)
+                if len(_parts) == 3:
+                    _art_label = f"{_parts[2]} (from step {_parts[1]})"
+                else:
+                    _art_label = _k
+                _art_entries.append(f"  - {_art_label}: {str(_v)[:500]}")
+        if _art_entries:
+            artifacts_block = "\n\nArtifacts from prior steps:\n" + "\n".join(_art_entries)
+
     ancestry_block = f"\n\n{ancestry_context}" if ancestry_context else ""
 
     # Phase 35 P1/P2: HITL constraint check — block/warn before any LLM call
@@ -669,6 +701,7 @@ def execute_step(
         f"Current step ({step_num}/{total_steps}) [{_step_type}]: {step_text}"
         f"{workspace_block}"
         f"{context_block}"
+        f"{artifacts_block}"
         f"{prefetch_block}"
         f"{_pipeline_block}"
         f"{_artifact_block}\n\n"
@@ -799,6 +832,21 @@ def execute_step(
             }
             if _confidence:
                 _outcome["confidence"] = _confidence
+            # Phase 62: Shared artifact layer — structured data from step
+            _raw_artifacts = tc.arguments.get("artifacts") or {}
+            if isinstance(_raw_artifacts, dict) and _raw_artifacts:
+                # Validate: keys and values must be strings, cap at 5 artifacts, 2000 chars each
+                _clean_artifacts = {}
+                for _ak, _av in list(_raw_artifacts.items())[:5]:
+                    _ak_str = str(_ak).strip()[:80]
+                    _av_str = str(_av)[:2000] if _av else ""
+                    if _ak_str and _av_str:
+                        _clean_artifacts[_ak_str] = _av_str
+                if _clean_artifacts:
+                    _outcome["artifacts"] = _clean_artifacts
+                    log.info("step %d artifacts: %d item(s) (%s)",
+                             step_num, len(_clean_artifacts),
+                             ", ".join(_clean_artifacts.keys()))
             # Mutable task graph: pick up any injected steps from the worker
             _raw_inject = tc.arguments.get("inject_steps") or []
             if isinstance(_raw_inject, list):

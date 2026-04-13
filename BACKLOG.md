@@ -89,7 +89,7 @@ Full report: `~/.poe/workspace/output/x-research-20260411T081706Z.md`
 Ran 4 live goals: Polymarket research, nootropic synthesis, recipe site build, self-audit.
 
 **Bugs found:**
-- [ ] **Output path resolution** — Subprocess adapter writes output files to unexpected locations. Goals requesting `output/foo.md` produced files at `/home/clawd/prototypes/poe-orchestration/prototypes/poe-orchestration/projects/<slug>/output/foo.md` instead of `~/.poe/workspace/output/` or repo-relative `output/`. Root cause: subprocess cwd or project artifact_dir resolution. P1 — every real run drops files somewhere unpredictable.
+- [x] **Output path resolution** — FIXED (session 19). Replaced 5 hardcoded `orch_root() / "prototypes" / "poe-orchestration" / "projects"` paths with `_project_dir_root()` → `orch_items.projects_root()`. Output now goes to `~/.poe/workspace/projects/<slug>/`.
 - [x] **Subprocess adapter orphan process leak** — FIXED (session 19). `_run_subprocess_safe()` with `start_new_session=True` and `os.killpg()` on timeout/completion. Applied to ClaudeSubprocessAdapter + CodexCLIAdapter. Still needs: (a) subprocess cwd pinning so `claude -p` doesn't run tests on wrong codebase, (b) process count guard in heartbeat.
 - [ ] **Stale test skills in workspace** — 41 skills in `~/.poe/workspace/memory/skills.jsonl` with wrong hashes, generating ~100 lines of log spam per goal. Left over from pre-conftest test runs that leaked to real workspace. Fix: clean the file, or add a `poe-doctor` check that detects and offers to prune stale skills.
 - [x] **Playbook deduplication bug** — FIXED (session 19). `append_to_playbook()` now checks if core entry text exists before appending. Also wrapped with `locked_write()`.
@@ -101,7 +101,7 @@ Ran 4 live goals: Polymarket research, nootropic synthesis, recipe site build, s
 - [ ] **Phase audit: verify "done" phases against current code** — Multiple phases likely marked done that are only surface-level implemented. Phase 45 (recovery planner) is the proven example: diagnosis built, action side never closed. Run orchestrator against each phase's ROADMAP description, verify claims match code. Jeremy's priority.
 - [x] **Cross-ref not wired into step execution** — FIXED (session 19). `verify_step_with_cross_ref()` in step_exec.py. Heuristic `_has_specific_claims()` detects file paths, line numbers, function names. Triggers cross-ref for specific claims. Annotates disputes, doesn't block.
 - [x] **No anti-hallucination prompt in EXECUTE_SYSTEM** — FIXED (session 19). ANTI-HALLUCINATION section + NEED_INFO mechanism added to EXECUTE_SYSTEM. Steps can say NEED_INFO: [what's missing] to trigger research sub-steps.
-- [ ] **Shared artifact layer for step context** — Steps only see compressed string summaries of prior results (800 chars, compressed after step 5). No structured data sharing. Need `loop_artifacts/` dict where steps write grep results, file contents, claim lists — accessible by all subsequent steps. `loop_shared_ctx` exists but is barely used.
+- [x] **Shared artifact layer for step context** — FIXED (session 19). `complete_step` tool extended with `artifacts` field. Stored in `loop_shared_ctx` as `artifact:{step}:{name}`. Injected into subsequent steps as "Artifacts from prior steps" block.
 - [ ] **PAT missing pull_requests:write** — Dev agent pushed branch but couldn't create PR. Token 2 needs PR write permission added. (Fixed mid-session by Jeremy but document for future tokens.)
 
 **Test goal results:**

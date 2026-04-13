@@ -545,3 +545,93 @@ class TestSpecificClaimDetection:
         from step_exec import _has_specific_claims
         assert not _has_specific_claims("")
         assert not _has_specific_claims("short")
+
+
+# ---------------------------------------------------------------------------
+# Phase 62: Shared artifact layer
+# ---------------------------------------------------------------------------
+
+class TestArtifactSchema:
+    """Verify complete_step tool accepts artifacts field."""
+
+    def test_artifacts_field_in_tool_schema(self):
+        from step_exec import EXECUTE_TOOLS
+        complete_step = next(t for t in EXECUTE_TOOLS if t["name"] == "complete_step")
+        props = complete_step["parameters"]["properties"]
+        assert "artifacts" in props
+        assert props["artifacts"]["type"] == "object"
+
+    def test_artifact_injection_in_system_prompt(self):
+        from step_exec import EXECUTE_SYSTEM
+        assert "Artifacts from prior steps" in EXECUTE_SYSTEM
+        assert "artifacts" in EXECUTE_SYSTEM
+
+
+class TestArtifactContextInjection:
+    """Verify artifacts from shared_ctx are injected into step context."""
+
+    def _adapter_capturing_prompt(self):
+        from llm import LLMResponse, ToolCall
+        captured = {}
+
+        class _Cap:
+            def complete(self, messages, **kw):
+                captured["user"] = next(
+                    (m.content for m in reversed(messages) if m.role == "user"), ""
+                )
+                return LLMResponse(
+                    content="",
+                    tool_calls=[ToolCall(
+                        name="complete_step",
+                        arguments={"result": "done", "summary": "done"},
+                    )],
+                )
+
+        return _Cap(), captured
+
+    def test_artifacts_injected_into_step_context(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("POE_ORCH_ROOT", str(tmp_path))
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+
+        from step_exec import execute_step, EXECUTE_TOOLS
+        adapter, captured = self._adapter_capturing_prompt()
+
+        shared = {
+            "artifact:1:file_list": '["src/main.py", "src/utils.py"]',
+            "artifact:2:grep_results": "3 matches found in auth.py",
+            "step:1:some step": "summary text",  # not an artifact
+        }
+        execute_step(
+            goal="Test goal",
+            step_text="Review the files found earlier",
+            step_num=3,
+            total_steps=5,
+            completed_context=["Step 1: found files"],
+            adapter=adapter,
+            tools=EXECUTE_TOOLS,
+            shared_ctx=shared,
+        )
+        assert "Artifacts from prior steps" in captured["user"]
+        assert "file_list (from step 1)" in captured["user"]
+        assert "grep_results (from step 2)" in captured["user"]
+        # Non-artifact keys should NOT be in artifacts block
+        assert "some step" not in captured["user"].split("Artifacts from prior steps")[1].split("Completed")[0]
+
+    def test_no_artifacts_block_when_empty(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("POE_ORCH_ROOT", str(tmp_path))
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+
+        from step_exec import execute_step, EXECUTE_TOOLS
+        adapter, captured = self._adapter_capturing_prompt()
+
+        execute_step(
+            goal="Test goal",
+            step_text="Do something",
+            step_num=1,
+            total_steps=3,
+            completed_context=[],
+            adapter=adapter,
+            tools=EXECUTE_TOOLS,
+            shared_ctx={},
+        )
+        assert "Artifacts from prior steps" not in captured["user"]
