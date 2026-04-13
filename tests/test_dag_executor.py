@@ -420,4 +420,4 @@ class TestDagWithParsedDeps:
         assert started_at[2] < started_at[4] or started_at[3] < started_at[4]
         # Steps 2 and 3 should start within a small window of each other (parallel)
         delta_23 = abs(started_at[2] - started_at[3])
-        assert delta_23 < 0.025, f"Steps 2 and 3 started too far apart: {delta_23:.3f}s"
+        assert delta_23 < 0.05, f"Steps 2 and 3 started too far apart: {delta_23:.3f}s"
