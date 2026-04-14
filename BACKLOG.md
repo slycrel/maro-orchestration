@@ -11,12 +11,12 @@ Last reviewed: 2026-04-14 (session 20)
 
 ### Session 20 (2026-04-14) — adversarial review findings (`output/self-review-report-20260414T040637Z-blind.md`)
 
-- [ ] **CRITICAL: Evolver broken state persistence** — `_verify_post_apply` on test failure logs a lesson but does NOT auto-revert. Self-improvement loop can make itself worse and stay that way. Fix: call `revert_suggestion` unconditionally before returning on verify failure. Separately: `revert_suggestion` no-op for `prompt_tweak` needs a real rollback strategy (snapshot → restore) or must be gated behind a dry-run flag.
+- [x] **CRITICAL: Evolver broken state persistence** — FIXED (commit `4b8dd7e`). `_verify_post_apply` now tracks `applied_ids` and iterates `revert_suggestion` on test failure. 3 new tests cover fail→revert, pass→no-revert, and legacy int-count backward compat. The `revert_suggestion` no-op for `prompt_tweak` is honest now (lessons decay naturally) — separate item if we want true snapshot/restore.
 - [ ] **CRITICAL: Silent exception swallowing (systemic)** — `agent_loop.py` has 15+ `except Exception: pass` sites in first 1,000 lines. Checkpoint, hook blocking, skill attribution, security scans all silently no-op. Fix: ERROR-level logging; for correctness-affecting sites, raise or set a finalization-blocking flag.
 - [ ] **CRITICAL: LoopPhase is string constants, not state machine** — no transition enforcement on 4,360-line core loop. Acknowledged debt. Fix: `LoopStateMachine` with explicit allowed transitions; `set_phase` raises `InvalidTransitionError`.
 - [ ] **HIGH: Director bypassed in practice** — `skip_if_simple=True` default means most NOW-lane goals skip decompose/delegate/review. Fix: make threshold configurable, lower default, or remove.
 - [ ] **HIGH: Inspector signal reliability** — (a) escalation tone detector uses keywords `error/failed/stuck` — fires on every stuck session; (b) backtracking detector uses positional order not timestamps; (c) context-churn check verifies lesson *presence* not *application*. Fix: LLM tone classifier; timestamp-ordered backtrack; lesson-reference detection.
-- [ ] **HIGH: Evolver `cost_optimization` silent no-op** — suggestion generated + logged, `apply_suggestion` has no handler. Users see it in `change_log.jsonl` thinking it was applied. Fix: implement handler OR mark as `pending_human_review`.
+- [x] **HIGH: Evolver `cost_optimization` silent no-op** — FIXED (commit `4b8dd7e`). Explicit branch in `apply_suggestion` sets `applied=False`, `status=pending_human_review`, with block_reason. Test added. Real auto-apply executor still TODO if we ever want one.
 - [ ] **HIGH: Test coverage width not depth** — no `--cov`, LLM calls fully mocked, no mutation testing, no concurrency tests for `task_store.py` fcntl. Fix: add `pytest-cov` with 70% floor; 3+ end-to-end tests with real LLM fixtures; concurrent-write tests for task_store.
 - [ ] **MODERATE: `_steps_are_independent` regex heuristic** — wrong independence → parallel dependent steps → race conditions. Fix: LLM-based dep analysis OR explicit `depends_on: [step_id]` in schema.
 - [ ] **MODERATE: `rate^steps` math false alerts** — `0.9^8 = 0.43` on healthy run fires alert. Fix: sliding window or Bayesian CI.
@@ -27,8 +27,9 @@ Last reviewed: 2026-04-14 (session 20)
 
 ### Session 20 infrastructure bugs
 
-- [ ] **File-claim verifier truncates first char of cited paths** — `[VERIFICATION: N file(s) cited but not found: odels.py, eviews.py, ain.py]` — first char dropped. Reproduces in recipe-pm + recipe-dev outputs. Regex over-eats a prefix character. Low severity (alarm-only). Fix: unit test cited-path extractor with backtick/slash/paren wrappers.
+- [x] **File-claim verifier truncates first char of cited paths** — FIXED (commit `a34228b`). Tightened lookbehind from `(?<![\`'\"(])` to `(?<![\w\`'\"(])` so matches can't start one char into a backtick-wrapped path. 4 regression tests cover backtick/single-quote/paren/word-adjacent wrappers.
 - [ ] **pytest-via-subprocess 900s timeout** — `python3 -m pytest tests/ -q` via `ClaudeSubprocessAdapter` hits 900s timeout (real pytest ~100s). Diagnosis correctly classified as `adapter_timeout` and recovered via smaller sub-commands (`--lf`, `tail`, `head`). Root cause unclear — possibly stdout buffering. Worth investigating before next adversarial run.
+- [ ] **`scripts/test-safe.sh` collection broken** — pytest `--collect-only -q` now outputs `path/to/file.py: NN` (file + count) instead of per-test `path::Class::test` nodeids. Script greps `^tests/`, dedups, and feeds back to pytest, which then errors on `tests/foo.py:` (trailing colon) and skips most of the suite. Symptom: "107 tests collected" instead of 3,830+; first chunk fails immediately with "file or directory not found: ...:". Workaround: `python3 -m pytest tests/ -q` directly works fine. Fix: either parse pytest's actual output format (use `--collect-only --quiet` then strip the `: NN` suffix and chunk by file) or switch to `pytest --collect-only -q --co --pyargs` style nodeids.
 
 ### Prior
 

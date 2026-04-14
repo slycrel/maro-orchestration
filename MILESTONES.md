@@ -8,12 +8,20 @@ Last updated: 2026-04-14 (session 20)
 
 ## Next Up
 
-1. **Evolver broken state persistence (CRITICAL)** — Session 20 adversarial review finding 3.2. `_verify_post_apply` on test failure does NOT auto-revert. Fix first — the self-improvement loop can make itself worse and stay that way. Call `revert_suggestion` unconditionally on verify failure; then fix `prompt_tweak` no-op in `revert_suggestion`.
-2. **Silent exception swallowing cleanup** — Session 20 finding 3.1. Sweep `agent_loop.py` first 1,000 lines (15+ sites); replace `except Exception: pass` with ERROR logging. For attribution + security scans, raise or set finalization-blocking flag.
-3. **Evolver `cost_optimization` handler** — Session 20 finding 3.6. Either implement the missing `apply_suggestion` handler or mark suggestions `pending_human_review` instead of silently logging as complete.
-4. **File-claim verifier path truncation** — Session 20 infra bug. Regex drops first char of cited paths (`odels.py`, `eviews.py`). Unit test + fix the extractor.
-5. **Recovery mid-loop apply (remaining)** — Gap 2 from phase audit is ~mostly closed via the mid-loop diagnosis bridge (session 19). Remaining: `budget_exhaustion` is diagnosed only after max_iterations hit; consider a mid-loop "iteration budget running low" signal that bumps the budget instead of grinding to a stop.
-6. **Artifact output routing cleanup** — Temp artifacts (per-step) → tmp dir (deleted by default, kept via config `keep_artifacts: true`). Permanent outputs → `~/.poe/workspace/output/`.
+1. **Silent exception swallowing cleanup** — Session 20 finding 3.1. Sweep `agent_loop.py` first 1,000 lines (16 confirmed sites); replace `except Exception: pass` with ERROR logging. For attribution + security scans, raise or set finalization-blocking flag. The other 71 sites in the file are lower-risk best-effort telemetry; defer those to a focused pass.
+2. **LoopPhase state machine** — Session 20 finding 3.3 (CRITICAL). Replace string constants with `LoopStateMachine` + explicit allowed transitions; `set_phase` raises `InvalidTransitionError` on invalid transitions.
+3. **Director bypassed in practice** — Session 20 finding 3.4. `skip_if_simple=True` default routes most NOW-lane goals around the Director. Make threshold configurable, lower default, or remove.
+4. **Inspector signal reliability** — Session 20 finding 3.5. Three false-positive mechanisms (escalation keywords, positional backtracking, churn-presence-not-application). Replace with LLM tone classifier, timestamp-ordered backtrack, lesson-reference detection.
+5. **Test coverage depth** — Session 20 finding 3.7. Add `pytest-cov` with 70% floor; 3+ end-to-end tests with real LLM fixtures; concurrent-write tests for `task_store.py` fcntl.
+6. **Recovery mid-loop apply (remaining)** — Gap 2 from phase audit is ~mostly closed via the mid-loop diagnosis bridge (session 19). Remaining: `budget_exhaustion` is diagnosed only after max_iterations hit; consider a mid-loop "iteration budget running low" signal that bumps the budget instead of grinding to a stop.
+7. **Artifact output routing cleanup** — Temp artifacts (per-step) → tmp dir (deleted by default, kept via config `keep_artifacts: true`). Permanent outputs → `~/.poe/workspace/output/`.
+8. **Fix `scripts/test-safe.sh` collection** — Pytest `--collect-only -q` output format changed; script no longer feeds valid nodeids back to pytest, runs ~107 things instead of 3,830+. Direct `pytest tests/ -q` works fine.
+
+## Done (session 20.5, 2026-04-14 — fix sprint)
+
+- [x] **claim_verifier path truncation** (commit `a34228b`) — Tightened regex lookbehind to `(?<![\w\`'\"(])` so backtick-wrapped paths no longer produce truncated matches like `odels.py`. 4 regression tests added.
+- [x] **Evolver `cost_optimization` held for review** (commit `4b8dd7e`) — Explicit branch in `apply_suggestion` marks `applied=False`, `status=pending_human_review` instead of silently falling through.
+- [x] **Evolver auto-revert on verify failure** (commit `4b8dd7e`) — `_verify_post_apply` now tracks `applied_ids` and iterates `revert_suggestion` on test failure. Closes the worst self-improvement-safety hole. 3 new tests cover fail→revert, pass→no-revert, legacy-int backward-compat.
 
 ## Done (session 20, 2026-04-14)
 
