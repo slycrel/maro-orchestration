@@ -312,13 +312,38 @@ def run_doctor() -> bool:
     return True
 
 
-def cleanup_workspace_skills() -> None:
-    """Remove duplicate skills (same content_hash) from workspace skills.jsonl.
+def _skill_hash_is_stale(skill_dict: dict) -> bool:
+    """Return True if the stored content_hash doesn't match the skill's actual content."""
+    stored = skill_dict.get("content_hash", "")
+    if not stored:
+        return False  # no hash stored — not stale, just unset
+    try:
+        import sys as _sys
+        from pathlib import Path as _Path
+        _src = _Path(__file__).parent
+        if str(_src) not in _sys.path:
+            _sys.path.insert(0, str(_src))
+        from skill_types import dict_to_skill, compute_skill_hash
+        skill_obj = dict_to_skill(skill_dict)
+        return compute_skill_hash(skill_obj) != stored
+    except Exception:
+        return False  # can't verify → keep
 
-    Keeps the best copy based on creation date and success metrics.
+
+def cleanup_workspace_skills(skills_path: "Path | None" = None) -> None:
+    """Remove duplicate and stale-hash skills from workspace skills.jsonl.
+
+    Stale-hash skills: stored content_hash doesn't match the skill's actual content.
+    These are typically test fixtures that leaked into the workspace.
+
+    Duplicates: multiple skills with the same content_hash. Keeps the best copy
+    based on creation date and success metrics.
+
+    Args:
+        skills_path: Override the default workspace path (for testing).
     """
     from collections import defaultdict
-    workspace_skills = Path.home() / ".poe" / "workspace" / "memory" / "skills.jsonl"
+    workspace_skills = skills_path or (Path.home() / ".poe" / "workspace" / "memory" / "skills.jsonl")
 
     if not workspace_skills.exists():
         print("Workspace skills file not found — nothing to clean")
@@ -336,20 +361,32 @@ def cleanup_workspace_skills() -> None:
 
     print(f"Loaded {len(all_skills)} skills")
 
-    # Group by content_hash
-    by_hash = defaultdict(list)
-    for skill in all_skills:
+    # Pass 1: remove stale-hash skills (test fixtures that leaked in)
+    stale = [s for s in all_skills if _skill_hash_is_stale(s)]
+    if stale:
+        print(f"Found {len(stale)} skill(s) with stale content_hash (test fixtures):")
+        for s in stale:
+            print(f"  {s.get('id', '?'):12} '{s.get('name', '?')}' — stored hash doesn't match content")
+    else:
+        print("No stale-hash skills found")
+    stale_ids = {s.get("id") for s in stale}
+    clean = [s for s in all_skills if s.get("id") not in stale_ids]
+
+    # Pass 2: deduplicate by content_hash
+    by_hash: dict = defaultdict(list)
+    for skill in clean:
         hash_val = skill.get("content_hash", "")
         if hash_val:
             by_hash[hash_val].append(skill)
+        else:
+            # No hash — keep as-is (can't dedup without a key)
+            by_hash[skill.get("id", id(skill))].append(skill)
 
-    # Find duplicates
     duplicates = {h: skills for h, skills in by_hash.items() if len(skills) > 1}
-    if not duplicates:
+    if duplicates:
+        print(f"Found {len(duplicates)} hash group(s) with duplicates:")
+    else:
         print("No duplicates found")
-        return
-
-    print(f"Found {len(duplicates)} hash group(s) with duplicates:")
 
     # Scoring: prefer recent + high success rate + high use count
     def score_skill(skill):
@@ -358,18 +395,23 @@ def cleanup_workspace_skills() -> None:
         use_count = int(skill.get("use_count", 0))
         return (created_at, success_rate, use_count)
 
-    total_removed = 0
+    total_dup_removed = 0
     for hash_val, skills in duplicates.items():
         best = max(skills, key=score_skill)
         removed = len(skills) - 1
-        total_removed += removed
+        total_dup_removed += removed
         print(f"  {hash_val[:16]}... : keeping best of {len(skills)} copies of '{best.get('name', '?')}'")
 
-    # Rewrite with deduped set
+    # Rewrite with clean, deduped set
     kept = [max(skills, key=score_skill) for skills in by_hash.values()]
     output_lines = [json.dumps(skill) for skill in kept]
     workspace_skills.write_text("\n".join(output_lines) + "\n", encoding="utf-8")
-    print(f"Cleaned: {len(kept)} skills remain ({total_removed} duplicates removed)")
+    total_removed = len(stale) + total_dup_removed
+    print(
+        f"Cleaned: {len(kept)} skills remain "
+        f"({len(stale)} stale-hash + {total_dup_removed} duplicate(s) removed, "
+        f"{total_removed} total)"
+    )
 
 
 def main():
