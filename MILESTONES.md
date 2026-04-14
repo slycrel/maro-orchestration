@@ -2,11 +2,23 @@
 
 What to do next, in what order. Updated each session. Strategic phases live in ROADMAP.md; deferred ideas live in BACKLOG.md. This file is the bridge — the executable queue.
 
-Last updated: 2026-04-14 (session 23 — Stage 3→4 regression tests, lesson dedup, locked_append)
+Last updated: 2026-04-14 (session 23 — Stage 3→4 regression, lesson dedup, phase audit, Phase 61 integration depth)
 
 ---
 
 ## Next Up
+
+1. **Phase 61 integration depth (remaining items)** — Checkpoint + memory injection tests done (+5 tests, 31→42). Remaining: AGENDA lane heartbeat e2e, adapter failover e2e chain.
+2. **LoopStateMachine conversion** (P1 architectural) — LoopContext becomes `self`. Eliminates context-threading complexity. ~40+ call sites to migrate.
+3. **Input classification tag** — Extend captain's log context field with URL/content type. Prevents circuit breakers on domain mismatches. Moderate scope.
+
+## Done (session 23, 2026-04-14 — Phase 61, lesson dedup, phase audit, Stage 3→4)
+
+- [x] **Memory Stage 3→4 regression tests** — 3 tests: `test_step_outcome_has_result_attribute`, `test_skill_extraction_fires_when_not_dry_run`, `test_skill_extraction_outcome_uses_step_result`. Skill extraction exceptions upgraded debug→warning.
+- [x] **Lesson deduplication** — `deduplicate_lessons()` two-pass (exact + Jaccard ≥0.8). `--cleanup-lessons`/`--dry-run` in doctor.py. 5 tests.
+- [x] **Phase audit** — Verified phases 44-62: all implementations confirmed real. Phase 45 "never closed" note was stale. No phantom phases found.
+- [x] **BACKLOG cleanup** — Closed artifact routing, orch.py tests, HIGH coverage item, inspector threshold asymmetry, Phase 45 note. Updated 6 items.
+- [x] **Phase 61 integration depth (partial)** — 5 tests: checkpoint recovery (3) + memory injection (2). Integration total: 31→42.
 
 1. ~~**Memory Stage 3→4 (verify extraction in live runs)**~~ — DONE (session 23). Added 3 regression tests: `test_step_outcome_has_result_attribute` (guards s.result attr), `test_skill_extraction_fires_when_not_dry_run` (verifies extract_skills is called), `test_skill_extraction_outcome_uses_step_result` (verifies step result data flows correctly). Upgraded skill extraction log.debug → log.warning so failures surface. Bug is verified closed.
 2. ~~**K2 follow-up: Import links collection**~~ — DONE (session 22). `import_link_farm()` + `poe-knowledge import-links` CLI. 315 nodes already in workspace. +9 tests.
