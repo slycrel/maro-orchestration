@@ -2295,3 +2295,16 @@ def test_loop_state_machine_does_not_modify_ctx_on_failure():
     except InvalidTransitionError:
         pass
     assert ctx.phase == LoopPhase.EXECUTE  # unchanged
+
+
+# ---------------------------------------------------------------------------
+# Regression: StepOutcome attribute access in skill extraction finalize path
+# ---------------------------------------------------------------------------
+
+def test_step_outcome_has_no_summary_attribute():
+    """StepOutcome does not have .summary — skill extraction code must use .result/.text."""
+    from agent_loop import StepOutcome
+    s = StepOutcome(index=0, text="do the thing", status="done", result="it worked", iteration=0)
+    assert not hasattr(s, "summary"), "StepOutcome.summary would break skill extraction — keep using .result"
+    assert hasattr(s, "text")
+    assert hasattr(s, "result")

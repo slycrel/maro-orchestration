@@ -1386,8 +1386,8 @@ def _process_done_step(
                 latency_ms=float(step_elapsed),
                 confidence=_confidence_val,
             )
-    except Exception:
-        pass
+    except Exception as _skill_attr_exc:
+        log.debug("skill attribution failed for step %d (non-critical): %s", step_idx, _skill_attr_exc)
 
     # Phase 33: record per-step cost
     try:
@@ -1401,8 +1401,8 @@ def _process_done_step(
             model=getattr(ctx.adapter, "model_key", ""),
             elapsed_ms=step_elapsed,
         )
-    except Exception:
-        pass
+    except Exception as _cost_exc:
+        log.debug("record_step_cost failed (non-critical): %s", _cost_exc)
 
     if ctx.step_callback is not None:
         try:
@@ -3251,23 +3251,23 @@ def _finalize_loop(
                     step_outcomes,
                     task_type="agenda",
                 )
-            except Exception:
-                pass
-    except Exception:
-        pass
+            except Exception as _trace_exc:
+                log.debug("record_step_trace failed (non-critical): %s", _trace_exc)
+    except Exception as _reflect_exc:
+        log.warning("reflect_and_record failed — run %s produced no learning data: %s", loop_id, _reflect_exc)
 
     # Auto-extract skills from successful loops (crystallise patterns)
     if loop_status == "done" and not dry_run and step_outcomes:
         try:
             from skills import extract_skills, save_skill, load_skills
-            done_summaries = [s.summary for s in step_outcomes if s.status == "done" and s.summary]
+            done_summaries = [s.result[:200] for s in step_outcomes if s.status == "done" and s.result]
             outcome_for_extraction = {
                 "goal": goal,
                 "status": loop_status,
                 "task_type": "agenda",
                 "summary": ". ".join(done_summaries[:4]),
                 "steps": [
-                    {"step": s.step, "status": s.status, "result": s.result, "summary": s.summary}
+                    {"step": s.text, "status": s.status, "result": s.result[:200]}
                     for s in step_outcomes
                 ],
                 "project": project,
@@ -3279,15 +3279,15 @@ def _finalize_loop(
                     save_skill(skill)
                     if verbose:
                         print(f"[poe] skill crystallised: {skill.name}", file=sys.stderr, flush=True)
-        except Exception:
-            pass
+        except Exception as _skill_exc:
+            log.debug("skill extraction failed (non-critical): %s", _skill_exc)
 
     # Phase 32: skill synthesis — when no skill matched at start, synthesize from this run
     if loop_status == "done" and had_no_matching_skill and not dry_run and step_outcomes:
         try:
             from evolver import synthesize_skill
-            done_steps = [s for s in step_outcomes if s.status == "done" and s.summary]
-            _synth_summary = ". ".join(s.summary for s in done_steps[:3])
+            done_steps = [s for s in step_outcomes if s.status == "done" and s.result]
+            _synth_summary = ". ".join(s.result[:120] for s in done_steps[:3])
             synthesize_skill(
                 goal=goal,
                 outcome_summary=_synth_summary or "completed successfully",
@@ -3295,8 +3295,8 @@ def _finalize_loop(
                 adapter=adapter,
                 verbose=verbose,
             )
-        except Exception:
-            pass
+        except Exception as _synth_exc:
+            log.debug("skill synthesis failed (non-critical): %s", _synth_exc)
 
     # Phase 32: auto-promote skills that meet threshold (don't wait for evolver heartbeat)
     if not dry_run:
@@ -3305,8 +3305,8 @@ def _finalize_loop(
             run_skill_maintenance()
         except ImportError:
             pass
-        except Exception:
-            pass
+        except Exception as _maint_exc:
+            log.debug("skill maintenance failed (non-critical): %s", _maint_exc)
 
     # Post-mission Telegram notification
     if not dry_run:
