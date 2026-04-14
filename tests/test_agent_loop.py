@@ -2591,3 +2591,83 @@ def test_loop_done_signal_fires_even_if_heartbeat_unavailable(monkeypatch, tmp_p
 
     result = run_agent_loop("write a haiku", project="no-hb", dry_run=True)
     assert result.status == "done"
+
+
+# ---------------------------------------------------------------------------
+# Stage 3→4 skill extraction regression
+# ---------------------------------------------------------------------------
+
+def test_step_outcome_has_result_attribute():
+    """StepOutcome must have .result, not .summary — regression guard for Stage 3→4 fix."""
+    so = StepOutcome(index=0, text="do work", status="done", result="found the answer", iteration=1)
+    assert hasattr(so, "result"), "StepOutcome missing .result attribute"
+    assert not hasattr(so, "summary"), "StepOutcome should not have .summary (old broken attr)"
+    # Ensure the attribute access pattern used in skill extraction works
+    done_summaries = [s.result[:200] for s in [so] if s.status == "done" and s.result]
+    assert done_summaries == ["found the answer"]
+
+
+def test_skill_extraction_fires_when_not_dry_run(monkeypatch, tmp_path):
+    """extract_skills is called after a successful non-dry-run loop."""
+    _setup_workspace(monkeypatch, tmp_path)
+
+    import skills as _skills_mod
+    calls = []
+
+    def _fake_extract(outcomes, adapter):
+        calls.append(outcomes)
+        return []  # return no skills — just verify we were called
+
+    monkeypatch.setattr(_skills_mod, "extract_skills", _fake_extract)
+    # Stub out reflect_and_record to avoid real LLM calls for lesson extraction
+    import agent_loop as _al
+    monkeypatch.setattr(_al, "reflect_and_record", lambda *a, **kw: None, raising=False)
+
+    result = run_agent_loop(
+        "summarise polymarket trends",
+        project="skill-extract-test",
+        adapter=_DryRunAdapter(),
+        dry_run=False,
+    )
+
+    assert result.status == "done"
+    # extract_skills must have been called exactly once
+    assert len(calls) == 1, f"expected 1 extract_skills call, got {len(calls)}"
+    # The outcome passed to extract_skills must use .result not .summary
+    outcome = calls[0][0]
+    assert "summary" in outcome, "outcome_for_extraction must have a summary key"
+    assert "steps" in outcome, "outcome_for_extraction must have a steps key"
+    for step in outcome["steps"]:
+        assert "result" in step, "each step dict must have a result key (not summary)"
+
+
+def test_skill_extraction_outcome_uses_step_result(monkeypatch, tmp_path):
+    """outcome_for_extraction.steps[n].result is populated from StepOutcome.result."""
+    _setup_workspace(monkeypatch, tmp_path)
+
+    import skills as _skills_mod
+    captured = {}
+
+    def _fake_extract(outcomes, adapter):
+        captured["outcome"] = outcomes[0]
+        return []
+
+    monkeypatch.setattr(_skills_mod, "extract_skills", _fake_extract)
+    import agent_loop as _al
+    monkeypatch.setattr(_al, "reflect_and_record", lambda *a, **kw: None, raising=False)
+
+    result = run_agent_loop(
+        "build a research summary",
+        project="skill-result-test",
+        adapter=_DryRunAdapter(),
+        dry_run=False,
+    )
+
+    assert result.status == "done"
+    assert captured, "extract_skills was never called"
+    steps = captured["outcome"]["steps"]
+    assert len(steps) >= 1
+    for step in steps:
+        assert step["result"] != "", "step result must be non-empty for done steps"
+        # Ensure each step dict is correctly structured (regression: old code used s.summary)
+        assert isinstance(step["result"], str)

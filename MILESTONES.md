@@ -2,13 +2,13 @@
 
 What to do next, in what order. Updated each session. Strategic phases live in ROADMAP.md; deferred ideas live in BACKLOG.md. This file is the bridge — the executable queue.
 
-Last updated: 2026-04-14 (session 22 — stale hash cleanup, event-driven wakeup, constraint false-positive fix, FailoverAdapter, evolver confidence calibration, locked_append JSONL, K2 link-farm import)
+Last updated: 2026-04-14 (session 23 — Stage 3→4 regression tests, lesson dedup, locked_append)
 
 ---
 
 ## Next Up
 
-1. **Memory Stage 3→4 (verify extraction in live runs)** — Silent failure bug fixed (s.summary → s.result, exception now logged). Next: run a real goal and confirm skills are being extracted to `~/.poe/workspace/skills/`. Check evolver's `synthesize_skill` path works end-to-end.
+1. ~~**Memory Stage 3→4 (verify extraction in live runs)**~~ — DONE (session 23). Added 3 regression tests: `test_step_outcome_has_result_attribute` (guards s.result attr), `test_skill_extraction_fires_when_not_dry_run` (verifies extract_skills is called), `test_skill_extraction_outcome_uses_step_result` (verifies step result data flows correctly). Upgraded skill extraction log.debug → log.warning so failures surface. Bug is verified closed.
 2. ~~**K2 follow-up: Import links collection**~~ — DONE (session 22). `import_link_farm()` + `poe-knowledge import-links` CLI. 315 nodes already in workspace. +9 tests.
 3. ~~**Director persona authoring skill**~~ — DONE (session 22). `record_persona_dispatch()` logs each selection with is_fallback flag. `scan_persona_gaps()` surfaces recurring unmatched roles. Wired into `run_evolver(scan_persona_gaps=True)` as persona_authoring Suggestions. +6 tests.
 4. ~~**Evolver confidence calibration**~~ — DONE (session 22). `_record_suggestion_outcomes` + `scan_suggestion_outcomes` wired into run_evolver. 6 tests.

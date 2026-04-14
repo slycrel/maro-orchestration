@@ -3320,7 +3320,7 @@ def _finalize_loop(
                     if verbose:
                         print(f"[poe] skill crystallised: {skill.name}", file=sys.stderr, flush=True)
         except Exception as _skill_exc:
-            log.debug("skill extraction failed (non-critical): %s", _skill_exc)
+            log.warning("skill extraction failed — loop %s may not contribute to skill library: %s", loop_id, _skill_exc)
 
     # Phase 32: skill synthesis — when no skill matched at start, synthesize from this run
     if loop_status == "done" and had_no_matching_skill and not dry_run and step_outcomes:
@@ -3336,7 +3336,7 @@ def _finalize_loop(
                 verbose=verbose,
             )
         except Exception as _synth_exc:
-            log.debug("skill synthesis failed (non-critical): %s", _synth_exc)
+            log.warning("skill synthesis failed — loop %s: %s", loop_id, _synth_exc)
 
     # Phase 32: auto-promote skills that meet threshold (don't wait for evolver heartbeat)
     if not dry_run:
