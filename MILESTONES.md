@@ -2,19 +2,20 @@
 
 What to do next, in what order. Updated each session. Strategic phases live in ROADMAP.md; deferred ideas live in BACKLOG.md. This file is the bridge — the executable queue.
 
-Last updated: 2026-04-14 (session 27 — dev round 4 closed #12/#23/#24, first-class project isolation next)
+Last updated: 2026-04-14 (session 27 — dev round 4 closed #12/#23/#24, first-class project isolation)
 
 ---
 
 ## Next Up
 
-- **First-class project isolation** — Add `project` field to Skill dataclass; filter `find_matching_skills()` by project; per-project lockfile in `set_loop_running()`; concurrent run safety. Required before parallel missions.
 - **BACKLOG cleanup** — Review and close stale BACKLOG items from earlier sessions.
 - **Evolver confidence calibration follow-up** — `scan_suggestion_outcomes` wired; verify calibration is improving (check live workspace suggestion stats).
+- **Grok response 3 steal items** — Bitter Lesson Engineering analysis: PAI comparison, thin-harness audit. Most items already shipped. Key remaining: ensure Mode 2→3 bridge is solid (signals→sub_mission flow).
 
-## Done (session 27, 2026-04-14 — dev round 4 closed #12/#23/#24)
+## Done (session 27, 2026-04-14 — dev round 4 closed #12/#23/#24, first-class project isolation)
 
 - [x] **Dev round 4** — Closed #12 (rate limit test for /api/recipes), #23 (HTML edit blank-name guard), #24 (photo_url/review_text length validators). 9 new tests: rate limit, field validators, HTML blank-name class. All 52 recipe tests pass.
+- [x] **First-class project isolation** — `Skill.project` field (""/global or project slug). `find_matching_skills(project=...)` filters to global + project-specific. `set_loop_running(project=...)` writes per-project lock. `get_running_project_loop()` + `is_project_running()` API. 11 new tests. Closes BACKLOG item.
 
 ## Done (session 26, 2026-04-14 — codebase graph, injection guard, harness spectrum, PM/dev rounds 3)
 
