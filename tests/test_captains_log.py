@@ -490,3 +490,83 @@ class TestGitCorrelation:
         assert "Git:" in rendered
         assert "abcdef12" in rendered
         assert "Fix token bug" in rendered
+
+
+# ---------------------------------------------------------------------------
+# Edge-case coverage — malformed lines, since filter, timeline date range
+# ---------------------------------------------------------------------------
+
+class TestEdgeCases:
+    """Targeted tests for previously uncovered branches."""
+
+    def test_load_log_skips_empty_lines(self, _tmp_log):
+        """Empty lines in the JSONL log don't crash load_log."""
+        _tmp_log.write_text(
+            '\n{"event_type":"DIAGNOSIS","subject":"real","summary":"ok","timestamp":"2026-04-10T12:00:00+00:00"}\n\n'
+        )
+        entries = load_log()
+        assert len(entries) == 1
+        assert entries[0]["subject"] == "real"
+
+    def test_load_log_skips_malformed_json(self, _tmp_log):
+        """Malformed JSON lines in the log are silently skipped."""
+        _tmp_log.write_text(
+            '{"event_type":"DIAGNOSIS","subject":"good","summary":"ok","timestamp":"2026-04-10T12:00:00+00:00"}\n'
+            'not valid json at all\n'
+            '{"event_type":"EVOLVER_APPLIED","subject":"also_good","summary":"ok","timestamp":"2026-04-10T13:00:00+00:00"}\n'
+        )
+        entries = load_log()
+        assert len(entries) == 2
+        subjects = {e["subject"] for e in entries}
+        assert subjects == {"good", "also_good"}
+
+    def test_load_log_since_filter(self, _tmp_log):
+        """load_log(since=...) skips entries before the given date."""
+        _tmp_log.write_text(
+            '{"event_type":"DIAGNOSIS","subject":"old","summary":"x","timestamp":"2026-04-09T12:00:00+00:00"}\n'
+            '{"event_type":"DIAGNOSIS","subject":"new","summary":"y","timestamp":"2026-04-11T12:00:00+00:00"}\n'
+        )
+        entries = load_log(since="2026-04-10")
+        assert len(entries) == 1
+        assert entries[0]["subject"] == "new"
+
+    def test_query_log_skips_malformed_json(self, _tmp_log):
+        """Malformed JSON in log is skipped during query."""
+        _tmp_log.write_text(
+            '{"event_type":"DIAGNOSIS","subject":"valid","summary":"has it","timestamp":"2026-04-10T12:00:00+00:00"}\n'
+            '{broken json\n'
+        )
+        entries = query_log("has it")
+        assert len(entries) == 1
+
+    def test_query_log_empty_path_returns_empty(self, tmp_path):
+        """query_log returns [] when log file doesn't exist."""
+        from captains_log import set_log_path
+        set_log_path(tmp_path / "no_log.jsonl")
+        assert query_log("anything") == []
+
+    def test_timeline_since_until_filters(self, tmp_path):
+        """timeline(since=..., until=...) respects date bounds."""
+        path = tmp_path / "captains_log.jsonl"
+        entries_data = [
+            {"timestamp": "2026-04-08T12:00:00+00:00", "event_type": "DIAGNOSIS"},
+            {"timestamp": "2026-04-10T12:00:00+00:00", "event_type": "EVOLVER_APPLIED"},
+            {"timestamp": "2026-04-12T12:00:00+00:00", "event_type": "SKILL_PROMOTED"},
+        ]
+        path.write_text("\n".join(json.dumps(e) for e in entries_data) + "\n")
+        from captains_log import set_log_path
+        set_log_path(path)
+        tl = timeline(since="2026-04-09", until="2026-04-11")
+        assert len(tl) == 1
+        assert tl[0]["date"] == "2026-04-10"
+
+    def test_timeline_skips_malformed_json(self, _tmp_log):
+        """Malformed lines in the log are skipped by timeline."""
+        _tmp_log.write_text(
+            '{"timestamp":"2026-04-10T12:00:00+00:00","event_type":"DIAGNOSIS"}\n'
+            'bad json\n'
+            '{"timestamp":"2026-04-10T13:00:00+00:00","event_type":"EVOLVER_APPLIED"}\n'
+        )
+        tl = timeline()
+        assert len(tl) == 1
+        assert tl[0]["total"] == 2  # 2 valid entries on same day
