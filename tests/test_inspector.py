@@ -683,17 +683,57 @@ def test_detect_friction_error_events():
 
 
 def test_detect_friction_escalation_tone():
-    """Outcomes with escalation keywords produce escalation_tone signals."""
+    """Outcomes with ≥2 informative escalation keywords produce escalation_tone signals.
+
+    Session 20 adversarial review finding 3.5: tautological keywords like
+    'failed'/'error'/'stuck'/'cannot' appear in most stuck_reasons by
+    construction and no longer count toward this signal. Informative keywords
+    ('broken', 'impossible', "doesn't work", 'not working', "won't work",
+    "can't") must cross a ≥2-hit threshold before firing.
+    """
     outcomes = [
         _make_spec_outcome(
             status="done",
-            summary="Task is broken and failed after multiple errors, system cannot continue.",
+            summary="The pipeline is broken — this approach is impossible because the upstream API doesn't work.",
             outcome_id="e1",
         ),
     ]
     signals = detect_friction(outcomes)
     types = [s.signal_type for s in signals]
     assert SIGNAL_ESCALATION_TONE in types
+
+
+def test_detect_friction_escalation_tone_ignores_tautological_keywords():
+    """Regression: a stuck outcome whose stuck_reason only contains tautological
+    keywords ('stuck', 'error', 'failed', 'cannot') must NOT fire escalation_tone.
+
+    Before session 20.5 this fired on every stuck session because 'stuck' and
+    'error' are expected words in any stuck_reason — noise, not signal.
+    """
+    outcomes = [
+        _make_spec_outcome(
+            status="stuck",
+            summary="Step 3 stuck: the tool call failed with an error, cannot retry.",
+            outcome_id="e2",
+        ),
+    ]
+    signals = detect_friction(outcomes)
+    types = [s.signal_type for s in signals]
+    assert SIGNAL_ESCALATION_TONE not in types
+
+
+def test_detect_friction_escalation_tone_requires_two_informative_hits():
+    """A single informative keyword is not enough — need ≥2."""
+    outcomes = [
+        _make_spec_outcome(
+            status="done",
+            summary="The build is broken and we're stuck.",
+            outcome_id="e3",
+        ),
+    ]
+    signals = detect_friction(outcomes)
+    types = [s.signal_type for s in signals]
+    assert SIGNAL_ESCALATION_TONE not in types
 
 
 def test_detect_friction_abandoned_tool_flow():
@@ -776,6 +816,74 @@ def test_detect_friction_context_churn():
     signals = detect_friction(outcomes)
     types = [s.signal_type for s in signals]
     assert SIGNAL_CONTEXT_CHURN in types
+
+
+def test_detect_friction_context_churn_requires_at_least_two_lessons():
+    """Regression (session 20.5): a single lesson is not enough to fire context_churn."""
+    outcomes = [
+        _make_spec_outcome(
+            status="stuck",
+            lessons=["one lone lesson about avoiding timeouts"],
+            outcome_id="cc_single",
+        ),
+    ]
+    signals = detect_friction(outcomes)
+    types = [s.signal_type for s in signals]
+    assert SIGNAL_CONTEXT_CHURN not in types
+
+
+def test_detect_friction_context_churn_skipped_when_lessons_appear_applied():
+    """Regression (session 20.5): if stuck_reason references lesson keywords,
+    the agent engaged with the lessons — this isn't pure churn and shouldn't
+    fire the signal.
+    """
+    outcomes = [
+        _make_spec_outcome(
+            status="stuck",
+            lessons=[
+                "Consider adapter timeout when calling external services",
+                "Check token budget before long operations",
+            ],
+            stuck_reason="adapter timeout after 180s despite budget check",
+            outcome_id="cc_applied",
+        ),
+    ]
+    signals = detect_friction(outcomes)
+    types = [s.signal_type for s in signals]
+    # "timeout" keyword appears in both the lessons and the stuck_reason →
+    # lesson keyword appears in stuck narrative → signal is suppressed
+    assert SIGNAL_CONTEXT_CHURN not in types
+
+
+def test_detect_friction_backtracking_sorts_chronologically():
+    """Regression (session 20.5): backtracking uses created_at ordering, not
+    list-insertion order. A project whose outcomes are loaded reverse-chrono
+    (stuck appears first in list, then done) must NOT trigger a backtracking
+    signal — chronologically that's the success path (stuck → recovered).
+    """
+    # Wall-clock order: done at T+0, stuck at T+10 → backtracking (real)
+    # List order: same — should fire
+    outcomes_real_backtrack = [
+        {**_make_spec_outcome(status="done", project="proj-x", outcome_id="r1"),
+         "created_at": "2026-04-14T00:00:00+00:00"},
+        {**_make_spec_outcome(status="stuck", project="proj-x", outcome_id="r2"),
+         "created_at": "2026-04-14T00:10:00+00:00"},
+    ]
+    signals = detect_friction(outcomes_real_backtrack)
+    types = [s.signal_type for s in signals]
+    assert SIGNAL_BACKTRACKING in types, "real chronological done→stuck must fire"
+
+    # Wall-clock order: stuck at T+0, done at T+10 → recovery, NOT backtracking
+    # List order is reversed (done first) — old impl would fire incorrectly
+    outcomes_fake_backtrack = [
+        {**_make_spec_outcome(status="done", project="proj-y", outcome_id="f1"),
+         "created_at": "2026-04-14T00:10:00+00:00"},
+        {**_make_spec_outcome(status="stuck", project="proj-y", outcome_id="f2"),
+         "created_at": "2026-04-14T00:00:00+00:00"},
+    ]
+    signals = detect_friction(outcomes_fake_backtrack)
+    types_y = [s.signal_type for s in signals if s.session_id == "proj-y"]
+    assert SIGNAL_BACKTRACKING not in types_y, "stuck→done chronologically is recovery, not backtracking"
 
 
 def test_detect_friction_returns_spec_friction_signals():

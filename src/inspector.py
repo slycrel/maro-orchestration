@@ -167,11 +167,29 @@ def inspector_thresholds() -> Dict[str, Any]:
     }
 
 
-# Escalation keywords for tone detection
-_ESCALATION_KEYWORDS = frozenset([
-    "broken", "failed", "stuck", "error", "cannot", "impossible",
+# Escalation keywords for tone detection.
+#
+# Session 20 adversarial review finding 3.5: the previous list included
+# "stuck", "error", "failed", "cannot" — words that appear in *every*
+# stuck outcome's `stuck_reason` by construction (it's literally the
+# stuck message). The signal fired tautologically on any stuck session
+# and said nothing about escalation severity.
+#
+# Split into tautological vs informative. Tautological keywords are
+# expected in stuck_reason and carry no signal on their own. Informative
+# keywords indicate genuine frustration/escalation beyond "yep, stuck".
+# We require ≥2 informative hits before firing, and ignore tautological
+# hits entirely.
+_ESCALATION_KEYWORDS_TAUTOLOGICAL = frozenset([
+    "stuck", "error", "failed", "cannot",
+])
+_ESCALATION_KEYWORDS_INFORMATIVE = frozenset([
+    "broken", "impossible",
     "doesn't work", "not working", "won't work", "can't",
 ])
+# Legacy export: union for backward compatibility with anything that imports it.
+_ESCALATION_KEYWORDS = _ESCALATION_KEYWORDS_TAUTOLOGICAL | _ESCALATION_KEYWORDS_INFORMATIVE
+_ESCALATION_INFORMATIVE_MIN_HITS = 2
 
 # Human-readable descriptions for each friction type (spec FRICTION_TYPES dict)
 FRICTION_TYPES: Dict[str, str] = {
@@ -559,21 +577,25 @@ def detect_friction(
                 evidence=evidence,
             ))
 
-    # --- escalation_tone: scan summary / stuck_reason for keywords ---
+    # --- escalation_tone: scan summary / stuck_reason for informative keywords ---
+    # Only informative keywords count toward the fire threshold. Tautological
+    # keywords ("stuck", "error", etc.) appear in most stuck_reasons by
+    # construction and produce no signal on their own.
     for o in items:
         text = " ".join([
             str(o.get("summary", "")),
             str(o.get("stuck_reason", "")),
             str(o.get("result_summary", "")),
         ]).lower()
-        found = [kw for kw in _ESCALATION_KEYWORDS if kw in text]
-        if found:
+        informative = [kw for kw in _ESCALATION_KEYWORDS_INFORMATIVE if kw in text]
+        if len(informative) >= _ESCALATION_INFORMATIVE_MIN_HITS:
             sid = o.get("outcome_id") or o.get("session_id", "?")
+            # Severity scales with number of informative hits, saturating at 1.0.
             signals.append(SpecFrictionSignal(
                 session_id=sid,
                 signal_type=SIGNAL_ESCALATION_TONE,
-                severity=min(1.0, len(found) * 0.2),
-                evidence=f"keywords={found[:3]} in outcome text",
+                severity=min(1.0, len(informative) * 0.3),
+                evidence=f"informative_keywords={informative[:3]} in outcome text",
             ))
 
     # --- abandoned_tool_flow: blocked/stuck with empty or very short result ---
@@ -611,15 +633,25 @@ def detect_friction(
                 evidence=f"goal slug '{slug}' stuck {count} times",
             ))
 
-    # --- backtracking: done outcome followed by stuck in same project ---
-    project_statuses: Dict[str, List[str]] = {}
+    # --- backtracking: done outcome CHRONOLOGICALLY followed by stuck in same project ---
+    # Session 20 adversarial review finding 3.5: previously scanned items in
+    # list order, which produced false positives whenever outcomes were loaded
+    # non-chronologically (reverse-chrono tail, sorted by project, etc.). Now
+    # sort per-project by created_at ASC before scanning. ISO 8601 UTC strings
+    # sort correctly lexicographically.
+    project_outcomes: Dict[str, List[tuple]] = {}
     for o in items:
         proj = str(o.get("project") or "unknown")
-        project_statuses.setdefault(proj, []).append(o.get("status", ""))
+        ts = str(o.get("created_at") or o.get("completed_at") or o.get("ts") or "")
+        project_outcomes.setdefault(proj, []).append((ts, o.get("status", "")))
 
-    for proj, statuses in project_statuses.items():
+    for proj, tuples in project_outcomes.items():
+        # Stable sort by timestamp; outcomes with missing timestamps keep
+        # their relative order (sorted() is stable) and land before any
+        # that do have timestamps — conservative but not catastrophic.
+        tuples.sort(key=lambda t: t[0])
         found_done = False
-        for s in statuses:
+        for _ts, s in tuples:
             if s == "done":
                 found_done = True
             elif found_done and s in ("stuck", "blocked", "error"):
@@ -627,22 +659,70 @@ def detect_friction(
                     session_id=proj,
                     signal_type=SIGNAL_BACKTRACKING,
                     severity=0.6,
-                    evidence=f"project '{proj}' had done then stuck/blocked",
+                    evidence=f"project '{proj}' had done then stuck/blocked (chronological)",
                 ))
                 break
 
-    # --- context_churn: lessons loaded but outcome still stuck ---
+    # --- context_churn: lessons loaded but NOT APPLIED, and outcome still stuck ---
+    # Session 20 adversarial review finding 3.5: previously fired on every stuck
+    # outcome that had any lessons in context, which is tautologically true
+    # whenever the learning pipeline is injecting lessons. That's not churn —
+    # that's the system working as designed.
+    #
+    # Real churn = lessons were present but the agent didn't reference them
+    # (stuck_reason and result text contain no evidence of applying the lessons).
+    # Heuristic: require ≥2 lessons loaded AND no keyword overlap between any
+    # lesson and the stuck_reason/result text. Low recall is fine; the goal is
+    # to eliminate the tautological firing pattern.
+    import re as _re
+    _WORD_RE = _re.compile(r"[a-z]{5,}")  # meaningful words only; skip articles/prepositions
+
+    def _extract_keywords(text: str, limit: int = 30) -> set:
+        # Return up to `limit` distinct ≥5-char lowercase words. Capping
+        # is cheap; sets aren't sliceable so we take the first `limit`
+        # distinct matches from findall.
+        seen: set = set()
+        for w in _WORD_RE.findall(str(text).lower()):
+            if w not in seen:
+                seen.add(w)
+                if len(seen) >= limit:
+                    break
+        return seen
+
     for o in items:
-        if o.get("status") in ("stuck", "error"):
-            lessons = o.get("lessons") or o.get("lessons_context") or []
-            if isinstance(lessons, list) and len(lessons) > 0:
-                sid = o.get("outcome_id") or o.get("session_id", "?")
-                signals.append(SpecFrictionSignal(
-                    session_id=sid,
-                    signal_type=SIGNAL_CONTEXT_CHURN,
-                    severity=0.5,
-                    evidence=f"lessons loaded ({len(lessons)}) but outcome stuck",
-                ))
+        if o.get("status") not in ("stuck", "error"):
+            continue
+        lessons = o.get("lessons") or o.get("lessons_context") or []
+        if not isinstance(lessons, list) or len(lessons) < 2:
+            continue
+
+        stuck_text = " ".join([
+            str(o.get("stuck_reason", "")),
+            str(o.get("result_summary", "")),
+            str(o.get("summary", "")),
+        ])
+        stuck_keywords = _extract_keywords(stuck_text, limit=30)
+
+        # Collect keywords from the first N lessons (cap to keep the check cheap).
+        lesson_text = " ".join(
+            str(lesson.get("text", "") if isinstance(lesson, dict) else lesson)
+            for lesson in lessons[:5]
+        )
+        lesson_keywords = _extract_keywords(lesson_text, limit=30)
+
+        # If at least one meaningful word from the lessons appears in the stuck
+        # narrative, the agent probably engaged with them — not pure churn.
+        applied = bool(stuck_keywords & lesson_keywords) if lesson_keywords else False
+        if applied:
+            continue
+
+        sid = o.get("outcome_id") or o.get("session_id", "?")
+        signals.append(SpecFrictionSignal(
+            session_id=sid,
+            signal_type=SIGNAL_CONTEXT_CHURN,
+            severity=0.5,
+            evidence=f"lessons loaded ({len(lessons)}) but stuck narrative shows no reference to them",
+        ))
 
     # --- platform_confusion: language about wrong context/environment ---
     _pc_keywords = ("wrong platform", "not supported", "platform confusion",
