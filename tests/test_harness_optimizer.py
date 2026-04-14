@@ -348,3 +348,158 @@ class TestRunHarnessOptimizerFull:
             run_harness_optimizer(dry_run=True)
         # If harness text not found, skipped — cands_path should not be written
         assert not cands_path.exists()
+
+
+# ---------------------------------------------------------------------------
+# Friction scanner tests — "Harness Is the Problem"
+# ---------------------------------------------------------------------------
+
+from harness_optimizer import (
+    FrictionPoint,
+    HarnessFrictionReport,
+    scan_harness_friction,
+    _classify_error,
+    _save_friction_suggestions,
+)
+
+
+class TestClassifyError:
+    def test_timeout(self):
+        assert _classify_error("step timed out after 900s") == "timeout"
+
+    def test_rate_limit(self):
+        assert _classify_error("hit your limit for claude-opus") == "rate_limit"
+
+    def test_adapter_error(self):
+        assert _classify_error("adapter_error: unexpected keyword argument") == "adapter_error"
+
+    def test_retry_storm(self):
+        assert _classify_error("retrying step after failure") == "retry_storm"
+
+    def test_tool_error(self):
+        assert _classify_error("tool_error: json decode failed") == "tool_error"
+
+    def test_phase_failure(self):
+        assert _classify_error("step stuck in phase C") == "phase_failure"
+
+    def test_none_for_clean_text(self):
+        assert _classify_error("step completed successfully") is None
+
+
+class TestScanHarnessFriction:
+    def _make_adapter_error_traces(self, n: int) -> list:
+        traces = []
+        for i in range(n):
+            traces.append({
+                "goal": f"goal {i}",
+                "recorded_at": f"2026-04-14T0{i % 10}:00:00Z",
+                "steps": [
+                    {"step": "research X", "status": "stuck",
+                     "stuck_reason": "adapter_error: unexpected keyword argument thinking_budget",
+                     "result": ""},
+                ],
+            })
+        return traces
+
+    def _make_timeout_traces(self, n: int) -> list:
+        traces = []
+        for i in range(n):
+            traces.append({
+                "goal": f"goal {i}",
+                "recorded_at": f"2026-04-14T0{i % 10}:00:00Z",
+                "steps": [
+                    {"step": "run pytest", "status": "stuck",
+                     "stuck_reason": "subprocess timed out after 900s",
+                     "result": ""},
+                ],
+            })
+        return traces
+
+    def test_detects_adapter_errors(self):
+        traces = self._make_adapter_error_traces(5)
+        report = scan_harness_friction(traces=traces, min_frequency=2)
+        assert not report.skipped
+        assert any(fp.friction_type == "adapter_error" for fp in report.friction_points)
+
+    def test_detects_timeouts(self):
+        traces = self._make_timeout_traces(5)
+        report = scan_harness_friction(traces=traces, min_frequency=2)
+        assert not report.skipped
+        assert any(fp.friction_type == "timeout" for fp in report.friction_points)
+
+    def test_no_traces_skips(self):
+        report = scan_harness_friction(traces=[], min_frequency=1)
+        assert report.skipped
+        assert report.traces_analyzed == 0
+
+    def test_below_min_frequency_not_surfaced(self):
+        # 1 adapter error with min_frequency=3 — should NOT create a friction point
+        traces = self._make_adapter_error_traces(1)
+        report = scan_harness_friction(traces=traces, min_frequency=3)
+        assert not any(fp.friction_type == "adapter_error" for fp in report.friction_points)
+
+    def test_high_rate_is_high_severity(self):
+        traces = self._make_adapter_error_traces(10)
+        report = scan_harness_friction(traces=traces, min_frequency=2)
+        adapter_fps = [fp for fp in report.friction_points if fp.friction_type == "adapter_error"]
+        if adapter_fps:
+            assert adapter_fps[0].severity == "high"
+
+    def test_friction_points_have_suggestion(self):
+        traces = self._make_adapter_error_traces(5)
+        report = scan_harness_friction(traces=traces, min_frequency=2)
+        for fp in report.friction_points:
+            assert fp.suggestion and len(fp.suggestion) > 10
+
+    def test_sorted_high_first(self):
+        # Mix of high and low severity — highs should come first
+        adapter_traces = self._make_adapter_error_traces(8)  # high rate
+        single_timeout = self._make_timeout_traces(2)  # medium/low rate
+        all_traces = adapter_traces + single_timeout
+        report = scan_harness_friction(traces=all_traces, min_frequency=2)
+        if len(report.friction_points) >= 2:
+            sev_order = {"high": 0, "medium": 1, "low": 2}
+            for i in range(len(report.friction_points) - 1):
+                a = sev_order.get(report.friction_points[i].severity, 3)
+                b = sev_order.get(report.friction_points[i + 1].severity, 3)
+                assert a <= b
+
+    def test_clean_traces_no_friction(self):
+        clean_traces = [
+            {"goal": "research X", "recorded_at": "2026-04-14T00:00:00Z",
+             "steps": [{"step": "step 1", "status": "done", "result": "success", "stuck_reason": ""}]}
+            for _ in range(10)
+        ]
+        report = scan_harness_friction(traces=clean_traces, min_frequency=2)
+        assert len(report.friction_points) == 0
+
+
+class TestSaveFrictionSuggestions:
+    def test_saves_medium_and_high_only(self, tmp_path):
+        fps = [
+            FrictionPoint("adapter_error", "adapter_error: 3/10 traces", 3, 10,
+                          ["example"], "fix kwargs", "high"),
+            FrictionPoint("timeout", "timeout: 2/10 traces", 2, 10,
+                          ["example"], "fix timeout", "medium"),
+            FrictionPoint("retry_storm", "retry_storm: 2/10 traces", 2, 10,
+                          ["example"], "reduce retries", "low"),
+        ]
+        with patch("harness_optimizer._save_friction_suggestions.__wrapped__",
+                   side_effect=lambda *a, **kw: None) if False else patch(
+            "evolver.Suggestion", side_effect=lambda **kw: MagicMock(**kw)
+        ), patch("evolver._save_suggestions") as mock_save:
+            from harness_optimizer import _save_friction_suggestions
+            n = _save_friction_suggestions(fps, run_id="test-run", dry_run=False)
+            # Should save high + medium = 2
+            # (low is filtered out)
+            assert n == 2
+
+    def test_dry_run_saves_nothing(self):
+        fps = [
+            FrictionPoint("adapter_error", "x", 5, 10, [], "fix it", "high"),
+        ]
+        with patch("evolver._save_suggestions") as mock_save:
+            from harness_optimizer import _save_friction_suggestions
+            n = _save_friction_suggestions(fps, run_id="test-run", dry_run=True)
+            assert n == 0
+            mock_save.assert_not_called()

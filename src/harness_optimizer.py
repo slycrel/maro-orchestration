@@ -428,6 +428,330 @@ def run_harness_optimizer(
 
 
 # ---------------------------------------------------------------------------
+# Harness friction analysis — "Harness Is the Problem" (@sebgoddijn / Ramp Glass)
+#
+# Models are fine; the harness is the bottleneck. Friction = quality signal.
+# Instead of just analyzing stuck prompts, scan ALL traces for code-path friction:
+# which error types recur? which phases fail? which adapter paths are hot?
+#
+# Produces `HarnessFrictionReport` with ranked friction points → evolver Suggestions
+# with category="harness_friction" for human review.
+# ---------------------------------------------------------------------------
+
+from collections import Counter
+
+
+@dataclass
+class FrictionPoint:
+    """One recurring code-path friction signal extracted from traces."""
+    friction_type: str        # "adapter_error" | "timeout" | "retry_storm" | "phase_failure" | "tool_error"
+    signal: str               # What was observed (e.g. "ClaudeSubprocessAdapter.complete() timeout")
+    frequency: int            # How many traces/steps exhibit this
+    total_traces: int         # Denominator for rate calculation
+    examples: List[str]       # Up to 3 example snippets from traces
+    suggestion: str           # Proposed harness fix (heuristic, not LLM)
+    severity: str             # "high" | "medium" | "low"
+
+    @property
+    def rate(self) -> float:
+        return self.frequency / max(1, self.total_traces)
+
+
+@dataclass
+class HarnessFrictionReport:
+    run_id: str
+    traces_analyzed: int
+    friction_points: List[FrictionPoint] = field(default_factory=list)
+    suggestions_saved: int = 0
+    elapsed_ms: int = 0
+    skipped: bool = False
+    skip_reason: str = ""
+
+    def summary(self) -> str:
+        if self.skipped:
+            return f"friction_scan run_id={self.run_id} skipped: {self.skip_reason}"
+        n = len(self.friction_points)
+        high = sum(1 for f in self.friction_points if f.severity == "high")
+        return (
+            f"friction_scan run_id={self.run_id}: {n} friction point(s) "
+            f"({high} high) from {self.traces_analyzed} traces"
+        )
+
+
+def _load_all_traces(limit: int = 50) -> List[Dict[str, Any]]:
+    """Load recent step traces (both stuck and successful)."""
+    path = _step_traces_path()
+    if not path.exists():
+        return []
+    raw = []
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                raw.append(json.loads(line))
+            except json.JSONDecodeError:
+                pass
+    except OSError:
+        return []
+    raw.sort(key=lambda t: t.get("recorded_at", ""), reverse=True)
+    return raw[:limit]
+
+
+_ADAPTER_ERROR_KEYWORDS = (
+    "adapter_error", "adaptererror", "timed out", "timeout",
+    "rate limit", "hit your limit", "connection error", "api error",
+    "subprocess", "returncode", "unexpected keyword",
+)
+_RETRY_KEYWORDS = ("retry", "retrying", "retried", "reattempt", "backoff")
+_TOOL_ERROR_KEYWORDS = ("tool_error", "tool call", "malformed", "json decode", "parse error")
+
+
+def _classify_error(text: str) -> Optional[str]:
+    t = text.lower()
+    if any(k in t for k in ("timed out", "timeout", "expired")):
+        return "timeout"
+    if any(k in t for k in ("rate limit", "hit your limit")):
+        return "rate_limit"
+    if any(k in t for k in ("adapter_error", "adaptererror", "unexpected keyword")):
+        return "adapter_error"
+    if any(k in t for k in _RETRY_KEYWORDS):
+        return "retry_storm"
+    if any(k in t for k in _TOOL_ERROR_KEYWORDS):
+        return "tool_error"
+    if any(k in t for k in ("stuck", "blocked")):
+        return "phase_failure"
+    return None
+
+
+def scan_harness_friction(
+    traces: Optional[List[Dict[str, Any]]] = None,
+    *,
+    limit: int = 50,
+    min_frequency: int = 2,
+) -> HarnessFrictionReport:
+    """Scan execution traces for code-path friction signals.
+
+    Args:
+        traces:         Preloaded traces (for testing). If None, loads from disk.
+        limit:          Max traces to scan.
+        min_frequency:  Minimum occurrences to surface a friction point.
+
+    Returns:
+        HarnessFrictionReport with ranked friction points.
+    """
+    import uuid as _uuid
+    import time as _time
+    run_id = _uuid.uuid4().hex[:8]
+    started = _time.monotonic()
+
+    if traces is None:
+        traces = _load_all_traces(limit=limit)
+
+    if not traces:
+        return HarnessFrictionReport(
+            run_id=run_id, traces_analyzed=0, skipped=True,
+            skip_reason="no traces found",
+        )
+
+    n_traces = len(traces)
+
+    # Counters
+    error_counter: Counter = Counter()
+    error_examples: Dict[str, List[str]] = {}
+    phase_counter: Counter = Counter()
+    retry_total: int = 0
+    retry_examples: List[str] = []
+    timeout_counter: Counter = Counter()
+    tool_error_counter: Counter = Counter()
+    tool_error_examples: Dict[str, List[str]] = {}
+
+    for trace in traces:
+        for step in trace.get("steps", []):
+            stuck_reason = step.get("stuck_reason", "") or ""
+            result = step.get("result", "") or ""
+            status = step.get("status", "")
+            step_text = step.get("step", "") or ""
+
+            combined = f"{stuck_reason} {result}".strip()
+            if not combined:
+                continue
+
+            err_type = _classify_error(combined)
+            if err_type == "timeout":
+                timeout_counter[step_text[:60] or "unknown_step"] += 1
+            elif err_type in ("adapter_error", "rate_limit"):
+                key = err_type
+                error_counter[key] += 1
+                if key not in error_examples:
+                    error_examples[key] = []
+                if len(error_examples[key]) < 3:
+                    error_examples[key].append(combined[:120])
+            elif err_type == "retry_storm":
+                retry_total += 1
+                if len(retry_examples) < 3:
+                    retry_examples.append(combined[:120])
+            elif err_type == "tool_error":
+                key = "tool_error"
+                tool_error_counter[key] += 1
+                if key not in tool_error_examples:
+                    tool_error_examples[key] = []
+                if len(tool_error_examples[key]) < 3:
+                    tool_error_examples[key].append(combined[:120])
+            elif err_type == "phase_failure":
+                phase = step.get("phase", "unknown")
+                phase_counter[phase] += 1
+
+    friction_points: List[FrictionPoint] = []
+
+    # Adapter errors
+    for err_type, count in error_counter.items():
+        if count < min_frequency:
+            continue
+        rate = count / n_traces
+        severity = "high" if rate > 0.3 else ("medium" if rate > 0.1 else "low")
+        hint = {
+            "adapter_error": (
+                "Check adapter kwargs compatibility (e.g. thinking_budget not supported by subprocess). "
+                "Consider adding **kwargs to adapter.complete() or fixing caller kwargs."
+            ),
+            "rate_limit": (
+                "Rate limit errors recur — consider increasing backoff delay, switching to a lower-tier "
+                "model for cheap steps, or adding request spreading."
+            ),
+        }.get(err_type, f"Recurring {err_type} — investigate adapter layer.")
+        friction_points.append(FrictionPoint(
+            friction_type=err_type,
+            signal=f"{err_type}: {count}/{n_traces} traces affected",
+            frequency=count,
+            total_traces=n_traces,
+            examples=error_examples.get(err_type, []),
+            suggestion=hint,
+            severity=severity,
+        ))
+
+    # Timeouts
+    top_timeouts = timeout_counter.most_common(3)
+    total_timeouts = sum(timeout_counter.values())
+    if total_timeouts >= min_frequency:
+        rate = total_timeouts / n_traces
+        severity = "high" if rate > 0.3 else ("medium" if rate > 0.1 else "low")
+        examples = [f"{step[:80]} ({cnt}×)" for step, cnt in top_timeouts]
+        friction_points.append(FrictionPoint(
+            friction_type="timeout",
+            signal=f"timeout: {total_timeouts}/{n_traces} steps timed out",
+            frequency=total_timeouts,
+            total_traces=n_traces,
+            examples=examples,
+            suggestion=(
+                "Timeout hotspot detected. Consider: (1) increasing POE_LONG_RUNNING_TIMEOUT for "
+                "full-suite steps, (2) splitting long steps into smaller atomic units, "
+                "(3) adding streaming progress checks."
+            ),
+            severity=severity,
+        ))
+
+    # Retry storms
+    if retry_total >= min_frequency:
+        rate = retry_total / n_traces
+        severity = "high" if rate > 0.3 else ("medium" if rate > 0.1 else "low")
+        friction_points.append(FrictionPoint(
+            friction_type="retry_storm",
+            signal=f"retry_storm: {retry_total} retry-related events in {n_traces} traces",
+            frequency=retry_total,
+            total_traces=n_traces,
+            examples=retry_examples,
+            suggestion=(
+                "Frequent retries signal brittle steps. Consider: (1) adding pre-flight validation "
+                "so failed steps fail fast, (2) lower retry counts for deterministic steps, "
+                "(3) investigate root cause of step brittleness."
+            ),
+            severity=severity,
+        ))
+
+    # Tool errors
+    total_tool_errors = sum(tool_error_counter.values())
+    if total_tool_errors >= min_frequency:
+        rate = total_tool_errors / n_traces
+        severity = "high" if rate > 0.3 else ("medium" if rate > 0.1 else "low")
+        friction_points.append(FrictionPoint(
+            friction_type="tool_error",
+            signal=f"tool_error: {total_tool_errors} tool call parsing failures",
+            frequency=total_tool_errors,
+            total_traces=n_traces,
+            examples=tool_error_examples.get("tool_error", []),
+            suggestion=(
+                "Tool call parsing failures. Consider: (1) strengthening JSON output validation "
+                "in EXECUTE_TOOLS, (2) adding a repair pass for malformed tool calls, "
+                "(3) checking if model output truncation is causing JSON truncation."
+            ),
+            severity=severity,
+        ))
+
+    # Phase failures
+    for phase, count in phase_counter.most_common(3):
+        if count < min_frequency:
+            continue
+        rate = count / n_traces
+        severity = "high" if rate > 0.3 else ("medium" if rate > 0.1 else "low")
+        friction_points.append(FrictionPoint(
+            friction_type="phase_failure",
+            signal=f"phase_failure: {phase} failed {count}/{n_traces} traces",
+            frequency=count,
+            total_traces=n_traces,
+            examples=[f"phase={phase}, count={count}"],
+            suggestion=(
+                f"Phase '{phase}' frequently fails. Review phase transition guards and "
+                f"error recovery for this phase in agent_loop.py."
+            ),
+            severity=severity,
+        ))
+
+    # Sort: high severity first, then by frequency
+    _SEV_ORDER = {"high": 0, "medium": 1, "low": 2}
+    friction_points.sort(key=lambda f: (_SEV_ORDER.get(f.severity, 3), -f.frequency))
+
+    return HarnessFrictionReport(
+        run_id=run_id,
+        traces_analyzed=n_traces,
+        friction_points=friction_points,
+        elapsed_ms=int((_time.monotonic() - started) * 1000),
+    )
+
+
+def _save_friction_suggestions(
+    friction_points: List[FrictionPoint],
+    run_id: str,
+    dry_run: bool = False,
+) -> int:
+    """Convert friction points to evolver Suggestions. Returns count saved."""
+    if not friction_points or dry_run:
+        return 0
+    try:
+        from evolver import Suggestion, _save_suggestions
+        suggestions = []
+        for i, fp in enumerate(friction_points):
+            if fp.severity == "low":
+                continue  # only surface medium+ friction
+            suggestions.append(Suggestion(
+                suggestion_id=f"friction-{run_id}-{i:02d}",
+                category="harness_friction",
+                target=f"harness:{fp.friction_type}",
+                suggestion=fp.suggestion,
+                failure_pattern=fp.signal,
+                confidence=fp.rate,  # frequency rate as confidence proxy
+                outcomes_analyzed=fp.total_traces,
+            ))
+        if suggestions:
+            _save_suggestions(suggestions)
+        return len(suggestions)
+    except Exception as exc:
+        log.warning("friction_scan: failed to save suggestions: %s", exc)
+        return 0
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 

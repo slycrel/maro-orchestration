@@ -1510,6 +1510,7 @@ def run_evolver(
     scan_canon: bool = True,
     scan_suggestion_calibration: bool = True,
     scan_persona_gaps: bool = True,
+    scan_harness_friction: bool = True,
 ) -> EvolverReport:
     """Run one meta-evolution cycle.
 
@@ -1677,6 +1678,32 @@ def run_evolver(
             log.info("evolver drift_scan findings=%d", len(drift_findings))
         except Exception as _drift_exc:
             log.debug("quality drift scan failed (non-fatal): %s", _drift_exc)
+
+    # Harness friction scan — "Harness Is the Problem" (@sebgoddijn / Ramp Glass)
+    # Models are fine; friction in code paths = harness quality signal.
+    if scan_harness_friction:
+        try:
+            from harness_optimizer import scan_harness_friction as _scan_friction
+            from harness_optimizer import _save_friction_suggestions
+            friction_report = _scan_friction()
+            if friction_report.friction_points:
+                n_saved = _save_friction_suggestions(
+                    friction_report.friction_points,
+                    run_id=f"{run_id}-friction",
+                    dry_run=dry_run,
+                )
+                if verbose and friction_report.friction_points:
+                    print(
+                        f"[evolver] harness_friction: {len(friction_report.friction_points)} "
+                        f"friction point(s), {n_saved} suggestion(s) saved",
+                        file=sys.stderr,
+                    )
+                log.info(
+                    "evolver harness_friction friction=%d saved=%d",
+                    len(friction_report.friction_points), n_saved,
+                )
+        except Exception as _hf_exc:
+            log.debug("harness friction scan failed (non-fatal): %s", _hf_exc)
 
     # Persona gap scan — detect recurring fallback dispatches → author new personas
     if scan_persona_gaps:
