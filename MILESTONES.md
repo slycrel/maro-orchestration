@@ -2,21 +2,28 @@
 
 What to do next, in what order. Updated each session. Strategic phases live in ROADMAP.md; deferred ideas live in BACKLOG.md. This file is the bridge — the executable queue.
 
-Last updated: 2026-04-14 (session 28 — PM round 5+6, dev round 5+6: review DELETE, pagination, seed data, photo_url, DB error handling)
+Last updated: 2026-04-14 (session 29 — recipe repo PM/dev rounds 7+8, claim verifier symbol extension)
 
 ---
 
 ## Next Up
 
-- **BACKLOG cleanup** — Review and close stale BACKLOG items from earlier sessions.
-- **Evolver confidence calibration follow-up** — `scan_suggestion_outcomes` wired; verify calibration is improving (check live workspace suggestion stats).
-- **Recipe repo final cleanup** — 2 issues left: #5 (duplicate-name IntegrityError form re-render), #2 (auth, intentionally out of scope). Consider filing PM round 7 audit on current test coverage gaps.
-- **Grok response 3 steal items** — Bitter Lesson Engineering analysis: PAI comparison, thin-harness audit. Most items already shipped. Key remaining: ensure Mode 2→3 bridge is solid (signals→sub_mission flow).
+- **BACKLOG cleanup** — Review and close stale BACKLOG items from earlier sessions (Slack partial item is stale — slack_listener.py + 25 tests already done).
+- **Evolver confidence calibration follow-up** — `scan_suggestion_outcomes` wired; verify calibration is improving (check live workspace suggestion stats). Heartbeat stopped by design since Apr 7-9 token burn — no new data until restarted.
+- **Formal stage contracts (Phase P2)** — Typed output contracts per pipeline phase + hard validation gates. See BACKLOG. Medium-term architectural improvement.
+
+## Done (session 29, 2026-04-14 — recipe PM/dev rounds 7+8, claim verifier symbol extension)
+
+- [x] **Recipe #5 — duplicate-name form error** — Added `unique=True` to `Recipe.name`; form handlers now catch `IntegrityError` specifically and re-render with "A recipe with that name already exists." form.html got error display block (was silently swallowing errors). 4 new tests (TestHTMLDuplicateName). Closed #5.
+- [x] **PM round 7 + dev round 7** — Filed #26 (body size guard 413), #27 (API rate limit 429), #28 (HTML search/pagination tests). Implemented all three: TestRateLimit (4 tests), TestBodySizeGuard (3 tests), TestHTMLSearchAndPagination (6 tests, DB-direct seeding to avoid rate limit collisions). 74 recipe tests passing. Closed #26/#27/#28.
+- [x] **Claim verifier symbol extension** — Extended `claim_verifier.py` with Python symbol (function/class/method) existence checking. New: `extract_symbol_claims()`, `_build_symbol_index()` (direct .py scan, <5ms), `verify_symbol_claims()`, `verify_all_claims()`, `SymbolReport`, `CompoundClaimReport`. `annotate_result()` now surfaces `SYMBOL_CLAIMS_NOT_FOUND`. 24 new tests (61 total in test_claim_verifier.py). 4266 orchestration tests passing. Closes BACKLOG "claim verifier only catches file paths" item.
 
 ## Done (session 28, 2026-04-14 — PM/dev rounds 5+6)
 
 - [x] **PM round 5+6** — Closed #9 (race false positive), #3 (auto-docs), #15 (photo_url done), #20 (review DELETE), #1 (pagination), #4 (seed data). Commented on #5. 2 issues remain: #5 (partial) + #2 (auth, out of scope).
 - [x] **Dev round 5+6** — review DELETE (204/404), photo_url round-trip, form DB error handling, pagination {total/limit/offset/items} envelope, HTML page nav, scripts/seed.py (10 recipes, idempotent, <1s). Rate-limit isolation fixes for TestApiRecipeValidation + TestPagination. 63 recipe tests passing.
+- [x] **Evolver suggestion stats dashboard** — `_read_suggestion_stats()` in observe.py: reads suggestions.jsonl, returns total/by_category/by_status/pending/applied. New panel in dashboard shows pending/applied badges + category table. 5 tests (71 total observe tests).
+- [x] **FastAPI deprecation warnings** — Eliminated on_event("startup") → asynccontextmanager lifespan; TemplateResponse calls to new API format. Zero warnings in recipe test output.
 
 ## Done (session 27, 2026-04-14 — dev round 4 closed #12/#23/#24, first-class project isolation)
 

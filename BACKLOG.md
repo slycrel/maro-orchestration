@@ -3,7 +3,7 @@
 Single canonical location for everything we've identified but haven't done yet.
 Read this at the start of every session. Update it as items are completed or new ones emerge.
 
-Last reviewed: 2026-04-14 (session 28)
+Last reviewed: 2026-04-14 (session 29)
 
 ---
 
@@ -339,9 +339,9 @@ Real findings from the run — hallucinations already vetted and discarded:
 - [x] **Evolver audit trail** — `evolver.py` appends to `memory/change_log.jsonl` before any suggestion mutation. `memory.py` logs decay cycle (promoted_ids + gc_ids) before rewriting lesson store. Creates rollback surface without requiring git tracking of runtime files. (2026-04-06)
 - [x] **No end-to-end integration test** — `tests/integration/test_integration.py` added: 23 mocked-LLM scenarios covering both lanes, magic keywords, constraint enforcement. `tests/regression/test_regression.py` added: 7 golden-path scenarios. (2026-04-06)
 - [x] **`tests/regression/` has spec but no tests** — `tests/regression/test_regression.py` implements 7 golden-path scenarios (NOW, AGENDA, direct:, btw:, pipeline:, stuck, prefix stacking). (2026-04-06)
-- [ ] **Phase 24 (Slack) still PARTIAL** — primary async human interface, no `slack.py`, no tests. (known, noted again)
+- [x] **Phase 24 (Slack)** — `src/slack_listener.py` (424L) + `tests/test_slack_listener.py` (25 tests). Socket Mode, slash commands, interrupt routing. Item was stale — already done. (verified session 29)
 - [x] **`lat.md` knowledge graph — wired into director.py (2026-04-06)** — `lat_inject.py` with TF-IDF `inject_relevant_nodes()` now wired into `_produce_spec()` in director.py (same pattern as planner.py). Silently skips if no relevant nodes match.
-- [x] **Adversarial review hallucination rate too high (partial)** — `src/claim_verifier.py` shipped (2026-04-06). Zero-LLM file-path extractor checks synthesis step results against filesystem; annotates NOT_FOUND claims. Wired into agent_loop.py on synthesis steps. Addresses option (a). Options (b) stream decompose (done via decompose prompt 2026-04-06) and (c) haiku sanity pass (pre_flight.py, done 2026-04-06) also shipped. Remaining: claim verifier only catches file paths — function/module existence and "X has no tests" type claims still undetected. Future: extend to grep-based function existence check.
+- [x] **Adversarial review hallucination rate too high** — FULLY DONE (session 29). `claim_verifier.py` extended with Python symbol (function/class/method) existence checking: `extract_symbol_claims()`, `_build_symbol_index()` (direct .py scan, no grep subprocess), `verify_symbol_claims()`, `verify_all_claims()`, `SymbolReport`, `CompoundClaimReport`. `annotate_result()` surfaces `SYMBOL_CLAIMS_NOT_FOUND`. 24 new tests (61 total). All three hallucination-detection vectors now covered: file paths, symbols, and decompose prompt hardening.
 
 ### Grok Round 4 feedback (2026-04-07)
 - [x] **`poe evolver apply` CLI** — `poe-evolver list|apply|run` subcommands. `apply` supports interactive/--all/--dry-run/by-id modes. Registered as `poe-evolver` entry point. (2026-04-07)
