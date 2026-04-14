@@ -2390,6 +2390,13 @@ def run_skill_maintenance(
             promoted = maybe_auto_promote_skills()
             if promoted and verbose:
                 print(f"[evolver] auto-promoted skills: {promoted}", file=sys.stderr)
+            # K4: record skill promotions in knowledge layer (non-blocking)
+            for sk in promoted:
+                try:
+                    from knowledge_bridge import record_skill_evolution
+                    record_skill_evolution(sk, event="promoted")
+                except Exception:
+                    pass
         except Exception as e:
             if verbose:
                 print(f"[evolver] auto-promote failed: {e}", file=sys.stderr)
@@ -2398,6 +2405,13 @@ def run_skill_maintenance(
             demoted = maybe_demote_skills()
             if demoted and verbose:
                 print(f"[evolver] demoted skills: {demoted}", file=sys.stderr)
+            # K4: record skill demotions in knowledge layer (non-blocking)
+            for sk in demoted:
+                try:
+                    from knowledge_bridge import record_skill_evolution
+                    record_skill_evolution(sk, event="demoted")
+                except Exception:
+                    pass
         except Exception as e:
             if verbose:
                 print(f"[evolver] demotion failed: {e}", file=sys.stderr)

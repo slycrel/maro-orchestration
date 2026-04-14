@@ -2,13 +2,17 @@
 
 What to do next, in what order. Updated each session. Strategic phases live in ROADMAP.md; deferred ideas live in BACKLOG.md. This file is the bridge — the executable queue.
 
-Last updated: 2026-04-14 (session 23 continued — input classification, Phase 61 complete, LoopStateMachine conversion, sub_mission auto-enqueue)
+Last updated: 2026-04-14 (session 24 — K4 write path, PM/dev regression)
 
 ---
 
 ## Next Up
 
-<!-- No pending items — see BACKLOG.md for deferred work -->
+<!-- See BACKLOG.md for deferred work -->
+
+## Done (session 24, 2026-04-14 — K4 write path)
+
+- [x] **K4: Knowledge write path** — `src/knowledge_bridge.py`: `outcome_to_knowledge()` heuristic + LLM extraction of insight/principle/pattern nodes. Dedup via Jaccard ≥0.7 on titles. `upsert_knowledge_from_candidate()` updates confidence on re-validation. `record_skill_evolution()` wired into evolver promote/demote paths. `validate_principle()` for bidirectional validation (validated/contradicted). `reflect_and_record()` in memory.py now calls `outcome_to_knowledge()` as non-blocking hook (fail-open). 27 tests. Closes BACKLOG K4 item + docs/knowledge-layer/README.md updated.
 
 ## Done (session 23 continued, 2026-04-14 — input classification, Phase 61 complete, LoopStateMachine, sub_mission enqueue)
 

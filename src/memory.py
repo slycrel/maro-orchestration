@@ -499,7 +499,7 @@ def reflect_and_record(
             except Exception:
                 pass  # tiered recording must never block the main reflection path
 
-    return record_outcome(
+    outcome = record_outcome(
         goal=goal,
         status=status,
         summary=result_summary,
@@ -513,6 +513,16 @@ def reflect_and_record(
         failure_chain=failure_chain or [],
         recovery_steps=recovery_steps,
     )
+
+    # K4: write path — outcomes update knowledge layer (non-blocking)
+    if not dry_run:
+        try:
+            from knowledge_bridge import outcome_to_knowledge
+            outcome_to_knowledge(outcome, adapter=adapter, dry_run=False)
+        except Exception:
+            pass  # knowledge write must never break the reflection path
+
+    return outcome
 
 
 # ---------------------------------------------------------------------------

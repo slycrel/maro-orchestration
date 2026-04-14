@@ -21,7 +21,7 @@ The knowledge layer has three views (Ledger / Web / Lens) implemented across thr
 | K1 | DONE | Module split (memory_ledger, knowledge_web, knowledge_lens) |
 | K2 | TODO | Migrate links — transform knowledge into graph nodes |
 | K3 | PARTIAL | Read path — captain's log wired into decompose + evolver (2026-04-11). Full knowledge node injection TODO. |
-| K4 | TODO | Write path — outcomes update knowledge layer |
+| K4 | DONE | Write path — `knowledge_bridge.py`: `outcome_to_knowledge()` wired into `reflect_and_record()`. Heuristic + LLM extraction, dedup (Jaccard ≥0.7), upsert confidence. Skill evolution (promote/demote) wired into evolver. `validate_principle()` for bidirectional validation. 27 tests. (2026-04-14) |
 | K5 | TODO | Lens/persona — different personas query differently |
 | K6 | TODO | Temporal intelligence — bi-temporal fields, decay |
 | K7 | TODO | Correspondence interface — cross-view queries |
