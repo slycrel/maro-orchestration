@@ -2529,3 +2529,47 @@ def test_artifact_cleanup_glob_pattern_does_not_match_permanent_files():
         assert fnmatch.fnmatch(f, pattern), f"{f} should match step pattern"
     for f in permanent_files:
         assert not fnmatch.fnmatch(f, pattern), f"{f} should NOT match step pattern"
+
+
+# ---------------------------------------------------------------------------
+# Heartbeat wakeup signal after loop completion
+# ---------------------------------------------------------------------------
+
+def test_loop_done_signals_heartbeat(monkeypatch, tmp_path):
+    """run_agent_loop calls post_heartbeat_event('loop_done') when the loop finishes."""
+    _setup_workspace(monkeypatch, tmp_path)
+
+    calls = []
+    fake_heartbeat = type(sys)("heartbeat")
+    fake_heartbeat.post_heartbeat_event = lambda event_type, payload="": calls.append((event_type, payload))
+    monkeypatch.setitem(sys.modules, "heartbeat", fake_heartbeat)
+
+    result = run_agent_loop("write a haiku", project="hb-test", dry_run=True)
+
+    assert result.status == "done"
+    loop_done_calls = [c for c in calls if c[0] == "loop_done"]
+    assert len(loop_done_calls) == 1, f"Expected 1 loop_done signal, got: {calls}"
+    assert loop_done_calls[0][1] == "hb-test"
+
+
+def test_loop_done_signal_includes_project(monkeypatch, tmp_path):
+    """loop_done heartbeat event payload is the project slug."""
+    _setup_workspace(monkeypatch, tmp_path)
+
+    payloads = []
+    fake_heartbeat = type(sys)("heartbeat")
+    fake_heartbeat.post_heartbeat_event = lambda event_type, payload="": payloads.append(payload) if event_type == "loop_done" else None
+    monkeypatch.setitem(sys.modules, "heartbeat", fake_heartbeat)
+
+    run_agent_loop("research market data", project="market-research", dry_run=True)
+
+    assert payloads == ["market-research"]
+
+
+def test_loop_done_signal_fires_even_if_heartbeat_unavailable(monkeypatch, tmp_path):
+    """Heartbeat import failure does not crash the loop — signal is best-effort."""
+    _setup_workspace(monkeypatch, tmp_path)
+    monkeypatch.setitem(sys.modules, "heartbeat", None)  # simulate import failure
+
+    result = run_agent_loop("write a haiku", project="no-hb", dry_run=True)
+    assert result.status == "done"

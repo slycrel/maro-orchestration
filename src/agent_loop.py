@@ -1678,6 +1678,15 @@ def _build_result_and_finalize(
     except Exception as _lock_exc:
         log.debug("clear_loop_running failed: %s", _lock_exc)
 
+    # Signal heartbeat to wake immediately — pick up next queued task without
+    # waiting for the full interval tick.  Reduces task-to-task latency from
+    # up to interval seconds to near-zero.
+    try:
+        from heartbeat import post_heartbeat_event as _phb_event
+        _phb_event(event_type="loop_done", payload=(ctx.project or ""))
+    except Exception as _phb_exc:
+        log.debug("post_heartbeat_event(loop_done) failed: %s", _phb_exc)
+
     return result
 
 
