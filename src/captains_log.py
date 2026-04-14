@@ -65,9 +65,11 @@ GRADUATION_PROPOSED = "GRADUATION_PROPOSED"
 # Recovery & diagnosis
 AUTO_RECOVERY = "AUTO_RECOVERY"
 DIAGNOSIS = "DIAGNOSIS"
+INPUT_MISMATCH = "INPUT_MISMATCH"  # skill invoked on out-of-domain input
 
 # Decisions
 DECISION_RECORDED = "DECISION_RECORDED"
+METACOGNITIVE_DECISION = "METACOGNITIVE_DECISION"  # mid-loop re-decompose/retry decisions
 
 EVENT_TYPES = {
     SKILL_SYNTHESIZED, SKILL_PROMOTED, SKILL_DEMOTED, SKILL_REWRITE,
@@ -77,7 +79,8 @@ EVENT_TYPES = {
     HYPOTHESIS_CREATED, HYPOTHESIS_PROMOTED, HYPOTHESIS_CONTRADICTED,
     STANDING_RULE_CONTRADICTED, RULE_GRADUATED, RULE_DEMOTED, CANON_CANDIDATE,
     EVOLVER_APPLIED, EVOLVER_GENERATED, EVOLVER_SKIPPED, GRADUATION_PROPOSED,
-    AUTO_RECOVERY, DIAGNOSIS, DECISION_RECORDED,
+    AUTO_RECOVERY, DIAGNOSIS, INPUT_MISMATCH,
+    DECISION_RECORDED, METACOGNITIVE_DECISION,
 }
 
 # ---------------------------------------------------------------------------
@@ -98,6 +101,47 @@ def set_log_path(path: Optional[Path]) -> None:
     """Override log path (for testing)."""
     global _log_path_override
     _log_path_override = path
+
+
+# ---------------------------------------------------------------------------
+# Input type classification (for INPUT_MISMATCH detection)
+# ---------------------------------------------------------------------------
+
+import re as _re
+
+_URL_RE = _re.compile(r"https?://\S+", _re.IGNORECASE)
+_CODE_INDICATORS = frozenset({"def ", "class ", "import ", "function ", "return ", "```"})
+_STRUCTURED_INDICATORS = frozenset({"{", "}", '":', "]: "})
+
+
+def classify_input_type(text: str) -> str:
+    """Classify the input domain of a goal or step text.
+
+    Returns one of: "url", "code", "structured_data", "plain_text".
+
+    Used to detect INPUT_MISMATCH when a skill trained on one input type
+    (e.g., web content from Jina) is invoked with a different type.
+    """
+    if not text:
+        return "plain_text"
+
+    # URL-heavy: Jina-style web fetch, link analysis
+    url_count = len(_URL_RE.findall(text))
+    if url_count >= 2 or (url_count == 1 and len(text) < 200):
+        return "url"
+
+    # Code: function definitions, imports, code blocks
+    text_lower = text.lower()
+    code_hits = sum(1 for kw in _CODE_INDICATORS if kw.lower() in text_lower)
+    if code_hits >= 2:
+        return "code"
+
+    # Structured data: JSON-like or tabular
+    struct_hits = sum(1 for kw in _STRUCTURED_INDICATORS if kw in text)
+    if struct_hits >= 3:
+        return "structured_data"
+
+    return "plain_text"
 
 
 # ---------------------------------------------------------------------------

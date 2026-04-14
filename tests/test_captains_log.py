@@ -230,7 +230,65 @@ class TestEventTypes:
         assert DECISION_RECORDED in EVENT_TYPES
 
     def test_event_type_count(self):
-        assert len(EVENT_TYPES) == 28
+        assert len(EVENT_TYPES) == 30
+
+    def test_input_mismatch_in_set(self):
+        from captains_log import INPUT_MISMATCH
+        assert INPUT_MISMATCH in EVENT_TYPES
+
+    def test_metacognitive_decision_in_set(self):
+        from captains_log import METACOGNITIVE_DECISION
+        assert METACOGNITIVE_DECISION in EVENT_TYPES
+
+
+# ---------------------------------------------------------------------------
+# classify_input_type
+# ---------------------------------------------------------------------------
+
+class TestClassifyInputType:
+    """Unit tests for the classify_input_type() helper."""
+
+    def test_url_single_short(self):
+        from captains_log import classify_input_type
+        assert classify_input_type("https://example.com/page") == "url"
+
+    def test_url_two_urls(self):
+        from captains_log import classify_input_type
+        text = "See https://foo.com and https://bar.com for details"
+        assert classify_input_type(text) == "url"
+
+    def test_url_single_long_is_not_url(self):
+        from captains_log import classify_input_type
+        # single URL embedded in a long paragraph → not classified as url
+        text = ("This is a very long document with lots of prose. " * 5
+                + "See https://example.com for more. " + "More prose here. " * 5)
+        # length > 200, only 1 URL → falls through to plain_text or other
+        result = classify_input_type(text)
+        assert result != "url"
+
+    def test_code_detection(self):
+        from captains_log import classify_input_type
+        text = "def my_func():\n    import os\n    return os.getcwd()"
+        assert classify_input_type(text) == "code"
+
+    def test_code_fenced(self):
+        from captains_log import classify_input_type
+        text = "Here is some code:\n```\nfunction foo() { return 1; }\nreturn foo();\n```"
+        assert classify_input_type(text) == "code"
+
+    def test_structured_data(self):
+        from captains_log import classify_input_type
+        text = '{"key": "value", "num": 42, "arr": [1, 2]}'
+        assert classify_input_type(text) == "structured_data"
+
+    def test_plain_text_fallback(self):
+        from captains_log import classify_input_type
+        text = "Summarise the latest Polymarket trends in crypto markets."
+        assert classify_input_type(text) == "plain_text"
+
+    def test_empty_string(self):
+        from captains_log import classify_input_type
+        assert classify_input_type("") == "plain_text"
 
 
 # ---------------------------------------------------------------------------

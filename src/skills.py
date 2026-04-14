@@ -909,7 +909,13 @@ def get_skills_needing_escalation() -> List[SkillStats]:
 # Phase 32: Utility scoring, failure attribution, auto-promotion, rewrite gating
 # ---------------------------------------------------------------------------
 
-def update_skill_utility(skill_id: str, success: bool, failure_reason: str = "") -> None:
+def update_skill_utility(
+    skill_id: str,
+    success: bool,
+    failure_reason: str = "",
+    *,
+    step_text: str = "",
+) -> None:
     """Update utility_score (EMA) and circuit-breaker state for a skill.
 
     Circuit-breaker state machine:
@@ -926,6 +932,8 @@ def update_skill_utility(skill_id: str, success: bool, failure_reason: str = "")
         skill_id: The skill to update.
         success: True if the step using this skill completed; False if blocked.
         failure_reason: The stuck_reason string (only stored on failure, max 5 kept).
+        step_text: The step/goal text (optional). Used to detect INPUT_MISMATCH when
+            a skill trained on web/URL content is invoked with plain-text input.
     """
     record_skill_outcome(skill_id, success)
 
@@ -990,6 +998,40 @@ def update_skill_utility(skill_id: str, success: bool, failure_reason: str = "")
         except Exception:
             pass
 
+    # INPUT_MISMATCH: log if circuit just opened and step_text looks like a domain mismatch
+    # (e.g., skill trained on URL/web content used for plain text, or vice versa)
+    if (
+        target.circuit_state == "open"
+        and old_circuit_state != "open"
+        and step_text
+        and not success
+    ):
+        try:
+            from captains_log import classify_input_type, log_event, INPUT_MISMATCH
+            _input_type = classify_input_type(step_text)
+            _trigger_text = " ".join(target.trigger_patterns).lower()
+            _url_skill = any(kw in _trigger_text for kw in ("url", "web", "http", "jina", "fetch", "scrape"))
+            _url_input = _input_type == "url"
+            if _url_skill != _url_input:
+                log_event(
+                    event_type=INPUT_MISMATCH,
+                    subject=target.name,
+                    summary=(
+                        f"Skill '{target.name}' expects {'url' if _url_skill else 'non-url'} input "
+                        f"but received {_input_type!r}. Circuit opened — failures may reflect domain mismatch."
+                    ),
+                    context={
+                        "skill_id": skill_id,
+                        "input_type": _input_type,
+                        "skill_url_domain": _url_skill,
+                        "consecutive_failures": target.consecutive_failures,
+                    },
+                    note="Inspector: treat this as INPUT_MISMATCH, not skill degradation.",
+                    related_ids=[f"skill:{skill_id}"],
+                )
+        except Exception:
+            pass
+
     # Recompute content hash after mutation
     target.content_hash = compute_skill_hash(target)
 
@@ -1009,7 +1051,12 @@ def attribute_failure_to_skills(
     attributed = []
     for skill in matched:
         try:
-            update_skill_utility(skill.id, success=False, failure_reason=failure_reason)
+            update_skill_utility(
+                skill.id,
+                success=False,
+                failure_reason=failure_reason,
+                step_text=step_text,
+            )
             attributed.append(skill.id)
         except Exception:
             pass
