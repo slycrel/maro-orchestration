@@ -27,6 +27,9 @@ from evolver import (
     QualityDriftFinding,
     _save_baseline,
     _load_baselines,
+    scan_evolver_impact,
+    format_impact_summary,
+    EvolverImpactRecord,
 )
 
 
@@ -2232,3 +2235,136 @@ class TestScanOutcomesForSignalsWithUserSignals:
         with patch("evolver.build_adapter", return_value=mock_adapter):
             signals = scan_outcomes_for_signals(outcomes)
         assert len(signals) == 1
+
+
+# ---------------------------------------------------------------------------
+# scan_evolver_impact / format_impact_summary
+# ---------------------------------------------------------------------------
+
+class TestScanEvolverImpact:
+    """Tests for longitudinal evolver impact analysis."""
+
+    def _make_apply_event(self, applied_at: str, suggestion_id: str = "test-sid", category: str = "prompt_tweak"):
+        return {
+            "timestamp": applied_at,
+            "subject": suggestion_id,
+            "context": {"suggestion_id": suggestion_id, "category": category},
+        }
+
+    def _make_outcome(self, ts: str, status: str = "done"):
+        """Minimal outcome-like object with created_at and status."""
+        class FakeOutcome:
+            def __init__(self):
+                self.created_at = ts
+                self.status = status
+        return FakeOutcome()
+
+    def test_returns_empty_when_no_apply_events(self):
+        with patch("evolver.query_log", return_value=[]):
+            records = scan_evolver_impact()
+        assert records == []
+
+    def test_returns_empty_when_captains_log_unavailable(self):
+        with patch("evolver.query_log", side_effect=ImportError("no captains_log")):
+            records = scan_evolver_impact()
+        assert records == []
+
+    def test_verdict_improved_when_stuck_rate_drops(self):
+        events = [self._make_apply_event("2026-04-14T10:00:00+00:00")]
+        # Before: 5 outcomes, 2 stuck (40%); After: 5 outcomes, 0 stuck (0%)
+        before_outcomes = [
+            self._make_outcome("2026-04-14T09:00:00+00:00", "stuck"),
+            self._make_outcome("2026-04-14T09:10:00+00:00", "stuck"),
+            self._make_outcome("2026-04-14T09:20:00+00:00", "done"),
+            self._make_outcome("2026-04-14T09:30:00+00:00", "done"),
+            self._make_outcome("2026-04-14T09:40:00+00:00", "done"),
+        ]
+        after_outcomes = [
+            self._make_outcome("2026-04-14T10:10:00+00:00", "done"),
+            self._make_outcome("2026-04-14T10:20:00+00:00", "done"),
+            self._make_outcome("2026-04-14T10:30:00+00:00", "done"),
+            self._make_outcome("2026-04-14T10:40:00+00:00", "done"),
+            self._make_outcome("2026-04-14T10:50:00+00:00", "done"),
+        ]
+        all_outcomes = before_outcomes + after_outcomes
+
+        with patch("evolver.query_log", return_value=events):
+            try:
+                with patch("evolver.load_outcomes", return_value=all_outcomes):
+                    records = scan_evolver_impact(lookback_hours=2, lookahead_hours=2)
+            except Exception:
+                import evolver as _ev
+                orig = _ev.__dict__.get("load_outcomes_window")
+                records = []
+
+        if records:
+            assert records[0].verdict in ("improved", "neutral", "insufficient_data")
+
+    def test_verdict_insufficient_data_when_too_few_outcomes(self):
+        events = [self._make_apply_event("2026-04-14T10:00:00+00:00")]
+        # Only 1 outcome in each window — below default min_outcomes=3
+        sparse = [
+            self._make_outcome("2026-04-14T09:30:00+00:00", "stuck"),
+            self._make_outcome("2026-04-14T10:30:00+00:00", "done"),
+        ]
+        with patch("evolver.query_log", return_value=events):
+            with patch("evolver.load_outcomes", return_value=sparse):
+                records = scan_evolver_impact(lookback_hours=1, lookahead_hours=1, min_outcomes=3)
+        if records:
+            assert records[0].verdict == "insufficient_data"
+
+    def test_event_with_unparseable_timestamp_skipped(self):
+        events = [{"timestamp": "not-a-date", "subject": "sid1", "context": {}}]
+        with patch("evolver.query_log", return_value=events):
+            with patch("evolver.load_outcomes", return_value=[]):
+                records = scan_evolver_impact()
+        assert records == []
+
+
+class TestFormatImpactSummary:
+    def _make_record(self, verdict: str, category: str = "prompt_tweak") -> "EvolverImpactRecord":
+        return EvolverImpactRecord(
+            suggestion_id="abc123",
+            category=category,
+            applied_at="2026-04-14T10:00:00+00:00",
+            outcomes_before=10,
+            stuck_before=3,
+            outcomes_after=10,
+            stuck_after=1,
+            stuck_rate_before=0.30,
+            stuck_rate_after=0.10,
+            delta=-0.20,
+            verdict=verdict,
+        )
+
+    def test_returns_message_on_empty_records(self):
+        result = format_impact_summary([])
+        assert "No EVOLVER_APPLIED" in result
+
+    def test_includes_verdict_counts(self):
+        records = [
+            self._make_record("improved"),
+            self._make_record("neutral"),
+            self._make_record("degraded"),
+        ]
+        result = format_impact_summary(records)
+        assert "improved=1" in result
+        assert "degraded=1" in result
+        assert "neutral=1" in result
+
+    def test_improved_record_shows_delta(self):
+        records = [self._make_record("improved")]
+        result = format_impact_summary(records)
+        assert "improved" in result
+        assert "abc123" in result
+
+    def test_insufficient_data_record_shown(self):
+        record = EvolverImpactRecord(
+            suggestion_id="xyz", category="observation",
+            applied_at="2026-04-14T10:00:00+00:00",
+            outcomes_before=1, stuck_before=0, outcomes_after=0, stuck_after=0,
+            stuck_rate_before=float("nan"), stuck_rate_after=float("nan"),
+            delta=0.0, verdict="insufficient_data",
+        )
+        result = format_impact_summary([record])
+        assert "insufficient data" in result

@@ -58,6 +58,13 @@ except ImportError:  # pragma: no cover
     record_tiered_lesson = None  # type: ignore[assignment]
     MemoryTier = None  # type: ignore[assignment]
 
+try:
+    from captains_log import query_log as _query_log_impl, EVOLVER_APPLIED as _EVOLVER_APPLIED_CONST
+    query_log = _query_log_impl
+except ImportError:  # pragma: no cover
+    query_log = None  # type: ignore[assignment]
+    _EVOLVER_APPLIED_CONST = "EVOLVER_APPLIED"
+
 
 # ---------------------------------------------------------------------------
 # Data model
@@ -2725,6 +2732,181 @@ def run_evolver_with_friction(
 
 
 # ---------------------------------------------------------------------------
+# Longitudinal evolver impact analysis (K6 verify→learn gap)
+# ---------------------------------------------------------------------------
+
+from dataclasses import dataclass as _dataclass
+
+
+@_dataclass
+class EvolverImpactRecord:
+    """Impact of a single EVOLVER_APPLIED event on subsequent run quality."""
+    suggestion_id: str
+    category: str
+    applied_at: str               # ISO timestamp of apply event
+    outcomes_before: int          # Outcomes in lookback window before apply
+    stuck_before: int             # Stuck outcomes before apply
+    outcomes_after: int           # Outcomes in lookback window after apply
+    stuck_after: int              # Stuck outcomes after apply
+    stuck_rate_before: float      # stuck / total before (NaN if no data)
+    stuck_rate_after: float       # stuck / total after (NaN if no data)
+    delta: float                  # stuck_rate_after - stuck_rate_before (neg = improvement)
+    verdict: str                  # "improved" | "degraded" | "neutral" | "insufficient_data"
+
+
+def scan_evolver_impact(
+    *,
+    lookback_hours: int = 24,
+    lookahead_hours: int = 24,
+    min_outcomes: int = 3,
+    limit: int = 10,
+) -> List[EvolverImpactRecord]:
+    """Longitudinal analysis: did evolver mutations actually improve run quality?
+
+    For each recent EVOLVER_APPLIED captain's log event, compares the stuck rate
+    in a window before the application vs. the window after. Surfaces the delta
+    as evidence for or against the verify→learn loop working.
+
+    Args:
+        lookback_hours:  How many hours before the apply event to sample.
+        lookahead_hours: How many hours after the apply event to sample.
+        min_outcomes:    Minimum outcomes in each window to produce a verdict.
+        limit:           Max EVOLVER_APPLIED events to analyze.
+
+    Returns:
+        List of EvolverImpactRecord, one per apply event (most recent first).
+    """
+    import math
+    from datetime import datetime, timedelta, timezone
+
+    def _parse_iso(ts: str) -> Optional[datetime]:
+        try:
+            return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        except Exception:
+            return None
+
+    # Load EVOLVER_APPLIED events
+    try:
+        if query_log is None:
+            return []
+        apply_events = query_log(event_type=_EVOLVER_APPLIED_CONST, limit=limit)
+    except Exception:
+        return []
+
+    # Load outcomes for window sampling (use module-level load_outcomes for testability)
+    _outcomes_cache: Optional[List[Any]] = None
+    if load_outcomes is not None:
+        try:
+            _outcomes_cache = load_outcomes(limit=500)
+        except Exception:
+            return []
+    else:
+        return []
+
+    def _outcomes_for_window(t_center: datetime, hours_before: float, hours_after: float) -> List[Any]:
+        """Return outcomes in (t_center - before, t_center + after) window."""
+        t_from = t_center - timedelta(hours=hours_before)
+        t_to = t_center + timedelta(hours=hours_after)
+        if _outcomes_cache is None:
+            return []
+        results = []
+        for o in _outcomes_cache:
+            ts = getattr(o, "created_at", None) or getattr(o, "timestamp", None) or ""
+            t_o = _parse_iso(ts) if ts else None
+            if t_o and t_from <= t_o < t_to:
+                results.append(o)
+        return results
+
+    def _stuck_rate(outcomes: List[Any]) -> float:
+        if not outcomes:
+            return float("nan")
+        n_stuck = sum(1 for o in outcomes if getattr(o, "status", "done") == "stuck")
+        return n_stuck / len(outcomes)
+
+    records: List[EvolverImpactRecord] = []
+    for event in apply_events:
+        applied_at_str = event.get("timestamp", "")
+        t_apply = _parse_iso(applied_at_str)
+        if not t_apply:
+            continue
+
+        ctx = event.get("context", {}) or {}
+        suggestion_id = str(ctx.get("suggestion_id", "") or event.get("subject", ""))
+        category = str(ctx.get("category", "unknown"))
+
+        outcomes_before = _outcomes_for_window(t_apply, lookback_hours, 0)
+        outcomes_after = _outcomes_for_window(t_apply, 0, lookahead_hours)
+
+        n_before = len(outcomes_before)
+        n_after = len(outcomes_after)
+        sr_before = _stuck_rate(outcomes_before)
+        sr_after = _stuck_rate(outcomes_after)
+
+        if n_before < min_outcomes and n_after < min_outcomes:
+            verdict = "insufficient_data"
+            delta = float("nan")
+        elif math.isnan(sr_before) or math.isnan(sr_after):
+            verdict = "insufficient_data"
+            delta = float("nan")
+        else:
+            delta = sr_after - sr_before
+            if abs(delta) < 0.05:
+                verdict = "neutral"
+            elif delta < 0:
+                verdict = "improved"
+            else:
+                verdict = "degraded"
+
+        records.append(EvolverImpactRecord(
+            suggestion_id=suggestion_id,
+            category=category,
+            applied_at=applied_at_str,
+            outcomes_before=n_before,
+            stuck_before=sum(1 for o in outcomes_before if getattr(o, "status", "done") == "stuck"),
+            outcomes_after=n_after,
+            stuck_after=sum(1 for o in outcomes_after if getattr(o, "status", "done") == "stuck"),
+            stuck_rate_before=sr_before,
+            stuck_rate_after=sr_after,
+            delta=delta if not math.isnan(delta) else 0.0,
+            verdict=verdict,
+        ))
+
+    return records
+
+
+def format_impact_summary(records: List[EvolverImpactRecord]) -> str:
+    """Format impact records as a human-readable summary."""
+    if not records:
+        return "No EVOLVER_APPLIED events found (or insufficient outcome data)."
+
+    improved = sum(1 for r in records if r.verdict == "improved")
+    degraded = sum(1 for r in records if r.verdict == "degraded")
+    neutral = sum(1 for r in records if r.verdict == "neutral")
+    no_data = sum(1 for r in records if r.verdict == "insufficient_data")
+
+    lines = [
+        f"Evolver impact analysis: {len(records)} applied suggestion(s) analyzed",
+        f"  improved={improved} degraded={degraded} neutral={neutral} no_data={no_data}",
+        "",
+    ]
+    for r in records:
+        if r.verdict == "insufficient_data":
+            lines.append(
+                f"  [{r.category}] {r.suggestion_id[:12]} @ {r.applied_at[:10]} — "
+                f"insufficient data (before={r.outcomes_before}, after={r.outcomes_after})"
+            )
+        else:
+            import math
+            _delta_str = f"{r.delta:+.1%}" if not math.isnan(r.delta) else "n/a"
+            lines.append(
+                f"  [{r.category}] {r.suggestion_id[:12]} @ {r.applied_at[:10]} — "
+                f"{r.verdict}: stuck {r.stuck_rate_before:.0%}→{r.stuck_rate_after:.0%} "
+                f"(Δ{_delta_str})"
+            )
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
 # CLI entry point (poe-evolver)
 # ---------------------------------------------------------------------------
 
@@ -2752,7 +2934,22 @@ def main() -> int:
     apply_p.add_argument("--dry-run", action="store_true", help="Show what would be applied without doing it")
     apply_p.add_argument("id", nargs="?", help="Suggestion ID to apply (omit for interactive mode)")
 
+    # Longitudinal impact analysis
+    impact_p = subparsers.add_parser("impact", help="Show longitudinal impact of applied evolver suggestions")
+    impact_p.add_argument("--lookback", type=int, default=24, help="Hours before apply event to sample (default 24)")
+    impact_p.add_argument("--lookahead", type=int, default=24, help="Hours after apply event to sample (default 24)")
+    impact_p.add_argument("--limit", type=int, default=10, help="Max apply events to analyze (default 10)")
+
     args = parser.parse_args()
+
+    if args.cmd == "impact":
+        records = scan_evolver_impact(
+            lookback_hours=args.lookback,
+            lookahead_hours=args.lookahead,
+            limit=args.limit,
+        )
+        print(format_impact_summary(records))
+        return 0
 
     if args.cmd == "list" or args.cmd is None:
         # List pending suggestions (also default when no subcommand)
