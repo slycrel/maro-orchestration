@@ -1216,3 +1216,133 @@ _PERSONA_ROUTING_KEYWORDS: Dict[str, List[str]] = {
     "psyche-researcher": ["psychology", "neurology", "cognitive", "mental", "behavior"],
     "reporter": ["consolidate", "synthesize", "combine outputs", "final report", "merge results"],
 }
+
+
+# ---------------------------------------------------------------------------
+# Persona dispatch tracking — detect recurring roles with no matching persona
+# ---------------------------------------------------------------------------
+
+def _dispatch_log_path() -> Path:
+    """Path to persona-dispatch-log.jsonl in the memory directory."""
+    try:
+        from orch_items import memory_dir
+        return memory_dir() / "persona-dispatch-log.jsonl"
+    except Exception:
+        return Path.home() / ".poe" / "workspace" / "memory" / "persona-dispatch-log.jsonl"
+
+
+def record_persona_dispatch(
+    goal: str,
+    persona_name: str,
+    confidence: float,
+    *,
+    is_fallback: bool = False,
+) -> None:
+    """Append a persona dispatch event to the dispatch log.
+
+    Called from handle.py after persona_for_goal() selects a persona.
+    When confidence < 0.75 or persona_name is the default, is_fallback=True
+    signals that no strong match was found — a potential gap to author.
+    """
+    import json as _json
+    from datetime import datetime, timezone
+    entry = {
+        "goal_preview": goal[:120],
+        "persona_name": persona_name,
+        "confidence": round(confidence, 3),
+        "is_fallback": is_fallback,
+        "dispatched_at": datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        from file_lock import locked_append
+        p = _dispatch_log_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        locked_append(p, _json.dumps(entry))
+    except Exception:
+        pass  # dispatch logging must never block execution
+
+
+def scan_persona_gaps(
+    *,
+    min_fallbacks: int = 3,
+    window_days: int = 30,
+    log_path: "Path | None" = None,
+) -> list:
+    """Scan dispatch log for recurring fallback patterns → return gap summaries.
+
+    A 'gap' is a cluster of fallback dispatches that share a similar work role
+    (inferred from goal keywords) and have appeared ≥ min_fallbacks times.
+
+    Returns:
+        List of dicts: {role_hint, fallback_count, sample_goals, suggested_slug}
+        sorted by fallback_count descending.
+    """
+    import json as _json
+    import re as _re
+    from collections import Counter, defaultdict
+    from datetime import datetime, timezone, timedelta
+
+    p = log_path or _dispatch_log_path()
+    if not p.exists():
+        return []
+
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=window_days)).isoformat()
+    entries = []
+    try:
+        for line in p.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                d = _json.loads(line)
+                if d.get("dispatched_at", "") >= cutoff and d.get("is_fallback", False):
+                    entries.append(d)
+            except Exception:
+                pass
+    except Exception:
+        return []
+
+    if not entries:
+        return []
+
+    # Simple role inference: extract dominant verb + object from goal_preview
+    _STOPWORDS = {"the", "a", "an", "to", "for", "and", "or", "in", "of", "on", "with"}
+    _ROLE_VERBS = {
+        "build": "builder", "implement": "builder", "create": "builder", "write": "builder",
+        "research": "researcher", "analyze": "researcher", "investigate": "researcher",
+        "review": "critic", "audit": "critic", "evaluate": "critic",
+        "deploy": "ops", "monitor": "ops", "setup": "ops",
+        "draft": "writer", "summarize": "writer", "document": "writer",
+        "plan": "planner", "design": "planner", "architect": "planner",
+        "file": "pm", "create issue": "pm", "manage": "pm", "track": "pm",
+    }
+
+    def _infer_role(goal_text: str) -> str:
+        lower = goal_text.lower()
+        for phrase, role in _ROLE_VERBS.items():
+            if phrase in lower:
+                return role
+        words = [w for w in _re.split(r"\W+", lower) if w and w not in _STOPWORDS and len(w) > 2]
+        return words[0] if words else "general"
+
+    # Group fallbacks by inferred role
+    role_goals: dict = defaultdict(list)
+    for entry in entries:
+        role = _infer_role(entry.get("goal_preview", ""))
+        role_goals[role].append(entry.get("goal_preview", ""))
+
+    gaps = []
+    for role, goals in role_goals.items():
+        count = len(goals)
+        if count < min_fallbacks:
+            continue
+        slug = role.lower().replace(" ", "-")
+        gaps.append({
+            "role_hint": role,
+            "fallback_count": count,
+            "sample_goals": goals[:3],
+            "suggested_slug": slug,
+        })
+
+    gaps.sort(key=lambda x: x["fallback_count"], reverse=True)
+    return gaps

@@ -1474,6 +1474,7 @@ def run_evolver(
     scan_drift: bool = True,
     scan_canon: bool = True,
     scan_suggestion_calibration: bool = True,
+    scan_persona_gaps: bool = True,
 ) -> EvolverReport:
     """Run one meta-evolution cycle.
 
@@ -1641,6 +1642,36 @@ def run_evolver(
             log.info("evolver drift_scan findings=%d", len(drift_findings))
         except Exception as _drift_exc:
             log.debug("quality drift scan failed (non-fatal): %s", _drift_exc)
+
+    # Persona gap scan — detect recurring fallback dispatches → author new personas
+    if scan_persona_gaps:
+        try:
+            from persona import scan_persona_gaps as _scan_pg
+            import uuid as _pg_uuid
+            gaps = _scan_pg()
+            for gap in gaps:
+                role = gap["role_hint"]
+                slug = gap["suggested_slug"]
+                count = gap["fallback_count"]
+                sample = "; ".join(gap["sample_goals"][:2])
+                suggestions.append(Suggestion(
+                    suggestion_id=f"pg-{_pg_uuid.uuid4().hex[:8]}",
+                    category="persona_authoring",
+                    target=slug,
+                    suggestion=(
+                        f"Author a new persona 'personas/{slug}.md' for the recurring '{role}' role. "
+                        f"{count} dispatches fell back to default persona (no confident match). "
+                        f"Sample goals: {sample}"
+                    ),
+                    failure_pattern=f"no_persona_match: role={role} count={count}",
+                    confidence=0.75,  # human-review recommended before auto-apply
+                    outcomes_analyzed=count,
+                ))
+            if verbose and gaps:
+                print(f"[evolver] persona_gap_scan: {len(gaps)} unmatched role(s)", file=sys.stderr)
+            log.info("evolver persona_gap_scan gaps=%d", len(gaps))
+        except Exception as _pg_exc:
+            log.debug("persona gap scan failed (non-fatal): %s", _pg_exc)
 
     report = EvolverReport(
         run_id=run_id,

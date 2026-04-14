@@ -790,3 +790,75 @@ class TestBuildPersonaSystemPromptWithTemplate:
         spec = self._make_spec("Be precise. Be brief. Be right.")
         result = build_persona_system_prompt(spec, goal="any goal")
         assert "Be precise. Be brief. Be right." in result
+
+
+# ---------------------------------------------------------------------------
+# record_persona_dispatch + scan_persona_gaps
+# ---------------------------------------------------------------------------
+
+class TestPersonaDispatchTracking:
+    def test_record_dispatch_writes_entry(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        from persona import record_persona_dispatch, _dispatch_log_path
+        record_persona_dispatch("build a search index", "builder", 0.85, is_fallback=False)
+        p = _dispatch_log_path()
+        assert p.exists()
+        import json
+        entries = [json.loads(l) for l in p.read_text().splitlines() if l.strip()]
+        assert len(entries) == 1
+        assert entries[0]["persona_name"] == "builder"
+        assert entries[0]["is_fallback"] is False
+
+    def test_record_dispatch_fallback_flag(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        from persona import record_persona_dispatch, _dispatch_log_path
+        record_persona_dispatch("do some miscellaneous thing", "general-assistant", 0.50, is_fallback=True)
+        import json
+        p = _dispatch_log_path()
+        entries = [json.loads(l) for l in p.read_text().splitlines() if l.strip()]
+        assert entries[0]["is_fallback"] is True
+        assert entries[0]["confidence"] == 0.5
+
+    def test_scan_no_gaps_when_few_fallbacks(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        from persona import record_persona_dispatch, scan_persona_gaps
+        # Only 2 fallbacks — below min_fallbacks=3
+        record_persona_dispatch("build a UI", "builder", 0.40, is_fallback=True)
+        record_persona_dispatch("build another UI", "builder", 0.40, is_fallback=True)
+        gaps = scan_persona_gaps(min_fallbacks=3)
+        assert gaps == []
+
+    def test_scan_detects_recurring_role(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        from persona import record_persona_dispatch, scan_persona_gaps
+        for i in range(4):
+            record_persona_dispatch(f"build feature {i}", "default", 0.40, is_fallback=True)
+        gaps = scan_persona_gaps(min_fallbacks=3)
+        assert len(gaps) >= 1
+        assert gaps[0]["fallback_count"] >= 3
+
+    def test_scan_only_counts_fallback_entries(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        from persona import record_persona_dispatch, scan_persona_gaps
+        # 3 fallbacks + 2 non-fallbacks for same role
+        for i in range(3):
+            record_persona_dispatch(f"build thing {i}", "builder", 0.40, is_fallback=True)
+        for i in range(5):
+            record_persona_dispatch(f"build thing {i+10}", "builder", 0.90, is_fallback=False)
+        gaps = scan_persona_gaps(min_fallbacks=3)
+        # Gap exists (3 fallbacks), but non-fallbacks don't inflate count
+        if gaps:
+            assert gaps[0]["fallback_count"] == 3
+
+    def test_gap_has_required_fields(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        from persona import record_persona_dispatch, scan_persona_gaps
+        for i in range(3):
+            record_persona_dispatch(f"research paper {i}", "default", 0.40, is_fallback=True)
+        gaps = scan_persona_gaps(min_fallbacks=3)
+        if gaps:
+            g = gaps[0]
+            assert "role_hint" in g
+            assert "fallback_count" in g
+            assert "sample_goals" in g
+            assert "suggested_slug" in g

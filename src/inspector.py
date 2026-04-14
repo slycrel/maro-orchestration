@@ -332,7 +332,13 @@ class AlignmentResult:
 
 @dataclass
 class InspectorReport:
-    """Full inspector run report (spec §12 — distinct from InspectionReport above)."""
+    """Heavyweight inspector run report from run_inspector() (spec §12).
+
+    INTENTIONALLY DISTINCT from InspectionReport (below). See InspectionReport
+    docstring for the full split explanation. This class has SpecFrictionSignal
+    objects, AlignmentResult objects, and evolver_tickets for autonomous delegation.
+    Written to memory/inspector-report-log.jsonl.
+    """
     report_id: str
     sessions_analyzed: int
     friction_signals: List["SpecFrictionSignal"] = field(default_factory=list)
@@ -428,6 +434,18 @@ class SessionQuality:
 
 @dataclass
 class InspectionReport:
+    """Lightweight quality scan report from run_inspection_cycle().
+
+    INTENTIONALLY DISTINCT from InspectorReport (spec §12). Two separate
+    entrypoints, two schemas:
+    - InspectorReport: heavyweight spec §12 report via run_inspector(). Has
+      SpecFrictionSignal objects, AlignmentResult objects, evolver_tickets.
+      Written to memory/inspector-report-log.jsonl.
+    - InspectionReport (this class): lightweight scan via run_inspection_cycle().
+      Has quality_distribution, suggestions (plain strings), threshold_breaches.
+      Written to memory/inspection-log.jsonl.
+    Evolver reads from suggestions.jsonl directly, not from either report file.
+    """
     run_id: str
     inspected_sessions: int
     quality_distribution: Dict[str, int] = field(default_factory=lambda: {"good": 0, "fair": 0, "poor": 0})

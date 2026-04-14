@@ -669,17 +669,25 @@ def handle(
         # forced_persona (from garrytan:, etc.) overrides auto-selection.
         _persona_ctx = ""
         try:
-            from persona import persona_for_goal, PersonaRegistry, build_persona_system_prompt
+            from persona import persona_for_goal, PersonaRegistry, build_persona_system_prompt, record_persona_dispatch, _DEFAULT_PERSONA
             _preg = PersonaRegistry()
-            _pname = (
-                _pfx.forced_persona
-                if _pfx.forced_persona
-                else persona_for_goal(message, registry=_preg, confidence_threshold=0.75)[0]
-            )
+            _pconf = 1.0
+            if _pfx.forced_persona:
+                _pname = _pfx.forced_persona
+            else:
+                _pname, _pconf = persona_for_goal(message, registry=_preg, confidence_threshold=0.75)
+            # Track dispatch for persona gap detection (evolver uses this)
+            try:
+                _is_fallback = not _pfx.forced_persona and (
+                    _pconf < 0.75 or _pname == _DEFAULT_PERSONA
+                )
+                record_persona_dispatch(message, _pname, _pconf, is_fallback=_is_fallback)
+            except Exception:
+                pass
             _pspec = _preg.load(_pname)
             if _pspec:
                 _persona_ctx = build_persona_system_prompt(_pspec, goal=message)
-                log.info("handle: persona=%s forced=%s", _pname, bool(_pfx.forced_persona))
+                log.info("handle: persona=%s conf=%.2f forced=%s", _pname, _pconf, bool(_pfx.forced_persona))
         except Exception:
             pass
         if _persona_ctx:
