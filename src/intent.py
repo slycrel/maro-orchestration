@@ -228,3 +228,84 @@ def check_goal_clarity(
         pass  # Clarity check failures must never block a run
 
     return {"clear": True, "question": ""}
+
+
+# ---------------------------------------------------------------------------
+# Bitter Lesson Goal Rewriter — "What vs How"
+# ---------------------------------------------------------------------------
+
+_BLE_SYSTEM = """\
+You are a Bitter Lesson goal rewriter. Your task: convert imperative-step goals
+("do X, then Y, then check Z") into outcome-focused goals ("achieve X given context Y").
+
+The Bitter Lesson principle: embed the *what* (desired outcome + user context + tools available),
+not the *how* (execution steps). The AI should figure out how.
+
+Rules:
+1. If the goal is ALREADY outcome-focused (no step-by-step instructions), return it unchanged.
+2. If the goal contains explicit sequencing ("first", "then", "step 1", "afterwards"), rewrite
+   it as a single outcome statement that preserves intent but removes prescribed method.
+3. Preserve all proper nouns, tool names, constraints, and output requirements.
+4. The rewritten goal should be clear, specific, and completable by an autonomous agent.
+5. Never add steps or structure the original didn't have. Just convert form.
+
+Respond with JSON only:
+{"rewritten": "rewritten goal or original if already outcome-focused", "changed": true|false}
+"""
+
+# Heuristic: detect imperative-heavy goals without LLM call
+_IMPERATIVE_MARKERS = re.compile(
+    r"\b(first,?\s|then\s|step\s*\d|step\s*one|next,?\s|finally,?\s|afterwards?\s"
+    r"|start by\s|begin by\s|start with\s|proceed to\s|make sure to\s"
+    r"|run the\s.*then\s|do\s.*,?\s*then\s|check\s.*,?\s*then\s)",
+    re.IGNORECASE,
+)
+
+
+def _is_imperative_heavy(goal: str) -> bool:
+    """Quick heuristic: does the goal prescribe execution steps?"""
+    return bool(_IMPERATIVE_MARKERS.search(goal)) and len(goal.split()) > 15
+
+
+def rewrite_imperative_goal(
+    goal: str,
+    *,
+    adapter=None,
+    dry_run: bool = False,
+) -> str:
+    """Bitter Lesson goal rewriter — strip prescribed execution steps, keep outcome intent.
+
+    Returns the rewritten goal (or the original if no rewrite is needed or safe).
+    Non-fatal — returns original on any error.
+
+    Only calls LLM when the heuristic detects imperative-heavy language.
+    """
+    if dry_run or not _is_imperative_heavy(goal):
+        return goal
+
+    if adapter is None:
+        return goal
+
+    try:
+        from llm import LLMMessage
+        resp = adapter.complete(
+            [
+                LLMMessage("system", _BLE_SYSTEM),
+                LLMMessage("user", f"Goal: {goal}"),
+            ],
+            max_tokens=256,
+            temperature=0.1,
+        )
+        data = extract_json(content_or_empty(resp), dict, log_tag="intent.ble_rewrite")
+        if data and data.get("changed"):
+            rewritten = safe_str(data.get("rewritten"))
+            if rewritten and len(rewritten) >= 10:
+                import logging as _logging
+                _logging.getLogger(__name__).info(
+                    "BLE rewrite applied: %r → %r", goal[:60], rewritten[:60]
+                )
+                return rewritten
+    except Exception:
+        pass  # Rewrite failures must never block a run
+
+    return goal

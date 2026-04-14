@@ -2103,3 +2103,132 @@ class TestScanSuggestionOutcomes:
                     scan_calibration=False, scan_costs=False, scan_drift=False,
                     scan_canon=False, verbose=False)
         assert calibration_called, "scan_suggestion_outcomes was not called"
+
+
+# ---------------------------------------------------------------------------
+# _load_user_signals + SIGNALS.md context injection
+# ---------------------------------------------------------------------------
+
+from evolver import _load_user_signals
+
+
+class TestLoadUserSignals:
+    def test_returns_empty_when_no_file(self, tmp_path, monkeypatch):
+        """Missing user/SIGNALS.md returns empty string."""
+        import evolver as _evolver_mod
+        monkeypatch.setattr(
+            _evolver_mod, "__file__",
+            str(tmp_path / "src" / "evolver.py"),
+        )
+        result = _load_user_signals()
+        assert result == ""
+
+    def test_reads_and_caps_at_600_chars(self, tmp_path, monkeypatch):
+        """Reads SIGNALS.md and caps at 600 chars."""
+        import evolver as _evolver_mod
+
+        # Create fake user/SIGNALS.md relative to a fake src/evolver.py
+        src_dir = tmp_path / "src"
+        src_dir.mkdir()
+        user_dir = tmp_path / "user"
+        user_dir.mkdir()
+        (user_dir / "SIGNALS.md").write_text("A" * 700)
+
+        monkeypatch.setattr(
+            _evolver_mod, "__file__",
+            str(src_dir / "evolver.py"),
+        )
+        result = _load_user_signals()
+        assert len(result) <= 600
+        assert result == "A" * 600
+
+    def test_nocrash_on_permission_error(self, tmp_path, monkeypatch):
+        """Permission error loading SIGNALS.md returns empty, never raises."""
+        import evolver as _evolver_mod
+        src_dir = tmp_path / "src"
+        src_dir.mkdir()
+        user_dir = tmp_path / "user"
+        user_dir.mkdir()
+        sig_file = user_dir / "SIGNALS.md"
+        sig_file.write_text("test")
+        sig_file.chmod(0o000)
+        monkeypatch.setattr(
+            _evolver_mod, "__file__",
+            str(src_dir / "evolver.py"),
+        )
+        try:
+            result = _load_user_signals()
+            # Either empty (permission denied) or the content — no crash
+            assert isinstance(result, str)
+        finally:
+            sig_file.chmod(0o644)
+
+
+class TestScanOutcomesForSignalsWithUserSignals:
+    def _make_outcome(self, status="done", goal="research goal", summary="found useful pattern"):
+        o = MagicMock()
+        o.status = status
+        o.goal = goal
+        o.summary = summary
+        o.task_type = "research"
+        return o
+
+    def test_user_signals_included_in_llm_call(self, tmp_path, monkeypatch):
+        """user/SIGNALS.md content is passed to the LLM when available."""
+        import evolver as _evolver_mod
+
+        src_dir = tmp_path / "src"
+        src_dir.mkdir()
+        user_dir = tmp_path / "user"
+        user_dir.mkdir()
+        (user_dir / "SIGNALS.md").write_text("## Active research: Polymarket arbitrage strategies")
+
+        monkeypatch.setattr(_evolver_mod, "__file__", str(src_dir / "evolver.py"))
+
+        captured_user_msg = []
+
+        def fake_build_adapter(model=None):
+            class _Adapter:
+                def complete(self, messages, **kwargs):
+                    # Capture the user message to check signal content was included
+                    user_msgs = [m for m in messages if getattr(m, 'role', '') == 'user']
+                    if user_msgs:
+                        captured_user_msg.append(getattr(user_msgs[0], 'content', ''))
+                    return MagicMock(
+                        content=json.dumps({"signals": []}),
+                        input_tokens=10,
+                        output_tokens=5,
+                    )
+            return _Adapter()
+
+        monkeypatch.setattr(_evolver_mod, "build_adapter", fake_build_adapter)
+
+        outcomes = [self._make_outcome()]
+        scan_outcomes_for_signals(outcomes)
+
+        assert len(captured_user_msg) > 0
+        # User signals block should be present in the LLM message
+        assert "Polymarket arbitrage" in captured_user_msg[0]
+
+    def test_no_signals_file_still_works(self, monkeypatch):
+        """Missing SIGNALS.md doesn't break signal scanning."""
+        import evolver as _evolver_mod
+        monkeypatch.setattr(_evolver_mod, "_load_user_signals", lambda: "")
+
+        signal_json = json.dumps({
+            "signals": [{
+                "signal_type": "lead",
+                "description": "something",
+                "suggested_goal": "Investigate lead further in depth",
+                "confidence": 0.9,
+                "source_outcome": "run",
+            }]
+        })
+        mock_adapter = MagicMock()
+        mock_adapter.complete.return_value = MagicMock(
+            content=signal_json, input_tokens=10, output_tokens=30
+        )
+        outcomes = [self._make_outcome()]
+        with patch("evolver.build_adapter", return_value=mock_adapter):
+            signals = scan_outcomes_for_signals(outcomes)
+        assert len(signals) == 1

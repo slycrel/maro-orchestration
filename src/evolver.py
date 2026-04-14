@@ -740,6 +740,18 @@ class BusinessSignal:
         }
 
 
+def _load_user_signals() -> str:
+    """Load user/SIGNALS.md as context for signal scanning. Non-fatal — returns '' on error."""
+    try:
+        from pathlib import Path as _Path
+        _signals_path = _Path(__file__).resolve().parent.parent / "user" / "SIGNALS.md"
+        if _signals_path.exists():
+            return _signals_path.read_text(encoding="utf-8").strip()[:600]
+    except Exception:
+        pass
+    return ""
+
+
 def scan_outcomes_for_signals(
     outcomes: List[Any],
     *,
@@ -751,6 +763,9 @@ def scan_outcomes_for_signals(
     Converts high-confidence signals into sub_mission Suggestion entries so the
     evolver queue can schedule them as autonomous runs. This closes the
     Mode 2 → Mode 3 loop: the system proposes its own next goals from findings.
+
+    Also consults user/SIGNALS.md for declared active research threads — signals
+    that align with user priorities get higher weighting in the proposed sub-missions.
 
     Args:
         outcomes: List of Outcome objects (recent).
@@ -781,12 +796,19 @@ def scan_outcomes_for_signals(
     if len(lines) <= 1:
         return []
 
+    # Include user/SIGNALS.md for context — align proposed sub-missions with user priorities
+    user_signals = _load_user_signals()
+    user_block = (
+        f"\n\nActive user research priorities (from user/SIGNALS.md — weight signals that align):\n{user_signals}"
+        if user_signals else ""
+    )
+
     try:
         adapter = build_adapter(model=MODEL_CHEAP)
         resp = adapter.complete(
             [
                 LLMMessage("system", _SIGNAL_SYSTEM),
-                LLMMessage("user", f"Scan these outcomes for signals:\n\n" + "\n".join(lines)),
+                LLMMessage("user", f"Scan these outcomes for signals:{user_block}\n\n" + "\n".join(lines)),
             ],
             max_tokens=1024,
             temperature=0.3,

@@ -202,3 +202,131 @@ def test_clarity_malformed_json_returns_clear():
 
     result = check_goal_clarity("research X Y Z W", adapter=BadJsonAdapter())
     assert result["clear"] is True
+
+
+# ---------------------------------------------------------------------------
+# rewrite_imperative_goal (Bitter Lesson goal rewriter)
+# ---------------------------------------------------------------------------
+
+from intent import rewrite_imperative_goal, _is_imperative_heavy
+
+
+class TestIsImperativeHeavy:
+    def test_outcome_goal_not_imperative(self):
+        # Pure outcome goal — should not be flagged
+        assert not _is_imperative_heavy("Research winning Polymarket prediction strategies and summarize top 3")
+
+    def test_then_sequence_is_imperative(self):
+        assert _is_imperative_heavy(
+            "First check the repo then run the tests then commit all changes and push to the main branch"
+        )
+
+    def test_step_sequence_is_imperative(self):
+        assert _is_imperative_heavy(
+            "Step 1: clone the repo. Step 2: install all deps. Step 3: run smoke tests and verify."
+        )
+
+    def test_start_by_is_imperative(self):
+        assert _is_imperative_heavy(
+            "Start by reading the README, then carefully audit the test coverage, and finally run the suite"
+        )
+
+    def test_short_goal_never_imperative(self):
+        # Under 15 words — never flagged regardless of content
+        assert not _is_imperative_heavy("First install then run")
+
+    def test_proceed_to_is_imperative(self):
+        assert _is_imperative_heavy(
+            "Proceed to analyze the Polymarket data carefully, then generate a detailed summary report for the team"
+        )
+
+
+class TestRewriteImperativeGoal:
+    def test_returns_original_when_no_imperative(self):
+        # Outcome-focused goal — should pass through unchanged
+        goal = "Research winning Polymarket strategies and summarize key findings"
+        assert rewrite_imperative_goal(goal) == goal
+
+    def test_returns_original_when_dry_run(self):
+        goal = "First do X then do Y then check Z for the final output"
+        assert rewrite_imperative_goal(goal, dry_run=True) == goal
+
+    def test_returns_original_when_no_adapter(self):
+        goal = "First do X then do Y then check Z for the final output and commit"
+        assert rewrite_imperative_goal(goal, adapter=None) == goal
+
+    def test_llm_rewrite_accepted_when_changed(self):
+        import json
+
+        class RewriteAdapter:
+            class _Resp:
+                content = json.dumps({"rewritten": "Achieve X outcome given Y context", "changed": True})
+                input_tokens = 30
+                output_tokens = 20
+                tool_calls = []
+
+            def complete(self, *args, **kwargs):
+                return self._Resp()
+
+        goal = "First do X, then do Y, then check Z for the final output and commit changes"
+        result = rewrite_imperative_goal(goal, adapter=RewriteAdapter())
+        assert result == "Achieve X outcome given Y context"
+        assert result != goal
+
+    def test_llm_unchanged_returns_original(self):
+        import json
+
+        class UnchangedAdapter:
+            class _Resp:
+                content = json.dumps({"rewritten": "original goal unchanged", "changed": False})
+                input_tokens = 30
+                output_tokens = 15
+                tool_calls = []
+
+            def complete(self, *args, **kwargs):
+                return self._Resp()
+
+        goal = "First do X then do Y then check Z and finalize the whole thing properly"
+        result = rewrite_imperative_goal(goal, adapter=UnchangedAdapter())
+        assert result == goal
+
+    def test_llm_bad_json_returns_original(self):
+        class BadAdapter:
+            class _Resp:
+                content = "not json"
+                input_tokens = 5
+                output_tokens = 5
+                tool_calls = []
+
+            def complete(self, *args, **kwargs):
+                return self._Resp()
+
+        goal = "First do X then do Y then check Z and commit all the results back to main"
+        result = rewrite_imperative_goal(goal, adapter=BadAdapter())
+        assert result == goal
+
+    def test_llm_exception_returns_original(self):
+        class CrashAdapter:
+            def complete(self, *args, **kwargs):
+                raise RuntimeError("adapter exploded")
+
+        goal = "First do X then do Y then check Z and push to origin main"
+        result = rewrite_imperative_goal(goal, adapter=CrashAdapter())
+        assert result == goal
+
+    def test_rewritten_goal_too_short_ignored(self):
+        import json
+
+        class TinyAdapter:
+            class _Resp:
+                content = json.dumps({"rewritten": "Hi", "changed": True})
+                input_tokens = 5
+                output_tokens = 5
+                tool_calls = []
+
+            def complete(self, *args, **kwargs):
+                return self._Resp()
+
+        goal = "First do X then do Y then check Z and commit and push to origin main branch"
+        result = rewrite_imperative_goal(goal, adapter=TinyAdapter())
+        assert result == goal  # too short — ignored

@@ -532,6 +532,19 @@ def handle(
                 )
             except (ImportError, Exception):
                 pass  # fall through to direct agenda handling
+        # BLE rewriter — strip prescribed execution steps, keep outcome intent (non-blocking)
+        # Bitter Lesson Engineering: embed the "what", let the AI own the "how".
+        if not dry_run:
+            try:
+                from intent import rewrite_imperative_goal
+                _rewritten = rewrite_imperative_goal(message, adapter=adapter)
+                if _rewritten != message:
+                    if verbose:
+                        print(f"[poe:{handle_id}] BLE rewrite: imperative goal → outcome goal", file=sys.stderr, flush=True)
+                    message = _rewritten
+            except Exception:
+                pass  # rewrite failures must never block a run
+
         # Clarification milestone — check goal clarity before starting (skipped if yolo=true)
         _yolo = _cfg.get("yolo", "false").strip().lower() == "true"
         if not dry_run and not _yolo:
