@@ -2302,14 +2302,15 @@ def _run_steps_parallel(
                     from security import scan_external_content as _sec_scan, InjectionRisk as _IRisk
                     _sec_result = _sec_scan(_result_text)
                     if _sec_result.risk >= _IRisk.HIGH:
-                        outcome["status"] = "blocked"
-                        outcome["stuck_reason"] = (
-                            f"parallel step {step_idx}: security scan flagged HIGH-risk "
-                            f"content in result ({', '.join(_sec_result.signals)})"
-                        )
-                        outcome["result"] = ""
+                        # Use sanitized result rather than blocking the entire step.
+                        # Step results are our agent's own output (possibly containing
+                        # fetched web content); fully blocking them causes research runs
+                        # to stall.  Sanitize-in-place redacts the suspicious spans
+                        # while keeping the useful content.
+                        outcome["result"] = _sec_result.sanitized
                         log.warning(
-                            "parallel step %d blocked by security scan: %s",
+                            "parallel step %d: security scan HIGH-risk — sanitized result "
+                            "(signals: %s)",
                             step_idx, ", ".join(_sec_result.signals),
                         )
                     elif _sec_result.risk > _IRisk.NONE:

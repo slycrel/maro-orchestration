@@ -114,10 +114,14 @@ _PATTERNS: List[tuple[str, re.Pattern, InjectionRisk]] = [
      ),
      InjectionRisk.HIGH),
 
-    # Exfiltration attempts
+    # Exfiltration attempts — "post" removed: matches HTTP POST + "post API key" in
+    # technical docs constantly; false-positive rate too high for research content.
+    # "send" kept but only in direct-object form (requires "the/your/my/this" before target).
     ("exfil_attempt",
      re.compile(
-         r"\b(send|exfiltrate|leak|forward|email|post|upload)\s+.{0,40}"
+         r"\b(exfiltrate|leak|forward|email|upload)\s+.{0,40}"
+         r"(secret|token|key|password|credential|api.?key|private)"
+         r"|\bsend\s+.{0,20}(your|my|the|this)\s+.{0,20}"
          r"(secret|token|key|password|credential|api.?key|private)",
          re.IGNORECASE,
      ),
