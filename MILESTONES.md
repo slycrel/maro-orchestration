@@ -2,7 +2,7 @@
 
 What to do next, in what order. Updated each session. Strategic phases live in ROADMAP.md; deferred ideas live in BACKLOG.md. This file is the bridge — the executable queue.
 
-Last updated: 2026-04-14 (session 27 — dev round 4 closed #12/#23/#24, first-class project isolation)
+Last updated: 2026-04-14 (session 28 — PM round 5, dev round 5: review DELETE, photo_url round-trip, form DB error handling)
 
 ---
 
@@ -10,7 +10,13 @@ Last updated: 2026-04-14 (session 27 — dev round 4 closed #12/#23/#24, first-c
 
 - **BACKLOG cleanup** — Review and close stale BACKLOG items from earlier sessions.
 - **Evolver confidence calibration follow-up** — `scan_suggestion_outcomes` wired; verify calibration is improving (check live workspace suggestion stats).
+- **PM round 6 / dev round 6** — Open issues: #5 (form errors, duplicate-name IntegrityError gap), #1 (pagination), #4 (seed data). Consider closing #4 as out-of-scope. #1 is a real enhancement worth scoping.
 - **Grok response 3 steal items** — Bitter Lesson Engineering analysis: PAI comparison, thin-harness audit. Most items already shipped. Key remaining: ensure Mode 2→3 bridge is solid (signals→sub_mission flow).
+
+## Done (session 28, 2026-04-14 — PM round 5, dev round 5)
+
+- [x] **PM round 5** — Closed #9 (race condition false positive: SQL aggregate, not read-modify-write), #3 (FastAPI auto-docs at /docs), #15 (photo_url done), #20 (review DELETE implemented). Commented on #5 with progress status.
+- [x] **Dev round 5** — review DELETE endpoint (204/404), photo_url round-trip tests (null when not set), form DB error handling (SQLAlchemyError catch → rollback → re-render), pyproject.toml pythonpath fix. 57 recipe tests pass.
 
 ## Done (session 27, 2026-04-14 — dev round 4 closed #12/#23/#24, first-class project isolation)
 
