@@ -997,6 +997,10 @@ def verify_claim_tiered(
         pass
 
     # P2: Check standing rules — authoritative durable constraints
+    # Intentional asymmetry vs P1: standing rules are authoritative and general — a
+    # fixed match of 2 keywords is deliberately looser than P1's proportional threshold.
+    # Rules are written for broad applicability; P1's proportional threshold would
+    # under-match short rules against long claims.
     try:
         from memory import load_standing_rules
         rules = load_standing_rules()
