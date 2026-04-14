@@ -168,8 +168,15 @@ Priority: env var > config.yml > hardcoded default. Tests are isolated (config r
 ## Running things
 
 ```bash
-# Tests
+# Tests — targeted (safe to run alongside TUI)
 cd /home/clawd/claude/openclaw-orchestration
+python3 -m pytest tests/test_agent_loop.py -q
+
+# Tests — full suite (use this one — caps CPU to 2 cores + nice 15)
+# Runs in chunks of 1000 so progress is visible; won't tip over the box.
+bash scripts/test-safe.sh
+
+# Tests — full suite, raw (only when the box is idle / no TUI running)
 python3 -m pytest tests/ -q
 
 # Smoke
