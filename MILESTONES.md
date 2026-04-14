@@ -8,8 +8,8 @@ Last updated: 2026-04-13 (session 19, continued)
 
 ## Next Up
 
-1. **Recovery mid-loop apply** — Gap 2 from phase audit. `plan_recovery()` auto-apply still runs at loop-end only; for complex failures this wastes all first-loop work. Trigger recovery mid-loop when convergence says a step isn't converging, applying to current state not fresh restart.
-2. **Phase 59 real cost computation** — `record_skill_outcome()` currently gets `cost_usd=0.0`. Plumb token counts × model pricing from metrics so skill stats actually reflect spend.
+1. **Recovery mid-loop apply (remaining)** — Gap 2 from phase audit is ~mostly closed via the mid-loop diagnosis bridge (session 19). Remaining: `budget_exhaustion` is diagnosed only after max_iterations hit; consider a mid-loop "iteration budget running low" signal that bumps the budget instead of grinding to a stop.
+2. **Artifact output routing cleanup** — Temp artifacts (per-step) → tmp dir (deleted by default, kept via config `keep_artifacts: true`). Permanent outputs → `~/.poe/workspace/output/`.
 
 ## Queued
 
@@ -29,6 +29,7 @@ Last updated: 2026-04-13 (session 19, continued)
 
 ## Done (session 19, continued)
 
+- [x] **Phase 59 real cost computation** — `record_skill_outcome()` now gets real `cost_usd` from `metrics.estimate_cost(tokens_in, tokens_out, model)`. Model is the per-step adapter's `model_key` (tier overrides reflected). Plumbed via new `step_model` kwarg on `_process_done_step`. Commit 3dd3e3d.
 - [x] **Wire diagnosis into mid-loop blocking** — `_handle_blocked_step` now consults `diagnose_loop()` after 2 retries. Maps 4 failure classes to targeted actions: retry_churn→redecompose, decomposition_too_broad→redecompose, empty_model_output→retry-with-tool-call-hint, constraint_false_positive→retry. Closes Gap 1 from PHASE_AUDIT. +8 tests. Commit edaceda.
 - [x] **Clean workspace skills** — 41 orphan skills in ~/.poe/workspace/memory/skills.jsonl, 4 content_hash groups with duplicates. One-shot cleanup (kept 31 unique), grouped by content_hash, scored by creation time + success metrics. Added `poe-doctor --cleanup-skills` flag. Reduces ~100 lines log spam per goal.
 - [x] **Add poe-doctor check for workspace skills duplicates** — Phase 62 enhancement, detects duplicate content_hash in workspace skills, reports findings with cleanup command. Validates dedup after each run.
