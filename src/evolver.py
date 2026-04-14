@@ -388,6 +388,14 @@ def apply_suggestion(suggestion_id: str) -> bool:
                     d["applied"] = True
                     _apply_suggestion_action(d)
                     log.info("evolver: auto-applied prompt_tweak: %s", d.get("suggestion", "")[:100])
+                elif category == "cost_optimization":
+                    # No executor exists yet — surface for human review instead of
+                    # silently marking applied. Previously fell through to else and
+                    # looked "applied" in logs without any real-world effect.
+                    d["applied"] = False
+                    d["status"] = "pending_human_review"
+                    d["block_reason"] = "cost_optimization has no auto-apply handler; review manually"
+                    log.info("evolver: cost_optimization held for human review: %s", d.get("suggestion", "")[:100])
                 else:
                     # observation, sub_mission, etc. — safe to apply
                     d["applied"] = True
@@ -1393,6 +1401,7 @@ def run_evolver(
     # Advisor Pattern: for medium-confidence suggestions (0.6–0.79), consult
     # Opus before applying. High-confidence (≥0.8) still auto-apply directly.
     auto_applied = 0
+    applied_ids: List[str] = []  # parallel to counter; lets _verify_post_apply revert on failure
     advisor_promoted = 0
     if not dry_run and suggestions:
         for s in suggestions:
@@ -1401,6 +1410,7 @@ def run_evolver(
             if s.confidence >= 0.8:
                 if apply_suggestion(s.suggestion_id):
                     auto_applied += 1
+                    applied_ids.append(s.suggestion_id)
             elif 0.6 <= s.confidence < 0.8:
                 # Advisor gate: let Opus decide on medium-confidence suggestions
                 try:
@@ -1425,6 +1435,7 @@ def run_evolver(
                     if _advice and "yes" in _advice.lower().split()[:5]:
                         if apply_suggestion(s.suggestion_id):
                             auto_applied += 1
+                            applied_ids.append(s.suggestion_id)
                             advisor_promoted += 1
                             log.info("evolver advisor: promoted suggestion %s (confidence %.2f)",
                                      s.suggestion_id, s.confidence)
@@ -1438,7 +1449,7 @@ def run_evolver(
 
     # Verify→learn: after mutations, check test suite health and record outcome
     if auto_applied and not dry_run:
-        _verify_post_apply(auto_applied, run_id, verbose=verbose)
+        _verify_post_apply(applied_ids, run_id, verbose=verbose)
 
     # Telegram notification
     if notify and suggestions and not dry_run:
@@ -1511,15 +1522,29 @@ def run_evolver(
 # Telegram notification
 # ---------------------------------------------------------------------------
 
-def _verify_post_apply(auto_applied: int, run_id: str, *, verbose: bool = False) -> None:
-    """Verify→learn: run test suite after auto-applying suggestions.
+def _verify_post_apply(applied_ids, run_id: str, *, verbose: bool = False) -> None:
+    """Verify→learn: run test suite after auto-applying suggestions; auto-revert on failure.
 
     Closes the verify→learn loop by checking whether mutations broke anything.
-    Records the outcome as a lesson so future evolver cycles can learn from it.
-    On test failure, logs a warning (does not auto-revert — that's a future enhancement).
+    On test failure, iterates applied_ids and calls revert_suggestion on each —
+    the self-improvement loop must not be able to make itself worse and stay there.
+
+    Accepts either a list of suggestion IDs (preferred) or an int count
+    (legacy; no revert possible).
     """
     import subprocess
     from pathlib import Path
+
+    # Backward-compat: some callers/tests pass an int count.
+    if isinstance(applied_ids, int):
+        auto_applied = applied_ids
+        id_list: List[str] = []
+    else:
+        id_list = list(applied_ids or [])
+        auto_applied = len(id_list)
+
+    if auto_applied <= 0:
+        return
 
     repo_root = Path(__file__).parent.parent
     test_dir = repo_root / "tests"
@@ -1547,23 +1572,44 @@ def _verify_post_apply(auto_applied: int, run_id: str, *, verbose: bool = False)
         log.debug("verify_post_apply: test run failed: %s", exc)
         return
 
+    reverted: List[dict] = []
     if passed:
         log.info("verify_post_apply: tests PASSED after %d mutations — %s", auto_applied, summary)
     else:
         log.warning("verify_post_apply: tests FAILED after %d mutations — %s", auto_applied, summary)
+        # Auto-revert every auto-applied mutation. Leaving broken state in place means
+        # self-improvement can make itself worse and stay that way.
+        for sid in id_list:
+            try:
+                rv = revert_suggestion(sid)
+                reverted.append({"suggestion_id": sid, **rv})
+                if rv.get("reverted"):
+                    log.info("verify_post_apply: reverted %s (%s): %s",
+                             sid, rv.get("category"), rv.get("detail"))
+                else:
+                    log.warning("verify_post_apply: revert FAILED for %s: %s",
+                                sid, rv.get("detail"))
+            except Exception as exc:
+                log.warning("verify_post_apply: revert raised for %s: %s", sid, exc)
+                reverted.append({"suggestion_id": sid, "reverted": False, "detail": str(exc)})
 
     if verbose:
         _icon = "✓" if passed else "✗"
-        print(f"[evolver] verify→learn: tests {_icon} after {auto_applied} mutations",
+        _revert_note = f", reverted {sum(1 for r in reverted if r.get('reverted'))}/{len(reverted)}" if reverted else ""
+        print(f"[evolver] verify→learn: tests {_icon} after {auto_applied} mutations{_revert_note}",
               file=sys.stderr, flush=True)
 
     # Record outcome as a lesson for the learning pipeline
     try:
         from memory_ledger import record_outcome
+        _revert_summary = ""
+        if reverted:
+            _n_ok = sum(1 for r in reverted if r.get("reverted"))
+            _revert_summary = f" Auto-reverted {_n_ok}/{len(reverted)} mutations."
         record_outcome(
             goal=f"evolver auto-apply ({auto_applied} suggestions, run {run_id})",
             status="done" if passed else "stuck",
-            summary=f"Post-mutation test suite: {'PASSED' if passed else 'FAILED'}. {summary}",
+            summary=f"Post-mutation test suite: {'PASSED' if passed else 'FAILED'}. {summary}{_revert_summary}",
             task_type="evolver_verify",
         )
     except Exception:
@@ -1576,7 +1622,8 @@ def _verify_post_apply(auto_applied: int, run_id: str, *, verbose: bool = False)
             event_type="EVOLVER_VERIFY",
             subject=f"run-{run_id}",
             summary=f"Post-mutation tests {'PASSED' if passed else 'FAILED'} after {auto_applied} auto-applied suggestions. {summary}",
-            context={"run_id": run_id, "auto_applied": auto_applied, "passed": passed, "summary": summary},
+            context={"run_id": run_id, "auto_applied": auto_applied, "passed": passed,
+                     "summary": summary, "reverted": reverted},
         )
     except Exception:
         pass

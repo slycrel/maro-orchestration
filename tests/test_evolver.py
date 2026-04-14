@@ -375,6 +375,92 @@ def test_apply_suggestion_no_file(tmp_path):
     assert ok is False
 
 
+def test_verify_post_apply_reverts_on_test_failure(tmp_path):
+    # Regression: session 20 adversarial review finding 3.2 — _verify_post_apply
+    # used to log a warning on test failure but leave broken state in place.
+    # The self-improvement loop could make itself worse and stay that way.
+    # Fix: iterate applied_ids on failure and call revert_suggestion on each.
+    from evolver import _verify_post_apply
+
+    fake_fail = MagicMock()
+    fake_fail.returncode = 1
+    fake_fail.stdout = "FAILED tests/test_foo.py::test_bar"
+    fake_fail.stderr = ""
+
+    reverted_ids = []
+
+    def fake_revert(sid):
+        reverted_ids.append(sid)
+        return {"reverted": True, "category": "prompt_tweak", "detail": "rolled back"}
+
+    # Simulate the caller passing a list of applied suggestion ids.
+    with patch("subprocess.run", return_value=fake_fail), \
+         patch("evolver.revert_suggestion", side_effect=fake_revert):
+        _verify_post_apply(["s1", "s2", "s3"], "run-xyz", verbose=False)
+
+    assert reverted_ids == ["s1", "s2", "s3"]
+
+
+def test_verify_post_apply_does_not_revert_on_test_success(tmp_path):
+    # Passing tests must NOT trigger a revert — would undo good changes.
+    from evolver import _verify_post_apply
+
+    fake_pass = MagicMock()
+    fake_pass.returncode = 0
+    fake_pass.stdout = "3830 passed"
+    fake_pass.stderr = ""
+
+    reverted_ids = []
+
+    def fake_revert(sid):
+        reverted_ids.append(sid)
+        return {"reverted": True, "category": "prompt_tweak", "detail": "rolled back"}
+
+    with patch("subprocess.run", return_value=fake_pass), \
+         patch("evolver.revert_suggestion", side_effect=fake_revert):
+        _verify_post_apply(["s1", "s2"], "run-xyz", verbose=False)
+
+    assert reverted_ids == []
+
+
+def test_verify_post_apply_accepts_legacy_int_count(tmp_path):
+    # Backward-compat: older callers/tests pass an int count. Still accepted,
+    # but no revert happens because we don't have the IDs. This preserves the
+    # old "log a warning" behavior for those callers.
+    from evolver import _verify_post_apply
+
+    fake_fail = MagicMock()
+    fake_fail.returncode = 1
+    fake_fail.stdout = "FAILED"
+    fake_fail.stderr = ""
+
+    with patch("subprocess.run", return_value=fake_fail), \
+         patch("evolver.revert_suggestion") as mock_revert:
+        _verify_post_apply(3, "run-xyz", verbose=False)
+
+    assert mock_revert.call_count == 0  # no IDs → no revert
+
+
+def test_apply_suggestion_cost_optimization_held_for_review(tmp_path):
+    # Regression: cost_optimization has no executor in _apply_suggestion_action.
+    # Previously it fell through to the else-branch and got marked applied=True,
+    # silently doing nothing. Now it must stay applied=False and surface for review.
+    path = tmp_path / "suggestions.jsonl"
+    s = Suggestion(suggestion_id="c1", category="cost_optimization", target="decompose",
+                   suggestion="switch to cheap tier", failure_pattern="high tokens",
+                   confidence=0.9, outcomes_analyzed=5, applied=False)
+    path.write_text(json.dumps(s.to_dict()) + "\n", encoding="utf-8")
+
+    with patch("evolver._suggestions_path", return_value=path):
+        ok = apply_suggestion("c1")
+    assert ok is True  # found + updated, but NOT executed
+
+    stored = json.loads(path.read_text(encoding="utf-8").strip().splitlines()[0])
+    assert stored["applied"] is False
+    assert stored.get("status") == "pending_human_review"
+    assert "cost_optimization" in stored.get("block_reason", "")
+
+
 def test_cli_poe_evolver_list(capsys, tmp_path):
     s1 = Suggestion(suggestion_id="s1", category="prompt_tweak", target="all",
                     suggestion="Be more concise", failure_pattern="verbose output",
