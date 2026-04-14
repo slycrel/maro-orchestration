@@ -65,6 +65,33 @@ class TestExtractFileClaims:
         claims = extract_file_claims(text)
         assert "personas/garrytan.yaml" in claims
 
+    def test_backtick_wrapped_path_not_truncated(self):
+        # Regression: `models.py` was producing "odels.py" because the lookbehind
+        # only blocked `m` (preceded by backtick) but allowed match to start at `o`
+        # (preceded by word char `m`). Fix tightens lookbehind to `(?<![\w...])`.
+        text = "Updated `models.py` and `reviews.py` today."
+        claims = extract_file_claims(text)
+        assert "odels.py" not in claims
+        assert "eviews.py" not in claims
+
+    def test_single_quote_wrapped_path_not_truncated(self):
+        text = "Check 'handle.py' and 'main.py' please."
+        claims = extract_file_claims(text)
+        assert "andle.py" not in claims
+        assert "ain.py" not in claims
+
+    def test_paren_wrapped_path_not_truncated(self):
+        text = "The fix (evolver.py) is in place."
+        claims = extract_file_claims(text)
+        assert "volver.py" not in claims
+
+    def test_word_char_followed_path_not_fragmented(self):
+        # "inmodels.py" should not yield "odels.py" or "models.py" — it's a word.
+        text = "The symbol inmodels.py is weird."
+        claims = extract_file_claims(text)
+        assert "odels.py" not in claims
+        assert "models.py" not in claims
+
 
 # ---------------------------------------------------------------------------
 # verify_file_claims

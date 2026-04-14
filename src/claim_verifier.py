@@ -66,7 +66,7 @@ class ClaimReport:
 # Matches: src/foo.py, tests/test_bar.py, docs/ARCH.md, lat.md/index.md
 _FILE_PATH_RE = re.compile(
     r"""
-    (?<![`'"(])                          # not immediately after quote/paren
+    (?<![\w`'"(])                        # not immediately after word char, quote, or paren
     (?:
         (?:src|tests?|docs?|lat\.md|scripts?|personas?|memory|deploy)/   # known dir prefix
         [\w/.-]+\.(?:py|md|json|yaml|yml|sh|txt|toml|cfg|ini)
@@ -75,7 +75,7 @@ _FILE_PATH_RE = re.compile(
     |
         [\w.-]+\.md                      # bare *.md anywhere (capitalized too)
     )
-    (?![`'")])                           # not immediately before quote/paren
+    (?![\w`'")])                         # not immediately before word char, quote, or paren
     """,
     re.VERBOSE,
 )
