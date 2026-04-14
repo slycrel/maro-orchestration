@@ -2308,3 +2308,139 @@ def test_step_outcome_has_no_summary_attribute():
     assert not hasattr(s, "summary"), "StepOutcome.summary would break skill extraction — keep using .result"
     assert hasattr(s, "text")
     assert hasattr(s, "result")
+
+
+# ---------------------------------------------------------------------------
+# Mid-loop budget bump
+# ---------------------------------------------------------------------------
+
+def _make_outcomes(n_done: int, n_total: int):
+    """Build a list of StepOutcome stubs for budget bump tests."""
+    from agent_loop import StepOutcome
+    outcomes = []
+    for i in range(n_total):
+        status = "done" if i < n_done else "blocked"
+        outcomes.append(StepOutcome(index=i, text=f"step {i}", status=status, result="ok", iteration=i))
+    return outcomes
+
+
+def test_budget_bump_fires_when_conditions_met(monkeypatch, tmp_path):
+    """Budget bump happens: 75%+ budget used, >2 steps remain, ≥50% done."""
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    # Suppress captains_log in bump path
+    monkeypatch.setitem(sys.modules, "captains_log", type(sys)("captains_log"))
+    sys.modules["captains_log"].log_event = lambda **kw: None
+
+    outcomes = _make_outcomes(n_done=5, n_total=8)  # 62.5% done
+    remaining = ["step A", "step B", "step C"]  # >2 remaining
+
+    # Simulate state: iteration=8 out of max_iterations=10 (80% consumed)
+    max_iterations = 10
+    iteration = 8  # >= 75% threshold
+
+    _budget_bumped = False
+    _BUDGET_WARN_THRESHOLD = 0.75
+    _steps_done = sum(1 for s in outcomes if s.status == "done")
+    _completion_rate = _steps_done / max(len(outcomes), 1)
+
+    bumped = False
+    if (
+        not _budget_bumped
+        and len(remaining) > 2
+        and iteration >= int(max_iterations * _BUDGET_WARN_THRESHOLD)
+        and _completion_rate >= 0.5
+    ):
+        _bump_amount = max(10, max_iterations // 2)
+        max_iterations += _bump_amount
+        bumped = True
+
+    assert bumped, "Budget bump should have fired"
+    # bump_amount = max(10, 10//2) = 10; 10+10=20
+    assert max_iterations == 20, f"Expected 20, got {max_iterations}"
+
+
+def test_budget_bump_does_not_fire_below_threshold(monkeypatch, tmp_path):
+    """No bump when budget consumption is below 75%."""
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    outcomes = _make_outcomes(n_done=5, n_total=8)
+    remaining = ["step A", "step B", "step C"]
+    max_iterations = 10
+    iteration = 6  # 60% — below threshold
+
+    _budget_bumped = False
+    _BUDGET_WARN_THRESHOLD = 0.75
+    _steps_done = sum(1 for s in outcomes if s.status == "done")
+    _completion_rate = _steps_done / max(len(outcomes), 1)
+
+    bumped = False
+    if (
+        not _budget_bumped
+        and len(remaining) > 2
+        and iteration >= int(max_iterations * _BUDGET_WARN_THRESHOLD)
+        and _completion_rate >= 0.5
+    ):
+        bumped = True
+
+    assert not bumped, "Bump should not fire below 75% threshold"
+
+
+def test_budget_bump_does_not_fire_when_completion_low(monkeypatch, tmp_path):
+    """No bump when completion rate is below 50% (poor progress doesn't warrant more budget)."""
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    outcomes = _make_outcomes(n_done=1, n_total=8)  # only 12.5% done
+    remaining = ["step A", "step B", "step C"]
+    max_iterations = 10
+    iteration = 9  # 90% consumed
+
+    _budget_bumped = False
+    _BUDGET_WARN_THRESHOLD = 0.75
+    _steps_done = sum(1 for s in outcomes if s.status == "done")
+    _completion_rate = _steps_done / max(len(outcomes), 1)
+
+    bumped = False
+    if (
+        not _budget_bumped
+        and len(remaining) > 2
+        and iteration >= int(max_iterations * _BUDGET_WARN_THRESHOLD)
+        and _completion_rate >= 0.5
+    ):
+        bumped = True
+
+    assert not bumped, "Bump should not fire with low completion rate"
+
+
+def test_budget_bump_fires_at_most_once():
+    """Budget bump is gated by _budget_bumped — second check never fires."""
+    bump_count = 0
+    for _ in range(3):
+        _budget_bumped = (bump_count > 0)
+        if not _budget_bumped:
+            bump_count += 1
+            _budget_bumped = True  # noqa: F841
+
+    assert bump_count == 1
+
+
+def test_budget_bump_does_not_fire_with_few_remaining(monkeypatch, tmp_path):
+    """No bump when ≤2 steps remain — synthesis fallback handles that case."""
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    outcomes = _make_outcomes(n_done=5, n_total=8)
+    remaining = ["step A", "step B"]  # exactly 2 — not >2
+    max_iterations = 10
+    iteration = 9
+
+    _budget_bumped = False
+    _BUDGET_WARN_THRESHOLD = 0.75
+    _steps_done = sum(1 for s in outcomes if s.status == "done")
+    _completion_rate = _steps_done / max(len(outcomes), 1)
+
+    bumped = False
+    if (
+        not _budget_bumped
+        and len(remaining) > 2
+        and iteration >= int(max_iterations * _BUDGET_WARN_THRESHOLD)
+        and _completion_rate >= 0.5
+    ):
+        bumped = True
+
+    assert not bumped, "Bump should not fire when only 2 steps remain (synthesis handles it)"

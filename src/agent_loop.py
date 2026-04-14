@@ -3562,6 +3562,7 @@ def run_agent_loop(
             pass
 
     # Phase F: Main execute loop
+    _budget_bumped = False  # guard: mid-loop budget bump fires at most once
     LoopStateMachine.set_phase(ctx, LoopPhase.EXECUTE)
     while remaining_steps:
         if iteration >= max_iterations:
@@ -3576,10 +3577,52 @@ def run_agent_loop(
                 stuck_reason += _ceiling_suffix
             break
 
+        # Mid-loop budget bump: when 75%+ of budget is consumed, there are still
+        # steps remaining, and good progress has been made, bump max_iterations
+        # by 50% (once only) so the loop can complete rather than hard-landing.
+        _remaining_budget = max_iterations - iteration
+        _BUDGET_WARN_THRESHOLD = 0.75
+        if (
+            not _budget_bumped
+            and len(remaining_steps) > 2
+            and iteration >= int(max_iterations * _BUDGET_WARN_THRESHOLD)
+        ):
+            _steps_done = sum(1 for s in step_outcomes if s.status == "done")
+            _completion_rate = _steps_done / max(len(step_outcomes), 1)
+            if _completion_rate >= 0.5:
+                _bump_amount = max(10, max_iterations // 2)
+                max_iterations += _bump_amount
+                _remaining_budget = max_iterations - iteration
+                _budget_bumped = True
+                log.info(
+                    "mid-loop budget bump: max_iterations bumped by %d to %d "
+                    "(%.0f%% done, %d steps remain)",
+                    _bump_amount, max_iterations, _completion_rate * 100, len(remaining_steps),
+                )
+                try:
+                    from captains_log import log_event
+                    log_event(
+                        event_type="METACOGNITIVE_DECISION",
+                        subject=goal[:80],
+                        summary=(
+                            f"Budget running low at {iteration}/{max_iterations - _bump_amount} "
+                            f"iterations — bumped max_iterations by {_bump_amount} to {max_iterations}. "
+                            f"{_steps_done}/{len(step_outcomes)} steps done, {len(remaining_steps)} remain."
+                        ),
+                        context={
+                            "action": "budget_bump",
+                            "bump_amount": _bump_amount,
+                            "new_max_iterations": max_iterations,
+                            "completion_rate": round(_completion_rate, 2),
+                            "steps_remaining": len(remaining_steps),
+                        },
+                    )
+                except Exception:
+                    pass
+
         # Budget-aware landing: when only 2 iterations remain and there are
         # still multiple steps, replace the remaining steps with a single
         # "synthesize what we have" step so the loop lands gracefully.
-        _remaining_budget = max_iterations - iteration
         if _remaining_budget <= 2 and len(remaining_steps) > 1 and len(step_outcomes) >= 3:
             _done_count = sum(1 for s in step_outcomes if s.status == "done")
             if _done_count >= 2:

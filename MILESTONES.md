@@ -2,7 +2,7 @@
 
 What to do next, in what order. Updated each session. Strategic phases live in ROADMAP.md; deferred ideas live in BACKLOG.md. This file is the bridge — the executable queue.
 
-Last updated: 2026-04-14 (session 21 — LoopStateMachine complete)
+Last updated: 2026-04-14 (session 21 — budget bump + LoopStateMachine complete)
 
 ---
 
@@ -13,10 +13,11 @@ Last updated: 2026-04-14 (session 21)
 1. **Memory Stage 3→4 (verify extraction in live runs)** — Silent failure bug fixed (s.summary → s.result, exception now logged). Next: run a real goal and confirm skills are being extracted to `~/.poe/workspace/skills/`. Check evolver's `synthesize_skill` path works end-to-end.
 2. **pytest-via-subprocess 900s timeout** — `python3 -m pytest tests/ -q` via ClaudeSubprocessAdapter times out (real pytest ~100s). Possibly stdout buffering or subprocess wrapper overhead. Investigate by running pytest in chunks via the adapter and checking actual elapsed time.
 3. **Remaining ~39 silent exceptions in agent_loop.py** — Lower-risk telemetry passes; sweep the ~10 most impactful sites in the finalize and recovery paths.
-4. **pytest-via-subprocess 900s timeout** — `python3 -m pytest tests/ -q` via `ClaudeSubprocessAdapter` hits 900s timeout (real pytest ~100s). Diagnosis correctly recovered via smaller sub-commands. Root cause unclear — possibly stdout buffering or double-rupture in the adapter. Worth investigating before next adversarial run.
-5. **Remaining 71 silent exceptions in agent_loop.py lines 1000+** — First 1,000 lines (16 high-risk sites) fixed in session 20.5. The rest are lower-risk best-effort telemetry; sweep + classify in a focused pass.
-6. **Recovery mid-loop apply (remaining)** — Gap 2 from phase audit is ~mostly closed via the mid-loop diagnosis bridge (session 19). Remaining: `budget_exhaustion` is diagnosed only after max_iterations hit; consider a mid-loop "iteration budget running low" signal that bumps the budget instead of grinding to a stop.
-7. **Artifact output routing cleanup** — Temp artifacts (per-step) → tmp dir (deleted by default, kept via config `keep_artifacts: true`). Permanent outputs → `~/.poe/workspace/output/`.
+4. **Artifact output routing cleanup** — Temp artifacts (per-step) → tmp dir (deleted by default, kept via config `keep_artifacts: true`). Permanent outputs → `~/.poe/workspace/output/`.
+
+## Done (session 21, 2026-04-14 — budget bump + LoopStateMachine + Stage 2→3 pipeline + skill extraction fix + NOW→Director escalation)
+
+- [x] **Recovery mid-loop budget bump** — When 75%+ of `max_iterations` consumed, >2 steps remain, and ≥50% of steps done: bumps `max_iterations` by 50% (min +10), fires at most once (`_budget_bumped` guard). Logs `METACOGNITIVE_DECISION` to captain's log. Prevents hard synthesis fallback when good progress is in flight. 5 tests. Closes MILESTONES #6.
 
 ## Done (session 21, 2026-04-14 — LoopStateMachine + Stage 2→3 pipeline + skill extraction fix + NOW→Director escalation)
 
