@@ -1121,8 +1121,8 @@ def append_knowledge_node(node: KnowledgeNode) -> None:
     """Append a knowledge node to the store."""
     p = _knowledge_nodes_path()
     p.parent.mkdir(parents=True, exist_ok=True)
-    with p.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(asdict(node), sort_keys=True) + "\n")
+    from file_lock import locked_append
+    locked_append(p, json.dumps(asdict(node), sort_keys=True))
     log.info("knowledge_node: added %s (%s) %r", node.node_id, node.node_type, node.title[:60])
 
 
@@ -1130,15 +1130,15 @@ def append_knowledge_edge(edge: KnowledgeEdge) -> None:
     """Append a knowledge edge to the store."""
     p = _knowledge_edges_path()
     p.parent.mkdir(parents=True, exist_ok=True)
-    with p.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(asdict(edge), sort_keys=True) + "\n")
+    from file_lock import locked_append
+    locked_append(p, json.dumps(asdict(edge), sort_keys=True))
 
 
 def load_knowledge_nodes(
     *,
     node_type: Optional[str] = None,
     domain: Optional[str] = None,
-    status: str = NODE_ACTIVE,
+    status: Optional[str] = NODE_ACTIVE,
     tag: Optional[str] = None,
 ) -> List[KnowledgeNode]:
     """Load knowledge nodes with optional filtering."""
@@ -1328,3 +1328,141 @@ def build_wiki_link_edges(nodes: List[KnowledgeNode]) -> List[KnowledgeEdge]:
                     relation="related",
                 ))
     return edges
+
+
+# ---------------------------------------------------------------------------
+# K2 link-farm import
+# ---------------------------------------------------------------------------
+
+# Map link-farm topics to KnowledgeNode domain tags
+_TOPIC_TO_DOMAIN = {
+    "agent-design": "orchestration",
+    "dev-practices": "engineering",
+    "claude-code": "tooling",
+    "skills-mcp": "tooling",
+    "prompting": "engineering",
+    "research": "research",
+    "management": "strategy",
+    "industry": "research",
+    "general": "general",
+}
+
+# Map link-farm topics to KnowledgeNode node_type
+_TOPIC_TO_NODE_TYPE = {
+    "agent-design": "pattern",
+    "dev-practices": "technique",
+    "claude-code": "tool",
+    "skills-mcp": "tool",
+    "prompting": "technique",
+    "research": "insight",
+    "management": "principle",
+    "industry": "insight",
+    "general": "insight",
+}
+
+
+def import_link_farm(
+    posts: list,
+    *,
+    min_priority: str = "long-term",
+    only_enriched: bool = True,
+    dry_run: bool = False,
+) -> dict:
+    """Import enriched posts from slycrel/link-farm into the knowledge node store.
+
+    Args:
+        posts: List of post dicts from posts_final_v3.json.
+        min_priority: Minimum priority to import ("near-term" | "medium-term" | "long-term").
+        only_enriched: Skip posts where enriched=False (no content yet).
+        dry_run: If True, return stats without writing anything.
+
+    Returns:
+        Dict with keys: added, skipped_dup, skipped_unenriched, skipped_priority, total.
+    """
+    import hashlib
+
+    _PRIORITY_ORDER = {"near-term": 0, "medium-term": 1, "long-term": 2}
+    min_rank = _PRIORITY_ORDER.get(min_priority, 2)
+
+    # Build URL dedup set from existing nodes (all statuses — candidates count as dups)
+    existing = load_knowledge_nodes(status=None)
+    existing_sources: set = set()
+    for n in existing:
+        existing_sources.update(n.sources)
+
+    stats = {
+        "added": 0,
+        "skipped_dup": 0,
+        "skipped_unenriched": 0,
+        "skipped_priority": 0,
+        "total": len(posts),
+    }
+
+    for post in posts:
+        url = post.get("url", "")
+        if url in existing_sources:
+            stats["skipped_dup"] += 1
+            continue
+
+        if only_enriched and not post.get("enriched", False):
+            stats["skipped_unenriched"] += 1
+            continue
+
+        priority = post.get("priority", "long-term")
+        if _PRIORITY_ORDER.get(priority, 2) > min_rank:
+            stats["skipped_priority"] += 1
+            continue
+
+        topics = post.get("topics", ["general"])
+        primary_topic = topics[0] if topics else "general"
+        domain = _TOPIC_TO_DOMAIN.get(primary_topic, "general")
+        node_type = _TOPIC_TO_NODE_TYPE.get(primary_topic, "insight")
+
+        # Build description from summary + content excerpt
+        summary = post.get("summary", "")
+        content = post.get("content", "")
+        description = summary
+        if content and len(content) > len(summary):
+            # Append first ~600 chars of full content if richer than summary
+            extra = content[:600].strip()
+            if extra and extra not in summary:
+                description = f"{summary}\n\n{extra}"
+
+        # Stable node_id from URL hash
+        node_id = hashlib.sha256(url.encode()).hexdigest()[:12]
+
+        # Title: use subject if it's not the generic "Post by X on X" pattern,
+        # otherwise fall back to summary first sentence
+        subject = post.get("subject", "")
+        if subject and "Post by" not in subject and "on X" not in subject:
+            title = subject[:120]
+        elif summary:
+            first_sentence = summary.split(".")[0].strip()
+            title = first_sentence[:120] if first_sentence else subject[:120] or "Untitled"
+        else:
+            title = url[:80]
+
+        node = KnowledgeNode(
+            node_id=node_id,
+            node_type=node_type,
+            title=title,
+            description=description[:2000],
+            domain=domain,
+            sources=[url],
+            tags=topics,
+            status=NODE_CANDIDATE,  # imported nodes start as candidates — not yet validated
+            confidence=0.4,         # external source, unverified
+            author=post.get("handle", post.get("author", "link-farm")),
+        )
+
+        if not dry_run:
+            append_knowledge_node(node)
+            existing_sources.add(url)  # prevent within-batch duplicates
+
+        stats["added"] += 1
+
+    log.info(
+        "import_link_farm: added=%d skipped_dup=%d skipped_unenriched=%d total=%d",
+        stats["added"], stats["skipped_dup"], stats["skipped_unenriched"], stats["total"],
+    )
+    return stats

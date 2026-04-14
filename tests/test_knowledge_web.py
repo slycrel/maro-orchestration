@@ -949,3 +949,104 @@ class TestTokenize:
         tokens = kw._tokenize("HELLO World")
         assert "hello" in tokens
         assert "world" in tokens
+
+
+# ===========================================================================
+# import_link_farm
+# ===========================================================================
+
+def _make_post(url="https://x.com/user/1", summary="Test post", topics=None,
+               priority="long-term", enriched=True, content="", subject=""):
+    return {
+        "date": "2026-04-14",
+        "author": "Test User",
+        "handle": "@testuser",
+        "subject": subject or "Post by Test User on X",
+        "url": url,
+        "summary": summary,
+        "topics": topics or ["agent-design"],
+        "audience": ["me"],
+        "priority": priority,
+        "sourceType": "tweet",
+        "views": "",
+        "notes": "",
+        "enriched": enriched,
+        "content": content,
+    }
+
+
+class TestImportLinkFarm:
+    def _all_nodes(self):
+        """Load nodes of any status (imported nodes are NODE_CANDIDATE)."""
+        return kw.load_knowledge_nodes(status=None)
+
+    def test_imports_enriched_posts(self, tmp_path):
+        posts = [
+            _make_post(url="https://x.com/a/1", summary="Summary A"),
+            _make_post(url="https://x.com/b/2", summary="Summary B"),
+        ]
+        stats = kw.import_link_farm(posts)
+        assert stats["added"] == 2
+        assert stats["skipped_dup"] == 0
+        assert len(self._all_nodes()) == 2
+
+    def test_skips_unenriched_by_default(self, tmp_path):
+        posts = [
+            _make_post(url="https://x.com/a/1", enriched=True),
+            _make_post(url="https://x.com/b/2", enriched=False),
+        ]
+        stats = kw.import_link_farm(posts)
+        assert stats["added"] == 1
+        assert stats["skipped_unenriched"] == 1
+
+    def test_deduplicates_same_url(self, tmp_path):
+        posts = [_make_post(url="https://x.com/a/1")]
+        kw.import_link_farm(posts)
+        stats = kw.import_link_farm(posts)
+        assert stats["skipped_dup"] == 1
+        assert stats["added"] == 0
+        assert len(self._all_nodes()) == 1
+
+    def test_dry_run_writes_nothing(self, tmp_path):
+        posts = [_make_post(url="https://x.com/a/1")]
+        stats = kw.import_link_farm(posts, dry_run=True)
+        assert stats["added"] == 1
+        assert self._all_nodes() == []
+
+    def test_node_type_maps_from_topic(self, tmp_path):
+        posts = [_make_post(url="https://x.com/a/1", topics=["agent-design"])]
+        kw.import_link_farm(posts)
+        nodes = self._all_nodes()
+        assert nodes[0].node_type == "pattern"
+        assert nodes[0].domain == "orchestration"
+
+    def test_node_starts_as_candidate(self, tmp_path):
+        posts = [_make_post(url="https://x.com/a/1")]
+        kw.import_link_farm(posts)
+        nodes = self._all_nodes()
+        assert nodes[0].status == kw.NODE_CANDIDATE
+        assert nodes[0].confidence < 0.5  # external, unvalidated
+
+    def test_url_preserved_as_source(self, tmp_path):
+        url = "https://x.com/user/999"
+        posts = [_make_post(url=url)]
+        kw.import_link_farm(posts)
+        nodes = self._all_nodes()
+        assert url in nodes[0].sources
+
+    def test_title_from_subject_when_not_generic(self, tmp_path):
+        posts = [_make_post(url="https://x.com/a/1", subject="Building better agent loops")]
+        kw.import_link_farm(posts)
+        nodes = self._all_nodes()
+        assert nodes[0].title == "Building better agent loops"
+
+    def test_title_from_summary_when_subject_generic(self, tmp_path):
+        posts = [_make_post(
+            url="https://x.com/a/1",
+            subject="Post by Test User on X",
+            summary="Reflexion paper shows agents can learn from failure. Very interesting.",
+        )]
+        kw.import_link_farm(posts)
+        nodes = self._all_nodes()
+        # Should use first sentence of summary
+        assert "Reflexion" in nodes[0].title

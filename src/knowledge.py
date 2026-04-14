@@ -321,6 +321,20 @@ def main(argv: list[str] | None = None) -> None:
 
     sub.add_parser("rules", help="List active Stage 5 rules")
 
+    p_import = sub.add_parser("import-links", help="Import enriched posts from slycrel/link-farm")
+    p_import.add_argument(
+        "--url",
+        default="https://raw.githubusercontent.com/slycrel/link-farm/main/posts_final_v3.json",
+        help="URL to posts_final_v3.json (default: link-farm main branch)",
+    )
+    p_import.add_argument("--dry-run", action="store_true", help="Show stats without writing")
+    p_import.add_argument(
+        "--min-priority",
+        default="long-term",
+        choices=["near-term", "medium-term", "long-term"],
+        help="Minimum priority level to import (default: long-term = all)",
+    )
+
     args = parser.parse_args(argv)
 
     if args.cmd == "status":
@@ -361,6 +375,31 @@ def main(argv: list[str] | None = None) -> None:
             for r in rules:
                 wa = f"  ⚠ {r.wrong_answer_count} wrong" if r.wrong_answer_count else ""
                 print(f"  {r.id}  {r.name}  ({r.use_count} uses){wa}")
+    elif args.cmd == "import-links":
+        import json as _json
+        import urllib.request as _urllib
+        from knowledge_web import import_link_farm
+
+        print(f"Fetching {args.url} ...")
+        try:
+            with _urllib.urlopen(args.url, timeout=30) as resp:
+                posts = _json.loads(resp.read().decode("utf-8"))
+        except Exception as e:
+            print(f"Error fetching posts: {e}")
+            raise SystemExit(1)
+
+        stats = import_link_farm(
+            posts,
+            min_priority=args.min_priority,
+            dry_run=args.dry_run,
+        )
+        label = "[DRY RUN] " if args.dry_run else ""
+        print(f"{label}link-farm import complete:")
+        print(f"  Added:              {stats['added']}")
+        print(f"  Skipped (dup):      {stats['skipped_dup']}")
+        print(f"  Skipped (enriched): {stats['skipped_unenriched']}")
+        print(f"  Skipped (priority): {stats['skipped_priority']}")
+        print(f"  Total posts:        {stats['total']}")
     else:
         print_dashboard()
 
