@@ -1,4 +1,4 @@
-"""Tests for claim_verifier.py — file-path hallucination detection."""
+"""Tests for claim_verifier.py — file-path and symbol hallucination detection."""
 
 import sys
 from pathlib import Path
@@ -13,6 +13,11 @@ from claim_verifier import (
     annotate_result,
     is_synthesis_step,
     ClaimReport,
+    extract_symbol_claims,
+    verify_symbol_claims,
+    verify_all_claims,
+    SymbolReport,
+    CompoundClaimReport,
 )
 
 
@@ -213,3 +218,201 @@ class TestIsSynthesisStep:
 
     def test_case_insensitive(self):
         assert is_synthesis_step("SUMMARIZE the findings") is True
+
+
+# ---------------------------------------------------------------------------
+# extract_symbol_claims
+# ---------------------------------------------------------------------------
+
+class TestExtractSymbolClaims:
+    def test_backtick_function_call(self):
+        claims = extract_symbol_claims("The `apply_suggestion()` function does X.")
+        assert "apply_suggestion" in claims
+
+    def test_backtick_name_no_parens(self):
+        claims = extract_symbol_claims("See `scan_outcomes_for_signals` for details.")
+        assert "scan_outcomes_for_signals" in claims
+
+    def test_def_keyword(self):
+        claims = extract_symbol_claims("I added `def run_agent_loop` to agent_loop.py.")
+        assert "run_agent_loop" in claims
+
+    def test_class_keyword(self):
+        claims = extract_symbol_claims("The class Director handles routing.")
+        assert "Director" in claims
+
+    def test_contextual_function_word(self):
+        claims = extract_symbol_claims("The verify_post_apply function was added.")
+        assert "verify_post_apply" in claims
+
+    def test_short_names_skipped(self):
+        # Names shorter than 5 chars shouldn't appear
+        claims = extract_symbol_claims("The `db()` and `run()` calls.")
+        assert "db" not in claims
+        assert "run" not in claims
+
+    def test_dunder_names_skipped(self):
+        claims = extract_symbol_claims("The `__init__` and `__repr__` methods.")
+        assert "__init__" not in claims
+        assert "__repr__" not in claims
+
+    def test_stdlib_builtins_skipped(self):
+        claims = extract_symbol_claims("Call `print()`, `range()`, and `isinstance()`.")
+        assert "print" not in claims
+        assert "range" not in claims
+
+    def test_empty_text_returns_empty(self):
+        assert extract_symbol_claims("") == []
+
+    def test_deduplicates(self):
+        text = "`apply_suggestion()` is called twice in `apply_suggestion()`."
+        claims = extract_symbol_claims(text)
+        assert claims.count("apply_suggestion") == 1
+
+
+# ---------------------------------------------------------------------------
+# verify_symbol_claims
+# ---------------------------------------------------------------------------
+
+class TestVerifySymbolClaims:
+    def test_known_real_symbol_verified(self):
+        """A function that actually exists in src/ is verified."""
+        root = Path(__file__).parent.parent
+        # verify_file_claims definitely exists in claim_verifier.py
+        report = verify_symbol_claims(
+            "The `verify_file_claims` function handles path checking.",
+            project_root=root,
+        )
+        assert "verify_file_claims" in report.verified
+        assert "verify_file_claims" not in report.not_found
+
+    def test_nonexistent_symbol_not_found(self):
+        """A clearly made-up function name is flagged as not found."""
+        root = Path(__file__).parent.parent
+        report = verify_symbol_claims(
+            "The `xyzzy_frobnicate_banana` function was added.",
+            project_root=root,
+        )
+        assert "xyzzy_frobnicate_banana" in report.not_found
+
+    def test_empty_text_returns_empty_report(self):
+        report = verify_symbol_claims("No code symbols here.", project_root=Path("."))
+        assert report.raw_claims == []
+        assert report.verified == []
+        assert report.not_found == []
+
+    def test_symbol_report_has_hallucinations_true(self):
+        report = SymbolReport(
+            raw_claims=["fake_func"],
+            verified=[],
+            not_found=["fake_func"],
+        )
+        assert report.has_hallucinations is True
+
+    def test_symbol_report_has_hallucinations_false(self):
+        report = SymbolReport(
+            raw_claims=["real_func"],
+            verified=["real_func"],
+            not_found=[],
+        )
+        assert report.has_hallucinations is False
+
+    def test_symbol_report_summary_with_not_found(self):
+        report = SymbolReport(
+            raw_claims=["missing_fn"],
+            verified=[],
+            not_found=["missing_fn"],
+        )
+        assert "NOT FOUND" in report.summary()
+        assert "missing_fn" in report.summary()
+
+    def test_custom_project_root(self, tmp_path):
+        """Symbols in custom project root are found."""
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "mymodule.py").write_text("def custom_function_xyz():\n    pass\n")
+        report = verify_symbol_claims(
+            "The `custom_function_xyz` was implemented.",
+            project_root=tmp_path,
+        )
+        assert "custom_function_xyz" in report.verified
+
+
+# ---------------------------------------------------------------------------
+# verify_all_claims / CompoundClaimReport
+# ---------------------------------------------------------------------------
+
+class TestVerifyAllClaims:
+    def test_returns_compound_report(self):
+        result = verify_all_claims("No claims here.", project_root=Path("."))
+        assert isinstance(result, CompoundClaimReport)
+        assert isinstance(result.file_report, ClaimReport)
+        assert isinstance(result.symbol_report, SymbolReport)
+
+    def test_no_hallucinations_when_all_clean(self, tmp_path):
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "util.py").write_text("def helper_function():\n    pass\n")
+        (tmp_path / "myfile.py").write_text("")
+        result = verify_all_claims(
+            "The `helper_function` was added to myfile.py.",
+            project_root=tmp_path,
+        )
+        assert result.file_report.verified  # myfile.py found
+        assert result.symbol_report.verified  # helper_function found
+        assert not result.has_hallucinations
+
+    def test_has_hallucinations_on_bad_file(self, tmp_path):
+        result = verify_all_claims(
+            "Updated ghostfile.py with new logic.",
+            project_root=tmp_path,
+        )
+        assert result.has_hallucinations
+        assert "ghostfile.py" in result.not_found_files
+
+    def test_has_hallucinations_on_bad_symbol(self, tmp_path):
+        (tmp_path / "src").mkdir()
+        result = verify_all_claims(
+            "The `nonexistent_banana_func` function was added.",
+            project_root=tmp_path,
+        )
+        assert result.has_hallucinations
+        assert "nonexistent_banana_func" in result.not_found_symbols
+
+
+# ---------------------------------------------------------------------------
+# annotate_result with symbol checking
+# ---------------------------------------------------------------------------
+
+class TestAnnotateResultWithSymbols:
+    def test_symbol_not_found_annotated(self, tmp_path):
+        (tmp_path / "src").mkdir()
+        result = annotate_result(
+            "The `phantom_function_xyz` was added.",
+            project_root=tmp_path,
+            check_symbols=True,
+        )
+        assert "SYMBOL_CLAIMS_NOT_FOUND" in result
+        assert "phantom_function_xyz" in result
+
+    def test_no_annotation_when_clean(self, tmp_path):
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "real.py").write_text("def actual_function_abc():\n    pass\n")
+        result = annotate_result(
+            "Called `actual_function_abc()` successfully.",
+            project_root=tmp_path,
+            check_symbols=True,
+        )
+        # No hallucinations → text returned unchanged
+        assert "SYMBOL_CLAIMS_NOT_FOUND" not in result
+        assert "claim-verifier" not in result
+
+    def test_check_symbols_false_skips_symbol_check(self, tmp_path):
+        (tmp_path / "src").mkdir()
+        result = annotate_result(
+            "The `phantom_function_xyz` was added.",
+            project_root=tmp_path,
+            check_symbols=False,
+        )
+        assert "SYMBOL_CLAIMS_NOT_FOUND" not in result
