@@ -2,13 +2,15 @@
 
 What to do next, in what order. Updated each session. Strategic phases live in ROADMAP.md; deferred ideas live in BACKLOG.md. This file is the bridge — the executable queue.
 
-Last updated: 2026-04-14 (session 23 — Stage 3→4 regression, lesson dedup, phase audit, Phase 61 integration depth)
+Last updated: 2026-04-14 (session 23 continued — input classification, Phase 61 complete, LoopStateMachine conversion, sub_mission auto-enqueue)
 
 ---
 
 ## Next Up
 
 <!-- No pending items — see BACKLOG.md for deferred work -->
+
+## Done (session 23 continued, 2026-04-14 — input classification, Phase 61 complete, LoopStateMachine, sub_mission enqueue)
 
 ## Done (session 23, 2026-04-14 — Phase 61, lesson dedup, phase audit, Stage 3→4, input classification)
 
