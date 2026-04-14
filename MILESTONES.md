@@ -2,13 +2,24 @@
 
 What to do next, in what order. Updated each session. Strategic phases live in ROADMAP.md; deferred ideas live in BACKLOG.md. This file is the bridge — the executable queue.
 
-Last updated: 2026-04-14 (session 24 — K4 write path, PM/dev regression)
+Last updated: 2026-04-14 (session 25 — repo scan, BLE rewriter, SIGNALS.md, PM/dev round 2)
 
 ---
 
 ## Next Up
 
-<!-- See BACKLOG.md for deferred work -->
+- **Codebase Graph + LSP** — Pre-build ranked call graph before agent reads any file. AST-based Python call graph; rank by betweenness/in-degree; inject top N files/functions into agent context. Claimed 1.8x faster, 2.1x cheaper. See BACKLOG P9/10.
+- **Third PM round** — run another PM pass on recipe repo after dev run 2 closes #17/#18/#19.
+- **Harness Architecture Spectrum** — Validate NOW/AGENDA checkpoint placement. See BACKLOG P7/10.
+
+## Done (session 25, 2026-04-14 — repo scan, BLE, SIGNALS.md, PM/dev round 2)
+
+- [x] **Repo stack auto-detection** — `src/repo_scan.py` (53 tests). Scans repo for tech stack via 50+ file indicators, deep-scans requirements.txt/package.json for frameworks. Wired into `_build_loop_context()` via project slug heuristic + `--repo` CLI flag. `repo_path` threaded through run_agent_loop → LoopContext → _build_loop_context (fail-open).
+- [x] **Bitter Lesson goal rewriter** — `rewrite_imperative_goal()` in intent.py. Strips prescribed execution steps from imperative-heavy goals, rewrites as outcome-focused. Wired into AGENDA path in handle.py before clarity check. `_IMPERATIVE_MARKERS` heuristic avoids LLM cost for already-clean goals. 15 tests.
+- [x] **SIGNALS.md → evolver signal alignment** — `_load_user_signals()` reads user/SIGNALS.md. `scan_outcomes_for_signals()` now passes user research priorities as context when proposing sub-missions. Closes the Mode 2→3 loop: factory-mode signal proposals align with user-declared interests. 5 tests.
+- [x] **PM round 2** — Filed 5 new issues (#16-20) on orchestrator-test-recipes: N+1, json.loads crash, test isolation, rating constraint, review dedup.
+- [x] **Dev run 1** — Closed #16 (N+1 query), #13 (FTS), #11 (timestamps). Plus previous session fixes for #7, #10.
+- [x] **Dev run 2 in progress** — Targeting #17 (json.loads), #19 (rating constraint), #18 (test isolation).
 
 ## Done (session 24, 2026-04-14 — K4 write path)
 

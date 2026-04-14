@@ -3,7 +3,7 @@
 Single canonical location for everything we've identified but haven't done yet.
 Read this at the start of every session. Update it as items are completed or new ones emerge.
 
-Last reviewed: 2026-04-14 (session 20)
+Last reviewed: 2026-04-14 (session 25)
 
 ---
 
@@ -93,7 +93,7 @@ Full report: `~/.poe/workspace/output/x-research-20260411T081706Z.md`
 - [ ] **Codebase Graph + LSP** — Pre-build ranked call graph before agent reads any file. Use real LSP (go-to-definition, call hierarchy) for surgical context. Multi-agent coordination via context bus. Claimed 1.8x faster, 2.1x cheaper (unverified). **Priority 9/10.** Source: @bniwael / SoulForge.
 - [x] **Evals-as-Training-Data flywheel** — (2026-04-11 session 16) `mine_failure_patterns()` → `generate_evals_from_patterns()` → `run_eval_flywheel()`. Failure-class scoring for 9 types, trend tracking, auto-suggestions. Wired into `run_nightly_eval()`. 29 tests. Source: @realsigridjin.
 - [x] **Thinking Token Budget** — (2026-04-11 session 16) `THINKING_HIGH/MID/LOW` constants, `thinking_budget` param on all adapters. AnthropicSDK: extended thinking API. Wired into decompose (HIGH) and advisor_call (MID). Source: @av1dlive.
-- [ ] **Harness Is the Problem** — "Models are fine, the harness isn't good enough." Evolver should target harness code paths, not just prompts. Friction = harness quality signal. Strategic validation of project direction. **Priority 8/10.** Source: @sebgoddijn / Ramp Glass.
+- [x] **Harness Is the Problem** — DONE (session 24, 2026-04-14). `scan_harness_friction()` in harness_optimizer.py: aggregates adapter_error, timeout, retry_storm, tool_error, phase_failure signals from traces. FrictionPoint + HarnessFrictionReport. Wired into `run_evolver(scan_harness_friction=True)`. `--friction` CLI flag. 19 new tests. category="harness_friction" Suggestions surfaced for medium/high severity. Source: @sebgoddijn / Ramp Glass.
 - [ ] **Harness Architecture Spectrum** — Thin (Anthropic) vs thick (LangChain) loop — best products live in the middle. Validate NOW/AGENDA checkpoint placement; inspector at all checkpoints. **Priority 7/10.** Source: @akshay_pachaar.
 - [x] **Event-driven subprocess wakeup** — FIXED (session 22). `run_agent_loop` calls `post_heartbeat_event("loop_done", payload=project)` after releasing the loop lock. Heartbeat's `_wakeup_event.wait()` unblocks immediately → next task picked up in near-zero time instead of waiting up to `interval` seconds. 3 tests. Source: @teknium / NousResearch hermes-agent.
 - [ ] **Large Memory Models (LMMs)** — Engramme: new architecture beyond RAG. Watch list — monitor for API release. **Priority 6/10.** Source: @svpino.
@@ -238,7 +238,7 @@ Six X posts researched via live Poe missions. Actionable items extracted:
 - [ ] **Eval-driven harness hill-climbing** — @mr_r0b0t + @ashpreetbedi both endorse @Vtrivedy10's LangChain article on using evals as autonomous learning signal. This IS evolver.py's pattern. Read full article when available — may have concrete recipes to improve the eval→lesson→skill pipeline.
 - [ ] **Letta API comparison** — @carsonfarmer/@sarahwooders: Anthropic's Managed Agents API mirrors Letta's 1yr-old API. Provider-managed memory = lock-in. Poe's file-based memory is aligned with "memory outside providers" thesis. Monitor Managed Agents API for useful features without adopting their memory model.
 - [ ] **Team OS / shared context layer** — @aakashgupta: 250+ structured docs/quarter compound into organizational knowledge. Validates knowledge layer K1-K2 investment. The "learning flywheel" pattern (each commit makes the repo smarter) is the vision for standing rules + lesson promotion.
-- [ ] **Auto-detect repo stack → skill discovery + summarization** — @ihtesham2005: project scan → tech-stack detection → skill suggestions/install + compact agent summary (CLAUDE.md-style condensation). The real steal is skill discovery + summarization, not just install. Later: pruning irrelevant skills, keeping context lean, monorepo-aware routing, updating recommendations as repo changes. Medium priority onboarding/discovery idea. Source: codex analysis of https://x.com/ihtesham2005/status/2042338547429212367
+- [x] **Auto-detect repo stack → skill discovery + summarization** — DONE (session 25). `src/repo_scan.py`: 50+ file indicators, deep-scan requirements.txt/package.json for frameworks, detect Docker/CI/DB. `format_repo_context()` injects compact stack summary into `_build_loop_context()`. Wired via project slug heuristic (~/claude/{project}/) + `--repo` CLI flag. 53 tests. Source: @ihtesham2005
 
 ### Infrastructure
 - [ ] **Phase 38 subpackage move** — src/ is flat with 49 modules. Deferred (33+ imports per group), revisit when it causes real problems.
@@ -292,6 +292,16 @@ Six X posts researched via live Poe missions. Actionable items extracted:
 
 ### Grok feedback sessions
 - [x] grok-response-2.txt — oh-my-claudecode, 724-office, Mimir steal list. Processed, items in STEAL_LIST.md.
+- [x] grok-response-3.txt — Miessler Bitter Lesson Engineering + Zakin Mode 1/2/3 taxonomy. Processed (session 25). Key steal items implemented:
+  - BLE goal rewriter: `rewrite_imperative_goal()` in intent.py. 15 tests.
+  - SIGNALS.md → signal alignment: `_load_user_signals()` in evolver.py. 5 tests.
+  Deferred items: USER/ folder formalization (CONFIG/GOALS/SIGNALS already exist), replay factory mode toggle in dashboard (dashboard is still basic).
+
+### Steal-list items from Miessler/Zakin (grok-response-3.txt)
+- [x] **BLE goal rewriter** — DONE (session 25). `rewrite_imperative_goal()` strips imperative steps, rewrites as outcome-focused. Wired into AGENDA path before clarity check. Non-blocking.
+- [x] **SIGNALS.md signal alignment** — DONE (session 25). User-declared research priorities injected into signal scanning. Factory sub-missions now aligned with user intent.
+- [ ] **Dashboard: replay as factory mode** — "Replay this run as factory mode" button. Re-runs the original goal but lets evolver inject one self-generated sub-goal from recent signals. Instant Mode 3 visibility. Low priority until dashboard gets real usage.
+- [ ] **Eval-driven harness hill-climbing** — @mr_r0b0t/@ashpreetbedi: use evals as autonomous learning signal for hill-climbing on harness quality. Already partially done (eval flywheel, evolver signal scan). Read the Vtrivedy10 LangChain article when it's available for concrete recipes.
 - [x] grok-response-3.txt — Bitter Lesson Engineering + Mode 1/2/3 taxonomy. Processed, implemented outcome-first decomposition + user context.
 - [x] **PAI (danielmiessler/Personal_AI_Infrastructure)** — Research run complete (2026-03-31, partial — subprocess timeout on step 6). Key findings: 964 TELOS files across 5 categories (world/self/goals/projects/standards), 340 hooks files, rich hook pattern library. Steal candidates: TELOS-style structured context injection; hook-based lifecycle callbacks at decision points. Jeremy's gut: good bones, too much ceremony for Poe's use case.
 - [x] **Hermes (NousResearch/hermes-agent)** — Jeremy asked if we should set up Hermes instead of OpenClaw. Research complete (2026-03-31). Verdict: **keep OpenClaw + poe-orchestration**. Hermes is optimized for repeated iterative tasks with automatic skill refinement; our system is more sophisticated in multi-agent oversight, recovery, and mission structure. Selective steal candidates below.
