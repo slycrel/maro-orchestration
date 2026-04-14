@@ -2209,43 +2209,51 @@ def test_artifact_storage_in_shared_ctx():
 # LoopStateMachine — transition enforcement
 # ---------------------------------------------------------------------------
 
+def test_loop_state_machine_is_loop_context_subclass():
+    """LoopStateMachine inherits LoopContext — ctx.set_phase() is the API."""
+    from agent_loop import LoopContext, LoopStateMachine
+    assert issubclass(LoopStateMachine, LoopContext)
+    ctx = LoopStateMachine()
+    assert isinstance(ctx, LoopContext)
+
+
 def test_loop_state_machine_happy_path():
     """Normal A→B→C→E→F→G path (skipping parallel) transitions cleanly."""
-    from agent_loop import LoopContext, LoopPhase, LoopStateMachine
-    ctx = LoopContext()
+    from agent_loop import LoopPhase, LoopStateMachine
+    ctx = LoopStateMachine()
     assert ctx.phase == LoopPhase.INIT
 
-    LoopStateMachine.set_phase(ctx, LoopPhase.DECOMPOSE)
+    ctx.set_phase(LoopPhase.DECOMPOSE)
     assert ctx.phase == LoopPhase.DECOMPOSE
 
-    LoopStateMachine.set_phase(ctx, LoopPhase.PRE_FLIGHT)
+    ctx.set_phase(LoopPhase.PRE_FLIGHT)
     assert ctx.phase == LoopPhase.PRE_FLIGHT
 
-    LoopStateMachine.set_phase(ctx, LoopPhase.PREPARE)
+    ctx.set_phase(LoopPhase.PREPARE)
     assert ctx.phase == LoopPhase.PREPARE
 
-    LoopStateMachine.set_phase(ctx, LoopPhase.EXECUTE)
+    ctx.set_phase(LoopPhase.EXECUTE)
     assert ctx.phase == LoopPhase.EXECUTE
 
-    LoopStateMachine.set_phase(ctx, LoopPhase.FINALIZE)
+    ctx.set_phase(LoopPhase.FINALIZE)
     assert ctx.phase == LoopPhase.FINALIZE
 
 
 def test_loop_state_machine_parallel_path():
     """PRE_FLIGHT → PARALLEL → PREPARE path is valid."""
-    from agent_loop import LoopContext, LoopPhase, LoopStateMachine
-    ctx = LoopContext()
-    LoopStateMachine.set_phase(ctx, LoopPhase.DECOMPOSE)
-    LoopStateMachine.set_phase(ctx, LoopPhase.PRE_FLIGHT)
-    LoopStateMachine.set_phase(ctx, LoopPhase.PARALLEL)
+    from agent_loop import LoopPhase, LoopStateMachine
+    ctx = LoopStateMachine()
+    ctx.set_phase(LoopPhase.DECOMPOSE)
+    ctx.set_phase(LoopPhase.PRE_FLIGHT)
+    ctx.set_phase(LoopPhase.PARALLEL)
     assert ctx.phase == LoopPhase.PARALLEL
-    LoopStateMachine.set_phase(ctx, LoopPhase.PREPARE)
+    ctx.set_phase(LoopPhase.PREPARE)
     assert ctx.phase == LoopPhase.PREPARE
 
 
 def test_loop_state_machine_early_exit_to_finalize():
     """Any phase can transition directly to FINALIZE (early-exit path)."""
-    from agent_loop import LoopContext, LoopPhase, LoopStateMachine
+    from agent_loop import LoopPhase, LoopStateMachine
     for start_phase in (
         LoopPhase.INIT,
         LoopPhase.DECOMPOSE,
@@ -2254,48 +2262,48 @@ def test_loop_state_machine_early_exit_to_finalize():
         LoopPhase.PREPARE,
         LoopPhase.EXECUTE,
     ):
-        ctx = LoopContext()
+        ctx = LoopStateMachine()
         ctx.phase = start_phase
-        LoopStateMachine.set_phase(ctx, LoopPhase.FINALIZE)
+        ctx.set_phase(LoopPhase.FINALIZE)
         assert ctx.phase == LoopPhase.FINALIZE
 
 
 def test_loop_state_machine_invalid_forward_skip():
     """Skipping phases raises InvalidTransitionError."""
-    from agent_loop import LoopContext, LoopPhase, LoopStateMachine, InvalidTransitionError
-    ctx = LoopContext()
+    from agent_loop import LoopPhase, LoopStateMachine, InvalidTransitionError
+    ctx = LoopStateMachine()
     # INIT → EXECUTE is not allowed (skips DECOMPOSE, PRE_FLIGHT, PREPARE)
     with pytest.raises(InvalidTransitionError, match="init.*execute"):
-        LoopStateMachine.set_phase(ctx, LoopPhase.EXECUTE)
+        ctx.set_phase(LoopPhase.EXECUTE)
 
 
 def test_loop_state_machine_backwards_transition():
     """Going backwards (EXECUTE → DECOMPOSE) raises InvalidTransitionError."""
-    from agent_loop import LoopContext, LoopPhase, LoopStateMachine, InvalidTransitionError
-    ctx = LoopContext()
+    from agent_loop import LoopPhase, LoopStateMachine, InvalidTransitionError
+    ctx = LoopStateMachine()
     ctx.phase = LoopPhase.EXECUTE
     with pytest.raises(InvalidTransitionError, match="execute.*decompose"):
-        LoopStateMachine.set_phase(ctx, LoopPhase.DECOMPOSE)
+        ctx.set_phase(LoopPhase.DECOMPOSE)
 
 
 def test_loop_state_machine_finalize_is_terminal():
     """FINALIZE → anything (including FINALIZE itself) raises InvalidTransitionError."""
-    from agent_loop import LoopContext, LoopPhase, LoopStateMachine, InvalidTransitionError
-    ctx = LoopContext()
+    from agent_loop import LoopPhase, LoopStateMachine, InvalidTransitionError
+    ctx = LoopStateMachine()
     ctx.phase = LoopPhase.FINALIZE
     with pytest.raises(InvalidTransitionError):
-        LoopStateMachine.set_phase(ctx, LoopPhase.INIT)
+        ctx.set_phase(LoopPhase.INIT)
     with pytest.raises(InvalidTransitionError):
-        LoopStateMachine.set_phase(ctx, LoopPhase.FINALIZE)
+        ctx.set_phase(LoopPhase.FINALIZE)
 
 
 def test_loop_state_machine_error_message_shows_both_phases():
     """InvalidTransitionError message shows current and target phases."""
-    from agent_loop import LoopContext, LoopPhase, LoopStateMachine, InvalidTransitionError
-    ctx = LoopContext()
+    from agent_loop import LoopPhase, LoopStateMachine, InvalidTransitionError
+    ctx = LoopStateMachine()
     ctx.phase = LoopPhase.PREPARE
     try:
-        LoopStateMachine.set_phase(ctx, LoopPhase.DECOMPOSE)
+        ctx.set_phase(LoopPhase.DECOMPOSE)
         pytest.fail("Should have raised")
     except InvalidTransitionError as exc:
         msg = str(exc)
@@ -2305,11 +2313,11 @@ def test_loop_state_machine_error_message_shows_both_phases():
 
 def test_loop_state_machine_does_not_modify_ctx_on_failure():
     """ctx.phase is unchanged when a transition fails."""
-    from agent_loop import LoopContext, LoopPhase, LoopStateMachine, InvalidTransitionError
-    ctx = LoopContext()
+    from agent_loop import LoopPhase, LoopStateMachine, InvalidTransitionError
+    ctx = LoopStateMachine()
     ctx.phase = LoopPhase.EXECUTE
     try:
-        LoopStateMachine.set_phase(ctx, LoopPhase.INIT)
+        ctx.set_phase(LoopPhase.INIT)
     except InvalidTransitionError:
         pass
     assert ctx.phase == LoopPhase.EXECUTE  # unchanged

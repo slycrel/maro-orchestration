@@ -30,7 +30,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, ClassVar, Dict, List, Optional
 
 log = logging.getLogger("poe.loop")
 
@@ -191,43 +191,8 @@ class InvalidTransitionError(Exception):
     """Raised when an invalid LoopPhase transition is attempted."""
 
 
-class LoopStateMachine:
-    """Enforces valid phase transitions for run_agent_loop.
-
-    Wraps LoopContext.phase writes with transition validation. Call
-    set_phase(ctx, new_phase) at each phase boundary in run_agent_loop.
-    Invalid transitions raise InvalidTransitionError immediately — no
-    silent no-ops, no state corruption.
-
-    Allowed transitions (all phases may also advance to FINALIZE for
-    early-exit paths):
-        INIT       → DECOMPOSE
-        DECOMPOSE  → PRE_FLIGHT
-        PRE_FLIGHT → PARALLEL | PREPARE
-        PARALLEL   → PREPARE
-        PREPARE    → EXECUTE
-        EXECUTE    → FINALIZE
-    """
-
-    _ALLOWED: Dict[str, set] = {
-        LoopPhase.INIT:       {LoopPhase.DECOMPOSE,  LoopPhase.FINALIZE},
-        LoopPhase.DECOMPOSE:  {LoopPhase.PRE_FLIGHT, LoopPhase.FINALIZE},
-        LoopPhase.PRE_FLIGHT: {LoopPhase.PARALLEL,   LoopPhase.PREPARE, LoopPhase.FINALIZE},
-        LoopPhase.PARALLEL:   {LoopPhase.PREPARE,    LoopPhase.FINALIZE},
-        LoopPhase.PREPARE:    {LoopPhase.EXECUTE,    LoopPhase.FINALIZE},
-        LoopPhase.EXECUTE:    {LoopPhase.FINALIZE},
-        LoopPhase.FINALIZE:   set(),
-    }
-
-    @classmethod
-    def set_phase(cls, ctx: LoopContext, new_phase: str) -> None:
-        """Advance ctx.phase to new_phase, raising InvalidTransitionError on bad transitions."""
-        allowed = cls._ALLOWED.get(ctx.phase, set())
-        if new_phase not in allowed:
-            raise InvalidTransitionError(
-                f"Invalid loop phase transition: {ctx.phase!r} → {new_phase!r}"
-            )
-        ctx.phase = new_phase
+# LoopStateMachine is defined after LoopContext below (it inherits LoopContext).
+# See class definition following @dataclass LoopContext.
 
 
 @dataclass
@@ -306,6 +271,42 @@ class LoopContext:
     started_at: float = 0.0
     start_ts: str = ""
     loop_timeout_secs: Optional[float] = None
+
+
+@dataclass
+class LoopStateMachine(LoopContext):
+    """LoopContext + phase transition enforcement.
+
+    Replaces the two-class pattern (LoopContext state + LoopStateMachine classmethod).
+    LoopContext becomes `self` — ctx.set_phase(X) validates and transitions in one call.
+
+    Allowed transitions (all phases may also advance to FINALIZE for early-exit paths):
+        INIT       → DECOMPOSE
+        DECOMPOSE  → PRE_FLIGHT
+        PRE_FLIGHT → PARALLEL | PREPARE
+        PARALLEL   → PREPARE
+        PREPARE    → EXECUTE
+        EXECUTE    → FINALIZE
+    """
+
+    _ALLOWED: ClassVar[Dict[str, set]] = {
+        LoopPhase.INIT:       {LoopPhase.DECOMPOSE,  LoopPhase.FINALIZE},
+        LoopPhase.DECOMPOSE:  {LoopPhase.PRE_FLIGHT, LoopPhase.FINALIZE},
+        LoopPhase.PRE_FLIGHT: {LoopPhase.PARALLEL,   LoopPhase.PREPARE, LoopPhase.FINALIZE},
+        LoopPhase.PARALLEL:   {LoopPhase.PREPARE,    LoopPhase.FINALIZE},
+        LoopPhase.PREPARE:    {LoopPhase.EXECUTE,    LoopPhase.FINALIZE},
+        LoopPhase.EXECUTE:    {LoopPhase.FINALIZE},
+        LoopPhase.FINALIZE:   set(),
+    }
+
+    def set_phase(self, new_phase: str) -> None:
+        """Advance self.phase to new_phase, raising InvalidTransitionError on bad transitions."""
+        allowed = self._ALLOWED.get(self.phase, set())
+        if new_phase not in allowed:
+            raise InvalidTransitionError(
+                f"Invalid loop phase transition: {self.phase!r} → {new_phase!r}"
+            )
+        self.phase = new_phase
 
 
 # ---------------------------------------------------------------------------
@@ -2100,7 +2101,7 @@ def _initialize_loop(
     from interrupt import InterruptQueue, set_loop_running
     from poe import assign_model_by_role
 
-    ctx = LoopContext()
+    ctx = LoopStateMachine()
     ctx.goal = goal
     ctx.verbose = verbose
     ctx.dry_run = dry_run
@@ -3481,7 +3482,7 @@ def run_agent_loop(
     o = _orch()
 
     # Phase B: Decompose goal into steps
-    LoopStateMachine.set_phase(ctx, LoopPhase.DECOMPOSE)
+    ctx.set_phase(LoopPhase.DECOMPOSE)
     steps, _prereq_context, _lessons_context, _skills_context, _cost_context, _had_no_matching_skill = _decompose_goal(
         ctx,
         preset_steps=preset_steps,
@@ -3491,7 +3492,7 @@ def run_agent_loop(
     )
 
     # Phase C: Pre-flight checks
-    LoopStateMachine.set_phase(ctx, LoopPhase.PRE_FLIGHT)
+    ctx.set_phase(LoopPhase.PRE_FLIGHT)
     steps, _pf, _pf_early_return = _preflight_checks(
         ctx, steps,
         resume_from_loop_id=resume_from_loop_id,
@@ -3517,7 +3518,7 @@ def run_agent_loop(
 
     # Phase D: Parallel fan-out (early return if applicable)
     if _use_dag or _use_fanout:
-        LoopStateMachine.set_phase(ctx, LoopPhase.PARALLEL)
+        ctx.set_phase(LoopPhase.PARALLEL)
         _parallel_result = _run_parallel_path(
             ctx, steps,
             clean_steps=_clean_steps,
@@ -3534,7 +3535,7 @@ def run_agent_loop(
             return _parallel_result
 
     # Phase E: Shape steps and write to NEXT.md
-    LoopStateMachine.set_phase(ctx, LoopPhase.PREPARE)
+    ctx.set_phase(LoopPhase.PREPARE)
     steps, step_indices, _manifest_steps = _prepare_execution(ctx, steps, _manifest_steps)
 
     # Step 2: Execute each step in order (dynamic — interrupts may add/replace steps)
@@ -3603,7 +3604,7 @@ def run_agent_loop(
 
     # Phase F: Main execute loop
     _budget_bumped = False  # guard: mid-loop budget bump fires at most once
-    LoopStateMachine.set_phase(ctx, LoopPhase.EXECUTE)
+    ctx.set_phase(LoopPhase.EXECUTE)
     while remaining_steps:
         if iteration >= max_iterations:
             loop_status = "stuck"
@@ -4156,7 +4157,7 @@ def run_agent_loop(
             break
 
     # Phase G: Build result, write artifacts, run finalize side-effects
-    LoopStateMachine.set_phase(ctx, LoopPhase.FINALIZE)
+    ctx.set_phase(LoopPhase.FINALIZE)
     result = _build_result_and_finalize(
         ctx,
         step_outcomes=step_outcomes,

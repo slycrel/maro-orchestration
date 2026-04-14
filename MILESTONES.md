@@ -8,7 +8,7 @@ Last updated: 2026-04-14 (session 23 — Stage 3→4 regression, lesson dedup, p
 
 ## Next Up
 
-1. **LoopStateMachine conversion** (P1 architectural) — LoopContext becomes `self`. Eliminates context-threading complexity. ~40+ call sites to migrate.
+<!-- No pending items — see BACKLOG.md for deferred work -->
 
 ## Done (session 23, 2026-04-14 — Phase 61, lesson dedup, phase audit, Stage 3→4, input classification)
 
@@ -18,6 +18,7 @@ Last updated: 2026-04-14 (session 23 — Stage 3→4 regression, lesson dedup, p
 - [x] **BACKLOG cleanup** — Closed artifact routing, orch.py tests, HIGH coverage item, inspector threshold asymmetry, Phase 45 note. Updated 6 items.
 - [x] **Phase 61 integration depth** — 12 new tests across 4 classes: checkpoint recovery (3), memory injection (2), AGENDA lane heartbeat e2e (3), FailoverAdapter chain (4). Integration total: 31→49.
 - [x] **Input classification tag** — `classify_input_type()` in captains_log.py (url/code/structured_data/plain_text). `INPUT_MISMATCH` + `METACOGNITIVE_DECISION` event constants. `update_skill_utility()` logs INPUT_MISMATCH when circuit opens on url-skill-vs-non-url-input domain mismatch. `attribute_failure_to_skills()` threads step_text through. 9 tests. EVENT_TYPES 28→30.
+- [x] **LoopStateMachine conversion** — `LoopStateMachine` now inherits `LoopContext`; `set_phase` is an instance method (`ctx.set_phase(X)` replaces `LoopStateMachine.set_phase(ctx, X)`). 6 call sites updated in `run_agent_loop`, 8 test functions updated + 1 new subclass check. `_initialize_loop` creates `LoopStateMachine()` instead of `LoopContext()`. Eliminates two-class pattern; ctx IS the state machine now.
 
 1. ~~**Memory Stage 3→4 (verify extraction in live runs)**~~ — DONE (session 23). Added 3 regression tests: `test_step_outcome_has_result_attribute` (guards s.result attr), `test_skill_extraction_fires_when_not_dry_run` (verifies extract_skills is called), `test_skill_extraction_outcome_uses_step_result` (verifies step result data flows correctly). Upgraded skill extraction log.debug → log.warning so failures surface. Bug is verified closed.
 2. ~~**K2 follow-up: Import links collection**~~ — DONE (session 22). `import_link_farm()` + `poe-knowledge import-links` CLI. 315 nodes already in workspace. +9 tests.
