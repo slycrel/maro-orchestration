@@ -2,15 +2,19 @@
 
 What to do next, in what order. Updated each session. Strategic phases live in ROADMAP.md; deferred ideas live in BACKLOG.md. This file is the bridge — the executable queue.
 
-Last updated: 2026-04-14 (session 26 — codebase graph, injection guard, dev run 2 closed #17/#18/#19)
+Last updated: 2026-04-14 (session 27 — dev round 4 closed #12/#23/#24, first-class project isolation next)
 
 ---
 
 ## Next Up
 
-- **Third PM round** — Dev run 2 closed #17/#18/#19. File next wave of issues on recipe repo (running).
+- **First-class project isolation** — Add `project` field to Skill dataclass; filter `find_matching_skills()` by project; per-project lockfile in `set_loop_running()`; concurrent run safety. Required before parallel missions.
 - **BACKLOG cleanup** — Review and close stale BACKLOG items from earlier sessions.
 - **Evolver confidence calibration follow-up** — `scan_suggestion_outcomes` wired; verify calibration is improving (check live workspace suggestion stats).
+
+## Done (session 27, 2026-04-14 — dev round 4 closed #12/#23/#24)
+
+- [x] **Dev round 4** — Closed #12 (rate limit test for /api/recipes), #23 (HTML edit blank-name guard), #24 (photo_url/review_text length validators). 9 new tests: rate limit, field validators, HTML blank-name class. All 52 recipe tests pass.
 
 ## Done (session 26, 2026-04-14 — codebase graph, injection guard, harness spectrum, PM/dev rounds 3)
 

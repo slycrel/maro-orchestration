@@ -550,8 +550,12 @@ def _default_lock_path() -> Path:
         return Path.home() / ".poe" / "workspace" / "memory" / "loop.lock"
 
 
-def set_loop_running(loop_id: str, goal: str = "") -> None:
-    """Write a lockfile marking an agent loop as active."""
+def set_loop_running(loop_id: str, goal: str = "", project: str = "") -> None:
+    """Write a lockfile marking an agent loop as active.
+
+    When project is non-empty, writes a per-project lockfile in addition to
+    the global lock. This enables concurrent-run safety checks per project.
+    """
     path = _default_lock_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
@@ -559,14 +563,28 @@ def set_loop_running(loop_id: str, goal: str = "") -> None:
         "goal": goal[:120],
         "pid": os.getpid(),
         "started_at": datetime.now(timezone.utc).isoformat(),
+        "project": project,
     }
     path.write_text(json.dumps(payload), encoding="utf-8")
+    # Per-project lock — allows checking if a specific project is already running.
+    if project:
+        _proj_lock = path.parent / f"loop-{project}.lock"
+        _proj_lock.write_text(json.dumps(payload), encoding="utf-8")
 
 
 def clear_loop_running() -> None:
-    """Remove the loop lockfile."""
+    """Remove the loop lockfile and any per-project lock written by set_loop_running()."""
     path = _default_lock_path()
     try:
+        # If a project was recorded in the lock, remove its per-project lock too.
+        try:
+            d = json.loads(path.read_text(encoding="utf-8"))
+            _proj = d.get("project", "")
+            if _proj:
+                _proj_lock = path.parent / f"loop-{_proj}.lock"
+                _proj_lock.unlink(missing_ok=True)
+        except Exception:
+            pass
         path.unlink(missing_ok=True)
     except Exception:
         pass
@@ -598,6 +616,36 @@ def get_running_loop() -> Optional[dict]:
 def is_loop_running() -> bool:
     """Return True if an agent loop is currently active."""
     return get_running_loop() is not None
+
+
+def get_running_project_loop(project: str) -> Optional[dict]:
+    """Return info about a running loop for the given project, or None.
+
+    Reads the per-project lock written by set_loop_running(project=...).
+    Verifies the PID is alive before trusting the result.
+    """
+    if not project:
+        return None
+    path = _default_lock_path().parent / f"loop-{project}.lock"
+    if not path.exists():
+        return None
+    try:
+        d = json.loads(path.read_text(encoding="utf-8"))
+        pid = d.get("pid", 0)
+        if pid:
+            try:
+                os.kill(pid, 0)
+            except OSError:
+                path.unlink(missing_ok=True)
+                return None
+        return d
+    except Exception:
+        return None
+
+
+def is_project_running(project: str) -> bool:
+    """Return True if an agent loop is currently active for the given project."""
+    return get_running_project_loop(project) is not None
 
 
 # ---------------------------------------------------------------------------

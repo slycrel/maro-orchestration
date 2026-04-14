@@ -359,3 +359,70 @@ class TestAgentLoopInterrupt:
         # Loop finishes (dry-run always completes steps)
         assert result.status == "done"
         assert result.interrupts_applied == 1
+
+
+# ---------------------------------------------------------------------------
+# Project isolation: per-project lockfile
+# ---------------------------------------------------------------------------
+
+class TestProjectLock:
+    def test_set_project_lock(self, tmp_path, monkeypatch):
+        lock_path = tmp_path / "loop.lock"
+        monkeypatch.setattr("interrupt._default_lock_path", lambda: lock_path)
+        from interrupt import set_loop_running, get_running_project_loop, is_project_running, clear_loop_running
+
+        set_loop_running("abc123", "test goal", project="polymarket")
+        # Global lock exists
+        assert lock_path.exists()
+        # Per-project lock exists
+        proj_lock = tmp_path / "loop-polymarket.lock"
+        assert proj_lock.exists()
+        # is_project_running returns True
+        assert is_project_running("polymarket")
+        # Different project is not running
+        assert not is_project_running("nootropics")
+
+    def test_clear_loop_removes_project_lock(self, tmp_path, monkeypatch):
+        lock_path = tmp_path / "loop.lock"
+        monkeypatch.setattr("interrupt._default_lock_path", lambda: lock_path)
+        from interrupt import set_loop_running, clear_loop_running, is_project_running
+
+        set_loop_running("abc123", "goal", project="research")
+        assert is_project_running("research")
+        clear_loop_running()
+        assert not is_project_running("research")
+        assert not lock_path.exists()
+
+    def test_no_project_no_project_lock(self, tmp_path, monkeypatch):
+        lock_path = tmp_path / "loop.lock"
+        monkeypatch.setattr("interrupt._default_lock_path", lambda: lock_path)
+        from interrupt import set_loop_running, is_project_running, clear_loop_running
+
+        set_loop_running("abc123", "no-project goal")  # no project kwarg
+        # No per-project lock files should be created
+        proj_locks = list(tmp_path.glob("loop-*.lock"))
+        assert proj_locks == []
+        assert not is_project_running("anything")
+        clear_loop_running()
+
+    def test_stale_project_lock_cleared(self, tmp_path, monkeypatch):
+        lock_path = tmp_path / "loop.lock"
+        monkeypatch.setattr("interrupt._default_lock_path", lambda: lock_path)
+        from interrupt import get_running_project_loop
+
+        # Write a per-project lock with dead PID
+        proj_lock = tmp_path / "loop-recipes.lock"
+        proj_lock.write_text(json.dumps({"loop_id": "old", "pid": 99999999, "project": "recipes"}))
+        result = get_running_project_loop("recipes")
+        assert result is None
+        assert not proj_lock.exists()
+
+    def test_project_lock_payload_includes_project(self, tmp_path, monkeypatch):
+        lock_path = tmp_path / "loop.lock"
+        monkeypatch.setattr("interrupt._default_lock_path", lambda: lock_path)
+        from interrupt import set_loop_running, get_running_loop
+
+        set_loop_running("loop1", "my goal", project="polymarket-edges")
+        info = get_running_loop()
+        assert info is not None
+        assert info["project"] == "polymarket-edges"

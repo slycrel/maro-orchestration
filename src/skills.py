@@ -567,7 +567,12 @@ def run_island_cycle(
     return {"assigned": assigned, "culled": cull_report, "total_culled": total_culled}
 
 
-def find_matching_skills(goal: str, adapter=None, use_router: bool = True) -> List[Skill]:
+def find_matching_skills(
+    goal: str,
+    adapter=None,
+    use_router: bool = True,
+    project: str = "",
+) -> List[Skill]:
     """Find skills whose trigger_patterns match the goal.
 
     Phase 17: when use_router=True (default) and a trained router is
@@ -579,6 +584,9 @@ def find_matching_skills(goal: str, adapter=None, use_router: bool = True) -> Li
         goal:       Goal string to match against.
         adapter:    Not used (reserved for future semantic search).
         use_router: If True, attempt router-based scoring (Phase 17).
+        project:    Project slug for isolation. When non-empty, only skills
+                    with project=="" (global) or project==this value are
+                    considered. Empty string disables filtering (legacy).
 
     Returns:
         Top matching skills in score order (up to 3 via router, 2 via keywords).
@@ -586,6 +594,15 @@ def find_matching_skills(goal: str, adapter=None, use_router: bool = True) -> Li
     skills = load_skills()
     if not skills:
         return []
+
+    # Project isolation: keep global skills (project=="") and project-specific
+    # skills belonging to the current project. Silently excludes skills that
+    # belong to a *different* project.
+    if project:
+        skills = [
+            s for s in skills
+            if not getattr(s, "project", "") or getattr(s, "project", "") == project
+        ]
 
     # Filter out skills with open circuit breaker — they've failed 3+ times
     # and shouldn't be injected until rewritten/recovered

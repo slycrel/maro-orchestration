@@ -753,7 +753,7 @@ def _process_blocked_step(ctx: LoopContext, blk: BlockedStepContext) -> tuple:
             int(outcome.get("tokens_out", 0)),
             getattr(step_adapter, "model_key", None),
         )
-        for _sk in find_matching_skills(step_text + " " + ctx.goal, use_router=False):
+        for _sk in find_matching_skills(step_text + " " + ctx.goal, use_router=False, project=ctx.project):
             if getattr(_sk, "variant_of", None) is not None:
                 record_variant_outcome(_sk.id, success=False)
             # Phase 59: record failure telemetry per skill
@@ -1376,7 +1376,7 @@ def _process_done_step(
             int(outcome.get("tokens_out", 0)),
             step_model,
         )
-        for _sk in find_matching_skills(step_text + " " + ctx.goal, use_router=False):
+        for _sk in find_matching_skills(step_text + " " + ctx.goal, use_router=False, project=ctx.project):
             update_skill_utility(_sk.id, success=True)
             if getattr(_sk, "variant_of", None) is not None:
                 record_variant_outcome(_sk.id, success=True)
@@ -2183,7 +2183,7 @@ def _initialize_loop(
 
     # Advertise this loop as running so other interfaces can route interrupts
     try:
-        set_loop_running(ctx.loop_id, goal)
+        set_loop_running(ctx.loop_id, goal, project=ctx.project)
     except Exception as _slr_exc:
         log.debug("set_loop_running failed: %s", _slr_exc)
 
@@ -2728,7 +2728,7 @@ def _build_loop_context(
     had_no_matching_skill = False
     try:
         from skills import find_matching_skills, format_skills_for_prompt, select_variant_for_task
-        _matching_skills = find_matching_skills(goal)
+        _matching_skills = find_matching_skills(goal, project=project)
         # A/B routing: for each matched skill, select parent or active challenger
         # using a hash of the goal as a stable routing key (loop_id not yet assigned)
         import hashlib as _hashlib

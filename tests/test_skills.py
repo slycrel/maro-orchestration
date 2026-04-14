@@ -2033,3 +2033,91 @@ class TestSkillConstraints:
         constraint = SkillConstraint("s1", ["test"], {"key": "val"})
         apply_skill_constraints("test goal", [skill], [constraint])
         assert skill.optimization_objective == original_obj  # original unchanged
+
+
+# ---------------------------------------------------------------------------
+# Project isolation in find_matching_skills
+# ---------------------------------------------------------------------------
+
+class TestFindMatchingSkillsProjectIsolation:
+    """find_matching_skills(project=...) filters to global + project-specific skills."""
+
+    def _make_skill(self, skill_id, name, trigger, project=""):
+        from skill_types import Skill
+        return Skill(
+            id=skill_id,
+            name=name,
+            description=f"desc {name}",
+            trigger_patterns=[trigger],
+            steps_template=["step"],
+            source_loop_ids=[],
+            created_at="2026-01-01T00:00:00",
+            project=project,
+        )
+
+    def test_no_project_returns_all(self, tmp_path, monkeypatch):
+        """Without a project filter, all matching skills are returned."""
+        from skills import find_matching_skills
+        global_skill = self._make_skill("g1", "global", "research", project="")
+        proj_skill = self._make_skill("p1", "proj", "research", project="polymarket")
+        monkeypatch.setattr("skills.load_skills", lambda: [global_skill, proj_skill])
+        results = find_matching_skills("research task", use_router=False, project="")
+        ids = {s.id for s in results}
+        assert "g1" in ids
+        assert "p1" in ids
+
+    def test_project_filter_includes_global(self, tmp_path, monkeypatch):
+        """With project set, global skills (project='') are always included."""
+        from skills import find_matching_skills
+        global_skill = self._make_skill("g1", "global", "research", project="")
+        proj_skill = self._make_skill("p1", "proj", "research", project="polymarket")
+        monkeypatch.setattr("skills.load_skills", lambda: [global_skill, proj_skill])
+        results = find_matching_skills("research task", use_router=False, project="polymarket")
+        ids = {s.id for s in results}
+        assert "g1" in ids
+        assert "p1" in ids
+
+    def test_project_filter_excludes_other_projects(self, tmp_path, monkeypatch):
+        """With project set, skills from other projects are excluded."""
+        from skills import find_matching_skills
+        global_skill = self._make_skill("g1", "global", "research", project="")
+        polymarket_skill = self._make_skill("p1", "poly", "research", project="polymarket")
+        nootropics_skill = self._make_skill("n1", "noot", "research", project="nootropics")
+        monkeypatch.setattr("skills.load_skills", lambda: [global_skill, polymarket_skill, nootropics_skill])
+        results = find_matching_skills("research task", use_router=False, project="polymarket")
+        ids = {s.id for s in results}
+        assert "g1" in ids
+        assert "p1" in ids
+        assert "n1" not in ids
+
+    def test_project_filter_empty_skill_pool(self, tmp_path, monkeypatch):
+        """When all matching skills belong to different projects, returns empty list."""
+        from skills import find_matching_skills
+        other_skill = self._make_skill("o1", "other", "research", project="other-project")
+        monkeypatch.setattr("skills.load_skills", lambda: [other_skill])
+        results = find_matching_skills("research task", use_router=False, project="my-project")
+        assert results == []
+
+    def test_skill_project_field_roundtrips_json(self):
+        """project field persists through skill_to_dict / dict_to_skill."""
+        from skill_types import skill_to_dict, dict_to_skill, Skill
+        skill = Skill(
+            id="s1", name="n", description="d", trigger_patterns=["t"],
+            steps_template=["s"], source_loop_ids=[], created_at="2026-01-01",
+            project="polymarket-edges",
+        )
+        d = skill_to_dict(skill)
+        assert d["project"] == "polymarket-edges"
+        restored = dict_to_skill(d)
+        assert restored.project == "polymarket-edges"
+
+    def test_skill_project_defaults_to_empty(self):
+        """Old skills loaded without project field default to '' (global)."""
+        from skill_types import dict_to_skill
+        d = {
+            "id": "s1", "name": "n", "description": "d", "trigger_patterns": [],
+            "steps_template": [], "source_loop_ids": [], "created_at": "2026-01-01",
+            # no "project" key — simulates old serialized skill
+        }
+        skill = dict_to_skill(d)
+        assert skill.project == ""

@@ -39,6 +39,7 @@ class Skill:
     variant_of: Optional[str] = None # A/B: parent skill ID if this is a challenger variant
     variant_wins: int = 0            # A/B: times this variant was selected and step succeeded
     variant_losses: int = 0          # A/B: times this variant was selected and step failed
+    project: str = ""                # project slug this skill belongs to; "" = global (all projects)
 
 
 @dataclass
@@ -170,6 +171,7 @@ def skill_to_dict(skill: Skill) -> dict:
         "variant_of": skill.variant_of,
         "variant_wins": skill.variant_wins,
         "variant_losses": skill.variant_losses,
+        "project": skill.project,
     }
 
 
@@ -196,6 +198,7 @@ def dict_to_skill(d: dict) -> Skill:
         variant_of=d.get("variant_of", None),
         variant_wins=int(d.get("variant_wins", 0)),
         variant_losses=int(d.get("variant_losses", 0)),
+        project=d.get("project", ""),
     )
 
 
