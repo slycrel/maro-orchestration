@@ -54,6 +54,9 @@ poe-replay = "strategy_evaluator:main"
 poe-tool-costs = "tool_cost_report:main"
 poe-benchmark = "backend_benchmark:main"
 poe-log = "captains_log:main"
+poe-repo-scan = "repo_scan:main"
+poe-codebase-graph = "codebase_graph:main"
+poe-harness-optimizer = "harness_optimizer:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

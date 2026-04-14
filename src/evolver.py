@@ -394,6 +394,24 @@ def apply_suggestion(suggestion_id: str) -> bool:
             d = json.loads(line)
             if d.get("suggestion_id") == suggestion_id:
                 found = True
+                # Injection guard: scan suggestion text before applying (fail-closed)
+                try:
+                    from injection_guard import scan_content
+                    _suggestion_text_for_scan = d.get("suggestion", "")
+                    _scan = scan_content(_suggestion_text_for_scan, source="evolver_suggestion")
+                    if not _scan.is_clean:
+                        d["applied"] = False
+                        d["status"] = "injection_risk_blocked"
+                        d["block_reason"] = f"injection_guard: {_scan.findings[0][:120]}"
+                        log.warning(
+                            "apply_suggestion: injection risk blocked id=%s risk=%s finding=%s",
+                            suggestion_id, _scan.risk_level, _scan.findings[0][:80] if _scan.findings else "?",
+                        )
+                        new_lines.append(json.dumps(d))
+                        continue
+                except Exception as _ig_exc:
+                    log.debug("injection_guard scan failed (proceeding): %s", _ig_exc)
+
                 # Phase 14: skill_pattern suggestions go through test gate
                 category = d.get("category", "observation")
 
