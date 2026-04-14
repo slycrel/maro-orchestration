@@ -405,8 +405,8 @@ def apply_suggestion(suggestion_id: str) -> bool:
                 try:
                     from injection_guard import scan_content
                     _suggestion_text_for_scan = d.get("suggestion", "")
-                    _scan = scan_content(_suggestion_text_for_scan, source="evolver_suggestion")
-                    if not _scan.is_clean:
+                    _scan = scan_content(_suggestion_text_for_scan, source="internal")
+                    if not _scan.safe_to_auto_apply:
                         d["applied"] = False
                         d["status"] = "injection_risk_blocked"
                         d["block_reason"] = f"injection_guard: {_scan.findings[0][:120]}"
@@ -417,7 +417,17 @@ def apply_suggestion(suggestion_id: str) -> bool:
                         new_lines.append(json.dumps(d))
                         continue
                 except Exception as _ig_exc:
-                    log.debug("injection_guard scan failed (proceeding): %s", _ig_exc)
+                    # Fail-closed: if the guard itself throws, skip this apply rather
+                    # than silently applying potentially malicious content.
+                    log.warning(
+                        "apply_suggestion: injection_guard scan FAILED — skipping apply "
+                        "for id=%s to avoid silent pass-through: %s",
+                        suggestion_id, _ig_exc,
+                    )
+                    d["applied"] = False
+                    d["status"] = "injection_guard_scan_failed"
+                    new_lines.append(json.dumps(d))
+                    continue
 
                 # Phase 14: skill_pattern suggestions go through test gate
                 category = d.get("category", "observation")
@@ -1821,7 +1831,7 @@ def run_evolver(
                     from llm import advisor_call as _adv_call
                     _adv_context = (
                         f"Category: {s.category}\n"
-                        f"Suggestion: {s.text[:300]}\n"
+                        f"Suggestion: {s.suggestion[:300]}\n"
                         f"Confidence: {s.confidence:.2f}\n"
                         f"Target: {getattr(s, 'target', 'all')}\n"
                         f"Based on {len(outcomes)} recent outcomes."
@@ -1923,7 +1933,8 @@ def run_evolver(
     # Provides evidence for the verify→learn loop — not just "tests pass" but "behavior improved."
     if not dry_run:
         try:
-            _impact_records = scan_evolver_impact(lookback_hours=48, lookahead_hours=48, limit=5)
+            _impact_limit = max(5, len(applied_ids) + 2)
+            _impact_records = scan_evolver_impact(lookback_hours=48, lookahead_hours=48, limit=_impact_limit)
             _degraded = [r for r in _impact_records if r.verdict == "degraded"]
             if _degraded:
                 log.warning(
@@ -2403,7 +2414,7 @@ def synthesize_skill(
         from injection_guard import scan_content as _scan_content
         _skill_text = "\n".join([description] + steps_template)
         _ig = _scan_content(_skill_text, source="internal")
-        if not _ig.is_clean:
+        if not _ig.safe_to_auto_apply:
             if verbose:
                 print(
                     f"[evolver] synthesize_skill: injection risk detected ({_ig.risk_level}) "
@@ -2411,8 +2422,14 @@ def synthesize_skill(
                     file=sys.stderr,
                 )
             return None
-    except Exception:
-        pass  # fail-open: proceed if guard unavailable
+    except Exception as _ig_exc:
+        # Fail-closed: if the guard scan throws, discard rather than silently persist
+        # content that bypassed injection checking.
+        log.warning(
+            "synthesize_skill: injection_guard scan FAILED — discarding skill '%s': %s",
+            name, _ig_exc,
+        )
+        return None
 
     # Deduplicate — don't create if a skill with this name already exists
     if not dry_run:
@@ -2820,7 +2837,7 @@ def scan_evolver_impact(
     _outcomes_cache: Optional[List[Any]] = None
     if load_outcomes is not None:
         try:
-            _outcomes_cache = load_outcomes(limit=500)
+            _outcomes_cache = load_outcomes(limit=5000)
         except Exception:
             return []
     else:
@@ -2890,7 +2907,7 @@ def scan_evolver_impact(
             stuck_after=sum(1 for o in outcomes_after if getattr(o, "status", "done") == "stuck"),
             stuck_rate_before=sr_before,
             stuck_rate_after=sr_after,
-            delta=delta if not math.isnan(delta) else 0.0,
+            delta=delta,  # NaN for insufficient_data — callers check math.isnan()
             verdict=verdict,
         ))
 

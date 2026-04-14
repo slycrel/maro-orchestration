@@ -243,7 +243,7 @@ def _build_symbol_index(project_root: Path) -> Set[str]:
         if not search_dir.is_dir() or search_dir in seen_dirs:
             continue
         seen_dirs.add(search_dir)
-        for py_file in search_dir.glob("*.py"):
+        for py_file in search_dir.rglob("*.py"):
             try:
                 for line in py_file.read_text(encoding="utf-8", errors="ignore").splitlines():
                     m = _def_or_class.match(line)
@@ -332,12 +332,14 @@ def verify_file_claims(
             if candidate.exists():
                 verified.append(claim)
             else:
-                # Also try just the filename in src/ and tests/
+                # Only try bare-filename fallback when the claim has no directory component —
+                # a claim like "wrong_dir/module.py" should NOT match "src/module.py".
                 found = False
-                for search_dir in [project_root / "src", project_root / "tests", project_root]:
-                    if (search_dir / Path(claim).name).exists():
-                        found = True
-                        break
+                if Path(claim).parent == Path("."):
+                    for search_dir in [project_root / "src", project_root / "tests", project_root]:
+                        if (search_dir / Path(claim).name).exists():
+                            found = True
+                            break
                 if found:
                     verified.append(claim)
                 else:

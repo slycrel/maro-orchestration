@@ -221,18 +221,42 @@ def build_codebase_graph(
         )
         file_nodes[rel] = fn
 
-        # Register function nodes
-        for func_body in ast.walk(tree):
-            if isinstance(func_body, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                qname = f"{module}.{func_body.name}"
-                calls = _collect_calls(func_body)
+        # Register function nodes — walk with class-context tracking to avoid
+        # collision: class A.run + class B.run both keyed 'module.run' with
+        # ast.walk; use a stack-based visitor instead.
+        class _FuncCollector(ast.NodeVisitor):
+            def __init__(self):
+                self._class_stack: list = []
+
+            def visit_ClassDef(self, node):
+                self._class_stack.append(node.name)
+                self.generic_visit(node)
+                self._class_stack.pop()
+
+            def _visit_func(self, node):
+                prefix = ".".join(self._class_stack)
+                qualified = f"{prefix}.{node.name}" if prefix else node.name
+                qname = f"{module}.{qualified}"
+                calls = _collect_calls(node)
                 func_nodes[qname] = FunctionNode(
-                    name=func_body.name,
+                    name=node.name,
                     module=module,
                     file_path=rel,
-                    line=func_body.lineno,
+                    line=node.lineno,
                     calls=calls,
                 )
+                # Don't recurse into nested functions via generic_visit here;
+                # manually visit the body so the class stack stays correct.
+                for child in ast.iter_child_nodes(node):
+                    self.visit(child)
+
+            def visit_FunctionDef(self, node):
+                self._visit_func(node)
+
+            def visit_AsyncFunctionDef(self, node):
+                self._visit_func(node)
+
+        _FuncCollector().visit(tree)
 
     # --- Pass 3: resolve imports → in-degree edges ---
     # Build basename → rel_path for bare-name imports (e.g. "from llm import ..." → "src/llm.py")
@@ -335,7 +359,7 @@ def format_graph_context(
     # Goal-biased file selection: exact path fragment matches go first
     top = graph.ranked_files[:top_files * 3]  # wider set, then filter
     if goal:
-        goal_words = {w.lower().strip(".,") for w in goal.split() if len(w) > 3}
+        goal_words = {w.lower().strip(".,") for w in goal.split() if len(w) >= 3}
         biased = [r for r in top if any(w in r.lower() for w in goal_words)]
         rest = [r for r in top if r not in set(biased)]
         top = (biased + rest)[:top_files]
@@ -361,7 +385,7 @@ def format_graph_context(
     top_funcs = graph.ranked_functions[:top_functions]
     if top_funcs:
         lines.append("Key functions (most central):")
-        for qname in top_funcs[:6]:  # cap at 6 for brevity
+        for qname in top_funcs[:top_functions]:
             fn = graph.functions[qname]
             lines.append(f"  {fn.file_path}:{fn.line} {fn.name}()")
 
@@ -374,7 +398,7 @@ def find_files_for_goal(graph: CodebaseGraph, goal: str, *, limit: int = 5) -> L
     if not goal or graph.error:
         return graph.ranked_files[:limit]
 
-    goal_words = {w.lower().strip(".,") for w in goal.split() if len(w) > 3}
+    goal_words = {w.lower().strip(".,") for w in goal.split() if len(w) >= 3}
     scored: List[Tuple[str, float]] = []
     for rel, fn in graph.files.items():
         # Score = centrality + keyword overlap in path + function names

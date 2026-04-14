@@ -2181,12 +2181,6 @@ def _initialize_loop(
     else:
         ctx.interrupt_queue = interrupt_queue
 
-    # Advertise this loop as running so other interfaces can route interrupts
-    try:
-        set_loop_running(ctx.loop_id, goal, project=ctx.project)
-    except Exception as _slr_exc:
-        log.debug("set_loop_running failed: %s", _slr_exc)
-
     # Resolve or create project
     # Always call ensure_project (idempotent) — guards against partially-initialized
     # projects where the dir exists but NEXT.md was never written.
@@ -2203,6 +2197,13 @@ def _initialize_loop(
         if verbose and not _proj_existed:
             print(f"[poe] created project={project}", file=sys.stderr, flush=True)
     ctx.project = project
+
+    # Advertise this loop as running so other interfaces can route interrupts
+    # Must be after ctx.project is set so the per-project lockfile is written correctly
+    try:
+        set_loop_running(ctx.loop_id, goal, project=ctx.project)
+    except Exception as _slr_exc:
+        log.debug("set_loop_running failed: %s", _slr_exc)
 
     # Load goal ancestry for prompt injection
     try:

@@ -92,11 +92,26 @@ class InjectionScanReport:
 
 
 def _source_is_allowed(source: str) -> bool:
-    """Check if a source identifier is in the allowlist."""
+    """Check if a source identifier is in the allowlist.
+
+    Uses exact match for short programmatic tokens and path-component match
+    for file paths.  Substring match is intentionally avoided — it allows
+    keyword-stuffing attacks like 'github.com/evil/workspace-tools' matching
+    the 'workspace' allowlist entry.
+    """
     if not source:
         return False
     source_lower = source.lower()
-    return any(allowed in source_lower for allowed in _ALLOWED_SOURCE_DIRS)
+    # Fast path: exact match (covers "internal", "builtin", "skills", etc.)
+    if source_lower in _ALLOWED_SOURCE_DIRS:
+        return True
+    # Path-component match for file paths (e.g. "/path/to/personas/file.yaml")
+    # Split on path separators only — "workspace-tools" won't match "workspace"
+    try:
+        path_parts = set(Path(source_lower).parts)
+        return bool(path_parts & _ALLOWED_SOURCE_DIRS)
+    except Exception:
+        return False
 
 
 def _truncated_hash(content: str) -> str:
@@ -145,15 +160,18 @@ def scan_content(
             blocked.append(pat.pattern)
 
     # Check exfiltration patterns
+    has_exfil = False
     for pat in _EXFIL_PATTERNS:
         m = pat.search(scan_target)
         if m:
             findings.append(f"exfiltration pattern: {m.group()[:60]!r}")
             blocked.append(pat.pattern)
+            has_exfil = True
 
     is_clean = len(findings) == 0
     risk_level = "low"
-    if len(findings) >= 3:
+    if has_exfil or len(findings) >= 3:
+        # Any exfiltration pattern = immediately HIGH regardless of count
         risk_level = "high"
     elif len(findings) >= 1:
         risk_level = "medium"
