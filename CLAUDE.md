@@ -207,3 +207,15 @@ poe-observe serve
 - Values: honest "tried X, failed, learned Y, trying Z" updates. Progress over perfection.
 
 Act, don't ask. Forgiveness over permission. Ask first only for: spending real money, posting publicly as Jeremy, destructive irreversible actions, exposing private data.
+
+---
+
+## End-of-chunk discipline
+
+When a chunk of work is done (milestone delivered, bug fixed, feature shipped — not every tiny edit), always:
+
+1. **Document** — update MILESTONES.md / BACKLOG.md / relevant docs so the next session knows what changed and what's next.
+2. **Commit** — clean, scoped commit with a useful message. No "WIP" or dangling work.
+3. **Push** — `git push` so the remote matches local. Don't let commits pile up unpushed — means a box crash loses work.
+
+Don't wait to be asked. Push is cheap, forgetting is expensive.
