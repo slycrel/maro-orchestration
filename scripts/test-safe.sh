@@ -56,8 +56,20 @@ TMP_LIST="$(mktemp)"
 trap 'rm -f "$TMP_LIST"' EXIT
 
 echo "[test-safe] collecting test list..." >&2
+# pytest --collect-only -q prints per-test nodeids only when given one path at a time;
+# when given a directory it prints one line per *file* as "tests/foo.py: NN" (file + count).
+# We ask pytest to print the collection tree with --co -q and then extract lines that
+# look like test nodeids ("path/to/file.py::Class::test" or "path/to/file.py::test").
+# Fallback to per-file chunking if nothing matches (handles both output formats).
 nice -n "$NICE" taskset -c "$CORES" python3 -m pytest tests/ --collect-only -q 2>/dev/null | \
-    grep -E '^tests/' | sort -u > "$TMP_LIST" || true
+    grep -E '^tests/[^ ]+::' | sort -u > "$TMP_LIST" || true
+
+if [[ ! -s "$TMP_LIST" ]]; then
+    # Newer pytest: collect-only prints "path: NN" per file. Extract paths only and chunk by file.
+    echo "[test-safe] collection returned file-level output; chunking by file" >&2
+    nice -n "$NICE" taskset -c "$CORES" python3 -m pytest tests/ --collect-only -q 2>/dev/null | \
+        grep -E '^tests/[^ ]+\.py' | sed -E 's/: *[0-9]+\s*$//' | sort -u > "$TMP_LIST" || true
+fi
 
 TOTAL="$(wc -l < "$TMP_LIST")"
 if [[ "$TOTAL" -eq 0 ]]; then
@@ -65,7 +77,7 @@ if [[ "$TOTAL" -eq 0 ]]; then
     exec nice -n "$NICE" taskset -c "$CORES" python3 -m pytest tests/ --tb=short -q
 fi
 
-echo "[test-safe] $TOTAL tests, chunks of $CHUNK_SIZE (cores=$CORES, nice=$NICE)" >&2
+echo "[test-safe] $TOTAL items, chunks of $CHUNK_SIZE (cores=$CORES, nice=$NICE)" >&2
 
 CHUNK_NUM=0
 FAILED_CHUNKS=()
@@ -73,8 +85,9 @@ while IFS= read -r -d '' chunk_file; do
     CHUNK_NUM=$((CHUNK_NUM + 1))
     CHUNK_LINES="$(wc -l < "$chunk_file")"
     echo "" >&2
-    echo "[test-safe] chunk $CHUNK_NUM ($CHUNK_LINES tests)" >&2
-    if ! nice -n "$NICE" taskset -c "$CORES" python3 -m pytest $(cat "$chunk_file") --tb=short -q; then
+    echo "[test-safe] chunk $CHUNK_NUM ($CHUNK_LINES items)" >&2
+    # Use xargs -a to pass chunk lines as args safely (handles spaces if any).
+    if ! xargs -a "$chunk_file" nice -n "$NICE" taskset -c "$CORES" python3 -m pytest --tb=short -q; then
         FAILED_CHUNKS+=("$CHUNK_NUM")
         echo "[test-safe] chunk $CHUNK_NUM had failures" >&2
     fi
@@ -93,4 +106,4 @@ if [[ ${#FAILED_CHUNKS[@]} -gt 0 ]]; then
 fi
 
 echo "" >&2
-echo "[test-safe] all $TOTAL tests passed" >&2
+echo "[test-safe] all $TOTAL items passed" >&2
