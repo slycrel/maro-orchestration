@@ -317,6 +317,7 @@ def handle(
     message: str,
     *,
     project: Optional[str] = None,
+    repo_path: str = "",
     model: Optional[str] = None,
     adapter=None,
     force_lane: Optional[str] = None,   # "now" | "agenda" | None (auto)
@@ -328,6 +329,7 @@ def handle(
     Args:
         message: The natural language request.
         project: Project slug to attach AGENDA work to.
+        repo_path: Optional path to target source repo (auto-injects stack context).
         model: LLM model override.
         adapter: Pre-built LLMAdapter (skips build_adapter).
         force_lane: Override classification ("now" or "agenda").
@@ -656,6 +658,7 @@ def handle(
         _ralph_from_cfg = _cfg.get("ralph_verify", "").strip().lower() == "true"
         _loop_kwargs: dict = dict(
             project=project,
+            repo_path=repo_path,
             model=model,
             adapter=adapter,
             dry_run=dry_run,
@@ -1113,6 +1116,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(prog="poe-handle", description="Poe's unified request handler")
     parser.add_argument("message", nargs="+", help="The request to handle")
     parser.add_argument("--project", "-p", help="Project slug for AGENDA work")
+    parser.add_argument("--repo", help="Path to target repo (auto-injects stack context into decompose)")
     parser.add_argument("--model", "-m", help="LLM model string")
     parser.add_argument("--lane", choices=["now", "agenda"], help="Force a specific lane")
     parser.add_argument("--dry-run", action="store_true", help="Simulate without API calls")
@@ -1125,6 +1129,7 @@ def main(argv=None):
     result = handle(
         msg,
         project=args.project,
+        repo_path=args.repo or "",
         model=args.model,
         force_lane=args.lane,
         dry_run=args.dry_run,

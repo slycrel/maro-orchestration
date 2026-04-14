@@ -271,6 +271,7 @@ class LoopContext:
     started_at: float = 0.0
     start_ts: str = ""
     loop_timeout_secs: Optional[float] = None
+    repo_path: str = ""  # optional target repo path for stack context injection
 
 
 @dataclass
@@ -2007,7 +2008,8 @@ def _decompose_goal(
     if ctx.verbose:
         print(f"[poe] decomposing goal...", file=sys.stderr, flush=True)
     _lessons_context, _skills_context, _cost_context, _had_no_matching_skill, _matched_rule = (
-        _build_loop_context(ctx.goal, verbose=ctx.verbose, permission_context=permission_context, project=ctx.project or "")
+        _build_loop_context(ctx.goal, verbose=ctx.verbose, permission_context=permission_context,
+                            project=ctx.project or "", repo_path=ctx.repo_path or "")
     )
 
     # Stage 5: rule hit — use deterministic steps, skip LLM decompose
@@ -2075,6 +2077,7 @@ def _initialize_loop(
     goal: str,
     *,
     project: Optional[str],
+    repo_path: str = "",
     model: Optional[str],
     backend: Optional[str],
     adapter,
@@ -2111,6 +2114,7 @@ def _initialize_loop(
     ctx.step_callback = step_callback
     ctx.cost_budget = cost_budget
     ctx.token_budget = token_budget
+    ctx.repo_path = repo_path or ""
 
     ctx.loop_id = str(uuid.uuid4())[:8]
     ctx.started_at = time.monotonic()
@@ -2596,6 +2600,7 @@ def _build_loop_context(
     verbose: bool = False,
     permission_context=None,
     project: str = "",
+    repo_path: str = "",
 ) -> tuple:
     """Load all context needed before decomposing a goal.
 
@@ -2774,6 +2779,39 @@ def _build_loop_context(
             )
     except Exception as _cst_exc:
         log.debug("cost context analysis failed: %s", _cst_exc)
+
+    # Repo stack context — auto-detected tech stack for the target project repo (non-blocking)
+    try:
+        from repo_scan import scan_repo, format_repo_context
+        from pathlib import Path as _Path
+        _repo_to_scan = ""
+        if repo_path:
+            _repo_to_scan = repo_path
+        elif project:
+            # Heuristic: check ~/claude/{project}/ on this machine
+            _candidate = _Path.home() / "claude" / project
+            if _candidate.exists():
+                _repo_to_scan = str(_candidate)
+            else:
+                # Try glob: ~/claude/{project}-*/  or  ~/claude/*-{project}/
+                _home_claude = _Path.home() / "claude"
+                if _home_claude.exists():
+                    for _d in _home_claude.iterdir():
+                        if _d.is_dir() and (
+                            _d.name.startswith(project) or _d.name.endswith(project) or
+                            project in _d.name
+                        ):
+                            _repo_to_scan = str(_d)
+                            break
+        if _repo_to_scan:
+            _stack = scan_repo(_repo_to_scan)
+            if _stack.primary_languages:
+                _repo_ctx = format_repo_context(_stack)
+                lessons_context = (lessons_context + "\n\n" + _repo_ctx) if lessons_context else _repo_ctx
+                if verbose:
+                    print(f"[poe] repo context: {_stack.summary}", file=sys.stderr, flush=True)
+    except Exception as _repo_exc:
+        log.debug("repo context injection failed: %s", _repo_exc)
 
     # Stage 5: check for a Rule match before returning (caller skips LLM decompose)
     matched_rule = None
@@ -3379,6 +3417,7 @@ def run_agent_loop(
     goal: str,
     *,
     project: Optional[str] = None,
+    repo_path: str = "",
     model: Optional[str] = None,
     backend: Optional[str] = None,
     adapter=None,
@@ -3432,6 +3471,7 @@ def run_agent_loop(
     ctx, _early_return = _initialize_loop(
         goal,
         project=project,
+        repo_path=repo_path,
         model=model,
         backend=backend,
         adapter=adapter,
