@@ -249,8 +249,13 @@ def test_apply_prompt_tweak_records_lesson():
 # 6. new_guardrail held for review by default
 # ---------------------------------------------------------------------------
 
-def test_apply_guardrail_held_by_default():
-    """new_guardrail suggestions are NOT auto-applied without POE_AUTO_APPLY_GUARDRAILS."""
+def test_apply_guardrail_held_in_production(monkeypatch):
+    """new_guardrail suggestions are held in production (config environment=production).
+
+    Session 20.5: previous behavior was 'held unless env var explicitly set' —
+    which silently disabled the guardrail path everywhere. New policy is
+    'auto-apply in non-prod, hold in prod'. This test covers the prod-hold case.
+    """
     sug = _make_suggestion(
         category="new_guardrail",
         target="all",
@@ -260,8 +265,12 @@ def test_apply_guardrail_held_by_default():
     )
     _seed_suggestion(sug)
 
-    # Ensure env var is NOT set
-    os.environ.pop("POE_AUTO_APPLY_GUARDRAILS", None)
+    # Ensure env override is unset so we hit the config-based branch
+    monkeypatch.delenv("POE_AUTO_APPLY_GUARDRAILS", raising=False)
+
+    # Simulate production environment via config
+    monkeypatch.setattr("config.get", lambda key, default=None:
+                        "production" if key == "environment" else default)
 
     result = apply_suggestion("sug-guard")
     assert result is True
@@ -269,7 +278,55 @@ def test_apply_guardrail_held_by_default():
     suggestions = load_suggestions(limit=100)
     matched = [s for s in suggestions if s.suggestion_id == "sug-guard"]
     assert len(matched) == 1
-    assert matched[0].applied is False  # held, not applied
+    assert matched[0].applied is False  # held in prod
+
+
+def test_apply_guardrail_auto_applied_in_dev():
+    """new_guardrail suggestions auto-apply in dev (default environment).
+
+    Session 20.5 regression: confirms the new default-on behavior.
+    """
+    sug = _make_suggestion(
+        category="new_guardrail",
+        target="all",
+        suggestion_text="Block destructive command X",
+        suggestion_id="sug-guard-dev",
+        confidence=0.9,
+    )
+    _seed_suggestion(sug)
+
+    # No env override, no config mock → defaults to dev → auto-apply
+    os.environ.pop("POE_AUTO_APPLY_GUARDRAILS", None)
+
+    result = apply_suggestion("sug-guard-dev")
+    assert result is True
+
+    suggestions = load_suggestions(limit=100)
+    matched = [s for s in suggestions if s.suggestion_id == "sug-guard-dev"]
+    assert len(matched) == 1
+    assert matched[0].applied is True  # auto-applied in dev
+
+
+def test_apply_guardrail_override_off_holds(monkeypatch):
+    """POE_AUTO_APPLY_GUARDRAILS=0 explicitly holds even in dev."""
+    sug = _make_suggestion(
+        category="new_guardrail",
+        target="all",
+        suggestion_text="Block trades over $1000",
+        suggestion_id="sug-guard-off",
+        confidence=0.9,
+    )
+    _seed_suggestion(sug)
+
+    monkeypatch.setenv("POE_AUTO_APPLY_GUARDRAILS", "0")
+
+    result = apply_suggestion("sug-guard-off")
+    assert result is True
+
+    suggestions = load_suggestions(limit=100)
+    matched = [s for s in suggestions if s.suggestion_id == "sug-guard-off"]
+    assert len(matched) == 1
+    assert matched[0].applied is False
 
 
 # ---------------------------------------------------------------------------
@@ -338,8 +395,15 @@ def test_apply_observation_is_noop():
 
 @patch("evolver.validate_skill_mutation", None)
 @patch("evolver.record_tiered_lesson", None)
-def test_run_evolver_auto_applies_high_confidence():
-    """run_evolver auto-applies suggestions with confidence >= 0.8."""
+@patch("evolver._verify_post_apply")
+def test_run_evolver_auto_applies_high_confidence(_mock_verify):
+    """run_evolver auto-applies suggestions with confidence >= 0.8.
+
+    Note: _verify_post_apply is mocked so the session 20.5 auto-revert
+    behavior doesn't undo mutations when the test-runner's own pytest
+    subprocess fails (orthogonal concern — covered by direct unit tests
+    on _verify_post_apply itself in test_evolver.py).
+    """
     from evolver import run_evolver
 
     skill = _make_skill()
@@ -457,8 +521,14 @@ def test_apply_skill_creates_backup():
 
 @patch("evolver.validate_skill_mutation", None)
 @patch("evolver.record_tiered_lesson", None)
-def test_run_evolver_mixed_confidence():
-    """With multiple suggestions at different confidences, only >=0.8 auto-apply."""
+@patch("evolver._verify_post_apply")
+def test_run_evolver_mixed_confidence(_mock_verify):
+    """With multiple suggestions at different confidences, only >=0.8 auto-apply.
+
+    _verify_post_apply is mocked to prevent session 20.5 auto-revert from
+    rolling back the mutation (post-apply test suite may fail for unrelated
+    reasons in this test harness).
+    """
     from evolver import run_evolver
 
     skill_a = _make_skill(name="skill-a", skill_id="sk-a", description="Skill A original")

@@ -373,16 +373,44 @@ def apply_suggestion(suggestion_id: str) -> bool:
                         d.pop("status", None)
                         _apply_suggestion_action(d)
                 elif category == "new_guardrail":
-                    # Guardrails can permanently block execution — require explicit opt-in.
-                    # Set POE_AUTO_APPLY_GUARDRAILS=1 to enable, otherwise hold for human review.
-                    if os.environ.get("POE_AUTO_APPLY_GUARDRAILS") == "1":
+                    # Guardrails can permanently block execution paths. Gate on
+                    # environment + explicit override:
+                    #   POE_AUTO_APPLY_GUARDRAILS=0 → always hold for review (prod-safe override)
+                    #   POE_AUTO_APPLY_GUARDRAILS=1 → always auto-apply (dev override)
+                    #   unset → auto-apply in non-prod, hold in prod
+                    #
+                    # Session 20 adversarial review finding 3.13: the previous
+                    # default (hold unless env=1) silently disabled the
+                    # guardrail self-improvement path everywhere. Most runs are
+                    # dev/experiment — guardrails should evolve there by default.
+                    _env_override = os.environ.get("POE_AUTO_APPLY_GUARDRAILS")
+                    if _env_override == "1":
+                        _should_apply = True
+                    elif _env_override == "0":
+                        _should_apply = False
+                    else:
+                        try:
+                            from config import get as _cfg_get
+                            _env = str(_cfg_get("environment", "dev")).lower()
+                        except Exception:
+                            _env = "dev"
+                        _should_apply = _env != "production"
+
+                    if _should_apply:
                         d["applied"] = True
                         _apply_suggestion_action(d)
+                        log.info("evolver: auto-applied new_guardrail (env=%s): %s",
+                                 _env_override or "config", d.get("suggestion", "")[:100])
                     else:
                         d["applied"] = False
                         d["status"] = "held_for_review"
-                        d["block_reason"] = "new_guardrail requires POE_AUTO_APPLY_GUARDRAILS=1 or manual review"
-                        log.info("evolver: guardrail held for review (not auto-applied): %s", d.get("suggestion", "")[:100])
+                        d["block_reason"] = (
+                            "new_guardrail held: production environment (set "
+                            "POE_AUTO_APPLY_GUARDRAILS=1 to override, or change "
+                            "config 'environment' from 'production')"
+                        )
+                        log.info("evolver: guardrail held for review (production env): %s",
+                                 d.get("suggestion", "")[:100])
                 elif category == "prompt_tweak":
                     # Prompt tweaks are lower risk (just a lesson) but log prominently
                     d["applied"] = True
