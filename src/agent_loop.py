@@ -1052,7 +1052,7 @@ def _post_step_checks(
             if _is_synth(step_text):
                 _annotated = _annotate(step_result, only_if_hallucinations=True)
                 if _annotated != step_result:
-                    log.warning("step %d [claim-verifier] hallucinated file paths detected", step_idx)
+                    log.warning("step %d [claim-verifier] hallucinated file/symbol claims detected", step_idx)
                     step_result = _annotated
                     outcome["result"] = step_result
         except Exception as _exc:

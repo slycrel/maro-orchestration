@@ -160,6 +160,23 @@ class TestVerifyFileClaims:
         summary = report.summary()
         assert "verified" in summary
 
+    def test_bare_filename_found_via_src_fallback(self, tmp_path):
+        """A bare 'memory.py' is found via fuzzy src/ lookup even without path prefix."""
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "memory.py").write_text("# memory module")
+        # Bare filename reference — no src/ prefix
+        report = verify_file_claims("The memory.py module handles this.", project_root=tmp_path)
+        assert "memory.py" in report.verified
+
+    def test_bare_filename_found_via_tests_fallback(self, tmp_path):
+        """A bare test file name is found via fuzzy tests/ lookup."""
+        tests = tmp_path / "tests"
+        tests.mkdir()
+        (tests / "test_memory.py").write_text("# tests")
+        report = verify_file_claims("See test_memory.py for coverage.", project_root=tmp_path)
+        assert "test_memory.py" in report.verified
+
 
 # ---------------------------------------------------------------------------
 # annotate_result
