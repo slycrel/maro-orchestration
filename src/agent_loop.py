@@ -2780,6 +2780,28 @@ def _build_loop_context(
     except Exception as _cst_exc:
         log.debug("cost context analysis failed: %s", _cst_exc)
 
+    # Codebase graph context — ranked call graph injected before decompose (non-blocking, fail-open)
+    # Injects top files by import centrality so the planner can navigate the codebase surgically.
+    # Only fires when a target repo is identifiable (explicit repo_path or project heuristic).
+    try:
+        from codebase_graph import build_codebase_graph, format_graph_context
+        from pathlib import Path as _CGPath
+        _cg_repo = repo_path or ""
+        if not _cg_repo and project:
+            _candidate = _CGPath.home() / "claude" / project
+            if _candidate.exists():
+                _cg_repo = str(_candidate)
+        if _cg_repo:
+            _cg = build_codebase_graph(_cg_repo, max_files=150)
+            if not _cg.error and _cg.total_files > 0:
+                _cg_ctx = format_graph_context(_cg, goal=goal, top_files=6, top_functions=8)
+                if _cg_ctx:
+                    lessons_context = (lessons_context + "\n\n" + _cg_ctx) if lessons_context else _cg_ctx
+                    if verbose:
+                        print(f"[poe] codebase graph: {_cg.total_files} files, top={_cg.ranked_files[0] if _cg.ranked_files else '?'}", file=sys.stderr, flush=True)
+    except Exception as _cg_exc:
+        log.debug("codebase graph injection failed: %s", _cg_exc)
+
     # Repo stack context — auto-detected tech stack for the target project repo (non-blocking)
     try:
         from repo_scan import scan_repo, format_repo_context
