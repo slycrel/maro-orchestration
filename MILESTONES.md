@@ -2,7 +2,7 @@
 
 What to do next, in what order. Updated each session. Strategic phases live in ROADMAP.md; deferred ideas live in BACKLOG.md. This file is the bridge — the executable queue.
 
-Last updated: 2026-04-14 (session 30 — housekeeping: docs archive, README update, link-farm steal items)
+Last updated: 2026-04-14 (session 30 cont. — adversarial fixes + 18-link research runs complete)
 
 ---
 
@@ -11,6 +11,12 @@ Last updated: 2026-04-14 (session 30 — housekeeping: docs archive, README upda
 - **Evolver confidence calibration follow-up** — `scan_suggestion_outcomes` wired; verify calibration is improving (check live workspace suggestion stats). Heartbeat stopped by design since Apr 7-9 token burn — no new data until restarted.
 - **Jeremy's undocumented ideas** — he mentioned having ideas not yet in the backlog. Needs elaboration.
 - **Formal stage contracts (Phase P2)** — Typed output contracts per pipeline phase + hard validation gates. See BACKLOG. Medium-term architectural improvement.
+
+## Done (session 30 cont., 2026-04-14 — adversarial fixes, research runs)
+
+- [x] **Adversarial review round 30 — 12 verified findings fixed** — EV-1 CRITICAL: `s.text` → `s.suggestion` in advisor gate (entire 0.6-0.79 confidence band was dead code). AL-1 HIGH: moved `set_loop_running` to after `ctx.project` is assigned (per-project lockfile was never written). IG-1 HIGH: `safe_to_auto_apply` was dead code — switched callsites. CV-1 HIGH: claim verifier fallback was accepting wrong directory prefixes. CV-2: rglob not glob in symbol index. EV-2/3/4: scan_evolver_impact limit fixes + NaN vs 0.0. IG-5: any exfil match → HIGH immediately. Plus earlier session fixes: CG-1/4/5, IG-2/3. All 426 targeted tests pass.
+- [x] **18-link research runs complete** — 4 orchestration runs (harness architecture, memory/skills, tooling/market, adversarial). 6 new BACKLOG steal items: proactive memory injection (P8), synthesize_skill 3-gate pre-check (P7), eval holdout discipline (P6), harness hill-climbing loop (P6), associative memory links (P5), dumb loop audit (P5). Research docs committed to docs/research/.
+- [x] **PM round 9** — Filed #39-#43 on orchestrator-test-recipes: review HTML UI missing, concurrent edit race (lost update), CSRF protection, photo_url validation, API versioning prefix.
 
 ## Done (session 30, 2026-04-14 — housekeeping, link-farm digest)
 

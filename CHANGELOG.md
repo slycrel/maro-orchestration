@@ -1,5 +1,40 @@
 # Changelog
 
+## [1.18.0] - 2026-04-14
+
+Session 30 continued (adversarial review round 30, 18-link research pipeline, PM round 9).
+
+### Fixed — Adversarial review round 30 (12 verified findings)
+- `evolver.py` EV-1 CRITICAL: `s.text[:300]` → `s.suggestion[:300]` in advisor gate; AttributeError swallowed by bare except made entire 0.6–0.79 confidence band dead code
+- `agent_loop.py` AL-1 HIGH: moved `set_loop_running()` to after `ctx.project` is set; per-project lockfile was never written (project was still `""` default)
+- `evolver.py` IG-1 HIGH: switched `apply_suggestion` + `synthesize_skill` to `safe_to_auto_apply` (source allowlist now enforced); `source="evolver_suggestion"` → `"internal"`
+- `claim_verifier.py` CV-1 HIGH: bare-filename fallback now only applies when claim has no directory component; `wrong_dir/foo.py` no longer matches `src/foo.py`
+- `claim_verifier.py` CV-2 MODERATE: `_build_symbol_index` now uses `rglob("*.py")` — subdirectory symbols were silently missing
+- `evolver.py` EV-2 MODERATE: `scan_evolver_impact` `load_outcomes(limit=500)` → `limit=5000`; events older than ~500 outcomes got spurious insufficient_data
+- `evolver.py` EV-3 MODERATE: store `float('nan')` for `insufficient_data` in `EvolverImpactRecord.delta` instead of `0.0`
+- `evolver.py` EV-4 MODERATE: `scan_evolver_impact(limit=5)` → `limit=max(5, len(applied_ids)+2)` in run_evolver
+- `injection_guard.py` IG-5 MODERATE: any `_EXFIL_PATTERNS` match → `risk_level="high"` immediately; previously required ≥3 total findings
+- Earlier (session 30 start): CG-1/4/5 codebase_graph fixes; IG-2/3 injection_guard fixes
+
+### Added — Research pipeline complete
+- 4 orchestration runs processed 18 X post links (harness architecture, memory/skills/self-improvement, tooling/market, adversarial)
+- `docs/research/ai-agent-memory-steal-list.md` — 6-post synthesis on memory/skills/self-improvement
+- `docs/research/ai-agent-memory-synthesis.md` — Q&A synthesis (Engramme vs RAG, skills quality gates, Team OS, lock-in risk)
+- `docs/research/x-posts-steal-list-20260414.md` — harness architecture steal list from Alpha Batcher, LangChain, Latent Briefing, Ramp Glass, eval hill-climbing
+
+### Added — BACKLOG steal items (session 30)
+- Proactive memory injection at loop entry (P8) — `knowledge_lens.rank()` at `_build_loop_context()`
+- `synthesize_skill()` 3-gate pre-check (P7) — trigger precision + output schema + edge case coverage
+- Eval harness + holdout discipline (P6) — reward-hacking prevention
+- Harness hill-climbing as autonomous loop (P6) — close verify→learn
+- Associative JSONL memory links/`related_ids` (P5)
+- Dumb loop scaffolding audit (P5)
+
+### Added — PM round 9 (orchestrator-test-recipes)
+- Filed #39–#43: review HTML UI (no edit/delete routes), concurrent edit race (lost update), CSRF protection, photo_url validation, API versioning prefix
+
+---
+
 ## [1.17.0] - 2026-04-14
 
 Sessions 29–30 (claim verifier symbols, recipe PM/dev rounds 7–8, housekeeping).
