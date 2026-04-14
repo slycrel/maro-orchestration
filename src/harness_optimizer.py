@@ -765,10 +765,32 @@ def main() -> None:
                         help="Minimum stuck traces required (default: 2)")
     parser.add_argument("--max-traces", type=int, default=10,
                         help="Maximum stuck traces to load (default: 10)")
+    parser.add_argument("--friction", action="store_true",
+                        help="Run harness friction scan (code-path quality signal)")
     parser.add_argument("--verbose", "-v", action="store_true")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO if args.verbose else logging.WARNING)
+
+    if args.friction:
+        friction_report = scan_harness_friction()
+        print(friction_report.summary())
+        if not friction_report.skipped:
+            for fp in friction_report.friction_points:
+                print(f"\n[{fp.severity.upper()}] {fp.friction_type}: {fp.signal}")
+                print(f"  Suggestion: {fp.suggestion[:120]}")
+                if fp.examples:
+                    print(f"  Example: {fp.examples[0][:100]}")
+            if not args.dry_run and friction_report.friction_points:
+                import uuid as _cli_uuid
+                n = _save_friction_suggestions(
+                    friction_report.friction_points,
+                    run_id=_cli_uuid.uuid4().hex[:8],
+                    dry_run=False,
+                )
+                print(f"\nSaved {n} suggestion(s) to evolver queue.")
+        return
+
     report = run_harness_optimizer(
         targets=args.targets,
         max_traces=args.max_traces,

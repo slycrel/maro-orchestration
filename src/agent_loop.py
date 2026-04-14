@@ -4031,7 +4031,18 @@ def run_agent_loop(
                 _cited_files = set(_verify_re.findall(r'\b([a-z_]+\.py)\b', step_result))
                 _src_files = set(f.name for f in Path("src").glob("*.py")) if Path("src").exists() else set()
                 _test_files = set(f.name for f in Path("tests").glob("*.py")) if Path("tests").exists() else set()
-                _all_real = _src_files | _test_files
+                # Also scan sibling dirs in ~/claude/ (one level deep) to avoid false positives
+                # when the agent references files from an external repo under ~/claude/
+                _sibling_py: set = set()
+                _home_claude = Path.home() / "claude"
+                if _home_claude.exists():
+                    for _sibling in _home_claude.iterdir():
+                        if _sibling.is_dir() and not _sibling.name.startswith("."):
+                            for _sub in ("src", "tests", ""):
+                                _d = _sibling / _sub if _sub else _sibling
+                                if _d.is_dir():
+                                    _sibling_py.update(f.name for f in _d.glob("*.py"))
+                _all_real = _src_files | _test_files | _sibling_py
                 _hallucinated = _cited_files - _all_real - {"__init__.py", "setup.py", "conftest.py"}
                 if _hallucinated and len(_hallucinated) <= len(_cited_files):
                     _note = f"\n[VERIFICATION: {len(_hallucinated)} file(s) cited but not found: {', '.join(sorted(_hallucinated)[:5])}]"
