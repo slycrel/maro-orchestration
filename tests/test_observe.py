@@ -712,3 +712,52 @@ class TestProjectStatusBoard:
         ):
             rows = observe._project_status_rows()
         assert rows[0]["status"] == "unknown"
+
+
+# ---------------------------------------------------------------------------
+# Eval trend dashboard integration
+# ---------------------------------------------------------------------------
+
+class TestEvalTrendDashboard:
+    """Tests for eval pass-rate panel in observe dashboard."""
+
+    def test_read_eval_trend_empty_when_no_data(self, monkeypatch, tmp_path):
+        """_read_eval_trend returns [] when eval module unavailable."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        from unittest.mock import patch
+        with patch("observe._read_eval_trend", return_value=[]):
+            import observe
+            result = observe._read_eval_trend()
+            assert result == []
+
+    def test_read_eval_trend_returns_newest_first(self, monkeypatch, tmp_path):
+        """_read_eval_trend returns entries in newest-first order."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        import observe
+        _entries = [
+            {"timestamp": "2026-04-14T10:00:00Z", "builtin_score": 0.80, "run_id": "run1"},
+            {"timestamp": "2026-04-14T11:00:00Z", "builtin_score": 0.85, "run_id": "run2"},
+        ]
+        from unittest.mock import patch
+        with patch("eval.load_eval_trend", return_value=_entries):
+            result = observe._read_eval_trend()
+        # _read_eval_trend reverses the list so newest is first
+        assert result[0]["run_id"] == "run2"
+        assert result[1]["run_id"] == "run1"
+
+    def test_collect_dashboard_includes_eval_trend(self, monkeypatch, tmp_path):
+        """_collect_dashboard_data includes eval_trend key."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        import observe
+        from unittest.mock import patch
+        _trend = [{"timestamp": "2026-04-14T10:00:00Z", "builtin_score": 0.90, "run_id": "r1"}]
+        with patch("observe._read_eval_trend", return_value=_trend):
+            data = observe._snapshot_json()
+        assert "eval_trend" in data
+        assert data["eval_trend"] == _trend
+
+    def test_dashboard_html_contains_eval_panel(self):
+        """Dashboard HTML contains the eval pass rate panel element."""
+        import observe
+        assert "eval-trend-status" in observe._DASHBOARD_HTML
+        assert "Eval Pass Rate" in observe._DASHBOARD_HTML

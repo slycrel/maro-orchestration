@@ -256,6 +256,20 @@ def _read_ancestry_tree() -> List[Dict[str, Any]]:
         return []
 
 
+def _read_eval_trend(limit: int = 10) -> List[Dict[str, Any]]:
+    """Load recent eval pass-rate trend for the dashboard panel.
+
+    Returns a list of recent trend entries (newest first), each with:
+      timestamp, builtin_score, generated_pass_rate (optional), run_id.
+    """
+    try:
+        from eval import load_eval_trend as _load_trend
+        entries = _load_trend(limit=limit)
+        return list(reversed(entries))  # newest first for display
+    except Exception:
+        return []
+
+
 # ---------------------------------------------------------------------------
 # Renderers
 # ---------------------------------------------------------------------------
@@ -671,6 +685,11 @@ _DASHBOARD_HTML = """\
   </div>
 
   <div class="panel full">
+    <h2>Eval Pass Rate</h2>
+    <div id="eval-trend-status"></div>
+  </div>
+
+  <div class="panel full">
     <h2>Live Events</h2>
     <table id="events-table">
       <thead><tr><th>Time</th><th>Loop</th><th>Type</th><th>Status</th><th>Step</th><th>Tokens</th></tr></thead>
@@ -872,6 +891,46 @@ async function refresh() {
         `<table><thead><tr><th>Time</th><th>Loop</th><th>Class</th><th>Severity</th><th>Tokens</th><th>Recommendation</th></tr></thead><tbody>${rows}</tbody></table>`;
     }
 
+    // Eval trend
+    const evalTrend = d.eval_trend || [];
+    if (!evalTrend.length) {
+      document.getElementById('eval-trend-status').innerHTML =
+        '<span class="idle">no eval runs yet — run poe-nightly-eval to populate</span>';
+    } else {
+      // Show the last 10 runs as a sparkline table
+      let rows = evalTrend.slice(0,10).map(e => {
+        const ts = (e.timestamp||'').slice(0,19).replace('T',' ');
+        const score = e.builtin_score != null ? (e.builtin_score * 100).toFixed(1)+'%' : '—';
+        const scoreCls = e.builtin_score >= 0.9 ? 'status-done' : e.builtin_score < 0.7 ? 'status-stuck' : '';
+        const genRate = e.generated_pass_rate != null ? (e.generated_pass_rate * 100).toFixed(1)+'%' : '—';
+        const genCls = e.generated_pass_rate >= 0.8 ? 'status-done' : e.generated_pass_rate < 0.6 ? 'status-stuck' : '';
+        const total = e.builtin_total || 0;
+        const pass = e.builtin_pass || 0;
+        const genTotal = e.generated_total || 0;
+        return `<tr>
+          <td>${esc(ts)}</td>
+          <td class="${scoreCls}">${score}</td>
+          <td>${pass}/${total}</td>
+          <td class="${genCls}">${genRate}</td>
+          <td>${e.generated_pass||0}/${genTotal}</td>
+          <td style="font-size:10px;color:var(--dim)">${esc((e.run_id||'').slice(0,12))}</td>
+        </tr>`;
+      }).join('');
+      const latest = evalTrend[0] || {};
+      const trend = evalTrend.length >= 2
+        ? (latest.builtin_score || 0) - (evalTrend[evalTrend.length-1].builtin_score || 0)
+        : 0;
+      const trendStr = trend > 0.01 ? badge('↑ improving', 'green')
+        : trend < -0.01 ? badge('↓ declining', 'red')
+        : badge('→ stable', 'blue');
+      document.getElementById('eval-trend-status').innerHTML =
+        `<div style="margin-bottom:6px">${trendStr} over last ${evalTrend.length} runs</div>` +
+        `<table><thead><tr>
+          <th>Time</th><th>Builtin Score</th><th>Pass/Total</th>
+          <th>Gen Pass Rate</th><th>Gen P/T</th><th>Run ID</th>
+        </tr></thead><tbody>${rows}</tbody></table>`;
+    }
+
     // Events
     const events = d.events || [];
     const tbody = document.getElementById('events-body');
@@ -910,6 +969,7 @@ def _snapshot_json(events_limit: int = 50) -> dict:
     cost = _read_cost_summary(hours=24)
     ancestry = _read_ancestry_tree()
     scheduler = _read_slow_scheduler()
+    eval_trend = _read_eval_trend(limit=10)
 
     events: List[dict] = []
     path = _events_path()
@@ -936,6 +996,7 @@ def _snapshot_json(events_limit: int = 50) -> dict:
         "ancestry": ancestry,
         "scheduler": scheduler,
         "events": events,
+        "eval_trend": eval_trend,
     }
 
 
