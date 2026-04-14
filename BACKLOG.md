@@ -3,7 +3,7 @@
 Single canonical location for everything we've identified but haven't done yet.
 Read this at the start of every session. Update it as items are completed or new ones emerge.
 
-Last reviewed: 2026-04-14 (session 25)
+Last reviewed: 2026-04-14 (session 28)
 
 ---
 
@@ -131,7 +131,7 @@ Ran 4 live goals: Polymarket research, nootropic synthesis, recipe site build, s
 - [x] **Cross-ref not wired into step execution** — FIXED (session 19). `verify_step_with_cross_ref()` in step_exec.py. Heuristic `_has_specific_claims()` detects file paths, line numbers, function names. Triggers cross-ref for specific claims. Annotates disputes, doesn't block.
 - [x] **No anti-hallucination prompt in EXECUTE_SYSTEM** — FIXED (session 19). ANTI-HALLUCINATION section + NEED_INFO mechanism added to EXECUTE_SYSTEM. Steps can say NEED_INFO: [what's missing] to trigger research sub-steps.
 - [x] **Shared artifact layer for step context** — FIXED (session 19). `complete_step` tool extended with `artifacts` field. Stored in `loop_shared_ctx` as `artifact:{step}:{name}`. Injected into subsequent steps as "Artifacts from prior steps" block.
-- [ ] **PAT missing pull_requests:write** — Dev agent pushed branch but couldn't create PR. Token 2 needs PR write permission added. (Fixed mid-session by Jeremy but document for future tokens.)
+- [x] **PAT missing pull_requests:write** — Fixed mid-session by Jeremy (session 18). Token 2 now has PR write permission.
 
 **Test goal results:**
 - Polymarket: 8/8 done, 1.47M tokens, 16min, quality gate PASS (0.85), 3 contested claims
@@ -227,7 +227,7 @@ Ran 4 live goals: Polymarket research, nootropic synthesis, recipe site build, s
 ### Captain's Log extensions (from Grok Round 5 feedback, 2026-04-10)
 - [x] **Input classification tag** — DONE (session 23). `classify_input_type()` in captains_log.py (url/code/structured_data/plain_text). `INPUT_MISMATCH` + `METACOGNITIVE_DECISION` event constants. `update_skill_utility()` logs INPUT_MISMATCH when circuit opens on url-skill-vs-non-url-input domain mismatch. `attribute_failure_to_skills()` threads step_text through. 9 tests. EVENT_TYPES 28→30.
 - [x] **Director context hook** — (2026-04-11 session 16) Captain's log context + playbook + knowledge nodes now injected into `_build_loop_context()`. Director sees recent learning events, operational wisdom, and relevant knowledge at decompose time.
-- [ ] **Dashboard captain's log panel** — When dashboard becomes command center (Jeremy's vision), captain's log is natural sidebar/tab. Scrollable, filterable, linked to artifacts.
+- [x] **Dashboard captain's log panel** — DONE (session 27). `_read_captain_log_entries(limit=20)` in observe.py reads captains_log.jsonl newest-first. Wired into `_snapshot_json()` and `_DASHBOARD_HTML`. Badge color-coding by event type. 6 tests in TestCaptainLogDashboard.
 
 ### From X research runs (2026-04-09)
 
