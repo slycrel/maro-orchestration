@@ -493,8 +493,8 @@ def _process_blocked_step(
                     ),
                 },
             )
-        except Exception:
-            pass
+        except Exception as _exc:
+            log.debug("captain's log emit for recovery decision failed: %s", _exc)
     _recovery_delta = 0
 
     if _decision.retry:
@@ -666,8 +666,9 @@ def _process_blocked_step(
                 cost_usd=_fail_cost,
                 latency_ms=float(step_elapsed),
             )
-    except Exception:
-        pass
+    except Exception as _exc:
+        # Affects the evolver's per-skill telemetry — silent loss skews learning.
+        log.warning("skill outcome recording failed for stuck step %d: %s", step_idx, _exc)
     try:
         from metrics import record_step_cost
         record_step_cost(
@@ -679,13 +680,13 @@ def _process_blocked_step(
             model=getattr(ctx.adapter, "model_key", ""),
             elapsed_ms=step_elapsed,
         )
-    except Exception:
-        pass
+    except Exception as _exc:
+        log.debug("metrics.record_step_cost failed for stuck step %d: %s", step_idx, _exc)
     if ctx.step_callback is not None:
         try:
             ctx.step_callback(step_idx, step_text, _stuck_reason or "blocked", "blocked")
-        except Exception:
-            pass
+        except Exception as _exc:
+            log.debug("step_callback raised for stuck step %d: %s", step_idx, _exc)
     return ("normal", step_idx, _loop_status, _stuck_reason, next_step_injected_context,
             consecutive_max_timeouts, _recovery_delta, replan_count)
 
@@ -713,8 +714,9 @@ def _write_iteration_artifacts(
     try:
         from checkpoint import write_checkpoint as _write_ckpt
         _write_ckpt(ctx.loop_id, ctx.goal, ctx.project or "", steps, step_outcomes)
-    except Exception:
-        pass
+    except Exception as _exc:
+        # Affects loop resumability — silent loss means a crashed loop can't restart.
+        log.warning("checkpoint write failed for loop %s: %s", ctx.loop_id, _exc)
 
     # Update plan manifest
     if ctx.project and manifest_steps:
@@ -728,8 +730,8 @@ def _write_iteration_artifacts(
                 step_outcomes=step_outcomes,
                 replan_count=replan_count,
             )
-        except Exception:
-            pass
+        except Exception as _exc:
+            log.warning("plan manifest update failed for loop %s: %s", ctx.loop_id, _exc)
 
     # Dead ends
     if step_status == "blocked" and dead_ends_available:
@@ -742,8 +744,8 @@ def _write_iteration_artifacts(
                 f"Attempted: {_attempted}"
             )
             update_dead_ends_fn(ctx.project, [_dead_end_text])
-        except Exception:
-            pass
+        except Exception as _exc:
+            log.warning("dead_ends update failed for loop %s: %s", ctx.loop_id, _exc)
 
     # March of Nines
     _alert = False
@@ -760,8 +762,8 @@ def _write_iteration_artifacts(
                     f"chain_success={_chain_success:.3f} "
                     f"({_steps_completed}/{_steps_attempted} steps done)"
                 ])
-        except Exception:
-            pass
+        except Exception as _exc:
+            log.debug("march-of-nines alert append failed for loop %s: %s", ctx.loop_id, _exc)
 
     return _alert
 
@@ -795,8 +797,10 @@ def _check_loop_interrupts(
             stuck_reason = f"kill switch: {_ks_msg}"
             if ctx.verbose:
                 print(f"[poe] kill switch active — stopping loop", file=sys.stderr, flush=True)
-    except Exception:
-        pass
+    except Exception as _exc:
+        # Safety mechanism — silent failure means a kill switch could be ignored.
+        log.error("kill switch check FAILED for loop %s — safety mechanism may be compromised: %s",
+                  ctx.loop_id, _exc)
 
     # Wall-clock timeout
     if not loop_status and ctx.loop_timeout_secs is not None:
@@ -849,8 +853,11 @@ def _check_loop_interrupts(
                             f"[poe] interrupt({intr.intent}) from {intr.source}: {len(remaining_steps)} steps remaining",
                             file=sys.stderr, flush=True,
                         )
-        except Exception:
-            pass
+        except Exception as _exc:
+            # Safety: silent failure means user-initiated interrupts (stop/pivot)
+            # could be silently dropped while the loop keeps running.
+            log.error("interrupt queue processing FAILED for loop %s — pending interrupts may be lost: %s",
+                      ctx.loop_id, _exc)
 
     return loop_status, stuck_reason, goal, interrupts_applied, remaining_steps, remaining_indices
 
@@ -890,8 +897,8 @@ def _post_step_checks(
             elapsed_ms=step_elapsed,
             detail=step_summary[:200] if step_summary else "",
         )
-    except Exception:
-        pass
+    except Exception as _exc:
+        log.debug("write_event(step_done/stuck) failed for step %d: %s", step_idx, _exc)
 
     # Security scan for prompt injection
     _has_external = "PRE-FETCHED" in step_text or "http" in step_text.lower()
@@ -906,8 +913,11 @@ def _post_step_checks(
                             step_idx, _scan.signals)
                 step_result = _scan.sanitized
                 outcome["result"] = step_result
-        except Exception:
-            pass
+        except Exception as _exc:
+            # Security: silent failure means external content passes unscanned
+            # into downstream LLM context. Fail loudly so it's visible.
+            log.error("security injection scan FAILED for step %d — external content may pass unsanitized: %s",
+                      step_idx, _exc)
 
     # Claim verifier on synthesis steps
     if step_status == "done" and step_result:
@@ -919,8 +929,8 @@ def _post_step_checks(
                     log.warning("step %d [claim-verifier] hallucinated file paths detected", step_idx)
                     step_result = _annotated
                     outcome["result"] = step_result
-        except Exception:
-            pass
+        except Exception as _exc:
+            log.warning("claim verifier failed for step %d (annotations skipped): %s", step_idx, _exc)
 
     # Step-level hooks
     _step_injected_context = ""
@@ -944,8 +954,11 @@ def _post_step_checks(
                 _block_outputs = [r.output for r in _step_results if r.should_block]
                 outcome["stuck_reason"] = "blocked by hook reviewer: " + "; ".join(_block_outputs[:2])
             _step_injected_context = _get_injected_ctx(_step_results)
-        except Exception:
-            pass
+        except Exception as _exc:
+            # Correctness: hooks can BLOCK steps. If the hook system errors, a step
+            # that should have been blocked proceeds as if approved. Surface loudly.
+            log.error("step-level hook execution FAILED for step %d — should-block hooks may not have run: %s",
+                      step_idx, _exc)
 
     return step_status, step_result, _step_injected_context
 
