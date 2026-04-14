@@ -610,3 +610,79 @@ class TestRegressionDetection:
         regressions = detect_eval_regressions()
         gen_regs = [r for r in regressions if r.metric == "generated_pass_rate"]
         assert len(gen_regs) >= 1
+
+
+# ---------------------------------------------------------------------------
+# Train/test split
+# ---------------------------------------------------------------------------
+
+class TestTrainTestSplit:
+    """Tests for the train/test split in run_eval_flywheel."""
+
+    def _make_pattern(self, failure_class: str, first_seen: str, count: int = 3):
+        """Create a minimal FailurePattern for testing."""
+        import hashlib
+        from eval import FailurePattern
+        return FailurePattern(
+            pattern_id=hashlib.sha256(failure_class.encode()).hexdigest()[:12],
+            failure_class=failure_class,
+            occurrence_count=count,
+            representative_goals=[f"goal for {failure_class}"],
+            evidence_summary=[],
+            severity="warning",
+            avg_tokens=1000,
+            avg_elapsed_ms=5000,
+            first_seen=first_seen,
+            last_seen=first_seen,
+        )
+
+    def test_split_returns_oldest_as_train(self):
+        """Oldest patterns go to train set, newest to test set."""
+        from eval import _train_test_split_patterns
+        patterns = [
+            self._make_pattern("class_a", "2026-01-01"),
+            self._make_pattern("class_b", "2026-02-01"),
+            self._make_pattern("class_c", "2026-03-01"),
+            self._make_pattern("class_d", "2026-04-01"),  # newest
+        ]
+        train, test = _train_test_split_patterns(patterns, test_fraction=0.25)
+        # 25% of 4 = 1 pattern in test → the newest one
+        assert len(test) == 1
+        assert test[0].failure_class == "class_d"
+        assert len(train) == 3
+
+    def test_split_respects_test_fraction(self):
+        """test_fraction parameter controls holdout size."""
+        from eval import _train_test_split_patterns
+        patterns = [self._make_pattern(f"cls_{i}", f"2026-0{i+1}-01") for i in range(6)]
+        # 6 patterns, 30% test = 1 (max(1, int(6*0.3)) = 1)
+        train, test = _train_test_split_patterns(patterns, test_fraction=0.3)
+        assert len(test) == 1
+        assert len(train) == 5
+
+    def test_split_skipped_for_few_patterns(self):
+        """With < 4 patterns, split is skipped (all go to train)."""
+        from eval import _train_test_split_patterns
+        patterns = [
+            self._make_pattern("class_a", "2026-01-01"),
+            self._make_pattern("class_b", "2026-02-01"),
+        ]
+        train, test = _train_test_split_patterns(patterns, test_fraction=0.3)
+        assert len(test) == 0
+        assert train == patterns
+
+    def test_split_empty_patterns(self):
+        """Empty patterns returns empty train and test."""
+        from eval import _train_test_split_patterns
+        train, test = _train_test_split_patterns([], test_fraction=0.3)
+        assert train == []
+        assert test == []
+
+    def test_flywheel_summary_includes_split_counts(self, flywheel_workspace):
+        """run_eval_flywheel summary includes patterns_train and patterns_test."""
+        from eval import run_eval_flywheel
+        summary = run_eval_flywheel(dry_run=True)
+        assert "patterns_train" in summary
+        assert "patterns_test" in summary
+        # train + test = total patterns (with no split: test may be 0)
+        assert summary["patterns_train"] + summary["patterns_test"] == summary["patterns_mined"]

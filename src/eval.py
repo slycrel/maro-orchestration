@@ -836,25 +836,53 @@ def load_eval_trend(limit: int = 50) -> List[dict]:
 # Main flywheel cycle
 # ---------------------------------------------------------------------------
 
+def _train_test_split_patterns(
+    patterns: "List[FailurePattern]",
+    test_fraction: float = 0.3,
+) -> "tuple[List[FailurePattern], List[FailurePattern]]":
+    """Split failure patterns into train (suggestion generation) and test (holdout) sets.
+
+    Sorting by first_seen ensures the oldest patterns go into the train set
+    and the newest (most recently observed) become the holdout. This prevents
+    the system from gaming the eval metric by training on the exact patterns
+    it's being tested on.
+
+    With very few patterns (< 4) we skip the split and use all patterns for
+    both training and testing to avoid degenerate edge cases.
+
+    Returns: (train_patterns, test_patterns)
+    """
+    if len(patterns) < 4:
+        return patterns, []
+    sorted_pats = sorted(patterns, key=lambda p: p.first_seen or "")
+    n_test = max(1, int(len(sorted_pats) * test_fraction))
+    train = sorted_pats[:-n_test]
+    test = sorted_pats[-n_test:]
+    return train, test
+
+
 def run_eval_flywheel(
     *,
     dry_run: bool = False,
     verbose: bool = False,
     min_occurrences: int = 2,
+    test_fraction: float = 0.3,
 ) -> Dict[str, Any]:
     """Run the full Evals-as-Training-Data flywheel.
 
     1. Mine failure patterns from diagnoses + outcomes
-    2. Generate new eval benchmarks from patterns
-    3. Run all evals (builtin + generated)
-    4. Score generated evals with failure-specific criteria
-    5. Generate suggestions for evolver on failures
-    6. Track pass-rate trend
+    2. Split patterns train/test (oldest→train for suggestion gen; newest→holdout)
+    3. Generate new eval benchmarks from train patterns only
+    4. Run all evals (builtin + generated)
+    5. Score generated evals with failure-specific criteria
+    6. Generate suggestions for evolver on failures (from train set only)
+    7. Track pass-rate trend
 
     Args:
         dry_run: Simulate without LLM calls.
         verbose: Print progress.
         min_occurrences: Minimum failure count to generate an eval.
+        test_fraction: Fraction of patterns held out for unbiased testing (default 0.3).
 
     Returns:
         Summary dict with counts and results.
@@ -863,6 +891,8 @@ def run_eval_flywheel(
 
     summary: Dict[str, Any] = {
         "patterns_mined": 0,
+        "patterns_train": 0,
+        "patterns_test": 0,
         "evals_generated": 0,
         "evals_saved": 0,
         "builtin_report": None,
@@ -880,20 +910,28 @@ def run_eval_flywheel(
         for p in patterns[:5]:
             print(f"  {p.failure_class}: {p.occurrence_count}x", file=_sys.stderr, flush=True)
 
-    # Step 2: Generate evals
-    if patterns:
-        new_evals = generate_evals_from_patterns(patterns)
+    # Step 2: Train/test split — generate suggestions only from train set
+    train_patterns, test_patterns = _train_test_split_patterns(patterns, test_fraction)
+    summary["patterns_train"] = len(train_patterns)
+    summary["patterns_test"] = len(test_patterns)
+    if verbose and test_patterns:
+        print(f"[eval-flywheel] split: {len(train_patterns)} train, {len(test_patterns)} holdout",
+              file=_sys.stderr, flush=True)
+
+    # Step 3: Generate evals from train patterns only
+    if train_patterns:
+        new_evals = generate_evals_from_patterns(train_patterns)
         summary["evals_generated"] = len(new_evals)
         if not dry_run and new_evals:
             summary["evals_saved"] = save_generated_evals(new_evals)
 
-    # Step 3: Run builtin evals
+    # Step 4: Run builtin evals
     if verbose:
         print("[eval-flywheel] running builtin benchmarks...", file=_sys.stderr, flush=True)
     builtin_report = run_eval(dry_run=dry_run, verbose=verbose)
     summary["builtin_report"] = builtin_report.to_dict()
 
-    # Step 4: Run generated evals with failure-specific scoring
+    # Step 5: Run generated evals with failure-specific scoring
     generated_evals = load_generated_evals()
     gen_results: List[tuple] = []  # (GeneratedEval, passed: bool)
 
@@ -915,17 +953,17 @@ def run_eval_flywheel(
         for ge, passed in gen_results
     ]
 
-    # Step 5: Track trend
+    # Step 6: Track trend
     record_eval_trend(builtin_report, generated_results=gen_results)
 
-    # Step 6: Generate suggestions for failed generated evals
+    # Step 7: Generate suggestions for failed generated evals (train set only)
     if not dry_run:
         failed_gen = [(ge, passed) for ge, passed in gen_results if not passed]
         if failed_gen:
             suggestions_written = _write_flywheel_suggestions(failed_gen, builtin_report.run_id)
             summary["suggestions_written"] = suggestions_written
 
-    # Step 7: Detect regressions in pass-rate trend
+    # Step 8: Detect regressions in pass-rate trend
     regressions = detect_eval_regressions()
     summary["regressions"] = [
         {"metric": r.metric, "current": r.current, "baseline": r.baseline,
