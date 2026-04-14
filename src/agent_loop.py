@@ -305,14 +305,33 @@ _EXECUTE_TOOLS = EXECUTE_TOOLS
 # ---------------------------------------------------------------------------
 
 # Phrases that indicate a step depends on a prior step's output.
+#
+# Session 20 adversarial review finding 3.9: the original list missed common
+# aggregation/synthesis verbs ("compile", "summarize", "synthesize") that
+# implicitly depend on prior step output without naming them. Expanded to
+# include those plus generic noun-phrase references ("the findings",
+# "the report", "the data"). False positives (marking independent steps as
+# dependent) just disable parallelism — safe. False negatives (marking
+# dependent steps as independent) cause race conditions — what we're guarding.
 _DEPENDENCY_PATTERNS = [
-    r"\bstep \d+\b",               # "step 2", "step N"
+    # Explicit step references
+    r"\bstep \d+\b",                                          # "step 2", "step N"
     r"\bfrom (the )?(previous|above|prior|last) step\b",
-    r"\bbased on (the )?(above|previous|prior|results?)\b",
-    r"\busing (the )?(result|output|finding|content) (from|of) (step|above)\b",
-    r"\bfrom the (result|output|content) (above|of step)\b",
     r"\bidentified in step\b",
     r"\bfollowing (the|from) step\b",
+    # Generic prior-output references
+    r"\bbased on (the )?(above|previous|prior|results?|findings?|outputs?|data)\b",
+    r"\busing (the )?(result|output|finding|content|data) (from|of) (step|above)\b",
+    r"\bfrom the (result|output|content) (above|of step)\b",
+    r"\bgiven (the )?(above|results?|findings?|data)\b",
+    r"\bwith (the )?(above|prior|previous)\b",   # "with the above ...", "with prior ..."
+    r"\bwith (the )?(results?|findings?|data) in (mind|hand)\b",
+    # Aggregation/synthesis verbs that imply prior outputs
+    r"\b(compile|aggregate|consolidate|synthesize|combine|merge) (the |all )?(results?|findings?|outputs?|data|reports?)\b",
+    r"\bsummari[sz]e (the |all |these |those )?(above|results?|findings?|outputs?|reports?|data)\b",
+    r"\banaly[sz]e (the |all |these |those )?(above|results?|findings?|outputs?|reports?|data)\b",
+    r"\b(produce|generate|write|build) (a |the )?(final |overall |comprehensive )?(report|summary|comparison|synthesis)\b",
+    r"\bcomparing (the |all )?(results?|findings?|outputs?)\b",
 ]
 _DEP_RE = _re.compile("|".join(_DEPENDENCY_PATTERNS), _re.I)
 
@@ -320,9 +339,10 @@ _DEP_RE = _re.compile("|".join(_DEPENDENCY_PATTERNS), _re.I)
 def _steps_are_independent(steps: List[str]) -> bool:
     """Return True if no step references a prior step's output.
 
-    Heuristic only — misses implicit dependencies but is safe:
-    false negatives (marking dependent steps as independent) can't happen
-    because we require ALL steps to pass the check.
+    Heuristic only — false positives (marking independent steps as dependent)
+    just disable parallelism, which is safe. False negatives (marking
+    dependent steps as independent) cause race conditions — adversarial
+    review finding 3.9 expanded the pattern set to reduce those.
     """
     return not any(_DEP_RE.search(s) for s in steps)
 
@@ -420,39 +440,79 @@ def _handle_budget_ceiling(
     return _suffix
 
 
-def _process_blocked_step(
-    ctx: LoopContext,
-    step_text: str,
-    step_idx: int,
-    step_result: str,
-    step_elapsed: int,
-    outcome: dict,
-    item_index: int,
-    iteration: int,
-    step_adapter,
-    *,
-    step_retries: Dict[str, int],
-    step_tier_overrides: Dict[str, str],
-    failure_chain: List[str],
-    step_outcomes: List[StepOutcome],
-    remaining_steps: List[str],
-    remaining_indices: List[int],
-    manifest_steps: List[str],
-    next_step_injected_context: str,
-    consecutive_max_timeouts: int,
-    max_consecutive_timeouts: int,
-    replan_count: int,
-    error_fingerprints: Optional[Dict[str, List[str]]] = None,
-) -> tuple:
+@dataclass
+class BlockedStepContext:
+    """Bundle of inputs + mutable state passed to `_process_blocked_step`.
+
+    Session 20 adversarial review finding 3.12: `_process_blocked_step` had
+    21 parameters — a design smell that resists testing and is rarely called
+    correctly. This dataclass packages them all into one object passed by
+    reference. Mutable collections (step_retries, failure_chain, etc.) still
+    mutate in place because the dataclass field is just a reference; scalar
+    in/out values (consecutive_max_timeouts, replan_count, next_step_*) are
+    returned via the function's tuple result, so assignments to them inside
+    the function don't need to write back to the dataclass.
+    """
+    # Per-step inputs
+    step_text: str
+    step_idx: int
+    step_result: str
+    step_elapsed: int
+    outcome: dict
+    item_index: int
+    iteration: int
+    step_adapter: Any
+    # Mutable shared state (referenced by both caller and callee)
+    step_retries: Dict[str, int]
+    step_tier_overrides: Dict[str, str]
+    failure_chain: List[str]
+    step_outcomes: List[StepOutcome]
+    remaining_steps: List[str]
+    remaining_indices: List[int]
+    manifest_steps: List[str]
+    error_fingerprints: Dict[str, List[str]] = field(default_factory=dict)
+    # Loop-level scalars (in via init, out via tuple return)
+    next_step_injected_context: str = ""
+    consecutive_max_timeouts: int = 0
+    max_consecutive_timeouts: int = 3
+    replan_count: int = 0
+
+
+def _process_blocked_step(ctx: LoopContext, blk: BlockedStepContext) -> tuple:
     """Phase F11: Process a blocked step — retry, split, redecompose, or terminal.
 
     Returns (flow: str, step_idx, loop_status, stuck_reason, next_step_injected_context,
              consecutive_max_timeouts, recovery_step_count_delta, replan_count).
     flow is "continue" (retry/split/redecompose), "break" (adapter hung), or "normal" (terminal, fall through).
-    Mutates step_retries, step_tier_overrides, failure_chain, step_outcomes,
-    remaining_steps/indices, manifest_steps, error_fingerprints in place.
+    Mutates blk.step_retries, blk.step_tier_overrides, blk.failure_chain,
+    blk.step_outcomes, blk.remaining_steps/indices, blk.manifest_steps,
+    blk.error_fingerprints in place.
     """
     from llm import MODEL_CHEAP, MODEL_MID, MODEL_POWER
+
+    # Unpack into local names so the function body below is unchanged.
+    # Session 20.5 refactor: the body still uses bare names; this preserves
+    # the call-site change without rewriting 300+ lines of internals.
+    step_text = blk.step_text
+    step_idx = blk.step_idx
+    step_result = blk.step_result
+    step_elapsed = blk.step_elapsed
+    outcome = blk.outcome
+    item_index = blk.item_index
+    iteration = blk.iteration
+    step_adapter = blk.step_adapter
+    step_retries = blk.step_retries
+    step_tier_overrides = blk.step_tier_overrides
+    failure_chain = blk.failure_chain
+    step_outcomes = blk.step_outcomes
+    remaining_steps = blk.remaining_steps
+    remaining_indices = blk.remaining_indices
+    manifest_steps = blk.manifest_steps
+    next_step_injected_context = blk.next_step_injected_context
+    consecutive_max_timeouts = blk.consecutive_max_timeouts
+    max_consecutive_timeouts = blk.max_consecutive_timeouts
+    replan_count = blk.replan_count
+    error_fingerprints = blk.error_fingerprints
 
     o = _orch()
     _prior_retries = step_retries.get(step_text, 0)
@@ -691,6 +751,38 @@ def _process_blocked_step(
             consecutive_max_timeouts, _recovery_delta, replan_count)
 
 
+_MARCH_OF_NINES_WINDOW = 5
+_MARCH_OF_NINES_THRESHOLD = 0.5
+
+
+def _compute_march_of_nines(step_outcomes: List["StepOutcome"]) -> Optional[tuple]:
+    """Return (rate, completed, window_size) if recent-window success rate is
+    below threshold; None if no alert should fire.
+
+    Session 20 adversarial review finding 3.10: the previous formula was
+       chain_success = (completed/attempted) ** attempted
+    which fired false alerts on healthy long runs — a 90% step rate over
+    8 steps looked like 0.43 (below the 0.5 threshold) and produced an
+    alert despite the run being fine. The pathology: penalizing chain
+    LENGTH rather than per-step rate degradation.
+
+    New behavior: look at the last N steps and alert if the success rate
+    within the window drops below threshold. Catches actual recent
+    degradation without punishing otherwise-healthy long runs.
+    """
+    if len(step_outcomes) < 3:
+        return None
+    window = step_outcomes[-_MARCH_OF_NINES_WINDOW:]
+    completed = sum(1 for s in window if s.status == "done")
+    size = len(window)
+    if size == 0:
+        return None
+    rate = completed / size
+    if rate >= _MARCH_OF_NINES_THRESHOLD:
+        return None
+    return (rate, completed, size)
+
+
 def _write_iteration_artifacts(
     ctx: LoopContext,
     step_text: str,
@@ -747,21 +839,18 @@ def _write_iteration_artifacts(
         except Exception as _exc:
             log.warning("dead_ends update failed for loop %s: %s", ctx.loop_id, _exc)
 
-    # March of Nines
+    # March of Nines — sliding-window success rate over recent steps.
+    _window_result = _compute_march_of_nines(step_outcomes)
     _alert = False
-    if len(step_outcomes) >= 3:
+    if _window_result is not None:
+        rate, completed, size = _window_result
+        _alert = True
         try:
-            _steps_completed = sum(1 for s in step_outcomes if s.status == "done")
-            _steps_attempted = len(step_outcomes)
-            _cumulative_rate = _steps_completed / _steps_attempted
-            _chain_success = _cumulative_rate ** _steps_attempted
-            if _chain_success < 0.5:
-                _alert = True
-                o.append_decision(ctx.project, [
-                    f"[loop:{ctx.loop_id}] March of Nines alert: "
-                    f"chain_success={_chain_success:.3f} "
-                    f"({_steps_completed}/{_steps_attempted} steps done)"
-                ])
+            o.append_decision(ctx.project, [
+                f"[loop:{ctx.loop_id}] March of Nines alert: "
+                f"recent_success_rate={rate:.2f} "
+                f"({completed}/{size} of last {size} steps done)"
+            ])
         except Exception as _exc:
             log.debug("march-of-nines alert append failed for loop %s: %s", ctx.loop_id, _exc)
 
@@ -3842,11 +3931,15 @@ def run_agent_loop(
             )
             _consecutive_max_timeouts = 0  # successful step — adapter is healthy
         else:
-            (_blk_flow, step_idx, _blk_status, _blk_reason,
-             _next_step_injected_context, _consecutive_max_timeouts,
-             _blk_recovery_delta, _replan_count) = _process_blocked_step(
-                ctx, step_text, step_idx, step_result, step_elapsed,
-                outcome, item_index, iteration, _step_adapter,
+            _blk = BlockedStepContext(
+                step_text=step_text,
+                step_idx=step_idx,
+                step_result=step_result,
+                step_elapsed=step_elapsed,
+                outcome=outcome,
+                item_index=item_index,
+                iteration=iteration,
+                step_adapter=_step_adapter,
                 step_retries=_step_retries,
                 step_tier_overrides=_step_tier_overrides,
                 failure_chain=_failure_chain,
@@ -3854,12 +3947,15 @@ def run_agent_loop(
                 remaining_steps=remaining_steps,
                 remaining_indices=remaining_indices,
                 manifest_steps=_manifest_steps,
+                error_fingerprints=_error_fingerprints,
                 next_step_injected_context=_next_step_injected_context,
                 consecutive_max_timeouts=_consecutive_max_timeouts,
                 max_consecutive_timeouts=_MAX_CONSECUTIVE_TIMEOUTS,
                 replan_count=_replan_count,
-                error_fingerprints=_error_fingerprints,
             )
+            (_blk_flow, step_idx, _blk_status, _blk_reason,
+             _next_step_injected_context, _consecutive_max_timeouts,
+             _blk_recovery_delta, _replan_count) = _process_blocked_step(ctx, _blk)
             _recovery_step_count += _blk_recovery_delta
             if _blk_flow == "continue":
                 continue

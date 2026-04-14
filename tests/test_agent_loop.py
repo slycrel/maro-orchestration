@@ -511,6 +511,68 @@ def test_march_of_nines_alert_set_on_low_success(monkeypatch, tmp_path):
     assert isinstance(result.march_of_nines_alert, bool)
 
 
+def test_compute_march_of_nines_healthy_long_run_does_not_alert():
+    """Regression (session 20.5): a healthy long run at 90% per-step success
+    must NOT fire the alert. The old rate^steps math produced 0.9^8 = 0.43,
+    below the 0.5 threshold — false positive.
+    """
+    from agent_loop import _compute_march_of_nines, StepOutcome
+
+    # 8 steps: 7 done, 1 stuck early in history — recent window is clean
+    outcomes = [
+        StepOutcome(index=i, text=f"s{i}", status="done", result=f"r{i}", iteration=0)
+        for i in range(7)
+    ]
+    outcomes.insert(2, StepOutcome(index=99, text="s_stuck", status="stuck", result="r", iteration=0))
+    assert len(outcomes) == 8
+    # Last 5 are all done → rate 1.0 → no alert
+    assert _compute_march_of_nines(outcomes) is None
+
+
+def test_compute_march_of_nines_recent_degradation_fires():
+    """Recent-window degradation (last N mostly stuck) must fire."""
+    from agent_loop import _compute_march_of_nines, StepOutcome
+
+    # 5 steps: 1 done, 4 stuck recently → window rate 0.2 → alert
+    outcomes = [
+        StepOutcome(index=0, text="s0", status="done", result="ok", iteration=0),
+        StepOutcome(index=1, text="s1", status="stuck", result="", iteration=0),
+        StepOutcome(index=2, text="s2", status="stuck", result="", iteration=0),
+        StepOutcome(index=3, text="s3", status="stuck", result="", iteration=0),
+        StepOutcome(index=4, text="s4", status="stuck", result="", iteration=0),
+    ]
+    result = _compute_march_of_nines(outcomes)
+    assert result is not None
+    rate, completed, size = result
+    assert completed == 1
+    assert size == 5
+    assert rate == 0.2
+
+
+def test_compute_march_of_nines_below_min_steps():
+    """Under 3 steps → no alert (not enough data)."""
+    from agent_loop import _compute_march_of_nines, StepOutcome
+
+    outcomes = [StepOutcome(index=0, text="s0", status="stuck", result="", iteration=0)]
+    assert _compute_march_of_nines(outcomes) is None
+    outcomes.append(StepOutcome(index=1, text="s1", status="stuck", result="", iteration=0))
+    assert _compute_march_of_nines(outcomes) is None
+
+
+def test_compute_march_of_nines_exactly_threshold_does_not_fire():
+    """Boundary: threshold is 0.5; rate == 0.5 must NOT fire (strict <)."""
+    from agent_loop import _compute_march_of_nines, StepOutcome
+
+    # 4 steps: 2 done, 2 stuck → rate 0.5 → no alert
+    outcomes = [
+        StepOutcome(index=0, text="s0", status="done", result="ok", iteration=0),
+        StepOutcome(index=1, text="s1", status="stuck", result="", iteration=0),
+        StepOutcome(index=2, text="s2", status="done", result="ok", iteration=0),
+        StepOutcome(index=3, text="s3", status="stuck", result="", iteration=0),
+    ]
+    assert _compute_march_of_nines(outcomes) is None
+
+
 def test_loop_result_has_march_of_nines_field(monkeypatch, tmp_path):
     """LoopResult has march_of_nines_alert field."""
     _setup_workspace(monkeypatch, tmp_path)
@@ -609,6 +671,59 @@ def test_steps_are_independent_with_above_ref():
 def test_steps_are_independent_single_step():
     # Single step — trivially independent
     assert _steps_are_independent(["Do one thing"])
+
+
+def test_steps_are_independent_implicit_aggregation_caught():
+    """Regression (session 20.5): aggregation verbs without explicit step
+    references must be detected as dependent. Old regex missed these,
+    causing race conditions when parallel-eligible steps actually depended
+    on prior outputs.
+    """
+    cases = [
+        # (case_name, steps, expected_independent)
+        ("compile aggregates findings", [
+            "Research peptide A safety profile",
+            "Research peptide B safety profile",
+            "Compile the findings into a comparison report",
+        ], False),
+        ("synthesize implies prior steps", [
+            "Pull X from API",
+            "Pull Y from API",
+            "Synthesize the data into a summary",
+        ], False),
+        ("final report verb", [
+            "Investigate option 1",
+            "Investigate option 2",
+            "Produce a final report",
+        ], False),
+        ("aggregate keyword", [
+            "Fetch metric 1",
+            "Fetch metric 2",
+            "Aggregate the results into a single dashboard payload",
+        ], False),
+        ("comparing the results", [
+            "Fetch baseline",
+            "Fetch experiment",
+            "Comparing the results, report the delta",
+        ], False),
+        ("with the data in hand", [
+            "Pull leaderboard",
+            "Pull markets",
+            "With the above data in hand, compute the edge",
+        ], False),
+        # Independent control case — pure parallel fetch with no aggregation
+        ("pure parallel fetch", [
+            "Fetch URL A",
+            "Fetch URL B",
+            "Fetch URL C",
+        ], True),
+    ]
+    for name, steps, expected in cases:
+        actual = _steps_are_independent(steps)
+        assert actual is expected, (
+            f"case '{name}': expected independent={expected}, got {actual} "
+            f"for steps={steps}"
+        )
 
 
 def test_run_agent_loop_fan_out_dry_run():
