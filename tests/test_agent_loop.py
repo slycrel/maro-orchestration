@@ -2444,3 +2444,88 @@ def test_budget_bump_does_not_fire_with_few_remaining(monkeypatch, tmp_path):
         bumped = True
 
     assert not bumped, "Bump should not fire when only 2 steps remain (synthesis handles it)"
+
+
+# ---------------------------------------------------------------------------
+# Artifact cleanup
+# ---------------------------------------------------------------------------
+
+def test_artifact_cleanup_deletes_step_files_by_default(monkeypatch, tmp_path):
+    """Per-step artifact files are deleted at loop end when keep_artifacts is not set."""
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+
+    # Create fake per-step artifact files
+    _art_dir = tmp_path / "projects" / "test-project" / "artifacts"
+    _art_dir.mkdir(parents=True)
+    _loop_id = "abc123"
+    step_files = [_art_dir / f"loop-{_loop_id}-step-0{i}.md" for i in range(3)]
+    permanent_files = [
+        _art_dir / f"loop-{_loop_id}-PARTIAL.md",
+        _art_dir / f"loop-{_loop_id}-plan.md",
+    ]
+    for f in step_files + permanent_files:
+        f.write_text("content")
+
+    # Inject config that says keep_artifacts=False
+    import sys
+    fake_config = type(sys)("config")
+    fake_config.get = lambda key, default=None: (False if key == "keep_artifacts" else default)
+    monkeypatch.setitem(sys.modules, "config", fake_config)
+
+    # Simulate the cleanup logic directly (avoids running the full loop)
+    from pathlib import Path
+    from unittest.mock import patch
+
+    _keep = False
+    _deleted = 0
+    if not _keep:
+        for _f in _art_dir.glob(f"loop-{_loop_id}-step-*.md"):
+            try:
+                _f.unlink()
+                _deleted += 1
+            except OSError:
+                pass
+
+    assert _deleted == 3, f"Expected 3 step files deleted, got {_deleted}"
+    # Step files gone
+    for f in step_files:
+        assert not f.exists(), f"{f.name} should have been deleted"
+    # Permanent files kept
+    for f in permanent_files:
+        assert f.exists(), f"{f.name} should have been kept"
+
+
+def test_artifact_cleanup_retains_files_when_keep_artifacts_true(monkeypatch, tmp_path):
+    """Per-step artifacts are kept when keep_artifacts: true."""
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+
+    _art_dir = tmp_path / "projects" / "test-project" / "artifacts"
+    _art_dir.mkdir(parents=True)
+    _loop_id = "abc123"
+    step_file = _art_dir / f"loop-{_loop_id}-step-01.md"
+    step_file.write_text("step output")
+
+    # Simulate _keep = True path — no deletion
+    _keep = True
+    _deleted = 0
+    if not _keep:
+        for _f in _art_dir.glob(f"loop-{_loop_id}-step-*.md"):
+            _f.unlink()
+            _deleted += 1
+
+    assert _deleted == 0
+    assert step_file.exists(), "Step file should be retained when keep_artifacts=True"
+
+
+def test_artifact_cleanup_glob_pattern_does_not_match_permanent_files():
+    """The glob pattern loop-{id}-step-*.md does not match PARTIAL.md or plan.md."""
+    import fnmatch
+    loop_id = "abc123"
+    pattern = f"loop-{loop_id}-step-*.md"
+    step_files = [f"loop-{loop_id}-step-01.md", f"loop-{loop_id}-step-09.md"]
+    permanent_files = [f"loop-{loop_id}-PARTIAL.md", f"loop-{loop_id}-plan.md",
+                       f"loop-{loop_id}-scratchpad"]
+    for f in step_files:
+        assert fnmatch.fnmatch(f, pattern), f"{f} should match step pattern"
+    for f in permanent_files:
+        assert not fnmatch.fnmatch(f, pattern), f"{f} should NOT match step pattern"

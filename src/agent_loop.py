@@ -1646,6 +1646,31 @@ def _build_result_and_finalize(
         except Exception as _ckpt_exc:
             log.debug("checkpoint delete failed: %s", _ckpt_exc)
 
+    # Artifact cleanup: per-step artifacts are temp by default.
+    # Only keep them if config `keep_artifacts: true` is set.
+    # Plan manifests, PARTIAL.md, loop logs, and scratchpad are always kept.
+    if not ctx.dry_run and ctx.project:
+        try:
+            from config import get as _cfg_get
+            _keep = bool(_cfg_get("keep_artifacts", False))
+        except Exception:
+            _keep = False
+        if not _keep:
+            try:
+                _art_dir = _project_dir_root() / ctx.project / "artifacts"
+                _deleted = 0
+                for _f in _art_dir.glob(f"loop-{ctx.loop_id}-step-*.md"):
+                    try:
+                        _f.unlink()
+                        _deleted += 1
+                    except OSError:
+                        pass
+                if _deleted:
+                    log.debug("artifact cleanup: deleted %d per-step artifact(s) "
+                              "(set keep_artifacts: true to retain)", _deleted)
+            except Exception as _art_exc:
+                log.debug("artifact cleanup failed: %s", _art_exc)
+
     # Release loop lock
     try:
         from interrupt import clear_loop_running

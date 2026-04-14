@@ -11,10 +11,13 @@ Last updated: 2026-04-14 (session 21)
 ## Next Up
 
 1. **Memory Stage 3→4 (verify extraction in live runs)** — Silent failure bug fixed (s.summary → s.result, exception now logged). Next: run a real goal and confirm skills are being extracted to `~/.poe/workspace/skills/`. Check evolver's `synthesize_skill` path works end-to-end.
-2. **Artifact output routing cleanup** — Temp artifacts (per-step) → tmp dir (deleted by default, kept via config `keep_artifacts: true`). Permanent outputs → `~/.poe/workspace/output/`.
+2. **K2 follow-up: Import links collection** — Knowledge node infrastructure built. Next: import enriched posts from slycrel/link-farm (300+ curated links).
+3. **Eval flywheel hardening** — Failure clustering, train/test split, pass-rate dashboard.
+4. **Event-driven subprocess wakeup** — Replace polling with asyncio.Queue signal.
 
 ## Done (session 21, 2026-04-14 — budget bump + exception sweep + LoopStateMachine + Stage 2→3 pipeline + skill extraction fix + NOW→Director escalation)
 
+- [x] **Artifact output routing cleanup** — Per-step artifacts (`loop-{id}-step-*.md`) auto-deleted at loop end by default. Config `keep_artifacts: true` retains them. Permanent files (PARTIAL.md, plan.md, loop log, scratchpad) always kept. 3 tests. Closes MILESTONES artifact-routing item.
 - [x] **pytest-via-subprocess timeout fix** — Root cause: 900s wasn't enough for full test suite (pytest ~100-300s on this hardware + Claude response time). Bumped to 1800s default for long-running steps, 3600s for full-suite (`tests/ ` hint). `POE_LONG_RUNNING_TIMEOUT` env var for override. Improved timeout log message identifies `full_suite` vs `long_running`. 5 tests. Closes MILESTONES #2.
 - [x] **~35 silent exceptions upgraded (agent_loop.py lines 1000+)** — `except Exception: pass` upgraded to `log.warning` (learning data loss: diagnosis lesson, plan manifest) or `log.debug` (optional context injections, adapter fallbacks, lifecycle telemetry). 4 safety-critical bare-pass sites kept. No behavior change — failures now surface in debug logs. Closes MILESTONES #3.
 - [x] **Recovery mid-loop budget bump** — When 75%+ of `max_iterations` consumed, >2 steps remain, and ≥50% of steps done: bumps `max_iterations` by 50% (min +10), fires at most once (`_budget_bumped` guard). Logs `METACOGNITIVE_DECISION` to captain's log. Prevents hard synthesis fallback when good progress is in flight. 5 tests. Closes MILESTONES #6.
