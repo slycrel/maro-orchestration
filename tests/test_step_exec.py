@@ -547,6 +547,92 @@ class TestSpecificClaimDetection:
         assert not _has_specific_claims("short")
 
 
+class TestVerifyStepWithCrossRef:
+    """verify_step_with_cross_ref: cross-ref triggered only on specific claims + passing base."""
+
+    def _make_adapter(self, monkeypatch):
+        """Patch VerificationAgent so verify_step returns a controllable verdict."""
+        from unittest.mock import MagicMock, patch
+        adapter = MagicMock()
+        return adapter
+
+    def test_no_specific_claims_skips_cross_ref(self, monkeypatch):
+        """Generic result without specific claims: cross-ref not called."""
+        from unittest.mock import MagicMock, patch
+        from step_exec import verify_step_with_cross_ref
+
+        mock_va = MagicMock()
+        mock_va.verify_step.return_value = MagicMock(passed=True, reason="ok", confidence=0.9)
+
+        cross_ref_called = []
+
+        def _mock_cross_ref(text, **kw):
+            cross_ref_called.append(True)
+            return MagicMock(disputed_claims=[])
+
+        with patch("verification_agent.VerificationAgent", return_value=mock_va), \
+             patch.dict("sys.modules", {"cross_ref": MagicMock(run_cross_ref=_mock_cross_ref)}):
+            result = verify_step_with_cross_ref(
+                "summarize findings",
+                "The system works well overall. No specific issues found.",
+                MagicMock(),
+            )
+
+        assert result["passed"] is True
+        assert not cross_ref_called
+
+    def test_specific_claims_with_disputes_annotated(self, monkeypatch):
+        """If cross-ref finds disputes, base verdict gets cross_ref_disputes annotation."""
+        from unittest.mock import MagicMock, patch
+        from step_exec import verify_step_with_cross_ref
+
+        mock_va = MagicMock()
+        mock_va.verify_step.return_value = MagicMock(passed=True, reason="ok", confidence=0.9)
+
+        disputed = MagicMock()
+        disputed.claim = "The function nonexistent_func was added at line 500"
+        disputed.status = "DISPUTED"
+        mock_cross_ref_report = MagicMock(disputed_claims=[disputed])
+
+        mock_cross_ref = MagicMock()
+        mock_cross_ref.run_cross_ref = MagicMock(return_value=mock_cross_ref_report)
+
+        result_text = (
+            "The function nonexistent_func was added to src/agent_loop.py at line 500. "
+            "Class Director now calls this method. Variable count is set to zero."
+        )
+
+        with patch("verification_agent.VerificationAgent", return_value=mock_va), \
+             patch.dict("sys.modules", {"cross_ref": mock_cross_ref}):
+            result = verify_step_with_cross_ref("implement feature", result_text, MagicMock())
+
+        assert result["passed"] is True  # still passes (annotation only, not block)
+        assert "cross_ref_disputes" in result
+
+    def test_cross_ref_exception_non_fatal(self, monkeypatch):
+        """cross-ref failure is swallowed silently."""
+        from unittest.mock import MagicMock, patch
+        from step_exec import verify_step_with_cross_ref
+
+        mock_va = MagicMock()
+        mock_va.verify_step.return_value = MagicMock(passed=True, reason="ok", confidence=0.9)
+
+        mock_cross_ref = MagicMock()
+        mock_cross_ref.run_cross_ref = MagicMock(side_effect=RuntimeError("cross-ref broken"))
+
+        result_text = (
+            "The function nonexistent_func was added at line 500. "
+            "Class Director calls this method. Variable count is set."
+        )
+
+        with patch("verification_agent.VerificationAgent", return_value=mock_va), \
+             patch.dict("sys.modules", {"cross_ref": mock_cross_ref}):
+            result = verify_step_with_cross_ref("step", result_text, MagicMock())
+
+        # Should not raise, should return base verdict
+        assert "passed" in result
+
+
 # ---------------------------------------------------------------------------
 # Phase 62: Shared artifact layer
 # ---------------------------------------------------------------------------
