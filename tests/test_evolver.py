@@ -1899,3 +1899,120 @@ class TestScanCanonCandidates:
                     scan_calibration=False, scan_costs=False, scan_drift=False,
                     verbose=False)
         assert not canon_called, "scan_canon_candidates was called despite scan_canon=False"
+
+
+# ---------------------------------------------------------------------------
+# scan_suggestion_outcomes — empirical confidence calibration
+# ---------------------------------------------------------------------------
+
+class TestScanSuggestionOutcomes:
+    """Tests for scan_suggestion_outcomes() and _record_suggestion_outcomes()."""
+
+    def _write_outcomes(self, path, entries):
+        import json
+        path.write_text("\n".join(json.dumps(e) for e in entries) + "\n", encoding="utf-8")
+
+    def test_no_file_returns_empty(self, tmp_path):
+        from evolver import scan_suggestion_outcomes
+        result = scan_suggestion_outcomes(outcomes_path=tmp_path / "nonexistent.jsonl")
+        assert result == []
+
+    def test_detects_overconfident_category(self, tmp_path):
+        """Category with high self-reported confidence but low pass rate → suggestion."""
+        from evolver import scan_suggestion_outcomes
+        out_file = tmp_path / "suggestion_outcomes.jsonl"
+        # 3 skill_mutation suggestions: all self-reported 0.9 but only 1/3 passed
+        entries = [
+            {"suggestion_id": f"s{i}", "category": "skill_mutation",
+             "confidence": 0.9, "verified": i == 0, "run_id": "r1", "verified_at": "2026-04-14T00:00:00Z"}
+            for i in range(3)
+        ]
+        self._write_outcomes(out_file, entries)
+        suggestions = scan_suggestion_outcomes(min_samples=3, outcomes_path=out_file)
+        assert len(suggestions) == 1
+        assert suggestions[0].category == "observation"
+        assert "skill_mutation" in suggestions[0].suggestion
+        assert "CONFIDENCE MISCALIBRATION" in suggestions[0].suggestion
+
+    def test_calibrated_category_no_suggestion(self, tmp_path):
+        """Category with matching empirical and self-reported confidence → no suggestion."""
+        from evolver import scan_suggestion_outcomes
+        out_file = tmp_path / "suggestion_outcomes.jsonl"
+        # prompt_tweak: self-reported 0.75, empirical 4/5 = 0.8 → calibrated
+        entries = [
+            {"suggestion_id": f"s{i}", "category": "prompt_tweak",
+             "confidence": 0.75, "verified": i < 4, "run_id": "r1", "verified_at": "2026-04-14T00:00:00Z"}
+            for i in range(5)
+        ]
+        self._write_outcomes(out_file, entries)
+        suggestions = scan_suggestion_outcomes(min_samples=3, outcomes_path=out_file)
+        assert len(suggestions) == 0
+
+    def test_min_samples_gate(self, tmp_path):
+        """Category with fewer than min_samples entries is skipped."""
+        from evolver import scan_suggestion_outcomes
+        out_file = tmp_path / "suggestion_outcomes.jsonl"
+        entries = [
+            {"suggestion_id": "s0", "category": "skill_mutation",
+             "confidence": 0.9, "verified": False, "run_id": "r1", "verified_at": "2026-04-14T00:00:00Z"}
+        ]
+        self._write_outcomes(out_file, entries)
+        # Only 1 sample, min_samples=3 → should skip
+        suggestions = scan_suggestion_outcomes(min_samples=3, outcomes_path=out_file)
+        assert len(suggestions) == 0
+
+    def test_record_suggestion_outcomes_writes_file(self, tmp_path, monkeypatch):
+        """_record_suggestion_outcomes writes one entry per suggestion_id."""
+        import json
+        from evolver import _record_suggestion_outcomes
+
+        # Conftest autouse fixture sets POE_WORKSPACE=tmp_path; memory_dir()
+        # will resolve to tmp_path/memory and create it automatically.
+        # Write a fake change_log so _record_suggestion_outcomes can look up
+        # category/confidence for each suggestion_id.
+        from config import memory_dir
+        mem_dir = memory_dir()  # creates tmp_path/memory
+        cl_path = mem_dir / "change_log.jsonl"
+        cl_path.write_text(
+            json.dumps({"suggestion_id": "sid1", "category": "prompt_tweak", "confidence": 0.8}) + "\n",
+            encoding="utf-8",
+        )
+
+        _record_suggestion_outcomes(["sid1"], True, "run-abc")
+
+        out_file = mem_dir / "suggestion_outcomes.jsonl"
+        assert out_file.exists()
+        entries = [json.loads(l) for l in out_file.read_text().splitlines() if l.strip()]
+        assert len(entries) == 1
+        assert entries[0]["suggestion_id"] == "sid1"
+        assert entries[0]["category"] == "prompt_tweak"
+        assert entries[0]["confidence"] == 0.8
+        assert entries[0]["verified"] is True
+
+    def test_run_evolver_includes_suggestion_calibration(self, monkeypatch):
+        """run_evolver calls scan_suggestion_outcomes when scan_suggestion_calibration=True."""
+        from evolver import run_evolver
+        from unittest.mock import MagicMock
+
+        calibration_called = []
+
+        def fake_calibration(**kw):
+            calibration_called.append(True)
+            return []
+
+        monkeypatch.setattr("evolver.scan_suggestion_outcomes", fake_calibration)
+
+        fake_outcomes = [
+            MagicMock(status="done", goal="g", summary="s", task_type="research",
+                      cost_usd=0.01, outcome_id="x")
+            for _ in range(5)
+        ]
+        monkeypatch.setattr("evolver.load_outcomes", lambda **kw: fake_outcomes)
+        monkeypatch.setattr("evolver._llm_analyze", lambda *a, **kw: ([], []))
+        monkeypatch.setattr("evolver._save_suggestions", lambda *a, **kw: None)
+        monkeypatch.setattr("evolver._save_baseline", lambda *a, **kw: None)
+
+        run_evolver(dry_run=True, scan_suggestion_calibration=True, scan_signals=False,
+                    scan_calibration=False, scan_costs=False, scan_drift=False,
+                    scan_canon=False, verbose=False)
+        assert calibration_called, "scan_suggestion_outcomes was not called"

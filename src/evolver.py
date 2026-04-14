@@ -1321,6 +1321,145 @@ def scan_canon_candidates(
     return suggestions
 
 
+def _record_suggestion_outcomes(
+    suggestion_ids: List[str],
+    passed: bool,
+    run_id: str,
+) -> None:
+    """Write per-suggestion verification outcomes to suggestion_outcomes.jsonl.
+
+    Called from _verify_post_apply after the test suite runs.  Enables
+    scan_suggestion_outcomes() to compute empirical confidence (actual pass
+    rate vs self-reported confidence) across categories over time.
+    """
+    if not suggestion_ids:
+        return
+    try:
+        from config import memory_dir as _memory_dir
+        out_path = _memory_dir() / "suggestion_outcomes.jsonl"
+
+        # Look up confidence + category for each suggestion_id from change_log
+        from config import memory_dir
+        cl_path = memory_dir() / "change_log.jsonl"
+        cl_by_id: dict = {}
+        if cl_path.exists():
+            for _line in cl_path.read_text(encoding="utf-8").splitlines():
+                _line = _line.strip()
+                if not _line:
+                    continue
+                try:
+                    _entry = json.loads(_line)
+                    _sid = _entry.get("suggestion_id", "")
+                    if _sid:
+                        cl_by_id[_sid] = _entry
+                except Exception:
+                    pass
+
+        now = datetime.now(timezone.utc).isoformat()
+        lines = []
+        for sid in suggestion_ids:
+            cl_entry = cl_by_id.get(sid, {})
+            lines.append(json.dumps({
+                "suggestion_id": sid,
+                "category": cl_entry.get("category", "unknown"),
+                "confidence": float(cl_entry.get("confidence", 0.5)),
+                "verified": passed,
+                "run_id": run_id,
+                "verified_at": now,
+            }))
+
+        with out_path.open("a", encoding="utf-8") as _fh:
+            _fh.write("\n".join(lines) + "\n")
+        log.debug("_record_suggestion_outcomes: wrote %d entries (passed=%s) to %s",
+                  len(lines), passed, out_path)
+    except Exception as exc:
+        log.debug("_record_suggestion_outcomes failed (non-fatal): %s", exc)
+
+
+def scan_suggestion_outcomes(
+    *,
+    min_samples: int = 3,
+    overconfidence_ratio: float = 0.6,
+    outcomes_path: "Path | None" = None,
+) -> List[Suggestion]:
+    """Compute empirical confidence from suggestion_outcomes.jsonl.
+
+    Compares self-reported confidence (from the evolver LLM at suggestion time)
+    against the actual verify-pass rate.  If a category's empirical pass rate is
+    consistently below ``overconfidence_ratio * mean_self_reported_confidence``,
+    it's systematically overconfident.
+
+    Returns Suggestion(category='observation') entries for each miscalibrated
+    category, so the evolver report surfaces them for human review.
+
+    Args:
+        min_samples: Minimum verified outcomes per category to report.
+        overconfidence_ratio: Flag category if empirical < ratio * self_reported.
+        outcomes_path: Override default path (for testing).
+    """
+    try:
+        if outcomes_path is None:
+            from orch_items import memory_dir
+            outcomes_path = memory_dir() / "suggestion_outcomes.jsonl"
+
+        if not outcomes_path.exists():
+            return []
+
+        from collections import defaultdict
+        cat_data: dict = defaultdict(lambda: {"passed": 0, "failed": 0, "confidences": []})
+        for _line in outcomes_path.read_text(encoding="utf-8").splitlines():
+            _line = _line.strip()
+            if not _line:
+                continue
+            try:
+                entry = json.loads(_line)
+                cat = entry.get("category", "unknown")
+                cat_data[cat]["confidences"].append(float(entry.get("confidence", 0.5)))
+                if entry.get("verified"):
+                    cat_data[cat]["passed"] += 1
+                else:
+                    cat_data[cat]["failed"] += 1
+            except Exception:
+                continue
+
+        suggestions: List[Suggestion] = []
+        import uuid as _uuid
+        for cat, data in cat_data.items():
+            total = data["passed"] + data["failed"]
+            if total < min_samples:
+                continue
+            empirical_rate = data["passed"] / total
+            mean_conf = sum(data["confidences"]) / len(data["confidences"]) if data["confidences"] else 0.5
+            if mean_conf <= 0:
+                continue
+            # Flag if empirical pass rate is well below self-reported confidence
+            if empirical_rate < overconfidence_ratio * mean_conf:
+                suggestions.append(Suggestion(
+                    suggestion_id=f"calibration-{_uuid.uuid4().hex[:8]}",
+                    category="observation",
+                    target=cat,
+                    suggestion=(
+                        f"CONFIDENCE MISCALIBRATION in category '{cat}': "
+                        f"self-reported confidence {mean_conf:.2f} but empirical pass rate "
+                        f"{empirical_rate:.2f} ({data['passed']}/{total} verified). "
+                        f"Reduce LLM confidence prompts for this category or tighten "
+                        f"auto-apply threshold."
+                    ),
+                    failure_pattern=f"overconfident:{cat}",
+                    confidence=0.8,
+                    outcomes_analyzed=total,
+                ))
+                log.info(
+                    "scan_suggestion_outcomes: %s overconfident — reported=%.2f empirical=%.2f (%d/%d)",
+                    cat, mean_conf, empirical_rate, data["passed"], total,
+                )
+
+        return suggestions
+    except Exception as exc:
+        log.debug("scan_suggestion_outcomes failed (non-fatal): %s", exc)
+        return []
+
+
 def run_evolver(
     *,
     outcomes_window: int = 50,
@@ -1333,6 +1472,7 @@ def run_evolver(
     scan_costs: bool = True,
     scan_drift: bool = True,
     scan_canon: bool = True,
+    scan_suggestion_calibration: bool = True,
 ) -> EvolverReport:
     """Run one meta-evolution cycle.
 
@@ -1463,6 +1603,20 @@ def run_evolver(
             log.info("evolver canon_scan candidates=%d", len(canon_suggestions))
         except Exception as _canon_exc:
             log.debug("canon scan failed (non-fatal): %s", _canon_exc)
+
+    # Suggestion confidence calibration — empirical pass rate vs self-reported confidence
+    if scan_suggestion_calibration:
+        try:
+            calibration_suggestions = scan_suggestion_outcomes()
+            suggestions.extend(calibration_suggestions)
+            if verbose and calibration_suggestions:
+                print(
+                    f"[evolver] suggestion_calibration: {len(calibration_suggestions)} miscalibration finding(s)",
+                    file=sys.stderr,
+                )
+            log.info("evolver suggestion_calibration findings=%d", len(calibration_suggestions))
+        except Exception as _sco_exc:
+            log.debug("suggestion calibration scan failed (non-fatal): %s", _sco_exc)
 
     # Quality drift detection — compare this cycle to rolling baseline
     if scan_drift:
@@ -1707,6 +1861,9 @@ def _verify_post_apply(applied_ids, run_id: str, *, verbose: bool = False) -> No
         _revert_note = f", reverted {sum(1 for r in reverted if r.get('reverted'))}/{len(reverted)}" if reverted else ""
         print(f"[evolver] verify→learn: tests {_icon} after {auto_applied} mutations{_revert_note}",
               file=sys.stderr, flush=True)
+
+    # Record per-suggestion verification outcomes for confidence calibration
+    _record_suggestion_outcomes(id_list, passed, run_id)
 
     # Record outcome as a lesson for the learning pipeline
     try:
