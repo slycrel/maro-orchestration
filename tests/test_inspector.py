@@ -997,6 +997,28 @@ def test_generate_tickets_with_mock_adapter():
     assert tickets[0]["auto_evolver"] is True
 
 
+def test_generate_tickets_fallback_preserves_attribution():
+    """LLM-failure fallback must keep attribution_report so skill-blame suffix lands on tickets.
+
+    Regression for self-audit Issue 4 (2026-04-13): line 1088 fallback recursed with
+    adapter=None but dropped attribution_report, silently discarding blame data.
+    """
+    class _Attr:
+        most_blamed_skills = ["skill-alpha", "skill-beta"]
+
+    signals = [
+        SpecFrictionSignal(session_id="s1", signal_type=SIGNAL_ERROR_EVENTS, severity=0.7, evidence="err"),
+    ]
+    patterns = ["error_events: repeated failures"]
+
+    failing_adapter = MagicMock()
+    failing_adapter.complete.side_effect = RuntimeError("LLM down")
+
+    tickets = generate_tickets(patterns, signals, adapter=failing_adapter, attribution_report=_Attr())
+    assert tickets, "fallback must still produce tickets"
+    assert "skill-alpha" in tickets[0]["suggested_fix"], "skill-blame suffix must survive fallback"
+
+
 # ---------------------------------------------------------------------------
 # Phase 12 spec API — run_full_inspector
 # ---------------------------------------------------------------------------

@@ -197,9 +197,9 @@ class FrictionSignal:
     evidence: str = ""    # anonymized evidence snippet (no raw user content — max 80 chars)
     session_id: str = ""
 
-    # Severity string ↔ float mapping for interop with SpecFrictionSignal
+    # Severity string ↔ float mapping for interop with SpecFrictionSignal.
+    # Reverse direction (float→str) lives in SpecFrictionSignal.severity_str.
     _SEVERITY_TO_FLOAT = {"low": 0.3, "medium": 0.6, "high": 0.9}
-    _FLOAT_TO_SEVERITY = [(0.5, "low"), (0.75, "medium"), (1.0, "high")]
 
     @property
     def severity_float(self) -> float:
@@ -1084,8 +1084,8 @@ def generate_tickets(
         if __debug__:
             print(f"[inspector] generate_tickets LLM call failed: {e}", file=sys.stderr)
 
-    # LLM failed — fallback
-    return generate_tickets(patterns, signals, adapter=None)
+    # LLM failed — fallback. Preserve attribution_report so skill-blame suffix still lands on tickets.
+    return generate_tickets(patterns, signals, adapter=None, attribution_report=attribution_report)
 
 
 def format_inspector_report(report: "InspectorReport") -> str:
