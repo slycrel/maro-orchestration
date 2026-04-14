@@ -1246,8 +1246,8 @@ def _run_parallel_batch(
         _batch_tokens = sum(o.get("tokens_in", 0) + o.get("tokens_out", 0) for o in _batch_outcomes)
         log.info("parallel batch done: %d steps, %d tokens, %dms",
                  len(_batch_steps), _batch_tokens, int((time.monotonic() - _batch_start) * 1000))
-    except Exception:
-        pass
+    except Exception as _exc:
+        log.debug("parallel batch cost logging failed: %s", _exc)
 
     return iteration, step_idx, _tokens_in_delta, _tokens_out_delta
 
@@ -1290,8 +1290,8 @@ def _process_done_step(
         _cited_files = sorted(set(
             _scratchpad_re.findall(r'\b([a-z_]+\.py)\b', step_result or "")
         ))
-    except Exception:
-        pass
+    except Exception as _exc:
+        log.debug("scratchpad file citation extraction failed: %s", _exc)
     with scratchpad_lock:
         scratchpad[f"step_{step_idx}"] = {
             "text": step_text[:200],
@@ -1407,8 +1407,8 @@ def _process_done_step(
     if ctx.step_callback is not None:
         try:
             ctx.step_callback(step_idx, step_text, step_summary, "done")
-        except Exception:
-            pass
+        except Exception as _cb_exc:
+            log.debug("step_callback raised on step %d: %s", step_idx, _cb_exc)
 
     return step_result
 
@@ -1439,8 +1439,8 @@ def _select_step_adapter(
                 if ctx.verbose:
                     _tier_name = {"cheap": "haiku", "mid": "sonnet", "power": "opus"}.get(_tier_override, _tier_override)
                     print(f"[poe] step {step_idx}: escalated to {_tier_name} (retry tier-up)", file=sys.stderr, flush=True)
-            except Exception:
-                pass
+            except Exception as _ta_exc:
+                log.debug("tier-override adapter build failed for step %d, using default: %s", step_idx, _ta_exc)
         else:
             try:
                 from poe import classify_step_model
@@ -1452,8 +1452,8 @@ def _select_step_adapter(
                     if ctx.verbose:
                         _tier = "haiku" if _step_model == MODEL_CHEAP else "sonnet"
                         print(f"[poe] step {step_idx}: routing to {_tier} (classify_step_model)", file=sys.stderr, flush=True)
-            except Exception:
-                pass
+            except Exception as _cm_exc:
+                log.debug("classify_step_model failed for step %d, using default: %s", step_idx, _cm_exc)
     return _step_adapter
 
 
@@ -1496,8 +1496,8 @@ def _build_result_and_finalize(
                 elapsed_ms=elapsed_total,
                 replan_count=replan_count,
             )
-        except Exception:
-            pass
+        except Exception as _mf_exc:
+            log.warning("plan manifest write failed (affects replay/debugging): %s", _mf_exc)
 
     log_path = _write_loop_log(
         project=ctx.project,
@@ -1544,8 +1544,8 @@ def _build_result_and_finalize(
                      pf_review.scope, loop_status,
                      _fb_entry["true_positive"], _fb_entry["false_positive"],
                      _fb_entry["false_negative"])
-        except Exception:
-            pass
+        except Exception as _pf_exc:
+            log.debug("pre-flight calibration feedback write failed: %s", _pf_exc)
 
     # Phase 36: emit loop_done event
     try:
@@ -1561,8 +1561,8 @@ def _build_result_and_finalize(
             elapsed_ms=elapsed_total,
             detail=stuck_reason or "",
         )
-    except Exception:
-        pass
+    except Exception as _obs_exc:
+        log.debug("loop_done observe event failed: %s", _obs_exc)
 
     result = LoopResult(
         loop_id=ctx.loop_id,
@@ -1643,15 +1643,15 @@ def _build_result_and_finalize(
         try:
             from checkpoint import delete_checkpoint as _del_ckpt
             _del_ckpt(ctx.loop_id)
-        except Exception:
-            pass
+        except Exception as _ckpt_exc:
+            log.debug("checkpoint delete failed: %s", _ckpt_exc)
 
     # Release loop lock
     try:
         from interrupt import clear_loop_running
         clear_loop_running()
-    except Exception:
-        pass
+    except Exception as _lock_exc:
+        log.debug("clear_loop_running failed: %s", _lock_exc)
 
     return result
 
@@ -1770,8 +1770,8 @@ def _run_parallel_path(
         if ctx.step_callback is not None:
             try:
                 ctx.step_callback(_i, _step_text, _oc.get("result", "")[:120], _st)
-            except Exception:
-                pass
+            except Exception as _cb_exc:
+                log.debug("step_callback raised on parallel step %d: %s", _i, _cb_exc)
     elapsed = int((time.monotonic() - ctx.started_at) * 1000)
     return LoopResult(
         loop_id=ctx.loop_id,
@@ -1877,8 +1877,8 @@ def _preflight_checks(
             if pf_review.milestone_step_indices:
                 log.info("pre-flight: steps %s flagged as milestone candidates — "
                          "may need own planning pass", pf_review.milestone_step_indices)
-        except Exception:
-            pass
+        except Exception as _pf_exc:
+            log.debug("pre-flight plan review failed: %s", _pf_exc)
 
     # Parse step dependencies for level-based and DAG-aware parallel execution
     clean_steps = steps
@@ -1901,8 +1901,8 @@ def _preflight_checks(
     try:
         from observe import write_event as _write_event
         _write_event("loop_start", goal=ctx.goal, project=ctx.project or "", loop_id=ctx.loop_id, status="start")
-    except Exception:
-        pass
+    except Exception as _obs_exc:
+        log.debug("loop_start observe event failed: %s", _obs_exc)
 
     # Emit plan manifest
     manifest_steps: List[str] = list(steps)
@@ -1918,8 +1918,8 @@ def _preflight_checks(
             )
             if ctx.verbose and manifest_path_str:
                 print(f"[poe] plan manifest: {manifest_path_str}", file=sys.stderr, flush=True)
-        except Exception:
-            pass
+        except Exception as _mf_exc:
+            log.warning("initial plan manifest write failed: %s", _mf_exc)
 
     # Shared state for team workers
     loop_shared_ctx: Dict[str, Any] = {}
@@ -1930,8 +1930,8 @@ def _preflight_checks(
     if ctx.project:
         try:
             proj_fanout_dir = str(_project_dir_root() / ctx.project)
-        except Exception:
-            pass
+        except Exception as _dir_exc:
+            log.debug("project fanout dir resolution failed: %s", _dir_exc)
 
     use_dag = parallel_fan_out > 0 and len(clean_steps) > 1 and bool(parallel_levels)
     use_fanout = (not use_dag and parallel_fan_out > 0
@@ -2104,8 +2104,8 @@ def _initialize_loop(
                 elapsed_ms=0,
                 log_path=None,
             )
-    except Exception:
-        pass  # killswitch import failure must never block execution
+    except Exception as _ks_exc:
+        log.debug("killswitch check failed (non-blocking): %s", _ks_exc)
 
     # Wall-clock timeout — default 2 hours, override via POE_LOOP_TIMEOUT_SECS
     try:
@@ -2136,16 +2136,17 @@ def _initialize_loop(
     if interrupt_queue is None:
         try:
             ctx.interrupt_queue = InterruptQueue()
-        except Exception:
-            ctx.interrupt_queue = None  # Non-fatal: run without interrupt support
+        except Exception as _iq_exc:
+            log.debug("InterruptQueue init failed, running without interrupt support: %s", _iq_exc)
+            ctx.interrupt_queue = None
     else:
         ctx.interrupt_queue = interrupt_queue
 
     # Advertise this loop as running so other interfaces can route interrupts
     try:
         set_loop_running(ctx.loop_id, goal)
-    except Exception:
-        pass
+    except Exception as _slr_exc:
+        log.debug("set_loop_running failed: %s", _slr_exc)
 
     # Resolve or create project
     # Always call ensure_project (idempotent) — guards against partially-initialized
@@ -2170,7 +2171,8 @@ def _initialize_loop(
         _proj_dir = o.project_dir(project)
         _ancestry = get_project_ancestry(_proj_dir)
         ctx.ancestry_context = build_ancestry_prompt(_ancestry, current_task=goal)
-    except Exception:
+    except Exception as _anc_exc:
+        log.debug("ancestry context load failed: %s", _anc_exc)
         ctx.ancestry_context = ""
 
     # Continuation depth awareness: let the planner know this is pass N of a large task.
@@ -2198,7 +2200,8 @@ def _initialize_loop(
         try:
             from hooks import load_registry as _load_registry
             ctx.hook_registry = _load_registry()
-        except Exception:
+        except Exception as _hr_exc:
+            log.debug("hook registry load failed: %s", _hr_exc)
             ctx.hook_registry = None
 
     return ctx, None
@@ -2231,7 +2234,8 @@ def _run_steps_parallel(
             from poe import classify_step_model
             step_model = classify_step_model(step_text)
             step_adapter = build_adapter(model=step_model) if step_model != adapter.model_key else adapter
-        except Exception:
+        except Exception as _cla_exc:
+            log.debug("classify_step_model failed for parallel step %d, using default: %s", step_idx, _cla_exc)
             step_adapter = adapter
 
         # _execute_step handles prefetch internally
@@ -2391,7 +2395,8 @@ def _run_steps_dag(
             from poe import classify_step_model
             step_model = classify_step_model(step_text)
             step_adapter = build_adapter(model=step_model) if step_model != adapter.model_key else adapter
-        except Exception:
+        except Exception as _cla_exc:
+            log.debug("classify_step_model failed for DAG step %d, using default: %s", step_idx, _cla_exc)
             step_adapter = adapter
 
         outcome = _execute_step(
@@ -2587,8 +2592,8 @@ def _build_loop_context(
         try:
             from memory import inject_lessons_for_task
             lessons_context = inject_lessons_for_task("agenda", goal, max_lessons=3)
-        except Exception:
-            pass
+        except Exception as _les_exc:
+            log.debug("lessons fallback injection failed: %s", _les_exc)
 
     # Phase 56: Standing rules (top tier — apply unconditionally)
     # Scoped to project domain when available to prevent cross-project bleed
@@ -2597,8 +2602,8 @@ def _build_loop_context(
         _rules = inject_standing_rules(domain=project)
         if _rules:
             lessons_context = _rules + ("\n\n" + lessons_context if lessons_context else "")
-    except Exception:
-        pass
+    except Exception as _exc:
+        log.debug("standing rules injection failed: %s", _exc)
 
     # Phase 56: Decision journal (relevant prior decisions)
     try:
@@ -2606,8 +2611,8 @@ def _build_loop_context(
         _decisions = inject_decisions(goal, domain=project)
         if _decisions:
             lessons_context = (lessons_context + "\n\n" + _decisions) if lessons_context else _decisions
-    except Exception:
-        pass
+    except Exception as _exc:
+        log.debug("decision journal injection failed: %s", _exc)
 
     # Resurrected graveyard lessons (topic-relevant, decayed)
     try:
@@ -2621,8 +2626,8 @@ def _build_loop_context(
                 )
             _graveyard_lines = "\n".join(f"- {l.lesson}" for l in _graveyard[:3])
             lessons_context += f"\n\nPreviously-learned (resurrected from decay):\n{_graveyard_lines}"
-    except Exception:
-        pass
+    except Exception as _exc:
+        log.debug("graveyard resurrection failed: %s", _exc)
 
     # Error nodes: relevant failure patterns from diagnoses.jsonl (Phase 46 follow-on)
     try:
@@ -2632,8 +2637,8 @@ def _build_loop_context(
             lessons_context += "\n\nKnown failure patterns for similar goals:\n" + "\n".join(
                 f"- {note}" for note in _failure_notes
             )
-    except Exception:
-        pass
+    except Exception as _exc:
+        log.debug("failure notes injection failed: %s", _exc)
 
     # Captain's log context: what has the learning system been doing recently?
     # This is the K3 "read bridge" — the first consumer of the captain's log
@@ -2657,8 +2662,8 @@ def _build_loop_context(
             ]
             _log_ctx = "## Recent Learning System Activity\n" + "\n".join(_log_lines)
             lessons_context = (lessons_context + "\n\n" + _log_ctx) if lessons_context else _log_ctx
-    except Exception:
-        pass
+    except Exception as _exc:
+        log.debug("captains log context injection failed: %s", _exc)
 
     # Director's operational playbook — evolved wisdom about how to do the job
     try:
@@ -2666,8 +2671,8 @@ def _build_loop_context(
         _playbook = inject_playbook(max_chars=800)
         if _playbook:
             lessons_context = (lessons_context + "\n\n" + _playbook) if lessons_context else _playbook
-    except Exception:
-        pass
+    except Exception as _exc:
+        log.debug("playbook injection failed: %s", _exc)
 
     # Knowledge nodes — structured knowledge from imported sources (K2)
     try:
@@ -2675,8 +2680,8 @@ def _build_loop_context(
         _knowledge = inject_knowledge_for_goal(goal, max_chars=600)
         if _knowledge:
             lessons_context = (lessons_context + "\n\n" + _knowledge) if lessons_context else _knowledge
-    except Exception:
-        pass
+    except Exception as _exc:
+        log.debug("knowledge injection failed: %s", _exc)
 
     # Matching skills for decompose prompt injection
     skills_context = ""
@@ -2717,8 +2722,8 @@ def _build_loop_context(
                 )
             if had_no_matching_skill:
                 had_no_matching_skill = False
-    except Exception:
-        pass
+    except Exception as _csk_exc:
+        log.debug("curated skill loader failed: %s", _csk_exc)
 
     # Cost awareness: expensive step types from metrics history
     cost_context = ""
@@ -2732,8 +2737,8 @@ def _build_loop_context(
                 "disproportionate tokens — prefer cheaper alternatives when possible: "
                 + ", ".join(_expensive)
             )
-    except Exception:
-        pass
+    except Exception as _cst_exc:
+        log.debug("cost context analysis failed: %s", _cst_exc)
 
     # Stage 5: check for a Rule match before returning (caller skips LLM decompose)
     matched_rule = None
@@ -2747,8 +2752,8 @@ def _build_loop_context(
                     f"[poe] Stage 5 rule hit: {matched_rule.name!r} — skipping LLM decompose",
                     file=sys.stderr, flush=True,
                 )
-    except Exception:
-        pass
+    except Exception as _rul_exc:
+        log.debug("rule match check failed: %s", _rul_exc)
 
     # Merge curated SKILL.md summaries with runtime skill context
     if curated_skills_context:
@@ -2852,7 +2857,8 @@ def _generate_timeout_split(step_text: str, adapter) -> List[str]:
             )
             try:
                 _split_adapter = build_adapter(model=MODEL_CHEAP)
-            except Exception:
+            except Exception as _sa_exc:
+                log.debug("cheap adapter build for timeout-split failed, using default: %s", _sa_exc)
                 _split_adapter = adapter
             resp = _split_adapter.complete(
                 [LLMMessage("user", _prompt)],
@@ -3213,8 +3219,8 @@ def _finalize_loop(
                     confidence=0.8,
                 )
                 log.info("injected diagnosis lesson: %s", _diag.failure_class)
-            except Exception:
-                pass
+            except Exception as _store_exc:
+                log.warning("failed to persist diagnosis lesson (learning data lost): %s", _store_exc)
     except Exception as exc:
         log.debug("introspect failed: %s", exc)
 
@@ -3326,8 +3332,8 @@ def _finalize_loop(
                 )
                 for _cid in _chat_ids:
                     _bot.send_message(_cid, _msg)
-        except Exception:
-            pass
+        except Exception as _tg_exc:
+            log.debug("post-mission Telegram notification failed (non-critical): %s", _tg_exc)
 
 
 # ---------------------------------------------------------------------------
@@ -3558,8 +3564,8 @@ def run_agent_loop(
     if project:
         try:
             _proj_artifact_dir = str(_project_dir_root() / project)
-        except Exception:
-            pass
+        except Exception as _pad_exc:
+            log.debug("project artifact dir resolution failed: %s", _pad_exc)
 
     # Phase F: Main execute loop
     _budget_bumped = False  # guard: mid-loop budget bump fires at most once
@@ -3617,8 +3623,8 @@ def run_agent_loop(
                             "steps_remaining": len(remaining_steps),
                         },
                     )
-                except Exception:
-                    pass
+                except Exception as _bmp_clog_exc:
+                    log.debug("budget bump captain's log write failed: %s", _bmp_clog_exc)
 
         # Budget-aware landing: when only 2 iterations remain and there are
         # still multiple steps, replace the remaining steps with a single
@@ -3710,8 +3716,8 @@ def run_agent_loop(
                             if _rephrase_lines:
                                 step_text = _rephrase_lines[-1][:200]
                                 log.info("milestone advisor: rephrased step %d → %s", _would_be_step_idx, step_text[:80])
-                except Exception:
-                    pass  # advisor is optional
+                except Exception as _ms_adv_exc:
+                    log.debug("milestone advisor call failed: %s", _ms_adv_exc)
             # Fall through to execute normally if decompose fails or returns 1 step
 
         # Check for parallel peers: if this step has siblings at the same
@@ -3946,8 +3952,8 @@ def run_agent_loop(
                     continue
                 elif _advice:
                     log.info("advisor on stuck step %d: %s", step_idx, _advice[:120])
-            except Exception:
-                pass  # advisor is optional — never block on failure
+            except Exception as _adv_exc:
+                log.debug("stuck-step advisor call failed: %s", _adv_exc)
 
             loop_status = "stuck"
             stuck_reason = f"same outcome '{step_status}' on '{step_text}' repeated 3 times"
@@ -3998,8 +4004,8 @@ def run_agent_loop(
                     outcome["result"] = step_result
                     log.warning("step %d verification: %d hallucinated files: %s",
                                 step_idx, len(_hallucinated), ", ".join(sorted(_hallucinated)[:5]))
-            except Exception:
-                pass  # verification must never break the loop
+            except Exception as _vfy_exc:
+                log.debug("file-citation verification failed for step %d: %s", step_idx, _vfy_exc)
 
         if step_status == "done":
             step_result = _process_done_step(
@@ -4158,8 +4164,8 @@ def run_agent_loop(
                         context={"action": _recovery.action, "risk": _recovery.risk, "params": dict(_recovery.params)},
                         loop_id=loop_id,
                     )
-                except Exception:
-                    pass
+                except Exception as _clog_exc:
+                    log.debug("auto-recovery captain's log write failed: %s", _clog_exc)
                 _new_params = dict(_recovery.params)
                 _new_max_steps = _new_params.pop("max_steps", max_steps)
                 _new_max_iter = _new_params.pop("max_iterations", max_iterations)
