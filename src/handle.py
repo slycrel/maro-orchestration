@@ -193,6 +193,53 @@ This is a side-note, not a task result.
 """
 
 
+def _is_complex_directive(message: str) -> bool:
+    """Heuristic: does a NOW-classified message actually require Director-level planning?
+
+    Returns True when the message shows signs of multi-step complexity that the
+    single-shot NOW lane would handle poorly. Used to gate optional escalation to
+    AGENDA when now_lane.escalate_to_director is enabled.
+
+    Signals:
+      - More than 25 words (classifier uses ≤15 as simple)
+      - Multi-step sequencing language
+      - Action verbs that imply building/researching/designing
+      - Multiple sentences (compound task)
+    """
+    import re
+    msg_lower = message.lower().strip()
+    words = msg_lower.split()
+
+    if len(words) > 25:
+        return True
+
+    # Multi-step indicators
+    _SEQUENCE_PATTERNS = [
+        r'\bthen\b', r'\bfirst\b.{0,60}\bthen\b', r'\bafter(ward)?\b',
+        r'\bstep\s+\d', r'\b\d+\.\s', r'\band\s+also\b', r'\badditionally\b',
+    ]
+    if any(re.search(p, msg_lower) for p in _SEQUENCE_PATTERNS):
+        return True
+
+    # Action verbs implying multi-step work (require 8+ words to avoid false positives
+    # on short creative requests like "write a haiku" or "create a joke")
+    _COMPLEX_VERBS = {
+        "build", "implement", "design", "research", "analyze",
+        "investigate", "develop", "plan", "architect", "refactor",
+        "migrate", "integrate", "deploy", "configure",
+    }
+    first_words = set(words[:8])
+    if len(words) >= 8 and first_words & _COMPLEX_VERBS:
+        return True
+
+    # Multiple sentences (compound task)
+    sentences = [s.strip() for s in re.split(r'[.!?]', message) if s.strip() and len(s.strip()) > 10]
+    if len(sentences) >= 2:
+        return True
+
+    return False
+
+
 def _run_now(
     message: str,
     handle_id: str,
@@ -406,6 +453,21 @@ def handle(
         )
 
     # Route to lane
+    if lane == "now":
+        # Optional escalation: if now_lane.escalate_to_director is enabled and the
+        # message looks complex, reclassify to agenda so the Director can plan it.
+        _now_escalate_enabled = False
+        try:
+            from config import get as _cfg_get
+            _now_escalate_enabled = bool(_cfg_get("now_lane.escalate_to_director", False))
+        except Exception:
+            pass
+        if _now_escalate_enabled and _is_complex_directive(message):
+            lane = "agenda"
+            reason = reason + " [now→agenda: complex directive escalated to Director]"
+            log.info("handle: now→agenda escalation for: %s", message[:80])
+            # Fall through to the agenda branch below
+
     if lane == "now":
         outcome = _run_now(message, handle_id, adapter, verbose=verbose)
         elapsed = int((time.monotonic() - started_at) * 1000)
