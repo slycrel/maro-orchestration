@@ -452,6 +452,7 @@ class ClaudeSubprocessAdapter(LLMAdapter):
         max_tokens: int = 4096,
         temperature: float = 0.3,
         timeout: Optional[int] = None,
+        **kwargs,  # absorb unsupported kwargs (e.g. thinking_budget) gracefully
     ) -> LLMResponse:
         # Build the prompt text
         prompt = self._build_prompt(messages, tools)

@@ -275,6 +275,21 @@ def test_subprocess_complete_plain_text_fallback(monkeypatch):
     assert resp.content == "just plain text response"
 
 
+def test_subprocess_complete_ignores_thinking_budget(monkeypatch):
+    """ClaudeSubprocessAdapter.complete() must not raise on thinking_budget kwarg."""
+    a = ClaudeSubprocessAdapter()
+    mock_result = MagicMock()
+    mock_result.returncode = 0
+    mock_result.stdout = _make_subprocess_output("hello")
+    mock_result.stderr = ""
+
+    with patch("llm._run_subprocess_safe", return_value=mock_result):
+        # Must not raise TypeError: got an unexpected keyword argument 'thinking_budget'
+        resp = a.complete([LLMMessage("user", "hi")], thinking_budget=1024)
+
+    assert resp.content == "hello"
+
+
 # ---------------------------------------------------------------------------
 # _run_subprocess_safe — process group cleanup
 # ---------------------------------------------------------------------------
