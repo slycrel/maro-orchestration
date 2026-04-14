@@ -649,7 +649,13 @@ def _process_blocked_step(
         print(f"[poe] step {step_idx} stuck after retry: {_stuck_reason}", file=sys.stderr, flush=True)
     try:
         from skills import attribute_failure_to_skills, find_matching_skills, record_variant_outcome, record_skill_outcome
+        from metrics import estimate_cost as _est_cost
         attribute_failure_to_skills(step_text, _stuck_reason, goal=ctx.goal)
+        _fail_cost = _est_cost(
+            int(outcome.get("tokens_in", 0)),
+            int(outcome.get("tokens_out", 0)),
+            getattr(step_adapter, "model_key", None),
+        )
         for _sk in find_matching_skills(step_text + " " + ctx.goal, use_router=False):
             if getattr(_sk, "variant_of", None) is not None:
                 record_variant_outcome(_sk.id, success=False)
@@ -657,6 +663,7 @@ def _process_blocked_step(
             record_skill_outcome(
                 _sk.id,
                 success=False,
+                cost_usd=_fail_cost,
                 latency_ms=float(step_elapsed),
             )
     except Exception:
@@ -1125,6 +1132,7 @@ def _process_done_step(
     loop_shared_ctx: Dict[str, Any],
     scratchpad: Dict[str, Any],
     scratchpad_lock,
+    step_model: Optional[str] = None,
 ) -> str:
     """Phase F10: Process a completed step — scratchpad, context, injection, skills.
 
@@ -1220,8 +1228,14 @@ def _process_done_step(
     # Phase 32: update skill utility + Phase 59: record skill cost/latency telemetry
     try:
         from skills import find_matching_skills, update_skill_utility, record_variant_outcome, record_skill_outcome
+        from metrics import estimate_cost as _est_cost
         _confidence_val = {"strong": 1.0, "weak": 0.5, "inferred": 0.3, "unverified": 0.1}.get(
             outcome.get("confidence", ""), 1.0
+        )
+        _step_cost = _est_cost(
+            int(outcome.get("tokens_in", 0)),
+            int(outcome.get("tokens_out", 0)),
+            step_model,
         )
         for _sk in find_matching_skills(step_text + " " + ctx.goal, use_router=False):
             update_skill_utility(_sk.id, success=True)
@@ -1231,7 +1245,7 @@ def _process_done_step(
             record_skill_outcome(
                 _sk.id,
                 success=True,
-                cost_usd=0.0,  # TODO: compute from token counts + model pricing
+                cost_usd=_step_cost,
                 latency_ms=float(step_elapsed),
                 confidence=_confidence_val,
             )
@@ -3811,6 +3825,7 @@ def run_agent_loop(
                 loop_shared_ctx=_loop_shared_ctx,
                 scratchpad=_scratchpad,
                 scratchpad_lock=_scratchpad_lock,
+                step_model=getattr(_step_adapter, "model_key", None),
             )
             _consecutive_max_timeouts = 0  # successful step — adapter is healthy
         else:
