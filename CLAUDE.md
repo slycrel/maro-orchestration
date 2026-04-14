@@ -179,6 +179,10 @@ bash scripts/test-safe.sh
 # Tests — full suite, raw (only when the box is idle / no TUI running)
 python3 -m pytest tests/ -q
 
+# Tests — with coverage (enforces 70% floor per .coveragerc)
+bash scripts/test-cov.sh
+bash scripts/test-cov.sh --html     # also produce output/coverage_html/
+
 # Smoke
 bash scripts/smoke.sh
 

@@ -356,3 +356,260 @@ class TestAtomicWrite:
         task_store._atomic_write(p, {"v": 1})
         task_store._atomic_write(p, {"v": 2})
         assert json.loads(p.read_text()) == {"v": 2}
+
+
+# ---------------------------------------------------------------------------
+# Concurrency — fcntl locking correctness
+# ---------------------------------------------------------------------------
+#
+# Session 20 adversarial review finding 3.7: fcntl locking had no concurrent
+# tests. These exercise the lock under both threaded and multiprocess racing
+# to make sure `claim()` is linearizable and `enqueue()` is safe under
+# concurrent writes to different tasks.
+
+import multiprocessing
+import threading
+
+
+def _worker_claim(workspace: str, job_id: str, result_list, hold_secs: float = 0.0) -> None:
+    """Subprocess entry: set POE_WORKSPACE, attempt to claim, append result.
+
+    If hold_secs > 0, sleep that long after a successful claim — keeps the
+    worker PID alive so the peer's stale-claim-recovery path doesn't trigger.
+    """
+    import os as _os
+    _os.environ["POE_WORKSPACE"] = workspace
+    # Force re-import under the new env so tasks_dir() resolves correctly.
+    import importlib
+    import time as _time
+    import task_store as _ts
+    importlib.reload(_ts)
+    try:
+        t = _ts.claim(job_id)
+        result_list.append(("claimed", t.get("claimed_by_pid")))
+        if hold_secs > 0:
+            _time.sleep(hold_secs)
+    except RuntimeError as exc:
+        result_list.append(("rejected", str(exc)))
+    except Exception as exc:  # unexpected
+        result_list.append(("error", repr(exc)))
+
+
+def _worker_enqueue(workspace: str, job_id: str, result_list) -> None:
+    import os as _os
+    _os.environ["POE_WORKSPACE"] = workspace
+    import importlib
+    import task_store as _ts
+    importlib.reload(_ts)
+    try:
+        _ts.enqueue(job_id=job_id)
+        result_list.append(("enqueued", job_id))
+    except Exception as exc:
+        result_list.append(("error", repr(exc)))
+
+
+class TestConcurrency:
+    def test_threaded_claim_race_only_one_winner(self, tmp_path, monkeypatch):
+        """10 threads race to claim the same task — exactly one wins.
+
+        All threads share a process id, so after the first claim succeeds the
+        `claim()` stale-recovery check sees a live PID and raises on the others.
+        This validates the exclusive-lock path is actually serializing claims.
+        """
+        monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+        task_store.enqueue(job_id="race-1")
+
+        results: list = []
+        results_lock = threading.Lock()
+        barrier = threading.Barrier(10)
+
+        def _thread_entry():
+            barrier.wait()  # maximize contention by releasing all threads at once
+            try:
+                t = task_store.claim("race-1")
+                with results_lock:
+                    results.append(("claimed", t["claimed_by_pid"]))
+            except RuntimeError as exc:
+                with results_lock:
+                    results.append(("rejected", str(exc)))
+
+        threads = [threading.Thread(target=_thread_entry) for _ in range(10)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        claimed = [r for r in results if r[0] == "claimed"]
+        rejected = [r for r in results if r[0] == "rejected"]
+        assert len(claimed) == 1, f"expected 1 winner, got {len(claimed)}: {results}"
+        assert len(rejected) == 9, f"expected 9 rejections, got {len(rejected)}"
+
+        # Verify the final on-disk state matches the winner
+        task = task_store._read_task(task_store.task_path("race-1"))
+        assert task["status"] == "claimed"
+        assert task["claimed_by_pid"] == claimed[0][1]
+
+    def test_multiprocess_claim_race_only_one_winner(self, tmp_path):
+        """Two real subprocesses race to claim. Only one succeeds.
+
+        fcntl is process-level — this is the honest cross-process test. Both
+        workers hold for 2s after a successful claim so the peer's claim
+        attempt hits while the winner is still alive (otherwise stale-claim
+        recovery correctly hands the task to the second worker).
+        """
+        import os as _os
+        orig_ws = _os.environ.get("POE_WORKSPACE")
+        _os.environ["POE_WORKSPACE"] = str(tmp_path)
+        try:
+            import importlib
+            importlib.reload(task_store)
+            task_store.enqueue(job_id="mp-race")
+
+            mgr = multiprocessing.Manager()
+            results = mgr.list()
+            p1 = multiprocessing.Process(target=_worker_claim,
+                                         args=(str(tmp_path), "mp-race", results, 2.0))
+            p2 = multiprocessing.Process(target=_worker_claim,
+                                         args=(str(tmp_path), "mp-race", results, 2.0))
+            p1.start(); p2.start()
+            p1.join(timeout=30); p2.join(timeout=30)
+            assert p1.exitcode == 0 and p2.exitcode == 0, f"subprocess crashed: {list(results)}"
+
+            outcomes = list(results)
+            claimed = [r for r in outcomes if r[0] == "claimed"]
+            rejected = [r for r in outcomes if r[0] == "rejected"]
+            errors = [r for r in outcomes if r[0] == "error"]
+            assert errors == [], f"unexpected errors: {errors}"
+            assert len(claimed) == 1, f"expected 1 winner, got {len(claimed)}: {outcomes}"
+            assert len(rejected) == 1
+        finally:
+            if orig_ws is None:
+                _os.environ.pop("POE_WORKSPACE", None)
+            else:
+                _os.environ["POE_WORKSPACE"] = orig_ws
+
+    def test_multiprocess_stale_claim_recovery(self, tmp_path):
+        """When a prior claimer exits without completing, the next claimer
+        recovers the task. This is the intentional stale-recovery path — it
+        should succeed, not be treated as a double-claim bug.
+        """
+        import os as _os
+        orig_ws = _os.environ.get("POE_WORKSPACE")
+        _os.environ["POE_WORKSPACE"] = str(tmp_path)
+        try:
+            import importlib
+            importlib.reload(task_store)
+            task_store.enqueue(job_id="stale-1")
+
+            mgr = multiprocessing.Manager()
+            results = mgr.list()
+            # First worker claims and exits immediately (no hold).
+            p1 = multiprocessing.Process(target=_worker_claim,
+                                         args=(str(tmp_path), "stale-1", results, 0.0))
+            p1.start(); p1.join(timeout=30)
+            assert p1.exitcode == 0
+
+            # Second worker should see the dead PID and recover.
+            p2 = multiprocessing.Process(target=_worker_claim,
+                                         args=(str(tmp_path), "stale-1", results, 0.0))
+            p2.start(); p2.join(timeout=30)
+            assert p2.exitcode == 0
+
+            outcomes = list(results)
+            claimed = [r for r in outcomes if r[0] == "claimed"]
+            assert len(claimed) == 2, f"expected both workers to claim (stale recovery): {outcomes}"
+            # The two claims should have different PIDs
+            pids = [r[1] for r in claimed]
+            assert pids[0] != pids[1]
+        finally:
+            if orig_ws is None:
+                _os.environ.pop("POE_WORKSPACE", None)
+            else:
+                _os.environ["POE_WORKSPACE"] = orig_ws
+
+    def test_concurrent_enqueue_of_different_tasks_all_succeed(self, tmp_path, monkeypatch):
+        """Writing to 20 different task files concurrently must produce 20
+        valid JSON files with no corruption. Per-file locks mean there's no
+        contention between different job_ids — this validates we aren't
+        accidentally sharing a lock path.
+        """
+        monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+
+        job_ids = [f"concurrent-{i:03d}" for i in range(20)]
+        results: list = []
+        results_lock = threading.Lock()
+        barrier = threading.Barrier(len(job_ids))
+
+        def _thread_entry(jid: str):
+            barrier.wait()
+            try:
+                task_store.enqueue(job_id=jid)
+                with results_lock:
+                    results.append(("ok", jid))
+            except Exception as exc:
+                with results_lock:
+                    results.append(("error", repr(exc)))
+
+        threads = [threading.Thread(target=_thread_entry, args=(j,)) for j in job_ids]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        errors = [r for r in results if r[0] == "error"]
+        assert errors == [], f"concurrent enqueue errors: {errors}"
+        assert len(results) == len(job_ids)
+
+        # Every file exists and is parseable JSON with the expected job_id
+        for jid in job_ids:
+            task = task_store._read_task(task_store.task_path(jid))
+            assert task is not None, f"missing task {jid}"
+            assert task["job_id"] == jid
+            assert task["status"] == "queued"
+
+    def test_serialized_claim_then_complete_is_consistent(self, tmp_path, monkeypatch):
+        """Interleaved claim + complete operations on the same task must
+        serialize correctly — no half-written state visible between them.
+        """
+        monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+        task_store.enqueue(job_id="serial-1")
+        task_store.claim("serial-1")
+
+        # Concurrent complete + list must produce consistent state:
+        # list() never sees a torn task file.
+        results: list = []
+        results_lock = threading.Lock()
+
+        def _completer():
+            try:
+                task_store.complete("serial-1", artifact_paths={"out": "/tmp/x"})
+                with results_lock:
+                    results.append(("complete", True))
+            except Exception as exc:
+                with results_lock:
+                    results.append(("complete", repr(exc)))
+
+        def _reader():
+            # Read 50 times in a tight loop while complete runs.
+            tear_detected = False
+            for _ in range(50):
+                try:
+                    t = task_store._read_task(task_store.task_path("serial-1"))
+                    if t is None:
+                        continue
+                    # Every read must produce a coherent status — no partial writes.
+                    assert t["status"] in ("claimed", "done"), f"torn status: {t['status']}"
+                except (json.JSONDecodeError, AssertionError):
+                    tear_detected = True
+                    break
+            with results_lock:
+                results.append(("read", tear_detected))
+
+        t_complete = threading.Thread(target=_completer)
+        t_reader = threading.Thread(target=_reader)
+        t_complete.start(); t_reader.start()
+        t_complete.join(); t_reader.join()
+
+        assert ("complete", True) in results
+        read_results = [r for r in results if r[0] == "read"]
+        assert read_results and read_results[0][1] is False, "reader saw torn write"

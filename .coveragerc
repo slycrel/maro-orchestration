@@ -4,8 +4,16 @@ omit =
     src/poe_orchestration.egg-info/*
     */test_*
     */tests/*
+    # Research-phase scripts, not production code paths. Keep them out of
+    # the coverage target so the overall number reflects what ships.
+    src/polymarket_backtest.py
+    src/polymarket_backtest_refined.py
 
 [report]
+# Session 20 adversarial review finding 3.7: coverage was unmeasured. Current
+# baseline with these omits is ~73%. Set floor to 70% as a ratchet — tighten
+# over time, fail CI if coverage drops below this.
+fail_under = 70
 exclude_lines =
     pragma: no cover
     def __repr__
