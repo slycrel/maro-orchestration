@@ -1,5 +1,139 @@
 # Changelog
 
+## [1.17.0] - 2026-04-14
+
+Sessions 29–30 (claim verifier symbols, recipe PM/dev rounds 7–8, housekeeping).
+
+### Added — Claim verifier symbol checking
+- `claim_verifier.py`: `extract_symbol_claims()` extracts Python function/class names from backtick spans, def/class keywords, and contextual patterns; skips dunder/stdlib/short names
+- `_build_symbol_index()`: direct .py file scan of src/ + tests/ — no subprocess, <5ms; returns set of all def/class names
+- `verify_symbol_claims()` → `SymbolReport`; `verify_all_claims()` → `CompoundClaimReport`
+- `annotate_result()`: new `check_symbols=True` flag surfaces `SYMBOL_CLAIMS_NOT_FOUND` in annotations
+- 24 new tests (63 total in test_claim_verifier.py); closes "claim verifier only catches file paths" BACKLOG item
+
+### Added — Recipe repo PM/dev rounds 7–8
+- Duplicate name guard: `unique=True` on `Recipe.name`; `IntegrityError` caught before `SQLAlchemyError`; form.html error display block
+- Rate limit: `TestRateLimit` (4 tests), `TestBodySizeGuard` (3 tests), `TestHTMLSearchAndPagination` (6 tests)
+- DB-direct seeding helper (`_seed_db`) to bypass rate limits in pagination tests
+- 74 recipe tests passing
+
+### Changed — Housekeeping
+- Archived 4 stale docs to `docs/archive/`: LOOP_SCRATCHPAD.md, plan-next-phase.md, PHASE_AUDIT.md ×2
+- Test count updated in README (3500+ → 4278) and CLAUDE.md (3789 → 4278; 60+ files → 109 files)
+- `claim_verifier.py` added to README source modules table
+- 4 link-farm steal items added to BACKLOG (Latent Briefing, isolated worktree, Skills quality gate, Kronos)
+
+---
+
+## [1.16.0] - 2026-04-14
+
+Session 28 (dashboard evolver stats, FastAPI deprecation, PM/dev rounds 5–6).
+
+### Added — Evolver suggestion stats in dashboard
+- `_read_suggestion_stats()` in `observe.py`: reads `suggestions.jsonl`, returns total/by_category/by_status/pending/applied counts
+- New panel in `poe-observe` dashboard: pending/applied badges + category table; 5 tests
+
+### Fixed — FastAPI deprecation warnings
+- Replaced `@app.on_event("startup")` with `asynccontextmanager` lifespan pattern
+- `TemplateResponse` calls updated to new API format (request as first arg)
+- Zero deprecation warnings in recipe test suite
+
+---
+
+## [1.15.0] - 2026-04-14
+
+Session 27 (first-class project isolation, captain's log dashboard, PM/dev round 4).
+
+### Added — First-class project isolation
+- `Skill.project` field (empty string = global, non-empty = project-scoped)
+- `find_matching_skills(project=...)` filters to global + project-specific skills only
+- `set_loop_running(project=...)` writes per-project lock file; `get_running_project_loop()` + `is_project_running()` API
+- 11 new tests; closes concurrent-run safety BACKLOG item
+
+### Added — Captain's log dashboard panel
+- `_read_captain_log_entries(limit=20)` in `observe.py`: reads `captains_log.jsonl` newest-first
+- Badge color-coding by event type in dashboard HTML; 6 tests in `TestCaptainLogDashboard`
+
+---
+
+## [1.14.0] - 2026-04-14
+
+Session 26 (codebase graph, injection guard, harness architecture spectrum, evolver impact).
+
+### Added — Codebase graph (AST-based)
+- `src/codebase_graph.py`: 5-pass AST analysis (collect → parse → resolve imports → centrality → rank)
+- Centrality = 0.7×in_degree + 0.3×line_coverage; basename import resolution; goal-biased `format_graph_context()`
+- Wired into `_build_loop_context()` (fail-open); `poe-codebase-graph` CLI; 39 tests
+- Verified: `llm.py` tops centrality (54 importers)
+
+### Added — Prompt injection guard
+- `src/injection_guard.py`: 17 regex patterns across 3 categories (override, tool-call, exfil)
+- `InjectionScanReport` with `risk_level` + `safe_to_auto_apply`; fail-closed (returns False on exceptions)
+- Wired into: evolver `apply_suggestion()`, persona `scan_personas_dir()` YAML loading, `create_freeform_persona()` goal scanning, `synthesize_skill()`; 59 tests
+
+### Added — Longitudinal evolver impact analysis
+- `scan_evolver_impact()`: for each EVOLVER_APPLIED captain's log event, compare stuck_rate before vs after in a lookahead window
+- `format_impact_summary()` table output; `poe-evolver impact` CLI subcommand
+- `run_evolver()` now warns on degraded suggestions in impact check block; 9 tests
+
+### Changed — Harness architecture spectrum
+- Friction scan wired into inspector heartbeat tick (no LLM, alongside `run_inspector()`)
+- Inspector friction summary injected into quality gate Pass 1 user message
+
+---
+
+## [1.13.0] - 2026-04-14
+
+Sessions 24–25 (K4 knowledge write path, repo scan, BLE goal rewriter, SIGNALS.md).
+
+### Added — K4 knowledge write path
+- `src/knowledge_bridge.py`: `outcome_to_knowledge()` heuristic + LLM extraction of insight/principle/pattern nodes
+- Dedup via Jaccard ≥0.7 on titles; `upsert_knowledge_from_candidate()` updates confidence on re-validation
+- `record_skill_evolution()` wired into evolver promote/demote paths; `validate_principle()` bidirectional
+- `reflect_and_record()` calls `outcome_to_knowledge()` as non-blocking hook (fail-open); 27 tests
+
+### Added — Repo stack auto-detection
+- `src/repo_scan.py`: 50+ file indicators, deep-scans requirements.txt/package.json for frameworks
+- Wired into `_build_loop_context()` via project slug heuristic + `--repo` CLI flag; 53 tests
+
+### Added — BLE goal rewriter
+- `rewrite_imperative_goal()` in `intent.py`: strips prescribed execution steps, rewrites as outcome-focused
+- Wired into AGENDA path before clarity check; `_IMPERATIVE_MARKERS` heuristic avoids LLM cost for clean goals; 15 tests
+
+### Added — SIGNALS.md evolver alignment
+- `_load_user_signals()` reads `user/SIGNALS.md`; `scan_outcomes_for_signals()` passes user research priorities as context when proposing sub-missions; 5 tests
+
+---
+
+## [1.12.0] - 2026-04-14
+
+Sessions 22–23 (cross-backend failover, hardening, LoopStateMachine, memory dedup, K-stage input classification).
+
+### Added — Cross-backend failover (FailoverAdapter)
+- `build_adapter("auto")` returns `FailoverAdapter` when multiple backends available; tries each in priority order on 402/401/403/5xx
+- Single-backend case returns adapter directly (no overhead); 14 tests
+
+### Added — LoopStateMachine conversion
+- `LoopStateMachine` inherits `LoopContext`; `set_phase` is an instance method
+- `_initialize_loop` creates `LoopStateMachine()` instead of `LoopContext()`; 6 call sites updated + 8 test functions; +1 subclass check test
+
+### Added — Input classification in captain's log
+- `classify_input_type()` in `captains_log.py` (url/code/structured_data/plain_text)
+- `INPUT_MISMATCH` + `METACOGNITIVE_DECISION` event constants; `update_skill_utility()` logs `INPUT_MISMATCH` on domain mismatch; 9 tests; EVENT_TYPES 28→30
+
+### Fixed — Hardening (sessions 22–23)
+- 11 unlocked bare-append JSONL paths converted to `locked_append()` (+5 tests)
+- Stale test skills in workspace: `poe-doctor --cleanup-skills` detects hash mismatches; ran on live workspace (15 stale + 2 dups removed); 6 tests
+- Constraint false-positive on step descriptions: `hitl_policy(is_description=True)` downgrades DESTROY→WRITE for planner-generated step text; 3 tests
+- Event-driven subprocess wakeup: `post_heartbeat_event("loop_done")` after loop lock release; 3 tests
+- Director persona gap analysis: `scan_persona_gaps()` → persona_authoring Suggestions; 6 tests
+- Evolver confidence calibration: `_record_suggestion_outcomes()` + `scan_suggestion_outcomes()` wired; 6 tests
+- Inspector dual report classes documented (InspectorReport vs InspectionReport — separate by design)
+- Lesson deduplication: `deduplicate_lessons()` two-pass (exact + Jaccard ≥0.8); `poe-doctor --cleanup-lessons`; 5 tests
+- Phase audit verified phases 44–62: all implementations confirmed real, no phantom phases
+
+---
+
 ## [1.11.2] - 2026-04-09
 
 Tool-cost reporting ported into the canonical orchestration repo.
