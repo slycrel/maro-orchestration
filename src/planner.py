@@ -205,6 +205,16 @@ DECOMPOSE_SYSTEM = textwrap.dedent("""\
      "Read I/O modules [after:1]",
      "Synthesize findings [after:2,3]"]
 
+    STEP DESCRIPTION STYLE:
+    Describe the TASK or OUTCOME, not the shell commands to accomplish it.
+    BAD:  "Clone repo (rm -rf first to clean up)"
+    BAD:  "Run git clone https://... && cd ... && npm install"
+    GOOD: "Clone the repository and install dependencies"
+    GOOD: "Set up the project workspace"
+    The execution agent will decide how to accomplish the task. Don't embed
+    shell commands in step text — they confuse the safety layer and make steps
+    fragile if the environment differs.
+
     OUTPUT FORMAT:
     Respond ONLY with a JSON array of step strings. No prose, no explanation.
     Each step is ONE sentence under 20 words — a precise work order for an execution agent.

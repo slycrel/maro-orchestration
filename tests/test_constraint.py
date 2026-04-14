@@ -332,6 +332,31 @@ def test_hitl_policy_flags_are_dicts():
         assert "risk" in p["flags"][0]
 
 
+def test_hitl_policy_description_destroys_downgraded_to_write():
+    """DESTROY tier downgrades to WRITE when is_description=True (planner step text)."""
+    p = hitl_policy("Clone repo (rm -rf first to clean up)", is_description=True)
+    # Should warn, not block
+    assert p["tier"] != ACTION_TIER_DESTROY
+    assert p["allowed"] is True
+    assert p["gate"] in ("warn", "none")
+
+
+def test_hitl_policy_description_false_still_blocks_destroy():
+    """Default is_description=False preserves DESTROY-tier blocking behavior."""
+    p = hitl_policy("rm -rf /var/log/old/ and clean up")
+    assert p["tier"] == ACTION_TIER_DESTROY
+    assert p["allowed"] is False
+    assert p["gate"] == "block"
+
+
+def test_hitl_policy_description_downgrade_logs_debug(caplog):
+    """Downgrade of DESTROY→WRITE is logged at DEBUG level."""
+    import logging
+    with caplog.at_level(logging.DEBUG, logger="poe.constraint"):
+        hitl_policy("Clone repo (rm -rf first)", is_description=True)
+    assert any("downgrade" in r.message.lower() for r in caplog.records)
+
+
 # ---------------------------------------------------------------------------
 # Phase 59: ViolationType enum + ViolationReport (NeMo DataDesigner steal)
 # ---------------------------------------------------------------------------

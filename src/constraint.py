@@ -611,7 +611,7 @@ def classify_action_tier(step_text: str, goal: str = "") -> str:
     return ACTION_TIER_READ
 
 
-def hitl_policy(step_text: str, goal: str = "") -> dict:
+def hitl_policy(step_text: str, goal: str = "", *, is_description: bool = False) -> dict:
     """Return a combined HITL + constraint policy decision for a step.
 
     Runs both the existing constraint checks (risk level) and the semantic
@@ -628,9 +628,34 @@ def hitl_policy(step_text: str, goal: str = "") -> dict:
     The ``allowed`` field is False when *either* the constraint harness raises
     HIGH or the tier is DESTROY.  The gate field is the *stricter* of the two
     signals (tier gate vs risk-derived gate).
+
+    Args:
+        is_description: Set True when scanning a planner-generated step description
+            (not actual LLM tool-call output). DESTROY tier is downgraded to MEDIUM
+            (warn instead of block) because the description reflects planning intent,
+            not a verified execution command — the LLM may choose a safe approach.
     """
     constraint_result = check_step_constraints(step_text, goal)
     tier = classify_action_tier(step_text, goal)
+
+    # Soften DESTROY tier and HIGH risk for step descriptions: the decomposer
+    # may include shell command fragments like "(rm -rf first)" as clarifying
+    # notes, but the execution agent will decide how to accomplish the task
+    # safely.  Blocking here loses work; warning surfaces the concern without
+    # halting.  Both the tier AND the risk level are downgraded so that neither
+    # independent path can block.
+    if is_description and (tier == ACTION_TIER_DESTROY or constraint_result.risk_level == "HIGH"):
+        if tier == ACTION_TIER_DESTROY:
+            tier = ACTION_TIER_WRITE  # downgrade → warn gate, not block
+        # Cap risk at MEDIUM — HIGH blocks even for WRITE/READ tiers
+        if constraint_result.risk_level == "HIGH":
+            constraint_result = ConstraintResult(
+                allowed=True,
+                risk_level="MEDIUM",
+                flags=constraint_result.flags,
+            )
+        log.debug("hitl_policy: DESTROY/HIGH downgraded for step description: %r", step_text[:80])
+
     tier_gate = _TIER_GATE[tier]
 
     # Derive a gate from risk level for comparison.

@@ -604,10 +604,13 @@ def execute_step(
 
     ancestry_block = f"\n\n{ancestry_context}" if ancestry_context else ""
 
-    # Phase 35 P1/P2: HITL constraint check — block/warn before any LLM call
+    # Phase 35 P1/P2: HITL constraint check — block/warn before any LLM call.
+    # is_description=True: this is a planner-generated step description, not
+    # actual LLM tool-call output. DESTROY tier downgrades to MEDIUM (warn)
+    # so decomposer hints like "(rm -rf first)" don't block the whole step.
     try:
         from constraint import hitl_policy, ACTION_TIER_DESTROY, ACTION_TIER_EXTERNAL, ACTION_TIER_WRITE
-        _hp = hitl_policy(step_text, goal=goal)
+        _hp = hitl_policy(step_text, goal=goal, is_description=True)
         log.debug("step %d constraint: tier=%s risk=%s allowed=%s",
                   step_num, _hp["tier"], _hp["risk_level"], _hp["allowed"])
         if not _hp["allowed"]:
