@@ -353,6 +353,22 @@ Real findings from the run — hallucinations already vetted and discarded:
 
 - [ ] **Kronos financial foundation model** — Nav Toor (@heynavtoor). Open-source time-series model trained on 12B candlestick records from 45 exchanges, 93% more accurate than leading models, zero-shot across any asset/timeframe, 4M–499M param sizes. Available on HuggingFace. **Watch list — if Polymarket research resumes, evaluate as price-prediction layer instead of LLM-based price inference.** Source: @heynavtoor.
 
+### From 18-link research runs (2026-04-14, session 30)
+
+Full reports: `docs/research/ai-agent-memory-synthesis.md`, `docs/research/ai-agent-memory-steal-list.md`, `docs/research/x-posts-steal-list-20260414.md`
+
+- [ ] **Proactive memory injection at loop entry** — Engramme (@svpino) architecture: memories surface automatically without explicit query. Portable to Poe: call `knowledge_lens.rank()` at `_build_loop_context()` entry, inject top-3 nodes into system context before step execution. ~10 lines, no new infrastructure. **Priority 8/10 — zero infra cost, direct improvement to memory utilization.** Source: @svpino/Engramme.
+
+- [ ] **synthesize_skill() 3-gate pre-promotion check** — Anthropic engineers' quality bar for Claude Skills (80K+ skills, most poorly built). Three failure modes → three gates before score check: (1) trigger precision — must fire 0 times on 10 off-target inputs; (2) output schema — must define and validate structure; (3) edge case coverage — must pass ≥3 adversarial cases. **Priority 7/10 — directly applicable to evolver.py:synthesize_skill(), high-value for skill quality.** Source: @av1dlive/@eng_khairallah1.
+
+- [ ] **Eval harness + holdout discipline** — evals = new training data (@realsigridjin/Better Harness). Reward-hacking risk: evolver currently evaluates on the same outcomes it was trained on. Fix: add train/holdout split to `run_nightly_eval()` → evolver validates on holdout set only. Prevents self-congratulatory loops where evolver improves its own eval metrics without improving real behavior. **Priority 6/10 — addresses reward-hacking as system matures.** Source: @realsigridjin.
+
+- [ ] **Harness hill-climbing as autonomous loop** — @ashpreetbedi/@mr_r0b0t: use eval benchmark scores as autonomous hill-climbing signal for harness improvement (LangChain TerminalBench 2.0: 52.8→66.5% with no model change). Poe has `eval.py` + `evolver.py` but they're not wired as an autonomous feedback loop. Fix: `run_nightly_eval()` → failure trace analysis → harness proposal → evolver suggestion → `_verify_post_apply`. **Priority 6/10 — closes the verify→learn loop that's currently 80% done.** Source: @ashpreetbedi + @Vtrivedy10.
+
+- [ ] **Associative JSONL memory links (related_ids)** — Engramme: associative recall surfaces neighboring memories without explicit query. Portable: add `related_ids` field to JSONL memory nodes; cosine-similarity pass in `reflect_and_record()` links new nodes to nearby existing ones; when a node is accessed, inject linked neighbors. Approximate associative recall at file-based scale. **Priority 5/10 — medium effort, enhances memory depth.** Source: @svpino/Engramme.
+
+- [ ] **Dumb loop audit (scaffolding designed to be removed)** — Alpha Batcher breakdown of Claude Code: Anthropic's deliberate "thin harness" philosophy. Each scaffold should pass the future-proof test: dropping in a more powerful model should improve performance WITHOUT requiring harness complexity changes. Run a scaffolding audit on agent_loop.py — label each check as load-bearing vs removable. Manus precedent: rebuilt agent 5× in 6 months, each rewrite removed complexity. **Priority 5/10 — strategic/architectural, no code cost.** Source: @alphabatcher/@akshay_pachaar.
+
 ### Grok Round 4 feedback (2026-04-07)
 - [x] **`poe evolver apply` CLI** — `poe-evolver list|apply|run` subcommands. `apply` supports interactive/--all/--dry-run/by-id modes. Registered as `poe-evolver` entry point. (2026-04-07)
 - [x] **`estimate_goal_scope` debug CLI** — `poe-preflight-stats --scope-check "goal"` prints scope + effect string. Registered as `poe-preflight-stats` entry point. (2026-04-07)
