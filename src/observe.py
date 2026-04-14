@@ -323,6 +323,45 @@ def _read_captain_log_entries(limit: int = 20) -> List[Dict[str, Any]]:
 # Renderers
 # ---------------------------------------------------------------------------
 
+def _read_suggestion_stats() -> Dict[str, Any]:
+    """Summarize evolver suggestions by category and status from suggestions.jsonl.
+
+    Returns:
+      total: int, by_category: {cat: count}, by_status: {status: count},
+      pending: int (status unknown/pending_human_review), applied: int.
+    """
+    try:
+        path = _memory_dir() / "suggestions.jsonl"
+        if not path.exists():
+            return {"total": 0, "by_category": {}, "by_status": {}, "pending": 0, "applied": 0}
+        by_cat: Dict[str, int] = {}
+        by_status: Dict[str, int] = {}
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                d = json.loads(line)
+                cat = d.get("category", "unknown")
+                status = d.get("status", "unknown")
+                by_cat[cat] = by_cat.get(cat, 0) + 1
+                by_status[status] = by_status.get(status, 0) + 1
+            except Exception:
+                pass
+        total = sum(by_cat.values())
+        pending = by_status.get("unknown", 0) + by_status.get("pending_human_review", 0)
+        applied = by_status.get("applied", 0)
+        return {
+            "total": total,
+            "by_category": by_cat,
+            "by_status": by_status,
+            "pending": pending,
+            "applied": applied,
+        }
+    except Exception:
+        return {"total": 0, "by_category": {}, "by_status": {}, "pending": 0, "applied": 0}
+
+
 def _age(iso_str: str) -> str:
     """Human-readable age from ISO timestamp."""
     try:
@@ -738,6 +777,11 @@ _DASHBOARD_HTML = """\
     <div id="eval-trend-status"></div>
   </div>
 
+  <div class="panel">
+    <h2>Evolver Suggestions</h2>
+    <div id="suggestion-stats"></div>
+  </div>
+
   <div class="panel full">
     <h2>Captain's Log <span style="font-size:11px;color:var(--dim);font-weight:normal">(recent self-improvement events)</span></h2>
     <div id="captain-log-status"></div>
@@ -985,6 +1029,27 @@ async function refresh() {
         </tr></thead><tbody>${rows}</tbody></table>`;
     }
 
+    // Evolver Suggestion Stats
+    const ss = d.suggestion_stats || {};
+    if (!ss.total) {
+      document.getElementById('suggestion-stats').innerHTML =
+        '<span class="idle">no suggestions yet</span>';
+    } else {
+      const cats = ss.by_category || {};
+      const pending = ss.pending || 0;
+      const applied = ss.applied || 0;
+      let catRows = Object.entries(cats).map(([cat, n]) =>
+        `<tr><td>${esc(cat)}</td><td style="text-align:right">${n}</td></tr>`
+      ).join('');
+      document.getElementById('suggestion-stats').innerHTML =
+        `<div style="display:flex;gap:2rem;margin-bottom:.5rem">
+           <div><strong>${ss.total}</strong> total</div>
+           <div>${badge(pending + ' pending', pending > 50 ? 'red' : pending > 10 ? 'yellow' : 'blue')}</div>
+           <div>${badge(applied + ' applied', 'green')}</div>
+         </div>
+         <table><thead><tr><th>Category</th><th style="text-align:right">Count</th></tr></thead><tbody>${catRows}</tbody></table>`;
+    }
+
     // Captain's Log
     const captainLog = d.captain_log || [];
     if (!captainLog.length) {
@@ -1052,6 +1117,7 @@ def _snapshot_json(events_limit: int = 50) -> dict:
     scheduler = _read_slow_scheduler()
     eval_trend = _read_eval_trend(limit=10)
     captain_log = _read_captain_log_entries(limit=20)
+    suggestion_stats = _read_suggestion_stats()
 
     events: List[dict] = []
     path = _events_path()
@@ -1080,6 +1146,7 @@ def _snapshot_json(events_limit: int = 50) -> dict:
         "events": events,
         "eval_trend": eval_trend,
         "captain_log": captain_log,
+        "suggestion_stats": suggestion_stats,
     }
 
 

@@ -835,3 +835,64 @@ class TestCaptainLogDashboard:
         import observe
         assert "captain-log-status" in observe._DASHBOARD_HTML
         assert "Captain" in observe._DASHBOARD_HTML
+
+
+class TestSuggestionStats:
+    """Tests for _read_suggestion_stats."""
+
+    @pytest.fixture(autouse=True)
+    def _mem(self, tmp_path, monkeypatch):
+        mem = tmp_path / "memory"
+        mem.mkdir()
+        monkeypatch.setenv("POE_MEMORY_DIR", str(mem))
+        self._mem_path = mem
+
+    def test_empty_when_no_file(self):
+        import observe
+        stats = observe._read_suggestion_stats()
+        assert stats["total"] == 0
+        assert stats["pending"] == 0
+        assert stats["applied"] == 0
+
+    def test_counts_by_category(self):
+        import json, observe
+        path = self._mem_path / "suggestions.jsonl"
+        entries = [
+            {"category": "skill_mutation", "status": "applied"},
+            {"category": "skill_mutation", "status": "applied"},
+            {"category": "inspection_finding", "status": "unknown"},
+            {"category": "inspection_finding", "status": "unknown"},
+            {"category": "inspection_finding", "status": "unknown"},
+        ]
+        path.write_text("\n".join(json.dumps(e) for e in entries))
+        stats = observe._read_suggestion_stats()
+        assert stats["total"] == 5
+        assert stats["by_category"]["skill_mutation"] == 2
+        assert stats["by_category"]["inspection_finding"] == 3
+
+    def test_pending_counts_unknown_and_pending_human_review(self):
+        import json, observe
+        path = self._mem_path / "suggestions.jsonl"
+        entries = [
+            {"category": "x", "status": "unknown"},
+            {"category": "x", "status": "pending_human_review"},
+            {"category": "x", "status": "applied"},
+        ]
+        path.write_text("\n".join(json.dumps(e) for e in entries))
+        stats = observe._read_suggestion_stats()
+        assert stats["pending"] == 2
+        assert stats["applied"] == 1
+
+    def test_snapshot_includes_suggestion_stats(self):
+        import observe
+        from unittest.mock import patch
+        _mock = {"total": 10, "by_category": {}, "by_status": {}, "pending": 8, "applied": 2}
+        with patch("observe._read_suggestion_stats", return_value=_mock):
+            data = observe._snapshot_json()
+        assert "suggestion_stats" in data
+        assert data["suggestion_stats"]["total"] == 10
+
+    def test_dashboard_html_contains_suggestion_panel(self):
+        import observe
+        assert "suggestion-stats" in observe._DASHBOARD_HTML
+        assert "Evolver Suggestions" in observe._DASHBOARD_HTML
