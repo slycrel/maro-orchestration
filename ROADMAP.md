@@ -213,11 +213,13 @@ Self-review identified 15 integration tests needed that aren't covered by the un
 **Shipped (session 23, 2026-04-14):** +5 tests in `tests/integration/test_integration.py`
 - `TestCheckpointRecovery` (3 tests): checkpoint written per step, resume skips completed steps, missing checkpoint starts fresh
 - `TestMemoryInjection` (2 tests): lessons written during loop are retrievable, lessons inject into decompose context
-- Total integration tests: 42
+
+**Shipped (session 23 continued, 2026-04-14):** +7 tests in `tests/integration/test_integration.py`
+- `TestAgendaLaneHeartbeat` (3 tests): enqueue_goal → drain_task_store flow, empty queue returns 0, max_tasks limit respected
+- `TestFailoverAdapterChain` (4 tests): 402 triggers failover, 400 propagates, first success no switch, all-fail propagates last
+- Total integration tests: 49
 
 **Remaining candidate items:**
-- AGENDA lane end-to-end: enqueue → heartbeat picks up → agent_loop runs → outcome recorded
-- Adapter switching: Anthropic API → OpenRouter fallback → subprocess fallback chain
 - Cross-agent claim challenge: persona B challenges worker claim; disagreement triggers retry (deferred from Phase 60)
 
 

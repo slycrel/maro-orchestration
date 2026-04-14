@@ -543,3 +543,187 @@ class TestMemoryInjection:
         )
         assert has_lesson_injection, \
             "decompose prompt should contain lesson injection from prior run"
+
+
+# ---------------------------------------------------------------------------
+# Phase 61: AGENDA lane heartbeat e2e
+# ---------------------------------------------------------------------------
+
+class TestAgendaLaneHeartbeat:
+    """Phase 61: full AGENDA path — enqueue_goal → drain_task_store → task done."""
+
+    def _setup(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+
+    def test_enqueued_task_is_processed_by_drain(self, monkeypatch, tmp_path):
+        """enqueue_goal() creates a task; drain_task_store() executes it end-to-end."""
+        self._setup(monkeypatch, tmp_path)
+        _suppress_side_effects(monkeypatch)
+
+        import agent_loop as _al
+        monkeypatch.setattr(_al, "reflect_and_record", lambda *a, **kw: None, raising=False)
+        import skills as _skills
+        monkeypatch.setattr(_skills, "extract_skills", lambda *a, **kw: [], raising=False)
+
+        from handle import enqueue_goal, drain_task_store
+        from task_store import list_tasks
+
+        job_id = enqueue_goal("summarize emerging AI research trends")
+
+        # Task should be queued
+        queued = list_tasks(status_filter="queued")
+        assert any(t["job_id"] == job_id for t in queued), "task should be queued before drain"
+
+        # Drain with dry_run=True so no real LLM calls are made
+        processed = drain_task_store(dry_run=True)
+        assert processed >= 1, "drain should process at least 1 task"
+
+        # Task should no longer be queued (moved to done/archive)
+        still_queued = [t for t in list_tasks(status_filter="queued") if t["job_id"] == job_id]
+        assert len(still_queued) == 0, "processed task should not remain in queue"
+
+    def test_drain_returns_zero_when_queue_empty(self, monkeypatch, tmp_path):
+        """drain_task_store() returns 0 with no queued tasks."""
+        self._setup(monkeypatch, tmp_path)
+        _suppress_side_effects(monkeypatch)
+
+        from handle import drain_task_store
+        processed = drain_task_store(dry_run=True)
+        assert processed == 0
+
+    def test_drain_respects_max_tasks_limit(self, monkeypatch, tmp_path):
+        """drain_task_store() processes at most max_tasks tasks per call."""
+        self._setup(monkeypatch, tmp_path)
+        _suppress_side_effects(monkeypatch)
+
+        import agent_loop as _al
+        monkeypatch.setattr(_al, "reflect_and_record", lambda *a, **kw: None, raising=False)
+        import skills as _skills
+        monkeypatch.setattr(_skills, "extract_skills", lambda *a, **kw: [], raising=False)
+
+        from handle import enqueue_goal, drain_task_store
+
+        # Enqueue 3 tasks
+        for i in range(3):
+            enqueue_goal(f"research task {i}: analyze market segment")
+
+        # Drain with limit=1 — only 1 should be processed per call
+        processed = drain_task_store(dry_run=True, max_tasks=1)
+        assert processed == 1, f"max_tasks=1 should process exactly 1 task, got {processed}"
+
+
+# ---------------------------------------------------------------------------
+# Phase 61: Adapter failover e2e chain
+# ---------------------------------------------------------------------------
+
+class TestFailoverAdapterChain:
+    """Phase 61: FailoverAdapter tries backends in order; skips on 402/5xx."""
+
+    def test_failover_skips_to_second_on_402(self):
+        """When first adapter raises 402, FailoverAdapter succeeds on second."""
+        from llm import FailoverAdapter, LLMResponse
+
+        call_log = []
+
+        class FirstAdapter:
+            model_key = "primary"
+            backend = "primary"
+            def complete(self, messages, **kwargs):
+                call_log.append("first")
+                raise RuntimeError("402 payment required: quota exceeded")
+
+        class SecondAdapter:
+            model_key = "fallback"
+            backend = "fallback"
+            def complete(self, messages, **kwargs):
+                call_log.append("second")
+                return LLMResponse(
+                    content="done via fallback",
+                    stop_reason="end_turn",
+                    input_tokens=10,
+                    output_tokens=5,
+                )
+
+        adapter = FailoverAdapter([FirstAdapter(), SecondAdapter()])
+        result = adapter.complete([])
+
+        assert call_log == ["first", "second"]
+        assert "fallback" in result.content
+
+    def test_failover_propagates_non_failover_error(self):
+        """A 400 (bad request) error propagates immediately without trying next adapter."""
+        from llm import FailoverAdapter
+
+        call_log = []
+
+        class BadRequestAdapter:
+            model_key = "primary"
+            backend = "primary"
+            def complete(self, messages, **kwargs):
+                call_log.append("first")
+                raise ValueError("400 bad request: invalid tool schema")
+
+        class SecondAdapter:
+            model_key = "fallback"
+            backend = "fallback"
+            def complete(self, messages, **kwargs):
+                call_log.append("second")  # should never run
+
+        adapter = FailoverAdapter([BadRequestAdapter(), SecondAdapter()])
+
+        with pytest.raises(ValueError, match="400 bad request"):
+            adapter.complete([])
+
+        assert call_log == ["first"], "non-failover error should not try second adapter"
+
+    def test_failover_first_succeeds_no_switch(self):
+        """When first adapter succeeds, no failover occurs."""
+        from llm import FailoverAdapter, LLMResponse
+
+        call_log = []
+
+        class GoodAdapter:
+            model_key = "primary"
+            backend = "primary"
+            def complete(self, messages, **kwargs):
+                call_log.append("first")
+                return LLMResponse(
+                    content="success on first",
+                    stop_reason="end_turn",
+                    input_tokens=10,
+                    output_tokens=5,
+                )
+
+        class FallbackAdapter:
+            model_key = "fallback"
+            backend = "fallback"
+            def complete(self, messages, **kwargs):
+                call_log.append("second")
+
+        adapter = FailoverAdapter([GoodAdapter(), FallbackAdapter()])
+        result = adapter.complete([])
+
+        assert call_log == ["first"]
+        assert result.content == "success on first"
+
+    def test_failover_exhausts_all_then_raises(self):
+        """When all adapters fail with failover errors, the last exception propagates."""
+        from llm import FailoverAdapter
+
+        call_log = []
+
+        class FailingAdapter:
+            def __init__(self, name):
+                self.model_key = name
+                self.backend = name
+            def complete(self, messages, **kwargs):
+                call_log.append(self.model_key)
+                raise RuntimeError(f"503 service unavailable on {self.model_key}")
+
+        adapter = FailoverAdapter([FailingAdapter("a"), FailingAdapter("b")])
+
+        with pytest.raises(RuntimeError, match="503"):
+            adapter.complete([])
+
+        assert call_log == ["a", "b"], "both adapters should have been tried"
