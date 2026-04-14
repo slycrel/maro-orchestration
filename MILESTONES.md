@@ -2,18 +2,24 @@
 
 What to do next, in what order. Updated each session. Strategic phases live in ROADMAP.md; deferred ideas live in BACKLOG.md. This file is the bridge — the executable queue.
 
-Last updated: 2026-04-14 (session 21 continued — budget bump, exception sweep, timeout fix, artifact cleanup, eval flywheel hardening)
+Last updated: 2026-04-14 (session 22 — stale hash cleanup, event-driven wakeup, constraint false-positive fix, FailoverAdapter)
 
 ---
-
-Last updated: 2026-04-14 (session 21)
 
 ## Next Up
 
 1. **Memory Stage 3→4 (verify extraction in live runs)** — Silent failure bug fixed (s.summary → s.result, exception now logged). Next: run a real goal and confirm skills are being extracted to `~/.poe/workspace/skills/`. Check evolver's `synthesize_skill` path works end-to-end.
 2. **K2 follow-up: Import links collection** — Knowledge node infrastructure built. Next: import enriched posts from slycrel/link-farm (300+ curated links).
-3. **Eval flywheel hardening** — Failure clustering, train/test split, pass-rate dashboard.
-4. **Event-driven subprocess wakeup** — Replace polling with asyncio.Queue signal.
+3. **Director persona authoring skill** — Trigger: N+1 dispatches of a recurring role with no matching persona. Action: spawn sub-goal to author `personas/<slug>.md`. See BACKLOG P2.
+4. **Evolver confidence calibration** — Self-reported confidence never validated against real outcomes. Track outcome of each applied suggestion, compute empirical confidence. P2.
+5. **11 unlocked bare-append JSONL paths** — captain-log, outcomes, step-costs, etc. do bare `open('a').write()`. Safe for single-writer but will corrupt under concurrent appends. P3.
+
+## Done (session 22, 2026-04-14 — stale hash cleanup, event-driven wakeup, constraint fix, FailoverAdapter)
+
+- [x] **Cross-backend failover on 4xx/5xx (FailoverAdapter)** — `build_adapter("auto")` now returns `FailoverAdapter` when multiple backends are available. Tries each in priority order; 402/401/403/5xx errors trigger failover to next backend. Single-backend case returns adapter directly (no overhead). 14 tests. Closes BACKLOG P2.
+- [x] **Constraint false-positive on step descriptions** — Two-part fix: (a) decompose prompt gets STEP DESCRIPTION STYLE section — "describe the task, not shell commands"; (b) `hitl_policy(is_description=True)` downgrades DESTROY tier → WRITE and caps HIGH risk at MEDIUM for step descriptions. Step_exec.py passes `is_description=True`. 3 tests. Closes BACKLOG item.
+- [x] **Event-driven subprocess wakeup** — `run_agent_loop` calls `post_heartbeat_event("loop_done", payload=project)` after releasing the loop lock. Heartbeat's `_wakeup_event.wait()` unblocks immediately → next task picked up in near-zero time. 3 tests. Closes MILESTONES item.
+- [x] **Stale test skills in workspace** — `poe-doctor --cleanup-skills` now detects skills where `compute_skill_hash(skill) != stored_hash` (test fixtures that leaked in). Ran on live workspace: 15 stale-hash + 2 duplicates removed, 14 real skills remain. `_skill_hash_is_stale()` helper for testability. `skills_path` kwarg for testing. 6 tests. Closes BACKLOG item.
 
 ## Done (session 21, 2026-04-14 — budget bump + exception sweep + LoopStateMachine + Stage 2→3 pipeline + skill extraction fix + NOW→Director escalation)
 
