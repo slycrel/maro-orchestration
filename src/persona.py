@@ -351,7 +351,20 @@ def scan_personas_dir(
         for p in yaml_files:
             try:
                 import yaml as _yaml
-                data = _yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+                _raw_yaml = p.read_text(encoding="utf-8")
+                # Injection guard: scan persona YAML before loading into PersonaSpec
+                try:
+                    from injection_guard import scan_persona_yaml as _scan_py
+                    _ig = _scan_py(_raw_yaml, source=str(p))
+                    if not _ig.is_clean:
+                        log.warning(
+                            "scan_personas_dir: injection risk in %s (%s risk) — skipping",
+                            p.name, _ig.risk_level,
+                        )
+                        continue
+                except Exception:
+                    pass  # fail-open: load without injection check if guard unavailable
+                data = _yaml.safe_load(_raw_yaml) or {}
                 name = str(data.get("name") or p.stem)
                 spec = PersonaSpec(
                     name=name,
@@ -940,6 +953,21 @@ def create_freeform_persona(
     Returns:
         PersonaSpec for the newly created persona.
     """
+    # Injection guard: goal text becomes the persona's system_prompt — scan it first
+    try:
+        from injection_guard import scan_content as _scan_content
+        _ig_report = _scan_content(goal, source="user_goal")
+        if not _ig_report.is_clean:
+            log.warning(
+                "create_freeform_persona: injection risk in goal (%s findings, %s risk) — "
+                "using safe fallback goal",
+                len(_ig_report.findings),
+                _ig_report.risk_level,
+            )
+            goal = "[goal redacted — injection risk detected]"
+    except Exception as _ig_exc:
+        log.debug("injection_guard scan skipped in create_freeform_persona: %s", _ig_exc)
+
     if personas_dir is None:
         personas_dir = _default_personas_dir()
 
