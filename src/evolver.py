@@ -298,6 +298,41 @@ def _apply_suggestion_action(d: dict) -> None:
             with open(_dynamic_constraints_path(), "a", encoding="utf-8") as f:
                 f.write(json.dumps(entry) + "\n")
 
+        elif category == "sub_mission":
+            # Enqueue the suggested goal for execution on the next heartbeat tick.
+            # Gated by evolver.auto_enqueue_signals (default False) — opt-in only.
+            # When off, the suggestion is logged to playbook for human review.
+            try:
+                from config import get as _cfg_get
+                _auto_enqueue = _cfg_get("evolver.auto_enqueue_signals", False)
+                if _auto_enqueue:
+                    from handle import enqueue_goal as _enqueue_goal
+                    _job_id = _enqueue_goal(
+                        suggestion_text,
+                        reason=f"evolver signal ({target}): {suggestion_text[:80]}",
+                    )
+                    log.info(
+                        "evolver sub_mission enqueued job_id=%s confidence=%.2f",
+                        _job_id, confidence,
+                    )
+                else:
+                    # Not auto-enqueuing — record to playbook so the human can review
+                    try:
+                        from playbook import append_to_playbook
+                        append_to_playbook(
+                            f"[Signal] {suggestion_text[:200]}",
+                            section="Signals",
+                            source=f"evolver:{suggestion_id}",
+                        )
+                    except Exception:
+                        pass
+                    log.info(
+                        "evolver sub_mission held for review (auto_enqueue_signals=false): %s",
+                        suggestion_text[:80],
+                    )
+            except Exception as _sm_exc:
+                log.warning("evolver sub_mission action failed: %s", _sm_exc)
+
         # observation: no action needed
 
         # Captain's log: evolver applied a suggestion

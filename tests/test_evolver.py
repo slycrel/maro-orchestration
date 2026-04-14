@@ -1153,6 +1153,93 @@ class TestRunEvolverSignalScan:
 
 
 # ---------------------------------------------------------------------------
+# sub_mission auto-enqueue via _apply_suggestion_action
+# ---------------------------------------------------------------------------
+
+class TestSubMissionAutoEnqueue:
+    """_apply_suggestion_action for sub_mission category: enqueue vs hold for review."""
+
+    def _make_sub_mission_dict(self, suggestion_text="Analyze market trends"):
+        return {
+            "suggestion_id": "sig-test01",
+            "category": "sub_mission",
+            "target": "opportunity",
+            "suggestion": suggestion_text,
+            "confidence": 0.85,
+            "applied": False,
+        }
+
+    def test_auto_enqueue_when_enabled(self, monkeypatch, tmp_path):
+        """When evolver.auto_enqueue_signals=True, sub_mission is enqueued via enqueue_goal."""
+        monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+
+        enqueued = []
+        monkeypatch.setattr("evolver._cfg_get" if hasattr(__import__("evolver"), "_cfg_get") else
+                            "config.get", lambda k, d=None: True if k == "evolver.auto_enqueue_signals" else d,
+                            raising=False)
+
+        # Patch at the import level
+        import evolver as _ev
+        import config as _cfg
+        monkeypatch.setattr(_cfg, "get", lambda k, d=None: True if k == "evolver.auto_enqueue_signals" else d)
+
+        def _fake_enqueue(goal, *, reason="", blocked_by=None):
+            enqueued.append(goal)
+            return "job-fake-01"
+        import handle as _handle
+        monkeypatch.setattr(_handle, "enqueue_goal", _fake_enqueue)
+
+        from evolver import _apply_suggestion_action
+        _apply_suggestion_action(self._make_sub_mission_dict("Research crypto arbitrage patterns"))
+
+        assert len(enqueued) == 1
+        assert "arbitrage" in enqueued[0]
+
+    def test_hold_for_review_when_disabled(self, monkeypatch, tmp_path):
+        """When evolver.auto_enqueue_signals=False (default), sub_mission goes to playbook."""
+        monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+
+        enqueued = []
+        import handle as _handle
+        monkeypatch.setattr(_handle, "enqueue_goal", lambda *a, **kw: enqueued.append(a) or "job-x")
+
+        import config as _cfg
+        monkeypatch.setattr(_cfg, "get", lambda k, d=None: False if k == "evolver.auto_enqueue_signals" else d)
+
+        playbook_entries = []
+        try:
+            import playbook as _pb
+            monkeypatch.setattr(_pb, "append_to_playbook", lambda text, section="", source="": playbook_entries.append(text))
+        except ImportError:
+            pass
+
+        from evolver import _apply_suggestion_action
+        _apply_suggestion_action(self._make_sub_mission_dict("Research crypto arbitrage patterns"))
+
+        # Should NOT enqueue
+        assert len(enqueued) == 0
+        # Should record to playbook (if playbook available)
+        if playbook_entries:
+            assert any("arbitrage" in e for e in playbook_entries)
+
+    def test_default_is_hold_not_enqueue(self, monkeypatch, tmp_path):
+        """Default config (no key set) does not auto-enqueue."""
+        monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+
+        enqueued = []
+        import handle as _handle
+        monkeypatch.setattr(_handle, "enqueue_goal", lambda *a, **kw: enqueued.append(a) or "job-x")
+
+        from evolver import _apply_suggestion_action
+        _apply_suggestion_action(self._make_sub_mission_dict("Analyze market gaps"))
+
+        assert len(enqueued) == 0, "default should NOT auto-enqueue sub_missions"
+
+
+# ---------------------------------------------------------------------------
 # scan_calibration_log
 # ---------------------------------------------------------------------------
 
