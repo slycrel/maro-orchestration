@@ -8,7 +8,8 @@ Last updated: 2026-04-13 (session 19, continued)
 
 ## Next Up
 
-1. **Wire diagnosis into mid-loop blocking** — Phase 44-45 diagnosis only fires at loop-end. Should also trigger during step blocking to inform retry-vs-redecompose decisions. Phase 62 `_handle_blocked_step` uses heuristics; should consult `diagnose_loop()` / `plan_recovery()` for richer decisions.
+1. **Recovery mid-loop apply** — Gap 2 from phase audit. `plan_recovery()` auto-apply still runs at loop-end only; for complex failures this wastes all first-loop work. Trigger recovery mid-loop when convergence says a step isn't converging, applying to current state not fresh restart.
+2. **Phase 59 real cost computation** — `record_skill_outcome()` currently gets `cost_usd=0.0`. Plumb token counts × model pricing from metrics so skill stats actually reflect spend.
 
 ## Queued
 
@@ -28,6 +29,7 @@ Last updated: 2026-04-13 (session 19, continued)
 
 ## Done (session 19, continued)
 
+- [x] **Wire diagnosis into mid-loop blocking** — `_handle_blocked_step` now consults `diagnose_loop()` after 2 retries. Maps 4 failure classes to targeted actions: retry_churn→redecompose, decomposition_too_broad→redecompose, empty_model_output→retry-with-tool-call-hint, constraint_false_positive→retry. Closes Gap 1 from PHASE_AUDIT. +8 tests. Commit edaceda.
 - [x] **Clean workspace skills** — 41 orphan skills in ~/.poe/workspace/memory/skills.jsonl, 4 content_hash groups with duplicates. One-shot cleanup (kept 31 unique), grouped by content_hash, scored by creation time + success metrics. Added `poe-doctor --cleanup-skills` flag. Reduces ~100 lines log spam per goal.
 - [x] **Add poe-doctor check for workspace skills duplicates** — Phase 62 enhancement, detects duplicate content_hash in workspace skills, reports findings with cleanup command. Validates dedup after each run.
 - [x] **Relax timing tolerance in DAG parallel test** — test_dag_executor.py::TestDagWithParsedDeps::test_parallel_after_tags timing flake (25ms→50ms window). System scheduling variability allowed, parallelism still validated.
