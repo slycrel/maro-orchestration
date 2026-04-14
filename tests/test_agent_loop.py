@@ -1000,6 +1000,182 @@ def test_handle_blocked_step_network_timeout_still_retries():
 
 
 # ---------------------------------------------------------------------------
+# Phase 44+45 bridge: mid-loop diagnose_loop consultation
+# ---------------------------------------------------------------------------
+
+def _mk_diag(failure_class, evidence=None):
+    """Helper: build a LoopDiagnosis-like object."""
+    from introspect import LoopDiagnosis
+    return LoopDiagnosis(
+        loop_id="test-loop",
+        failure_class=failure_class,
+        severity="warning",
+        evidence=evidence or [],
+        recommendation="test",
+    )
+
+
+def test_diagnosis_retry_churn_triggers_redecompose(monkeypatch):
+    """After 2+ retries with retry_churn diagnosis → redecompose to break churn."""
+    import introspect
+    monkeypatch.setattr(introspect, "diagnose_loop", lambda _lid: _mk_diag("retry_churn"))
+
+    decision = _handle_blocked_step(
+        step_text="flaky step",
+        outcome={"stuck_reason": "reason A", "result": ""},
+        prior_retries=2,
+        adapter=None,
+        error_fingerprints=["a", "b", "c"],  # converging
+        replan_count=0,
+        loop_id="test-loop",
+    )
+    assert decision.retry is False
+    assert decision.redecompose is True
+    assert "retry_churn" in decision.metacognitive_reason
+
+
+def test_diagnosis_retry_churn_exhausted_marks_stuck(monkeypatch):
+    """retry_churn + replan_count at threshold → stuck (no infinite redecompose)."""
+    import introspect
+    monkeypatch.setattr(introspect, "diagnose_loop", lambda _lid: _mk_diag("retry_churn"))
+
+    decision = _handle_blocked_step(
+        step_text="flaky step",
+        outcome={"stuck_reason": "reason A", "result": ""},
+        prior_retries=2,
+        adapter=None,
+        error_fingerprints=["a", "b", "c"],
+        replan_count=2,  # at _REDECOMPOSE_THRESHOLD
+        loop_id="test-loop",
+    )
+    assert decision.retry is False
+    assert decision.redecompose is False
+    assert decision.loop_status == "stuck"
+    assert "retry_churn" in decision.metacognitive_reason
+
+
+def test_diagnosis_decomposition_too_broad_triggers_redecompose(monkeypatch):
+    """decomposition_too_broad diagnosis → redecompose, even if converging."""
+    import introspect
+    monkeypatch.setattr(
+        introspect, "diagnose_loop",
+        lambda _lid: _mk_diag("decomposition_too_broad"),
+    )
+    decision = _handle_blocked_step(
+        step_text="review the whole repo",
+        outcome={"stuck_reason": "token overflow", "result": ""},
+        prior_retries=2,
+        adapter=None,
+        error_fingerprints=["a", "b", "c"],
+        replan_count=0,
+        loop_id="test-loop",
+    )
+    assert decision.retry is False
+    assert decision.redecompose is True
+    assert "decomposition_too_broad" in decision.metacognitive_reason
+
+
+def test_diagnosis_empty_model_output_retry_with_hint(monkeypatch):
+    """empty_model_output diagnosis → retry with explicit tool-call hint."""
+    import introspect
+    monkeypatch.setattr(
+        introspect, "diagnose_loop",
+        lambda _lid: _mk_diag("empty_model_output"),
+    )
+    decision = _handle_blocked_step(
+        step_text="classify the result",
+        outcome={"stuck_reason": "empty output", "result": ""},
+        prior_retries=2,
+        adapter=None,
+        error_fingerprints=["a", "b", "c"],
+        loop_id="test-loop",
+    )
+    assert decision.retry is True
+    assert "complete_step" in decision.hint or "tool" in decision.hint.lower()
+    assert "empty_model_output" in decision.metacognitive_reason
+
+
+def test_diagnosis_healthy_falls_through_to_heuristic(monkeypatch):
+    """healthy diagnosis → no override; existing convergence heuristic decides."""
+    import introspect
+    monkeypatch.setattr(introspect, "diagnose_loop", lambda _lid: _mk_diag("healthy"))
+    decision = _handle_blocked_step(
+        step_text="do something",
+        outcome={"stuck_reason": "transient error", "result": ""},
+        prior_retries=2,
+        adapter=None,
+        error_fingerprints=["a", "b", "c"],  # converging → retry path
+        loop_id="test-loop",
+    )
+    # Convergence heuristic → retry (converging, under _RETRY_THRESHOLD=3)
+    assert decision.retry is True
+    assert "retry_churn" not in decision.metacognitive_reason
+    assert "decomposition_too_broad" not in decision.metacognitive_reason
+
+
+def test_diagnosis_not_consulted_below_threshold(monkeypatch):
+    """prior_retries < _DIAGNOSIS_RETRY_THRESHOLD → don't even call diagnose_loop."""
+    calls = []
+    import introspect
+
+    def _spy(_lid):
+        calls.append(_lid)
+        return _mk_diag("retry_churn")
+
+    monkeypatch.setattr(introspect, "diagnose_loop", _spy)
+    _handle_blocked_step(
+        step_text="do something",
+        outcome={"stuck_reason": "err", "result": ""},
+        prior_retries=0,
+        adapter=None,
+        error_fingerprints=["a"],
+        loop_id="test-loop",
+    )
+    assert calls == []  # not called — below threshold
+
+
+def test_diagnosis_no_loop_id_skips_consultation(monkeypatch):
+    """Empty loop_id → diagnose_loop not called (back-compat for tests)."""
+    calls = []
+    import introspect
+
+    def _spy(_lid):
+        calls.append(_lid)
+        return _mk_diag("retry_churn")
+
+    monkeypatch.setattr(introspect, "diagnose_loop", _spy)
+    _handle_blocked_step(
+        step_text="do something",
+        outcome={"stuck_reason": "err", "result": ""},
+        prior_retries=2,
+        adapter=None,
+        error_fingerprints=["a", "b", "c"],
+        loop_id="",  # empty
+    )
+    assert calls == []
+
+
+def test_diagnosis_exception_swallowed(monkeypatch):
+    """diagnose_loop raising → falls through silently to heuristic."""
+    import introspect
+
+    def _boom(_lid):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(introspect, "diagnose_loop", _boom)
+    # Should not raise — falls through to convergence heuristic
+    decision = _handle_blocked_step(
+        step_text="do something",
+        outcome={"stuck_reason": "err", "result": ""},
+        prior_retries=2,
+        adapter=None,
+        error_fingerprints=["a", "b", "c"],
+        loop_id="test-loop",
+    )
+    assert decision is not None
+
+
+# ---------------------------------------------------------------------------
 # _finalize_loop
 # ---------------------------------------------------------------------------
 

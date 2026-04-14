@@ -469,6 +469,7 @@ def _process_blocked_step(
         error_fingerprints=_fps,
         step_outcomes=step_outcomes,
         replan_count=replan_count,
+        loop_id=ctx.loop_id,
     )
 
     # Phase 62: Log metacognitive reasoning
@@ -2730,6 +2731,34 @@ def _generate_timeout_split(step_text: str, adapter) -> List[str]:
     return []
 
 
+_DIAGNOSIS_RETRY_THRESHOLD = 2  # retries before we consult diagnose_loop()
+
+
+def _consult_diagnosis(loop_id: str) -> Optional[tuple]:
+    """Mid-loop consultation of Phase 44 diagnose_loop() + Phase 45 plan_recovery().
+
+    Returns (failure_class, recovery_plan) if diagnosis classifies anything
+    actionable (non-healthy, with a recovery plan), else None.
+
+    Safe to call mid-loop — diagnose_loop() reads whatever events.jsonl has
+    been flushed so far (write_event is synchronous).
+    """
+    if not loop_id:
+        return None
+    try:
+        from introspect import diagnose_loop, plan_recovery
+        diag = diagnose_loop(loop_id)
+        if diag.failure_class == "healthy":
+            return None
+        plan = plan_recovery(diag)
+        if plan is None:
+            return None
+        return (diag.failure_class, plan)
+    except Exception as exc:
+        log.debug("mid-loop diagnosis consult failed: %s", exc)
+        return None
+
+
 def _handle_blocked_step(
     step_text: str,
     outcome: dict,
@@ -2739,6 +2768,7 @@ def _handle_blocked_step(
     error_fingerprints: Optional[List[str]] = None,
     step_outcomes: Optional[list] = None,
     replan_count: int = 0,
+    loop_id: str = "",
 ) -> _BlockDecision:
     """Decide what to do when a step returns status != 'done'.
 
@@ -2823,6 +2853,60 @@ def _handle_blocked_step(
             ),
             metacognitive_reason="timeout and split-recovery failed — terminal",
         )
+
+    # Phase 44+45 bridge: after N retries, consult the rich diagnosis
+    # taxonomy (10 failure classes) before falling back to the convergence
+    # heuristic. The diagnosis sees the whole loop trace — it can spot
+    # retry_churn, decomposition_too_broad, etc. that per-step heuristics miss.
+    if prior_retries >= _DIAGNOSIS_RETRY_THRESHOLD and loop_id:
+        _diag_result = _consult_diagnosis(loop_id)
+        if _diag_result is not None:
+            _fc, _plan = _diag_result
+            _meta = f"retries={prior_retries}, diag={_fc}, plan_action={_plan.action[:60]!r}"
+            if _fc == "retry_churn":
+                if replan_count < _REDECOMPOSE_THRESHOLD:
+                    log.info("diagnosis (retry_churn) — re-decomposing to break churn (%s)", _meta)
+                    return _BlockDecision(
+                        retry=False, hint="", loop_status="", stuck_reason="",
+                        redecompose=True,
+                        metacognitive_reason=f"diagnose_loop: retry_churn — redecompose ({_meta})",
+                    )
+                log.warning("diagnosis (retry_churn) — exhausted re-decompositions (%s)", _meta)
+                return _BlockDecision(
+                    retry=False, hint="", loop_status="stuck",
+                    stuck_reason=f"retry_churn after {replan_count} re-decompositions",
+                    metacognitive_reason=f"diagnose_loop: retry_churn exhausted ({_meta})",
+                )
+            if _fc == "decomposition_too_broad" and replan_count < _REDECOMPOSE_THRESHOLD:
+                log.info("diagnosis (decomposition_too_broad) — re-decomposing (%s)", _meta)
+                return _BlockDecision(
+                    retry=False, hint="", loop_status="", stuck_reason="",
+                    redecompose=True,
+                    metacognitive_reason=f"diagnose_loop: decomposition_too_broad ({_meta})",
+                )
+            if _fc == "empty_model_output" and prior_retries < _RETRY_THRESHOLD:
+                _hint_txt = (
+                    _plan.params.get("hint")
+                    or "You MUST call complete_step or flag_stuck. Do not return bare text."
+                )
+                log.info("diagnosis (empty_model_output) — retry with tool-call hint (%s)", _meta)
+                return _BlockDecision(
+                    retry=True, hint=_hint_txt, loop_status="", stuck_reason="",
+                    metacognitive_reason=f"diagnose_loop: empty_model_output — explicit tool-call hint ({_meta})",
+                )
+            if _fc == "constraint_false_positive" and prior_retries < _RETRY_THRESHOLD:
+                log.info("diagnosis (constraint_false_positive) — retry (%s)", _meta)
+                return _BlockDecision(
+                    retry=True,
+                    hint="[Constraint false-positive suspected; retrying with refreshed state]",
+                    loop_status="", stuck_reason="",
+                    metacognitive_reason=f"diagnose_loop: constraint_false_positive ({_meta})",
+                )
+            # Other classes (adapter_timeout, budget_exhaustion, setup_failure,
+            # artifact_missing, integration_drift, token_explosion) fall through
+            # to the convergence heuristic — they're either already handled by
+            # earlier special cases or lack a clear mid-loop action.
+            log.debug("diagnosis (%s) — no targeted mid-loop action; using heuristic (%s)", _fc, _meta)
 
     # Phase 62: Convergence-aware decision algorithm
     # (from zoom-metacognition research: Argyris double-loop / Boyd OODA)
