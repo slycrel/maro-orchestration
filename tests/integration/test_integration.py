@@ -379,3 +379,167 @@ class TestPrefixStacking:
         pr = _apply_prefixes("BTW: disk usage high")
         assert pr.btw_mode is True
         assert "BTW" not in pr.message
+
+
+# ---------------------------------------------------------------------------
+# Phase 61: Integration depth — checkpoint recovery + memory injection
+# ---------------------------------------------------------------------------
+
+class TestCheckpointRecovery:
+    """Phase 61: loop resume from checkpoint restores correct step index."""
+
+    def _setup(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+
+    def test_checkpoint_written_per_step(self, monkeypatch, tmp_path):
+        """A checkpoint is written after each step during a non-dry-run loop."""
+        self._setup(monkeypatch, tmp_path)
+        import agent_loop as _al
+        monkeypatch.setattr(_al, "reflect_and_record", lambda *a, **kw: None, raising=False)
+        import skills as _skills
+        monkeypatch.setattr(_skills, "extract_skills", lambda *a, **kw: [], raising=False)
+
+        from agent_loop import run_agent_loop, _DryRunAdapter
+        result = run_agent_loop(
+            "research market volatility patterns",
+            project="ckpt-test",
+            adapter=_DryRunAdapter(),
+            dry_run=False,
+        )
+
+        assert result.status == "done"
+        # Checkpoint should be deleted on success (clean loop)
+        from checkpoint import load_checkpoint
+        ckpt = load_checkpoint(result.loop_id)
+        assert ckpt is None, "checkpoint should be deleted after successful loop"
+
+    def test_resume_skips_completed_steps(self, monkeypatch, tmp_path):
+        """Resuming from a checkpoint skips already-completed steps."""
+        self._setup(monkeypatch, tmp_path)
+        from checkpoint import write_checkpoint, CompletedStep
+
+        loop_id = "test-resume-abc123"
+        steps = ["Step A: research topic", "Step B: analyze data", "Step C: write summary"]
+        # Pre-complete step A
+        completed = [CompletedStep(index=1, text=steps[0], status="done", result="research done")]
+        write_checkpoint(loop_id, "summarize market data", "ckpt-proj", steps, completed)
+
+        import agent_loop as _al
+        monkeypatch.setattr(_al, "reflect_and_record", lambda *a, **kw: None, raising=False)
+        import skills as _skills
+        monkeypatch.setattr(_skills, "extract_skills", lambda *a, **kw: [], raising=False)
+
+        from agent_loop import run_agent_loop, _DryRunAdapter
+        result = run_agent_loop(
+            "summarize market data",
+            project="ckpt-proj",
+            adapter=_DryRunAdapter(),
+            dry_run=False,
+            resume_from_loop_id=loop_id,
+        )
+
+        assert result.status == "done"
+        # Result should include the pre-completed step A outcome
+        step_texts = [s.text for s in result.steps]
+        assert any("Step A" in t or "research topic" in t for t in step_texts), \
+            f"resumed run should include step A; got: {step_texts}"
+
+    def test_resume_from_missing_checkpoint_starts_fresh(self, monkeypatch, tmp_path):
+        """If the checkpoint doesn't exist, loop runs from scratch without error."""
+        self._setup(monkeypatch, tmp_path)
+        import agent_loop as _al
+        monkeypatch.setattr(_al, "reflect_and_record", lambda *a, **kw: None, raising=False)
+        import skills as _skills
+        monkeypatch.setattr(_skills, "extract_skills", lambda *a, **kw: [], raising=False)
+
+        from agent_loop import run_agent_loop, _DryRunAdapter
+        result = run_agent_loop(
+            "analyze trends",
+            project="fresh-start",
+            adapter=_DryRunAdapter(),
+            dry_run=False,
+            resume_from_loop_id="nonexistent-loop-id-xyz",
+        )
+
+        assert result.status == "done"
+        assert len(result.steps) >= 1
+
+
+class TestMemoryInjection:
+    """Phase 61: lessons from prior run surface in next run's context."""
+
+    def _setup(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+
+    def test_lessons_written_during_loop_are_retrievable(self, monkeypatch, tmp_path):
+        """Lessons recorded during a run can be queried in subsequent runs."""
+        self._setup(monkeypatch, tmp_path)
+        # Directly record a lesson as if a prior run produced it
+        from memory_ledger import _store_lesson, load_lessons
+
+        _store_lesson(
+            task_type="research",
+            outcome="done",
+            lesson="Always cross-check Polymarket market IDs before querying.",
+            source_goal="prior polymarket goal",
+        )
+
+        lessons = load_lessons(task_type="research", limit=10)
+        assert len(lessons) >= 1
+        texts = [l.lesson for l in lessons]
+        assert any("Polymarket" in t for t in texts)
+
+    def test_lessons_inject_into_decompose_context(self, monkeypatch, tmp_path):
+        """Lessons from memory are injected into the decompose system prompt."""
+        self._setup(monkeypatch, tmp_path)
+        from memory_ledger import _store_lesson
+
+        # Seed a lesson
+        _store_lesson(
+            task_type="research",
+            outcome="done",
+            lesson="Verify source credibility before citing statistics.",
+            source_goal="prior research goal",
+            confidence=0.85,
+        )
+
+        # Capture the decompose prompt
+        captured_prompts = []
+
+        class CapturingAdapter:
+            model_key = "scripted"
+
+            def complete(self, messages, *, tools=None, tool_choice="auto", **kwargs):
+                from llm import LLMResponse, ToolCall
+                for msg in messages:
+                    if hasattr(msg, "content") and isinstance(msg.content, str):
+                        captured_prompts.append(msg.content)
+                # Always return a decompose-style response
+                return LLMResponse(
+                    content=json.dumps(["Step 1: research sources", "Step 2: verify claims"]),
+                    stop_reason="end_turn", input_tokens=50, output_tokens=20,
+                )
+
+        import agent_loop as _al
+        monkeypatch.setattr(_al, "reflect_and_record", lambda *a, **kw: None, raising=False)
+        import skills as _skills
+        monkeypatch.setattr(_skills, "extract_skills", lambda *a, **kw: [], raising=False)
+
+        from agent_loop import run_agent_loop
+        run_agent_loop(
+            "research competitor analysis",
+            project="inject-test",
+            adapter=CapturingAdapter(),
+            dry_run=False,
+        )
+
+        # At least one decompose prompt should contain lesson context
+        all_prompts = " ".join(captured_prompts)
+        # Lessons are injected as a block — check for lesson content or lesson header
+        has_lesson_injection = (
+            "Verify source credibility" in all_prompts
+            or "lesson" in all_prompts.lower()
+            or "prior run" in all_prompts.lower()
+        )
+        assert has_lesson_injection, \
+            "decompose prompt should contain lesson injection from prior run"

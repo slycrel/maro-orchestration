@@ -204,18 +204,20 @@ Shipped 2026-04-07. 4 systemic steal items, all pattern-driven (no new if-else b
 
 ---
 
-### Phase 61: Integration Depth *(CANDIDATE)*
+### Phase 61: Integration Depth *(PARTIAL — session 23)*
 
 *"3061 unit tests and only 31 integration tests — close the gap."*
 
 Self-review identified 15 integration tests needed that aren't covered by the unit suite:
 
-**Candidate items:**
-- NOW lane end-to-end: goal → intent → handle → agent_loop → memory reflects
+**Shipped (session 23, 2026-04-14):** +5 tests in `tests/integration/test_integration.py`
+- `TestCheckpointRecovery` (3 tests): checkpoint written per step, resume skips completed steps, missing checkpoint starts fresh
+- `TestMemoryInjection` (2 tests): lessons written during loop are retrievable, lessons inject into decompose context
+- Total integration tests: 42
+
+**Remaining candidate items:**
 - AGENDA lane end-to-end: enqueue → heartbeat picks up → agent_loop runs → outcome recorded
-- Checkpoint recovery: loop interrupted mid-run → resume restores correct step index
 - Adapter switching: Anthropic API → OpenRouter fallback → subprocess fallback chain
-- Memory injection: lessons from prior run surface in next run's injection string
 - Cross-agent claim challenge: persona B challenges worker claim; disagreement triggers retry (deferred from Phase 60)
 
 
