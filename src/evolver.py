@@ -2368,6 +2368,22 @@ def synthesize_skill(
     if not name or not description or not steps_template:
         return None
 
+    # Injection guard: scan LLM-generated skill content before persisting
+    try:
+        from injection_guard import scan_content as _scan_content
+        _skill_text = "\n".join([description] + steps_template)
+        _ig = _scan_content(_skill_text, source="internal")
+        if not _ig.is_clean:
+            if verbose:
+                print(
+                    f"[evolver] synthesize_skill: injection risk detected ({_ig.risk_level}) "
+                    f"in LLM-generated skill '{name}' — discarding",
+                    file=sys.stderr,
+                )
+            return None
+    except Exception:
+        pass  # fail-open: proceed if guard unavailable
+
     # Deduplicate — don't create if a skill with this name already exists
     if not dry_run:
         existing_names = {s.name for s in load_skills()}
