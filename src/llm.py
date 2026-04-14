@@ -161,6 +161,36 @@ def _is_retryable(exc: Exception) -> bool:
     return False
 
 
+def _is_failover_error(exc: Exception) -> bool:
+    """Return True if the exception warrants trying the next backend.
+
+    Failover triggers on errors that indicate a *backend is unavailable*,
+    not errors that indicate the *request is bad* (400, bad schema, etc.).
+
+    - 402/payment required: quota or billing issue on this backend
+    - 401/403: auth failure (bad or expired key for this backend)
+    - 5xx after retry exhaustion: server-side instability
+    - Subprocess failures: binary missing or timed out unrecoverably
+    """
+    msg = str(exc).lower()
+    # Backend payment/quota/auth errors
+    for pattern in ("402", "payment required", "quota exceeded", "billing",
+                    "401", "unauthorized", "403", "forbidden"):
+        if pattern in msg:
+            return True
+    # Server errors (after retry exhaustion in _retry_complete)
+    for pattern in ("500", "502", "503", "529",
+                    "service unavailable", "internal server error"):
+        if pattern in msg:
+            return True
+    # Subprocess-specific failures (binary not found or subprocess crashed)
+    if "subprocess" in msg and any(s in msg for s in ("failed", "not found", "unavailable")):
+        return True
+    if "claude binary" in msg or "claude -p" in msg:
+        return True
+    return False
+
+
 def _retry_complete(fn, *args, max_retries: int = 3, **kwargs) -> "LLMResponse":
     """Wrap an adapter .complete() call with retry on transient errors.
 
@@ -216,6 +246,96 @@ class LLMAdapter:
 
     def _resolved_model(self, model_key: str) -> str:
         return resolve_model(self.backend, model_key)
+
+
+# ---------------------------------------------------------------------------
+# FailoverAdapter — wraps multiple adapters; tries each on backend errors
+# ---------------------------------------------------------------------------
+
+class FailoverAdapter(LLMAdapter):
+    """Wraps an ordered list of adapters; tries the next on backend failures.
+
+    Failover triggers when the active adapter raises an error that indicates
+    the backend is unavailable (4xx billing/auth, 5xx after retry exhaustion,
+    subprocess not found). Errors that indicate a bad request (400, schema
+    errors) propagate immediately — those won't be fixed by switching backends.
+
+    The `backend` attribute always reflects the currently active adapter.
+    The `model_key` is forwarded from the current adapter.
+
+    Usage::
+
+        adapter = FailoverAdapter([
+            AnthropicSDKAdapter(...),
+            OpenRouterAdapter(...),
+            ClaudeSubprocessAdapter(),
+        ])
+    """
+
+    backend: str = "failover"
+
+    def __init__(self, adapters: List["LLMAdapter"]) -> None:
+        if not adapters:
+            raise ValueError("FailoverAdapter requires at least one adapter")
+        self._adapters: List["LLMAdapter"] = list(adapters)
+        self._current_idx: int = 0
+
+    @property
+    def backend(self) -> str:  # type: ignore[override]
+        return getattr(self._adapters[self._current_idx], "backend", "failover")
+
+    @backend.setter
+    def backend(self, value: str) -> None:
+        pass  # read-only; tracks active adapter
+
+    @property
+    def model_key(self) -> str:
+        return getattr(self._adapters[self._current_idx], "model_key", "")
+
+    def complete(
+        self,
+        messages: List["LLMMessage"],
+        *,
+        tools: Optional[List["LLMTool"]] = None,
+        tool_choice: str = "auto",
+        max_tokens: int = 4096,
+        temperature: float = 0.3,
+        thinking_budget: Optional[int] = None,
+        **kwargs,
+    ) -> "LLMResponse":
+        last_exc: Optional[Exception] = None
+        for idx, adapter in enumerate(self._adapters):
+            self._current_idx = idx
+            try:
+                result = adapter.complete(
+                    messages,
+                    tools=tools,
+                    tool_choice=tool_choice,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    thinking_budget=thinking_budget,
+                    **kwargs,
+                )
+                if idx > 0:
+                    log.info(
+                        "FailoverAdapter: succeeded on %s (index %d/%d)",
+                        adapter.backend, idx + 1, len(self._adapters),
+                    )
+                return result
+            except Exception as exc:
+                last_exc = exc
+                if not _is_failover_error(exc) or idx >= len(self._adapters) - 1:
+                    # Non-failover error or last adapter — propagate
+                    raise
+                next_backend = getattr(self._adapters[idx + 1], "backend", "?")
+                log.warning(
+                    "FailoverAdapter: %s failed with %s (%s), trying %s",
+                    adapter.backend, type(exc).__name__, str(exc)[:80], next_backend,
+                )
+        # Should never reach here, but satisfy type checker
+        if last_exc is not None:
+            raise last_exc
+        raise RuntimeError("FailoverAdapter: no adapters configured")
 
 
 # ---------------------------------------------------------------------------
@@ -1116,24 +1236,27 @@ def build_adapter(
             return AnthropicSDKAdapter(api_key=api_key, model=model)
         return OpenRouterAdapter(api_key=api_key, model=model)
 
-    # Walk the configured backend order, return the first available.
-    # First-in-list wins; there is no runtime failover across backends
-    # (cross-backend retry on 402/429 is tracked in BACKLOG).
+    # Walk the configured backend order, build all available adapters, and
+    # return a FailoverAdapter that tries each in priority order at runtime.
+    # Previously: first-in-list wins (no runtime failover across backends).
+    # Now: primary adapter is tried first; if it returns 402/4xx/5xx, the
+    # next available backend is tried automatically.
     order = _get_backend_order()
+    available: List[LLMAdapter] = []
     power_fallback_warned = False
     for name in order:
         if name == "anthropic":
             key = _get_key("ANTHROPIC_API_KEY", env)
             if key:
-                return AnthropicSDKAdapter(api_key=key, model=model)
+                available.append(AnthropicSDKAdapter(api_key=key, model=model))
         elif name == "openrouter":
             key = _get_key("OPENROUTER_API_KEY", env)
             if key:
-                return OpenRouterAdapter(api_key=key, model=model)
+                available.append(OpenRouterAdapter(api_key=key, model=model))
         elif name == "openai":
             key = _get_key("OPENAI_API_KEY", env)
             if key:
-                return OpenAIAdapter(api_key=key, model=model)
+                available.append(OpenAIAdapter(api_key=key, model=model))
         elif name == "subprocess":
             if _claude_bin_available():
                 if model == MODEL_POWER and not power_fallback_warned:
@@ -1144,18 +1267,26 @@ def build_adapter(
                         "multi-step work; set an API key or reorder `model.backend_order`."
                     )
                     power_fallback_warned = True
-                return ClaudeSubprocessAdapter(model=model)
+                available.append(ClaudeSubprocessAdapter(model=model))
         elif name == "codex":
             if _codex_auth_available():
-                return CodexCLIAdapter(model=model)
+                available.append(CodexCLIAdapter(model=model))
         else:
             log.warning("build_adapter: unknown backend %r in backend_order — skipping", name)
 
-    raise RuntimeError(
-        "No LLM backend available. Set ANTHROPIC_API_KEY, OPENROUTER_API_KEY, "
-        "OPENAI_API_KEY, or install Claude Code (claude -p) / Codex CLI (codex). "
-        f"Tried backend_order={order!r}."
-    )
+    if not available:
+        raise RuntimeError(
+            "No LLM backend available. Set ANTHROPIC_API_KEY, OPENROUTER_API_KEY, "
+            "OPENAI_API_KEY, or install Claude Code (claude -p) / Codex CLI (codex). "
+            f"Tried backend_order={order!r}."
+        )
+
+    if len(available) == 1:
+        return available[0]  # single backend — no wrapper overhead
+
+    log.debug("build_adapter(auto): %d backends available, using FailoverAdapter: %s",
+              len(available), [a.backend for a in available])
+    return FailoverAdapter(available)
 
 
 def detect_available_backends() -> Dict[str, bool]:

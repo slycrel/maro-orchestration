@@ -330,17 +330,20 @@ def test_build_adapter_subprocess_explicit(monkeypatch):
 
 
 def test_build_adapter_auto_prefers_anthropic(monkeypatch):
-    # Pin to DEFAULT_BACKEND_ORDER so this test is immune to user config changes.
-    from llm import DEFAULT_BACKEND_ORDER
+    """Anthropic is first in the FailoverAdapter when available + top of backend_order."""
+    from llm import DEFAULT_BACKEND_ORDER, FailoverAdapter
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-key")
     monkeypatch.setattr("llm._claude_bin_available", lambda: True)
     monkeypatch.setattr("llm._load_env_file", lambda *a, **kw: {})
     monkeypatch.setattr("llm._get_backend_order", lambda: list(DEFAULT_BACKEND_ORDER))
     a = build_adapter("auto")
-    assert isinstance(a, AnthropicSDKAdapter)
+    # Multiple backends available → FailoverAdapter; primary (index 0) is Anthropic
+    assert isinstance(a, FailoverAdapter), f"Expected FailoverAdapter, got {type(a)}"
+    assert isinstance(a._adapters[0], AnthropicSDKAdapter)
 
 
 def test_build_adapter_auto_falls_back_to_subprocess(monkeypatch):
+    """Single available backend returns the adapter directly (no FailoverAdapter wrapper)."""
     from llm import DEFAULT_BACKEND_ORDER
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
@@ -350,28 +353,31 @@ def test_build_adapter_auto_falls_back_to_subprocess(monkeypatch):
     monkeypatch.setattr("llm._load_env_file", lambda *a, **kw: {})
     monkeypatch.setattr("llm._get_backend_order", lambda: list(DEFAULT_BACKEND_ORDER))
     a = build_adapter("auto")
-    assert isinstance(a, ClaudeSubprocessAdapter)
+    assert isinstance(a, ClaudeSubprocessAdapter)  # single backend, no wrapper
 
 
 def test_build_adapter_honors_configured_backend_order(monkeypatch):
-    """config model.backend_order should take precedence over DEFAULT_BACKEND_ORDER."""
+    """config model.backend_order puts subprocess first in the FailoverAdapter."""
+    from llm import FailoverAdapter
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-key")
     monkeypatch.setattr("llm._claude_bin_available", lambda: True)
     monkeypatch.setattr("llm._load_env_file", lambda *a, **kw: {})
-    # With default order, anthropic wins. Configure subprocess-first — subprocess must win.
+    # Configure subprocess-first — subprocess must be primary adapter.
     monkeypatch.setattr("llm._get_backend_order", lambda: ["subprocess", "anthropic"])
     a = build_adapter("auto")
-    assert isinstance(a, ClaudeSubprocessAdapter)
+    assert isinstance(a, FailoverAdapter)
+    assert isinstance(a._adapters[0], ClaudeSubprocessAdapter)
 
 
 def test_build_adapter_skips_unavailable_backends_in_order(monkeypatch):
-    """If the top-ranked backend has no key/binary, fall through to the next one."""
+    """If the top-ranked backend has no key/binary, skip it; next available is primary."""
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-key")
     monkeypatch.setattr("llm._claude_bin_available", lambda: False)
     monkeypatch.setattr("llm._load_env_file", lambda *a, **kw: {})
     monkeypatch.setattr("llm._get_backend_order", lambda: ["openrouter", "subprocess", "anthropic"])
     a = build_adapter("auto")
+    # Only anthropic available → single adapter, no wrapper
     assert isinstance(a, AnthropicSDKAdapter)
 
 
@@ -818,3 +824,131 @@ class TestThinkingBudget:
         # At least one complete() call should have been made
         assert mock_adapter.complete.called
         assert len(steps) == 2
+
+
+# ---------------------------------------------------------------------------
+# FailoverAdapter
+# ---------------------------------------------------------------------------
+
+class TestIsFailoverError:
+    def test_402_payment_required(self):
+        from llm import _is_failover_error
+        assert _is_failover_error(RuntimeError("HTTP 402 Payment Required"))
+
+    def test_401_unauthorized(self):
+        from llm import _is_failover_error
+        assert _is_failover_error(RuntimeError("HTTP 401 Unauthorized"))
+
+    def test_403_forbidden(self):
+        from llm import _is_failover_error
+        assert _is_failover_error(RuntimeError("403 Forbidden"))
+
+    def test_500_internal_server_error(self):
+        from llm import _is_failover_error
+        assert _is_failover_error(RuntimeError("500 Internal Server Error"))
+
+    def test_503_service_unavailable(self):
+        from llm import _is_failover_error
+        assert _is_failover_error(RuntimeError("503 Service Unavailable"))
+
+    def test_400_bad_request_not_failover(self):
+        from llm import _is_failover_error
+        # 400 bad request = bad caller, not broken backend
+        assert not _is_failover_error(RuntimeError("400 Bad Request — invalid schema"))
+
+    def test_generic_runtime_error_not_failover(self):
+        from llm import _is_failover_error
+        # Generic error without backend signal should not failover
+        assert not _is_failover_error(RuntimeError("model returned empty response"))
+
+
+class TestFailoverAdapter:
+    def _make_adapter(self, response_or_exc):
+        """Build a fake LLMAdapter that returns a value or raises."""
+        from llm import LLMAdapter, LLMResponse
+
+        class FakeAdapter(LLMAdapter):
+            def __init__(self, name, val):
+                self._name = name
+                self._val = val
+
+            @property
+            def backend(self):
+                return self._name
+
+            def complete(self, messages, **kwargs):
+                if isinstance(self._val, Exception):
+                    raise self._val
+                return LLMResponse(content=self._val, stop_reason="end_turn")
+
+        return FakeAdapter(response_or_exc[0], response_or_exc[1])
+
+    def test_first_adapter_succeeds(self):
+        from llm import FailoverAdapter, LLMMessage
+        a1 = self._make_adapter(("backend-a", "ok response"))
+        a2 = self._make_adapter(("backend-b", RuntimeError("should not reach")))
+        fa = FailoverAdapter([a1, a2])
+        result = fa.complete([LLMMessage("user", "hi")])
+        assert result.content == "ok response"
+        assert fa.backend == "backend-a"
+
+    def test_failover_to_second_on_402(self):
+        from llm import FailoverAdapter, LLMMessage
+        a1 = self._make_adapter(("backend-a", RuntimeError("HTTP 402 Payment Required")))
+        a2 = self._make_adapter(("backend-b", "fallback response"))
+        fa = FailoverAdapter([a1, a2])
+        result = fa.complete([LLMMessage("user", "hi")])
+        assert result.content == "fallback response"
+        assert fa.backend == "backend-b"
+
+    def test_no_failover_on_non_backend_error(self):
+        from llm import FailoverAdapter, LLMMessage
+        a1 = self._make_adapter(("backend-a", RuntimeError("model returned empty response")))
+        a2 = self._make_adapter(("backend-b", "should not reach"))
+        fa = FailoverAdapter([a1, a2])
+        with pytest.raises(RuntimeError, match="model returned empty response"):
+            fa.complete([LLMMessage("user", "hi")])
+        # backend should remain at a1 since no failover happened
+        assert fa.backend == "backend-a"
+
+    def test_all_adapters_fail_raises_last(self):
+        from llm import FailoverAdapter, LLMMessage
+        a1 = self._make_adapter(("backend-a", RuntimeError("HTTP 402")))
+        a2 = self._make_adapter(("backend-b", RuntimeError("HTTP 503")))
+        fa = FailoverAdapter([a1, a2])
+        with pytest.raises(RuntimeError, match="503"):
+            fa.complete([LLMMessage("user", "hi")])
+
+    def test_single_adapter_returns_directly(self):
+        """build_adapter('auto') returns the adapter directly when only one is available."""
+        from llm import FailoverAdapter, LLMAdapter
+        a1 = self._make_adapter(("only-backend", "ok"))
+        fa = FailoverAdapter([a1])
+        assert len(fa._adapters) == 1
+        assert fa.backend == "only-backend"
+
+    def test_empty_adapter_list_raises(self):
+        from llm import FailoverAdapter
+        with pytest.raises(ValueError, match="at least one"):
+            FailoverAdapter([])
+
+    def test_model_key_forwarded_from_active_adapter(self):
+        from llm import FailoverAdapter, LLMAdapter
+
+        class KeyedAdapter(LLMAdapter):
+            backend = "keyed"
+            model_key = "mid"
+            def complete(self, messages, **kwargs):
+                raise RuntimeError("HTTP 402")
+
+        class FallbackAdapter(LLMAdapter):
+            backend = "fallback"
+            model_key = "cheap"
+            def complete(self, messages, **kwargs):
+                from llm import LLMResponse
+                return LLMResponse(content="ok", stop_reason="end_turn")
+
+        fa = FailoverAdapter([KeyedAdapter(), FallbackAdapter()])
+        from llm import LLMMessage
+        fa.complete([LLMMessage("user", "test")])
+        assert fa.model_key == "cheap"  # now on FallbackAdapter

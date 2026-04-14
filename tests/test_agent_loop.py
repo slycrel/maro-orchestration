@@ -1420,10 +1420,22 @@ def test_cost_budget_stops_loop(monkeypatch, tmp_path):
 # Phase 35 P2: HITL tier wiring in _execute_step
 # ---------------------------------------------------------------------------
 
-def test_execute_step_destroy_tier_is_blocked():
-    """Steps classified as DESTROY tier must be blocked before LLM call."""
+def test_execute_step_destroy_tier_warns_but_proceeds():
+    """Step descriptions with DESTROY tier now warn but proceed to LLM (is_description=True).
+
+    Previously: blocked before LLM call (causing decomposer false positives like
+    "Clone repo (rm -rf first)" blocking real work).
+    Now: DESTROY tier in step descriptions is downgraded to MEDIUM (warn gate) —
+    the LLM decides how to accomplish the task safely.
+    """
     from unittest.mock import MagicMock
-    adapter = MagicMock()  # should never be called
+    from llm import LLMResponse, ToolCall
+    adapter = MagicMock()
+    adapter.complete.return_value = LLMResponse(
+        content="",
+        tool_calls=[ToolCall(name="complete_step", arguments={"result": "done", "summary": "cleaned"})],
+        input_tokens=1, output_tokens=1,
+    )
 
     outcome = _execute_step(
         goal="clean up workspace",
@@ -1434,15 +1446,21 @@ def test_execute_step_destroy_tier_is_blocked():
         adapter=adapter,
         tools=[],
     )
-    assert outcome["status"] == "blocked"
-    assert "DESTROY" in outcome["stuck_reason"]
-    adapter.complete.assert_not_called()
+    # LLM should be called — step description is advisory, not blocked
+    adapter.complete.assert_called()
+    assert outcome["status"] == "done"
 
 
-def test_execute_step_high_risk_is_blocked():
-    """HIGH risk steps are still blocked via hitl_policy."""
+def test_execute_step_high_risk_description_proceeds():
+    """HIGH risk step descriptions are downgraded to MEDIUM — LLM call proceeds."""
     from unittest.mock import MagicMock
+    from llm import LLMResponse, ToolCall
     adapter = MagicMock()
+    adapter.complete.return_value = LLMResponse(
+        content="",
+        tool_calls=[ToolCall(name="complete_step", arguments={"result": "done", "summary": "ok"})],
+        input_tokens=1, output_tokens=1,
+    )
 
     outcome = _execute_step(
         goal="system admin",
@@ -1453,8 +1471,8 @@ def test_execute_step_high_risk_is_blocked():
         adapter=adapter,
         tools=[],
     )
-    assert outcome["status"] == "blocked"
-    adapter.complete.assert_not_called()
+    adapter.complete.assert_called()
+    assert outcome["status"] == "done"
 
 
 def test_execute_step_external_tier_logs_but_proceeds(capsys):
