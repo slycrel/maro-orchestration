@@ -1,12 +1,52 @@
-"""Global test fixtures — workspace isolation.
+"""Global test fixtures — workspace isolation + recursion guard.
 
 Every test gets its own tmp workspace so nothing leaks into ~/.poe/workspace/.
 Individual tests that already set OPENCLAW_WORKSPACE via monkeypatch will
 override this (monkeypatch wins over os.environ in the same scope).
+
+The recursion guard (pytest_configure) refuses to start a second pytest
+session if one is already active in the process tree. See rationale below.
 """
 
 import os
 import pytest
+
+
+# ---------------------------------------------------------------------------
+# Recursion guard
+# ---------------------------------------------------------------------------
+#
+# History: session 18 regression runs hit a process-leak scenario where a
+# subprocess `claude -p` spawned 160+ pytest workers against the wrong
+# codebase, consuming 12GB RAM. Evolver's verify_post_apply path also shells
+# out to `pytest` on this same tree after auto-applying mutations. If either
+# of those fires *from inside* a pytest session, we get nested/recursive full-
+# suite runs — at best wasting minutes, at worst fork-bombing the box.
+#
+# Scoped subprocess pytest (a skill validator running pytest against a tmp
+# test dir) is fine — that child won't load this conftest.py. The guard only
+# catches children that re-enter *this* project's test tree.
+
+_ACTIVE_ENV = "POE_PYTEST_ACTIVE"
+
+
+def pytest_configure(config):
+    active = os.environ.get(_ACTIVE_ENV)
+    if active and active != str(os.getpid()):
+        pytest.exit(
+            f"Recursive pytest blocked: parent pytest pid={active} is already "
+            "running against this tree. Full-suite recursion causes runaway "
+            "fork-bombs (session 18: 160+ workers / 12GB RAM). If a test needs "
+            "to invoke pytest, target a scoped tmp directory whose tree does "
+            "not include tests/conftest.py — that child won't trip this guard.",
+            returncode=2,
+        )
+    os.environ[_ACTIVE_ENV] = str(os.getpid())
+
+
+def pytest_sessionfinish(session, exitstatus):
+    if os.environ.get(_ACTIVE_ENV) == str(os.getpid()):
+        os.environ.pop(_ACTIVE_ENV, None)
 
 # API key env vars that should never leak into tests.  Tests that need a real
 # adapter explicitly set these; everything else gets isolation for free.
