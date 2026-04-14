@@ -2,7 +2,7 @@
 
 What to do next, in what order. Updated each session. Strategic phases live in ROADMAP.md; deferred ideas live in BACKLOG.md. This file is the bridge — the executable queue.
 
-Last updated: 2026-04-14 (session 21 — budget bump + LoopStateMachine complete)
+Last updated: 2026-04-14 (session 21 continued — budget bump, exception sweep, timeout fix, artifact cleanup, eval flywheel hardening)
 
 ---
 
