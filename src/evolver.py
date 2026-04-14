@@ -1919,6 +1919,29 @@ def run_evolver(
     except Exception as _island_exc:
         log.debug("island cycle failed (non-fatal): %s", _island_exc)
 
+    # Longitudinal impact check: warn if any recently-applied suggestions show degraded verdict.
+    # Provides evidence for the verify→learn loop — not just "tests pass" but "behavior improved."
+    if not dry_run:
+        try:
+            _impact_records = scan_evolver_impact(lookback_hours=48, lookahead_hours=48, limit=5)
+            _degraded = [r for r in _impact_records if r.verdict == "degraded"]
+            if _degraded:
+                log.warning(
+                    "evolver impact_check: %d suggestion(s) show DEGRADED stuck rate — "
+                    "consider reviewing or reverting: %s",
+                    len(_degraded),
+                    [r.suggestion_id for r in _degraded],
+                )
+                if verbose:
+                    for r in _degraded:
+                        print(
+                            f"[evolver] impact_check: degraded suggestion {r.suggestion_id} "
+                            f"({r.category}): stuck {r.stuck_rate_before:.0%}→{r.stuck_rate_after:.0%}",
+                            file=sys.stderr,
+                        )
+        except Exception as _impact_exc:
+            log.debug("evolver impact check failed (non-fatal): %s", _impact_exc)
+
     return report
 
 

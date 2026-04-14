@@ -315,6 +315,7 @@ Workspace inherits from user; workspace keys override. Access in code: `from con
 | `orch.py` | Core file-first state: NEXT.md tasks, run records, project lifecycle |
 | `poe_self.py` | Persistent identity block: `load_poe_identity()`, `with_poe_identity()` — injected into every decompose call |
 | `checkpoint.py` | Per-step loop checkpointing: `write_checkpoint()`, `resume_from()`, `delete_checkpoint()` — enables loop resume |
+| `claim_verifier.py` | Hallucination detection: file-path and Python symbol existence checking on step results; `annotate_result()` surfaces `NOT_FOUND` / `SYMBOL_CLAIMS_NOT_FOUND` |
 
 ---
 
@@ -374,7 +375,7 @@ Next run with similar task:
 ## Development
 
 ```bash
-# Run tests (3500+ passing, all LLM calls mocked)
+# Run tests (4278 passing, all LLM calls mocked)
 python3 -m pytest tests/ -q
 
 # Dry-run (no LLM calls)

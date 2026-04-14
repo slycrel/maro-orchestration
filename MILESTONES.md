@@ -2,15 +2,21 @@
 
 What to do next, in what order. Updated each session. Strategic phases live in ROADMAP.md; deferred ideas live in BACKLOG.md. This file is the bridge — the executable queue.
 
-Last updated: 2026-04-14 (session 29 — recipe repo PM/dev rounds 7+8, claim verifier symbol extension)
+Last updated: 2026-04-14 (session 30 — housekeeping: docs archive, README update, link-farm steal items)
 
 ---
 
 ## Next Up
 
-- **BACKLOG cleanup** — Review and close stale BACKLOG items from earlier sessions (Slack partial item is stale — slack_listener.py + 25 tests already done).
 - **Evolver confidence calibration follow-up** — `scan_suggestion_outcomes` wired; verify calibration is improving (check live workspace suggestion stats). Heartbeat stopped by design since Apr 7-9 token burn — no new data until restarted.
+- **Jeremy's undocumented ideas** — he mentioned having ideas not yet in the backlog. Needs elaboration.
 - **Formal stage contracts (Phase P2)** — Typed output contracts per pipeline phase + hard validation gates. See BACKLOG. Medium-term architectural improvement.
+
+## Done (session 30, 2026-04-14 — housekeeping, link-farm digest)
+
+- [x] **Link-farm Apr 9–11 batch processed** — 18 new entries reviewed. Already-done: advisor pattern, codebase graph, evals flywheel, harness spectrum, event-driven wakeup, harness optimizer, Polymarket dataset, Engramme, MCP Toolbox (all in BACKLOG). 4 net-new steal items added to BACKLOG: Latent Briefing (KV cache compaction), isolated worktree per sub-agent, Claude Skills quality gate for synthesize_skill, Kronos financial model.
+- [x] **Docs archive** — Moved 4 stale docs to `docs/archive/`: `LOOP_SCRATCHPAD.md`, `plan-next-phase.md`, `PHASE_AUDIT.md`, `PHASE_AUDIT_2026-04-13.md`. These were research scratch and planning artifacts superseded by current implementation.
+- [x] **README + CLAUDE.md updated** — Test count: 3500+ → 4278. `claim_verifier.py` added to source modules table. `tests/` line count updated to 109 files / 4,278 tests.
 
 ## Done (session 29, 2026-04-14 — recipe PM/dev rounds 7+8, claim verifier symbol extension)
 

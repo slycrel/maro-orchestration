@@ -74,7 +74,7 @@ src/                 All production Python (50+ modules)
   constraint.py      Pre-execution constraint enforcement
   ...
 
-tests/               60+ test files, ~3,195 tests
+tests/               109 test files, 4,278 tests
 scripts/             smoke.sh, audit-phases.sh, enqueue.sh
 personas/            YAML persona specs
 docs/                Architecture, memory systems, self-reflection design
@@ -90,7 +90,7 @@ deploy/              systemd service files
 
 ## Current state
 
-**As of 2026-04-12.** Phases 0–61 complete. Tests: 3,789 passing (~100s sequential).
+**As of 2026-04-14.** Phases 0–61 complete. Tests: 4,278 passing (~100s sequential).
 
 | Status | Phases |
 |--------|--------|

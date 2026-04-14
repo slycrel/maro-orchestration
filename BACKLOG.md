@@ -3,7 +3,7 @@
 Single canonical location for everything we've identified but haven't done yet.
 Read this at the start of every session. Update it as items are completed or new ones emerge.
 
-Last reviewed: 2026-04-14 (session 29)
+Last reviewed: 2026-04-14 (session 30)
 
 ---
 
@@ -342,6 +342,16 @@ Real findings from the run — hallucinations already vetted and discarded:
 - [x] **Phase 24 (Slack)** — `src/slack_listener.py` (424L) + `tests/test_slack_listener.py` (25 tests). Socket Mode, slash commands, interrupt routing. Item was stale — already done. (verified session 29)
 - [x] **`lat.md` knowledge graph — wired into director.py (2026-04-06)** — `lat_inject.py` with TF-IDF `inject_relevant_nodes()` now wired into `_produce_spec()` in director.py (same pattern as planner.py). Silently skips if no relevant nodes match.
 - [x] **Adversarial review hallucination rate too high** — FULLY DONE (session 29). `claim_verifier.py` extended with Python symbol (function/class/method) existence checking: `extract_symbol_claims()`, `_build_symbol_index()` (direct .py scan, no grep subprocess), `verify_symbol_claims()`, `verify_all_claims()`, `SymbolReport`, `CompoundClaimReport`. `annotate_result()` surfaces `SYMBOL_CLAIMS_NOT_FOUND`. 24 new tests (61 total). All three hallucination-detection vectors now covered: file paths, symbols, and decompose prompt hardening.
+
+### From link-farm (2026-04-09–11 batch)
+
+- [ ] **Latent Briefing — KV cache compaction for multi-agent memory** — Ramp Labs paper (quoted by @vral). KV cache compaction technique for efficient context sharing across hierarchical multi-agent systems; eliminates need to pass full .md files between agents. Currently Poe passes context as text files; this approach would let child agents share a compressed parent context layer directly. **Priority 5/10 — monitor until implementation details are public.** Source: @vral.
+
+- [ ] **Isolated worktree per sub-agent** — from Alpha Batcher's breakdown of Claude Code's architecture (@alphabatcher). Each sub-agent gets its own git worktree so writes don't collide. Relevant to concurrent run safety (Phase 62 project isolation). Current `is_project_running()` + per-project lock file is a simpler version; worktree isolation is stronger. **Priority 6/10 — revisit when parallel missions are actually running.** Source: @alphabatcher.
+
+- [ ] **Claude Skills quality gate for synthesize_skill** — Avid (@av1dlive) highlights that 80K+ community skills are mostly poorly built. Anthropic engineers' 16-min talk covers what separates good from bad skills. Steal: add a `_skill_quality_score()` heuristic to `synthesize_skill()` — check for: concrete trigger condition, measurable success criterion, ≤5 steps, no LLM hallucinated tool names. Block skills scoring below threshold. **Priority 7/10 — directly applicable to evolver.py skill synthesis.** Source: @av1dlive.
+
+- [ ] **Kronos financial foundation model** — Nav Toor (@heynavtoor). Open-source time-series model trained on 12B candlestick records from 45 exchanges, 93% more accurate than leading models, zero-shot across any asset/timeframe, 4M–499M param sizes. Available on HuggingFace. **Watch list — if Polymarket research resumes, evaluate as price-prediction layer instead of LLM-based price inference.** Source: @heynavtoor.
 
 ### Grok Round 4 feedback (2026-04-07)
 - [x] **`poe evolver apply` CLI** — `poe-evolver list|apply|run` subcommands. `apply` supports interactive/--all/--dry-run/by-id modes. Registered as `poe-evolver` entry point. (2026-04-07)
