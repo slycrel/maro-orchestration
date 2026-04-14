@@ -761,3 +761,77 @@ class TestEvalTrendDashboard:
         import observe
         assert "eval-trend-status" in observe._DASHBOARD_HTML
         assert "Eval Pass Rate" in observe._DASHBOARD_HTML
+
+
+# ---------------------------------------------------------------------------
+# Captain's Log dashboard panel
+# ---------------------------------------------------------------------------
+
+class TestCaptainLogDashboard:
+    """Tests for the captain's log panel in observe dashboard."""
+
+    @pytest.fixture(autouse=True)
+    def _mem_dir(self, monkeypatch, tmp_path):
+        """Redirect memory_dir to tmp_path/memory for all tests in this class."""
+        mem = tmp_path / "memory"
+        mem.mkdir(parents=True, exist_ok=True)
+        monkeypatch.setenv("POE_MEMORY_DIR", str(mem))
+        return mem
+
+    def test_read_captain_log_empty_when_no_file(self, tmp_path):
+        import observe
+        result = observe._read_captain_log_entries()
+        assert result == []
+
+    def test_read_captain_log_returns_entries(self, tmp_path):
+        import json
+        log_path = tmp_path / "memory" / "captains_log.jsonl"
+        entries = [
+            {"timestamp": "2026-04-14T10:00:00Z", "event_type": "SKILL_PROMOTED",
+             "loop_id": "abc123", "subject": "research-skill", "summary": "promoted to established"},
+            {"timestamp": "2026-04-14T11:00:00Z", "event_type": "EVOLVER_APPLIED",
+             "loop_id": "def456", "subject": "prompt_tweak", "note": "tightened decompose prompt"},
+        ]
+        log_path.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
+        import observe
+        result = observe._read_captain_log_entries()
+        assert len(result) == 2
+        # Newest first (reversed read order)
+        assert result[0]["event_type"] == "EVOLVER_APPLIED"
+        assert result[1]["event_type"] == "SKILL_PROMOTED"
+
+    def test_read_captain_log_respects_limit(self, tmp_path):
+        import json
+        log_path = tmp_path / "memory" / "captains_log.jsonl"
+        entries = [{"timestamp": f"2026-04-14T{i:02d}:00:00Z", "event_type": "DIAGNOSIS"} for i in range(30)]
+        log_path.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
+        import observe
+        result = observe._read_captain_log_entries(limit=5)
+        assert len(result) == 5
+
+    def test_read_captain_log_uses_fallback_summary(self, tmp_path):
+        """Falls back to 'note' then 'suggestion' when 'summary' is absent."""
+        import json
+        log_path = tmp_path / "memory" / "captains_log.jsonl"
+        entry = {"timestamp": "2026-04-14T10:00:00Z", "event_type": "DIAGNOSIS",
+                 "loop_id": "abc", "note": "fallback note text"}
+        log_path.write_text(json.dumps(entry) + "\n")
+        import observe
+        result = observe._read_captain_log_entries()
+        assert len(result) == 1
+        assert result[0]["summary"] == "fallback note text"
+
+    def test_snapshot_includes_captain_log(self):
+        import observe
+        from unittest.mock import patch
+        _log = [{"ts": "2026-04-14T10:00:00Z", "event_type": "SKILL_PROMOTED",
+                 "loop_id": "abc", "subject": "s", "summary": "promoted"}]
+        with patch("observe._read_captain_log_entries", return_value=_log):
+            data = observe._snapshot_json()
+        assert "captain_log" in data
+        assert data["captain_log"] == _log
+
+    def test_dashboard_html_contains_captain_log_panel(self):
+        import observe
+        assert "captain-log-status" in observe._DASHBOARD_HTML
+        assert "Captain" in observe._DASHBOARD_HTML

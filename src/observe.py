@@ -270,6 +270,55 @@ def _read_eval_trend(limit: int = 10) -> List[Dict[str, Any]]:
         return []
 
 
+def _read_captain_log_entries(limit: int = 20) -> List[Dict[str, Any]]:
+    """Read recent captain's log entries for the dashboard panel.
+
+    Returns the most recent `limit` entries (newest first), each normalized to:
+      ts, event_type, loop_id, subject, summary.
+    """
+    try:
+        path = _memory_dir() / "captains_log.jsonl"
+        if not path.exists():
+            return []
+        entries: List[Dict[str, Any]] = []
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except Exception:
+            return []
+        for line in reversed(lines):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                e = json.loads(line)
+                ts = e.get("timestamp") or e.get("ts") or ""
+                event_type = e.get("event_type", "?")
+                loop_id = (e.get("loop_id") or "")[:12]
+                subject = e.get("subject") or e.get("name") or ""
+                # Best summary: use 'summary', fallback to 'note', fallback to 'suggestion'
+                summary = (
+                    e.get("summary")
+                    or e.get("note")
+                    or e.get("suggestion")
+                    or e.get("lesson")
+                    or ""
+                )
+                entries.append({
+                    "ts": ts,
+                    "event_type": event_type,
+                    "loop_id": loop_id,
+                    "subject": subject[:60],
+                    "summary": summary[:120],
+                })
+                if len(entries) >= limit:
+                    break
+            except Exception:
+                continue
+        return entries
+    except Exception:
+        return []
+
+
 # ---------------------------------------------------------------------------
 # Renderers
 # ---------------------------------------------------------------------------
@@ -690,6 +739,11 @@ _DASHBOARD_HTML = """\
   </div>
 
   <div class="panel full">
+    <h2>Captain's Log <span style="font-size:11px;color:var(--dim);font-weight:normal">(recent self-improvement events)</span></h2>
+    <div id="captain-log-status"></div>
+  </div>
+
+  <div class="panel full">
     <h2>Live Events</h2>
     <table id="events-table">
       <thead><tr><th>Time</th><th>Loop</th><th>Type</th><th>Status</th><th>Step</th><th>Tokens</th></tr></thead>
@@ -931,6 +985,33 @@ async function refresh() {
         </tr></thead><tbody>${rows}</tbody></table>`;
     }
 
+    // Captain's Log
+    const captainLog = d.captain_log || [];
+    if (!captainLog.length) {
+      document.getElementById('captain-log-status').innerHTML =
+        '<span class="idle">no entries — captains_log.jsonl is empty</span>';
+    } else {
+      // Group event types for badge colors
+      const _clBadge = (et) => {
+        if (!et) return badge('?', 'blue');
+        if (et.startsWith('EVOLVER')) return badge(et, 'green');
+        if (et.startsWith('SKILL')) return badge(et, 'blue');
+        if (et === 'DIAGNOSIS') return badge(et, 'yellow');
+        if (et === 'GRADUATION_PROPOSED' || et === 'RULE_GRADUATED') return badge(et, 'green');
+        if (et.includes('CONTRADICT') || et.includes('STUCK')) return badge(et, 'red');
+        return badge(et, 'blue');
+      };
+      let clRows = captainLog.map(e => {
+        const ts = (e.ts||'').slice(0,19).replace('T',' ');
+        const lid = esc((e.loop_id||'').slice(0,8));
+        const subj = esc((e.subject||'').slice(0,40));
+        const summ = esc((e.summary||'').slice(0,100));
+        return `<tr><td>${esc(ts)}</td><td>${lid}</td><td>${_clBadge(e.event_type)}</td><td>${subj}</td><td>${summ}</td></tr>`;
+      }).join('');
+      document.getElementById('captain-log-status').innerHTML =
+        `<table><thead><tr><th>Time</th><th>Loop</th><th>Event</th><th>Subject</th><th>Summary</th></tr></thead><tbody>${clRows}</tbody></table>`;
+    }
+
     // Events
     const events = d.events || [];
     const tbody = document.getElementById('events-body');
@@ -970,6 +1051,7 @@ def _snapshot_json(events_limit: int = 50) -> dict:
     ancestry = _read_ancestry_tree()
     scheduler = _read_slow_scheduler()
     eval_trend = _read_eval_trend(limit=10)
+    captain_log = _read_captain_log_entries(limit=20)
 
     events: List[dict] = []
     path = _events_path()
@@ -997,6 +1079,7 @@ def _snapshot_json(events_limit: int = 50) -> dict:
         "scheduler": scheduler,
         "events": events,
         "eval_trend": eval_trend,
+        "captain_log": captain_log,
     }
 
 
