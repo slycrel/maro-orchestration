@@ -424,6 +424,16 @@ def apply_suggestion(suggestion_id: str) -> bool:
                     d["status"] = "pending_human_review"
                     d["block_reason"] = "cost_optimization has no auto-apply handler; review manually"
                     log.info("evolver: cost_optimization held for human review: %s", d.get("suggestion", "")[:100])
+                elif category == "crystallization":
+                    # Stage 2→3 promotion is human-gated by design (KNOWLEDGE_CRYSTALLIZATION.md).
+                    # Never auto-write to AGENTS.md — surface for Jeremy's review only.
+                    d["applied"] = False
+                    d["status"] = "pending_human_review"
+                    d["block_reason"] = (
+                        "crystallization requires human review: run `poe-memory canon-candidates` "
+                        "to inspect and manually promote to AGENTS.md"
+                    )
+                    log.info("evolver: crystallization held for human review: %s", d.get("suggestion", "")[:100])
                 else:
                     # observation, sub_mission, etc. — safe to apply
                     d["applied"] = True
@@ -1255,6 +1265,62 @@ def scan_quality_drift(
     return findings
 
 
+# ---------------------------------------------------------------------------
+# Stage 2→3: Canon candidate scan — surfaces lessons ready for identity promotion
+# ---------------------------------------------------------------------------
+
+def scan_canon_candidates(
+    *,
+    min_hits: int = 10,
+    min_task_types: int = 3,
+) -> List[Suggestion]:
+    """Scan long-tier lessons for Stage 2→3 promotion candidates.
+
+    A lesson that has been applied 10+ times across 3+ task types has proven
+    itself broadly. It's a candidate to move from tiered retrieval (Stage 2)
+    to always-active identity in the system prompt (Stage 3 / AGENTS.md).
+
+    Promotion is NOT automatic — this just surfaces the candidates as
+    observation Suggestions in the evolver report for human review.
+
+    Returns one Suggestion per candidate, category='crystallization'.
+    """
+    try:
+        from memory import get_canon_candidates as _get_canon
+    except ImportError:
+        return []
+
+    try:
+        candidates = _get_canon(min_hits=min_hits, min_task_types=min_task_types)
+    except Exception as exc:
+        log.debug("scan_canon_candidates: failed to load candidates: %s", exc)
+        return []
+
+    suggestions: List[Suggestion] = []
+    import uuid as _cuid
+    for c in candidates:
+        lesson_text = c.get("lesson", "")[:200]
+        times = c.get("times_applied", 0)
+        types = c.get("task_types_seen", [])
+        lid = c.get("lesson_id", "?")
+        suggestions.append(Suggestion(
+            suggestion_id=f"canon-{_cuid.uuid4().hex[:8]}",
+            category="crystallization",
+            target=c.get("task_type", "general"),
+            suggestion=(
+                f"PROMOTE TO IDENTITY (Stage 3): '{lesson_text}' — "
+                f"applied {times}x across {len(types)} task types "
+                f"({', '.join(types[:4])}). "
+                f"Add to AGENTS.md or persona system prompt to eliminate retrieval cost."
+            ),
+            failure_pattern=f"lesson_id={lid} times_applied={times} task_types={len(types)}",
+            confidence=min(0.95, 0.5 + times * 0.03 + len(types) * 0.05),
+            outcomes_analyzed=times,
+        ))
+
+    return suggestions
+
+
 def run_evolver(
     *,
     outcomes_window: int = 50,
@@ -1266,6 +1332,7 @@ def run_evolver(
     scan_calibration: bool = True,
     scan_costs: bool = True,
     scan_drift: bool = True,
+    scan_canon: bool = True,
 ) -> EvolverReport:
     """Run one meta-evolution cycle.
 
@@ -1382,6 +1449,20 @@ def run_evolver(
             log.info("evolver cost_scan suggestions=%d", len(cost_suggestions))
         except Exception as _cost_exc:
             log.debug("cost scan failed (non-fatal): %s", _cost_exc)
+
+    # Canon candidate scan — Stage 2→3 promotion surface (human-gated, no auto-apply)
+    if scan_canon:
+        try:
+            canon_suggestions = scan_canon_candidates()
+            suggestions.extend(canon_suggestions)
+            if verbose and canon_suggestions:
+                print(
+                    f"[evolver] canon_scan: {len(canon_suggestions)} identity promotion candidate(s)",
+                    file=sys.stderr,
+                )
+            log.info("evolver canon_scan candidates=%d", len(canon_suggestions))
+        except Exception as _canon_exc:
+            log.debug("canon scan failed (non-fatal): %s", _canon_exc)
 
     # Quality drift detection — compare this cycle to rolling baseline
     if scan_drift:

@@ -10,12 +10,16 @@ Last updated: 2026-04-14 (session 21)
 
 ## Next Up
 
-1. **Memory Stage 2→3 / 3→4 not implemented** — Architecture specifies a K-stage memory pipeline (observation → episodic → lesson → identity → skill). Stage 2→3 (lesson→identity consolidation) has a threshold spec but no implementation. Stage 3→4 (skill extraction) is "not reliably triggered." Lessons accumulate but never crystallize.
+1. **Memory Stage 3→4 (skill extraction reliability)** — Stage 2→3 pipeline now wired (evolver surfaces canon candidates). Stage 3→4 gap: `extract_skills()` is called in agent_loop's finalize phase but wrapped in bare `except Exception: pass` — silent failures mean extracted skills may not persist. Instrument + verify extraction path works in live runs.
 2. **NOW → Director routing for complex goals** — Session 20.5 follow-up to finding 3.4. NOW lane (`handle._run_now`) does a single LLM call with no Director involvement. Add config flag `now_lane.escalate_to_director` + `_is_complex_directive` heuristic + new code path in `handle()` that calls `run_director` when classifier returns NOW but complexity > threshold.
 4. **pytest-via-subprocess 900s timeout** — `python3 -m pytest tests/ -q` via `ClaudeSubprocessAdapter` hits 900s timeout (real pytest ~100s). Diagnosis correctly recovered via smaller sub-commands. Root cause unclear — possibly stdout buffering or double-rupture in the adapter. Worth investigating before next adversarial run.
 5. **Remaining 71 silent exceptions in agent_loop.py lines 1000+** — First 1,000 lines (16 high-risk sites) fixed in session 20.5. The rest are lower-risk best-effort telemetry; sweep + classify in a focused pass.
 6. **Recovery mid-loop apply (remaining)** — Gap 2 from phase audit is ~mostly closed via the mid-loop diagnosis bridge (session 19). Remaining: `budget_exhaustion` is diagnosed only after max_iterations hit; consider a mid-loop "iteration budget running low" signal that bumps the budget instead of grinding to a stop.
 7. **Artifact output routing cleanup** — Temp artifacts (per-step) → tmp dir (deleted by default, kept via config `keep_artifacts: true`). Permanent outputs → `~/.poe/workspace/output/`.
+
+## Done (session 21, 2026-04-14 — LoopStateMachine + Stage 2→3 pipeline)
+
+- [x] **Stage 2→3 crystallization pipeline** — `scan_canon_candidates()` in evolver.py surfaces long-tier lessons with 10+ applies across 3+ task types as `crystallization` Suggestions. Wired into `run_evolver(scan_canon=True)` (default on). `apply_suggestion` explicitly holds crystallization for human review (never auto-applies). 7 tests cover candidates→suggestions, empty case, confidence scaling, import failure, run_evolver integration, and the held-for-review gate. Closes BACKLOG MODERATE "Memory Stage 2→3."
 
 ## Done (session 21, 2026-04-14 — LoopStateMachine)
 

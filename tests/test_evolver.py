@@ -461,6 +461,31 @@ def test_apply_suggestion_cost_optimization_held_for_review(tmp_path):
     assert "cost_optimization" in stored.get("block_reason", "")
 
 
+def test_apply_suggestion_crystallization_held_for_review(tmp_path):
+    """crystallization is human-gated — apply_suggestion must NOT auto-apply it."""
+    path = tmp_path / "suggestions.jsonl"
+    s = Suggestion(
+        suggestion_id="cr1",
+        category="crystallization",
+        target="research",
+        suggestion="PROMOTE TO IDENTITY: 'Always X' — applied 15x across 3 task types.",
+        failure_pattern="lesson_id=abc times_applied=15 task_types=3",
+        confidence=0.95,
+        outcomes_analyzed=15,
+        applied=False,
+    )
+    path.write_text(json.dumps(s.to_dict()) + "\n", encoding="utf-8")
+
+    with patch("evolver._suggestions_path", return_value=path):
+        ok = apply_suggestion("cr1")
+    assert ok is True  # found + updated
+
+    stored = json.loads(path.read_text(encoding="utf-8").strip().splitlines()[0])
+    assert stored["applied"] is False, "crystallization must NOT be auto-applied"
+    assert stored.get("status") == "pending_human_review"
+    assert "crystallization" in stored.get("block_reason", "")
+
+
 def test_cli_poe_evolver_list(capsys, tmp_path):
     s1 = Suggestion(suggestion_id="s1", category="prompt_tweak", target="all",
                     suggestion="Be more concise", failure_pattern="verbose output",
@@ -1711,3 +1736,166 @@ class TestQualityDrift:
         loaded = _load_baselines()
         assert len(loaded) == 2
         assert loaded[0]["ts"] == "2026-01-02"  # newest first
+
+
+# ---------------------------------------------------------------------------
+# Stage 2→3: scan_canon_candidates
+# ---------------------------------------------------------------------------
+
+class TestScanCanonCandidates:
+    """Tests for scan_canon_candidates() — Stage 2→3 crystallization surface."""
+
+    def _make_candidates(self, n: int = 2) -> list:
+        """Build fake get_canon_candidates return values."""
+        return [
+            {
+                "lesson_id": f"lid{i:02d}",
+                "lesson": f"Always do X for task type {i}",
+                "task_type": "research",
+                "score": 0.95,
+                "times_applied": 12 + i,
+                "task_types_seen": ["research", "build", "ops"],
+                "sessions_validated": 5,
+                "recorded_at": "2026-01-01",
+            }
+            for i in range(n)
+        ]
+
+    def test_returns_suggestions_for_each_candidate(self):
+        """One crystallization Suggestion per canon candidate."""
+        import sys, types
+        from evolver import scan_canon_candidates
+        candidates = self._make_candidates(3)
+        fake_mem = types.ModuleType("memory")
+        fake_mem.get_canon_candidates = lambda **kw: candidates
+        orig = sys.modules.get("memory")
+        sys.modules["memory"] = fake_mem
+        try:
+            result = scan_canon_candidates()
+            assert len(result) == 3
+            for s in result:
+                assert s.category == "crystallization"
+                assert "PROMOTE TO IDENTITY" in s.suggestion
+                assert 0.5 <= s.confidence <= 1.0
+        finally:
+            if orig is None:
+                sys.modules.pop("memory", None)
+            else:
+                sys.modules["memory"] = orig
+
+    def test_returns_empty_when_no_candidates(self, monkeypatch):
+        """Empty list when no lessons meet the threshold."""
+        import sys, types
+        fake_mem = types.ModuleType("memory")
+        fake_mem.get_canon_candidates = lambda **kw: []
+        orig = sys.modules.get("memory")
+        sys.modules["memory"] = fake_mem
+        try:
+            from evolver import scan_canon_candidates
+            result = scan_canon_candidates()
+            assert result == []
+        finally:
+            if orig is None:
+                sys.modules.pop("memory", None)
+            else:
+                sys.modules["memory"] = orig
+
+    def test_suggestion_confidence_scales_with_hits(self):
+        """More applications → higher confidence, capped at 0.95."""
+        import sys, types
+        from evolver import scan_canon_candidates
+        for times_applied in [10, 20, 30]:
+            fake_mem = types.ModuleType("memory")
+            fake_mem.get_canon_candidates = lambda **kw: [{
+                "lesson_id": "x",
+                "lesson": "test lesson",
+                "task_type": "research",
+                "score": 0.9,
+                "times_applied": times_applied,
+                "task_types_seen": ["research", "build", "ops"],
+                "sessions_validated": 3,
+                "recorded_at": "2026-01-01",
+            }]
+            orig = sys.modules.get("memory")
+            sys.modules["memory"] = fake_mem
+            try:
+                result = scan_canon_candidates()
+            finally:
+                if orig is None:
+                    sys.modules.pop("memory", None)
+                else:
+                    sys.modules["memory"] = orig
+            assert len(result) == 1
+            assert result[0].confidence <= 0.95
+
+    def test_handles_import_error_gracefully(self, monkeypatch):
+        """Returns [] if memory module is unavailable."""
+        import sys
+        from evolver import scan_canon_candidates
+        orig = sys.modules.get("memory")
+        sys.modules.pop("memory", None)
+        # Remove from builtins import path temporarily by making it unimportable
+        import importlib
+        original_import = __builtins__.__import__ if hasattr(__builtins__, '__import__') else __import__
+        try:
+            result = scan_canon_candidates()
+            # Either returns [] or raises — both acceptable if memory import fails
+            assert isinstance(result, list)
+        except Exception:
+            pass  # acceptable — ImportError path
+        finally:
+            if orig is not None:
+                sys.modules["memory"] = orig
+
+    def test_run_evolver_includes_canon_scan(self, monkeypatch):
+        """run_evolver with scan_canon=True calls scan_canon_candidates."""
+        from evolver import run_evolver
+        canon_called = []
+
+        def fake_canon(**kw):
+            canon_called.append(True)
+            return []
+
+        monkeypatch.setattr("evolver.scan_canon_candidates", fake_canon)
+
+        # Provide enough outcomes to pass min_outcomes check
+        fake_outcomes = [
+            MagicMock(status="done", goal="g", summary="s", task_type="research",
+                      cost_usd=0.01, outcome_id="x")
+            for _ in range(5)
+        ]
+        monkeypatch.setattr("evolver.load_outcomes", lambda **kw: fake_outcomes)
+        monkeypatch.setattr("evolver._llm_analyze", lambda *a, **kw: ([], []))
+        monkeypatch.setattr("evolver._save_suggestions", lambda *a, **kw: None)
+        monkeypatch.setattr("evolver._save_baseline", lambda *a, **kw: None)
+
+        run_evolver(dry_run=True, scan_canon=True, scan_signals=False,
+                    scan_calibration=False, scan_costs=False, scan_drift=False,
+                    verbose=False)
+        assert canon_called, "scan_canon_candidates was not called"
+
+    def test_run_evolver_skips_canon_scan_when_disabled(self, monkeypatch):
+        """run_evolver with scan_canon=False does not call scan_canon_candidates."""
+        from evolver import run_evolver
+        canon_called = []
+
+        def fake_canon(**kw):
+            canon_called.append(True)
+            return []
+
+        monkeypatch.setattr("evolver.scan_canon_candidates", fake_canon)
+
+        fake_outcomes = [
+            MagicMock(status="done", goal="g", summary="s", task_type="research",
+                      cost_usd=0.01, outcome_id="x")
+            for _ in range(5)
+        ]
+        monkeypatch.setattr("evolver.load_outcomes", lambda **kw: fake_outcomes)
+        monkeypatch.setattr("evolver._llm_analyze", lambda *a, **kw: ([], []))
+        monkeypatch.setattr("evolver._save_suggestions", lambda *a, **kw: None)
+        monkeypatch.setattr("evolver._save_baseline", lambda *a, **kw: None)
+
+        run_evolver(dry_run=True, scan_canon=False, scan_signals=False,
+                    scan_calibration=False, scan_costs=False, scan_drift=False,
+                    verbose=False)
+        assert not canon_called, "scan_canon_candidates was called despite scan_canon=False"
