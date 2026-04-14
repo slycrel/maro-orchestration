@@ -339,7 +339,7 @@ def decompose(
     # to avoid inflating decomposition token cost)
     try:
         _user_dir = Path(__file__).resolve().parent.parent / "user"
-        for _ctx_file in ("CONTEXT.md", "SIGNALS.md"):
+        for _ctx_file in ("GOALS.md", "CONTEXT.md", "SIGNALS.md"):
             _ctx_path = _user_dir / _ctx_file
             if _ctx_path.exists():
                 _ctx = _ctx_path.read_text(encoding="utf-8").strip()[:500]
