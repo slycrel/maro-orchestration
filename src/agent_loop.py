@@ -177,15 +177,7 @@ class LoopResult:
 # ---------------------------------------------------------------------------
 
 class LoopPhase:
-    """Named constants for the major phases of run_agent_loop.
-
-    Not a formal enum — just named strings for clarity in logging and
-    transition tracking. The function is too large for a single-dispatch
-    FSM, but naming the phases makes the flow auditable.
-
-    Extraction plan: each phase corresponds to a future method on a
-    LoopStateMachine class. For now, these are documentation anchors.
-    """
+    """Named constants for the major phases of run_agent_loop."""
     INIT = "init"                    # Phase A: setup, adapter, project
     DECOMPOSE = "decompose"          # Phase B: goal → steps
     PRE_FLIGHT = "pre_flight"        # Phase C: gates, resume, cost estimate
@@ -193,6 +185,49 @@ class LoopPhase:
     PREPARE = "prepare"              # Phase E: shape steps, NEXT.md
     EXECUTE = "execute"              # Phase F: main while loop
     FINALIZE = "finalize"            # Phase G: reflection, recovery, return
+
+
+class InvalidTransitionError(Exception):
+    """Raised when an invalid LoopPhase transition is attempted."""
+
+
+class LoopStateMachine:
+    """Enforces valid phase transitions for run_agent_loop.
+
+    Wraps LoopContext.phase writes with transition validation. Call
+    set_phase(ctx, new_phase) at each phase boundary in run_agent_loop.
+    Invalid transitions raise InvalidTransitionError immediately — no
+    silent no-ops, no state corruption.
+
+    Allowed transitions (all phases may also advance to FINALIZE for
+    early-exit paths):
+        INIT       → DECOMPOSE
+        DECOMPOSE  → PRE_FLIGHT
+        PRE_FLIGHT → PARALLEL | PREPARE
+        PARALLEL   → PREPARE
+        PREPARE    → EXECUTE
+        EXECUTE    → FINALIZE
+    """
+
+    _ALLOWED: Dict[str, set] = {
+        LoopPhase.INIT:       {LoopPhase.DECOMPOSE,  LoopPhase.FINALIZE},
+        LoopPhase.DECOMPOSE:  {LoopPhase.PRE_FLIGHT, LoopPhase.FINALIZE},
+        LoopPhase.PRE_FLIGHT: {LoopPhase.PARALLEL,   LoopPhase.PREPARE, LoopPhase.FINALIZE},
+        LoopPhase.PARALLEL:   {LoopPhase.PREPARE,    LoopPhase.FINALIZE},
+        LoopPhase.PREPARE:    {LoopPhase.EXECUTE,    LoopPhase.FINALIZE},
+        LoopPhase.EXECUTE:    {LoopPhase.FINALIZE},
+        LoopPhase.FINALIZE:   set(),
+    }
+
+    @classmethod
+    def set_phase(cls, ctx: LoopContext, new_phase: str) -> None:
+        """Advance ctx.phase to new_phase, raising InvalidTransitionError on bad transitions."""
+        allowed = cls._ALLOWED.get(ctx.phase, set())
+        if new_phase not in allowed:
+            raise InvalidTransitionError(
+                f"Invalid loop phase transition: {ctx.phase!r} → {new_phase!r}"
+            )
+        ctx.phase = new_phase
 
 
 @dataclass
@@ -3406,6 +3441,7 @@ def run_agent_loop(
     o = _orch()
 
     # Phase B: Decompose goal into steps
+    LoopStateMachine.set_phase(ctx, LoopPhase.DECOMPOSE)
     steps, _prereq_context, _lessons_context, _skills_context, _cost_context, _had_no_matching_skill = _decompose_goal(
         ctx,
         preset_steps=preset_steps,
@@ -3415,6 +3451,7 @@ def run_agent_loop(
     )
 
     # Phase C: Pre-flight checks
+    LoopStateMachine.set_phase(ctx, LoopPhase.PRE_FLIGHT)
     steps, _pf, _pf_early_return = _preflight_checks(
         ctx, steps,
         resume_from_loop_id=resume_from_loop_id,
@@ -3440,6 +3477,7 @@ def run_agent_loop(
 
     # Phase D: Parallel fan-out (early return if applicable)
     if _use_dag or _use_fanout:
+        LoopStateMachine.set_phase(ctx, LoopPhase.PARALLEL)
         _parallel_result = _run_parallel_path(
             ctx, steps,
             clean_steps=_clean_steps,
@@ -3456,6 +3494,7 @@ def run_agent_loop(
             return _parallel_result
 
     # Phase E: Shape steps and write to NEXT.md
+    LoopStateMachine.set_phase(ctx, LoopPhase.PREPARE)
     steps, step_indices, _manifest_steps = _prepare_execution(ctx, steps, _manifest_steps)
 
     # Step 2: Execute each step in order (dynamic — interrupts may add/replace steps)
@@ -3522,6 +3561,8 @@ def run_agent_loop(
         except Exception:
             pass
 
+    # Phase F: Main execute loop
+    LoopStateMachine.set_phase(ctx, LoopPhase.EXECUTE)
     while remaining_steps:
         if iteration >= max_iterations:
             loop_status = "stuck"
@@ -4032,6 +4073,7 @@ def run_agent_loop(
             break
 
     # Phase G: Build result, write artifacts, run finalize side-effects
+    LoopStateMachine.set_phase(ctx, LoopPhase.FINALIZE)
     result = _build_result_and_finalize(
         ctx,
         step_outcomes=step_outcomes,

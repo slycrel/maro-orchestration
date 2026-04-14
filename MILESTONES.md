@@ -2,21 +2,24 @@
 
 What to do next, in what order. Updated each session. Strategic phases live in ROADMAP.md; deferred ideas live in BACKLOG.md. This file is the bridge — the executable queue.
 
-Last updated: 2026-04-14 (session 20.5 — adversarial review fix sprint complete)
+Last updated: 2026-04-14 (session 21 — LoopStateMachine complete)
 
 ---
 
-Last updated: 2026-04-14 (session 20.5)
+Last updated: 2026-04-14 (session 21)
 
 ## Next Up
 
-1. **LoopPhase state machine** — Session 20 finding 3.3 (CRITICAL). Replace string constants with `LoopStateMachine` + explicit allowed transitions; `set_phase` raises `InvalidTransitionError` on invalid transitions. Wrinkle: `phase` field on `LoopContext` exists but is never set anywhere — fix requires both adding the SM class AND identifying ~7 transition points in `run_agent_loop` (4,360 lines) to instrument. Estimated 2–4 hour focused session.
-2. **Memory Stage 2→3 / 3→4 not implemented** — Architecture specifies a K-stage memory pipeline (observation → episodic → lesson → identity → skill). Stage 2→3 (lesson→identity consolidation) has a threshold spec but no implementation. Stage 3→4 (skill extraction) is "not reliably triggered." Lessons accumulate but never crystallize.
-3. **NOW → Director routing for complex goals** — Session 20.5 follow-up to finding 3.4. NOW lane (`handle._run_now`) does a single LLM call with no Director involvement. Add config flag `now_lane.escalate_to_director` + `_is_complex_directive` heuristic + new code path in `handle()` that calls `run_director` when classifier returns NOW but complexity > threshold.
+1. **Memory Stage 2→3 / 3→4 not implemented** — Architecture specifies a K-stage memory pipeline (observation → episodic → lesson → identity → skill). Stage 2→3 (lesson→identity consolidation) has a threshold spec but no implementation. Stage 3→4 (skill extraction) is "not reliably triggered." Lessons accumulate but never crystallize.
+2. **NOW → Director routing for complex goals** — Session 20.5 follow-up to finding 3.4. NOW lane (`handle._run_now`) does a single LLM call with no Director involvement. Add config flag `now_lane.escalate_to_director` + `_is_complex_directive` heuristic + new code path in `handle()` that calls `run_director` when classifier returns NOW but complexity > threshold.
 4. **pytest-via-subprocess 900s timeout** — `python3 -m pytest tests/ -q` via `ClaudeSubprocessAdapter` hits 900s timeout (real pytest ~100s). Diagnosis correctly recovered via smaller sub-commands. Root cause unclear — possibly stdout buffering or double-rupture in the adapter. Worth investigating before next adversarial run.
 5. **Remaining 71 silent exceptions in agent_loop.py lines 1000+** — First 1,000 lines (16 high-risk sites) fixed in session 20.5. The rest are lower-risk best-effort telemetry; sweep + classify in a focused pass.
 6. **Recovery mid-loop apply (remaining)** — Gap 2 from phase audit is ~mostly closed via the mid-loop diagnosis bridge (session 19). Remaining: `budget_exhaustion` is diagnosed only after max_iterations hit; consider a mid-loop "iteration budget running low" signal that bumps the budget instead of grinding to a stop.
 7. **Artifact output routing cleanup** — Temp artifacts (per-step) → tmp dir (deleted by default, kept via config `keep_artifacts: true`). Permanent outputs → `~/.poe/workspace/output/`.
+
+## Done (session 21, 2026-04-14 — LoopStateMachine)
+
+- [x] **LoopPhase state machine** — `LoopStateMachine` class with `_ALLOWED` transitions dict; `set_phase(ctx, phase)` raises `InvalidTransitionError` on invalid transitions. Wired into `run_agent_loop` at all 7 phase boundaries (A→B, B→C, C→D, D→E, E→F, F→G, plus FINALIZE on early exits). `LoopContext.phase` field was present but never set — now set at every transition. 8 tests. Closes BACKLOG CRITICAL finding 3.3.
 
 ## Done (session 20.5, 2026-04-14 — fix sprint, 10 commits)
 
