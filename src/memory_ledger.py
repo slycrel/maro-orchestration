@@ -436,9 +436,16 @@ def _store_lesson(
             source_goal=source_goal,
             confidence=0.0,
         )
-    # Check for near-duplicate (same lesson text for same task type)
-    existing = load_lessons(task_type=task_type, limit=50)
+    # Pass 1: fast exact-text dedup (no limit — prevents unbounded accumulation)
+    # Pass 2: near-duplicate check within recent 100 lessons (word-overlap ≥ 0.8)
+    existing = load_lessons(task_type=task_type, limit=500)
     for ex in existing:
+        if ex.lesson == lesson:
+            # Exact match: reinforce without touching confidence (it's already there)
+            ex.times_reinforced += 1
+            _rewrite_lessons_file(task_type, existing)
+            return ex
+    for ex in existing[:100]:
         if _text_similarity(ex.lesson, lesson) > 0.8:
             # Reinforce existing lesson and persist the update
             ex.times_reinforced += 1
@@ -595,6 +602,88 @@ def load_outcomes(limit: int = 20) -> List[Outcome]:
         pass
 
     return list(reversed(outcomes))[:limit]
+
+
+# ---------------------------------------------------------------------------
+# Lesson deduplication (cleanup utility)
+# ---------------------------------------------------------------------------
+
+def deduplicate_lessons(*, dry_run: bool = False) -> dict:
+    """Deduplicate lessons.jsonl by exact text match and near-duplicate word overlap.
+
+    Keeps the first occurrence (oldest) of each lesson text.
+    Near-duplicates (word overlap ≥ 0.8) are merged: the older entry survives,
+    its times_reinforced count is bumped for each dropped near-dup.
+
+    Returns:
+        Dict with keys: before, after, removed_exact, removed_near, removed_dry_run.
+    """
+    path = _lessons_path()
+    if not path.exists():
+        return {"before": 0, "after": 0, "removed_exact": 0, "removed_near": 0}
+
+    all_lessons: List[Lesson] = []
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                d = json.loads(line)
+                l = Lesson(**{k: d[k] for k in Lesson.__dataclass_fields__ if k in d})
+                all_lessons.append(l)
+            except Exception:
+                pass
+    except Exception:
+        return {"before": 0, "after": 0, "removed_exact": 0, "removed_near": 0}
+
+    before = len(all_lessons)
+    kept: List[Lesson] = []
+    removed_exact = 0
+    removed_near = 0
+
+    for l in all_lessons:
+        # Exact match check
+        exact_match = next((k for k in kept if k.lesson == l.lesson), None)
+        if exact_match is not None:
+            exact_match.times_reinforced += 1
+            removed_exact += 1
+            continue
+
+        # Near-duplicate check
+        near_match = next(
+            (k for k in kept if _text_similarity(k.lesson, l.lesson) > 0.8),
+            None,
+        )
+        if near_match is not None:
+            near_match.times_reinforced += 1
+            near_match.confidence = min(1.0, near_match.confidence + 0.05)
+            removed_near += 1
+            continue
+
+        kept.append(l)
+
+    after = len(kept)
+    if not dry_run and after < before:
+        content = "\n".join(json.dumps(asdict(l)) for l in kept) + "\n"
+        try:
+            from file_lock import locked_write
+            with locked_write(path):
+                path.write_text(content, encoding="utf-8")
+        except Exception as exc:
+            log.warning("deduplicate_lessons: write failed: %s", exc)
+
+    log.info(
+        "deduplicate_lessons: before=%d after=%d removed_exact=%d removed_near=%d dry_run=%s",
+        before, after, removed_exact, removed_near, dry_run,
+    )
+    return {
+        "before": before,
+        "after": after,
+        "removed_exact": removed_exact,
+        "removed_near": removed_near,
+        "removed_dry_run": dry_run and (removed_exact + removed_near),
+    }
 
 
 # ---------------------------------------------------------------------------

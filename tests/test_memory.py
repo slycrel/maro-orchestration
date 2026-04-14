@@ -1658,3 +1658,112 @@ class TestCalibrationLoop:
 
         result = calibrated_alignment_threshold("alignment")
         assert result == _ALIGNMENT_THRESHOLD_BASE
+
+
+class TestDeduplicateLessons:
+    """Tests for deduplicate_lessons() two-pass cleanup utility."""
+
+    def _lessons_path(self, tmp_path):
+        """Return the lessons.jsonl path under the orch_items memory_dir for this workspace."""
+        return tmp_path / "prototypes" / "poe-orchestration" / "memory" / "lessons.jsonl"
+
+    def _make_lesson(self, text, task_type="build", lesson_id=None):
+        """Build a complete Lesson-compatible dict."""
+        import uuid
+        return {
+            "lesson_id": lesson_id or str(uuid.uuid4()),
+            "task_type": task_type,
+            "outcome": "done",
+            "lesson": text,
+            "source_goal": "test goal",
+            "confidence": 0.7,
+            "times_applied": 0,
+            "times_reinforced": 0,
+            "recorded_at": "2026-01-01T00:00:00+00:00",
+        }
+
+    def _write_lessons(self, path, lessons):
+        import json
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            for lesson in lessons:
+                f.write(json.dumps(lesson) + "\n")
+
+    def test_removes_exact_duplicates(self, monkeypatch, tmp_path):
+        """Exact duplicate lesson texts are reduced to one."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        import json
+        lessons_path = self._lessons_path(tmp_path)
+        lesson = self._make_lesson("Always test edge cases.", lesson_id="L001")
+        self._write_lessons(lessons_path, [lesson, lesson, lesson])
+
+        from memory_ledger import deduplicate_lessons
+        stats = deduplicate_lessons()
+        assert stats["before"] == 3
+        assert stats["after"] == 1
+        assert stats["removed_exact"] == 2
+
+        kept = [json.loads(l) for l in lessons_path.read_text().splitlines() if l.strip()]
+        assert len(kept) == 1
+
+    def test_removes_near_duplicates(self, monkeypatch, tmp_path):
+        """Near-duplicate lessons (word Jaccard > 0.8) are collapsed."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        lessons_path = self._lessons_path(tmp_path)
+        # 11 common words, 1 unique each → Jaccard = 11/13 ≈ 0.846 (above 0.8 threshold)
+        base = "Always validate user inputs at the system boundary before processing any data."
+        near = "Always validate user inputs at the system boundary before processing all data."
+        self._write_lessons(lessons_path, [
+            self._make_lesson(base, lesson_id="L001"),
+            self._make_lesson(near, lesson_id="L002"),
+        ])
+
+        from memory_ledger import deduplicate_lessons
+        stats = deduplicate_lessons()
+        assert stats["before"] == 2
+        assert stats["after"] == 1
+        assert stats["removed_near"] >= 1
+
+    def test_dry_run_does_not_write(self, monkeypatch, tmp_path):
+        """dry_run=True reports what would change but leaves the file untouched."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        lessons_path = self._lessons_path(tmp_path)
+        lesson = self._make_lesson("Always test edge cases.", lesson_id="L001")
+        self._write_lessons(lessons_path, [lesson, lesson])
+        original = lessons_path.read_text()
+
+        from memory_ledger import deduplicate_lessons
+        stats = deduplicate_lessons(dry_run=True)
+        assert stats["removed_exact"] == 1
+        assert lessons_path.read_text() == original  # file unchanged
+
+    def test_keeps_unique_lessons(self, monkeypatch, tmp_path):
+        """Distinct lessons are preserved untouched."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        lessons_path = self._lessons_path(tmp_path)
+        self._write_lessons(lessons_path, [
+            self._make_lesson("Test edge cases.", task_type="build", lesson_id="L001"),
+            self._make_lesson("Monitor memory usage.", task_type="ops", lesson_id="L002"),
+            self._make_lesson("Validate sources carefully.", task_type="research", lesson_id="L003"),
+        ])
+
+        from memory_ledger import deduplicate_lessons
+        stats = deduplicate_lessons()
+        assert stats["before"] == 3
+        assert stats["after"] == 3
+        assert stats["removed_exact"] == 0
+        assert stats["removed_near"] == 0
+
+    def test_empty_file_returns_zero_stats(self, monkeypatch, tmp_path):
+        """Empty or missing lessons file returns zero counts without error."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        lessons_path = self._lessons_path(tmp_path)
+        lessons_path.parent.mkdir(parents=True, exist_ok=True)
+        lessons_path.write_text("")
+
+        from memory_ledger import deduplicate_lessons
+        stats = deduplicate_lessons()
+        assert stats["before"] == 0
+        assert stats["after"] == 0
+        assert stats["removed_exact"] == 0
+        assert stats["removed_near"] == 0

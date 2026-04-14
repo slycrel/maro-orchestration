@@ -419,10 +419,18 @@ def main():
     parser = argparse.ArgumentParser(description="Poe environment health check")
     parser.add_argument("--json", action="store_true", help="JSON output (not yet implemented, use text)")
     parser.add_argument("--cleanup-skills", action="store_true", help="Remove duplicate skills from workspace")
+    parser.add_argument("--cleanup-lessons", action="store_true", help="Deduplicate lessons from workspace")
+    parser.add_argument("--dry-run", action="store_true", help="Show what cleanup would do without writing")
     args = parser.parse_args()
 
     if args.cleanup_skills:
         cleanup_workspace_skills()
+    elif args.cleanup_lessons:
+        from memory_ledger import deduplicate_lessons
+        stats = deduplicate_lessons(dry_run=args.dry_run)
+        label = "[DRY RUN] " if args.dry_run else ""
+        print(f"{label}lessons dedup: {stats['before']} → {stats['after']} "
+              f"(-{stats['removed_exact']} exact, -{stats['removed_near']} near-dup)")
     else:
         ok = run_doctor()
         sys.exit(0 if ok else 1)

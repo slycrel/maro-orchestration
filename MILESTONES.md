@@ -2,17 +2,17 @@
 
 What to do next, in what order. Updated each session. Strategic phases live in ROADMAP.md; deferred ideas live in BACKLOG.md. This file is the bridge — the executable queue.
 
-Last updated: 2026-04-14 (session 22 — stale hash cleanup, event-driven wakeup, constraint false-positive fix, FailoverAdapter)
+Last updated: 2026-04-14 (session 22 — stale hash cleanup, event-driven wakeup, constraint false-positive fix, FailoverAdapter, evolver confidence calibration, locked_append JSONL, K2 link-farm import)
 
 ---
 
 ## Next Up
 
 1. **Memory Stage 3→4 (verify extraction in live runs)** — Silent failure bug fixed (s.summary → s.result, exception now logged). Next: run a real goal and confirm skills are being extracted to `~/.poe/workspace/skills/`. Check evolver's `synthesize_skill` path works end-to-end.
-2. **K2 follow-up: Import links collection** — Knowledge node infrastructure built. Next: import enriched posts from slycrel/link-farm (300+ curated links).
-3. **Director persona authoring skill** — Trigger: N+1 dispatches of a recurring role with no matching persona. Action: spawn sub-goal to author `personas/<slug>.md`. See BACKLOG P2.
-4. **Evolver confidence calibration** — Self-reported confidence never validated against real outcomes. Track outcome of each applied suggestion, compute empirical confidence. P2.
-5. **11 unlocked bare-append JSONL paths** — captain-log, outcomes, step-costs, etc. do bare `open('a').write()`. Safe for single-writer but will corrupt under concurrent appends. P3.
+2. ~~**K2 follow-up: Import links collection**~~ — DONE (session 22). `import_link_farm()` + `poe-knowledge import-links` CLI. 315 nodes already in workspace. +9 tests.
+3. ~~**Director persona authoring skill**~~ — DONE (session 22). `record_persona_dispatch()` logs each selection with is_fallback flag. `scan_persona_gaps()` surfaces recurring unmatched roles. Wired into `run_evolver(scan_persona_gaps=True)` as persona_authoring Suggestions. +6 tests.
+4. ~~**Evolver confidence calibration**~~ — DONE (session 22). `_record_suggestion_outcomes` + `scan_suggestion_outcomes` wired into run_evolver. 6 tests.
+5. ~~**11 unlocked bare-append JSONL paths**~~ — DONE (session 22). Added `locked_append()` to file_lock.py; converted 11 highest-traffic sites (captains_log, memory_ledger×5, metrics, evolver×4, inspector×2). +5 tests.
 
 ## Done (session 22, 2026-04-14 — stale hash cleanup, event-driven wakeup, constraint fix, FailoverAdapter)
 
