@@ -1,11 +1,13 @@
 """Lightweight file locking for shared data store writes.
 
-Uses fcntl.flock for advisory locking on Linux. Protects full-rewrite
-operations (skills.jsonl, tiered lessons, hypotheses, rules) from
-concurrent corruption when multiple agent loops run simultaneously.
+Uses fcntl.flock for advisory locking on Linux. Protects both full-rewrite
+operations (skills.jsonl, tiered lessons, hypotheses, rules) and append-only
+JSONL streams (outcomes.jsonl, captains_log.jsonl, step-costs.jsonl, etc.)
+from concurrent corruption when multiple agent loops run simultaneously.
 
-Append-only files (outcomes.jsonl, captains_log.jsonl, events.jsonl)
-don't need this — small appends are atomic on Linux.
+Note: Linux's append-write atomicity guarantee only applies to writes under
+PIPE_BUF (4096 bytes). JSON payloads (step outcomes, traces, lessons) easily
+exceed this limit, so bare open('a').write() is NOT safe under concurrent writers.
 
 Behavior: best-effort lock with explicit warning on fallback. The lock
 is advisory — it prevents concurrent Poe processes from corrupting each
@@ -15,10 +17,14 @@ This is a deliberate tradeoff: blocking indefinitely is worse than a
 rare unlocked write, but the warning makes degradation visible.
 
 Usage:
-    from file_lock import locked_write
+    from file_lock import locked_write, locked_append
 
+    # Full rewrite
     with locked_write(path):
         path.write_text(content)
+
+    # JSONL line append
+    locked_append(path, json.dumps(entry))
 """
 
 from __future__ import annotations
@@ -112,3 +118,19 @@ def locked_write(path: Path) -> Generator[None, None, None]:
                 pass
         if acquired:
             held.discard(lock_key)
+
+
+def locked_append(path: Path, line: str) -> None:
+    """Append a newline-terminated line to path atomically via flock.
+
+    Acquires the same .lock file used by locked_write(), so append and
+    rewrite callers are mutually exclusive. The line must NOT end with \\n
+    — this function adds the newline.
+
+    Falls through on lock failure (logs WARNING) rather than blocking the
+    caller indefinitely. The write still happens — degraded, not dropped.
+    """
+    with locked_write(path):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(line + "\n")

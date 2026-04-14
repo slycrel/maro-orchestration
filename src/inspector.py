@@ -1399,21 +1399,21 @@ def run_full_inspector(
     # 7. Persist
     if not dry_run:
         try:
+            from file_lock import locked_append
             p = _inspector_report_log_path()
             p.parent.mkdir(parents=True, exist_ok=True)
-            with p.open("a", encoding="utf-8") as f:
-                f.write(json.dumps(report.to_dict()) + "\n")
+            locked_append(p, json.dumps(report.to_dict()))
         except Exception as e:
             if verbose:
                 print(f"[inspector] failed to persist report: {e}", file=sys.stderr)
 
         if signals:
             try:
+                from file_lock import locked_append
                 sp = _friction_signals_log_path()
                 sp.parent.mkdir(parents=True, exist_ok=True)
-                with sp.open("a", encoding="utf-8") as f:
-                    for s in signals:
-                        f.write(json.dumps(s.to_dict()) + "\n")
+                for s in signals:
+                    locked_append(sp, json.dumps(s.to_dict()))
             except Exception as e:
                 if verbose:
                     print(f"[inspector] failed to persist signals: {e}", file=sys.stderr)

@@ -132,8 +132,8 @@ def log_event(
     try:
         path = _log_path()
         path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(entry) + "\n")
+        from file_lock import locked_append
+        locked_append(path, json.dumps(entry))
     except Exception as exc:
         logger.warning("captains_log: write failed: %s", exc)
 

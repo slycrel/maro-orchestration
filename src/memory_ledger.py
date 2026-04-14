@@ -169,8 +169,8 @@ def append_task_ledger(entry: TaskLedgerEntry) -> None:
         "created_at": entry.created_at,
     }
     try:
-        with open(path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(row) + "\n")
+        from file_lock import locked_append
+        locked_append(path, json.dumps(row))
     except Exception as exc:
         log.debug("append_task_ledger: write failed: %s", exc)
 
@@ -253,8 +253,8 @@ def record_step_trace(
         "steps": steps_data,
     }
     try:
-        with open(_step_traces_path(), "a", encoding="utf-8") as f:
-            f.write(json.dumps(trace) + "\n")
+        from file_lock import locked_append
+        locked_append(_step_traces_path(), json.dumps(trace))
     except OSError as exc:
         log.warning("record_step_trace: failed to write: %s", exc)
 
@@ -353,8 +353,8 @@ def record_outcome(
     )
 
     # Append to outcomes ledger
-    with open(_outcomes_path(), "a", encoding="utf-8") as f:
-        f.write(json.dumps(asdict(outcome)) + "\n")
+    from file_lock import locked_append
+    locked_append(_outcomes_path(), json.dumps(asdict(outcome)))
 
     # Append to daily log
     _append_daily_log(outcome)
@@ -454,8 +454,8 @@ def _store_lesson(
         source_goal=source_goal,
         confidence=confidence,
     )
-    with open(_lessons_path(), "a", encoding="utf-8") as f:
-        f.write(json.dumps(asdict(l)) + "\n")
+    from file_lock import locked_append
+    locked_append(_lessons_path(), json.dumps(asdict(l)))
     return l
 
 
@@ -603,17 +603,17 @@ def load_outcomes(limit: int = 20) -> List[Outcome]:
 
 def _save_compressed_batch(batch: CompressedBatch) -> None:
     path = _compressed_outcomes_path()
-    with open(path, "a", encoding="utf-8") as f:
-        f.write(json.dumps({
-            "batch_id": batch.batch_id,
-            "summary": batch.summary,
-            "task_types": batch.task_types,
-            "outcome_ids": batch.outcome_ids,
-            "batch_size": batch.batch_size,
-            "oldest_at": batch.oldest_at,
-            "newest_at": batch.newest_at,
-            "compressed_at": batch.compressed_at,
-        }) + "\n")
+    from file_lock import locked_append
+    locked_append(path, json.dumps({
+        "batch_id": batch.batch_id,
+        "summary": batch.summary,
+        "task_types": batch.task_types,
+        "outcome_ids": batch.outcome_ids,
+        "batch_size": batch.batch_size,
+        "oldest_at": batch.oldest_at,
+        "newest_at": batch.newest_at,
+        "compressed_at": batch.compressed_at,
+    }))
 
 
 def load_compressed_batches(limit: int = 20) -> List[CompressedBatch]:

@@ -177,8 +177,8 @@ def record_step_cost(
     try:
         path = _step_costs_path()
         path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(entry) + "\n")
+        from file_lock import locked_append
+        locked_append(path, json.dumps(entry))
     except Exception:
         pass  # never break the caller
     return entry

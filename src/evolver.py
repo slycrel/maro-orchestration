@@ -166,9 +166,9 @@ def load_suggestions(limit: int = 20) -> List[Suggestion]:
 def _save_suggestions(suggestions: List[Suggestion]) -> None:
     p = _suggestions_path()
     p.parent.mkdir(parents=True, exist_ok=True)
-    with p.open("a", encoding="utf-8") as f:
-        for s in suggestions:
-            f.write(json.dumps(s.to_dict()) + "\n")
+    from file_lock import locked_append
+    for s in suggestions:
+        locked_append(p, json.dumps(s.to_dict()))
 
 
 def list_pending_suggestions(limit: int = 20) -> List[Suggestion]:
@@ -233,8 +233,8 @@ def _apply_suggestion_action(d: dict) -> None:
             "before_state": before_state,
         }
         _cl_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(_cl_path, "a", encoding="utf-8") as _clf:
-            _clf.write(json.dumps(_cl_entry) + "\n")
+        from file_lock import locked_append
+        locked_append(_cl_path, json.dumps(_cl_entry))
     except Exception:
         pass  # audit trail must never block execution
 
@@ -1151,8 +1151,8 @@ def _save_baseline(entry: dict) -> None:
     """Append a cycle quality snapshot to baselines."""
     path = _baselines_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "a", encoding="utf-8") as f:
-        f.write(json.dumps(entry) + "\n")
+    from file_lock import locked_append
+    locked_append(path, json.dumps(entry))
 
 
 def scan_quality_drift(
@@ -1368,8 +1368,9 @@ def _record_suggestion_outcomes(
                 "verified_at": now,
             }))
 
-        with out_path.open("a", encoding="utf-8") as _fh:
-            _fh.write("\n".join(lines) + "\n")
+        from file_lock import locked_append
+        for _line in lines:
+            locked_append(out_path, _line)
         log.debug("_record_suggestion_outcomes: wrote %d entries (passed=%s) to %s",
                   len(lines), passed, out_path)
     except Exception as exc:

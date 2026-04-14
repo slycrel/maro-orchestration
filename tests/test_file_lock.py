@@ -9,7 +9,9 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from file_lock import locked_write
+import json
+
+from file_lock import locked_write, locked_append
 
 
 class TestLockedWrite:
@@ -50,3 +52,44 @@ class TestLockedWrite:
         with locked_write(path):
             path.write_text("after error\n")
         assert path.read_text() == "after error\n"
+
+
+class TestLockedAppend:
+    def test_appends_single_line(self, tmp_path):
+        path = tmp_path / "out.jsonl"
+        locked_append(path, json.dumps({"x": 1}))
+        lines = path.read_text().splitlines()
+        assert lines == ['{"x": 1}']
+
+    def test_appends_multiple_lines_sequential(self, tmp_path):
+        path = tmp_path / "out.jsonl"
+        locked_append(path, json.dumps({"a": 1}))
+        locked_append(path, json.dumps({"b": 2}))
+        locked_append(path, json.dumps({"c": 3}))
+        lines = path.read_text().splitlines()
+        assert len(lines) == 3
+        assert json.loads(lines[0]) == {"a": 1}
+        assert json.loads(lines[2]) == {"c": 3}
+
+    def test_creates_parent_dirs(self, tmp_path):
+        path = tmp_path / "deep" / "sub" / "out.jsonl"
+        locked_append(path, "line1")
+        assert path.exists()
+        assert path.read_text().strip() == "line1"
+
+    def test_adds_newline_terminator(self, tmp_path):
+        path = tmp_path / "out.jsonl"
+        locked_append(path, "no-newline-in-arg")
+        content = path.read_text()
+        assert content.endswith("\n")
+        assert content.count("\n") == 1
+
+    def test_reentrant_with_locked_write(self, tmp_path):
+        """locked_append inside locked_write on same path doesn't deadlock."""
+        path = tmp_path / "out.jsonl"
+        with locked_write(path):
+            path.write_text("existing\n")
+            # locked_append uses locked_write internally — reentrancy guard fires
+            locked_append(path, "appended")
+        lines = path.read_text().splitlines()
+        assert "appended" in lines
