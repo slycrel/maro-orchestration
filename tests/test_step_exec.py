@@ -635,3 +635,120 @@ class TestArtifactContextInjection:
             shared_ctx={},
         )
         assert "Artifacts from prior steps" not in captured["user"]
+
+
+# ---------------------------------------------------------------------------
+# Long-running timeout classification
+# ---------------------------------------------------------------------------
+
+class TestLongRunningTimeout:
+    """Tests for per-step timeout injection in execute_step."""
+
+    def _adapter_capturing_kwargs(self):
+        """Returns adapter that captures the kwargs passed to complete()."""
+        from llm import LLMResponse, ToolCall
+        captured = {}
+
+        class _Cap:
+            def complete(self, messages, **kw):
+                captured["kw"] = kw
+                return LLMResponse(
+                    content="",
+                    tool_calls=[ToolCall(
+                        name="complete_step",
+                        arguments={"result": "done", "summary": "ok"},
+                    )],
+                )
+
+        return _Cap(), captured
+
+    def test_pytest_step_gets_long_timeout(self, tmp_path, monkeypatch):
+        """A step containing 'pytest' gets the long-running timeout (1800s default)."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        monkeypatch.delenv("POE_LONG_RUNNING_TIMEOUT", raising=False)
+
+        from step_exec import execute_step, EXECUTE_TOOLS
+        adapter, captured = self._adapter_capturing_kwargs()
+        execute_step(
+            goal="test goal",
+            step_text="Run pytest tests/test_foo.py -q and check results",
+            step_num=1,
+            total_steps=2,
+            completed_context=[],
+            adapter=adapter,
+            tools=EXECUTE_TOOLS,
+        )
+        assert "timeout" in captured.get("kw", {})
+        assert captured["kw"]["timeout"] == 1800
+
+    def test_full_suite_step_gets_doubled_timeout(self, tmp_path, monkeypatch):
+        """A step with 'tests/' in it gets 2× the long-running timeout."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        monkeypatch.delenv("POE_LONG_RUNNING_TIMEOUT", raising=False)
+
+        from step_exec import execute_step, EXECUTE_TOOLS
+        adapter, captured = self._adapter_capturing_kwargs()
+        execute_step(
+            goal="test goal",
+            step_text="Run pytest tests/ -q to verify no regressions",
+            step_num=1,
+            total_steps=2,
+            completed_context=[],
+            adapter=adapter,
+            tools=EXECUTE_TOOLS,
+        )
+        assert "timeout" in captured.get("kw", {})
+        assert captured["kw"]["timeout"] == 3600
+
+    def test_non_long_running_step_no_timeout(self, tmp_path, monkeypatch):
+        """A normal analysis step does not inject a timeout."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+
+        from step_exec import execute_step, EXECUTE_TOOLS
+        adapter, captured = self._adapter_capturing_kwargs()
+        execute_step(
+            goal="test goal",
+            step_text="Analyze the failure patterns and write a summary",
+            step_num=1,
+            total_steps=2,
+            completed_context=[],
+            adapter=adapter,
+            tools=EXECUTE_TOOLS,
+        )
+        assert "timeout" not in captured.get("kw", {})
+
+    def test_poe_long_running_timeout_env_override(self, tmp_path, monkeypatch):
+        """POE_LONG_RUNNING_TIMEOUT overrides the default 1800s for long-running steps."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        monkeypatch.setenv("POE_LONG_RUNNING_TIMEOUT", "600")
+
+        from step_exec import execute_step, EXECUTE_TOOLS
+        adapter, captured = self._adapter_capturing_kwargs()
+        execute_step(
+            goal="test goal",
+            step_text="Run pytest tests/test_foo.py -q",
+            step_num=1,
+            total_steps=2,
+            completed_context=[],
+            adapter=adapter,
+            tools=EXECUTE_TOOLS,
+        )
+        assert captured["kw"]["timeout"] == 600
+
+    def test_docker_step_gets_long_timeout(self, tmp_path, monkeypatch):
+        """Docker build steps also get the long-running timeout."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        monkeypatch.delenv("POE_LONG_RUNNING_TIMEOUT", raising=False)
+
+        from step_exec import execute_step, EXECUTE_TOOLS
+        adapter, captured = self._adapter_capturing_kwargs()
+        execute_step(
+            goal="deploy app",
+            step_text="Build the docker image and push to registry",
+            step_num=1,
+            total_steps=3,
+            completed_context=[],
+            adapter=adapter,
+            tools=EXECUTE_TOOLS,
+        )
+        assert captured["kw"]["timeout"] == 1800

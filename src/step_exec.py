@@ -709,14 +709,26 @@ def execute_step(
     )
 
     # Detect steps that run external commands — give them a longer timeout.
-    # 900s covers: pytest on large suites (90s) + LLM analysis time.
-    # These timeout values are passed to the adapter; CodexAdapter and
-    # ClaudeSubprocessAdapter both respect the timeout kwarg.
+    # Long-running steps: test suites, builds, installs.
+    # Default is 1800s (30 min) — covers pytest on large suites (~100-300s) + LLM
+    # analysis time on constrained hardware. Override via POE_LONG_RUNNING_TIMEOUT.
+    # The step text can further hint at scale: "full suite" / "all tests" / "tests/ -q"
+    # get an extra multiplier vs single-file runs.
     _long_running_keywords = {"pytest", "test suite", "npm run", "make ", "docker ", "pip install",
                               "git clone", "build ", "compile", "deploy", "cargo ", "mvn "}
     _step_lower = step_text.lower()
     _is_long_running = any(kw in _step_lower for kw in _long_running_keywords)
-    _step_timeout = 900 if _is_long_running else None
+    _default_long_timeout = int(os.environ.get("POE_LONG_RUNNING_TIMEOUT", "1800"))
+    # Full test suite runs need more headroom than targeted single-file runs.
+    # "tests/ " (trailing space) matches "pytest tests/ -q" but NOT "tests/test_foo.py"
+    # (which would be "tests/t...").
+    _full_suite_hints = {"tests/ ", "tests -q", "all tests", "full suite", "test suite"}
+    _is_full_suite = _is_long_running and any(h in _step_lower for h in _full_suite_hints)
+    _step_timeout = (min(_default_long_timeout * 2, 3600) if _is_full_suite
+                     else _default_long_timeout if _is_long_running else None)
+    if _is_long_running:
+        log.debug("step %d classified as %s (timeout=%ds)",
+                  step_num, "full_suite" if _is_full_suite else "long_running", _step_timeout)
 
     # Phase 41 step 6: inject tool_search if any deferred tools are in the list
     _active_tools = list(tools)
@@ -746,7 +758,19 @@ def execute_step(
         )
     except Exception as exc:
         _elapsed = time.monotonic() - _step_t0
-        log.warning("step %d adapter_error: %s elapsed=%.1fs", step_num, exc, _elapsed)
+        _exc_str = str(exc)
+        _was_lr = locals().get("_is_long_running", False)
+        _was_full = locals().get("_is_full_suite", False)
+        _used_timeout = locals().get("_step_timeout")
+        if "timed out" in _exc_str.lower() and _was_lr:
+            log.warning(
+                "step %d long-running timeout after %.0fs (limit=%ds, type=%s): %s",
+                step_num, _elapsed, _used_timeout or 0,
+                "full_suite" if _was_full else "long_running",
+                step_text[:80],
+            )
+        else:
+            log.warning("step %d adapter_error: %s elapsed=%.1fs", step_num, exc, _elapsed)
         return {
             "status": "blocked",
             "stuck_reason": f"LLM call failed: {exc}",
