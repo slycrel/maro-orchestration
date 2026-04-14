@@ -8,9 +8,8 @@ Last updated: 2026-04-14 (session 26 — codebase graph, injection guard, dev ru
 
 ## Next Up
 
-- **Third PM round** — Dev run 2 closed #17/#18/#19. File next wave of issues on recipe repo.
-- **Harness Architecture Spectrum** — Validate NOW/AGENDA checkpoint placement. See BACKLOG P7/10.
-- **Wire injection_guard into skills.py loading** — Same defense-in-depth pattern as persona loading. Scan skill YAML before promoting to workspace.
+- **Third PM round** — Dev run 2 closed #17/#18/#19. File next wave of issues on recipe repo (running).
+- **BACKLOG cleanup** — Review and close stale BACKLOG items from earlier sessions.
 - **Evolver confidence calibration follow-up** — `scan_suggestion_outcomes` wired; verify calibration is improving (check live workspace suggestion stats).
 
 ## Done (session 26, 2026-04-14 — codebase graph, injection guard, dev round 2)
@@ -18,6 +17,7 @@ Last updated: 2026-04-14 (session 26 — codebase graph, injection guard, dev ru
 - [x] **Codebase Graph** — `src/codebase_graph.py` (39 tests). AST-based Python call graph; 5-pass algorithm (collect → parse → resolve imports → centrality → rank). Basename import resolution (`from llm import ...` → `llm.py`). Centrality = 0.7×in_degree + 0.3×line_coverage. Goal-biased keyword ranking in `format_graph_context()`. Wired into `_build_loop_context()` (fail-open). `poe-codebase-graph` CLI. Verified: `llm.py` tops centrality (54 importers), `agent_loop.py` in top 10.
 - [x] **Prompt injection guard** — `src/injection_guard.py` (59 tests). 17 regex patterns across 3 categories (override, tool-call, exfil). `InjectionScanReport` with risk_level + safe_to_auto_apply. Wired into: evolver `apply_suggestion()`, persona `scan_personas_dir()` YAML loading, persona `create_freeform_persona()` goal scanning. Fail-closed (returns False on exceptions).
 - [x] **Dev run 2 closed** — #17 (json.loads crash), #18 (test isolation conftest.py), #19 (rating DB constraint) all closed.
+- [x] **Harness Architecture Spectrum** — Friction scan wired into inspector heartbeat tick (heuristic, no LLM, runs alongside inspector). Inspector friction summary injected into quality gate Pass 1 user message. Closes BACKLOG P7/10. NOW lane intentionally thin by design; AGENDA has pre-flight + quality gate + post-hoc inspector. Injection guard wired into synthesize_skill() in evolver.
 
 ## Done (session 25, 2026-04-14 — repo scan, BLE, SIGNALS.md, PM/dev round 2)
 

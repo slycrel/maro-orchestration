@@ -298,9 +298,21 @@ def run_quality_gate(
         import json
 
         # --- Pass 1: PASS/ESCALATE verdict ---
+        # Inject inspector friction summary if available — friction signals (stuck steps,
+        # escalation tone, backtracking) should bias the gate toward ESCALATE.
+        _friction_note = ""
+        try:
+            from inspector import get_friction_summary as _get_friction_summary
+            _fs = _get_friction_summary()
+            if _fs:
+                _friction_note = f"\nInspector friction signals (from recent runs): {_fs[:300]}\n"
+        except Exception:
+            pass  # friction context is optional — never block the gate
+
         user_msg = (
             f"Goal: {goal[:300]}\n\n"
-            f"Output from final steps:\n{output_summary}\n\n"
+            f"Output from final steps:\n{output_summary}\n"
+            f"{_friction_note}\n"
             f"Does this output meet the bar for the stated goal?"
         )
 

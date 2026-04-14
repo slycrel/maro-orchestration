@@ -545,7 +545,7 @@ def _run_evolver_bg(*, dry_run: bool = False, verbose: bool = False,
 
 
 def _run_inspector_bg(*, dry_run: bool = False, verbose: bool = False) -> None:
-    """Run inspector in background thread. Clears flag in finally."""
+    """Run inspector + harness friction scan in background thread. Clears flag in finally."""
     global _inspector_active
     try:
         from inspector import run_inspector
@@ -553,6 +553,23 @@ def _run_inspector_bg(*, dry_run: bool = False, verbose: bool = False) -> None:
     except Exception as e:
         if verbose:
             print(f"[heartbeat] inspector failed: {e}", file=sys.stderr)
+    # Harness friction scan: heuristic code-path quality signal (no LLM, cheap).
+    # Runs alongside inspector since both analyze execution quality.
+    try:
+        from harness_optimizer import scan_harness_friction, _save_friction_suggestions
+        import uuid as _uuid
+        _fric_report = scan_harness_friction()
+        if not _fric_report.skipped and _fric_report.friction_points:
+            _save_friction_suggestions(
+                _fric_report.friction_points,
+                run_id=_uuid.uuid4().hex[:8],
+                dry_run=dry_run,
+            )
+            if verbose:
+                print(f"[heartbeat] friction_scan: {_fric_report.summary()}", file=sys.stderr)
+    except Exception as _fe:
+        if verbose:
+            print(f"[heartbeat] friction_scan failed: {_fe}", file=sys.stderr)
     finally:
         with _inspector_lock:
             _inspector_active = False
