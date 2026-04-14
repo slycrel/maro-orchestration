@@ -14,11 +14,14 @@ which backend is actually serving the call:
 
 Auto-detection order (highest to lowest priority):
     1. Explicit backend= or api_key= arg to build_adapter()
-    2. ANTHROPIC_API_KEY env var → AnthropicSDKAdapter
-    3. OPENROUTER_API_KEY env var → OpenRouterAdapter
-    4. OPENAI_API_KEY env var → OpenAIAdapter
-    5. codex binary available + auth → CodexCLIAdapter (GPT-5.4 via ChatGPT OAuth, prompt caching)
-    6. claude binary in PATH → ClaudeSubprocessAdapter (always available on this box)
+    2. POE_BACKEND env var (single backend, no fallback)
+    3. config `model.backend_order` (ordered list; first available wins)
+    4. DEFAULT_BACKEND_ORDER (anthropic, subprocess, openrouter, openai)
+
+A backend is "available" when: (anthropic/openrouter/openai) its API key env var
+is set, (subprocess) the `claude` binary is on PATH, (codex) `codex` binary plus
+~/.codex/auth.json present. codex stays out of the default order (agentic
+subprocess, not a drop-in API).
 
 Model names are backend-specific but normalized through constants:
     MODEL_CHEAP, MODEL_MID, MODEL_POWER — callers use these, not raw strings.
@@ -989,6 +992,58 @@ def _claude_bin_available() -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Backend-order config
+# ---------------------------------------------------------------------------
+
+# Default auto-detect order. Configurable via ~/.poe/config.yml:
+#     model:
+#       backend_order: [subprocess, anthropic, openrouter, openai]
+#
+# Rationale: anthropic first (native tool calls, no routing overhead);
+# subprocess second (always available on this box, no API credits);
+# openrouter/openai last (billed routes).
+DEFAULT_BACKEND_ORDER = ["anthropic", "subprocess", "openrouter", "openai"]
+
+_KNOWN_BACKENDS = {"anthropic", "openrouter", "openai", "subprocess", "codex"}
+
+
+def _get_backend_order() -> List[str]:
+    """Resolve the ordered list of backends to try in auto-detect mode.
+
+    Reads `model.backend_order` from config. Unknown names are dropped with a
+    warning; an empty/missing list falls back to DEFAULT_BACKEND_ORDER. Names
+    are lowercased so the YAML is forgiving about case.
+    """
+    try:
+        from config import get as _config_get
+        raw = _config_get("model.backend_order", None)
+    except Exception:
+        raw = None
+
+    if not raw:
+        return list(DEFAULT_BACKEND_ORDER)
+    if not isinstance(raw, list):
+        log.warning("config model.backend_order must be a list, got %s — using default", type(raw).__name__)
+        return list(DEFAULT_BACKEND_ORDER)
+
+    cleaned: List[str] = []
+    seen: set = set()
+    for item in raw:
+        if not isinstance(item, str):
+            continue
+        name = item.strip().lower()
+        if not name or name in seen:
+            continue
+        if name not in _KNOWN_BACKENDS:
+            log.warning("config model.backend_order: unknown backend %r — skipping", name)
+            continue
+        cleaned.append(name)
+        seen.add(name)
+
+    return cleaned or list(DEFAULT_BACKEND_ORDER)
+
+
+# ---------------------------------------------------------------------------
 # Factory — auto-detect or explicit backend
 # ---------------------------------------------------------------------------
 
@@ -1061,51 +1116,45 @@ def build_adapter(
             return AnthropicSDKAdapter(api_key=api_key, model=model)
         return OpenRouterAdapter(api_key=api_key, model=model)
 
-    # 1. Anthropic SDK (cleanest native tool support, no routing overhead)
-    key = _get_key("ANTHROPIC_API_KEY", env)
-    if key:
-        return AnthropicSDKAdapter(api_key=key, model=model)
-
-    # 2. For power-tier (Opus): prefer API over subprocess.
-    #    claude -p --dangerously-skip-permissions exposes real tools; Opus uses them
-    #    and does genuine multi-step work that routinely exceeds the subprocess timeout.
-    #    Cheap/mid models follow the JSON injection template and respond quickly — subprocess
-    #    is fine for them. Opus through subprocess is reliably broken for complex tasks.
-    if model == MODEL_POWER:
-        key = _get_key("OPENROUTER_API_KEY", env)
-        if key:
-            return OpenRouterAdapter(api_key=key, model=model)
-        key = _get_key("OPENAI_API_KEY", env)
-        if key:
-            return OpenAIAdapter(api_key=key, model=model)
-        # No API key — fall through to subprocess with a logged warning
-        import logging as _logging
-        _logging.getLogger("poe.llm").warning(
-            "build_adapter: MODEL_POWER requested but no API key available — "
-            "falling back to subprocess (Opus via claude -p is unreliable for complex steps)"
-        )
-
-    # 3. Claude subprocess — always available on this box, no credits needed.
-    #    CodexCLIAdapter exists but is NOT in auto-detection: it wraps `codex exec`
-    #    which is an agentic subprocess (same fundamental cost model as claude -p)
-    #    and the OAuth token does not work with the public OpenAI API directly.
-    #    Use build_adapter("codex") explicitly if you want to experiment with it.
-    if _claude_bin_available():
-        return ClaudeSubprocessAdapter(model=model)
-
-    # 4. OpenRouter (multi-model routing, requires credits)
-    key = _get_key("OPENROUTER_API_KEY", env)
-    if key:
-        return OpenRouterAdapter(api_key=key, model=model)
-
-    # 5. OpenAI
-    key = _get_key("OPENAI_API_KEY", env)
-    if key:
-        return OpenAIAdapter(api_key=key, model=model)
+    # Walk the configured backend order, return the first available.
+    # First-in-list wins; there is no runtime failover across backends
+    # (cross-backend retry on 402/429 is tracked in BACKLOG).
+    order = _get_backend_order()
+    power_fallback_warned = False
+    for name in order:
+        if name == "anthropic":
+            key = _get_key("ANTHROPIC_API_KEY", env)
+            if key:
+                return AnthropicSDKAdapter(api_key=key, model=model)
+        elif name == "openrouter":
+            key = _get_key("OPENROUTER_API_KEY", env)
+            if key:
+                return OpenRouterAdapter(api_key=key, model=model)
+        elif name == "openai":
+            key = _get_key("OPENAI_API_KEY", env)
+            if key:
+                return OpenAIAdapter(api_key=key, model=model)
+        elif name == "subprocess":
+            if _claude_bin_available():
+                if model == MODEL_POWER and not power_fallback_warned:
+                    # Opus over `claude -p` is flaky on complex steps — warn but honor config.
+                    log.warning(
+                        "build_adapter: MODEL_POWER resolving to subprocess (claude -p) "
+                        "per backend_order. Opus via subprocess is unreliable for long "
+                        "multi-step work; set an API key or reorder `model.backend_order`."
+                    )
+                    power_fallback_warned = True
+                return ClaudeSubprocessAdapter(model=model)
+        elif name == "codex":
+            if _codex_auth_available():
+                return CodexCLIAdapter(model=model)
+        else:
+            log.warning("build_adapter: unknown backend %r in backend_order — skipping", name)
 
     raise RuntimeError(
         "No LLM backend available. Set ANTHROPIC_API_KEY, OPENROUTER_API_KEY, "
-        "OPENAI_API_KEY, or install Claude Code (claude -p) / Codex CLI (codex)."
+        "OPENAI_API_KEY, or install Claude Code (claude -p) / Codex CLI (codex). "
+        f"Tried backend_order={order!r}."
     )
 
 

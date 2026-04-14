@@ -330,22 +330,71 @@ def test_build_adapter_subprocess_explicit(monkeypatch):
 
 
 def test_build_adapter_auto_prefers_anthropic(monkeypatch):
+    # Pin to DEFAULT_BACKEND_ORDER so this test is immune to user config changes.
+    from llm import DEFAULT_BACKEND_ORDER
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-key")
     monkeypatch.setattr("llm._claude_bin_available", lambda: True)
     monkeypatch.setattr("llm._load_env_file", lambda *a, **kw: {})
+    monkeypatch.setattr("llm._get_backend_order", lambda: list(DEFAULT_BACKEND_ORDER))
     a = build_adapter("auto")
     assert isinstance(a, AnthropicSDKAdapter)
 
 
 def test_build_adapter_auto_falls_back_to_subprocess(monkeypatch):
+    from llm import DEFAULT_BACKEND_ORDER
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.setattr("llm._claude_bin_available", lambda: True)
     monkeypatch.setattr("llm._codex_auth_available", lambda: False)
     monkeypatch.setattr("llm._load_env_file", lambda *a, **kw: {})
+    monkeypatch.setattr("llm._get_backend_order", lambda: list(DEFAULT_BACKEND_ORDER))
     a = build_adapter("auto")
     assert isinstance(a, ClaudeSubprocessAdapter)
+
+
+def test_build_adapter_honors_configured_backend_order(monkeypatch):
+    """config model.backend_order should take precedence over DEFAULT_BACKEND_ORDER."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-key")
+    monkeypatch.setattr("llm._claude_bin_available", lambda: True)
+    monkeypatch.setattr("llm._load_env_file", lambda *a, **kw: {})
+    # With default order, anthropic wins. Configure subprocess-first — subprocess must win.
+    monkeypatch.setattr("llm._get_backend_order", lambda: ["subprocess", "anthropic"])
+    a = build_adapter("auto")
+    assert isinstance(a, ClaudeSubprocessAdapter)
+
+
+def test_build_adapter_skips_unavailable_backends_in_order(monkeypatch):
+    """If the top-ranked backend has no key/binary, fall through to the next one."""
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-key")
+    monkeypatch.setattr("llm._claude_bin_available", lambda: False)
+    monkeypatch.setattr("llm._load_env_file", lambda *a, **kw: {})
+    monkeypatch.setattr("llm._get_backend_order", lambda: ["openrouter", "subprocess", "anthropic"])
+    a = build_adapter("auto")
+    assert isinstance(a, AnthropicSDKAdapter)
+
+
+def test_get_backend_order_uses_default_when_unset(monkeypatch):
+    from llm import _get_backend_order, DEFAULT_BACKEND_ORDER
+    monkeypatch.setattr("config.get", lambda key, default=None: default)
+    assert _get_backend_order() == DEFAULT_BACKEND_ORDER
+
+
+def test_get_backend_order_drops_unknown_and_duplicates(monkeypatch):
+    from llm import _get_backend_order
+    monkeypatch.setattr(
+        "config.get",
+        lambda key, default=None: ["Subprocess", "unknown-thing", "subprocess", "ANTHROPIC", ""],
+    )
+    # Case-normalized, dedup'd, unknowns dropped.
+    assert _get_backend_order() == ["subprocess", "anthropic"]
+
+
+def test_get_backend_order_falls_back_on_non_list(monkeypatch):
+    from llm import _get_backend_order, DEFAULT_BACKEND_ORDER
+    monkeypatch.setattr("config.get", lambda key, default=None: "subprocess,anthropic")
+    assert _get_backend_order() == DEFAULT_BACKEND_ORDER
 
 
 def test_build_adapter_no_backends_raises(monkeypatch):
