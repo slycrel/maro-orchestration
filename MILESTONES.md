@@ -2,14 +2,25 @@
 
 What to do next, in what order. Updated each session. Strategic phases live in ROADMAP.md; deferred ideas live in BACKLOG.md. This file is the bridge — the executable queue.
 
-Last updated: 2026-04-13 (session 19, continued)
+Last updated: 2026-04-14 (session 20)
 
 ---
 
 ## Next Up
 
-1. **Recovery mid-loop apply (remaining)** — Gap 2 from phase audit is ~mostly closed via the mid-loop diagnosis bridge (session 19). Remaining: `budget_exhaustion` is diagnosed only after max_iterations hit; consider a mid-loop "iteration budget running low" signal that bumps the budget instead of grinding to a stop.
-2. **Artifact output routing cleanup** — Temp artifacts (per-step) → tmp dir (deleted by default, kept via config `keep_artifacts: true`). Permanent outputs → `~/.poe/workspace/output/`.
+1. **Evolver broken state persistence (CRITICAL)** — Session 20 adversarial review finding 3.2. `_verify_post_apply` on test failure does NOT auto-revert. Fix first — the self-improvement loop can make itself worse and stay that way. Call `revert_suggestion` unconditionally on verify failure; then fix `prompt_tweak` no-op in `revert_suggestion`.
+2. **Silent exception swallowing cleanup** — Session 20 finding 3.1. Sweep `agent_loop.py` first 1,000 lines (15+ sites); replace `except Exception: pass` with ERROR logging. For attribution + security scans, raise or set finalization-blocking flag.
+3. **Evolver `cost_optimization` handler** — Session 20 finding 3.6. Either implement the missing `apply_suggestion` handler or mark suggestions `pending_human_review` instead of silently logging as complete.
+4. **File-claim verifier path truncation** — Session 20 infra bug. Regex drops first char of cited paths (`odels.py`, `eviews.py`). Unit test + fix the extractor.
+5. **Recovery mid-loop apply (remaining)** — Gap 2 from phase audit is ~mostly closed via the mid-loop diagnosis bridge (session 19). Remaining: `budget_exhaustion` is diagnosed only after max_iterations hit; consider a mid-loop "iteration budget running low" signal that bumps the budget instead of grinding to a stop.
+6. **Artifact output routing cleanup** — Temp artifacts (per-step) → tmp dir (deleted by default, kept via config `keep_artifacts: true`). Permanent outputs → `~/.poe/workspace/output/`.
+
+## Done (session 20, 2026-04-14)
+
+- [x] **5 parallel live regression goals** — peptaura-peptides (411K tok, 9/9), polymarket-edges incremental first run (1.28M tok, 8/8), recipe-pm (721K tok, 8/8, 5 issues filed #11–15), recipe-dev (572K tok, 8/8, #14 closed), adversarial-review blind (1.39M tok, 45.7min, 14 findings). All green, all escalated to mid-tier quality gate.
+- [x] **Polymarket-edges incremental workspace pattern validated** — `~/.poe/workspace/projects/polymarket-edges/` git-initialized, first run deepened Edge 04 (hypothesized→evidenced, N=65 markets) and added Edge 08 (negRisk cross-market arb). Pattern: read ledger, deepen 1, add 1, commit. Compounds across runs.
+- [x] **Phase 62 adaptive replanning validated live** — adversarial review's step-16 subprocess timeout correctly diagnosed as `adapter_timeout`; mid-loop replanning recovered via 3 sub-steps (`--lf`, `tail`, `head`) with zero manual intervention.
+- [x] **14 adversarial findings logged to BACKLOG** — 3 CRITICAL, 4 HIGH, 5 MODERATE, 2 MINOR. Top 4 elevated to MILESTONES "Next Up".
 
 ## Queued
 

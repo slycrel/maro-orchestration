@@ -3,11 +3,34 @@
 Single canonical location for everything we've identified but haven't done yet.
 Read this at the start of every session. Update it as items are completed or new ones emerge.
 
-Last reviewed: 2026-04-11 (session 16)
+Last reviewed: 2026-04-14 (session 20)
 
 ---
 
 ## Bugs (fix before next stability sprint)
+
+### Session 20 (2026-04-14) — adversarial review findings (`output/self-review-report-20260414T040637Z-blind.md`)
+
+- [ ] **CRITICAL: Evolver broken state persistence** — `_verify_post_apply` on test failure logs a lesson but does NOT auto-revert. Self-improvement loop can make itself worse and stay that way. Fix: call `revert_suggestion` unconditionally before returning on verify failure. Separately: `revert_suggestion` no-op for `prompt_tweak` needs a real rollback strategy (snapshot → restore) or must be gated behind a dry-run flag.
+- [ ] **CRITICAL: Silent exception swallowing (systemic)** — `agent_loop.py` has 15+ `except Exception: pass` sites in first 1,000 lines. Checkpoint, hook blocking, skill attribution, security scans all silently no-op. Fix: ERROR-level logging; for correctness-affecting sites, raise or set a finalization-blocking flag.
+- [ ] **CRITICAL: LoopPhase is string constants, not state machine** — no transition enforcement on 4,360-line core loop. Acknowledged debt. Fix: `LoopStateMachine` with explicit allowed transitions; `set_phase` raises `InvalidTransitionError`.
+- [ ] **HIGH: Director bypassed in practice** — `skip_if_simple=True` default means most NOW-lane goals skip decompose/delegate/review. Fix: make threshold configurable, lower default, or remove.
+- [ ] **HIGH: Inspector signal reliability** — (a) escalation tone detector uses keywords `error/failed/stuck` — fires on every stuck session; (b) backtracking detector uses positional order not timestamps; (c) context-churn check verifies lesson *presence* not *application*. Fix: LLM tone classifier; timestamp-ordered backtrack; lesson-reference detection.
+- [ ] **HIGH: Evolver `cost_optimization` silent no-op** — suggestion generated + logged, `apply_suggestion` has no handler. Users see it in `change_log.jsonl` thinking it was applied. Fix: implement handler OR mark as `pending_human_review`.
+- [ ] **HIGH: Test coverage width not depth** — no `--cov`, LLM calls fully mocked, no mutation testing, no concurrency tests for `task_store.py` fcntl. Fix: add `pytest-cov` with 70% floor; 3+ end-to-end tests with real LLM fixtures; concurrent-write tests for task_store.
+- [ ] **MODERATE: `_steps_are_independent` regex heuristic** — wrong independence → parallel dependent steps → race conditions. Fix: LLM-based dep analysis OR explicit `depends_on: [step_id]` in schema.
+- [ ] **MODERATE: `rate^steps` math false alerts** — `0.9^8 = 0.43` on healthy run fires alert. Fix: sliding window or Bayesian CI.
+- [ ] **MODERATE: Memory Stage 2→3 and 3→4 not implemented** — lessons never consolidate into identity or skills. Known gap; de-risk before more lessons accumulate.
+- [ ] **MODERATE: `_process_blocked_step` 18+ parameters** — design smell. Fix: `BlockedStepContext` dataclass.
+- [ ] **MINOR: `new_guardrail` permanently gated** — `POE_AUTO_APPLY_GUARDRAILS` off by default. Fix: default on in non-production; `--dry-run` for prod.
+- [ ] **MINOR: Persona auto-selection missing** — requires `persona:` prefix. Fix: director keyword-to-persona map as v1.
+
+### Session 20 infrastructure bugs
+
+- [ ] **File-claim verifier truncates first char of cited paths** — `[VERIFICATION: N file(s) cited but not found: odels.py, eviews.py, ain.py]` — first char dropped. Reproduces in recipe-pm + recipe-dev outputs. Regex over-eats a prefix character. Low severity (alarm-only). Fix: unit test cited-path extractor with backtick/slash/paren wrappers.
+- [ ] **pytest-via-subprocess 900s timeout** — `python3 -m pytest tests/ -q` via `ClaudeSubprocessAdapter` hits 900s timeout (real pytest ~100s). Diagnosis correctly classified as `adapter_timeout` and recovered via smaller sub-commands (`--lf`, `tail`, `head`). Root cause unclear — possibly stdout buffering. Worth investigating before next adversarial run.
+
+### Prior
 
 - [x] **Flaky: test_mission_with_partial_milestone** — Fixed. Root cause: (1) `maybe_add_verification_step` fires on "analyze" in goal, adding extra step that exhausts ScriptedAdapter; (2) `negotiate_contract` + `grade_contract` consume 2 more LLM calls per feature; (3) `run_boot_protocol` + `run_hooks` added 10-90s latency. Fix: patch `_decompose`, `sprint_contract`, `boot_protocol`, and `hooks` in the test. Test now deterministic and <1s.
 
