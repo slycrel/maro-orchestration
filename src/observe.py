@@ -1209,7 +1209,14 @@ function appendEvent(ev) {
     error: '&#10060; Error',
   }[ev.type] || ev.type;
 
-  div.innerHTML = `<b style="color:#aaa">${label}</b> <span style="color:#e0e0e0">${esc(ev.text||'')}</span>`;
+  // Steps and completions get block layout with wrapping text; short events stay inline
+  const blockTypes = ['step', 'complete', 'question', 'low_confidence'];
+  if (blockTypes.includes(ev.type)) {
+    div.innerHTML = `<div style="color:#888;font-size:11px;margin-bottom:3px">${label}</div>`
+      + `<div style="color:#e0e0e0;white-space:pre-wrap;word-break:break-word">${esc(ev.text||'')}</div>`;
+  } else {
+    div.innerHTML = `<b style="color:#aaa">${label}</b> <span style="color:#e0e0e0">${esc(ev.text||'')}</span>`;
+  }
   msgs.appendChild(div);
   msgs.scrollTop = msgs.scrollHeight;
 }

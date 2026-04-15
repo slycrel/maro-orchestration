@@ -702,7 +702,7 @@ def handle(
             def _step_cb(step_num: int, step_text: str, summary: Optional[str], status: str) -> None:
                 channel.emit(
                     "step",
-                    text=f"Step {step_num}: {(summary or step_text)[:120]}",
+                    text=f"Step {step_num}: {(summary or step_text)[:600]}",
                     step_num=step_num,
                     status=status,
                 )
