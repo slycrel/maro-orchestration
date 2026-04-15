@@ -795,6 +795,42 @@ _DASHBOARD_HTML = """\
     </table>
   </div>
 
+  <div class="panel full" id="chat-panel">
+    <h2>Goal Chat</h2>
+
+    <!-- New goal form -->
+    <div id="submit-area">
+      <textarea id="goal-input" rows="3" placeholder="Describe your goal..."
+                style="width:100%;font-family:monospace;font-size:13px;padding:8px;
+                       background:#1a1a2e;color:#e0e0e0;border:1px solid #444;border-radius:4px"></textarea>
+      <button onclick="submitGoal()"
+              style="margin-top:6px;padding:8px 20px;background:#4a9eff;color:#fff;
+                     border:none;border-radius:4px;cursor:pointer;font-size:13px">
+        Submit Goal
+      </button>
+    </div>
+
+    <!-- Thread list -->
+    <div id="thread-list" style="margin-top:12px"></div>
+
+    <!-- Active thread view -->
+    <div id="thread-view" style="margin-top:12px;display:none">
+      <div id="thread-messages"
+           style="max-height:400px;overflow-y:auto;background:#0d0d1a;
+                  padding:12px;border-radius:4px;border:1px solid #333"></div>
+      <div id="reply-area" style="margin-top:8px;display:none">
+        <textarea id="reply-input" rows="2" placeholder="Reply to director..."
+                  style="width:100%;font-family:monospace;font-size:13px;padding:8px;
+                         background:#1a1a2e;color:#e0e0e0;border:1px solid #444;border-radius:4px"></textarea>
+        <button onclick="sendReply()"
+                style="margin-top:6px;padding:8px 20px;background:#44bb88;color:#fff;
+                       border:none;border-radius:4px;cursor:pointer;font-size:13px">
+          Send Reply
+        </button>
+      </div>
+    </div>
+  </div>
+
 </div>
 <div id="ticker">Loading...</div>
 
@@ -1099,6 +1135,118 @@ async function refresh() {
 }
 refresh();
 setInterval(refresh, 5000);
+
+// ---------------------------------------------------------------------------
+// Goal Chat panel
+// ---------------------------------------------------------------------------
+let activeThread = null;
+let lastEventIdx = 0;
+let pollInterval = null;
+
+function submitGoal() {
+  const goal = document.getElementById('goal-input').value.trim();
+  if (!goal) return;
+  fetch('/api/submit', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({goal})
+  }).then(r => r.json()).then(data => {
+    document.getElementById('goal-input').value = '';
+    openThread(data.handle_id);
+    refreshThreadList();
+  });
+}
+
+function openThread(handle_id) {
+  activeThread = handle_id;
+  lastEventIdx = 0;
+  document.getElementById('thread-view').style.display = 'block';
+  document.getElementById('thread-messages').innerHTML = '';
+  startPoll();
+}
+
+function startPoll() {
+  if (pollInterval) clearInterval(pollInterval);
+  pollInterval = setInterval(pollThread, 1200);
+}
+
+function pollThread() {
+  if (!activeThread) return;
+  fetch(`/api/thread/${activeThread}?since=${lastEventIdx}`)
+    .then(r => r.json()).then(data => {
+      data.events.forEach(ev => appendEvent(ev));
+      lastEventIdx += data.events.length;
+      document.getElementById('reply-area').style.display =
+        data.waiting ? 'block' : 'none';
+      if (data.status !== 'running') clearInterval(pollInterval);
+    });
+}
+
+function appendEvent(ev) {
+  const msgs = document.getElementById('thread-messages');
+  const div = document.createElement('div');
+  div.style.cssText = 'margin:6px 0;padding:8px 10px;border-radius:4px;font-size:12px';
+
+  const colors = {
+    user_goal: '#1a3a5c',
+    user_reply: '#1a3a5c',
+    question: '#3a2a1a',
+    step: '#1a2a1a',
+    low_confidence: '#3a1a1a',
+    complete: '#1a3a2a',
+    error: '#3a1a1a',
+  };
+  div.style.background = colors[ev.type] || '#1a1a2e';
+
+  const label = {
+    user_goal: '&#127919; Goal',
+    user_reply: '&#128100; You',
+    question: '&#10067; Director asks',
+    step: '&#9881;&#65039; Step',
+    low_confidence: '&#9888;&#65039; Risky call',
+    complete: '&#9989; Done',
+    error: '&#10060; Error',
+  }[ev.type] || ev.type;
+
+  div.innerHTML = `<b style="color:#aaa">${label}</b> <span style="color:#e0e0e0">${esc(ev.text||'')}</span>`;
+  msgs.appendChild(div);
+  msgs.scrollTop = msgs.scrollHeight;
+}
+
+function sendReply() {
+  const text = document.getElementById('reply-input').value.trim();
+  if (!text || !activeThread) return;
+  fetch(`/api/reply/${activeThread}`, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({text})
+  }).then(() => {
+    document.getElementById('reply-input').value = '';
+    appendEvent({type: 'user_reply', text});
+  });
+}
+
+function refreshThreadList() {
+  fetch('/api/threads').then(r => r.json()).then(data => {
+    const list = document.getElementById('thread-list');
+    if (!data.threads || !data.threads.length) { list.innerHTML = ''; return; }
+    list.innerHTML = '<div style="font-size:11px;color:#888;margin-bottom:4px">Recent goals:</div>' +
+      data.threads.slice(0,8).map(t =>
+        `<div onclick="openThread('${esc(t.handle_id)}')"
+              style="cursor:pointer;padding:6px 8px;margin:3px 0;border-radius:3px;
+                     background:${t.handle_id===activeThread?'#2a2a4a':'#1a1a2e'};
+                     border:1px solid #333;font-size:12px">
+          <span style="color:${t.status==='complete'?'#44bb88':t.status==='error'?'#ff6644':'#4a9eff'}"
+               >&#9679;</span>
+          <span style="color:#ccc"> ${esc((t.goal||'').substring(0,60))}${(t.goal||'').length>60?'...':''}</span>
+        </div>`
+      ).join('');
+  });
+}
+
+// Refresh thread list on load and periodically
+refreshThreadList();
+setInterval(refreshThreadList, 10000);
 </script>
 </body>
 </html>
@@ -1188,6 +1336,37 @@ def serve_dashboard(host: str = "0.0.0.0", port: int = 7700) -> None:
                     self._send_json(200, _snapshot_json())
                 except Exception as exc:
                     self._send_json(500, {"error": str(exc)})
+            elif self.path == "/api/threads":
+                try:
+                    from conversation import list_channels
+                    self._send_json(200, {"threads": list_channels()})
+                except Exception as exc:
+                    self._send_json(500, {"error": str(exc)})
+            elif self.path.startswith("/api/thread/"):
+                try:
+                    # parse handle_id and optional since= param
+                    import urllib.parse as _up
+                    _parts = self.path.split("?", 1)
+                    _handle_id = _parts[0][len("/api/thread/"):]
+                    _since = 0
+                    if len(_parts) > 1:
+                        _qs = dict(_up.parse_qsl(_parts[1]))
+                        try:
+                            _since = int(_qs.get("since", 0))
+                        except (ValueError, TypeError):
+                            _since = 0
+                    from conversation import get_channel
+                    _ch = get_channel(_handle_id)
+                    if _ch is None:
+                        self._send_json(404, {"error": "thread not found"})
+                        return
+                    self._send_json(200, {
+                        "events": _ch.events_since(_since),
+                        "waiting": _ch.waiting_for_reply,
+                        "status": _ch.status,
+                    })
+                except Exception as exc:
+                    self._send_json(500, {"error": str(exc)})
             else:
                 self.send_response(404)
                 self.end_headers()
@@ -1250,6 +1429,58 @@ def serve_dashboard(host: str = "0.0.0.0", port: int = 7700) -> None:
                 threading.Thread(target=_run_factory, daemon=True).start()
                 self._send_json(202, {"queued": True, "mode": "factory",
                                       "outcomes_scanned": n_outcomes})
+            elif self.path == "/api/submit":
+                try:
+                    _length = int(self.headers.get("Content-Length", 0))
+                    _body = json.loads(self.rfile.read(_length).decode("utf-8"))
+                    _goal = _body.get("goal", "").strip()
+                    _project = _body.get("project", None) or None
+                    if not _goal:
+                        self._send_json(400, {"error": "goal is required"})
+                        return
+                    import uuid as _uuid
+                    _handle_id = _uuid.uuid4().hex[:12]
+                    from conversation import create_channel
+                    _channel = create_channel(_handle_id, _goal)
+                    def _run_goal() -> None:
+                        try:
+                            import sys as _sys
+                            _sys.path.insert(0, str(Path(__file__).parent))
+                            from handle import handle as _handle
+                            import inspect as _inspect
+                            _sig = _inspect.signature(_handle)
+                            if "channel" in _sig.parameters:
+                                _hr = _handle(_goal, project=_project, verbose=True,
+                                              channel=_channel)
+                            else:
+                                _channel.emit("step", text="Starting goal execution...")
+                                _hr = _handle(_goal, project=_project, verbose=True)
+                            _channel.complete(_hr.result if _hr else "[done]")
+                        except Exception as _exc:
+                            _channel.emit("error", text=str(_exc))
+                            _channel.status = "error"
+                    threading.Thread(target=_run_goal, daemon=True).start()
+                    self._send_json(202, {"handle_id": _handle_id, "status": "running"})
+                except Exception as exc:
+                    self._send_json(500, {"error": str(exc)})
+            elif self.path.startswith("/api/reply/"):
+                try:
+                    _handle_id = self.path[len("/api/reply/"):]
+                    _length = int(self.headers.get("Content-Length", 0))
+                    _body = json.loads(self.rfile.read(_length).decode("utf-8"))
+                    _text = _body.get("text", "").strip()
+                    if not _text:
+                        self._send_json(400, {"error": "text is required"})
+                        return
+                    from conversation import get_channel
+                    _ch = get_channel(_handle_id)
+                    if _ch is None:
+                        self._send_json(404, {"error": "thread not found"})
+                        return
+                    _ch.receive_reply(_text)
+                    self._send_json(200, {"ok": True})
+                except Exception as exc:
+                    self._send_json(500, {"error": str(exc)})
             else:
                 self.send_response(404)
                 self.end_headers()

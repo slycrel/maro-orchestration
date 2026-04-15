@@ -37,7 +37,10 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from conversation import ConversationChannel
 
 log = logging.getLogger("poe.director")
 
@@ -912,6 +915,7 @@ def handle_escalation(
     adapter=None,
     dry_run: bool = False,
     verbose: bool = False,
+    channel: Optional["ConversationChannel"] = None,
 ) -> EscalationDecision:
     """Process a loop_escalation task and decide what happens next.
 
@@ -1004,6 +1008,17 @@ def handle_escalation(
     if decision_class == "user_challenge" and action != "surface":
         log.info("escalation decision_class=user_challenge, overriding action=%s to surface", action)
         action = "surface"
+
+    # Notify channel of risky judgment calls (confidence <= 7 = < 70% sure)
+    if channel is not None and confidence <= 7 and action != "surface":
+        try:
+            channel.notify_low_confidence(
+                decision=f"{action}: {summary_for_user[:120]}",
+                confidence=confidence / 10.0,
+                reasoning=reasoning[:200],
+            )
+        except Exception:
+            pass  # channel notifications must never block escalation logic
 
     # Log calibration event for self-improvement
     try:

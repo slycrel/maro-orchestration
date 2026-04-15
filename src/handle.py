@@ -28,6 +28,10 @@ import sys
 import time
 import uuid
 
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from conversation import ConversationChannel
+
 log = logging.getLogger("poe.handle")
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -323,6 +327,7 @@ def handle(
     force_lane: Optional[str] = None,   # "now" | "agenda" | None (auto)
     dry_run: bool = False,
     verbose: bool = False,
+    channel: Optional["ConversationChannel"] = None,
 ) -> HandleResult:
     """Process an incoming request through Poe's handle.
 
@@ -335,6 +340,9 @@ def handle(
         force_lane: Override classification ("now" or "agenda").
         dry_run: Simulate without API calls.
         verbose: Print progress.
+        channel: Optional ConversationChannel for bidirectional comms (e.g. dashboard).
+            When provided, the clarity check uses channel.ask() to gather missing info
+            (rather than returning clarification_needed), and step events are emitted.
 
     Returns:
         HandleResult with routing info and substantive result.
@@ -553,23 +561,31 @@ def handle(
                 _clarity = check_goal_clarity(message, adapter=adapter)
                 if not _clarity.get("clear"):
                     _q = _clarity.get("question", "Could you clarify the goal?")
-                    elapsed = int((time.monotonic() - started_at) * 1000)
                     if verbose:
                         print(f"[poe:{handle_id}] clarity check: UNCLEAR — {_q}", file=sys.stderr, flush=True)
-                    return HandleResult(
-                        handle_id=handle_id,
-                        lane="agenda",
-                        lane_confidence=confidence,
-                        classification_reason=reason + " [clarity check: ambiguous]",
-                        message=message,
-                        status="clarification_needed",
-                        result=(
-                            f"Before starting, I need to clarify one thing:\n\n"
-                            f"{_q}\n\n"
-                            f"*(Add `yolo: true` to user/CONFIG.md to skip this check.)*"
-                        ),
-                        elapsed_ms=elapsed,
-                    )
+                    if channel is not None:
+                        # Ask via channel and wait for reply — then continue with enriched goal
+                        _reply = channel.ask(_q)
+                        if _reply:
+                            message = f"{message}\n\nAdditional context: {_reply}"
+                        # Fall through to continue execution
+                    else:
+                        # No channel — return clarification_needed (CLI path)
+                        elapsed = int((time.monotonic() - started_at) * 1000)
+                        return HandleResult(
+                            handle_id=handle_id,
+                            lane="agenda",
+                            lane_confidence=confidence,
+                            classification_reason=reason + " [clarity check: ambiguous]",
+                            message=message,
+                            status="clarification_needed",
+                            result=(
+                                f"Before starting, I need to clarify one thing:\n\n"
+                                f"{_q}\n\n"
+                                f"*(Add `yolo: true` to user/CONFIG.md to skip this check.)*"
+                            ),
+                            elapsed_ms=elapsed,
+                        )
             except Exception:
                 pass  # clarity check must never block execution
 
@@ -681,6 +697,17 @@ def handle(
         if _ultraplan_max_steps is not None:
             _loop_kwargs["max_steps"] = _ultraplan_max_steps
 
+        # Wire step_callback for channel live updates (main AGENDA path only)
+        if channel is not None:
+            def _step_cb(step_num: int, step_text: str, summary: Optional[str], status: str) -> None:
+                channel.emit(
+                    "step",
+                    text=f"Step {step_num}: {(summary or step_text)[:120]}",
+                    step_num=step_num,
+                    status=status,
+                )
+            _loop_kwargs["step_callback"] = _step_cb
+
         # Persona injection: select best persona for goal and inject as ancestry_context_extra.
         # forced_persona (from garrytan:, etc.) overrides auto-selection.
         _persona_ctx = ""
@@ -711,6 +738,18 @@ def handle(
 
         loop_result = run_agent_loop(message, **_loop_kwargs)
         elapsed = int((time.monotonic() - started_at) * 1000)
+
+        # Notify channel that the main loop completed
+        if channel is not None:
+            try:
+                _result_parts = [
+                    s.result for s in loop_result.steps
+                    if s.status == "done" and s.result
+                ]
+                _result_summary = "\n\n".join(_result_parts) if _result_parts else "[no output]"
+                channel.complete(_result_summary)
+            except Exception:
+                pass  # channel notifications must never block
 
         # Quality gate — skeptic review; escalate model tier if output is below bar
         _gate_note = ""
