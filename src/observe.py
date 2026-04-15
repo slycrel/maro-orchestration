@@ -730,6 +730,42 @@ _DASHBOARD_HTML = """\
 <h1>&#x25B6; Poe — Agent Command Center</h1>
 <div class="grid">
 
+  <div class="panel full" id="chat-panel">
+    <h2>Goal Chat</h2>
+
+    <!-- New goal form -->
+    <div id="submit-area">
+      <textarea id="goal-input" rows="3" placeholder="Describe your goal..."
+                style="width:100%;font-family:monospace;font-size:13px;padding:8px;
+                       background:#1a1a2e;color:#e0e0e0;border:1px solid #444;border-radius:4px"></textarea>
+      <button onclick="submitGoal()"
+              style="margin-top:6px;padding:8px 20px;background:#4a9eff;color:#fff;
+                     border:none;border-radius:4px;cursor:pointer;font-size:13px">
+        Submit Goal
+      </button>
+    </div>
+
+    <!-- Thread list -->
+    <div id="thread-list" style="margin-top:12px"></div>
+
+    <!-- Active thread view -->
+    <div id="thread-view" style="margin-top:12px;display:none">
+      <div id="thread-messages"
+           style="max-height:400px;overflow-y:auto;background:#0d0d1a;
+                  padding:12px;border-radius:4px;border:1px solid #333"></div>
+      <div id="reply-area" style="margin-top:8px;display:none">
+        <textarea id="reply-input" rows="2" placeholder="Reply to director..."
+                  style="width:100%;font-family:monospace;font-size:13px;padding:8px;
+                         background:#1a1a2e;color:#e0e0e0;border:1px solid #444;border-radius:4px"></textarea>
+        <button onclick="sendReply()"
+                style="margin-top:6px;padding:8px 20px;background:#44bb88;color:#fff;
+                       border:none;border-radius:4px;cursor:pointer;font-size:13px">
+          Send Reply
+        </button>
+      </div>
+    </div>
+  </div>
+
   <div class="panel">
     <h2>Active Loop</h2>
     <div id="loop-status"></div>
@@ -795,41 +831,6 @@ _DASHBOARD_HTML = """\
     </table>
   </div>
 
-  <div class="panel full" id="chat-panel">
-    <h2>Goal Chat</h2>
-
-    <!-- New goal form -->
-    <div id="submit-area">
-      <textarea id="goal-input" rows="3" placeholder="Describe your goal..."
-                style="width:100%;font-family:monospace;font-size:13px;padding:8px;
-                       background:#1a1a2e;color:#e0e0e0;border:1px solid #444;border-radius:4px"></textarea>
-      <button onclick="submitGoal()"
-              style="margin-top:6px;padding:8px 20px;background:#4a9eff;color:#fff;
-                     border:none;border-radius:4px;cursor:pointer;font-size:13px">
-        Submit Goal
-      </button>
-    </div>
-
-    <!-- Thread list -->
-    <div id="thread-list" style="margin-top:12px"></div>
-
-    <!-- Active thread view -->
-    <div id="thread-view" style="margin-top:12px;display:none">
-      <div id="thread-messages"
-           style="max-height:400px;overflow-y:auto;background:#0d0d1a;
-                  padding:12px;border-radius:4px;border:1px solid #333"></div>
-      <div id="reply-area" style="margin-top:8px;display:none">
-        <textarea id="reply-input" rows="2" placeholder="Reply to director..."
-                  style="width:100%;font-family:monospace;font-size:13px;padding:8px;
-                         background:#1a1a2e;color:#e0e0e0;border:1px solid #444;border-radius:4px"></textarea>
-        <button onclick="sendReply()"
-                style="margin-top:6px;padding:8px 20px;background:#44bb88;color:#fff;
-                       border:none;border-radius:4px;cursor:pointer;font-size:13px">
-          Send Reply
-        </button>
-      </div>
-    </div>
-  </div>
 
 </div>
 <div id="ticker">Loading...</div>
