@@ -724,6 +724,7 @@ _DASHBOARD_HTML = """\
   .tree-root { color: var(--blue); }
   .tree-child { color: var(--text); }
   .tree-sep { color: var(--dim); }
+  @keyframes pulse { 0%,100%{opacity:.5} 50%{opacity:1} }
 </style>
 </head>
 <body>
@@ -753,6 +754,11 @@ _DASHBOARD_HTML = """\
       <div id="thread-messages"
            style="max-height:400px;overflow-y:auto;background:#0d0d1a;
                   padding:12px;border-radius:4px;border:1px solid #333"></div>
+      <div id="running-indicator" style="display:none;margin:6px 0;padding:6px 10px;
+           border-radius:4px;background:#1a1a2e;font-size:12px;color:#888;
+           animation:pulse 1.4s ease-in-out infinite">
+        <span style="color:#4a9eff">&#9679;</span> Running&hellip;
+      </div>
       <div id="reply-area" style="margin-top:8px;display:none">
         <textarea id="reply-input" rows="2" placeholder="Reply to director..."
                   style="width:100%;font-family:monospace;font-size:13px;padding:8px;
@@ -1163,12 +1169,19 @@ function openThread(handle_id) {
   lastEventIdx = 0;
   document.getElementById('thread-view').style.display = 'block';
   document.getElementById('thread-messages').innerHTML = '';
+  setRunningIndicator(false);
   startPoll();
 }
 
 function startPoll() {
   if (pollInterval) clearInterval(pollInterval);
   pollInterval = setInterval(pollThread, 1200);
+}
+
+function setRunningIndicator(running) {
+  const el = document.getElementById('running-indicator');
+  if (!el) return;
+  el.style.display = running ? 'block' : 'none';
 }
 
 function pollThread() {
@@ -1179,6 +1192,7 @@ function pollThread() {
       lastEventIdx += data.events.length;
       document.getElementById('reply-area').style.display =
         data.waiting ? 'block' : 'none';
+      setRunningIndicator(data.status === 'running');
       if (data.status !== 'running') clearInterval(pollInterval);
     });
 }
@@ -1195,6 +1209,7 @@ function appendEvent(ev) {
     step: '#1a2a1a',
     low_confidence: '#3a1a1a',
     complete: '#1a3a2a',
+    stuck: '#2a1a00',
     error: '#3a1a1a',
   };
   div.style.background = colors[ev.type] || '#1a1a2e';
@@ -1206,11 +1221,12 @@ function appendEvent(ev) {
     step: '&#9881;&#65039; Step',
     low_confidence: '&#9888;&#65039; Risky call',
     complete: '&#9989; Done',
+    stuck: '&#9203; Stuck',
     error: '&#10060; Error',
   }[ev.type] || ev.type;
 
   // Steps and completions get block layout with wrapping text; short events stay inline
-  const blockTypes = ['step', 'complete', 'question', 'low_confidence'];
+  const blockTypes = ['step', 'complete', 'question', 'low_confidence', 'stuck'];
   if (blockTypes.includes(ev.type)) {
     div.innerHTML = `<div style="color:#888;font-size:11px;margin-bottom:3px">${label}</div>`
       + `<div style="color:#e0e0e0;white-space:pre-wrap;word-break:break-word">${esc(ev.text||'')}</div>`;

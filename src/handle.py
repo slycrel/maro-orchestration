@@ -747,6 +747,11 @@ def handle(
                     if s.status == "done" and s.result
                 ]
                 _result_summary = "\n\n".join(_result_parts) if _result_parts else "[no output]"
+                if loop_result.status == "stuck":
+                    _stuck_reason = getattr(loop_result, "stuck_reason", None) or "no further progress possible"
+                    channel.emit("stuck", text=f"Loop got stuck after {len(loop_result.steps)} steps: {_stuck_reason}")
+                elif loop_result.status not in ("done", "complete"):
+                    channel.emit("error", text=f"Loop ended with status: {loop_result.status}")
                 channel.complete(_result_summary)
             except Exception:
                 pass  # channel notifications must never block
