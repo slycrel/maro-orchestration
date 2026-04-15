@@ -1,5 +1,37 @@
 # Changelog
 
+## [1.19.0] - 2026-04-15
+
+Phase 62: ConversationChannel + dashboard goal chat.
+
+### Added — ConversationChannel abstraction (`src/conversation.py`)
+- `ConversationChannel` base: `emit()`, `ask()`, `notify_low_confidence()`, `complete()`
+- `ThreadChannel`: thread-safe event list + `queue.Queue` inbox; JSONL persistence to `~/.poe/workspace/memory/threads/<handle_id>.jsonl`
+- `ask()` blocks for reply (timeout=300s); emits `question_timeout` and returns None on timeout — loop proceeds with best judgment
+- Global registry: `create_channel` / `get_channel` / `list_channels`
+- Dashboard is first channel peer; Telegram/Slack/openclaw are future peers at same level
+
+### Added — Dashboard goal chat (`src/observe.py`)
+- `POST /api/submit` — starts `handle()` in background thread with channel, returns `handle_id`
+- `GET /api/thread/<id>?since=N` — events slice + `waiting` flag (JS polls every 1.2s)
+- `POST /api/reply/<id>` — delivers user reply to waiting `ask()` call
+- `GET /api/threads` — lists active/recent channels
+- Chat panel in `_DASHBOARD_HTML`: goal submit form, thread list, live message feed with color-coded event types, reply textarea appears when `waiting=true`
+
+### Changed — `src/handle.py`
+- `channel: Optional[ConversationChannel] = None` parameter (backward-compatible)
+- Clarity check: with channel → calls `channel.ask()` and enriches goal before proceeding; without channel → returns `clarification_needed` as before (CLI path unchanged)
+- `step_callback` wired to channel for main AGENDA run_agent_loop path only
+- `channel.complete()` called after loop finishes
+
+### Changed — `src/director.py`
+- `handle_escalation(channel=None)` — emits `notify_low_confidence` for confidence ≤ 7/10 decisions (non-blocking)
+
+### Tests
+- `tests/test_conversation.py` (new) — 17 tests: registry, emit, ask/reply threading, timeout, events_since, flags
+
+---
+
 ## [1.18.0] - 2026-04-14
 
 Session 30 continued (adversarial review round 30, 18-link research pipeline, PM round 9).

@@ -2,7 +2,7 @@
 
 What to do next, in what order. Updated each session. Strategic phases live in ROADMAP.md; deferred ideas live in BACKLOG.md. This file is the bridge — the executable queue.
 
-Last updated: 2026-04-14 (session 30 cont. — adversarial fixes + 18-link research runs complete)
+Last updated: 2026-04-15 (session 31 — Phase 62: ConversationChannel + dashboard chat)
 
 ---
 
@@ -11,6 +11,14 @@ Last updated: 2026-04-14 (session 30 cont. — adversarial fixes + 18-link resea
 - **Evolver confidence calibration follow-up** — `scan_suggestion_outcomes` wired; verify calibration is improving (check live workspace suggestion stats). Heartbeat stopped by design since Apr 7-9 token burn — no new data until restarted.
 - **Jeremy's undocumented ideas** — he mentioned having ideas not yet in the backlog. Needs elaboration.
 - **Formal stage contracts (Phase P2)** — Typed output contracts per pipeline phase + hard validation gates. See BACKLOG. Medium-term architectural improvement.
+
+## Done (session 31, 2026-04-15 — Phase 62: ConversationChannel + dashboard chat)
+
+- [x] **ConversationChannel abstraction** (`src/conversation.py`) — base interface (`emit`, `ask`, `notify_low_confidence`, `complete`) + `ThreadChannel` implementation. Thread-safe, JSONL-persisted to `~/.poe/workspace/memory/threads/`. Global registry. Dashboard is first peer; Telegram/Slack/openclaw are future peers at same level.
+- [x] **Dashboard Goal Chat panel** (`src/observe.py`) — 4 new endpoints: `POST /api/submit`, `GET /api/thread/<id>?since=N`, `POST /api/reply/<id>`, `GET /api/threads`. Chat panel in dashboard UI: goal submission, live polling, color-coded event feed, reply box appears when director is waiting.
+- [x] **handle.py channel integration** — `channel=` param; clarity check asks via channel and continues with enriched goal instead of returning early; step events emitted to channel; `channel.complete()` on finish.
+- [x] **Director low-confidence notifications** — confidence ≤ 7/10 → `notify_low_confidence` event to channel (non-blocking, purely informational; user knows a ~65% call was made).
+- [x] **17 new tests** — `tests/test_conversation.py`; 164 total passing (handle + director + conversation).
 
 ## Done (session 30 cont., 2026-04-14 — adversarial fixes, research runs)
 
