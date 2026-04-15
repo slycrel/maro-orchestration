@@ -1,0 +1,22 @@
+[Unit]
+Description=Poe Command Center — live dashboard + goal chat (port 7700)
+Documentation=file:///home/clawd/claude/openclaw-orchestration/CLAUDE.md
+After=network.target
+
+[Service]
+Type=simple
+User=clawd
+WorkingDirectory=/home/clawd/claude/openclaw-orchestration
+ExecStart=/usr/bin/python3 -m observe serve --port 7700
+Restart=on-failure
+RestartSec=10
+
+Environment=PYTHONPATH=/home/clawd/claude/openclaw-orchestration/src
+Environment=OPENCLAW_WORKSPACE=/home/clawd/.openclaw/workspace
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=poe-observe
+
+[Install]
+WantedBy=default.target
