@@ -202,5 +202,104 @@ def list_channels() -> List[Dict[str, Any]]:
             "created_at": ch.created_at,
             "event_count": len(ch._events),
         }
-        for ch in channels
+        for ch in sorted(channels, key=lambda c: c.created_at)
     ]
+
+
+# ---------------------------------------------------------------------------
+# Disk-based channel recovery (survives service restarts)
+# ---------------------------------------------------------------------------
+
+def _load_channel_from_jsonl(path: Path) -> Optional[ThreadChannel]:
+    """Reconstruct a read-only channel snapshot from a JSONL file.
+
+    Channels that were still 'running' at shutdown are marked 'interrupted'
+    since their execution process no longer exists.
+    """
+    try:
+        events: List[Dict[str, Any]] = []
+        with path.open("r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if line:
+                    events.append(json.loads(line))
+        if not events:
+            return None
+
+        # Extract metadata from the first user_goal event
+        goal_event = next((e for e in events if e.get("type") == "user_goal"), None)
+        goal = goal_event["text"] if goal_event else ""
+        created_at = events[0].get("ts", datetime.now(timezone.utc).isoformat())
+        handle_id = path.stem
+
+        # Determine terminal status from events
+        terminal_types = {"complete", "error"}
+        last_type = events[-1].get("type", "")
+        if last_type in terminal_types:
+            status = last_type
+        else:
+            # Process was killed mid-run — mark as interrupted
+            status = "interrupted"
+
+        ch = ThreadChannel.__new__(ThreadChannel)
+        ch.handle_id = handle_id
+        ch.goal = goal
+        ch.status = status
+        ch.waiting_for_reply = False
+        ch.created_at = created_at
+        ch._events = events
+        ch._lock = threading.Lock()
+        ch._inbox: "queue.Queue[str]" = queue.Queue()
+        ch._jsonl_path = path
+
+        # Append the interrupted marker if needed (once, don't re-add on reload)
+        if status == "interrupted" and last_type not in ("interrupted",):
+            interrupted_event = {
+                "type": "interrupted",
+                "text": "Service restarted — run did not complete.",
+                "ts": datetime.now(timezone.utc).isoformat(),
+            }
+            ch._events.append(interrupted_event)
+            try:
+                with path.open("a", encoding="utf-8") as fh:
+                    fh.write(json.dumps(interrupted_event) + "\n")
+            except Exception:
+                pass
+
+        return ch
+    except Exception:
+        return None
+
+
+def load_channels_from_disk(max_age_days: int = 7) -> int:
+    """Scan the threads directory and reload recent channels into the registry.
+
+    Called once at service startup. Skips channels already in the registry.
+    Returns the number of channels loaded.
+    """
+    import time as _time
+    cutoff = _time.time() - max_age_days * 86400
+    loaded = 0
+    try:
+        threads_dir = _threads_dir()
+        if not threads_dir.exists():
+            return 0
+        paths = sorted(threads_dir.glob("*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)
+        for path in paths:
+            try:
+                if path.stat().st_mtime < cutoff:
+                    continue
+                handle_id = path.stem
+                with _registry_lock:
+                    if handle_id in _registry:
+                        continue  # already live
+                ch = _load_channel_from_jsonl(path)
+                if ch is not None:
+                    with _registry_lock:
+                        _registry[handle_id] = ch
+                    loaded += 1
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return loaded

@@ -1213,6 +1213,7 @@ function appendEvent(ev) {
     low_confidence: '#3a1a1a',
     complete: '#1a3a2a',
     stuck: '#2a1a00',
+    interrupted: '#2a2a00',
     error: '#3a1a1a',
   };
   div.style.background = colors[ev.type] || '#1a1a2e';
@@ -1225,11 +1226,12 @@ function appendEvent(ev) {
     low_confidence: '&#9888;&#65039; Risky call',
     complete: '&#9989; Done',
     stuck: '&#9203; Stuck',
+    interrupted: '&#9940; Interrupted',
     error: '&#10060; Error',
   }[ev.type] || ev.type;
 
   // Goals, steps, completions get block layout with wrapping text; short events stay inline
-  const blockTypes = ['user_goal', 'user_reply', 'step', 'complete', 'question', 'low_confidence', 'stuck'];
+  const blockTypes = ['user_goal', 'user_reply', 'step', 'complete', 'question', 'low_confidence', 'stuck', 'interrupted'];
   if (blockTypes.includes(ev.type)) {
     div.innerHTML = `<div style="color:#888;font-size:11px;margin-bottom:3px">${label}</div>`
       + `<div style="color:#e0e0e0;white-space:pre-wrap;word-break:break-word">${esc(ev.text||'')}</div>`;
@@ -1263,7 +1265,7 @@ function refreshThreadList() {
               style="cursor:pointer;padding:6px 8px;margin:3px 0;border-radius:3px;
                      background:${t.handle_id===activeThread?'#2a2a4a':'#1a1a2e'};
                      border:1px solid #333;font-size:12px">
-          <span style="color:${t.status==='complete'?'#44bb88':t.status==='error'?'#ff6644':'#4a9eff'}"
+          <span style="color:${t.status==='complete'?'#44bb88':t.status==='error'?'#ff6644':t.status==='interrupted'?'#aaaa33':'#4a9eff'}"
                >&#9679;</span>
           <span style="color:#ccc"> ${esc((t.goal||'').substring(0,60))}${(t.goal||'').length>60?'...':''}</span>
         </div>`
@@ -1511,6 +1513,15 @@ def serve_dashboard(host: str = "0.0.0.0", port: int = 7700) -> None:
             else:
                 self.send_response(404)
                 self.end_headers()
+
+    # Recover channels from prior runs before accepting requests
+    try:
+        from conversation import load_channels_from_disk
+        _recovered = load_channels_from_disk(max_age_days=7)
+        if _recovered:
+            print(f"Loaded {_recovered} thread(s) from disk")
+    except Exception:
+        pass
 
     server = http.server.HTTPServer((host, port), _Handler)
     url = f"http://{host}:{port}"
