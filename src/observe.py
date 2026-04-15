@@ -1153,13 +1153,16 @@ let pollInterval = null;
 function submitGoal() {
   const goal = document.getElementById('goal-input').value.trim();
   if (!goal) return;
+  document.getElementById('goal-input').value = '';
   fetch('/api/submit', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({goal})
   }).then(r => r.json()).then(data => {
-    document.getElementById('goal-input').value = '';
     openThread(data.handle_id);
+    // Optimistically render the goal so it shows before first poll
+    appendEvent({type: 'user_goal', text: goal});
+    lastEventIdx = 1;  // server created user_goal as event 0; skip on first poll
     refreshThreadList();
   });
 }
@@ -1225,8 +1228,8 @@ function appendEvent(ev) {
     error: '&#10060; Error',
   }[ev.type] || ev.type;
 
-  // Steps and completions get block layout with wrapping text; short events stay inline
-  const blockTypes = ['step', 'complete', 'question', 'low_confidence', 'stuck'];
+  // Goals, steps, completions get block layout with wrapping text; short events stay inline
+  const blockTypes = ['user_goal', 'user_reply', 'step', 'complete', 'question', 'low_confidence', 'stuck'];
   if (blockTypes.includes(ev.type)) {
     div.innerHTML = `<div style="color:#888;font-size:11px;margin-bottom:3px">${label}</div>`
       + `<div style="color:#e0e0e0;white-space:pre-wrap;word-break:break-word">${esc(ev.text||'')}</div>`;
