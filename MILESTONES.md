@@ -2,9 +2,17 @@
 
 What to do next, in what order. Updated each session. Strategic phases live in ROADMAP.md; deferred ideas live in BACKLOG.md. This file is the bridge — the executable queue.
 
-Last updated: 2026-04-15 (session 31 — Phase 62: ConversationChannel + dashboard chat)
+Last updated: 2026-04-15 (session 32 — Phase 63: Director closure check + completion standard)
 
 ---
+
+## Done (session 32, 2026-04-15 — Phase 63: Director closure check + completion standard)
+
+- [x] **Director closure check** (`src/director.py: verify_goal_completion`) — post-loop gate where the director generates executable verification commands specific to the goal (go build, pytest, curl, etc.), runs them mechanically with real exit codes (no LLM judgment on results), then interprets outcomes and declares whether the goal is genuinely complete. Emits `verification` event (check summary) and `needs_work` event (gap list) to channel. Wired in `handle.py` after `run_agent_loop` returns "done", before `channel.complete()`. Non-fatal — never blocks execution. 8 new tests.
+- [x] **Completion standard** (`user/COMPLETION_STANDARD.md`) — "boil the ocean" operating principle injected as ancestry context for every AGENDA run. Editable without code changes. Stacks with persona context.
+- [x] **Continue flow** (`/api/continue/<id>`, `channel.restart()`, `prior_context_summary()`) — follow-up input appears on completed/stuck/interrupted threads; new run picks up with full prior context injected. Divider event separates continuation runs in the thread view.
+- [x] **Thread persistence across restarts** (`load_channels_from_disk()`) — on service startup, scans `~/.poe/workspace/memory/threads/*.jsonl` and reloads last 7 days of threads. Channels that were mid-run at shutdown get `interrupted` event and status.
+- [x] **Goal visibility fixes** — user_goal/user_reply block layout, optimistic goal render on submit, running indicator (pulsing blue dot while loop is active).
 
 ## Next Up
 

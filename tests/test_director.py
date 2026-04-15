@@ -20,8 +20,10 @@ from director import (
     DirectorResult,
     Ticket,
     ReviewDecision,
+    ClosureVerdict,
     run_director,
     requires_explicit_acceptance,
+    verify_goal_completion,
     _produce_spec,
     _review_worker_output,
     _is_simple_directive,
@@ -570,3 +572,133 @@ class TestReviewLoopExhaustion:
 
         # 1 initial + (MAX_REVIEW_ROUNDS - 1) revisions = MAX_REVIEW_ROUNDS per ticket, upper bound
         assert dispatch_call_count[0] <= MAX_REVIEW_ROUNDS * 10
+
+
+# ---------------------------------------------------------------------------
+# Director Closure Check
+# ---------------------------------------------------------------------------
+
+class TestVerifyGoalCompletion:
+    """Tests for verify_goal_completion — director closure check."""
+
+    def test_dry_run_returns_complete(self):
+        verdict = verify_goal_completion("build X", [], None, dry_run=True)
+        assert verdict.complete is True
+        assert verdict.checks_run == 0
+
+    def test_no_adapter_returns_complete(self):
+        verdict = verify_goal_completion("build X", [], None)
+        assert verdict.complete is True
+
+    def test_no_checks_returns_complete(self, monkeypatch):
+        """If director generates no checks (research goal), skip verification."""
+        from unittest.mock import MagicMock, patch
+        adapter = MagicMock()
+        adapter.complete.return_value = MagicMock()
+        with patch("director.extract_json", return_value={"checks": []}):
+            verdict = verify_goal_completion("summarize this article", [], adapter)
+        assert verdict.complete is True
+        assert verdict.checks_run == 0
+
+    def test_all_checks_pass(self, monkeypatch, tmp_path):
+        """All passing checks → director can declare complete."""
+        from unittest.mock import MagicMock, patch, call
+
+        adapter = MagicMock()
+        plan_resp = MagicMock()
+        verdict_resp = MagicMock()
+        adapter.complete.side_effect = [plan_resp, verdict_resp]
+
+        checks = [{"description": "file exists", "command": f"test -f {tmp_path}"}]
+        verdict_data = {"complete": True, "confidence": 0.9, "gaps": [], "summary": "All good."}
+
+        with patch("director.extract_json", side_effect=[{"checks": checks}, verdict_data]):
+            with patch("director.content_or_empty", return_value="{}"):
+                result = verify_goal_completion(
+                    "create a directory", [], adapter, workspace_path=str(tmp_path)
+                )
+
+        # Verdict comes from the mocked data, not the subprocess result
+        assert isinstance(result, ClosureVerdict)
+
+    def test_failed_checks_surface_gaps(self, monkeypatch, tmp_path):
+        """Failed checks + director verdict with gaps → needs_work emitted."""
+        from unittest.mock import MagicMock, patch
+
+        adapter = MagicMock()
+        channel = MagicMock()
+        channel.emit = MagicMock()
+
+        checks = [{"description": "server builds", "command": "false"}]
+        verdict_data = {
+            "complete": False, "confidence": 0.2,
+            "gaps": ["Server does not compile"], "summary": "Build failed."
+        }
+
+        with patch("director.extract_json", side_effect=[{"checks": checks}, verdict_data]):
+            with patch("director.content_or_empty", return_value="{}"):
+                result = verify_goal_completion(
+                    "build a server", [], adapter,
+                    workspace_path=str(tmp_path), channel=channel,
+                )
+
+        assert result.complete is False
+        assert len(result.gaps) > 0
+        # needs_work event should have been emitted
+        emitted_types = [c.args[0] for c in channel.emit.call_args_list]
+        assert "needs_work" in emitted_types
+
+    def test_verification_event_emitted(self, monkeypatch, tmp_path):
+        """verification event always emitted when checks run."""
+        from unittest.mock import MagicMock, patch
+
+        adapter = MagicMock()
+        channel = MagicMock()
+        channel.emit = MagicMock()
+
+        checks = [{"description": "true", "command": "true"}]
+        verdict_data = {"complete": True, "confidence": 0.95, "gaps": [], "summary": "Done."}
+
+        with patch("director.extract_json", side_effect=[{"checks": checks}, verdict_data]):
+            with patch("director.content_or_empty", return_value="{}"):
+                verify_goal_completion(
+                    "do a thing", [], adapter,
+                    workspace_path=str(tmp_path), channel=channel,
+                )
+
+        emitted_types = [c.args[0] for c in channel.emit.call_args_list]
+        assert "verification" in emitted_types
+
+    def test_exception_returns_complete(self):
+        """Exceptions are swallowed — never blocks execution."""
+        from unittest.mock import MagicMock, patch
+
+        adapter = MagicMock()
+        adapter.complete.side_effect = RuntimeError("API down")
+
+        result = verify_goal_completion("build X", [], adapter)
+        assert result.complete is True
+
+    def test_timeout_marks_check_failed(self, monkeypatch, tmp_path):
+        """Timed-out checks are marked failed, not raised."""
+        import subprocess
+        from unittest.mock import MagicMock, patch
+
+        adapter = MagicMock()
+        checks = [{"description": "slow", "command": "sleep 999"}]
+        verdict_data = {"complete": False, "confidence": 0.3,
+                        "gaps": ["check timed out"], "summary": "Timed out."}
+
+        def _raise_timeout(*a, **kw):
+            raise subprocess.TimeoutExpired("sleep", 1)
+
+        with patch("director.extract_json", side_effect=[{"checks": checks}, verdict_data]):
+            with patch("director.content_or_empty", return_value="{}"):
+                with patch("subprocess.run", side_effect=_raise_timeout):
+                    result = verify_goal_completion(
+                        "build X", [], adapter,
+                        workspace_path=str(tmp_path), timeout_per_check=1,
+                    )
+
+        assert result.checks_run == 1
+        assert result.checks_passed == 0

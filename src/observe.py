@@ -1258,6 +1258,8 @@ function appendEvent(ev) {
     step: '#1a2a1a',
     low_confidence: '#3a1a1a',
     complete: '#1a3a2a',
+    verification: '#1a2a3a',
+    needs_work: '#3a2500',
     stuck: '#2a1a00',
     interrupted: '#2a2a00',
     error: '#3a1a1a',
@@ -1271,13 +1273,15 @@ function appendEvent(ev) {
     step: '&#9881;&#65039; Step',
     low_confidence: '&#9888;&#65039; Risky call',
     complete: '&#9989; Done',
+    verification: '&#128270; Verified',
+    needs_work: '&#9888;&#65039; Needs work',
     stuck: '&#9203; Stuck',
     interrupted: '&#9940; Interrupted',
     error: '&#10060; Error',
   }[ev.type] || ev.type;
 
   // Goals, steps, completions get block layout with wrapping text; short events stay inline
-  const blockTypes = ['user_goal', 'user_reply', 'step', 'complete', 'question', 'low_confidence', 'stuck', 'interrupted'];
+  const blockTypes = ['user_goal', 'user_reply', 'step', 'complete', 'question', 'low_confidence', 'stuck', 'interrupted', 'verification', 'needs_work'];
   if (blockTypes.includes(ev.type)) {
     div.innerHTML = `<div style="color:#888;font-size:11px;margin-bottom:3px">${label}</div>`
       + `<div style="color:#e0e0e0;white-space:pre-wrap;word-break:break-word">${esc(ev.text||'')}</div>`;

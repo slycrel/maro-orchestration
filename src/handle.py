@@ -755,6 +755,22 @@ def handle(
         loop_result = run_agent_loop(message, **_loop_kwargs)
         elapsed = int((time.monotonic() - started_at) * 1000)
 
+        # Director closure check — verify the goal was actually achieved
+        # Runs after the loop declares "done"; emits verification/needs_work events
+        # to channel. Non-fatal: never blocks or changes loop_result.status.
+        if not dry_run and loop_result.status == "done":
+            try:
+                from director import verify_goal_completion
+                verify_goal_completion(
+                    message,
+                    loop_result.steps,
+                    adapter,
+                    workspace_path=repo_path or "",
+                    channel=channel,
+                )
+            except Exception:
+                pass
+
         # Notify channel that the main loop completed
         if channel is not None:
             try:

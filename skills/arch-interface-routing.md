@@ -13,17 +13,44 @@ How goals enter the system, get classified, and reach the right execution path.
 ## Goal Flow
 
 ```
-Goal arrives (Telegram / Slack / CLI / Python API)
+Goal arrives (Telegram / Slack / CLI / Python API / Dashboard)
   → handle.py: parse prefixes, classify intent
     → NOW lane: _run_now() → single LLM call → response
     → AGENDA lane:
       → Clarity check (ambiguous? ask user first, unless yolo mode)
+      → BLE rewrite (strip imperative steps → outcome-focused goal)
+      → Completion standard injected (user/COMPLETION_STANDARD.md)
       → Director (if complex): plan → delegate to workers → review → compile
       → OR skip-director (if simple ≤15 words): straight to agent_loop
       → run_agent_loop() → LoopResult
+      → Director closure check: generate verification commands → run → interpret
+          → emits verification event (check results) + needs_work event (gaps)
       → Quality gate (optional multi-pass review)
       → Format result → return HandleResult
 ```
+
+## Director Closure Check (verify_goal_completion)
+
+Post-loop gate that answers "was the goal actually achieved?" — distinct from:
+- **Ralph verify** (step-level: did this step address its own goal?)
+- **Inspector** (friction detection: is the loop struggling?)
+- **Quality gate** (skeptic review of final output)
+
+The closure check is **goal-level** and uses **real exit codes**, not LLM judgment:
+
+1. Director generates 2–5 executable shell commands for the goal type
+   (e.g. for a Go port: `go build ./...`, `test -f cmd/server/main.go`)
+2. System runs them mechanically — exit 0 = pass, anything else = fail
+3. Director interprets the results and declares complete/incomplete + specific gaps
+4. If incomplete: `needs_work` event surfaces gaps to channel (continue UI appears)
+5. If complete: `verification` event confirms what was checked
+
+**Non-fatal by design** — any exception returns complete=True, never blocks.
+**Research/writing goals** return no checks and are skipped automatically.
+
+Key insight: the loop's "done" status means it ran out of steps it could take,
+not that the goal was satisfied. The director is the only entity that holds the
+original intent and should be the one signing off on completion.
 
 ## Two Lanes
 

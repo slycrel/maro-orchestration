@@ -1131,6 +1131,222 @@ def handle_escalation(
 
 
 # ---------------------------------------------------------------------------
+# Director Closure Check — goal-level completion verification
+# ---------------------------------------------------------------------------
+
+_CLOSURE_PLAN_SYSTEM = textwrap.dedent("""\
+    You are the Director performing a closure check after an agent loop completed.
+
+    Your job: given the original goal and the work that was done, produce a list of
+    EXECUTABLE verification checks — shell commands that mechanically confirm the
+    goal was actually achieved.
+
+    Rules:
+    - Generate 2–5 checks. Each must be a single shell command.
+    - Commands must be fast (<15s), safe (read-only preferred), and exit 0 on success.
+    - Focus on the goal, not the process. If the goal was "port a Go project to a
+      WebSocket server," verify: does it build? does the entry point exist? do tests pass?
+    - If the goal is research/writing (no executable artifact), return an empty list.
+    - Working directory for commands is provided — use relative paths from there.
+
+    Respond with JSON only:
+    {"checks": [{"description": "...", "command": "..."}]}
+""").strip()
+
+_CLOSURE_VERDICT_SYSTEM = textwrap.dedent("""\
+    You are the Director reviewing verification results after an agent loop completed.
+
+    Given the original goal, the agent's work summary, and the results of executable
+    verification checks, decide whether the goal was genuinely achieved.
+
+    Be honest. If checks failed or were skipped, say so. If the work is incomplete,
+    name the specific gaps — don't soften them.
+
+    Respond with JSON only:
+    {
+      "complete": true|false,
+      "confidence": 0.0–1.0,
+      "gaps": ["specific gap 1", "specific gap 2"],
+      "summary": "one or two sentences"
+    }
+""").strip()
+
+
+@dataclass
+class ClosureVerdict:
+    complete: bool
+    confidence: float
+    gaps: List[str]
+    summary: str
+    checks_run: int
+    checks_passed: int
+
+
+def verify_goal_completion(
+    goal: str,
+    steps: list,
+    adapter,
+    *,
+    workspace_path: str = "",
+    channel: Optional["ConversationChannel"] = None,
+    dry_run: bool = False,
+    timeout_per_check: int = 30,
+) -> ClosureVerdict:
+    """Director closure check: verify the goal was actually achieved.
+
+    Generates executable verification commands for the goal, runs them
+    mechanically (no LLM judgment on results), then asks the director to
+    interpret the outcomes and declare whether the goal is complete.
+
+    Non-fatal — returns complete=True on any error so it never blocks execution.
+    Emits 'verification' and 'needs_work' events to channel if provided.
+    """
+    import subprocess
+
+    _null = ClosureVerdict(
+        complete=True, confidence=0.5, gaps=[],
+        summary="Verification skipped.", checks_run=0, checks_passed=0,
+    )
+
+    if dry_run or adapter is None:
+        return _null
+
+    # Build a compact work summary from step results
+    step_summary_parts = []
+    for i, s in enumerate(steps or []):
+        _res = getattr(s, "result", "") or ""
+        _txt = getattr(s, "text", "") or getattr(s, "step_text", "") or ""
+        if _res or _txt:
+            step_summary_parts.append(f"Step {i+1}: {(_txt or '')[:120]}\nResult: {(_res or '')[:300]}")
+    work_summary = "\n\n".join(step_summary_parts[-6:]) if step_summary_parts else "(no step detail available)"
+
+    try:
+        from llm import LLMMessage
+
+        # Phase 1: generate verification plan
+        plan_resp = adapter.complete(
+            [
+                LLMMessage("system", _CLOSURE_PLAN_SYSTEM),
+                LLMMessage("user",
+                    f"Goal: {goal}\n\n"
+                    f"Working directory: {workspace_path or '(unspecified)'}\n\n"
+                    f"Work done:\n{work_summary}"
+                ),
+            ],
+            max_tokens=512,
+            temperature=0.1,
+        )
+        plan_data = extract_json(content_or_empty(plan_resp), dict,
+                                 log_tag="director.closure_plan")
+        checks = safe_list(plan_data.get("checks") if plan_data else None, element_type=dict)
+
+        if not checks:
+            # Research/writing goal — no executable checks, skip
+            return _null
+
+        # Phase 2: run checks mechanically
+        check_results = []
+        cwd = workspace_path or None
+        for check in checks[:5]:
+            desc = safe_str(check.get("description", ""))
+            cmd = safe_str(check.get("command", ""))
+            if not cmd:
+                continue
+            try:
+                proc = subprocess.run(
+                    cmd, shell=True, capture_output=True, text=True,
+                    timeout=timeout_per_check, cwd=cwd,
+                )
+                check_results.append({
+                    "description": desc,
+                    "command": cmd,
+                    "exit_code": proc.returncode,
+                    "stdout": proc.stdout[:500],
+                    "stderr": proc.stderr[:300],
+                    "passed": proc.returncode == 0,
+                })
+            except subprocess.TimeoutExpired:
+                check_results.append({
+                    "description": desc, "command": cmd,
+                    "exit_code": -1, "stdout": "", "stderr": "timed out",
+                    "passed": False,
+                })
+            except Exception as exc:
+                check_results.append({
+                    "description": desc, "command": cmd,
+                    "exit_code": -1, "stdout": "", "stderr": str(exc),
+                    "passed": False,
+                })
+
+        if not check_results:
+            return _null
+
+        checks_run = len(check_results)
+        checks_passed = sum(1 for r in check_results if r["passed"])
+
+        # Emit verification progress to channel
+        if channel is not None:
+            _lines = [f"Director closure check — {checks_passed}/{checks_run} passed"]
+            for r in check_results:
+                icon = "✓" if r["passed"] else "✗"
+                _lines.append(f"  {icon} {r['description']} (exit {r['exit_code']})")
+                if not r["passed"] and r["stderr"]:
+                    _lines.append(f"    {r['stderr'][:120]}")
+            channel.emit("verification", text="\n".join(_lines),
+                         checks_run=checks_run, checks_passed=checks_passed)
+
+        # Phase 3: director interprets results
+        results_text = json.dumps(check_results, indent=2)
+        verdict_resp = adapter.complete(
+            [
+                LLMMessage("system", _CLOSURE_VERDICT_SYSTEM),
+                LLMMessage("user",
+                    f"Goal: {goal}\n\n"
+                    f"Work done:\n{work_summary}\n\n"
+                    f"Verification results:\n{results_text}"
+                ),
+            ],
+            max_tokens=256,
+            temperature=0.1,
+        )
+        verdict_data = extract_json(content_or_empty(verdict_resp), dict,
+                                    log_tag="director.closure_verdict")
+
+        if not verdict_data:
+            return _null
+
+        complete = bool(verdict_data.get("complete", True))
+        confidence = safe_float(verdict_data.get("confidence"), default=0.7,
+                                min_val=0.0, max_val=1.0)
+        gaps = [safe_str(g) for g in safe_list(verdict_data.get("gaps")) if g]
+        summary = safe_str(verdict_data.get("summary", ""))
+
+        verdict = ClosureVerdict(
+            complete=complete,
+            confidence=confidence,
+            gaps=gaps,
+            summary=summary,
+            checks_run=checks_run,
+            checks_passed=checks_passed,
+        )
+
+        # Emit needs_work if gaps found
+        if not complete and channel is not None:
+            gap_text = "\n".join(f"• {g}" for g in gaps) if gaps else "(unspecified)"
+            channel.emit("needs_work", text=f"{summary}\n\nGaps:\n{gap_text}")
+
+        log.info(
+            "closure check: complete=%s confidence=%.2f checks=%d/%d gaps=%d",
+            complete, confidence, checks_passed, checks_run, len(gaps),
+        )
+        return verdict
+
+    except Exception:
+        log.debug("closure check error — treating as complete", exc_info=True)
+        return _null
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
