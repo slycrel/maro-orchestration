@@ -328,6 +328,7 @@ def handle(
     dry_run: bool = False,
     verbose: bool = False,
     channel: Optional["ConversationChannel"] = None,
+    prior_context: Optional[str] = None,
 ) -> HandleResult:
     """Process an incoming request through Poe's handle.
 
@@ -733,8 +734,16 @@ def handle(
                 log.info("handle: persona=%s conf=%.2f forced=%s", _pname, _pconf, bool(_pfx.forced_persona))
         except Exception:
             pass
+        _extra_ctx_parts = []
+        if prior_context:
+            _extra_ctx_parts.append(
+                f"== Prior run context (for continuation) ==\n{prior_context}\n"
+                f"== End prior context — continue from here =="
+            )
         if _persona_ctx:
-            _loop_kwargs["ancestry_context_extra"] = _persona_ctx
+            _extra_ctx_parts.append(_persona_ctx)
+        if _extra_ctx_parts:
+            _loop_kwargs["ancestry_context_extra"] = "\n\n".join(_extra_ctx_parts)
 
         loop_result = run_agent_loop(message, **_loop_kwargs)
         elapsed = int((time.monotonic() - started_at) * 1000)

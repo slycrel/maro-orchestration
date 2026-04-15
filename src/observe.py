@@ -769,6 +769,18 @@ _DASHBOARD_HTML = """\
           Send Reply
         </button>
       </div>
+      <div id="continue-area" style="margin-top:8px;display:none">
+        <textarea id="continue-input" rows="2"
+                  placeholder="Tell it to keep going, or give it a new direction…"
+                  onkeydown="if(event.key==='Enter'&&(event.metaKey||event.ctrlKey))sendContinue()"
+                  style="width:100%;font-family:monospace;font-size:13px;padding:8px;
+                         background:#1a1a2e;color:#e0e0e0;border:1px solid #555;border-radius:4px"></textarea>
+        <button onclick="sendContinue()"
+                style="margin-top:6px;padding:8px 20px;background:#4a6ea8;color:#fff;
+                       border:none;border-radius:4px;cursor:pointer;font-size:13px">
+          &#9654; Continue
+        </button>
+      </div>
     </div>
   </div>
 
@@ -1172,8 +1184,31 @@ function openThread(handle_id) {
   lastEventIdx = 0;
   document.getElementById('thread-view').style.display = 'block';
   document.getElementById('thread-messages').innerHTML = '';
+  document.getElementById('continue-area').style.display = 'none';
+  document.getElementById('continue-input').value = '';
   setRunningIndicator(false);
   startPoll();
+}
+
+function sendContinue() {
+  const text = document.getElementById('continue-input').value.trim();
+  if (!text || !activeThread) return;
+  document.getElementById('continue-area').style.display = 'none';
+  setRunningIndicator(true);
+  fetch(`/api/continue/${activeThread}`, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({text})
+  }).then(r => r.json()).then(data => {
+    if (data.ok) {
+      document.getElementById('continue-input').value = '';
+      startPoll();
+    } else {
+      setRunningIndicator(false);
+      document.getElementById('continue-area').style.display = 'block';
+      alert(data.error || 'Continue failed');
+    }
+  });
 }
 
 function startPoll() {
@@ -1195,8 +1230,11 @@ function pollThread() {
       lastEventIdx += data.events.length;
       document.getElementById('reply-area').style.display =
         data.waiting ? 'block' : 'none';
-      setRunningIndicator(data.status === 'running');
-      if (data.status !== 'running') clearInterval(pollInterval);
+      const running = data.status === 'running';
+      setRunningIndicator(running);
+      document.getElementById('continue-area').style.display =
+        (!running && !data.waiting) ? 'block' : 'none';
+      if (!running) clearInterval(pollInterval);
     });
 }
 
@@ -1204,6 +1242,14 @@ function appendEvent(ev) {
   const msgs = document.getElementById('thread-messages');
   const div = document.createElement('div');
   div.style.cssText = 'margin:6px 0;padding:8px 10px;border-radius:4px;font-size:12px';
+
+  if (ev.type === 'divider') {
+    div.style.cssText = 'margin:10px 0;text-align:center;font-size:11px;color:#555';
+    div.textContent = ev.text || '──────';
+    msgs.appendChild(div);
+    msgs.scrollTop = msgs.scrollHeight;
+    return;
+  }
 
   const colors = {
     user_goal: '#1a3a5c',
@@ -1508,6 +1554,46 @@ def serve_dashboard(host: str = "0.0.0.0", port: int = 7700) -> None:
                         return
                     _ch.receive_reply(_text)
                     self._send_json(200, {"ok": True})
+                except Exception as exc:
+                    self._send_json(500, {"error": str(exc)})
+            elif self.path.startswith("/api/continue/"):
+                try:
+                    _handle_id = self.path[len("/api/continue/"):]
+                    _length = int(self.headers.get("Content-Length", 0))
+                    _body = json.loads(self.rfile.read(_length).decode("utf-8"))
+                    _follow_up = _body.get("text", "").strip()
+                    if not _follow_up:
+                        self._send_json(400, {"error": "text is required"})
+                        return
+                    from conversation import get_channel
+                    _ch = get_channel(_handle_id)
+                    if _ch is None:
+                        self._send_json(404, {"error": "thread not found"})
+                        return
+                    if _ch.status == "running":
+                        self._send_json(409, {"error": "thread already running"})
+                        return
+                    _prior_ctx = _ch.prior_context_summary()
+                    _project = None  # project not tracked per-thread yet
+                    _ch.restart(_follow_up)
+                    def _run_continue() -> None:
+                        try:
+                            import sys as _sys
+                            _sys.path.insert(0, str(Path(__file__).parent))
+                            from handle import handle as _handle
+                            _hr = _handle(
+                                _follow_up,
+                                project=_project,
+                                verbose=True,
+                                channel=_ch,
+                                prior_context=_prior_ctx,
+                            )
+                            _ch.complete(_hr.result if _hr else "[done]")
+                        except Exception as _exc:
+                            _ch.emit("error", text=str(_exc))
+                            _ch.status = "error"
+                    threading.Thread(target=_run_continue, daemon=True).start()
+                    self._send_json(202, {"ok": True, "status": "running"})
                 except Exception as exc:
                     self._send_json(500, {"error": str(exc)})
             else:

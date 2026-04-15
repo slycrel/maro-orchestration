@@ -161,6 +161,41 @@ class ThreadChannel(ConversationChannel):
         """Put a user reply into the inbox queue (called by API endpoint)."""
         self._inbox.put(text)
 
+    def restart(self, follow_up: str) -> None:
+        """Reset channel to running state for a continuation run.
+
+        Emits a divider + the follow-up goal, clears the reply inbox,
+        and resets status so the dashboard resumes polling.
+        """
+        self._inbox = queue.Queue()
+        self.waiting_for_reply = False
+        self.status = "running"
+        self.emit("divider", text="── continuing ──")
+        self.emit("user_goal", text=follow_up)
+
+    def prior_context_summary(self, max_chars: int = 4000) -> str:
+        """Build a compact summary of prior events for injection as run context."""
+        with self._lock:
+            events = list(self._events)
+        parts = []
+        for ev in events:
+            t = ev.get("type", "")
+            text = ev.get("text", "").strip()
+            if not text:
+                continue
+            if t == "user_goal":
+                parts.append(f"Original goal: {text}")
+            elif t == "step":
+                parts.append(f"Completed: {text}")
+            elif t == "complete":
+                parts.append(f"Prior result:\n{text}")
+            elif t in ("stuck", "error", "interrupted"):
+                parts.append(f"Prior run ended ({t}): {text}")
+        summary = "\n".join(parts)
+        if len(summary) > max_chars:
+            summary = summary[-max_chars:]  # keep the most recent context
+        return summary
+
     def events_since(self, idx: int) -> List[Dict[str, Any]]:
         """Return a thread-safe slice of events starting from idx."""
         with self._lock:
