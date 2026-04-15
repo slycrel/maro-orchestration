@@ -742,6 +742,13 @@ def handle(
             )
         if _persona_ctx:
             _extra_ctx_parts.append(_persona_ctx)
+        # Completion standard — injected for every AGENDA run
+        try:
+            _std_path = Path(__file__).parent.parent / "user" / "COMPLETION_STANDARD.md"
+            if _std_path.exists():
+                _extra_ctx_parts.append(_std_path.read_text(encoding="utf-8").strip())
+        except Exception:
+            pass
         if _extra_ctx_parts:
             _loop_kwargs["ancestry_context_extra"] = "\n\n".join(_extra_ctx_parts)
 
