@@ -1,8 +1,6 @@
 """Tests for correspondence.py — dev-facing retrieval over project docs/memory.
 
-Deterministic embeddings via monkeypatched fake so tests don't touch the network.
-sqlite-vec is a hard dependency for the live paths; tests that exercise the db
-skip gracefully if the extension isn't installed on this box.
+Uses SQLite FTS5 (built-in, no external deps). No network calls, no API keys.
 """
 
 from __future__ import annotations
@@ -69,62 +67,19 @@ class TestChunking:
 
 
 # ---------------------------------------------------------------------------
-# Ingest + query (requires sqlite-vec)
+# Ingest + query (FTS5 built into sqlite; no external deps)
 # ---------------------------------------------------------------------------
-
-try:
-    import sqlite_vec  # noqa: F401
-    _HAS_SQLITE_VEC = True
-except ImportError:
-    _HAS_SQLITE_VEC = False
-
-_sqlite_vec_required = pytest.mark.skipif(
-    not _HAS_SQLITE_VEC,
-    reason="sqlite-vec not installed (pip install sqlite-vec)",
-)
-
-
-def _deterministic_embed(dim: int):
-    """Return an embed_fn that hashes text → a stable unit vector in R^dim.
-
-    Same text ⇒ same vector; similar text shares leading chars ⇒ similar vectors
-    (crude but enough for roundtrip tests).
-    """
-    import hashlib
-    import struct
-
-    def _fn(texts):
-        out = []
-        for t in texts:
-            vec = [0.0] * dim
-            # First dim/4 floats: derived from word-bucket counts
-            for word in t.lower().split():
-                h = int(hashlib.md5(word.encode()).hexdigest(), 16)
-                idx = h % dim
-                vec[idx] += 1.0
-            # Normalize to unit length
-            norm = sum(x * x for x in vec) ** 0.5
-            if norm > 0:
-                vec = [x / norm for x in vec]
-            out.append(vec)
-        return out
-
-    return _fn
-
 
 @pytest.fixture
 def corr_cfg(tmp_path):
     return {
         "db_path": str(tmp_path / "corr.db"),
         "sources": [],
-        "embed_model": "fake",
-        "embed_dim": 64,  # small dim for test speed
         "max_chunk_chars": 6000,
         "top_k": 5,
     }
 
 
-@_sqlite_vec_required
 class TestIngestQuery:
     def test_roundtrip_returns_relevant_chunk(self, corr_cfg, tmp_path):
         src = tmp_path / "docs" / "notes.md"
@@ -136,13 +91,12 @@ class TestIngestQuery:
             encoding="utf-8",
         )
         corr_cfg["sources"] = [str(tmp_path / "docs")]
-        embed = _deterministic_embed(corr_cfg["embed_dim"])
 
-        stats = corr.ingest(cfg=corr_cfg, embed_fn=embed)
+        stats = corr.ingest(cfg=corr_cfg)
         assert stats.chunks_new == 3
         assert not stats.errors
 
-        hits = corr.query("taste and judgment", cfg=corr_cfg, embed_fn=embed)
+        hits = corr.query("taste judgment", cfg=corr_cfg)
         assert hits, "expected at least one hit"
         # The 'Taste' section should rank highest
         top = hits[0]
@@ -152,10 +106,9 @@ class TestIngestQuery:
         src = tmp_path / "a.md"
         src.write_text("# H\nbody text\n", encoding="utf-8")
         corr_cfg["sources"] = [str(tmp_path)]
-        embed = _deterministic_embed(corr_cfg["embed_dim"])
 
-        s1 = corr.ingest(cfg=corr_cfg, embed_fn=embed)
-        s2 = corr.ingest(cfg=corr_cfg, embed_fn=embed)
+        s1 = corr.ingest(cfg=corr_cfg)
+        s2 = corr.ingest(cfg=corr_cfg)
         assert s1.chunks_new >= 1
         assert s2.chunks_new == 0
         assert s2.chunks_existing >= 1
@@ -164,11 +117,10 @@ class TestIngestQuery:
         src = tmp_path / "a.md"
         src.write_text("# H\noriginal body\n", encoding="utf-8")
         corr_cfg["sources"] = [str(tmp_path)]
-        embed = _deterministic_embed(corr_cfg["embed_dim"])
 
-        corr.ingest(cfg=corr_cfg, embed_fn=embed)
+        corr.ingest(cfg=corr_cfg)
         src.write_text("# H\nwholly different content\n", encoding="utf-8")
-        s2 = corr.ingest(cfg=corr_cfg, embed_fn=embed)
+        s2 = corr.ingest(cfg=corr_cfg)
         assert s2.chunks_new >= 1  # new hash ⇒ new row
 
     def test_since_filter_skips_old_files(self, corr_cfg, tmp_path):
@@ -179,9 +131,8 @@ class TestIngestQuery:
         past = 1_700_000_000
         os.utime(src, (past, past))
         corr_cfg["sources"] = [str(tmp_path)]
-        embed = _deterministic_embed(corr_cfg["embed_dim"])
 
-        stats = corr.ingest(cfg=corr_cfg, embed_fn=embed, since_seconds=60)
+        stats = corr.ingest(cfg=corr_cfg, since_seconds=60)
         assert stats.files_skipped_stale == 1
         assert stats.chunks_new == 0
 
@@ -189,13 +140,22 @@ class TestIngestQuery:
         src = tmp_path / "a.md"
         src.write_text("# H\nbody\n", encoding="utf-8")
         corr_cfg["sources"] = [str(tmp_path)]
-        embed = _deterministic_embed(corr_cfg["embed_dim"])
-        corr.ingest(cfg=corr_cfg, embed_fn=embed)
+        corr.ingest(cfg=corr_cfg)
 
         s = corr.status(cfg=corr_cfg)
         assert "error" not in s
         assert s["total_chunks"] >= 1
         assert s["last_ingest_utc"] is not None
+
+    def test_special_chars_in_query_dont_crash(self, corr_cfg, tmp_path):
+        src = tmp_path / "a.md"
+        src.write_text("# H\nbody with punctuation\n", encoding="utf-8")
+        corr_cfg["sources"] = [str(tmp_path)]
+        corr.ingest(cfg=corr_cfg)
+        # FTS5 MATCH has lots of syntactic gotchas — confirm escape handles them
+        corr.query('what is the "scope" concept (v2)?', cfg=corr_cfg)
+        corr.query("AND OR NOT NEAR ^ * :", cfg=corr_cfg)
+        corr.query("", cfg=corr_cfg)  # empty query — just don't crash
 
 
 # ---------------------------------------------------------------------------
@@ -346,7 +306,6 @@ class TestRenderTranscript:
         assert "ASSISTANT:" in out
 
 
-@_sqlite_vec_required
 class TestIngestSessions:
     def test_ingests_specific_paths(self, corr_cfg, tmp_path):
         records = [
@@ -357,10 +316,7 @@ class TestIngestSessions:
         ]
         session = tmp_path / "session.jsonl"
         _write_jsonl(session, records)
-        embed = _deterministic_embed(corr_cfg["embed_dim"])
-        stats = corr.ingest_sessions(
-            cfg=corr_cfg, embed_fn=embed, paths=[str(session)],
-        )
+        stats = corr.ingest_sessions(cfg=corr_cfg, paths=[str(session)])
         assert stats.files_scanned == 1
         assert stats.chunks_new >= 1
         assert not stats.errors
@@ -373,9 +329,8 @@ class TestIngestSessions:
         ]
         session = tmp_path / "session.jsonl"
         _write_jsonl(session, records)
-        embed = _deterministic_embed(corr_cfg["embed_dim"])
-        s1 = corr.ingest_sessions(cfg=corr_cfg, embed_fn=embed, paths=[str(session)])
-        s2 = corr.ingest_sessions(cfg=corr_cfg, embed_fn=embed, paths=[str(session)])
+        s1 = corr.ingest_sessions(cfg=corr_cfg, paths=[str(session)])
+        s2 = corr.ingest_sessions(cfg=corr_cfg, paths=[str(session)])
         assert s1.chunks_new >= 1
         assert s2.chunks_new == 0
         assert s2.chunks_existing >= 1
@@ -487,7 +442,6 @@ class TestTelegramTurns:
         assert "worth a look" in chunks[0].content
 
 
-@_sqlite_vec_required
 class TestIngestTelegram:
     def test_ingest_telegram_specific_path(self, corr_cfg, tmp_path):
         msgs = [
@@ -500,10 +454,7 @@ class TestIngestTelegram:
         path.write_text(json.dumps({
             "name": "x", "type": "bot_chat", "id": 1, "messages": msgs,
         }), encoding="utf-8")
-        embed = _deterministic_embed(corr_cfg["embed_dim"])
-        stats = corr.ingest_telegram(
-            cfg=corr_cfg, embed_fn=embed, paths=[str(path)],
-        )
+        stats = corr.ingest_telegram(cfg=corr_cfg, paths=[str(path)])
         assert stats.files_scanned == 1
         assert stats.chunks_new >= 1
         assert not stats.errors
@@ -519,23 +470,12 @@ class TestIngestTelegram:
                  "from": "poe", "text": "ack"},
             ],
         }), encoding="utf-8")
-        embed = _deterministic_embed(corr_cfg["embed_dim"])
-        stats = corr.ingest_telegram(
-            cfg=corr_cfg, embed_fn=embed, paths=[str(export_dir)],
-        )
+        stats = corr.ingest_telegram(cfg=corr_cfg, paths=[str(export_dir)])
         assert stats.files_scanned == 1
         assert stats.chunks_new >= 1
 
 
 class TestGracefulFailures:
-    def test_missing_api_key_raises_useful_error(self, monkeypatch):
-        """No API key → RuntimeError with install/setup guidance (not crash)."""
-        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-        monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
-        with pytest.raises(RuntimeError) as exc_info:
-            corr._embed_openai(["hello"], model="text-embedding-3-small")
-        assert "OPENAI_API_KEY" in str(exc_info.value) or "API key" in str(exc_info.value)
-
     def test_duration_parser_accepts_suffixes(self):
         assert corr._parse_duration("30s") == 30
         assert corr._parse_duration("5m") == 300

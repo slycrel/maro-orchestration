@@ -28,11 +28,13 @@ hope you pick the right ones. This module builds a thin vector-retrieval layer
 over the corpus so questions can be asked and relevant chunks surface.
 
 Design:
-  - sqlite-vec for storage (single file, no server, matches repo convention)
-  - OpenAI-compatible embeddings endpoint (cheap, ~$0.02/1M tokens with
-    text-embedding-3-small)
+  - SQLite FTS5 (built-in, zero external calls) for BM25 keyword retrieval
   - Markdown heading-aware chunking with source/section/mtime metadata
-  - Graceful ImportError fallback — sqlite-vec and requests are optional deps
+  - Single sqlite file, no server, no API keys required for the hot path
+  - Semantic re-rank is a future option (pipe FTS5 top-K through `claude -p`
+    if vocabulary mismatch ever hurts recall; or revive vec_chunks table when
+    a local embedder lands). BM25 is a strong default for dev-doc search
+    against the author's own terminology.
 
 Bitter-principle posture: don't reinvent retrieval. This module is ~400 lines
 of plumbing over primitives that already work (SQLite, HTTP embeddings,
@@ -55,15 +57,13 @@ import argparse
 import hashlib
 import json
 import logging
-import os
 import re
 import sqlite3
-import struct
 import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 log = logging.getLogger("poe.correspondence")
 
@@ -73,8 +73,6 @@ log = logging.getLogger("poe.correspondence")
 # ---------------------------------------------------------------------------
 
 _DEFAULT_DB_PATH = Path.home() / ".poe" / "workspace" / "correspondence.db"
-_DEFAULT_EMBED_MODEL = "text-embedding-3-small"
-_DEFAULT_EMBED_DIM = 1536
 _DEFAULT_MAX_CHUNK_CHARS = 6000
 _DEFAULT_TOP_K = 8
 
@@ -101,8 +99,11 @@ def _default_sources() -> List[str]:
         str(repo_root / "ROADMAP.md"),
         str(repo_root / "CLAUDE.md"),
         str(home / ".claude" / "projects" / "-home-clawd-claude" / "memory"),
-        # Early grok reviews — plain text, at the repo's parent claude/ dir.
-        str(home / "claude"),
+        # Early grok reviews — plain text, listed as individual files so we
+        # don't sweep the broader ~/claude/ tree (which contains other repos).
+        str(home / "claude" / "grok-response.txt"),
+        str(home / "claude" / "grok-response-2.txt"),
+        str(home / "claude" / "grok-response-3.txt"),
         # OpenClaw workspace top-level markdown (identity, principles, MEMORY,
         # playbook, etc.). NOTE: only top-level .md via glob — the memory/
         # subtree holds thousands of machine-generated outcome files we don't
@@ -116,8 +117,6 @@ def _load_config() -> Dict[str, Any]:
     cfg: Dict[str, Any] = {
         "db_path": str(_DEFAULT_DB_PATH),
         "sources": _default_sources(),
-        "embed_model": _DEFAULT_EMBED_MODEL,
-        "embed_dim": _DEFAULT_EMBED_DIM,
         "max_chunk_chars": _DEFAULT_MAX_CHUNK_CHARS,
         "top_k": _DEFAULT_TOP_K,
     }
@@ -242,99 +241,20 @@ def _hash(content: str, source: str, section: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Embeddings — HTTP to OpenAI-compatible endpoint
+# Storage — sqlite + FTS5 (zero external deps, no API keys)
 # ---------------------------------------------------------------------------
 
-def _embed_openai(texts: List[str], *, model: str,
-                  api_key: Optional[str] = None,
-                  base_url: Optional[str] = None) -> List[List[float]]:
-    """Embed texts via an OpenAI-compatible /embeddings endpoint.
+def _open_db(db_path: str) -> sqlite3.Connection:
+    """Open sqlite, create schema if absent, and ensure FTS5 index is synced.
 
-    Key resolution: OPENAI_API_KEY first, then OPENROUTER_API_KEY. If only
-    OPENROUTER is set and base_url isn't explicit, auto-switches to OpenRouter's
-    endpoint — this keeps the "set one key, it works" path clean.
-
-    Raises RuntimeError on any HTTP failure. Caller is expected to handle that.
+    Schema: a `chunks` table holds content; `chunks_fts` is an FTS5 virtual
+    table kept in sync via triggers. BM25 ranking over `chunks_fts` is the
+    retrieval substrate.
     """
-    try:
-        import requests
-    except ImportError as exc:
-        raise RuntimeError(
-            "correspondence: `requests` is required for embeddings. "
-            "Install with: pip install requests"
-        ) from exc
-
-    if not api_key:
-        api_key = os.environ.get("OPENAI_API_KEY")
-        if not api_key:
-            api_key = os.environ.get("OPENROUTER_API_KEY")
-            if api_key and base_url is None:
-                base_url = "https://openrouter.ai/api/v1"
-    if not api_key:
-        raise RuntimeError(
-            "correspondence: no API key. Set OPENAI_API_KEY (or OPENROUTER_API_KEY)."
-        )
-    if base_url is None:
-        base_url = "https://api.openai.com/v1"
-
-    resp = requests.post(
-        f"{base_url.rstrip('/')}/embeddings",
-        headers={"Authorization": f"Bearer {api_key}"},
-        json={"model": model, "input": texts},
-        timeout=60,
-    )
-    if resp.status_code != 200:
-        raise RuntimeError(
-            f"correspondence: embeddings HTTP {resp.status_code}: {resp.text[:300]}"
-        )
-    data = resp.json()
-    return [item["embedding"] for item in data.get("data", [])]
-
-
-EmbedFn = Callable[[List[str]], List[List[float]]]
-
-
-def _build_embed_fn(cfg: Dict[str, Any]) -> EmbedFn:
-    model = cfg.get("embed_model", _DEFAULT_EMBED_MODEL)
-    # Pass None so _embed_openai's auto-switch (OPENROUTER → openrouter endpoint)
-    # can fire when OPENAI_API_KEY is absent. Only override if config sets it.
-    base_url = cfg.get("embed_base_url")
-
-    def _fn(texts: List[str]) -> List[List[float]]:
-        # Chunk into batches of 100 to respect typical request limits
-        out: List[List[float]] = []
-        for i in range(0, len(texts), 100):
-            batch = texts[i:i + 100]
-            out.extend(_embed_openai(batch, model=model, base_url=base_url))
-        return out
-
-    return _fn
-
-
-# ---------------------------------------------------------------------------
-# Storage — sqlite + sqlite-vec
-# ---------------------------------------------------------------------------
-
-def _open_db(db_path: str, *, embed_dim: int) -> sqlite3.Connection:
-    """Open sqlite with sqlite-vec loaded; create schema if absent.
-
-    Raises RuntimeError with install instructions if sqlite-vec unavailable.
-    """
-    try:
-        import sqlite_vec
-    except ImportError as exc:
-        raise RuntimeError(
-            "correspondence: `sqlite-vec` is required. "
-            "Install with: pip install sqlite-vec"
-        ) from exc
-
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
-    conn.enable_load_extension(True)
-    sqlite_vec.load(conn)
-    conn.enable_load_extension(False)
 
-    conn.executescript(f"""
+    conn.executescript("""
         CREATE TABLE IF NOT EXISTS chunks (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             source TEXT NOT NULL,
@@ -346,21 +266,47 @@ def _open_db(db_path: str, *, embed_dim: int) -> sqlite3.Connection:
         CREATE INDEX IF NOT EXISTS idx_chunks_source ON chunks(source);
         CREATE INDEX IF NOT EXISTS idx_chunks_modified ON chunks(modified_at);
 
-        CREATE VIRTUAL TABLE IF NOT EXISTS vec_chunks USING vec0(
-            embedding float[{embed_dim}]
+        CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
+            section, content,
+            content='chunks', content_rowid='id',
+            tokenize='porter unicode61'
         );
+
+        CREATE TRIGGER IF NOT EXISTS chunks_ai AFTER INSERT ON chunks BEGIN
+            INSERT INTO chunks_fts(rowid, section, content)
+            VALUES (new.id, new.section, new.content);
+        END;
+        CREATE TRIGGER IF NOT EXISTS chunks_ad AFTER DELETE ON chunks BEGIN
+            INSERT INTO chunks_fts(chunks_fts, rowid, section, content)
+            VALUES('delete', old.id, old.section, old.content);
+        END;
+        CREATE TRIGGER IF NOT EXISTS chunks_au AFTER UPDATE ON chunks BEGIN
+            INSERT INTO chunks_fts(chunks_fts, rowid, section, content)
+            VALUES('delete', old.id, old.section, old.content);
+            INSERT INTO chunks_fts(rowid, section, content)
+            VALUES (new.id, new.section, new.content);
+        END;
 
         CREATE TABLE IF NOT EXISTS ingest_meta (
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
         );
     """)
-    conn.commit()
+
+    # Back-fill FTS5 from pre-existing rows if the schema was just upgraded.
+    # Idempotent: only inserts rows whose id isn't already in chunks_fts.
+    missing = conn.execute(
+        "SELECT COUNT(*) FROM chunks WHERE id NOT IN (SELECT rowid FROM chunks_fts)"
+    ).fetchone()[0]
+    if missing:
+        conn.execute(
+            "INSERT INTO chunks_fts(rowid, section, content) "
+            "SELECT id, section, content FROM chunks "
+            "WHERE id NOT IN (SELECT rowid FROM chunks_fts)"
+        )
+        conn.commit()
+
     return conn
-
-
-def _pack_vec(vec: List[float]) -> bytes:
-    return struct.pack(f"{len(vec)}f", *vec)
 
 
 # ---------------------------------------------------------------------------
@@ -382,12 +328,14 @@ _TEXT_EXTS = {".md", ".txt"}
 # auto-generated outcome/memory files, git internals, and venvs.
 _EXCLUDE_DIR_NAMES = {
     ".git", "node_modules", "__pycache__", ".venv", "venv",
+    ".cache", ".browser-profiles",  # playwright/chromium caches under workspace
     "memory",        # workspace auto-memory — too noisy, too many files
     "output",        # run artifacts
     "projects",      # per-project scratch
     "skills",        # evolved skill files
     "personas",      # persona YAMLs
     "old-reference",
+    "prototypes",    # earlier stub copies of current repo — creates dupes
 }
 
 
@@ -708,18 +656,23 @@ def _iter_telegram_turns(json_path: Path, *, max_chars: int,
         yield from _emit(current)
 
 
+def _insert_chunk(conn: sqlite3.Connection, ch: Chunk) -> None:
+    """Insert a chunk; FTS5 trigger mirrors it automatically."""
+    conn.execute(
+        "INSERT INTO chunks(source, section, modified_at, content, content_hash) "
+        "VALUES (?,?,?,?,?)",
+        (ch.source, ch.section, ch.modified_at, ch.content, ch.content_hash),
+    )
+
+
 def ingest_telegram(*, cfg: Optional[Dict[str, Any]] = None,
-                    embed_fn: Optional[EmbedFn] = None,
                     paths: Optional[List[str]] = None) -> IngestStats:
     """Ingest Telegram Desktop chat exports (result.json) as turn-based chunks.
 
     `paths`: list of result.json files OR directories containing them.
     """
     cfg = cfg or _load_config()
-    if embed_fn is None:
-        embed_fn = _build_embed_fn(cfg)
-
-    conn = _open_db(cfg["db_path"], embed_dim=cfg["embed_dim"])
+    conn = _open_db(cfg["db_path"])
     stats = IngestStats()
 
     resolved: List[Path] = []
@@ -733,7 +686,6 @@ def ingest_telegram(*, cfg: Optional[Dict[str, Any]] = None,
             if rj.is_file():
                 resolved.append(rj)
 
-    pending: List[Chunk] = []
     for path in resolved:
         stats.files_scanned += 1
         try:
@@ -745,44 +697,11 @@ def ingest_telegram(*, cfg: Optional[Dict[str, Any]] = None,
                 if row:
                     stats.chunks_existing += 1
                 else:
-                    pending.append(ch)
+                    _insert_chunk(conn, ch)
+                    stats.chunks_new += 1
         except Exception as exc:
             stats.errors.append(f"{path}: parse failed: {exc}")
             continue
-
-    if pending:
-        batch_size = 100
-        for i in range(0, len(pending), batch_size):
-            batch = pending[i:i + batch_size]
-            try:
-                vectors = embed_fn([c.content for c in batch])
-            except Exception as exc:
-                stats.errors.append(f"embed batch {i}: {exc}")
-                continue
-            if len(vectors) != len(batch):
-                stats.errors.append(
-                    f"embedding count mismatch: {len(vectors)} vs {len(batch)}"
-                )
-                continue
-            expected_dim = cfg["embed_dim"]
-            for ch, vec in zip(batch, vectors):
-                if len(vec) != expected_dim:
-                    stats.errors.append(
-                        f"dim mismatch {len(vec)}≠{expected_dim} for {ch.source}"
-                    )
-                    continue
-                cur = conn.execute(
-                    "INSERT INTO chunks(source, section, modified_at, content, content_hash) "
-                    "VALUES (?,?,?,?,?)",
-                    (ch.source, ch.section, ch.modified_at, ch.content, ch.content_hash),
-                )
-                chunk_id = cur.lastrowid
-                conn.execute(
-                    "INSERT INTO vec_chunks(rowid, embedding) VALUES (?, ?)",
-                    (chunk_id, _pack_vec(vec)),
-                )
-                stats.chunks_new += 1
-            conn.commit()
 
     conn.execute(
         "INSERT OR REPLACE INTO ingest_meta(key, value) VALUES (?, ?)",
@@ -874,7 +793,6 @@ def _iter_session_files(paths: Optional[List[str]], dirs: List[str]) -> Iterable
 
 
 def ingest_sessions(*, cfg: Optional[Dict[str, Any]] = None,
-                    embed_fn: Optional[EmbedFn] = None,
                     paths: Optional[List[str]] = None,
                     since_seconds: Optional[int] = None,
                     limit: Optional[int] = None) -> IngestStats:
@@ -888,18 +806,14 @@ def ingest_sessions(*, cfg: Optional[Dict[str, Any]] = None,
     Content-hash dedup identical to `ingest()` — safe to re-run.
     """
     cfg = cfg or _load_config()
-    if embed_fn is None:
-        embed_fn = _build_embed_fn(cfg)
-
     session_dirs = cfg.get("session_dirs") or _DEFAULT_SESSION_DIRS
-    conn = _open_db(cfg["db_path"], embed_dim=cfg["embed_dim"])
+    conn = _open_db(cfg["db_path"])
     stats = IngestStats()
 
     cutoff: Optional[int] = None
     if since_seconds is not None:
         cutoff = int(time.time()) - int(since_seconds)
 
-    pending: List[Chunk] = []
     count = 0
     for path in _iter_session_files(paths, session_dirs):
         if limit is not None and count >= limit:
@@ -924,46 +838,12 @@ def ingest_sessions(*, cfg: Optional[Dict[str, Any]] = None,
                 if row:
                     stats.chunks_existing += 1
                 else:
-                    pending.append(ch)
+                    _insert_chunk(conn, ch)
+                    stats.chunks_new += 1
         except Exception as exc:
             stats.errors.append(f"{path}: parse failed: {exc}")
             continue
-
-    if pending:
-        # Batch embed in chunks of 100 — embed_fn already handles batching, but
-        # we slice here so a single failure doesn't lose everything.
-        batch_size = 100
-        for i in range(0, len(pending), batch_size):
-            batch = pending[i:i + batch_size]
-            try:
-                vectors = embed_fn([c.content for c in batch])
-            except Exception as exc:
-                stats.errors.append(f"embed batch {i}: {exc}")
-                continue
-            if len(vectors) != len(batch):
-                stats.errors.append(
-                    f"embedding count mismatch: {len(vectors)} vs {len(batch)}"
-                )
-                continue
-            expected_dim = cfg["embed_dim"]
-            for ch, vec in zip(batch, vectors):
-                if len(vec) != expected_dim:
-                    stats.errors.append(
-                        f"dim mismatch {len(vec)}≠{expected_dim} for {ch.source}"
-                    )
-                    continue
-                cur = conn.execute(
-                    "INSERT INTO chunks(source, section, modified_at, content, content_hash) "
-                    "VALUES (?,?,?,?,?)",
-                    (ch.source, ch.section, ch.modified_at, ch.content, ch.content_hash),
-                )
-                chunk_id = cur.lastrowid
-                conn.execute(
-                    "INSERT INTO vec_chunks(rowid, embedding) VALUES (?, ?)",
-                    (chunk_id, _pack_vec(vec)),
-                )
-                stats.chunks_new += 1
-            conn.commit()
+        conn.commit()
 
     conn.execute(
         "INSERT OR REPLACE INTO ingest_meta(key, value) VALUES (?, ?)",
@@ -975,25 +855,20 @@ def ingest_sessions(*, cfg: Optional[Dict[str, Any]] = None,
 
 
 def ingest(*, cfg: Optional[Dict[str, Any]] = None,
-           embed_fn: Optional[EmbedFn] = None,
            since_seconds: Optional[int] = None) -> IngestStats:
-    """Scan configured sources, chunk, embed, and upsert into the db.
+    """Scan configured sources, chunk, and upsert into the db.
 
     Content-hash dedup — re-ingesting the same content is cheap.
     `since_seconds`: only process files with mtime newer than (now - since_seconds).
     """
     cfg = cfg or _load_config()
-    if embed_fn is None:
-        embed_fn = _build_embed_fn(cfg)
-
-    conn = _open_db(cfg["db_path"], embed_dim=cfg["embed_dim"])
+    conn = _open_db(cfg["db_path"])
     stats = IngestStats()
 
     cutoff: Optional[int] = None
     if since_seconds is not None:
         cutoff = int(time.time()) - int(since_seconds)
 
-    pending: List[Chunk] = []
     for path in _iter_markdown_files(cfg["sources"]):
         stats.files_scanned += 1
         try:
@@ -1002,6 +877,9 @@ def ingest(*, cfg: Optional[Dict[str, Any]] = None,
                 stats.files_skipped_stale += 1
                 continue
             text = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            # Binary file masquerading as .md/.txt (browser caches, etc.) — skip silently.
+            continue
         except Exception as exc:
             stats.errors.append(f"{path}: read failed: {exc}")
             continue
@@ -1015,40 +893,8 @@ def ingest(*, cfg: Optional[Dict[str, Any]] = None,
             if row:
                 stats.chunks_existing += 1
             else:
-                pending.append(ch)
-
-    if pending:
-        try:
-            vectors = embed_fn([c.content for c in pending])
-        except Exception as exc:
-            stats.errors.append(f"embed failed: {exc}")
-            conn.close()
-            return stats
-        if len(vectors) != len(pending):
-            stats.errors.append(
-                f"embedding count mismatch: {len(vectors)} vs {len(pending)}"
-            )
-            conn.close()
-            return stats
-
-        expected_dim = cfg["embed_dim"]
-        for ch, vec in zip(pending, vectors):
-            if len(vec) != expected_dim:
-                stats.errors.append(
-                    f"dim mismatch {len(vec)}≠{expected_dim} for {ch.source}"
-                )
-                continue
-            cur = conn.execute(
-                "INSERT INTO chunks(source, section, modified_at, content, content_hash) "
-                "VALUES (?,?,?,?,?)",
-                (ch.source, ch.section, ch.modified_at, ch.content, ch.content_hash),
-            )
-            chunk_id = cur.lastrowid
-            conn.execute(
-                "INSERT INTO vec_chunks(rowid, embedding) VALUES (?, ?)",
-                (chunk_id, _pack_vec(vec)),
-            )
-            stats.chunks_new += 1
+                _insert_chunk(conn, ch)
+                stats.chunks_new += 1
 
     conn.execute(
         "INSERT OR REPLACE INTO ingest_meta(key, value) VALUES (?, ?)",
@@ -1069,40 +915,62 @@ class QueryHit:
     section: str
     content: str
     modified_at: int
-    distance: float
+    score: float  # BM25 — lower is better (FTS5 convention: negative numbers)
+
+
+def _fts5_escape(text: str) -> str:
+    """Make arbitrary user text safe to pass as an FTS5 MATCH argument.
+
+    Tokenizes on whitespace, quotes each token as a phrase literal (doubling
+    embedded quotes per FTS5 escape rules), and joins with OR. OR here widens
+    recall — BM25 still ranks chunks that hit multiple tokens higher, so the
+    natural "exact phrase match wins" behavior is preserved while a single-
+    token-match is not silently dropped the way an implicit-AND would do it.
+    """
+    raw = text.strip()
+    if not raw:
+        return ""
+    tokens = raw.split()
+    quoted = []
+    for t in tokens:
+        inner = t.replace('"', '""')
+        quoted.append(f'"{inner}"')
+    return " OR ".join(quoted)
 
 
 def query(text: str, *, top_k: Optional[int] = None,
-          cfg: Optional[Dict[str, Any]] = None,
-          embed_fn: Optional[EmbedFn] = None) -> List[QueryHit]:
+          cfg: Optional[Dict[str, Any]] = None) -> List[QueryHit]:
+    """BM25 full-text search over the chunks corpus.
+
+    FTS5's `porter unicode61` tokenizer gives us stemming + unicode folding
+    out of the box. Results are ordered by bm25() ascending (more negative
+    = better match).
+    """
     cfg = cfg or _load_config()
-    if embed_fn is None:
-        embed_fn = _build_embed_fn(cfg)
     if top_k is None:
         top_k = cfg["top_k"]
-
-    vectors = embed_fn([text])
-    if not vectors:
+    if not text or not text.strip():
         return []
-    qvec = _pack_vec(vectors[0])
 
-    conn = _open_db(cfg["db_path"], embed_dim=cfg["embed_dim"])
+    match_expr = _fts5_escape(text)
+    conn = _open_db(cfg["db_path"])
     try:
         rows = conn.execute(
             "SELECT chunks.source, chunks.section, chunks.content, chunks.modified_at, "
-            "vec_chunks.distance "
-            "FROM vec_chunks "
-            "JOIN chunks ON chunks.id = vec_chunks.rowid "
-            "WHERE vec_chunks.embedding MATCH ? AND k = ? "
-            "ORDER BY vec_chunks.distance",
-            (qvec, top_k),
+            "bm25(chunks_fts) AS score "
+            "FROM chunks_fts "
+            "JOIN chunks ON chunks.id = chunks_fts.rowid "
+            "WHERE chunks_fts MATCH ? "
+            "ORDER BY score "
+            "LIMIT ?",
+            (match_expr, top_k),
         ).fetchall()
     finally:
         conn.close()
 
     return [
         QueryHit(source=r[0], section=r[1], content=r[2],
-                 modified_at=r[3], distance=r[4])
+                 modified_at=r[3], score=r[4])
         for r in rows
     ]
 
@@ -1114,7 +982,7 @@ def query(text: str, *, top_k: Optional[int] = None,
 def status(*, cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     cfg = cfg or _load_config()
     try:
-        conn = _open_db(cfg["db_path"], embed_dim=cfg["embed_dim"])
+        conn = _open_db(cfg["db_path"])
     except RuntimeError as exc:
         return {"error": str(exc)}
     try:
@@ -1158,7 +1026,7 @@ def _cmd_query(args: argparse.Namespace) -> int:
         print("(no hits)")
         return 0
     for h in hits:
-        header = f"[d={h.distance:.3f}] {Path(h.source).name}"
+        header = f"[bm25={h.score:.2f}] {Path(h.source).name}"
         if h.section:
             header += f" — {h.section}"
         print(header)
