@@ -2,26 +2,32 @@
 
 What to do next, in what order. Updated each session. Strategic phases live in ROADMAP.md; deferred ideas live in BACKLOG.md. This file is the bridge — the executable queue.
 
-Last updated: 2026-04-15 (session 33 — Phase 64A: adaptive execution, director as persistent supervisor)
+Last updated: 2026-04-15 (session 33 — Phase 64A/B/C: full adaptive execution pipeline)
 
 ---
 
-## Done (session 33, 2026-04-15 — Phase 64A: adaptive execution)
+## Done (session 33, 2026-04-15 — Phase 64A/B/C: adaptive execution)
 
-- [x] **EvaluationContext + DirectorDecision dataclasses** (`src/director.py`) — compact serializable snapshot of execution state (no live LoopContext references); decision type with action/reasoning/revised_steps/next_check_in.
-- [x] **director_evaluate()** (`src/director.py`) — Phase A wires `continue` and `adjust` only; `replan`/`restart`/`escalate` deferred to Phase C. Non-fatal — returns `continue` on any exception. Empty `revised_steps` on `adjust` folds back to `continue` per design. Phase A LLM actions clamped — any other action becomes `continue`.
-- [x] **LoopContext adaptive fields** (`src/agent_loop.py`) — `steps_since_last_check`, `director_replan_count`, `director_budget_ceiling` added; wired but inert enforcement deferred to Phase B (no budget ceiling enforcement yet).
-- [x] **Stuck trigger** — inside `stuck_streak >= 2` block before existing advisor; director `continue` resets streak and retries, `adjust` replaces remaining steps + remaining_indices and retries. Falls through to advisor if adaptive_execution off or director returns neither.
-- [x] **Verify-failure + step-threshold triggers** — end of each iteration: syncs `_session_verify_failures`/`stuck_streak` to ctx, increments `steps_since_last_check`; fires on `session_verify_failures >= 2` or `steps_since_last_check >= 5`. `remaining_indices` rebuilt in sync with `remaining_steps` on adjust.
-- [x] **Gated by `adaptive_execution` config flag** (default off) — same opt-in pattern as `ralph_verify`.
-- [x] **14 new tests** — TestEvaluationContext, TestDirectorDecision, TestDirectorEvaluate; 100 total in test_director.py.
+- [x] **EvaluationContext + DirectorDecision dataclasses** (`src/director.py`) — compact serializable snapshot; action/reasoning/revised_steps/new_approach/restart_context/user_question/next_check_in.
+- [x] **director_evaluate()** — all 5 actions wired: continue, adjust, replan, restart, escalate. Budget note injected when convergence_budget_remaining=0. Non-fatal — returns `continue` on any exception.
+- [x] **LoopContext additions** — `steps_since_last_check`, `director_replan_count`, `director_budget_ceiling`, `channel`.
+- [x] **Stuck trigger** (Phase A) — inside `stuck_streak >= 2` before existing advisor; continue resets streak, adjust replaces step tail, replan calls planner with new_approach context, restart breaks loop, escalate calls channel.ask().
+- [x] **Verify-failure + step-threshold triggers** (Phase A) — end of each iteration; fires on `session_verify_failures >= 2` or `steps_since_last_check >= 5`; same full action set.
+- [x] **Budget enforcement** (Phase B) — `director_replan_count >= director_budget_ceiling` → replan/restart clamped to continue in both trigger sites; budget visible in LLM prompt.
+- [x] **replan** (Phase B) — calls `planner.decompose()` with `new_approach + completed steps` as ancestry context; replaces remaining steps + indices; increments `director_replan_count`.
+- [x] **restart** (Phase C) — loop breaks with `loop_status="restart"`, `stuck_reason=restart_context`; handle.py detects and re-runs with restart context injected as ancestry, `continuation_depth+1`, capped at depth 3.
+- [x] **escalate** (Phase C) — `ctx.channel.ask(user_question)` mid-loop; reply injected as next step context; falls back to logging if no channel.
+- [x] **channel param** (`run_agent_loop`) — optional, default None; handle.py passes its channel for main AGENDA path.
+- [x] **Gated by `adaptive_execution` config flag** (default off).
+- [x] **18 new tests** — 107 total in test_director.py; 4329 total.
 
 ## Next Up
 
-- **Phase 64B** — strategic threshold check every K steps unconditionally; `ExecutionPlan` metadata struct + planner changes; wire `replan` action. Deferred: needs operational data from Phase A first.
-- **Evolver confidence calibration follow-up** — `scan_suggestion_outcomes` wired; verify calibration is improving (check live workspace suggestion stats). Heartbeat stopped by design since Apr 7-9 token burn — no new data until restarted.
+- **Phase 64D** — memory layer: record approach + outcome per goal type; director uses history to select initial approach. Deferred until Phase A/B/C generate operational data.
+- **Closure check unification** (Phase C leftover) — `director_evaluate(trigger="closure")` wraps `verify_goal_completion`; `ClosureVerdict` retired. Low-priority code hygiene.
+- **Evolver confidence calibration follow-up** — `scan_suggestion_outcomes` wired; verify calibration is improving. Heartbeat stopped since Apr 7-9 token burn — no new data until restarted.
 - **Jeremy's undocumented ideas** — he mentioned having ideas not yet in the backlog. Needs elaboration.
-- **Formal stage contracts (Phase P2)** — Typed output contracts per pipeline phase + hard validation gates. See BACKLOG. Medium-term architectural improvement.
+- **Formal stage contracts (Phase P2)** — Typed output contracts per pipeline phase + hard validation gates. See BACKLOG.
 
 ## Done (session 32, 2026-04-15 — Phase 63: Director closure check + completion standard)
 
