@@ -754,9 +754,16 @@ def handle(
         # Gated by `scope_generation` config flag (default off). `scope_ab_skip`
         # is the paired A/B flag — when true, we'd-have-generated is recorded
         # but not injected, so the same goal can be run with/without scope for
-        # comparison. See docs/PHASE_65_IMPLEMENTATION_PLAN.md.
-        _scope_on = _cfg.get("scope_generation", "false").strip().lower() == "true"
-        _scope_ab_skip = _cfg.get("scope_ab_skip", "false").strip().lower() == "true"
+        # comparison. Uses the same config system as adaptive_execution (reads
+        # from ~/.poe/config.yml, not the repo-local user/CONFIG.md).
+        # See docs/PHASE_65_IMPLEMENTATION_PLAN.md.
+        try:
+            from config import get as _config_get
+            _scope_on = bool(_config_get("scope_generation", False))
+            _scope_ab_skip = bool(_config_get("scope_ab_skip", False))
+        except Exception:
+            _scope_on = False
+            _scope_ab_skip = False
         if _scope_on and not dry_run:
             try:
                 from scope import generate_scope
