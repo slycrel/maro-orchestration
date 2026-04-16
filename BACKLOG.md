@@ -77,7 +77,7 @@ Last reviewed: 2026-04-14 (session 30)
 
 See `docs/CONSTRAINT_ORCHESTRATION_DESIGN.md` + `docs/CONSTRAINT_ORCHESTRATION_REVIEW.md`. Items below are the review's sharp findings that must be resolved before code lands.
 
-- [ ] **BLOCKER: Rename the concept.** `src/constraint.py` is taken (HITL/risk gating, destroy/external/write/read tiers, produces "violations"). Adding a new "constraint" concept alongside will conflate the two in code + prompts. Strawman: "premise" (`goal_premises`, `generate_premises`, `inject_premises`). Decision required before any PR.
+- [x] **Rename decided: "scope".** (2026-04-16) `ScopeSet`, `generate_scope()`, `src/scope.py`. Rationale: captures both what IS and what IS NOT in the bounded space (complements specs). Avoids collision with `src/constraint.py` (HITL/risk harness).
 - [ ] **BLOCKER: Autonomous-path behavior.** Design says "human gate (unless yolo)" as if binary. Heartbeat/cron path has no channel. Document the behavior: skip? auto-approve after N? block+fail? Default should probably be "log inversion output for post-hoc review, continue with it as planner context, no gate."
 - [ ] **BLOCKER: A/B mechanism.** Cannot evaluate "bounded planning produces measurably better outcomes than unbounded planning" without running goals both ways. Build the A/B capability before enabling anywhere. Probably a config flag or `inversion:` prefix.
 - [ ] **BLOCKER: Cost ceiling.** Given April 7-9 token burn, do not ship a feature adding per-goal LLM calls without a per-goal token budget + circuit breaker. Instrumentation first.
