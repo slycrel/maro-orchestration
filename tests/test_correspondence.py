@@ -202,6 +202,185 @@ class TestIngestQuery:
 # Graceful-failure paths (no sqlite-vec installed, no API key)
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# JSONL session transcript ingestion
+# ---------------------------------------------------------------------------
+
+import json
+
+
+def _write_jsonl(path: Path, records: list) -> None:
+    path.write_text("\n".join(json.dumps(r) for r in records) + "\n", encoding="utf-8")
+
+
+class TestJsonlExtraction:
+    def test_user_text_string(self):
+        assert corr._extract_user_text("hello world") == "hello world"
+
+    def test_user_text_scaffold_filtered(self):
+        assert corr._extract_user_text("<local-command-caveat>stuff</local-command-caveat>") == ""
+        assert corr._extract_user_text("<command-name>/foo</command-name>") == ""
+
+    def test_user_text_list_blocks(self):
+        content = [
+            {"type": "text", "text": "first message"},
+            {"type": "tool_result", "tool_use_id": "x", "content": "should be skipped"},
+            {"type": "text", "text": "second message"},
+        ]
+        out = corr._extract_user_text(content)
+        assert "first message" in out
+        assert "second message" in out
+        assert "should be skipped" not in out
+
+    def test_user_text_list_skips_scaffold_blocks(self):
+        content = [
+            {"type": "text", "text": "<local-command-caveat>nope</local-command-caveat>"},
+            {"type": "text", "text": "real prose"},
+        ]
+        assert corr._extract_user_text(content) == "real prose"
+
+    def test_assistant_text_skips_thinking_and_tool_use(self):
+        content = [
+            {"type": "thinking", "thinking": "should not appear"},
+            {"type": "text", "text": "visible reply"},
+            {"type": "tool_use", "name": "Read", "input": {}},
+            {"type": "text", "text": "second reply"},
+        ]
+        out = corr._extract_assistant_text(content)
+        assert "visible reply" in out
+        assert "second reply" in out
+        assert "should not appear" not in out
+
+
+class TestTurnChunks:
+    def test_single_turn_yields_one_chunk(self, tmp_path):
+        records = [
+            {"type": "user", "timestamp": "2026-04-16T10:00:00Z",
+             "message": {"content": "why did we rename constraint to scope"}},
+            {"type": "assistant", "timestamp": "2026-04-16T10:00:01Z",
+             "message": {"content": [{"type": "text", "text": "because scope is narrower"}]}},
+        ]
+        path = tmp_path / "session.jsonl"
+        _write_jsonl(path, records)
+        chunks = list(corr._iter_turn_chunks(path, max_chars=6000))
+        assert len(chunks) == 1
+        c = chunks[0]
+        assert "USER:" in c.content
+        assert "ASSISTANT:" in c.content
+        assert "rename constraint" in c.content
+        assert "scope is narrower" in c.content
+        assert "turn 1" in c.section
+        assert "2026-04-16" in c.section
+
+    def test_multi_turn_yields_multiple_chunks(self, tmp_path):
+        records = [
+            {"type": "user", "timestamp": "2026-04-16T10:00:00Z",
+             "message": {"content": "first question"}},
+            {"type": "assistant", "timestamp": "2026-04-16T10:00:01Z",
+             "message": {"content": [{"type": "text", "text": "first answer"}]}},
+            {"type": "user", "timestamp": "2026-04-16T10:01:00Z",
+             "message": {"content": "second question"}},
+            {"type": "assistant", "timestamp": "2026-04-16T10:01:01Z",
+             "message": {"content": [{"type": "text", "text": "second answer"}]}},
+        ]
+        path = tmp_path / "session.jsonl"
+        _write_jsonl(path, records)
+        chunks = list(corr._iter_turn_chunks(path, max_chars=6000))
+        assert len(chunks) == 2
+        assert "first question" in chunks[0].content
+        assert "second question" in chunks[1].content
+
+    def test_scaffold_user_message_skipped(self, tmp_path):
+        records = [
+            {"type": "user", "timestamp": "2026-04-16T10:00:00Z",
+             "message": {"content": "<local-command-caveat>noise</local-command-caveat>"}},
+            {"type": "assistant", "timestamp": "2026-04-16T10:00:01Z",
+             "message": {"content": [{"type": "text", "text": "a reply"}]}},
+            {"type": "user", "timestamp": "2026-04-16T10:01:00Z",
+             "message": {"content": "real question"}},
+            {"type": "assistant", "timestamp": "2026-04-16T10:01:01Z",
+             "message": {"content": [{"type": "text", "text": "real answer"}]}},
+        ]
+        path = tmp_path / "session.jsonl"
+        _write_jsonl(path, records)
+        chunks = list(corr._iter_turn_chunks(path, max_chars=6000))
+        # The scaffold user is skipped → the assistant reply attaches to nothing
+        # and becomes a leading assistant-only chunk; then the real turn.
+        contents = [c.content for c in chunks]
+        assert any("real question" in c and "real answer" in c for c in contents)
+        assert not any("local-command-caveat" in c for c in contents)
+
+    def test_malformed_lines_skipped(self, tmp_path):
+        path = tmp_path / "session.jsonl"
+        path.write_text(
+            json.dumps({"type": "user", "message": {"content": "good line"}}) + "\n"
+            "not json at all\n"
+            + json.dumps({"type": "assistant",
+                          "message": {"content": [{"type": "text", "text": "reply"}]}}) + "\n",
+            encoding="utf-8",
+        )
+        chunks = list(corr._iter_turn_chunks(path, max_chars=6000))
+        assert len(chunks) == 1
+        assert "good line" in chunks[0].content
+
+
+class TestRenderTranscript:
+    def test_renders_readable_transcript(self, tmp_path):
+        records = [
+            {"type": "user", "timestamp": "2026-04-16T10:00:00Z",
+             "message": {"content": "question one"}},
+            {"type": "assistant", "timestamp": "2026-04-16T10:00:01Z",
+             "message": {"content": [
+                 {"type": "thinking", "thinking": "hidden"},
+                 {"type": "text", "text": "answer one"},
+                 {"type": "tool_use", "name": "Read", "input": {}},
+             ]}},
+        ]
+        path = tmp_path / "s.jsonl"
+        _write_jsonl(path, records)
+        out = corr.render_transcript(path)
+        assert "question one" in out
+        assert "answer one" in out
+        assert "hidden" not in out
+        assert "USER:" in out
+        assert "ASSISTANT:" in out
+
+
+@_sqlite_vec_required
+class TestIngestSessions:
+    def test_ingests_specific_paths(self, corr_cfg, tmp_path):
+        records = [
+            {"type": "user", "timestamp": "2026-04-16T10:00:00Z",
+             "message": {"content": "scope and inversion"}},
+            {"type": "assistant", "timestamp": "2026-04-16T10:00:01Z",
+             "message": {"content": [{"type": "text", "text": "fail modes before plans"}]}},
+        ]
+        session = tmp_path / "session.jsonl"
+        _write_jsonl(session, records)
+        embed = _deterministic_embed(corr_cfg["embed_dim"])
+        stats = corr.ingest_sessions(
+            cfg=corr_cfg, embed_fn=embed, paths=[str(session)],
+        )
+        assert stats.files_scanned == 1
+        assert stats.chunks_new >= 1
+        assert not stats.errors
+
+    def test_ingest_sessions_idempotent(self, corr_cfg, tmp_path):
+        records = [
+            {"type": "user", "message": {"content": "test question"}},
+            {"type": "assistant",
+             "message": {"content": [{"type": "text", "text": "test reply"}]}},
+        ]
+        session = tmp_path / "session.jsonl"
+        _write_jsonl(session, records)
+        embed = _deterministic_embed(corr_cfg["embed_dim"])
+        s1 = corr.ingest_sessions(cfg=corr_cfg, embed_fn=embed, paths=[str(session)])
+        s2 = corr.ingest_sessions(cfg=corr_cfg, embed_fn=embed, paths=[str(session)])
+        assert s1.chunks_new >= 1
+        assert s2.chunks_new == 0
+        assert s2.chunks_existing >= 1
+
+
 class TestGracefulFailures:
     def test_missing_api_key_raises_useful_error(self, monkeypatch):
         """No API key → RuntimeError with install/setup guidance (not crash)."""
