@@ -749,6 +749,47 @@ def handle(
                 _extra_ctx_parts.append(_std_path.read_text(encoding="utf-8").strip())
         except Exception:
             pass
+
+        # Phase 65 minimum viable experiment: scope generation via inversion.
+        # Gated by `scope_generation` config flag (default off). `scope_ab_skip`
+        # is the paired A/B flag — when true, we'd-have-generated is recorded
+        # but not injected, so the same goal can be run with/without scope for
+        # comparison. See docs/PHASE_65_IMPLEMENTATION_PLAN.md.
+        _scope_on = _cfg.get("scope_generation", "false").strip().lower() == "true"
+        _scope_ab_skip = _cfg.get("scope_ab_skip", "false").strip().lower() == "true"
+        if _scope_on and not dry_run:
+            try:
+                from scope import generate_scope
+                _scope = generate_scope(message, adapter)
+                if _scope is not None and not _scope.is_empty():
+                    # Record scope artifact alongside the goal
+                    try:
+                        if project:
+                            _proj_dir = Path.home() / ".poe" / "workspace" / "projects" / project / "artifacts"
+                            _proj_dir.mkdir(parents=True, exist_ok=True)
+                            (_proj_dir / "scope.md").write_text(
+                                _scope.to_markdown(), encoding="utf-8"
+                            )
+                    except Exception as _scope_rec_exc:
+                        log.debug("scope: could not record artifact: %s", _scope_rec_exc)
+                    # A/B skip: record but don't inject
+                    if _scope_ab_skip:
+                        log.info("[scope-deferred] ab-skip: scope generated "
+                                 "but not injected (ab-test control arm)")
+                    else:
+                        _extra_ctx_parts.append(_scope.to_markdown())
+                        if channel is None:
+                            log.info("[scope-deferred] human-gate: no channel, "
+                                     "proceeding with generated scope without review")
+                        else:
+                            log.info("[scope-deferred] human-gate: scope used "
+                                     "without review (gate UX deferred)")
+                        log.info("[scope-deferred] enforcement: scope injected "
+                                 "but not checked mid-execution, violation "
+                                 "detection deferred")
+            except Exception as _scope_exc:
+                log.warning("scope: generation failed, continuing without scope: %s", _scope_exc)
+
         if _extra_ctx_parts:
             _loop_kwargs["ancestry_context_extra"] = "\n\n".join(_extra_ctx_parts)
 
