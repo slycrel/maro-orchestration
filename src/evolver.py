@@ -2529,6 +2529,24 @@ def synthesize_skill(
                     f"'{name}' — {_reason}",
                     file=sys.stderr,
                 )
+            # Observability: emit a captain's log event so dev CLI + evolver
+            # can count how often each gate fires and for which skill shapes.
+            try:
+                from captains_log import log_event, SKILL_SYNTHESIS_REJECTED
+                log_event(
+                    event_type=SKILL_SYNTHESIS_REJECTED,
+                    subject=name,
+                    summary=f"{_gate_name} gate: {_reason}",
+                    context={
+                        "gate": _gate_name,
+                        "reason": _reason,
+                        "goal": goal[:200],
+                        "trigger_patterns": trigger_patterns[:5],
+                    },
+                    loop_id=source_loop_id or None,
+                )
+            except Exception:
+                pass
             return None
 
     # Injection guard: scan LLM-generated skill content before persisting

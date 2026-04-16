@@ -1032,6 +1032,28 @@ def test_synthesize_skill_all_gates_pass_when_well_formed(tmp_path):
     assert skill is not None
 
 
+def test_gate_rejection_emits_captains_log_event(tmp_path):
+    """A rejected synthesis is recorded as SKILL_SYNTHESIS_REJECTED."""
+    from captains_log import set_log_path, load_log, SKILL_SYNTHESIS_REJECTED
+    log_path = tmp_path / "captains_log.jsonl"
+    set_log_path(log_path)
+    try:
+        adapter = _GateFailingAdapter(edge_cases=["only one"])
+        with patch("skills._skills_path", return_value=tmp_path / "skills.jsonl"):
+            skill = synthesize_skill(
+                goal="specific goal", outcome_summary="done",
+                adapter=adapter, dry_run=True,
+            )
+        assert skill is None
+        events = load_log()
+        rejected = [e for e in events if e.get("event_type") == SKILL_SYNTHESIS_REJECTED]
+        assert len(rejected) == 1
+        assert rejected[0]["subject"] == "failing_skill"
+        assert rejected[0]["context"]["gate"] == "edge_case_coverage"
+    finally:
+        set_log_path(None)
+
+
 # ---------------------------------------------------------------------------
 # Feedback loop: _apply_suggestion_action
 # ---------------------------------------------------------------------------
