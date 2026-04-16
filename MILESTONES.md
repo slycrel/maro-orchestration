@@ -2,9 +2,18 @@
 
 What to do next, in what order. Updated each session. Strategic phases live in ROADMAP.md; deferred ideas live in BACKLOG.md. This file is the bridge — the executable queue.
 
-Last updated: 2026-04-16 (session 34 — Phase 65 MVE shipped; scope generation live, A/B-ready)
+Last updated: 2026-04-16 (session 34 — closure gate closed; verdict now drives restart on gaps)
 
 ---
+
+## Done (session 34, 2026-04-16 — closure check: verdict gates the loop + behavioral-check prompt)
+
+The review's sharpest point about Phase 65 ("scope alone wouldn't have caught slycrel-go — nobody ran a browser") led to the sibling fix for Phase 63's closure check. Two concrete gaps closed:
+
+- [x] **Closure verdict now drives restart** (`src/handle.py`) — previously `verify_goal_completion` emitted `verification` and `needs_work` events to the channel but the verdict was discarded; `loop_result.status` stayed `done` regardless of gaps found. Now, when the verdict returns `complete=False` with `confidence >= 0.6` and at least one check ran, handle.py injects the gap list as ancestry context (`== Closure gap context ==`) and re-runs the loop. Shares the same `continuation_depth` cap as director-triggered restart (≤3).
+- [x] **Behavioral checks mandated in closure plan prompt** (`src/director.py`) — the original `_CLOSURE_PLAN_SYSTEM` example ("does it build? does the entry point exist? do tests pass?") biased toward build-only verification, which passes trivially for service-producing goals (the exact slycrel-go silent-failure class). New prompt defines four goal taxonomies (static artifact / running service / changes to existing codebase / research+writing) and requires *at least one* behavioral check (start service, probe endpoint, tear down PID) for service goals. Explicitly states: "A service that compiles but was never started is a classic silent failure."
+- [x] **Config flag `closure_restart`** — defaults to `true`; set to `false` for A/B comparison or to disable noisy restarts. Read via `config.get()` matching `scope_generation` / `adaptive_execution` pattern.
+- [x] **Tests** — 8 new tests in `test_handle.py` (restart fires on incomplete verdict, gap context injection, depth increment, low-confidence skip, complete-verdict skip, checks_run=0 research skip, config flag disable, depth cap); 1 new source-level prompt guard in `test_director.py` blocking regression to build-only example.
 
 ## Done (session 34, 2026-04-16 — Phase 65 MVE: scope generation shipped)
 
@@ -31,7 +40,7 @@ Last updated: 2026-04-16 (session 34 — Phase 65 MVE shipped; scope generation 
 ## Next Up
 
 - **Phase 65 A/B corpus run** — scope generation is live and default-on in `~/.poe/config.yml`. Run a spread of real goals (research + code + analysis, ~20 total) with `scope_ab_skip` toggled across paired runs. Measure: plan quality, token cost, step count to completion, verification outcome. If positive signal: extend toward triad, lifecycle, retrieval per the full design. If negative: the design doc becomes informational.
-- **Verification with ground-truth feedback** — sibling concern to Phase 65; the review's sharpest point was that scope alone doesn't address "nobody ran a browser." Needs its own design. Likely a separate phase.
+- **Verification with ground-truth feedback — v1 shipped this session** (closure verdict gate + behavioral check mandate). Remaining work: observe v1 behavior on a live service-producing goal (repeat slycrel-go or similar), measure whether behavioral checks get generated and trip correctly, iterate on the prompt taxonomy if the generated checks miss the mark. If the restart actually fires mid-stream, verify the second run is meaningfully different (not just retrying the same thing) — that would be the signal that gap-as-context works as steering signal.
 - **Phase 65 expansion triggers** (hold until A/B data is in):
   - Triad (PM/engineer/architect) — ablate against single-generalist to confirm different constraint lines
   - Human gate UX for interactive/channel paths

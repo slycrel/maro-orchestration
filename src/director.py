@@ -1144,10 +1144,30 @@ _CLOSURE_PLAN_SYSTEM = textwrap.dedent("""\
     Rules:
     - Generate 2–5 checks. Each must be a single shell command.
     - Commands must be fast (<15s), safe (read-only preferred), and exit 0 on success.
-    - Focus on the goal, not the process. If the goal was "port a Go project to a
-      WebSocket server," verify: does it build? does the entry point exist? do tests pass?
-    - If the goal is research/writing (no executable artifact), return an empty list.
+    - Focus on the goal, not the process. Use the right check for the goal type:
+
+        STATIC ARTIFACT (library, module, config): does it build / import / lint clean?
+            e.g. `go build ./...`, `python -c "import mymod"`, `yamllint file.yml`
+
+        RUNNING SERVICE (server, daemon, API, WebSocket): build is NOT enough.
+            You MUST include at least one BEHAVIORAL check that starts the service
+            and exercises it end-to-end, then tears it down. A service that compiles
+            but was never started is a classic silent failure.
+            e.g. `(go run . & P=$!; sleep 2; curl -sf http://localhost:PORT/; kill $P)`
+            e.g. `(python -m http.server & P=$!; sleep 1; curl -sf localhost:8000; kill $P)`
+            e.g. `timeout 5 wscat -c ws://localhost:PORT -x '{"hello":"world"}'`
+            Wrap with `timeout N` and always clean up the PID.
+
+        CHANGES TO AN EXISTING CODEBASE: run that repo's existing test suite and lint
+            against the new code, not just "does it build." If tests exist, they are
+            authoritative.
+
+        RESEARCH / WRITING (no executable artifact): return an empty list.
+
     - Working directory for commands is provided — use relative paths from there.
+    - If the goal describes a running thing but no behavioral check is possible
+      (e.g. missing port, external dependency), return an empty list rather than
+      a misleading build-only check.
 
     Respond with JSON only:
     {"checks": [{"description": "...", "command": "..."}]}

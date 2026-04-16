@@ -682,6 +682,23 @@ class TestVerifyGoalCompletion:
         result = verify_goal_completion("build X", [], adapter)
         assert result.complete is True
 
+    def test_plan_prompt_mandates_behavioral_checks(self):
+        """_CLOSURE_PLAN_SYSTEM must steer toward behavioral checks for services.
+
+        Regression guard: the original prompt's example ('does it build? does the
+        entry point exist?') biased toward build-only verification, which is why
+        slycrel-go-style failures slipped through. The prompt must explicitly
+        require behavioral checks for service-producing goals.
+        """
+        from director import _CLOSURE_PLAN_SYSTEM
+        text = _CLOSURE_PLAN_SYSTEM.lower()
+        # Must name running services as a distinct category
+        assert "running service" in text or "service" in text
+        # Must mandate behavioral check
+        assert "behavioral" in text
+        # Must warn that build-only is insufficient for services
+        assert "build is not enough" in text or "compiles but was never started" in text
+
     def test_timeout_marks_check_failed(self, monkeypatch, tmp_path):
         """Timed-out checks are marked failed, not raised."""
         import subprocess

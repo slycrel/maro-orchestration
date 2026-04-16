@@ -838,11 +838,14 @@ def handle(
 
         # Director closure check — verify the goal was actually achieved
         # Runs after the loop declares "done"; emits verification/needs_work events
-        # to channel. Non-fatal: never blocks or changes loop_result.status.
+        # to channel. Non-fatal: never raises.
+        # If closure_restart is enabled and the verdict says the goal is NOT
+        # complete with material confidence, feed the gaps back as restart context
+        # and re-run the loop (capped by continuation_depth).
         if not dry_run and loop_result.status == "done":
             try:
                 from director import verify_goal_completion
-                verify_goal_completion(
+                _closure = verify_goal_completion(
                     message,
                     loop_result.steps,
                     adapter,
@@ -850,7 +853,57 @@ def handle(
                     channel=channel,
                 )
             except Exception:
-                pass
+                _closure = None
+
+            try:
+                from config import get as _config_get
+                _closure_restart = bool(_config_get("closure_restart", True))
+            except Exception:
+                _closure_restart = True
+
+            _depth = _loop_kwargs.get("continuation_depth", 0)
+            if (
+                _closure_restart
+                and _closure is not None
+                and not _closure.complete
+                and _closure.confidence >= 0.6
+                and _closure.checks_run > 0
+                and _depth < 3
+            ):
+                _gap_lines = "\n".join(f"- {g}" for g in _closure.gaps) or "(none specified)"
+                _closure_ctx = (
+                    f"The previous run declared done, but closure verification found gaps.\n"
+                    f"Summary: {_closure.summary}\n"
+                    f"Gaps:\n{_gap_lines}\n"
+                    f"Verification: {_closure.checks_passed}/{_closure.checks_run} checks passed.\n"
+                    f"Address the gaps before declaring done again."
+                )
+                _closure_ancestry = (
+                    _loop_kwargs.get("ancestry_context_extra", "")
+                    + f"\n\n== Closure gap context ==\n{_closure_ctx}\n== End closure gap context =="
+                ).strip()
+                _closure_kwargs = dict(_loop_kwargs)
+                _closure_kwargs["ancestry_context_extra"] = _closure_ancestry
+                _closure_kwargs["continuation_depth"] = _depth + 1
+                log.info(
+                    "handle: closure restart (depth %d) — gaps=%d confidence=%.2f",
+                    _closure_kwargs["continuation_depth"],
+                    len(_closure.gaps),
+                    _closure.confidence,
+                )
+                if channel is not None:
+                    try:
+                        channel.emit(
+                            "closure_restart",
+                            text=f"Closure verification found gaps — restarting.\n{_closure.summary}",
+                        )
+                    except Exception:
+                        pass
+                try:
+                    loop_result = run_agent_loop(message, **_closure_kwargs)
+                    elapsed = int((time.monotonic() - started_at) * 1000)
+                except Exception as _cr_exc:
+                    log.warning("handle: closure restart re-run failed: %s", _cr_exc)
 
         # Notify channel that the main loop completed
         if channel is not None:

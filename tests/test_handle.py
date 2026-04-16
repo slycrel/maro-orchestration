@@ -834,3 +834,238 @@ class TestDirectorRestart:
             handle("do the thing", force_lane="agenda", dry_run=False)
 
         assert call_count["n"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Phase 65+: closure-driven restart (verdict gates the loop)
+# ---------------------------------------------------------------------------
+
+class TestClosureRestart:
+    """Closure verdict actually gates execution — not just informational events.
+
+    When director closure check returns complete=False with material confidence,
+    handle.py re-runs the loop with gaps injected as ancestry context. This is
+    the other half of 'nobody ran a browser' — scope sets bounds up front, this
+    catches the silent-failure case on the way out.
+    """
+
+    def _setup(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+
+    @staticmethod
+    def _no_quality_gate():
+        from unittest.mock import patch, MagicMock
+        verdict = MagicMock()
+        verdict.escalate = False
+        verdict.contested_claims = []
+        return patch("quality_gate.run_quality_gate", return_value=verdict)
+
+    def _fake_loop_result(self, status="done"):
+        from agent_loop import LoopResult, StepOutcome
+        return LoopResult(
+            loop_id="test-lr", project="test-proj", goal="build X",
+            status=status, stuck_reason=None,
+            steps=[StepOutcome(index=0, text="step", status="done",
+                               result="output", iteration=0)],
+        )
+
+    def _fake_closure(self, complete, confidence, gaps=None, checks_run=2):
+        from director import ClosureVerdict
+        return ClosureVerdict(
+            complete=complete, confidence=confidence,
+            gaps=gaps or [], summary="verified",
+            checks_run=checks_run, checks_passed=(checks_run if complete else 0),
+        )
+
+    def test_incomplete_verdict_triggers_restart(self, monkeypatch, tmp_path):
+        """complete=False with confidence >= 0.6 re-runs the loop."""
+        self._setup(monkeypatch, tmp_path)
+        from unittest.mock import patch
+
+        done_result = self._fake_loop_result(status="done")
+        calls = []
+        def _fake_run(*args, **kwargs):
+            calls.append(kwargs.copy())
+            return done_result
+
+        incomplete = self._fake_closure(False, 0.85,
+                                         gaps=["server never started"])
+        complete = self._fake_closure(True, 0.9)
+        verdict_seq = [incomplete, complete]
+
+        with patch("agent_loop.run_agent_loop", side_effect=_fake_run), \
+             patch("intent.check_goal_clarity", return_value={"clear": True}), \
+             patch("director.verify_goal_completion",
+                   side_effect=lambda *a, **k: verdict_seq.pop(0)), \
+             self._no_quality_gate():
+            handle("build a websocket server", force_lane="agenda", dry_run=False)
+
+        assert len(calls) == 2, f"expected restart, got {len(calls)} calls"
+
+    def test_gaps_injected_as_ancestry_context(self, monkeypatch, tmp_path):
+        """Restart re-run receives the gap list in ancestry_context_extra."""
+        self._setup(monkeypatch, tmp_path)
+        from unittest.mock import patch
+
+        done_result = self._fake_loop_result(status="done")
+        calls = []
+        def _fake_run(*args, **kwargs):
+            calls.append(kwargs.copy())
+            return done_result
+
+        incomplete = self._fake_closure(
+            False, 0.85, gaps=["server never started", "no client handshake"],
+        )
+        complete = self._fake_closure(True, 0.9)
+        verdict_seq = [incomplete, complete]
+
+        with patch("agent_loop.run_agent_loop", side_effect=_fake_run), \
+             patch("intent.check_goal_clarity", return_value={"clear": True}), \
+             patch("director.verify_goal_completion",
+                   side_effect=lambda *a, **k: verdict_seq.pop(0)), \
+             self._no_quality_gate():
+            handle("build a websocket server", force_lane="agenda", dry_run=False)
+
+        assert len(calls) == 2
+        restart_ancestry = calls[1].get("ancestry_context_extra", "")
+        assert "Closure gap context" in restart_ancestry
+        assert "server never started" in restart_ancestry
+        assert "no client handshake" in restart_ancestry
+
+    def test_continuation_depth_increments(self, monkeypatch, tmp_path):
+        """Closure restart uses the same continuation_depth bucket as director restart."""
+        self._setup(monkeypatch, tmp_path)
+        from unittest.mock import patch
+
+        done_result = self._fake_loop_result(status="done")
+        calls = []
+        def _fake_run(*args, **kwargs):
+            calls.append(kwargs.copy())
+            return done_result
+
+        incomplete = self._fake_closure(False, 0.85, gaps=["gap"])
+        complete = self._fake_closure(True, 0.9)
+        verdict_seq = [incomplete, complete]
+
+        with patch("agent_loop.run_agent_loop", side_effect=_fake_run), \
+             patch("intent.check_goal_clarity", return_value={"clear": True}), \
+             patch("director.verify_goal_completion",
+                   side_effect=lambda *a, **k: verdict_seq.pop(0)), \
+             self._no_quality_gate():
+            handle("build X", force_lane="agenda", dry_run=False)
+
+        first_depth = calls[0].get("continuation_depth", 0)
+        second_depth = calls[1].get("continuation_depth", 0)
+        assert second_depth == first_depth + 1
+
+    def test_low_confidence_does_not_restart(self, monkeypatch, tmp_path):
+        """complete=False but confidence below threshold → no restart (too noisy)."""
+        self._setup(monkeypatch, tmp_path)
+        from unittest.mock import patch
+
+        done_result = self._fake_loop_result(status="done")
+        calls = []
+        def _fake_run(*args, **kwargs):
+            calls.append(kwargs.copy())
+            return done_result
+
+        weak = self._fake_closure(False, 0.3, gaps=["maybe a problem"])
+
+        with patch("agent_loop.run_agent_loop", side_effect=_fake_run), \
+             patch("intent.check_goal_clarity", return_value={"clear": True}), \
+             patch("director.verify_goal_completion", return_value=weak), \
+             self._no_quality_gate():
+            handle("build X", force_lane="agenda", dry_run=False)
+
+        assert len(calls) == 1, "low-confidence closure should not trigger restart"
+
+    def test_complete_verdict_does_not_restart(self, monkeypatch, tmp_path):
+        """complete=True → no restart (happy path)."""
+        self._setup(monkeypatch, tmp_path)
+        from unittest.mock import patch
+
+        done_result = self._fake_loop_result(status="done")
+        calls = []
+        def _fake_run(*args, **kwargs):
+            calls.append(kwargs.copy())
+            return done_result
+
+        ok = self._fake_closure(True, 0.9)
+
+        with patch("agent_loop.run_agent_loop", side_effect=_fake_run), \
+             patch("intent.check_goal_clarity", return_value={"clear": True}), \
+             patch("director.verify_goal_completion", return_value=ok), \
+             self._no_quality_gate():
+            handle("build X", force_lane="agenda", dry_run=False)
+
+        assert len(calls) == 1
+
+    def test_no_checks_run_does_not_restart(self, monkeypatch, tmp_path):
+        """Research goals get checks_run=0 — should not restart."""
+        self._setup(monkeypatch, tmp_path)
+        from unittest.mock import patch
+
+        done_result = self._fake_loop_result(status="done")
+        calls = []
+        def _fake_run(*args, **kwargs):
+            calls.append(kwargs.copy())
+            return done_result
+
+        skipped = self._fake_closure(False, 0.8, gaps=[], checks_run=0)
+
+        with patch("agent_loop.run_agent_loop", side_effect=_fake_run), \
+             patch("intent.check_goal_clarity", return_value={"clear": True}), \
+             patch("director.verify_goal_completion", return_value=skipped), \
+             self._no_quality_gate():
+            handle("summarize this article", force_lane="agenda", dry_run=False)
+
+        assert len(calls) == 1
+
+    def test_config_flag_disables_restart(self, monkeypatch, tmp_path):
+        """closure_restart=False disables the restart path for A/B comparison."""
+        self._setup(monkeypatch, tmp_path)
+        from unittest.mock import patch
+
+        done_result = self._fake_loop_result(status="done")
+        calls = []
+        def _fake_run(*args, **kwargs):
+            calls.append(kwargs.copy())
+            return done_result
+
+        incomplete = self._fake_closure(False, 0.9, gaps=["a gap"])
+
+        def _cfg(name, default=None):
+            if name == "closure_restart":
+                return False
+            return default
+
+        with patch("agent_loop.run_agent_loop", side_effect=_fake_run), \
+             patch("intent.check_goal_clarity", return_value={"clear": True}), \
+             patch("director.verify_goal_completion", return_value=incomplete), \
+             patch("config.get", side_effect=_cfg), \
+             self._no_quality_gate():
+            handle("build X", force_lane="agenda", dry_run=False)
+
+        assert len(calls) == 1, "closure_restart=False should skip restart"
+
+    def test_depth_cap_prevents_infinite_loop(self, monkeypatch, tmp_path):
+        """Closure restart shares the continuation_depth cap of 3."""
+        self._setup(monkeypatch, tmp_path)
+        from unittest.mock import patch
+
+        done_result = self._fake_loop_result(status="done")
+        calls = []
+        def _fake_run(*args, **kwargs):
+            calls.append(kwargs.copy())
+            return done_result
+
+        incomplete = self._fake_closure(False, 0.9, gaps=["persistent gap"])
+
+        with patch("agent_loop.run_agent_loop", side_effect=_fake_run), \
+             patch("intent.check_goal_clarity", return_value={"clear": True}), \
+             patch("director.verify_goal_completion", return_value=incomplete), \
+             self._no_quality_gate():
+            handle("build X", force_lane="agenda", dry_run=False)
+
+        # Initial + up to 3 restarts
+        assert len(calls) <= 4, f"closure restart ran {len(calls)} times, expected ≤4"
