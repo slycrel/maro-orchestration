@@ -2791,3 +2791,43 @@ def test_adaptive_adjust_remaining_indices_are_negative_one(monkeypatch, tmp_pat
         f"mark_item called with header-area index {low_indices} — "
         "adaptive adjust must use -1 sentinels, not step counts"
     )
+
+
+def test_adaptive_adjust_source_pattern_absent():
+    """Source-level regression: the buggy index-rebuild pattern must not reappear.
+
+    Before fix, all 4 adaptive execution sites (stuck/adjust, stuck/replan,
+    verify-or-threshold/adjust, verify-or-threshold/replan) used:
+
+        remaining_indices[:] = list(
+            range(len(step_outcomes), len(step_outcomes) + len(new_steps))
+        )
+
+    These integers collide with NEXT.md line numbers and cause mark_item to
+    raise ValueError. Post-fix: `[-1] * len(new_steps)` at all 4 sites.
+
+    This test exists because the functional tests above can't reliably trigger
+    the adjust/replan code path under dry_run (DryRunAdapter only produces
+    3 steps; the step threshold is 5). A source-level check is the most
+    direct guard against accidental revert.
+    """
+    import inspect
+    import agent_loop as _al
+
+    src = inspect.getsource(_al)
+
+    # The buggy pattern combines remaining_indices slice-assignment with a
+    # range() expression using step_outcomes count. If any site reintroduces
+    # it, this check fails.
+    import re
+    buggy_pattern = re.compile(
+        r"remaining_indices\[:\]\s*=\s*list\(\s*\n?\s*range\(\s*len\(step_outcomes\)",
+        re.MULTILINE,
+    )
+    matches = buggy_pattern.findall(src)
+    assert not matches, (
+        f"Buggy remaining_indices rebuild pattern reintroduced "
+        f"({len(matches)} occurrence(s)). All adaptive adjust/replan sites "
+        "must use [-1] * len(new_steps) — NEXT.md line numbers are not "
+        "step counts."
+    )
