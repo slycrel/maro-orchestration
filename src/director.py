@@ -1347,31 +1347,35 @@ def verify_goal_completion(
 
 
 # ---------------------------------------------------------------------------
-# Adaptive Execution — Phase 64, Phase A
+# Adaptive Execution — Phase 64
 # ---------------------------------------------------------------------------
 
-_ADAPTIVE_PHASE_A_SYSTEM = textwrap.dedent("""\
+_ADAPTIVE_SYSTEM = textwrap.dedent("""\
     You are the Director evaluating mid-execution state for a running agent loop.
 
-    Phase A actions only:
+    Available actions:
     - "continue" — current approach is fine, proceed
-    - "adjust"   — tactically revise remaining steps based on discoveries
+    - "adjust"   — tactically revise remaining steps based on discoveries (sharpening)
+    - "replan"   — current approach has strategic problems; step back and describe a better one
 
-    Rules for "adjust":
-    - Only adjust if remaining steps are clearly misaligned with what was discovered.
-    - Provide a replacement step list that continues from the current position.
-    - Do not repeat steps that are already completed.
-    - Keep changes minimal — sharpen, don't restructure.
-    - If the remaining steps look fine, return "continue" instead.
-    - For "continue", revised_steps may be omitted or null.
+    Choose "replan" only when the overall approach is wrong — not just the next steps.
+    "adjust" is for tactical corrections; "replan" is for strategic course changes.
+    When the convergence budget is 0, you MUST return "continue" (no more replans allowed).
 
-    next_check_in: steps before next mandatory check (integer, 1–10, default 3).
+    Rules:
+    - "adjust": provide revised_steps replacing the remaining tail. Minimal changes only.
+      Empty or missing revised_steps on "adjust" falls back to "continue".
+    - "replan": provide new_approach — a concise narrative (1–3 sentences) describing
+      the better strategy. Do NOT provide steps — the planner will generate them.
+    - "continue": revised_steps and new_approach may be omitted.
+    - next_check_in: steps before next mandatory check (integer, 1–10, default 3).
 
     Respond with JSON only:
     {
-      "action": "continue" | "adjust",
+      "action": "continue" | "adjust" | "replan",
       "reasoning": "one sentence",
       "revised_steps": ["step 1", "step 2", ...],
+      "new_approach": "narrative description of better strategy",
       "next_check_in": 3
     }
 """).strip()
@@ -1392,8 +1396,8 @@ class EvaluationContext:
     verify_failure_count: int
     total_steps_taken: int
     max_steps: int
-    current_approach: str = ""         # always "" in Phase A (ExecutionPlan deferred to Phase B)
-    convergence_budget_remaining: int = 2  # informational-only in Phase A
+    current_approach: str = ""         # "" until ExecutionPlan introduced (Phase B+)
+    convergence_budget_remaining: int = 2  # 0 means no more replans allowed
 
 
 @dataclass
@@ -1416,10 +1420,11 @@ def director_evaluate(
     *,
     dry_run: bool = False,
 ) -> DirectorDecision:
-    """Phase A director evaluation: continue vs. adjust.
+    """Director mid-execution evaluation.
 
     Called from agent_loop on verify failure streak, step threshold, or stuck signal.
-    Phase A wires only 'continue' and 'adjust'. replan/restart/escalate deferred.
+    Supported actions: continue, adjust, replan. restart/escalate deferred to Phase C.
+    Budget enforcement (replan clamped to continue when budget exhausted) is in agent_loop.
 
     Non-fatal — returns 'continue' on any exception.
 
@@ -1444,6 +1449,12 @@ def director_evaluate(
         or "  (none — may be near end)"
     )
 
+    budget_note = (
+        "Convergence budget: 0 — you MUST return continue (no more replans allowed)."
+        if eval_ctx.convergence_budget_remaining <= 0
+        else f"Convergence budget remaining: {eval_ctx.convergence_budget_remaining} replan(s)."
+    )
+
     user_msg = (
         f"Goal: {goal}\n\n"
         f"Trigger: {trigger}\n"
@@ -1451,8 +1462,7 @@ def director_evaluate(
         f"Steps remaining:\n{remaining_str}\n\n"
         f"Recent step results:\n{eval_ctx.step_results_summary or '(none)'}\n\n"
         f"Consecutive verify failures: {eval_ctx.verify_failure_count}\n"
-        f"Convergence budget remaining: {eval_ctx.convergence_budget_remaining}"
-        f" (informational only in Phase A)"
+        f"{budget_note}"
     )
 
     try:
@@ -1460,7 +1470,7 @@ def director_evaluate(
 
         resp = adapter.complete(
             [
-                LLMMessage("system", _ADAPTIVE_PHASE_A_SYSTEM),
+                LLMMessage("system", _ADAPTIVE_SYSTEM),
                 LLMMessage("user", user_msg),
             ],
             max_tokens=512,
@@ -1471,8 +1481,8 @@ def director_evaluate(
             return _continue
 
         raw_action = safe_str(data.get("action", "continue")).lower().strip()
-        # Phase A: clamp to allowed actions only
-        action = raw_action if raw_action in ("continue", "adjust") else "continue"
+        # Clamp to supported actions (restart/escalate deferred to Phase C)
+        action = raw_action if raw_action in ("continue", "adjust", "replan") else "continue"
 
         reasoning = safe_str(data.get("reasoning", ""))
 
@@ -1482,6 +1492,8 @@ def director_evaluate(
             next_check_in = 3
 
         revised_steps: Optional[List[str]] = None
+        new_approach: Optional[str] = None
+
         if action == "adjust":
             raw_steps = safe_list(data.get("revised_steps"), element_type=str)
             revised_steps = [s for s in raw_steps if s] or None
@@ -1489,10 +1501,14 @@ def director_evaluate(
                 # Empty revised_steps on adjust → treat as continue (per design spec)
                 action = "continue"
 
+        elif action == "replan":
+            new_approach = safe_str(data.get("new_approach", "")) or None
+
         decision = DirectorDecision(
             action=action,
             reasoning=reasoning,
             revised_steps=revised_steps,
+            new_approach=new_approach,
             next_check_in=next_check_in,
         )
         log.info(

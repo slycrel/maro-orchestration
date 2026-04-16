@@ -841,19 +841,57 @@ class TestDirectorEvaluate:
 
         assert result.action == "continue"
 
-    def test_phase_a_clamps_replan_to_continue(self):
-        """Phase A must not allow replan/restart/escalate actions."""
+    def test_replan_allowed_with_budget(self):
+        """replan is allowed when convergence budget > 0."""
         from unittest.mock import MagicMock, patch
 
         adapter = MagicMock()
         ctx = _eval_ctx()
+        ctx.convergence_budget_remaining = 2
+        data = {
+            "action": "replan",
+            "reasoning": "wrong approach entirely",
+            "new_approach": "try a different strategy",
+            "next_check_in": 3,
+        }
+
+        with patch("director.extract_json", return_value=data):
+            with patch("director.content_or_empty", return_value="{}"):
+                result = director_evaluate("build X", ctx, "stuck", adapter)
+
+        assert result.action == "replan"
+        assert result.new_approach == "try a different strategy"
+        assert result.revised_steps is None
+
+    def test_replan_with_zero_budget_still_returned_by_evaluate(self):
+        """director_evaluate returns replan regardless of budget — enforcement is in agent_loop."""
+        from unittest.mock import MagicMock, patch
+
+        adapter = MagicMock()
+        ctx = _eval_ctx()
+        ctx.convergence_budget_remaining = 0
         data = {"action": "replan", "reasoning": "need fresh start", "next_check_in": 1}
 
         with patch("director.extract_json", return_value=data):
             with patch("director.content_or_empty", return_value="{}"):
                 result = director_evaluate("build X", ctx, "stuck", adapter)
 
-        assert result.action == "continue"
+        # director_evaluate itself does NOT clamp replan — agent_loop does
+        assert result.action == "replan"
+
+    def test_restart_and_escalate_clamped_to_continue(self):
+        """restart and escalate (Phase C) are not yet wired — clamp to continue."""
+        from unittest.mock import MagicMock, patch
+
+        adapter = MagicMock()
+        ctx = _eval_ctx()
+
+        for disallowed_action in ("restart", "escalate"):
+            data = {"action": disallowed_action, "reasoning": "whatever", "next_check_in": 1}
+            with patch("director.extract_json", return_value=data):
+                with patch("director.content_or_empty", return_value="{}"):
+                    result = director_evaluate("build X", ctx, "stuck", adapter)
+            assert result.action == "continue", f"{disallowed_action} should be clamped"
 
     def test_next_check_in_clamped_to_minimum_1(self):
         from unittest.mock import MagicMock, patch

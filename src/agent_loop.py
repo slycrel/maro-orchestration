@@ -4065,6 +4065,17 @@ def run_agent_loop(
                     )
                     _ae_decision = _dir_evaluate(goal, _ae_ctx, "stuck", adapter, dry_run=dry_run)
                     ctx.steps_since_last_check = 0
+                    # Budget enforcement: replan disallowed when ceiling reached
+                    if (_ae_decision.action == "replan"
+                            and ctx.director_replan_count >= ctx.director_budget_ceiling):
+                        log.info("adaptive [stuck]: replan requested but budget exhausted "
+                                 "(%d/%d) — forcing continue",
+                                 ctx.director_replan_count, ctx.director_budget_ceiling)
+                        _ae_decision = type(_ae_decision)(
+                            action="continue",
+                            reasoning="replan budget exhausted",
+                            next_check_in=_ae_decision.next_check_in,
+                        )
                     if _ae_decision.action == "continue":
                         stuck_streak = 0
                         log.info("adaptive [stuck/continue]: resetting streak — %s",
@@ -4083,6 +4094,48 @@ def run_agent_loop(
                             print(f"[poe] adaptive adjust (stuck): {len(_ae_new)} steps — "
                                   f"{_ae_decision.reasoning[:60]}", file=sys.stderr, flush=True)
                         continue
+                    elif _ae_decision.action == "replan":
+                        try:
+                            from planner import decompose as _planner_decompose
+                            _ae_completed_ctx = "\n".join(
+                                f"- {o.text}: {(o.result or '')[:200]}"
+                                for o in step_outcomes[-5:]
+                            )
+                            _ae_ancestry = (
+                                f"Director replan: {_ae_decision.new_approach or 'fresh approach'}\n\n"
+                                f"Already completed:\n{_ae_completed_ctx}"
+                            )
+                            _ae_replan_steps = _planner_decompose(
+                                goal, adapter,
+                                max_steps=max(3, max_iterations - len(step_outcomes)),
+                                ancestry_context=_ae_ancestry,
+                            )
+                            if _ae_replan_steps:
+                                remaining_steps[:] = _ae_replan_steps
+                                remaining_indices[:] = list(
+                                    range(len(step_outcomes),
+                                          len(step_outcomes) + len(_ae_replan_steps))
+                                )
+                                ctx.director_replan_count += 1
+                                stuck_streak = 0
+                                log.info(
+                                    "adaptive [stuck/replan]: fresh %d steps "
+                                    "(replan %d/%d) — %s",
+                                    len(_ae_replan_steps),
+                                    ctx.director_replan_count, ctx.director_budget_ceiling,
+                                    _ae_decision.reasoning[:80],
+                                )
+                                if verbose:
+                                    print(
+                                        f"[poe] adaptive replan (stuck): "
+                                        f"{len(_ae_replan_steps)} steps — "
+                                        f"{_ae_decision.reasoning[:60]}",
+                                        file=sys.stderr, flush=True,
+                                    )
+                                continue
+                        except Exception as _ae_replan_exc:
+                            log.debug("adaptive replan (stuck) planner call failed: %s",
+                                      _ae_replan_exc)
                 except Exception as _ae_exc:
                     log.debug("adaptive execution (stuck trigger) error: %s", _ae_exc)
 
@@ -4319,6 +4372,20 @@ def run_agent_loop(
                         goal, _ae2_ctx, _ae2_trigger, adapter, dry_run=dry_run
                     )
                     ctx.steps_since_last_check = 0  # reset regardless of action
+                    # Budget enforcement: replan disallowed when ceiling reached
+                    if (_ae2_decision.action == "replan"
+                            and ctx.director_replan_count >= ctx.director_budget_ceiling):
+                        log.info(
+                            "adaptive [%s]: replan requested but budget exhausted "
+                            "(%d/%d) — forcing continue",
+                            _ae2_trigger,
+                            ctx.director_replan_count, ctx.director_budget_ceiling,
+                        )
+                        _ae2_decision = type(_ae2_decision)(
+                            action="continue",
+                            reasoning="replan budget exhausted",
+                            next_check_in=_ae2_decision.next_check_in,
+                        )
                     if _ae2_decision.action == "adjust" and _ae2_decision.revised_steps:
                         _ae2_new = _ae2_decision.revised_steps
                         remaining_steps[:] = _ae2_new
@@ -4328,8 +4395,51 @@ def run_agent_loop(
                         log.info("adaptive [%s/adjust]: replaced %d steps — %s",
                                  _ae2_trigger, len(_ae2_new), _ae2_decision.reasoning[:100])
                         if verbose:
-                            print(f"[poe] adaptive adjust ({_ae2_trigger}): {len(_ae2_new)} steps — "
-                                  f"{_ae2_decision.reasoning[:60]}", file=sys.stderr, flush=True)
+                            print(
+                                f"[poe] adaptive adjust ({_ae2_trigger}): {len(_ae2_new)} steps — "
+                                f"{_ae2_decision.reasoning[:60]}", file=sys.stderr, flush=True,
+                            )
+                    elif _ae2_decision.action == "replan":
+                        try:
+                            from planner import decompose as _planner_decompose2
+                            _ae2_completed_ctx = "\n".join(
+                                f"- {o.text}: {(o.result or '')[:200]}"
+                                for o in step_outcomes[-5:]
+                            )
+                            _ae2_ancestry = (
+                                f"Director replan: "
+                                f"{_ae2_decision.new_approach or 'fresh approach'}\n\n"
+                                f"Already completed:\n{_ae2_completed_ctx}"
+                            )
+                            _ae2_replan_steps = _planner_decompose2(
+                                goal, adapter,
+                                max_steps=max(3, max_iterations - len(step_outcomes)),
+                                ancestry_context=_ae2_ancestry,
+                            )
+                            if _ae2_replan_steps:
+                                remaining_steps[:] = _ae2_replan_steps
+                                remaining_indices[:] = list(
+                                    range(len(step_outcomes),
+                                          len(step_outcomes) + len(_ae2_replan_steps))
+                                )
+                                ctx.director_replan_count += 1
+                                log.info(
+                                    "adaptive [%s/replan]: fresh %d steps "
+                                    "(replan %d/%d) — %s",
+                                    _ae2_trigger, len(_ae2_replan_steps),
+                                    ctx.director_replan_count, ctx.director_budget_ceiling,
+                                    _ae2_decision.reasoning[:80],
+                                )
+                                if verbose:
+                                    print(
+                                        f"[poe] adaptive replan ({_ae2_trigger}): "
+                                        f"{len(_ae2_replan_steps)} steps — "
+                                        f"{_ae2_decision.reasoning[:60]}",
+                                        file=sys.stderr, flush=True,
+                                    )
+                        except Exception as _ae2_replan_exc:
+                            log.debug("adaptive replan (%s) planner call failed: %s",
+                                      _ae2_trigger, _ae2_replan_exc)
                     else:
                         log.info("adaptive [%s/continue]: %s",
                                  _ae2_trigger, _ae2_decision.reasoning[:100])
