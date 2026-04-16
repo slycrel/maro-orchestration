@@ -9,6 +9,16 @@
 4. Check ROADMAP.md for phase status
 5. Check `~/claude/grok-response-*.txt` for unprocessed feedback
 
+**When you need to recall something from prior correspondence (design docs, conversation logs, rationale for a past decision), use `dev-recall` instead of blind grep.** It's vector retrieval over docs/, lat.md/, MILESTONES/BACKLOG/ROADMAP/CLAUDE, and auto-memory:
+
+```bash
+PYTHONPATH=src python3 -m correspondence query "why did we rename constraint to scope"
+PYTHONPATH=src python3 -m correspondence ingest --since 1d   # re-embed recent changes
+PYTHONPATH=src python3 -m correspondence status
+```
+
+This is **dev-facing tooling only** — not part of Poe's runtime self-improvement. See `src/correspondence.py` module docstring. Don't blur these.
+
 **Before modifying a subsystem, load its architecture skill.** The `skills/arch-*.md` files describe intent, interfaces, gaps, and file maps for each subsystem. Read the relevant one before making design decisions:
 
 | Working on... | Load this skill |

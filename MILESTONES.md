@@ -2,7 +2,25 @@
 
 What to do next, in what order. Updated each session. Strategic phases live in ROADMAP.md; deferred ideas live in BACKLOG.md. This file is the bridge — the executable queue.
 
-Last updated: 2026-04-16 (session 34 — closure gate closed; verdict now drives restart on gaps)
+Last updated: 2026-04-16 (session 34 — closure gate + correspondence retrieval)
+
+---
+
+## Done (session 34, 2026-04-16 — `correspondence.py` dev-facing retrieval prototype)
+
+Framing: this is explicitly **dev-facing tooling**, not Poe runtime. The name avoids collision with Poe's own `knowledge.py` crystallization dashboard + `knowledge_web.py` tiered memory, both of which serve Poe operating on its own goals. The underlying library is reusable if Poe ever wants self-recall of our correspondence, but v1 is invoked via `dev-recall` CLI (no `poe-` prefix). This distinction — "how we build the system" vs "the system itself" — matters and is now documented explicitly in the module docstring and CLAUDE.md.
+
+- [x] **`src/correspondence.py`** — markdown heading-aware chunker, sqlite-vec storage, OpenAI-compatible embeddings (auto-switches to OpenRouter when only `OPENROUTER_API_KEY` is set), content-hash dedup for idempotent re-ingest, `--since Nd` filter for incremental updates.
+- [x] **`tests/test_correspondence.py`** — 14 tests: chunking behavior (heading splits, section chain, size caps, hash stability), ingest/query roundtrip with deterministic fake embeddings, idempotent re-ingest, `since_seconds` filter, status output, graceful failures. sqlite-vec-dependent tests skip cleanly if extension absent.
+- [x] **Corpus ingested** — 110 files → 1,181 chunks from `docs/`, `lat.md/`, `MILESTONES.md`, `BACKLOG.md`, `ROADMAP.md`, `CLAUDE.md`, and `~/.claude/.../memory/`. Smoke queries return expected top hits (e.g. "why rename constraint to scope" → `PHASE_65_IMPLEMENTATION_PLAN.md > Rename` at distance 0.83; "don't patch prompts with taxonomies" → the `feedback_inference_not_prompting.md` I wrote earlier in the session as rank 1).
+- [x] **Dev guidance in `CLAUDE.md`** — explicit pointer to `dev-recall` as the preferred recall path for prior correspondence, with note that this is dev tooling and not Poe runtime.
+- [x] **`pyproject.toml`** — new `correspondence` optional extra (sqlite-vec + requests); NOT added to `[project.scripts]` (no `poe-` prefix, invoked as `python3 -m correspondence` — preserves the dev/system boundary).
+
+Why now: design conversations, reviews, decisions, and conversation logs accumulate across sessions in 4+ locations. MEMORY.md (my auto-memory index) gives me named-file lookup but not query-by-topic. With the corpus growing — especially around the last two sessions (scope orchestration, closure gate, inversion, taste) — blind grep stops scaling. Retrieval first, graph later per Jeremy's preference.
+
+Next steps for this tool (not urgent): BM25+RRF fusion using the existing `hybrid_search.py` if retrieval quality disappoints in practice; nightly re-ingest via heartbeat; conversation-transcript ingestion (JSONL session logs). None of these block using it today.
+
+---
 
 ---
 
