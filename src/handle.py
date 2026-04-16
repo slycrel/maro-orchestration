@@ -757,6 +757,7 @@ def handle(
         # comparison. Uses the same config system as adaptive_execution (reads
         # from ~/.poe/config.yml, not the repo-local user/CONFIG.md).
         # See docs/PHASE_65_IMPLEMENTATION_PLAN.md.
+        _scope = None
         try:
             from config import get as _config_get
             _scope_on = bool(_config_get("scope_generation", False))
@@ -851,6 +852,7 @@ def handle(
                     adapter,
                     workspace_path=repo_path or "",
                     channel=channel,
+                    scope=_scope,
                 )
             except Exception:
                 _closure = None

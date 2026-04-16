@@ -1048,6 +1048,50 @@ class TestClosureRestart:
 
         assert len(calls) == 1, "closure_restart=False should skip restart"
 
+    def test_scope_plumbed_to_closure(self, monkeypatch, tmp_path):
+        """Generated scope must be passed into verify_goal_completion.
+
+        This is the link between scope (planning-side inversion) and closure
+        (verification-side inversion): closure probes the failure modes scope
+        enumerated. If scope is not plumbed, the two halves don't compose.
+        """
+        self._setup(monkeypatch, tmp_path)
+        from unittest.mock import patch, MagicMock
+        from scope import ScopeSet
+
+        done_result = self._fake_loop_result(status="done")
+
+        # Enable scope generation via config.get
+        def _cfg(name, default=None):
+            if name == "scope_generation":
+                return True
+            return default
+
+        fake_scope = ScopeSet(
+            failure_modes=["server never started"],
+            in_scope=["message echo"],
+            out_of_scope=["auth"],
+            raw_text="",
+        )
+
+        verify_calls = []
+        def _fake_verify(*args, **kwargs):
+            verify_calls.append(kwargs)
+            return self._fake_closure(True, 0.9)
+
+        with patch("agent_loop.run_agent_loop", return_value=done_result), \
+             patch("intent.check_goal_clarity", return_value={"clear": True}), \
+             patch("scope.generate_scope", return_value=fake_scope), \
+             patch("director.verify_goal_completion", side_effect=_fake_verify), \
+             patch("config.get", side_effect=_cfg), \
+             self._no_quality_gate():
+            handle("build X", force_lane="agenda", dry_run=False)
+
+        assert verify_calls, "verify_goal_completion was not invoked"
+        passed_scope = verify_calls[0].get("scope")
+        assert passed_scope is not None, "scope not plumbed into verify_goal_completion"
+        assert passed_scope.failure_modes == ["server never started"]
+
     def test_depth_cap_prevents_infinite_loop(self, monkeypatch, tmp_path):
         """Closure restart shares the continuation_depth cap of 3."""
         self._setup(monkeypatch, tmp_path)

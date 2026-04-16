@@ -682,22 +682,97 @@ class TestVerifyGoalCompletion:
         result = verify_goal_completion("build X", [], adapter)
         assert result.complete is True
 
-    def test_plan_prompt_mandates_behavioral_checks(self):
-        """_CLOSURE_PLAN_SYSTEM must steer toward behavioral checks for services.
+    def test_plan_prompt_uses_inversion_framing(self):
+        """_CLOSURE_PLAN_SYSTEM must use inversion framing, not goal-type taxonomy.
 
-        Regression guard: the original prompt's example ('does it build? does the
-        entry point exist?') biased toward build-only verification, which is why
-        slycrel-go-style failures slipped through. The prompt must explicitly
-        require behavioral checks for service-producing goals.
+        Regression guard: the prior version encoded a four-category taxonomy
+        ('static artifact / running service / changes to existing codebase /
+        research') with category-specific mandates. That's prompt-patching: it
+        front-loads the correct answer instead of letting the system infer it
+        from the goal and its failure modes. The prompt must instead reason by
+        inversion — probe whether failure modes (from scope, or on-the-fly)
+        actually occurred — and each check must label its failure_mode.
         """
         from director import _CLOSURE_PLAN_SYSTEM
         text = _CLOSURE_PLAN_SYSTEM.lower()
-        # Must name running services as a distinct category
-        assert "running service" in text or "service" in text
-        # Must mandate behavioral check
-        assert "behavioral" in text
-        # Must warn that build-only is insufficient for services
-        assert "build is not enough" in text or "compiles but was never started" in text
+        # Must frame itself as inversion-based
+        assert "inversion" in text
+        assert "failure mode" in text
+        # Must require each check to name its failure mode in output
+        assert "failure_mode" in text
+        # Must NOT hardcode the service-category mandate
+        assert "running service" not in text
+        assert "behavioral check" not in text
+
+    def test_plan_prompt_has_fallback_when_scope_absent(self):
+        """Prompt must handle the no-scope case by doing its own inversion."""
+        from director import _CLOSURE_PLAN_SYSTEM
+        text = _CLOSURE_PLAN_SYSTEM.lower()
+        # Explicitly covers the case of no input failure modes
+        assert "no failure modes" in text or "your own inversion" in text
+
+    def test_scope_failure_modes_reach_plan_prompt(self, monkeypatch, tmp_path):
+        """When scope is supplied, its failure modes appear in the plan-call user message."""
+        from unittest.mock import MagicMock, patch
+        from scope import ScopeSet
+
+        adapter = MagicMock()
+        captured_messages = []
+
+        def _complete(messages, **kwargs):
+            captured_messages.append(messages)
+            return MagicMock()
+
+        adapter.complete.side_effect = _complete
+
+        scope = ScopeSet(
+            failure_modes=[
+                "server compiles but never accepts a connection",
+                "websocket handshake fails under TLS",
+            ],
+            in_scope=["bidirectional messaging"],
+            out_of_scope=["auth"],
+            raw_text="",
+        )
+
+        with patch("director.extract_json",
+                   side_effect=[{"checks": []}, {"complete": True}]):
+            with patch("director.content_or_empty", return_value="{}"):
+                verify_goal_completion(
+                    "build a websocket server", [], adapter,
+                    workspace_path=str(tmp_path), scope=scope,
+                )
+
+        # First call is the plan call; messages[1] is the user message
+        assert captured_messages, "expected adapter.complete to be called"
+        user_msg = captured_messages[0][1].content
+        assert "server compiles but never accepts a connection" in user_msg
+        assert "websocket handshake fails under TLS" in user_msg
+        assert "failure modes" in user_msg.lower()
+
+    def test_no_scope_no_failure_mode_block(self, monkeypatch, tmp_path):
+        """When scope is None, user message must NOT contain the failure-modes header."""
+        from unittest.mock import MagicMock, patch
+
+        adapter = MagicMock()
+        captured_messages = []
+
+        def _complete(messages, **kwargs):
+            captured_messages.append(messages)
+            return MagicMock()
+
+        adapter.complete.side_effect = _complete
+
+        with patch("director.extract_json",
+                   side_effect=[{"checks": []}, {"complete": True}]):
+            with patch("director.content_or_empty", return_value="{}"):
+                verify_goal_completion(
+                    "build X", [], adapter,
+                    workspace_path=str(tmp_path), scope=None,
+                )
+
+        user_msg = captured_messages[0][1].content
+        assert "Failure modes identified when planning" not in user_msg
 
     def test_timeout_marks_check_failed(self, monkeypatch, tmp_path):
         """Timed-out checks are marked failed, not raised."""

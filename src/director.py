@@ -1137,40 +1137,36 @@ def handle_escalation(
 _CLOSURE_PLAN_SYSTEM = textwrap.dedent("""\
     You are the Director performing a closure check after an agent loop completed.
 
-    Your job: given the original goal and the work that was done, produce a list of
-    EXECUTABLE verification checks — shell commands that mechanically confirm the
-    goal was actually achieved.
+    You verify by INVERSION: given the goal and what was done, your job is to probe
+    whether any of the ways this work could be silently wrong actually happened.
 
-    Rules:
+    How to reason:
+    1. If the input includes "failure modes" (generated when planning this goal),
+       those are your primary targets. For each failure mode, ask: "what single
+       shell command, run right now, would detect whether this actually happened?"
+       A failure mode with no mechanical probe is fine to skip — do not fabricate.
+    2. If no failure modes are provided, do your own inversion first. Given this
+       specific goal and this specific work summary, enumerate 3–5 ways a claim of
+       "done" could be hiding a silent failure. Then derive checks from those.
+    3. Reason from the actual work done, not from goal type templates. The right
+       check for "build a server" depends on whether the work stopped at compiling
+       (probe: does it actually respond?), at starting (probe: does it handle a
+       real request?), or at integration (probe: does the documented client path
+       work?). Let the work steer the check.
+
+    Output rules:
     - Generate 2–5 checks. Each must be a single shell command.
-    - Commands must be fast (<15s), safe (read-only preferred), and exit 0 on success.
-    - Focus on the goal, not the process. Use the right check for the goal type:
-
-        STATIC ARTIFACT (library, module, config): does it build / import / lint clean?
-            e.g. `go build ./...`, `python -c "import mymod"`, `yamllint file.yml`
-
-        RUNNING SERVICE (server, daemon, API, WebSocket): build is NOT enough.
-            You MUST include at least one BEHAVIORAL check that starts the service
-            and exercises it end-to-end, then tears it down. A service that compiles
-            but was never started is a classic silent failure.
-            e.g. `(go run . & P=$!; sleep 2; curl -sf http://localhost:PORT/; kill $P)`
-            e.g. `(python -m http.server & P=$!; sleep 1; curl -sf localhost:8000; kill $P)`
-            e.g. `timeout 5 wscat -c ws://localhost:PORT -x '{"hello":"world"}'`
-            Wrap with `timeout N` and always clean up the PID.
-
-        CHANGES TO AN EXISTING CODEBASE: run that repo's existing test suite and lint
-            against the new code, not just "does it build." If tests exist, they are
-            authoritative.
-
-        RESEARCH / WRITING (no executable artifact): return an empty list.
-
-    - Working directory for commands is provided — use relative paths from there.
-    - If the goal describes a running thing but no behavioral check is possible
-      (e.g. missing port, external dependency), return an empty list rather than
-      a misleading build-only check.
+    - Each check MUST name which failure mode (or inversion hypothesis) it probes.
+    - Commands must be fast (<15s), safe (read-only or self-cleaning), and exit 0
+      on success. Wrap background processes with `timeout` and always clean up PIDs.
+    - Working directory provided — use relative paths from there.
+    - If the goal produces no executable artifact (research, writing, analysis),
+      return an empty list. If a failure mode cannot be mechanically probed in
+      this environment (missing port, external service, credential needed), skip
+      that failure mode rather than fabricate a weak check.
 
     Respond with JSON only:
-    {"checks": [{"description": "...", "command": "..."}]}
+    {"checks": [{"failure_mode": "...", "description": "...", "command": "..."}]}
 """).strip()
 
 _CLOSURE_VERDICT_SYSTEM = textwrap.dedent("""\
@@ -1211,12 +1207,17 @@ def verify_goal_completion(
     channel: Optional["ConversationChannel"] = None,
     dry_run: bool = False,
     timeout_per_check: int = 30,
+    scope=None,
 ) -> ClosureVerdict:
     """Director closure check: verify the goal was actually achieved.
 
-    Generates executable verification commands for the goal, runs them
-    mechanically (no LLM judgment on results), then asks the director to
-    interpret the outcomes and declare whether the goal is complete.
+    Reasons by INVERSION. When a ScopeSet is supplied, its failure_modes are the
+    primary targets for check generation — each check probes whether a named
+    failure mode actually occurred. When scope is absent, the LLM does its own
+    inversion from the goal and work summary.
+
+    Runs the generated checks mechanically (no LLM judgment on exit codes), then
+    asks the director to interpret outcomes and declare completeness.
 
     Non-fatal — returns complete=True on any error so it never blocks execution.
     Emits 'verification' and 'needs_work' events to channel if provided.
@@ -1240,6 +1241,19 @@ def verify_goal_completion(
             step_summary_parts.append(f"Step {i+1}: {(_txt or '')[:120]}\nResult: {(_res or '')[:300]}")
     work_summary = "\n\n".join(step_summary_parts[-6:]) if step_summary_parts else "(no step detail available)"
 
+    # Pull scope's failure modes into the plan-call context.
+    # Closure verification is inversion against the same possibilities scope
+    # enumerated up front — this is the linking point between the two halves.
+    _scope_block = ""
+    if scope is not None:
+        _fm = getattr(scope, "failure_modes", None) or []
+        if _fm:
+            _scope_block = (
+                "Failure modes identified when planning (probe these specifically):\n"
+                + "\n".join(f"- {fm}" for fm in _fm)
+                + "\n\n"
+            )
+
     try:
         from llm import LLMMessage
 
@@ -1250,6 +1264,7 @@ def verify_goal_completion(
                 LLMMessage("user",
                     f"Goal: {goal}\n\n"
                     f"Working directory: {workspace_path or '(unspecified)'}\n\n"
+                    f"{_scope_block}"
                     f"Work done:\n{work_summary}"
                 ),
             ],
