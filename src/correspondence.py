@@ -40,10 +40,13 @@ markdown parsing). Start with pure vector; if quality is poor, graduate to
 BM25+RRF fusion using the existing `hybrid_search.py`.
 
 CLI:
-    dev-recall ingest              # full re-ingest
-    dev-recall ingest --since 1d   # only recently-modified files
-    dev-recall query "taste"       # top-K chunks
-    dev-recall status              # counts, last-ingest time
+    dev-recall ingest                        # scan + embed markdown/text sources
+    dev-recall ingest --since 1d             # only recently-modified files
+    dev-recall ingest-sessions               # Claude Code JSONL transcripts
+    dev-recall ingest-telegram --path PATH   # Telegram Desktop result.json export
+    dev-recall transcript SESSION.jsonl      # boil a JSONL down to readable chat
+    dev-recall query "taste"                 # top-K chunks
+    dev-recall status                        # counts, last-ingest time
 """
 
 from __future__ import annotations
@@ -577,6 +580,219 @@ def _iter_turn_chunks(jsonl_path: Path, *, max_chars: int) -> Iterable[Chunk]:
         yield from _emit(current)
 
 
+# ---------------------------------------------------------------------------
+# Telegram export — result.json from Telegram Desktop "Export chat history"
+# ---------------------------------------------------------------------------
+
+def _extract_telegram_text(text_field: Any) -> str:
+    """Flatten a Telegram `text` field (string OR list of entities) to prose.
+
+    Telegram exports inline entities (mentions, bot_commands, links, bold/italic)
+    as a list where each element is either a plain string or a dict with
+    {type, text}. We just want the concatenated human-readable text.
+    """
+    if isinstance(text_field, str):
+        return text_field.strip()
+    if isinstance(text_field, list):
+        parts: List[str] = []
+        for entity in text_field:
+            if isinstance(entity, str):
+                parts.append(entity)
+            elif isinstance(entity, dict):
+                t = entity.get("text") or ""
+                if t:
+                    parts.append(t)
+        return "".join(parts).strip()
+    return ""
+
+
+def _iter_telegram_turns(json_path: Path, *, max_chars: int,
+                         bot_sender: Optional[str] = None) -> Iterable[Chunk]:
+    """Yield Chunks from a Telegram Desktop result.json chat export.
+
+    Turn model mirrors the JSONL session adapter: a "turn" = human text(s)
+    followed by the bot's reply(ies). Consecutive same-sender messages are
+    concatenated inside a turn. A new human message flushes the current turn.
+
+    If bot_sender is None, inferred as the sender with the most messages
+    (typically the bot, since bots reply more verbosely than humans do).
+
+    Each Chunk:
+      source  = absolute path to result.json
+      section = "turn N — YYYY-MM-DD HH:MM"
+      content = "USER: ...\\n\\nASSISTANT: ..."
+    """
+    try:
+        mtime = int(json_path.stat().st_mtime)
+        with json_path.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return
+
+    messages = data.get("messages") or []
+    if not messages:
+        return
+
+    if bot_sender is None:
+        counts: Dict[str, int] = {}
+        for m in messages:
+            if m.get("type") == "message":
+                s = m.get("from")
+                if s:
+                    counts[s] = counts.get(s, 0) + 1
+        if counts:
+            bot_sender = max(counts.items(), key=lambda kv: kv[1])[0]
+
+    current = _Turn()
+    last_role: Optional[str] = None
+    turn_idx = 0
+
+    def _emit(t: _Turn) -> Iterable[Chunk]:
+        text = t.user_text
+        if t.asst_parts:
+            combined = "\n\n".join(t.asst_parts)
+            if text:
+                text = f"USER: {text}\n\nASSISTANT: {combined}"
+            else:
+                text = f"ASSISTANT: {combined}"
+        elif text:
+            text = f"USER: {text}"
+        else:
+            return
+        ts_fragment = t.started_at[:16].replace("T", " ") if t.started_at else "?"
+        section = f"turn {t.turn_index} — {ts_fragment}"
+        source = str(json_path)
+        for piece in _split_for_size(text, max_chars):
+            piece = piece.strip()
+            if not piece:
+                continue
+            yield Chunk(
+                source=source, section=section, content=piece,
+                modified_at=mtime,
+                content_hash=_hash(piece, source, section),
+            )
+
+    for m in messages:
+        if m.get("type") != "message":
+            continue
+        text = _extract_telegram_text(m.get("text"))
+        if not text:
+            continue
+        sender = m.get("from")
+        is_bot = (sender == bot_sender)
+        role = "bot" if is_bot else "user"
+        ts = m.get("date", "")
+
+        if role == "user":
+            if last_role == "bot":
+                # Bot reply finished; flush the turn before starting a new one.
+                yield from _emit(current)
+                current = _Turn()
+            if current.user_text:
+                current.user_text = current.user_text + "\n\n" + text
+            else:
+                current.user_text = text
+                current.started_at = ts
+                turn_idx += 1
+                current.turn_index = turn_idx
+        else:
+            if not current.user_text and not current.asst_parts:
+                # Bot spoke first (no preceding user message)
+                turn_idx += 1
+                current.turn_index = turn_idx
+                current.started_at = ts
+            current.asst_parts.append(text)
+        last_role = role
+
+    if current.user_text or current.asst_parts:
+        yield from _emit(current)
+
+
+def ingest_telegram(*, cfg: Optional[Dict[str, Any]] = None,
+                    embed_fn: Optional[EmbedFn] = None,
+                    paths: Optional[List[str]] = None) -> IngestStats:
+    """Ingest Telegram Desktop chat exports (result.json) as turn-based chunks.
+
+    `paths`: list of result.json files OR directories containing them.
+    """
+    cfg = cfg or _load_config()
+    if embed_fn is None:
+        embed_fn = _build_embed_fn(cfg)
+
+    conn = _open_db(cfg["db_path"], embed_dim=cfg["embed_dim"])
+    stats = IngestStats()
+
+    resolved: List[Path] = []
+    for p in (paths or []):
+        pth = Path(p).expanduser()
+        if pth.is_file() and pth.suffix.lower() == ".json":
+            resolved.append(pth)
+        elif pth.is_dir():
+            # Telegram exports put result.json at the directory root
+            rj = pth / "result.json"
+            if rj.is_file():
+                resolved.append(rj)
+
+    pending: List[Chunk] = []
+    for path in resolved:
+        stats.files_scanned += 1
+        try:
+            for ch in _iter_telegram_turns(path, max_chars=cfg["max_chunk_chars"]):
+                row = conn.execute(
+                    "SELECT 1 FROM chunks WHERE content_hash = ?",
+                    (ch.content_hash,),
+                ).fetchone()
+                if row:
+                    stats.chunks_existing += 1
+                else:
+                    pending.append(ch)
+        except Exception as exc:
+            stats.errors.append(f"{path}: parse failed: {exc}")
+            continue
+
+    if pending:
+        batch_size = 100
+        for i in range(0, len(pending), batch_size):
+            batch = pending[i:i + batch_size]
+            try:
+                vectors = embed_fn([c.content for c in batch])
+            except Exception as exc:
+                stats.errors.append(f"embed batch {i}: {exc}")
+                continue
+            if len(vectors) != len(batch):
+                stats.errors.append(
+                    f"embedding count mismatch: {len(vectors)} vs {len(batch)}"
+                )
+                continue
+            expected_dim = cfg["embed_dim"]
+            for ch, vec in zip(batch, vectors):
+                if len(vec) != expected_dim:
+                    stats.errors.append(
+                        f"dim mismatch {len(vec)}≠{expected_dim} for {ch.source}"
+                    )
+                    continue
+                cur = conn.execute(
+                    "INSERT INTO chunks(source, section, modified_at, content, content_hash) "
+                    "VALUES (?,?,?,?,?)",
+                    (ch.source, ch.section, ch.modified_at, ch.content, ch.content_hash),
+                )
+                chunk_id = cur.lastrowid
+                conn.execute(
+                    "INSERT INTO vec_chunks(rowid, embedding) VALUES (?, ?)",
+                    (chunk_id, _pack_vec(vec)),
+                )
+                stats.chunks_new += 1
+            conn.commit()
+
+    conn.execute(
+        "INSERT OR REPLACE INTO ingest_meta(key, value) VALUES (?, ?)",
+        ("last_ingest_telegram_utc", str(int(time.time()))),
+    )
+    conn.commit()
+    conn.close()
+    return stats
+
+
 def render_transcript(jsonl_path: Path) -> str:
     """Boil a session JSONL down to a readable chat transcript.
 
@@ -968,6 +1184,19 @@ def _cmd_ingest_sessions(args: argparse.Namespace) -> int:
     return 0 if not stats.errors else 1
 
 
+def _cmd_ingest_telegram(args: argparse.Namespace) -> int:
+    if not args.path:
+        print("ERROR: at least one --path is required (result.json file or export dir)",
+              file=sys.stderr)
+        return 1
+    stats = ingest_telegram(paths=args.path)
+    print(f"files_scanned={stats.files_scanned} "
+          f"new_chunks={stats.chunks_new} existing={stats.chunks_existing}")
+    for err in stats.errors:
+        print(f"ERROR: {err}", file=sys.stderr)
+    return 0 if not stats.errors else 1
+
+
 def _cmd_transcript(args: argparse.Namespace) -> int:
     path = Path(args.path).expanduser()
     if not path.is_file():
@@ -1032,6 +1261,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     ingses.add_argument("--limit", type=int, default=None,
                         help="cap number of session files processed")
     ingses.set_defaults(fn=_cmd_ingest_sessions)
+
+    ingtg = sub.add_parser(
+        "ingest-telegram",
+        help="ingest a Telegram Desktop chat export (result.json)",
+    )
+    ingtg.add_argument(
+        "--path", action="append", default=[],
+        help="path to result.json OR the export directory (repeatable)",
+    )
+    ingtg.set_defaults(fn=_cmd_ingest_telegram)
 
     tr = sub.add_parser(
         "transcript",

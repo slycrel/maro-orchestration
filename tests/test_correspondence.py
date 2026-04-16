@@ -381,6 +381,152 @@ class TestIngestSessions:
         assert s2.chunks_existing >= 1
 
 
+# ---------------------------------------------------------------------------
+# Telegram export ingestion
+# ---------------------------------------------------------------------------
+
+class TestTelegramExtraction:
+    def test_text_string_passthrough(self):
+        assert corr._extract_telegram_text("hello") == "hello"
+
+    def test_text_list_entities_flattened(self):
+        entities = [
+            "check ",
+            {"type": "link", "text": "https://x.com/foo"},
+            " then tell me what you think",
+        ]
+        out = corr._extract_telegram_text(entities)
+        assert "check " in out
+        assert "https://x.com/foo" in out
+        assert "then tell me" in out
+
+    def test_text_bot_command_entity(self):
+        entities = [{"type": "bot_command", "text": "/start"}]
+        assert corr._extract_telegram_text(entities) == "/start"
+
+
+class TestTelegramTurns:
+    def _write(self, tmp_path, messages):
+        path = tmp_path / "result.json"
+        path.write_text(json.dumps({
+            "name": "test chat", "type": "bot_chat", "id": 1, "messages": messages,
+        }), encoding="utf-8")
+        return path
+
+    def test_single_turn_user_then_bot(self, tmp_path):
+        msgs = [
+            {"id": 1, "type": "message", "date": "2026-02-05T00:00:00",
+             "from": "Jeremy Stone", "text": "hello"},
+            {"id": 2, "type": "message", "date": "2026-02-05T00:00:01",
+             "from": "poe", "text": "hi there"},
+        ]
+        path = self._write(tmp_path, msgs)
+        chunks = list(corr._iter_telegram_turns(path, max_chars=6000, bot_sender="poe"))
+        assert len(chunks) == 1
+        assert "USER: hello" in chunks[0].content
+        assert "ASSISTANT: hi there" in chunks[0].content
+        assert "2026-02-05" in chunks[0].section
+
+    def test_consecutive_user_messages_concat(self, tmp_path):
+        msgs = [
+            {"id": 1, "type": "message", "date": "2026-02-05T00:00:00",
+             "from": "Jeremy Stone", "text": "first line"},
+            {"id": 2, "type": "message", "date": "2026-02-05T00:00:01",
+             "from": "Jeremy Stone", "text": "second line"},
+            {"id": 3, "type": "message", "date": "2026-02-05T00:00:02",
+             "from": "poe", "text": "got it"},
+        ]
+        path = self._write(tmp_path, msgs)
+        chunks = list(corr._iter_telegram_turns(path, max_chars=6000, bot_sender="poe"))
+        assert len(chunks) == 1
+        assert "first line" in chunks[0].content
+        assert "second line" in chunks[0].content
+
+    def test_multiple_turns_yield_separate_chunks(self, tmp_path):
+        msgs = [
+            {"id": 1, "type": "message", "date": "2026-02-05T00:00:00",
+             "from": "Jeremy Stone", "text": "q1"},
+            {"id": 2, "type": "message", "date": "2026-02-05T00:00:01",
+             "from": "poe", "text": "a1"},
+            {"id": 3, "type": "message", "date": "2026-02-05T00:01:00",
+             "from": "Jeremy Stone", "text": "q2"},
+            {"id": 4, "type": "message", "date": "2026-02-05T00:01:01",
+             "from": "poe", "text": "a2"},
+        ]
+        path = self._write(tmp_path, msgs)
+        chunks = list(corr._iter_telegram_turns(path, max_chars=6000, bot_sender="poe"))
+        assert len(chunks) == 2
+
+    def test_service_messages_skipped(self, tmp_path):
+        msgs = [
+            {"id": 1, "type": "service", "action": "joined"},
+            {"id": 2, "type": "message", "date": "2026-02-05T00:00:00",
+             "from": "Jeremy Stone", "text": "hello"},
+            {"id": 3, "type": "message", "date": "2026-02-05T00:00:01",
+             "from": "poe", "text": "hi"},
+        ]
+        path = self._write(tmp_path, msgs)
+        chunks = list(corr._iter_telegram_turns(path, max_chars=6000, bot_sender="poe"))
+        assert len(chunks) == 1
+
+    def test_x_link_message_preserved(self, tmp_path):
+        # Later in the export Jeremy started dumping X links with one-line notes.
+        # Those are user-only turns (no bot reply); they should still ingest.
+        msgs = [
+            {"id": 1, "type": "message", "date": "2026-04-10T00:00:00",
+             "from": "Jeremy Stone",
+             "text": [
+                 {"type": "link", "text": "https://x.com/karpathy/status/1"},
+                 "\n\nworth a look for orchestration?",
+             ]},
+        ]
+        path = self._write(tmp_path, msgs)
+        chunks = list(corr._iter_telegram_turns(path, max_chars=6000, bot_sender="poe"))
+        assert len(chunks) == 1
+        assert "x.com/karpathy" in chunks[0].content
+        assert "worth a look" in chunks[0].content
+
+
+@_sqlite_vec_required
+class TestIngestTelegram:
+    def test_ingest_telegram_specific_path(self, corr_cfg, tmp_path):
+        msgs = [
+            {"id": 1, "type": "message", "date": "2026-02-05T00:00:00",
+             "from": "Jeremy Stone", "text": "how does closure gating work"},
+            {"id": 2, "type": "message", "date": "2026-02-05T00:00:01",
+             "from": "poe", "text": "inversion probes the scope's failure modes"},
+        ]
+        path = tmp_path / "result.json"
+        path.write_text(json.dumps({
+            "name": "x", "type": "bot_chat", "id": 1, "messages": msgs,
+        }), encoding="utf-8")
+        embed = _deterministic_embed(corr_cfg["embed_dim"])
+        stats = corr.ingest_telegram(
+            cfg=corr_cfg, embed_fn=embed, paths=[str(path)],
+        )
+        assert stats.files_scanned == 1
+        assert stats.chunks_new >= 1
+        assert not stats.errors
+
+    def test_ingest_telegram_directory_resolves_result_json(self, corr_cfg, tmp_path):
+        export_dir = tmp_path / "ChatExport_2026-01-01"
+        export_dir.mkdir()
+        (export_dir / "result.json").write_text(json.dumps({
+            "name": "x", "type": "bot_chat", "id": 1, "messages": [
+                {"id": 1, "type": "message", "date": "2026-01-01T00:00:00",
+                 "from": "Jeremy Stone", "text": "test"},
+                {"id": 2, "type": "message", "date": "2026-01-01T00:00:01",
+                 "from": "poe", "text": "ack"},
+            ],
+        }), encoding="utf-8")
+        embed = _deterministic_embed(corr_cfg["embed_dim"])
+        stats = corr.ingest_telegram(
+            cfg=corr_cfg, embed_fn=embed, paths=[str(export_dir)],
+        )
+        assert stats.files_scanned == 1
+        assert stats.chunks_new >= 1
+
+
 class TestGracefulFailures:
     def test_missing_api_key_raises_useful_error(self, monkeypatch):
         """No API key → RuntimeError with install/setup guidance (not crash)."""
