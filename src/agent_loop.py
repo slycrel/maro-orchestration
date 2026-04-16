@@ -261,6 +261,12 @@ class LoopContext:
     max_iterations: int = 40
     continuation_depth: int = 0
     ralph_verify: bool = False
+
+    # Adaptive execution (Phase 64)
+    steps_since_last_check: int = 0
+    director_replan_count: int = 0
+    director_budget_ceiling: int = 2
+
     step_callback: Optional[Callable] = None
     interrupt_queue: Any = None
     hook_registry: Any = None
@@ -4027,6 +4033,59 @@ def run_agent_loop(
             last_action = action_key
 
         if stuck_streak >= 2:  # 3rd repeat
+            # Phase 64 Phase A: adaptive execution — director evaluates before stuck advisor
+            try:
+                from config import get as _ae_cfg_get
+                _ae_on = bool(_ae_cfg_get("adaptive_execution", False))
+            except Exception:
+                _ae_on = False
+            if _ae_on:
+                try:
+                    from director import (
+                        director_evaluate as _dir_evaluate,
+                        EvaluationContext as _EvalCtx,
+                    )
+                    _ae_done = [o for o in step_outcomes if o.status == "done"]
+                    _ae_results = "\n---\n".join(
+                        (o.result or "")[:600] for o in _ae_done[-3:]
+                    )
+                    _ae_ctx = _EvalCtx(
+                        goal=goal,
+                        current_pass_scope=goal,
+                        steps_completed=[o.text for o in step_outcomes],
+                        # include current stuck step so director knows what failed
+                        steps_remaining=[step_text] + list(remaining_steps),
+                        step_results_summary=f"[Stuck on: {step_text}]\n\n{_ae_results}",
+                        verify_failure_count=_session_verify_failures,
+                        total_steps_taken=len(step_outcomes),
+                        max_steps=max_iterations,
+                        convergence_budget_remaining=(
+                            ctx.director_budget_ceiling - ctx.director_replan_count
+                        ),
+                    )
+                    _ae_decision = _dir_evaluate(goal, _ae_ctx, "stuck", adapter, dry_run=dry_run)
+                    ctx.steps_since_last_check = 0
+                    if _ae_decision.action == "continue":
+                        stuck_streak = 0
+                        log.info("adaptive [stuck/continue]: resetting streak — %s",
+                                 _ae_decision.reasoning[:100])
+                        continue
+                    elif _ae_decision.action == "adjust" and _ae_decision.revised_steps:
+                        _ae_new = _ae_decision.revised_steps
+                        remaining_steps[:] = _ae_new
+                        remaining_indices[:] = list(
+                            range(len(step_outcomes), len(step_outcomes) + len(_ae_new))
+                        )
+                        stuck_streak = 0
+                        log.info("adaptive [stuck/adjust]: replaced %d steps — %s",
+                                 len(_ae_new), _ae_decision.reasoning[:100])
+                        if verbose:
+                            print(f"[poe] adaptive adjust (stuck): {len(_ae_new)} steps — "
+                                  f"{_ae_decision.reasoning[:60]}", file=sys.stderr, flush=True)
+                        continue
+                except Exception as _ae_exc:
+                    log.debug("adaptive execution (stuck trigger) error: %s", _ae_exc)
+
             # Advisor Pattern: before giving up, ask Opus for strategic guidance
             try:
                 from llm import advisor_call as _advisor_call
@@ -4212,6 +4271,70 @@ def run_agent_loop(
 
         if loop_status == "stuck":
             break
+
+        # Phase 64 Phase A: adaptive execution — verify_failure and step_threshold triggers.
+        # Sync session-level counters to ctx so triggers can read them.
+        ctx.session_verify_failures = _session_verify_failures
+        ctx.stuck_streak = stuck_streak
+        ctx.steps_since_last_check += 1
+        try:
+            from config import get as _ae2_cfg_get
+            _ae2_on = bool(_ae2_cfg_get("adaptive_execution", False))
+        except Exception:
+            _ae2_on = False
+        if _ae2_on:
+            _AE_K = 5  # step threshold between mandatory checks
+            _ae2_fire = (
+                ctx.session_verify_failures >= 2
+                or ctx.steps_since_last_check >= _AE_K
+            )
+            if _ae2_fire:
+                try:
+                    from director import (
+                        director_evaluate as _dir_evaluate2,
+                        EvaluationContext as _EvalCtx2,
+                    )
+                    _ae2_done = [o for o in step_outcomes if o.status == "done"]
+                    _ae2_results = "\n---\n".join(
+                        (o.result or "")[:600] for o in _ae2_done[-3:]
+                    )
+                    _ae2_ctx = _EvalCtx2(
+                        goal=goal,
+                        current_pass_scope=goal,
+                        steps_completed=[o.text for o in step_outcomes],
+                        steps_remaining=list(remaining_steps),
+                        step_results_summary=_ae2_results,
+                        verify_failure_count=ctx.session_verify_failures,
+                        total_steps_taken=len(step_outcomes),
+                        max_steps=max_iterations,
+                        convergence_budget_remaining=(
+                            ctx.director_budget_ceiling - ctx.director_replan_count
+                        ),
+                    )
+                    _ae2_trigger = (
+                        "verify_failure" if ctx.session_verify_failures >= 2
+                        else "step_threshold"
+                    )
+                    _ae2_decision = _dir_evaluate2(
+                        goal, _ae2_ctx, _ae2_trigger, adapter, dry_run=dry_run
+                    )
+                    ctx.steps_since_last_check = 0  # reset regardless of action
+                    if _ae2_decision.action == "adjust" and _ae2_decision.revised_steps:
+                        _ae2_new = _ae2_decision.revised_steps
+                        remaining_steps[:] = _ae2_new
+                        remaining_indices[:] = list(
+                            range(len(step_outcomes), len(step_outcomes) + len(_ae2_new))
+                        )
+                        log.info("adaptive [%s/adjust]: replaced %d steps — %s",
+                                 _ae2_trigger, len(_ae2_new), _ae2_decision.reasoning[:100])
+                        if verbose:
+                            print(f"[poe] adaptive adjust ({_ae2_trigger}): {len(_ae2_new)} steps — "
+                                  f"{_ae2_decision.reasoning[:60]}", file=sys.stderr, flush=True)
+                    else:
+                        log.info("adaptive [%s/continue]: %s",
+                                 _ae2_trigger, _ae2_decision.reasoning[:100])
+                except Exception as _ae2_exc:
+                    log.debug("adaptive execution error: %s", _ae2_exc)
 
         # Carry injected context forward to next step
         _next_step_injected_context = _step_injected_context

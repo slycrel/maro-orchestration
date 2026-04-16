@@ -1347,6 +1347,166 @@ def verify_goal_completion(
 
 
 # ---------------------------------------------------------------------------
+# Adaptive Execution — Phase 64, Phase A
+# ---------------------------------------------------------------------------
+
+_ADAPTIVE_PHASE_A_SYSTEM = textwrap.dedent("""\
+    You are the Director evaluating mid-execution state for a running agent loop.
+
+    Phase A actions only:
+    - "continue" — current approach is fine, proceed
+    - "adjust"   — tactically revise remaining steps based on discoveries
+
+    Rules for "adjust":
+    - Only adjust if remaining steps are clearly misaligned with what was discovered.
+    - Provide a replacement step list that continues from the current position.
+    - Do not repeat steps that are already completed.
+    - Keep changes minimal — sharpen, don't restructure.
+    - If the remaining steps look fine, return "continue" instead.
+    - For "continue", revised_steps may be omitted or null.
+
+    next_check_in: steps before next mandatory check (integer, 1–10, default 3).
+
+    Respond with JSON only:
+    {
+      "action": "continue" | "adjust",
+      "reasoning": "one sentence",
+      "revised_steps": ["step 1", "step 2", ...],
+      "next_check_in": 3
+    }
+""").strip()
+
+
+@dataclass
+class EvaluationContext:
+    """Compact execution state snapshot for director_evaluate().
+
+    Not the full LoopContext — only what the director needs to make a decision.
+    Serializable; no live references to loop internals.
+    """
+    goal: str
+    current_pass_scope: str
+    steps_completed: List[str]
+    steps_remaining: List[str]
+    step_results_summary: str          # last 3 completed step results, ≤600 chars each
+    verify_failure_count: int
+    total_steps_taken: int
+    max_steps: int
+    current_approach: str = ""         # always "" in Phase A (ExecutionPlan deferred to Phase B)
+    convergence_budget_remaining: int = 2  # informational-only in Phase A
+
+
+@dataclass
+class DirectorDecision:
+    """Decision returned by director_evaluate()."""
+    action: str                                   # continue | adjust | replan | restart | escalate
+    reasoning: str                                # one sentence — logged + shown in channel
+    revised_steps: Optional[List[str]] = None     # for 'adjust'
+    new_approach: Optional[str] = None            # for 'replan' (Phase B+)
+    restart_context: Optional[str] = None         # for 'restart' (Phase C+)
+    user_question: Optional[str] = None           # for 'escalate' (Phase C+)
+    next_check_in: int = 3                        # steps before next mandatory check
+
+
+def director_evaluate(
+    goal: str,
+    eval_ctx: EvaluationContext,
+    trigger: str,
+    adapter,
+    *,
+    dry_run: bool = False,
+) -> DirectorDecision:
+    """Phase A director evaluation: continue vs. adjust.
+
+    Called from agent_loop on verify failure streak, step threshold, or stuck signal.
+    Phase A wires only 'continue' and 'adjust'. replan/restart/escalate deferred.
+
+    Non-fatal — returns 'continue' on any exception.
+
+    Args:
+        goal:     original goal (immutable)
+        eval_ctx: compact snapshot of current execution state
+        trigger:  what fired this call — "verify_failure" | "step_threshold" | "stuck"
+        adapter:  LLM adapter (cheap model is sufficient)
+        dry_run:  skip LLM call and return continue
+    """
+    _continue = DirectorDecision(action="continue", reasoning="evaluation skipped")
+
+    if dry_run or adapter is None:
+        return _continue
+
+    completed_str = (
+        "\n".join(f"  {i + 1}. {s}" for i, s in enumerate(eval_ctx.steps_completed))
+        or "  (none yet)"
+    )
+    remaining_str = (
+        "\n".join(f"  {i + 1}. {s}" for i, s in enumerate(eval_ctx.steps_remaining))
+        or "  (none — may be near end)"
+    )
+
+    user_msg = (
+        f"Goal: {goal}\n\n"
+        f"Trigger: {trigger}\n"
+        f"Steps completed ({eval_ctx.total_steps_taken}/{eval_ctx.max_steps}):\n{completed_str}\n\n"
+        f"Steps remaining:\n{remaining_str}\n\n"
+        f"Recent step results:\n{eval_ctx.step_results_summary or '(none)'}\n\n"
+        f"Consecutive verify failures: {eval_ctx.verify_failure_count}\n"
+        f"Convergence budget remaining: {eval_ctx.convergence_budget_remaining}"
+        f" (informational only in Phase A)"
+    )
+
+    try:
+        from llm import LLMMessage
+
+        resp = adapter.complete(
+            [
+                LLMMessage("system", _ADAPTIVE_PHASE_A_SYSTEM),
+                LLMMessage("user", user_msg),
+            ],
+            max_tokens=512,
+            temperature=0.1,
+        )
+        data = extract_json(content_or_empty(resp), dict, log_tag="director.adaptive")
+        if not data:
+            return _continue
+
+        raw_action = safe_str(data.get("action", "continue")).lower().strip()
+        # Phase A: clamp to allowed actions only
+        action = raw_action if raw_action in ("continue", "adjust") else "continue"
+
+        reasoning = safe_str(data.get("reasoning", ""))
+
+        try:
+            next_check_in = max(1, int(data.get("next_check_in", 3)))
+        except (TypeError, ValueError):
+            next_check_in = 3
+
+        revised_steps: Optional[List[str]] = None
+        if action == "adjust":
+            raw_steps = safe_list(data.get("revised_steps"), element_type=str)
+            revised_steps = [s for s in raw_steps if s] or None
+            if not revised_steps:
+                # Empty revised_steps on adjust → treat as continue (per design spec)
+                action = "continue"
+
+        decision = DirectorDecision(
+            action=action,
+            reasoning=reasoning,
+            revised_steps=revised_steps,
+            next_check_in=next_check_in,
+        )
+        log.info(
+            "director_evaluate [%s]: action=%s next_check_in=%d — %s",
+            trigger, action, next_check_in, reasoning[:120],
+        )
+        return decision
+
+    except Exception:
+        log.debug("director_evaluate error — returning continue", exc_info=True)
+        return _continue
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 

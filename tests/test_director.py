@@ -21,6 +21,9 @@ from director import (
     Ticket,
     ReviewDecision,
     ClosureVerdict,
+    EvaluationContext,
+    DirectorDecision,
+    director_evaluate,
     run_director,
     requires_explicit_acceptance,
     verify_goal_completion,
@@ -702,3 +705,187 @@ class TestVerifyGoalCompletion:
 
         assert result.checks_run == 1
         assert result.checks_passed == 0
+
+
+# ---------------------------------------------------------------------------
+# Adaptive Execution — Phase 64, Phase A
+# ---------------------------------------------------------------------------
+
+def _eval_ctx(
+    *,
+    goal="test goal",
+    steps_completed=None,
+    steps_remaining=None,
+    step_results_summary="",
+    verify_failure_count=0,
+    total_steps_taken=0,
+    max_steps=10,
+) -> EvaluationContext:
+    return EvaluationContext(
+        goal=goal,
+        current_pass_scope=goal,
+        steps_completed=steps_completed or [],
+        steps_remaining=steps_remaining or [],
+        step_results_summary=step_results_summary,
+        verify_failure_count=verify_failure_count,
+        total_steps_taken=total_steps_taken,
+        max_steps=max_steps,
+    )
+
+
+class TestEvaluationContext:
+    def test_defaults(self):
+        ctx = _eval_ctx()
+        assert ctx.current_approach == ""
+        assert ctx.convergence_budget_remaining == 2
+
+    def test_fields_set(self):
+        ctx = _eval_ctx(
+            goal="build a thing",
+            steps_completed=["step 1"],
+            steps_remaining=["step 2"],
+            verify_failure_count=1,
+            total_steps_taken=3,
+            max_steps=20,
+        )
+        assert ctx.goal == "build a thing"
+        assert ctx.steps_completed == ["step 1"]
+        assert ctx.steps_remaining == ["step 2"]
+        assert ctx.verify_failure_count == 1
+        assert ctx.total_steps_taken == 3
+        assert ctx.max_steps == 20
+
+
+class TestDirectorDecision:
+    def test_continue_defaults(self):
+        d = DirectorDecision(action="continue", reasoning="all good")
+        assert d.action == "continue"
+        assert d.revised_steps is None
+        assert d.next_check_in == 3
+
+    def test_adjust_with_steps(self):
+        d = DirectorDecision(
+            action="adjust",
+            reasoning="steps off track",
+            revised_steps=["new step 1", "new step 2"],
+            next_check_in=5,
+        )
+        assert d.action == "adjust"
+        assert len(d.revised_steps) == 2
+        assert d.next_check_in == 5
+
+    def test_phase_bc_fields_default_none(self):
+        d = DirectorDecision(action="continue", reasoning="ok")
+        assert d.new_approach is None
+        assert d.restart_context is None
+        assert d.user_question is None
+
+
+class TestDirectorEvaluate:
+    def test_dry_run_returns_continue(self):
+        ctx = _eval_ctx()
+        result = director_evaluate("goal", ctx, "step_threshold", None, dry_run=True)
+        assert result.action == "continue"
+
+    def test_none_adapter_returns_continue(self):
+        ctx = _eval_ctx()
+        result = director_evaluate("goal", ctx, "verify_failure", None)
+        assert result.action == "continue"
+
+    def test_llm_returns_continue(self):
+        from unittest.mock import MagicMock, patch
+
+        adapter = MagicMock()
+        ctx = _eval_ctx(steps_remaining=["finish it"])
+        data = {"action": "continue", "reasoning": "looks fine", "next_check_in": 3}
+
+        with patch("director.extract_json", return_value=data):
+            with patch("director.content_or_empty", return_value="{}"):
+                result = director_evaluate("build X", ctx, "step_threshold", adapter)
+
+        assert result.action == "continue"
+        assert result.reasoning == "looks fine"
+        assert result.next_check_in == 3
+        assert result.revised_steps is None
+
+    def test_llm_returns_adjust_with_steps(self):
+        from unittest.mock import MagicMock, patch
+
+        adapter = MagicMock()
+        ctx = _eval_ctx(steps_remaining=["old step 1", "old step 2"])
+        data = {
+            "action": "adjust",
+            "reasoning": "steps are wrong",
+            "revised_steps": ["new step A", "new step B", "new step C"],
+            "next_check_in": 4,
+        }
+
+        with patch("director.extract_json", return_value=data):
+            with patch("director.content_or_empty", return_value="{}"):
+                result = director_evaluate("build X", ctx, "verify_failure", adapter)
+
+        assert result.action == "adjust"
+        assert result.revised_steps == ["new step A", "new step B", "new step C"]
+        assert result.next_check_in == 4
+
+    def test_adjust_with_empty_steps_falls_back_to_continue(self):
+        from unittest.mock import MagicMock, patch
+
+        adapter = MagicMock()
+        ctx = _eval_ctx()
+        data = {"action": "adjust", "reasoning": "eh", "revised_steps": [], "next_check_in": 3}
+
+        with patch("director.extract_json", return_value=data):
+            with patch("director.content_or_empty", return_value="{}"):
+                result = director_evaluate("build X", ctx, "stuck", adapter)
+
+        assert result.action == "continue"
+
+    def test_phase_a_clamps_replan_to_continue(self):
+        """Phase A must not allow replan/restart/escalate actions."""
+        from unittest.mock import MagicMock, patch
+
+        adapter = MagicMock()
+        ctx = _eval_ctx()
+        data = {"action": "replan", "reasoning": "need fresh start", "next_check_in": 1}
+
+        with patch("director.extract_json", return_value=data):
+            with patch("director.content_or_empty", return_value="{}"):
+                result = director_evaluate("build X", ctx, "stuck", adapter)
+
+        assert result.action == "continue"
+
+    def test_next_check_in_clamped_to_minimum_1(self):
+        from unittest.mock import MagicMock, patch
+
+        adapter = MagicMock()
+        ctx = _eval_ctx()
+        data = {"action": "continue", "reasoning": "ok", "next_check_in": 0}
+
+        with patch("director.extract_json", return_value=data):
+            with patch("director.content_or_empty", return_value="{}"):
+                result = director_evaluate("build X", ctx, "step_threshold", adapter)
+
+        assert result.next_check_in >= 1
+
+    def test_bad_json_returns_continue(self):
+        from unittest.mock import MagicMock, patch
+
+        adapter = MagicMock()
+        ctx = _eval_ctx()
+
+        with patch("director.extract_json", return_value=None):
+            with patch("director.content_or_empty", return_value="not json"):
+                result = director_evaluate("build X", ctx, "step_threshold", adapter)
+
+        assert result.action == "continue"
+
+    def test_adapter_exception_returns_continue(self):
+        from unittest.mock import MagicMock
+
+        adapter = MagicMock()
+        adapter.complete.side_effect = RuntimeError("network error")
+        ctx = _eval_ctx()
+
+        result = director_evaluate("build X", ctx, "verify_failure", adapter)
+        assert result.action == "continue"
