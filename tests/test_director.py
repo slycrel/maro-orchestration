@@ -879,19 +879,45 @@ class TestDirectorEvaluate:
         # director_evaluate itself does NOT clamp replan — agent_loop does
         assert result.action == "replan"
 
-    def test_restart_and_escalate_clamped_to_continue(self):
-        """restart and escalate (Phase C) are not yet wired — clamp to continue."""
+    def test_restart_returns_restart_with_context(self):
+        """restart action is now wired (Phase C)."""
         from unittest.mock import MagicMock, patch
 
         adapter = MagicMock()
         ctx = _eval_ctx()
+        data = {
+            "action": "restart",
+            "reasoning": "approach is fundamentally wrong",
+            "restart_context": "tried X, learned Y, need fresh start with Z",
+            "next_check_in": 3,
+        }
 
-        for disallowed_action in ("restart", "escalate"):
-            data = {"action": disallowed_action, "reasoning": "whatever", "next_check_in": 1}
-            with patch("director.extract_json", return_value=data):
-                with patch("director.content_or_empty", return_value="{}"):
-                    result = director_evaluate("build X", ctx, "stuck", adapter)
-            assert result.action == "continue", f"{disallowed_action} should be clamped"
+        with patch("director.extract_json", return_value=data):
+            with patch("director.content_or_empty", return_value="{}"):
+                result = director_evaluate("build X", ctx, "stuck", adapter)
+
+        assert result.action == "restart"
+        assert result.restart_context == "tried X, learned Y, need fresh start with Z"
+
+    def test_escalate_returns_escalate_with_question(self):
+        """escalate action is now wired (Phase C)."""
+        from unittest.mock import MagicMock, patch
+
+        adapter = MagicMock()
+        ctx = _eval_ctx()
+        data = {
+            "action": "escalate",
+            "reasoning": "conflicting goals",
+            "user_question": "Should we prioritize X or Y?",
+            "next_check_in": 3,
+        }
+
+        with patch("director.extract_json", return_value=data):
+            with patch("director.content_or_empty", return_value="{}"):
+                result = director_evaluate("build X", ctx, "verify_failure", adapter)
+
+        assert result.action == "escalate"
+        assert result.user_question == "Should we prioritize X or Y?"
 
     def test_next_check_in_clamped_to_minimum_1(self):
         from unittest.mock import MagicMock, patch

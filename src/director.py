@@ -1354,28 +1354,39 @@ _ADAPTIVE_SYSTEM = textwrap.dedent("""\
     You are the Director evaluating mid-execution state for a running agent loop.
 
     Available actions:
-    - "continue" — current approach is fine, proceed
-    - "adjust"   — tactically revise remaining steps based on discoveries (sharpening)
-    - "replan"   — current approach has strategic problems; step back and describe a better one
+    - "continue"  — current approach is fine, proceed
+    - "adjust"    — tactically revise remaining steps based on discoveries (sharpening)
+    - "replan"    — current approach has strategic problems; step back and describe a better one
+    - "restart"   — current work is not worth preserving; start fresh with what was learned
+    - "escalate"  — human decision required; you cannot resolve this autonomously
 
-    Choose "replan" only when the overall approach is wrong — not just the next steps.
-    "adjust" is for tactical corrections; "replan" is for strategic course changes.
-    When the convergence budget is 0, you MUST return "continue" (no more replans allowed).
+    Decision guidelines:
+    - Choose "adjust" for tactical corrections: wrong next steps, missed edge case.
+    - Choose "replan" for strategic course changes: fundamentally wrong approach.
+    - Choose "restart" only when completed work is counterproductive (not just insufficient).
+    - Choose "escalate" only for genuine decision points: conflicting goals, irreversible
+      actions, or deep ambiguity that cannot be resolved from context alone.
+    - Default is autonomous. Escalate sparingly.
+    - When the convergence budget is 0, you MUST return "continue" (no more replans/restarts).
 
-    Rules:
+    Field rules:
     - "adjust": provide revised_steps replacing the remaining tail. Minimal changes only.
-      Empty or missing revised_steps on "adjust" falls back to "continue".
-    - "replan": provide new_approach — a concise narrative (1–3 sentences) describing
-      the better strategy. Do NOT provide steps — the planner will generate them.
-    - "continue": revised_steps and new_approach may be omitted.
+      Empty or missing revised_steps falls back to "continue".
+    - "replan": provide new_approach — 1–3 sentences describing the better strategy.
+      Do NOT provide steps — the planner generates them.
+    - "restart": provide restart_context — what was learned and why fresh start is needed.
+    - "escalate": provide user_question — the specific question for the human.
+    - "continue": all optional fields may be omitted.
     - next_check_in: steps before next mandatory check (integer, 1–10, default 3).
 
     Respond with JSON only:
     {
-      "action": "continue" | "adjust" | "replan",
+      "action": "continue" | "adjust" | "replan" | "restart" | "escalate",
       "reasoning": "one sentence",
       "revised_steps": ["step 1", "step 2", ...],
       "new_approach": "narrative description of better strategy",
+      "restart_context": "what was learned; why starting fresh",
+      "user_question": "specific question for the human",
       "next_check_in": 3
     }
 """).strip()
@@ -1481,8 +1492,8 @@ def director_evaluate(
             return _continue
 
         raw_action = safe_str(data.get("action", "continue")).lower().strip()
-        # Clamp to supported actions (restart/escalate deferred to Phase C)
-        action = raw_action if raw_action in ("continue", "adjust", "replan") else "continue"
+        _valid_actions = ("continue", "adjust", "replan", "restart", "escalate")
+        action = raw_action if raw_action in _valid_actions else "continue"
 
         reasoning = safe_str(data.get("reasoning", ""))
 
@@ -1493,6 +1504,8 @@ def director_evaluate(
 
         revised_steps: Optional[List[str]] = None
         new_approach: Optional[str] = None
+        restart_context: Optional[str] = None
+        user_question: Optional[str] = None
 
         if action == "adjust":
             raw_steps = safe_list(data.get("revised_steps"), element_type=str)
@@ -1500,15 +1513,20 @@ def director_evaluate(
             if not revised_steps:
                 # Empty revised_steps on adjust → treat as continue (per design spec)
                 action = "continue"
-
         elif action == "replan":
             new_approach = safe_str(data.get("new_approach", "")) or None
+        elif action == "restart":
+            restart_context = safe_str(data.get("restart_context", "")) or None
+        elif action == "escalate":
+            user_question = safe_str(data.get("user_question", "")) or None
 
         decision = DirectorDecision(
             action=action,
             reasoning=reasoning,
             revised_steps=revised_steps,
             new_approach=new_approach,
+            restart_context=restart_context,
+            user_question=user_question,
             next_check_in=next_check_in,
         )
         log.info(

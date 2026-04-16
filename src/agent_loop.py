@@ -268,6 +268,7 @@ class LoopContext:
     director_budget_ceiling: int = 2
 
     step_callback: Optional[Callable] = None
+    channel: Any = None  # Optional ConversationChannel for mid-loop escalation (Phase 64C)
     interrupt_queue: Any = None
     hook_registry: Any = None
     perm_ctx: Any = None
@@ -3468,6 +3469,7 @@ def run_agent_loop(
     permission_context=None,
     continuation_depth: int = 0,
     preset_steps: Optional[List[str]] = None,
+    channel=None,  # Optional ConversationChannel for mid-loop escalation (Phase 64C)
 ) -> LoopResult:
     """Run the autonomous loop for a goal.
 
@@ -3521,6 +3523,8 @@ def run_agent_loop(
     )
     if _early_return is not None:
         return _early_return
+
+    ctx.channel = channel  # Phase 64C: mid-loop escalation channel
 
     # Re-import lazy deps used by subsequent phases (same lazy-import pattern)
     from llm import LLMMessage, LLMTool, build_adapter, MODEL_CHEAP, MODEL_MID, MODEL_POWER
@@ -4136,6 +4140,42 @@ def run_agent_loop(
                         except Exception as _ae_replan_exc:
                             log.debug("adaptive replan (stuck) planner call failed: %s",
                                       _ae_replan_exc)
+                    elif _ae_decision.action == "restart":
+                        # Break with restart status — handle.py detects and re-runs
+                        _ae_restart_ctx = (
+                            _ae_decision.restart_context or _ae_decision.reasoning
+                        )
+                        ctx.director_replan_count += 1  # restart counts toward budget
+                        loop_status = "restart"
+                        stuck_reason = _ae_restart_ctx
+                        log.info("adaptive [stuck/restart]: breaking loop "
+                                 "(replan %d/%d) — %s",
+                                 ctx.director_replan_count, ctx.director_budget_ceiling,
+                                 _ae_restart_ctx[:100])
+                        if verbose:
+                            print(f"[poe] adaptive restart (stuck) — "
+                                  f"{_ae_restart_ctx[:80]}", file=sys.stderr, flush=True)
+                        break
+                    elif _ae_decision.action == "escalate":
+                        _ae_question = _ae_decision.user_question or _ae_decision.reasoning
+                        if ctx.channel is not None:
+                            try:
+                                _ae_reply = ctx.channel.ask(_ae_question)
+                                if _ae_reply:
+                                    _next_step_injected_context = (
+                                        f"Director asked: {_ae_question}\n"
+                                        f"User replied: {_ae_reply}"
+                                    )
+                                    log.info("adaptive [stuck/escalate]: got user reply "
+                                             "(%d chars)", len(_ae_reply))
+                            except Exception as _esc_exc:
+                                log.debug("adaptive escalate channel.ask failed: %s",
+                                          _esc_exc)
+                        else:
+                            log.info("adaptive [stuck/escalate]: no channel — "
+                                     "logging question: %s", _ae_question[:150])
+                        stuck_streak = 0
+                        continue
                 except Exception as _ae_exc:
                     log.debug("adaptive execution (stuck trigger) error: %s", _ae_exc)
 
@@ -4440,11 +4480,51 @@ def run_agent_loop(
                         except Exception as _ae2_replan_exc:
                             log.debug("adaptive replan (%s) planner call failed: %s",
                                       _ae2_trigger, _ae2_replan_exc)
+                    elif _ae2_decision.action == "restart":
+                        _ae2_restart_ctx = (
+                            _ae2_decision.restart_context or _ae2_decision.reasoning
+                        )
+                        ctx.director_replan_count += 1
+                        loop_status = "restart"
+                        stuck_reason = _ae2_restart_ctx
+                        log.info("adaptive [%s/restart]: breaking loop "
+                                 "(replan %d/%d) — %s",
+                                 _ae2_trigger,
+                                 ctx.director_replan_count, ctx.director_budget_ceiling,
+                                 _ae2_restart_ctx[:100])
+                        if verbose:
+                            print(f"[poe] adaptive restart ({_ae2_trigger}) — "
+                                  f"{_ae2_restart_ctx[:80]}", file=sys.stderr, flush=True)
+                    elif _ae2_decision.action == "escalate":
+                        _ae2_question = (
+                            _ae2_decision.user_question or _ae2_decision.reasoning
+                        )
+                        if ctx.channel is not None:
+                            try:
+                                _ae2_reply = ctx.channel.ask(_ae2_question)
+                                if _ae2_reply:
+                                    _next_step_injected_context = (
+                                        f"Director asked: {_ae2_question}\n"
+                                        f"User replied: {_ae2_reply}"
+                                    )
+                                    log.info("adaptive [%s/escalate]: got user reply "
+                                             "(%d chars)", _ae2_trigger, len(_ae2_reply))
+                            except Exception as _esc2_exc:
+                                log.debug("adaptive escalate channel.ask failed: %s",
+                                          _esc2_exc)
+                        else:
+                            log.info("adaptive [%s/escalate]: no channel — "
+                                     "logging question: %s", _ae2_trigger,
+                                     _ae2_question[:150])
                     else:
                         log.info("adaptive [%s/continue]: %s",
                                  _ae2_trigger, _ae2_decision.reasoning[:100])
                 except Exception as _ae2_exc:
                     log.debug("adaptive execution error: %s", _ae2_exc)
+
+        # Restart break — must be outside the adaptive try/except block
+        if loop_status == "restart":
+            break
 
         # Carry injected context forward to next step
         _next_step_injected_context = _step_injected_context

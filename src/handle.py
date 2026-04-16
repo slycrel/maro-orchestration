@@ -752,8 +752,36 @@ def handle(
         if _extra_ctx_parts:
             _loop_kwargs["ancestry_context_extra"] = "\n\n".join(_extra_ctx_parts)
 
+        if channel is not None:
+            _loop_kwargs["channel"] = channel
+
         loop_result = run_agent_loop(message, **_loop_kwargs)
         elapsed = int((time.monotonic() - started_at) * 1000)
+
+        # Director restart: loop broke with restart status — re-run with restart context.
+        # continuation_depth increment prevents infinite restart loops.
+        if (loop_result.status == "restart"
+                and not dry_run
+                and _loop_kwargs.get("continuation_depth", 0) < 3):
+            try:
+                _restart_ctx = loop_result.stuck_reason or "Director requested restart."
+                _restart_ancestry = (
+                    _loop_kwargs.get("ancestry_context_extra", "")
+                    + f"\n\n== Director restart context ==\n{_restart_ctx}\n== End restart context =="
+                ).strip()
+                _restart_kwargs = dict(_loop_kwargs)
+                _restart_kwargs["ancestry_context_extra"] = _restart_ancestry
+                _restart_kwargs["continuation_depth"] = (
+                    _loop_kwargs.get("continuation_depth", 0) + 1
+                )
+                log.info("handle: director restart (depth %d) — %s",
+                         _restart_kwargs["continuation_depth"], _restart_ctx[:80])
+                if channel is not None:
+                    channel.emit("restart", text=f"Director restart: {_restart_ctx[:200]}")
+                loop_result = run_agent_loop(message, **_restart_kwargs)
+                elapsed = int((time.monotonic() - started_at) * 1000)
+            except Exception as _rst_exc:
+                log.warning("handle: restart re-run failed: %s", _rst_exc)
 
         # Director closure check — verify the goal was actually achieved
         # Runs after the loop declares "done"; emits verification/needs_work events
@@ -782,6 +810,10 @@ def handle(
                 if loop_result.status == "stuck":
                     _stuck_reason = getattr(loop_result, "stuck_reason", None) or "no further progress possible"
                     channel.emit("stuck", text=f"Loop got stuck after {len(loop_result.steps)} steps: {_stuck_reason}")
+                elif loop_result.status == "restart":
+                    # restart re-run failed or depth exceeded — treat as stuck
+                    _rst_reason = getattr(loop_result, "stuck_reason", None) or "restart limit reached"
+                    channel.emit("stuck", text=f"Director restart loop exhausted: {_rst_reason}")
                 elif loop_result.status not in ("done", "complete"):
                     channel.emit("error", text=f"Loop ended with status: {loop_result.status}")
                 channel.complete(_result_summary)
