@@ -2,9 +2,23 @@
 
 What to do next, in what order. Updated each session. Strategic phases live in ROADMAP.md; deferred ideas live in BACKLOG.md. This file is the bridge — the executable queue.
 
-Last updated: 2026-04-16 (session 34 — Phase 65 proposal documented + reviewed, existing-systems audit in flight)
+Last updated: 2026-04-16 (session 34 — Phase 65 MVE shipped; scope generation live, A/B-ready)
 
 ---
+
+## Done (session 34, 2026-04-16 — Phase 65 MVE: scope generation shipped)
+
+- [x] **Concept renamed to "scope"** (Jeremy's call) — captures both what IS and what IS NOT in the bounded space; complements specs naturally; avoids collision with `src/constraint.py`.
+- [x] **`src/scope.py`** — `ScopeSet` dataclass + `generate_scope()` function + `_parse_scope_markdown` parser + `inject_scope_into_context` helper. Single-call inversion via generalist prompt asking for failure modes + derived in-scope/out-of-scope. Non-fatal: returns `None` on any failure.
+- [x] **Inversion prompt** — demands goal-specific failure modes (not generic "bug risk" items). Verified against a real adapter: "Build a safe websocket server for a text adventure game" produced 7 concrete failure modes (unauthenticated messages, unbounded size, race conditions, resource leaks, command injection, rate limiting, token leaks) + 5 in-scope + 5 out-of-scope. Output specificity addresses the review's concern that LLM inversion would be generic.
+- [x] **`handle.py` integration** — scope generation fires after clarity check, before `run_agent_loop`. Scope markdown injected into `ancestry_context_extra`; artifact written to `~/.poe/workspace/projects/<slug>/artifacts/scope.md`. Verified end-to-end (scope.md landed in the correct project directory with correct format).
+- [x] **Config flags** (`~/.poe/config.yml`):
+  - `scope_generation: true` — master enable (default false)
+  - `scope_ab_skip: true` — A/B paired control: scope is generated and recorded but NOT injected (for comparison runs)
+- [x] **`[scope-deferred]` markers** at every punted decision — triad (single generalist used), human gate (no approval UX), enforcement (injected not checked), lifecycle (immutable after set), retrieval (full-block injection), cross-goal memory (recorded but not retrieved), ab-skip path. Searchable via `grep "scope-deferred"` when expanding later.
+- [x] **19 tests** in `test_scope.py` covering ScopeSet, parser edge cases (heading variants, asterisk bullets, garbage input), generator non-fatal paths, and deferred-marker emission. Full suite: 4,341 passing (up from 4,322).
+- [x] **Config system bug fixed** — `scope_generation` was being read from `user/CONFIG.md` (in-repo) instead of `~/.poe/config.yml` (user-global). Switched to `config.get()` matching `adaptive_execution`'s pattern.
+- [x] **Project slug derivation fixed** — when `handle()` is called via CLI with `project=None`, scope artifact path now derives the slug via `_goal_to_slug()` (same as `run_agent_loop`), so scope.md lands in the correct project dir.
 
 ## Done (session 34, 2026-04-16 — Phase 65 proposal: constraint/premise orchestration)
 
@@ -16,10 +30,13 @@ Last updated: 2026-04-16 (session 34 — Phase 65 proposal documented + reviewed
 
 ## Next Up
 
-- **Phase 65 existing-systems audit** — IN FLIGHT (background agent). Mapping what already exists in pre_flight / constraint.py / inspector / director / persona / memory layer that overlaps with Phase 65 design. Likely finding: much of the proposed machinery has primitive forms already present.
-- **Phase 65 minimum experiment** — per review: one inversion call before `planner.decompose()`, recorded with plan, A/B on ~20 goals. Only after audit + rename decided + A/B mechanism designed.
-- **Phase 65 rename** — `constraint` is taken; strawman "premise" (e.g. `goal_premises`, `generate_premises()`). Decision before any code lands.
-- **Verification with ground-truth feedback** — sibling concern to Phase 65; the review's sharpest point is that constraint-setting alone doesn't address "nobody ran a browser." Needs its own design.
+- **Phase 65 A/B corpus run** — scope generation is live and default-on in `~/.poe/config.yml`. Run a spread of real goals (research + code + analysis, ~20 total) with `scope_ab_skip` toggled across paired runs. Measure: plan quality, token cost, step count to completion, verification outcome. If positive signal: extend toward triad, lifecycle, retrieval per the full design. If negative: the design doc becomes informational.
+- **Verification with ground-truth feedback** — sibling concern to Phase 65; the review's sharpest point was that scope alone doesn't address "nobody ran a browser." Needs its own design. Likely a separate phase.
+- **Phase 65 expansion triggers** (hold until A/B data is in):
+  - Triad (PM/engineer/architect) — ablate against single-generalist to confirm different constraint lines
+  - Human gate UX for interactive/channel paths
+  - Violation detection at step level (mechanical → structural → semantic)
+  - Constraint lifecycle (revise/except/break) hooked into director_evaluate
 - **Phase 64D** — memory layer: record approach + outcome per goal type; director uses history to select initial approach. Deferred until Phase A/B/C generate operational data.
 - **Closure check unification** (Phase C leftover) — `director_evaluate(trigger="closure")` wraps `verify_goal_completion`; `ClosureVerdict` retired. Low-priority code hygiene.
 - **Evolver confidence calibration follow-up** — `scan_suggestion_outcomes` wired; verify calibration is improving. Heartbeat stopped since Apr 7-9 token burn — no new data until restarted.
