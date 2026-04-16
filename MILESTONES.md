@@ -2,7 +2,21 @@
 
 What to do next, in what order. Updated each session. Strategic phases live in ROADMAP.md; deferred ideas live in BACKLOG.md. This file is the bridge — the executable queue.
 
-Last updated: 2026-04-16 (session 34 — closure gate + correspondence retrieval)
+Last updated: 2026-04-16 (session 34 — closure gate + correspondence retrieval + synthesize_skill 3-gate)
+
+---
+
+## Done (session 34, 2026-04-16 — `synthesize_skill()` 3-gate pre-promotion check)
+
+BACKLOG item (P7/10, Claude Skills quality bar) — wired into `evolver.synthesize_skill()` before persistence. Three gates run in sequence; a skill that fails any gate is discarded with a logged reason. All gates execute at synthesis time with no new infrastructure.
+
+- [x] **Trigger precision gate** — rejects patterns that fire on a fixed 10-goal off-target corpus. `_TRIGGER_PRECISION_MAX_HITS=3`: if any single pattern matches ≥3 off-target goals it's too generic and would steal matches from better skills. `_TRIGGER_MIN_LEN=4` also rejects stubs like "the" / "and" / "do".
+- [x] **Output schema gate** — requires a non-empty `expected_outputs` list in the LLM response, forcing the LLM to declare the concrete artifacts the skill produces.
+- [x] **Edge case coverage gate** — requires ≥`_MIN_EDGE_CASES=3` distinct non-empty entries in the `edge_cases` list, so the LLM has to articulate adversarial/boundary conditions up front.
+- [x] **Prompt updated** — `_SYNTHESIZE_SYSTEM` now asks for `expected_outputs` and `edge_cases` fields with concrete examples and a precision rule on triggers ("NOT generic words that would match unrelated goals").
+- [x] **15 new tests** in `test_evolver.py`: 5 tests per gate (each reject path + accept path), 4 end-to-end synthesize_skill rejection tests (one per gate + all-pass reference). Existing `_SynthesisAdapter` fixture extended with the new fields so all prior tests still pass. Full suite green.
+
+Source: @av1dlive / @eng_khairallah1 via the Anthropic engineers' Claude Skills quality bar (80K+ skills most poorly built — these three gates were cited as the highest-leverage filters).
 
 ---
 

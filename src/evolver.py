@@ -2331,14 +2331,114 @@ Output ONLY valid JSON with these keys:
   "name": "<short snake_case skill name, e.g. web_research_summarise>",
   "description": "<one sentence describing what this skill does>",
   "trigger_patterns": ["<2-5 short keyword phrases that should trigger this skill>"],
-  "steps_template": ["<step 1>", "<step 2>", "<step 3>"]
+  "steps_template": ["<step 1>", "<step 2>", "<step 3>"],
+  "expected_outputs": ["<artifact or result 1>", "<artifact or result 2>"],
+  "edge_cases": ["<adversarial case 1>", "<adversarial case 2>", "<adversarial case 3>"]
 }
 Rules:
 - 2-5 steps, each concrete and actionable
-- trigger_patterns should be distinct phrases likely found in similar goal strings
+- trigger_patterns should be SPECIFIC — distinct phrases found in this goal type,
+  NOT generic words that would match unrelated goals (e.g. "and", "do", "task")
 - description must be one sentence
 - name must be unique and descriptive (snake_case)
+- expected_outputs: 1-3 concrete artifacts or results the skill produces
+- edge_cases: at least 3 adversarial or boundary cases the skill should handle
+  (e.g. "empty input", "timeout mid-way", "ambiguous goal wording")
 """
+
+
+# -----------------------------------------------------------------------------
+# 3-gate pre-promotion quality check (BACKLOG item, 2026-04-14)
+# Source: Anthropic engineers' Claude Skills quality bar. Three failure modes:
+#   (1) trigger precision — must not fire on off-target inputs
+#   (2) output schema — must declare what it produces
+#   (3) edge case coverage — must articulate adversarial cases
+# Run in synthesize_skill() before persistence. A skill that fails any gate
+# is discarded with a logged reason; the alternative is polluting the skill
+# library with generic-trigger skills that steal matches from better ones.
+# -----------------------------------------------------------------------------
+
+# Fixed corpus of generic goals spanning the solution space. Any trigger
+# pattern that matches too many of these is too generic to be useful.
+_OFF_TARGET_CORPUS = (
+    "write a blog post about AI safety",
+    "fix the failing CI pipeline",
+    "deploy the new database migration",
+    "review yesterday's grafana dashboards",
+    "update the README with new install instructions",
+    "send a status email to the team",
+    "schedule a follow-up meeting",
+    "create a quarterly OKR report",
+    "investigate the auth bug in staging",
+    "post a tweet about the release",
+)
+
+# If any single trigger matches this many off-target goals, precision fails.
+_TRIGGER_PRECISION_MAX_HITS = 3
+# Triggers shorter than this are almost always too generic.
+_TRIGGER_MIN_LEN = 4
+# Minimum edge cases the LLM must articulate.
+_MIN_EDGE_CASES = 3
+
+
+def _gate_trigger_precision(
+    trigger_patterns: List[str],
+    off_target: tuple = _OFF_TARGET_CORPUS,
+) -> tuple:
+    """Reject skills whose triggers fire on generic off-target goals.
+
+    Uses the same substring-match logic as skills.find_matching_skills, so
+    this gate models real-world match behavior rather than approximating it.
+    Returns (passed, reason).
+    """
+    if not trigger_patterns:
+        return False, "no trigger_patterns"
+    for pattern in trigger_patterns:
+        p = (pattern or "").strip().lower()
+        if len(p) < _TRIGGER_MIN_LEN:
+            return False, f"trigger {pattern!r} too short (<{_TRIGGER_MIN_LEN} chars)"
+        hits = sum(
+            1 for goal in off_target
+            if p in goal.lower() or goal.lower() in p
+        )
+        if hits >= _TRIGGER_PRECISION_MAX_HITS:
+            return False, (
+                f"trigger {pattern!r} matched {hits}/{len(off_target)} off-target goals "
+                f"(threshold {_TRIGGER_PRECISION_MAX_HITS})"
+            )
+    return True, ""
+
+
+def _gate_output_schema(parsed: dict) -> tuple:
+    """Reject skills that don't declare what they produce.
+
+    Requires `expected_outputs` as a non-empty list of non-empty strings.
+    Returns (passed, reason).
+    """
+    raw = parsed.get("expected_outputs")
+    if not isinstance(raw, list) or not raw:
+        return False, "expected_outputs missing or not a list"
+    outputs = [str(o).strip() for o in raw if str(o).strip()]
+    if not outputs:
+        return False, "expected_outputs empty after filtering blanks"
+    return True, ""
+
+
+def _gate_edge_case_coverage(parsed: dict) -> tuple:
+    """Reject skills that don't articulate enough adversarial cases.
+
+    Requires `edge_cases` to contain at least _MIN_EDGE_CASES distinct
+    non-empty strings. Returns (passed, reason).
+    """
+    raw = parsed.get("edge_cases")
+    if not isinstance(raw, list):
+        return False, "edge_cases missing or not a list"
+    cases = {str(c).strip().lower() for c in raw if str(c).strip()}
+    if len(cases) < _MIN_EDGE_CASES:
+        return False, (
+            f"edge_cases has {len(cases)} distinct entries (need {_MIN_EDGE_CASES})"
+        )
+    return True, ""
 
 
 def synthesize_skill(
@@ -2408,6 +2508,28 @@ def synthesize_skill(
 
     if not name or not description or not steps_template:
         return None
+
+    # 3-gate pre-promotion quality check (see _gate_* helpers above).
+    # Run before the injection guard so we don't spend guard cycles on
+    # structurally-bad skills that would fail anyway.
+    _gates = (
+        ("trigger_precision", _gate_trigger_precision(trigger_patterns)),
+        ("output_schema", _gate_output_schema(parsed)),
+        ("edge_case_coverage", _gate_edge_case_coverage(parsed)),
+    )
+    for _gate_name, (_passed, _reason) in _gates:
+        if not _passed:
+            log.info(
+                "synthesize_skill: gate %s rejected skill %r: %s",
+                _gate_name, name, _reason,
+            )
+            if verbose:
+                print(
+                    f"[evolver] synthesize_skill: {_gate_name} gate failed for "
+                    f"'{name}' — {_reason}",
+                    file=sys.stderr,
+                )
+            return None
 
     # Injection guard: scan LLM-generated skill content before persisting
     try:

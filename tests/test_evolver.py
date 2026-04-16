@@ -710,17 +710,26 @@ from evolver import synthesize_skill
 
 
 class _SynthesisAdapter:
-    """Returns a well-formed skill JSON."""
+    """Returns a well-formed skill JSON that passes all 3 gates."""
     def complete(self, messages, **kwargs):
         result = MagicMock()
         result.content = json.dumps({
             "name": "web_search_summarize",
             "description": "Search the web and summarize results for a given topic.",
-            "trigger_patterns": ["search and summarize", "web research", "look up"],
+            "trigger_patterns": ["search and summarize", "web research", "look up topic"],
             "steps_template": [
                 "Search for the topic using a web search tool",
                 "Extract the top 3 relevant results",
                 "Summarize the findings in 2-3 sentences",
+            ],
+            "expected_outputs": [
+                "a 2-3 sentence summary paragraph",
+                "a list of 3 source URLs",
+            ],
+            "edge_cases": [
+                "search returns zero results",
+                "search times out mid-query",
+                "all results are paywalled or unreadable",
             ],
         })
         return result
@@ -828,6 +837,199 @@ def test_synthesize_skill_sets_source_loop_id(tmp_path):
         )
     assert skill is not None
     assert "loop42" in skill.source_loop_ids
+
+
+# ===========================================================================
+# 3-gate pre-promotion quality checks
+# ===========================================================================
+
+from evolver import (
+    _gate_trigger_precision,
+    _gate_output_schema,
+    _gate_edge_case_coverage,
+    _OFF_TARGET_CORPUS,
+    _MIN_EDGE_CASES,
+)
+
+
+class TestTriggerPrecisionGate:
+    def test_rejects_empty_patterns(self):
+        passed, reason = _gate_trigger_precision([])
+        assert passed is False
+        assert "no trigger_patterns" in reason
+
+    def test_rejects_too_short_pattern(self):
+        passed, reason = _gate_trigger_precision(["ok"])
+        assert passed is False
+        assert "too short" in reason
+
+    def test_rejects_generic_pattern_that_matches_corpus(self):
+        # "status report" appears in every off-target — should fail precision
+        corpus = (
+            "draft a status report for Monday",
+            "email a status report to finance",
+            "compile the weekly status report",
+            "archive last month's status report",
+            "review yesterday's grafana dashboards",
+        )
+        passed, reason = _gate_trigger_precision(
+            ["status report"], off_target=corpus
+        )
+        assert passed is False
+        assert "off-target" in reason
+
+    def test_rejects_when_any_one_pattern_is_generic(self):
+        # Mixing a specific trigger with a bad one still fails — a single
+        # generic trigger is enough to steal matches from better skills.
+        corpus = (
+            "draft a status report",
+            "email a status report",
+            "compile status report",
+        )
+        passed, reason = _gate_trigger_precision(
+            ["polymarket edge scan", "status report"], off_target=corpus
+        )
+        assert passed is False
+
+    def test_accepts_specific_patterns(self):
+        passed, reason = _gate_trigger_precision(
+            ["search and summarize", "web research", "look up topic"]
+        )
+        assert passed is True, reason
+
+    def test_accepts_domain_specific_jargon(self):
+        passed, reason = _gate_trigger_precision(
+            ["polymarket edge scan", "edge ledger update"]
+        )
+        assert passed is True, reason
+
+
+class TestOutputSchemaGate:
+    def test_rejects_missing_expected_outputs(self):
+        passed, reason = _gate_output_schema({})
+        assert passed is False
+        assert "expected_outputs" in reason
+
+    def test_rejects_empty_list(self):
+        passed, reason = _gate_output_schema({"expected_outputs": []})
+        assert passed is False
+
+    def test_rejects_non_list(self):
+        passed, reason = _gate_output_schema({"expected_outputs": "just a string"})
+        assert passed is False
+
+    def test_rejects_list_of_blanks(self):
+        passed, reason = _gate_output_schema({"expected_outputs": ["", "  ", ""]})
+        assert passed is False
+        assert "blanks" in reason
+
+    def test_accepts_non_empty_list(self):
+        passed, reason = _gate_output_schema(
+            {"expected_outputs": ["a summary paragraph", "3 source URLs"]}
+        )
+        assert passed is True
+
+
+class TestEdgeCaseCoverageGate:
+    def test_rejects_missing_edge_cases(self):
+        passed, reason = _gate_edge_case_coverage({})
+        assert passed is False
+
+    def test_rejects_too_few_edge_cases(self):
+        passed, reason = _gate_edge_case_coverage(
+            {"edge_cases": ["empty input", "timeout"]}
+        )
+        assert passed is False
+        assert str(_MIN_EDGE_CASES) in reason
+
+    def test_rejects_duplicate_edge_cases(self):
+        # Distinct count is what matters — 3 copies of the same case = 1 distinct
+        passed, reason = _gate_edge_case_coverage(
+            {"edge_cases": ["empty input", "empty input", "empty input"]}
+        )
+        assert passed is False
+
+    def test_accepts_three_distinct_cases(self):
+        passed, reason = _gate_edge_case_coverage({
+            "edge_cases": [
+                "search returns zero results",
+                "search times out mid-query",
+                "all results are paywalled",
+            ]
+        })
+        assert passed is True
+
+
+class _GateFailingAdapter:
+    """Adapter factory: produces skills that fail specific gates."""
+    def __init__(self, *, triggers=None, expected_outputs=None, edge_cases=None):
+        self._triggers = triggers
+        self._expected_outputs = expected_outputs
+        self._edge_cases = edge_cases
+
+    def complete(self, messages, **kwargs):
+        result = MagicMock()
+        payload = {
+            "name": "failing_skill",
+            "description": "A skill designed to trip a specific gate.",
+            "trigger_patterns": self._triggers
+            if self._triggers is not None
+            else ["search and summarize", "web research", "look up topic"],
+            "steps_template": ["step one", "step two"],
+            "expected_outputs": self._expected_outputs
+            if self._expected_outputs is not None
+            else ["a summary"],
+            "edge_cases": self._edge_cases
+            if self._edge_cases is not None
+            else ["empty input", "timeout", "ambiguous wording"],
+        }
+        result.content = json.dumps(payload)
+        return result
+
+
+def test_synthesize_skill_rejects_generic_trigger(tmp_path):
+    """A skill whose trigger matches off-target goals is discarded."""
+    adapter = _GateFailingAdapter(triggers=["the", "and", "do"])
+    with patch("skills._skills_path", return_value=tmp_path / "skills.jsonl"):
+        skill = synthesize_skill(
+            goal="something", outcome_summary="done",
+            adapter=adapter, dry_run=True,
+        )
+    assert skill is None
+
+
+def test_synthesize_skill_rejects_missing_expected_outputs(tmp_path):
+    """A skill that omits expected_outputs is discarded."""
+    adapter = _GateFailingAdapter(expected_outputs=[])
+    with patch("skills._skills_path", return_value=tmp_path / "skills.jsonl"):
+        skill = synthesize_skill(
+            goal="something", outcome_summary="done",
+            adapter=adapter, dry_run=True,
+        )
+    assert skill is None
+
+
+def test_synthesize_skill_rejects_insufficient_edge_cases(tmp_path):
+    """A skill that lists fewer than _MIN_EDGE_CASES is discarded."""
+    adapter = _GateFailingAdapter(edge_cases=["only one"])
+    with patch("skills._skills_path", return_value=tmp_path / "skills.jsonl"):
+        skill = synthesize_skill(
+            goal="something", outcome_summary="done",
+            adapter=adapter, dry_run=True,
+        )
+    assert skill is None
+
+
+def test_synthesize_skill_all_gates_pass_when_well_formed(tmp_path):
+    """The reference adapter yields a skill that survives all 3 gates."""
+    with patch("skills._skills_path", return_value=tmp_path / "skills.jsonl"):
+        skill = synthesize_skill(
+            goal="search and summarize recent news",
+            outcome_summary="done",
+            adapter=_SynthesisAdapter(),
+            dry_run=True,
+        )
+    assert skill is not None
 
 
 # ---------------------------------------------------------------------------
