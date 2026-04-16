@@ -140,7 +140,7 @@ class LoopResult:
     loop_id: str
     project: str
     goal: str
-    status: str          # "done" | "stuck" | "error" | "interrupted"
+    status: str          # "done" | "stuck" | "error" | "interrupted" | "restart"
     steps: List[StepOutcome] = field(default_factory=list)
     stuck_reason: Optional[str] = None
     total_tokens_in: int = 0

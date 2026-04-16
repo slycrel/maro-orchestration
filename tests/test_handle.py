@@ -688,3 +688,149 @@ class TestNowDirectorEscalation:
         # We verify _is_complex_directive correctly identifies the trigger condition
         complex_msg = "implement a full REST API with authentication and then deploy it to production"
         assert _is_complex_directive(complex_msg)
+
+
+# ---------------------------------------------------------------------------
+# Phase 64C: director restart re-run
+# ---------------------------------------------------------------------------
+
+class TestDirectorRestart:
+    """handle.py detects loop_result.status == 'restart' and re-runs with context."""
+
+    def _setup(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+
+    @staticmethod
+    def _no_quality_gate():
+        """Context manager that stubs quality gate to never escalate."""
+        from unittest.mock import patch, MagicMock
+        verdict = MagicMock()
+        verdict.escalate = False
+        verdict.contested_claims = []
+        return patch("quality_gate.run_quality_gate", return_value=verdict)
+
+    def _fake_loop_result(self, status="done", stuck_reason=None):
+        from agent_loop import LoopResult, StepOutcome
+        return LoopResult(
+            loop_id="test-lr",
+            project="test-proj",
+            goal="do the thing",
+            status=status,
+            stuck_reason=stuck_reason,
+            steps=[StepOutcome(index=0, text="step 1", status="done",
+                               result="output", iteration=0)],
+        )
+
+    def test_restart_status_triggers_rerun(self, monkeypatch, tmp_path):
+        """When loop returns 'restart', handle re-runs the loop with restart context."""
+        self._setup(monkeypatch, tmp_path)
+        from unittest.mock import patch
+
+        restart_result = self._fake_loop_result(
+            status="restart", stuck_reason="director: wrong approach, try X instead"
+        )
+        done_result = self._fake_loop_result(status="done")
+
+        call_count = {"n": 0}
+        def _fake_run(*args, **kwargs):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                return restart_result
+            return done_result
+
+        with patch("agent_loop.run_agent_loop", side_effect=_fake_run), \
+             patch("intent.check_goal_clarity", return_value={"clear": True}), \
+             self._no_quality_gate():
+            handle("do the thing", force_lane="agenda", dry_run=False)
+
+        assert call_count["n"] == 2, "loop should have been called twice"
+
+    def test_restart_injects_context_into_ancestry(self, monkeypatch, tmp_path):
+        """Restart re-run receives the restart_context in ancestry_context_extra."""
+        self._setup(monkeypatch, tmp_path)
+        from unittest.mock import patch
+
+        restart_result = self._fake_loop_result(
+            status="restart", stuck_reason="learned: X fails; try Y"
+        )
+        done_result = self._fake_loop_result(status="done")
+
+        calls = []
+        def _fake_run(*args, **kwargs):
+            calls.append(kwargs.copy())
+            if len(calls) == 1:
+                return restart_result
+            return done_result
+
+        with patch("agent_loop.run_agent_loop", side_effect=_fake_run), \
+             patch("intent.check_goal_clarity", return_value={"clear": True}), \
+             self._no_quality_gate():
+            handle("do the thing", force_lane="agenda", dry_run=False)
+
+        assert len(calls) == 2
+        restart_ancestry = calls[1].get("ancestry_context_extra", "")
+        assert "learned: X fails; try Y" in restart_ancestry
+        assert "Director restart context" in restart_ancestry
+
+    def test_restart_increments_continuation_depth(self, monkeypatch, tmp_path):
+        """Restart re-run has continuation_depth incremented by 1."""
+        self._setup(monkeypatch, tmp_path)
+        from unittest.mock import patch
+
+        restart_result = self._fake_loop_result(status="restart", stuck_reason="retry")
+        done_result = self._fake_loop_result(status="done")
+
+        calls = []
+        def _fake_run(*args, **kwargs):
+            calls.append(kwargs.copy())
+            if len(calls) == 1:
+                return restart_result
+            return done_result
+
+        with patch("agent_loop.run_agent_loop", side_effect=_fake_run), \
+             patch("intent.check_goal_clarity", return_value={"clear": True}), \
+             self._no_quality_gate():
+            handle("do the thing", force_lane="agenda", dry_run=False)
+
+        first_depth = calls[0].get("continuation_depth", 0)
+        second_depth = calls[1].get("continuation_depth", 0)
+        assert second_depth == first_depth + 1
+
+    def test_restart_depth_cap_prevents_infinite_loop(self, monkeypatch, tmp_path):
+        """Restart loop is capped at depth 3 — loop is not re-run beyond that."""
+        self._setup(monkeypatch, tmp_path)
+        from unittest.mock import patch
+
+        restart_result = self._fake_loop_result(status="restart", stuck_reason="retry forever")
+        calls = []
+
+        def _fake_run(*args, **kwargs):
+            calls.append(kwargs.copy())
+            return restart_result
+
+        with patch("agent_loop.run_agent_loop", side_effect=_fake_run), \
+             patch("intent.check_goal_clarity", return_value={"clear": True}), \
+             self._no_quality_gate():
+            handle("do the thing", force_lane="agenda", dry_run=False)
+
+        # initial + up to 3 restarts (cap at continuation_depth == 3)
+        assert len(calls) <= 4, f"restart loop ran {len(calls)} times, expected ≤4"
+
+    def test_done_result_no_restart(self, monkeypatch, tmp_path):
+        """'done' status does not trigger a restart re-run."""
+        self._setup(monkeypatch, tmp_path)
+        from unittest.mock import patch
+
+        done_result = self._fake_loop_result(status="done")
+        call_count = {"n": 0}
+
+        def _fake_run(*args, **kwargs):
+            call_count["n"] += 1
+            return done_result
+
+        with patch("agent_loop.run_agent_loop", side_effect=_fake_run), \
+             patch("intent.check_goal_clarity", return_value={"clear": True}), \
+             self._no_quality_gate():
+            handle("do the thing", force_lane="agenda", dry_run=False)
+
+        assert call_count["n"] == 1

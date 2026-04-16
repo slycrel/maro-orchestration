@@ -1434,8 +1434,8 @@ def director_evaluate(
     """Director mid-execution evaluation.
 
     Called from agent_loop on verify failure streak, step threshold, or stuck signal.
-    Supported actions: continue, adjust, replan. restart/escalate deferred to Phase C.
-    Budget enforcement (replan clamped to continue when budget exhausted) is in agent_loop.
+    Supported actions: continue, adjust, replan, restart, escalate.
+    Budget enforcement (replan/restart clamped to continue when budget exhausted) is in agent_loop.
 
     Non-fatal — returns 'continue' on any exception.
 

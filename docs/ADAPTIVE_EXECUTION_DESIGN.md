@@ -1,7 +1,7 @@
 # Adaptive Execution Design — Director as Persistent Supervisor
 
-**Status:** Design (pre-implementation, post-review)
-**Phase:** 64 candidate
+**Status:** Implemented (Phase A/B/C shipped 2026-04-15)
+**Phase:** 64
 **Context:** Emerged from slycrel-go port analysis — loop declared "done" after phase 1 of N, no structural mechanism to catch premature completion or adapt approach mid-run.
 
 ---
@@ -194,27 +194,33 @@ Phase B adds checks unconditionally when enabled. Phase C adds one call at closu
 
 ## Phased Build
 
-**Phase A (immediate):**
+**Phase A (shipped 2026-04-15):** ✓
 - `EvaluationContext` and `DirectorDecision` dataclasses
-- `director_evaluate()` function in `director.py` — Phase A only wires `continue` and `adjust`
-- Trigger in `agent_loop.py` on verify failure streak or step threshold
+- `director_evaluate()` in `director.py` — continue + adjust
+- Stuck trigger (inside `stuck_streak >= 2` before advisor) + verify-failure/step-threshold trigger (end of each iteration)
+- `LoopContext` gains `steps_since_last_check`, `director_replan_count`, `director_budget_ceiling`
 - Gated by `adaptive_execution` config flag (default off)
-- `director_replan_count` and `director_budget_ceiling` added to LoopContext but **inert** in Phase A — wired but not enforced until Phase B ships `replan`. No test coverage of budget enforcement in Phase A.
-- Tests
 
-**Phase B:**
-- Strategic threshold check every K steps
-- `ExecutionPlan` metadata struct + planner changes
-- Wire `replan` action
+**Phase B (shipped 2026-04-15):** ✓
+- `replan` action: director returns `new_approach` narrative → `planner.decompose()` called with context → fresh steps replace remaining tail
+- Budget enforcement: `director_replan_count >= director_budget_ceiling` → replan clamped to continue
+- Updated system prompt with replan guidance + budget-exhausted hint
+- `ExecutionPlan` struct deferred — `current_approach` field stays `""` until Phase D
 
-**Phase C:**
-- Wire `restart` and `escalate` actions
-- Unify `verify_goal_completion` → `director_evaluate(trigger="closure")`
-- `restart` re-entry with `continuation_depth` increment
+**Phase C (shipped 2026-04-15):** ✓
+- `restart` action: loop breaks with `loop_status="restart"`, `stuck_reason=restart_context`; handle.py re-runs with context injected as ancestry + `continuation_depth+1` (capped at 3)
+- `escalate` action: `ctx.channel.ask(user_question)` mid-loop; reply injected as next-step context; logs if no channel
+- `run_agent_loop` gains `channel=` param; handle.py passes channel for main AGENDA path
+- `restart` increments `director_replan_count` toward budget ceiling
+- Full 5-action system prompt with guidance for each action
+
+**Phase C leftover (deferred):**
+- Unify `verify_goal_completion` → `director_evaluate(trigger="closure")`; retire `ClosureVerdict`
 
 **Phase D:**
 - Memory layer: record approach + outcome per goal type
 - Director uses history to select initial approach
+- Introduce `ExecutionPlan` struct with `approach` + `phase` metadata
 
 ---
 

@@ -52,6 +52,34 @@ Key insight: the loop's "done" status means it ran out of steps it could take,
 not that the goal was satisfied. The director is the only entity that holds the
 original intent and should be the one signing off on completion.
 
+## Director Adaptive Supervision (director_evaluate — Phase 64)
+
+The director also acts as a **persistent supervisor** mid-execution, not just at start and end.
+Gated by `adaptive_execution: true` in config (default off).
+
+```
+director_evaluate(goal, eval_ctx, trigger) → DirectorDecision
+```
+
+**Trigger points** (all call the same function, same decision space):
+- `stuck` — fires inside `stuck_streak >= 2` block, before existing advisor
+- `verify_failure` — fires when `session_verify_failures >= 2`
+- `step_threshold` — fires every K=5 steps unconditionally
+
+**Decision space:**
+
+| Action | What happens |
+|--------|-------------|
+| `continue` | proceed as-is |
+| `adjust` | replace remaining steps tail with director's revised list |
+| `replan` | call `planner.decompose()` with `new_approach` as ancestry; replace steps |
+| `restart` | break loop with `loop_status="restart"`; handle.py re-runs with context injected |
+| `escalate` | call `channel.ask(user_question)` mid-loop; reply injected as next-step context |
+
+**Budget enforcement:** `director_replan_count >= director_budget_ceiling` (default 2) → replan/restart clamped to continue. Counter persists across restarts (on LoopContext).
+
+**Restart re-entry:** handle.py detects `loop_result.status == "restart"`, appends restart context to ancestry, increments `continuation_depth`, re-runs (capped at depth 3).
+
 ## Two Lanes
 
 **NOW**: Single-shot response. Simple factual or generative requests. No decomposition, no memory recording, no quality gate. Fast (<10s).
@@ -112,6 +140,6 @@ Composable agent identities from YAML + markdown files. Each spec defines:
 |------|-------|------|
 | src/handle.py | ~1104 | Unified entry point, prefix registry, lane dispatch |
 | src/intent.py | ~230 | NOW/AGENDA classification |
-| src/director.py | ~1165 | Plan-delegate-review hierarchy |
+| src/director.py | ~1590 | Plan-delegate-review hierarchy + adaptive supervision |
 | src/workers.py | ~388 | Specialized executors |
 | src/persona.py | ~1218 | Composable identities |
