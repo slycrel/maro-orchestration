@@ -61,9 +61,11 @@ class EvaluationContext:
     convergence_budget_remaining: int  # steps until next director check is mandatory
 ```
 
-**`step_results_summary` unit:** the last 3 completed step result strings, each truncated to 600 chars, joined with separators. Not tool calls or LLM turns — completed step outputs only.
+**`step_results_summary` unit:** the last 3 completed step result strings, each truncated to 600 chars, joined with separators. Not tool calls or LLM turns — completed step outputs only. Access via `StepOutcome.result` field (typed object built by `step_from_decompose()`). Filter to `status == "done"` outcomes only.
 
 **`verify_failure_count` reset rule:** resets to 0 on the first passing ralph verify. A single pass zeroes it — prevents flaky verifiers from permanently elevating director call frequency.
+
+`convergence_budget_remaining` is computed as `director_budget_ceiling - director_replan_count`. In Phase A both are inert (0 and 2 respectively), so this field always reads 2. The LLM prompt should label it informational-only in Phase A to avoid confusing the model with a value it can't act on.
 
 This keeps the LLM context small and the interface stable regardless of LoopContext internals.
 
@@ -83,7 +85,7 @@ class DirectorDecision:
     next_check_in: int = 3                # steps before next mandatory director check
 ```
 
-**`adjust` semantics:** replaces the remaining steps tail from the current cursor forward — no splicing, no interaction with parallel execution. Clean replacement only. If `revised_steps` is empty or None on an `adjust` action, treat as `continue` (not as "done", not as error).
+**`adjust` semantics:** replaces the remaining steps tail from the current cursor forward — no splicing, no interaction with parallel execution. Clean replacement only. If `revised_steps` is empty or None on an `adjust` action, treat as `continue` (not as "done", not as error). Implementation note: `remaining_steps` and `remaining_indices` are kept in sync in `LoopContext` — when `adjust` replaces `remaining_steps`, `remaining_indices` must be rebuilt to match (sequential indices from `len(step_outcomes)` onward). The existing `remaining_indices` manipulation pattern (used by interrupt injection) is the reference for how to do this safely.
 
 **`next_check_in`:** the director sets the interval to the next check. Floor: 1. Ceiling: steps remaining. If the director returns 0 or a negative value, clamp to 1. This is NOT the convergence budget counter — it is a suggestion. The actual counter lives in `LoopContext` (see below).
 
@@ -117,11 +119,11 @@ Three callsites, same function, different trigger context:
 
 ### 1. Mid-execution — on signals (Phase A, opt-in)
 Called from `agent_loop.py` during the step loop. Gated behind config flag `adaptive_execution` (default: off), following the same opt-in pattern as `ralph_verify`. When enabled, fires on:
-- `verify_failure_count >= 2` (consecutive ralph verify failures)
-- `steps_since_last_check >= K` (configurable threshold, default 5)
-- `loop_result.status == "stuck"` — uses the existing stuck detection from `LoopResult`, not a new heuristic
+- `ctx.session_verify_failures >= 2` — field already exists on `LoopContext` (line 243). The local `_session_verify_failures` shadows it in the execute section and must be synced back to `ctx` each iteration so the trigger can read it.
+- `ctx.steps_since_last_check >= K` (default 5) — field must be added to `LoopContext`, incremented in the main while-loop alongside `stuck_streak`.
+- `ctx.stuck_streak >= 2` — use `stuck_streak` (already on `LoopContext` line 233) as the mid-loop stuck signal. **Not** `loop_status == "stuck"`: that value is written at line 3674 immediately before `break` at 3683 — the loop has already exited and no mid-loop call is possible. `stuck_streak` is visible and incrementing before the break decision is made.
 
-**`steps_since_last_check` reset rule:** resets after any director call, regardless of the decision returned (`continue`, `adjust`, or future actions). Prevents an `adjust` that produces no meaningful step changes from immediately re-triggering on the next step.
+**`steps_since_last_check` reset rule:** resets to 0 after any director call, regardless of the decision returned. Prevents an `adjust` with no meaningful changes from immediately re-triggering on the next step.
 
 For Phase A: only `continue` and `adjust` actions are wired. `replan`, `restart`, `escalate` are deferred to Phase C.
 
