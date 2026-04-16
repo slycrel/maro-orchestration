@@ -769,14 +769,19 @@ def handle(
                 from scope import generate_scope
                 _scope = generate_scope(message, adapter)
                 if _scope is not None and not _scope.is_empty():
-                    # Record scope artifact alongside the goal
+                    # Record scope artifact alongside the goal. If project is
+                    # None (CLI usage), derive the slug the same way
+                    # run_agent_loop does so the artifact lands in the
+                    # right project directory.
                     try:
-                        if project:
-                            _proj_dir = Path.home() / ".poe" / "workspace" / "projects" / project / "artifacts"
-                            _proj_dir.mkdir(parents=True, exist_ok=True)
-                            (_proj_dir / "scope.md").write_text(
-                                _scope.to_markdown(), encoding="utf-8"
-                            )
+                        from agent_loop import _goal_to_slug
+                        _scope_project = project or _goal_to_slug(message)
+                        _proj_dir = Path.home() / ".poe" / "workspace" / "projects" / _scope_project / "artifacts"
+                        _proj_dir.mkdir(parents=True, exist_ok=True)
+                        (_proj_dir / "scope.md").write_text(
+                            _scope.to_markdown(), encoding="utf-8"
+                        )
+                        log.info("scope: recorded artifact at %s/scope.md", _proj_dir)
                     except Exception as _scope_rec_exc:
                         log.debug("scope: could not record artifact: %s", _scope_rec_exc)
                     # A/B skip: record but don't inject
