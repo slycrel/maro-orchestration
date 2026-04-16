@@ -2,9 +2,28 @@
 
 What to do next, in what order. Updated each session. Strategic phases live in ROADMAP.md; deferred ideas live in BACKLOG.md. This file is the bridge — the executable queue.
 
-Last updated: 2026-04-15 (session 33 — Phase 64A/B/C: full adaptive execution pipeline)
+Last updated: 2026-04-16 (session 34 — Phase 65 proposal documented + reviewed, existing-systems audit in flight)
 
 ---
+
+## Done (session 34, 2026-04-16 — Phase 65 proposal: constraint/premise orchestration)
+
+- [x] **NEXT.md index bug fix** (`src/agent_loop.py`) — adaptive adjust/replan was rebuilding `remaining_indices` as sequential step counts instead of NEXT.md line numbers, causing `ValueError: item_index N not found` mid-loop. All 4 replacement sites now use `[-1] * len(new_steps)` (same convention as interrupt injection). Exposed by slycrel-go regression run. 2 regression tests added.
+- [x] **Phase 64 regression validation** — slycrel-go headless server goal ran through orchestrator, completed cleanly (8 steps, no director intervention), produced real WebSocket+IOProvider implementation pushed to slycrel/slycrel-go#1.
+- [x] **Phase 65 design doc** (`docs/CONSTRAINT_ORCHESTRATION_DESIGN.md`) — inversion + constraint-setting before planning; persona perspective rotation (PM/engineer/architect triad); constraint lifecycle (set/inject/detect/revise/except/break).
+- [x] **Independent critical review** (`docs/CONSTRAINT_ORCHESTRATION_REVIEW.md`) — identified name collision with `src/constraint.py`, unreachable human gate in autonomous path, scope narrowing (design addresses planning; real defect is in verification — "nobody ran a browser"), shipped word-count gate is wrong, and a substantially smaller minimum experiment.
+- [x] **Conversation log preserved** (`docs/conversations/2026-04-16-constraint-orchestration.md`) — full back-and-forth that produced the design.
+
+## Next Up
+
+- **Phase 65 existing-systems audit** — IN FLIGHT (background agent). Mapping what already exists in pre_flight / constraint.py / inspector / director / persona / memory layer that overlaps with Phase 65 design. Likely finding: much of the proposed machinery has primitive forms already present.
+- **Phase 65 minimum experiment** — per review: one inversion call before `planner.decompose()`, recorded with plan, A/B on ~20 goals. Only after audit + rename decided + A/B mechanism designed.
+- **Phase 65 rename** — `constraint` is taken; strawman "premise" (e.g. `goal_premises`, `generate_premises()`). Decision before any code lands.
+- **Verification with ground-truth feedback** — sibling concern to Phase 65; the review's sharpest point is that constraint-setting alone doesn't address "nobody ran a browser." Needs its own design.
+- **Phase 64D** — memory layer: record approach + outcome per goal type; director uses history to select initial approach. Deferred until Phase A/B/C generate operational data.
+- **Closure check unification** (Phase C leftover) — `director_evaluate(trigger="closure")` wraps `verify_goal_completion`; `ClosureVerdict` retired. Low-priority code hygiene.
+- **Evolver confidence calibration follow-up** — `scan_suggestion_outcomes` wired; verify calibration is improving. Heartbeat stopped since Apr 7-9 token burn — no new data until restarted.
+- **Formal stage contracts (Phase P2)** — Typed output contracts per pipeline phase + hard validation gates. See BACKLOG.
 
 ## Done (session 33, 2026-04-15 — Phase 64A/B/C: adaptive execution)
 
@@ -20,14 +39,6 @@ Last updated: 2026-04-15 (session 33 — Phase 64A/B/C: full adaptive execution 
 - [x] **channel param** (`run_agent_loop`) — optional, default None; handle.py passes its channel for main AGENDA path.
 - [x] **Gated by `adaptive_execution` config flag** (default off).
 - [x] **18 new tests** — 107 total in test_director.py; 4329 total.
-
-## Next Up
-
-- **Phase 64D** — memory layer: record approach + outcome per goal type; director uses history to select initial approach. Deferred until Phase A/B/C generate operational data.
-- **Closure check unification** (Phase C leftover) — `director_evaluate(trigger="closure")` wraps `verify_goal_completion`; `ClosureVerdict` retired. Low-priority code hygiene.
-- **Evolver confidence calibration follow-up** — `scan_suggestion_outcomes` wired; verify calibration is improving. Heartbeat stopped since Apr 7-9 token burn — no new data until restarted.
-- **Jeremy's undocumented ideas** — he mentioned having ideas not yet in the backlog. Needs elaboration.
-- **Formal stage contracts (Phase P2)** — Typed output contracts per pipeline phase + hard validation gates. See BACKLOG.
 
 ## Done (session 32, 2026-04-15 — Phase 63: Director closure check + completion standard)
 
