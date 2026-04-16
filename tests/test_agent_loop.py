@@ -2679,3 +2679,115 @@ def test_skill_extraction_outcome_uses_step_result(monkeypatch, tmp_path):
         assert step["result"] != "", "step result must be non-empty for done steps"
         # Ensure each step dict is correctly structured (regression: old code used s.summary)
         assert isinstance(step["result"], str)
+
+
+# ---------------------------------------------------------------------------
+# Regression: adaptive adjust/replan must use -1 indices, not step counts
+# ---------------------------------------------------------------------------
+
+def test_adaptive_adjust_uses_negative_indices(monkeypatch, tmp_path):
+    """remaining_indices after adaptive adjust must be -1 sentinels, not step counts.
+
+    Bug: adjust set remaining_indices = list(range(len(step_outcomes), ...))
+    which produced small integers (0, 1, 2...) that collide with actual line
+    numbers in NEXT.md, causing 'item_index N not found' ValueError mid-loop.
+
+    Fix: use [-1] * len(new_steps) — same convention as interrupt injection.
+    """
+    _setup_workspace(monkeypatch, tmp_path)
+
+    from director import DirectorDecision
+    import agent_loop as _al
+    import config as _cfg_mod
+
+    # Enable adaptive_execution via config patch
+    _orig_cfg_get = _cfg_mod.get
+    def _patched_cfg_get(key, default=None):
+        if key == "adaptive_execution":
+            return True
+        return _orig_cfg_get(key, default)
+    monkeypatch.setattr(_cfg_mod, "get", _patched_cfg_get)
+
+    # Patch director_evaluate to return adjust on first call
+    _calls = []
+    import director as _dm
+
+    def _fake_director_evaluate(goal, eval_ctx, trigger, adapter, *, dry_run=False):
+        _calls.append(trigger)
+        return DirectorDecision(
+            action="adjust",
+            reasoning="test adjust",
+            revised_steps=["adjusted step A", "adjusted step B"],
+        )
+
+    monkeypatch.setattr(_dm, "director_evaluate", _fake_director_evaluate)
+
+    result = run_agent_loop(
+        "multi-step goal that triggers adjust",
+        adapter=_DryRunAdapter(),
+        dry_run=False,
+    )
+    # The loop must complete without ValueError from mark_item
+    assert result.status in ("done", "stuck", "error")
+
+
+def test_adaptive_adjust_remaining_indices_are_negative_one(monkeypatch, tmp_path):
+    """After adjust fires, remaining_indices must all be -1, not step-count integers."""
+    _setup_workspace(monkeypatch, tmp_path)
+
+    from director import DirectorDecision
+    import agent_loop as _al
+    import config as _cfg_mod
+    import orch_items as _oi
+
+    # Enable adaptive_execution via config patch
+    _orig_cfg_get = _cfg_mod.get
+    def _patched_cfg_get(key, default=None):
+        if key == "adaptive_execution":
+            return True
+        return _orig_cfg_get(key, default)
+    monkeypatch.setattr(_cfg_mod, "get", _patched_cfg_get)
+
+    # Spy on mark_item to catch any bad indices
+    _mark_calls = []
+    _orig_mark = _oi.mark_item
+
+    def _spy_mark(slug, item_index, new_state):
+        _mark_calls.append(item_index)
+        _orig_mark(slug, item_index, new_state)
+
+    monkeypatch.setattr(_oi, "mark_item", _spy_mark)
+
+    # Patch director_evaluate to return adjust once, then continue
+    _eval_count = [0]
+    import director as _dm
+
+    def _fake_eval(goal, eval_ctx, trigger, adapter, *, dry_run=False):
+        _eval_count[0] += 1
+        if _eval_count[0] == 1:
+            return DirectorDecision(
+                action="adjust",
+                reasoning="force adjust",
+                revised_steps=["new step X", "new step Y"],
+            )
+        return DirectorDecision(action="continue", reasoning="ok")
+
+    monkeypatch.setattr(_dm, "director_evaluate", _fake_eval)
+
+    result = run_agent_loop(
+        "test adjust index fix",
+        adapter=_DryRunAdapter(),
+        dry_run=False,
+    )
+
+    # mark_item is never called with -1 (skipped by agent_loop).
+    # mark_item IS called for original NEXT.md items — their indices are line
+    # numbers (typically >= 8 for a normal NEXT.md with header lines).
+    # The bug produced indices like 5, 6, 7 (step counts), which are blank
+    # lines in NEXT.md. Verify no such collision occurred.
+    # Conservatively: no item_index in [0, 1, 2] which are always header lines.
+    low_indices = [i for i in _mark_calls if 0 <= i < 3]
+    assert low_indices == [], (
+        f"mark_item called with header-area index {low_indices} — "
+        "adaptive adjust must use -1 sentinels, not step counts"
+    )

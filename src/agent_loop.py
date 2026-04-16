@@ -4088,9 +4088,7 @@ def run_agent_loop(
                     elif _ae_decision.action == "adjust" and _ae_decision.revised_steps:
                         _ae_new = _ae_decision.revised_steps
                         remaining_steps[:] = _ae_new
-                        remaining_indices[:] = list(
-                            range(len(step_outcomes), len(step_outcomes) + len(_ae_new))
-                        )
+                        remaining_indices[:] = [-1] * len(_ae_new)
                         stuck_streak = 0
                         log.info("adaptive [stuck/adjust]: replaced %d steps — %s",
                                  len(_ae_new), _ae_decision.reasoning[:100])
@@ -4116,10 +4114,7 @@ def run_agent_loop(
                             )
                             if _ae_replan_steps:
                                 remaining_steps[:] = _ae_replan_steps
-                                remaining_indices[:] = list(
-                                    range(len(step_outcomes),
-                                          len(step_outcomes) + len(_ae_replan_steps))
-                                )
+                                remaining_indices[:] = [-1] * len(_ae_replan_steps)
                                 ctx.director_replan_count += 1
                                 stuck_streak = 0
                                 log.info(
@@ -4429,9 +4424,7 @@ def run_agent_loop(
                     if _ae2_decision.action == "adjust" and _ae2_decision.revised_steps:
                         _ae2_new = _ae2_decision.revised_steps
                         remaining_steps[:] = _ae2_new
-                        remaining_indices[:] = list(
-                            range(len(step_outcomes), len(step_outcomes) + len(_ae2_new))
-                        )
+                        remaining_indices[:] = [-1] * len(_ae2_new)
                         log.info("adaptive [%s/adjust]: replaced %d steps — %s",
                                  _ae2_trigger, len(_ae2_new), _ae2_decision.reasoning[:100])
                         if verbose:
@@ -4458,10 +4451,7 @@ def run_agent_loop(
                             )
                             if _ae2_replan_steps:
                                 remaining_steps[:] = _ae2_replan_steps
-                                remaining_indices[:] = list(
-                                    range(len(step_outcomes),
-                                          len(step_outcomes) + len(_ae2_replan_steps))
-                                )
+                                remaining_indices[:] = [-1] * len(_ae2_replan_steps)
                                 ctx.director_replan_count += 1
                                 log.info(
                                     "adaptive [%s/replan]: fresh %d steps "
