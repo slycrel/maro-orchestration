@@ -121,6 +121,7 @@ class WorkerSessionSpec:
     payload_name: str = "worker-payload.json"
     result_name: str = "worker-result.json"
     working_directory: Optional[str] = None
+    source_directory: Optional[str] = None
     environment: dict = field(default_factory=dict)
     timeout_seconds: Optional[float] = None
 
@@ -230,6 +231,7 @@ def _load_worker_session_manifest(path: Path) -> WorkerSessionSpec:
         payload_name=payload_name,
         result_name=result_name,
         working_directory=working_directory,
+        source_directory=str(path.parent.resolve()),
         environment=environment,
         timeout_seconds=timeout_seconds,
     )
@@ -573,6 +575,7 @@ def worker_session_bridge(
         payload_name=resolved_payload_name,
         result_name=resolved_result_name,
         working_directory=spec.working_directory,
+        source_directory=spec.source_directory,
         extra_env=spec.environment,
     )
 
@@ -584,6 +587,7 @@ def session_execution_bridge(
     payload_name: str = "session-payload.json",
     result_name: str = "session-result.json",
     working_directory: Optional[str] = None,
+    source_directory: Optional[str] = None,
     extra_env: Optional[dict] = None,
 ) -> ExecutionBridge:
     if not session_command or not session_command.strip():
@@ -599,6 +603,30 @@ def session_execution_bridge(
         default="session-result.json",
         field_name="result_name",
     )
+    resolved_source_directory: Optional[Path] = None
+    if source_directory:
+        resolved_source_directory = Path(source_directory).expanduser().resolve()
+        if not resolved_source_directory.exists():
+            raise ExecutionBridgeError(f"worker source directory does not exist: {resolved_source_directory}")
+        if not resolved_source_directory.is_dir():
+            raise ExecutionBridgeError(f"worker source directory must be a directory: {resolved_source_directory}")
+
+    def _resolve_working_directory(raw: str) -> Path:
+        candidates: list[Path] = []
+        if resolved_source_directory is not None:
+            candidates.append((resolved_source_directory / raw).resolve())
+        candidates.append((orch_root() / raw).resolve())
+
+        for candidate in candidates:
+            if candidate.exists():
+                if not candidate.is_dir():
+                    raise ExecutionBridgeError(f"worker working directory must be a directory: {candidate}")
+                return candidate
+        if resolved_source_directory is not None:
+            raise ExecutionBridgeError(
+                f"worker working directory does not exist relative to source_directory or orchestration root: {raw}"
+            )
+        raise ExecutionBridgeError(f"worker working directory does not exist: {(orch_root() / raw).resolve()}")
 
     def _coerce_result_payload(raw: dict, *, default_artifact_path: str, run_id: str) -> ExecutionResult:
         status = (raw.get("status") or "").lower().strip()
@@ -691,20 +719,16 @@ def session_execution_bridge(
         if extra_env:
             env.update({str(k): str(v) for k, v in extra_env.items()})
 
-        cwd = orch_root()
+        cwd = resolved_source_directory or orch_root()
         if working_directory:
             try:
-                resolved_working_directory = (orch_root() / working_directory).resolve()
+                resolved_working_directory = _resolve_working_directory(working_directory)
             except RuntimeError as exc:
-                raise ExecutionBridgeError(
-                    f"invalid worker working directory: {working_directory}: {exc}"
-                ) from exc
-            if not resolved_working_directory.exists():
-                raise ExecutionBridgeError(f"worker working directory does not exist: {resolved_working_directory}")
-            if not resolved_working_directory.is_dir():
-                raise ExecutionBridgeError(f"worker working directory must be a directory: {resolved_working_directory}")
+                raise ExecutionBridgeError(f"invalid worker working directory: {working_directory}: {exc}") from exc
             cwd = resolved_working_directory
             env["ORCH_SESSION_WORKING_DIR"] = str(resolved_working_directory)
+        elif resolved_source_directory is not None:
+            env["ORCH_SESSION_WORKING_DIR"] = str(cwd)
 
         try:
             proc = subprocess.run(

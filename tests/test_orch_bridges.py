@@ -361,6 +361,7 @@ class TestLoadWorkerSessionManifest:
         assert spec.payload_name == "in.json"
         assert spec.result_name == "out.json"
         assert spec.working_directory == "workdir"
+        assert spec.source_directory == str(tmp_path.resolve())
         assert spec.environment == {"FOO": "bar"}
         assert spec.timeout_seconds == 30.0
 
@@ -413,6 +414,7 @@ class TestWorkerSessionSpec:
         assert spec.payload_name == "worker-payload.json"
         assert spec.result_name == "worker-result.json"
         assert spec.working_directory is None
+        assert spec.source_directory is None
         assert spec.environment == {}
         assert spec.timeout_seconds is None
 

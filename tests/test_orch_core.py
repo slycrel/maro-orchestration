@@ -474,6 +474,64 @@ def test_worker_session_bridge_supports_working_directory(monkeypatch, tmp_path)
     assert (artifact_root / "working_directory.txt").read_text(encoding="utf-8") == expected
 
 
+def test_worker_session_bridge_defaults_cwd_to_manifest_directory(monkeypatch, tmp_path):
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    _mkproj(tmp_path, "demo", "- [ ] first\n", priority=3)
+
+    workers = tmp_path / "prototypes" / "poe-orchestration" / "workers"
+    worker_dir = workers / "relative-worker"
+    worker_dir.mkdir(parents=True, exist_ok=True)
+    helper = worker_dir / "write-note.sh"
+    helper.write_text('printf "manifest-cwd" > "$ORCH_RUN_ARTIFACT_DIR/from-relative-command.txt"\n', encoding="utf-8")
+    helper.chmod(0o755)
+    manifest = worker_dir / "worker-session.json"
+    manifest.write_text(json.dumps({"command": "./write-note.sh"}), encoding="utf-8")
+
+    tick = orch.run_tick(
+        "demo",
+        worker=str(manifest),
+        execution=orch.worker_session_bridge(str(manifest)),
+    )
+
+    assert tick is not None
+    assert tick.validation.status == "done"
+    assert tick.run.status == "done"
+    artifact_root = tmp_path / "prototypes" / "poe-orchestration" / tick.run.artifact_path
+    assert (artifact_root / "from-relative-command.txt").read_text(encoding="utf-8") == "manifest-cwd"
+
+
+def test_worker_session_bridge_resolves_relative_working_directory_from_manifest_directory(monkeypatch, tmp_path):
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    _mkproj(tmp_path, "demo", "- [ ] first\n", priority=3)
+
+    workers = tmp_path / "prototypes" / "poe-orchestration" / "workers"
+    worker_dir = workers / "rel-workdir"
+    workdir = worker_dir / "workspace"
+    workdir.mkdir(parents=True, exist_ok=True)
+    manifest = worker_dir / "worker-session.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "command": 'pwd > "$ORCH_RUN_ARTIFACT_DIR/resolved-cwd.txt"',
+                "working_directory": "workspace",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    tick = orch.run_tick(
+        "demo",
+        worker=str(manifest),
+        execution=orch.worker_session_bridge(str(manifest)),
+    )
+
+    assert tick is not None
+    assert tick.validation.status == "done"
+    assert tick.run.status == "done"
+    artifact_root = tmp_path / "prototypes" / "poe-orchestration" / tick.run.artifact_path
+    assert (artifact_root / "resolved-cwd.txt").read_text(encoding="utf-8").strip() == str(workdir)
+
+
 def test_worker_session_bridge_errors_when_missing(monkeypatch, tmp_path):
     monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
     _mkproj(tmp_path, "demo", "- [ ] first\n", priority=3)
