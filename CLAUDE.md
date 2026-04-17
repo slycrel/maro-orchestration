@@ -5,11 +5,11 @@
 **Start-of-session checklist:**
 1. Read this file (CLAUDE.md)
 2. Read MILESTONES.md — prioritized work queue. This is what to do next.
-3. Read BACKLOG.md — deferred items, bugs, ideas. Update as you work.
+3. Read BACKLOG.md — active deferred items, bugs, ideas. Update as you work. When an item ships, move it to BACKLOG_DONE.md with its context intact (the archive is ingested by `dev-recall` for historical "why/how/rejected" context).
 4. Check ROADMAP.md for phase status
 5. Check `~/claude/grok-response-*.txt` for unprocessed feedback
 
-**When you need to recall something from prior correspondence (design docs, conversation logs, rationale for a past decision), use `dev-recall` instead of blind grep.** It's vector retrieval over docs/, lat.md/, MILESTONES/BACKLOG/ROADMAP/CLAUDE, and auto-memory:
+**When you need to recall something from prior correspondence (design docs, conversation logs, rationale for a past decision), use `dev-recall` instead of blind grep.** It's vector retrieval over docs/, lat.md/, MILESTONES/BACKLOG/BACKLOG_DONE/ROADMAP/CLAUDE, and auto-memory:
 
 ```bash
 PYTHONPATH=src python3 -m correspondence query "why did we rename constraint to scope"

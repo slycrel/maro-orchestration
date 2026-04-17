@@ -96,6 +96,7 @@ def _default_sources() -> List[str]:
         str(repo_root / "lat.md"),
         str(repo_root / "MILESTONES.md"),
         str(repo_root / "BACKLOG.md"),
+        str(repo_root / "BACKLOG_DONE.md"),
         str(repo_root / "ROADMAP.md"),
         str(repo_root / "CLAUDE.md"),
         str(home / ".claude" / "projects" / "-home-clawd-claude" / "memory"),
