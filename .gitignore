@@ -20,6 +20,11 @@ memory/
 # Temporary
 tmp/
 
+# Archives / downloads accidentally dropped at repo root
+*.tar.gz
+*.tgz
+*.zip
+
 # Runtime test/artifact directories
 checkpoints/
 prototypes/
