@@ -9,6 +9,36 @@ Last reviewed: 2026-04-16 (session 34 — split into active + done).
 
 ---
 
+### Bounded workspace / sandboxing (discovered 2026-04-17)
+
+Run 4 of slycrel-go blind test was contaminated by stale local clones. Four
+`slycrel-go` trees existed on disk (`~/slycrel-go`, `~/.openclaw/.../slycrel-go`,
+`~/.poe/workspace/projects/slycrel-go`, `/tmp/slycrel-go`) — the worker
+surveyed one of them instead of cloning fresh into the expected workspace
+`repo/` subdirectory. Result: step 1 asserted "project already has a
+complete headless server implementation" from the stale tree.
+
+Right behavior: orchestrator should clone the repo into its own workspace,
+not scavenge from elsewhere on the filesystem.
+
+- [ ] **Low-effort: workspace-folder constraint option.** A config flag /
+  per-goal setting that restricts file access (or at minimum, search paths)
+  to the project workspace `repo/` subdir. Not full sandboxing — just
+  "don't wander." Cheap win.
+- [ ] **Medium-effort: document the bounded-workspace spectrum.** Three
+  tiers worth naming: (a) docker/container (full isolation, heavy setup),
+  (b) orchestrator workspace only (soft fence — honor convention, no
+  enforcement), (c) full machine (current default). Short doc in
+  `docs/` noting when to use which and what each protects against.
+- [ ] **Diagnostic: detect scavenging.** Captain's log event when a worker
+  reads a file outside the project workspace root. Cheap instrumentation,
+  makes contamination visible.
+
+Not ambitious; the goal is "constraint to a folder isn't a bad option to
+have" not "build a sandboxing subsystem."
+
+---
+
 ### Session 20 (2026-04-14) — adversarial review findings (`output/self-review-report-20260414T040637Z-blind.md`)
 
 - [~] **HIGH: Test coverage width not depth** — PARTIAL. pytest-cov with 70% floor: DONE (session 20.5, .coveragerc). Concurrent task_store tests: DONE (session 20.5, +5 tests). End-to-end integration tests: DONE (test_integration.py, 23 tests). Remaining: mutation testing (aspirational, no tooling) and real-LLM-fixture tests (expensive, defer). Item substantially closed.
