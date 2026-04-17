@@ -1356,6 +1356,41 @@ def verify_goal_completion(
         gaps = [safe_str(g) for g in safe_list(verdict_data.get("gaps")) if g]
         summary = safe_str(verdict_data.get("summary", ""))
 
+        # Build modality distribution now; we use it both for the behavioral-gap
+        # downgrade below and for the CLOSURE_VERDICT event at the end.
+        modality_dist: Dict[str, int] = {}
+        for r in check_results:
+            mode = _classify_probe_modality(r.get("command", ""))
+            modality_dist[mode] = modality_dist.get(mode, 0) + 1
+
+        # Behavioral-evidence downgrade: when the verdict claims complete=True
+        # but the LLM's own summary/gaps admit runtime behavior wasn't exercised
+        # AND modality shows zero behavioral probes, flip to complete=False so
+        # the existing closure_restart machinery gets a chance to re-run with
+        # behavioral expectations. This is self-contradiction detection —
+        # reading what the system already generated, not a taxonomy imposed
+        # from outside.
+        behavioral_gap_reason = _detect_behavioral_gap(
+            complete=complete,
+            summary=summary,
+            gaps=gaps,
+            modality_dist=modality_dist,
+            scope=scope,
+        )
+        if behavioral_gap_reason:
+            log.warning(
+                "closure: downgrading complete=True -> False — behavioral gap: %s",
+                behavioral_gap_reason,
+            )
+            complete = False
+            # Confidence must be ≥0.6 for closure_restart to engage.
+            if confidence < 0.6:
+                confidence = 0.6
+            gaps = list(gaps) + [
+                f"No behavioral probe exercised the runtime delivery "
+                f"(modality={modality_dist}). {behavioral_gap_reason}"
+            ]
+
         verdict = ClosureVerdict(
             complete=complete,
             confidence=confidence,
@@ -1379,10 +1414,6 @@ def verify_goal_completion(
         # modality distribution. Lets closure quality be measured instead of
         # guessed (floor: static vs runtime ratio across runs).
         try:
-            modality_dist: Dict[str, int] = {}
-            for r in check_results:
-                mode = _classify_probe_modality(r.get("command", ""))
-                modality_dist[mode] = modality_dist.get(mode, 0) + 1
             from captains_log import log_event, CLOSURE_VERDICT
             log_event(
                 CLOSURE_VERDICT,
@@ -1400,6 +1431,7 @@ def verify_goal_completion(
                     "gap_count": len(gaps),
                     "scope_supplied": scope is not None,
                     "modality_distribution": modality_dist,
+                    "behavioral_gap_downgrade": behavioral_gap_reason or "",
                     "commands": [r.get("command", "")[:200] for r in check_results],
                     "summary": summary[:400],
                 },
@@ -1448,13 +1480,99 @@ def _classify_probe_modality(cmd: str) -> str:
     """
     if not cmd:
         return "static"
-    for label, pat in _MODALITY_PATTERNS:
+    # Browser / ws / http are the strongest behavioral signals — they win
+    # even when mixed with static tools (e.g. "curl ... && grep ...").
+    for label, pat in _MODALITY_PATTERNS[:3]:
         if pat.search(cmd):
             return label
-    # No runtime indicator — treat as static. The regex above is biased
-    # toward the behavioral end; false-positives go *toward* runtime, which
-    # is the opposite of the current failure mode (everything-is-static bias).
+    # Before checking "process", defer to explicit static hints. A command
+    # like `go build ./cmd/slycrel-server` otherwise matches "process" via
+    # `./cmd/...` even though the actual verb is a compile-only check.
+    if _STATIC_HINTS.search(cmd):
+        return "static"
+    # Process = runs a built binary / script that likely exercises the
+    # artifact without network I/O.
+    for label, pat in _MODALITY_PATTERNS[3:]:
+        if pat.search(cmd):
+            return label
+    # No runtime indicator — treat as static.
     return "static"
+
+
+# Runtime-gap admission phrases — what the LLM says when it knows it didn't
+# actually exercise the thing. Drawn from the slycrel-go run's own closure
+# summary: *"Gap: runtime validation (server startup + browser connection)
+# was not performed."* Matching against the LLM's own words, not an external
+# taxonomy of goal types.
+_RUNTIME_GAP_ADMISSION = re.compile(
+    r"\b(runtime (validation|check|verification|test)|"
+    r"(?:not|never|wasn'?t|weren'?t) (?:run|tested|performed|exercised|executed|verified|started|booted)|"
+    r"no \w+(?:\s+\w+){0,3} (?:was |were )?(?:run|tested|performed|exercised|executed|verified|started|booted)|"
+    r"unexercised runtime|no behavioral|no runtime probe|"
+    r"browser connection (?:was )?not|server (?:startup|boot) (?:was )?not)\b",
+    re.I,
+)
+
+# Scope failure-modes that signal runtime delivery expectations. When scope
+# generated these, the system already said it cared about behavioral evidence
+# — closure probing only code is then an inversion miss.
+_RUNTIME_FAILURE_MODE_HINT = re.compile(
+    r"\b(server|daemon|process|websocket|ws connection|http|endpoint|port|"
+    r"browser|client|session|listen|connect|disconnect|responds? to|"
+    r"render|ui|deploy|service)\b",
+    re.I,
+)
+
+_BEHAVIORAL_MODALITIES = ("http", "ws", "browser", "process")
+
+
+def _detect_behavioral_gap(
+    *,
+    complete: bool,
+    summary: str,
+    gaps: List[str],
+    modality_dist: Dict[str, int],
+    scope=None,
+) -> str:
+    """Return a non-empty reason string when complete=True contradicts evidence.
+
+    Two inference-shaped signals:
+    1. The LLM's own summary/gaps admit runtime wasn't exercised (self-contradiction).
+    2. Scope's failure_modes named runtime expectations but no behavioral probe ran.
+
+    Either fires only when `complete=True` AND modality_distribution has zero
+    behavioral probes. The goal is to catch the precise slycrel-go pattern
+    (closure summary: "runtime validation was not performed" → returns
+    complete=True) using data the system already generated, not an external
+    "if goal is a server, demand http probe" rule.
+    """
+    if not complete:
+        return ""
+
+    has_behavioral = any(modality_dist.get(m, 0) > 0 for m in _BEHAVIORAL_MODALITIES)
+    if has_behavioral:
+        return ""
+
+    # Signal 1: self-contradiction in summary / gap text.
+    combined_text = summary + "\n" + "\n".join(gaps)
+    if _RUNTIME_GAP_ADMISSION.search(combined_text):
+        m = _RUNTIME_GAP_ADMISSION.search(combined_text)
+        return f"LLM summary admits runtime was not exercised: {m.group(0)!r}"
+
+    # Signal 2: scope failure modes named runtime expectations.
+    if scope is not None:
+        try:
+            fm = getattr(scope, "failure_modes", None) or []
+            for mode in fm:
+                if _RUNTIME_FAILURE_MODE_HINT.search(mode or ""):
+                    return (
+                        f"scope.failure_modes named runtime expectation "
+                        f"({mode[:100]!r}) but no behavioral probe ran"
+                    )
+        except Exception:
+            pass
+
+    return ""
 
 
 # ---------------------------------------------------------------------------

@@ -622,6 +622,90 @@ class TestProbeModalityClassifier:
         assert _classify_probe_modality("") == "static"
 
 
+class TestDetectBehavioralGap:
+    """Tests for _detect_behavioral_gap — the complete=True downgrade.
+
+    The feature catches closure's exact slycrel-go failure mode: LLM returns
+    complete=True while its own summary admits runtime wasn't exercised and
+    modality_distribution has zero behavioral probes. The fix reads the LLM's
+    own words, not an external "if goal is a server, require http" taxonomy.
+    """
+
+    def _call(self, **overrides):
+        from director import _detect_behavioral_gap
+        kwargs = dict(
+            complete=True,
+            summary="",
+            gaps=[],
+            modality_dist={"static": 5},  # all-static = the runtime gap case
+            scope=None,
+        )
+        kwargs.update(overrides)
+        return _detect_behavioral_gap(**kwargs)
+
+    def test_complete_false_never_flags(self):
+        # When the LLM already said incomplete, the downgrade path is moot.
+        assert self._call(complete=False, summary="runtime was not performed") == ""
+
+    def test_behavioral_probe_present_never_flags(self):
+        # Any behavioral modality (http/ws/browser/process) clears the gap.
+        for mod in ("http", "ws", "browser", "process"):
+            assert self._call(
+                modality_dist={mod: 1, "static": 3},
+                summary="runtime validation was not performed",
+            ) == ""
+
+    def test_slycrel_go_exact_admission_flags(self):
+        # The exact phrasing from the 2026-04-17 slycrel-go run.
+        reason = self._call(
+            summary=(
+                "The branch is architecturally sound. All structural components "
+                "are in place and the code compiles cleanly. "
+                "Gap: runtime validation (server startup + browser connection) "
+                "was not performed."
+            ),
+        )
+        assert reason  # non-empty
+        assert "not" in reason.lower() or "runtime" in reason.lower()
+
+    def test_admission_in_gaps_list_also_flags(self):
+        # Admission can live in the gaps list instead of the summary.
+        reason = self._call(
+            summary="all checks passed",
+            gaps=["No server boot was tested"],
+        )
+        assert reason
+
+    def test_no_admission_and_no_scope_does_not_flag(self):
+        # LLM returned all-static verdict with no self-contradiction and no
+        # scope failure modes to cross-check — nothing to infer from.
+        assert self._call(summary="all checks passed on config parsing") == ""
+
+    def test_scope_failure_modes_with_runtime_hint_flag(self):
+        # Scope already said "server must respond to /health" — closure with
+        # zero behavioral probes contradicts scope, not just the LLM summary.
+        class _FakeScope:
+            failure_modes = ["Server does not respond to /health under concurrent load"]
+        reason = self._call(
+            summary="all checks passed",
+            scope=_FakeScope(),
+        )
+        assert reason
+        assert "scope" in reason.lower()
+
+    def test_scope_without_runtime_hint_does_not_flag(self):
+        # Scope cared only about code-level things → static probes are fine.
+        class _FakeScope:
+            failure_modes = ["Import cycle between modules", "Type annotation drift"]
+        assert self._call(summary="all checks passed", scope=_FakeScope()) == ""
+
+    def test_bad_scope_object_does_not_raise(self):
+        # Defensive: a scope without failure_modes shouldn't crash.
+        class _Bad:
+            pass
+        assert self._call(scope=_Bad()) == ""
+
+
 class TestVerifyGoalCompletion:
     """Tests for verify_goal_completion — director closure check."""
 

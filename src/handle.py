@@ -768,7 +768,15 @@ def handle(
         if _scope_on and not dry_run:
             try:
                 from scope import generate_scope
-                _scope = generate_scope(message, adapter)
+                # Hand scope the ancestry assembled so far — it gets passed
+                # to the director-proxy fallback on parse failure so the proxy
+                # can commit to an interpretation informed by the same context
+                # the planner would see.
+                _scope_ancestry = "\n\n".join(p for p in _extra_ctx_parts if p)
+                _scope = generate_scope(
+                    message, adapter,
+                    ancestry_context=_scope_ancestry,
+                )
                 # Resolve the project artifacts dir once; used for both
                 # successful scope.md persistence and raw-dump on parse failure.
                 try:
@@ -819,21 +827,31 @@ def handle(
                             log.debug("scope: could not record artifact: %s", _scope_rec_exc)
                     try:
                         from captains_log import log_event, SCOPE_GENERATED
+                        _scope_ctx = {
+                            "goal_preview": message[:200],
+                            "failure_modes_count": len(_scope.failure_modes),
+                            "in_scope_count": len(_scope.in_scope),
+                            "out_of_scope_count": len(_scope.out_of_scope),
+                            "ab_skip": bool(_scope_ab_skip),
+                        }
+                        # Surface director-proxy resolution when the scope
+                        # only parsed after an ambiguity handoff. This lets
+                        # post-hoc review see "goal was ambiguous, proxy
+                        # committed to X, scope generated from X."
+                        if _scope.proxy_resolution:
+                            _scope_ctx["proxy_resolution"] = _scope.proxy_resolution
                         log_event(
                             SCOPE_GENERATED,
-                            subject="scope_generated",
+                            subject=("scope_generated_via_proxy"
+                                     if _scope.proxy_resolution else "scope_generated"),
                             summary=(
                                 f"Scope: {len(_scope.failure_modes)} failure modes, "
                                 f"{len(_scope.in_scope)} in-scope, "
-                                f"{len(_scope.out_of_scope)} out-of-scope."
+                                f"{len(_scope.out_of_scope)} out-of-scope"
+                                + (" (proxy-resolved)" if _scope.proxy_resolution else "")
+                                + "."
                             ),
-                            context={
-                                "goal_preview": message[:200],
-                                "failure_modes_count": len(_scope.failure_modes),
-                                "in_scope_count": len(_scope.in_scope),
-                                "out_of_scope_count": len(_scope.out_of_scope),
-                                "ab_skip": bool(_scope_ab_skip),
-                            },
+                            context=_scope_ctx,
                         )
                     except Exception:
                         pass
