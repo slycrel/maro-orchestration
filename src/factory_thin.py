@@ -81,13 +81,32 @@ FACTORY_ADVERSARIAL = textwrap.dedent("""\
     - Is the mechanism sound, or is it extrapolation?
     - Are there competing studies, frameworks, or interpretations not mentioned?
     - Is the dose, population, or context applicable to the goal?
+    - For code/build claims: does the file exist at the named path with the
+      claimed shape? Does the command named actually succeed on this machine?
 
     Grade each finding: CONFIRMED / DOWNGRADED / CONTESTED / OVERCLAIMED.
     Be specific — cite what's wrong, not just that something is uncertain.
     Skip claims that are clearly solid. Focus on what would change a decision.
 
-    Produce a concise adversarial report: list of contested claims with your verdict
-    and one-sentence reason. These corrections will feed into the final compile.
+    For each contested claim, ALSO supply `settled_by_command`: a single-line
+    shell command whose exit code decisively settles whether your contestation
+    is correct. Convention: exit 0 means your contestation was WRONG (the
+    original claim stands); non-zero means your contestation was RIGHT.
+    Examples: `test -f docs/protocol.md`, `command -v go`,
+    `wc -l < web/index.html | awk '{exit ($1>=500)?0:1}'`.
+    Set `settled_by_command` to null when the claim is genuinely un-probe-able
+    (interpretations, dose-vs-context questions, scientific uncertainty).
+    Don't invent commands that can't run — null is correct when you can't name
+    a concrete check.
+
+    Respond ONLY with JSON:
+    {"contested_claims": [
+        {"claim": "<what the step asserted>",
+         "verdict": "CONFIRMED | DOWNGRADED | CONTESTED | OVERCLAIMED",
+         "reason": "<one sentence>",
+         "settled_by_command": "<single-line shell command>" or null}
+    ]}
+    Empty list is fine when nothing is worth contesting.
 """).strip()
 
 FACTORY_COMPILE = textwrap.dedent("""\
@@ -269,7 +288,7 @@ def run_factory_thin(
         )
         total_tokens_in += adv_resp.input_tokens
         total_tokens_out += adv_resp.output_tokens
-        adversarial_findings = adv_resp.content
+        adversarial_findings = _ground_adversarial_findings(adv_resp.content)
         _log(f"adversarial review done tokens={adv_resp.input_tokens + adv_resp.output_tokens}")
     except Exception as exc:
         _log(f"adversarial review failed (non-fatal): {exc}")
@@ -336,6 +355,50 @@ def _parse_steps(content: str, max_steps: int) -> List[str]:
     if isinstance(steps, list) and all(isinstance(s, str) for s in steps):
         return [s.strip() for s in steps if s.strip()][:max_steps]
     return []
+
+
+def _ground_adversarial_findings(raw: str) -> str:
+    """Parse reviewer JSON, probe each contestation, re-render as text.
+
+    Falls back to the raw text when the reviewer didn't emit parseable JSON
+    — the compiler can still consume prose findings. When parsing succeeds,
+    every claim with a `settled_by_command` gets probed by
+    quality_gate._probe_contested_claims, which mutates verdict to
+    DISMISSED_BY_PROBE on exit 0 and emits a CLAIM_PROBED event.
+    """
+    if not raw:
+        return ""
+    parsed = extract_json(raw, dict, log_tag="factory_thin._ground_adversarial")
+    if not isinstance(parsed, dict):
+        return raw
+    claims = parsed.get("contested_claims")
+    if not isinstance(claims, list) or not claims:
+        return raw
+
+    try:
+        from quality_gate import _probe_contested_claims
+        grounded = _probe_contested_claims(claims)
+    except Exception as exc:  # noqa: BLE001 — grounding is best-effort
+        log.warning("adversarial grounding failed (non-fatal): %s", exc)
+        return raw
+
+    lines = []
+    for c in grounded:
+        if not isinstance(c, dict):
+            continue
+        verdict = str(c.get("verdict") or "CONTESTED")
+        claim_txt = str(c.get("claim") or "").strip()
+        reason = str(c.get("reason") or "").strip()
+        probe_status = c.get("probe_status")
+        suffix = ""
+        if probe_status == "dismissed":
+            suffix = " (settled by probe — original contestation was wrong)"
+        elif probe_status == "validated":
+            suffix = " (probe confirmed contestation)"
+        elif probe_status == "unrunnable":
+            suffix = " (probe un-runnable; verdict stands)"
+        lines.append(f"- [{verdict}] {claim_txt} — {reason}{suffix}")
+    return "\n".join(lines) if lines else raw
 
 
 # ---------------------------------------------------------------------------
