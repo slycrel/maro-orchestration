@@ -1153,6 +1153,11 @@ _CLOSURE_PLAN_SYSTEM = textwrap.dedent("""\
        (probe: does it actually respond?), at starting (probe: does it handle a
        real request?), or at integration (probe: does the documented client path
        work?). Let the work steer the check.
+    4. Prefer at least one behavioral/runtime probe when the work summary suggests
+       a running artifact, service, CLI, endpoint, websocket, or UI flow. Static
+       file/grep checks are useful, but they are not enough by themselves if the
+       claimed success depends on runtime behavior. If runtime probing is impossible
+       here, say that by skipping the check rather than faking a static substitute.
 
     Output rules:
     - Generate 2–5 checks. Each must be a single shell command.
@@ -1196,6 +1201,20 @@ class ClosureVerdict:
     summary: str
     checks_run: int
     checks_passed: int
+
+
+def _check_modality_from_command(command: str) -> str:
+    """Best-effort classification of a closure check's probe modality."""
+    cmd = (command or "").lower()
+    if any(tok in cmd for tok in ("playwright", "chromium", "firefox", "webkit", "selenium", "xdotool")):
+        return "browser"
+    if any(tok in cmd for tok in ("websocket", "wss://", "ws://", "websocat", "wscat")):
+        return "ws"
+    if any(tok in cmd for tok in ("curl ", "wget ", "http://", "https://", "nc ", "netcat ")):
+        return "http"
+    if any(tok in cmd for tok in ("timeout ", "python -m http.server", "uvicorn", "gunicorn", "node ", "npm ", "pnpm ", "./", "bash ", "sh ")):
+        return "process"
+    return "static"
 
 
 def verify_goal_completion(
@@ -1285,6 +1304,7 @@ def verify_goal_completion(
         for check in checks[:5]:
             desc = safe_str(check.get("description", ""))
             cmd = safe_str(check.get("command", ""))
+            modality = _check_modality_from_command(cmd)
             if not cmd:
                 continue
             try:
@@ -1295,6 +1315,7 @@ def verify_goal_completion(
                 check_results.append({
                     "description": desc,
                     "command": cmd,
+                    "modality": modality,
                     "exit_code": proc.returncode,
                     "stdout": proc.stdout[:500],
                     "stderr": proc.stderr[:300],
@@ -1303,12 +1324,14 @@ def verify_goal_completion(
             except subprocess.TimeoutExpired:
                 check_results.append({
                     "description": desc, "command": cmd,
+                    "modality": modality,
                     "exit_code": -1, "stdout": "", "stderr": "timed out",
                     "passed": False,
                 })
             except Exception as exc:
                 check_results.append({
                     "description": desc, "command": cmd,
+                    "modality": modality,
                     "exit_code": -1, "stdout": "", "stderr": str(exc),
                     "passed": False,
                 })

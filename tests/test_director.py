@@ -836,6 +836,23 @@ class TestVerifyGoalCompletion:
         # Explicitly covers the case of no input failure modes
         assert "no failure modes" in text or "your own inversion" in text
 
+    def test_plan_prompt_prefers_runtime_probe_for_runtime_claims(self):
+        """Prompt should bias toward behavioral probes when success depends on runtime behavior."""
+        from director import _CLOSURE_PLAN_SYSTEM
+        text = _CLOSURE_PLAN_SYSTEM.lower()
+        assert "behavioral/runtime probe" in text or "runtime probe" in text
+        assert "static" in text
+
+    def test_check_modality_classification(self):
+        """Closure checks should expose a coarse probe modality for evals."""
+        from director import _check_modality_from_command
+
+        assert _check_modality_from_command("grep -q foo app.py") == "static"
+        assert _check_modality_from_command("curl -fsS http://localhost:8000/health") == "http"
+        assert _check_modality_from_command("wscat -c ws://localhost:8000/ws") == "ws"
+        assert _check_modality_from_command("timeout 5 python -m http.server 8000") == "process"
+        assert _check_modality_from_command("playwright test smoke.spec.ts") == "browser"
+
     def test_scope_failure_modes_reach_plan_prompt(self, monkeypatch, tmp_path):
         """When scope is supplied, its failure modes appear in the plan-call user message."""
         from unittest.mock import MagicMock, patch
@@ -922,6 +939,30 @@ class TestVerifyGoalCompletion:
 
         assert result.checks_run == 1
         assert result.checks_passed == 0
+
+    def test_check_results_include_modality_in_verdict_context(self, monkeypatch, tmp_path):
+        """Verification results passed to the verdict step should include probe modality."""
+        from unittest.mock import MagicMock, patch
+
+        adapter = MagicMock()
+        captured_messages = []
+
+        def _complete(messages, **kwargs):
+            captured_messages.append(messages)
+            return MagicMock()
+
+        adapter.complete.side_effect = _complete
+
+        checks = [{"description": "health endpoint", "command": "curl -fsS http://localhost:9999/health"}]
+
+        with patch("director.extract_json", side_effect=[{"checks": checks}, {"complete": True, "confidence": 0.8, "gaps": [], "summary": "ok"}]):
+            with patch("director.content_or_empty", return_value="{}"):
+                with patch("subprocess.run") as run:
+                    run.return_value = MagicMock(returncode=0, stdout="ok", stderr="")
+                    verify_goal_completion("build health check", [], adapter, workspace_path=str(tmp_path))
+
+        verdict_user_msg = captured_messages[1][1].content
+        assert '"modality": "http"' in verdict_user_msg
 
 
 # ---------------------------------------------------------------------------
