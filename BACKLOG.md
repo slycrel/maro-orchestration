@@ -45,6 +45,20 @@ See `docs/CONSTRAINT_ORCHESTRATION_DESIGN.md` + `docs/CONSTRAINT_ORCHESTRATION_R
 
   Related: BDD (Given/When/Then framing), TDD (red-green cycle), property-based testing (∀ operation, property holds), mutation testing (probe-of-probe bounded version). Sibling of Phase 65 "Scope: verification sibling" blocker above — this IS that sibling.
 
+- [ ] **Runtime-probe bias in closure check generation.** Finding from the slycrel-go replay experiment (2026-04-16, `~/.poe/workspace/projects/slycrel-replay/artifacts/`): when scope + `verify_goal_completion` run against the original slycrel-go work summary + branch state, closure correctly returns `complete=False, confidence=0.35` and produces a gap list — architecturally the pipeline works. But **all 5 generated probes were static** (`grep`, `test -f`, `go build`). Zero of them started the server, issued a curl, or upgraded a WebSocket. The probes caught a real hallucination in the work summary (claimed xterm.js integration that doesn't exist in `web/*`) but did not exercise runtime behavior at all.
+
+  This matters because the primary failure class the loop had ("nobody touched reality — `go build` passed so we called it done") is *behavioral*, and static probes only partially address it. Code-content probes catch hallucinated code; they don't catch unexercised code.
+
+  **Root cause:** the `_CLOSURE_PLAN_SYSTEM` prompt (director.py:1137) says "Commands must be fast (<15s), safe (read-only or self-cleaning)" and "Wrap background processes with `timeout` and always clean up PIDs." The LLM reads this as a nudge toward grep — safer, faster, no port concerns. The prompt *permits* live probes (literally says "probe: does it actually respond?") but the path of least resistance wins.
+
+  **Fix shape:**
+  (a) Add explicit scaffolding examples to the prompt: e.g., `timeout 5 ./bin --addr :18080 & sleep 1; curl -f localhost:18080/health; kill %1 2>/dev/null; wait 2>/dev/null` — showing a safe server-boot-probe-cleanup pattern.
+  (b) Allow per-check `mode=runtime` with a longer timeout (30s vs 15s) for live probes.
+  (c) For build/implement goals specifically, require ≥1 runtime probe in the generated check list (reject plan if all checks are static grep).
+  (d) Provide an ephemeral-port helper so the LLM doesn't have to pick an arbitrary free port.
+
+  The false-positive in the same replay (check 2 grep'd for `!RemoteAddr.*username` but matched a legitimate log line `log.Printf(... username, r.RemoteAddr)`) is a second-order problem — overly-strict negated greps. Also worth a cheaper post-hoc signal: "does the probe inspect code or invoke it?" as a plan-quality metric.
+
 ### From X research (2026-04-11 — 10 posts, live orchestration, 2 loops)
 
 Full report: `~/.poe/workspace/output/x-research-20260411T081706Z.md`
