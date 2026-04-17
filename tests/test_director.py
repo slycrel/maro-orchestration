@@ -581,6 +581,47 @@ class TestReviewLoopExhaustion:
 # Director Closure Check
 # ---------------------------------------------------------------------------
 
+class TestProbeModalityClassifier:
+    """Tests for _classify_probe_modality — closure quality observability."""
+
+    def test_curl_is_http(self):
+        from director import _classify_probe_modality
+        assert _classify_probe_modality("curl -f http://localhost:8080/health") == "http"
+
+    def test_wscat_is_ws(self):
+        from director import _classify_probe_modality
+        assert _classify_probe_modality("wscat -c ws://localhost:8080/ws") == "ws"
+        assert _classify_probe_modality("nc -z localhost 8080 && curl -i ws://x/y") == "ws"
+
+    def test_playwright_is_browser(self):
+        from director import _classify_probe_modality
+        assert _classify_probe_modality("npx playwright test e2e.spec.ts") == "browser"
+
+    def test_go_build_is_static(self):
+        from director import _classify_probe_modality
+        assert _classify_probe_modality("cd /repo && go build ./...") == "static"
+
+    def test_grep_test_f_is_static(self):
+        from director import _classify_probe_modality
+        assert _classify_probe_modality("grep -q foo bar.go") == "static"
+        assert _classify_probe_modality("test -f web/index.html") == "static"
+
+    def test_server_boot_curl_is_http_not_static(self):
+        from director import _classify_probe_modality
+        cmd = "timeout 5 ./slycrel-server --addr :18080 & sleep 1; curl -f localhost:18080/health; kill %1"
+        # The curl makes this behavioral even though there's a static-looking tail.
+        assert _classify_probe_modality(cmd) == "http"
+
+    def test_bare_binary_invocation_is_process(self):
+        from director import _classify_probe_modality
+        assert _classify_probe_modality("./slycrel --help") == "process"
+        assert _classify_probe_modality("go run ./cmd/cli -validate") == "process"
+
+    def test_empty_is_static(self):
+        from director import _classify_probe_modality
+        assert _classify_probe_modality("") == "static"
+
+
 class TestVerifyGoalCompletion:
     """Tests for verify_goal_completion — director closure check."""
 

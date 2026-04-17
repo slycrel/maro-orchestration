@@ -769,22 +769,74 @@ def handle(
             try:
                 from scope import generate_scope
                 _scope = generate_scope(message, adapter)
-                if _scope is not None and not _scope.is_empty():
-                    # Record scope artifact alongside the goal. If project is
-                    # None (CLI usage), derive the slug the same way
-                    # run_agent_loop does so the artifact lands in the
-                    # right project directory.
+                # Resolve the project artifacts dir once; used for both
+                # successful scope.md persistence and raw-dump on parse failure.
+                try:
+                    from agent_loop import _goal_to_slug
+                    _scope_project = project or _goal_to_slug(message)
+                    _proj_dir = Path.home() / ".poe" / "workspace" / "projects" / _scope_project / "artifacts"
+                    _proj_dir.mkdir(parents=True, exist_ok=True)
+                except Exception:
+                    _proj_dir = None
+
+                if _scope is not None and _scope.is_empty():
+                    # Parse failed. Persist the raw LLM response so the next
+                    # debug pass has evidence, and record a captain's log event
+                    # so closure/scope observability runs can count parse failures.
+                    _raw = (_scope.raw_text or "").strip()
+                    if _proj_dir is not None and _raw:
+                        try:
+                            (_proj_dir / "scope-raw-FAILED.txt").write_text(
+                                _raw + "\n", encoding="utf-8"
+                            )
+                            log.info("scope: parse failed, raw response at %s/scope-raw-FAILED.txt", _proj_dir)
+                        except Exception as _raw_exc:
+                            log.debug("scope: could not record raw response: %s", _raw_exc)
                     try:
-                        from agent_loop import _goal_to_slug
-                        _scope_project = project or _goal_to_slug(message)
-                        _proj_dir = Path.home() / ".poe" / "workspace" / "projects" / _scope_project / "artifacts"
-                        _proj_dir.mkdir(parents=True, exist_ok=True)
-                        (_proj_dir / "scope.md").write_text(
-                            _scope.to_markdown(), encoding="utf-8"
+                        from captains_log import log_event, SCOPE_PARSE_FAILED
+                        log_event(
+                            SCOPE_PARSE_FAILED,
+                            subject="scope_parse_failed",
+                            summary=f"Scope LLM response did not parse into failure_modes/in_scope/out_of_scope sections.",
+                            context={
+                                "goal_preview": message[:200],
+                                "raw_length": len(_raw),
+                                "raw_preview": _raw[:400],
+                            },
                         )
-                        log.info("scope: recorded artifact at %s/scope.md", _proj_dir)
-                    except Exception as _scope_rec_exc:
-                        log.debug("scope: could not record artifact: %s", _scope_rec_exc)
+                    except Exception:
+                        pass
+                    _scope = None  # treat as "no scope" for the rest of the pipeline
+                elif _scope is not None and not _scope.is_empty():
+                    # Successful parse. Persist scope.md + emit captain's log event.
+                    if _proj_dir is not None:
+                        try:
+                            (_proj_dir / "scope.md").write_text(
+                                _scope.to_markdown(), encoding="utf-8"
+                            )
+                            log.info("scope: recorded artifact at %s/scope.md", _proj_dir)
+                        except Exception as _scope_rec_exc:
+                            log.debug("scope: could not record artifact: %s", _scope_rec_exc)
+                    try:
+                        from captains_log import log_event, SCOPE_GENERATED
+                        log_event(
+                            SCOPE_GENERATED,
+                            subject="scope_generated",
+                            summary=(
+                                f"Scope: {len(_scope.failure_modes)} failure modes, "
+                                f"{len(_scope.in_scope)} in-scope, "
+                                f"{len(_scope.out_of_scope)} out-of-scope."
+                            ),
+                            context={
+                                "goal_preview": message[:200],
+                                "failure_modes_count": len(_scope.failure_modes),
+                                "in_scope_count": len(_scope.in_scope),
+                                "out_of_scope_count": len(_scope.out_of_scope),
+                                "ab_skip": bool(_scope_ab_skip),
+                            },
+                        )
+                    except Exception:
+                        pass
                     # A/B skip: record but don't inject
                     if _scope_ab_skip:
                         log.info("[scope-deferred] ab-skip: scope generated "

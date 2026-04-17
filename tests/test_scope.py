@@ -165,9 +165,16 @@ def test_generate_scope_returns_none_on_empty_response():
     assert generate_scope("build X", adapter) is None
 
 
-def test_generate_scope_returns_none_on_unparseable_response():
+def test_generate_scope_returns_empty_scope_with_raw_on_unparseable_response():
+    # Parse failure used to return None, which discarded evidence. Now we
+    # return an empty ScopeSet with raw_text populated so the caller can
+    # persist the raw LLM output for debugging. is_empty() still flags
+    # "don't inject" — this only changes what the caller can observe.
     adapter = _FakeAdapter(response_text="I'd love to help but...")
-    assert generate_scope("build X", adapter) is None
+    scope = generate_scope("build X", adapter)
+    assert scope is not None
+    assert scope.is_empty()
+    assert "I'd love to help" in scope.raw_text
 
 
 def test_generate_scope_parses_good_response():

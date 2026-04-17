@@ -1374,11 +1374,87 @@ def verify_goal_completion(
             "closure check: complete=%s confidence=%.2f checks=%d/%d gaps=%d",
             complete, confidence, checks_passed, checks_run, len(gaps),
         )
+
+        # Phase 65: emit CLOSURE_VERDICT to captain's log with per-check
+        # modality distribution. Lets closure quality be measured instead of
+        # guessed (floor: static vs runtime ratio across runs).
+        try:
+            modality_dist: Dict[str, int] = {}
+            for r in check_results:
+                mode = _classify_probe_modality(r.get("command", ""))
+                modality_dist[mode] = modality_dist.get(mode, 0) + 1
+            from captains_log import log_event, CLOSURE_VERDICT
+            log_event(
+                CLOSURE_VERDICT,
+                subject="closure_verdict",
+                summary=(
+                    f"Closure: complete={complete} confidence={confidence:.2f} "
+                    f"checks {checks_passed}/{checks_run} gaps={len(gaps)}"
+                ),
+                context={
+                    "goal_preview": goal[:200],
+                    "complete": complete,
+                    "confidence": confidence,
+                    "checks_run": checks_run,
+                    "checks_passed": checks_passed,
+                    "gap_count": len(gaps),
+                    "scope_supplied": scope is not None,
+                    "modality_distribution": modality_dist,
+                    "commands": [r.get("command", "")[:200] for r in check_results],
+                    "summary": summary[:400],
+                },
+            )
+        except Exception:
+            pass
+
         return verdict
 
     except Exception:
         log.debug("closure check error — treating as complete", exc_info=True)
         return _null
+
+
+# ---------------------------------------------------------------------------
+# Probe modality classifier (Phase 65 closure observability)
+# ---------------------------------------------------------------------------
+
+# Order matters: first match wins. browser/ws/http/process before static so
+# a command like `curl localhost:8080/health && grep foo bar` classifies as
+# http (the behavioral part), not static.
+_MODALITY_PATTERNS = (
+    ("browser", re.compile(r"\b(playwright|puppeteer|selenium|chromium|chrome --headless|firefox --headless)\b", re.I)),
+    ("ws",      re.compile(r"\b(wscat|websocat|wss?://)\b", re.I)),
+    ("http",    re.compile(r"\b(curl|wget|httpie|http [A-Z]+|https?://)\b", re.I)),
+    # "process" = runs a built binary or a script that likely exercises the
+    # artifact without network (e.g. `./bin --help`, `timeout 5 ./server &`).
+    # First char after `./` must be alphanumeric/underscore — rules out the
+    # go wildcard `./...` (as in `go build ./...`) which is a package pattern,
+    # not a binary invocation.
+    ("process", re.compile(r"(^|[\s;&|])\./[A-Za-z0-9_-][A-Za-z0-9_./-]*|(^|[\s;&|])(go run|node |python[0-9.]* |timeout [0-9]+\s+\S+\s*&)", re.I)),
+)
+
+_STATIC_HINTS = re.compile(
+    r"\b(grep|rg|test -[efdrs]|cat|head|tail|wc -[lc]|ls |find |jq |go build|go vet|go test -run|tsc --noEmit|ruff|flake8|mypy|pytest --collect-only)\b",
+    re.I,
+)
+
+
+def _classify_probe_modality(cmd: str) -> str:
+    """Classify a closure probe command by what it actually exercises.
+
+    Returns one of: browser, ws, http, process, static. "static" is the
+    residual — code inspection and compile-level checks that never touch
+    the running artifact.
+    """
+    if not cmd:
+        return "static"
+    for label, pat in _MODALITY_PATTERNS:
+        if pat.search(cmd):
+            return label
+    # No runtime indicator — treat as static. The regex above is biased
+    # toward the behavioral end; false-positives go *toward* runtime, which
+    # is the opposite of the current failure mode (everything-is-static bias).
+    return "static"
 
 
 # ---------------------------------------------------------------------------

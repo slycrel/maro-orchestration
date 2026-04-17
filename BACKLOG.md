@@ -60,6 +60,18 @@ See `docs/CONSTRAINT_ORCHESTRATION_DESIGN.md` + `docs/CONSTRAINT_ORCHESTRATION_R
 
   **Replay raw numbers** (evidence for the bias finding above): `~/.poe/workspace/projects/slycrel-replay/artifacts/summary.json` — `complete=False, confidence=0.35, 3/5 checks passed`. The two failing probes: (i) overly-strict grep for `!RemoteAddr.*username` false-positived on a legit log line `log.Printf(... username, r.RemoteAddr)`; (ii) `grep -qi xterm web/*` correctly caught that the work summary hallucinated xterm.js integration. The `_CLOSURE_PLAN_SYSTEM` prompt at `director.py:1137` says "Commands must be fast (<15s), safe (read-only or self-cleaning), exit 0 on success. Wrap background processes with `timeout` and always clean up PIDs" — permits live probes but nudges toward grep via path-of-least-resistance.
 
+### Introspect-sees-no-action: `decomposition_too_broad` (and siblings)
+
+- [ ] **`decomposition_too_broad` fires but nothing acts on it.** Full slycrel-go run (2026-04-16, loop `85ac29ee-*`) completed with introspect warning `decomposition_too_broad` logged and then ignored — loop continued, shipped 2 commits, closure never consulted the warning. This is the shape of self-improvement theater: the system knows something is off and does nothing. Frame this honestly as "not yet handled" rather than "working as designed."
+
+  **What should happen (candidates, unordered, not committed):**
+  - a warning of this severity should at minimum surface as a captain's log event the orchestrator can react to (not just a log line)
+  - should gate or influence decompose: retry with tighter bounds, or demand explicit scope acknowledgement of the breadth
+  - should decrement closure confidence or force an extra behavioral probe — breadth without coverage is precisely where slycrel-go regressions survived
+  - related introspect signals likely have the same shape (surfaced, ignored). Audit them together: grep `introspect` in agent_loop.py + introspect.py for "warn"/"observation" emissions and catalog which ones actually change behavior vs which ones are log-only.
+
+  **Evidence:** `~/.poe/workspace/projects/for-this-project-httpsgithubcomslycrelslycrelgo-id/artifacts/loop-85ac29ee-*/` — the warning is visible in the loop log, ends up with no handler. Same run also had scope parse failure silently discarding the raw LLM response (fixed 2026-04-16) — these are sibling observability gaps.
+
 ### From X research (2026-04-11 — 10 posts, live orchestration, 2 loops)
 
 Full report: `~/.poe/workspace/output/x-research-20260411T081706Z.md`

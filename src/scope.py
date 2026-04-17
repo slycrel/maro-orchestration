@@ -219,8 +219,12 @@ def generate_scope(
 
     scope = _parse_scope_markdown(content)
     if scope.is_empty():
-        log.warning("scope: LLM response had no parseable sections, skipping")
-        return None
+        # Return the empty ScopeSet (with raw_text populated) so the caller
+        # can persist the raw LLM output for debugging. `is_empty()` still
+        # flags "don't inject into planner context" — this is about keeping
+        # the evidence, not about changing injection behaviour.
+        log.warning("scope: LLM response had no parseable sections, returning raw for debug")
+        return scope
 
     log.info(
         "scope: generated %d failure modes, %d in-scope, %d out-of-scope items",
