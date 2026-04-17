@@ -25,6 +25,7 @@ from quality_gate import (
     _BULL_SYSTEM,
     _BEAR_SYSTEM,
     _RISK_MANAGER_SYSTEM,
+    _probe_contested_claims,
 )
 
 
@@ -452,3 +453,108 @@ class TestQualityGateWithDebate:
         verdict = run_quality_gate("goal", steps, adapter, run_adversarial=True, with_debate=True)
         assert verdict.escalate is True
         assert "REJECT" in verdict.reason or "Debate" in verdict.reason
+
+
+class TestProbeContestedClaims:
+    """Tests for _probe_contested_claims — inversion-at-verification for adversarial review.
+
+    The feature catches reviewer hallucinations (e.g. 2026-04-17 slycrel-go
+    run: "Go not installed on this machine" when Go is demonstrably at
+    ~/go/bin/go). The reviewer self-generates the probe that would settle
+    its own claim; the probe's exit code is the ground truth.
+    """
+
+    def test_empty_claims_list_returns_empty(self):
+        assert _probe_contested_claims([]) == []
+
+    def test_non_dict_items_passed_through(self):
+        # Defensive: sometimes the adversarial JSON returns non-object entries.
+        result = _probe_contested_claims(["not a dict", 42])
+        assert result == ["not a dict", 42]
+
+    def test_claim_without_command_marked_unprobed(self):
+        claim = {"claim": "the output is too optimistic", "verdict": "CONTESTED", "reason": "no metric"}
+        [out] = _probe_contested_claims([claim])
+        assert out["probe_status"] == "unprobed"
+        assert out["verdict"] == "CONTESTED"  # unchanged — can't run nothing
+
+    def test_null_command_marked_unprobed(self):
+        claim = {"claim": "x", "verdict": "CONTESTED", "settled_by_command": None}
+        [out] = _probe_contested_claims([claim])
+        assert out["probe_status"] == "unprobed"
+
+    def test_empty_command_marked_unprobed(self):
+        claim = {"claim": "x", "verdict": "CONTESTED", "settled_by_command": "   "}
+        [out] = _probe_contested_claims([claim])
+        assert out["probe_status"] == "unprobed"
+
+    def test_probe_exits_zero_dismisses_claim(self):
+        # "exit 0 means claim-as-stated-by-reviewer-is-wrong" convention.
+        claim = {
+            "claim": "the file /etc/hostname does not exist",
+            "verdict": "CONTESTED",
+            "settled_by_command": "test -f /etc/hostname",
+        }
+        [out] = _probe_contested_claims([claim])
+        assert out["probe_status"] == "dismissed"
+        assert out["verdict"] == "DISMISSED_BY_PROBE"
+        assert out["original_verdict"] == "CONTESTED"
+        assert out["probe_exit_code"] == 0
+
+    def test_probe_nonzero_exit_validates_reviewer(self):
+        # Probe agrees with the reviewer — contestation stands.
+        claim = {
+            "claim": "the file /nonexistent/nowhere does not exist",
+            "verdict": "CONTESTED",
+            "settled_by_command": "test -f /nonexistent/nowhere",
+        }
+        [out] = _probe_contested_claims([claim])
+        assert out["probe_status"] == "validated"
+        assert out["verdict"] == "CONTESTED"  # unchanged
+        assert out["probe_exit_code"] != 0
+        assert "original_verdict" not in out  # no reclassification happened
+
+    def test_probe_timeout_is_unrunnable(self, monkeypatch):
+        import subprocess as _sp
+        def _raise_timeout(*a, **kw):
+            raise _sp.TimeoutExpired(cmd=a[0] if a else "", timeout=1)
+        monkeypatch.setattr(_sp, "run", _raise_timeout)
+        claim = {"claim": "x", "verdict": "CONTESTED", "settled_by_command": "sleep 100"}
+        [out] = _probe_contested_claims([claim])
+        assert out["probe_status"] == "unrunnable"
+        assert out["verdict"] == "CONTESTED"  # don't grant either side
+        assert "timeout" in out["probe_output_preview"].lower()
+
+    def test_probe_exception_is_unrunnable(self, monkeypatch):
+        import subprocess as _sp
+        def _raise(*a, **kw):
+            raise OSError("simulated exec failure")
+        monkeypatch.setattr(_sp, "run", _raise)
+        claim = {"claim": "x", "verdict": "CONTESTED", "settled_by_command": "does-not-matter"}
+        [out] = _probe_contested_claims([claim])
+        assert out["probe_status"] == "unrunnable"
+        assert out["verdict"] == "CONTESTED"
+        assert "exec error" in out["probe_output_preview"]
+
+    def test_mixed_batch_classifies_each_independently(self):
+        # Dismissed + validated + unprobed together in one batch — each slot
+        # is independent, per-claim captain's log emission too.
+        claims = [
+            {"claim": "file /etc/hostname does not exist", "verdict": "CONTESTED",
+             "settled_by_command": "test -f /etc/hostname"},
+            {"claim": "file /nowhere/never does not exist", "verdict": "CONTESTED",
+             "settled_by_command": "test -f /nowhere/never"},
+            {"claim": "subjective claim about tone", "verdict": "CONTESTED"},
+        ]
+        out = _probe_contested_claims(claims)
+        statuses = [c["probe_status"] for c in out]
+        assert statuses == ["dismissed", "validated", "unprobed"]
+
+    def test_caller_dict_is_not_mutated(self):
+        claim = {"claim": "x", "verdict": "CONTESTED",
+                 "settled_by_command": "test -f /etc/hostname"}
+        _probe_contested_claims([claim])
+        # Caller's dict must be untouched — function returns a new list of
+        # shallow copies so callers can diff before/after safely.
+        assert "probe_status" not in claim
+        assert claim["verdict"] == "CONTESTED"

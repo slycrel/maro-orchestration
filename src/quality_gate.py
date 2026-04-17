@@ -212,9 +212,23 @@ _ADVERSARIAL_SYSTEM = textwrap.dedent("""\
     Be specific — cite what's wrong, not just that something is uncertain.
     Skip claims that are clearly solid. Focus on what would change a decision.
 
-    Produce a concise list of contested claims with verdict and one-sentence reason.
+    For each contested claim, ALSO supply `settled_by_command`: a single-line
+    shell command (read-only, <15s, exits 0 on success) that would decisively
+    settle whether your contestation is correct. Examples:
+      - Claim "file X does not exist" → `test -f path/to/X`
+      - Claim "tool Y is not installed" → `command -v Y`
+      - Claim "branch Z does not exist" → `git ls-remote --heads origin | grep -q Z`
+      - Claim "server does not respond" → `curl -fs -m 5 http://localhost:PORT/path`
+    Set `settled_by_command` to null when the claim is genuinely un-probe-able
+    (subjective interpretation, future-looking, requires an unreachable system).
+    Don't invent commands that can't run — null is correct when you can't
+    name a concrete check.
+
+    Produce a concise list of contested claims with verdict, reason, and probe.
     If everything checks out, respond with an empty list: []
-    Format: JSON array of {"claim": "...", "verdict": "...", "reason": "...", "population_match": true|false}
+    Format: JSON array of {"claim": "...", "verdict": "...", "reason": "...",
+                            "population_match": true|false,
+                            "settled_by_command": "..." or null}
     Set population_match=false when the cited study population doesn't match the goal population
     (e.g. study was in MCI patients but goal targets healthy adults; study used vegetarians
     but recommendation applies to omnivores). This is the most commonly missed downgrade.
@@ -365,6 +379,14 @@ def run_quality_gate(
                 log.info("quality_gate adversarial found %d contested claims",
                          len(contested_claims))
 
+                # Inversion-at-verification: for each contested claim that
+                # named a concrete probe, run the probe and reclassify based
+                # on what actually happens on disk. Catches reviewer
+                # hallucinations (e.g. 2026-04-17 slycrel-go: "Go not
+                # installed" — one `command -v go` settles it in <50ms).
+                if contested_claims:
+                    contested_claims = _probe_contested_claims(contested_claims)
+
         except Exception as exc:
             log.debug("quality_gate adversarial pass failed (non-fatal): %s", exc)
 
@@ -418,6 +440,124 @@ def run_quality_gate(
             log.warning("quality_gate cross_ref pass failed: %s", exc)
 
     return QualityVerdict(verdict, reason, confidence, escalate, contested_claims, council_verdict, debate_verdict, cross_ref_result)
+
+
+# ---------------------------------------------------------------------------
+# Probe contested claims (inversion-at-verification for adversarial review)
+# ---------------------------------------------------------------------------
+
+# Commands whose success output only matters if they exit 0. Kept small so
+# misuse can't silently ground false positives — when in doubt, the probe
+# is "unrunnable" and the claim stays CONTESTED.
+_PROBE_TIMEOUT_SEC = 15
+
+
+def _probe_contested_claims(claims: list) -> list:
+    """Run each claim's `settled_by_command` and reclassify based on outcome.
+
+    Inversion-at-verification, mirrored onto the adversarial reviewer's own
+    output: the reviewer generated the contestation AND the probe that would
+    settle it. Running the probe makes the ground-truth check mechanical,
+    not a second LLM judgment.
+
+    Reclassification rule (first applicable):
+      - No `settled_by_command` → mutate in-place, add `probe_status=unprobed`
+      - Probe exits 0 → reviewer's contestation was likely wrong about the
+        concrete fact: downgrade verdict to "DISMISSED_BY_PROBE", set
+        `probe_status=dismissed`. The claim will still appear in the record
+        for calibration but won't be appended to user-facing output.
+      - Probe exits non-zero → reviewer was right or the probe was wrong;
+        keep original verdict, set `probe_status=validated`. Contestation
+        stands.
+      - Probe raises / times out → leave verdict alone, set
+        `probe_status=unrunnable`. Don't grant the reviewer a free win, don't
+        grant dismissal either.
+
+    The convention `exit 0 == claim-as-stated-by-reviewer-is-wrong` is what
+    the prompt asks for: "a command that would decisively settle whether
+    your contestation is correct." If reviewer says "Go not installed",
+    probe `command -v go` exits 0 when Go IS installed — contestation wrong.
+
+    Emits a CLAIM_PROBED captain's log event per claim so calibration can
+    track the reviewer's false-positive rate over time.
+    """
+    import subprocess
+
+    out: list = []
+    for raw in claims:
+        if not isinstance(raw, dict):
+            out.append(raw)
+            continue
+        claim = dict(raw)  # shallow copy — never mutate caller's dict
+        cmd = claim.get("settled_by_command")
+        if not cmd or not isinstance(cmd, str) or not cmd.strip():
+            claim["probe_status"] = "unprobed"
+            out.append(claim)
+            continue
+
+        probe_status = "unrunnable"
+        probe_exit = None
+        probe_out = ""
+        try:
+            result = subprocess.run(
+                cmd, shell=True, capture_output=True, text=True,
+                timeout=_PROBE_TIMEOUT_SEC,
+            )
+            probe_exit = result.returncode
+            combined = (result.stdout or "") + (result.stderr or "")
+            probe_out = combined[:400]
+            if result.returncode == 0:
+                probe_status = "dismissed"
+                original_verdict = safe_str(claim.get("verdict", "CONTESTED"))
+                claim["original_verdict"] = original_verdict
+                claim["verdict"] = "DISMISSED_BY_PROBE"
+            else:
+                probe_status = "validated"
+        except subprocess.TimeoutExpired:
+            probe_status = "unrunnable"
+            probe_out = f"[timeout after {_PROBE_TIMEOUT_SEC}s]"
+        except Exception as exc:  # noqa: BLE001 — probe exec is best-effort
+            probe_status = "unrunnable"
+            probe_out = f"[exec error: {exc}]"
+
+        claim["probe_status"] = probe_status
+        claim["probe_exit_code"] = probe_exit
+        claim["probe_output_preview"] = probe_out
+
+        # Per-claim captain's log event so reviewer calibration can be
+        # measured instead of guessed. Same shape as closure's modality chart.
+        try:
+            from captains_log import log_event, CLAIM_PROBED
+            log_event(
+                CLAIM_PROBED,
+                subject="claim_probed",
+                summary=(
+                    f"Claim probe {probe_status}: "
+                    f"{safe_str(claim.get('claim', ''))[:120]}"
+                ),
+                context={
+                    "claim_preview": safe_str(claim.get("claim", ""))[:200],
+                    "reviewer_verdict": safe_str(claim.get("original_verdict")
+                                                  or claim.get("verdict", "")),
+                    "final_verdict": safe_str(claim.get("verdict", "")),
+                    "probe_command": cmd[:300],
+                    "probe_status": probe_status,
+                    "probe_exit_code": probe_exit,
+                    "probe_output_preview": probe_out[:300],
+                },
+            )
+        except Exception:
+            pass
+
+        out.append(claim)
+
+    # Summary log for the whole batch — one line per run, not per claim.
+    from collections import Counter
+    status_counts = Counter(c.get("probe_status") for c in out if isinstance(c, dict))
+    if status_counts:
+        log.info("adversarial probe outcomes: %s", dict(status_counts))
+
+    return out
 
 
 # ---------------------------------------------------------------------------

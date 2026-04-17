@@ -230,7 +230,7 @@ class TestEventTypes:
         assert DECISION_RECORDED in EVENT_TYPES
 
     def test_event_type_count(self):
-        assert len(EVENT_TYPES) == 34
+        assert len(EVENT_TYPES) == 35
 
     def test_input_mismatch_in_set(self):
         from captains_log import INPUT_MISMATCH
