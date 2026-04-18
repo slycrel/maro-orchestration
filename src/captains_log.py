@@ -77,6 +77,7 @@ SCOPE_GENERATED = "SCOPE_GENERATED"
 SCOPE_PARSE_FAILED = "SCOPE_PARSE_FAILED"
 CLOSURE_VERDICT = "CLOSURE_VERDICT"  # per-check modality distribution + pass/gap counts
 CLAIM_PROBED = "CLAIM_PROBED"  # adversarial-review grounding: per-claim probe outcome
+CLAIM_VERIFIER_OUTCOME = "CLAIM_VERIFIER_OUTCOME"  # per-step: file/symbol claim verification outcome + downstream action
 
 EVENT_TYPES = {
     SKILL_SYNTHESIZED, SKILL_SYNTHESIS_REJECTED, SKILL_PROMOTED, SKILL_DEMOTED, SKILL_REWRITE,
@@ -89,6 +90,7 @@ EVENT_TYPES = {
     AUTO_RECOVERY, DIAGNOSIS, INPUT_MISMATCH,
     DECISION_RECORDED, METACOGNITIVE_DECISION,
     SCOPE_GENERATED, SCOPE_PARSE_FAILED, CLOSURE_VERDICT, CLAIM_PROBED,
+    CLAIM_VERIFIER_OUTCOME,
 }
 
 # ---------------------------------------------------------------------------

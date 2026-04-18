@@ -405,6 +405,41 @@ def test_run_subprocess_safe_no_stdin_uses_devnull():
     assert result.stdout == ""
 
 
+def test_run_subprocess_safe_updates_current_step_symlink():
+    """During a run, /tmp/poe-current-step.log is created/updated as a symlink."""
+    from llm import _run_subprocess_safe
+
+    _run_subprocess_safe(["sh", "-c", "printf ok"], input="", timeout=5)
+    # The stdout temp file gets deleted on cleanup, so the symlink dangles
+    # after completion — that's by design. Just verify the link exists.
+    assert os.path.islink("/tmp/poe-current-step.log")
+
+
+def test_run_subprocess_safe_symlink_disabled_by_env(monkeypatch):
+    """POE_CURRENT_STEP_SYMLINK=0 suppresses the symlink update."""
+    from llm import _run_subprocess_safe
+
+    # Record the symlink target (or absence) before our call.
+    before_target = None
+    if os.path.islink("/tmp/poe-current-step.log"):
+        try:
+            before_target = os.readlink("/tmp/poe-current-step.log")
+        except OSError:
+            pass
+
+    monkeypatch.setenv("POE_CURRENT_STEP_SYMLINK", "0")
+    _run_subprocess_safe(["sh", "-c", "printf ok"], input="", timeout=5)
+
+    after_target = None
+    if os.path.islink("/tmp/poe-current-step.log"):
+        try:
+            after_target = os.readlink("/tmp/poe-current-step.log")
+        except OSError:
+            pass
+    # When disabled, the link either stays at its pre-call target or stays absent.
+    assert after_target == before_target
+
+
 def test_run_subprocess_safe_cleans_temp_files():
     """Temp stdout/stderr files get deleted on normal completion."""
     from llm import _run_subprocess_safe

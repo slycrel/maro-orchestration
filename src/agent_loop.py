@@ -1055,13 +1055,63 @@ def _post_step_checks(
     # Claim verifier on synthesis steps
     if step_status == "done" and step_result:
         try:
-            from claim_verifier import is_synthesis_step as _is_synth, annotate_result as _annotate
+            from claim_verifier import (
+                is_synthesis_step as _is_synth,
+                verify_file_claims as _verify_files,
+                verify_symbol_claims as _verify_symbols,
+            )
             if _is_synth(step_text):
-                _annotated = _annotate(step_result, only_if_hallucinations=True)
-                if _annotated != step_result:
-                    log.warning("step %d [claim-verifier] hallucinated file/symbol claims detected", step_idx)
-                    step_result = _annotated
-                    outcome["result"] = step_result
+                _file_rep = _verify_files(step_result)
+                _sym_rep = _verify_symbols(step_result)
+                _has_halluc = (_file_rep.has_hallucinations
+                               or _sym_rep.has_hallucinations)
+                if _has_halluc:
+                    # Inline annotation — mirrors claim_verifier.annotate_result
+                    # so we don't re-run the checks twice.
+                    _parts = []
+                    if _file_rep.not_found:
+                        _parts.append(
+                            f"FILE_CLAIMS_NOT_FOUND: {', '.join(_file_rep.not_found)}")
+                    if _sym_rep.not_found:
+                        _parts.append(
+                            f"SYMBOL_CLAIMS_NOT_FOUND: {', '.join(_sym_rep.not_found)}")
+                    if _parts:
+                        step_result = (step_result
+                                       + "\n\n[claim-verifier] "
+                                       + " | ".join(_parts))
+                        outcome["result"] = step_result
+                    log.warning(
+                        "step %d [claim-verifier] hallucinated file/symbol claims detected",
+                        step_idx)
+
+                # Structured event so downstream analysis can compute
+                # hallucination rate over time — not just a log warning.
+                try:
+                    from captains_log import log_event, CLAIM_VERIFIER_OUTCOME
+                    _outcome_label = "hallucinations_annotated" if _has_halluc else "clean"
+                    log_event(
+                        CLAIM_VERIFIER_OUTCOME,
+                        subject="claim_verifier",
+                        summary=(
+                            f"Step {step_idx}: {_outcome_label}"
+                            + (f" (files={len(_file_rep.not_found)}, "
+                               f"symbols={len(_sym_rep.not_found)})"
+                               if _has_halluc else "")
+                        ),
+                        context={
+                            "step_idx": step_idx,
+                            "outcome": _outcome_label,
+                            "action": ("annotated_and_continued"
+                                       if _has_halluc else "none"),
+                            "file_not_found": list(_file_rep.not_found)[:20],
+                            "file_verified_count": len(_file_rep.verified),
+                            "symbol_not_found": list(_sym_rep.not_found)[:20],
+                            "symbol_verified_count": len(_sym_rep.verified),
+                        },
+                    )
+                except Exception as _log_exc:
+                    log.debug("CLAIM_VERIFIER_OUTCOME emit failed for step %d: %s",
+                              step_idx, _log_exc)
         except Exception as _exc:
             log.warning("claim verifier failed for step %d (annotations skipped): %s", step_idx, _exc)
 

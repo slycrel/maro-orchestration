@@ -430,6 +430,21 @@ def _run_subprocess_safe(cmd, *, input=None, timeout=600,
     stdout_path = stdout_f.name
     stderr_path = stderr_f.name
 
+    # Operator-visibility symlink: `tail -f /tmp/poe-current-step.log` from
+    # anywhere shows the in-flight subprocess's stdout. Updated atomically
+    # on each new subprocess; dangles between steps (by design — means
+    # "no step running"). Disable with POE_CURRENT_STEP_SYMLINK=0.
+    if os.environ.get("POE_CURRENT_STEP_SYMLINK", "1") != "0":
+        try:
+            link_target = "/tmp/poe-current-step.log"
+            tmp_link = f"{link_target}.{os.getpid()}.tmp"
+            try: os.unlink(tmp_link)
+            except OSError: pass
+            os.symlink(stdout_path, tmp_link)
+            os.rename(tmp_link, link_target)  # atomic replace
+        except OSError:
+            pass  # best-effort; never block on symlink failures
+
     def _read_captured():
         stdout_f.flush(); stderr_f.flush()
         stdout_f.seek(0); stderr_f.seek(0)

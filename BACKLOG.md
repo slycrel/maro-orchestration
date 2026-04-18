@@ -9,6 +9,25 @@ Last reviewed: 2026-04-16 (session 34 — split into active + done).
 
 ---
 
+### Runtime visibility (tracked 2026-04-17)
+
+- [ ] **Current-step symlink.** `/tmp/poe-current-step.log` → active
+  streaming stdout file, updated as each subprocess starts. Makes
+  `tail -f` work from anywhere during a run without hunting for temp
+  paths. (ITEM #1 — shipping now.)
+- [ ] **Claim-verifier outcome event.** Run 5 emitted
+  `[claim-verifier] hallucinated file/symbol claims detected` only as a
+  log warning — no captain's log event, no visibility into what the
+  system did next. Promote to a structured CLAIM_VERIFIER_OUTCOME event
+  with step id + symbol list + downstream action taken. (ITEM #2 —
+  shipping now.)
+- [ ] **Rolling reviewer-calibration metric.** `scripts/probe-stats.sh`
+  scans last N days of captain's log, reports
+  `dismissed/validated/unprobed` rates for CLAIM_PROBED. Tells us if the
+  adversarial reviewer is getting more or less trustworthy over time —
+  the reason we built the grounding. (ITEM #3 — deferred; revisit after
+  regression sweep.)
+
 ### Step-process visibility + elevation (discovered 2026-04-17)
 
 Run 5 of slycrel-go lost step 9 to a hard 600s wall-clock kill of the
