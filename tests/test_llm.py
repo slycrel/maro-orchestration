@@ -294,44 +294,128 @@ def test_subprocess_complete_ignores_thinking_budget(monkeypatch):
 # _run_subprocess_safe — process group cleanup
 # ---------------------------------------------------------------------------
 
-def test_run_subprocess_safe_kills_process_group_on_timeout():
-    """On timeout, _run_subprocess_safe kills the entire process group."""
-    from llm import _run_subprocess_safe
-    import subprocess
-    import signal
-
-    with patch("subprocess.Popen") as mock_popen:
-        proc = MagicMock()
-        proc.pid = 12345
-        proc.communicate.side_effect = subprocess.TimeoutExpired(cmd="test", timeout=1)
-        proc.wait.return_value = None
-        mock_popen.return_value = proc
-
-        with pytest.raises(subprocess.TimeoutExpired):
-            _run_subprocess_safe(["test"], input="hello", timeout=1)
-
-        # Should have been called with start_new_session=True
-        mock_popen.assert_called_once()
-        assert mock_popen.call_args[1].get("start_new_session") is True
-
-
 def test_run_subprocess_safe_returns_completed_process():
-    """Normal completion returns CompletedProcess with correct fields."""
+    """Normal completion returns CompletedProcess with captured output."""
     from llm import _run_subprocess_safe
-    import subprocess
+    import subprocess as sp
 
-    with patch("subprocess.Popen") as mock_popen:
-        proc = MagicMock()
-        proc.pid = 12345
-        proc.communicate.return_value = ("output", "")
-        proc.returncode = 0
-        mock_popen.return_value = proc
+    result = _run_subprocess_safe(
+        ["sh", "-c", "printf hello; printf oops >&2"],
+        input="", timeout=10,
+    )
+    assert isinstance(result, sp.CompletedProcess)
+    assert result.returncode == 0
+    assert result.stdout == "hello"
+    assert result.stderr == "oops"
 
-        result = _run_subprocess_safe(["test"], input="hello", timeout=10)
 
-        assert isinstance(result, subprocess.CompletedProcess)
-        assert result.stdout == "output"
-        assert result.returncode == 0
+def test_run_subprocess_safe_walltime_timeout_kills_and_raises():
+    """Wall-clock timeout raises TimeoutExpired after killing the process."""
+    from llm import _run_subprocess_safe
+    import subprocess as sp
+
+    with pytest.raises(sp.TimeoutExpired) as exc_info:
+        _run_subprocess_safe(
+            ["sh", "-c", "sleep 10"],
+            input="", timeout=1, liveness_timeout=0,
+        )
+    reason = getattr(exc_info.value, "poe_kill_reason", "")
+    assert "wall-clock" in reason
+
+
+def test_run_subprocess_safe_walltime_preserves_partial_output():
+    """On wall-clock kill, accumulated stdout is available on the exception."""
+    from llm import _run_subprocess_safe
+    import subprocess as sp
+
+    script = "printf partial; sleep 10"
+    with pytest.raises(sp.TimeoutExpired) as exc_info:
+        _run_subprocess_safe(
+            ["sh", "-c", script],
+            input="", timeout=2, liveness_timeout=0,
+        )
+    assert (exc_info.value.output or "").startswith("partial")
+
+
+def test_run_subprocess_safe_liveness_kills_silent_process():
+    """Liveness timeout fires when a process produces no output for the window."""
+    from llm import _run_subprocess_safe
+    import subprocess as sp
+
+    with pytest.raises(sp.TimeoutExpired) as exc_info:
+        _run_subprocess_safe(
+            ["sh", "-c", "sleep 10"],
+            input="", timeout=60, liveness_timeout=2, poll_interval=0.2,
+        )
+    reason = getattr(exc_info.value, "poe_kill_reason", "")
+    assert "liveness" in reason
+
+
+def test_run_subprocess_safe_liveness_spares_chatty_process():
+    """A process that emits regularly does NOT trip the liveness timeout."""
+    from llm import _run_subprocess_safe
+
+    # Emits every 0.3s for ~1.5s — below the 2s liveness window every time.
+    script = "for i in 1 2 3 4 5; do printf 'x'; sleep 0.3; done"
+    result = _run_subprocess_safe(
+        ["sh", "-c", script],
+        input="", timeout=10, liveness_timeout=2, poll_interval=0.2,
+    )
+    assert result.returncode == 0
+    assert result.stdout == "xxxxx"
+
+
+def test_run_subprocess_safe_liveness_env_var_override(monkeypatch):
+    """POE_LIVENESS_TIMEOUT env var overrides the default liveness window."""
+    from llm import _run_subprocess_safe
+    import subprocess as sp
+
+    monkeypatch.setenv("POE_LIVENESS_TIMEOUT", "1")
+    with pytest.raises(sp.TimeoutExpired) as exc_info:
+        _run_subprocess_safe(
+            ["sh", "-c", "sleep 10"],
+            input="", timeout=30, poll_interval=0.2,
+        )
+    reason = getattr(exc_info.value, "poe_kill_reason", "")
+    assert "liveness" in reason
+
+
+def test_run_subprocess_safe_stdin_passed_through():
+    """Input provided via `input=` reaches the subprocess stdin."""
+    from llm import _run_subprocess_safe
+
+    result = _run_subprocess_safe(
+        ["sh", "-c", "cat"],
+        input="payload-data\n", timeout=10,
+    )
+    assert result.returncode == 0
+    assert result.stdout == "payload-data\n"
+
+
+def test_run_subprocess_safe_no_stdin_uses_devnull():
+    """With input=None, stdin is /dev/null — proc exits immediately if it reads."""
+    from llm import _run_subprocess_safe
+
+    # `cat` with no stdin sees EOF immediately → exit 0, no output.
+    result = _run_subprocess_safe(
+        ["sh", "-c", "cat"],
+        input=None, timeout=5,
+    )
+    assert result.returncode == 0
+    assert result.stdout == ""
+
+
+def test_run_subprocess_safe_cleans_temp_files():
+    """Temp stdout/stderr files get deleted on normal completion."""
+    from llm import _run_subprocess_safe
+    import glob, tempfile
+
+    tmpdir = tempfile.gettempdir()
+    before = set(glob.glob(f"{tmpdir}/tmp*.stdout") + glob.glob(f"{tmpdir}/tmp*.stderr"))
+    _run_subprocess_safe(["sh", "-c", "printf done"], input="", timeout=5)
+    after = set(glob.glob(f"{tmpdir}/tmp*.stdout") + glob.glob(f"{tmpdir}/tmp*.stderr"))
+    # No new .stdout/.stderr tempfiles should have been left behind by our call.
+    assert not (after - before)
 
 
 # ---------------------------------------------------------------------------

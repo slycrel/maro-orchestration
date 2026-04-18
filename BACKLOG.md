@@ -9,6 +9,27 @@ Last reviewed: 2026-04-16 (session 34 — split into active + done).
 
 ---
 
+### Step-process visibility + elevation (discovered 2026-04-17)
+
+Run 5 of slycrel-go lost step 9 to a hard 600s wall-clock kill of the
+`claude -p` subprocess. No way to distinguish "hung" from "working hard",
+no partial output captured. Jeremy's framing: "if a step is going to take
+that long, it should probably be a sub-milestone/goal on its own, not
+just a step" — mirrors the ralph-within-structure feedback (a step that
+needs 10+ minutes is a goal the decomposer miscategorized).
+
+- [x] **Heartbeat / liveness timeout.** Stream step subprocess stdout+stderr
+  to disk instead of buffering. Kill on *no output for N seconds*, not
+  wall clock. Partial output survives the kill. See
+  `src/llm.py::_run_subprocess_safe`. (Shipped 2026-04-17 — commit
+  0942ec29ff.)
+- [ ] **Step-to-goal elevation.** When a step's elapsed time or token
+  spend crosses a threshold, pause it, capture its state, respawn as a
+  child goal with its own decompose/execute/verify loop, merge result
+  back. Invasive (state handoff + result merge + parent-loop resumption);
+  wait for heartbeat signal to tell us *which* steps actually need this
+  before building.
+
 ### Bounded workspace / sandboxing (discovered 2026-04-17)
 
 Run 4 of slycrel-go blind test was contaminated by stale local clones. Four

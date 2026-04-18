@@ -378,53 +378,156 @@ Tools:
 """)
 
 
-def _run_subprocess_safe(cmd, *, input=None, timeout=600):
-    """Run a subprocess in its own process group and clean up on timeout/completion.
+def _run_subprocess_safe(cmd, *, input=None, timeout=600,
+                         liveness_timeout=None, poll_interval=2.0):
+    """Run a subprocess in its own process group with streaming + liveness check.
 
-    Returns a subprocess.CompletedProcess-like object. On timeout, kills the
-    entire process group (not just the parent) to prevent zombie child processes.
+    Streams stdout/stderr to temp files instead of buffering in memory. Two
+    kill conditions:
+      1. Wall-clock `timeout` — hard ceiling, same semantics as before.
+      2. Liveness: if no bytes land on stdout OR stderr for `liveness_timeout`
+         seconds, assume the subprocess is hung (not working hard) and kill.
+
+    `liveness_timeout` defaults to min(timeout, 180). Pass 0 or None-like to
+    disable (falls back to wall-clock only). Env var `POE_LIVENESS_TIMEOUT`
+    overrides the default for the whole process.
+
+    Partial output captured up to the kill is preserved in the returned
+    CompletedProcess (stdout/stderr fields), unlike communicate(), so a
+    timed-out step doesn't lose all accumulated work.
+
+    Returns a subprocess.CompletedProcess. On wall-clock timeout raises
+    subprocess.TimeoutExpired (unchanged). On liveness timeout raises a
+    subprocess.TimeoutExpired with an augmented message so callers can
+    distinguish.
     """
     import signal
-    proc = subprocess.Popen(
-        cmd,
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        start_new_session=True,  # creates new process group
-    )
-    try:
-        stdout, stderr = proc.communicate(input=input, timeout=timeout)
-    except subprocess.TimeoutExpired:
-        # Kill the entire process group
-        try:
-            os.killpg(proc.pid, signal.SIGTERM)
-        except OSError:
-            pass
-        # Give children 2s to exit, then SIGKILL
-        try:
-            proc.wait(timeout=2)
-        except subprocess.TimeoutExpired:
+    import tempfile
+    import time
+
+    if liveness_timeout is None:
+        env_override = os.environ.get("POE_LIVENESS_TIMEOUT")
+        if env_override:
             try:
-                os.killpg(proc.pid, signal.SIGKILL)
+                liveness_timeout = int(env_override)
+            except ValueError:
+                liveness_timeout = None
+        if liveness_timeout is None:
+            liveness_timeout = min(timeout, 180) if timeout else 0
+
+    stdin_f = None
+    if input is not None:
+        stdin_f = tempfile.NamedTemporaryFile(
+            mode="w", suffix=".stdin", delete=False, encoding="utf-8")
+        stdin_f.write(input)
+        stdin_f.flush()
+        stdin_f.seek(0)
+
+    stdout_f = tempfile.NamedTemporaryFile(
+        mode="w+b", suffix=".stdout", delete=False)
+    stderr_f = tempfile.NamedTemporaryFile(
+        mode="w+b", suffix=".stderr", delete=False)
+    stdout_path = stdout_f.name
+    stderr_path = stderr_f.name
+
+    def _read_captured():
+        stdout_f.flush(); stderr_f.flush()
+        stdout_f.seek(0); stderr_f.seek(0)
+        return (stdout_f.read().decode("utf-8", errors="replace"),
+                stderr_f.read().decode("utf-8", errors="replace"))
+
+    def _cleanup_files():
+        try: stdout_f.close()
+        except Exception: pass
+        try: stderr_f.close()
+        except Exception: pass
+        for p in (stdout_path, stderr_path,
+                  stdin_f.name if stdin_f else None):
+            if p:
+                try: os.unlink(p)
+                except OSError: pass
+
+    def _last_activity_mtime():
+        latest = 0.0
+        for p in (stdout_path, stderr_path):
+            try:
+                latest = max(latest, os.path.getmtime(p))
             except OSError:
                 pass
-            proc.wait(timeout=5)
-        raise subprocess.TimeoutExpired(cmd, timeout)
-    except Exception:
-        # On any error, clean up the process group
+        return latest
+
+    proc = subprocess.Popen(
+        cmd,
+        stdin=stdin_f if stdin_f else subprocess.DEVNULL,
+        stdout=stdout_f,
+        stderr=stderr_f,
+        start_new_session=True,
+    )
+    if stdin_f:
         try:
-            os.killpg(proc.pid, signal.SIGKILL)
-        except OSError:
+            stdin_f.close()
+        except Exception:
             pass
+
+    start = time.monotonic()
+    last_seen = start  # monotonic-time of most recent observed output
+    last_mtime = 0.0   # wall-clock mtime we've already credited
+    kill_reason = None
+    try:
+        while True:
+            rc = proc.poll()
+            if rc is not None:
+                break
+            now = time.monotonic()
+            elapsed = now - start
+
+            # Liveness: each poll, if either file's mtime advanced past what
+            # we've seen, stamp last_seen with the current monotonic time.
+            # Avoids fragile monotonic↔wall-clock conversion.
+            latest_mtime = _last_activity_mtime()
+            if latest_mtime > last_mtime:
+                last_mtime = latest_mtime
+                last_seen = now
+
+            if timeout and elapsed >= timeout:
+                kill_reason = f"wall-clock timeout after {int(elapsed)}s"
+                break
+            if liveness_timeout and (now - last_seen) >= liveness_timeout:
+                kill_reason = (f"liveness timeout: no output for "
+                               f"{int(now - last_seen)}s (elapsed={int(elapsed)}s)")
+                break
+
+            time.sleep(poll_interval)
+
+        if kill_reason is not None:
+            try: os.killpg(proc.pid, signal.SIGTERM)
+            except OSError: pass
+            try: proc.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                try: os.killpg(proc.pid, signal.SIGKILL)
+                except OSError: pass
+                proc.wait(timeout=5)
+            stdout, stderr = _read_captured()
+            _cleanup_files()
+            exc = subprocess.TimeoutExpired(cmd, timeout or liveness_timeout,
+                                            output=stdout, stderr=stderr)
+            # Attach reason for caller introspection; not used by base class.
+            exc.poe_kill_reason = kill_reason  # type: ignore[attr-defined]
+            raise exc
+    except subprocess.TimeoutExpired:
+        raise
+    except Exception:
+        try: os.killpg(proc.pid, signal.SIGKILL)
+        except OSError: pass
+        _cleanup_files()
         raise
     finally:
-        # Ensure process group is dead even on normal completion
-        try:
-            os.killpg(proc.pid, signal.SIGTERM)
-        except OSError:
-            pass  # already exited — expected
+        # Best-effort process-group cleanup on normal completion too.
+        try: os.killpg(proc.pid, signal.SIGTERM)
+        except OSError: pass
 
+    stdout, stderr = _read_captured()
+    _cleanup_files()
     return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
 
 
