@@ -115,10 +115,13 @@ fi
 # 4. Launch. `-u` forces unbuffered stdout/stderr so the log file grows in
 # real time when redirected; without it Python defaults to block buffering
 # on non-tty descriptors and the log appears to freeze for long stretches.
+# POE_LOG_LEVEL=INFO surfaces scope/director/step progress — the whole
+# point of a blind-test run is to observe the pipeline, so the quieter
+# WARNING default is wrong here.
 cd "$REPO_ROOT"
 prompt=$(cat "$PROMPT_FILE")
 echo "launching handle (log: $LOG_FILE)..."
-PYTHONPATH=src python3 -u -m handle "$prompt" > "$LOG_FILE" 2>&1 &
+POE_LOG_LEVEL=INFO PYTHONPATH=src python3 -u -m handle "$prompt" > "$LOG_FILE" 2>&1 &
 pid=$!
 echo "PID: $pid"
 echo "tail: tail -f $LOG_FILE"
