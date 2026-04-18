@@ -22,7 +22,7 @@ needs 10+ minutes is a goal the decomposer miscategorized).
   to disk instead of buffering. Kill on *no output for N seconds*, not
   wall clock. Partial output survives the kill. See
   `src/llm.py::_run_subprocess_safe`. (Shipped 2026-04-17 — commit
-  0942ec29ff.)
+  a44eb6a.)
 - [ ] **Step-to-goal elevation.** When a step's elapsed time or token
   spend crosses a threshold, pause it, capture its state, respawn as a
   child goal with its own decompose/execute/verify loop, merge result
