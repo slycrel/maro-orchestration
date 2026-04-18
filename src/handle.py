@@ -907,13 +907,19 @@ def handle(
             except Exception as _rst_exc:
                 log.warning("handle: restart re-run failed: %s", _rst_exc)
 
-        # Director closure check — verify the goal was actually achieved
-        # Runs after the loop declares "done"; emits verification/needs_work events
-        # to channel. Non-fatal: never raises.
-        # If closure_restart is enabled and the verdict says the goal is NOT
-        # complete with material confidence, feed the gaps back as restart context
-        # and re-run the loop (capped by continuation_depth).
-        if not dry_run and loop_result.status == "done":
+        # Director closure check — verify the goal was actually achieved.
+        # Runs on any terminal state that produced steps (not just "done"):
+        # a stuck/partial/restart loop still benefits from closure's honest
+        # "what got delivered" signal, and the CLOSURE_VERDICT event makes
+        # the recovery paths observable. Closure-restart escalation only
+        # fires from "done" (other states already indicate work isn't
+        # complete — re-running via this path would double-recover).
+        _closure_eligible_statuses = ("done", "partial", "stuck", "restart")
+        _ran_any_step = any(getattr(s, "status", "") == "done"
+                            for s in (loop_result.steps or []))
+        if (not dry_run
+                and loop_result.status in _closure_eligible_statuses
+                and _ran_any_step):
             try:
                 from director import verify_goal_completion
                 _closure = verify_goal_completion(
@@ -941,6 +947,7 @@ def handle(
                 and _closure.confidence >= 0.6
                 and _closure.checks_run > 0
                 and _depth < 3
+                and loop_result.status == "done"  # only escalate from "done" — stuck/partial already know they're incomplete
             ):
                 _gap_lines = "\n".join(f"- {g}" for g in _closure.gaps) or "(none specified)"
                 _closure_ctx = (
@@ -998,10 +1005,21 @@ def handle(
             except Exception:
                 pass  # channel notifications must never block
 
-        # Quality gate — skeptic review; escalate model tier if output is below bar
+        # Quality gate — skeptic review; escalate model tier if output is below bar.
+        # Runs on any terminal state that produced work so contested-claims
+        # and probe events fire regardless of outcome. Only the *escalation*
+        # re-run is gated on "done" — stuck/partial loops don't benefit from
+        # being re-run at a higher tier (they indicate a decomposition or
+        # recovery issue, not a model-tier issue).
         _gate_note = ""
         _contested_claims: list = []
-        if not dry_run and loop_result.status == "done" and _cfg.get("quality_gate", "true") == "true":
+        _gate_statuses = ("done", "partial", "stuck", "restart")
+        _ran_any_step_for_gate = any(getattr(s, "status", "") == "done"
+                                      for s in (loop_result.steps or []))
+        if (not dry_run
+                and loop_result.status in _gate_statuses
+                and _ran_any_step_for_gate
+                and _cfg.get("quality_gate", "true") == "true"):
             try:
                 from quality_gate import run_quality_gate, next_model_tier
                 _gate_verdict = run_quality_gate(
@@ -1010,7 +1028,7 @@ def handle(
                     run_cross_ref=_strict_prefix,
                 )
                 _contested_claims = _gate_verdict.contested_claims or []
-                if _gate_verdict.escalate:
+                if _gate_verdict.escalate and loop_result.status == "done":
                     _next_tier = next_model_tier(model or "cheap")
                     _action = _cfg.get("quality_gate_action", "escalate").strip().lower()
                     _gate_note = f"\n\n⚠️ Quality gate: ESCALATE — {_gate_verdict.reason}"
