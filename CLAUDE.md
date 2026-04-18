@@ -31,6 +31,21 @@ This is **dev-facing tooling only** — not part of Poe's runtime self-improveme
 
 These skills document **intent vs implementation gaps** — what the system is supposed to do vs what's actually coded. They prevent accidental regressions and surface the real design constraints.
 
+**Coding posture:** read `docs/CODING_NOTES.md` before shipping. This repo
+is heavily iterating — principles for keeping seams visible and rework
+cheap live there (registry vs dispatch, 3-is-fine/4-wants-extraction,
+don't-refactor-mid-feature, test seams not internals, etc.). Not a style
+guide; the minimum overhead that keeps the codebase honest during
+exploration.
+
+**Open design spaces** — if your work touches these, read the doc first:
+
+| Space | Doc |
+|---|---|
+| Intent resolution / side-quests / "what does done mean" | `docs/INTENT_RESOLUTION_DESIGN.md` |
+| Scope + constraint orchestration (Phase 65) | `docs/CONSTRAINT_ORCHESTRATION_DESIGN.md` + review |
+| Adaptive execution | `docs/ADAPTIVE_EXECUTION_DESIGN.md` |
+
 - GitHub: https://github.com/slycrel/openclaw-orchestration
 - Machine: Ubuntu headless, user `clawd`, `/home/clawd/claude/openclaw-orchestration/`
 - Owner: Jeremy Stone (`slycrel`) — 25+ years engineering, AI orchestration

@@ -5,7 +5,90 @@ Read this at the start of every session. Update it as items are completed or new
 
 **Completed items live in [BACKLOG_DONE.md](BACKLOG_DONE.md)** — move items there with their full context when they ship; that file is the archive of what we've already decided, tried, or superseded, and it's ingested by `dev-recall` for historical context.
 
-Last reviewed: 2026-04-16 (session 34 — split into active + done).
+Last reviewed: 2026-04-18 (post run-7 — added intent-resolution initiative + modular-refactor chunks + coding notes).
+
+---
+
+### Intent resolution — naming the "side-quests before decompose" shape (discovered 2026-04-18)
+
+Run 7 of slycrel-go surfaced (again) that "done" means "the plan we guessed
+up front got executed," not "the goal's artifact exists." The server was
+built. The browser client wasn't — and the prompt explicitly said "browser
+as a client." Closure missed it because closure checks against the plan's
+deliverable list, and the plan's deliverable list was itself a 1-shot guess.
+
+We keep writing pieces that nibble at this (`scope.py`, closure,
+inversion, ralph, director-restart) and stopping there. The structural
+phase missing is: **delay decomposition until intent-resolution
+side-quests have settled the unknowns.** See
+`docs/INTENT_RESOLUTION_DESIGN.md` for the full sketch + the minimum
+experiment proposal.
+
+- [ ] **Minimum experiment (before building orchestration):** take one
+  blind-test goal. Manually produce a resolved-intent artifact
+  (unknowns / probes / deliverable-map). Run side-quests by hand using
+  the existing `handle.py` path, capture outputs. Run the main goal with
+  resolved-intent + side-quest artifacts injected as ancestry context.
+  Measure: does output quality + closure verdict + adversarial review
+  improve measurably vs the same goal without? If yes, build
+  orchestration. If no, the ceiling isn't here.
+- [ ] **Small-scope deliverable-map LLM prompt:** dedicated prompt that
+  asks "what artifacts does this goal *literally* imply?" separate from
+  scope generation. Cheap to try and might catch the slycrel-go "no
+  client exists" class of miss without any other structural changes.
+- [ ] **Resolved-intent artifact schema.** After the experiment, if we
+  want to build the orchestration, spec the artifact (fields,
+  persistence, merge rules on pivot).
+- [ ] **Pivot reuse / workspace persistence as first-class.** The
+  `polymarket-edges` pattern proves the value of persistent workspaces
+  (project_polymarket_edges.md memory). Generalize: every goal's
+  side-quest outputs live in `~/.poe/workspace/projects/<slug>/
+  artifacts/` and survive across reruns of the same goal family.
+
+### Modular refactoring (AFK-friendly chunks, queued 2026-04-18)
+
+Jeremy's framing: LLMs don't feel rework cost the way humans do, so our
+codebase has accumulated seams that are hidden (not broken, just hostile
+to the next edit). These chunks are sized so one session can ship one of
+them cleanly without needing real-time direction. Pick any of them when
+looking for an AFK-friendly chore. Principles in `docs/CODING_NOTES.md`.
+
+- [ ] **llm.py adapter protocol extraction.** Four adapters
+  (Anthropic / OpenAI / OpenRouter / Subprocess) share patterns by
+  convention, not by interface. Extract an `Adapter` Protocol with
+  `complete(messages) → iterator_of_events` so streaming is first-class
+  and liveness/kill logic lives in one wrapper instead of per-adapter.
+  Port subprocess adapter first (we just touched it), others
+  incrementally. Dependency: stream-json parsing lands first (see
+  separate item) — the streaming shape is the point of the extraction.
+  Size: ~half day per adapter once protocol is spec'd.
+- [ ] **handle.py prefix registry.** `apply_prefixes()` is a chain of
+  if/elif on magic strings (`ralph:`, `verify:`, `pipeline:`, `strict:`,
+  `effort:`, `ultraplan:`, `btw:`, `direct:`, `mode:thin`). Collect into
+  a `PREFIX_HANDLERS: dict[str, Callable]` registry so "what modifiers
+  exist?" is a one-line grep. Preserve stacking semantics. Tests
+  already cover every modifier so regression risk is low. Size:
+  half-day. Good starter AFK chunk.
+- [ ] **agent_loop.py phase extraction (continuation).** `LoopPhase` +
+  `LoopContext` shipped (memory: project_monolith_extraction.md).
+  Next 2 phases to extract: `scope_generation_phase` and
+  `step_execution_phase`. Module is ~74KB; want to get under 40KB per
+  file. Size: one phase per session, ~half-day each.
+- [ ] **Captain's log event contract doc.** We have 36+ event types
+  emitted across 10+ modules. No single doc says "here's every event,
+  here's the field schema, here's when it fires." Blind collaborator
+  can't reason about observability without reading every emitter.
+  Produce `docs/CAPTAINS_LOG_EVENTS.md` with one table: event / fields /
+  emitter / when-it-fires. Pure documentation chunk — zero code risk.
+  Size: half-day. Excellent AFK starter.
+- [ ] **Test clutter trim.** Jeremy's outside-in-testing posture
+  applied to the suite: tests that poke private functions with mocked
+  collaborators and assert call-shape are performative. Sweep tests
+  touched during recent refactors and mark ones that would break on
+  a rename-without-behavior-change — delete the clearest offenders,
+  keep anything covering a module boundary or regression. Don't do
+  a mass pass; trim opportunistically when editing neighboring code.
+  (Tracked as a posture, not a standalone chunk.)
 
 ---
 
@@ -24,6 +107,17 @@ Last reviewed: 2026-04-16 (session 34 — split into active + done).
   adversarial reviewer is getting more or less trustworthy over time —
   the reason we built the grounding. (ITEM #3 — deferred; revisit after
   more probe data accumulates.)
+- [ ] **Stream-json token visibility (next up, per Jeremy 2026-04-18).**
+  `claude -p --output-format stream-json` emits newline-delimited JSON
+  events (init, assistant chunks, tool calls, result). Switch the
+  subprocess adapter + `/tmp/poe-current-step.log` to this mode so
+  operators see live tokens instead of 0 bytes until burst-at-end. Each
+  new line becomes the primary liveness signal; CPU-activity demotes to
+  a fallback for adapters that don't stream. Parser work: line-reader
+  that accumulates assistant deltas + handles tool_use events + parses
+  the final `result` event for usage stats. Tests need fake streaming
+  fixtures. Size: ~half-day. Coordinates with the adapter protocol
+  extraction (stream shape is the point of the Adapter interface).
 - [x] **Closure + quality_gate run on partial/stuck/restart.** Previously
   gated on `status == "done"`; metacognitive-recovery paths produced
   material work but emitted no CLOSURE_VERDICT / CLAIM_VERIFIER_OUTCOME /
