@@ -378,28 +378,76 @@ Tools:
 """)
 
 
+def _session_cpu_ticks(leader_pid: int) -> int:
+    """Sum utime+stime (clock ticks) for all procs whose session == leader_pid.
+
+    Secondary liveness signal: a silent-but-computing subprocess (e.g. a
+    local LLM mid-inference) won't advance its output file's mtime but
+    will burn CPU. Summing across the session catches multi-process
+    pipelines (e.g. claude CLI → node worker) since `start_new_session=True`
+    makes the Popen'd process the session leader.
+
+    Best-effort: any per-proc read failure is skipped silently. Returns 0
+    on total failure (Linux /proc unavailable), which disables the signal.
+    """
+    total = 0
+    try:
+        entries = os.listdir("/proc")
+    except OSError:
+        return 0
+    for entry in entries:
+        if not entry.isdigit():
+            continue
+        try:
+            with open(f"/proc/{entry}/stat", "rb") as f:
+                data = f.read().decode("ascii", errors="replace")
+        except (FileNotFoundError, ProcessLookupError, OSError):
+            continue
+        # Format: pid (comm) state ppid pgrp session tty_nr ...
+        # `comm` may contain spaces/parens; split fields after the final ')'.
+        rparen = data.rfind(")")
+        if rparen == -1:
+            continue
+        rest = data[rparen + 2:].split()
+        # rest indices (0-based, starting after the `comm` field):
+        #   0=state, 1=ppid, 2=pgrp, 3=session, ..., 11=utime, 12=stime
+        try:
+            session = int(rest[3])
+            utime = int(rest[11])
+            stime = int(rest[12])
+        except (IndexError, ValueError):
+            continue
+        if session == leader_pid:
+            total += utime + stime
+    return total
+
+
 def _run_subprocess_safe(cmd, *, input=None, timeout=600,
                          liveness_timeout=None, poll_interval=2.0):
     """Run a subprocess in its own process group with streaming + liveness check.
 
-    Streams stdout/stderr to temp files instead of buffering in memory. Two
-    kill conditions:
+    Streams the subprocess's stdout+stderr (merged) to a single temp file
+    so the on-disk view matches what an operator sees on a terminal.
+    Two kill conditions:
       1. Wall-clock `timeout` — hard ceiling, same semantics as before.
-      2. Liveness: if no bytes land on stdout OR stderr for `liveness_timeout`
-         seconds, assume the subprocess is hung (not working hard) and kill.
+      2. Liveness: if neither file-mtime advances nor CPU time accumulates
+         across the subprocess session for `liveness_timeout` seconds,
+         assume the subprocess is hung and kill. The CPU signal prevents
+         false-kills of silent-but-computing local models.
 
     `liveness_timeout` defaults to min(timeout, 180). Pass 0 or None-like to
     disable (falls back to wall-clock only). Env var `POE_LIVENESS_TIMEOUT`
     overrides the default for the whole process.
 
     Partial output captured up to the kill is preserved in the returned
-    CompletedProcess (stdout/stderr fields), unlike communicate(), so a
-    timed-out step doesn't lose all accumulated work.
+    CompletedProcess.stdout (stderr is empty — both streams merged). This
+    lets callers still access accumulated work on timeout, unlike
+    communicate().
 
-    Returns a subprocess.CompletedProcess. On wall-clock timeout raises
-    subprocess.TimeoutExpired (unchanged). On liveness timeout raises a
-    subprocess.TimeoutExpired with an augmented message so callers can
-    distinguish.
+    Returns a subprocess.CompletedProcess with stdout=merged output and
+    stderr="". On wall-clock or liveness timeout raises
+    subprocess.TimeoutExpired with `.poe_kill_reason` attached so callers
+    can distinguish.
     """
     import signal
     import tempfile
@@ -423,59 +471,44 @@ def _run_subprocess_safe(cmd, *, input=None, timeout=600,
         stdin_f.flush()
         stdin_f.seek(0)
 
-    stdout_f = tempfile.NamedTemporaryFile(
-        mode="w+b", suffix=".stdout", delete=False)
-    stderr_f = tempfile.NamedTemporaryFile(
-        mode="w+b", suffix=".stderr", delete=False)
-    stdout_path = stdout_f.name
-    stderr_path = stderr_f.name
+    combined_f = tempfile.NamedTemporaryFile(
+        mode="w+b", suffix=".out", delete=False)
+    combined_path = combined_f.name
 
     # Operator-visibility symlink: `tail -f /tmp/poe-current-step.log` from
-    # anywhere shows the in-flight subprocess's stdout. Updated atomically
-    # on each new subprocess; dangles between steps (by design — means
-    # "no step running"). Disable with POE_CURRENT_STEP_SYMLINK=0.
+    # anywhere shows the in-flight subprocess's merged output. Updated
+    # atomically on each new subprocess; dangles between steps (by
+    # design — means "no step running"). Disable with
+    # POE_CURRENT_STEP_SYMLINK=0.
     if os.environ.get("POE_CURRENT_STEP_SYMLINK", "1") != "0":
         try:
             link_target = "/tmp/poe-current-step.log"
             tmp_link = f"{link_target}.{os.getpid()}.tmp"
             try: os.unlink(tmp_link)
             except OSError: pass
-            os.symlink(stdout_path, tmp_link)
+            os.symlink(combined_path, tmp_link)
             os.rename(tmp_link, link_target)  # atomic replace
         except OSError:
             pass  # best-effort; never block on symlink failures
 
     def _read_captured():
-        stdout_f.flush(); stderr_f.flush()
-        stdout_f.seek(0); stderr_f.seek(0)
-        return (stdout_f.read().decode("utf-8", errors="replace"),
-                stderr_f.read().decode("utf-8", errors="replace"))
+        combined_f.flush()
+        combined_f.seek(0)
+        return combined_f.read().decode("utf-8", errors="replace")
 
     def _cleanup_files():
-        try: stdout_f.close()
+        try: combined_f.close()
         except Exception: pass
-        try: stderr_f.close()
-        except Exception: pass
-        for p in (stdout_path, stderr_path,
-                  stdin_f.name if stdin_f else None):
+        for p in (combined_path, stdin_f.name if stdin_f else None):
             if p:
                 try: os.unlink(p)
                 except OSError: pass
 
-    def _last_activity_mtime():
-        latest = 0.0
-        for p in (stdout_path, stderr_path):
-            try:
-                latest = max(latest, os.path.getmtime(p))
-            except OSError:
-                pass
-        return latest
-
     proc = subprocess.Popen(
         cmd,
         stdin=stdin_f if stdin_f else subprocess.DEVNULL,
-        stdout=stdout_f,
-        stderr=stderr_f,
+        stdout=combined_f,
+        stderr=subprocess.STDOUT,
         start_new_session=True,
     )
     if stdin_f:
@@ -485,8 +518,9 @@ def _run_subprocess_safe(cmd, *, input=None, timeout=600,
             pass
 
     start = time.monotonic()
-    last_seen = start  # monotonic-time of most recent observed output
-    last_mtime = 0.0   # wall-clock mtime we've already credited
+    last_seen = start          # monotonic time of most recent activity
+    last_mtime = 0.0           # file mtime we've already credited
+    last_cpu = _session_cpu_ticks(proc.pid)  # initial CPU baseline
     kill_reason = None
     try:
         while True:
@@ -496,20 +530,29 @@ def _run_subprocess_safe(cmd, *, input=None, timeout=600,
             now = time.monotonic()
             elapsed = now - start
 
-            # Liveness: each poll, if either file's mtime advanced past what
-            # we've seen, stamp last_seen with the current monotonic time.
-            # Avoids fragile monotonic↔wall-clock conversion.
-            latest_mtime = _last_activity_mtime()
+            # Output-mtime signal: file grew since last poll?
+            try:
+                latest_mtime = os.path.getmtime(combined_path)
+            except OSError:
+                latest_mtime = 0.0
             if latest_mtime > last_mtime:
                 last_mtime = latest_mtime
+                last_seen = now
+
+            # CPU signal: session burned more cycles since last poll?
+            # Catches silent-but-computing local models that don't stream.
+            cur_cpu = _session_cpu_ticks(proc.pid)
+            if cur_cpu > last_cpu:
+                last_cpu = cur_cpu
                 last_seen = now
 
             if timeout and elapsed >= timeout:
                 kill_reason = f"wall-clock timeout after {int(elapsed)}s"
                 break
             if liveness_timeout and (now - last_seen) >= liveness_timeout:
-                kill_reason = (f"liveness timeout: no output for "
-                               f"{int(now - last_seen)}s (elapsed={int(elapsed)}s)")
+                kill_reason = (f"liveness timeout: no output or CPU activity "
+                               f"for {int(now - last_seen)}s "
+                               f"(elapsed={int(elapsed)}s)")
                 break
 
             time.sleep(poll_interval)
@@ -522,10 +565,10 @@ def _run_subprocess_safe(cmd, *, input=None, timeout=600,
                 try: os.killpg(proc.pid, signal.SIGKILL)
                 except OSError: pass
                 proc.wait(timeout=5)
-            stdout, stderr = _read_captured()
+            stdout = _read_captured()
             _cleanup_files()
             exc = subprocess.TimeoutExpired(cmd, timeout or liveness_timeout,
-                                            output=stdout, stderr=stderr)
+                                            output=stdout, stderr="")
             # Attach reason for caller introspection; not used by base class.
             exc.poe_kill_reason = kill_reason  # type: ignore[attr-defined]
             raise exc
@@ -541,9 +584,9 @@ def _run_subprocess_safe(cmd, *, input=None, timeout=600,
         try: os.killpg(proc.pid, signal.SIGTERM)
         except OSError: pass
 
-    stdout, stderr = _read_captured()
+    stdout = _read_captured()
     _cleanup_files()
-    return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
+    return subprocess.CompletedProcess(cmd, proc.returncode, stdout, "")
 
 
 class ClaudeSubprocessAdapter(LLMAdapter):
@@ -594,12 +637,12 @@ class ClaudeSubprocessAdapter(LLMAdapter):
             raise RuntimeError(f"claude binary not found at {self.claude_bin}")
 
         if result.returncode != 0:
-            stderr = result.stderr.strip()
-            stdout_hint = result.stdout.strip()[:200] if result.stdout.strip() else ""
-            detail = stderr[:300] or stdout_hint or "(no output)"
+            # stdout holds the merged stdout+stderr stream from the subprocess.
+            merged = result.stdout.strip()
+            detail = merged[:300] or "(no output)"
 
             # Rate limit detection: "hit your limit" or "resets" in output
-            _combined = (detail + " " + stdout_hint).lower()
+            _combined = merged.lower()
             if "hit your limit" in _combined or "rate limit" in _combined or "resets" in _combined:
                 import time as _time
                 # Multi-cycle polling: retry up to _RATE_LIMIT_MAX_RETRIES times.
@@ -624,7 +667,7 @@ class ClaudeSubprocessAdapter(LLMAdapter):
                         _retry_success = True
                         break
                     # Check if still rate-limited
-                    _retry_combined = (result.stderr + " " + result.stdout).lower()
+                    _retry_combined = result.stdout.lower()
                     if "hit your limit" not in _retry_combined and "rate limit" not in _retry_combined:
                         # Non-rate-limit error — stop retrying
                         break
@@ -647,19 +690,33 @@ class ClaudeSubprocessAdapter(LLMAdapter):
                     debug_path = _os.path.join(tempfile.gettempdir(), f"claude_rc1_{os.getpid()}.txt")
                     with open(debug_path, "w") as _f:
                         _f.write(f"rc={result.returncode}\ncmd={cmd}\nprompt_len={len(prompt)}\n\n")
-                        _f.write(f"--- STDERR ---\n{result.stderr}\n--- STDOUT ---\n{result.stdout[:2000]}\n")
+                        _f.write(f"--- OUTPUT (merged stdout+stderr) ---\n{result.stdout[:4000]}\n")
                         _f.write(f"--- PROMPT (first 3000 chars) ---\n{prompt[:3000]}\n")
                 except Exception:
                     pass
                 raise RuntimeError(f"claude subprocess failed (rc={result.returncode}): {detail}")
 
-        # Parse JSON output
+        # Parse JSON output. stdout holds merged stdout+stderr, so claude's
+        # JSON blob may be surrounded by warning/debug text. Try a direct
+        # parse first; if that fails, scan for the first `{` that begins a
+        # valid JSON object.
+        _stdout_text = result.stdout.strip()
+        data = None
         try:
-            data = json.loads(result.stdout.strip())
+            data = json.loads(_stdout_text)
         except json.JSONDecodeError:
+            _decoder = json.JSONDecoder()
+            _start = _stdout_text.find("{")
+            while _start != -1:
+                try:
+                    data, _ = _decoder.raw_decode(_stdout_text[_start:])
+                    break
+                except json.JSONDecodeError:
+                    _start = _stdout_text.find("{", _start + 1)
+        if data is None:
             # Fallback: treat as plain text
             return LLMResponse(
-                content=result.stdout.strip(),
+                content=_stdout_text,
                 backend=self.backend,
             )
 
@@ -819,9 +876,9 @@ class CodexCLIAdapter(LLMAdapter):
             raise RuntimeError(f"codex binary not found at {self.codex_bin}")
 
         if result.returncode != 0:
-            stderr = result.stderr.strip()
-            stdout_hint = result.stdout.strip()[:200] if result.stdout.strip() else ""
-            detail = stderr[:300] or stdout_hint or "(no output)"
+            # stdout holds merged stdout+stderr.
+            merged = result.stdout.strip()
+            detail = merged[:300] or "(no output)"
             raise RuntimeError(f"codex subprocess failed (rc={result.returncode}): {detail}")
 
         return self._parse_jsonl_output(result.stdout, tools)

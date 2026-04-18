@@ -295,7 +295,13 @@ def test_subprocess_complete_ignores_thinking_budget(monkeypatch):
 # ---------------------------------------------------------------------------
 
 def test_run_subprocess_safe_returns_completed_process():
-    """Normal completion returns CompletedProcess with captured output."""
+    """Normal completion returns CompletedProcess with merged stdout+stderr.
+
+    stdout and stderr are piped into the same temp file (stderr=STDOUT),
+    so .stdout holds the merged stream and .stderr is empty. Interleaving
+    order between the two sources is not deterministic across platforms,
+    so we only assert both payloads landed somewhere in .stdout.
+    """
     from llm import _run_subprocess_safe
     import subprocess as sp
 
@@ -305,8 +311,9 @@ def test_run_subprocess_safe_returns_completed_process():
     )
     assert isinstance(result, sp.CompletedProcess)
     assert result.returncode == 0
-    assert result.stdout == "hello"
-    assert result.stderr == "oops"
+    assert "hello" in result.stdout
+    assert "oops" in result.stdout
+    assert result.stderr == ""
 
 
 def test_run_subprocess_safe_walltime_timeout_kills_and_raises():
@@ -363,6 +370,30 @@ def test_run_subprocess_safe_liveness_spares_chatty_process():
     )
     assert result.returncode == 0
     assert result.stdout == "xxxxx"
+
+
+def test_run_subprocess_safe_liveness_spares_cpu_busy_silent_process():
+    """A process burning CPU with zero output does NOT trip the liveness timeout.
+
+    This protects slow/local-model inference paths where the model may be
+    silent-but-computing for long stretches before emitting any tokens.
+    CPU activity in the subprocess session counts as "still working".
+    """
+    from llm import _run_subprocess_safe
+
+    # Busy-loop for ~3s with zero stdout/stderr. Liveness is 1s, so a naive
+    # output-only liveness check would kill this at ~1s. The CPU signal
+    # must rescue it.
+    script = (
+        "python3 -c 'import time; t=time.time();\n"
+        "x=0\n"
+        "while time.time()-t<3: x+=1'"
+    )
+    result = _run_subprocess_safe(
+        ["sh", "-c", script],
+        input="", timeout=10, liveness_timeout=1, poll_interval=0.2,
+    )
+    assert result.returncode == 0, f"unexpected rc: out={result.stdout!r}"
 
 
 def test_run_subprocess_safe_liveness_env_var_override(monkeypatch):
@@ -441,15 +472,19 @@ def test_run_subprocess_safe_symlink_disabled_by_env(monkeypatch):
 
 
 def test_run_subprocess_safe_cleans_temp_files():
-    """Temp stdout/stderr files get deleted on normal completion."""
+    """Merged-output temp file (and stdin temp file, if any) are deleted on completion."""
     from llm import _run_subprocess_safe
     import glob, tempfile
 
     tmpdir = tempfile.gettempdir()
-    before = set(glob.glob(f"{tmpdir}/tmp*.stdout") + glob.glob(f"{tmpdir}/tmp*.stderr"))
-    _run_subprocess_safe(["sh", "-c", "printf done"], input="", timeout=5)
-    after = set(glob.glob(f"{tmpdir}/tmp*.stdout") + glob.glob(f"{tmpdir}/tmp*.stderr"))
-    # No new .stdout/.stderr tempfiles should have been left behind by our call.
+    before = set(
+        glob.glob(f"{tmpdir}/tmp*.out") + glob.glob(f"{tmpdir}/tmp*.stdin")
+    )
+    _run_subprocess_safe(["sh", "-c", "printf done"], input="ignored", timeout=5)
+    after = set(
+        glob.glob(f"{tmpdir}/tmp*.out") + glob.glob(f"{tmpdir}/tmp*.stdin")
+    )
+    # No new .out/.stdin tempfiles should have been left behind by our call.
     assert not (after - before)
 
 
