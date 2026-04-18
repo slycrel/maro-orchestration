@@ -11,22 +11,36 @@ Last reviewed: 2026-04-16 (session 34 — split into active + done).
 
 ### Runtime visibility (tracked 2026-04-17)
 
-- [ ] **Current-step symlink.** `/tmp/poe-current-step.log` → active
-  streaming stdout file, updated as each subprocess starts. Makes
-  `tail -f` work from anywhere during a run without hunting for temp
-  paths. (ITEM #1 — shipping now.)
-- [ ] **Claim-verifier outcome event.** Run 5 emitted
-  `[claim-verifier] hallucinated file/symbol claims detected` only as a
-  log warning — no captain's log event, no visibility into what the
-  system did next. Promote to a structured CLAIM_VERIFIER_OUTCOME event
-  with step id + symbol list + downstream action taken. (ITEM #2 —
-  shipping now.)
+- [x] **Current-step symlink.** `/tmp/poe-current-step.log` → active
+  streaming merged-output file, updated atomically as each subprocess
+  starts. (Shipped 2026-04-17 — commit 58a91dd; symlink target extended
+  to merged stream in b188e5f.)
+- [x] **Claim-verifier outcome event.** Structured CLAIM_VERIFIER_OUTCOME
+  event now emitted with step id + file_not_found/symbol_not_found lists
+  + downstream action taken. (Shipped 2026-04-17 — commit 58a91dd.)
 - [ ] **Rolling reviewer-calibration metric.** `scripts/probe-stats.sh`
   scans last N days of captain's log, reports
   `dismissed/validated/unprobed` rates for CLAIM_PROBED. Tells us if the
   adversarial reviewer is getting more or less trustworthy over time —
   the reason we built the grounding. (ITEM #3 — deferred; revisit after
-  regression sweep.)
+  more probe data accumulates.)
+- [x] **Closure + quality_gate run on partial/stuck/restart.** Previously
+  gated on `status == "done"`; metacognitive-recovery paths produced
+  material work but emitted no CLOSURE_VERDICT / CLAIM_VERIFIER_OUTCOME /
+  CLAIM_PROBED events because terminal status wasn't "done". Widened to
+  run on any terminal state that produced ≥1 successful step; kept the
+  *escalation* branches gated on "done" only. (Shipped 2026-04-18 —
+  commit 7f907bd.)
+- [x] **Merged stdout+stderr stream.** `_run_subprocess_safe` pipes both
+  streams into a single temp file via `stderr=subprocess.STDOUT`.
+  Operator view via `/tmp/poe-current-step.log` now matches what the
+  subprocess would print to a terminal. JSON parser tolerant of
+  interleaved non-JSON prose. (Shipped 2026-04-18 — commit b188e5f.)
+- [x] **CPU-activity liveness signal.** Secondary liveness check sums
+  utime+stime across every proc whose session == subprocess pid. A
+  silent-but-computing local model burns CPU → last_seen advances →
+  liveness timer doesn't fire. Protects slow/local-model inference paths
+  from false-kills. (Shipped 2026-04-18 — commit b188e5f.)
 
 ### Step-process visibility + elevation (discovered 2026-04-17)
 
