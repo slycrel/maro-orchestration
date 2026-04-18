@@ -108,15 +108,17 @@ echo
 if [[ "$setup_only" -eq 1 ]]; then
   echo "--setup-only: skipping run."
   echo "to launch manually:"
-  echo "  cd $REPO_ROOT && PYTHONPATH=src python3 -m handle \"\$(cat $PROMPT_FILE)\" > $LOG_FILE 2>&1 &"
+  echo "  cd $REPO_ROOT && PYTHONPATH=src python3 -u -m handle \"\$(cat $PROMPT_FILE)\" > $LOG_FILE 2>&1 &"
   exit 0
 fi
 
-# 4. Launch
+# 4. Launch. `-u` forces unbuffered stdout/stderr so the log file grows in
+# real time when redirected; without it Python defaults to block buffering
+# on non-tty descriptors and the log appears to freeze for long stretches.
 cd "$REPO_ROOT"
 prompt=$(cat "$PROMPT_FILE")
 echo "launching handle (log: $LOG_FILE)..."
-PYTHONPATH=src python3 -m handle "$prompt" > "$LOG_FILE" 2>&1 &
+PYTHONPATH=src python3 -u -m handle "$prompt" > "$LOG_FILE" 2>&1 &
 pid=$!
 echo "PID: $pid"
 echo "tail: tail -f $LOG_FILE"
