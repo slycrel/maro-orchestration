@@ -227,7 +227,8 @@ print(result.summary())
 ## Always-on services
 
 ```bash
-# Heartbeat (health + meta-evolver, 60s interval)
+# Heartbeat loop defaults to health-only. Add --autonomy only if you
+# explicitly want background drains and self-improvement running.
 sudo cp deploy/poe-heartbeat.service /etc/systemd/system/
 sudo systemctl enable --now poe-heartbeat
 
@@ -240,6 +241,12 @@ Heartbeat recovery tiers:
 1. **Scripted**: disk warn, API key missing, gateway down → log suggestion
 2. **LLM diagnosis**: stuck projects → cheap LLM recovery action
 3. **Telegram escalation**: critical health → alert Jeremy
+
+Autonomous background work is opt-in:
+
+```bash
+python3 src/cli.py poe-heartbeat --loop --autonomy
+```
 
 ---
 

@@ -544,6 +544,7 @@ def main(argv: list[str] | None = None) -> int:
                 dry_run=args.dry_run,
                 verbose=args.verbose,
                 escalate=not args.no_escalate,
+                autonomy=args.autonomy,
             )
             return 0
         report = run_heartbeat(

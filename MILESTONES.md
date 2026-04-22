@@ -6,6 +6,17 @@ Last updated: 2026-04-16 (session 34 — closure gate + correspondence retrieval
 
 ---
 
+## Done (session 35, 2026-04-22 — heartbeat health-only by default, autonomy explicit)
+
+Live-box behavior exposed an architectural coupling: `poe-heartbeat.service` came back on reboot and `heartbeat_loop()` implicitly owned scheduler drain, task-store drain, mission drain, backlog drain, evolver, inspector, and eval work. That made manual-use deployments surprising and turned heartbeat from "health substrate" into an autonomy daemon by default.
+
+- [x] **Heartbeat loop split by mode** — `heartbeat_loop(..., autonomy=False)` is now health-only by default. Background drains and self-improvement work only run when autonomy is explicitly enabled.
+- [x] **CLI switch** — `poe-heartbeat --loop --autonomy` enables the old background behavior intentionally. Plain `poe-heartbeat --loop` now stays in health-check mode.
+- [x] **Docs updated** — `README.md` and `skills/arch-platform.md` now describe heartbeat as health-only by default and autonomy as opt-in.
+- [x] **Tests added** — `test_heartbeat.py` verifies scheduler drain is skipped in health-only mode and runs when autonomy is enabled.
+
+---
+
 ## Done (session 34, 2026-04-16 — `synthesize_skill()` 3-gate pre-promotion check)
 
 BACKLOG item (P7/10, Claude Skills quality bar) — wired into `evolver.synthesize_skill()` before persistence. Three gates run in sequence; a skill that fails any gate is discarded with a logged reason. All gates execute at synthesis time with no new infrastructure.

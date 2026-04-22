@@ -58,7 +58,9 @@ Periodic health check + tiered self-healing (runs every 60s in loop mode):
 
 **Lifecycle management:** Use `scripts/heartbeat-ctl.sh start|stop|status|restart`. Auto-stops after 4 hours. Never start as bare `nohup python3 heartbeat.py &`.
 
-**Backlog drain:** Heartbeat picks up NEXT.md TODO items when idle. Interval: every 30 ticks (~30 min). Skips failed/paused projects (lifecycle markers `.poe-failed`/`.poe-paused`).
+**Autonomy switch:** `heartbeat_loop(..., autonomy=False)` is health-only by default. Scheduler drain, task-store drain, mission drain, backlog drain, evolver, inspector, and eval work only run when autonomy is explicitly enabled via CLI/config.
+
+**Backlog drain:** When autonomy is enabled, heartbeat picks up NEXT.md TODO items when idle. Interval: every 30 ticks (~30 min). Skips failed/paused projects (lifecycle markers `.poe-failed`/`.poe-paused`).
 
 ## Project & Item Management (orch_items.py)
 

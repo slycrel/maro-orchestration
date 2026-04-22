@@ -24,6 +24,7 @@ from heartbeat import (
     run_heartbeat,
     _diagnosis_due,
     _mark_diagnosis_ran,
+    heartbeat_loop,
 )
 
 
@@ -298,6 +299,37 @@ def test_cli_poe_heartbeat_json(capsys):
     out = capsys.readouterr().out
     data = json.loads(out)
     assert "health_status" in data
+
+
+def test_heartbeat_loop_health_only_skips_scheduler(monkeypatch):
+    import heartbeat as hb
+    import scheduler
+
+    monkeypatch.setattr(hb, "run_heartbeat", lambda **kwargs: None)
+    monkeypatch.setattr(hb._wakeup_event, "wait", lambda timeout=None: (_ for _ in ()).throw(RuntimeError("stop")))
+    called = []
+    monkeypatch.setattr(scheduler, "drain_due_jobs", lambda **kwargs: called.append(kwargs) or 0)
+
+    with pytest.raises(RuntimeError, match="stop"):
+        heartbeat_loop(interval=0.01, dry_run=True, verbose=False, autonomy=False)
+
+    assert called == []
+
+
+def test_heartbeat_loop_autonomy_calls_scheduler(monkeypatch):
+    import heartbeat as hb
+    import scheduler
+
+    monkeypatch.setattr(hb, "run_heartbeat", lambda **kwargs: None)
+    monkeypatch.setattr(hb._wakeup_event, "wait", lambda timeout=None: (_ for _ in ()).throw(RuntimeError("stop")))
+    monkeypatch.setattr(hb, "_task_store_drain_active", True)
+    called = []
+    monkeypatch.setattr(scheduler, "drain_due_jobs", lambda **kwargs: called.append(kwargs) or 0)
+
+    with pytest.raises(RuntimeError, match="stop"):
+        heartbeat_loop(interval=0.01, dry_run=True, verbose=False, autonomy=True)
+
+    assert len(called) == 1
 
 
 # ---------------------------------------------------------------------------

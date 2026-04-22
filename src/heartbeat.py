@@ -711,6 +711,7 @@ def heartbeat_loop(
     dry_run: bool = False,
     verbose: bool = True,
     escalate: bool = True,
+    autonomy: Optional[bool] = None,
 ) -> None:
     """Run heartbeat on a fixed interval forever.
 
@@ -744,6 +745,16 @@ def heartbeat_loop(
         )
     global _evolver_active, _inspector_active, _backlog_drain_active
     global _task_store_drain_active, _eval_active, _harness_optimizer_active
+
+    if autonomy is None:
+        try:
+            from config import get as _cfg_get
+            autonomy = bool(_cfg_get("heartbeat.autonomy", False))
+        except Exception:
+            autonomy = False
+    if verbose:
+        _mode = "autonomy-enabled" if autonomy else "health-only"
+        print(f"[heartbeat] mode={_mode}", file=sys.stderr)
 
     # Phase 41 step 7 — MCP server init: load servers listed in user/CONFIG.md
     try:
@@ -781,6 +792,11 @@ def heartbeat_loop(
         except Exception as e:
             print(f"[heartbeat] run failed: {e}", file=sys.stderr)
         tick += 1
+
+        if not autonomy:
+            _wakeup_event.wait(timeout=interval)
+            _wakeup_event.clear()
+            continue
 
         # SlowUpdateScheduler (MetaClaw steal): gate heavy background work to idle windows.
         # Check if a mission drain is currently running — if so, skip expensive LLM work
