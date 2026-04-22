@@ -65,7 +65,7 @@ Two capabilities, often conflated but distinct:
 **Where intent has drifted:**
 - Director is mostly bypassed (`skip_if_simple=True` for most goals). This is pragmatically correct but means the plan→delegate→review cycle doesn't get exercised.
 - Persona system exists but personas aren't auto-selected based on goal type — it's manual via prefixes.
-- The "never off" vision (VISION §9) isn't met: no auto-restart, session guard blocks autonomous work.
+- The "never off" vision (VISION §9) is not the default operating mode: manual runs work without background services, and always-on behavior must be intentionally enabled.
 
 **Key files:** `handle.py` (1104 lines), `intent.py`, `director.py`, `workers.py`, `persona.py`
 
@@ -150,13 +150,13 @@ Two capabilities, often conflated but distinct:
 **What exists:**
 - `llm.py`: Adapter hierarchy (Anthropic → OpenRouter → OpenAI → subprocess). Model abstraction (CHEAP/MID/POWER). Retry with exponential backoff. Advisor pattern (`advisor_call()`).
 - `config.py`: Two-tier YAML (user `~/.poe/config.yml` + workspace). Env var override.
-- `heartbeat.py`: Periodic health check + tiered recovery. Session guard. Diagnosis cooldown.
+- `heartbeat.py`: Optional health monitor + tiered recovery. Session guard. Diagnosis cooldown.
 - `orch_items.py`: Project/item management. NEXT.md parsing. RunRecords.
 - `task_store.py`: File-per-task JSON with fcntl locking. DAG deps. Stale claim recovery.
 - `metrics.py`: Per-model, per-step-type cost tracking to step-costs.jsonl.
 
 **Where intent has drifted:**
-- **"Never off" not implemented.** Heartbeat has 4h auto-stop. No auto-restart mechanism in production (systemd unit exists but isn't installed).
+- **Always-on mode is explicitly optional.** Manual orchestration is self-contained; service installation is a deployment choice rather than a baseline requirement.
 - **Cost awareness is after-the-fact.** `metrics.py` records costs. `tool_cost_report.py` summarizes them. But there's no real-time budget enforcement that says "stop, you've spent $5 on this goal."
 - **Workspace routing is split.** `output_root()` and `projects_root()` still point to repo, not `~/.poe/workspace/`. Captain's log and memory are in workspace, but projects and output aren't.
 

@@ -55,7 +55,7 @@ How the openclaw-orchestration system works, from a Telegram message to a comple
 ### Ops & health
 | Module | Lines | Role |
 |--------|-------|------|
-| `heartbeat.py` | 493 | Periodic health check + tiered recovery |
+| `heartbeat.py` | 493 | Optional health monitor; autonomy only when explicitly enabled |
 | `sheriff.py` | 474 | Progress validation, stuck detection, system health |
 | `mission.py` | 1260 | Multi-day missions: milestones → features → worker sessions |
 | `background.py` | 307 | Non-blocking subprocess execution |
@@ -65,7 +65,7 @@ How the openclaw-orchestration system works, from a Telegram message to a comple
 ### I/O & integration
 | Module | Lines | Role |
 |--------|-------|------|
-| `telegram_listener.py` | 571 | Telegram long-poll listener + slash commands |
+| `telegram_listener.py` | 571 | Optional Telegram long-poll listener + slash commands |
 | `slack_listener.py` | 424 | Slack Socket Mode listener + slash commands |
 | `gateway.py` | 377 | OpenClaw HMAC-authenticated gateway |
 | `web_fetch.py` | 539 | URL pre-fetch + content extraction (Jina Reader) |
@@ -555,7 +555,7 @@ status     → show workspace path, dir existence, service states
 smoke      → dry-run NOW-lane task via handle.py
 ```
 
-Service file generation:
+Service file generation is optional deployment scaffolding, not a requirement for manual orchestration:
 ```
 Linux (platform.system() == "Linux"):
     deploy/systemd/poe-heartbeat.service

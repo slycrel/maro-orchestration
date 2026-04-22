@@ -28,6 +28,17 @@ Follow-up to the heartbeat/autonomy split: the repo still nudged fresh installs 
 
 ---
 
+## Done (session 35, 2026-04-22 — optional-service framing extended beyond heartbeat)
+
+The heartbeat fix still left adjacent docs reading as if Telegram and inspector should be deployed by default. That blurred the line between manual orchestration and intentionally installed background interfaces.
+
+- [x] **Telegram docs softened** — `README.md` now presents `telegram_listener.py` as an optional interface with manual run instructions first and service enablement second.
+- [x] **Optional services section expanded** — `README.md` now groups heartbeat, Telegram, and inspector under explicit opt-in deployment guidance, with manual-run alternatives shown alongside service installs.
+- [x] **Architecture docs normalized** — `docs/ARCHITECTURE.md` and `docs/ARCHITECTURE_OVERVIEW.md` now describe heartbeat and Telegram as optional deployment surfaces rather than baseline runtime requirements.
+- [x] **Bootstrap metadata clarified** — generated service templates now carry "Optional ..." descriptions so copied units read correctly in `systemctl` and deployment output.
+
+---
+
 ## Done (session 34, 2026-04-16 — `synthesize_skill()` 3-gate pre-promotion check)
 
 BACKLOG item (P7/10, Claude Skills quality bar) — wired into `evolver.synthesize_skill()` before persistence. Three gates run in sequence; a skill that fails any gate is discarded with a logged reason. All gates execute at synthesis time with no new infrastructure.
