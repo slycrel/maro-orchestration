@@ -2,13 +2,13 @@
 
 Handles:
 - Creating workspace directory structure
-- Writing systemd (Linux) or launchd (macOS) service files
-- Smoke-testing the install by running poe-heartbeat once
+- Writing optional systemd (Linux) or launchd (macOS) service files
+- Smoke-testing the install by running a manual NOW-lane request once
 
 Entry points:
-  poe-bootstrap install    -- full install (dirs + services + first heartbeat)
+  poe-bootstrap install    -- workspace + optional service file templates + smoke test
   poe-bootstrap dirs       -- create workspace dirs only
-  poe-bootstrap services   -- write service files only
+  poe-bootstrap services   -- write optional service files only
   poe-bootstrap status     -- show current workspace and service status
   poe-bootstrap smoke      -- run a dry-run NOW-lane task and verify output
 """
@@ -257,17 +257,20 @@ def install(run_smoke: bool = True) -> None:
     print()
     print("Installation complete.")
     if platform.system() == "Linux":
-        print("  To enable services, run:")
+        print("  Optional always-on services:")
+        print("    Manual CLI / mission runs do not require these services.")
+        print("    Enable only the ones you intentionally want.")
         for svc in _SERVICES:
             service_path = deploy_dir() / "systemd" / f"{svc['name']}.service"
             print(f"    sudo cp {service_path} /etc/systemd/system/")
-            print(f"    sudo systemctl enable --now {svc['name']}")
+            print(f"    # optional: sudo systemctl enable --now {svc['name']}")
     else:
-        print("  To load launchd agents, run:")
+        print("  Optional launchd agents:")
+        print("    Manual CLI / mission runs do not require these agents.")
         for svc in _SERVICES:
             plist_path = deploy_dir() / "launchd" / f"{svc['label']}.plist"
             print(f"    cp {plist_path} ~/Library/LaunchAgents/")
-            print(f"    launchctl load ~/Library/LaunchAgents/{svc['label']}.plist")
+            print(f"    # optional: launchctl load ~/Library/LaunchAgents/{svc['label']}.plist")
 
 
 # ---------------------------------------------------------------------------
@@ -282,9 +285,9 @@ def main(argv: list[str] | None = None) -> None:
     )
     sub = parser.add_subparsers(dest="cmd")
 
-    sub.add_parser("install", help="Full install: dirs + services + smoke test")
+    sub.add_parser("install", help="Workspace install: dirs + optional service templates + smoke test")
     sub.add_parser("dirs", help="Create workspace directories only")
-    sub.add_parser("services", help="Write service files only")
+    sub.add_parser("services", help="Write optional service files only")
     sub.add_parser("status", help="Show workspace and service status")
     p_smoke = sub.add_parser("smoke", help="Run smoke test (dry-run NOW-lane task)")
     p_smoke  # noqa: B018

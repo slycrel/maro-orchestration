@@ -548,9 +548,9 @@ deploy_dir()           → Path  (deploy/ sibling of src/)
 
 Bootstrap (`poe-bootstrap`):
 ```
-install    → create dirs + write service files + smoke test
+install    → create dirs + write optional service files + smoke test
 dirs       → create workspace/memory/skills/projects/output/secrets/logs/
-services   → write systemd (Linux) or launchd (macOS) service files
+services   → write optional systemd (Linux) or launchd (macOS) service files
 status     → show workspace path, dir existence, service states
 smoke      → dry-run NOW-lane task via handle.py
 ```

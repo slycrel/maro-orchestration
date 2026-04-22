@@ -1,5 +1,5 @@
 [Unit]
-Description=Poe Heartbeat — periodic health check + tiered self-healing
+Description=Poe Heartbeat — optional health monitor (manual runs do not require this service)
 # Update Documentation path if repo location changes
 Documentation=file:///home/clawd/claude/openclaw-orchestration/CLAUDE.md
 After=network.target
@@ -9,6 +9,9 @@ Type=simple
 User=clawd
 # NOTE: Update WorkingDirectory/PYTHONPATH if repo is moved.
 # Use `scripts/heartbeat-ctl.sh` for path-independent startup instead.
+# This service intentionally runs heartbeat in health-only mode by default.
+# Pass --autonomy only in environments where always-on background execution
+# is explicitly desired.
 WorkingDirectory=/home/clawd/claude/openclaw-orchestration
 ExecStart=/usr/bin/python3 src/heartbeat.py --loop --interval 60
 Restart=on-failure

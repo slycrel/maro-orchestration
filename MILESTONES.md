@@ -17,6 +17,17 @@ Live-box behavior exposed an architectural coupling: `poe-heartbeat.service` cam
 
 ---
 
+## Done (session 35, 2026-04-22 — deployment path now treats services as optional)
+
+Follow-up to the heartbeat/autonomy split: the repo still nudged fresh installs toward always-on services as if they were the normal path. That was intentional in the original autonomous-host framing, but wrong for manual-use mode and easy to misread as "required for orchestration."
+
+- [x] **Bootstrap wording updated** — `poe-bootstrap install` and `poe-bootstrap services` now describe service files as optional templates, not the default operating mode.
+- [x] **Install output softened** — bootstrap now prints commented optional `systemctl` / `launchctl` commands instead of presenting service enablement as the next required step.
+- [x] **Systemd unit clarified** — `deploy/systemd/poe-heartbeat.service` now identifies itself as an optional health monitor and explicitly notes that manual runs do not require it.
+- [x] **Docs aligned** — `README.md` and `docs/ARCHITECTURE.md` now describe services as optional infrastructure layered on top of self-contained manual runs.
+
+---
+
 ## Done (session 34, 2026-04-16 — `synthesize_skill()` 3-gate pre-promotion check)
 
 BACKLOG item (P7/10, Claude Skills quality bar) — wired into `evolver.synthesize_skill()` before persistence. Three gates run in sequence; a skill that fails any gate is discarded with a logged reason. All gates execute at synthesis time with no new infrastructure.

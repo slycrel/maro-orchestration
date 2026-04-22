@@ -93,7 +93,7 @@ export ANTHROPIC_API_KEY=sk-ant-...
 # or: export OPENROUTER_API_KEY=...
 # or: export OPENAI_API_KEY=...
 
-# 3. Bootstrap workspace (creates ~/.poe/workspace/, systemd services)
+# 3. Bootstrap workspace (creates ~/.poe/workspace/ and optional service templates)
 python3 src/cli.py poe-bootstrap install
 
 # 4. Run your first goal
@@ -224,15 +224,15 @@ print(result.summary())
 
 ---
 
-## Always-on services
+## Optional Services
 
 ```bash
-# Heartbeat loop defaults to health-only. Add --autonomy only if you
-# explicitly want background drains and self-improvement running.
+# Manual CLI / mission runs do not require the heartbeat service.
+# If you want an always-on health monitor, the service stays health-only by default.
 sudo cp deploy/poe-heartbeat.service /etc/systemd/system/
 sudo systemctl enable --now poe-heartbeat
 
-# Inspector (quality validation, runs every 20 heartbeat ticks)
+# Inspector is also optional.
 sudo cp deploy/poe-inspector.service /etc/systemd/system/
 sudo systemctl enable --now poe-inspector
 ```
