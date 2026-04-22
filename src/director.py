@@ -1169,6 +1169,11 @@ _CLOSURE_PLAN_SYSTEM = textwrap.dedent("""\
     - Each check MUST name which failure mode (or inversion hypothesis) it probes.
     - Commands must be fast (<15s), safe (read-only or self-cleaning), and exit 0
       on success. Wrap background processes with `timeout` and always clean up PIDs.
+    - Prefer robust checks over brittle string-matching theater. If a grep pattern
+      would be sensitive to log formatting or harmless wording changes, prefer a
+      stronger structural predicate (for example `jq`, exact JSON field checks,
+      endpoint status codes, websocket handshakes, process exit codes, or `grep -E`
+      patterns that only encode the essential invariant).
     - Working directory provided — use relative paths from there.
     - If the goal produces no executable artifact (research, writing, analysis),
       return an empty list. If a failure mode cannot be mechanically probed in
