@@ -131,6 +131,22 @@ class TestCheckDueJobs:
         due = check_due_jobs(now=after)
         assert due == []
 
+    def test_inflight_job_not_returned_until_lease_stale(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        from scheduler import add_job, check_due_jobs, mark_job_dispatched
+        from datetime import datetime as dt
+
+        job = add_job("Inflight", {"type": "once", "time": "09:00"})
+        assert mark_job_dispatched(job["job_id"]) is True
+
+        after = dt.fromisoformat(job["next_run"]) + timedelta(minutes=5)
+        assert check_due_jobs(now=after) == []
+
+        stale_after = after + timedelta(hours=7)
+        due = check_due_jobs(now=stale_after)
+        assert len(due) == 1
+        assert due[0]["job_id"] == job["job_id"]
+
 
 # ---------------------------------------------------------------------------
 # mark_job_done
@@ -178,6 +194,18 @@ class TestMarkJobDone:
         _setup(monkeypatch, tmp_path)
         from scheduler import mark_job_done
         assert mark_job_done("ghost-id") is False
+
+    def test_mark_job_done_clears_dispatch_lease(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        from scheduler import add_job, mark_job_dispatched, mark_job_done, list_jobs
+
+        job = add_job("One shot", {"type": "once", "time": "09:00"})
+        assert mark_job_dispatched(job["job_id"]) is True
+        assert mark_job_done(job["job_id"]) is True
+
+        jobs = list_jobs(enabled_only=False)
+        assert "dispatch_started_at" not in jobs[0]
+        assert "dispatch_pid" not in jobs[0]
 
 
 # ---------------------------------------------------------------------------

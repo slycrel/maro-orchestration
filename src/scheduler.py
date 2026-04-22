@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -38,6 +39,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 log = logging.getLogger("poe.scheduler")
+
+_DISPATCH_LEASE_SECS = 6 * 60 * 60
 
 
 # ---------------------------------------------------------------------------
@@ -165,18 +168,78 @@ def list_jobs(*, enabled_only: bool = False) -> List[Dict[str, Any]]:
     return sorted(jobs, key=lambda j: j.get("next_run", ""))
 
 
+def _parse_iso_utc(value: str) -> Optional[datetime]:
+    """Parse an ISO timestamp into an aware datetime, or None on failure."""
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(value)
+    except Exception:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def _clear_dispatch_state(job: Dict[str, Any]) -> None:
+    """Remove in-flight dispatch lease fields from a job dict."""
+    job.pop("dispatch_started_at", None)
+    job.pop("dispatch_pid", None)
+
+
+def _dispatch_is_stale(job: Dict[str, Any], *, now: Optional[datetime] = None) -> bool:
+    """Return True when a persisted dispatch lease is older than the timeout."""
+    started = _parse_iso_utc(str(job.get("dispatch_started_at", "")))
+    if started is None:
+        return False
+    current = now or datetime.now(timezone.utc)
+    return (current - started).total_seconds() >= _DISPATCH_LEASE_SECS
+
+
 def check_due_jobs(*, now: Optional[datetime] = None) -> List[Dict[str, Any]]:
     """Return all enabled jobs whose next_run is <= now."""
     _now = now or datetime.now(timezone.utc)
     _now_str = _now.isoformat()
     due = []
-    for job in _load_jobs():
+    dirty = False
+    jobs = _load_jobs()
+    for job in jobs:
         if not job.get("enabled", True):
             continue
+        if job.get("dispatch_started_at"):
+            if _dispatch_is_stale(job, now=_now):
+                log.warning("scheduler: clearing stale dispatch lease for job %s", job.get("job_id", "?"))
+                _clear_dispatch_state(job)
+                dirty = True
+            else:
+                continue
         next_run = job.get("next_run", "")
         if next_run and next_run <= _now_str:
             due.append(job)
+    if dirty:
+        _save_jobs(jobs)
     return due
+
+
+def mark_job_dispatched(job_id: str) -> bool:
+    """Persist an in-flight lease so the same due job is not re-submitted."""
+    jobs = _load_jobs()
+    found = False
+    now = datetime.now(timezone.utc).isoformat()
+    for job in jobs:
+        if job.get("job_id") != job_id:
+            continue
+        found = True
+        if not job.get("enabled", True):
+            break
+        if job.get("dispatch_started_at") and not _dispatch_is_stale(job):
+            return False
+        job["dispatch_started_at"] = now
+        job["dispatch_pid"] = os.getpid()
+        break
+    if found:
+        _save_jobs(jobs)
+    return found
 
 
 def mark_job_done(job_id: str) -> bool:
@@ -192,6 +255,7 @@ def mark_job_done(job_id: str) -> bool:
         if job.get("job_id") != job_id:
             continue
         found = True
+        _clear_dispatch_state(job)
         job["run_count"] = job.get("run_count", 0) + 1
         job["last_run"] = datetime.now(timezone.utc).isoformat()
         stype = job.get("schedule", {}).get("type", "once")
@@ -215,6 +279,8 @@ def enable_job(job_id: str, *, enabled: bool = True) -> bool:
     for job in jobs:
         if job.get("job_id") == job_id:
             job["enabled"] = enabled
+            if not enabled:
+                _clear_dispatch_state(job)
             _save_jobs(jobs)
             return True
     return False
@@ -254,6 +320,9 @@ def drain_due_jobs(
         try:
             import threading as _threading
             from handle import handle
+
+            if not mark_job_dispatched(job_id):
+                continue
 
             def _run_job(g: str = goal, jid: str = job_id) -> None:
                 try:
