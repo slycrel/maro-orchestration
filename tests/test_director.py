@@ -852,6 +852,15 @@ class TestVerifyGoalCompletion:
         assert "101 switching protocols" in text
         assert "./bin/tool --help" in text
 
+    def test_plan_prompt_warns_against_brittle_grep_theater(self):
+        """Prompt should bias toward robust predicates, not fragile string matching."""
+        from director import _CLOSURE_PLAN_SYSTEM
+        text = _CLOSURE_PLAN_SYSTEM.lower()
+        assert "brittle string-matching theater" in text
+        assert "endpoint status codes" in text
+        assert "process exit codes" in text
+        assert "grep -e" in text
+
     def test_check_modality_classification(self):
         """Closure checks should expose a coarse probe modality for evals."""
         from director import _check_modality_from_command
