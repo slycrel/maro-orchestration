@@ -843,6 +843,15 @@ class TestVerifyGoalCompletion:
         assert "behavioral/runtime probe" in text or "runtime probe" in text
         assert "static" in text
 
+    def test_plan_prompt_includes_runtime_scaffolding_examples(self):
+        """Prompt should show cheap lifecycle scaffolding for runtime probes."""
+        from director import _CLOSURE_PLAN_SYSTEM
+        text = _CLOSURE_PLAN_SYSTEM.lower()
+        assert "trap 'kill $pid' exit" in text
+        assert "curl -fss http://127.0.0.1:8000/health" in text
+        assert "101 switching protocols" in text
+        assert "./bin/tool --help" in text
+
     def test_check_modality_classification(self):
         """Closure checks should expose a coarse probe modality for evals."""
         from director import _check_modality_from_command
