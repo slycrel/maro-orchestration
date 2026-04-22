@@ -1158,6 +1158,11 @@ _CLOSURE_PLAN_SYSTEM = textwrap.dedent("""\
        file/grep checks are useful, but they are not enough by themselves if the
        claimed success depends on runtime behavior. If runtime probing is impossible
        here, say that by skipping the check rather than faking a static substitute.
+       Cheap scaffolding is encouraged when it makes runtime probing mechanical, for
+       example:
+       - start a server in background with cleanup: `tmp=$(mktemp); (python app.py >$tmp 2>&1 &) ; pid=$!; trap 'kill $pid' EXIT; sleep 2; curl -fsS http://127.0.0.1:8000/health`
+       - probe websocket upgrade: `python server.py >/tmp/s.log 2>&1 & pid=$!; trap 'kill $pid' EXIT; sleep 2; curl -i -N -H 'Connection: Upgrade' -H 'Upgrade: websocket' http://127.0.0.1:8080/ws | grep '101 Switching Protocols'`
+       - exercise a CLI or built binary directly: `./bin/tool --help >/tmp/tool.out && grep -q 'usage' /tmp/tool.out`
 
     Output rules:
     - Generate 2–5 checks. Each must be a single shell command.
