@@ -1,12 +1,21 @@
-"""Scope generation — inversion-driven bounding of the solution space.
+"""Scope + resolved-intent — the thread the driver watches.
 
-Phase 65 minimum viable experiment. One LLM call before planner.decompose()
-produces a scope: failure modes → in-scope / out-of-scope derivation.
+Originally Phase 65's minimum viable experiment (scope only): one LLM call
+before planner.decompose() produces an inversion-derived scope.
 
-The hypothesis: having an explicit scope in planning context produces
-measurably better plans than unbounded decomposition. This module tests
-that with the smallest possible implementation — everything else in the
-design is deferred until signal justifies it.
+Expanded 2026-04-23 to produce a `ResolvedIntent` — per
+`docs/INTENT_RESOLUTION_DESIGN.md` and `docs/DRIVER_AND_WATCHER.md` #4
+("plan-creation as its own step"), this is the durable artifact that sits
+between goal and decomposition. v0 adds a **deliverable map** (concrete
+artifacts the goal implies, with preconditions). Future versions add
+assumed / verified / unknown-but-accepted sections and cross-turn
+agenda-state carryover.
+
+The 2026-04-22 scope A/B showed scope injection structurally compresses
+planner output (8 steps vs 15-40); widening the thread with deliverables
+tests whether committing to concrete artifacts up front makes closure's
+"did we actually build the right thing" question answerable against a
+checked-in map instead of a post-hoc grep.
 
 Deferred explicitly (logged at runtime with `[scope-deferred]` markers):
 - Persona triad (PM/engineer/architect) — using single generalist
@@ -15,8 +24,12 @@ Deferred explicitly (logged at runtime with `[scope-deferred]` markers):
 - Lifecycle (revise/except/break) — scope is immutable after set
 - Retrieval-based injection — scope goes into ancestry as one block
 - Cross-goal memory — scope recorded but nothing retrieves it
+- Side-quest DAG for unknowns — v0 is one-shot; INTENT_RESOLUTION_DESIGN
+  says don't build this until we've run one by hand
+- Cross-turn agenda-state tracking — thread is per-invocation for v0
 
-See `docs/PHASE_65_IMPLEMENTATION_PLAN.md` for the rationale.
+See `docs/PHASE_65_IMPLEMENTATION_PLAN.md` and
+`docs/INTENT_RESOLUTION_DESIGN.md` for the rationale.
 """
 
 from __future__ import annotations
@@ -34,7 +47,7 @@ log = logging.getLogger(__name__)
 
 _SCOPE_SYSTEM = """You are helping bound the solution space for a goal before work begins.
 
-Your job is to do two things, in order:
+Your job is to do three things, in order:
 
 1. **Inversion pass**: enumerate 3-7 ways this specific goal would definitively fail.
    Not generic "bug risk" items — concrete, grounded failure modes that would
@@ -44,7 +57,12 @@ Your job is to do two things, in order:
    - **In scope** — concrete things that must be done to avoid the failures (2-5 items)
    - **Out of scope** — things that could be pursued but explicitly aren't for this goal (2-5 items)
 
-Output FORMAT — plain markdown with exactly these three headings:
+3. **Deliverable map**: list the concrete, checkable artifacts that must exist for the goal to be done.
+   Files, commits, processes, endpoints — things someone else could point at afterward and say
+   "yes, this is what we asked for." Include known preconditions (tools, dependencies, services)
+   inline using the format `[preconditions: X, Y]`. 2-6 items.
+
+Output FORMAT — plain markdown with exactly these four headings:
 
 ## Failure Modes
 - <mode 1, specific to this goal>
@@ -59,10 +77,17 @@ Output FORMAT — plain markdown with exactly these three headings:
 - <concrete thing we're NOT pursuing>
 - <...>
 
+## Deliverables
+- <artifact name>: <one-line description> [preconditions: <tool or dep>, <...>]
+- <artifact name>: <description> [preconditions: <...>]
+- <...>
+
 Be specific. "Add error handling" is not a failure mode. "If the WebSocket
 connection drops mid-game, session state is lost" is. Same for scope:
 "Support WebSocket reconnection with session recovery" is concrete;
-"Handle errors well" is not.
+"Handle errors well" is not. Same for deliverables: "cmd/server/main.go:
+HTTP server binary serving /ws and /static/ [preconditions: Go toolchain,
+gorilla/websocket]" is concrete; "working server" is not.
 """
 
 
@@ -103,25 +128,78 @@ class ScopeSet:
 
 
 # ---------------------------------------------------------------------------
+# Deliverable + ResolvedIntent
+# ---------------------------------------------------------------------------
+
+@dataclass
+class Deliverable:
+    """A concrete artifact the goal implies, with any known preconditions.
+
+    `name` is the identifier (file path, commit, endpoint, etc.).
+    `description` is one line of context.
+    `preconditions` are tools or dependencies required for the deliverable
+    to exist — used by closure's pre-flight to short-circuit INCONCLUSIVE
+    verdicts rather than silent pass-throughs (see BACKLOG: closure
+    silent-verification bug).
+    """
+    name: str
+    description: str = ""
+    preconditions: List[str] = field(default_factory=list)
+
+    def to_markdown_line(self) -> str:
+        pre = ""
+        if self.preconditions:
+            pre = f" [preconditions: {', '.join(self.preconditions)}]"
+        desc = f": {self.description}" if self.description else ""
+        return f"- {self.name}{desc}{pre}"
+
+
+@dataclass
+class ResolvedIntent:
+    """The thread the driver watches — what we know about the goal before decompose.
+
+    v0 wraps `ScopeSet` and adds a deliverable map. Future fields (per
+    `docs/INTENT_RESOLUTION_DESIGN.md`): `assumed`, `verified`,
+    `unknown_but_accepted`, and cross-turn `open_agenda_items` for the
+    godot-replay agenda-state-divergence finding.
+
+    Keep ScopeSet as the inner record so existing callers that just want
+    the scope view keep working — `resolved_intent.scope` is the ScopeSet
+    they already know how to handle.
+    """
+    scope: ScopeSet = field(default_factory=ScopeSet)
+    deliverables: List[Deliverable] = field(default_factory=list)
+    raw_text: str = ""  # original LLM output — same payload as scope.raw_text
+
+    def to_markdown(self) -> str:
+        """Render the resolved intent as injectable markdown for planner context."""
+        parts = []
+        if not self.scope.is_empty():
+            parts.append(self.scope.to_markdown())
+        if self.deliverables:
+            parts.append("\n## Deliverables (concrete artifacts)")
+            parts.extend(d.to_markdown_line() for d in self.deliverables)
+        return "\n".join(parts) if parts else ""
+
+    def is_empty(self) -> bool:
+        """True when neither scope nor deliverables have content."""
+        return self.scope.is_empty() and not self.deliverables
+
+
+# ---------------------------------------------------------------------------
 # Parser
 # ---------------------------------------------------------------------------
 
 _HEADING_PATTERN = re.compile(r"^#{1,4}\s*(.+?)\s*$", re.MULTILINE)
 
 
-def _parse_scope_markdown(text: str) -> ScopeSet:
-    """Parse the LLM's markdown response into a ScopeSet.
+def _split_sections(text: str) -> dict:
+    """Split a markdown blob into {section_key: [bullet_items]}.
 
-    Tolerates variations: extra whitespace, different heading levels,
-    alternate phrasings like "Failure Modes:" or "## FAILURE MODES".
-
-    Returns an empty ScopeSet if nothing parseable — caller decides whether
-    that means "skip injection" or "warn and proceed without scope."
+    Headings can be ##/###/####, possibly with trailing colon. Recognized
+    section keys: failure_modes, in_scope, out_of_scope, deliverables.
+    Anything else is ignored. Shared by scope and resolved-intent parsers.
     """
-    if not text or not text.strip():
-        return ScopeSet(raw_text=text or "")
-
-    # Split into sections by heading. Headings can be ## or ###.
     sections: dict = {}
     current_key: Optional[str] = None
     current_items: List[str] = []
@@ -134,34 +212,102 @@ def _parse_scope_markdown(text: str) -> ScopeSet:
             return "out_of_scope"
         if "in scope" in k or "in-scope" in k or "inscope" in k:
             return "in_scope"
+        if "deliverable" in k or "artifact" in k:
+            return "deliverables"
         return None
 
     for line in text.split("\n"):
         stripped = line.strip()
-        # Heading line
         m = _HEADING_PATTERN.match(line)
         if m:
-            # Flush previous section
             if current_key is not None:
                 sections[current_key] = current_items
             current_key = _normalize(m.group(1))
             current_items = []
             continue
-        # Bullet line inside a section
         if current_key is not None and (stripped.startswith("-") or stripped.startswith("*")):
             item = stripped.lstrip("-* ").strip()
             if item:
                 current_items.append(item)
-    # Final section
     if current_key is not None:
         sections[current_key] = current_items
+    return sections
 
+
+# `[preconditions: X, Y, Z]` — trailing annotation in deliverable bullets.
+_PRECONDITIONS_RE = re.compile(r"\[preconditions?:\s*(.+?)\s*\]", re.IGNORECASE)
+
+
+def _parse_deliverable_line(item: str) -> Deliverable:
+    """Parse a single deliverable bullet into a Deliverable.
+
+    Format: `<name>: <description> [preconditions: X, Y]`
+    - `name:` is the split point; if absent, the whole string is the name.
+    - The preconditions annotation can appear at the end of the description.
+    - Tolerates missing description, missing preconditions, or either alone.
+    """
+    if not item:
+        return Deliverable(name="")
+    # Extract preconditions first so they don't pollute the description.
+    preconditions: List[str] = []
+    m = _PRECONDITIONS_RE.search(item)
+    if m:
+        pre_raw = m.group(1)
+        preconditions = [p.strip() for p in pre_raw.split(",") if p.strip()]
+        item = (item[:m.start()] + item[m.end():]).strip()
+    # Split name: description.
+    if ":" in item:
+        name, _, desc = item.partition(":")
+        return Deliverable(
+            name=name.strip(),
+            description=desc.strip(),
+            preconditions=preconditions,
+        )
+    return Deliverable(name=item.strip(), preconditions=preconditions)
+
+
+def _parse_scope_markdown(text: str) -> ScopeSet:
+    """Parse the LLM's markdown response into a ScopeSet.
+
+    Tolerates variations: extra whitespace, different heading levels,
+    alternate phrasings like "Failure Modes:" or "## FAILURE MODES".
+
+    Returns an empty ScopeSet if nothing parseable — caller decides whether
+    that means "skip injection" or "warn and proceed without scope."
+
+    Deliverables section (if present) is ignored here; use
+    `_parse_resolved_intent_markdown` to capture it.
+    """
+    if not text or not text.strip():
+        return ScopeSet(raw_text=text or "")
+
+    sections = _split_sections(text)
     return ScopeSet(
         failure_modes=sections.get("failure_modes", []),
         in_scope=sections.get("in_scope", []),
         out_of_scope=sections.get("out_of_scope", []),
         raw_text=text,
     )
+
+
+def _parse_resolved_intent_markdown(text: str) -> "ResolvedIntent":
+    """Parse the LLM's markdown into a ResolvedIntent (scope + deliverables)."""
+    if not text or not text.strip():
+        return ResolvedIntent(scope=ScopeSet(raw_text=text or ""), raw_text=text or "")
+    sections = _split_sections(text)
+    scope = ScopeSet(
+        failure_modes=sections.get("failure_modes", []),
+        in_scope=sections.get("in_scope", []),
+        out_of_scope=sections.get("out_of_scope", []),
+        raw_text=text,
+    )
+    deliverables = [
+        _parse_deliverable_line(line)
+        for line in sections.get("deliverables", [])
+    ]
+    # Drop deliverables with empty names (malformed lines).
+    deliverables = [d for d in deliverables if d.name]
+    return ResolvedIntent(scope=scope, deliverables=deliverables, raw_text=text)
 
 
 # ---------------------------------------------------------------------------
@@ -291,11 +437,72 @@ def resolve_ambiguity_via_proxy(
 # Generator
 # ---------------------------------------------------------------------------
 
+def generate_resolved_intent(
+    goal: str,
+    adapter,
+    *,
+    max_tokens: int = 1200,
+    temperature: float = 0.3,
+    ancestry_context: str = "",
+    allow_proxy_fallback: bool = True,
+) -> Optional["ResolvedIntent"]:
+    """Generate a resolved intent (scope + deliverable map) for `goal`.
+
+    One LLM call. Returns None on any failure, a ResolvedIntent on success.
+    If the scope sections parse but deliverables don't, you still get back a
+    ResolvedIntent with an empty deliverables list — inject scope alone and
+    let the planner proceed.
+
+    This is the successor to `generate_scope()` — per
+    `docs/INTENT_RESOLUTION_DESIGN.md` and `docs/DRIVER_AND_WATCHER.md`,
+    it's the "plan-creation as its own step" artifact that sits between goal
+    and decomposition.
+    """
+    if not goal or not adapter:
+        return None
+
+    scope = generate_scope(
+        goal, adapter,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        ancestry_context=ancestry_context,
+        allow_proxy_fallback=allow_proxy_fallback,
+    )
+    if scope is None:
+        return None
+    # Pick deliverables out of the same raw response scope came from. Cheap:
+    # no extra LLM round-trip. We keep the scope ScopeSet as-is (not re-parsed)
+    # so that test double patches on generate_scope still see their returned
+    # values flow through unchanged.
+    sections = _split_sections(scope.raw_text) if scope.raw_text else {}
+    deliverables = [
+        _parse_deliverable_line(line)
+        for line in sections.get("deliverables", [])
+    ]
+    deliverables = [d for d in deliverables if d.name]
+    intent = ResolvedIntent(
+        scope=scope,
+        deliverables=deliverables,
+        raw_text=scope.raw_text,
+    )
+    if intent.deliverables:
+        log.info(
+            "resolved_intent: parsed %d deliverable(s) alongside scope",
+            len(intent.deliverables),
+        )
+    else:
+        log.info(
+            "resolved_intent: no deliverables parsed; scope-only intent "
+            "(prompt may need tightening or goal is unusual)"
+        )
+    return intent
+
+
 def generate_scope(
     goal: str,
     adapter,
     *,
-    max_tokens: int = 800,
+    max_tokens: int = 1200,
     temperature: float = 0.3,
     ancestry_context: str = "",
     allow_proxy_fallback: bool = True,
@@ -306,6 +513,11 @@ def generate_scope(
 
     The call is single-persona (generalist) — the triad (PM/engineer/architect)
     is deferred until A/B signal justifies the 3x cost.
+
+    Note: the underlying prompt now asks for four sections (failure modes,
+    in/out of scope, deliverables). `generate_scope` returns only the scope
+    view (deliverables are silently dropped); callers who want the full
+    thread should use `generate_resolved_intent()` instead.
     """
     if not goal or not adapter:
         return None
@@ -421,3 +633,18 @@ def inject_scope_into_context(scope: Optional[ScopeSet], ancestry_context_extra:
     if ancestry_context_extra:
         return f"{ancestry_context_extra}\n\n{scope_block}"
     return scope_block
+
+
+def inject_resolved_intent_into_context(
+    intent: Optional["ResolvedIntent"], ancestry_context_extra: str
+) -> str:
+    """Append resolved-intent markdown (scope + deliverables) to ancestry."""
+    if not intent or intent.is_empty():
+        return ancestry_context_extra
+
+    block = intent.to_markdown()
+    if not block:
+        return ancestry_context_extra
+    if ancestry_context_extra:
+        return f"{ancestry_context_extra}\n\n{block}"
+    return block

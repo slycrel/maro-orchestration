@@ -8,11 +8,17 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from scope import (
+    Deliverable,
+    ResolvedIntent,
     ScopeSet,
     _looks_like_clarification,
+    _parse_deliverable_line,
     _parse_proxy_response,
+    _parse_resolved_intent_markdown,
     _parse_scope_markdown,
+    generate_resolved_intent,
     generate_scope,
+    inject_resolved_intent_into_context,
     inject_scope_into_context,
     resolve_ambiguity_via_proxy,
 )
@@ -395,3 +401,210 @@ def test_generate_scope_skips_proxy_on_garbage_response_without_question():
     assert scope is not None
     assert scope.is_empty()
     assert len(adapter.calls) == 1  # no proxy escalation
+
+
+# ---------------------------------------------------------------------------
+# Deliverable parsing
+# ---------------------------------------------------------------------------
+
+def test_parse_deliverable_line_full_form():
+    d = _parse_deliverable_line(
+        "cmd/server/main.go: HTTP server binary [preconditions: Go, gorilla/websocket]"
+    )
+    assert d.name == "cmd/server/main.go"
+    assert d.description == "HTTP server binary"
+    assert d.preconditions == ["Go", "gorilla/websocket"]
+
+
+def test_parse_deliverable_line_no_preconditions():
+    d = _parse_deliverable_line("web/index.html: browser entry page")
+    assert d.name == "web/index.html"
+    assert d.description == "browser entry page"
+    assert d.preconditions == []
+
+
+def test_parse_deliverable_line_bare_name():
+    d = _parse_deliverable_line("docs/ARCHITECTURE.md")
+    assert d.name == "docs/ARCHITECTURE.md"
+    assert d.description == ""
+    assert d.preconditions == []
+
+
+def test_parse_deliverable_line_preconditions_only():
+    d = _parse_deliverable_line("tool-name [preconditions: python3.12]")
+    assert d.name == "tool-name"
+    assert d.preconditions == ["python3.12"]
+
+
+def test_deliverable_to_markdown_line_roundtrips():
+    d = Deliverable(name="a.go", description="b c", preconditions=["Go"])
+    line = d.to_markdown_line()
+    assert line.startswith("- a.go")
+    assert "b c" in line
+    assert "preconditions: Go" in line
+
+
+# ---------------------------------------------------------------------------
+# ResolvedIntent
+# ---------------------------------------------------------------------------
+
+_FULL_RESPONSE_WITH_DELIVERABLES = """## Failure Modes
+- server hangs on WebSocket close
+- session state not persisted across reconnect
+
+## In Scope
+- WebSocket protocol definition
+- Per-session state persistence
+
+## Out of Scope
+- Authentication
+- Persistent chat history
+
+## Deliverables
+- cmd/server/main.go: HTTP server binary [preconditions: Go toolchain, gorilla/websocket]
+- web/index.html: browser entry point [preconditions: none]
+- internal/session/state.go: per-connection session state
+"""
+
+
+def test_parse_resolved_intent_markdown_captures_all_sections():
+    intent = _parse_resolved_intent_markdown(_FULL_RESPONSE_WITH_DELIVERABLES)
+    assert not intent.is_empty()
+    # Scope piece intact
+    assert len(intent.scope.failure_modes) == 2
+    assert len(intent.scope.in_scope) == 2
+    assert len(intent.scope.out_of_scope) == 2
+    # Deliverables
+    assert len(intent.deliverables) == 3
+    assert intent.deliverables[0].name == "cmd/server/main.go"
+    assert "Go toolchain" in intent.deliverables[0].preconditions
+    assert intent.deliverables[2].preconditions == []  # no annotation on 3rd
+
+
+def test_parse_resolved_intent_markdown_empty_input():
+    intent = _parse_resolved_intent_markdown("")
+    assert intent.is_empty()
+    assert intent.scope.raw_text == ""
+
+
+def test_parse_resolved_intent_drops_malformed_deliverable_lines():
+    text = _FULL_RESPONSE_WITH_DELIVERABLES + "\n- [preconditions: only]\n"
+    intent = _parse_resolved_intent_markdown(text)
+    # The malformed line (no name) should be dropped — still 3 deliverables.
+    assert len(intent.deliverables) == 3
+
+
+def test_resolved_intent_to_markdown_renders_both_sections():
+    intent = ResolvedIntent(
+        scope=ScopeSet(
+            failure_modes=["x"],
+            in_scope=["y"],
+            out_of_scope=["z"],
+        ),
+        deliverables=[Deliverable(name="a.go", description="the thing")],
+    )
+    md = intent.to_markdown()
+    assert "Scope (goal bounds)" in md
+    assert "## Deliverables" in md
+    assert "- a.go: the thing" in md
+
+
+def test_resolved_intent_is_empty_when_neither_scope_nor_deliverables():
+    assert ResolvedIntent().is_empty()
+
+
+def test_resolved_intent_is_not_empty_with_only_deliverables():
+    intent = ResolvedIntent(deliverables=[Deliverable(name="a.go")])
+    assert not intent.is_empty()
+
+
+def test_parse_scope_markdown_ignores_deliverables_section():
+    """Back-compat: old generate_scope callers still get a plain ScopeSet
+    even when the LLM emits a deliverables block — no crashes, no bleed."""
+    scope = _parse_scope_markdown(_FULL_RESPONSE_WITH_DELIVERABLES)
+    assert not scope.is_empty()
+    assert len(scope.failure_modes) == 2
+    # ScopeSet has no deliverables field — just verify the shape is unchanged.
+    assert not hasattr(scope, "deliverables")
+
+
+# ---------------------------------------------------------------------------
+# generate_resolved_intent + injection
+# ---------------------------------------------------------------------------
+
+def test_generate_resolved_intent_returns_both_scope_and_deliverables():
+    adapter = _FakeAdapter(response_text=_FULL_RESPONSE_WITH_DELIVERABLES)
+    intent = generate_resolved_intent("build a headless server", adapter)
+    assert intent is not None
+    assert not intent.is_empty()
+    assert len(intent.deliverables) == 3
+    assert len(intent.scope.failure_modes) == 2
+
+
+def test_generate_resolved_intent_none_on_missing_goal():
+    adapter = _FakeAdapter(response_text=_FULL_RESPONSE_WITH_DELIVERABLES)
+    assert generate_resolved_intent("", adapter) is None
+
+
+def test_generate_resolved_intent_none_on_adapter_failure():
+    adapter = _FakeAdapter(raise_on_complete=True)
+    assert generate_resolved_intent("build X", adapter) is None
+
+
+def test_generate_resolved_intent_empty_deliverables_scope_only():
+    # Scope sections present but no deliverables — intent should still be
+    # non-empty (scope alone is useful).
+    scope_only = """## Failure Modes
+- x
+
+## In Scope
+- y
+
+## Out of Scope
+- z
+"""
+    adapter = _FakeAdapter(response_text=scope_only)
+    intent = generate_resolved_intent("build X", adapter)
+    assert intent is not None
+    assert not intent.is_empty()
+    assert intent.deliverables == []
+    assert len(intent.scope.failure_modes) == 1
+
+
+def test_inject_resolved_intent_appends_to_ancestry():
+    intent = ResolvedIntent(
+        scope=ScopeSet(failure_modes=["a"], in_scope=["b"], out_of_scope=["c"]),
+        deliverables=[Deliverable(name="x.go", description="d")],
+    )
+    merged = inject_resolved_intent_into_context(intent, "prior ancestry")
+    assert merged.startswith("prior ancestry")
+    assert "Scope (goal bounds)" in merged
+    assert "## Deliverables" in merged
+    assert "x.go" in merged
+
+
+def test_inject_resolved_intent_none_returns_ancestry_unchanged():
+    assert inject_resolved_intent_into_context(None, "abc") == "abc"
+
+
+def test_inject_resolved_intent_empty_returns_ancestry_unchanged():
+    assert inject_resolved_intent_into_context(ResolvedIntent(), "abc") == "abc"
+
+
+def test_generate_resolved_intent_carries_proxy_resolution():
+    # If the scope path went through the proxy (ambiguous goal → committed
+    # interpretation), the ResolvedIntent should preserve that state on
+    # its inner scope, so post-hoc audit can see what happened.
+    adapter = _FakeAdapter(responses=[
+        _CLARIFICATION_RESPONSE,    # first scope call: asks a question
+        _PROXY_COMMITMENT,          # proxy commits to an interpretation
+        _FULL_RESPONSE_WITH_DELIVERABLES,  # scope retry with commitment: succeeds
+    ])
+    intent = generate_resolved_intent("do something ambiguous", adapter)
+    assert intent is not None
+    assert not intent.is_empty()
+    assert intent.scope.proxy_resolution  # non-empty dict
+    assert "interpretation" in intent.scope.proxy_resolution
+    # And the deliverables from the retry response should be captured.
+    assert len(intent.deliverables) == 3
+
