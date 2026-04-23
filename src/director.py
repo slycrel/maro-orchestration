@@ -1237,6 +1237,7 @@ def verify_goal_completion(
     dry_run: bool = False,
     timeout_per_check: int = 30,
     scope=None,
+    diagnosis=None,
 ) -> ClosureVerdict:
     """Director closure check: verify the goal was actually achieved.
 
@@ -1410,6 +1411,11 @@ def verify_goal_completion(
             modality_dist=modality_dist,
             scope=scope,
         )
+        diagnosis_gap_reason = _detect_diagnosis_gap(
+            complete=complete,
+            diagnosis=diagnosis,
+            modality_dist=modality_dist,
+        )
         if behavioral_gap_reason:
             log.warning(
                 "closure: downgrading complete=True -> False — behavioral gap: %s",
@@ -1422,6 +1428,17 @@ def verify_goal_completion(
             gaps = list(gaps) + [
                 f"No behavioral probe exercised the runtime delivery "
                 f"(modality={modality_dist}). {behavioral_gap_reason}"
+            ]
+        if diagnosis_gap_reason:
+            log.warning(
+                "closure: downgrading complete=True -> False — diagnosis gap: %s",
+                diagnosis_gap_reason,
+            )
+            complete = False
+            if confidence < 0.6:
+                confidence = 0.6
+            gaps = list(gaps) + [
+                f"Loop diagnosis and closure disagree: {diagnosis_gap_reason}"
             ]
 
         verdict = ClosureVerdict(
@@ -1465,6 +1482,8 @@ def verify_goal_completion(
                     "scope_supplied": scope is not None,
                     "modality_distribution": modality_dist,
                     "behavioral_gap_downgrade": behavioral_gap_reason or "",
+                    "diagnosis_failure_class": safe_str(getattr(diagnosis, "failure_class", "")),
+                    "diagnosis_gap_downgrade": diagnosis_gap_reason or "",
                     "commands": [r.get("command", "")[:200] for r in check_results],
                     "summary": summary[:400],
                 },
@@ -1606,6 +1625,43 @@ def _detect_behavioral_gap(
             pass
 
     return ""
+
+
+def _detect_diagnosis_gap(
+    *,
+    complete: bool,
+    diagnosis=None,
+    modality_dist: Dict[str, int],
+) -> str:
+    """Return a reason when loop diagnosis contradicts a clean closure verdict.
+
+    Targets the concrete backlog case where introspection already concluded the
+    decomposition was too broad, but closure still blesses the run without any
+    behavioral evidence.
+    """
+    if not complete or diagnosis is None:
+        return ""
+
+    try:
+        failure_class = safe_str(getattr(diagnosis, "failure_class", ""))
+        severity = safe_str(getattr(diagnosis, "severity", ""))
+        recommendation = safe_str(getattr(diagnosis, "recommendation", ""))
+    except Exception:
+        return ""
+
+    if failure_class != "decomposition_too_broad":
+        return ""
+
+    has_behavioral = any(modality_dist.get(m, 0) > 0 for m in _BEHAVIORAL_MODALITIES)
+    if has_behavioral:
+        return ""
+
+    sev = f" severity={severity}" if severity else ""
+    rec = f" recommendation={recommendation[:120]!r}" if recommendation else ""
+    return (
+        f"loop diagnosis reported decomposition_too_broad{sev} "
+        f"before closure, but no behavioral probe ran.{rec}"
+    )
 
 
 # ---------------------------------------------------------------------------

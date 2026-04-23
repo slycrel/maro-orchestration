@@ -706,6 +706,43 @@ class TestDetectBehavioralGap:
         assert self._call(scope=_Bad()) == ""
 
 
+class TestDetectDiagnosisGap:
+    def _diag(self, failure_class="decomposition_too_broad", severity="warning", recommendation="split the work"):
+        class _Diag:
+            pass
+        d = _Diag()
+        d.failure_class = failure_class
+        d.severity = severity
+        d.recommendation = recommendation
+        return d
+
+    def test_non_broad_diagnosis_does_not_flag(self):
+        from director import _detect_diagnosis_gap
+        assert _detect_diagnosis_gap(
+            complete=True,
+            diagnosis=self._diag(failure_class="healthy"),
+            modality_dist={"static": 2},
+        ) == ""
+
+    def test_behavioral_probe_clears_diagnosis_gap(self):
+        from director import _detect_diagnosis_gap
+        assert _detect_diagnosis_gap(
+            complete=True,
+            diagnosis=self._diag(),
+            modality_dist={"http": 1, "static": 2},
+        ) == ""
+
+    def test_broad_diagnosis_with_only_static_checks_flags(self):
+        from director import _detect_diagnosis_gap
+        reason = _detect_diagnosis_gap(
+            complete=True,
+            diagnosis=self._diag(),
+            modality_dist={"static": 4},
+        )
+        assert "decomposition_too_broad" in reason
+        assert "no behavioral probe" in reason
+
+
 class TestVerifyGoalCompletion:
     """Tests for verify_goal_completion — director closure check."""
 
@@ -981,6 +1018,35 @@ class TestVerifyGoalCompletion:
 
         verdict_user_msg = captured_messages[1][1].content
         assert '"modality": "http"' in verdict_user_msg
+
+    def test_broad_diagnosis_downgrades_complete_without_behavioral_probe(self, monkeypatch, tmp_path):
+        """Closure should not bless an over-broad run on static checks alone."""
+        from unittest.mock import MagicMock, patch
+
+        class _Diag:
+            failure_class = "decomposition_too_broad"
+            severity = "warning"
+            recommendation = "split the work into narrower steps"
+
+        adapter = MagicMock()
+        checks = [{"description": "repo grep", "command": "grep -q handler server.go"}]
+        verdict_data = {"complete": True, "confidence": 0.9, "gaps": [], "summary": "All good."}
+
+        with patch("director.extract_json", side_effect=[{"checks": checks}, verdict_data]):
+            with patch("director.content_or_empty", return_value="{}"):
+                with patch("subprocess.run") as run:
+                    run.return_value = MagicMock(returncode=0, stdout="ok", stderr="")
+                    result = verify_goal_completion(
+                        "build X",
+                        [],
+                        adapter,
+                        workspace_path=str(tmp_path),
+                        diagnosis=_Diag(),
+                    )
+
+        assert result.complete is False
+        assert result.confidence >= 0.6
+        assert any("decomposition_too_broad" in gap for gap in result.gaps)
 
 
 # ---------------------------------------------------------------------------

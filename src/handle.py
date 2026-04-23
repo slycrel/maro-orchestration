@@ -952,6 +952,13 @@ def handle(
         if (not dry_run
                 and loop_result.status in _closure_eligible_statuses
                 and _ran_any_step):
+            _closure_diag = None
+            try:
+                from introspect import diagnose_loop as _diagnose_loop
+                if getattr(loop_result, "loop_id", ""):
+                    _closure_diag = _diagnose_loop(loop_result.loop_id)
+            except Exception:
+                _closure_diag = None
             try:
                 from director import verify_goal_completion
                 _closure = verify_goal_completion(
@@ -961,6 +968,7 @@ def handle(
                     workspace_path=repo_path or "",
                     channel=channel,
                     scope=_scope,
+                    diagnosis=_closure_diag,
                 )
             except Exception:
                 _closure = None

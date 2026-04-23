@@ -1092,6 +1092,36 @@ class TestClosureRestart:
         assert passed_scope is not None, "scope not plumbed into verify_goal_completion"
         assert passed_scope.failure_modes == ["server never started"]
 
+    def test_diagnosis_plumbed_to_closure(self, monkeypatch, tmp_path):
+        """Loop diagnosis should reach closure so it can distrust broad runs."""
+        self._setup(monkeypatch, tmp_path)
+        from unittest.mock import patch
+
+        done_result = self._fake_loop_result(status="done")
+
+        class _Diag:
+            failure_class = "decomposition_too_broad"
+            severity = "warning"
+            recommendation = "split into narrower slices"
+
+        verify_calls = []
+
+        def _fake_verify(*args, **kwargs):
+            verify_calls.append(kwargs)
+            return self._fake_closure(True, 0.9)
+
+        with patch("agent_loop.run_agent_loop", return_value=done_result), \
+             patch("intent.check_goal_clarity", return_value={"clear": True}), \
+             patch("introspect.diagnose_loop", return_value=_Diag()), \
+             patch("director.verify_goal_completion", side_effect=_fake_verify), \
+             self._no_quality_gate():
+            handle("build X", force_lane="agenda", dry_run=False)
+
+        assert verify_calls, "verify_goal_completion was not invoked"
+        passed_diag = verify_calls[0].get("diagnosis")
+        assert passed_diag is not None, "diagnosis not plumbed into verify_goal_completion"
+        assert passed_diag.failure_class == "decomposition_too_broad"
+
     def test_depth_cap_prevents_infinite_loop(self, monkeypatch, tmp_path):
         """Closure restart shares the continuation_depth cap of 3."""
         self._setup(monkeypatch, tmp_path)
