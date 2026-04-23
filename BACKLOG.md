@@ -253,6 +253,33 @@ See `docs/CONSTRAINT_ORCHESTRATION_DESIGN.md` + `docs/CONSTRAINT_ORCHESTRATION_R
 
   **Related:** sibling to the "runtime-probe bias" item above. That one is about closure *choosing* static over behavioral probes; this is about closure *mis-reading* the behavioral probes it does choose. Both resolve to: the verification verdict is decoupled from whether the thing was actually verified. Fix one without the other and the same failure surfaces on a different axis.
 
+- [ ] **Step runner has no hang protection / no long-lived-process affordance.** Scope A/B run-02-control (2026-04-23, `~/.poe/experiments/scope-ab-2026-04-22/run-02-control/`) got through 26 steps cleanly, then hit step 27 "Start server with --headless flag on localhost:8080" and the process hung indefinitely until external SIGTERM (rc=-15). The step runner shells out and blocks waiting on completion — but `go run ./cmd/server` is a long-lived process that never exits. Planner treated "start the server" as a discrete decompose step; runner had no way to say "start it, wait for a readiness signal, keep it alive in the background, move on."
+
+  **Candidates:**
+  - step-runner timeout: any step that exceeds N minutes of wall clock without producing output gets killed and the step marked as `requires_background_mode`
+  - classify step intent at decompose time — "start a long-lived process" → `background=true`, spawn detached + poll readiness (HTTP probe, port listen, log-line match) rather than waiting on exit
+  - planner prompt change: instruct the decomposer to *not* emit "start server" as a terminal step — servers should be started inside a verification step that also probes them and shuts down afterward
+
+  **Why this matters:** until this is fixed, any blind-test goal that produces a long-running binary is an accident waiting to happen on the control arm (scope-injected arm compresses to 8 steps and keeps server startup inside the verification phase, so it doesn't trip this). We can't get clean A/B data on anything server-shaped until we fix the hang path.
+
+- [ ] **Rate-limit recovery has no total-backoff cap; recovery path emits phantom `Step -1`.** Scope A/B run-06-control (2026-04-23, `~/.poe/experiments/scope-ab-2026-04-22/run-06-control/`) hit 6 rate-limit retries with exponential backoff (60→120→240→480→960→1800s = 61 min total wall-clock in backoff alone). Per-attempt cap is enforced; **total-backoff-wall-clock is not.** After step 20 finally completed, the recovery path fired with `recovery[NEEDS-REVIEW] risk=medium: Retry with smaller step scope or switch to API adapter` — and produced a `Step -1` marker that the main loop doesn't know how to handle. Run exited rc=1 with no closure verdict. Total runtime: 2h30m for 20 completed steps.
+
+  **Candidates:**
+  - cap total backoff wall-clock at ~10 min; if exceeded, bail cleanly (soft-fail with "rate-limited, retry later" rather than another 30-min sleep)
+  - recovery path should trigger an actual replan (fewer steps, smaller scope) or adapter switch, not a phantom `Step -1` ordinal
+  - while in rate-limit backoff, pause the cost meter or at least annotate "backoff-idle tokens=0" — run-06 showed $41 cost accumulating during 61 min of no real work (cost meter is probably accumulating during retries before the API call; worth auditing)
+
+  **Related:** `decomposition_too_broad` miscalibration (next item). Both are recovery-layer bugs that only surface on long plans.
+
+- [ ] **`decomposition_too_broad` threshold is miscalibrated post-scope.** Scope A/B 2026-04-23: every treat run (scope injected) got `DIAGNOSIS: decomposition_too_broad (warning). 8/8 steps done.` — despite 8 being the *narrowest* decomposition achieved across the whole experiment (controls were 15/37/40). The diagnostic threshold was tuned on pre-scope runs; scope-injected plans are now systematically compressed enough to trip the threshold as a baseline. The warning has become noise.
+
+  **Candidates:**
+  - re-tune the threshold against the post-scope decomposition distribution (8 steps for a medium-complexity blind-test goal is fine; treat that as the new normal)
+  - condition the threshold on `scope_supplied=true` — scope-gated plans should be *expected* to be tighter
+  - separate "too few steps" from "too many steps" — current single-dimension warning fires on both ends ambiguously
+
+- [ ] **`run-03-treat` didn't emit CLOSURE_VERDICT despite reaching adversarial review.** Scope A/B run-03 (2026-04-23): 8/8 steps completed, adversarial review fired (3 claim probes), `decomposition_too_broad` diagnosis logged, rc=0 — but no `CLOSURE_VERDICT` event in captain's log and no `closure check: complete=...` line in handle.log. Runs 01/04/05 all emitted the verdict. Suggests a code path where adversarial review runs but director closure is skipped (likely via the `decomposition_too_broad` diagnosis short-circuiting?). Minor; probably a one-line fix once located. Trace: `~/.poe/experiments/scope-ab-2026-04-22/run-03-treat/handle.log` ends mid-adversarial-review output, no closure event follows.
+
 ### Introspect-sees-no-action: `decomposition_too_broad` (and siblings)
 
 - [ ] **`decomposition_too_broad` fires but nothing acts on it.** Full slycrel-go run (2026-04-16, loop `85ac29ee-*`) completed with introspect warning `decomposition_too_broad` logged and then ignored — loop continued, shipped 2 commits, closure never consulted the warning. This is the shape of self-improvement theater: the system knows something is off and does nothing. Frame this honestly as "not yet handled" rather than "working as designed."
