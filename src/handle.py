@@ -758,6 +758,7 @@ def handle(
         # from ~/.poe/config.yml, not the repo-local user/CONFIG.md).
         # See docs/PHASE_65_IMPLEMENTATION_PLAN.md.
         _scope = None
+        _resolved_intent = None
         try:
             from config import get as _config_get
             _scope_on = bool(_config_get("scope_generation", False))
@@ -767,16 +768,20 @@ def handle(
             _scope_ab_skip = False
         if _scope_on and not dry_run:
             try:
-                from scope import generate_scope
-                # Hand scope the ancestry assembled so far — it gets passed
-                # to the director-proxy fallback on parse failure so the proxy
-                # can commit to an interpretation informed by the same context
-                # the planner would see.
+                from scope import generate_resolved_intent
+                # Hand the generator the ancestry assembled so far — it gets
+                # passed to the director-proxy fallback on parse failure so the
+                # proxy can commit to an interpretation informed by the same
+                # context the planner would see.
                 _scope_ancestry = "\n\n".join(p for p in _extra_ctx_parts if p)
-                _scope = generate_scope(
+                _resolved_intent = generate_resolved_intent(
                     message, adapter,
                     ancestry_context=_scope_ancestry,
                 )
+                # Keep _scope as the scope-view for back-compat with the
+                # existing artifact-write / captain's-log / ab-skip branches
+                # below — they all operate on the ScopeSet shape.
+                _scope = _resolved_intent.scope if _resolved_intent else None
                 # Resolve the project artifacts dir once; used for both
                 # successful scope.md persistence and raw-dump on parse failure.
                 try:
@@ -816,7 +821,8 @@ def handle(
                         pass
                     _scope = None  # treat as "no scope" for the rest of the pipeline
                 elif _scope is not None and not _scope.is_empty():
-                    # Successful parse. Persist scope.md + emit captain's log event.
+                    # Successful parse. Persist scope.md + resolved_intent.md
+                    # + emit captain's log event.
                     if _proj_dir is not None:
                         try:
                             (_proj_dir / "scope.md").write_text(
@@ -825,6 +831,23 @@ def handle(
                             log.info("scope: recorded artifact at %s/scope.md", _proj_dir)
                         except Exception as _scope_rec_exc:
                             log.debug("scope: could not record artifact: %s", _scope_rec_exc)
+                        # Resolved-intent artifact — "the thread the driver
+                        # watches" per docs/DRIVER_AND_WATCHER.md #4. Scope is
+                        # a section of the thread; the thread itself includes
+                        # deliverables (and, later, assumed/verified/unknown
+                        # and agenda-state carryover).
+                        if _resolved_intent is not None and not _resolved_intent.is_empty():
+                            try:
+                                (_proj_dir / "resolved_intent.md").write_text(
+                                    _resolved_intent.to_markdown(), encoding="utf-8"
+                                )
+                                log.info(
+                                    "resolved_intent: recorded artifact at %s/resolved_intent.md "
+                                    "(%d deliverables)",
+                                    _proj_dir, len(_resolved_intent.deliverables),
+                                )
+                            except Exception as _ri_rec_exc:
+                                log.debug("resolved_intent: could not record artifact: %s", _ri_rec_exc)
                     try:
                         from captains_log import log_event, SCOPE_GENERATED
                         _scope_ctx = {
@@ -832,6 +855,10 @@ def handle(
                             "failure_modes_count": len(_scope.failure_modes),
                             "in_scope_count": len(_scope.in_scope),
                             "out_of_scope_count": len(_scope.out_of_scope),
+                            "deliverables_count": (
+                                len(_resolved_intent.deliverables)
+                                if _resolved_intent is not None else 0
+                            ),
                             "ab_skip": bool(_scope_ab_skip),
                         }
                         # Surface director-proxy resolution when the scope
@@ -860,7 +887,12 @@ def handle(
                         log.info("[scope-deferred] ab-skip: scope generated "
                                  "but not injected (ab-test control arm)")
                     else:
-                        _extra_ctx_parts.append(_scope.to_markdown())
+                        # Inject the full resolved intent (scope + deliverables)
+                        # when available; fall back to scope-only for back-compat.
+                        if _resolved_intent is not None and not _resolved_intent.is_empty():
+                            _extra_ctx_parts.append(_resolved_intent.to_markdown())
+                        else:
+                            _extra_ctx_parts.append(_scope.to_markdown())
                         if channel is None:
                             log.info("[scope-deferred] human-gate: no channel, "
                                      "proceeding with generated scope without review")

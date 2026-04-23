@@ -2,7 +2,39 @@
 
 What to do next, in what order. Updated each session. Strategic phases live in ROADMAP.md; deferred ideas live in BACKLOG.md. This file is the bridge — the executable queue.
 
-Last updated: 2026-04-16 (session 34 — closure gate + correspondence retrieval + synthesize_skill 3-gate)
+Last updated: 2026-04-23 (session 36 — scope A/B analysis + ResolvedIntent v0)
+
+---
+
+## Done (session 36, 2026-04-23 — scope A/B analysis + ResolvedIntent v0: plan-creation as its own step)
+
+Two-part session. First: analyze the 2026-04-22 scope A/B chain (6 runs, 3 treat + 3 control). Second: make the "fundamental approach shift" Jeremy asked for — per `docs/INTENT_RESOLUTION_DESIGN.md` and `docs/DRIVER_AND_WATCHER.md` #4, the thread the driver watches is a durable artifact with concrete deliverable commitments, not just a scope bound.
+
+**Analysis (`~/.poe/experiments/scope-ab-2026-04-22/ANALYSIS.md`):**
+- Treat (scope injected): 3/3 rc=0, 8-step plans consistently, ~$8 each
+- Control (scope not injected): 1/3 clean (rc=0), plans 15/37/40 steps, $8–$41
+- **Primary signal: scope injection structurally compresses plan length** (8 vs 15–40). Consistent across all three treat runs.
+- Both control failures (run-02 SIGTERM at "start server," run-06 61-min rate-limit cascade + rc=1) are recovery-layer bugs that surface preferentially on long plans — four new backlog entries added.
+- Hypothesis on closure quality ("does injection improve verdict?") remains under-tested: too few clean controls.
+
+**ResolvedIntent v0 (the shift):**
+- [x] **`src/scope.py`** — new `Deliverable(name, description, preconditions)` dataclass and `ResolvedIntent(scope, deliverables, raw_text)` wrapper. LLM prompt extended from 3 sections to 4 (adds "Deliverables" as a checkable artifact map with inline `[preconditions: X, Y]` annotations). Shared `_split_sections()` helper keeps `_parse_scope_markdown` and `_parse_resolved_intent_markdown` reading the same text.
+- [x] **`generate_resolved_intent()`** — wraps existing `generate_scope()` (no extra LLM call); re-parses the scope's `raw_text` for deliverables. `generate_scope()` still works and still returns `ScopeSet` — back-compat preserved for everything that only wants the scope view.
+- [x] **`handle.py` integration** — when `scope_generation` is on, calls `generate_resolved_intent` instead of bare `generate_scope`. Writes `resolved_intent.md` alongside the existing `scope.md` (both land in `~/.poe/workspace/projects/<slug>/artifacts/`). Injects the full thread (scope + deliverables) into planner ancestry when `scope_ab_skip` is false. Adds `deliverables_count` to captain's log `SCOPE_GENERATED` context.
+- [x] **15 new tests** in `test_scope.py` — Deliverable parsing (full form, no preconditions, bare name, preconditions-only), ResolvedIntent rendering, `generate_resolved_intent` edge cases (missing goal, adapter failure, scope-only response, proxy-resolution carry-through), injection helper, and back-compat guard that `_parse_scope_markdown` still ignores the deliverables section.
+
+**Backlog additions (from A/B analysis):**
+- Step runner has no hang protection / no long-lived-process affordance (run-02 SIGTERM)
+- Rate-limit recovery has no total-backoff cap; phantom `Step -1` on recovery path (run-06)
+- `decomposition_too_broad` miscalibrated post-scope (fires on every 8-step treat run)
+- `run-03-treat` didn't emit CLOSURE_VERDICT (likely short-circuited by a diagnosis)
+
+**Explicitly deferred for later steps** (so future session picks them up with shape named):
+- Cross-turn agenda-state carryover (godot-replay finding: dormant-but-open items)
+- Durable reuse of `resolved_intent.md` across invocations for the same project slug
+- `assumed` / `verified` / `unknown-but-accepted` sections
+- Closure pre-flight consuming the `preconditions` field (resolves binary via `shutil.which`, downgrades to INCONCLUSIVE)
+- Side-quest DAG for unknowns (`INTENT_RESOLUTION_DESIGN.md` says don't build until one's been run by hand)
 
 ---
 
