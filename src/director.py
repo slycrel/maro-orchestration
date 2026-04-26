@@ -1213,6 +1213,78 @@ class ClosureVerdict:
     checks_passed: int
 
 
+def _classify_precondition(preq: str) -> str:
+    """Classify a Deliverable.precondition as 'command', 'path', or 'opaque'.
+
+    - command: single token, no slashes, no spaces — try shutil.which.
+    - path: contains a slash or starts with `./` — try Path.exists.
+    - opaque: anything else (port numbers, env-var requirements, etc.) —
+      can't pre-flight mechanically; preserve as informational only.
+    """
+    s = (preq or "").strip()
+    if not s:
+        return "opaque"
+    # Path-shaped: contains a slash, or starts with ./ or ../
+    if "/" in s or s.startswith("."):
+        return "path"
+    # Command-shaped: single token, no spaces
+    if " " not in s and "\t" not in s:
+        return "command"
+    return "opaque"
+
+
+def _run_precondition_preflight(
+    deliverables: list, *, cwd: Optional[str] = None
+) -> List[Dict[str, Any]]:
+    """Mechanically pre-flight Deliverable.preconditions before closure plan runs.
+
+    For each command-shaped precondition: shutil.which → passed.
+    For each path-shaped precondition: Path(cwd or '.')/preq exists → passed.
+    Opaque preconditions are skipped (no synthetic check; the LLM still sees
+    them in the deliverables block).
+
+    Returns a list of synthetic check results in the same shape as the
+    real check_results — so callers can prepend them and the existing
+    interpretation pipeline treats them uniformly.
+    """
+    import shutil
+    out: List[Dict[str, Any]] = []
+    base = Path(cwd) if cwd else Path.cwd()
+    for d in deliverables or []:
+        _preqs = getattr(d, "preconditions", None) or []
+        _name = getattr(d, "name", "") or "(unnamed deliverable)"
+        for preq in _preqs:
+            kind = _classify_precondition(preq)
+            if kind == "command":
+                found = shutil.which(preq)
+                passed = found is not None
+                stderr = "" if passed else f"command `{preq}` not on PATH"
+                out.append({
+                    "description": f"precondition: {preq} (command for {_name})",
+                    "command": f"shutil.which({preq!r})",
+                    "modality": "preflight",
+                    "exit_code": 0 if passed else 127,
+                    "stdout": found or "",
+                    "stderr": stderr,
+                    "passed": passed,
+                })
+            elif kind == "path":
+                target = (base / preq).resolve() if not Path(preq).is_absolute() else Path(preq)
+                passed = target.exists()
+                stderr = "" if passed else f"path `{preq}` does not exist"
+                out.append({
+                    "description": f"precondition: {preq} (path for {_name})",
+                    "command": f"Path({preq!r}).exists",
+                    "modality": "preflight",
+                    "exit_code": 0 if passed else 1,
+                    "stdout": str(target) if passed else "",
+                    "stderr": stderr,
+                    "passed": passed,
+                })
+            # opaque kinds (port numbers, env-var requirements) are not pre-flighted
+    return out
+
+
 def _check_modality_from_command(command: str) -> str:
     """Best-effort classification of a closure check's probe modality."""
     cmd = (command or "").lower()
@@ -1297,6 +1369,7 @@ def verify_goal_completion(
     # closure now sees the same concrete deliverable map the planner saw,
     # so checks can hit deliverable paths instead of inferring them.
     _deliverables_block = ""
+    _preflight_results: List[Dict[str, Any]] = []
     if resolved_intent is not None:
         _deliv = getattr(resolved_intent, "deliverables", None) or []
         if _deliv:
@@ -1316,6 +1389,14 @@ def verify_goal_completion(
                 + "\n".join(_lines)
                 + "\n\n"
             )
+            # Pre-flight: run preconditions before the closure plan executes.
+            # A missing precondition (`go` not on PATH, port 8080 unreachable,
+            # `./run.sh` not present) means the run could not have actually
+            # exercised the deliverable — we want closure to mark this as a
+            # gap rather than treat "command not found → exit 127 → check
+            # failed" as just another check failure indistinguishable from
+            # "the program is wrong." See INTENT_RESOLUTION_DESIGN.md.
+            _preflight_results = _run_precondition_preflight(_deliv, cwd=workspace_path or None)
 
     try:
         from llm import LLMMessage
@@ -1380,6 +1461,13 @@ def verify_goal_completion(
                     "exit_code": -1, "stdout": "", "stderr": str(exc),
                     "passed": False,
                 })
+
+        # Prepend pre-flight results so the director sees missing
+        # preconditions before it ever interprets the LLM-generated checks.
+        # When everything passed at pre-flight there's no need to expose
+        # them — keeps the check feed clean for the common case.
+        if _preflight_results and any(not r["passed"] for r in _preflight_results):
+            check_results = _preflight_results + check_results
 
         if not check_results:
             return _null
