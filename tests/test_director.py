@@ -1043,6 +1043,147 @@ class TestVerifyGoalCompletion:
         user_msg = captured_messages[0][1].content
         assert "Deliverables committed when planning" not in user_msg
 
+    def test_precondition_preflight_classifies_inputs(self):
+        from director import _classify_precondition
+        assert _classify_precondition("go") == "command"
+        assert _classify_precondition("python3") == "command"
+        assert _classify_precondition("./run.sh") == "path"
+        assert _classify_precondition("cmd/server/main.go") == "path"
+        assert _classify_precondition("/usr/bin/whatever") == "path"
+        assert _classify_precondition("port 8080") == "opaque"
+        assert _classify_precondition("") == "opaque"
+
+    def test_precondition_preflight_command_present(self, tmp_path):
+        from director import _run_precondition_preflight
+        from scope import Deliverable
+
+        # `sh` is on PATH on every Linux/Unix box; safe to assume.
+        d = Deliverable(name="x", description="", preconditions=["sh"])
+        results = _run_precondition_preflight([d], cwd=str(tmp_path))
+        assert len(results) == 1
+        assert results[0]["passed"] is True
+        assert results[0]["modality"] == "preflight"
+        assert "sh" in results[0]["description"]
+
+    def test_precondition_preflight_command_missing(self, tmp_path):
+        from director import _run_precondition_preflight
+        from scope import Deliverable
+
+        d = Deliverable(name="x", description="", preconditions=["this-command-does-not-exist-xyzzy"])
+        results = _run_precondition_preflight([d], cwd=str(tmp_path))
+        assert len(results) == 1
+        assert results[0]["passed"] is False
+        assert results[0]["exit_code"] == 127
+        assert "not on PATH" in results[0]["stderr"]
+
+    def test_precondition_preflight_path_present(self, tmp_path):
+        from director import _run_precondition_preflight
+        from scope import Deliverable
+
+        # Create a real file in cwd and reference it.
+        (tmp_path / "run.sh").write_text("#!/bin/sh\n")
+        d = Deliverable(name="x", description="", preconditions=["./run.sh"])
+        results = _run_precondition_preflight([d], cwd=str(tmp_path))
+        assert len(results) == 1
+        assert results[0]["passed"] is True
+        assert results[0]["modality"] == "preflight"
+
+    def test_precondition_preflight_path_missing(self, tmp_path):
+        from director import _run_precondition_preflight
+        from scope import Deliverable
+
+        d = Deliverable(name="x", description="", preconditions=["./not-here.sh"])
+        results = _run_precondition_preflight([d], cwd=str(tmp_path))
+        assert len(results) == 1
+        assert results[0]["passed"] is False
+        assert "does not exist" in results[0]["stderr"]
+
+    def test_precondition_preflight_skips_opaque(self, tmp_path):
+        from director import _run_precondition_preflight
+        from scope import Deliverable
+
+        d = Deliverable(name="x", description="", preconditions=["port 8080", "env var X required"])
+        results = _run_precondition_preflight([d], cwd=str(tmp_path))
+        assert results == []
+
+    def test_failing_preconditions_become_check_results(self, monkeypatch, tmp_path):
+        """Failed preflight checks get prepended to check_results so director sees them."""
+        from unittest.mock import MagicMock, patch
+        from scope import Deliverable, ResolvedIntent, ScopeSet
+
+        adapter = MagicMock()
+
+        # The plan call returns one regular check.
+        # Preflight will add 1 failing check (missing command) before that.
+        def _complete(messages, **kwargs):
+            return MagicMock()
+        adapter.complete.side_effect = _complete
+
+        ri = ResolvedIntent(
+            scope=ScopeSet(failure_modes=[], in_scope=[], out_of_scope=[], raw_text=""),
+            deliverables=[
+                Deliverable(
+                    name="cmd/server/main.go",
+                    description="",
+                    preconditions=["this-cmd-does-not-exist-xyzzy"],
+                ),
+            ],
+            raw_text="",
+        )
+
+        captured_verdict_user = []
+
+        def _extract_json_side_effect(content, _type, log_tag=None):
+            # Plan call: return one check
+            if "closure_plan" in (log_tag or ""):
+                return {"checks": [{"description": "fake check", "command": "true"}]}
+            # Verdict call: capture the user message context for inspection
+            return {"complete": True, "confidence": 0.9, "gaps": [], "summary": "ok"}
+
+        with patch("director.extract_json", side_effect=_extract_json_side_effect):
+            with patch("director.content_or_empty", return_value="{}"):
+                verdict = verify_goal_completion(
+                    "build the thing", [], adapter,
+                    workspace_path=str(tmp_path), resolved_intent=ri,
+                )
+
+        assert verdict is not None
+        # 2 checks total: 1 failing preflight + 1 fake passing check
+        assert verdict.checks_run == 2
+        assert verdict.checks_passed == 1
+
+    def test_passing_preconditions_not_prepended(self, monkeypatch, tmp_path):
+        """When all preflight checks pass, they shouldn't pollute check_results."""
+        from unittest.mock import MagicMock, patch
+        from scope import Deliverable, ResolvedIntent, ScopeSet
+
+        adapter = MagicMock()
+        adapter.complete.side_effect = lambda *a, **kw: MagicMock()
+
+        # `sh` is always present.
+        ri = ResolvedIntent(
+            scope=ScopeSet(failure_modes=[], in_scope=[], out_of_scope=[], raw_text=""),
+            deliverables=[
+                Deliverable(name="x", description="", preconditions=["sh"]),
+            ],
+            raw_text="",
+        )
+
+        def _extract_json_side_effect(content, _type, log_tag=None):
+            if "closure_plan" in (log_tag or ""):
+                return {"checks": [{"description": "fake", "command": "true"}]}
+            return {"complete": True, "confidence": 0.9, "gaps": [], "summary": "ok"}
+
+        with patch("director.extract_json", side_effect=_extract_json_side_effect):
+            with patch("director.content_or_empty", return_value="{}"):
+                verdict = verify_goal_completion(
+                    "x", [], adapter,
+                    workspace_path=str(tmp_path), resolved_intent=ri,
+                )
+
+        # Only the LLM-generated check; passing preflight is suppressed.
+        assert verdict.checks_run == 1
+
     def test_empty_deliverables_list_skips_block(self, monkeypatch, tmp_path):
         """ResolvedIntent with empty deliverables list shouldn't render the block."""
         from unittest.mock import MagicMock, patch
