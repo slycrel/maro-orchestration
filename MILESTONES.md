@@ -2,7 +2,28 @@
 
 What to do next, in what order. Updated each session. Strategic phases live in ROADMAP.md; deferred ideas live in BACKLOG.md. This file is the bridge — the executable queue.
 
-Last updated: 2026-04-23 (session 36 — scope A/B analysis + ResolvedIntent v0)
+Last updated: 2026-04-26 (session 37 — run transparency phase + closure reads deliverables)
+
+---
+
+## Done (session 37, 2026-04-26 — run transparency phase + closure reads deliverables)
+
+Started from the data-loss observation in the 2026-04-25 scope A/B 1+1 (treat made commits, control's setup-reset wiped them). Jeremy framed the gap as systemic transparency, not test-tooling: every paid run should produce a source/build/artifact bundle. Mental model: "source (plan + prompt artifacts) + build folder (interim objects + resources) for compiling a project."
+
+**Run-dir transparency (`src/runs.py` — new module, 4 commits, 25+ tests):**
+- [x] **Per-run nickname module** (commit `13a6470`) — deterministic 2-word labels (50 adj × 50 noun = 2500 combos), sha1-hashed handle_id for even distribution. Run-dirs at `~/.poe/workspace/runs/<handle_id>-<nickname>/` with source/build/artifact subtree.
+- [x] **Run-dir as the write destination, not a copy target** (commit `8a68e37`) — Jeremy's design correction: writes go to the run-dir from the start. Process-level context var (`set_current_run_dir`) lets agent_loop's PARTIAL.md / scratchpad / step files / plan manifests / loop log JSON consult `runs.artifact_dir()` and land directly in `<run-dir>/build/`. handle.py's scope.md / resolved_intent.md route to `<run-dir>/source/`. Behavior-preserving fallback when no run-dir is active.
+- [x] **Per-run captain's log slice** (commit `17fb0e9`) — `record_log_offset()` at run start, `slice_log_for_run()` at finalize → `<run-dir>/build/captains_log_slice.jsonl` covering only this run. Same pattern `scope_ab_runner.py` used externally; centralized so every paid run gets it.
+- [x] **Per-run repo bundle** (commit `a99771b`) — `record_repo_base()` + `snapshot_repo_bundle()` capture `repo.bundle` (`git bundle --all`), `git_log.txt`, `branch_diff.patch`, `base_sha.txt` into `<run-dir>/artifact/`. Restorable with `git clone repo.bundle`. Closes the data-loss gap that motivated the audit phase.
+- [x] **Smoke-tested end-to-end** — handle.py dry-run on agenda lane produces full source/build tree with all expected files (PARTIAL, scratchpad, plan, log.json, captains_log_slice).
+
+**Captain's log structural events (commit `c644d82`, before this session):**
+- [x] **`LOOP_CREATED` event** — every loop-spawn site (initial dispatch, director restart, closure restart, quality-gate escalate) emits cause-effect chain with `reason` + `parent_loop_id`. Threaded through handle.py escalation paths.
+- [x] **`QUALITY_GATE_VERDICT` event** — promoted from handle.log into structured captain's log; emitted from `quality_gate.py::run_quality_gate` after pass1 verdict parsing with verdict/confidence/escalate/reason/step_count/loop_id.
+
+**Closure reads deliverables (commit `0921580`):**
+- [x] **`verify_goal_completion(resolved_intent=...)`** — when ResolvedIntent has deliverables, they render as "Deliverables committed when planning (verify each was built):" block in the plan call, with name/description/preconditions inline. handle.py threads `_resolved_intent` through. This is the watcher half of `docs/DRIVER_AND_WATCHER.md` #4 — without it, deliverables were advisory planner-prompt text only.
+- [x] **3 new tests** in `test_director.py` covering deliverable injection, no-resolved-intent (no header), and empty deliverables list.
 
 ---
 
@@ -136,9 +157,8 @@ The review's sharpest point about Phase 65 ("scope alone wouldn't have caught sl
 
 ## Next Up
 
-- **ResolvedIntent v0 validation** — with the artifact now writing, re-run the scope A/B (treat=scope+deliverables injected, control=skip) on 2–3 pairs and check: (a) do planners commit to deliverables by name, (b) does closure converge against the deliverable paths instead of the generic failure-mode checklist, (c) do control-arm recovery bugs (step hang, rate-limit cascade) need to be fixed before the signal is clean. Budget before launch — prior A/B ran $41 on the slowest control arm.
-- **Closure reads deliverables** — `verify_goal_completion(...)` currently consumes `scope.failure_modes` but not `resolved_intent.deliverables`. Wire deliverables into the closure plan prompt as explicit "did we build these?" targets. This is the "watcher" half of `docs/DRIVER_AND_WATCHER.md` #4 — without it, deliverables are advisory planner prompt text only.
-- **Closure pre-flight for preconditions** — use `shutil.which` / path existence on `Deliverable.preconditions` before running closure checks; downgrade verdict to INCONCLUSIVE when preconditions are missing so we stop treating "command not found" as "check passed." (From A/B backlog item and `INTENT_RESOLUTION_DESIGN.md`.)
+- **ResolvedIntent v0 validation** — with both halves now wired (planner sees deliverables, closure sees deliverables), re-run the scope A/B (treat=scope+deliverables injected, control=skip) on 2–3 pairs and check: (a) do planners commit to deliverables by name, (b) does closure now converge against the deliverable paths instead of the generic failure-mode checklist, (c) do control-arm recovery bugs (step hang, rate-limit cascade) need to be fixed before the signal is clean. Budget before launch — prior A/B ran $41 on the slowest control arm.
+- **Closure pre-flight for preconditions** — use `shutil.which` / path existence on `Deliverable.preconditions` before running closure checks; downgrade verdict to INCONCLUSIVE when preconditions are missing so we stop treating "command not found" as "check passed." (From A/B backlog item and `INTENT_RESOLUTION_DESIGN.md`.) Now unblocked — closure reads deliverables in commit `0921580`, so preconditions are present at the call site.
 - **Phase 65 A/B expansion** (hold until v0 signal is in) — run a wider goal spread (~20 total) once the driver/watcher wiring is complete. Measure plan quality, token cost, step count, verification outcome, deliverable convergence. Design: triad / lifecycle / retrieval per full doc only after v0 data lands.
 - **Verification with ground-truth feedback — v1 shipped this session** (closure verdict gate + behavioral check mandate). Remaining work: observe v1 behavior on a live service-producing goal (repeat slycrel-go or similar), measure whether behavioral checks get generated and trip correctly, iterate on the prompt taxonomy if the generated checks miss the mark. If the restart actually fires mid-stream, verify the second run is meaningfully different (not just retrying the same thing) — that would be the signal that gap-as-context works as steering signal.
 - **Phase 65 expansion triggers** (hold until A/B data is in):
