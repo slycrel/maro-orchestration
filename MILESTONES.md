@@ -25,6 +25,10 @@ Started from the data-loss observation in the 2026-04-25 scope A/B 1+1 (treat ma
 - [x] **`verify_goal_completion(resolved_intent=...)`** — when ResolvedIntent has deliverables, they render as "Deliverables committed when planning (verify each was built):" block in the plan call, with name/description/preconditions inline. handle.py threads `_resolved_intent` through. This is the watcher half of `docs/DRIVER_AND_WATCHER.md` #4 — without it, deliverables were advisory planner-prompt text only.
 - [x] **3 new tests** in `test_director.py` covering deliverable injection, no-resolved-intent (no header), and empty deliverables list.
 
+**Closure pre-flight for preconditions (commit `3d3d9e6`):**
+- [x] **`_classify_precondition()` + `_run_precondition_preflight()`** — command-shaped tokens get `shutil.which`; path-shaped get `Path.exists`; opaque (port numbers, env-var requirements) are skipped. Failed pre-flights are prepended to check_results so the director sees them as gaps; passing pre-flights stay out of the feed. Stops treating "command not found → exit 127" as "check passed" — the silent-failure bug that motivated preconditions in `INTENT_RESOLUTION_DESIGN.md`.
+- [x] **8 new tests** in `test_director.py` covering classification, command-present/missing, path-present/missing, opaque-skip, fail-prepended, and pass-suppressed.
+
 ---
 
 ## Done (session 36, 2026-04-23 — scope A/B analysis + ResolvedIntent v0: plan-creation as its own step)
@@ -157,8 +161,7 @@ The review's sharpest point about Phase 65 ("scope alone wouldn't have caught sl
 
 ## Next Up
 
-- **ResolvedIntent v0 validation** — with both halves now wired (planner sees deliverables, closure sees deliverables), re-run the scope A/B (treat=scope+deliverables injected, control=skip) on 2–3 pairs and check: (a) do planners commit to deliverables by name, (b) does closure now converge against the deliverable paths instead of the generic failure-mode checklist, (c) do control-arm recovery bugs (step hang, rate-limit cascade) need to be fixed before the signal is clean. Budget before launch — prior A/B ran $41 on the slowest control arm.
-- **Closure pre-flight for preconditions** — use `shutil.which` / path existence on `Deliverable.preconditions` before running closure checks; downgrade verdict to INCONCLUSIVE when preconditions are missing so we stop treating "command not found" as "check passed." (From A/B backlog item and `INTENT_RESOLUTION_DESIGN.md`.) Now unblocked — closure reads deliverables in commit `0921580`, so preconditions are present at the call site.
+- **ResolvedIntent v0 validation** — three halves now wired (planner sees deliverables, closure sees deliverables, closure pre-flights preconditions). Re-run the scope A/B (treat=scope+deliverables injected, control=skip) on 2–3 pairs and check: (a) do planners commit to deliverables by name, (b) does closure now converge against the deliverable paths instead of the generic failure-mode checklist, (c) does the precondition pre-flight catch what failed silently in the 2026-04-22 A/B, (d) do control-arm recovery bugs (step hang, rate-limit cascade) need to be fixed before the signal is clean. Budget before launch — prior A/B ran $41 on the slowest control arm.
 - **Phase 65 A/B expansion** (hold until v0 signal is in) — run a wider goal spread (~20 total) once the driver/watcher wiring is complete. Measure plan quality, token cost, step count, verification outcome, deliverable convergence. Design: triad / lifecycle / retrieval per full doc only after v0 data lands.
 - **Verification with ground-truth feedback — v1 shipped this session** (closure verdict gate + behavioral check mandate). Remaining work: observe v1 behavior on a live service-producing goal (repeat slycrel-go or similar), measure whether behavioral checks get generated and trip correctly, iterate on the prompt taxonomy if the generated checks miss the mark. If the restart actually fires mid-stream, verify the second run is meaningfully different (not just retrying the same thing) — that would be the signal that gap-as-context works as steering signal.
 - **Phase 65 expansion triggers** (hold until A/B data is in):
