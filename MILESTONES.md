@@ -2,7 +2,22 @@
 
 What to do next, in what order. Updated each session. Strategic phases live in ROADMAP.md; deferred ideas live in BACKLOG.md. This file is the bridge — the executable queue.
 
-Last updated: 2026-04-26 (session 37 — run transparency phase + closure reads deliverables)
+Last updated: 2026-04-26 (session 38 — decomposition feedback wired into next decompose, planner→opus)
+
+---
+
+## Done (session 38, 2026-04-26 — decomposition feedback wired forward)
+
+Triggered by the scope A/B 1+1 run on 2026-04-26: both arms hit `decomposition_too_broad` 8/8, treat's step 8 ran 9 minutes, and BACKLOG:316 ("warning fires but nothing acts on it") was still open. The Phase 62 wiring acted on `decomposition_too_broad` only on the *blocked* path; this closes the *post-mortem → next-decompose* path.
+
+- [x] **`LoopDiagnosis.project` field** (introspect.py) — caller threads project slug; persisted on save_diagnosis; load_diagnoses preserves it. Backwards-compat default `""`.
+- [x] **`diagnose_loop(loop_id, project="")` signature** — agent_loop.py's end-of-loop introspect block passes `ctx.project`. Mid-loop call sites unchanged.
+- [x] **`find_relevant_failure_notes` strengthened** — same-project diagnoses lead the result list ahead of goal-token-overlap matches (a prior decomp warning on this exact project is far more actionable than a vague semantic match). Limit raised 2→3.
+- [x] **`decomposition_too_broad` notes carry concrete numbers** — `_format_decomp_too_broad_note` parses evidence ("Step 8 took 534230ms with 277883 tokens") into "Step 8 took 534s with 277K tok" and appends the actionable cap (`≤120s/200K tok per step; split if a step touches >3 files`). The next planner sees specifics, not "decompose further" advice.
+- [x] **agent_loop.py call site** — `find_relevant_failure_notes(goal, limit=3, project=project or "")` in `_build_loop_context`.
+- [x] **6 new tests** in `tests/test_introspect.py` covering project capture, persistence roundtrip, project-priority retrieval, fallback to token overlap, concrete-number formatting, and no-project-arg backward compat.
+
+Closes BACKLOG:316 for the post-mortem case (still open: in-flight 8/8-strong loops where the warning fires after completion-not-blocking).
 
 ---
 

@@ -844,3 +844,153 @@ class TestPlanRecoveryAdvisor:
         assert plan is not None
         assert plan.risk == "low"
         assert plan.auto_apply is True
+
+
+# ---------------------------------------------------------------------------
+# Decomposition-too-broad feedback wired into next decompose() — task (b)
+#
+# When a loop fires decomposition_too_broad, the next planner run on the same
+# project should see a strong, concrete hint — not a generic "decompose
+# further" lesson buried among other agenda lessons. These tests cover:
+#   1. project is captured on LoopDiagnosis when caller provides it
+#   2. project survives persistence roundtrip
+#   3. find_relevant_failure_notes prioritizes same-project diagnoses
+#   4. decomposition_too_broad notes include concrete numbers (Ns, NK tok)
+# ---------------------------------------------------------------------------
+
+def test_diagnose_loop_carries_project(tmp_path, monkeypatch):
+    """diagnose_loop(project=...) is persisted on the diagnosis."""
+    monkeypatch.setattr("introspect._events_path", lambda: tmp_path / "memory" / "events.jsonl")
+    events = [
+        _make_step_event("loopP1", 1, "done"),
+        _make_loop_done("loopP1", "done"),
+    ]
+    _write_events(tmp_path, events)
+    diag = diagnose_loop("loopP1", project="my-go-thing")
+    assert diag.project == "my-go-thing"
+
+
+def test_diagnose_loop_project_defaults_empty(tmp_path, monkeypatch):
+    """Backwards-compat: diagnose_loop without project leaves it empty."""
+    monkeypatch.setattr("introspect._events_path", lambda: tmp_path / "memory" / "events.jsonl")
+    events = [
+        _make_step_event("loopP2", 1, "done"),
+        _make_loop_done("loopP2", "done"),
+    ]
+    _write_events(tmp_path, events)
+    diag = diagnose_loop("loopP2")
+    assert diag.project == ""
+
+
+def test_diagnosis_persistence_includes_project(tmp_path, monkeypatch):
+    """Project field roundtrips through save_diagnosis → load_diagnoses."""
+    monkeypatch.setattr("introspect._diagnoses_path", lambda: tmp_path / "memory" / "diagnoses.jsonl")
+    diag = LoopDiagnosis(
+        loop_id="rt01",
+        failure_class="decomposition_too_broad",
+        severity="warning",
+        project="proj-alpha",
+    )
+    save_diagnosis(diag)
+    loaded = load_diagnoses()
+    assert len(loaded) == 1
+    assert loaded[0].project == "proj-alpha"
+
+
+def test_find_relevant_failure_notes_prioritizes_project(tmp_path, monkeypatch):
+    """Same-project diagnosis surfaces above goal-token overlap match."""
+    from introspect import find_relevant_failure_notes
+    monkeypatch.setattr("introspect._diagnoses_path", lambda: tmp_path / "memory" / "diagnoses.jsonl")
+
+    # Diagnosis A: matches goal text but different project
+    save_diagnosis(LoopDiagnosis(
+        loop_id="A",
+        failure_class="token_explosion",
+        severity="warning",
+        evidence=["Step 3 grew on websocket headless server tokens"],
+        recommendation="Distill prior step outputs",
+        project="other-project",
+    ))
+    # Diagnosis B: doesn't match goal text but is same project as caller
+    save_diagnosis(LoopDiagnosis(
+        loop_id="B",
+        failure_class="decomposition_too_broad",
+        severity="warning",
+        evidence=["Step 8 took 534230ms with 277883 tokens"],
+        recommendation="Decompose further",
+        project="ive-set-up-a-working",
+    ))
+
+    notes = find_relevant_failure_notes(
+        "websocket headless server",
+        project="ive-set-up-a-working",
+    )
+    # Same-project entry leads regardless of goal-token match
+    assert notes
+    assert "decomposition_too_broad" in notes[0]
+    assert "ive-set-up-a-working" in notes[0]
+
+
+def test_find_relevant_failure_notes_falls_back_to_token_overlap(tmp_path, monkeypatch):
+    """No project match → fall back to existing goal-token overlap behavior."""
+    from introspect import find_relevant_failure_notes
+    monkeypatch.setattr("introspect._diagnoses_path", lambda: tmp_path / "memory" / "diagnoses.jsonl")
+
+    save_diagnosis(LoopDiagnosis(
+        loop_id="X",
+        failure_class="token_explosion",
+        severity="warning",
+        evidence=["websocket headless server token growth"],
+        recommendation="Distill outputs",
+        project="proj-x",
+    ))
+
+    notes = find_relevant_failure_notes(
+        "websocket headless server",
+        project="unrelated-project",
+    )
+    assert notes
+    assert "token_explosion" in notes[0]
+
+
+def test_find_relevant_failure_notes_concrete_numbers(tmp_path, monkeypatch):
+    """decomposition_too_broad notes include human-readable Ns/NK tok numbers."""
+    from introspect import find_relevant_failure_notes
+    monkeypatch.setattr("introspect._diagnoses_path", lambda: tmp_path / "memory" / "diagnoses.jsonl")
+
+    save_diagnosis(LoopDiagnosis(
+        loop_id="DC",
+        failure_class="decomposition_too_broad",
+        severity="warning",
+        evidence=["Step 8 took 534230ms with 277883 tokens",
+                  "Step text: implement websocket IO provider end-to-end"],
+        recommendation="Decompose further",
+        project="my-project",
+    ))
+
+    notes = find_relevant_failure_notes("anything", project="my-project")
+    assert notes
+    note = notes[0]
+    # Numbers compressed: 534230ms → 534s, 277883 tokens → 277K tok
+    assert "534s" in note
+    assert "277K tok" in note
+    # Carries the actionable cap
+    assert "120s" in note or "200K" in note
+
+
+def test_find_relevant_failure_notes_no_project_arg_still_works(tmp_path, monkeypatch):
+    """Calling without project= keeps prior behavior (token overlap only)."""
+    from introspect import find_relevant_failure_notes
+    monkeypatch.setattr("introspect._diagnoses_path", lambda: tmp_path / "memory" / "diagnoses.jsonl")
+
+    save_diagnosis(LoopDiagnosis(
+        loop_id="L",
+        failure_class="constraint_false_positive",
+        severity="warning",
+        evidence=["matched step text terminal websocket"],
+        recommendation="Review constraints",
+    ))
+
+    notes = find_relevant_failure_notes("terminal websocket connection")
+    assert notes
+    assert "constraint_false_positive" in notes[0]

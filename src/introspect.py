@@ -99,6 +99,7 @@ class LoopDiagnosis:
     steps_done: int = 0
     steps_blocked: int = 0
     steps_total: int = 0
+    project: str = ""           # project slug — lets retrieval prioritize same-project history
 
     def summary(self) -> str:
         return (
@@ -120,6 +121,7 @@ class LoopDiagnosis:
             "steps_done": self.steps_done,
             "steps_blocked": self.steps_blocked,
             "steps_total": self.steps_total,
+            "project": self.project,
         }
 
 
@@ -209,11 +211,16 @@ def _build_step_profiles(events: List[dict]) -> List[StepProfile]:
     return profiles
 
 
-def diagnose_loop(loop_id: str) -> LoopDiagnosis:
+def diagnose_loop(loop_id: str, project: str = "") -> LoopDiagnosis:
     """Analyze a completed loop's execution trace and classify any failures.
 
     Pure heuristics — no LLM calls. Reads events.jsonl for the given loop_id
     and produces a structured diagnosis.
+
+    Args:
+        loop_id: loop to diagnose.
+        project: project slug for the loop (when known by caller). Persisted on
+            the diagnosis so retrieval can prioritize same-project history.
 
     Returns LoopDiagnosis with failure_class from the taxonomy.
     """
@@ -225,6 +232,7 @@ def diagnose_loop(loop_id: str) -> LoopDiagnosis:
             severity="warning",
             evidence=["No events found for this loop_id"],
             recommendation="Check that events.jsonl is being written (observe.write_event)",
+            project=project,
         )
 
     profiles = _build_step_profiles(events)
@@ -378,6 +386,7 @@ def diagnose_loop(loop_id: str) -> LoopDiagnosis:
         steps_done=len(done),
         steps_blocked=len(blocked),
         steps_total=len(profiles),
+        project=project,
     )
 
     log.info("diagnosis loop_id=%s class=%s severity=%s steps=%d/%d tokens=%d",
@@ -450,14 +459,58 @@ def load_diagnoses(limit: int = 50) -> List[LoopDiagnosis]:
 # Error nodes as queryable memory (Phase 46 follow-on / Mimir steal)
 # ---------------------------------------------------------------------------
 
-def find_relevant_failure_notes(goal: str, limit: int = 2, lookback: int = 50) -> List[str]:
+def _format_decomp_too_broad_note(diag: LoopDiagnosis) -> str:
+    """Format a decomposition_too_broad note with concrete numbers from evidence.
+
+    Evidence lines look like:
+      "Step 8 took 534230ms with 277883 tokens"
+      "Step 6 consumed 297102 tokens (92887ms)"
+
+    Pulls the largest-impact step + numbers so the next planner sees specifics,
+    not just generic "decompose further" advice.
+    """
+    import re
+    proj_tag = f" (project={diag.project})" if diag.project else ""
+    # Find the worst offender mentioned in evidence
+    best = None
+    for ev in diag.evidence:
+        m = re.search(r"Step (\d+).*?(\d+)\s*(?:ms|tokens).*?(\d+)\s*(?:tokens|ms)", ev)
+        if m:
+            best = ev
+            break
+    detail = best if best else (diag.evidence[0] if diag.evidence else "")
+    # Compress numbers to human-readable
+    detail = re.sub(r"(\d{4,})ms", lambda m: f"{int(m.group(1))//1000}s", detail)
+    detail = re.sub(r"(\d{4,})\s*tokens", lambda m: f"{int(m.group(1))//1000}K tok", detail)
+    return (
+        f"[decomposition_too_broad]{proj_tag} {detail} — bias toward narrower steps "
+        f"(cap ≤120s/200K tok per step; split if a step touches >3 files)"
+    )
+
+
+def find_relevant_failure_notes(
+    goal: str,
+    limit: int = 3,
+    lookback: int = 50,
+    project: str = "",
+) -> List[str]:
     """Find recent non-healthy diagnoses relevant to the current goal.
 
     Returns brief failure notes that can be injected into agent context
     as "known patterns to avoid" before decomposition starts.
 
-    Uses simple token overlap — zero LLM cost.
+    Uses simple token overlap — zero LLM cost. Same-project diagnoses always
+    rank above token-overlap matches: a prior decomposition warning on the same
+    project is much more actionable than a vaguely-similar-goal one.
+
+    Args:
+        goal: current goal text — for token-overlap scoring.
+        limit: max notes to return.
+        lookback: how many recent diagnoses to scan.
+        project: project slug — when set, same-project diagnoses are surfaced
+            first regardless of goal-text overlap.
     """
+    import re
     diagnoses = load_diagnoses(limit=lookback)
     non_healthy = [d for d in diagnoses if d.failure_class != "healthy"]
     if not non_healthy:
@@ -469,9 +522,12 @@ def find_relevant_failure_notes(goal: str, limit: int = 2, lookback: int = 50) -
                   "is", "are", "was", "were", "my", "me", "i", "on", "at", "by"}
     goal_tokens -= _STOPWORDS
 
+    same_project: List[LoopDiagnosis] = []
     scored: List[tuple] = []
     for diag in non_healthy:
-        # Score by overlap between goal tokens and evidence strings
+        if project and diag.project == project:
+            same_project.append(diag)
+            continue
         evidence_text = " ".join(diag.evidence).lower()
         evidence_tokens = set(evidence_text.split()) - _STOPWORDS
         overlap = len(goal_tokens & evidence_tokens)
@@ -479,15 +535,20 @@ def find_relevant_failure_notes(goal: str, limit: int = 2, lookback: int = 50) -
             scored.append((overlap, diag))
 
     scored.sort(key=lambda x: x[0], reverse=True)
-    top = scored[:limit]
+    # Same-project entries lead; goal-overlap entries fill remaining slots.
+    ordered = same_project + [d for _, d in scored]
+    top = ordered[:limit]
     if not top:
         return []
 
     notes = []
-    for _, diag in top:
-        # Keep notes brief: class name + recommendation snippet
-        rec = diag.recommendation[:120].replace("\n", " ")
-        notes.append(f"[{diag.failure_class}] {rec}")
+    for diag in top:
+        if diag.failure_class == "decomposition_too_broad":
+            notes.append(_format_decomp_too_broad_note(diag))
+        else:
+            proj_tag = f" (project={diag.project})" if diag.project else ""
+            rec = diag.recommendation[:120].replace("\n", " ")
+            notes.append(f"[{diag.failure_class}]{proj_tag} {rec}")
     return notes
 
 
