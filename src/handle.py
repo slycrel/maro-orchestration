@@ -1002,6 +1002,7 @@ def handle(
                     workspace_path=repo_path or "",
                     channel=channel,
                     scope=_scope,
+                    resolved_intent=_resolved_intent,
                     diagnosis=_closure_diag,
                 )
             except Exception:

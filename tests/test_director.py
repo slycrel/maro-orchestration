@@ -971,6 +971,109 @@ class TestVerifyGoalCompletion:
         user_msg = captured_messages[0][1].content
         assert "Failure modes identified when planning" not in user_msg
 
+    def test_resolved_intent_deliverables_injected_into_plan(self, monkeypatch, tmp_path):
+        """ResolvedIntent.deliverables become explicit verification targets in the plan call."""
+        from unittest.mock import MagicMock, patch
+        from scope import Deliverable, ResolvedIntent, ScopeSet
+
+        adapter = MagicMock()
+        captured_messages = []
+
+        def _complete(messages, **kwargs):
+            captured_messages.append(messages)
+            return MagicMock()
+
+        adapter.complete.side_effect = _complete
+
+        ri = ResolvedIntent(
+            scope=ScopeSet(failure_modes=[], in_scope=[], out_of_scope=[], raw_text=""),
+            deliverables=[
+                Deliverable(
+                    name="cmd/server/main.go",
+                    description="HTTP server entry point",
+                    preconditions=["go", "port 8080"],
+                ),
+                Deliverable(
+                    name="static/index.html",
+                    description="client UI",
+                    preconditions=[],
+                ),
+            ],
+            raw_text="",
+        )
+
+        with patch("director.extract_json",
+                   side_effect=[{"checks": []}, {"complete": True}]):
+            with patch("director.content_or_empty", return_value="{}"):
+                verify_goal_completion(
+                    "build the websocket app", [], adapter,
+                    workspace_path=str(tmp_path), resolved_intent=ri,
+                )
+
+        user_msg = captured_messages[0][1].content
+        assert "Deliverables committed when planning" in user_msg
+        assert "cmd/server/main.go" in user_msg
+        assert "HTTP server entry point" in user_msg
+        assert "preconditions: go, port 8080" in user_msg
+        assert "static/index.html" in user_msg
+        # Deliverables section comes alongside scope section, not instead of work summary
+        assert "Work done" in user_msg
+
+    def test_no_resolved_intent_no_deliverable_block(self, monkeypatch, tmp_path):
+        """When resolved_intent is None, user message must NOT contain the deliverables header."""
+        from unittest.mock import MagicMock, patch
+
+        adapter = MagicMock()
+        captured_messages = []
+
+        def _complete(messages, **kwargs):
+            captured_messages.append(messages)
+            return MagicMock()
+
+        adapter.complete.side_effect = _complete
+
+        with patch("director.extract_json",
+                   side_effect=[{"checks": []}, {"complete": True}]):
+            with patch("director.content_or_empty", return_value="{}"):
+                verify_goal_completion(
+                    "build X", [], adapter,
+                    workspace_path=str(tmp_path), resolved_intent=None,
+                )
+
+        user_msg = captured_messages[0][1].content
+        assert "Deliverables committed when planning" not in user_msg
+
+    def test_empty_deliverables_list_skips_block(self, monkeypatch, tmp_path):
+        """ResolvedIntent with empty deliverables list shouldn't render the block."""
+        from unittest.mock import MagicMock, patch
+        from scope import ResolvedIntent, ScopeSet
+
+        adapter = MagicMock()
+        captured_messages = []
+
+        def _complete(messages, **kwargs):
+            captured_messages.append(messages)
+            return MagicMock()
+
+        adapter.complete.side_effect = _complete
+
+        ri = ResolvedIntent(
+            scope=ScopeSet(failure_modes=[], in_scope=[], out_of_scope=[], raw_text=""),
+            deliverables=[],
+            raw_text="",
+        )
+
+        with patch("director.extract_json",
+                   side_effect=[{"checks": []}, {"complete": True}]):
+            with patch("director.content_or_empty", return_value="{}"):
+                verify_goal_completion(
+                    "build X", [], adapter,
+                    workspace_path=str(tmp_path), resolved_intent=ri,
+                )
+
+        user_msg = captured_messages[0][1].content
+        assert "Deliverables committed when planning" not in user_msg
+
     def test_timeout_marks_check_failed(self, monkeypatch, tmp_path):
         """Timed-out checks are marked failed, not raised."""
         import subprocess

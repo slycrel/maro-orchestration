@@ -1237,6 +1237,7 @@ def verify_goal_completion(
     dry_run: bool = False,
     timeout_per_check: int = 30,
     scope=None,
+    resolved_intent=None,
     diagnosis=None,
 ) -> ClosureVerdict:
     """Director closure check: verify the goal was actually achieved.
@@ -1245,6 +1246,13 @@ def verify_goal_completion(
     primary targets for check generation — each check probes whether a named
     failure mode actually occurred. When scope is absent, the LLM does its own
     inversion from the goal and work summary.
+
+    When a ResolvedIntent is supplied, its deliverables list is injected as
+    explicit "did we build these?" targets — the watcher half of
+    docs/DRIVER_AND_WATCHER.md #4. Each Deliverable.name (with optional
+    description and preconditions) is named so the closure plan can
+    generate path-existence and behavioral checks against it directly,
+    not just against generic failure modes.
 
     Runs the generated checks mechanically (no LLM judgment on exit codes), then
     asks the director to interpret outcomes and declare completeness.
@@ -1284,6 +1292,31 @@ def verify_goal_completion(
                 + "\n\n"
             )
 
+    # Pull resolved-intent deliverables into the plan-call context.
+    # The "did we build these?" half of docs/DRIVER_AND_WATCHER.md #4 —
+    # closure now sees the same concrete deliverable map the planner saw,
+    # so checks can hit deliverable paths instead of inferring them.
+    _deliverables_block = ""
+    if resolved_intent is not None:
+        _deliv = getattr(resolved_intent, "deliverables", None) or []
+        if _deliv:
+            _lines = []
+            for d in _deliv:
+                _name = getattr(d, "name", "") or ""
+                _desc = getattr(d, "description", "") or ""
+                _preq = getattr(d, "preconditions", None) or []
+                _line = f"- {_name}"
+                if _desc:
+                    _line += f": {_desc}"
+                if _preq:
+                    _line += f" [preconditions: {', '.join(_preq)}]"
+                _lines.append(_line)
+            _deliverables_block = (
+                "Deliverables committed when planning (verify each was built):\n"
+                + "\n".join(_lines)
+                + "\n\n"
+            )
+
     try:
         from llm import LLMMessage
 
@@ -1295,6 +1328,7 @@ def verify_goal_completion(
                     f"Goal: {goal}\n\n"
                     f"Working directory: {workspace_path or '(unspecified)'}\n\n"
                     f"{_scope_block}"
+                    f"{_deliverables_block}"
                     f"Work done:\n{work_summary}"
                 ),
             ],
