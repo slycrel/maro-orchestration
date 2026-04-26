@@ -255,3 +255,66 @@ def source_dir() -> Optional[Path]:
     out = rd / "source"
     out.mkdir(parents=True, exist_ok=True)
     return out
+
+
+# ---------------------------------------------------------------------------
+# Captain's log slicing — record offset at run-start, slice on finalize.
+# Same pattern scope_ab_runner.py uses externally; centralized here so
+# handle() can do it for every run, not just the experiment harness.
+# ---------------------------------------------------------------------------
+
+_run_log_offsets: dict = {}
+
+
+def _captains_log_path() -> Optional[Path]:
+    """Locate the captain's log file. None if captains_log isn't available."""
+    try:
+        from captains_log import _log_path  # type: ignore
+        return _log_path()
+    except Exception:
+        return None
+
+
+def record_log_offset(handle_id: str) -> None:
+    """Record the captain's log byte-length at run start.
+
+    Call this once at the top of handle() *after* the run-dir exists.
+    Pairs with `slice_log_for_run()` at finalize.
+    """
+    log_path = _captains_log_path()
+    if log_path is None:
+        return
+    try:
+        offset = log_path.stat().st_size if log_path.exists() else 0
+    except Exception:
+        offset = 0
+    _run_log_offsets[handle_id] = offset
+
+
+def slice_log_for_run(handle_id: str) -> Optional[Path]:
+    """Write `<run-dir>/build/captains_log_slice.jsonl` covering this run.
+
+    Reads from the offset recorded by `record_log_offset()` to the
+    current end of file. Returns the slice path on success, None on
+    failure or when no offset was recorded.
+    """
+    log_path = _captains_log_path()
+    if log_path is None or not log_path.exists():
+        return None
+    rd = run_dir(handle_id)
+    if not rd.exists():
+        return None
+    offset = _run_log_offsets.get(handle_id, 0)
+    out = rd / "build" / "captains_log_slice.jsonl"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with log_path.open("rb") as src, out.open("wb") as dst:
+            src.seek(offset)
+            while True:
+                chunk = src.read(64 * 1024)
+                if not chunk:
+                    break
+                dst.write(chunk)
+    except Exception:
+        return None
+    return out

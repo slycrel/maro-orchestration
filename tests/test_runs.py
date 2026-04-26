@@ -153,9 +153,12 @@ from runs import (
 @pytest.fixture(autouse=True)
 def _clear_run_state():
     """Ensure the module-level current-run state doesn't leak between tests."""
+    import runs as _runs
     set_current_run_dir(None)
+    _runs._run_log_offsets.clear()
     yield
     set_current_run_dir(None)
+    _runs._run_log_offsets.clear()
 
 
 def test_set_and_get_current_run_dir(workspace):
@@ -198,3 +201,65 @@ def test_source_dir_returns_run_dir_source_when_active(workspace):
     src = source_dir()
     assert src == rd / "source"
     assert src.exists()
+
+
+# ---------------------------------------------------------------------------
+# Captain's log slicing
+# ---------------------------------------------------------------------------
+
+from runs import record_log_offset, slice_log_for_run
+
+
+def test_slice_log_captures_only_run_window(workspace, tmp_path, monkeypatch):
+    log_path = tmp_path / "captains_log.jsonl"
+    log_path.write_text('{"event":"BEFORE_RUN"}\n', encoding="utf-8")
+
+    # Point captains_log helpers at our test file.
+    import captains_log
+    monkeypatch.setattr(captains_log, "_log_path_override", log_path)
+
+    create_run_dir("abcd1234", prompt="p")
+    record_log_offset("abcd1234")
+
+    # Two events written during the "run"
+    with log_path.open("a", encoding="utf-8") as f:
+        f.write('{"event":"DURING_1"}\n')
+        f.write('{"event":"DURING_2"}\n')
+
+    out = slice_log_for_run("abcd1234")
+    assert out is not None
+    assert out.exists()
+    content = out.read_text(encoding="utf-8")
+    assert "BEFORE_RUN" not in content
+    assert "DURING_1" in content
+    assert "DURING_2" in content
+
+
+def test_slice_log_when_no_offset_recorded_includes_everything(workspace, tmp_path, monkeypatch):
+    log_path = tmp_path / "captains_log.jsonl"
+    log_path.write_text('{"event":"X"}\n', encoding="utf-8")
+    import captains_log
+    monkeypatch.setattr(captains_log, "_log_path_override", log_path)
+
+    create_run_dir("abcd1234", prompt="p")
+    # No record_log_offset call — offset defaults to 0 → whole file.
+    out = slice_log_for_run("abcd1234")
+    assert out is not None
+    assert "X" in out.read_text(encoding="utf-8")
+
+
+def test_slice_log_returns_none_when_run_dir_missing(workspace, tmp_path, monkeypatch):
+    log_path = tmp_path / "captains_log.jsonl"
+    log_path.write_text('{"event":"X"}\n', encoding="utf-8")
+    import captains_log
+    monkeypatch.setattr(captains_log, "_log_path_override", log_path)
+
+    # Don't create the run-dir.
+    assert slice_log_for_run("nonexist1") is None
+
+
+def test_slice_log_returns_none_when_log_file_missing(workspace, tmp_path, monkeypatch):
+    import captains_log
+    monkeypatch.setattr(captains_log, "_log_path_override", tmp_path / "absent.jsonl")
+    create_run_dir("abcd1234", prompt="p")
+    assert slice_log_for_run("abcd1234") is None

@@ -383,12 +383,14 @@ def handle(
     try:
         from runs import create_run_dir as _create_run_dir
         from runs import set_current_run_dir as _set_current_run_dir
+        from runs import record_log_offset as _record_log_offset
         _rd = _create_run_dir(
             handle_id,
             prompt=_raw_input,
             model=model,
         )
         _set_current_run_dir(_rd)
+        _record_log_offset(handle_id)
     except Exception as _run_dir_exc:
         log.debug("runs: create_run_dir failed: %s", _run_dir_exc)
 
@@ -1527,13 +1529,15 @@ def main(argv=None):
         verbose=args.verbose,
     )
 
-    # Finalize the per-run metadata.json + clear the current-run context.
-    # The CLI is the paid-spend entry point; programmatic test callers
-    # that care about isolation can call set_current_run_dir(None)
-    # themselves.
+    # Finalize the per-run metadata.json + slice captain's log + clear
+    # the current-run context. The CLI is the paid-spend entry point;
+    # programmatic test callers that care about isolation can call
+    # set_current_run_dir(None) themselves.
     try:
         from runs import finalize_run as _finalize_run
+        from runs import slice_log_for_run as _slice_log
         from runs import set_current_run_dir as _clear_run
+        _slice_log(result.handle_id)
         _finalize_run(result.handle_id, status=result.status)
         _clear_run(None)
     except Exception:
