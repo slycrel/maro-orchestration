@@ -1213,22 +1213,55 @@ class ClosureVerdict:
     checks_passed: int
 
 
+_PRECOND_SENTINELS = frozenset({"none", "n/a", "na", "-", "tbd", "(none)", "null", "nil"})
+
+# Domain-looking prefix: catches Go module paths (github.com/x/y), import paths
+# (golang.org/x/term, gopkg.in/yaml.v3), URLs without a scheme. Filesystem paths
+# don't have a `<word>.<tld>/` prefix so this disambiguates module-vs-fs.
+_DOMAIN_PREFIX_RE = re.compile(r"^[a-z0-9][a-z0-9-]+\.[a-z]{2,}/")
+
+
 def _classify_precondition(preq: str) -> str:
     """Classify a Deliverable.precondition as 'command', 'path', or 'opaque'.
 
-    - command: single token, no slashes, no spaces — try shutil.which.
-    - path: contains a slash or starts with `./` — try Path.exists.
-    - opaque: anything else (port numbers, env-var requirements, etc.) —
-      can't pre-flight mechanically; preserve as informational only.
+    - command: single token, no slashes, no spaces, no dots — try shutil.which.
+    - path: filesystem-shaped (starts with /, ./, ../, ~, or has a slash but not
+      a domain-looking prefix) — try Path.exists.
+    - opaque: anything else — can't pre-flight mechanically. Includes:
+      * sentinel non-values ("none", "n/a", "-", ...)
+      * Go module paths and other domain-prefixed import strings
+        (`gorilla/websocket`, `github.com/x/y`, `golang.org/x/term`)
+      * URLs (anything containing `://`)
+      * port numbers, env-var requirements, free-form notes
     """
     s = (preq or "").strip()
     if not s:
         return "opaque"
-    # Path-shaped: contains a slash, or starts with ./ or ../
-    if "/" in s or s.startswith("."):
+    # Sentinel non-values (lowercase compare)
+    if s.lower() in _PRECOND_SENTINELS:
+        return "opaque"
+    # URLs and scheme-prefixed strings
+    if "://" in s:
+        return "opaque"
+    # Domain-looking prefix → import path / module path, not filesystem
+    if _DOMAIN_PREFIX_RE.match(s.lower()):
+        return "opaque"
+    # Two-segment slash-separated tokens that *look* like a Go module
+    # (e.g. `gorilla/websocket`, `urfave/cli`) — single slash, both segments
+    # are bare lowercase identifiers, no leading ./ or /. Heuristic but covers
+    # the common case where the LLM emits a module-style precondition.
+    if (
+        s.count("/") == 1
+        and not s.startswith(("/", "./", "../", "~"))
+        and re.match(r"^[a-z0-9][\w.-]*/[a-z0-9][\w.-]*$", s, re.IGNORECASE)
+    ):
+        return "opaque"
+    # Path-shaped: starts with /, ./, ../, ~, or contains a slash
+    if s.startswith(("/", "./", "../", "~")) or "/" in s:
         return "path"
-    # Command-shaped: single token, no spaces
-    if " " not in s and "\t" not in s:
+    # Command-shaped: single token, no spaces, no dots (dots usually mean a
+    # version string, file extension, or similar — not a binary on PATH).
+    if " " not in s and "\t" not in s and "." not in s:
         return "command"
     return "opaque"
 
