@@ -1110,6 +1110,61 @@ class TestVerifyGoalCompletion:
         assert _classify_precondition("port 8080") == "opaque"
         assert _classify_precondition("") == "opaque"
 
+    def test_precondition_classifies_sentinel_non_values_opaque(self):
+        """Sentinel strings are not commands — must not get shutil.which'd.
+
+        Regression: 2026-04-26 scope A/B closure preflight ran
+        `shutil.which("none")` and reported it as a missing command, polluting
+        the closure check feed with synthetic failures.
+        """
+        from director import _classify_precondition
+        for sentinel in ("none", "None", "NONE", "n/a", "N/A", "-", "tbd", "(none)", "null"):
+            assert _classify_precondition(sentinel) == "opaque", (
+                f"sentinel {sentinel!r} must be opaque, not classified as command/path"
+            )
+
+    def test_precondition_classifies_go_module_paths_opaque(self):
+        """Go module paths (and other import paths) are not filesystem paths.
+
+        Regression: 2026-04-26 scope A/B closure preflight tried
+        `Path('gorilla/websocket').exists()` and `Path('github.com/x/y').exists()`
+        — module paths look slash-shaped but are not on the filesystem.
+        """
+        from director import _classify_precondition
+        # Two-segment lowercase slashy strings — typical Go module idiom
+        assert _classify_precondition("gorilla/websocket") == "opaque"
+        assert _classify_precondition("urfave/cli") == "opaque"
+        # Domain-prefixed full module paths
+        assert _classify_precondition("github.com/x/y") == "opaque"
+        assert _classify_precondition("golang.org/x/term") == "opaque"
+        assert _classify_precondition("gopkg.in/yaml.v3") == "opaque"
+        # URLs always opaque
+        assert _classify_precondition("https://example.com/api") == "opaque"
+        assert _classify_precondition("ws://localhost:8080") == "opaque"
+
+    def test_precondition_classifies_real_filesystem_paths_correctly(self):
+        """After tightening, genuine filesystem paths must still classify as 'path'."""
+        from director import _classify_precondition
+        # Absolute paths
+        assert _classify_precondition("/usr/local/bin/x") == "path"
+        # Relative with explicit prefix
+        assert _classify_precondition("./scripts/run.sh") == "path"
+        assert _classify_precondition("../shared/config.yml") == "path"
+        # Home-relative
+        assert _classify_precondition("~/.config/poe.yml") == "path"
+        # Nested project paths (3+ segments — not module-shaped)
+        assert _classify_precondition("internal/io/websocket_impl.go") == "path"
+        assert _classify_precondition("cmd/server/main.go") == "path"
+
+    def test_precondition_classifies_versioned_strings_opaque(self):
+        """Strings with dots but no slashes (versions, dotted names) → opaque."""
+        from director import _classify_precondition
+        # Version strings shouldn't try shutil.which("1.2.3")
+        assert _classify_precondition("1.2.3") == "opaque"
+        assert _classify_precondition("v1.0") == "opaque"
+        # A bare dotted-name shouldn't be a command either
+        assert _classify_precondition("python3.12") == "opaque"
+
     def test_precondition_preflight_command_present(self, tmp_path):
         from director import _run_precondition_preflight
         from scope import Deliverable
