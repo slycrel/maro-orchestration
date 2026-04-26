@@ -1147,6 +1147,44 @@ def handle(
                         elapsed = int((time.monotonic() - started_at) * 1000)
                         _gate_note = f"\n\n✅ Quality gate escalated to {_next_tier} — re-run complete."
                         _contested_claims = []  # fresh run — don't append stale claims
+
+                        # Re-run closure on the escalated loop. Without this, only the
+                        # initial loop's closure verdict shows up in the captain's log
+                        # — the escalated re-run (which is the version we ship) would
+                        # have no closure record at all (2026-04-26 audit finding).
+                        if not dry_run:
+                            try:
+                                from director import verify_goal_completion as _verify_post_escalate
+                                from introspect import diagnose_loop as _diag_post_escalate
+                                _post_diag = None
+                                try:
+                                    if getattr(loop_result, "loop_id", ""):
+                                        _post_diag = _diag_post_escalate(
+                                            loop_result.loop_id,
+                                            project=(project or loop_result.project or ""),
+                                        )
+                                except Exception:
+                                    _post_diag = None
+                                _post_closure = _verify_post_escalate(
+                                    message,
+                                    loop_result.steps,
+                                    _escalated_adapter,
+                                    workspace_path=repo_path or "",
+                                    channel=channel,
+                                    scope=_scope,
+                                    resolved_intent=_resolved_intent,
+                                    diagnosis=_post_diag,
+                                    loop_id=getattr(loop_result, "loop_id", "") or "",
+                                )
+                                if verbose and _post_closure is not None:
+                                    print(
+                                        f"[poe:{handle_id}] post-escalate closure: "
+                                        f"complete={_post_closure.complete} "
+                                        f"confidence={_post_closure.confidence:.2f}",
+                                        file=sys.stderr, flush=True,
+                                    )
+                            except Exception as _post_exc:
+                                log.debug("post-escalate closure failed: %s", _post_exc)
             except Exception:
                 pass  # gate never blocks delivery of results
 
