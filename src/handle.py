@@ -1019,6 +1019,7 @@ def handle(
                     scope=_scope,
                     resolved_intent=_resolved_intent,
                     diagnosis=_closure_diag,
+                    loop_id=getattr(loop_result, "loop_id", "") or "",
                 )
             except Exception:
                 _closure = None

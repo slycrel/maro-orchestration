@@ -844,6 +844,63 @@ class TestVerifyGoalCompletion:
         result = verify_goal_completion("build X", [], adapter)
         assert result.complete is True
 
+    def test_closure_verdict_event_carries_loop_id(self, tmp_path):
+        """CLOSURE_VERDICT captains_log event must include loop_id when supplied.
+
+        Regression guard: prior implementation logged the verdict without loop_id,
+        so the event couldn't be linked to its loop in run-dir slices or lineage
+        chains. QUALITY_GATE_VERDICT and LOOP_CREATED already had it; closure
+        was the missing third leg.
+        """
+        from unittest.mock import MagicMock, patch
+
+        adapter = MagicMock()
+        checks = [{"description": "true", "command": "true"}]
+        verdict_data = {"complete": True, "confidence": 0.9, "gaps": [], "summary": "Done."}
+
+        captured = {}
+
+        def _spy_log_event(*args, **kwargs):
+            captured["args"] = args
+            captured["kwargs"] = kwargs
+            return {}
+
+        with patch("director.extract_json", side_effect=[{"checks": checks}, verdict_data]):
+            with patch("director.content_or_empty", return_value="{}"):
+                with patch("captains_log.log_event", side_effect=_spy_log_event):
+                    verify_goal_completion(
+                        "do a thing", [], adapter,
+                        workspace_path=str(tmp_path),
+                        loop_id="abc12345",
+                    )
+
+        assert captured.get("kwargs", {}).get("loop_id") == "abc12345"
+
+    def test_closure_verdict_event_loop_id_omitted_when_blank(self, tmp_path):
+        """No loop_id supplied → log_event called with loop_id=None (existing
+        skip-when-empty behavior in captains_log.log_event preserves omission)."""
+        from unittest.mock import MagicMock, patch
+
+        adapter = MagicMock()
+        checks = [{"description": "true", "command": "true"}]
+        verdict_data = {"complete": True, "confidence": 0.9, "gaps": [], "summary": "Done."}
+        captured = {}
+
+        def _spy_log_event(*args, **kwargs):
+            captured["kwargs"] = kwargs
+            return {}
+
+        with patch("director.extract_json", side_effect=[{"checks": checks}, verdict_data]):
+            with patch("director.content_or_empty", return_value="{}"):
+                with patch("captains_log.log_event", side_effect=_spy_log_event):
+                    verify_goal_completion(
+                        "do a thing", [], adapter,
+                        workspace_path=str(tmp_path),
+                    )
+
+        # Default kwarg loop_id="" → passed as None (falsy → captains_log omits it)
+        assert captured.get("kwargs", {}).get("loop_id") is None
+
     def test_plan_prompt_uses_inversion_framing(self):
         """_CLOSURE_PLAN_SYSTEM must use inversion framing, not goal-type taxonomy.
 
