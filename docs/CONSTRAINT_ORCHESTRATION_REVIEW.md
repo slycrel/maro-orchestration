@@ -194,3 +194,50 @@ That's it. No gate, no lifecycle, no violation detection, no persona rotation, n
 ## Origin
 
 Review conducted by independent agent with no conversation context on 2026-04-16. Findings delivered in response to the question "what's being inferred or missed?" — findings preserved verbatim above for signal. Scope correction and minimum experiment added by the conversation participants in response to the review.
+
+---
+
+## Status as of 2026-04-26 (delta-audit)
+
+Ten days on from the review. Re-checking the "Known Issues Before Any Code Lands" list against what's actually in the tree.
+
+### What shipped under a different name
+The minimum viable experiment described above (one inversion call + planner-context injection + A/B mechanism + recording) **shipped as `src/scope.py`**, not under the proposed "premise" name. The collision with `constraint.py` was resolved by picking a third word. Concretely:
+
+- ✅ One LLM call before `planner.decompose()` — `scope.generate_scope()` / `scope.generate_resolved_intent()`
+- ✅ Generalist prompt, no triad — `[scope-deferred]` markers log everything we explicitly did not build
+- ✅ Injected as additional planner context — via `ancestry_context` block
+- ✅ A/B mechanism — `scripts/scope_ab_runner.py`, run-dir transparency, captain's-log `SCOPE_GENERATED` event
+- ✅ Recorded alongside plan — `scope.md` / `resolved_intent.md` in run-dir
+- ✅ Cost ceiling — single LLM call per goal, easy to budget; A/B disable via prefix
+- ✅ Autonomous-path documented — scope is generated regardless of channel; logged for post-hoc review even when no human is in the loop
+
+The 2026-04-23 expansion added `ResolvedIntent` with deliverables (per `docs/INTENT_RESOLUTION_DESIGN.md` and `docs/DRIVER_AND_WATCHER.md` #4 — "plan-creation as its own step"). Closure now reads deliverables when verifying.
+
+### What hasn't shipped from the original design
+Still deferred or rejected:
+
+- ❌ Persona triad (PM/engineer/architect) — review said drop from v1; remains dropped
+- ❌ Constraint lifecycle (set/inject/detect/revise/except/break) — none of revise/except/break exists; scope is immutable after set
+- ❌ Mid-loop director trigger for "constraint review" — no `trigger="constraint_review"` branch in director
+- ❌ Violation detection — scope injected, not enforced; no `SIGNAL_CONSTRAINT_VIOLATION`
+- ❌ Cross-goal memory retrieval of scope — scope recorded per-run, no `inject_lessons_for_task` integration
+- ❌ Skill-type taxonomy for inversion / validation — review said drop; remains dropped
+
+### Tension with the 2026-04-26 DISCUSS note
+**Important:** see the top of BACKLOG.md for the 2026-04-26 DISCUSS note framing: "lean into the bitter lesson — try 1-shot first, decompose only as an escape hatch with explicit cost." If that frame wins, **most of the unbuilt parts of this design become anti-features** rather than missing features:
+
+- Constraint lifecycle is decompose-stage scaffolding; if 1-shot is the default, there is no decompose stage to lifecycle around for most goals.
+- Mid-loop violation detection is decompose-stage telemetry; same.
+- Cross-goal scope memory is decompose-stage memory; partly survives (an inversion at the 1-shot stage is still useful), but the hooks change.
+- Persona triad was already dropped; no impact.
+
+**Recommendation:** do not implement the rest of the design until the DISCUSS-note frame is resolved. The shipped scope/ResolvedIntent v0 is compatible with both frames — it just front-loads inversion regardless of whether the next stage is 1-shot or decompose. Anything that adds machinery *around* decomposition (lifecycle, violation detection, cross-goal retrieval keyed on plan structure) is at risk of being deleted in a frame-shift.
+
+### Updated Known Issues
+- [x] **Rename.** Resolved — shipped as `scope`, sidestepping `constraint.py` collision.
+- [x] **Autonomous path.** Documented in `src/scope.py` module docstring; scope generated unconditionally, logged for post-hoc review.
+- [x] **Cost ceiling.** Single LLM call per goal; trip via prefix to disable.
+- [x] **A/B mechanism.** Shipped as `scripts/scope_ab_runner.py`.
+- [x] **Existing-systems review.** This document is the post-hoc audit. The infrastructure assumed in the original audit (planner context injection, decompose extension points) was indeed mature — minimum experiment landed in ~150 lines as predicted.
+- [ ] **DISCUSS-frame resolution.** New blocker as of 2026-04-26: decide whether the rest of the design is coherent with the 1-shot-first direction before adding any decompose-stage machinery.
