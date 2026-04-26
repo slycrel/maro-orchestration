@@ -228,6 +228,80 @@ class TestIsDataHeavyStep:
         assert _is_data_heavy_step("FETCH ALL records from the endpoint")
 
 
+# ---------------------------------------------------------------------------
+# Long-lived process detection (BACKLOG:287)
+# ---------------------------------------------------------------------------
+
+class TestIsLongLivedStep:
+    """Step that starts a process which doesn't exit must be flagged so the
+    executor knows to background-spawn + probe readiness instead of waiting
+    for exit. Audit case: 'Start server with --headless flag on
+    localhost:8080' hung 10 minutes until SIGTERM (rc=-15).
+    """
+
+    def test_actual_audit_case(self):
+        """The exact step text from the scope-ab run that motivated this."""
+        from step_exec import _is_long_lived_step
+        assert _is_long_lived_step(
+            "Start server with --headless flag on localhost:8080"
+        )
+
+    def test_start_server_phrase(self):
+        from step_exec import _is_long_lived_step
+        assert _is_long_lived_step("Start the websocket server in the background")
+
+    def test_launch_daemon_phrase(self):
+        from step_exec import _is_long_lived_step
+        assert _is_long_lived_step("Launch the metrics daemon")
+
+    def test_run_server_phrase(self):
+        from step_exec import _is_long_lived_step
+        assert _is_long_lived_step("Run server on port 3000")
+
+    def test_listen_on_port_phrase(self):
+        from step_exec import _is_long_lived_step
+        assert _is_long_lived_step("Build a service that will listen on port 8080")
+
+    def test_uvicorn_invocation(self):
+        from step_exec import _is_long_lived_step
+        assert _is_long_lived_step("Run uvicorn app:main --reload")
+
+    def test_npm_start_invocation(self):
+        from step_exec import _is_long_lived_step
+        assert _is_long_lived_step("Run npm start to bring up the dev server")
+
+    def test_go_run_cmd_pattern(self):
+        from step_exec import _is_long_lived_step
+        assert _is_long_lived_step("go run ./cmd/server")
+
+    def test_verb_noun_with_qualifier(self):
+        """'Start the X server' / 'launch the Y service' must catch via regex."""
+        from step_exec import _is_long_lived_step
+        assert _is_long_lived_step("Start the gRPC API server")
+        assert _is_long_lived_step("Launch the websocket broker")
+
+    def test_normal_command_step_not_flagged(self):
+        from step_exec import _is_long_lived_step
+        assert not _is_long_lived_step("Run pytest tests/test_handle.py -q")
+
+    def test_analysis_step_not_flagged(self):
+        from step_exec import _is_long_lived_step
+        assert not _is_long_lived_step("Summarize the test results")
+
+    def test_read_step_not_flagged(self):
+        from step_exec import _is_long_lived_step
+        assert not _is_long_lived_step("Read src/server.py and identify the entry point")
+
+    def test_test_for_server_not_flagged(self):
+        """'Test the server' is verification, not startup."""
+        from step_exec import _is_long_lived_step
+        assert not _is_long_lived_step("Test the server response with curl")
+
+    def test_case_insensitive(self):
+        from step_exec import _is_long_lived_step
+        assert _is_long_lived_step("START SERVER on localhost")
+
+
 class TestResultLooksLikeRawDump:
     def test_short_result_not_flagged(self):
         from step_exec import _result_looks_like_raw_dump

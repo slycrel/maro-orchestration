@@ -9,6 +9,31 @@ Last reviewed: 2026-04-18 (post run-7 — added intent-resolution initiative + m
 
 ---
 
+### DISCUSS — invert the planning stage: 1-shot first, escape hatch second (2026-04-26, Jeremy)
+
+Jeremy's framing while AFK: instead of scaffolding around the planning stage (scope, intent-resolution, constraint orchestration, decomposition_too_broad recovery, etc.), **lean into the bitter lesson** by inverting the default. The flow becomes:
+
+> "Try this in one shot. If you can't do it without more planning, **explain why and return** instead — don't decompose."
+
+In other words: 1-shot is the default, decomposition is the escape hatch with an explicit cost (the model has to justify needing it).
+
+**Why this might be right:**
+- The bitter lesson says scaffolding loses to capability. We've been adding more scaffolding (scope, intent-resolution, constraint orchestration, mid-loop redecompose, decomposition_too_broad warnings) — each piece individually useful but the aggregate is "we trust the model less and less."
+- Most goals we feed it are probably 1-shot doable on Opus. The 8/8-strong loops we keep flagging as "too broad" might just be cases where the model could have done the whole thing in one Bash + edit dance and we forced ceremony onto it.
+- Closure check + adversarial review already exist. The 1-shot output goes through both. If the 1-shot was wrong, those layers catch it; if it was right, we save 8x the cost.
+- "Explain why and return" is a structured signal we can route — same mechanic as `flag_stuck` with `NEED_INFO`. The escape hatch doesn't bypass our existing infrastructure, it just inverts which path is the default.
+
+**Open questions for the discussion:**
+- Where does this slot in: replace decompose? Add a `try_1shot` phase in front? Replace the planner with "judge: 1-shot or decompose?"
+- How does it interact with goals that obviously need decomposition (research → synthesize, multi-tool sequences)? Or is the answer "trust the model to recognize that and ask"?
+- What does the return-with-explanation look like — is it a structured ResolvedIntent-shaped object (gaps + probes), or just free text the planner consumes?
+- How does this relate to scope (which is already a kind of pre-1-shot intent compression) and to docs/INTENT_RESOLUTION_DESIGN.md?
+- If we ship this, what do we *remove*? The bitter-lesson framing says scaffolding should *go away*, not stack — `decomposition_too_broad`, mid-loop redecompose, parts of constraint orchestration may all be load-bearing only because we forced decomposition in the first place.
+
+**Status:** flagged for discussion when Jeremy is back. Don't implement — think first about whether it's a frame-shift (which deletes existing scaffolding) or just another phase added on top (which makes things worse).
+
+---
+
 ### Intent resolution — naming the "side-quests before decompose" shape (discovered 2026-04-18)
 
 Run 7 of slycrel-go surfaced (again) that "done" means "the plan we guessed
@@ -284,14 +309,16 @@ See `docs/CONSTRAINT_ORCHESTRATION_DESIGN.md` + `docs/CONSTRAINT_ORCHESTRATION_R
 
   **Related:** sibling to the "runtime-probe bias" item above. That one is about closure *choosing* static over behavioral probes; this is about closure *mis-reading* the behavioral probes it does choose. Both resolve to: the verification verdict is decoupled from whether the thing was actually verified. Fix one without the other and the same failure surfaces on a different axis.
 
-- [ ] **Step runner has no hang protection / no long-lived-process affordance.** Scope A/B run-02-control (2026-04-23, `~/.poe/experiments/scope-ab-2026-04-22/run-02-control/`) got through 26 steps cleanly, then hit step 27 "Start server with --headless flag on localhost:8080" and the process hung indefinitely until external SIGTERM (rc=-15). The step runner shells out and blocks waiting on completion — but `go run ./cmd/server` is a long-lived process that never exits. Planner treated "start the server" as a discrete decompose step; runner had no way to say "start it, wait for a readiness signal, keep it alive in the background, move on."
+- [x] **Step runner has no hang protection / no long-lived-process affordance.** Partially closed 2026-04-26 (commit TBD): step_exec.py now classifies long-lived steps via `_is_long_lived_step` (phrase set + verb-noun regex catching "start/launch/run/spawn/boot the X server/service/daemon/listener/broker/worker/api"); when matched, injects `_LONG_LIVED_PROCESS_EXTRA` into user_msg telling the executor to (a) background-spawn (`run_in_background`/`& disown`/`nohup &`), (b) probe readiness via curl/nc/log-grep, (c) call complete_step on readiness signal — not on exit. 14 new tests in `tests/test_step_exec.py::TestIsLongLivedStep` cover the audit case ("Start server with --headless flag on localhost:8080"), each long-lived phrase, the verb-noun regex, and false-positive guards (test/read/analyze steps).
 
-  **Candidates:**
-  - step-runner timeout: any step that exceeds N minutes of wall clock without producing output gets killed and the step marked as `requires_background_mode`
-  - classify step intent at decompose time — "start a long-lived process" → `background=true`, spawn detached + poll readiness (HTTP probe, port listen, log-line match) rather than waiting on exit
-  - planner prompt change: instruct the decomposer to *not* emit "start server" as a terminal step — servers should be started inside a verification step that also probes them and shuts down afterward
+  Original audit case: scope A/B run-02-control (2026-04-23, `~/.poe/experiments/scope-ab-2026-04-22/run-02-control/`) hit step 27 "Start server with --headless flag on localhost:8080", hung indefinitely until SIGTERM (rc=-15). Planner treated "start the server" as a discrete decompose step; the executor had no signal to spawn-and-detach.
 
-  **Why this matters:** until this is fixed, any blind-test goal that produces a long-running binary is an accident waiting to happen on the control arm (scope-injected arm compresses to 8 steps and keeps server startup inside the verification phase, so it doesn't trip this). We can't get clean A/B data on anything server-shaped until we fix the hang path.
+  **Still open** (deferred — escalate if observed in the next A/B run):
+  - step-runner hard timeout: per-step wall-clock cap that produces a `requires_background_mode` outcome rather than a generic timeout (currently the adapter-level 600s cap fires, but the step is marked blocked rather than actionable)
+  - decompose-time classification: emit `background=true` on the step manifest so introspection sees the structural mismatch when later steps depend on a non-terminating one
+  - planner prompt change: instruct the decomposer to *not* emit "start server" as a terminal step — servers should start inside a verification step that also probes and shuts down
+
+  **Why this matters:** until this is fully closed, any blind-test goal that produces a long-running binary remains a hazard on the control arm. Scope-injected arms compress to 8 steps and keep server startup inside the verification phase, so they sidestep it; the prompt nudge above should help control arms too.
 
 - [ ] **Rate-limit recovery has no total-backoff cap; recovery path emits phantom `Step -1`.** Scope A/B run-06-control (2026-04-23, `~/.poe/experiments/scope-ab-2026-04-22/run-06-control/`) hit 6 rate-limit retries with exponential backoff (60→120→240→480→960→1800s = 61 min total wall-clock in backoff alone). Per-attempt cap is enforced; **total-backoff-wall-clock is not.** After step 20 finally completed, the recovery path fired with `recovery[NEEDS-REVIEW] risk=medium: Retry with smaller step scope or switch to API adapter` — and produced a `Step -1` marker that the main loop doesn't know how to handle. Run exited rc=1 with no closure verdict. Total runtime: 2h30m for 20 completed steps.
 
@@ -313,7 +340,11 @@ See `docs/CONSTRAINT_ORCHESTRATION_DESIGN.md` + `docs/CONSTRAINT_ORCHESTRATION_R
 
 ### Introspect-sees-no-action: `decomposition_too_broad` (and siblings)
 
-- [x] **`decomposition_too_broad` fires but nothing acts on it.** Partially closed 2026-04-26: introspect now stamps `LoopDiagnosis.project` so retrieval can prioritize same-project history; `find_relevant_failure_notes` ranks same-project diagnoses above goal-token overlap; `decomposition_too_broad` notes render with concrete numbers (e.g. "Step 8 took 534s with 277K tok") and append the actionable cap (`≤120s/200K tok per step; split if a step touches >3 files`). The next loop on the same project sees this in `lessons_context` ahead of all other failure-pattern injections. Phase 62 (mid-loop redecompose on `_handle_blocked_step`) was already live for the blocked path; this closes the *post-mortem → next-decompose* feedback that was previously generic-lesson-only. Original Apr 16 finding (`loop 85ac29ee-*`) is the canonical case this addresses. **Still open:** acting on the warning *during* an in-flight loop that's completing-not-blocking (the 8/8-strong case) — that's a separate shape. **Commit:** TBD.
+- [x] **`decomposition_too_broad` fires but nothing acts on it.** Partially closed 2026-04-26: introspect now stamps `LoopDiagnosis.project` so retrieval can prioritize same-project history; `find_relevant_failure_notes` ranks same-project diagnoses above goal-token overlap; `decomposition_too_broad` notes render with concrete numbers (e.g. "Step 8 took 534s with 277K tok") and append the actionable cap (`≤120s/200K tok per step; split if a step touches >3 files`). The next loop on the same project sees this in `lessons_context` ahead of all other failure-pattern injections. Phase 62 (mid-loop redecompose on `_handle_blocked_step`) was already live for the blocked path; this closes the *post-mortem → next-decompose* feedback that was previously generic-lesson-only. Original Apr 16 finding (`loop 85ac29ee-*`) is the canonical case this addresses.
+
+  **Mid-loop visibility added 2026-04-26 (commit TBD):** new `STEP_TOO_BROAD` captain's log event fires the moment a `done` step exceeds both caps (>120s elapsed AND >200K tokens). Wired in `_write_iteration_artifacts` after march-of-nines. Visible in the per-run `captains_log_slice.jsonl` and as a project decision. The post-mortem path already feeds the next decompose; this closes the visibility gap on the in-flight loop. 7 new tests in `tests/test_agent_loop.py` cover the predicate (above caps, below caps, only-one-cap, blocked/skipped/zero-metric guards, EVENT_TYPES registration).
+
+  **Still open** (deferred — needs more A/B data before committing to mid-loop intervention): actually *acting* on the signal mid-loop (kill + replan vs continue with warning logged). Visibility-first is the cheapest credible upgrade today; the action question deserves data on how often the signal fires and whether the loop completes successfully despite it.
 
 ### From X research (2026-04-11 — 10 posts, live orchestration, 2 loops)
 

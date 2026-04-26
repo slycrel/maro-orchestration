@@ -620,6 +620,99 @@ def test_loop_result_has_march_of_nines_field(monkeypatch, tmp_path):
     assert isinstance(result.march_of_nines_alert, bool)
 
 
+# ---------------------------------------------------------------------------
+# Step-too-broad signal (BACKLOG:316 leftover)
+# ---------------------------------------------------------------------------
+
+
+def test_check_step_too_broad_fires_above_caps():
+    """A done step exceeding both elapsed (>120s) AND tokens (>200K) caps
+    fires the signal. Both caps must be breached — either alone is allowed."""
+    from agent_loop import _check_step_too_broad, StepOutcome
+
+    step = StepOutcome(
+        index=7, text="too broad step", status="done", result="ok",
+        iteration=0, tokens_in=150_000, tokens_out=80_000, elapsed_ms=534_000,
+    )
+    result = _check_step_too_broad(step)
+    assert result is not None
+    elapsed_s, tokens, idx = result
+    assert elapsed_s == 534
+    assert tokens == 230_000
+    assert idx == 7
+
+
+def test_check_step_too_broad_below_caps():
+    """Step under the caps does not fire."""
+    from agent_loop import _check_step_too_broad, StepOutcome
+
+    step = StepOutcome(
+        index=2, text="normal step", status="done", result="ok",
+        iteration=0, tokens_in=50_000, tokens_out=20_000, elapsed_ms=60_000,
+    )
+    assert _check_step_too_broad(step) is None
+
+
+def test_check_step_too_broad_only_one_cap_breached():
+    """Only one cap breached → no fire (need both, since either alone has
+    legitimate explanations: tokens-only = lots of context, time-only = slow
+    LLM/network). Both = the step is doing too much."""
+    from agent_loop import _check_step_too_broad, StepOutcome
+
+    # Time over, tokens under
+    step1 = StepOutcome(
+        index=0, text="slow but small", status="done", result="ok",
+        iteration=0, tokens_in=10_000, tokens_out=5_000, elapsed_ms=300_000,
+    )
+    assert _check_step_too_broad(step1) is None
+
+    # Tokens over, time under
+    step2 = StepOutcome(
+        index=1, text="big but fast", status="done", result="ok",
+        iteration=0, tokens_in=200_000, tokens_out=50_000, elapsed_ms=30_000,
+    )
+    assert _check_step_too_broad(step2) is None
+
+
+def test_check_step_too_broad_skips_blocked_step():
+    """Blocked steps go through the diagnosis path; this signal is for
+    successful but oversized steps."""
+    from agent_loop import _check_step_too_broad, StepOutcome
+
+    step = StepOutcome(
+        index=3, text="blocked huge step", status="blocked", result="",
+        iteration=0, tokens_in=200_000, tokens_out=80_000, elapsed_ms=300_000,
+    )
+    assert _check_step_too_broad(step) is None
+
+
+def test_check_step_too_broad_skips_skipped_step():
+    """Skipped steps did no work; metrics are meaningless here."""
+    from agent_loop import _check_step_too_broad, StepOutcome
+
+    step = StepOutcome(
+        index=4, text="skipped", status="skipped", result="",
+        iteration=0, tokens_in=300_000, tokens_out=100_000, elapsed_ms=400_000,
+    )
+    assert _check_step_too_broad(step) is None
+
+
+def test_check_step_too_broad_zero_metrics():
+    """Step with no recorded metrics (e.g. injected sentinel) does not fire."""
+    from agent_loop import _check_step_too_broad, StepOutcome
+
+    step = StepOutcome(
+        index=0, text="zero metrics", status="done", result="ok", iteration=0,
+    )
+    assert _check_step_too_broad(step) is None
+
+
+def test_step_too_broad_event_in_captains_log_event_types():
+    """Constant is registered in EVENT_TYPES — log_event will accept it."""
+    from captains_log import EVENT_TYPES, STEP_TOO_BROAD
+    assert STEP_TOO_BROAD in EVENT_TYPES
+
+
 @pytest.mark.slow
 def test_dead_ends_written_on_block(monkeypatch, tmp_path):
     """Blocked step writes to DEAD_ENDS.md."""

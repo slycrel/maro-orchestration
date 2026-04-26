@@ -175,6 +175,81 @@ def _is_data_heavy_step(step_text: str) -> bool:
     return any(kw in lower for kw in _DATA_HEAVY_KEYWORDS)
 
 
+# ---------------------------------------------------------------------------
+# Long-lived process detection
+# ---------------------------------------------------------------------------
+
+# A "long-lived process" step starts something that does not exit on success —
+# servers, daemons, listeners. The naive execution path (shell out, wait for
+# exit) hangs until the wall-clock timeout fires. This wastes a step's
+# entire timeout budget and leaves no useful output. The fix is to instruct
+# the executor to spawn in background + probe readiness + return immediately.
+#
+# Audit case (BACKLOG:287): step "Start server with --headless flag on
+# localhost:8080" hung 10 min until SIGTERM, rc=-15. The LLM had no signal
+# from the prompt that this step required background-mode invocation.
+
+_LONG_LIVED_PHRASES = frozenset({
+    "start server", "start service", "start daemon", "start the server",
+    "launch server", "launch service", "launch daemon", "launch the server",
+    "run server", "run daemon", "run the server",
+    "spawn server", "spawn service", "spawn daemon",
+    "boot server", "bring up server",
+    "listen on port", "listening on port",
+    "serve on port", "serve on :",
+    "uvicorn ", "gunicorn ", "fastapi run", "flask run",
+    "python -m http.server",
+    "go run ./cmd/", "go run cmd/",
+    "npm start", "npm run dev", "npm run serve",
+})
+
+# Regex catches "start the X server", "run the websocket service", etc. —
+# action verb + (optional words) + server-shaped noun.
+import re as _re_lll
+_LONG_LIVED_VERB_NOUN = _re_lll.compile(
+    r"\b(?:start|launch|spawn|boot|bring up|run)\s+(?:the\s+|a\s+)?"
+    r"(?:\S+\s+){0,3}"
+    r"(?:server|service|daemon|listener|broker|worker|api)\b",
+    _re_lll.IGNORECASE,
+)
+
+
+def _is_long_lived_step(step_text: str) -> bool:
+    """Return True if the step starts a process that does not exit on success.
+
+    Detection is intentionally permissive — false positives just add a prompt
+    block telling the executor to background-spawn (no harm if not needed),
+    while false negatives let the step hang until timeout (the bug we're
+    fixing). When in doubt, prefer the prompt nudge.
+    """
+    lower = step_text.lower()
+    if any(p in lower for p in _LONG_LIVED_PHRASES):
+        return True
+    if _LONG_LIVED_VERB_NOUN.search(step_text):
+        return True
+    return False
+
+
+_LONG_LIVED_PROCESS_EXTRA = textwrap.dedent("""\
+
+    LONG-LIVED PROCESS — this step starts something that does NOT exit:
+    Servers, daemons, listeners, watchers. If you wait for the command to
+    complete, the step hangs until timeout (10–30 minutes wasted). Instead:
+      1. Spawn the process in background (Bash run_in_background=true,
+         or `cmd & disown`, or `nohup cmd >log 2>&1 &`).
+      2. Probe readiness with a bounded check — examples:
+         - HTTP: `curl -fsS --max-time 5 http://localhost:PORT/health`
+         - Port: `nc -z localhost PORT` or `ss -ltn | grep :PORT`
+         - Log:  `grep -m1 'listening' log` (with a timeout)
+      3. Once readiness is confirmed, call complete_step with the PID, port,
+         and readiness signal observed. Do NOT wait for the process to exit —
+         it never will.
+    If the step also requires shutting down the process afterward, do that
+    in the SAME step (start → probe → use → kill). A trailing PID is not a
+    valid handoff to a later step.
+""").strip()
+
+
 def _result_looks_like_raw_dump(result: str) -> bool:
     """Heuristic: detect if a complete_step result is raw API output.
 
@@ -699,6 +774,13 @@ def execute_step(
         _artifact_block = "\n\n" + _ARTIFACT_MATERIALIZE.format(artifact_path=_artifact_path)
         log.debug("step %d exec_command — injecting artifact materialization", step_num)
 
+    # Long-lived processes (servers/daemons) need explicit background-spawn
+    # + readiness probe instructions, otherwise the step hangs until timeout.
+    _long_lived_block = ""
+    if _is_long_lived_step(step_text):
+        _long_lived_block = "\n\n" + _LONG_LIVED_PROCESS_EXTRA
+        log.debug("step %d long_lived=True — injecting background-spawn enforcement", step_num)
+
     user_msg = (
         f"Overall goal: {goal}{ancestry_block}\n\n"
         f"Current step ({step_num}/{total_steps}) [{_step_type}]: {step_text}"
@@ -707,7 +789,8 @@ def execute_step(
         f"{artifacts_block}"
         f"{prefetch_block}"
         f"{_pipeline_block}"
-        f"{_artifact_block}\n\n"
+        f"{_artifact_block}"
+        f"{_long_lived_block}\n\n"
         f"Complete this step now. Call complete_step when done or flag_stuck if blocked."
     )
 

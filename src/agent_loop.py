@@ -799,6 +799,35 @@ _MARCH_OF_NINES_WINDOW = 5
 _MARCH_OF_NINES_THRESHOLD = 0.5
 
 
+# Per-step resource cap matching the `decomposition_too_broad` post-mortem
+# note: a step that takes >120s AND >200K tokens has burned a step's worth
+# of budget on a single sub-task, which implies the plan was decomposed too
+# broadly. We emit a structured signal so the warning is visible mid-loop
+# (BACKLOG:316 leftover — 8/8-strong loops never block, so the post-mortem
+# is the only feedback today, and it only kicks in for the next loop).
+_STEP_TOO_BROAD_ELAPSED_MS = 120_000
+_STEP_TOO_BROAD_TOKENS = 200_000
+
+
+def _check_step_too_broad(step_outcome: "StepOutcome") -> Optional[tuple]:
+    """Return (elapsed_s, total_tokens, step_index) if the step breached the
+    too-broad cap; None otherwise.
+
+    Fires only on `done` steps — blocked/skipped steps are noisy on these
+    metrics (a blocked step may have run hot before flagging stuck) and the
+    `_handle_blocked_step` path already covers them via the diagnosis taxonomy.
+    """
+    if getattr(step_outcome, "status", "") != "done":
+        return None
+    elapsed_ms = getattr(step_outcome, "elapsed_ms", 0) or 0
+    tokens = (getattr(step_outcome, "tokens_in", 0) or 0) + (
+        getattr(step_outcome, "tokens_out", 0) or 0
+    )
+    if elapsed_ms > _STEP_TOO_BROAD_ELAPSED_MS and tokens > _STEP_TOO_BROAD_TOKENS:
+        return (elapsed_ms // 1000, tokens, getattr(step_outcome, "index", -1))
+    return None
+
+
 def _compute_march_of_nines(step_outcomes: List["StepOutcome"]) -> Optional[tuple]:
     """Return (rate, completed, window_size) if recent-window success rate is
     below threshold; None if no alert should fire.
@@ -897,6 +926,46 @@ def _write_iteration_artifacts(
             ])
         except Exception as _exc:
             log.debug("march-of-nines alert append failed for loop %s: %s", ctx.loop_id, _exc)
+
+    # Step-too-broad signal — fires the moment a step breaches the cap, so
+    # the warning is visible mid-loop in the per-run captain's-log slice
+    # rather than only at post-mortem. The post-mortem path already feeds
+    # the next decompose; this closes the visibility gap on the in-flight
+    # loop (BACKLOG:316 leftover for the 8/8-strong case).
+    if step_outcomes:
+        _too_broad = _check_step_too_broad(step_outcomes[-1])
+        if _too_broad is not None:
+            _elapsed_s, _tokens, _step_idx = _too_broad
+            try:
+                from captains_log import log_event, STEP_TOO_BROAD
+                log_event(
+                    STEP_TOO_BROAD,
+                    subject=f"loop:{ctx.loop_id}",
+                    summary=(
+                        f"Step {_step_idx} took {_elapsed_s}s with "
+                        f"{_tokens // 1000}K tokens (cap: "
+                        f"≤{_STEP_TOO_BROAD_ELAPSED_MS // 1000}s, "
+                        f"≤{_STEP_TOO_BROAD_TOKENS // 1000}K)"
+                    ),
+                    context={
+                        "step_index": _step_idx,
+                        "elapsed_s": _elapsed_s,
+                        "tokens": _tokens,
+                        "cap_elapsed_s": _STEP_TOO_BROAD_ELAPSED_MS // 1000,
+                        "cap_tokens": _STEP_TOO_BROAD_TOKENS,
+                        "project": ctx.project or "",
+                    },
+                    loop_id=ctx.loop_id,
+                )
+            except Exception as _exc:
+                log.debug("step_too_broad event append failed for loop %s: %s", ctx.loop_id, _exc)
+            try:
+                o.append_decision(ctx.project, [
+                    f"[loop:{ctx.loop_id}] Step too broad: step {_step_idx} "
+                    f"took {_elapsed_s}s / {_tokens // 1000}K tok — split if continuing"
+                ])
+            except Exception as _exc:
+                log.debug("step_too_broad decision append failed for loop %s: %s", ctx.loop_id, _exc)
 
     return _alert
 

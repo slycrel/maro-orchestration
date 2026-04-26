@@ -83,6 +83,13 @@ CLAIM_VERIFIER_OUTCOME = "CLAIM_VERIFIER_OUTCOME"  # per-step: file/symbol claim
 LOOP_CREATED = "LOOP_CREATED"  # every loop spawn — reason, parent_loop_id, slug, max_steps
 QUALITY_GATE_VERDICT = "QUALITY_GATE_VERDICT"  # PASS / ESCALATE — most important escalation signal
 
+# Per-step resource-burn signal: step exceeded the cap from the
+# decomposition_too_broad post-mortem note (≤120s and ≤200K tokens per step).
+# Fires mid-loop so the warning is visible without waiting for the loop to
+# finish — addresses BACKLOG:316 leftover (8/8-strong loops where the
+# post-mortem warning fires too late to act on this loop).
+STEP_TOO_BROAD = "STEP_TOO_BROAD"
+
 EVENT_TYPES = {
     SKILL_SYNTHESIZED, SKILL_SYNTHESIS_REJECTED, SKILL_PROMOTED, SKILL_DEMOTED, SKILL_REWRITE,
     SKILL_CIRCUIT_OPEN, SKILL_CIRCUIT_HALF_OPEN, SKILL_CIRCUIT_CLOSED,
@@ -95,7 +102,7 @@ EVENT_TYPES = {
     DECISION_RECORDED, METACOGNITIVE_DECISION,
     SCOPE_GENERATED, SCOPE_PARSE_FAILED, CLOSURE_VERDICT, CLAIM_PROBED,
     CLAIM_VERIFIER_OUTCOME,
-    LOOP_CREATED, QUALITY_GATE_VERDICT,
+    LOOP_CREATED, QUALITY_GATE_VERDICT, STEP_TOO_BROAD,
 }
 
 # ---------------------------------------------------------------------------
