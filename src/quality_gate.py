@@ -346,17 +346,33 @@ def run_quality_gate(
             reason = safe_str(data.get("reason"))
             confidence = safe_float(data.get("confidence"), default=0.5, min_val=0.0, max_val=1.0)
             escalate = verdict == "ESCALATE" and confidence >= confidence_threshold
-            log.info("quality_gate verdict=%s confidence=%.2f escalate=%s reason=%r",
-                     verdict, confidence, escalate, reason[:80])
+            # Decision = what we're actually going to do, so the log line never reads
+            # `verdict=ESCALATE escalate=False` (a 2026-04-26 audit finding: the LLM
+            # said ESCALATE but confidence under threshold meant we wouldn't act, yet
+            # the printed verdict still claimed ESCALATE). Recommendation stays in
+            # `verdict`; the *action* is `decision` and matches `escalate`.
+            if escalate:
+                decision = "ESCALATE"
+            elif verdict == "ESCALATE":
+                decision = "WEAK_ESCALATE"  # LLM wanted ESCALATE but confidence too low
+            else:
+                decision = "PASS"
+            log.info("quality_gate decision=%s verdict=%s confidence=%.2f threshold=%.2f reason=%r",
+                     decision, verdict, confidence, confidence_threshold, reason[:80])
             try:
                 from captains_log import log_event, QUALITY_GATE_VERDICT
                 log_event(
                     QUALITY_GATE_VERDICT,
                     subject=goal[:120],
-                    summary=f"verdict={verdict} confidence={confidence:.2f} escalate={escalate}",
+                    summary=(
+                        f"decision={decision} verdict={verdict} "
+                        f"confidence={confidence:.2f} threshold={confidence_threshold:.2f}"
+                    ),
                     context={
+                        "decision": decision,
                         "verdict": verdict,
                         "confidence": confidence,
+                        "confidence_threshold": confidence_threshold,
                         "escalate": escalate,
                         "reason": reason[:400],
                         "step_count": len(done_steps),
