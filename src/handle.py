@@ -375,6 +375,20 @@ def handle(
     except Exception:
         pass  # never block on logging
 
+    # Per-run isolation: create the run-dir at start so artifact writers
+    # downstream can land directly in `~/.poe/workspace/runs/<id>-<nick>/`
+    # rather than scattered across project_workspace/. See src/runs.py.
+    # Never block the run on a runs/ failure.
+    try:
+        from runs import create_run_dir as _create_run_dir
+        _create_run_dir(
+            handle_id,
+            prompt=_raw_input,
+            model=model,
+        )
+    except Exception as _run_dir_exc:
+        log.debug("runs: create_run_dir failed: %s", _run_dir_exc)
+
     # Apply user/CONFIG.md defaults (non-fatal — bad config never blocks a run)
     _cfg = _load_user_config()
     if model is None:
@@ -1499,6 +1513,14 @@ def main(argv=None):
         dry_run=args.dry_run,
         verbose=args.verbose,
     )
+
+    # Finalize the per-run metadata.json — the CLI is the paid-spend
+    # entry point; programmatic test callers don't need this.
+    try:
+        from runs import finalize_run as _finalize_run
+        _finalize_run(result.handle_id, status=result.status)
+    except Exception:
+        pass
 
     print(result.format(mode=args.format))
     return 0 if result.status == "done" else 1
