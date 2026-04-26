@@ -1143,3 +1143,113 @@ class TestClosureRestart:
 
         # Initial + up to 3 restarts
         assert len(calls) <= 4, f"closure restart ran {len(calls)} times, expected ≤4"
+
+
+# ---------------------------------------------------------------------------
+# Post-escalate closure (audit finding 2026-04-26)
+# ---------------------------------------------------------------------------
+
+class TestPostEscalateClosure:
+    """Quality gate ESCALATE re-runs the loop with a stronger model. The
+    escalated re-run is the version we ship — but until 2026-04-26 the
+    captain's log only carried the *initial* loop's CLOSURE_VERDICT, so the
+    actual delivered work had no closure record. handle.py now runs a second
+    verify_goal_completion after the escalated loop returns.
+    """
+
+    def _setup(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+
+    def _fake_loop_result(self, status="done", loop_id="lr-1"):
+        from agent_loop import LoopResult, StepOutcome
+        return LoopResult(
+            loop_id=loop_id, project="proj", goal="build X",
+            status=status, stuck_reason=None,
+            steps=[StepOutcome(index=0, text="step", status="done",
+                               result="output", iteration=0)],
+        )
+
+    def _fake_closure(self, complete=True, confidence=0.9):
+        from director import ClosureVerdict
+        return ClosureVerdict(
+            complete=complete, confidence=confidence,
+            gaps=[], summary="ok", checks_run=2,
+            checks_passed=(2 if complete else 0),
+        )
+
+    def _escalating_gate(self):
+        from unittest.mock import patch, MagicMock
+        verdict = MagicMock()
+        verdict.escalate = True
+        verdict.contested_claims = []
+        verdict.reason = "weak coverage"
+        return patch("quality_gate.run_quality_gate", return_value=verdict)
+
+    def test_post_escalate_closure_runs(self, monkeypatch, tmp_path):
+        """When quality gate escalates, verify_goal_completion is called
+        TWICE — once for the initial loop, once for the escalated re-run."""
+        self._setup(monkeypatch, tmp_path)
+        from unittest.mock import patch, MagicMock
+
+        initial = self._fake_loop_result(status="done", loop_id="lr-initial")
+        escalated = self._fake_loop_result(status="done", loop_id="lr-escalated")
+        run_results = [initial, escalated]
+
+        def _fake_run(*args, **kwargs):
+            return run_results.pop(0)
+
+        verify_calls = []
+        def _fake_verify(*args, **kwargs):
+            verify_calls.append(kwargs)
+            return self._fake_closure(complete=True, confidence=0.9)
+
+        with patch("agent_loop.run_agent_loop", side_effect=_fake_run), \
+             patch("intent.check_goal_clarity", return_value={"clear": True}), \
+             patch("director.verify_goal_completion", side_effect=_fake_verify), \
+             patch("llm.build_adapter", return_value=MagicMock()), \
+             self._escalating_gate():
+            handle("build X", force_lane="agenda", model="cheap", dry_run=False)
+
+        assert len(verify_calls) == 2, (
+            f"expected 2 closure calls (initial + post-escalate), got {len(verify_calls)}"
+        )
+        # Second call should reference the escalated loop's id
+        second_loop_id = verify_calls[1].get("loop_id", "")
+        assert second_loop_id == "lr-escalated", (
+            f"post-escalate closure should target escalated loop_id, got {second_loop_id!r}"
+        )
+
+    def test_post_escalate_closure_failure_does_not_break_delivery(
+        self, monkeypatch, tmp_path
+    ):
+        """Post-escalate closure errors are swallowed — handle.py must still
+        return a result even if verify_goal_completion crashes on the second
+        call."""
+        self._setup(monkeypatch, tmp_path)
+        from unittest.mock import patch, MagicMock
+
+        initial = self._fake_loop_result(status="done", loop_id="lr-initial")
+        escalated = self._fake_loop_result(status="done", loop_id="lr-escalated")
+        run_results = [initial, escalated]
+
+        def _fake_run(*args, **kwargs):
+            return run_results.pop(0)
+
+        call_count = {"n": 0}
+        def _fake_verify(*args, **kwargs):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                return self._fake_closure(complete=True, confidence=0.9)
+            raise RuntimeError("boom")  # second call (post-escalate) fails
+
+        with patch("agent_loop.run_agent_loop", side_effect=_fake_run), \
+             patch("intent.check_goal_clarity", return_value={"clear": True}), \
+             patch("director.verify_goal_completion", side_effect=_fake_verify), \
+             patch("llm.build_adapter", return_value=MagicMock()), \
+             self._escalating_gate():
+            result = handle("build X", force_lane="agenda", model="cheap", dry_run=False)
+
+        # Both verify calls were attempted, but the failure didn't propagate
+        assert call_count["n"] == 2
+        assert result is not None
+        assert result.status in ("done", "complete", "stuck", "partial", "restart")
