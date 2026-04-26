@@ -230,7 +230,7 @@ class TestEventTypes:
         assert DECISION_RECORDED in EVENT_TYPES
 
     def test_event_type_count(self):
-        assert len(EVENT_TYPES) == 36
+        assert len(EVENT_TYPES) == 38
 
     def test_input_mismatch_in_set(self):
         from captains_log import INPUT_MISMATCH
@@ -239,6 +239,16 @@ class TestEventTypes:
     def test_metacognitive_decision_in_set(self):
         from captains_log import METACOGNITIVE_DECISION
         assert METACOGNITIVE_DECISION in EVENT_TYPES
+
+    def test_loop_created_in_set(self):
+        from captains_log import LOOP_CREATED
+        assert LOOP_CREATED in EVENT_TYPES
+        assert LOOP_CREATED == "LOOP_CREATED"
+
+    def test_quality_gate_verdict_in_set(self):
+        from captains_log import QUALITY_GATE_VERDICT
+        assert QUALITY_GATE_VERDICT in EVENT_TYPES
+        assert QUALITY_GATE_VERDICT == "QUALITY_GATE_VERDICT"
 
 
 # ---------------------------------------------------------------------------

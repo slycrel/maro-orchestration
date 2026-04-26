@@ -257,6 +257,7 @@ def run_quality_gate(
     run_council: bool = False,
     with_debate: bool = False,
     run_cross_ref: bool = False,
+    loop_id: Optional[str] = None,
 ) -> QualityVerdict:
     """Review completed loop output and return a quality verdict.
 
@@ -347,6 +348,23 @@ def run_quality_gate(
             escalate = verdict == "ESCALATE" and confidence >= confidence_threshold
             log.info("quality_gate verdict=%s confidence=%.2f escalate=%s reason=%r",
                      verdict, confidence, escalate, reason[:80])
+            try:
+                from captains_log import log_event, QUALITY_GATE_VERDICT
+                log_event(
+                    QUALITY_GATE_VERDICT,
+                    subject=goal[:120],
+                    summary=f"verdict={verdict} confidence={confidence:.2f} escalate={escalate}",
+                    context={
+                        "verdict": verdict,
+                        "confidence": confidence,
+                        "escalate": escalate,
+                        "reason": reason[:400],
+                        "step_count": len(done_steps),
+                    },
+                    loop_id=loop_id,
+                )
+            except Exception as _ev_exc:
+                log.debug("captains_log quality_gate emit failed: %s", _ev_exc)
 
     except Exception as exc:
         log.debug("quality_gate pass1 failed (non-fatal): %s", exc)

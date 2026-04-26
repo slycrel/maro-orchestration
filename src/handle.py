@@ -930,6 +930,8 @@ def handle(
                 _restart_kwargs["continuation_depth"] = (
                     _loop_kwargs.get("continuation_depth", 0) + 1
                 )
+                _restart_kwargs["loop_reason"] = "director_restart"
+                _restart_kwargs["parent_loop_id"] = getattr(loop_result, "loop_id", None)
                 log.info("handle: director restart (depth %d) — %s",
                          _restart_kwargs["continuation_depth"], _restart_ctx[:80])
                 if channel is not None:
@@ -1004,6 +1006,8 @@ def handle(
                 _closure_kwargs = dict(_loop_kwargs)
                 _closure_kwargs["ancestry_context_extra"] = _closure_ancestry
                 _closure_kwargs["continuation_depth"] = _depth + 1
+                _closure_kwargs["loop_reason"] = "closure_restart"
+                _closure_kwargs["parent_loop_id"] = getattr(loop_result, "loop_id", None)
                 log.info(
                     "handle: closure restart (depth %d) — gaps=%d confidence=%.2f",
                     _closure_kwargs["continuation_depth"],
@@ -1066,6 +1070,7 @@ def handle(
                     message, loop_result.steps, adapter,
                     run_council=_strict_prefix,
                     run_cross_ref=_strict_prefix,
+                    loop_id=getattr(loop_result, "loop_id", None),
                 )
                 _contested_claims = _gate_verdict.contested_claims or []
                 if _gate_verdict.escalate and loop_result.status == "done":
@@ -1087,6 +1092,8 @@ def handle(
                             adapter=_escalated_adapter,
                             dry_run=False,
                             verbose=verbose,
+                            loop_reason="quality_gate_escalate",
+                            parent_loop_id=getattr(loop_result, "loop_id", None),
                         )
                         elapsed = int((time.monotonic() - started_at) * 1000)
                         _gate_note = f"\n\n✅ Quality gate escalated to {_next_tier} — re-run complete."

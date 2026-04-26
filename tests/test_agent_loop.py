@@ -213,6 +213,45 @@ def test_loop_creates_project(monkeypatch, tmp_path):
     assert orch.project_dir("haiku-project").exists()
 
 
+def test_loop_emits_loop_created_event(monkeypatch, tmp_path):
+    """Run-transparency: every loop spawn emits a LOOP_CREATED captain's log
+    event with the reason + parent_loop_id."""
+    _setup_workspace(monkeypatch, tmp_path)
+    captured: list = []
+
+    def fake_log_event(event_type, *, subject, summary, context=None,
+                       note=None, loop_id=None, related_ids=None):
+        captured.append({
+            "event_type": event_type, "subject": subject, "summary": summary,
+            "context": context or {}, "loop_id": loop_id,
+            "related_ids": related_ids,
+        })
+        return {}
+
+    import captains_log as _cl
+    monkeypatch.setattr(_cl, "log_event", fake_log_event)
+
+    # Default reason ("initial") path
+    run_agent_loop("default-reason goal", project="t-default", dry_run=True)
+    initial = [e for e in captured if e["event_type"] == "LOOP_CREATED"]
+    assert len(initial) >= 1
+    assert initial[-1]["context"]["reason"] == "initial"
+    assert initial[-1]["context"]["parent_loop_id"] is None
+    assert initial[-1]["loop_id"]  # 8-char hex id
+
+    # Explicit reason + parent path (closure_restart-style)
+    captured.clear()
+    run_agent_loop(
+        "child-reason goal", project="t-child", dry_run=True,
+        loop_reason="closure_restart", parent_loop_id="parent01",
+    )
+    child = [e for e in captured if e["event_type"] == "LOOP_CREATED"]
+    assert len(child) >= 1
+    assert child[-1]["context"]["reason"] == "closure_restart"
+    assert child[-1]["context"]["parent_loop_id"] == "parent01"
+    assert child[-1]["related_ids"] == ["parent01"]
+
+
 def test_loop_auto_slugs_project(monkeypatch, tmp_path):
     _setup_workspace(monkeypatch, tmp_path)
     result = run_agent_loop(

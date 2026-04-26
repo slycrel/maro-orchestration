@@ -2151,6 +2151,8 @@ def _initialize_loop(
     max_steps: int,
     max_iterations: int,
     step_callback,
+    loop_reason: str = "initial",
+    parent_loop_id: Optional[str] = None,
 ) -> tuple:
     """Phase A: Initialize loop — setup adapter, project, ancestry, hooks.
 
@@ -2179,8 +2181,29 @@ def _initialize_loop(
 
     _configure_logging(verbose)
 
-    log.info("loop_start loop_id=%s goal=%r project=%s max_steps=%d",
-             ctx.loop_id, goal[:80], project or "(auto)", max_steps)
+    log.info("loop_start loop_id=%s goal=%r project=%s max_steps=%d reason=%s parent=%s",
+             ctx.loop_id, goal[:80], project or "(auto)", max_steps,
+             loop_reason, parent_loop_id or "-")
+
+    try:
+        from captains_log import log_event, LOOP_CREATED
+        log_event(
+            LOOP_CREATED,
+            subject=goal[:120],
+            summary=f"reason={loop_reason} project={project or '(auto)'} max_steps={max_steps}",
+            context={
+                "reason": loop_reason,
+                "parent_loop_id": parent_loop_id,
+                "project": project or "",
+                "max_steps": max_steps,
+                "continuation_depth": continuation_depth,
+                "dry_run": dry_run,
+            },
+            loop_id=ctx.loop_id,
+            related_ids=[parent_loop_id] if parent_loop_id else None,
+        )
+    except Exception as _ev_exc:
+        log.debug("captains_log LOOP_CREATED emit failed: %s", _ev_exc)
 
     # Kill switch check — refuse to start if sentinel is present
     try:
@@ -3520,6 +3543,8 @@ def run_agent_loop(
     continuation_depth: int = 0,
     preset_steps: Optional[List[str]] = None,
     channel=None,  # Optional ConversationChannel for mid-loop escalation (Phase 64C)
+    loop_reason: str = "initial",  # why this loop was spawned — for run-transparency captain's log
+    parent_loop_id: Optional[str] = None,
 ) -> LoopResult:
     """Run the autonomous loop for a goal.
 
@@ -3570,6 +3595,8 @@ def run_agent_loop(
         max_steps=max_steps,
         max_iterations=max_iterations,
         step_callback=step_callback,
+        loop_reason=loop_reason,
+        parent_loop_id=parent_loop_id,
     )
     if _early_return is not None:
         return _early_return

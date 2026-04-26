@@ -79,6 +79,10 @@ CLOSURE_VERDICT = "CLOSURE_VERDICT"  # per-check modality distribution + pass/ga
 CLAIM_PROBED = "CLAIM_PROBED"  # adversarial-review grounding: per-claim probe outcome
 CLAIM_VERIFIER_OUTCOME = "CLAIM_VERIFIER_OUTCOME"  # per-step: file/symbol claim verification outcome + downstream action
 
+# Run transparency: loop lifecycle + quality-gate decisions
+LOOP_CREATED = "LOOP_CREATED"  # every loop spawn — reason, parent_loop_id, slug, max_steps
+QUALITY_GATE_VERDICT = "QUALITY_GATE_VERDICT"  # PASS / ESCALATE — most important escalation signal
+
 EVENT_TYPES = {
     SKILL_SYNTHESIZED, SKILL_SYNTHESIS_REJECTED, SKILL_PROMOTED, SKILL_DEMOTED, SKILL_REWRITE,
     SKILL_CIRCUIT_OPEN, SKILL_CIRCUIT_HALF_OPEN, SKILL_CIRCUIT_CLOSED,
@@ -91,6 +95,7 @@ EVENT_TYPES = {
     DECISION_RECORDED, METACOGNITIVE_DECISION,
     SCOPE_GENERATED, SCOPE_PARSE_FAILED, CLOSURE_VERDICT, CLAIM_PROBED,
     CLAIM_VERIFIER_OUTCOME,
+    LOOP_CREATED, QUALITY_GATE_VERDICT,
 }
 
 # ---------------------------------------------------------------------------

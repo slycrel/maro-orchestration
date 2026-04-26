@@ -558,3 +558,42 @@ class TestProbeContestedClaims:
         # shallow copies so callers can diff before/after safely.
         assert "probe_status" not in claim
         assert claim["verdict"] == "CONTESTED"
+
+
+class TestQualityGateCaptainsLogEmit:
+    """Run-transparency: QUALITY_GATE_VERDICT event lands on the captain's log."""
+
+    def test_emits_quality_gate_verdict_event(self, monkeypatch):
+        captured: list = []
+
+        def fake_log_event(event_type, *, subject, summary, context=None,
+                           note=None, loop_id=None, related_ids=None):
+            captured.append({
+                "event_type": event_type, "summary": summary,
+                "context": context or {}, "loop_id": loop_id,
+            })
+            return {}
+
+        import captains_log as _cl
+        monkeypatch.setattr(_cl, "log_event", fake_log_event)
+
+        resp = MagicMock()
+        resp.tool_calls = []
+        resp.input_tokens = 10
+        resp.output_tokens = 5
+        resp.content = '{"verdict":"ESCALATE","reason":"shallow output","confidence":0.85}'
+        adapter = MagicMock()
+        adapter.complete = MagicMock(return_value=resp)
+
+        steps = [MagicMock(status="done", index=1, text="step", result="result text")]
+        run_quality_gate("ship the headless server", steps, adapter,
+                         run_adversarial=False, loop_id="abc12345")
+
+        gate_events = [e for e in captured if e["event_type"] == "QUALITY_GATE_VERDICT"]
+        assert len(gate_events) == 1
+        ev = gate_events[0]
+        assert ev["loop_id"] == "abc12345"
+        assert ev["context"]["verdict"] == "ESCALATE"
+        assert ev["context"]["escalate"] is True  # 0.85 >= default 0.75 threshold
+        assert ev["context"]["confidence"] == pytest.approx(0.85)
+        assert "shallow output" in ev["context"]["reason"]
