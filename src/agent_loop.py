@@ -2068,7 +2068,7 @@ def _decompose_goal(
 
     Returns (steps, prereq_context, lessons_context, skills_context, cost_context).
     """
-    from llm import build_adapter, MODEL_CHEAP, MODEL_MID, THINKING_HIGH
+    from llm import build_adapter, MODEL_MID, THINKING_HIGH
 
     if ctx.verbose:
         print(f"[poe] decomposing goal...", file=sys.stderr, flush=True)
@@ -2090,12 +2090,21 @@ def _decompose_goal(
         steps = None
 
     if steps is None:
-        # Decompose uses at least mid (Sonnet) — a weak planner compounds across every step.
+        # Planning runs once per loop and biases every subsequent step. Use the
+        # central role→model policy (assign_model_by_role("planner") → MODEL_POWER)
+        # — same surface director.py uses, so the planner-tier choice lives in
+        # one place. Step execution stays on whatever the loop adapter selected.
+        from poe import assign_model_by_role as _assign
         _decompose_adapter = ctx.adapter
-        if getattr(ctx.adapter, "model_key", "") == MODEL_CHEAP:
+        _planner_tier = _assign("planner")
+        try:
+            _decompose_adapter = build_adapter(model=_planner_tier)
+            log.debug("decompose: lifted adapter to %s for plan quality", _planner_tier)
+        except Exception as _power_exc:
+            log.debug("decompose: %s unavailable (%s); falling back to mid",
+                      _planner_tier, _power_exc)
             try:
                 _decompose_adapter = build_adapter(model=MODEL_MID)
-                log.debug("decompose: lifted adapter cheap → mid for plan quality")
             except Exception:
                 _decompose_adapter = ctx.adapter
         # Enable extended thinking for decomposition when using Anthropic SDK

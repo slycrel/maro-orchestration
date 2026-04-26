@@ -19,6 +19,10 @@ Triggered by the scope A/B 1+1 run on 2026-04-26: both arms hit `decomposition_t
 
 Closes BACKLOG:316 for the post-mortem case (still open: in-flight 8/8-strong loops where the warning fires after completion-not-blocking).
 
+**Planner tier lift to MODEL_POWER (opus):**
+- [x] **agent_loop._decompose_phase uses `assign_model_by_role("planner")`** — was hardcoded `cheap → mid` lift; now reads the central role→model policy in poe.py (which already maps `planner → MODEL_POWER`). Same surface director.py uses; rule-of-three: third call site, kept the policy in one place. Falls back to MODEL_MID if power unavailable.
+- Rationale: planner runs once per loop and biases every subsequent step. Marginal cost of opus (~$0.20, ~30s on a single call) is negligible against what a sloppy plan compounds across 8 step executions. Step execution stays on whatever the loop adapter selected.
+
 ---
 
 ## Done (session 37, 2026-04-26 — run transparency phase + closure reads deliverables)
