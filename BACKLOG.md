@@ -313,15 +313,7 @@ See `docs/CONSTRAINT_ORCHESTRATION_DESIGN.md` + `docs/CONSTRAINT_ORCHESTRATION_R
 
 ### Introspect-sees-no-action: `decomposition_too_broad` (and siblings)
 
-- [ ] **`decomposition_too_broad` fires but nothing acts on it.** Full slycrel-go run (2026-04-16, loop `85ac29ee-*`) completed with introspect warning `decomposition_too_broad` logged and then ignored — loop continued, shipped 2 commits, closure never consulted the warning. This is the shape of self-improvement theater: the system knows something is off and does nothing. Frame this honestly as "not yet handled" rather than "working as designed."
-
-  **What should happen (candidates, unordered, not committed):**
-  - a warning of this severity should at minimum surface as a captain's log event the orchestrator can react to (not just a log line)
-  - should gate or influence decompose: retry with tighter bounds, or demand explicit scope acknowledgement of the breadth
-  - should decrement closure confidence or force an extra behavioral probe — breadth without coverage is precisely where slycrel-go regressions survived
-  - related introspect signals likely have the same shape (surfaced, ignored). Audit them together: grep `introspect` in agent_loop.py + introspect.py for "warn"/"observation" emissions and catalog which ones actually change behavior vs which ones are log-only.
-
-  **Evidence:** `~/.poe/workspace/projects/for-this-project-httpsgithubcomslycrelslycrelgo-id/artifacts/loop-85ac29ee-*/` — the warning is visible in the loop log, ends up with no handler. Same run also had scope parse failure silently discarding the raw LLM response (fixed 2026-04-16) — these are sibling observability gaps.
+- [x] **`decomposition_too_broad` fires but nothing acts on it.** Partially closed 2026-04-26: introspect now stamps `LoopDiagnosis.project` so retrieval can prioritize same-project history; `find_relevant_failure_notes` ranks same-project diagnoses above goal-token overlap; `decomposition_too_broad` notes render with concrete numbers (e.g. "Step 8 took 534s with 277K tok") and append the actionable cap (`≤120s/200K tok per step; split if a step touches >3 files`). The next loop on the same project sees this in `lessons_context` ahead of all other failure-pattern injections. Phase 62 (mid-loop redecompose on `_handle_blocked_step`) was already live for the blocked path; this closes the *post-mortem → next-decompose* feedback that was previously generic-lesson-only. Original Apr 16 finding (`loop 85ac29ee-*`) is the canonical case this addresses. **Still open:** acting on the warning *during* an in-flight loop that's completing-not-blocking (the 8/8-strong case) — that's a separate shape. **Commit:** TBD.
 
 ### From X research (2026-04-11 — 10 posts, live orchestration, 2 loops)
 

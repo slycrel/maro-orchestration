@@ -2760,9 +2760,11 @@ def _build_loop_context(
         log.debug("graveyard resurrection failed: %s", _exc)
 
     # Error nodes: relevant failure patterns from diagnoses.jsonl (Phase 46 follow-on)
+    # Same-project diagnoses always lead — a prior decomposition_too_broad on this
+    # exact project is far more actionable than a vaguely-similar-goal one.
     try:
         from introspect import find_relevant_failure_notes
-        _failure_notes = find_relevant_failure_notes(goal, limit=2)
+        _failure_notes = find_relevant_failure_notes(goal, limit=3, project=project or "")
         if _failure_notes:
             lessons_context += "\n\nKnown failure patterns for similar goals:\n" + "\n".join(
                 f"- {note}" for note in _failure_notes
@@ -3367,7 +3369,7 @@ def _finalize_loop(
         from introspect import run_lenses as _run_lenses, aggregate_lenses as _aggregate
         from introspect import plan_recovery as _plan_recovery
         from introspect import _build_step_profiles, _load_loop_events
-        _diag = _diagnose(loop_id)
+        _diag = _diagnose(loop_id, project=ctx.project or "")
         _save_diag(_diag)
         if _diag.failure_class != "healthy":
             log.warning("introspect: %s", _diag.summary())
