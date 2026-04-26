@@ -156,9 +156,11 @@ def _clear_run_state():
     import runs as _runs
     set_current_run_dir(None)
     _runs._run_log_offsets.clear()
+    _runs._run_repo_bases.clear()
     yield
     set_current_run_dir(None)
     _runs._run_log_offsets.clear()
+    _runs._run_repo_bases.clear()
 
 
 def test_set_and_get_current_run_dir(workspace):
@@ -263,3 +265,68 @@ def test_slice_log_returns_none_when_log_file_missing(workspace, tmp_path, monke
     monkeypatch.setattr(captains_log, "_log_path_override", tmp_path / "absent.jsonl")
     create_run_dir("abcd1234", prompt="p")
     assert slice_log_for_run("abcd1234") is None
+
+
+# ---------------------------------------------------------------------------
+# Repo bundle
+# ---------------------------------------------------------------------------
+
+import subprocess as _sp
+
+from runs import record_repo_base, snapshot_repo_bundle
+
+
+@pytest.fixture
+def git_repo(tmp_path):
+    """A git repo with one initial commit."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _sp.run(["git", "init", "-b", "main"], cwd=repo, capture_output=True, check=True)
+    _sp.run(["git", "config", "user.email", "t@t"], cwd=repo, capture_output=True, check=True)
+    _sp.run(["git", "config", "user.name", "t"], cwd=repo, capture_output=True, check=True)
+    (repo / "README.md").write_text("base\n")
+    _sp.run(["git", "add", "."], cwd=repo, capture_output=True, check=True)
+    _sp.run(["git", "commit", "-m", "init"], cwd=repo, capture_output=True, check=True)
+    return repo
+
+
+def test_repo_bundle_captures_state(workspace, git_repo):
+    rd = create_run_dir("abcd1234", prompt="p")
+    record_repo_base("abcd1234", str(git_repo))
+
+    # Make a change after recording the base.
+    (git_repo / "new.txt").write_text("after\n")
+    _sp.run(["git", "add", "."], cwd=git_repo, capture_output=True, check=True)
+    _sp.run(["git", "commit", "-m", "after"], cwd=git_repo, capture_output=True, check=True)
+
+    bundle = snapshot_repo_bundle("abcd1234")
+    assert bundle is not None
+    assert bundle.exists()
+    assert bundle.name == "repo.bundle"
+    assert bundle.parent == rd / "artifact"
+    assert (rd / "artifact" / "git_log.txt").exists()
+    assert (rd / "artifact" / "branch_diff.patch").exists()
+    assert (rd / "artifact" / "base_sha.txt").exists()
+    # Diff should include the new file content.
+    diff = (rd / "artifact" / "branch_diff.patch").read_text()
+    assert "new.txt" in diff
+
+
+def test_repo_bundle_returns_none_when_no_base_recorded(workspace):
+    create_run_dir("abcd1234", prompt="p")
+    assert snapshot_repo_bundle("abcd1234") is None
+
+
+def test_record_repo_base_handles_empty_repo_path(workspace):
+    record_repo_base("abcd1234", "")  # no-op, no exception
+    create_run_dir("abcd1234", prompt="p")
+    assert snapshot_repo_bundle("abcd1234") is None
+
+
+def test_record_repo_base_handles_non_git_dir(workspace, tmp_path):
+    bogus = tmp_path / "notarepo"
+    bogus.mkdir()
+    record_repo_base("abcd1234", str(bogus))
+    create_run_dir("abcd1234", prompt="p")
+    # rev-parse fails → no entry recorded → snapshot returns None.
+    assert snapshot_repo_bundle("abcd1234") is None

@@ -318,3 +318,79 @@ def slice_log_for_run(handle_id: str) -> Optional[Path]:
     except Exception:
         return None
     return out
+
+
+# ---------------------------------------------------------------------------
+# Repo bundle — captures git state at end-of-run so the artifact survives
+# downstream resets. Restorable with `git clone repo.bundle`.
+# ---------------------------------------------------------------------------
+
+import subprocess
+_run_repo_bases: dict = {}
+
+
+def record_repo_base(handle_id: str, repo_path: str) -> None:
+    """Record the current HEAD sha of repo_path so end-of-run can diff against it.
+
+    Call this once at run start when a --repo is supplied. Pairs with
+    `snapshot_repo_bundle()` at finalize.
+    """
+    if not repo_path:
+        return
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=repo_path, capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode == 0:
+            _run_repo_bases[handle_id] = (repo_path, result.stdout.strip())
+    except Exception:
+        pass
+
+
+def snapshot_repo_bundle(handle_id: str) -> Optional[Path]:
+    """Write `<run-dir>/artifact/repo.bundle` + git_log.txt + branch_diff.patch.
+
+    Restorable with `git clone repo.bundle`. Captures the current state
+    of the repo paired in `record_repo_base()`. Returns the bundle path
+    on success, None if no repo was paired or the snapshot failed.
+    """
+    pair = _run_repo_bases.get(handle_id)
+    if not pair:
+        return None
+    repo_path, base_sha = pair
+    rd = run_dir(handle_id)
+    if not rd.exists():
+        return None
+    out_dir = rd / "artifact"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    bundle = out_dir / "repo.bundle"
+    try:
+        subprocess.run(
+            ["git", "bundle", "create", str(bundle), "--all"],
+            cwd=repo_path, capture_output=True, timeout=60, check=True,
+        )
+    except Exception:
+        return None
+    # Best-effort: log + diff. Failures here don't void the bundle.
+    try:
+        log_out = subprocess.run(
+            ["git", "log", "--all", "--graph", "--oneline", "-100"],
+            cwd=repo_path, capture_output=True, text=True, timeout=15,
+        )
+        (out_dir / "git_log.txt").write_text(log_out.stdout, encoding="utf-8")
+    except Exception:
+        pass
+    try:
+        diff_out = subprocess.run(
+            ["git", "diff", f"{base_sha}..HEAD"],
+            cwd=repo_path, capture_output=True, text=True, timeout=30,
+        )
+        (out_dir / "branch_diff.patch").write_text(diff_out.stdout, encoding="utf-8")
+    except Exception:
+        pass
+    try:
+        (out_dir / "base_sha.txt").write_text(base_sha + "\n", encoding="utf-8")
+    except Exception:
+        pass
+    return bundle
