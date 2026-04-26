@@ -136,3 +136,65 @@ def test_nickname_distribution_smoke():
     import secrets
     nicks = {nickname(secrets.token_hex(4)) for _ in range(100)}
     assert len(nicks) > 50
+
+
+# ---------------------------------------------------------------------------
+# Current-run context: artifact_dir / source_dir routing
+# ---------------------------------------------------------------------------
+
+from runs import (
+    set_current_run_dir,
+    current_run_dir,
+    artifact_dir,
+    source_dir,
+)
+
+
+@pytest.fixture(autouse=True)
+def _clear_run_state():
+    """Ensure the module-level current-run state doesn't leak between tests."""
+    set_current_run_dir(None)
+    yield
+    set_current_run_dir(None)
+
+
+def test_set_and_get_current_run_dir(workspace):
+    rd = create_run_dir("abcd1234", prompt="p")
+    set_current_run_dir(rd)
+    assert current_run_dir() == rd
+    set_current_run_dir(None)
+    assert current_run_dir() is None
+
+
+def test_artifact_dir_uses_run_dir_when_active(workspace):
+    rd = create_run_dir("abcd1234", prompt="p")
+    set_current_run_dir(rd)
+    out = artifact_dir("any-project")
+    assert out == rd / "build"
+    assert out.exists()
+
+
+def test_artifact_dir_falls_back_to_project_root_fn(workspace):
+    fallback_root = workspace / "fallback_projects"
+    out = artifact_dir("my-proj", project_root_fn=lambda: fallback_root)
+    assert out == fallback_root / "my-proj" / "artifacts"
+    assert out.exists()
+
+
+def test_artifact_dir_default_fallback_when_no_project_root_fn(workspace):
+    # No run-dir set, no project_root_fn — must default into POE_WORKSPACE.
+    out = artifact_dir("my-proj")
+    assert out == workspace / "projects" / "my-proj" / "artifacts"
+    assert out.exists()
+
+
+def test_source_dir_returns_none_when_no_run_dir():
+    assert source_dir() is None
+
+
+def test_source_dir_returns_run_dir_source_when_active(workspace):
+    rd = create_run_dir("abcd1234", prompt="p")
+    set_current_run_dir(rd)
+    src = source_dir()
+    assert src == rd / "source"
+    assert src.exists()

@@ -191,3 +191,67 @@ def finalize_run(
     meta["ended_at"] = ended_at or datetime.now(timezone.utc).isoformat()
     meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
     return rd
+
+
+# ---------------------------------------------------------------------------
+# Current-run context: lets agent_loop / scope writers land in the run-dir
+# without threading run_dir through every signature.
+#
+# A handle() invocation runs in one process; one run-dir at a time. Setting
+# this is opt-in: when unset, callers fall back to the legacy project-dir
+# artifact path. Tests that don't set it see no behavior change.
+# ---------------------------------------------------------------------------
+
+_current_run_dir: Optional[Path] = None
+
+
+def set_current_run_dir(path: Optional[Path]) -> None:
+    """Set (or clear) the run-dir for the current handle. Accepts None to clear."""
+    global _current_run_dir
+    _current_run_dir = Path(path) if path is not None else None
+
+
+def current_run_dir() -> Optional[Path]:
+    """Return the run-dir for the current handle, or None if unset."""
+    return _current_run_dir
+
+
+def artifact_dir(project: str, project_root_fn=None) -> Path:
+    """Where to write per-loop artifacts (PARTIAL files, scratchpad, step outputs).
+
+    If a run-dir is active, returns `<run-dir>/build/`. Otherwise falls back
+    to `project_root_fn()/project/artifacts` for backwards compatibility.
+    The fallback is what every existing call site already computed inline,
+    so swapping in this helper is behavior-preserving when no run-dir is set.
+
+    `project_root_fn` is injected so callers can keep their existing
+    `_project_dir_root` import path without circular-import shenanigans.
+    """
+    rd = current_run_dir()
+    if rd is not None:
+        out = rd / "build"
+        out.mkdir(parents=True, exist_ok=True)
+        return out
+    if project_root_fn is None:
+        # No run-dir AND no fallback — punt to the workspace default.
+        ws = os.environ.get("POE_WORKSPACE") or os.environ.get("OPENCLAW_WORKSPACE")
+        root = Path(ws) / "projects" if ws else Path.home() / ".poe" / "workspace" / "projects"
+    else:
+        root = project_root_fn()
+    out = Path(root) / project / "artifacts"
+    out.mkdir(parents=True, exist_ok=True)
+    return out
+
+
+def source_dir() -> Optional[Path]:
+    """`<run-dir>/source/` if a run-dir is active, else None.
+
+    Used by handle.py for scope.md and resolved_intent.md placement.
+    Callers fall back to project_dir-based writes when this returns None.
+    """
+    rd = current_run_dir()
+    if rd is None:
+        return None
+    out = rd / "source"
+    out.mkdir(parents=True, exist_ok=True)
+    return out

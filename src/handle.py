@@ -375,17 +375,20 @@ def handle(
     except Exception:
         pass  # never block on logging
 
-    # Per-run isolation: create the run-dir at start so artifact writers
-    # downstream can land directly in `~/.poe/workspace/runs/<id>-<nick>/`
-    # rather than scattered across project_workspace/. See src/runs.py.
+    # Per-run isolation: create the run-dir at start and pin it as the
+    # current-run context so artifact writers downstream land directly
+    # in `~/.poe/workspace/runs/<id>-<nick>/` rather than scattered
+    # across project_workspace/. See src/runs.py.
     # Never block the run on a runs/ failure.
     try:
         from runs import create_run_dir as _create_run_dir
-        _create_run_dir(
+        from runs import set_current_run_dir as _set_current_run_dir
+        _rd = _create_run_dir(
             handle_id,
             prompt=_raw_input,
             model=model,
         )
+        _set_current_run_dir(_rd)
     except Exception as _run_dir_exc:
         log.debug("runs: create_run_dir failed: %s", _run_dir_exc)
 
@@ -837,12 +840,22 @@ def handle(
                 elif _scope is not None and not _scope.is_empty():
                     # Successful parse. Persist scope.md + resolved_intent.md
                     # + emit captain's log event.
-                    if _proj_dir is not None:
+                    # Per-run isolation: prefer run-dir/source when active,
+                    # fall back to project_dir for older callers.
+                    _scope_dir = _proj_dir
+                    try:
+                        from runs import source_dir as _source_dir_fn
+                        _src = _source_dir_fn()
+                        if _src is not None:
+                            _scope_dir = _src
+                    except Exception:
+                        pass
+                    if _scope_dir is not None:
                         try:
-                            (_proj_dir / "scope.md").write_text(
+                            (_scope_dir / "scope.md").write_text(
                                 _scope.to_markdown(), encoding="utf-8"
                             )
-                            log.info("scope: recorded artifact at %s/scope.md", _proj_dir)
+                            log.info("scope: recorded artifact at %s/scope.md", _scope_dir)
                         except Exception as _scope_rec_exc:
                             log.debug("scope: could not record artifact: %s", _scope_rec_exc)
                         # Resolved-intent artifact — "the thread the driver
@@ -852,13 +865,13 @@ def handle(
                         # and agenda-state carryover).
                         if _resolved_intent is not None and not _resolved_intent.is_empty():
                             try:
-                                (_proj_dir / "resolved_intent.md").write_text(
+                                (_scope_dir / "resolved_intent.md").write_text(
                                     _resolved_intent.to_markdown(), encoding="utf-8"
                                 )
                                 log.info(
                                     "resolved_intent: recorded artifact at %s/resolved_intent.md "
                                     "(%d deliverables)",
-                                    _proj_dir, len(_resolved_intent.deliverables),
+                                    _scope_dir, len(_resolved_intent.deliverables),
                                 )
                             except Exception as _ri_rec_exc:
                                 log.debug("resolved_intent: could not record artifact: %s", _ri_rec_exc)
@@ -1514,11 +1527,15 @@ def main(argv=None):
         verbose=args.verbose,
     )
 
-    # Finalize the per-run metadata.json — the CLI is the paid-spend
-    # entry point; programmatic test callers don't need this.
+    # Finalize the per-run metadata.json + clear the current-run context.
+    # The CLI is the paid-spend entry point; programmatic test callers
+    # that care about isolation can call set_current_run_dir(None)
+    # themselves.
     try:
         from runs import finalize_run as _finalize_run
+        from runs import set_current_run_dir as _clear_run
         _finalize_run(result.handle_id, status=result.status)
+        _clear_run(None)
     except Exception:
         pass
 

@@ -1660,8 +1660,12 @@ def _build_result_and_finalize(
                     if len(s.result) > 2000:
                         _partial_lines.append(f"\n... (truncated, {len(s.result)} chars total)")
                 _partial_lines.append("")
-            _art_dir = _project_dir_root() / ctx.project / "artifacts"
-            _art_dir.mkdir(parents=True, exist_ok=True)
+            try:
+                from runs import artifact_dir as _runs_artifact_dir
+                _art_dir = _runs_artifact_dir(ctx.project, project_root_fn=_project_dir_root)
+            except Exception:
+                _art_dir = _project_dir_root() / ctx.project / "artifacts"
+                _art_dir.mkdir(parents=True, exist_ok=True)
             (_art_dir / f"loop-{ctx.loop_id}-PARTIAL.md").write_text(
                 "\n".join(_partial_lines), encoding="utf-8")
             log.info("wrote partial result: %s (%d steps)", f"loop-{ctx.loop_id}-PARTIAL.md", len(_done_steps))
@@ -1716,7 +1720,11 @@ def _build_result_and_finalize(
             _keep = False
         if not _keep:
             try:
-                _art_dir = _project_dir_root() / ctx.project / "artifacts"
+                try:
+                    from runs import artifact_dir as _runs_artifact_dir
+                    _art_dir = _runs_artifact_dir(ctx.project, project_root_fn=_project_dir_root)
+                except Exception:
+                    _art_dir = _project_dir_root() / ctx.project / "artifacts"
                 _deleted = 0
                 for _f in _art_dir.glob(f"loop-{ctx.loop_id}-step-*.md"):
                     try:
@@ -4724,8 +4732,12 @@ def _write_step_artifact(
     """Write a step's result to the project artifacts directory."""
     try:
         o = _orch()
-        artifacts_dir = _project_dir_root() / project / "artifacts"
-        artifacts_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            from runs import artifact_dir as _runs_artifact_dir
+            artifacts_dir = _runs_artifact_dir(project, project_root_fn=_project_dir_root)
+        except Exception:
+            artifacts_dir = _project_dir_root() / project / "artifacts"
+            artifacts_dir.mkdir(parents=True, exist_ok=True)
         fname = f"loop-{loop_id}-step-{step_num:02d}.md"
         path = artifacts_dir / fname
         content = f"# Step {step_num}: {step_text}\n\n{result}\n"
@@ -4741,8 +4753,12 @@ def _plan_manifest_path(project: str, loop_id: str) -> Optional[Path]:
         return None
     try:
         o = _orch()
-        artifacts_dir = o.orch_root() / "projects" / project / "artifacts"
-        artifacts_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            from runs import artifact_dir as _runs_artifact_dir
+            artifacts_dir = _runs_artifact_dir(project, project_root_fn=_project_dir_root)
+        except Exception:
+            artifacts_dir = o.orch_root() / "projects" / project / "artifacts"
+            artifacts_dir.mkdir(parents=True, exist_ok=True)
         return artifacts_dir / f"loop-{loop_id}-plan.md"
     except Exception:
         return None
@@ -4858,8 +4874,12 @@ def _write_loop_log(
     """Write the full loop log JSON to the project artifacts directory."""
     try:
         o = _orch()
-        artifacts_dir = _project_dir_root() / project / "artifacts"
-        artifacts_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            from runs import artifact_dir as _runs_artifact_dir
+            artifacts_dir = _runs_artifact_dir(project, project_root_fn=_project_dir_root)
+        except Exception:
+            artifacts_dir = _project_dir_root() / project / "artifacts"
+            artifacts_dir.mkdir(parents=True, exist_ok=True)
         fname = f"loop-{loop_id}-log.json"
         path = artifacts_dir / fname
         payload = {
