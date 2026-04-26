@@ -92,6 +92,30 @@ looking for an AFK-friendly chore. Principles in `docs/CODING_NOTES.md`.
 
 ---
 
+### Comprehensive run transparency (audit phase, queued 2026-04-26)
+
+When a user pays real money for a run, they should be able to reconstruct exactly what was done — not because the test framework needs it, but because that's what spending non-trivial dollars demands. The 2026-04-25 scope A/B 1+1 surfaced this concretely: treat made commits, control's setup-reset wiped them, and we couldn't tell after the fact what code each arm produced. That's not a test-tooling problem; it's a systemic transparency gap.
+
+**Mental model (Jeremy's framing):** treat a run like a project compile.
+- **Source** — the inputs: prompt, scope, resolved-intent (deliverable map), plan(s).
+- **Build** — interim objects: per-step outputs, tool calls + results, captain's log slice, agent reasoning, intermediate artifacts (scratchpad/PARTIAL files), recovery decisions.
+- **Artifact** — the final result: code diff (or a branch with the commits), report, decisions log, NEXT.md state.
+
+Every paid-spend run should produce all three, durably, in one inspectable bundle. Some pieces exist (NEXT.md, scratchpad, captain's log slice when a runner extracts it); the gap is comprehensive coverage + a default per-run capture, not opt-in test instrumentation.
+
+- [ ] **Per-run isolation: branch-name front-loaded into the prompt.** When a goal touches a repo, pre-create a uniquely-named branch (`<slug>-<handle_id>` or similar) and tell the agent to commit all work there. Stops cross-run state collisions; makes the artifact survive the next run's reset by living on a distinct ref. (Smaller piece shipped first in `scope_ab_runner.py` 2026-04-26 as the test-side affordance.)
+- [ ] **Per-run repo bundle.** At end of every paid run, capture `git bundle create repo.bundle --all` + `git log --all --graph --oneline` + `git diff <base>..HEAD` into the run's artifact dir. Survives downstream resets, restores cleanly with `git clone repo.bundle`.
+- [ ] **Quality-gate verdict as a captain's log event.** Currently `quality_gate verdict=ESCALATE confidence=0.80 reason=...` only emits to handle.log. Promote to a `QUALITY_GATE_VERDICT` captain's log event (or extend an existing one) so the structured slice contains the most important escalation signal in any multi-loop run.
+- [ ] **`LOOP_CREATED` captain's log event with `reason` + `parent_loop_id`.** Every loop-spawn site (initial dispatch in `handle.py`, escalation paths in `agent_loop.py`, closure-restart in `handle.py`, recovery retries) emits the cause-effect chain. Today the slice references multiple `loop_id`s in DIAGNOSIS events with no traceable parent, and handle.log shows only some loop_starts.
+- [ ] **Captain's log viewer (low-priority; partially covered by command center).** Render a slice as a sortable timeline (ts, event, loop_id, slug, key fields). Until cross-run queries become a pattern, this is a thin reader over JSONL — no storage migration warranted.
+- [ ] **NEXT.md ↔ git activity sync.** Control's NEXT.md showed steps 6–8 unchecked while the repo had matching commits. Either NEXT.md updates lag, or the agent didn't reflect the work back. Either way: closure should compare claimed-done against repo activity and surface the divergence.
+- [ ] **Storage decision (deferred).** JSONL captain's log is fine for within-run analysis. Sqlite *indexer* on top (not replacement) is the right pattern when cross-run queries become routine — "median treat-vs-control delta across N runs," "all CLOSURE_VERDICT < 0.5 in last 30 days." Defer until we have a concrete query we keep wanting.
+- [ ] **Spend-gated transparency mandate.** Define a threshold (e.g., $2 estimated spend) above which the full source/build/artifact bundle is mandatory and visible to the user without grep. Below that, current behavior is fine.
+
+Items already shipped that fit this frame are listed under **Runtime visibility** below — that section becomes the historical record of partial coverage; this section is the umbrella spec for completing it.
+
+---
+
 ### Runtime visibility (tracked 2026-04-17)
 
 - [x] **Current-step symlink.** `/tmp/poe-current-step.log` → active
