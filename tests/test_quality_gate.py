@@ -596,4 +596,88 @@ class TestQualityGateCaptainsLogEmit:
         assert ev["context"]["verdict"] == "ESCALATE"
         assert ev["context"]["escalate"] is True  # 0.85 >= default 0.75 threshold
         assert ev["context"]["confidence"] == pytest.approx(0.85)
+        assert ev["context"]["decision"] == "ESCALATE"  # decision matches action
         assert "shallow output" in ev["context"]["reason"]
+
+    def test_decision_weak_escalate_when_confidence_below_threshold(self, monkeypatch):
+        """LLM says ESCALATE but confidence too low → decision=WEAK_ESCALATE.
+
+        Regression: 2026-04-26 audit caught log lines reading
+        `verdict=ESCALATE escalate=False` — the printed verdict didn't match
+        the action. Now `decision` is the action-matching label so the log
+        line and captain's-log event are unambiguous.
+        """
+        captured: list = []
+
+        def fake_log_event(event_type, *, subject, summary, context=None,
+                           note=None, loop_id=None, related_ids=None):
+            captured.append({
+                "event_type": event_type, "summary": summary,
+                "context": context or {}, "loop_id": loop_id,
+            })
+            return {}
+
+        import captains_log as _cl
+        monkeypatch.setattr(_cl, "log_event", fake_log_event)
+
+        # LLM recommends ESCALATE but confidence 0.68 is below default 0.75
+        resp = MagicMock()
+        resp.tool_calls = []
+        resp.input_tokens = 10
+        resp.output_tokens = 5
+        resp.content = '{"verdict":"ESCALATE","reason":"truncated mid-sentence","confidence":0.68}'
+        adapter = MagicMock()
+        adapter.complete = MagicMock(return_value=resp)
+
+        steps = [MagicMock(status="done", index=1, text="step", result="result text")]
+        verdict = run_quality_gate("ship the thing", steps, adapter,
+                                   run_adversarial=False, loop_id="def67890")
+
+        # Action: did NOT escalate (confidence too low)
+        assert verdict.escalate is False
+        # Raw LLM recommendation preserved
+        assert verdict.verdict == "ESCALATE"
+
+        gate_events = [e for e in captured if e["event_type"] == "QUALITY_GATE_VERDICT"]
+        assert len(gate_events) == 1
+        ev = gate_events[0]
+        # Decision label matches action, not raw LLM recommendation
+        assert ev["context"]["decision"] == "WEAK_ESCALATE"
+        assert ev["context"]["verdict"] == "ESCALATE"      # raw recommendation
+        assert ev["context"]["escalate"] is False           # action
+        assert ev["context"]["confidence_threshold"] == pytest.approx(0.75)
+        # Summary string is unambiguous
+        assert "decision=WEAK_ESCALATE" in ev["summary"]
+
+    def test_decision_pass_when_verdict_pass(self, monkeypatch):
+        """verdict=PASS → decision=PASS (no contradiction even when verdict=PASS)."""
+        captured: list = []
+
+        def fake_log_event(event_type, *, subject, summary, context=None,
+                           note=None, loop_id=None, related_ids=None):
+            captured.append({
+                "event_type": event_type, "summary": summary,
+                "context": context or {}, "loop_id": loop_id,
+            })
+            return {}
+
+        import captains_log as _cl
+        monkeypatch.setattr(_cl, "log_event", fake_log_event)
+
+        resp = MagicMock()
+        resp.tool_calls = []
+        resp.input_tokens = 10
+        resp.output_tokens = 5
+        resp.content = '{"verdict":"PASS","reason":"all good","confidence":0.9}'
+        adapter = MagicMock()
+        adapter.complete = MagicMock(return_value=resp)
+
+        steps = [MagicMock(status="done", index=1, text="step", result="result text")]
+        run_quality_gate("a goal", steps, adapter, run_adversarial=False)
+
+        gate_events = [e for e in captured if e["event_type"] == "QUALITY_GATE_VERDICT"]
+        assert len(gate_events) == 1
+        ev = gate_events[0]
+        assert ev["context"]["decision"] == "PASS"
+        assert ev["context"]["verdict"] == "PASS"
+        assert ev["context"]["escalate"] is False
