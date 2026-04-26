@@ -186,9 +186,13 @@ def main() -> int:
 
     handle_log = out / "handle.log"
     print(f"[scope-ab] launching handle.py (log: {handle_log})")
+    # --repo points handle.py at the *test* repo so closure (verify_goal_completion)
+    # runs git log / find / grep against the work-tree the agent edited, not the
+    # openclaw repo cwd. Without this, closure checks ran 0/8 even for a clean
+    # treat run because they were probing the wrong directory (2026-04-26).
     with handle_log.open("wb") as f:
         rc = subprocess.call(
-            ["python3", "-u", "-m", "handle", prompt],
+            ["python3", "-u", "-m", "handle", prompt, "--repo", str(TEST_REPO_DIR)],
             cwd=str(REPO), env=env, stdout=f, stderr=subprocess.STDOUT,
         )
     ended = datetime.now(timezone.utc).isoformat()
