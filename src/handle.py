@@ -457,6 +457,21 @@ def handle(
     if _direct_mode:
         lane = "agenda"
 
+    # Refresh run-dir metadata.json now that lane is known. Fills in
+    # the lane/model fields that were null at create_run_dir time
+    # (which had to run before classification to record offsets early).
+    try:
+        from runs import write_metadata as _write_meta
+        from runs import current_run_dir as _crd
+        _rd = _crd()
+        if _rd is not None:
+            _write_meta(
+                _rd, handle_id=handle_id, prompt=_raw_input,
+                lane=lane, model=model,
+            )
+    except Exception:
+        pass
+
     # btw mode: quick observation, always routes to NOW regardless of classification.
     # The result is prefixed with "[Observation]" to distinguish from work products.
     if _btw_mode:
