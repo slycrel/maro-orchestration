@@ -1311,6 +1311,7 @@ def verify_goal_completion(
     scope=None,
     resolved_intent=None,
     diagnosis=None,
+    loop_id: str = "",
 ) -> ClosureVerdict:
     """Director closure check: verify the goal was actually achieved.
 
@@ -1609,6 +1610,7 @@ def verify_goal_completion(
                     "commands": [r.get("command", "")[:200] for r in check_results],
                     "summary": summary[:400],
                 },
+                loop_id=loop_id or None,
             )
         except Exception:
             pass
