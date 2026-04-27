@@ -5,32 +5,29 @@ Read this at the start of every session. Update it as items are completed or new
 
 **Completed items live in [BACKLOG_DONE.md](BACKLOG_DONE.md)** — move items there with their full context when they ship; that file is the archive of what we've already decided, tried, or superseded, and it's ingested by `dev-recall` for historical context.
 
-Last reviewed: 2026-04-18 (post run-7 — added intent-resolution initiative + modular-refactor chunks + coding notes).
+Last reviewed: 2026-04-27 (Thread Architecture sketch — see top entry).
 
 ---
 
-### DISCUSS — invert the planning stage: 1-shot first, escape hatch second (2026-04-26, Jeremy)
+### ACTIVE DESIGN SPACE — Thread Architecture (2026-04-26 → 2026-04-27, Jeremy + Claude)
 
-Jeremy's framing while AFK: instead of scaffolding around the planning stage (scope, intent-resolution, constraint orchestration, decomposition_too_broad recovery, etc.), **lean into the bitter lesson** by inverting the default. The flow becomes:
+**Branch:** `arch/thread-navigator`
+**Doc:** `docs/THREAD_ARCHITECTURE.md` (the sketch + decisions + open list)
+**Conversation log:** `docs/conversations/2026-04-26-thread-architecture.md` (literal transcript)
 
-> "Try this in one shot. If you can't do it without more planning, **explain why and return** instead — don't decompose."
+The 1-shot-first DISCUSS item (formerly here) expanded into a full architectural sketch over a 7-turn planning conversation. Rather than just inverting the planning default, the conversation reframed the unit of orchestration to **thread**, with a per-turn `navigator → work → navigator` loop, navigator-selected personas, sub-thread fork/collate, build-folder-as-thread-residence, and crystallization (Stages 1–5) as the navigator's improvement path.
 
-In other words: 1-shot is the default, decomposition is the escape hatch with an explicit cost (the model has to justify needing it).
+Don't implement yet — the architecture doc has 9 open decisions to work through first, starting with the navigator's prompt + decision schema (Open Decision #1). Backlog-style detail items will be added under this entry as the design firms up.
 
-**Why this might be right:**
-- The bitter lesson says scaffolding loses to capability. We've been adding more scaffolding (scope, intent-resolution, constraint orchestration, mid-loop redecompose, decomposition_too_broad warnings) — each piece individually useful but the aggregate is "we trust the model less and less."
-- Most goals we feed it are probably 1-shot doable on Opus. The 8/8-strong loops we keep flagging as "too broad" might just be cases where the model could have done the whole thing in one Bash + edit dance and we forced ceremony onto it.
-- Closure check + adversarial review already exist. The 1-shot output goes through both. If the 1-shot was wrong, those layers catch it; if it was right, we save 8x the cost.
-- "Explain why and return" is a structured signal we can route — same mechanic as `flag_stuck` with `NEED_INFO`. The escape hatch doesn't bypass our existing infrastructure, it just inverts which path is the default.
+**1-shot-first** is preserved as one move-shape the navigator picks per turn (not the default; navigator decides whether to plan or execute). Existing planning scaffolding (`decomposition_too_broad`, mid-loop redecompose, scope-as-armor) probably shrinks but does not delete — Jeremy pushed back on aggressive deletion (Tesla-vs-driver: confident-sounding LLM ideas without critical-thinking-edges drift, because people's context ≠ LLM context).
 
-**Open questions for the discussion:**
-- Where does this slot in: replace decompose? Add a `try_1shot` phase in front? Replace the planner with "judge: 1-shot or decompose?"
-- How does it interact with goals that obviously need decomposition (research → synthesize, multi-tool sequences)? Or is the answer "trust the model to recognize that and ask"?
-- What does the return-with-explanation look like — is it a structured ResolvedIntent-shaped object (gaps + probes), or just free text the planner consumes?
-- How does this relate to scope (which is already a kind of pre-1-shot intent compression) and to docs/INTENT_RESOLUTION_DESIGN.md?
-- If we ship this, what do we *remove*? The bitter-lesson framing says scaffolding should *go away*, not stack — `decomposition_too_broad`, mid-loop redecompose, parts of constraint orchestration may all be load-bearing only because we forced decomposition in the first place.
-
-**Status:** flagged for discussion when Jeremy is back. Don't implement — think first about whether it's a frame-shift (which deletes existing scaffolding) or just another phase added on top (which makes things worse).
+**Adjacent items that should be re-evaluated under this frame** (most are below in this backlog):
+- Intent resolution (next entry) — folds into "fork+collate" sub-thread mechanism
+- Captain's log infrastructure-vs-visibility (new) — should be demoted to data, not infrastructure
+- Persona auto-selection (existing drift in `architecture overview`) — becomes load-bearing, not optional
+- Recall() interface (new) — single seam over memory substrates the navigator queries
+- Crystallization Stage 5 (existing gap in `KNOWLEDGE_CRYSTALLIZATION.md`) — the navigator's cheaper-over-time mechanism
+- Shared-learning portability (new) — self-learned artifacts should survive HDD loss / orchestrator switch
 
 ---
 
