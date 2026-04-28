@@ -39,6 +39,34 @@ print(r.summary())
 "
 ```
 
+## Worker session manifest flow
+
+Worker-session manifests can now use either the explicit field names
+(`environment`, `timeout_seconds`, `working_directory`) or the shorter aliases
+(`env`, `timeout`, `cwd`).
+
+Example manifest:
+
+```json
+{
+  "command": "python3 worker.py",
+  "payload_name": "in/session.json",
+  "result_name": "out/result.json",
+  "cwd": "workers/demo",
+  "env": {
+    "DEMO_MODE": "1"
+  },
+  "timeout": 45
+}
+```
+
+At runtime the worker receives:
+- `ORCH_SESSION_PAYLOAD`
+- `ORCH_SESSION_RESULT_PATH`
+- `ORCH_SESSION_WORKING_DIR`
+- `ORCH_RUN_ARTIFACT_DIR`
+- `ORCH_RUN_ARTIFACT_PATH`
+
 ## Inspecting evidence
 
 ```bash
