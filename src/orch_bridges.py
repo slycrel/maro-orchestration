@@ -10,7 +10,7 @@ import os
 import subprocess
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from shlex import quote
+from shlex import quote, split as shell_split
 from typing import Any, List, Optional, Tuple
 
 from orch_items import (
@@ -302,6 +302,32 @@ def _extract_json_result(raw: str) -> Optional[dict]:
     if isinstance(payload, dict):
         return payload
     return None
+
+
+def _resolve_session_command(session_command: str, *, source_directory: Optional[Path]) -> str:
+    command = str(session_command or "").strip()
+    if not command or source_directory is None:
+        return command
+
+    try:
+        parts = shell_split(command)
+    except ValueError:
+        return command
+    if not parts:
+        return command
+
+    executable = parts[0].strip()
+    if not executable:
+        return command
+    if executable.startswith("/"):
+        return command
+
+    candidate = (source_directory / executable).resolve()
+    if not candidate.exists() or not candidate.is_file():
+        return command
+
+    parts[0] = str(candidate)
+    return " ".join(quote(part) for part in parts)
 
 
 def _coerce_validation_payload(raw: dict, *, run: RunRecord, execution: ExecutionResult) -> ValidationResult:
@@ -739,9 +765,14 @@ def session_execution_bridge(
         elif resolved_source_directory is not None:
             env["ORCH_SESSION_WORKING_DIR"] = str(cwd)
 
+        resolved_command = _resolve_session_command(
+            session_command,
+            source_directory=cwd,
+        )
+
         try:
             proc = subprocess.run(
-                session_command,
+                resolved_command,
                 shell=True,
                 cwd=cwd,
                 env=env,
@@ -750,9 +781,9 @@ def session_execution_bridge(
                 timeout=timeout_seconds,
             )
         except subprocess.TimeoutExpired as exc:
-            raise ExecutionBridgeError(f"session timed out after {timeout_seconds}s: {session_command}") from exc
+            raise ExecutionBridgeError(f"session timed out after {timeout_seconds}s: {resolved_command}") from exc
         except Exception as exc:
-            raise ExecutionBridgeError(f"session execution failed: {session_command}: {exc}") from exc
+            raise ExecutionBridgeError(f"session execution failed: {resolved_command}: {exc}") from exc
 
         stdout_path.write_text(proc.stdout or "", encoding="utf-8")
         stderr_path.write_text(proc.stderr or "", encoding="utf-8")
@@ -765,12 +796,12 @@ def session_execution_bridge(
             return stdout_result
 
         if proc.returncode == 0:
-            note = f"session succeeded: {session_command}"
+            note = f"session succeeded: {resolved_command}"
             if proc.stdout.strip():
                 note = f"{note}; stdout={proc.stdout.strip().splitlines()[-1]}"
             return ExecutionResult(status="done", note=note, artifact_path=default_artifact_path)
 
-        note = f"session failed ({proc.returncode}): {session_command}"
+        note = f"session failed ({proc.returncode}): {resolved_command}"
         if proc.stderr.strip():
             note = f"{note}; stderr={proc.stderr.strip().splitlines()[-1]}"
         raise ExecutionBridgeError(note)

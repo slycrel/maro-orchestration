@@ -365,7 +365,7 @@ def test_cli_tick_worker_session_manifest_aliases(tmp_path):
     manifest.write_text(
         json.dumps(
             {
-                "command": "bash ./run.sh",
+                "command": "run.sh",
                 "cwd": "nested",
                 "env": {"ORCH_WORKER_TOKEN": "alias-ok"},
                 "timeout": 15,

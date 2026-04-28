@@ -22,6 +22,7 @@ from orch_bridges import (
     _extract_json_result,
     _extract_session_result_from_text,
     _load_worker_session_manifest,
+    _resolve_session_command,
     _merge_notes,
     _read_jsonl_records,
     _validation_bridge_name,
@@ -322,8 +323,23 @@ class TestJsonlRoundTrip:
 
 
 # ---------------------------------------------------------------------------
-# _load_worker_session_manifest
+# _resolve_session_command / _load_worker_session_manifest
 # ---------------------------------------------------------------------------
+
+class TestResolveSessionCommand:
+    def test_resolves_relative_script_from_source_directory(self, tmp_path):
+        script = tmp_path / "run.sh"
+        script.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+        script.chmod(0o755)
+
+        command = _resolve_session_command("run.sh --flag", source_directory=tmp_path)
+        assert command.startswith(str(script.resolve()))
+        assert "--flag" in command
+
+    def test_leaves_non_local_command_unchanged(self, tmp_path):
+        command = _resolve_session_command("python3 -m worker", source_directory=tmp_path)
+        assert command == "python3 -m worker"
+
 
 class TestLoadWorkerSessionManifest:
     def test_string_manifest(self, tmp_path):
