@@ -402,6 +402,17 @@ Next run with similar task:
 
 ---
 
+## Worker session manifests
+
+`poe-orchestration` execution bridges accept either a named worker script or a JSON manifest via `--worker-session`.
+
+Manifests now support both the explicit keys and short aliases:
+- `environment` or `env`
+- `timeout_seconds` or `timeout`
+- `working_directory` or `cwd`
+
+Use this when a worker needs nested artifact paths, injected environment variables, or a fixed working directory without shell wrapper glue.
+
 ## Development
 
 ```bash
