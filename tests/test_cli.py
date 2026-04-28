@@ -341,6 +341,50 @@ def test_cli_tick_worker_session(tmp_path):
     assert "execution=done validation=done" in r.stdout
 
 
+def test_cli_tick_worker_session_manifest_aliases(tmp_path):
+    r = _run(tmp_path, "init", "demo", "Session", "manifest", "--priority", "1")
+    assert r.returncode == 0
+
+    worker_dir = tmp_path / "prototypes" / "poe-orchestration" / "workers" / "demo"
+    worker_dir.mkdir(parents=True)
+    workdir = worker_dir / "nested"
+    workdir.mkdir()
+    script = workdir / "run.sh"
+    script.write_text(
+        "#!/usr/bin/env bash\n"
+        'printf "%s" "$ORCH_WORKER_TOKEN" > "$ORCH_RUN_ARTIFACT_DIR/token.txt"\n'
+        'printf "%s" "$ORCH_SESSION_WORKING_DIR" > "$ORCH_RUN_ARTIFACT_DIR/cwd.txt"\n'
+        'cat > "$ORCH_SESSION_RESULT_PATH" <<EOF\n'
+        '{"status":"done","note":"alias worker","artifact_path":"$ORCH_RUN_ARTIFACT_PATH"}\n'
+        "EOF\n",
+        encoding="utf-8",
+    )
+    script.chmod(0o755)
+
+    manifest = worker_dir / "alias.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "command": "bash ./run.sh",
+                "cwd": "nested",
+                "env": {"ORCH_WORKER_TOKEN": "alias-ok"},
+                "timeout": 15,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    r = _run(tmp_path, "tick", "--project", "demo", "--worker-session", str(manifest))
+    assert r.returncode == 0
+    assert "execution=done validation=done" in r.stdout
+
+    run_line = next(line for line in r.stdout.splitlines() if "run_id=" in line)
+    run_id = run_line.split("run_id=", 1)[1].split()[0]
+    artifact_dir = tmp_path / "prototypes" / "poe-orchestration" / "output" / "runs" / run_id
+    assert (artifact_dir / "token.txt").read_text(encoding="utf-8") == "alias-ok"
+    assert (artifact_dir / "cwd.txt").read_text(encoding="utf-8") == str(workdir)
+
+
 def test_cli_tick_session_cmd_markers_trigger_retries(tmp_path):
     r = _run(tmp_path, "init", "demo", "Session", "salvage", "--priority", "1")
     assert r.returncode == 0
