@@ -224,8 +224,17 @@ def _load_worker_session_manifest(path: Path) -> WorkerSessionSpec:
         field_name="working_directory",
     )
     worker_name = path.stem if path.name else "worker_session"
-    environment = _coerce_env_map(data.get("environment"), worker=worker_name)
-    timeout_seconds = _coerce_positive_timeout(data.get("timeout_seconds"), field_name="timeout_seconds")
+    raw_environment = data.get("environment")
+    if raw_environment is None and "env" in data:
+        raw_environment = data.get("env")
+    environment = _coerce_env_map(raw_environment, worker=worker_name)
+
+    raw_timeout = data.get("timeout_seconds")
+    timeout_field_name = "timeout_seconds"
+    if raw_timeout is None and "timeout" in data:
+        raw_timeout = data.get("timeout")
+        timeout_field_name = "timeout"
+    timeout_seconds = _coerce_positive_timeout(raw_timeout, field_name=timeout_field_name)
     return WorkerSessionSpec(
         command=command,
         payload_name=payload_name,
