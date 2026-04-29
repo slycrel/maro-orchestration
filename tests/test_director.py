@@ -1208,6 +1208,8 @@ class TestVerifyGoalCompletion:
         results = _run_precondition_preflight([d], cwd=str(tmp_path))
         assert len(results) == 1
         assert results[0]["passed"] is False
+        assert results[0]["exit_code"] == 127
+        assert results[0]["outcome"] == "inconclusive"
         assert "does not exist" in results[0]["stderr"]
 
     def test_precondition_preflight_skips_opaque(self, tmp_path):
@@ -1350,6 +1352,33 @@ class TestVerifyGoalCompletion:
 
         assert result.checks_run == 1
         assert result.checks_passed == 0
+
+    def test_command_not_found_downgrades_complete_to_inconclusive(self, tmp_path):
+        """A probe that couldn't run must not count as evidence of completion."""
+        import subprocess
+        from unittest.mock import MagicMock, patch
+
+        adapter = MagicMock()
+        checks = [{"description": "behavioral probe", "command": "go build ./... && ./server"}]
+        verdict_data = {"complete": True, "confidence": 0.9, "gaps": [], "summary": "Looks complete."}
+
+        completed = subprocess.CompletedProcess(
+            args=checks[0]["command"], returncode=127, stdout="", stderr="go: command not found"
+        )
+
+        with patch("director.extract_json", side_effect=[{"checks": checks}, verdict_data]):
+            with patch("director.content_or_empty", return_value="{}"):
+                with patch("subprocess.run", return_value=completed):
+                    result = verify_goal_completion(
+                        "build X", [], adapter,
+                        workspace_path=str(tmp_path),
+                    )
+
+        assert result.complete is False
+        assert result.confidence == 0.6
+        assert result.checks_run == 1
+        assert result.checks_passed == 0
+        assert any("inconclusive" in gap.lower() for gap in result.gaps)
 
     def test_check_results_include_modality_in_verdict_context(self, monkeypatch, tmp_path):
         """Verification results passed to the verdict step should include probe modality."""
