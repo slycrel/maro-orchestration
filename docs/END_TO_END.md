@@ -49,7 +49,7 @@ Example manifest:
 
 ```json
 {
-  "command": "python3 worker.py",
+  "cmd": "python3 worker.py",
   "payloadName": "in/session.json",
   "resultName": "out/result.json",
   "workingDirectory": "workers/demo",

@@ -407,6 +407,7 @@ Next run with similar task:
 `poe-orchestration` execution bridges accept either a named worker script or a JSON manifest via `--worker-session`.
 
 Manifests now support both the explicit keys and short aliases:
+- `command` or `cmd`
 - `environment`, `environmentVariables`, or `env`
 - `working_directory`, `workingDirectory`, or `cwd`
 - `timeout_seconds`, `timeoutSeconds`, or `timeout`

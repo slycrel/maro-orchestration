@@ -196,6 +196,8 @@ def _load_worker_session_manifest(path: Path) -> WorkerSessionSpec:
         raise ValueError(f"invalid worker session manifest format in {path}")
 
     raw_command = data.get("command")
+    if raw_command is None and "cmd" in data:
+        raw_command = data.get("cmd")
     if raw_command is None:
         raise ValueError(f"invalid worker session manifest format in {path}: missing 'command'")
     if isinstance(raw_command, (list, tuple)):
