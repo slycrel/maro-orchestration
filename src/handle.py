@@ -1037,6 +1037,7 @@ def handle(
                 and not _closure.complete
                 and _closure.confidence >= 0.6
                 and _closure.checks_run > 0
+                and getattr(_closure, "inconclusive_count", 0) == 0
                 and _depth < 3
                 and loop_result.status == "done"  # only escalate from "done" — stuck/partial already know they're incomplete
             ):

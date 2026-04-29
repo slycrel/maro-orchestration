@@ -1212,6 +1212,7 @@ class ClosureVerdict:
     summary: str
     checks_run: int
     checks_passed: int
+    inconclusive_count: int = 0
 
 
 _PRECOND_SENTINELS = frozenset({"none", "n/a", "na", "-", "tbd", "(none)", "null", "nil"})
@@ -1390,6 +1391,7 @@ def verify_goal_completion(
     _null = ClosureVerdict(
         complete=True, confidence=0.5, gaps=[],
         summary="Verification skipped.", checks_run=0, checks_passed=0,
+        inconclusive_count=0,
     )
 
     if dry_run or adapter is None:
@@ -1643,6 +1645,7 @@ def verify_goal_completion(
             summary=summary,
             checks_run=checks_run,
             checks_passed=checks_passed,
+            inconclusive_count=len(inconclusive_checks),
         )
 
         # Emit needs_work if gaps found

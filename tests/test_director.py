@@ -1378,6 +1378,7 @@ class TestVerifyGoalCompletion:
         assert result.confidence == 0.6
         assert result.checks_run == 1
         assert result.checks_passed == 0
+        assert result.inconclusive_count == 1
         assert any("inconclusive" in gap.lower() for gap in result.gaps)
 
     def test_check_results_include_modality_in_verdict_context(self, monkeypatch, tmp_path):
