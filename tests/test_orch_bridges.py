@@ -429,6 +429,22 @@ class TestLoadWorkerSessionManifest:
         assert spec.environment == {"FOO": "bar", "COUNT": "2"}
         assert spec.timeout_seconds == 12.0
 
+    def test_dict_manifest_supports_extra_snake_and_short_aliases(self, tmp_path):
+        path = tmp_path / "worker.json"
+        path.write_text(json.dumps({
+            "cmd": "run.sh",
+            "payload_path": "snake/in.json",
+            "result_path": "snake/out.json",
+            "workDir": "snake-dir",
+            "environment_variables": {"FOO": "zap"},
+        }), encoding="utf-8")
+        spec = _load_worker_session_manifest(path)
+        assert spec.command == "run.sh"
+        assert spec.payload_name == "snake/in.json"
+        assert spec.result_name == "snake/out.json"
+        assert spec.working_directory == "snake-dir"
+        assert spec.environment == {"FOO": "zap"}
+
     def test_missing_command_raises(self, tmp_path):
         path = tmp_path / "worker.json"
         path.write_text(json.dumps({"payload_name": "in.json"}), encoding="utf-8")
@@ -460,7 +476,7 @@ class TestLoadWorkerSessionManifest:
             _load_worker_session_manifest(path)
 
     def test_working_dir_aliases(self, tmp_path):
-        for alias in ("working_directory", "working_dir", "workingDirectory", "cwd"):
+        for alias in ("working_directory", "working_dir", "workingDirectory", "workDir", "cwd"):
             path = tmp_path / f"worker_{alias}.json"
             path.write_text(json.dumps({"command": "run.sh", alias: "mydir"}), encoding="utf-8")
             spec = _load_worker_session_manifest(path)

@@ -211,6 +211,8 @@ def _load_worker_session_manifest(path: Path) -> WorkerSessionSpec:
         raise ValueError(f"invalid worker session manifest format in {path}: missing 'command'")
 
     raw_payload_name = data.get("payload_name")
+    if raw_payload_name is None and "payload_path" in data:
+        raw_payload_name = data.get("payload_path")
     if raw_payload_name is None and "payloadName" in data:
         raw_payload_name = data.get("payloadName")
     if raw_payload_name is None and "payload" in data:
@@ -223,6 +225,8 @@ def _load_worker_session_manifest(path: Path) -> WorkerSessionSpec:
         field_name="payload_name",
     )
     raw_result_name = data.get("result_name")
+    if raw_result_name is None and "result_path" in data:
+        raw_result_name = data.get("result_path")
     if raw_result_name is None and "resultName" in data:
         raw_result_name = data.get("resultName")
     if raw_result_name is None and "result" in data:
@@ -234,13 +238,15 @@ def _load_worker_session_manifest(path: Path) -> WorkerSessionSpec:
         default="worker-result.json",
         field_name="result_name",
     )
-    _raw_wd = data.get("working_directory") or data.get("working_dir") or data.get("workingDirectory") or data.get("cwd")
+    _raw_wd = data.get("working_directory") or data.get("working_dir") or data.get("workingDirectory") or data.get("workDir") or data.get("cwd")
     working_directory = _coerce_session_directory_name(
         _raw_wd,
         field_name="working_directory",
     )
     worker_name = path.stem if path.name else "worker_session"
     raw_environment = data.get("environment")
+    if raw_environment is None and "environment_variables" in data:
+        raw_environment = data.get("environment_variables")
     if raw_environment is None and "environmentVariables" in data:
         raw_environment = data.get("environmentVariables")
     if raw_environment is None and "env" in data:
