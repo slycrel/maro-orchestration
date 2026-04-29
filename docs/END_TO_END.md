@@ -49,7 +49,8 @@ Example manifest:
 
 ```json
 {
-  "cmd": "python3 worker.py",
+  "cmd": "python3",
+  "args": ["worker.py"],
   "payload_path": "in/session.json",
   "result_path": "out/result.json",
   "workDir": "workers/demo",

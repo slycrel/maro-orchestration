@@ -362,6 +362,18 @@ class TestLoadWorkerSessionManifest:
         assert "python3" in spec.command
         assert "worker" in spec.command
 
+    def test_dict_manifest_supports_args_field(self, tmp_path):
+        path = tmp_path / "worker.json"
+        path.write_text(json.dumps({"command": "python3", "args": ["-m", "worker", "--flag"]}), encoding="utf-8")
+        spec = _load_worker_session_manifest(path)
+        assert spec.command == "python3 -m worker --flag"
+
+    def test_dict_manifest_supports_arguments_alias(self, tmp_path):
+        path = tmp_path / "worker.json"
+        path.write_text(json.dumps({"cmd": "python3", "arguments": ["-m", "worker"]}), encoding="utf-8")
+        spec = _load_worker_session_manifest(path)
+        assert spec.command == "python3 -m worker"
+
     def test_dict_manifest_supports_cmd_alias(self, tmp_path):
         path = tmp_path / "worker.json"
         path.write_text(json.dumps({"cmd": ["python3", "-m", "worker"]}), encoding="utf-8")
@@ -473,6 +485,12 @@ class TestLoadWorkerSessionManifest:
         path = tmp_path / "worker.json"
         path.write_text(json.dumps({"command": []}), encoding="utf-8")
         with pytest.raises(ValueError, match="invalid worker session command"):
+            _load_worker_session_manifest(path)
+
+    def test_non_list_args_raises(self, tmp_path):
+        path = tmp_path / "worker.json"
+        path.write_text(json.dumps({"command": "python3", "args": "-m worker"}), encoding="utf-8")
+        with pytest.raises(ValueError, match="invalid worker session args"):
             _load_worker_session_manifest(path)
 
     def test_working_dir_aliases(self, tmp_path):

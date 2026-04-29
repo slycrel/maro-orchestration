@@ -200,15 +200,25 @@ def _load_worker_session_manifest(path: Path) -> WorkerSessionSpec:
         raw_command = data.get("cmd")
     if raw_command is None:
         raise ValueError(f"invalid worker session manifest format in {path}: missing 'command'")
+
+    raw_args = data.get("args")
+    if raw_args is None and "arguments" in data:
+        raw_args = data.get("arguments")
+    command_parts: list[str]
     if isinstance(raw_command, (list, tuple)):
         command_parts = [str(part).strip() for part in raw_command]
-        if not command_parts or any(not part for part in command_parts):
-            raise ValueError(f"invalid worker session command in {path}")
-        command = " ".join(quote(part) for part in command_parts)
     else:
-        command = str(raw_command).strip()
-    if not command:
-        raise ValueError(f"invalid worker session manifest format in {path}: missing 'command'")
+        command_text = str(raw_command).strip()
+        if not command_text:
+            raise ValueError(f"invalid worker session manifest format in {path}: missing 'command'")
+        command_parts = [command_text]
+    if raw_args is not None:
+        if not isinstance(raw_args, (list, tuple)):
+            raise ValueError(f"invalid worker session args in {path}")
+        command_parts.extend(str(part).strip() for part in raw_args)
+    if not command_parts or any(not part for part in command_parts):
+        raise ValueError(f"invalid worker session command in {path}")
+    command = " ".join(quote(part) for part in command_parts)
 
     raw_payload_name = data.get("payload_name")
     if raw_payload_name is None and "payload_path" in data:
