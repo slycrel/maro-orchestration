@@ -157,7 +157,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_poe_heartbeat.add_argument("--dry-run", action="store_true", help="Check only, no recovery or Telegram alerts")
     p_poe_heartbeat.add_argument("--no-escalate", action="store_true", help="Skip Telegram escalation")
     autonomy_group = p_poe_heartbeat.add_mutually_exclusive_group()
-    autonomy_group.add_argument("--autonomy", dest="autonomy", action="store_const", const=True, default=None, help="Enable autonomous drains and background work in loop mode")
+    autonomy_group.add_argument("--autonomy", dest="autonomy", action="store_const", const=True, default=None, help="Enable autonomous drains and background work in loop mode (otherwise use config/default)")
     autonomy_group.add_argument("--no-autonomy", dest="autonomy", action="store_const", const=False, help="Force health-only heartbeat loop mode")
     p_poe_heartbeat.add_argument("--backlog-every", type=int, default=None, help="Autonomous backlog drain cadence in heartbeat ticks (default: 5)")
     p_poe_heartbeat.add_argument("--verbose", "-v", action="store_true", default=True)

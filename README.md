@@ -257,11 +257,13 @@ Heartbeat recovery tiers:
 2. **LLM diagnosis**: stuck projects → cheap LLM recovery action
 3. **Telegram escalation**: critical health → alert Jeremy
 
-Autonomous background work is opt-in:
+Autonomous background work can be enabled explicitly:
 
 ```bash
 python3 src/cli.py poe-heartbeat --loop --autonomy
 ```
+
+If you run `poe-heartbeat --loop` without either flag, it now defers to `heartbeat.autonomy` config. Use `--no-autonomy` to force health-only mode regardless of config.
 
 You can also skip services entirely and run the pieces manually when needed:
 

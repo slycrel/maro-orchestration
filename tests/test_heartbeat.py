@@ -353,6 +353,24 @@ def test_heartbeat_loop_health_only_skips_scheduler(monkeypatch):
     assert called == []
 
 
+def test_heartbeat_loop_none_autonomy_uses_config(monkeypatch):
+    import heartbeat as hb
+    import scheduler
+    import types
+
+    monkeypatch.setattr(hb, "run_heartbeat", lambda **kwargs: None)
+    monkeypatch.setattr(hb._wakeup_event, "wait", lambda timeout=None: (_ for _ in ()).throw(RuntimeError("stop")))
+    monkeypatch.setattr(hb, "_task_store_drain_active", True)
+    monkeypatch.setitem(sys.modules, "config", types.SimpleNamespace(get=lambda key, default=None: True if key == "heartbeat.autonomy" else default))
+    called = []
+    monkeypatch.setattr(scheduler, "drain_due_jobs", lambda **kwargs: called.append(kwargs) or 0)
+
+    with pytest.raises(RuntimeError, match="stop"):
+        heartbeat_loop(interval=0.01, dry_run=True, verbose=False, autonomy=None)
+
+    assert len(called) == 1
+
+
 def test_heartbeat_loop_autonomy_calls_scheduler(monkeypatch):
     import heartbeat as hb
     import scheduler
