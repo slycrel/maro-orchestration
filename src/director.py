@@ -1190,8 +1190,9 @@ _CLOSURE_VERDICT_SYSTEM = textwrap.dedent("""\
     Given the original goal, the agent's work summary, and the results of executable
     verification checks, decide whether the goal was genuinely achieved.
 
-    Be honest. If checks failed or were skipped, say so. If the work is incomplete,
-    name the specific gaps — don't soften them.
+    Be honest. If checks failed or were skipped, say so. If any probe was
+    inconclusive (missing tool, command not found, timeout, probe could not run),
+    do not treat that as evidence the goal works.
 
     Respond with JSON only:
     {
@@ -1292,27 +1293,31 @@ def _run_precondition_preflight(
                 found = shutil.which(preq)
                 passed = found is not None
                 stderr = "" if passed else f"command `{preq}` not on PATH"
+                exit_code = 0 if passed else 127
                 out.append({
                     "description": f"precondition: {preq} (command for {_name})",
                     "command": f"shutil.which({preq!r})",
                     "modality": "preflight",
-                    "exit_code": 0 if passed else 127,
+                    "exit_code": exit_code,
                     "stdout": found or "",
                     "stderr": stderr,
                     "passed": passed,
+                    "outcome": _check_outcome(exit_code=exit_code, stderr=stderr),
                 })
             elif kind == "path":
                 target = (base / preq).resolve() if not Path(preq).is_absolute() else Path(preq)
                 passed = target.exists()
                 stderr = "" if passed else f"path `{preq}` does not exist"
+                exit_code = 0 if passed else 127
                 out.append({
                     "description": f"precondition: {preq} (path for {_name})",
                     "command": f"Path({preq!r}).exists",
                     "modality": "preflight",
-                    "exit_code": 0 if passed else 1,
+                    "exit_code": exit_code,
                     "stdout": str(target) if passed else "",
                     "stderr": stderr,
                     "passed": passed,
+                    "outcome": _check_outcome(exit_code=exit_code, stderr=stderr),
                 })
             # opaque kinds (port numbers, env-var requirements) are not pre-flighted
     return out
@@ -1330,6 +1335,20 @@ def _check_modality_from_command(command: str) -> str:
     if any(tok in cmd for tok in ("timeout ", "python -m http.server", "uvicorn", "gunicorn", "node ", "npm ", "pnpm ", "./", "bash ", "sh ")):
         return "process"
     return "static"
+
+
+def _check_outcome(*, exit_code: int, stderr: str = "") -> str:
+    """Classify a closure probe outcome as pass, fail, or inconclusive."""
+    if exit_code == 0:
+        return "pass"
+    err = (stderr or "").lower()
+    if exit_code in (-1, 126, 127):
+        return "inconclusive"
+    if "command not found" in err or "not on path" in err or "no such file or directory" in err:
+        return "inconclusive"
+    if "timed out" in err or "timeout" in err:
+        return "inconclusive"
+    return "fail"
 
 
 def verify_goal_completion(
@@ -1472,6 +1491,7 @@ def verify_goal_completion(
                     cmd, shell=True, capture_output=True, text=True,
                     timeout=timeout_per_check, cwd=cwd,
                 )
+                outcome = _check_outcome(exit_code=proc.returncode, stderr=proc.stderr)
                 check_results.append({
                     "description": desc,
                     "command": cmd,
@@ -1480,6 +1500,7 @@ def verify_goal_completion(
                     "stdout": proc.stdout[:500],
                     "stderr": proc.stderr[:300],
                     "passed": proc.returncode == 0,
+                    "outcome": outcome,
                 })
             except subprocess.TimeoutExpired:
                 check_results.append({
@@ -1487,13 +1508,16 @@ def verify_goal_completion(
                     "modality": modality,
                     "exit_code": -1, "stdout": "", "stderr": "timed out",
                     "passed": False,
+                    "outcome": "inconclusive",
                 })
             except Exception as exc:
+                _stderr = str(exc)
                 check_results.append({
                     "description": desc, "command": cmd,
                     "modality": modality,
-                    "exit_code": -1, "stdout": "", "stderr": str(exc),
+                    "exit_code": -1, "stdout": "", "stderr": _stderr,
                     "passed": False,
+                    "outcome": _check_outcome(exit_code=-1, stderr=_stderr),
                 })
 
         # Prepend pre-flight results so the director sees missing
@@ -1508,14 +1532,16 @@ def verify_goal_completion(
 
         checks_run = len(check_results)
         checks_passed = sum(1 for r in check_results if r["passed"])
+        inconclusive_checks = [r for r in check_results if r.get("outcome") == "inconclusive"]
 
         # Emit verification progress to channel
         if channel is not None:
             _lines = [f"Director closure check — {checks_passed}/{checks_run} passed"]
             for r in check_results:
-                icon = "✓" if r["passed"] else "✗"
+                outcome = r.get("outcome", "pass" if r.get("passed") else "fail")
+                icon = "✓" if outcome == "pass" else ("?" if outcome == "inconclusive" else "✗")
                 _lines.append(f"  {icon} {r['description']} (exit {r['exit_code']})")
-                if not r["passed"] and r["stderr"]:
+                if outcome != "pass" and r["stderr"]:
                     _lines.append(f"    {r['stderr'][:120]}")
             channel.emit("verification", text="\n".join(_lines),
                          checks_run=checks_run, checks_passed=checks_passed)
@@ -1596,6 +1622,19 @@ def verify_goal_completion(
             gaps = list(gaps) + [
                 f"Loop diagnosis and closure disagree: {diagnosis_gap_reason}"
             ]
+        if complete and inconclusive_checks:
+            complete = False
+            if confidence > 0.6:
+                confidence = 0.6
+            elif confidence < 0.6:
+                confidence = 0.6
+            gaps = list(gaps) + [
+                f"{len(inconclusive_checks)} verification probe(s) were inconclusive and cannot be counted as proof of completion"
+            ]
+            if summary:
+                summary = f"{summary} Verification was inconclusive."
+            else:
+                summary = "Verification was inconclusive."
 
         verdict = ClosureVerdict(
             complete=complete,
@@ -1637,6 +1676,7 @@ def verify_goal_completion(
                     "gap_count": len(gaps),
                     "scope_supplied": scope is not None,
                     "modality_distribution": modality_dist,
+                    "inconclusive_count": len(inconclusive_checks),
                     "behavioral_gap_downgrade": behavioral_gap_reason or "",
                     "diagnosis_failure_class": safe_str(getattr(diagnosis, "failure_class", "")),
                     "diagnosis_gap_downgrade": diagnosis_gap_reason or "",
