@@ -545,6 +545,7 @@ def main(argv: list[str] | None = None) -> int:
                 verbose=args.verbose,
                 escalate=not args.no_escalate,
                 autonomy=args.autonomy,
+                backlog_every=args.backlog_every,
             )
             return 0
         report = run_heartbeat(

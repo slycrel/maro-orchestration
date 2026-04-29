@@ -21,6 +21,7 @@ from heartbeat import (
     _run_evolver_bg,
     _run_inspector_bg,
     _run_eval_bg,
+    _resolve_backlog_every,
     run_heartbeat,
     _diagnosis_due,
     _mark_diagnosis_ran,
@@ -299,6 +300,20 @@ def test_cli_poe_heartbeat_json(capsys):
     out = capsys.readouterr().out
     data = json.loads(out)
     assert "health_status" in data
+
+
+def test_resolve_backlog_every_defaults_to_active_cadence():
+    assert _resolve_backlog_every(None) == 5
+    assert _resolve_backlog_every(0) == 1
+    assert _resolve_backlog_every("7") == 7
+
+
+def test_cli_poe_heartbeat_loop_forwards_backlog_every():
+    with patch("heartbeat.heartbeat_loop") as mock_loop:
+        import cli
+        rc = cli.main(["poe-heartbeat", "--loop", "--dry-run", "--no-escalate", "--backlog-every", "3"])
+    assert rc == 0
+    assert mock_loop.call_args.kwargs["backlog_every"] == 3
 
 
 def test_heartbeat_loop_health_only_skips_scheduler(monkeypatch):

@@ -32,6 +32,8 @@ from typing import Any, Dict, List, Optional
 
 log = logging.getLogger("poe.heartbeat")
 
+DEFAULT_BACKLOG_EVERY = 5
+
 
 # ---------------------------------------------------------------------------
 # Interactive session detection
@@ -700,13 +702,33 @@ def _run_backlog_step(*, dry_run: bool = False, verbose: bool = False) -> None:
             _backlog_drain_active = False
 
 
+def _resolve_backlog_every(backlog_every: Optional[int]) -> int:
+    """Resolve autonomous backlog-drain cadence.
+
+    Default is every 5 heartbeat ticks (~5 minutes at 60s interval), which keeps
+    autonomous work active during build phases instead of idling for half-hour gaps.
+    Config key: heartbeat.backlog_every.
+    """
+    if backlog_every is not None:
+        try:
+            return max(1, int(backlog_every))
+        except Exception:
+            return DEFAULT_BACKLOG_EVERY
+    try:
+        from config import get as _cfg_get
+        return max(1, int(_cfg_get("heartbeat.backlog_every", DEFAULT_BACKLOG_EVERY)))
+    except Exception:
+        return DEFAULT_BACKLOG_EVERY
+
+
+
 def heartbeat_loop(
     *,
     interval: float = 60.0,
     evolver_every: int = 10,
     inspector_every: int = 20,
     mission_check_every: int = 5,
-    backlog_every: int = 30,      # autonomous NEXT.md drain every N ticks (~30 min at 60s)
+    backlog_every: Optional[int] = None,
     eval_every: int = 1440,   # Phase 42: ~24h at 60s interval
     dry_run: bool = False,
     verbose: bool = True,
@@ -724,7 +746,7 @@ def heartbeat_loop(
     Every `mission_check_every` cycles (Phase 34), checks for pending
     missions and logs/notifies if autonomous drain would be warranted.
 
-    Every `backlog_every` cycles (default ~30 min), picks the highest-priority
+    Every `backlog_every` cycles (default ~5 min), picks the highest-priority
     NEXT.md TODO item across all projects and runs it via run_agent_loop
     (autonomous backlog drain). Skipped if a mission drain, prior backlog drain,
     or an interactive Claude Code session is already active. This is the primary
@@ -736,6 +758,8 @@ def heartbeat_loop(
     Every `evolver_every * 5` cycles, runs the harness optimizer to propose
     word-level improvements to EXECUTE_SYSTEM/DECOMPOSE_SYSTEM based on stuck traces.
     """
+    backlog_every = _resolve_backlog_every(backlog_every)
+
     if verbose:
         print(
             f"[heartbeat] loop started interval={interval}s "
@@ -902,7 +926,7 @@ def heartbeat_loop(
                 if verbose:
                     print(f"[heartbeat] mission check failed: {e}", file=sys.stderr)
         # Autonomous backlog drain: pick up NEXT.md TODO items when idle.
-        # Fires every `backlog_every` ticks (~30 min default). Skips if a mission,
+        # Fires every `backlog_every` ticks (~5 min default). Skips if a mission,
         # prior backlog drain, or an interactive Claude Code session is running.
         if tick % backlog_every == 0 and not _any_busy:
             with _backlog_drain_lock:
@@ -1014,6 +1038,7 @@ if __name__ == "__main__":
     parser.add_argument("--interval", type=float, default=60.0, help="Seconds between checks (default: 60)")
     parser.add_argument("--dry-run", action="store_true", help="Check without recovery or alerting")
     parser.add_argument("--no-escalate", action="store_true", help="Skip Telegram escalation")
+    parser.add_argument("--backlog-every", type=int, default=None, help="Autonomous backlog drain cadence in heartbeat ticks (default: 5)")
     parser.add_argument("--format", choices=["text", "json"], default="text")
     args = parser.parse_args()
 
@@ -1022,6 +1047,7 @@ if __name__ == "__main__":
             interval=args.interval,
             dry_run=args.dry_run,
             escalate=not args.no_escalate,
+            backlog_every=args.backlog_every,
         )
     else:
         report = run_heartbeat(dry_run=args.dry_run, escalate=not args.no_escalate)
