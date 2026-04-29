@@ -403,6 +403,21 @@ class TestLoadWorkerSessionManifest:
         assert spec.payload_name == "in/payload.json"
         assert spec.result_name == "out/result.json"
 
+    def test_dict_manifest_supports_camel_case_aliases(self, tmp_path):
+        path = tmp_path / "worker.json"
+        path.write_text(json.dumps({
+            "command": "run.sh",
+            "payloadPath": "camel/payload.json",
+            "resultPath": "camel/result.json",
+            "workingDirectory": "camel-dir",
+            "timeoutSeconds": 12,
+        }), encoding="utf-8")
+        spec = _load_worker_session_manifest(path)
+        assert spec.payload_name == "camel/payload.json"
+        assert spec.result_name == "camel/result.json"
+        assert spec.working_directory == "camel-dir"
+        assert spec.timeout_seconds == 12.0
+
     def test_missing_command_raises(self, tmp_path):
         path = tmp_path / "worker.json"
         path.write_text(json.dumps({"payload_name": "in.json"}), encoding="utf-8")
@@ -434,7 +449,7 @@ class TestLoadWorkerSessionManifest:
             _load_worker_session_manifest(path)
 
     def test_working_dir_aliases(self, tmp_path):
-        for alias in ("working_directory", "working_dir", "cwd"):
+        for alias in ("working_directory", "working_dir", "workingDirectory", "cwd"):
             path = tmp_path / f"worker_{alias}.json"
             path.write_text(json.dumps({"command": "run.sh", alias: "mydir"}), encoding="utf-8")
             spec = _load_worker_session_manifest(path)

@@ -211,6 +211,8 @@ def _load_worker_session_manifest(path: Path) -> WorkerSessionSpec:
     raw_payload_name = data.get("payload_name")
     if raw_payload_name is None and "payload" in data:
         raw_payload_name = data.get("payload")
+    if raw_payload_name is None and "payloadPath" in data:
+        raw_payload_name = data.get("payloadPath")
     payload_name = _coerce_session_file_name(
         raw_payload_name,
         default="worker-payload.json",
@@ -219,12 +221,14 @@ def _load_worker_session_manifest(path: Path) -> WorkerSessionSpec:
     raw_result_name = data.get("result_name")
     if raw_result_name is None and "result" in data:
         raw_result_name = data.get("result")
+    if raw_result_name is None and "resultPath" in data:
+        raw_result_name = data.get("resultPath")
     result_name = _coerce_session_file_name(
         raw_result_name,
         default="worker-result.json",
         field_name="result_name",
     )
-    _raw_wd = data.get("working_directory") or data.get("working_dir") or data.get("cwd")
+    _raw_wd = data.get("working_directory") or data.get("working_dir") or data.get("workingDirectory") or data.get("cwd")
     working_directory = _coerce_session_directory_name(
         _raw_wd,
         field_name="working_directory",
@@ -237,6 +241,9 @@ def _load_worker_session_manifest(path: Path) -> WorkerSessionSpec:
 
     raw_timeout = data.get("timeout_seconds")
     timeout_field_name = "timeout_seconds"
+    if raw_timeout is None and "timeoutSeconds" in data:
+        raw_timeout = data.get("timeoutSeconds")
+        timeout_field_name = "timeoutSeconds"
     if raw_timeout is None and "timeout" in data:
         raw_timeout = data.get("timeout")
         timeout_field_name = "timeout"

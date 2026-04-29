@@ -50,13 +50,13 @@ Example manifest:
 ```json
 {
   "command": "python3 worker.py",
-  "payload": "in/session.json",
-  "result": "out/result.json",
-  "cwd": "workers/demo",
+  "payloadPath": "in/session.json",
+  "resultPath": "out/result.json",
+  "workingDirectory": "workers/demo",
   "env": {
     "DEMO_MODE": "1"
   },
-  "timeout": 45
+  "timeoutSeconds": 45
 }
 ```
 
