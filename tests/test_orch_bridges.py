@@ -437,7 +437,7 @@ class TestLoadWorkerSessionManifest:
             "payloadPath": "camel/payload.json",
             "resultPath": "camel/result.json",
             "workingDirectory": "camel-dir",
-            "environmentVariables": {"FOO": "bar", "COUNT": 2},
+            "envVars": {"FOO": "bar", "COUNT": 2},
             "timeoutSeconds": 12,
         }), encoding="utf-8")
         spec = _load_worker_session_manifest(path)

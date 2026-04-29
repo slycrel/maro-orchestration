@@ -410,7 +410,7 @@ Next run with similar task:
 
 Manifests now support both the explicit keys and short aliases:
 - `command` or `cmd` (optionally with `args`, `argv`, or `arguments` arrays)
-- `environment`, `environment_variables`, `environmentVariables`, or `env`
+- `environment`, `environment_variables`, `environmentVariables`, `envVars`, or `env`
 - `working_directory`, `working_dir`, `workingDirectory`, `workDir`, or `cwd`
 - `timeout_seconds`, `timeoutSeconds`, or `timeout`
 - `payload_name`, `payload_path`, `payloadName`, `payload`, or `payloadPath`

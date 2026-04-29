@@ -261,6 +261,8 @@ def _load_worker_session_manifest(path: Path) -> WorkerSessionSpec:
         raw_environment = data.get("environment_variables")
     if raw_environment is None and "environmentVariables" in data:
         raw_environment = data.get("environmentVariables")
+    if raw_environment is None and "envVars" in data:
+        raw_environment = data.get("envVars")
     if raw_environment is None and "env" in data:
         raw_environment = data.get("env")
     environment = _coerce_env_map(raw_environment, worker=worker_name)

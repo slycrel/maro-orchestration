@@ -54,7 +54,7 @@ Example manifest:
   "payload_path": "in/session.json",
   "result_path": "out/result.json",
   "workDir": "workers/demo",
-  "environment_variables": {
+  "envVars": {
     "DEMO_MODE": "1"
   },
   "timeoutSeconds": 45
