@@ -50,8 +50,8 @@ Example manifest:
 ```json
 {
   "command": "python3 worker.py",
-  "payload_name": "in/session.json",
-  "result_name": "out/result.json",
+  "payload": "in/session.json",
+  "result": "out/result.json",
   "cwd": "workers/demo",
   "env": {
     "DEMO_MODE": "1"

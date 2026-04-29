@@ -410,6 +410,8 @@ Manifests now support both the explicit keys and short aliases:
 - `environment` or `env`
 - `timeout_seconds` or `timeout`
 - `working_directory` or `cwd`
+- `payload_name` or `payload`
+- `result_name` or `result`
 
 Use this when a worker needs nested artifact paths, injected environment variables, or a fixed working directory without shell wrapper glue.
 
