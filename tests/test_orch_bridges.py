@@ -374,6 +374,12 @@ class TestLoadWorkerSessionManifest:
         spec = _load_worker_session_manifest(path)
         assert spec.command == "python3 -m worker"
 
+    def test_dict_manifest_supports_argv_alias(self, tmp_path):
+        path = tmp_path / "worker.json"
+        path.write_text(json.dumps({"cmd": "python3", "argv": ["worker.py", "--mode", "argv"]}), encoding="utf-8")
+        spec = _load_worker_session_manifest(path)
+        assert spec.command == "python3 worker.py --mode argv"
+
     def test_dict_manifest_supports_cmd_alias(self, tmp_path):
         path = tmp_path / "worker.json"
         path.write_text(json.dumps({"cmd": ["python3", "-m", "worker"]}), encoding="utf-8")

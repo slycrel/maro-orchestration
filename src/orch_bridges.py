@@ -202,6 +202,8 @@ def _load_worker_session_manifest(path: Path) -> WorkerSessionSpec:
         raise ValueError(f"invalid worker session manifest format in {path}: missing 'command'")
 
     raw_args = data.get("args")
+    if raw_args is None and "argv" in data:
+        raw_args = data.get("argv")
     if raw_args is None and "arguments" in data:
         raw_args = data.get("arguments")
     command_parts: list[str]
