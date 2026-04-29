@@ -40,15 +40,17 @@ DEFAULT_BACKLOG_EVERY = 5
 # ---------------------------------------------------------------------------
 
 def _is_interactive_session_active() -> bool:
-    """Return True if a `claude --continue` interactive session is running.
+    """Return True if a relevant `claude --continue` interactive session is running.
 
-    When an interactive Claude Code session is active, the heartbeat should
-    skip all autonomous LLM work (backlog drain, evolver, inspector, task-store
-    drain) to avoid double-burning tokens. Health checks still run every tick.
+    When an interactive Claude Code session is active for this workspace/repo, the
+    heartbeat should skip all autonomous LLM work (backlog drain, evolver,
+    inspector, task-store drain) to avoid double-burning tokens. Health checks
+    still run every tick.
 
-    Detection: scan the process table for 'claude --continue' processes owned
-    by the current user. The subprocess adapter processes (claude -p) spawned
-    by the heartbeat itself are excluded since they don't use --continue.
+    Detection: scan the process table for 'claude --continue' processes owned by
+    the current user, then keep only sessions whose cwd lives under this repo or
+    an explicitly configured workspace root. Unrelated long-lived Claude sessions
+    elsewhere on the box should not freeze this workspace indefinitely.
     """
     try:
         result = subprocess.run(
@@ -57,7 +59,33 @@ def _is_interactive_session_active() -> bool:
             text=True,
             timeout=2,
         )
-        return result.returncode == 0 and bool(result.stdout.strip())
+        if result.returncode != 0 or not result.stdout.strip():
+            return False
+
+        roots = {Path.cwd().resolve(), Path(__file__).resolve().parent.parent.resolve()}
+        for env_name in ("POE_WORKSPACE", "OPENCLAW_WORKSPACE", "WORKSPACE_ROOT"):
+            value = os.environ.get(env_name)
+            if value:
+                try:
+                    roots.add(Path(value).expanduser().resolve())
+                except Exception:
+                    pass
+
+        for raw_pid in result.stdout.splitlines():
+            raw_pid = raw_pid.strip()
+            if not raw_pid:
+                continue
+            try:
+                cwd = Path(os.readlink(f"/proc/{int(raw_pid)}/cwd")).resolve()
+            except Exception:
+                continue
+            for root in roots:
+                try:
+                    cwd.relative_to(root)
+                    return True
+                except ValueError:
+                    continue
+        return False
     except Exception:
         return False  # if we can't tell, don't block work
 

@@ -819,14 +819,25 @@ class TestSessionGuard:
         with patch("heartbeat.subprocess.run", return_value=mock_result):
             assert _is_interactive_session_active() is False
 
-    def test_returns_true_when_pgrep_finds_process(self):
-        """pgrep returns 0 with output → interactive session active."""
+    def test_returns_true_when_pgrep_finds_process_in_workspace(self):
+        """Matching claude session under this workspace/repo → interactive session active."""
         from heartbeat import _is_interactive_session_active
         mock_result = MagicMock()
         mock_result.returncode = 0
         mock_result.stdout = "12345\n"
-        with patch("heartbeat.subprocess.run", return_value=mock_result):
+        with patch("heartbeat.subprocess.run", return_value=mock_result), \
+             patch("heartbeat.os.readlink", return_value=str(Path.cwd())):
             assert _is_interactive_session_active() is True
+
+    def test_returns_false_when_pgrep_finds_only_unrelated_process(self):
+        """Claude sessions outside this workspace should not block autonomous work."""
+        from heartbeat import _is_interactive_session_active
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = "12345\n"
+        with patch("heartbeat.subprocess.run", return_value=mock_result), \
+             patch("heartbeat.os.readlink", return_value="/home/clawd/claude"):
+            assert _is_interactive_session_active() is False
 
     def test_returns_false_on_subprocess_exception(self):
         """If pgrep is not available or times out, default to False (don't block work)."""
@@ -848,6 +859,16 @@ class TestSessionGuard:
         mock_result.returncode = 0
         mock_result.stdout = "   \n"  # whitespace only
         with patch("heartbeat.subprocess.run", return_value=mock_result):
+            assert _is_interactive_session_active() is False
+
+    def test_uninspectable_process_is_ignored(self):
+        """If cwd inspection fails for a match, skip it instead of blocking work."""
+        from heartbeat import _is_interactive_session_active
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = "12345\n"
+        with patch("heartbeat.subprocess.run", return_value=mock_result), \
+             patch("heartbeat.os.readlink", side_effect=OSError("gone")):
             assert _is_interactive_session_active() is False
 
     def test_tier2_skips_all_llm_when_session_active(self):
