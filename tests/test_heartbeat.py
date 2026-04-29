@@ -316,6 +316,28 @@ def test_cli_poe_heartbeat_loop_forwards_backlog_every():
     assert mock_loop.call_args.kwargs["backlog_every"] == 3
 
 
+def test_cli_poe_heartbeat_loop_leaves_autonomy_unset_by_default():
+    with patch("heartbeat.heartbeat_loop") as mock_loop:
+        import cli
+        rc = cli.main(["poe-heartbeat", "--loop", "--dry-run", "--no-escalate"])
+    assert rc == 0
+    assert mock_loop.call_args.kwargs["autonomy"] is None
+
+
+def test_cli_poe_heartbeat_loop_accepts_explicit_autonomy_flags():
+    with patch("heartbeat.heartbeat_loop") as mock_loop:
+        import cli
+        rc = cli.main(["poe-heartbeat", "--loop", "--dry-run", "--no-escalate", "--autonomy"])
+    assert rc == 0
+    assert mock_loop.call_args.kwargs["autonomy"] is True
+
+    with patch("heartbeat.heartbeat_loop") as mock_loop:
+        import cli
+        rc = cli.main(["poe-heartbeat", "--loop", "--dry-run", "--no-escalate", "--no-autonomy"])
+    assert rc == 0
+    assert mock_loop.call_args.kwargs["autonomy"] is False
+
+
 def test_heartbeat_loop_health_only_skips_scheduler(monkeypatch):
     import heartbeat as hb
     import scheduler
