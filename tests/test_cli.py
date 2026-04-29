@@ -393,6 +393,44 @@ def test_cli_tick_worker_session_manifest_aliases(tmp_path):
     assert (artifact_dir / "result-path.txt").read_text(encoding="utf-8") == str(artifact_dir / "resp" / "result.json")
 
 
+def test_cli_tick_worker_session_manifest_args_arrays(tmp_path):
+    r = _run(tmp_path, "init", "demo", "Session", "argv", "--priority", "1")
+    assert r.returncode == 0
+
+    worker_dir = tmp_path / "prototypes" / "poe-orchestration" / "workers" / "argv"
+    worker_dir.mkdir(parents=True)
+    script = worker_dir / "worker.py"
+    script.write_text(
+        "import json\n"
+        "import os\n"
+        "import sys\n"
+        "from pathlib import Path\n"
+        "Path(os.environ['ORCH_RUN_ARTIFACT_DIR']).joinpath('argv.txt').write_text(' '.join(sys.argv), encoding='utf-8')\n"
+        "Path(os.environ['ORCH_SESSION_RESULT_PATH']).write_text(json.dumps({'status':'done','note':'argv worker','artifact_path':os.environ['ORCH_RUN_ARTIFACT_PATH']}), encoding='utf-8')\n",
+        encoding="utf-8",
+    )
+
+    manifest = worker_dir / "argv.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "cmd": "python3",
+                "arguments": ["worker.py", "--mode", "cli"],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    r = _run(tmp_path, "tick", "--project", "demo", "--worker-session", str(manifest))
+    assert r.returncode == 0
+    assert "execution=done validation=done" in r.stdout
+
+    run_line = next(line for line in r.stdout.splitlines() if "run_id=" in line)
+    run_id = run_line.split("run_id=", 1)[1].split()[0]
+    artifact_dir = tmp_path / "prototypes" / "poe-orchestration" / "output" / "runs" / run_id
+    assert (artifact_dir / "argv.txt").read_text(encoding="utf-8") == "worker.py --mode cli"
+
+
 def test_cli_tick_session_cmd_markers_trigger_retries(tmp_path):
     r = _run(tmp_path, "init", "demo", "Session", "salvage", "--priority", "1")
     assert r.returncode == 0
