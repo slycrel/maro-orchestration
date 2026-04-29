@@ -209,6 +209,8 @@ def _load_worker_session_manifest(path: Path) -> WorkerSessionSpec:
         raise ValueError(f"invalid worker session manifest format in {path}: missing 'command'")
 
     raw_payload_name = data.get("payload_name")
+    if raw_payload_name is None and "payloadName" in data:
+        raw_payload_name = data.get("payloadName")
     if raw_payload_name is None and "payload" in data:
         raw_payload_name = data.get("payload")
     if raw_payload_name is None and "payloadPath" in data:
@@ -219,6 +221,8 @@ def _load_worker_session_manifest(path: Path) -> WorkerSessionSpec:
         field_name="payload_name",
     )
     raw_result_name = data.get("result_name")
+    if raw_result_name is None and "resultName" in data:
+        raw_result_name = data.get("resultName")
     if raw_result_name is None and "result" in data:
         raw_result_name = data.get("result")
     if raw_result_name is None and "resultPath" in data:
@@ -235,6 +239,8 @@ def _load_worker_session_manifest(path: Path) -> WorkerSessionSpec:
     )
     worker_name = path.stem if path.name else "worker_session"
     raw_environment = data.get("environment")
+    if raw_environment is None and "environmentVariables" in data:
+        raw_environment = data.get("environmentVariables")
     if raw_environment is None and "env" in data:
         raw_environment = data.get("env")
     environment = _coerce_env_map(raw_environment, worker=worker_name)

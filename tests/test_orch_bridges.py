@@ -407,15 +407,19 @@ class TestLoadWorkerSessionManifest:
         path = tmp_path / "worker.json"
         path.write_text(json.dumps({
             "command": "run.sh",
+            "payloadName": "camel/in-name.json",
+            "resultName": "camel/out-name.json",
             "payloadPath": "camel/payload.json",
             "resultPath": "camel/result.json",
             "workingDirectory": "camel-dir",
+            "environmentVariables": {"FOO": "bar", "COUNT": 2},
             "timeoutSeconds": 12,
         }), encoding="utf-8")
         spec = _load_worker_session_manifest(path)
-        assert spec.payload_name == "camel/payload.json"
-        assert spec.result_name == "camel/result.json"
+        assert spec.payload_name == "camel/in-name.json"
+        assert spec.result_name == "camel/out-name.json"
         assert spec.working_directory == "camel-dir"
+        assert spec.environment == {"FOO": "bar", "COUNT": "2"}
         assert spec.timeout_seconds == 12.0
 
     def test_missing_command_raises(self, tmp_path):
