@@ -208,13 +208,19 @@ def _load_worker_session_manifest(path: Path) -> WorkerSessionSpec:
     if not command:
         raise ValueError(f"invalid worker session manifest format in {path}: missing 'command'")
 
+    raw_payload_name = data.get("payload_name")
+    if raw_payload_name is None and "payload" in data:
+        raw_payload_name = data.get("payload")
     payload_name = _coerce_session_file_name(
-        data.get("payload_name"),
+        raw_payload_name,
         default="worker-payload.json",
         field_name="payload_name",
     )
+    raw_result_name = data.get("result_name")
+    if raw_result_name is None and "result" in data:
+        raw_result_name = data.get("result")
     result_name = _coerce_session_file_name(
-        data.get("result_name"),
+        raw_result_name,
         default="worker-result.json",
         field_name="result_name",
     )

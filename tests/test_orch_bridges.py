@@ -392,6 +392,17 @@ class TestLoadWorkerSessionManifest:
         assert spec.environment == {"FOO": "bar", "COUNT": "3"}
         assert spec.timeout_seconds == 45.0
 
+    def test_dict_manifest_supports_payload_and_result_aliases(self, tmp_path):
+        path = tmp_path / "worker.json"
+        path.write_text(json.dumps({
+            "command": "run.sh",
+            "payload": "in/payload.json",
+            "result": "out/result.json",
+        }), encoding="utf-8")
+        spec = _load_worker_session_manifest(path)
+        assert spec.payload_name == "in/payload.json"
+        assert spec.result_name == "out/result.json"
+
     def test_missing_command_raises(self, tmp_path):
         path = tmp_path / "worker.json"
         path.write_text(json.dumps({"payload_name": "in.json"}), encoding="utf-8")

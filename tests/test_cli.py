@@ -369,6 +369,8 @@ def test_cli_tick_worker_session_manifest_aliases(tmp_path):
                 "cwd": "nested",
                 "env": {"ORCH_WORKER_TOKEN": "alias-ok"},
                 "timeout": 15,
+                "payload": "req/payload.json",
+                "result": "resp/result.json",
             }
         ),
         encoding="utf-8",
@@ -383,6 +385,8 @@ def test_cli_tick_worker_session_manifest_aliases(tmp_path):
     artifact_dir = tmp_path / "prototypes" / "poe-orchestration" / "output" / "runs" / run_id
     assert (artifact_dir / "token.txt").read_text(encoding="utf-8") == "alias-ok"
     assert (artifact_dir / "cwd.txt").read_text(encoding="utf-8") == str(workdir)
+    assert (artifact_dir / "req" / "payload.json").exists()
+    assert (artifact_dir / "resp" / "result.json").exists()
 
 
 def test_cli_tick_session_cmd_markers_trigger_retries(tmp_path):
