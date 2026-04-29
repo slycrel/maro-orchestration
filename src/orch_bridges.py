@@ -754,6 +754,8 @@ def session_execution_bridge(
                 "ORCH_RUN_ARTIFACT_DIR": str(artifact_dir),
                 "ORCH_RUN_ARTIFACT_PATH": default_artifact_path,
                 "ORCH_SESSION_PAYLOAD": str(payload_path),
+                "ORCH_SESSION_PAYLOAD_PATH": str(payload_path),
+                "ORCH_SESSION_RESULT": str(result_path),
                 "ORCH_SESSION_RESULT_PATH": str(result_path),
             }
         )

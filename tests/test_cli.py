@@ -354,6 +354,8 @@ def test_cli_tick_worker_session_manifest_aliases(tmp_path):
         "#!/usr/bin/env bash\n"
         'printf "%s" "$ORCH_WORKER_TOKEN" > "$ORCH_RUN_ARTIFACT_DIR/token.txt"\n'
         'printf "%s" "$ORCH_SESSION_WORKING_DIR" > "$ORCH_RUN_ARTIFACT_DIR/cwd.txt"\n'
+        'printf "%s" "$ORCH_SESSION_PAYLOAD_PATH" > "$ORCH_RUN_ARTIFACT_DIR/payload-path.txt"\n'
+        'printf "%s" "$ORCH_SESSION_RESULT" > "$ORCH_RUN_ARTIFACT_DIR/result-path.txt"\n'
         'cat > "$ORCH_SESSION_RESULT_PATH" <<EOF\n'
         '{"status":"done","note":"alias worker","artifact_path":"$ORCH_RUN_ARTIFACT_PATH"}\n'
         "EOF\n",
@@ -387,6 +389,8 @@ def test_cli_tick_worker_session_manifest_aliases(tmp_path):
     assert (artifact_dir / "cwd.txt").read_text(encoding="utf-8") == str(workdir)
     assert (artifact_dir / "req" / "payload.json").exists()
     assert (artifact_dir / "resp" / "result.json").exists()
+    assert (artifact_dir / "payload-path.txt").read_text(encoding="utf-8") == str(artifact_dir / "req" / "payload.json")
+    assert (artifact_dir / "result-path.txt").read_text(encoding="utf-8") == str(artifact_dir / "resp" / "result.json")
 
 
 def test_cli_tick_session_cmd_markers_trigger_retries(tmp_path):
