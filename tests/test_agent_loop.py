@@ -23,6 +23,8 @@ from agent_loop import (
     _decompose,
     _execute_step,
     _goal_to_slug,
+    _is_combined_exec_analyze,
+    _split_exec_analyze,
     _write_plan_manifest,
     run_agent_loop,
     run_parallel_loops,
@@ -1902,11 +1904,53 @@ def test_is_combined_exec_analyze_new_patterns():
     assert _is_combined_exec_analyze("find all Python files and evaluate import dependencies") is True
 
 
+def test_split_exec_analyze_produces_non_compound_analyze_step():
+    parts = _split_exec_analyze("run pytest and analyze failures")
+    assert len(parts) == 2
+    assert _is_combined_exec_analyze(parts[0]) is False
+    assert _is_combined_exec_analyze(parts[1]) is False
+    assert parts[1].lower().startswith("read the captured output")
+
+
 def test_is_combined_exec_analyze_does_not_over_trigger():
     """Pure analysis steps without an exec keyword are not flagged."""
     assert _is_combined_exec_analyze("Identify the root cause of the import failure") is False
     assert _is_combined_exec_analyze("Evaluate the quality of the test coverage summary") is False
     assert _is_combined_exec_analyze("Conclude whether the architecture matches the design doc") is False
+
+
+def test_run_agent_loop_recovers_if_compound_step_leaks_to_executor(monkeypatch, tmp_path):
+    """Even if a shaper path misses a compound step, the executor guard should split it."""
+    _setup_workspace(monkeypatch, tmp_path)
+
+    import agent_loop as al
+
+    monkeypatch.setattr(al, "_decompose", lambda *args, **kwargs: ["run pytest and analyze failures"])
+    monkeypatch.setattr(al, "_shape_steps", lambda steps, **kwargs: list(steps))
+
+    executed = []
+
+    def _fake_execute_step(**kwargs):
+        executed.append(kwargs["step_text"])
+        return {
+            "status": "done",
+            "result": f"ok: {kwargs['step_text']}",
+            "summary": "done",
+            "tokens_in": 0,
+            "tokens_out": 0,
+            "confidence": "high",
+            "inject_steps": [],
+        }
+
+    monkeypatch.setattr(al, "_execute_step", _fake_execute_step)
+
+    result = run_agent_loop("check repo", project="compound-leak", dry_run=False, max_steps=1)
+
+    assert result.status == "done"
+    assert executed
+    assert all(not _is_combined_exec_analyze(step) for step in executed)
+    assert executed[0].lower().startswith("run ")
+    assert any("analyze" in step.lower() or "read the captured output" in step.lower() for step in executed)
 
 
 # ---------------------------------------------------------------------------

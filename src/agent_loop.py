@@ -3065,10 +3065,10 @@ def _split_exec_analyze(step: str) -> List[str]:
     """Split a combined exec+analyze step into two atomic steps.
 
     Returns a list of two step strings: [run_step, analyze_step].
+    The analyze step is sanitized so it does not itself contain the original
+    execution phrasing and re-trigger the compound-step detector.
     """
     low = step.lower()
-    # Find which exec keyword matched to build a clean run step
-    exec_kw = next((kw.strip() for kw in _EXEC_KEYWORDS if kw in low), "command")
     # Trim trailing clauses that describe analysis
     run_part = step
     for sep in (" and ", " then ", ", then ", " to ", "; "):
@@ -3079,8 +3079,17 @@ def _split_exec_analyze(step: str) -> List[str]:
                 run_part = candidate
                 break
 
+    analysis_part = "analyze the captured output for errors, results, and next actions"
+    analysis_idx = min((low.find(kw) for kw in _ANALYZE_KEYWORDS if kw in low), default=-1)
+    if analysis_idx >= 0:
+        candidate = step[analysis_idx:].strip(" ,;:-")
+        if candidate:
+            analysis_part = candidate
+    if any(kw in analysis_part.lower() for kw in _EXEC_KEYWORDS):
+        analysis_part = "analyze the captured output for errors, results, and next actions"
+
     run_step = f"Run {run_part.lstrip('Rr un').strip()[:120]} and save output to a file"
-    analyze_step = f"Read the captured output and analyze results: {step[:80]}"
+    analyze_step = f"Read the captured output and {analysis_part[:120]}"
     return [run_step, analyze_step]
 
 
@@ -4094,14 +4103,26 @@ def run_agent_loop(
             if _next_step_injected_context
             else _ancestry_context
         )
-        # Invariant guard: if a compound step still reaches execution, log it so we
-        # can trace which path introduced it (shaper gap detection — Codex Priority 1).
+        # Invariant guard: if a compound step still reaches execution, recover
+        # immediately instead of merely logging. This closes shaper gaps across
+        # weird plan-mutation paths by converting the leak into replacement steps
+        # before any executor/tool burn happens.
         if _is_combined_exec_analyze(step_text):
+            _parts = _split_exec_analyze(step_text)
             log.warning(
-                "step-shape-LEAK step=%d: compound exec+analyze step reached executor "
-                "(shaper did not catch this — check injection path): %r",
-                step_idx, step_text[:120],
+                "step-shape-LEAK step=%d: compound exec+analyze step reached executor; "
+                "auto-splitting into %d replacement steps: %r",
+                step_idx, len(_parts), step_text[:120],
             )
+            remaining_steps[:0] = _parts
+            remaining_indices[:0] = [-1] * len(_parts)
+            if verbose:
+                print(
+                    f"[poe] step {step_idx}: recovered compound step by splitting into {len(_parts)} steps",
+                    file=sys.stderr,
+                    flush=True,
+                )
+            continue
         outcome = _execute_step(
             goal=goal,
             step_text=step_text,
