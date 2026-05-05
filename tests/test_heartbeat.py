@@ -511,6 +511,37 @@ def test_run_backlog_step_loop_exception_marks_blocked(tmp_path, monkeypatch):
     assert heartbeat._backlog_drain_active is False
 
 
+def test_run_backlog_step_processes_multiple_items_per_wake(tmp_path, monkeypatch):
+    """Backlog drain should chew through a small batch instead of one item per wake."""
+    monkeypatch.setenv("POE_ORCH_ROOT", str(tmp_path))
+
+    import importlib
+    import orch_items as oi
+    importlib.reload(oi)
+
+    oi.ensure_project("proj-e", "mission e")
+    oi.append_next_items("proj-e", ["first", "second", "third"])
+
+    import heartbeat
+    heartbeat._backlog_drain_active = True
+
+    _lines, seeded_items = oi.parse_next("proj-e")
+    selected = [item for item in seeded_items if item.text in {"first", "second", "third"}]
+
+    mock_loop_result = MagicMock()
+    mock_loop_result.status = "done"
+
+    with patch("orch_items.select_global_next", side_effect=[("proj-e", selected[0]), ("proj-e", selected[1]), None]), \
+         patch("agent_loop.run_agent_loop", return_value=mock_loop_result) as mock_loop:
+        _run_backlog_step(dry_run=False, verbose=False, max_items=2)
+
+    _lines2, items2 = oi.parse_next("proj-e")
+    target_states = {item.text: item.state for item in items2 if item.text in {"first", "second", "third"}}
+    assert target_states == {"first": oi.STATE_DONE, "second": oi.STATE_DONE, "third": oi.STATE_TODO}
+    assert mock_loop.call_count == 2
+    assert heartbeat._backlog_drain_active is False
+
+
 # ---------------------------------------------------------------------------
 # Background evolver / inspector / eval thread functions
 # ---------------------------------------------------------------------------

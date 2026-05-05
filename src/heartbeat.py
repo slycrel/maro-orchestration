@@ -33,6 +33,7 @@ from typing import Any, Dict, List, Optional
 log = logging.getLogger("poe.heartbeat")
 
 DEFAULT_BACKLOG_EVERY = 5
+DEFAULT_BACKLOG_BATCH_SIZE = 3
 
 
 # ---------------------------------------------------------------------------
@@ -647,11 +648,13 @@ def _run_task_store_drain(*, dry_run: bool = False, verbose: bool = False) -> No
             _task_store_drain_active = False
 
 
-def _run_backlog_step(*, dry_run: bool = False, verbose: bool = False) -> None:
-    """Pick the highest-priority NEXT.md TODO and run one agent loop iteration.
+def _run_backlog_step(*, dry_run: bool = False, verbose: bool = False, max_items: int = DEFAULT_BACKLOG_BATCH_SIZE) -> None:
+    """Pick the highest-priority NEXT.md TODO items and run bounded agent-loop work.
 
     Called from a daemon thread by heartbeat_loop. Marks items DOING on start,
     DONE on loop success, BLOCKED on loop failure (to prevent infinite retry).
+    Processes a small batch per wake so background work does not idle between
+    tiny bursts.
     """
     global _backlog_drain_active
     try:
@@ -670,61 +673,61 @@ def _run_backlog_step(*, dry_run: bool = False, verbose: bool = False) -> None:
             STATE_DOING,
             STATE_DONE,
             STATE_BLOCKED,
-            STATE_TODO,
         )
+        from agent_loop import run_agent_loop
 
-        result = select_global_next()
-        if result is None:
+        processed = 0
+        while processed < max(1, int(max_items)):
+            result = select_global_next()
+            if result is None:
+                if verbose and processed == 0:
+                    print("[heartbeat] backlog drain: no TODO items found", file=sys.stderr)
+                return
+
+            slug, item = result
             if verbose:
-                print("[heartbeat] backlog drain: no TODO items found", file=sys.stderr)
-            return
+                print(
+                    f"[heartbeat] backlog drain: [{slug}] {item.text[:80]}",
+                    file=sys.stderr,
+                )
 
-        slug, item = result
-        if verbose:
-            print(
-                f"[heartbeat] backlog drain: [{slug}] {item.text[:80]}",
-                file=sys.stderr,
-            )
-
-        # Claim the item by marking it in-progress
-        try:
-            mark_item(slug, item.index, STATE_DOING)
-        except Exception as exc:
-            print(f"[heartbeat] backlog drain mark_doing failed: {exc}", file=sys.stderr)
-            return
-
-        if dry_run:
-            # In dry-run, immediately mark done — used by tests to validate wiring
-            mark_item(slug, item.index, STATE_DONE)
-            if verbose:
-                print(f"[heartbeat] backlog drain: dry-run — marked done [{slug}] item {item.index}", file=sys.stderr)
-            return
-
-        try:
-            from agent_loop import run_agent_loop
-            loop_result = run_agent_loop(
-                goal=item.text,
-                project=slug,
-                dry_run=False,
-                verbose=verbose,
-            )
-            if loop_result.status == "done":
-                mark_item(slug, item.index, STATE_DONE)
-            else:
-                # stuck/error → block so we don't retry the same item on every tick
-                mark_item(slug, item.index, STATE_BLOCKED)
-                if verbose:
-                    print(
-                        f"[heartbeat] backlog drain: loop ended {loop_result.status!r} "
-                        f"for [{slug}] item {item.index} — marked blocked",
-                        file=sys.stderr,
-                    )
-        except Exception as exc:
-            print(f"[heartbeat] backlog drain loop failed: {exc}", file=sys.stderr)
             try:
-                mark_item(slug, item.index, STATE_BLOCKED)
-            except Exception:
-                pass
+                mark_item(slug, item.index, STATE_DOING)
+            except Exception as exc:
+                print(f"[heartbeat] backlog drain mark_doing failed: {exc}", file=sys.stderr)
+                return
+
+            if dry_run:
+                mark_item(slug, item.index, STATE_DONE)
+                processed += 1
+                if verbose:
+                    print(f"[heartbeat] backlog drain: dry-run — marked done [{slug}] item {item.index}", file=sys.stderr)
+                continue
+
+            try:
+                loop_result = run_agent_loop(
+                    goal=item.text,
+                    project=slug,
+                    dry_run=False,
+                    verbose=verbose,
+                )
+                if loop_result.status == "done":
+                    mark_item(slug, item.index, STATE_DONE)
+                else:
+                    mark_item(slug, item.index, STATE_BLOCKED)
+                    if verbose:
+                        print(
+                            f"[heartbeat] backlog drain: loop ended {loop_result.status!r} "
+                            f"for [{slug}] item {item.index} — marked blocked",
+                            file=sys.stderr,
+                        )
+            except Exception as exc:
+                print(f"[heartbeat] backlog drain loop failed: {exc}", file=sys.stderr)
+                try:
+                    mark_item(slug, item.index, STATE_BLOCKED)
+                except Exception:
+                    pass
+            processed += 1
     finally:
         with _backlog_drain_lock:
             _backlog_drain_active = False
