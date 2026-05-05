@@ -410,11 +410,11 @@ Next run with similar task:
 
 Manifests now support both the explicit keys and short aliases:
 - `command` or `cmd` (optionally with `args`, `argv`, or `arguments` arrays)
-- `environment`, `environment_variables`, `environmentVariables`, `envVars`, or `env`
-- `working_directory`, `working_dir`, `workingDirectory`, `workDir`, or `cwd`
-- `timeout_seconds`, `timeoutSeconds`, or `timeout`
-- `payload_name`, `payload_path`, `payloadName`, `payload`, or `payloadPath`
-- `result_name`, `result_path`, `resultName`, `result`, or `resultPath`
+- `environment`, `environment_variables`, `environmentVariables`, `env_vars`, `envVars`, or `env`
+- `working_directory`, `working_dir`, `work_dir`, `workingDirectory`, `workingDir`, `workDir`, or `cwd`
+- `timeout_seconds`, `timeout_secs`, `timeoutSeconds`, `timeoutSecs`, or `timeout`
+- `payload_name`, `payload_file`, `payload_path`, `payloadName`, `payloadFile`, `payload`, or `payloadPath`
+- `result_name`, `result_file`, `result_path`, `resultName`, `resultFile`, `result`, or `resultPath`
 
 Use this when a worker needs nested artifact paths, injected environment variables, or a fixed working directory without shell wrapper glue.
 
