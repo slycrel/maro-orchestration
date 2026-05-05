@@ -34,6 +34,7 @@ log = logging.getLogger("poe.heartbeat")
 
 DEFAULT_BACKLOG_EVERY = 5
 DEFAULT_BACKLOG_BATCH_SIZE = 3
+DEFAULT_TASK_STORE_BATCH_SIZE = 6
 
 
 # ---------------------------------------------------------------------------
@@ -627,7 +628,7 @@ def _run_eval_bg(*, dry_run: bool = False, verbose: bool = False) -> None:
             _slow_update_sched.finish_work()
 
 
-def _run_task_store_drain(*, dry_run: bool = False, verbose: bool = False) -> None:
+def _run_task_store_drain(*, dry_run: bool = False, verbose: bool = False, max_tasks: int = DEFAULT_TASK_STORE_BATCH_SIZE) -> None:
     """Drain loop_continuation and loop_escalation tasks from the task store.
 
     Called from a daemon thread by heartbeat_loop. Each call processes up to
@@ -637,7 +638,7 @@ def _run_task_store_drain(*, dry_run: bool = False, verbose: bool = False) -> No
     global _task_store_drain_active
     try:
         from handle import drain_task_store
-        n = drain_task_store(dry_run=dry_run, verbose=verbose, max_tasks=3)
+        n = drain_task_store(dry_run=dry_run, verbose=verbose, max_tasks=max(1, int(max_tasks)))
         if n and verbose:
             print(f"[heartbeat] task store drain: processed {n} task(s)", file=sys.stderr)
     except Exception as exc:

@@ -4,6 +4,7 @@ import json
 import sys
 import threading
 import time
+import types
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -18,6 +19,7 @@ from heartbeat import (
     _tier2_llm_diagnosis,
     _tier3_escalate,
     _run_backlog_step,
+    _run_task_store_drain,
     _run_evolver_bg,
     _run_inspector_bg,
     _run_eval_bg,
@@ -545,6 +547,38 @@ def test_run_backlog_step_processes_multiple_items_per_wake(tmp_path, monkeypatc
 # ---------------------------------------------------------------------------
 # Background evolver / inspector / eval thread functions
 # ---------------------------------------------------------------------------
+
+def test_run_task_store_drain_forwards_batch_size(monkeypatch):
+    import heartbeat
+    heartbeat._task_store_drain_active = True
+    captured = {}
+
+    def _fake_drain_task_store(**kwargs):
+        captured.update(kwargs)
+        return 2
+
+    monkeypatch.setitem(sys.modules, "handle", types.SimpleNamespace(drain_task_store=_fake_drain_task_store))
+    _run_task_store_drain(dry_run=True, verbose=False, max_tasks=7)
+    assert captured["dry_run"] is True
+    assert captured["verbose"] is False
+    assert captured["max_tasks"] == 7
+    assert heartbeat._task_store_drain_active is False
+
+
+def test_run_task_store_drain_clamps_batch_size(monkeypatch):
+    import heartbeat
+    heartbeat._task_store_drain_active = True
+    captured = {}
+
+    def _fake_drain_task_store(**kwargs):
+        captured.update(kwargs)
+        return 0
+
+    monkeypatch.setitem(sys.modules, "handle", types.SimpleNamespace(drain_task_store=_fake_drain_task_store))
+    _run_task_store_drain(dry_run=False, verbose=True, max_tasks=0)
+    assert captured["max_tasks"] == 1
+    assert heartbeat._task_store_drain_active is False
+
 
 def test_run_evolver_bg_clears_flag():
     """_run_evolver_bg clears _evolver_active flag even on exception."""
