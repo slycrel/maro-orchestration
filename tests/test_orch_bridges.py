@@ -103,6 +103,9 @@ class TestCoerceSessionFileName:
     def test_returns_default_for_none(self):
         assert _coerce_session_file_name(None, default="d.json", field_name="f") == "d.json"
 
+    def test_accepts_nested_relative_alias_style_path(self):
+        assert _coerce_session_file_name("payloads/in.json", default="d.json", field_name="payload_file") == "payloads/in.json"
+
     def test_returns_default_for_empty(self):
         assert _coerce_session_file_name("", default="d.json", field_name="f") == "d.json"
 
@@ -462,6 +465,23 @@ class TestLoadWorkerSessionManifest:
         assert spec.result_name == "snake/out.json"
         assert spec.working_directory == "snake-dir"
         assert spec.environment == {"FOO": "zap"}
+
+    def test_dict_manifest_supports_additional_file_env_and_timeout_aliases(self, tmp_path):
+        path = tmp_path / "worker.json"
+        path.write_text(json.dumps({
+            "cmd": "python3",
+            "argv": ["worker.py"],
+            "payload_file": "payloads/in.json",
+            "resultFile": "results/out.json",
+            "env_vars": {"FOO": "bar", "COUNT": 2},
+            "timeoutSecs": 9,
+        }), encoding="utf-8")
+        spec = _load_worker_session_manifest(path)
+        assert spec.command == "python3 worker.py"
+        assert spec.payload_name == "payloads/in.json"
+        assert spec.result_name == "results/out.json"
+        assert spec.environment == {"FOO": "bar", "COUNT": "2"}
+        assert spec.timeout_seconds == 9.0
 
     def test_missing_command_raises(self, tmp_path):
         path = tmp_path / "worker.json"

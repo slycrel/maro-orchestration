@@ -223,10 +223,14 @@ def _load_worker_session_manifest(path: Path) -> WorkerSessionSpec:
     command = " ".join(quote(part) for part in command_parts)
 
     raw_payload_name = data.get("payload_name")
+    if raw_payload_name is None and "payload_file" in data:
+        raw_payload_name = data.get("payload_file")
     if raw_payload_name is None and "payload_path" in data:
         raw_payload_name = data.get("payload_path")
     if raw_payload_name is None and "payloadName" in data:
         raw_payload_name = data.get("payloadName")
+    if raw_payload_name is None and "payloadFile" in data:
+        raw_payload_name = data.get("payloadFile")
     if raw_payload_name is None and "payload" in data:
         raw_payload_name = data.get("payload")
     if raw_payload_name is None and "payloadPath" in data:
@@ -237,10 +241,14 @@ def _load_worker_session_manifest(path: Path) -> WorkerSessionSpec:
         field_name="payload_name",
     )
     raw_result_name = data.get("result_name")
+    if raw_result_name is None and "result_file" in data:
+        raw_result_name = data.get("result_file")
     if raw_result_name is None and "result_path" in data:
         raw_result_name = data.get("result_path")
     if raw_result_name is None and "resultName" in data:
         raw_result_name = data.get("resultName")
+    if raw_result_name is None and "resultFile" in data:
+        raw_result_name = data.get("resultFile")
     if raw_result_name is None and "result" in data:
         raw_result_name = data.get("result")
     if raw_result_name is None and "resultPath" in data:
@@ -261,6 +269,8 @@ def _load_worker_session_manifest(path: Path) -> WorkerSessionSpec:
         raw_environment = data.get("environment_variables")
     if raw_environment is None and "environmentVariables" in data:
         raw_environment = data.get("environmentVariables")
+    if raw_environment is None and "env_vars" in data:
+        raw_environment = data.get("env_vars")
     if raw_environment is None and "envVars" in data:
         raw_environment = data.get("envVars")
     if raw_environment is None and "env" in data:
@@ -269,9 +279,15 @@ def _load_worker_session_manifest(path: Path) -> WorkerSessionSpec:
 
     raw_timeout = data.get("timeout_seconds")
     timeout_field_name = "timeout_seconds"
+    if raw_timeout is None and "timeout_secs" in data:
+        raw_timeout = data.get("timeout_secs")
+        timeout_field_name = "timeout_secs"
     if raw_timeout is None and "timeoutSeconds" in data:
         raw_timeout = data.get("timeoutSeconds")
         timeout_field_name = "timeoutSeconds"
+    if raw_timeout is None and "timeoutSecs" in data:
+        raw_timeout = data.get("timeoutSecs")
+        timeout_field_name = "timeoutSecs"
     if raw_timeout is None and "timeout" in data:
         raw_timeout = data.get("timeout")
         timeout_field_name = "timeout"

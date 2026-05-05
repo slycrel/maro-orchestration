@@ -42,8 +42,9 @@ print(r.summary())
 ## Worker session manifest flow
 
 Worker-session manifests can now use either the explicit field names
-(`environment`, `timeout_seconds`, `working_directory`) or the shorter aliases
-(`env`, `timeout`, `cwd`).
+(`environment`, `timeout_seconds`, `working_directory`, `payload_name`, `result_name`)
+or the shorter aliases (`env`, `env_vars`, `timeout`, `timeoutSecs`, `cwd`,
+`payload_file`, `resultFile`).
 
 Example manifest:
 
