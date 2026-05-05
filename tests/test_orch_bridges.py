@@ -466,7 +466,7 @@ class TestLoadWorkerSessionManifest:
         assert spec.working_directory == "snake-dir"
         assert spec.environment == {"FOO": "zap"}
 
-    def test_dict_manifest_supports_additional_file_env_and_timeout_aliases(self, tmp_path):
+    def test_dict_manifest_supports_additional_file_env_timeout_and_workdir_aliases(self, tmp_path):
         path = tmp_path / "worker.json"
         path.write_text(json.dumps({
             "cmd": "python3",
@@ -475,6 +475,7 @@ class TestLoadWorkerSessionManifest:
             "resultFile": "results/out.json",
             "env_vars": {"FOO": "bar", "COUNT": 2},
             "timeoutSecs": 9,
+            "work_dir": "snake-workdir",
         }), encoding="utf-8")
         spec = _load_worker_session_manifest(path)
         assert spec.command == "python3 worker.py"
@@ -482,6 +483,16 @@ class TestLoadWorkerSessionManifest:
         assert spec.result_name == "results/out.json"
         assert spec.environment == {"FOO": "bar", "COUNT": "2"}
         assert spec.timeout_seconds == 9.0
+        assert spec.working_directory == "snake-workdir"
+
+    def test_dict_manifest_supports_working_dir_alias(self, tmp_path):
+        path = tmp_path / "worker.json"
+        path.write_text(json.dumps({
+            "command": "run.sh",
+            "workingDir": "camel-workdir",
+        }), encoding="utf-8")
+        spec = _load_worker_session_manifest(path)
+        assert spec.working_directory == "camel-workdir"
 
     def test_missing_command_raises(self, tmp_path):
         path = tmp_path / "worker.json"
