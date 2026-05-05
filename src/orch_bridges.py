@@ -258,7 +258,15 @@ def _load_worker_session_manifest(path: Path) -> WorkerSessionSpec:
         default="worker-result.json",
         field_name="result_name",
     )
-    _raw_wd = data.get("working_directory") or data.get("working_dir") or data.get("workingDirectory") or data.get("workDir") or data.get("cwd")
+    _raw_wd = (
+        data.get("working_directory")
+        or data.get("working_dir")
+        or data.get("work_dir")
+        or data.get("workingDirectory")
+        or data.get("workingDir")
+        or data.get("workDir")
+        or data.get("cwd")
+    )
     working_directory = _coerce_session_directory_name(
         _raw_wd,
         field_name="working_directory",
