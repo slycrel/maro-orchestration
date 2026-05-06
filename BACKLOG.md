@@ -9,6 +9,28 @@ Last reviewed: 2026-04-18 (post run-7 — added intent-resolution initiative + m
 
 ---
 
+### Build-loop wiring — cron wakeups are hitting the wrong abstraction (2026-05-06)
+
+The repeated `poe-orchestration-build-loop` duty-cycle alerts finally coughed up a concrete diagnosis: the 5-minute cron is not running a dedicated autonomous build loop. It is waking the main session with the generic reminder text:
+
+> Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.
+
+That explains the observed pattern:
+- `last_status=ok`
+- duty cycle usually ~5–7%, occasionally a bit higher
+- background checkpoints fine
+- repo often clean
+
+In other words: the system is succeeding at the wrong thing. A reminder wake can only do opportunistic work; it is not a real build-runner substrate.
+
+- [ ] **Route build-loop cron to a dedicated autonomous runner/supervisor.** Either:
+  - target a dedicated worker/session that owns build continuation directly, or
+  - keep the reminder wake but make it reliably spawn/maintain exactly one autonomous build worker when backlog is active.
+- [ ] **Define the success condition operationally.** "Fixed" means more than cleaner logs: while active work exists, measured duty should stay above the 60% floor (target 85%+) without relying on human-visible heartbeat chatter.
+- [ ] **Preserve health-only heartbeat semantics.** The 2026-04-22 split was correct; do not regress into making every generic heartbeat wake an autonomy daemon again. The fix needs to be explicit build-loop wiring, not re-coupling everything.
+
+---
+
 ### DISCUSS — invert the planning stage: 1-shot first, escape hatch second (2026-04-26, Jeremy)
 
 Jeremy's framing while AFK: instead of scaffolding around the planning stage (scope, intent-resolution, constraint orchestration, decomposition_too_broad recovery, etc.), **lean into the bitter lesson** by inverting the default. The flow becomes:
