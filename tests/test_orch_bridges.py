@@ -31,6 +31,7 @@ from orch_bridges import (
     chain_validation_bridges,
     command_execution_bridge,
     named_validation_bridge,
+    session_execution_bridge,
     _default_validation_bridge,
     _default_execution_bridge,
 )
@@ -709,6 +710,25 @@ class TestCommandExecutionBridge:
         bridge = command_execution_bridge("false")
         with pytest.raises(ExecutionBridgeError, match="command failed"):
             bridge(_make_run())
+
+
+class TestSessionExecutionBridge:
+    @patch("orch_bridges.subprocess.run")
+    def test_failed_session_includes_stdout_and_stderr_tails(self, mock_run, tmp_path, monkeypatch):
+        monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+        mock_run.return_value = MagicMock(
+            returncode=1,
+            stdout="line a\nNOW lane error: 429 Client Error\nfinal stdout line\n",
+            stderr="warn one\nwarn two\nfinal stderr line\n",
+        )
+        bridge = session_execution_bridge("false")
+        with pytest.raises(ExecutionBridgeError) as excinfo:
+            bridge(_make_run())
+
+        msg = str(excinfo.value)
+        assert "session failed" in msg
+        assert "stdout=line a | NOW lane error: 429 Client Error | final stdout line" in msg
+        assert "stderr=warn one | warn two | final stderr line" in msg
 
 
 # ---------------------------------------------------------------------------

@@ -862,15 +862,26 @@ def session_execution_bridge(
         if stdout_result:
             return stdout_result
 
+        def _tail_lines(text: str, *, limit: int = 3) -> str:
+            lines = [line.strip() for line in (text or "").splitlines() if line.strip()]
+            if not lines:
+                return ""
+            return " | ".join(lines[-limit:])
+
         if proc.returncode == 0:
             note = f"session succeeded: {resolved_command}"
-            if proc.stdout.strip():
-                note = f"{note}; stdout={proc.stdout.strip().splitlines()[-1]}"
+            stdout_tail = _tail_lines(proc.stdout)
+            if stdout_tail:
+                note = f"{note}; stdout={stdout_tail}"
             return ExecutionResult(status="done", note=note, artifact_path=default_artifact_path)
 
         note = f"session failed ({proc.returncode}): {resolved_command}"
-        if proc.stderr.strip():
-            note = f"{note}; stderr={proc.stderr.strip().splitlines()[-1]}"
+        stdout_tail = _tail_lines(proc.stdout)
+        stderr_tail = _tail_lines(proc.stderr)
+        if stdout_tail:
+            note = f"{note}; stdout={stdout_tail}"
+        if stderr_tail:
+            note = f"{note}; stderr={stderr_tail}"
         raise ExecutionBridgeError(note)
 
     return _execute
