@@ -75,9 +75,9 @@ _MODEL_MAP: Dict[str, Dict[str, str]] = {
         MODEL_POWER: "claude-opus-4-6",
     },
     "openrouter": {
-        MODEL_CHEAP: "anthropic/claude-haiku-4-5-20251001",
-        MODEL_MID:   "anthropic/claude-sonnet-4-6",
-        MODEL_POWER: "anthropic/claude-opus-4-6",
+        MODEL_CHEAP: "anthropic/claude-haiku-4.5",
+        MODEL_MID:   "anthropic/claude-sonnet-4.6",
+        MODEL_POWER: "anthropic/claude-opus-4.6",
     },
     "openai": {
         MODEL_CHEAP: "gpt-4o-mini",

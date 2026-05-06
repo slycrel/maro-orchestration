@@ -785,12 +785,14 @@ def test_poe_backend_env_var_ignored_when_explicit_backend(monkeypatch):
 
 
 def test_openrouter_model_map_uses_current_ids():
-    """OpenRouter model map should reference current -4-6 model IDs."""
-    from llm import _MODEL_MAP, MODEL_MID, MODEL_POWER
+    """OpenRouter model map should reference current OpenRouter model IDs."""
+    from llm import _MODEL_MAP, MODEL_CHEAP, MODEL_MID, MODEL_POWER
+    cheap = _MODEL_MAP["openrouter"][MODEL_CHEAP]
     mid = _MODEL_MAP["openrouter"][MODEL_MID]
     power = _MODEL_MAP["openrouter"][MODEL_POWER]
-    assert "4-6" in mid, f"Expected 4-6 in mid model, got {mid!r}"
-    assert "4-6" in power, f"Expected 4-6 in power model, got {power!r}"
+    assert cheap == "anthropic/claude-haiku-4.5"
+    assert mid == "anthropic/claude-sonnet-4.6"
+    assert power == "anthropic/claude-opus-4.6"
 
 
 def test_run_agent_loop_passes_backend_to_build_adapter(monkeypatch):
