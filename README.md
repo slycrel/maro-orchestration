@@ -121,6 +121,10 @@ python3 src/cli.py poe-observe
 
 # Dedicated autonomous build-loop runner
 python3 src/cli.py build-loop --worker-session handle --format json
+./scripts/build-loop.sh --worker-session handle --format json
+
+# Example cron target (every 5 minutes)
+*/5 * * * * cd /path/to/openclaw-orchestration && OPENCLAW_WORKSPACE=/path/to/workspace ./scripts/build-loop.sh --worker-session handle --format json >> /tmp/poe-build-loop.log 2>&1
 
 # Memory status
 python3 src/cli.py memory context
