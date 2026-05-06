@@ -3,11 +3,12 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from pathlib import Path
 from typing import List
 
-from orch_items import append_decision, append_next_items, get_item, next_path, parse_next, project_dir
+from orch_items import append_decision, append_next_items, next_path, parse_next, project_dir
 from sprint_contract import _heuristic_criteria
 
 PLACEHOLDER_DEFINE = "Define success criteria"
@@ -48,8 +49,54 @@ def _existing_item_texts(project: str) -> List[str]:
     return [item.text for item in items]
 
 
-def _heuristic_plan_steps(mission: str) -> List[str]:
-    compact = " ".join(mission.split())
+def _project_items(project: str):
+    _lines, items = parse_next(project)
+    return items
+
+
+def _reference_items(project: str) -> List[str]:
+    out: List[str] = []
+    for item in _project_items(project):
+        if item.text in PLACEHOLDERS:
+            continue
+        if item.text.startswith(("Gather inputs for:", "Produce first artifact for:", "Review results and capture next decisions for:")):
+            continue
+        out.append(item.text)
+    return out
+
+
+def _best_context_text(project: str, mission: str) -> str:
+    refs = sorted(_reference_items(project), key=len, reverse=True)
+    for ref in refs:
+        if len(ref) >= max(40, len(mission)):
+            return ref
+    return mission
+
+
+def _discover_urls(project: str, mission: str) -> List[str]:
+    corpus = "\n".join([mission, *_reference_items(project)])
+    return list(dict.fromkeys(re.findall(r"https?://\S+", corpus)))
+
+
+def _discover_paths(project: str, mission: str) -> List[str]:
+    corpus = "\n".join([mission, *_reference_items(project)])
+    return list(dict.fromkeys(re.findall(r"\b(?:docs|output|projects|memory)/[^\s)]+", corpus)))
+
+
+def _gather_inputs_path(project: str) -> Path:
+    return project_dir(project) / "INPUTS.md"
+
+
+def _first_artifact_path(project: str) -> Path:
+    return project_dir(project) / "FIRST_ARTIFACT.md"
+
+
+def _review_path(project: str) -> Path:
+    return project_dir(project) / "REVIEW.md"
+
+
+def _heuristic_plan_steps(project: str, mission: str) -> List[str]:
+    compact = " ".join(_best_context_text(project, mission).split())
     steps = [
         f"Gather inputs for: {compact[:120]}",
         f"Produce first artifact for: {compact[:120]}",
@@ -90,7 +137,7 @@ def handle_placeholder(project: str, item_text: str) -> int:
 
     if item_text == PLACEHOLDER_PLAN:
         existing = set(_existing_item_texts(project))
-        candidates = _heuristic_plan_steps(mission)
+        candidates = _heuristic_plan_steps(project, mission)
         new_steps = [step for step in candidates if step not in existing and step not in PLACEHOLDERS]
         if new_steps:
             append_next_items(project, new_steps)
@@ -118,6 +165,88 @@ def handle_placeholder(project: str, item_text: str) -> int:
             return _write_result("blocked", "no concrete leaf task is queued after plan bootstrap")
         append_decision(project, [f"Bootstrap cleared placeholder; next leaf task is `{leaf.text}`."])
         return _write_result("done", f"queued next leaf task: {leaf.text}")
+
+    if item_text.startswith("Gather inputs for:"):
+        mission_context = _best_context_text(project, mission)
+        refs = _reference_items(project)
+        urls = _discover_urls(project, mission)
+        paths = _discover_paths(project, mission)
+        path = _gather_inputs_path(project)
+        body = [
+            f"# Inputs — {project}",
+            "",
+            "## Mission context",
+            "",
+            f"- mission: {mission}",
+            f"- active step: {item_text}",
+            f"- inferred focus: {mission_context}",
+            "",
+            "## Reference checklist items",
+            "",
+            *([f"- {ref}" for ref in refs] or ["- (none discovered)"]),
+            "",
+            "## URLs",
+            "",
+            *([f"- {url}" for url in urls] or ["- (none discovered)"]),
+            "",
+            "## File references",
+            "",
+            *([f"- {p}" for p in paths] or ["- (none discovered)"]),
+            "",
+        ]
+        path.write_text("\n".join(body), encoding="utf-8")
+        append_decision(project, [f"Gathered bootstrap inputs into {path.name}.", *(f"- url: {u}" for u in urls[:5]), *(f"- path: {p}" for p in paths[:5])])
+        return _write_result("done", f"gathered bootstrap inputs at {path.name}")
+
+    if item_text.startswith("Produce first artifact for:"):
+        inputs_path = _gather_inputs_path(project)
+        refs = _reference_items(project)
+        path = _first_artifact_path(project)
+        body = [
+            f"# First Artifact — {project}",
+            "",
+            "## Source step",
+            "",
+            f"- {item_text}",
+            "",
+            "## Available references",
+            "",
+            *([f"- {ref}" for ref in refs[:8]] or ["- (none discovered)"]),
+            "",
+            "## Supporting files",
+            "",
+            f"- inputs: {inputs_path.name if inputs_path.exists() else '(not generated yet)'}",
+            "",
+            "## Bootstrap next move",
+            "",
+            "- Use the gathered references to produce the actual domain artifact on the next pass.",
+            "",
+        ]
+        path.write_text("\n".join(body), encoding="utf-8")
+        append_decision(project, [f"Created bootstrap artifact stub at {path.name}."])
+        return _write_result("done", f"created bootstrap artifact at {path.name}")
+
+    if item_text.startswith("Review results and capture next decisions for:"):
+        artifact_path = _first_artifact_path(project)
+        inputs_path = _gather_inputs_path(project)
+        path = _review_path(project)
+        body = [
+            f"# Review — {project}",
+            "",
+            "## Checked artifacts",
+            "",
+            f"- inputs: {'present' if inputs_path.exists() else 'missing'} ({inputs_path.name})",
+            f"- first artifact: {'present' if artifact_path.exists() else 'missing'} ({artifact_path.name})",
+            "",
+            "## Next decisions",
+            "",
+            "- Continue from the gathered inputs and bootstrap artifact into the domain-specific deliverable.",
+            "- Replace truncated or ambiguous mission text when a clearer source is known.",
+            "",
+        ]
+        path.write_text("\n".join(body), encoding="utf-8")
+        append_decision(project, [f"Reviewed bootstrap artifacts in {path.name}."])
+        return _write_result("done", f"reviewed bootstrap artifacts at {path.name}")
 
     return 10
 
