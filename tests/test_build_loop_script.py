@@ -17,10 +17,16 @@ def test_build_loop_shell_wrapper_runs_cli(tmp_path):
     repo_root = Path(__file__).resolve().parents[1]
     script = repo_root / "scripts" / "build-loop.sh"
 
-    _mkproj(tmp_path, "demo", "- [ ] first task\n", priority=1)
-    workers = tmp_path / "prototypes" / "poe-orchestration" / "workers"
-    workers.mkdir(parents=True, exist_ok=True)
-    worker = workers / "done.sh"
+    repo_projects = repo_root / "projects"
+    repo_projects.mkdir(exist_ok=True)
+    repo_project = repo_projects / "repo-local-check"
+    repo_project.mkdir(exist_ok=True)
+    (repo_project / "NEXT.md").write_text("- [ ] repo local\n", encoding="utf-8")
+    (repo_project / "PRIORITY").write_text("99\n", encoding="utf-8")
+
+    repo_workers = repo_root / "workers"
+    repo_workers.mkdir(exist_ok=True)
+    worker = repo_workers / "done.sh"
     worker.write_text(
         "#!/usr/bin/env bash\n"
         "set -euo pipefail\n"
@@ -30,18 +36,27 @@ def test_build_loop_shell_wrapper_runs_cli(tmp_path):
     worker.chmod(0o755)
 
     env = os.environ.copy()
-    env["OPENCLAW_WORKSPACE"] = str(tmp_path)
-    proc = subprocess.run(
-        [str(script), "--project", "demo", "--max-runs", "1", "--worker-session", "done"],
-        cwd=repo_root,
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    env.pop("OPENCLAW_WORKSPACE", None)
+    env.pop("POE_WORKSPACE", None)
+    env.pop("WORKSPACE_ROOT", None)
+    env.pop("POE_ORCH_ROOT", None)
+    try:
+        proc = subprocess.run(
+            [str(script), "--max-runs", "1", "--worker-session", "done"],
+            cwd=repo_root,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
 
-    assert proc.returncode == 0, proc.stderr
-    payload = json.loads(proc.stdout)
-    assert payload["status"] == "ok"
-    assert payload["runs"] == 1
-    assert payload["items"][0]["project"] == "demo"
+        assert proc.returncode == 0, proc.stderr
+        payload = json.loads(proc.stdout)
+        assert payload["status"] == "ok"
+        assert payload["runs"] == 1
+        assert payload["items"][0]["project"] == "repo-local-check"
+    finally:
+        for child in repo_project.iterdir():
+            child.unlink()
+        repo_project.rmdir()
+        worker.unlink(missing_ok=True)
