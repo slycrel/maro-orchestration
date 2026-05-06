@@ -191,13 +191,29 @@ def _is_failover_error(exc: Exception) -> bool:
     return False
 
 
+def _env_int(name: str, default: int) -> int:
+    raw = os.environ.get(name)
+    if raw is None or not str(raw).strip():
+        return default
+    try:
+        return max(0, int(str(raw).strip()))
+    except (TypeError, ValueError):
+        return default
+
+
+
 def _retry_complete(fn, *args, max_retries: int = 3, **kwargs) -> "LLMResponse":
     """Wrap an adapter .complete() call with retry on transient errors.
 
     Exponential backoff: 5s, 15s, 45s. Only retries on rate limits,
     server errors, and connection failures. Non-retryable errors propagate
     immediately.
+
+    `POE_LLM_MAX_RETRIES` overrides the retry budget when set. This is useful
+    for unattended worker runs where fast failure is better than camping on a
+    rate limit for over a minute.
     """
+    max_retries = _env_int("POE_LLM_MAX_RETRIES", max_retries)
     last_exc = None
     for attempt in range(max_retries + 1):
         try:
@@ -647,7 +663,11 @@ class ClaudeSubprocessAdapter(LLMAdapter):
                 import time as _time
                 # Multi-cycle polling: retry up to _RATE_LIMIT_MAX_RETRIES times.
                 # Each cycle waits exponentially longer (60→120→240→480→900→1800s, capped).
-                _RATE_LIMIT_MAX_RETRIES = getattr(self, "_rate_limit_max_retries", 6)
+                _RATE_LIMIT_MAX_RETRIES = getattr(
+                    self,
+                    "_rate_limit_max_retries",
+                    _env_int("POE_CLAUDE_RATE_LIMIT_MAX_RETRIES", 6),
+                )
                 _RATE_LIMIT_CYCLE_CAP = 1800  # 30 minutes max per wait
                 _wait = getattr(self, "_rate_limit_wait", 60)
                 _retry_success = False

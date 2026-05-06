@@ -37,6 +37,7 @@ from llm import (
     MODEL_CHEAP, MODEL_MID, MODEL_POWER,
     _load_env_file,
     _claude_bin_available,
+    _retry_complete,
 )
 
 
@@ -662,6 +663,22 @@ def _make_subprocess_result(returncode=0, stdout="", stderr=""):
     return MagicMock(returncode=returncode, stdout=stdout, stderr=stderr)
 
 
+def test_retry_complete_respects_env_override(monkeypatch):
+    calls = []
+
+    def _always_429():
+        calls.append(1)
+        raise RuntimeError("429 Client Error")
+
+    monkeypatch.setenv("POE_LLM_MAX_RETRIES", "0")
+    monkeypatch.setattr("time.sleep", lambda s: None)
+
+    with pytest.raises(RuntimeError, match="429"):
+        _retry_complete(_always_429, max_retries=3)
+
+    assert len(calls) == 1
+
+
 class TestRateLimitMultiCycleRetry:
     def _make_adapter(self, max_retries=3):
         a = ClaudeSubprocessAdapter()
@@ -703,6 +720,22 @@ class TestRateLimitMultiCycleRetry:
             adapter.complete([LLMMessage("user", "test")])
         # 1 initial + 3 retries = 4 subprocess calls
         assert len(calls) == 4
+
+    def test_env_override_can_disable_subprocess_rate_limit_retries(self, monkeypatch):
+        calls = []
+
+        def _fake_run(cmd, **kw):
+            calls.append(1)
+            return _make_subprocess_result(1, stderr="rate limit exceeded", stdout="rate limit exceeded")
+
+        monkeypatch.setattr("llm._run_subprocess_safe", _fake_run)
+        monkeypatch.setattr("time.sleep", lambda s: None)
+        monkeypatch.setenv("POE_CLAUDE_RATE_LIMIT_MAX_RETRIES", "0")
+
+        adapter = ClaudeSubprocessAdapter()
+        with pytest.raises(RuntimeError, match="rate-limited after 0 retries"):
+            adapter.complete([LLMMessage("user", "test")])
+        assert len(calls) == 1
 
     def test_backoff_wait_grows_exponentially(self, monkeypatch):
         """Wait times should grow each cycle."""
