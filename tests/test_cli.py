@@ -469,6 +469,35 @@ def test_cli_loop_worker_session_manifest_args_arrays(tmp_path):
     assert (run_dirs[0] / "argv-loop.txt").read_text(encoding="utf-8") == "worker.py --mode loop"
 
 
+def test_cli_build_loop_runs_worker_session(tmp_path):
+    r = _run(tmp_path, "init", "demo", "Build", "loop", "--priority", "1")
+    assert r.returncode == 0
+
+    workers = tmp_path / "prototypes" / "poe-orchestration" / "workers"
+    workers.mkdir(parents=True, exist_ok=True)
+    script = workers / "done.sh"
+    script.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        "printf '%s' \"${ORCH_ITEM_TEXT}\" > \"${ORCH_RUN_ARTIFACT_DIR}/item.txt\"\n",
+        encoding="utf-8",
+    )
+    script.chmod(0o755)
+
+    r = _run(tmp_path, "build-loop", "--project", "demo", "--max-runs", "1", "--worker-session", "done")
+    assert r.returncode == 0
+    payload = json.loads(r.stdout)
+    assert payload["status"] == "ok"
+    assert payload["runs"] == 1
+    assert payload["items"][0]["project"] == "demo"
+
+
+def test_cli_build_loop_path_format(tmp_path):
+    r = _run(tmp_path, "build-loop", "--format", "path")
+    assert r.returncode == 0
+    assert r.stdout.strip().endswith("build-loop-status.json")
+
+
 def test_cli_tick_session_cmd_markers_trigger_retries(tmp_path):
     r = _run(tmp_path, "init", "demo", "Session", "salvage", "--priority", "1")
     assert r.returncode == 0
