@@ -64,6 +64,8 @@ def run_build_loop(
     continue_on_retry: bool = True,
     continue_on_blocked: bool = False,
 ) -> dict:
+    if not any(os.environ.get(var) for var in ("POE_ORCH_ROOT", "POE_WORKSPACE", "OPENCLAW_WORKSPACE", "WORKSPACE_ROOT")):
+        os.environ.setdefault("POE_ORCH_ROOT", str(orch_root()))
     started_at = now_utc_iso()
     next_item = select_next_item(project) if project else None
     if project is None:
