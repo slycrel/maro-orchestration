@@ -119,6 +119,9 @@ python3 src/telegram_listener.py --once    # process pending and exit
 python3 src/cli.py sheriff health
 python3 src/cli.py poe-observe
 
+# Dedicated autonomous build-loop runner
+python3 src/cli.py build-loop --worker-session handle --format json
+
 # Memory status
 python3 src/cli.py memory context
 python3 src/cli.py poe-memory status

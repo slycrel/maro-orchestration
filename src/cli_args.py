@@ -458,6 +458,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="Maximum attempts per item before stopping non-done statuses",
     )
 
+    p_build_loop = sub.add_parser("build-loop", help="Run the dedicated autonomous build loop")
+    p_build_loop.add_argument("--project")
+    p_build_loop.add_argument("--worker", default="handle")
+    p_build_loop.add_argument("--worker-session", default="handle")
+    p_build_loop.add_argument("--max-runs", type=int, default=8)
+    p_build_loop.add_argument("--max-retry-streak", type=int, default=2)
+    p_build_loop.add_argument("--max-attempts-per-item", type=int, default=3)
+    p_build_loop.add_argument("--no-continue-on-retry", action="store_true")
+    p_build_loop.add_argument("--continue-on-blocked", action="store_true")
+    p_build_loop.add_argument("--format", choices=["json", "path"], default="json")
+
     p_ancestry = sub.add_parser("ancestry", help="Show goal ancestry chain for a project (§18)")
     p_ancestry.add_argument("project", help="Project slug")
     p_ancestry.add_argument("--set-parent", help="Set parent project slug (creates ancestry link)")
