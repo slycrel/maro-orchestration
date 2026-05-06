@@ -2,6 +2,8 @@
 
 Autonomous agent framework. Give it a goal; it decomposes, executes, learns, and reports. No hand-holding required.
 
+A dedicated build-loop runner now lives in `src/build_loop_runner.py` so cron can wake a real bounded automation loop instead of nudging a generic reminder session and hoping for initiative.
+
 Works standalone or alongside OpenClaw, Telegram, Slack, or any other interface you wire in.
 
 > **Status: personal infrastructure / active development.** This is a working system, not a polished library. APIs change, features are added fast, and some things are still sharp edges. It runs continuously on a headless Ubuntu box and gets iterated on daily. If you're reading this and it seems useful, it probably is — just go in eyes open.

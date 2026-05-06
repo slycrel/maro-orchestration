@@ -26,6 +26,7 @@ In other words: the system is succeeding at the wrong thing. A reminder wake can
 - [ ] **Route build-loop cron to a dedicated autonomous runner/supervisor.** Either:
   - target a dedicated worker/session that owns build continuation directly, or
   - keep the reminder wake but make it reliably spawn/maintain exactly one autonomous build worker when backlog is active.
+  - Progress (2026-05-06): dedicated runner now exists in `src/build_loop_runner.py` with a lockfile/status contract plus a default `workers/handle.sh` bridge. Remaining work is wiring cron to call it instead of the generic reminder wake.
 - [ ] **Define the success condition operationally.** "Fixed" means more than cleaner logs: while active work exists, measured duty should stay above the 60% floor (target 85%+) without relying on human-visible heartbeat chatter.
 - [ ] **Preserve health-only heartbeat semantics.** The 2026-04-22 split was correct; do not regress into making every generic heartbeat wake an autonomy daemon again. The fix needs to be explicit build-loop wiring, not re-coupling everything.
 
