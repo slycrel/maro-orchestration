@@ -2,7 +2,44 @@
 
 What to do next, in what order. Updated each session. Strategic phases live in ROADMAP.md; deferred ideas live in BACKLOG.md. This file is the bridge — the executable queue.
 
-Last updated: 2026-04-26 (session 38 — decomposition feedback wired into next decompose, planner→opus)
+Last updated: 2026-05-12 (session 39 — productive persistence & zoom-out metacognition research synthesis)
+
+---
+
+## Done (session 39, 2026-05-12 — research synthesis: productive persistence + zoom-out metacognition)
+
+Completed research synthesis on two interconnected design spaces needed for Phase 66–67 (persistence calibration and failure-driven zoom-out):
+
+**Productive Persistence research (`docs/research/productive_persistence.md`):**
+- [x] Synthesized grit/persistence literature (Duckworth, Kapur, Dweck, Bjork, Seligman, meta-RL)
+- [x] Grounded three highest-value gaps in Poe code: unused `task['attempt']` signal, undetected zoom-out signals (4 of 5), LLM-only failure classification
+- [x] Mapped failure taxonomy to retry tiers: informative/confirming/infrastructure/ambiguity
+- [x] Defined productive persistence invariant: goal-stable / strategy-flexible (vs. count-based retry)
+- [x] Identified optimal persistence zone (~60–85% step-success rate) and calibration surfaces
+- [x] Proposed Wave 1 (wiring existing signals), Wave 2 (structural upgrades), Wave 3 (validation-requires) implementation roadmap
+- [x] Noted external evidence (Credé meta-analysis r≈0.18) argues *for* signal quality over persistence volume
+
+**Zoom-Out Metacognition research (`docs/research/zoom-metacognition-adaptive-expertise.md`):**
+- [x] Synthesized expert learning literature (Hatano & Inagaki, Schwartz & Bransford, Feltovich/Spiro CFT, Ericsson)
+- [x] Modeled five zoom-out signals: stuck-streak, near-miss, confidence–accuracy decoupling, meta-ignorance, load-aware threshold degradation
+- [x] Mapped reframing mechanics: from local (retry loop) → tactical (strategy pivot) → strategic (decompose) → lateral (skill swap) → hierarchical (goal inversion)
+- [x] Connected to existing Poe: introspect.py (stuck detection), inspector.py (friction signals), director.py (strategy pivot), agent_loop.py (multi-tier escalation)
+- [x] Identified undetected signals 4/5 and proposed semantic-hash solution for stuck_streak (distinguish identical loops from novel exploration)
+
+**Research Brief (`docs/research-brief-findings-and-design.md`):**
+- [x] Synthesized both research docs into unified findings + design implications
+- [x] Flagged theory-to-implementation gaps with priority ranking
+- [x] Noted contradiction resolution (retry-as-count vs. retry-as-hypothesis-narrowing) and which model is more defensible
+
+**Knowledge graph updates (`lat.md/core-loop.md`, `lat.md/quality-gates.md`):**
+- [x] Added backpointers to new research docs
+
+**Supporting files:**
+- [x] `docs/research/productive_persistence_summary.md` — one-page takeaway for quick reference
+- [x] `docs/research/zoom-metacognition-adaptive-expertise.md` — full treatment
+- [x] `docs/adversarial-verification.md`, `docs/adversarial-verification-report.md`, `docs/md-claims-audit.md` — audit trail from synthesis round-trips
+
+**Next:** Implementation phases (Wave 1–3) depend on design discussion; BACKLOG:DISCUSS (invert the planning stage: 1-shot first) and intent-resolution minimum experiment take priority. These research docs provide the grounding for those decisions.
 
 ---
 
