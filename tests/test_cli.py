@@ -490,12 +490,33 @@ def test_cli_build_loop_runs_worker_session(tmp_path):
     assert payload["status"] == "ok"
     assert payload["runs"] == 1
     assert payload["items"][0]["project"] == "demo"
+    heartbeat_run = tmp_path / "prototypes" / "poe-orchestration" / payload["heartbeat_run_path"]
+    assert heartbeat_run.exists()
+    record = json.loads(heartbeat_run.read_text(encoding="utf-8"))
+    assert record["status"] == "ok"
+    assert record["runs"] == 1
+    assert "stdout_excerpt" in record
+    assert record["stderr_excerpt"] == ""
 
 
 def test_cli_build_loop_path_format(tmp_path):
     r = _run(tmp_path, "build-loop", "--format", "path")
     assert r.returncode == 0
     assert r.stdout.strip().endswith("build-loop-status.json")
+
+
+def test_cli_build_loop_idle_writes_heartbeat_run(tmp_path):
+    r = _run(tmp_path, "build-loop")
+    assert r.returncode == 0
+    payload = json.loads(r.stdout)
+    assert payload["status"] == "idle"
+    assert payload["reason"] == "no_work"
+    heartbeat_run = tmp_path / "prototypes" / "poe-orchestration" / payload["heartbeat_run_path"]
+    assert heartbeat_run.exists()
+    record = json.loads(heartbeat_run.read_text(encoding="utf-8"))
+    assert record["status"] == "idle"
+    assert record["reason"] == "no_work"
+    assert record["exit_code"] == 0
 
 
 def test_cli_tick_session_cmd_markers_trigger_retries(tmp_path):

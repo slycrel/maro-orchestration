@@ -11,12 +11,13 @@ import argparse
 import fcntl
 import json
 import os
+import re
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator, Optional
 
 from orch import run_loop, select_global_next, select_next_item, worker_session_bridge
-from orch_items import now_utc_iso, orch_root, output_root
+from orch_items import now_utc_iso, orch_root, output_root, relative_display_path
 
 
 def build_loop_status_path() -> Path:
@@ -27,11 +28,51 @@ def build_loop_lock_path() -> Path:
     return output_root() / "build-loop.lock"
 
 
+def heartbeat_runs_root() -> Path:
+    return output_root() / "heartbeat" / "runs"
+
+
 def _write_status(payload: dict) -> dict:
     path = build_loop_status_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     return payload
+
+
+def _safe_filename(value: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "-", value).strip("-._")
+    return cleaned or "run"
+
+
+def _write_heartbeat_run(summary: dict) -> str:
+    runs_dir = heartbeat_runs_root()
+    runs_dir.mkdir(parents=True, exist_ok=True)
+    stamp = now_utc_iso().replace(":", "").replace("-", "")
+    summary_json = json.dumps(summary, indent=2) + "\n"
+    selected_project = summary.get("selected_project") or summary.get("project") or "global"
+    status = str(summary.get("status") or "unknown")
+    path = runs_dir / f"{stamp}-{_safe_filename(status)}-{_safe_filename(str(selected_project))}.json"
+    payload = {
+        "generated_at": now_utc_iso(),
+        "duration_seconds": summary.get("duration_seconds"),
+        "status": summary.get("status"),
+        "reason": summary.get("reason"),
+        "project": summary.get("project"),
+        "selected_project": summary.get("selected_project"),
+        "worker": summary.get("worker"),
+        "worker_session": summary.get("worker_session"),
+        "runs": summary.get("runs"),
+        "validation_statuses": summary.get("validation_statuses"),
+        "run_ids": summary.get("run_ids"),
+        "items": summary.get("items"),
+        "exit_code": 0,
+        "stdout_excerpt": summary_json[-4000:],
+        "stderr_excerpt": "",
+        "status_path": relative_display_path(build_loop_status_path()),
+        "orch_root": summary.get("orch_root"),
+    }
+    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    return relative_display_path(path)
 
 
 @contextmanager
@@ -64,9 +105,17 @@ def run_build_loop(
     continue_on_retry: bool = True,
     continue_on_blocked: bool = False,
 ) -> dict:
+    started_wall = os.times().elapsed
     if not any(os.environ.get(var) for var in ("POE_ORCH_ROOT", "POE_WORKSPACE", "OPENCLAW_WORKSPACE", "WORKSPACE_ROOT")):
         os.environ.setdefault("POE_ORCH_ROOT", str(orch_root()))
     started_at = now_utc_iso()
+
+    def finalize(summary: dict) -> dict:
+        summary["duration_seconds"] = round(max(0.0, os.times().elapsed - started_wall), 3)
+        heartbeat_record = _write_heartbeat_run(summary)
+        summary["heartbeat_run_path"] = heartbeat_record
+        return _write_status(summary)
+
     next_item = select_next_item(project) if project else None
     if project is None:
         global_next = select_global_next()
@@ -78,7 +127,7 @@ def run_build_loop(
         next_project = project if next_item else None
 
     if next_item is None:
-        return _write_status(
+        return finalize(
             {
                 "status": "idle",
                 "reason": "no_work",
@@ -94,7 +143,7 @@ def run_build_loop(
 
     with _try_lock(build_loop_lock_path()) as acquired:
         if not acquired:
-            return _write_status(
+            return finalize(
                 {
                     "status": "busy",
                     "reason": "lock_held",
@@ -144,7 +193,7 @@ def run_build_loop(
             ],
             "orch_root": str(orch_root()),
         }
-        return _write_status(summary)
+        return finalize(summary)
 
 
 def main(argv: Optional[list[str]] = None) -> int:
