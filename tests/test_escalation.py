@@ -71,24 +71,28 @@ class TestHandleEscalationWithLLM:
         monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
         enqueued = {}
 
-        def _fake_enqueue(lane, source, reason, parent_job_id, continuation_depth=0):
-            enqueued.update({"lane": lane, "source": source, "depth": continuation_depth})
+        def _fake_enqueue(lane, source, reason, parent_job_id, continuation_depth=0, origin=None):
+            enqueued.update({"lane": lane, "source": source, "depth": continuation_depth,
+                             "origin": origin})
             return {"job_id": "cont-new-001"}
 
         with mock.patch("task_store.enqueue", _fake_enqueue):
             task = _make_escalation_task(depth=2)
+            task["origin"] = {"parent_loop_id": "loop-9", "parent_goal": "review the codebase"}
             result = handle_escalation(task, adapter=self._make_adapter("continue"))
 
         assert result.action == "continue"
         assert result.followup_task_id == "cont-new-001"
         assert enqueued["source"] == "loop_continuation"
         assert enqueued["depth"] == 3  # depth+1
+        # Ancestry carried across the requeue boundary (4e133eb)
+        assert enqueued["origin"] == {"parent_loop_id": "loop-9", "parent_goal": "review the codebase"}
 
     def test_narrow_action_enqueues_with_revised_goal(self, monkeypatch, tmp_path):
         monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
         enqueued = {}
 
-        def _fake_enqueue(lane, source, reason, parent_job_id, continuation_depth=0):
+        def _fake_enqueue(lane, source, reason, parent_job_id, continuation_depth=0, origin=None):
             enqueued.update({"reason": reason, "source": source, "depth": continuation_depth})
             return {"job_id": "narrow-001"}
 

@@ -531,6 +531,100 @@ class TestOriginAncestry:
         assert captured["origin"]["source"] == "user_goal"
 
 
+class TestRecallDispatchGuard:
+    """handle_task refuses to re-run a goal whose recent attempts all failed
+    (goal-brain step 3 dispatch guard, docs/RECALL_DESIGN.md). Basis: the same
+    goal ran ~25x in 35 minutes on 2026-05-17 with no memory at dispatch."""
+
+    GOAL = "verify the polymarket rate limit handling end to end"
+
+    def _make_failed_runs(self, n, *, status="stuck", goal=None):
+        import runs
+        import uuid
+        for _ in range(n):
+            handle_id = uuid.uuid4().hex[:12]
+            rd = runs.create_run_dir(handle_id, prompt=goal or self.GOAL)
+            meta_path = rd / "metadata.json"
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            meta["status"] = status
+            meta_path.write_text(json.dumps(meta), encoding="utf-8")
+
+    def _fake_handle_factory(self, calls):
+        def _fake_handle(message, **kwargs):
+            calls.append(message)
+            return HandleResult(
+                handle_id="x", lane="agenda", lane_confidence=1.0,
+                classification_reason="t", message=message, status="done", result="",
+            )
+        return _fake_handle
+
+    def _task(self):
+        return {"job_id": "task-009", "source": "user_goal", "reason": self.GOAL}
+
+    def test_guard_blocks_all_failing_repeats(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        import handle as handle_mod
+        self._make_failed_runs(3)
+        calls = []
+        monkeypatch.setattr(handle_mod, "handle", self._fake_handle_factory(calls))
+
+        result = handle_mod.handle_task(self._task(), dry_run=False)
+
+        assert calls == [], "guard should have fired before handle()"
+        assert result.status == "error"
+        assert result.classification_reason == "recall_guard"
+        assert "refusing to re-run" in result.result
+
+    def test_guard_disarmed_by_a_done_attempt(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        import handle as handle_mod
+        self._make_failed_runs(3)
+        self._make_failed_runs(1, status="done")
+        calls = []
+        monkeypatch.setattr(handle_mod, "handle", self._fake_handle_factory(calls))
+
+        result = handle_mod.handle_task(self._task(), dry_run=False)
+
+        assert calls == [self.GOAL]
+        assert result.status == "done"
+
+    def test_guard_skipped_on_dry_run(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        import handle as handle_mod
+        self._make_failed_runs(5)
+        calls = []
+        monkeypatch.setattr(handle_mod, "handle", self._fake_handle_factory(calls))
+
+        result = handle_mod.handle_task(self._task(), dry_run=True)
+
+        assert calls == [self.GOAL]
+        assert result.status == "done"
+
+    def test_guard_below_threshold_passes_through(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        import handle as handle_mod
+        self._make_failed_runs(2)
+        calls = []
+        monkeypatch.setattr(handle_mod, "handle", self._fake_handle_factory(calls))
+
+        result = handle_mod.handle_task(self._task(), dry_run=False)
+
+        assert calls == [self.GOAL]
+        assert result.status == "done"
+
+    def test_guard_trip_emits_event(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        import handle as handle_mod
+        self._make_failed_runs(3)
+        monkeypatch.setattr(handle_mod, "handle", self._fake_handle_factory([]))
+        events = []
+        from unittest.mock import patch as _patch
+        with _patch("captains_log.log_event",
+                    side_effect=lambda et, *a, **k: events.append(et)):
+            handle_mod.handle_task(self._task(), dry_run=False)
+        assert "RECALL_GUARD_TRIPPED" in events
+
+
 # ---------------------------------------------------------------------------
 # _apply_prefixes registry unit tests
 # ---------------------------------------------------------------------------
