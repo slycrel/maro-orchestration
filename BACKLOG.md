@@ -34,7 +34,8 @@ Session 40 audit confirmed consolidation **never ran** (only entry point was the
 - [x] `run_decay_cycle` persisted decayed scores without moving the `last_reinforced` anchor → compounding rot on every RMW write (reinforce/forget/promote all re-persisted decayed bystander scores). Decay is now strictly a read-time derivation; rewrites use `raw=True`.
 - [x] RMW paths loaded with default `limit=50` → stores >50 lessons would be silently truncated on rewrite. All rewrite paths now load `raw=True, limit=None`.
 - [x] In-process consolidation ("dream cycle"): `maybe_consolidate()` marker-gated to once per `memory.consolidation_interval_hours` (default 24h), wired into `handle()` (post-request, never affects outcome), heartbeat tick, and `poe-memory consolidate [--force]`. In-process by design — **no cron/daemon** (Jeremy: rogue-process history).
-- [ ] Promotion timing race remains (M2 scope): one day of decay drops 1.0 → 0.85, below the 0.9 promote threshold, so promotion effectively requires reinforcement and consolidation on the *same day*. Fix: evaluate promotion at reinforcement time.
+- [x] Promotion timing race (M2, shipped 2026-06-10): promotion now evaluated at reinforcement time via `_post_reinforce_hooks` — score is freshly re-anchored, so eligibility is real. Consolidation-cycle promotion stays as a backstop.
+- [x] Standing rules accrete (M2, shipped 2026-06-10): LONG re-confirmation calls `observe_pattern`; `record_tiered_lesson` dedups cross-tier so re-learning a promoted lesson reinforces the LONG record instead of duplicating into MEDIUM. Full path medium → long → standing rule now reachable in production.
 
 ---
 

@@ -230,7 +230,17 @@ def record_tiered_lesson(
     except ImportError:
         pass
 
-    existing = load_tiered_lessons(tier=tier, task_type=task_type)
+    # Session 40 M2: a lesson the system already promoted to LONG and has now
+    # re-learned is a production re-confirmation, not new knowledge. Reinforce
+    # the long-tier record (which feeds the standing-rule pipeline) instead of
+    # accreting a duplicate in medium. limit=None — a dedup check against a
+    # truncated load would silently miss matches.
+    if tier == MemoryTier.MEDIUM:
+        for ex in load_tiered_lessons(tier=MemoryTier.LONG, task_type=task_type, limit=None):
+            if _text_similarity(ex.lesson, lesson_text) > 0.8:
+                return _reinforce_tiered_lesson(ex, tier=MemoryTier.LONG)
+
+    existing = load_tiered_lessons(tier=tier, task_type=task_type, limit=None)
     for ex in existing:
         if _text_similarity(ex.lesson, lesson_text) > 0.8:
             return _reinforce_tiered_lesson(ex, tier=tier)
@@ -294,6 +304,38 @@ def _reinforce_tiered_lesson(tl: TieredLesson, *, tier: str) -> TieredLesson:
     all_lessons = load_tiered_lessons(tier=tier, min_score=0.0, limit=None, raw=True)
     updated = [tl if l.lesson_id == tl.lesson_id else l for l in all_lessons]
     _rewrite_tiered_lessons(tier, lessons=updated)
+    return _post_reinforce_hooks(tl, tier=tier)
+
+
+def _post_reinforce_hooks(tl: TieredLesson, *, tier: str) -> TieredLesson:
+    """Re-confirmation side effects (session 40, M2). Never raises.
+
+    MEDIUM — promote the moment eligibility is met. Reinforcement re-anchors
+    the score to today, and a single day of decay (1.0 * 0.85) already falls
+    below PROMOTE_MIN_SCORE (0.9) — so the daily consolidation cycle can only
+    ever promote lessons reinforced that same day. Promotion has to happen
+    here, at reinforcement time; the consolidation-cycle check remains as a
+    backstop.
+
+    LONG — a re-confirmed permanent lesson is a repeated pattern observation.
+    Feed observe_pattern so hypotheses accrue confirmations and standing
+    rules accrete. promote_lesson seeds the first observation; without this
+    hook nothing ever confirms a hypothesis, so standing_rules.jsonl never
+    grows.
+    """
+    if tier == MemoryTier.MEDIUM:
+        if tl.score >= PROMOTE_MIN_SCORE and tl.sessions_validated >= PROMOTE_MIN_SESSIONS:
+            try:
+                if promote_lesson(tl.lesson_id):
+                    tl.tier = MemoryTier.LONG
+            except Exception as exc:
+                log.warning("promotion-at-reinforcement failed for %s: %s", tl.lesson_id, exc)
+    elif tier == MemoryTier.LONG:
+        try:
+            from knowledge_lens import observe_pattern
+            observe_pattern(tl.lesson, tl.task_type or "", source_lesson_id=tl.lesson_id)
+        except Exception as exc:
+            log.warning("observe_pattern at reinforcement failed for %s: %s", tl.lesson_id, exc)
     return tl
 
 
@@ -391,6 +433,11 @@ def reinforce_lesson(lesson_id: str, tier: str = MemoryTier.MEDIUM) -> Optional[
 
     Phase 59 Feynman F5: once sessions_validated reaches 3, confidence is
     promoted to >= _CONFIDENCE_MULTI_SESSION (0.9).
+
+    Session 40 M2: reinforcement triggers _post_reinforce_hooks — an eligible
+    MEDIUM lesson is promoted to LONG immediately (check the returned
+    ``.tier``), and a LONG re-confirmation feeds the standing-rule pipeline
+    via observe_pattern.
     """
     # Non-raw load: target's effective (decay-derived) score is the
     # reinforcement base. The rewrite inside _reinforce_tiered_lesson
@@ -408,7 +455,12 @@ def reinforce_lesson(lesson_id: str, tier: str = MemoryTier.MEDIUM) -> Optional[
             event_type=LESSON_REINFORCED,
             subject=lesson_id,
             summary=f"Reinforced (sessions: {target.sessions_validated}, score: {target.score:.2f}): {target.lesson[:80]}",
-            context={"tier": tier, "sessions_validated": target.sessions_validated, "score": round(target.score, 3)},
+            context={
+                "tier": tier,
+                "sessions_validated": target.sessions_validated,
+                "score": round(target.score, 3),
+                "promoted": target.tier != tier,
+            },
         )
     except Exception:
         pass

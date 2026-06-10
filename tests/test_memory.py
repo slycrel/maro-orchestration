@@ -1431,10 +1431,13 @@ class TestConfidenceTierStandardization:
         for _ in range(3):
             reinforce_lesson(tl.lesson_id, tier=MemoryTier.MEDIUM)
 
-        loaded = load_tiered_lessons(MemoryTier.MEDIUM)
+        # Session 40 M2: hitting eligibility (score >= 0.9, sessions >= 3) at
+        # reinforcement time promotes the lesson to LONG immediately.
+        loaded = load_tiered_lessons(MemoryTier.LONG)
         target = next(l for l in loaded if l.lesson_id == tl.lesson_id)
         assert target.sessions_validated >= 3
         assert target.confidence >= 0.9
+        assert target.tier == MemoryTier.LONG
 
 
 class TestVerificationOutcomes:

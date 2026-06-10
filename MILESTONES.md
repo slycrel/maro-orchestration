@@ -2,7 +2,7 @@
 
 What to do next, in what order. Updated each session. Strategic phases live in ROADMAP.md; deferred ideas live in BACKLOG.md. This file is the bridge — the executable queue.
 
-Last updated: 2026-06-10 (session 40 — memory lifecycle M1 shipped + dry-run hermeticity fix)
+Last updated: 2026-06-10 (session 40 — M1 + M2 shipped: consolidation, dry-run hermeticity, standing-rule accretion)
 
 ---
 
@@ -16,7 +16,16 @@ Jeremy's directive: fix-in-place over rewrite; keep it a program, not an operati
 - [x] **Step-shape auto-split non-convergence fixed**: analysis-first steps with an incidental exec keyword (e.g. "Analyze findings from build X") re-split into themselves every iteration until max_iterations → 'stuck'. Splitter now sanitizes the run part; executor guard executes as-is when a split wouldn't converge.
 - [x] Regression tests: long-tier-never-decays, no-decay-persistence, no-truncation, consolidation gating/config/force, dry-run-never-builds-adapter.
 
-Remaining in this arc: M2 (standing rules accrete via observe_pattern at reinforcement time + promotion timing race), M3 (recovery-plan insights recorded as lessons), M4 (goal-brain doc — doubles as step 1 below), M5 (portability pass).
+## Done (session 40, 2026-06-10 — M2: standing rules accrete + promotion timing race)
+
+Before M2, `standing_rules.jsonl`/`hypotheses.jsonl` could never grow: `observe_pattern()` was called exactly once per lesson (at medium→long promotion), but rules need 2+ confirmations — and the promotion it depended on was itself racy (one day of decay drops 1.0 → 0.85, below the 0.9 threshold, so consolidation only promoted same-day-reinforced lessons). All in `_post_reinforce_hooks` (knowledge_web.py), which runs on every reinforcement path:
+
+- [x] **Promotion-at-reinforcement-time** — a MEDIUM lesson meeting eligibility (score ≥ 0.9, sessions ≥ 3) promotes to LONG at the moment of reinforcement, when its score is freshly re-anchored. Consolidation-cycle promotion stays as a backstop.
+- [x] **observe_pattern on LONG re-confirmation** — re-confirming a long-tier lesson feeds the standing-rule pipeline, so hypotheses accrue confirmations and rules accrete.
+- [x] **Cross-tier dedup in record_tiered_lesson** — re-learning an already-promoted lesson now reinforces the LONG record (triggering observe_pattern) instead of silently creating a duplicate MEDIUM lesson. This was the gap that would have kept the pipeline dead in production even with the hooks: lessons are recorded via record_tiered_lesson, which only deduped within its own tier. Both dedup loads now use `limit=None` (truncated dedup misses matches).
+- [x] Regression tests: promotion-at-reinforcement (incl. the day-old-eligible-lesson race), hypothesis creation + 2nd-confirmation rule promotion, hook failures never break reinforcement, cross-tier dedup, full medium→standing-rule pipeline end-to-end.
+
+Remaining in this arc: M3 (recovery-plan insights recorded as lessons), M4 (goal-brain doc — doubles as step 1 below), M5 (portability pass).
 
 ---
 
