@@ -32,7 +32,12 @@ Before M2, `standing_rules.jsonl`/`hypotheses.jsonl` could never grow: `observe_
 - [x] **Same-class bugs from a pyflakes sweep**: `evolver.rewrite_skill` lost its `verbose` param while both callers pass `verbose=verbose` — TypeError on every call, swallowed by callers' excepts, skill rewriting (circuit-breaker recovery) dead; `llm.py` bare `thinking_budget` in the no-kwarg fallback branch; `agent_loop` terminal handler bare `block_reason`. All fixed.
 - [x] **Bug class locked out**: `tests/test_static_undefined_names.py` runs pyflakes' undefined-name check over src/ as part of the suite; evolver's annotation-only `Skill` imports moved under TYPE_CHECKING so the report stays clean.
 
-Remaining in this arc: M4 (goal-brain doc — doubles as step 1 below), M5 (portability pass).
+## Done (session 40, 2026-06-10 — M4: GOAL_BRAIN.md, the compiled-truth anchor)
+
+- [x] **GOAL_BRAIN.md created at repo root** — both the goal-brain artifact definition v0 (defined by example, per the May-18 sequencing step 1) and this project's own instance: Jeremy's invariants quoted verbatim (anti-telephone), compiled truth with verification basis per claim, dated append-only decisions, a Threads section as the manual fan-out defense, and open questions with what they block. Format rules distinguish human-steerable (Intent, Invariants) from system-maintained sections.
+- [x] **Wired into CLAUDE.md** as session-checklist step 2, with the precedence rule: when GOAL_BRAIN.md disagrees with any other doc, GOAL_BRAIN.md wins.
+
+Remaining in this arc: M5 (portability pass).
 
 ---
 
@@ -40,7 +45,7 @@ Remaining in this arc: M4 (goal-brain doc — doubles as step 1 below), M5 (port
 
 _Sequencing agreed in `docs/conversations/2026-05-18-memory-and-goal-brain.md` (Claude + Poe-codex converged). Phase 65 implementation is **paused** — see session-38 delta-audit; its minimum experiment already shipped as `src/scope.py` + `ResolvedIntent`._
 
-- [ ] **1. Define the goal-brain artifact concretely** — fields, human-steerable vs system-maintained, what makes a "good" one. One markdown file. This is the trust anchor ("we're not escaping LLM trust, we're redistributing it").
+- [x] **1. Define the goal-brain artifact concretely** — fields, human-steerable vs system-maintained, what makes a "good" one. One markdown file. This is the trust anchor ("we're not escaping LLM trust, we're redistributing it"). **Done 2026-06-10: `GOAL_BRAIN.md` (M4) — defined by example; the project is instance #1.**
 - [ ] **2. Pressure-test against 3–5 real past runs** from `~/.poe/workspace/runs/` — see where it leaks before designing further.
 - [ ] **3. Define `recall()` shape** — what slice of goal-brain + correspondence the navigator sees per turn.
 - [ ] **4. Define the navigator's decision schema** — only after 1–3.
