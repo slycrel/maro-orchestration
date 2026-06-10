@@ -2,7 +2,44 @@
 
 What to do next, in what order. Updated each session. Strategic phases live in ROADMAP.md; deferred ideas live in BACKLOG.md. This file is the bridge — the executable queue.
 
-Last updated: 2026-04-26 (session 38 — decomposition feedback wired into next decompose, planner→opus)
+Last updated: 2026-06-10 (session 40 — branch reconciliation + stale-queue correction)
+
+---
+
+## Next Up — Goal-brain artifact definition (per 2026-05-18 conversation)
+
+_Sequencing agreed in `docs/conversations/2026-05-18-memory-and-goal-brain.md` (Claude + Poe-codex converged). Phase 65 implementation is **paused** — see session-38 delta-audit; its minimum experiment already shipped as `src/scope.py` + `ResolvedIntent`._
+
+- [ ] **1. Define the goal-brain artifact concretely** — fields, human-steerable vs system-maintained, what makes a "good" one. One markdown file. This is the trust anchor ("we're not escaping LLM trust, we're redistributing it").
+- [ ] **2. Pressure-test against 3–5 real past runs** from `~/.poe/workspace/runs/` — see where it leaks before designing further.
+- [ ] **3. Define `recall()` shape** — what slice of goal-brain + correspondence the navigator sees per turn.
+- [ ] **4. Define the navigator's decision schema** — only after 1–3.
+- [ ] **5. Write the navigator prompt** — last.
+
+**Caveat from Jeremy (2026-06-10):** treat all documented design as best guess — "littered with poor assumptions and telephone-via-AI-interpretation kinds of flaws." Verify against early conversations/code before building on any documented claim.
+
+---
+
+## Correction (session 40, 2026-06-10)
+
+The session-39 "Next Up" queued implementing `src/scope.py`/`ScopeSet` from scratch — but that shipped 2026-04-23 (session 36, plus `ResolvedIntent`), and the session-38 delta-audit explicitly recommended pausing further Phase 65 work. The May 12 autonomous session synthesized from stale sources. Queue replaced with the goal-brain sequencing above. This is an instance of the fan-out failure mode the goal-brain is designed to fix: parallel sessions (May 12 research, May 18 conversation) never reconciled.
+
+---
+
+## Decision recorded (2026-06-10) — navigator visibility of work-LLM output
+
+The open question from the 2026-05-18 conversation ("does the navigator see the work LLM's full output, or only recommendation + summary?") — Jeremy's call: **sometimes, on demand**. Default is recommendation + structured signals; full output is pullable when the navigator judges it needs it — same pattern as skills (not loaded by default, available if needed), "because we need the work to get started before we know if we need it." Criteria for when to pull is a taste/judgment call, deliberately unpinned for now.
+
+---
+
+## Done (session 39, 2026-05-12 — findings-and-design research brief)
+
+Autonomous goal "findings and design" resolved via dev-recall to constraint orchestration (Phase 65) as the primary subject, with intent resolution and adaptive execution as causal prerequisites. Produced a complete synthesis brief covering the three-system causal chain (intent→constraints→execution) and the ScopeSet naming/schema correction.
+
+- [x] **Research brief written** — `docs/research-brief-findings-and-design.md` (242 lines). Covers: §0 question, §1 constraints, §2 research plan, §3 sources, §4 exec summary, §5 key findings (5), §6 counterpoints, §7 risks (6), §8 recommendation, §9 next actions, §10 appendix.
+- [x] **Key finding** — the three systems (intent resolution / scope / adaptive execution) form a causal chain but share no explicit handoff protocol; ScopeSet is the missing shared data structure (Phase 65 already has a complete v1 spec in `PHASE_65_IMPLEMENTATION_PLAN.md`; implementation can start now — all prerequisites are done).
+- [x] **ScopeSet naming corrected** — brief originally used `ConstraintSet`; audited against `PHASE_65_IMPLEMENTATION_PLAN.md` and corrected to `ScopeSet` throughout. `EvaluationContext` extension confirmed deferred (not v1 scope).
+- [x] **Committed** — branch `arch/thread-navigator`, commit `c08006c`.
 
 ---
 
