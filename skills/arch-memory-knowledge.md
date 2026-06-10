@@ -64,10 +64,16 @@ Loop starting
 ## Tiered Memory Model
 
 - **MEDIUM**: Score 0.2–1.0. Decays 15%/day (score *= 0.85^days). New lessons start here at score 1.0.
-- **LONG**: Promoted when score ≥ 0.9 AND sessions_validated ≥ 3. No decay.
+- **LONG**: Promoted when score ≥ 0.9 AND sessions_validated ≥ 3. No decay (enforced tier-aware since session 40 — earlier code decayed long-tier on load).
 - **Standing Rules**: Promoted from long-tier after 2+ pattern confirmations. Zero cost, always active.
 
 Reinforcement: When a lesson is re-confirmed, score += 0.3, sessions_validated++. At threshold: promote to LONG.
+
+**Decay is a read-time derivation, never persisted** (session 40 invariant). The stored score is the score as of `last_reinforced`; the effective score is computed on load. Any code that rewrites a lessons file MUST load with `raw=True, limit=None` — persisting an effective (decayed) score without re-anchoring `last_reinforced` compounds decay, and the default `limit=50` silently truncates larger stores on rewrite.
+
+## Consolidation (the "dream cycle", session 40)
+
+`maybe_consolidate()` in knowledge_web.py runs `run_decay_cycle` (medium tier: promote eligibles, GC effective-score < 0.2) at most once per `memory.consolidation_interval_hours` (default 24h; `memory.consolidation_enabled` to turn off), gated by a `memory/last_consolidation.json` marker. **In-process by design — no cron/daemon** (rogue-process history). Entry points: end of every `handle()` call (try/finally, skipped on dry_run, can never affect the request outcome), every heartbeat tick (even health-only mode — pure local file work), and `poe-memory consolidate [--force]`. Logs a `MEMORY_CONSOLIDATED` captain's-log event. Concurrent double-run is safe: decay is read-derived, promotion is eligibility-gated, GC is idempotent.
 
 ## Captain's Log
 
@@ -86,7 +92,8 @@ Append-only event stream tracking knowledge lifecycle:
 2. **No Stage 4→5 pathway.** Skill → rule promotion is conceptual only.
 3. **Reinforcement is passive.** Lessons only reinforce when explicitly re-confirmed in a run. System doesn't proactively test its own lessons.
 4. **Captain's log reads are coarse.** Dumps recent events rather than targeted retrieval.
-5. **Decay works but creates cold-start.** A valid lesson that isn't used for 7 days decays to ~0.32 — it effectively dies even if it's correct. No mechanism to "wake up" dormant lessons.
+5. **Decay works but creates cold-start.** A valid lesson that isn't used for 7 days decays to ~0.32 — it effectively dies even if it's correct. `search_graveyard(resurrect=True)` can wake matches, but nothing calls it proactively.
+6. **Promotion timing race.** Promote threshold is effective score ≥ 0.9, but one day of decay drops 1.0 → 0.85 — so consolidation only promotes lessons reinforced the same day. Fix queued (M2): evaluate promotion at reinforcement time.
 
 ## File Map
 

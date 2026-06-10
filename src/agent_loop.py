@@ -1554,7 +1554,14 @@ def _select_step_adapter(
 
     Returns the adapter to use for this step (may be different from ctx.adapter).
     """
-    from llm import build_adapter, MODEL_CHEAP, MODEL_MID
+    from llm import build_adapter, MODEL_CHEAP, MODEL_MID, LLMAdapter as _LLMAdapterBase
+
+    # Only re-tier adapters we know how to rebuild (build_adapter products all
+    # subclass LLMAdapter). _DryRunAdapter and injected test doubles are plain
+    # classes without model_key — they'd slip past the explicit-model check
+    # below and get swapped for a live adapter (real LLM calls in dry runs).
+    if ctx.dry_run or not isinstance(ctx.adapter, _LLMAdapterBase):
+        return ctx.adapter
 
     adapter = ctx.adapter
     _step_adapter = adapter
@@ -2163,19 +2170,25 @@ def _decompose_goal(
         # central role→model policy (assign_model_by_role("planner") → MODEL_POWER)
         # — same surface director.py uses, so the planner-tier choice lives in
         # one place. Step execution stays on whatever the loop adapter selected.
+        from llm import LLMAdapter as _LLMAdapterBase
         from poe import assign_model_by_role as _assign
         _decompose_adapter = ctx.adapter
-        _planner_tier = _assign("planner")
-        try:
-            _decompose_adapter = build_adapter(model=_planner_tier)
-            log.debug("decompose: lifted adapter to %s for plan quality", _planner_tier)
-        except Exception as _power_exc:
-            log.debug("decompose: %s unavailable (%s); falling back to mid",
-                      _planner_tier, _power_exc)
+        # Only lift adapters we know how to rebuild (build_adapter products all
+        # subclass LLMAdapter). Dry-run and injected test doubles are plain
+        # classes — swapping them for a live subprocess/SDK adapter would burn
+        # real LLM calls and break the injection seam.
+        if not ctx.dry_run and isinstance(ctx.adapter, _LLMAdapterBase):
+            _planner_tier = _assign("planner")
             try:
-                _decompose_adapter = build_adapter(model=MODEL_MID)
-            except Exception:
-                _decompose_adapter = ctx.adapter
+                _decompose_adapter = build_adapter(model=_planner_tier)
+                log.debug("decompose: lifted adapter to %s for plan quality", _planner_tier)
+            except Exception as _power_exc:
+                log.debug("decompose: %s unavailable (%s); falling back to mid",
+                          _planner_tier, _power_exc)
+                try:
+                    _decompose_adapter = build_adapter(model=MODEL_MID)
+                except Exception:
+                    _decompose_adapter = ctx.adapter
         # Enable extended thinking for decomposition when using Anthropic SDK
         # (planning benefits most from deeper reasoning)
         _decompose_thinking = None
@@ -3088,7 +3101,18 @@ def _split_exec_analyze(step: str) -> List[str]:
     if any(kw in analysis_part.lower() for kw in _EXEC_KEYWORDS):
         analysis_part = "analyze the captured output for errors, results, and next actions"
 
-    run_step = f"Run {run_part.lstrip('Rr un').strip()[:120]} and save output to a file"
+    # Drop any analysis clause remaining in the run part — a produced step
+    # that still matches the compound detector would re-split forever at the
+    # executor-side leak guard (splits must strictly converge).
+    _rp_low = run_part.lower()
+    _an_idx = min((_rp_low.find(kw) for kw in _ANALYZE_KEYWORDS if kw in _rp_low), default=-1)
+    if _an_idx > 0:
+        run_part = run_part[:_an_idx].strip(" ,;:-")
+
+    _rp = run_part.strip()
+    if _rp.lower().startswith("run "):
+        _rp = _rp[4:]
+    run_step = f"Run {_rp[:120]} and save output to a file"
     analyze_step = f"Read the captured output and {analysis_part[:120]}"
     return [run_step, analyze_step]
 
@@ -4109,20 +4133,31 @@ def run_agent_loop(
         # before any executor/tool burn happens.
         if _is_combined_exec_analyze(step_text):
             _parts = _split_exec_analyze(step_text)
-            log.warning(
-                "step-shape-LEAK step=%d: compound exec+analyze step reached executor; "
-                "auto-splitting into %d replacement steps: %r",
-                step_idx, len(_parts), step_text[:120],
-            )
-            remaining_steps[:0] = _parts
-            remaining_indices[:0] = [-1] * len(_parts)
-            if verbose:
-                print(
-                    f"[poe] step {step_idx}: recovered compound step by splitting into {len(_parts)} steps",
-                    file=sys.stderr,
-                    flush=True,
+            # Convergence guard: if a replacement would itself re-trip the
+            # detector (analysis-first steps with an incidental exec keyword,
+            # e.g. "Analyze findings from build X"), splitting would loop
+            # forever — execute the step as-is instead.
+            if any(_is_combined_exec_analyze(p) for p in _parts):
+                log.warning(
+                    "step-shape-LEAK step=%d: split non-convergent (likely a "
+                    "false-positive compound match); executing as-is: %r",
+                    step_idx, step_text[:120],
                 )
-            continue
+            else:
+                log.warning(
+                    "step-shape-LEAK step=%d: compound exec+analyze step reached executor; "
+                    "auto-splitting into %d replacement steps: %r",
+                    step_idx, len(_parts), step_text[:120],
+                )
+                remaining_steps[:0] = _parts
+                remaining_indices[:0] = [-1] * len(_parts)
+                if verbose:
+                    print(
+                        f"[poe] step {step_idx}: recovered compound step by splitting into {len(_parts)} steps",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                continue
         outcome = _execute_step(
             goal=goal,
             step_text=step_text,

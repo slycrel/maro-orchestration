@@ -422,6 +422,41 @@ class TestMagicKeywordPrefixes:
         result = handle("strict: analyze trading performance", dry_run=True)
         assert result.message == "analyze trading performance"
 
+
+# ---------------------------------------------------------------------------
+# Dry-run hermeticity
+# ---------------------------------------------------------------------------
+
+class TestDryRunHermeticity:
+    """dry_run=True must never build a live adapter anywhere in the pipeline.
+
+    Regression: the decompose planner-lift and per-step model selection
+    called build_adapter() unconditionally, so dry runs made real subprocess
+    LLM calls (each test took minutes of retry sleeps instead of ms).
+    """
+
+    def test_dry_run_never_builds_real_adapter(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        import llm
+
+        def _boom(*args, **kwargs):
+            raise AssertionError("build_adapter called during dry_run")
+
+        monkeypatch.setattr(llm, "build_adapter", _boom)
+        result = handle("ralph: research market trends", dry_run=True)
+        assert result.message == "research market trends"
+
+    def test_dry_run_agenda_lane_hermetic(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        import llm
+
+        def _boom(*args, **kwargs):
+            raise AssertionError("build_adapter called during dry_run")
+
+        monkeypatch.setattr(llm, "build_adapter", _boom)
+        result = handle("research polymarket strategies", dry_run=True, force_lane="agenda")
+        assert result.status in ("done", "stuck", "error", "clarification_needed")
+
     def test_no_ralph_prefix_unchanged(self, monkeypatch, tmp_path):
         _setup(monkeypatch, tmp_path)
         result = handle("research market trends", dry_run=True)

@@ -849,6 +849,17 @@ def heartbeat_loop(
             print(f"[heartbeat] run failed: {e}", file=sys.stderr)
         tick += 1
 
+        # In-process memory consolidation (dream cycle). Self-gating: marker
+        # file limits it to once per interval, and it's pure local file work
+        # (no LLM calls), so it runs even in health-only mode and doesn't
+        # need the SlowUpdateScheduler. Never raises.
+        if not dry_run:
+            try:
+                from knowledge_web import maybe_consolidate
+                maybe_consolidate()
+            except Exception as _kc_exc:
+                print(f"[heartbeat] consolidation check failed: {_kc_exc}", file=sys.stderr)
+
         if not autonomy:
             _wakeup_event.wait(timeout=interval)
             _wakeup_event.clear()

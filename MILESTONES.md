@@ -2,7 +2,21 @@
 
 What to do next, in what order. Updated each session. Strategic phases live in ROADMAP.md; deferred ideas live in BACKLOG.md. This file is the bridge — the executable queue.
 
-Last updated: 2026-06-10 (session 40 — branch reconciliation + stale-queue correction)
+Last updated: 2026-06-10 (session 40 — memory lifecycle M1 shipped + dry-run hermeticity fix)
+
+---
+
+## Done (session 40, 2026-06-10 — M1: memory lifecycle fixes + in-process consolidation)
+
+Jeremy's directive: fix-in-place over rewrite; keep it a program, not an operating system (no cron/daemons — rogue-process history); installable harness. Working through M1–M5; M1 shipped:
+
+- [x] **Three latent data-corruption bugs in knowledge_web.py fixed** — tier-blind decay eroding LONG-tier lessons on every load; `run_decay_cycle` + every RMW write persisting decayed scores without re-anchoring `last_reinforced` (compounding rot); RMW paths truncating stores >50 lessons via default `limit=50`. Decay is now strictly a read-time derivation (`raw=True` loading discipline on all rewrite paths).
+- [x] **In-process consolidation ("dream cycle")** — `maybe_consolidate()`: marker-gated (`memory/last_consolidation.json`) to once per `memory.consolidation_interval_hours` (default 24h, `memory.consolidation_enabled` to disable). Wired into `handle()` post-request (try/finally, never affects request outcome, skipped on dry_run), heartbeat tick (runs even health-only — pure local file work), and `poe-memory consolidate [--force]`. Captain's-log `MEMORY_CONSOLIDATED` event per run.
+- [x] **Dry-run hermeticity** (found via test hang): `dry_run=True` was making real authenticated `claude -p` calls through the decompose planner-lift and per-step model selection — real token burn, test_handle.py took 2h06m. Both sites now only re-tier `isinstance(_, LLMAdapter)` adapters (build_adapter products), so dry-run + injected test doubles pass through untouched; conftest additionally blocks `claude`/`codex` binaries at the `llm._run_subprocess_safe` seam. test_handle.py: 2h06m → ~8s. Details + remaining fragile spots in BACKLOG.md.
+- [x] **Step-shape auto-split non-convergence fixed**: analysis-first steps with an incidental exec keyword (e.g. "Analyze findings from build X") re-split into themselves every iteration until max_iterations → 'stuck'. Splitter now sanitizes the run part; executor guard executes as-is when a split wouldn't converge.
+- [x] Regression tests: long-tier-never-decays, no-decay-persistence, no-truncation, consolidation gating/config/force, dry-run-never-builds-adapter.
+
+Remaining in this arc: M2 (standing rules accrete via observe_pattern at reinforcement time + promotion timing race), M3 (recovery-plan insights recorded as lessons), M4 (goal-brain doc — doubles as step 1 below), M5 (portability pass).
 
 ---
 

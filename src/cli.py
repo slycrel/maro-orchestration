@@ -878,6 +878,18 @@ def main(argv: list[str] | None = None) -> int:
             result = run_decay_cycle(tier=tier, dry_run=dry_run)
             label = "(dry-run) " if dry_run else ""
             print(f"{label}tier={tier} decayed={result['decayed']} promoted={result['promoted']} gc={result['gc']}")
+        elif memory_cmd == "consolidate":
+            from memory import maybe_consolidate, consolidation_due
+            force = getattr(args, "force", False)
+            if not force and not consolidation_due():
+                print("Consolidation not due (marker within interval) — use --force to run anyway")
+                return 0
+            result = maybe_consolidate(force=force)
+            if result is None:
+                print("Consolidation skipped (disabled in config, not due, or failed — see logs)")
+            else:
+                cycle = result["medium"]
+                print(f"Consolidated: decayed={cycle['decayed']} promoted={cycle['promoted']} gc={cycle['gc']}")
         elif memory_cmd == "forget":
             tier = getattr(args, "tier", "medium")
             removed = forget_lesson(args.lesson_id, tier=tier)
