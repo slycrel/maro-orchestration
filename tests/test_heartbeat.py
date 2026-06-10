@@ -4,6 +4,7 @@ import json
 import sys
 import threading
 import time
+import types
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -18,9 +19,11 @@ from heartbeat import (
     _tier2_llm_diagnosis,
     _tier3_escalate,
     _run_backlog_step,
+    _run_task_store_drain,
     _run_evolver_bg,
     _run_inspector_bg,
     _run_eval_bg,
+    _resolve_backlog_every,
     run_heartbeat,
     _diagnosis_due,
     _mark_diagnosis_ran,
@@ -301,6 +304,42 @@ def test_cli_poe_heartbeat_json(capsys):
     assert "health_status" in data
 
 
+def test_resolve_backlog_every_defaults_to_active_cadence():
+    assert _resolve_backlog_every(None) == 5
+    assert _resolve_backlog_every(0) == 1
+    assert _resolve_backlog_every("7") == 7
+
+
+def test_cli_poe_heartbeat_loop_forwards_backlog_every():
+    with patch("heartbeat.heartbeat_loop") as mock_loop:
+        import cli
+        rc = cli.main(["poe-heartbeat", "--loop", "--dry-run", "--no-escalate", "--backlog-every", "3"])
+    assert rc == 0
+    assert mock_loop.call_args.kwargs["backlog_every"] == 3
+
+
+def test_cli_poe_heartbeat_loop_leaves_autonomy_unset_by_default():
+    with patch("heartbeat.heartbeat_loop") as mock_loop:
+        import cli
+        rc = cli.main(["poe-heartbeat", "--loop", "--dry-run", "--no-escalate"])
+    assert rc == 0
+    assert mock_loop.call_args.kwargs["autonomy"] is None
+
+
+def test_cli_poe_heartbeat_loop_accepts_explicit_autonomy_flags():
+    with patch("heartbeat.heartbeat_loop") as mock_loop:
+        import cli
+        rc = cli.main(["poe-heartbeat", "--loop", "--dry-run", "--no-escalate", "--autonomy"])
+    assert rc == 0
+    assert mock_loop.call_args.kwargs["autonomy"] is True
+
+    with patch("heartbeat.heartbeat_loop") as mock_loop:
+        import cli
+        rc = cli.main(["poe-heartbeat", "--loop", "--dry-run", "--no-escalate", "--no-autonomy"])
+    assert rc == 0
+    assert mock_loop.call_args.kwargs["autonomy"] is False
+
+
 def test_heartbeat_loop_health_only_skips_scheduler(monkeypatch):
     import heartbeat as hb
     import scheduler
@@ -314,6 +353,24 @@ def test_heartbeat_loop_health_only_skips_scheduler(monkeypatch):
         heartbeat_loop(interval=0.01, dry_run=True, verbose=False, autonomy=False)
 
     assert called == []
+
+
+def test_heartbeat_loop_none_autonomy_uses_config(monkeypatch):
+    import heartbeat as hb
+    import scheduler
+    import types
+
+    monkeypatch.setattr(hb, "run_heartbeat", lambda **kwargs: None)
+    monkeypatch.setattr(hb._wakeup_event, "wait", lambda timeout=None: (_ for _ in ()).throw(RuntimeError("stop")))
+    monkeypatch.setattr(hb, "_task_store_drain_active", True)
+    monkeypatch.setitem(sys.modules, "config", types.SimpleNamespace(get=lambda key, default=None: True if key == "heartbeat.autonomy" else default))
+    called = []
+    monkeypatch.setattr(scheduler, "drain_due_jobs", lambda **kwargs: called.append(kwargs) or 0)
+
+    with pytest.raises(RuntimeError, match="stop"):
+        heartbeat_loop(interval=0.01, dry_run=True, verbose=False, autonomy=None)
+
+    assert len(called) == 1
 
 
 def test_heartbeat_loop_autonomy_calls_scheduler(monkeypatch):
@@ -456,9 +513,72 @@ def test_run_backlog_step_loop_exception_marks_blocked(tmp_path, monkeypatch):
     assert heartbeat._backlog_drain_active is False
 
 
+def test_run_backlog_step_processes_multiple_items_per_wake(tmp_path, monkeypatch):
+    """Backlog drain should chew through a small batch instead of one item per wake."""
+    monkeypatch.setenv("POE_ORCH_ROOT", str(tmp_path))
+
+    import importlib
+    import orch_items as oi
+    importlib.reload(oi)
+
+    oi.ensure_project("proj-e", "mission e")
+    oi.append_next_items("proj-e", ["first", "second", "third"])
+
+    import heartbeat
+    heartbeat._backlog_drain_active = True
+
+    _lines, seeded_items = oi.parse_next("proj-e")
+    selected = [item for item in seeded_items if item.text in {"first", "second", "third"}]
+
+    mock_loop_result = MagicMock()
+    mock_loop_result.status = "done"
+
+    with patch("orch_items.select_global_next", side_effect=[("proj-e", selected[0]), ("proj-e", selected[1]), None]), \
+         patch("agent_loop.run_agent_loop", return_value=mock_loop_result) as mock_loop:
+        _run_backlog_step(dry_run=False, verbose=False, max_items=2)
+
+    _lines2, items2 = oi.parse_next("proj-e")
+    target_states = {item.text: item.state for item in items2 if item.text in {"first", "second", "third"}}
+    assert target_states == {"first": oi.STATE_DONE, "second": oi.STATE_DONE, "third": oi.STATE_TODO}
+    assert mock_loop.call_count == 2
+    assert heartbeat._backlog_drain_active is False
+
+
 # ---------------------------------------------------------------------------
 # Background evolver / inspector / eval thread functions
 # ---------------------------------------------------------------------------
+
+def test_run_task_store_drain_forwards_batch_size(monkeypatch):
+    import heartbeat
+    heartbeat._task_store_drain_active = True
+    captured = {}
+
+    def _fake_drain_task_store(**kwargs):
+        captured.update(kwargs)
+        return 2
+
+    monkeypatch.setitem(sys.modules, "handle", types.SimpleNamespace(drain_task_store=_fake_drain_task_store))
+    _run_task_store_drain(dry_run=True, verbose=False, max_tasks=7)
+    assert captured["dry_run"] is True
+    assert captured["verbose"] is False
+    assert captured["max_tasks"] == 7
+    assert heartbeat._task_store_drain_active is False
+
+
+def test_run_task_store_drain_clamps_batch_size(monkeypatch):
+    import heartbeat
+    heartbeat._task_store_drain_active = True
+    captured = {}
+
+    def _fake_drain_task_store(**kwargs):
+        captured.update(kwargs)
+        return 0
+
+    monkeypatch.setitem(sys.modules, "handle", types.SimpleNamespace(drain_task_store=_fake_drain_task_store))
+    _run_task_store_drain(dry_run=False, verbose=True, max_tasks=0)
+    assert captured["max_tasks"] == 1
+    assert heartbeat._task_store_drain_active is False
+
 
 def test_run_evolver_bg_clears_flag():
     """_run_evolver_bg clears _evolver_active flag even on exception."""
@@ -764,14 +884,25 @@ class TestSessionGuard:
         with patch("heartbeat.subprocess.run", return_value=mock_result):
             assert _is_interactive_session_active() is False
 
-    def test_returns_true_when_pgrep_finds_process(self):
-        """pgrep returns 0 with output → interactive session active."""
+    def test_returns_true_when_pgrep_finds_process_in_workspace(self):
+        """Matching claude session under this workspace/repo → interactive session active."""
         from heartbeat import _is_interactive_session_active
         mock_result = MagicMock()
         mock_result.returncode = 0
         mock_result.stdout = "12345\n"
-        with patch("heartbeat.subprocess.run", return_value=mock_result):
+        with patch("heartbeat.subprocess.run", return_value=mock_result), \
+             patch("heartbeat.os.readlink", return_value=str(Path.cwd())):
             assert _is_interactive_session_active() is True
+
+    def test_returns_false_when_pgrep_finds_only_unrelated_process(self):
+        """Claude sessions outside this workspace should not block autonomous work."""
+        from heartbeat import _is_interactive_session_active
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = "12345\n"
+        with patch("heartbeat.subprocess.run", return_value=mock_result), \
+             patch("heartbeat.os.readlink", return_value="/home/clawd/claude"):
+            assert _is_interactive_session_active() is False
 
     def test_returns_false_on_subprocess_exception(self):
         """If pgrep is not available or times out, default to False (don't block work)."""
@@ -793,6 +924,16 @@ class TestSessionGuard:
         mock_result.returncode = 0
         mock_result.stdout = "   \n"  # whitespace only
         with patch("heartbeat.subprocess.run", return_value=mock_result):
+            assert _is_interactive_session_active() is False
+
+    def test_uninspectable_process_is_ignored(self):
+        """If cwd inspection fails for a match, skip it instead of blocking work."""
+        from heartbeat import _is_interactive_session_active
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = "12345\n"
+        with patch("heartbeat.subprocess.run", return_value=mock_result), \
+             patch("heartbeat.os.readlink", side_effect=OSError("gone")):
             assert _is_interactive_session_active() is False
 
     def test_tier2_skips_all_llm_when_session_active(self):

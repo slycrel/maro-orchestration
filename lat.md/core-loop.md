@@ -44,3 +44,4 @@ Other subsystems that the core loop directly invokes or feeds into.
 - [[quality-gates]] — quality gate fires after loop completion
 - [[worker-agents]] — director and workers are the agents doing the work
 - [[self-improvement]] — evolver and thinkback use loop outcomes as input
+- `docs/research/productive_persistence.md` — persistence model: `stuck_streak`, tiered retry budget, failure taxonomy, and gap analysis for the retry/escalation ladder

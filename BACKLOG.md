@@ -9,6 +9,29 @@ Last reviewed: 2026-04-27 (Thread Architecture sketch — see top entry).
 
 ---
 
+### Build-loop wiring — cron wakeups are hitting the wrong abstraction (2026-05-06)
+
+The repeated `poe-orchestration-build-loop` duty-cycle alerts finally coughed up a concrete diagnosis: the 5-minute cron is not running a dedicated autonomous build loop. It is waking the main session with the generic reminder text:
+
+> Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.
+
+That explains the observed pattern:
+- `last_status=ok`
+- duty cycle usually ~5–7%, occasionally a bit higher
+- background checkpoints fine
+- repo often clean
+
+In other words: the system is succeeding at the wrong thing. A reminder wake can only do opportunistic work; it is not a real build-runner substrate.
+
+- [x] **Route build-loop cron to a dedicated autonomous runner/supervisor.** Completed 2026-05-06.
+  - The dedicated runner lives in `src/build_loop_runner.py` with a lockfile/status contract plus a default `workers/handle.sh` bridge.
+  - `python3 src/cli.py build-loop` is the first-class entrypoint and `scripts/build-loop.sh` is the stable cron-facing wrapper.
+  - The live OpenClaw cron job `poe-orchestration-build-loop` now targets the dedicated persistent session with a payload instructing it to run the build-loop wrapper instead of the old generic HEARTBEAT reminder text.
+- [ ] **Define the success condition operationally.** "Fixed" means more than cleaner logs: while active work exists, measured duty should stay above the 60% floor (target 85%+) without relying on human-visible heartbeat chatter.
+- [ ] **Preserve health-only heartbeat semantics.** The 2026-04-22 split was correct; do not regress into making every generic heartbeat wake an autonomy daemon again. The fix needs to be explicit build-loop wiring, not re-coupling everything.
+
+---
+
 ### ACTIVE DESIGN SPACE — Thread Architecture (2026-04-26 → 2026-04-27, Jeremy + Claude)
 
 **Branch:** `arch/thread-navigator`

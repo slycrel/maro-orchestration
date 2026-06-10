@@ -10,8 +10,6 @@ design question it informs.
 
 | Question | Informs | Priority |
 |----------|---------|----------|
-| **Productive persistence in agents**: exploration-exploitation tradeoff, grit vs. stubbornness, when to quit — what does ML + psych research say about the optimal persistence model? (incl. OpenAI autocurricula emergent strategies, Duckworth grit, Kapur productive failure) | Roadblock resilience in agent_loop.py | High |
-| **Zoom in / zoom out metacognition**: adaptive expertise, double-loop learning (Argyris), OODA loops — how do smart people/systems toggle between object-level execution and meta-level goal review? Agent analogue: re-decompose on stuck vs. retry step | Loop resilience + decompose strategy | High |
 | How does spaced repetition interact with confidence/score signals? | Memory decay model (Phase 16/27) | High |
 | What distinguishes tacit vs. explicit knowledge in expertise research? | Crystallization Stage 4→5 (Phase 22) | High |
 | Kahneman System 1/2: when should an autonomous agent deliberate vs. act? | Loop decompose/execute split | Medium |
@@ -32,4 +30,13 @@ Use the `psyche-researcher` persona to generate these.
 
 ## Completed research
 
-*(none yet — waiting for first directed spawn)*
+| Artifact | Question answered | Date |
+|----------|------------------|------|
+| `productive_persistence.md` | When should an agent persist vs. pivot vs. quit? Full implementation guide: definition, 6 core dimensions (hypothesis-narrowing, tiered retry budget, failure taxonomy, recovery ladder, zoom-out signals, durable artifacts), decision tree, current codebase state, signal implementation status, dissent (Credé grit critique), recommendation (3-wave implementation roadmap), and 9 concrete next actions. Cross-linked to lat.md/ nodes. | 2026-05-12 |
+| `productive-persistence.md` | Earlier synthesis: ML/psychology research on productive persistence (Duckworth, Kapur, RL). Theoretical depth; used as source for `productive_persistence.md`. | 2026-03-27 |
+| `zoom-metacognition-adaptive-expertise.md` | How do experts toggle between object-level execution and meta-level goal review? Adaptive expertise, CFT, crystallization failure mechanisms, 15 Poe implementation recommendations. | 2026-05-12 |
+| `zoom-metacognition.md` | Earlier zoom-out synthesis: Argyris double-loop learning, OODA, agent metacognition analogues. | ~2026-04 |
+| `system1-system2-agents.md` | Kahneman System 1/2: when should an autonomous agent deliberate vs. act? | ~2026-04 |
+| `spaced-repetition-confidence.md` | How does spaced repetition interact with confidence/score signals? | ~2026-04 |
+| `tacit-vs-explicit.md` | What distinguishes tacit vs. explicit knowledge in expertise research? | ~2026-04 |
+| `agent0-synthesis.md` | Agent0 / Foundation Agent synthesis — steal-list from related agent architectures. | ~2026-04 |

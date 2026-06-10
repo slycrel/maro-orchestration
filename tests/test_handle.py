@@ -1021,6 +1021,28 @@ class TestClosureRestart:
 
         assert len(calls) == 1
 
+    def test_inconclusive_closure_does_not_restart(self, monkeypatch, tmp_path):
+        """Inconclusive verification should not trigger a closure restart loop."""
+        self._setup(monkeypatch, tmp_path)
+        from unittest.mock import patch
+
+        done_result = self._fake_loop_result(status="done")
+        calls = []
+        def _fake_run(*args, **kwargs):
+            calls.append(kwargs.copy())
+            return done_result
+
+        inconclusive = self._fake_closure(False, 0.6, gaps=["verification was inconclusive"])
+        inconclusive.inconclusive_count = 1
+
+        with patch("agent_loop.run_agent_loop", side_effect=_fake_run), \
+             patch("intent.check_goal_clarity", return_value={"clear": True}), \
+             patch("director.verify_goal_completion", return_value=inconclusive), \
+             self._no_quality_gate():
+            handle("build X", force_lane="agenda", dry_run=False)
+
+        assert len(calls) == 1, "inconclusive closure should not trigger restart"
+
     def test_config_flag_disables_restart(self, monkeypatch, tmp_path):
         """closure_restart=False disables the restart path for A/B comparison."""
         self._setup(monkeypatch, tmp_path)

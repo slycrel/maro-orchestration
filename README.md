@@ -2,6 +2,8 @@
 
 Autonomous agent framework. Give it a goal; it decomposes, executes, learns, and reports. No hand-holding required.
 
+A dedicated build-loop runner now lives in `src/build_loop_runner.py` so cron can wake a real bounded automation loop instead of nudging a generic reminder session and hoping for initiative.
+
 Works standalone or alongside OpenClaw, Telegram, Slack, or any other interface you wire in.
 
 > **Status: personal infrastructure / active development.** This is a working system, not a polished library. APIs change, features are added fast, and some things are still sharp edges. It runs continuously on a headless Ubuntu box and gets iterated on daily. If you're reading this and it seems useful, it probably is — just go in eyes open.
@@ -116,6 +118,13 @@ python3 src/telegram_listener.py --once    # process pending and exit
 # System health
 python3 src/cli.py sheriff health
 python3 src/cli.py poe-observe
+
+# Dedicated autonomous build-loop runner
+python3 src/cli.py build-loop --worker-session handle --format json
+./scripts/build-loop.sh --worker-session handle --format json
+
+# Example cron target (every 5 minutes)
+*/5 * * * * cd /path/to/openclaw-orchestration && OPENCLAW_WORKSPACE=/path/to/workspace ./scripts/build-loop.sh --worker-session handle --format json >> /tmp/poe-build-loop.log 2>&1
 
 # Memory status
 python3 src/cli.py memory context
@@ -257,11 +266,13 @@ Heartbeat recovery tiers:
 2. **LLM diagnosis**: stuck projects → cheap LLM recovery action
 3. **Telegram escalation**: critical health → alert Jeremy
 
-Autonomous background work is opt-in:
+Autonomous background work can be enabled explicitly:
 
 ```bash
 python3 src/cli.py poe-heartbeat --loop --autonomy
 ```
+
+If you run `poe-heartbeat --loop` without either flag, it now defers to `heartbeat.autonomy` config. Use `--no-autonomy` to force health-only mode regardless of config.
 
 You can also skip services entirely and run the pieces manually when needed:
 
@@ -401,6 +412,20 @@ Next run with similar task:
 **Prompt injection detection** (`security.py`) — scans external content before it enters the agent context.
 
 ---
+
+## Worker session manifests
+
+`poe-orchestration` execution bridges accept either a named worker script or a JSON manifest via `--worker-session`.
+
+Manifests now support both the explicit keys and short aliases:
+- `command` or `cmd` (optionally with `args`, `argv`, or `arguments` arrays)
+- `environment`, `environment_variables`, `environmentVariables`, `env_vars`, `envVars`, or `env`
+- `working_directory`, `working_dir`, `work_dir`, `workingDirectory`, `workingDir`, `workDir`, or `cwd`
+- `timeout_seconds`, `timeout_secs`, `timeoutSeconds`, `timeoutSecs`, or `timeout`
+- `payload_name`, `payload_file`, `payload_path`, `payloadName`, `payloadFile`, `payload`, or `payloadPath`
+- `result_name`, `result_file`, `result_path`, `resultName`, `resultFile`, `result`, or `resultPath`
+
+Use this when a worker needs nested artifact paths, injected environment variables, or a fixed working directory without shell wrapper glue.
 
 ## Development
 

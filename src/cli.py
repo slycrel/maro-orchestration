@@ -545,6 +545,7 @@ def main(argv: list[str] | None = None) -> int:
                 verbose=args.verbose,
                 escalate=not args.no_escalate,
                 autonomy=args.autonomy,
+                backlog_every=args.backlog_every,
             )
             return 0
         report = run_heartbeat(
@@ -667,6 +668,32 @@ def main(argv: list[str] | None = None) -> int:
             print(
                 f"iteration={idx} project={tick.run.project} run_id={tick.run.run_id} status={tick.validation.status} item={tick.run.index}"
             )
+        return 0
+
+    if args.cmd == "build-loop":
+        from build_loop_runner import build_loop_status_path, run_build_loop
+
+        if args.max_runs <= 0:
+            return fail("E_BUILD_LOOP_BAD_LIMIT", "max-runs must be greater than zero")
+        try:
+            summary = run_build_loop(
+                project=args.project,
+                worker=args.worker,
+                worker_session=args.worker_session,
+                max_runs=args.max_runs,
+                max_retry_streak=args.max_retry_streak,
+                max_attempts_per_item=args.max_attempts_per_item,
+                continue_on_retry=not args.no_continue_on_retry,
+                continue_on_blocked=args.continue_on_blocked,
+            )
+        except ValueError as exc:
+            return fail("E_BUILD_LOOP_FAILED", str(exc))
+        except Exception as exc:
+            return fail("E_BUILD_LOOP_FAILED", str(exc))
+        if args.format == "path":
+            print(build_loop_status_path())
+        else:
+            print(json.dumps(summary, indent=2))
         return 0
 
     if args.cmd == "ancestry":
