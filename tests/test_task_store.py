@@ -79,6 +79,20 @@ class TestEnqueue:
         t = task_store.enqueue(continuation_depth=2)
         assert t["continuation_depth"] == 2
 
+    def test_enqueue_origin_persisted(self):
+        origin = {
+            "parent_handle_id": "abcd1234",
+            "parent_loop_id": "loop-99",
+            "parent_goal": "the original goal",
+        }
+        t = task_store.enqueue(reason="requeued step", origin=origin)
+        data = json.loads(task_store.task_path(t["job_id"]).read_text())
+        assert data["origin"] == origin
+
+    def test_enqueue_origin_defaults_to_empty(self):
+        t = task_store.enqueue(reason="fresh")
+        assert t["origin"] == {}
+
 
 # ---------------------------------------------------------------------------
 # Claim

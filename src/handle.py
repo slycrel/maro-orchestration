@@ -329,6 +329,7 @@ def handle(
     verbose: bool = False,
     channel: Optional["ConversationChannel"] = None,
     prior_context: Optional[str] = None,
+    origin: Optional[dict] = None,
 ) -> HandleResult:
     """Process an incoming request through Poe's handle.
 
@@ -351,6 +352,7 @@ def handle(
             verbose=verbose,
             channel=channel,
             prior_context=prior_context,
+            origin=origin,
         )
     finally:
         if not dry_run:
@@ -373,6 +375,7 @@ def _handle_impl(
     verbose: bool = False,
     channel: Optional["ConversationChannel"] = None,
     prior_context: Optional[str] = None,
+    origin: Optional[dict] = None,
 ) -> HandleResult:
     """Process an incoming request through Poe's handle.
 
@@ -388,6 +391,10 @@ def _handle_impl(
         channel: Optional ConversationChannel for bidirectional comms (e.g. dashboard).
             When provided, the clarity check uses channel.ask() to gather missing info
             (rather than returning clarification_needed), and step events are emitted.
+        origin: Ancestry of this request when it was spawned by prior work
+            (parent_handle_id, parent_loop_id, parent_goal, source, job_id).
+            Stamped into the run-dir metadata so every run is traceable to the
+            thread it serves. None for direct user input.
 
     Returns:
         HandleResult with routing info and substantive result.
@@ -409,13 +416,14 @@ def _handle_impl(
         _inputs_path = Path(__file__).resolve().parent.parent / "memory" / "handle_inputs.jsonl"
         _inputs_path.parent.mkdir(parents=True, exist_ok=True)
         with _inputs_path.open("a", encoding="utf-8") as _fh:
-            _fh.write(
-                json.dumps({
-                    "handle_id": handle_id,
-                    "raw_input": _raw_input,
-                    "ts": datetime.now(timezone.utc).isoformat(),
-                }) + "\n"
-            )
+            _input_rec = {
+                "handle_id": handle_id,
+                "raw_input": _raw_input,
+                "ts": datetime.now(timezone.utc).isoformat(),
+            }
+            if origin:
+                _input_rec["origin"] = origin
+            _fh.write(json.dumps(_input_rec) + "\n")
     except Exception:
         pass  # never block on logging
 
@@ -433,6 +441,7 @@ def _handle_impl(
             handle_id,
             prompt=_raw_input,
             model=model,
+            extra_metadata={"origin": origin} if origin else None,
         )
         _set_current_run_dir(_rd)
         _record_log_offset(handle_id)
@@ -1485,7 +1494,16 @@ def handle_task(
 
     else:
         log.info("handle_task routing %s job_id=%s via handle()", source or "unknown", job_id)
-        return handle(reason, adapter=adapter, dry_run=dry_run, verbose=verbose)
+        # Carry ancestry across the requeue boundary: the task's origin (if its
+        # creator recorded one) plus queue-level identity. Without this, a
+        # requeued goal arrives at handle() indistinguishable from fresh user
+        # input (goal-brain pressure test, 2026-06-10, finding 1).
+        _origin = dict(task.get("origin") or {})
+        _origin.setdefault("source", source or "task_store")
+        _origin.setdefault("job_id", job_id)
+        if task.get("parent_job_id"):
+            _origin.setdefault("parent_job_id", task["parent_job_id"])
+        return handle(reason, adapter=adapter, dry_run=dry_run, verbose=verbose, origin=_origin)
 
 
 def drain_task_store(

@@ -57,6 +57,7 @@ def make_task(
     parent_job_id: str = "",
     blocked_by: Optional[List[str]] = None,
     continuation_depth: int = 0,
+    origin: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     now = utc_now()
     return {
@@ -70,6 +71,11 @@ def make_task(
         "parent_job_id": parent_job_id,
         "blocked_by": blocked_by or [],
         "continuation_depth": continuation_depth,
+        # Ancestry back to the work that spawned this task (parent_handle_id,
+        # parent_loop_id, parent_goal, ...). Without it a requeued plan step
+        # arrives at handle() as a brand-new goal with no thread identity —
+        # the fan-out failure traced in the 2026-06-10 goal-brain pressure test.
+        "origin": origin or {},
         "timestamps": {
             "queued_at_utc": now,
             "claimed_at_utc": "",
@@ -139,12 +145,13 @@ def enqueue(
     blocked_by: Optional[List[str]] = None,
     job_id: Optional[str] = None,
     continuation_depth: int = 0,
+    origin: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Create a new task and write it to disk."""
     jid = job_id or new_job_id()
     task = make_task(jid, lane=lane, source=source, reason=reason,
                      parent_job_id=parent_job_id, blocked_by=blocked_by,
-                     continuation_depth=continuation_depth)
+                     continuation_depth=continuation_depth, origin=origin)
 
     # If blocked_by contains task IDs, verify they exist
     if task["blocked_by"]:

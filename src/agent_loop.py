@@ -413,6 +413,16 @@ def _handle_budget_ceiling(
     if remaining_steps:
         try:
             from task_store import enqueue as _ts_enqueue
+            try:
+                from runs import current_handle_id as _cur_hid
+                _parent_handle = _cur_hid() or ""
+            except Exception:
+                _parent_handle = ""
+            _origin = {
+                "parent_loop_id": ctx.loop_id,
+                "parent_handle_id": _parent_handle,
+                "parent_goal": ctx.goal[:200],
+            }
             _done_count = sum(1 for s in step_outcomes if s.status == "done")
             _done_summary = "; ".join(
                 s.text[:80] for s in step_outcomes if s.status == "done"
@@ -442,6 +452,7 @@ def _handle_budget_ceiling(
                     reason=_esc_reason,
                     parent_job_id=ctx.loop_id,
                     continuation_depth=continuation_depth,
+                    origin=_origin,
                 )
                 log.warning(
                     "budget_ceiling_escalation: depth=%d >= max=%d, escalated to %s "
@@ -468,6 +479,7 @@ def _handle_budget_ceiling(
                     reason=_cont_reason,
                     parent_job_id=ctx.loop_id,
                     continuation_depth=_next_depth,
+                    origin=_origin,
                 )
                 log.info(
                     "budget_ceiling_continuation: enqueued %s depth=%d with %d remaining "

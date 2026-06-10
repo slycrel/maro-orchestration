@@ -171,6 +171,15 @@ def test_set_and_get_current_run_dir(workspace):
     assert current_run_dir() is None
 
 
+def test_current_handle_id_from_pinned_run_dir(workspace):
+    from runs import current_handle_id
+    rd = create_run_dir("abcd1234", prompt="p")
+    set_current_run_dir(rd)
+    assert current_handle_id() == "abcd1234"
+    set_current_run_dir(None)
+    assert current_handle_id() is None
+
+
 def test_artifact_dir_uses_run_dir_when_active(workspace):
     rd = create_run_dir("abcd1234", prompt="p")
     set_current_run_dir(rd)

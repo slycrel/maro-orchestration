@@ -1054,6 +1054,7 @@ def handle_escalation(
                 reason=reason,  # original escalation context becomes continuation context
                 parent_job_id=job_id,
                 continuation_depth=depth + 1,
+                origin=task.get("origin") or {},  # carry ancestry forward
             )
             followup_task_id = _cont_task["job_id"]
             log.info("escalation_continue: enqueued %s depth=%d", followup_task_id, depth + 1)
@@ -1075,6 +1076,7 @@ def handle_escalation(
                 reason=f"NARROWED from escalation {job_id}:\n\n{revised_goal}",
                 parent_job_id=job_id,
                 continuation_depth=depth + 1,
+                origin=task.get("origin") or {},  # carry ancestry forward
             )
             followup_task_id = _narrow_task["job_id"]
             log.info("escalation_narrow: enqueued %s with revised goal %r",

@@ -216,6 +216,15 @@ def current_run_dir() -> Optional[Path]:
     return _current_run_dir
 
 
+def current_handle_id() -> Optional[str]:
+    """Handle id of the active run, derived from the pinned run-dir name
+    (`<handle_id>-<nickname>`). None when no run-dir is pinned."""
+    rd = current_run_dir()
+    if rd is None:
+        return None
+    return rd.name.split("-", 1)[0]
+
+
 def artifact_dir(project: str, project_root_fn=None) -> Path:
     """Where to write per-loop artifacts (PARTIAL files, scratchpad, step outputs).
 

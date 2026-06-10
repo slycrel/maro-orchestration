@@ -476,6 +476,61 @@ class TestDryRunHermeticity:
         assert r1.message == r2.message == "check the analysis"
 
 
+class TestOriginAncestry:
+    """Ancestry survives the requeue boundary (goal-brain pressure test,
+    2026-06-10, finding 1): handle(origin=...) stamps run metadata, and
+    handle_task threads the task's origin through to handle()."""
+
+    def test_origin_stamped_into_run_metadata(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        origin = {
+            "parent_handle_id": "feed1234",
+            "parent_loop_id": "loop-7",
+            "parent_goal": "the parent goal",
+        }
+        result = handle("summarize the findings", dry_run=True, origin=origin)
+        meta_path = next((tmp_path / "runs").glob(f"{result.handle_id}-*/metadata.json"))
+        meta = json.loads(meta_path.read_text())
+        assert meta["origin"] == origin
+
+    def test_no_origin_for_direct_input(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        result = handle("summarize the findings", dry_run=True)
+        meta_path = next((tmp_path / "runs").glob(f"{result.handle_id}-*/metadata.json"))
+        meta = json.loads(meta_path.read_text())
+        assert "origin" not in meta
+
+    def test_handle_task_threads_origin_through(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        import handle as handle_mod
+
+        captured = {}
+
+        def _fake_handle(message, **kwargs):
+            captured["message"] = message
+            captured["origin"] = kwargs.get("origin")
+            return HandleResult(
+                handle_id="x", lane="now", lane_confidence=1.0,
+                classification_reason="t", message=message, status="done", result="",
+            )
+
+        monkeypatch.setattr(handle_mod, "handle", _fake_handle)
+        task = {
+            "job_id": "task-001",
+            "source": "user_goal",
+            "reason": "do the thing [after:3]",
+            "parent_job_id": "task-000",
+            "origin": {"parent_loop_id": "loop-42", "parent_goal": "big goal"},
+        }
+        handle_mod.handle_task(task, dry_run=True)
+        assert captured["message"] == "do the thing [after:3]"
+        assert captured["origin"]["parent_loop_id"] == "loop-42"
+        assert captured["origin"]["parent_goal"] == "big goal"
+        assert captured["origin"]["job_id"] == "task-001"
+        assert captured["origin"]["parent_job_id"] == "task-000"
+        assert captured["origin"]["source"] == "user_goal"
+
+
 # ---------------------------------------------------------------------------
 # _apply_prefixes registry unit tests
 # ---------------------------------------------------------------------------

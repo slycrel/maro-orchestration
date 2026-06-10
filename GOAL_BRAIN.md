@@ -153,8 +153,8 @@ Sample: the 2026-05-13..17 window of `~/.poe/workspace/runs/` (478 dirs total;
    `prompt.txt` (no scope.md / resolved_intent.md — scope generation returns None
    silently on adapter failure), and `metadata.json` has no thread/parent field. A
    run cannot be traced back to the intent it serves except by string matching.
-   Mechanical fix queued in BACKLOG: parent/thread fields on run metadata, threaded
-   through the requeue path.
+   Fixed same day: tasks carry an `origin` ancestry dict from enqueue through
+   `handle_task` into run metadata (recorded, not yet consulted — see Threads).
 
 ## Decisions (system-maintained, append-only)
 
@@ -192,9 +192,10 @@ Active:
 - **Goal-brain sequencing, steps 3–5**: recall() shape (now with the step-2
   requirement that it include a dispatch-time hook); then navigator schema; then
   prompt. Step 2 (pressure test) done 2026-06-10 — findings in Compiled truth.
-- **Run↔thread linkage**: parent/thread fields on run metadata + the requeue path
-  carrying ancestry (pressure-test findings 1 and 4). Mechanical prerequisite for
-  recall() at dispatch time.
+- **Run↔thread linkage**: done 2026-06-10 — tasks carry an `origin` ancestry dict
+  (parent handle/loop/goal) from enqueue through `handle_task` into run metadata.
+  Ancestry is now *recorded* at every requeue boundary; *consulting* it at
+  dispatch is the recall() work (step 3).
 
 Dormant (deliberately parked, not dropped):
 - Thread Architecture implementation (`arch/thread-navigator`) — parked pending
