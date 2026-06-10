@@ -9,6 +9,14 @@ Last reviewed: 2026-06-10 (session 40 — memory lifecycle fixes + dry-run herme
 
 ---
 
+### Goal-brain pressure-test findings — runtime gaps (2026-06-10)
+
+From sequencing step 2 (GOAL_BRAIN.md Compiled truth has the full findings; sample = the 2026-05-13..17 run-dir window). The decompose-fallback chop is fixed; these are the remaining mechanical gaps:
+
+- [ ] **Run↔thread linkage** — `metadata.json` in run dirs has no parent-goal/thread field, and the task-requeue path (`handle_task` → `handle(reason)`) drops ancestry entirely: a requeued plan step arrives as a brand-new goal with `[after:N]` markup intact. Add parent/thread fields to run metadata and thread them through requeue. Prerequisite for recall() at dispatch time.
+- [ ] **Dispatch-time dedup/memory** — the same agenda goal ran ~25× in ~35 min on 2026-05-17 (mixed stuck/done) with nothing consulting prior outcomes. Before dispatching, check recent runs/lessons for "we just ran this" (exact or near-duplicate prompt within a window). This is the read-side half of the standing-rule pipeline at the dispatch boundary.
+- [ ] **Scope generation fails silently** — `generate_scope` returns None on any adapter failure, so during the rc=1 outage no run got a scope.md and nothing recorded that scope was skipped. Emit a captain's-log event (or doctor-visible counter) when scope generation is skipped due to error, so outages are visible in run artifacts.
+
 ### Dry-run hermeticity — fixed two leak sites, two more fail-safe-by-accident (2026-06-10)
 
 Session 40 found `dry_run=True` runs making **real authenticated `claude -p` CLI calls** (subprocess adapter needs no API key, so conftest key-isolation didn't stop it). test_handle.py alone took 2h06m of real token burn. Fixed:

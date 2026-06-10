@@ -58,8 +58,8 @@ M1–M5 complete: the session-40 arc (memory lifecycle → standing rules → re
 _Sequencing agreed in `docs/conversations/2026-05-18-memory-and-goal-brain.md` (Claude + Poe-codex converged). Phase 65 implementation is **paused** — see session-38 delta-audit; its minimum experiment already shipped as `src/scope.py` + `ResolvedIntent`._
 
 - [x] **1. Define the goal-brain artifact concretely** — fields, human-steerable vs system-maintained, what makes a "good" one. One markdown file. This is the trust anchor ("we're not escaping LLM trust, we're redistributing it"). **Done 2026-06-10: `GOAL_BRAIN.md` (M4) — defined by example; the project is instance #1.**
-- [ ] **2. Pressure-test against 3–5 real past runs** from `~/.poe/workspace/runs/` — see where it leaks before designing further.
-- [ ] **3. Define `recall()` shape** — what slice of goal-brain + correspondence the navigator sees per turn.
+- [x] **2. Pressure-test against 3–5 real past runs** from `~/.poe/workspace/runs/` — see where it leaks before designing further. **Done 2026-06-10: examined the 2026-05-13..17 window (~60 runs). Four leaks, recorded in GOAL_BRAIN.md Compiled truth: (1) goal identity doesn't survive the task-requeue boundary — plan-step fragments became standalone goals, ~40 wasted runs; (2) the heuristic decompose fallback chopped goals on `[.;]` exactly when the LLM was failing — fixed, fallback is now the goal verbatim; (3) no cross-run memory at dispatch — same goal ran ~25× in 35 min; (4) run dirs aren't linkable to threads (no parent/thread metadata). Net: recall() (step 3) needs a dispatch-time hook, plus a mechanical run↔thread linkage prerequisite (BACKLOG).**
+- [ ] **3. Define `recall()` shape** — what slice of goal-brain + correspondence the navigator sees per turn. Step-2 addendum: must also define the dispatch-time slice ("what thread does this incoming goal belong to, and what do we already know about it?").
 - [ ] **4. Define the navigator's decision schema** — only after 1–3.
 - [ ] **5. Write the navigator prompt** — last.
 

@@ -159,6 +159,32 @@ class TestStagedPassDecomposition:
         assert len(result) == 3
 
 
+class TestDecomposeFallback:
+    """When the LLM is unavailable, decompose must return the goal verbatim
+    as a single step — never chop it on punctuation.
+
+    The old heuristic fallback (orch.decompose_goal, split on [.;]) turned
+    "Flag claims into artifacts/flagged-claims.md [after:3,4,5]" into the
+    fragments "Flag claims into artifacts/flagged-claims" and
+    "md [after:3,4,5]", each of which became a standalone nonsense goal.
+    Traced across ~40 error/stuck production runs, 2026-05-13..17.
+    """
+
+    class _FailingAdapter:
+        def complete(self, messages, **kw):
+            raise RuntimeError("claude subprocess failed (rc=1): simulated outage")
+
+    def test_failing_adapter_returns_goal_verbatim(self):
+        goal = "Flag claims rated weak or contested into artifacts/flagged-claims.md [after:3,4,5]"
+        result = decompose(goal, self._FailingAdapter(), max_steps=8)
+        assert result == [goal]
+
+    def test_failing_adapter_never_splits_on_periods(self):
+        goal = "Read config.yml. Update the timeout. Run scripts/test-safe.sh."
+        result = decompose(goal, self._FailingAdapter(), max_steps=8)
+        assert result == [goal]
+
+
 # ---------------------------------------------------------------------------
 # estimate_goal_scope (Phase 58)
 # ---------------------------------------------------------------------------

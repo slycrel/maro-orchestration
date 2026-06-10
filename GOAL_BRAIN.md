@@ -125,6 +125,37 @@ after the fixes have production runtime.
 - 10 known pre-existing test failures, all triaged and recorded in BACKLOG.md
   (plan-manifest order-dependence ×4, orch_core bridge ×5, scheduler lease ×1).
 
+**Goal-brain pressure test against real runs (sequencing step 2, 2026-06-10).**
+Sample: the 2026-05-13..17 window of `~/.poe/workspace/runs/` (478 dirs total;
+~60 examined via metadata + captain's log traces). Where the artifact leaks:
+
+1. **Goal identity does not survive the requeue boundary.** Plan-step text
+   recirculates as top-level goals (task queue → `handle_task` → `handle(reason)`)
+   with `[after:N]` markup intact and no pointer to the parent goal. Each fragment
+   spawned a full run (planner, budget, run dir): ~40 error/stuck runs in the
+   sample trace to a handful of parent goals. The Threads section of this file is
+   the manual antidote, but nothing at dispatch time can ask "what thread does this
+   belong to?" → recall() (step 3) needs a **dispatch-time hook**, not only a
+   navigator-turn hook. Basis: run metadata + LOOP_CREATED events, e.g. subject
+   "Rate each claim ... artifacts/claim_ratings.md [after:3,4,5]" reason=initial.
+2. **The heuristic decompose fallback manufactured nonsense goals** — split on
+   `[.;]` chopped filenames ("...flagged-claims.md [after:3,4,5]" → "md
+   [after:3,4,5]") and fired exactly when the LLM was failing (the rc=1 era), i.e.
+   when the system was least able to recover. Fixed 2026-06-10: planner falls back
+   to the goal verbatim as a single step. The rc=1 fix (M5) removes the dominant
+   trigger.
+3. **No cross-run memory at dispatch.** The same adversarial-verification goal ran
+   ~25 times in ~35 minutes on 2026-05-17 (mixed stuck/done) with nothing
+   consulting prior outcomes. Lessons existed; dispatch never reads them. Adds
+   evidence to the "end-to-end standing-rule observation" open question — the read
+   side at dispatch is the missing half.
+4. **Run dirs are not linkable to threads.** Sampled runs' `source/` holds only
+   `prompt.txt` (no scope.md / resolved_intent.md — scope generation returns None
+   silently on adapter failure), and `metadata.json` has no thread/parent field. A
+   run cannot be traced back to the intent it serves except by string matching.
+   Mechanical fix queued in BACKLOG: parent/thread fields on run metadata, threaded
+   through the requeue path.
+
 ## Decisions (system-maintained, append-only)
 
 - **2026-04-23** — Ship Deliverable + ResolvedIntent as "plan-creation as its own
@@ -145,6 +176,9 @@ after the fixes have production runtime.
 - **2026-06-10** — This file becomes the compiled-truth anchor and the goal-brain
   artifact definition v0 (M4). CLAUDE.md session checklist reads it second,
   after CLAUDE.md itself.
+- **2026-06-10** — Planner's LLM-failure fallback is the goal verbatim as one step,
+  never a punctuation split (pressure-test finding 2). `orch.decompose_goal` keeps
+  the heuristic for explicit CLI use only.
 
 ## Threads (system-maintained — nothing leaves this list silently)
 
@@ -155,9 +189,12 @@ Active:
   backtest_metrics.py, doctor.py), fresh-venv install verified under a foreign
   HOME, rc=1 payload-first fix shipped. Remaining: codex-side payload check
   decision (deferred — JSONL format differs, no observed repro), final sweep.
-- **Goal-brain sequencing, steps 2–5**: pressure-test this artifact against 3–5 real
-  runs from `~/.poe/workspace/runs/`; then recall() shape; then navigator schema;
-  then prompt. (MILESTONES.md "Next Up".)
+- **Goal-brain sequencing, steps 3–5**: recall() shape (now with the step-2
+  requirement that it include a dispatch-time hook); then navigator schema; then
+  prompt. Step 2 (pressure test) done 2026-06-10 — findings in Compiled truth.
+- **Run↔thread linkage**: parent/thread fields on run metadata + the requeue path
+  carrying ancestry (pressure-test findings 1 and 4). Mechanical prerequisite for
+  recall() at dispatch time.
 
 Dormant (deliberately parked, not dropped):
 - Thread Architecture implementation (`arch/thread-navigator`) — parked pending

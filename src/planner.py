@@ -496,15 +496,16 @@ def decompose(
             import sys
             print(f"[poe] decompose LLM call failed, using heuristic: {exc}", file=sys.stderr, flush=True)
 
-    # --- Heuristic fallback ---
-    try:
-        import orch
-        _heuristic_steps = orch.decompose_goal(goal, max_steps=max_steps)
-        log.info("decompose heuristic produced %d steps (goal=%r)", len(_heuristic_steps), goal[:60])
-        return _heuristic_steps
-    except Exception:
-        # Last resort: split on sentences
-        return [goal]
+    # --- Fallback: the goal verbatim as a single step ---
+    # The old heuristic here (orch.decompose_goal, split on [.;]) manufactured
+    # nonsense goals from step text containing filenames or [after:N] markup
+    # ("...flagged-claims.md [after:3,4,5]" → "md [after:3,4,5]" as its own
+    # step), and it fired exactly when the LLM was failing — i.e. when the
+    # system was least able to recover. Traced across ~40 error/stuck runs,
+    # 2026-05-13..17. One verbatim step degrades gracefully; a regex chop
+    # compounds the outage. (Goal-brain pressure test, 2026-06-10.)
+    log.info("decompose falling back to single verbatim step (goal=%r)", goal[:60])
+    return [goal]
 
 
 # ---------------------------------------------------------------------------
