@@ -253,6 +253,85 @@ def test_subprocess_complete_failure(monkeypatch):
             a.complete([LLMMessage("user", "test")])
 
 
+def test_subprocess_rc1_with_success_payload_accepted(monkeypatch):
+    """Non-zero exit with a complete success result on stdout is a success.
+
+    The claude CLI can print a valid success JSON result and still exit 1
+    (observed when it fails to persist session state, e.g. foreign HOME).
+    This was the long-standing "claude subprocess failed (rc=1)" blocker:
+    the adapter trusted the exit code over the payload.
+    """
+    a = ClaudeSubprocessAdapter()
+    mock_result = MagicMock()
+    mock_result.returncode = 1
+    mock_result.stdout = _make_subprocess_output("answer despite rc=1")
+    mock_result.stderr = ""
+
+    with patch("llm._run_subprocess_safe", return_value=mock_result):
+        resp = a.complete([LLMMessage("user", "test")])
+
+    assert resp.content == "answer despite rc=1"
+    assert resp.input_tokens == 100
+
+
+def test_subprocess_rc1_success_payload_amid_noise(monkeypatch):
+    """Payload extraction scans past warning text and non-result JSON noise."""
+    a = ClaudeSubprocessAdapter()
+    noise_obj = json.dumps({"type": "diagnostic", "msg": "session save failed"})
+    mock_result = MagicMock()
+    mock_result.returncode = 1
+    mock_result.stdout = (
+        "Warning: cannot write to HOME\n"
+        + noise_obj + "\n"
+        + _make_subprocess_output("found it")
+        + "\ntrailing noise"
+    )
+    mock_result.stderr = ""
+
+    with patch("llm._run_subprocess_safe", return_value=mock_result):
+        resp = a.complete([LLMMessage("user", "test")])
+
+    assert resp.content == "found it"
+
+
+def test_subprocess_rc1_with_error_payload_still_raises(monkeypatch):
+    """A non-zero exit with an error result (is_error=true) must still raise,
+    and the human-readable message from the payload's "result" field must
+    surface in the exception instead of truncated raw JSON.
+
+    Real-world shape: the CLI reports auth errors as subtype="success" with
+    is_error=true and result="Not logged in · Please run /login".
+    """
+    a = ClaudeSubprocessAdapter()
+    error_payload = json.dumps({
+        "type": "result", "subtype": "success", "is_error": True,
+        "result": "Not logged in · Please run /login",
+    })
+    mock_result = MagicMock()
+    mock_result.returncode = 1
+    mock_result.stdout = error_payload
+    mock_result.stderr = ""
+
+    with patch("llm._run_subprocess_safe", return_value=mock_result):
+        with pytest.raises(RuntimeError, match="Not logged in"):
+            a.complete([LLMMessage("user", "test")])
+
+
+def test_extract_success_result_requires_not_is_error():
+    """_extract_success_result is the payload-first gate: subtype alone is
+    not enough — is_error must be falsy and "result" present."""
+    from llm import _extract_success_result, _extract_result_object
+
+    good = json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": "ok"})
+    bad = json.dumps({"type": "result", "subtype": "success", "is_error": True, "result": "Not logged in"})
+    assert _extract_success_result(good) is not None
+    assert _extract_success_result(bad) is None
+    assert _extract_success_result("") is None
+    assert _extract_success_result("no json here") is None
+    # _extract_result_object still finds the error object (for error detail)
+    assert _extract_result_object(bad)["result"] == "Not logged in"
+
+
 def test_subprocess_complete_timeout(monkeypatch):
     import subprocess as sp
     a = ClaudeSubprocessAdapter(timeout=1)

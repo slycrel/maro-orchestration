@@ -20,8 +20,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-WORKSPACE = Path("/home/clawd/prototypes/poe-orchestration/prototypes/poe-orchestration/projects/find-10-highly-profitable-polymarket")
-
 POSITION_SIZE = 10.0  # USD per trade
 
 
@@ -148,19 +146,12 @@ def main():
     parser.add_argument("--limit", type=int, default=20, help="Max markets to backtest")
     args = parser.parse_args()
 
-    # Resolve input path — check /tmp first, then workspace
     input_path = Path(args.input)
     if not input_path.exists():
-        alt = WORKSPACE / input_path.name
-        if alt.exists():
-            input_path = alt
-        else:
-            print(f"ERROR: Input file not found: {args.input}", file=sys.stderr)
-            sys.exit(1)
+        print(f"ERROR: Input file not found: {args.input}", file=sys.stderr)
+        sys.exit(1)
 
-    # Resolve output path — always write to workspace too
     output_path = Path(args.output)
-    workspace_output = WORKSPACE / output_path.name
 
     with open(input_path) as f:
         markets = json.load(f)
@@ -207,19 +198,18 @@ def main():
         print(f"  [{processed}/{len(markets)}] {slug} done, trades so far: {len(all_trades)}", file=sys.stderr)
 
     # Write trades JSONL
-    for dest in [workspace_output, output_path]:
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        with open(dest, "w") as f:
-            for t in all_trades:
-                f.write(json.dumps(t) + "\n")
-        print(f"Wrote {len(all_trades)} trades to {dest}", file=sys.stderr)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(output_path, "w") as f:
+        for t in all_trades:
+            f.write(json.dumps(t) + "\n")
+    print(f"Wrote {len(all_trades)} trades to {output_path}", file=sys.stderr)
 
     # Compute and print metrics
     metrics = compute_metrics(all_trades)
     print(json.dumps(metrics, indent=2))
 
-    # Save metrics
-    metrics_path = WORKSPACE / "backtest_metrics.json"
+    # Save metrics next to the trades file
+    metrics_path = output_path.parent / "backtest_metrics.json"
     with open(metrics_path, "w") as f:
         json.dump(metrics, f, indent=2)
     print(f"Metrics saved to {metrics_path}", file=sys.stderr)

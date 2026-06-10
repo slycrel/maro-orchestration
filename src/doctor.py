@@ -99,8 +99,15 @@ def run_doctor() -> bool:
     except Exception as exc:
         results.append(_check("LLM API reachable", False, str(exc)[:80]))
 
-    # Memory directory
-    mem_dir = Path(__file__).resolve().parent.parent / "memory"
+    # Memory directory — use the canonical resolution (env > config > orch
+    # fallback), not a repo-relative guess. The repo-local memory/ is a stale
+    # copy (tests write there); reporting it here misled diagnostics on any
+    # box where the real data lives in ~/.poe/workspace/memory.
+    try:
+        from orch_items import memory_dir as _canonical_memory_dir
+        mem_dir = _canonical_memory_dir()
+    except Exception:
+        mem_dir = Path(__file__).resolve().parent.parent / "memory"
     results.append(_check(
         "Memory directory",
         mem_dir.exists(),
@@ -108,9 +115,7 @@ def run_doctor() -> bool:
     ))
 
     # Skills file (runtime JSONL)
-    skills_path = Path(__file__).resolve().parent.parent / "skills.jsonl"
-    if not skills_path.exists():
-        skills_path = Path(__file__).resolve().parent.parent / "memory" / "skills.jsonl"
+    skills_path = mem_dir / "skills.jsonl"
     results.append(_check(
         "Skills data",
         skills_path.exists(),

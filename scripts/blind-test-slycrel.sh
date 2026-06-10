@@ -28,7 +28,7 @@ UPSTREAM_URL="git@github.com:slycrel/slycrel-go.git"
 WORK_ROOT="/tmp/slycrel-blind-run"
 REPO_DIR="$WORK_ROOT/repo"
 LOG_FILE="/tmp/slycrel-blind-run.log"
-WORKSPACE_DIR_PATTERN="/home/clawd/.poe/workspace/projects/for-this-project-*"
+WORKSPACE_DIR_PATTERN="$HOME/.poe/workspace/projects/for-this-project-*"
 
 setup_only=0
 for arg in "$@"; do
