@@ -605,6 +605,48 @@ def _run_subprocess_safe(cmd, *, input=None, timeout=600,
     return subprocess.CompletedProcess(cmd, proc.returncode, stdout, "")
 
 
+def _extract_result_object(text: str) -> Optional[dict]:
+    """Scan merged stdout+stderr for the claude CLI's `{"type": "result"}`
+    object, skipping past warning text and non-result JSON noise."""
+    text = (text or "").strip()
+    if not text:
+        return None
+    decoder = json.JSONDecoder()
+    start = text.find("{")
+    while start != -1:
+        try:
+            data, consumed = decoder.raw_decode(text[start:])
+        except json.JSONDecodeError:
+            start = text.find("{", start + 1)
+            continue
+        if isinstance(data, dict) and data.get("type") == "result":
+            return data
+        start = text.find("{", start + consumed)
+    return None
+
+
+def _extract_success_result(text: str) -> Optional[dict]:
+    """Return the parsed claude CLI result payload if `text` contains a
+    genuinely successful `--output-format json` result object, else None.
+
+    The CLI can print a complete success result to stdout and still exit
+    non-zero (e.g. failing to persist session state after the response). The
+    payload, not the exit code, is the ground truth for whether the model
+    call succeeded. Note the CLI also reports *errors* with subtype "success"
+    plus is_error=true (the message lives in the "result" field), so is_error
+    is the load-bearing check.
+    """
+    data = _extract_result_object(text)
+    if (
+        data is not None
+        and data.get("subtype") == "success"
+        and not data.get("is_error", False)
+        and "result" in data
+    ):
+        return data
+    return None
+
+
 class ClaudeSubprocessAdapter(LLMAdapter):
     """Adapter using `claude -p` subprocess. Works anywhere Claude Code is installed.
 
@@ -652,7 +694,19 @@ class ClaudeSubprocessAdapter(LLMAdapter):
         except FileNotFoundError:
             raise RuntimeError(f"claude binary not found at {self.claude_bin}")
 
+        # Payload-first: a non-zero exit with a complete success result on
+        # stdout is a successful call (see _extract_success_result). This was
+        # the long-standing "claude subprocess failed (rc=1)" blocker.
+        _rc_payload = None
         if result.returncode != 0:
+            _rc_payload = _extract_success_result(result.stdout)
+            if _rc_payload is not None:
+                log.warning(
+                    "claude exited rc=%d but stdout holds a success result; accepting payload",
+                    result.returncode,
+                )
+
+        if result.returncode != 0 and _rc_payload is None:
             # stdout holds the merged stdout+stderr stream from the subprocess.
             merged = result.stdout.strip()
             detail = merged[:300] or "(no output)"
@@ -703,7 +757,10 @@ class ClaudeSubprocessAdapter(LLMAdapter):
                             f"{result.stdout[:200]}"
                         )
 
-            if result.returncode != 0:
+            # Re-check after retries: a retry can also exit non-zero with a
+            # usable success payload.
+            _rc_payload = _extract_success_result(result.stdout)
+            if result.returncode != 0 and _rc_payload is None:
                 # Dump debug info to /tmp for post-mortem diagnosis
                 try:
                     import tempfile, os as _os
@@ -714,6 +771,14 @@ class ClaudeSubprocessAdapter(LLMAdapter):
                         _f.write(f"--- PROMPT (first 3000 chars) ---\n{prompt[:3000]}\n")
                 except Exception:
                     pass
+                # The CLI reports errors as a result object with is_error=true
+                # and the human-readable message in "result" (e.g. "Not logged
+                # in · Please run /login"). Surface that instead of raw JSON.
+                _err_obj = _extract_result_object(result.stdout)
+                if _err_obj is not None and _err_obj.get("result"):
+                    detail = str(_err_obj["result"])[:300]
+                else:
+                    detail = result.stdout.strip()[:300] or "(no output)"
                 raise RuntimeError(f"claude subprocess failed (rc={result.returncode}): {detail}")
 
         # Parse JSON output. stdout holds merged stdout+stderr, so claude's
@@ -721,18 +786,21 @@ class ClaudeSubprocessAdapter(LLMAdapter):
         # parse first; if that fails, scan for the first `{` that begins a
         # valid JSON object.
         _stdout_text = result.stdout.strip()
-        data = None
-        try:
-            data = json.loads(_stdout_text)
-        except json.JSONDecodeError:
-            _decoder = json.JSONDecoder()
-            _start = _stdout_text.find("{")
-            while _start != -1:
-                try:
-                    data, _ = _decoder.raw_decode(_stdout_text[_start:])
-                    break
-                except json.JSONDecodeError:
-                    _start = _stdout_text.find("{", _start + 1)
+        # If we accepted a non-zero exit on the strength of its success
+        # payload, parse from that payload rather than re-scanning stdout.
+        data = _rc_payload
+        if data is None:
+            try:
+                data = json.loads(_stdout_text)
+            except json.JSONDecodeError:
+                _decoder = json.JSONDecoder()
+                _start = _stdout_text.find("{")
+                while _start != -1:
+                    try:
+                        data, _ = _decoder.raw_decode(_stdout_text[_start:])
+                        break
+                    except json.JSONDecodeError:
+                        _start = _stdout_text.find("{", _start + 1)
         if data is None:
             # Fallback: treat as plain text
             return LLMResponse(
@@ -828,7 +896,25 @@ class ClaudeSubprocessAdapter(LLMAdapter):
 # CodexCLIAdapter — uses `codex exec --json` (ChatGPT OAuth, prompt caching)
 # ---------------------------------------------------------------------------
 
-_CODEX_BIN = "/home/linuxbrew/.linuxbrew/bin/codex"
+def _find_codex_bin() -> str:
+    """Resolve the codex binary path. CODEX_BIN env, then PATH, then common locations."""
+    import shutil
+    if env := os.environ.get("CODEX_BIN"):
+        return env
+    if found := shutil.which("codex"):
+        return found
+    for candidate in (
+        Path.home() / ".local" / "bin" / "codex",
+        Path("/usr/local/bin/codex"),
+        Path("/opt/homebrew/bin/codex"),
+        Path("/home/linuxbrew/.linuxbrew/bin/codex"),
+    ):
+        if candidate.is_file():
+            return str(candidate)
+    return "codex"  # let exec-time PATH lookup have the last word
+
+
+_CODEX_BIN = _find_codex_bin()
 _CODEX_AUTH_FILE = str(Path.home() / ".codex" / "auth.json")
 
 

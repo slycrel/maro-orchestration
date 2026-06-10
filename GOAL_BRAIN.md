@@ -97,6 +97,14 @@ learned lessons and so on... all the flavors of persistent working knowledge)."*
 - Dry runs and the test suite were making real authenticated `claude -p` calls
   (token burn — the rogue-process failure class). Sealed at three seams in
   `3bd28cd`; conftest blocks the CLI binaries outright.
+- The long-standing "claude subprocess failed (rc=1)" blocker decomposed into two
+  real defects (M5 investigation, 2026-06-10): (a) the adapter trusted the exit
+  code over the payload — the CLI can print a complete success result and still
+  exit non-zero; now payload-first, with `is_error` as the load-bearing check;
+  (b) error details were truncated raw JSON that buried the CLI's actual message
+  (`is_error:true` results carry it in the `result` field, e.g. "Not logged in ·
+  Please run /login") — now surfaced verbatim. Basis: live repro under a foreign
+  HOME + `/tmp/claude_rc1_*.txt` dumps + regression tests in test_llm.py.
 
 **Execution quality, as of the session-40 audit (not yet re-measured post-fixes):**
 478 run dirs Apr 26–May 16; recent runs ~50% stuck / 30% error / 15% done. One
@@ -143,6 +151,10 @@ after the fixes have production runtime.
 Active:
 - **M5 — portability pass**: no hardcoded machine paths (`_CODEX_BIN` etc.),
   `pip install -e` works, installable harness. Last of the session-40 arc.
+  Status 2026-06-10: hardcoded paths removed (llm.py, backtester.py,
+  backtest_metrics.py, doctor.py), fresh-venv install verified under a foreign
+  HOME, rc=1 payload-first fix shipped. Remaining: codex-side payload check
+  decision (deferred — JSONL format differs, no observed repro), final sweep.
 - **Goal-brain sequencing, steps 2–5**: pressure-test this artifact against 3–5 real
   runs from `~/.poe/workspace/runs/`; then recall() shape; then navigator schema;
   then prompt. (MILESTONES.md "Next Up".)

@@ -6,7 +6,7 @@ import math
 import sys
 from pathlib import Path
 
-DEFAULT_INPUT = Path("/home/clawd/prototypes/poe-orchestration/prototypes/poe-orchestration/projects/find-10-highly-profitable-polymarket/backtest_trades.jsonl")
+DEFAULT_INPUT = Path("backtest_trades.jsonl")  # cwd; pass an explicit path as argv[1]
 
 
 def load_trades(path: Path) -> list[dict]:

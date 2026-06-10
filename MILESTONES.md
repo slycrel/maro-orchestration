@@ -2,7 +2,7 @@
 
 What to do next, in what order. Updated each session. Strategic phases live in ROADMAP.md; deferred ideas live in BACKLOG.md. This file is the bridge — the executable queue.
 
-Last updated: 2026-06-10 (session 40 — M1–M3 shipped: consolidation, dry-run hermeticity, standing-rule accretion, recovery lessons + dead introspect block revived)
+Last updated: 2026-06-10 (session 40 — M1–M5 shipped: consolidation, dry-run hermeticity, standing-rule accretion, recovery lessons + dead introspect block revived, GOAL_BRAIN.md, portability pass + rc=1 blocker fixed)
 
 ---
 
@@ -37,7 +37,19 @@ Before M2, `standing_rules.jsonl`/`hypotheses.jsonl` could never grow: `observe_
 - [x] **GOAL_BRAIN.md created at repo root** — both the goal-brain artifact definition v0 (defined by example, per the May-18 sequencing step 1) and this project's own instance: Jeremy's invariants quoted verbatim (anti-telephone), compiled truth with verification basis per claim, dated append-only decisions, a Threads section as the manual fan-out defense, and open questions with what they block. Format rules distinguish human-steerable (Intent, Invariants) from system-maintained sections.
 - [x] **Wired into CLAUDE.md** as session-checklist step 2, with the precedence rule: when GOAL_BRAIN.md disagrees with any other doc, GOAL_BRAIN.md wins.
 
-Remaining in this arc: M5 (portability pass).
+## Done (session 40, 2026-06-10 — M5: portability pass + the rc=1 blocker decomposed)
+
+Per the installable-harness invariant ("ideally this is a harness you install, not a single machine setup"). Verified end-to-end: fresh venv, `pip install -e .`, `poe-doctor` from the installed entry point under a foreign `HOME=/tmp/m5-home`.
+
+- [x] **Hardcoded machine paths removed** — `llm._CODEX_BIN` was a literal linuxbrew path; now `_find_codex_bin()` (CODEX_BIN env → PATH → common locations → bare name), mirroring `_find_claude_bin()`. `backtester.py` dropped its `/home/clawd/prototypes` WORKSPACE constant (input must exist at the given path; output + metrics land where `--output` says). `backtest_metrics.py` DEFAULT_INPUT is cwd-relative. `scripts/blind-test-slycrel.sh` uses `$HOME`. The `deploy/systemd/` units keep absolute paths by design — they're documented per-machine templates.
+- [x] **doctor.py memory check de-hardcoded** — was `Path(__file__)/../memory` (reported the stale repo-local copy); now uses canonical `orch_items.memory_dir()` resolution, and the skills check reads `<memory>/skills.jsonl` instead of the repo-relative path.
+- [x] **The "claude subprocess failed (rc=1)" blocker decomposed into two real defects** (live repro via foreign-HOME doctor + `/tmp/claude_rc1_*.txt` dumps):
+  1. **Exit code trusted over payload** — the CLI can print a complete success result JSON and still exit non-zero (e.g. failing to persist session state after responding). `ClaudeSubprocessAdapter` is now payload-first: rc≠0 with a genuine success payload (`type=result`, `subtype=success`, `is_error` falsy, `result` present) is accepted with a warning log. `is_error` is the load-bearing check — the CLI reports *errors* as `subtype:"success"` + `is_error:true` too.
+  2. **Error detail buried the actual message** — failures raised with 300 chars of truncated raw JSON, hiding the CLI's human-readable error (it lives in the payload's `result` field, e.g. "Not logged in · Please run /login"). The raise now surfaces that field verbatim. Historical "rc=1" mysteries were very likely real, readable errors nobody could see.
+- [x] **Regression tests** — payload-first acceptance (clean + amid JSON/warning noise), error-payload still raises with the readable message, extractor unit tests. test_llm.py: 91 passing.
+- [ ] **Deferred**: codex-side payload-first check (JSONL event format differs, no observed repro — revisit if a codex rc≠0-with-output shows up).
+
+M1–M5 complete: the session-40 arc (memory lifecycle → standing rules → recovery lessons → goal-brain → portability) is done.
 
 ---
 
