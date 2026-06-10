@@ -69,6 +69,8 @@ Loop starting
 
 Reinforcement: When a lesson is re-confirmed, score += 0.3, sessions_validated++. At threshold: promote to LONG.
 
+**Re-confirmation side effects (session 40 M2, `_post_reinforce_hooks` in knowledge_web.py):** every reinforcement — whether via `reinforce_lesson()` or `record_tiered_lesson()`'s near-duplicate dedup — runs the hooks: a MEDIUM lesson meeting eligibility (score ≥ 0.9, sessions ≥ 3) promotes to LONG *immediately* (the returned lesson's `.tier` changes), and a LONG re-confirmation calls `observe_pattern()` so hypotheses accrue confirmations and standing rules accrete. `record_tiered_lesson(tier=MEDIUM)` also dedups against LONG first — re-learning an already-promoted lesson reinforces the long-tier record instead of creating a medium duplicate. Full accretion path: medium lesson → eligibility at reinforcement → LONG (promote_lesson seeds hypothesis, confirmation 1) → re-learned once more → standing rule (RULE_PROMOTE_CONFIRMATIONS = 2).
+
 **Decay is a read-time derivation, never persisted** (session 40 invariant). The stored score is the score as of `last_reinforced`; the effective score is computed on load. Any code that rewrites a lessons file MUST load with `raw=True, limit=None` — persisting an effective (decayed) score without re-anchoring `last_reinforced` compounds decay, and the default `limit=50` silently truncates larger stores on rewrite.
 
 ## Consolidation (the "dream cycle", session 40)
@@ -93,7 +95,7 @@ Append-only event stream tracking knowledge lifecycle:
 3. **Reinforcement is passive.** Lessons only reinforce when explicitly re-confirmed in a run. System doesn't proactively test its own lessons.
 4. **Captain's log reads are coarse.** Dumps recent events rather than targeted retrieval.
 5. **Decay works but creates cold-start.** A valid lesson that isn't used for 7 days decays to ~0.32 — it effectively dies even if it's correct. `search_graveyard(resurrect=True)` can wake matches, but nothing calls it proactively.
-6. **Promotion timing race.** Promote threshold is effective score ≥ 0.9, but one day of decay drops 1.0 → 0.85 — so consolidation only promotes lessons reinforced the same day. Fix queued (M2): evaluate promotion at reinforcement time.
+6. ~~**Promotion timing race.**~~ FIXED (session 40 M2): promotion is now evaluated at reinforcement time (`_post_reinforce_hooks`), when the score is freshly re-anchored. The consolidation-cycle promotion check remains as a backstop but only catches same-day-reinforced lessons (one day of decay drops 1.0 → 0.85, below the 0.9 threshold).
 
 ## File Map
 

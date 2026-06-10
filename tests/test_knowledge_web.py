@@ -436,6 +436,153 @@ class TestReinforceLesson:
 
 
 # ===========================================================================
+# Post-reinforcement hooks (session 40 M2): promotion-at-reinforcement +
+# standing-rule pipeline wiring
+# ===========================================================================
+
+class TestPromotionAtReinforcement:
+    def test_eligible_lesson_promotes_on_reinforcement(self, tmp_path):
+        """0.7 + 0.3 bonus = 1.0, sessions 2→3: eligibility met at the moment
+        of reinforcement — promotes to LONG immediately."""
+        _write_lesson_to_file(tmp_path, _make_lesson(
+            lesson_id="p1", score=0.7, sessions_validated=2,
+        ))
+        result = reinforce_lesson("p1", tier=MemoryTier.MEDIUM)
+        assert result.tier == MemoryTier.LONG
+        medium = load_tiered_lessons(tier=MemoryTier.MEDIUM, raw=True, limit=None)
+        assert all(l.lesson_id != "p1" for l in medium)
+        long_lessons = load_tiered_lessons(tier=MemoryTier.LONG, raw=True, limit=None)
+        assert any(l.lesson_id == "p1" for l in long_lessons)
+
+    def test_score_short_stays_medium(self, tmp_path):
+        _write_lesson_to_file(tmp_path, _make_lesson(
+            lesson_id="p2", score=0.4, sessions_validated=2,
+        ))
+        result = reinforce_lesson("p2", tier=MemoryTier.MEDIUM)
+        assert result.tier == MemoryTier.MEDIUM
+        assert result.score < PROMOTE_MIN_SCORE
+        medium = load_tiered_lessons(tier=MemoryTier.MEDIUM, raw=True, limit=None)
+        assert any(l.lesson_id == "p2" for l in medium)
+
+    def test_sessions_short_stays_medium(self, tmp_path):
+        _write_lesson_to_file(tmp_path, _make_lesson(
+            lesson_id="p3", score=1.0, sessions_validated=1,
+        ))
+        result = reinforce_lesson("p3", tier=MemoryTier.MEDIUM)
+        assert result.tier == MemoryTier.MEDIUM
+        assert result.sessions_validated == 2
+
+    def test_promotion_failure_does_not_break_reinforcement(self, tmp_path):
+        _write_lesson_to_file(tmp_path, _make_lesson(
+            lesson_id="p4", score=0.7, sessions_validated=2,
+        ))
+        with patch.object(kw, "promote_lesson", side_effect=RuntimeError("boom")):
+            result = reinforce_lesson("p4", tier=MemoryTier.MEDIUM)
+        assert result is not None
+        assert result.times_reinforced == 1
+
+    def test_decay_cycle_alone_misses_day_old_eligible_lesson(self, tmp_path):
+        """The timing race this hook fixes: a stored 1.0 from yesterday is
+        effective 0.85 < PROMOTE_MIN_SCORE, so the consolidation cycle never
+        promotes it — but a single reinforcement re-anchors and promotes."""
+        yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
+        _write_lesson_to_file(tmp_path, _make_lesson(
+            lesson_id="p5", score=1.0, sessions_validated=3, last_reinforced=yesterday,
+        ))
+        counts = run_decay_cycle(tier=MemoryTier.MEDIUM)
+        assert counts["promoted"] == 0
+        result = reinforce_lesson("p5", tier=MemoryTier.MEDIUM)
+        assert result.tier == MemoryTier.LONG
+
+
+class TestStandingRulePipelineWiring:
+    def test_long_reinforcement_creates_hypothesis(self, tmp_path):
+        from knowledge_lens import load_hypotheses
+        _write_lesson_to_file(tmp_path, _make_lesson(
+            lesson_id="L1", lesson="Always check the adapter type before swapping.",
+            tier=MemoryTier.LONG, task_type="build",
+        ), tier=MemoryTier.LONG)
+        reinforce_lesson("L1", tier=MemoryTier.LONG)
+        hyps = load_hypotheses()
+        assert len(hyps) == 1
+        assert hyps[0].confirmations == 1
+        assert hyps[0].source_lesson_ids == ["L1"]
+
+    def test_second_confirmation_promotes_standing_rule(self, tmp_path):
+        from knowledge_lens import load_hypotheses, load_standing_rules
+        _write_lesson_to_file(tmp_path, _make_lesson(
+            lesson_id="L2", lesson="Prefer raw loads for read-modify-write paths.",
+            tier=MemoryTier.LONG, task_type="build",
+        ), tier=MemoryTier.LONG)
+        reinforce_lesson("L2", tier=MemoryTier.LONG)
+        reinforce_lesson("L2", tier=MemoryTier.LONG)
+        rules = load_standing_rules()
+        assert len(rules) == 1
+        assert rules[0].confirmations == 2
+        assert load_hypotheses() == []
+
+    def test_observe_pattern_failure_does_not_break_reinforcement(self, tmp_path):
+        _write_lesson_to_file(tmp_path, _make_lesson(
+            lesson_id="L3", lesson="Some long lesson.",
+            tier=MemoryTier.LONG,
+        ), tier=MemoryTier.LONG)
+        with patch("knowledge_lens.observe_pattern", side_effect=RuntimeError("boom")):
+            result = reinforce_lesson("L3", tier=MemoryTier.LONG)
+        assert result is not None
+        assert result.times_reinforced == 1
+
+    def test_full_pipeline_medium_to_standing_rule(self, tmp_path):
+        """End-to-end accretion path: medium lesson hits eligibility →
+        promoted to LONG (promote_lesson seeds the first observation) →
+        the system re-learns the same lesson → cross-tier dedup reinforces
+        the LONG record → second confirmation → standing rule."""
+        from knowledge_lens import load_hypotheses, load_standing_rules
+        _write_lesson_to_file(tmp_path, _make_lesson(
+            lesson_id="e2e", lesson="Verify claims against code before fixing.",
+            score=0.7, sessions_validated=2, task_type="general",
+        ))
+        result = reinforce_lesson("e2e", tier=MemoryTier.MEDIUM)
+        assert result.tier == MemoryTier.LONG
+        assert len(load_hypotheses()) == 1
+
+        record_tiered_lesson(
+            "Verify claims against code before fixing.", "general", "done", "g2",
+        )
+        rules = load_standing_rules()
+        assert len(rules) == 1
+        assert rules[0].rule == "Verify claims against code before fixing."
+        assert load_hypotheses() == []
+
+
+class TestCrossTierDedup:
+    def test_relearned_long_lesson_reinforces_not_duplicates(self, tmp_path):
+        _write_lesson_to_file(tmp_path, _make_lesson(
+            lesson_id="L4", lesson="Use the safe test runner on this box.",
+            tier=MemoryTier.LONG, task_type="ops",
+        ), tier=MemoryTier.LONG)
+        result = record_tiered_lesson(
+            "Use the safe test runner on this box.", "ops", "done", "g1",
+        )
+        assert result.lesson_id == "L4"
+        assert result.tier == MemoryTier.LONG
+        assert result.times_reinforced == 1
+        assert load_tiered_lessons(tier=MemoryTier.MEDIUM, raw=True, limit=None) == []
+
+    def test_unrelated_lesson_still_records_medium(self, tmp_path):
+        _write_lesson_to_file(tmp_path, _make_lesson(
+            lesson_id="L5", lesson="Use the safe test runner on this box.",
+            tier=MemoryTier.LONG, task_type="ops",
+        ), tier=MemoryTier.LONG)
+        result = record_tiered_lesson(
+            "Completely different insight about caching layers.", "ops", "done", "g1",
+        )
+        assert result.lesson_id != "L5"
+        assert result.tier == MemoryTier.MEDIUM
+        medium = load_tiered_lessons(tier=MemoryTier.MEDIUM, raw=True, limit=None)
+        assert len(medium) == 1
+
+
+# ===========================================================================
 # forget_lesson
 # ===========================================================================
 
