@@ -32,21 +32,27 @@ from typing import Any, Dict, List, Optional
 
 log = logging.getLogger("poe.heartbeat")
 
+DEFAULT_BACKLOG_EVERY = 5
+DEFAULT_BACKLOG_BATCH_SIZE = 3
+DEFAULT_TASK_STORE_BATCH_SIZE = 6
+
 
 # ---------------------------------------------------------------------------
 # Interactive session detection
 # ---------------------------------------------------------------------------
 
 def _is_interactive_session_active() -> bool:
-    """Return True if a `claude --continue` interactive session is running.
+    """Return True if a relevant `claude --continue` interactive session is running.
 
-    When an interactive Claude Code session is active, the heartbeat should
-    skip all autonomous LLM work (backlog drain, evolver, inspector, task-store
-    drain) to avoid double-burning tokens. Health checks still run every tick.
+    When an interactive Claude Code session is active for this workspace/repo, the
+    heartbeat should skip all autonomous LLM work (backlog drain, evolver,
+    inspector, task-store drain) to avoid double-burning tokens. Health checks
+    still run every tick.
 
-    Detection: scan the process table for 'claude --continue' processes owned
-    by the current user. The subprocess adapter processes (claude -p) spawned
-    by the heartbeat itself are excluded since they don't use --continue.
+    Detection: scan the process table for 'claude --continue' processes owned by
+    the current user, then keep only sessions whose cwd lives under this repo or
+    an explicitly configured workspace root. Unrelated long-lived Claude sessions
+    elsewhere on the box should not freeze this workspace indefinitely.
     """
     try:
         result = subprocess.run(
@@ -55,7 +61,33 @@ def _is_interactive_session_active() -> bool:
             text=True,
             timeout=2,
         )
-        return result.returncode == 0 and bool(result.stdout.strip())
+        if result.returncode != 0 or not result.stdout.strip():
+            return False
+
+        roots = {Path.cwd().resolve(), Path(__file__).resolve().parent.parent.resolve()}
+        for env_name in ("POE_WORKSPACE", "OPENCLAW_WORKSPACE", "WORKSPACE_ROOT"):
+            value = os.environ.get(env_name)
+            if value:
+                try:
+                    roots.add(Path(value).expanduser().resolve())
+                except Exception:
+                    pass
+
+        for raw_pid in result.stdout.splitlines():
+            raw_pid = raw_pid.strip()
+            if not raw_pid:
+                continue
+            try:
+                cwd = Path(os.readlink(f"/proc/{int(raw_pid)}/cwd")).resolve()
+            except Exception:
+                continue
+            for root in roots:
+                try:
+                    cwd.relative_to(root)
+                    return True
+                except ValueError:
+                    continue
+        return False
     except Exception:
         return False  # if we can't tell, don't block work
 
@@ -596,7 +628,7 @@ def _run_eval_bg(*, dry_run: bool = False, verbose: bool = False) -> None:
             _slow_update_sched.finish_work()
 
 
-def _run_task_store_drain(*, dry_run: bool = False, verbose: bool = False) -> None:
+def _run_task_store_drain(*, dry_run: bool = False, verbose: bool = False, max_tasks: int = DEFAULT_TASK_STORE_BATCH_SIZE) -> None:
     """Drain loop_continuation and loop_escalation tasks from the task store.
 
     Called from a daemon thread by heartbeat_loop. Each call processes up to
@@ -606,7 +638,7 @@ def _run_task_store_drain(*, dry_run: bool = False, verbose: bool = False) -> No
     global _task_store_drain_active
     try:
         from handle import drain_task_store
-        n = drain_task_store(dry_run=dry_run, verbose=verbose, max_tasks=3)
+        n = drain_task_store(dry_run=dry_run, verbose=verbose, max_tasks=max(1, int(max_tasks)))
         if n and verbose:
             print(f"[heartbeat] task store drain: processed {n} task(s)", file=sys.stderr)
     except Exception as exc:
@@ -617,11 +649,13 @@ def _run_task_store_drain(*, dry_run: bool = False, verbose: bool = False) -> No
             _task_store_drain_active = False
 
 
-def _run_backlog_step(*, dry_run: bool = False, verbose: bool = False) -> None:
-    """Pick the highest-priority NEXT.md TODO and run one agent loop iteration.
+def _run_backlog_step(*, dry_run: bool = False, verbose: bool = False, max_items: int = DEFAULT_BACKLOG_BATCH_SIZE) -> None:
+    """Pick the highest-priority NEXT.md TODO items and run bounded agent-loop work.
 
     Called from a daemon thread by heartbeat_loop. Marks items DOING on start,
     DONE on loop success, BLOCKED on loop failure (to prevent infinite retry).
+    Processes a small batch per wake so background work does not idle between
+    tiny bursts.
     """
     global _backlog_drain_active
     try:
@@ -640,64 +674,84 @@ def _run_backlog_step(*, dry_run: bool = False, verbose: bool = False) -> None:
             STATE_DOING,
             STATE_DONE,
             STATE_BLOCKED,
-            STATE_TODO,
         )
+        from agent_loop import run_agent_loop
 
-        result = select_global_next()
-        if result is None:
+        processed = 0
+        while processed < max(1, int(max_items)):
+            result = select_global_next()
+            if result is None:
+                if verbose and processed == 0:
+                    print("[heartbeat] backlog drain: no TODO items found", file=sys.stderr)
+                return
+
+            slug, item = result
             if verbose:
-                print("[heartbeat] backlog drain: no TODO items found", file=sys.stderr)
-            return
+                print(
+                    f"[heartbeat] backlog drain: [{slug}] {item.text[:80]}",
+                    file=sys.stderr,
+                )
 
-        slug, item = result
-        if verbose:
-            print(
-                f"[heartbeat] backlog drain: [{slug}] {item.text[:80]}",
-                file=sys.stderr,
-            )
-
-        # Claim the item by marking it in-progress
-        try:
-            mark_item(slug, item.index, STATE_DOING)
-        except Exception as exc:
-            print(f"[heartbeat] backlog drain mark_doing failed: {exc}", file=sys.stderr)
-            return
-
-        if dry_run:
-            # In dry-run, immediately mark done — used by tests to validate wiring
-            mark_item(slug, item.index, STATE_DONE)
-            if verbose:
-                print(f"[heartbeat] backlog drain: dry-run — marked done [{slug}] item {item.index}", file=sys.stderr)
-            return
-
-        try:
-            from agent_loop import run_agent_loop
-            loop_result = run_agent_loop(
-                goal=item.text,
-                project=slug,
-                dry_run=False,
-                verbose=verbose,
-            )
-            if loop_result.status == "done":
-                mark_item(slug, item.index, STATE_DONE)
-            else:
-                # stuck/error → block so we don't retry the same item on every tick
-                mark_item(slug, item.index, STATE_BLOCKED)
-                if verbose:
-                    print(
-                        f"[heartbeat] backlog drain: loop ended {loop_result.status!r} "
-                        f"for [{slug}] item {item.index} — marked blocked",
-                        file=sys.stderr,
-                    )
-        except Exception as exc:
-            print(f"[heartbeat] backlog drain loop failed: {exc}", file=sys.stderr)
             try:
-                mark_item(slug, item.index, STATE_BLOCKED)
-            except Exception:
-                pass
+                mark_item(slug, item.index, STATE_DOING)
+            except Exception as exc:
+                print(f"[heartbeat] backlog drain mark_doing failed: {exc}", file=sys.stderr)
+                return
+
+            if dry_run:
+                mark_item(slug, item.index, STATE_DONE)
+                processed += 1
+                if verbose:
+                    print(f"[heartbeat] backlog drain: dry-run — marked done [{slug}] item {item.index}", file=sys.stderr)
+                continue
+
+            try:
+                loop_result = run_agent_loop(
+                    goal=item.text,
+                    project=slug,
+                    dry_run=False,
+                    verbose=verbose,
+                )
+                if loop_result.status == "done":
+                    mark_item(slug, item.index, STATE_DONE)
+                else:
+                    mark_item(slug, item.index, STATE_BLOCKED)
+                    if verbose:
+                        print(
+                            f"[heartbeat] backlog drain: loop ended {loop_result.status!r} "
+                            f"for [{slug}] item {item.index} — marked blocked",
+                            file=sys.stderr,
+                        )
+            except Exception as exc:
+                print(f"[heartbeat] backlog drain loop failed: {exc}", file=sys.stderr)
+                try:
+                    mark_item(slug, item.index, STATE_BLOCKED)
+                except Exception:
+                    pass
+            processed += 1
     finally:
         with _backlog_drain_lock:
             _backlog_drain_active = False
+
+
+def _resolve_backlog_every(backlog_every: Optional[int]) -> int:
+    """Resolve autonomous backlog-drain cadence.
+
+    Default is every 5 heartbeat ticks (~5 minutes at 60s interval), which keeps
+    autonomous work active during build phases instead of idling for half-hour gaps.
+    Config key: heartbeat.backlog_every.
+    """
+    if backlog_every is not None:
+        try:
+            return max(1, int(backlog_every))
+        except Exception:
+            return DEFAULT_BACKLOG_EVERY
+    try:
+        from config import get as _cfg_get
+        return max(1, int(_cfg_get("heartbeat.backlog_every", DEFAULT_BACKLOG_EVERY)))
+    except Exception:
+        return DEFAULT_BACKLOG_EVERY
+
 
 
 def heartbeat_loop(
@@ -706,7 +760,7 @@ def heartbeat_loop(
     evolver_every: int = 10,
     inspector_every: int = 20,
     mission_check_every: int = 5,
-    backlog_every: int = 30,      # autonomous NEXT.md drain every N ticks (~30 min at 60s)
+    backlog_every: Optional[int] = None,
     eval_every: int = 1440,   # Phase 42: ~24h at 60s interval
     dry_run: bool = False,
     verbose: bool = True,
@@ -724,7 +778,7 @@ def heartbeat_loop(
     Every `mission_check_every` cycles (Phase 34), checks for pending
     missions and logs/notifies if autonomous drain would be warranted.
 
-    Every `backlog_every` cycles (default ~30 min), picks the highest-priority
+    Every `backlog_every` cycles (default ~5 min), picks the highest-priority
     NEXT.md TODO item across all projects and runs it via run_agent_loop
     (autonomous backlog drain). Skipped if a mission drain, prior backlog drain,
     or an interactive Claude Code session is already active. This is the primary
@@ -736,6 +790,8 @@ def heartbeat_loop(
     Every `evolver_every * 5` cycles, runs the harness optimizer to propose
     word-level improvements to EXECUTE_SYSTEM/DECOMPOSE_SYSTEM based on stuck traces.
     """
+    backlog_every = _resolve_backlog_every(backlog_every)
+
     if verbose:
         print(
             f"[heartbeat] loop started interval={interval}s "
@@ -902,7 +958,7 @@ def heartbeat_loop(
                 if verbose:
                     print(f"[heartbeat] mission check failed: {e}", file=sys.stderr)
         # Autonomous backlog drain: pick up NEXT.md TODO items when idle.
-        # Fires every `backlog_every` ticks (~30 min default). Skips if a mission,
+        # Fires every `backlog_every` ticks (~5 min default). Skips if a mission,
         # prior backlog drain, or an interactive Claude Code session is running.
         if tick % backlog_every == 0 and not _any_busy:
             with _backlog_drain_lock:
@@ -1014,6 +1070,7 @@ if __name__ == "__main__":
     parser.add_argument("--interval", type=float, default=60.0, help="Seconds between checks (default: 60)")
     parser.add_argument("--dry-run", action="store_true", help="Check without recovery or alerting")
     parser.add_argument("--no-escalate", action="store_true", help="Skip Telegram escalation")
+    parser.add_argument("--backlog-every", type=int, default=None, help="Autonomous backlog drain cadence in heartbeat ticks (default: 5)")
     parser.add_argument("--format", choices=["text", "json"], default="text")
     args = parser.parse_args()
 
@@ -1022,6 +1079,7 @@ if __name__ == "__main__":
             interval=args.interval,
             dry_run=args.dry_run,
             escalate=not args.no_escalate,
+            backlog_every=args.backlog_every,
         )
     else:
         report = run_heartbeat(dry_run=args.dry_run, escalate=not args.no_escalate)

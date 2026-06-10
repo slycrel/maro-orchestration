@@ -156,7 +156,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_poe_heartbeat.add_argument("--interval", type=float, default=60.0, help="Seconds between checks (default: 60)")
     p_poe_heartbeat.add_argument("--dry-run", action="store_true", help="Check only, no recovery or Telegram alerts")
     p_poe_heartbeat.add_argument("--no-escalate", action="store_true", help="Skip Telegram escalation")
-    p_poe_heartbeat.add_argument("--autonomy", action="store_true", help="Enable autonomous drains and background work in loop mode")
+    autonomy_group = p_poe_heartbeat.add_mutually_exclusive_group()
+    autonomy_group.add_argument("--autonomy", dest="autonomy", action="store_const", const=True, default=None, help="Enable autonomous drains and background work in loop mode (otherwise use config/default)")
+    autonomy_group.add_argument("--no-autonomy", dest="autonomy", action="store_const", const=False, help="Force health-only heartbeat loop mode")
+    p_poe_heartbeat.add_argument("--backlog-every", type=int, default=None, help="Autonomous backlog drain cadence in heartbeat ticks (default: 5)")
     p_poe_heartbeat.add_argument("--verbose", "-v", action="store_true", default=True)
     p_poe_heartbeat.add_argument("--format", choices=["text", "json"], default="text")
 
@@ -416,7 +419,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_tick.add_argument("--note")
     p_tick.add_argument("--exec-cmd", help="Shell command execution bridge for the claimed task")
     p_tick.add_argument("--session-cmd", help="Session command execution bridge for the claimed task")
-    p_tick.add_argument("--worker-session", help="Named worker session script")
+    p_tick.add_argument("--worker-session", help="Named worker session script or manifest (.json)")
     p_tick.add_argument("--session-timeout", type=float, default=None, help="Timeout in seconds for session command")
     p_tick.add_argument("--disable-x-capture", action="store_true", help="Disable X capture/rate-limit salvage classification")
     p_tick.add_argument("--disable-artifact-progress", action="store_true", help="Disable stale artifact progress detection across attempts")
@@ -436,7 +439,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_loop.add_argument("--max-runs", type=int, default=10)
     p_loop.add_argument("--exec-cmd", help="Shell command execution bridge for each claimed task")
     p_loop.add_argument("--session-cmd", help="Session command execution bridge for each claimed task")
-    p_loop.add_argument("--worker-session", help="Named worker session script")
+    p_loop.add_argument("--worker-session", help="Named worker session script or manifest (.json)")
     p_loop.add_argument("--session-timeout", type=float, default=None, help="Timeout in seconds for session command")
     p_loop.add_argument("--disable-x-capture", action="store_true", help="Disable X capture/rate-limit salvage classification")
     p_loop.add_argument("--disable-artifact-progress", action="store_true", help="Disable stale artifact progress detection across attempts")
@@ -454,6 +457,17 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         help="Maximum attempts per item before stopping non-done statuses",
     )
+
+    p_build_loop = sub.add_parser("build-loop", help="Run the dedicated autonomous build loop")
+    p_build_loop.add_argument("--project")
+    p_build_loop.add_argument("--worker", default="handle")
+    p_build_loop.add_argument("--worker-session", default="handle")
+    p_build_loop.add_argument("--max-runs", type=int, default=8)
+    p_build_loop.add_argument("--max-retry-streak", type=int, default=2)
+    p_build_loop.add_argument("--max-attempts-per-item", type=int, default=3)
+    p_build_loop.add_argument("--no-continue-on-retry", action="store_true")
+    p_build_loop.add_argument("--continue-on-blocked", action="store_true")
+    p_build_loop.add_argument("--format", choices=["json", "path"], default="json")
 
     p_ancestry = sub.add_parser("ancestry", help="Show goal ancestry chain for a project (§18)")
     p_ancestry.add_argument("project", help="Project slug")

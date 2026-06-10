@@ -43,6 +43,45 @@ Autonomous goal "findings and design" resolved via dev-recall to constraint orch
 
 ---
 
+## Done (session 39-main, 2026-05-12 — research synthesis: productive persistence + zoom-out metacognition)
+
+_Merge note (2026-06-10): two independent "session 39"s ran on 2026-05-12 — one on `arch/thread-navigator` (above), one on `main` (below). Neither knew about the other; reconciled in the session-40 merge._
+
+Completed research synthesis on two interconnected design spaces needed for Phase 66–67 (persistence calibration and failure-driven zoom-out):
+
+**Productive Persistence research (`docs/research/productive_persistence.md`):**
+- [x] Synthesized grit/persistence literature (Duckworth, Kapur, Dweck, Bjork, Seligman, meta-RL)
+- [x] Grounded three highest-value gaps in Poe code: unused `task['attempt']` signal, undetected zoom-out signals (4 of 5), LLM-only failure classification
+- [x] Mapped failure taxonomy to retry tiers: informative/confirming/infrastructure/ambiguity
+- [x] Defined productive persistence invariant: goal-stable / strategy-flexible (vs. count-based retry)
+- [x] Identified optimal persistence zone (~60–85% step-success rate) and calibration surfaces
+- [x] Proposed Wave 1 (wiring existing signals), Wave 2 (structural upgrades), Wave 3 (validation-requires) implementation roadmap
+- [x] Noted external evidence (Credé meta-analysis r≈0.18) argues *for* signal quality over persistence volume
+
+**Zoom-Out Metacognition research (`docs/research/zoom-metacognition-adaptive-expertise.md`):**
+- [x] Synthesized expert learning literature (Hatano & Inagaki, Schwartz & Bransford, Feltovich/Spiro CFT, Ericsson)
+- [x] Modeled five zoom-out signals: stuck-streak, near-miss, confidence–accuracy decoupling, meta-ignorance, load-aware threshold degradation
+- [x] Mapped reframing mechanics: from local (retry loop) → tactical (strategy pivot) → strategic (decompose) → lateral (skill swap) → hierarchical (goal inversion)
+- [x] Connected to existing Poe: introspect.py (stuck detection), inspector.py (friction signals), director.py (strategy pivot), agent_loop.py (multi-tier escalation)
+- [x] Identified undetected signals 4/5 and proposed semantic-hash solution for stuck_streak (distinguish identical loops from novel exploration)
+
+**Research Brief (`docs/research-brief-persistence-and-zoom.md` — renamed in the 2026-06-10 merge; the same filename was independently used by the arch-side session 39):**
+- [x] Synthesized both research docs into unified findings + design implications
+- [x] Flagged theory-to-implementation gaps with priority ranking
+- [x] Noted contradiction resolution (retry-as-count vs. retry-as-hypothesis-narrowing) and which model is more defensible
+
+**Knowledge graph updates (`lat.md/core-loop.md`, `lat.md/quality-gates.md`):**
+- [x] Added backpointers to new research docs
+
+**Supporting files:**
+- [x] `docs/research/productive_persistence_summary.md` — one-page takeaway for quick reference
+- [x] `docs/research/zoom-metacognition-adaptive-expertise.md` — full treatment
+- [x] `docs/adversarial-verification.md`, `docs/adversarial-verification-report.md`, `docs/md-claims-audit.md` — audit trail from synthesis round-trips
+
+**Next:** Implementation phases (Wave 1–3) depend on design discussion; BACKLOG:DISCUSS (invert the planning stage: 1-shot first) and intent-resolution minimum experiment take priority. These research docs provide the grounding for those decisions.
+
+---
+
 ## Done (session 38, 2026-04-26 — decomposition feedback wired forward)
 
 Triggered by the scope A/B 1+1 run on 2026-04-26: both arms hit `decomposition_too_broad` 8/8, treat's step 8 ran 9 minutes, and BACKLOG:316 ("warning fires but nothing acts on it") was still open. The Phase 62 wiring acted on `decomposition_too_broad` only on the *blocked* path; this closes the *post-mortem → next-decompose* path.

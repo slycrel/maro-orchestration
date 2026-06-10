@@ -22,6 +22,7 @@ from orch_bridges import (
     _extract_json_result,
     _extract_session_result_from_text,
     _load_worker_session_manifest,
+    _resolve_session_command,
     _merge_notes,
     _read_jsonl_records,
     _validation_bridge_name,
@@ -30,6 +31,7 @@ from orch_bridges import (
     chain_validation_bridges,
     command_execution_bridge,
     named_validation_bridge,
+    session_execution_bridge,
     _default_validation_bridge,
     _default_execution_bridge,
 )
@@ -101,6 +103,9 @@ class TestCoerceSessionFileName:
 
     def test_returns_default_for_none(self):
         assert _coerce_session_file_name(None, default="d.json", field_name="f") == "d.json"
+
+    def test_accepts_nested_relative_alias_style_path(self):
+        assert _coerce_session_file_name("payloads/in.json", default="d.json", field_name="payload_file") == "payloads/in.json"
 
     def test_returns_default_for_empty(self):
         assert _coerce_session_file_name("", default="d.json", field_name="f") == "d.json"
@@ -322,8 +327,23 @@ class TestJsonlRoundTrip:
 
 
 # ---------------------------------------------------------------------------
-# _load_worker_session_manifest
+# _resolve_session_command / _load_worker_session_manifest
 # ---------------------------------------------------------------------------
+
+class TestResolveSessionCommand:
+    def test_resolves_relative_script_from_source_directory(self, tmp_path):
+        script = tmp_path / "run.sh"
+        script.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+        script.chmod(0o755)
+
+        command = _resolve_session_command("run.sh --flag", source_directory=tmp_path)
+        assert command.startswith(str(script.resolve()))
+        assert "--flag" in command
+
+    def test_leaves_non_local_command_unchanged(self, tmp_path):
+        command = _resolve_session_command("python3 -m worker", source_directory=tmp_path)
+        assert command == "python3 -m worker"
+
 
 class TestLoadWorkerSessionManifest:
     def test_string_manifest(self, tmp_path):
@@ -346,6 +366,31 @@ class TestLoadWorkerSessionManifest:
         assert "python3" in spec.command
         assert "worker" in spec.command
 
+    def test_dict_manifest_supports_args_field(self, tmp_path):
+        path = tmp_path / "worker.json"
+        path.write_text(json.dumps({"command": "python3", "args": ["-m", "worker", "--flag"]}), encoding="utf-8")
+        spec = _load_worker_session_manifest(path)
+        assert spec.command == "python3 -m worker --flag"
+
+    def test_dict_manifest_supports_arguments_alias(self, tmp_path):
+        path = tmp_path / "worker.json"
+        path.write_text(json.dumps({"cmd": "python3", "arguments": ["-m", "worker"]}), encoding="utf-8")
+        spec = _load_worker_session_manifest(path)
+        assert spec.command == "python3 -m worker"
+
+    def test_dict_manifest_supports_argv_alias(self, tmp_path):
+        path = tmp_path / "worker.json"
+        path.write_text(json.dumps({"cmd": "python3", "argv": ["worker.py", "--mode", "argv"]}), encoding="utf-8")
+        spec = _load_worker_session_manifest(path)
+        assert spec.command == "python3 worker.py --mode argv"
+
+    def test_dict_manifest_supports_cmd_alias(self, tmp_path):
+        path = tmp_path / "worker.json"
+        path.write_text(json.dumps({"cmd": ["python3", "-m", "worker"]}), encoding="utf-8")
+        spec = _load_worker_session_manifest(path)
+        assert "python3" in spec.command
+        assert "worker" in spec.command
+
     def test_dict_manifest_all_fields(self, tmp_path):
         path = tmp_path / "worker.json"
         path.write_text(json.dumps({
@@ -364,6 +409,91 @@ class TestLoadWorkerSessionManifest:
         assert spec.source_directory == str(tmp_path.resolve())
         assert spec.environment == {"FOO": "bar"}
         assert spec.timeout_seconds == 30.0
+
+    def test_dict_manifest_supports_env_and_timeout_aliases(self, tmp_path):
+        path = tmp_path / "worker.json"
+        path.write_text(json.dumps({
+            "command": "run.sh",
+            "env": {"FOO": "bar", "COUNT": 3},
+            "timeout": "45",
+        }), encoding="utf-8")
+        spec = _load_worker_session_manifest(path)
+        assert spec.environment == {"FOO": "bar", "COUNT": "3"}
+        assert spec.timeout_seconds == 45.0
+
+    def test_dict_manifest_supports_payload_and_result_aliases(self, tmp_path):
+        path = tmp_path / "worker.json"
+        path.write_text(json.dumps({
+            "command": "run.sh",
+            "payload": "in/payload.json",
+            "result": "out/result.json",
+        }), encoding="utf-8")
+        spec = _load_worker_session_manifest(path)
+        assert spec.payload_name == "in/payload.json"
+        assert spec.result_name == "out/result.json"
+
+    def test_dict_manifest_supports_camel_case_aliases(self, tmp_path):
+        path = tmp_path / "worker.json"
+        path.write_text(json.dumps({
+            "command": "run.sh",
+            "payloadName": "camel/in-name.json",
+            "resultName": "camel/out-name.json",
+            "payloadPath": "camel/payload.json",
+            "resultPath": "camel/result.json",
+            "workingDirectory": "camel-dir",
+            "envVars": {"FOO": "bar", "COUNT": 2},
+            "timeoutSeconds": 12,
+        }), encoding="utf-8")
+        spec = _load_worker_session_manifest(path)
+        assert spec.payload_name == "camel/in-name.json"
+        assert spec.result_name == "camel/out-name.json"
+        assert spec.working_directory == "camel-dir"
+        assert spec.environment == {"FOO": "bar", "COUNT": "2"}
+        assert spec.timeout_seconds == 12.0
+
+    def test_dict_manifest_supports_extra_snake_and_short_aliases(self, tmp_path):
+        path = tmp_path / "worker.json"
+        path.write_text(json.dumps({
+            "cmd": "run.sh",
+            "payload_path": "snake/in.json",
+            "result_path": "snake/out.json",
+            "workDir": "snake-dir",
+            "environment_variables": {"FOO": "zap"},
+        }), encoding="utf-8")
+        spec = _load_worker_session_manifest(path)
+        assert spec.command == "run.sh"
+        assert spec.payload_name == "snake/in.json"
+        assert spec.result_name == "snake/out.json"
+        assert spec.working_directory == "snake-dir"
+        assert spec.environment == {"FOO": "zap"}
+
+    def test_dict_manifest_supports_additional_file_env_timeout_and_workdir_aliases(self, tmp_path):
+        path = tmp_path / "worker.json"
+        path.write_text(json.dumps({
+            "cmd": "python3",
+            "argv": ["worker.py"],
+            "payload_file": "payloads/in.json",
+            "resultFile": "results/out.json",
+            "env_vars": {"FOO": "bar", "COUNT": 2},
+            "timeoutSecs": 9,
+            "work_dir": "snake-workdir",
+        }), encoding="utf-8")
+        spec = _load_worker_session_manifest(path)
+        assert spec.command == "python3 worker.py"
+        assert spec.payload_name == "payloads/in.json"
+        assert spec.result_name == "results/out.json"
+        assert spec.environment == {"FOO": "bar", "COUNT": "2"}
+        assert spec.timeout_seconds == 9.0
+        assert spec.working_directory == "snake-workdir"
+
+    def test_dict_manifest_supports_working_dir_alias(self, tmp_path):
+        path = tmp_path / "worker.json"
+        path.write_text(json.dumps({
+            "command": "run.sh",
+            "workingDir": "camel-workdir",
+        }), encoding="utf-8")
+        spec = _load_worker_session_manifest(path)
+        assert spec.working_directory == "camel-workdir"
 
     def test_missing_command_raises(self, tmp_path):
         path = tmp_path / "worker.json"
@@ -395,8 +525,14 @@ class TestLoadWorkerSessionManifest:
         with pytest.raises(ValueError, match="invalid worker session command"):
             _load_worker_session_manifest(path)
 
+    def test_non_list_args_raises(self, tmp_path):
+        path = tmp_path / "worker.json"
+        path.write_text(json.dumps({"command": "python3", "args": "-m worker"}), encoding="utf-8")
+        with pytest.raises(ValueError, match="invalid worker session args"):
+            _load_worker_session_manifest(path)
+
     def test_working_dir_aliases(self, tmp_path):
-        for alias in ("working_directory", "working_dir", "cwd"):
+        for alias in ("working_directory", "working_dir", "workingDirectory", "workDir", "cwd"):
             path = tmp_path / f"worker_{alias}.json"
             path.write_text(json.dumps({"command": "run.sh", alias: "mydir"}), encoding="utf-8")
             spec = _load_worker_session_manifest(path)
@@ -574,6 +710,25 @@ class TestCommandExecutionBridge:
         bridge = command_execution_bridge("false")
         with pytest.raises(ExecutionBridgeError, match="command failed"):
             bridge(_make_run())
+
+
+class TestSessionExecutionBridge:
+    @patch("orch_bridges.subprocess.run")
+    def test_failed_session_includes_stdout_and_stderr_tails(self, mock_run, tmp_path, monkeypatch):
+        monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+        mock_run.return_value = MagicMock(
+            returncode=1,
+            stdout="line a\nNOW lane error: 429 Client Error\nfinal stdout line\n",
+            stderr="warn one\nwarn two\nfinal stderr line\n",
+        )
+        bridge = session_execution_bridge("false")
+        with pytest.raises(ExecutionBridgeError) as excinfo:
+            bridge(_make_run())
+
+        msg = str(excinfo.value)
+        assert "session failed" in msg
+        assert "stdout=line a | NOW lane error: 429 Client Error | final stdout line" in msg
+        assert "stderr=warn one | warn two | final stderr line" in msg
 
 
 # ---------------------------------------------------------------------------

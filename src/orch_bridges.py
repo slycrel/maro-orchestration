@@ -10,7 +10,7 @@ import os
 import subprocess
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from shlex import quote
+from shlex import quote, split as shell_split
 from typing import Any, List, Optional, Tuple
 
 from orch_items import (
@@ -196,36 +196,110 @@ def _load_worker_session_manifest(path: Path) -> WorkerSessionSpec:
         raise ValueError(f"invalid worker session manifest format in {path}")
 
     raw_command = data.get("command")
+    if raw_command is None and "cmd" in data:
+        raw_command = data.get("cmd")
     if raw_command is None:
         raise ValueError(f"invalid worker session manifest format in {path}: missing 'command'")
+
+    raw_args = data.get("args")
+    if raw_args is None and "argv" in data:
+        raw_args = data.get("argv")
+    if raw_args is None and "arguments" in data:
+        raw_args = data.get("arguments")
+    command_parts: list[str]
     if isinstance(raw_command, (list, tuple)):
         command_parts = [str(part).strip() for part in raw_command]
-        if not command_parts or any(not part for part in command_parts):
-            raise ValueError(f"invalid worker session command in {path}")
-        command = " ".join(quote(part) for part in command_parts)
     else:
-        command = str(raw_command).strip()
-    if not command:
-        raise ValueError(f"invalid worker session manifest format in {path}: missing 'command'")
+        command_text = str(raw_command).strip()
+        if not command_text:
+            raise ValueError(f"invalid worker session manifest format in {path}: missing 'command'")
+        command_parts = [command_text]
+    if raw_args is not None:
+        if not isinstance(raw_args, (list, tuple)):
+            raise ValueError(f"invalid worker session args in {path}")
+        command_parts.extend(str(part).strip() for part in raw_args)
+    if not command_parts or any(not part for part in command_parts):
+        raise ValueError(f"invalid worker session command in {path}")
+    command = " ".join(quote(part) for part in command_parts)
 
+    raw_payload_name = data.get("payload_name")
+    if raw_payload_name is None and "payload_file" in data:
+        raw_payload_name = data.get("payload_file")
+    if raw_payload_name is None and "payload_path" in data:
+        raw_payload_name = data.get("payload_path")
+    if raw_payload_name is None and "payloadName" in data:
+        raw_payload_name = data.get("payloadName")
+    if raw_payload_name is None and "payloadFile" in data:
+        raw_payload_name = data.get("payloadFile")
+    if raw_payload_name is None and "payload" in data:
+        raw_payload_name = data.get("payload")
+    if raw_payload_name is None and "payloadPath" in data:
+        raw_payload_name = data.get("payloadPath")
     payload_name = _coerce_session_file_name(
-        data.get("payload_name"),
+        raw_payload_name,
         default="worker-payload.json",
         field_name="payload_name",
     )
+    raw_result_name = data.get("result_name")
+    if raw_result_name is None and "result_file" in data:
+        raw_result_name = data.get("result_file")
+    if raw_result_name is None and "result_path" in data:
+        raw_result_name = data.get("result_path")
+    if raw_result_name is None and "resultName" in data:
+        raw_result_name = data.get("resultName")
+    if raw_result_name is None and "resultFile" in data:
+        raw_result_name = data.get("resultFile")
+    if raw_result_name is None and "result" in data:
+        raw_result_name = data.get("result")
+    if raw_result_name is None and "resultPath" in data:
+        raw_result_name = data.get("resultPath")
     result_name = _coerce_session_file_name(
-        data.get("result_name"),
+        raw_result_name,
         default="worker-result.json",
         field_name="result_name",
     )
-    _raw_wd = data.get("working_directory") or data.get("working_dir") or data.get("cwd")
+    _raw_wd = (
+        data.get("working_directory")
+        or data.get("working_dir")
+        or data.get("work_dir")
+        or data.get("workingDirectory")
+        or data.get("workingDir")
+        or data.get("workDir")
+        or data.get("cwd")
+    )
     working_directory = _coerce_session_directory_name(
         _raw_wd,
         field_name="working_directory",
     )
     worker_name = path.stem if path.name else "worker_session"
-    environment = _coerce_env_map(data.get("environment"), worker=worker_name)
-    timeout_seconds = _coerce_positive_timeout(data.get("timeout_seconds"), field_name="timeout_seconds")
+    raw_environment = data.get("environment")
+    if raw_environment is None and "environment_variables" in data:
+        raw_environment = data.get("environment_variables")
+    if raw_environment is None and "environmentVariables" in data:
+        raw_environment = data.get("environmentVariables")
+    if raw_environment is None and "env_vars" in data:
+        raw_environment = data.get("env_vars")
+    if raw_environment is None and "envVars" in data:
+        raw_environment = data.get("envVars")
+    if raw_environment is None and "env" in data:
+        raw_environment = data.get("env")
+    environment = _coerce_env_map(raw_environment, worker=worker_name)
+
+    raw_timeout = data.get("timeout_seconds")
+    timeout_field_name = "timeout_seconds"
+    if raw_timeout is None and "timeout_secs" in data:
+        raw_timeout = data.get("timeout_secs")
+        timeout_field_name = "timeout_secs"
+    if raw_timeout is None and "timeoutSeconds" in data:
+        raw_timeout = data.get("timeoutSeconds")
+        timeout_field_name = "timeoutSeconds"
+    if raw_timeout is None and "timeoutSecs" in data:
+        raw_timeout = data.get("timeoutSecs")
+        timeout_field_name = "timeoutSecs"
+    if raw_timeout is None and "timeout" in data:
+        raw_timeout = data.get("timeout")
+        timeout_field_name = "timeout"
+    timeout_seconds = _coerce_positive_timeout(raw_timeout, field_name=timeout_field_name)
     return WorkerSessionSpec(
         command=command,
         payload_name=payload_name,
@@ -293,6 +367,32 @@ def _extract_json_result(raw: str) -> Optional[dict]:
     if isinstance(payload, dict):
         return payload
     return None
+
+
+def _resolve_session_command(session_command: str, *, source_directory: Optional[Path]) -> str:
+    command = str(session_command or "").strip()
+    if not command or source_directory is None:
+        return command
+
+    try:
+        parts = shell_split(command)
+    except ValueError:
+        return command
+    if not parts:
+        return command
+
+    executable = parts[0].strip()
+    if not executable:
+        return command
+    if executable.startswith("/"):
+        return command
+
+    candidate = (source_directory / executable).resolve()
+    if not candidate.exists() or not candidate.is_file():
+        return command
+
+    parts[0] = str(candidate)
+    return " ".join(quote(part) for part in parts)
 
 
 def _coerce_validation_payload(raw: dict, *, run: RunRecord, execution: ExecutionResult) -> ValidationResult:
@@ -713,6 +813,8 @@ def session_execution_bridge(
                 "ORCH_RUN_ARTIFACT_DIR": str(artifact_dir),
                 "ORCH_RUN_ARTIFACT_PATH": default_artifact_path,
                 "ORCH_SESSION_PAYLOAD": str(payload_path),
+                "ORCH_SESSION_PAYLOAD_PATH": str(payload_path),
+                "ORCH_SESSION_RESULT": str(result_path),
                 "ORCH_SESSION_RESULT_PATH": str(result_path),
             }
         )
@@ -730,9 +832,14 @@ def session_execution_bridge(
         elif resolved_source_directory is not None:
             env["ORCH_SESSION_WORKING_DIR"] = str(cwd)
 
+        resolved_command = _resolve_session_command(
+            session_command,
+            source_directory=cwd,
+        )
+
         try:
             proc = subprocess.run(
-                session_command,
+                resolved_command,
                 shell=True,
                 cwd=cwd,
                 env=env,
@@ -741,9 +848,9 @@ def session_execution_bridge(
                 timeout=timeout_seconds,
             )
         except subprocess.TimeoutExpired as exc:
-            raise ExecutionBridgeError(f"session timed out after {timeout_seconds}s: {session_command}") from exc
+            raise ExecutionBridgeError(f"session timed out after {timeout_seconds}s: {resolved_command}") from exc
         except Exception as exc:
-            raise ExecutionBridgeError(f"session execution failed: {session_command}: {exc}") from exc
+            raise ExecutionBridgeError(f"session execution failed: {resolved_command}: {exc}") from exc
 
         stdout_path.write_text(proc.stdout or "", encoding="utf-8")
         stderr_path.write_text(proc.stderr or "", encoding="utf-8")
@@ -755,15 +862,26 @@ def session_execution_bridge(
         if stdout_result:
             return stdout_result
 
+        def _tail_lines(text: str, *, limit: int = 3) -> str:
+            lines = [line.strip() for line in (text or "").splitlines() if line.strip()]
+            if not lines:
+                return ""
+            return " | ".join(lines[-limit:])
+
         if proc.returncode == 0:
-            note = f"session succeeded: {session_command}"
-            if proc.stdout.strip():
-                note = f"{note}; stdout={proc.stdout.strip().splitlines()[-1]}"
+            note = f"session succeeded: {resolved_command}"
+            stdout_tail = _tail_lines(proc.stdout)
+            if stdout_tail:
+                note = f"{note}; stdout={stdout_tail}"
             return ExecutionResult(status="done", note=note, artifact_path=default_artifact_path)
 
-        note = f"session failed ({proc.returncode}): {session_command}"
-        if proc.stderr.strip():
-            note = f"{note}; stderr={proc.stderr.strip().splitlines()[-1]}"
+        note = f"session failed ({proc.returncode}): {resolved_command}"
+        stdout_tail = _tail_lines(proc.stdout)
+        stderr_tail = _tail_lines(proc.stderr)
+        if stdout_tail:
+            note = f"{note}; stdout={stdout_tail}"
+        if stderr_tail:
+            note = f"{note}; stderr={stderr_tail}"
         raise ExecutionBridgeError(note)
 
     return _execute

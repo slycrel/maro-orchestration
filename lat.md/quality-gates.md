@@ -33,3 +33,4 @@ Systems that feed into or are fed by the quality gate pipeline.
 - [[core-loop]] — quality gate fires after loop completion
 - [[memory-system]] — lessons extracted from gate findings
 - [[constraint-system]] — the earliest gate; fires pre-execution
+- `docs/research/productive_persistence.md` — failure taxonomy (infrastructure/user/hypothesis/tool) used to classify what the inspector flags; learned helplessness risk from repeated infrastructure failures
