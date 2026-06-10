@@ -840,6 +840,27 @@ def _handle_impl(
         except Exception:
             pass
 
+        # Dispatch recall (goal-brain step 3, docs/RECALL_DESIGN.md): the goal
+        # arrives knowing its own history — thread ancestry plus recent
+        # attempts at the same goal. Advisory injection; the hard guard lives
+        # in handle_task (autonomous requeue path only). Read-only and local;
+        # any failure degrades to "knows nothing".
+        try:
+            from config import get as _recall_cfg_get
+            _recall_inject_on = bool(_recall_cfg_get("recall.dispatch_inject", True))
+        except Exception:
+            _recall_inject_on = True
+        if _recall_inject_on:
+            try:
+                from recall import recall as _recall_fn
+                _recall_block = _recall_fn(
+                    message, slice="dispatch", origin=origin,
+                ).as_context_block()
+                if _recall_block:
+                    _extra_ctx_parts.append(_recall_block)
+            except Exception as _recall_exc:
+                log.debug("handle: dispatch recall skipped: %s", _recall_exc)
+
         # Phase 65 minimum viable experiment: scope generation via inversion.
         # Gated by `scope_generation` config flag (default off). `scope_ab_skip`
         # is the paired A/B flag — when true, we'd-have-generated is recorded
@@ -1529,6 +1550,55 @@ def handle_task(
         _origin.setdefault("job_id", job_id)
         if task.get("parent_job_id"):
             _origin.setdefault("parent_job_id", task["parent_job_id"])
+        # Dispatch guard (goal-brain step 3, docs/RECALL_DESIGN.md): refuse to
+        # re-run a goal whose recent attempts ALL failed. Applies only to this
+        # autonomous requeue path — a human calling handle() directly is never
+        # blocked. Basis: 2026-05-17, the same goal ran ~25x in 35 minutes
+        # with nothing consulting prior outcomes. Skipped on dry_run (preview
+        # burns nothing, so there is no waste to guard against).
+        if not dry_run:
+            try:
+                from config import get as _cfg_get
+                _guard_on = bool(_cfg_get("recall.dispatch_guard", True))
+                _guard_attempts = int(_cfg_get("recall.guard_attempts", 3))
+                _guard_window = float(_cfg_get("recall.guard_window_minutes", 60))
+            except Exception:
+                _guard_on, _guard_attempts, _guard_window = True, 3, 60.0
+            if _guard_on:
+                try:
+                    from recall import recall as _recall_fn
+                    _sig = _recall_fn(
+                        reason, slice="dispatch", origin=_origin,
+                    ).dispatch_signals(window_minutes=_guard_window)
+                except Exception as _guard_exc:
+                    log.debug("handle_task recall guard skipped: %s", _guard_exc)
+                    _sig = None
+                if _sig and _sig["repeat_count"] >= _guard_attempts and _sig["all_failing"]:
+                    _msg = (
+                        f"recall guard: {_sig['repeat_count']} attempts at this goal "
+                        f"in the last {int(_guard_window)}m, all failed — refusing to "
+                        f"re-run without a change of approach (docs/RECALL_DESIGN.md)"
+                    )
+                    log.warning("handle_task %s job_id=%s", _msg, job_id)
+                    try:
+                        from captains_log import log_event, RECALL_GUARD_TRIPPED
+                        log_event(
+                            RECALL_GUARD_TRIPPED,
+                            subject="recall_guard",
+                            summary=_msg,
+                            context={"goal_preview": reason[:200], "job_id": job_id, **_sig},
+                        )
+                    except Exception:
+                        pass
+                    return HandleResult(
+                        handle_id="",
+                        lane="agenda",
+                        lane_confidence=1.0,
+                        classification_reason="recall_guard",
+                        message=reason,
+                        status="error",
+                        result=_msg,
+                    )
         return handle(reason, adapter=adapter, dry_run=dry_run, verbose=verbose, origin=_origin)
 
 

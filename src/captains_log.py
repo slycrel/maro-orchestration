@@ -98,6 +98,15 @@ QUALITY_GATE_VERDICT = "QUALITY_GATE_VERDICT"  # PASS / ESCALATE — most import
 # post-mortem warning fires too late to act on this loop).
 STEP_TOO_BROAD = "STEP_TOO_BROAD"
 
+# recall() seam instrumentation (goal-brain step 3, docs/RECALL_DESIGN.md).
+# Every recall() call logs one RECALL_PERFORMED — these tuples are the
+# crystallization substrate per the 2026-05-18 static-now-instrument-everything
+# decision. RECALL_GUARD_TRIPPED fires when the dispatch guard refuses to
+# re-run a goal whose recent attempts all failed (the ~25x repeat burn,
+# 2026-05-17).
+RECALL_PERFORMED = "RECALL_PERFORMED"
+RECALL_GUARD_TRIPPED = "RECALL_GUARD_TRIPPED"
+
 EVENT_TYPES = {
     SKILL_SYNTHESIZED, SKILL_SYNTHESIS_REJECTED, SKILL_PROMOTED, SKILL_DEMOTED, SKILL_REWRITE,
     SKILL_CIRCUIT_OPEN, SKILL_CIRCUIT_HALF_OPEN, SKILL_CIRCUIT_CLOSED,
@@ -112,6 +121,7 @@ EVENT_TYPES = {
     SCOPE_GENERATED, SCOPE_PARSE_FAILED, SCOPE_SKIPPED, CLOSURE_VERDICT, CLAIM_PROBED,
     CLAIM_VERIFIER_OUTCOME,
     LOOP_CREATED, QUALITY_GATE_VERDICT, STEP_TOO_BROAD,
+    RECALL_PERFORMED, RECALL_GUARD_TRIPPED,
 }
 
 # ---------------------------------------------------------------------------

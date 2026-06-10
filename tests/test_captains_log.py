@@ -230,11 +230,16 @@ class TestEventTypes:
         assert DECISION_RECORDED in EVENT_TYPES
 
     def test_event_type_count(self):
-        assert len(EVENT_TYPES) == 41
+        assert len(EVENT_TYPES) == 43
 
     def test_scope_skipped_in_set(self):
         from captains_log import SCOPE_SKIPPED
         assert SCOPE_SKIPPED in EVENT_TYPES
+
+    def test_recall_events_in_set(self):
+        from captains_log import RECALL_PERFORMED, RECALL_GUARD_TRIPPED
+        assert RECALL_PERFORMED in EVENT_TYPES
+        assert RECALL_GUARD_TRIPPED in EVENT_TYPES
 
     def test_memory_consolidated_in_set(self):
         from captains_log import MEMORY_CONSOLIDATED

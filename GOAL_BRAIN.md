@@ -181,6 +181,11 @@ Sample: the 2026-05-13..17 window of `~/.poe/workspace/runs/` (478 dirs total;
 - **2026-06-10** — Planner's LLM-failure fallback is the goal verbatim as one step,
   never a punctuation split (pressure-test finding 2). `orch.decompose_goal` keeps
   the heuristic for explicit CLI use only.
+- **2026-06-10** — recall() shape pinned (`docs/RECALL_DESIGN.md`): one read seam,
+  three slices (dispatch / loop / navigator), writes nothing but its own
+  instrumentation. Dispatch guard defaults are a made call, not measured: ≥3
+  attempts in 60min all non-done → refuse (autonomous requeue path only; humans
+  and dry runs never blocked). Revisit against RECALL_GUARD_TRIPPED data.
 
 ## Threads (system-maintained — nothing leaves this list silently)
 
@@ -191,13 +196,18 @@ Active:
   backtest_metrics.py, doctor.py), fresh-venv install verified under a foreign
   HOME, rc=1 payload-first fix shipped. Remaining: codex-side payload check
   decision (deferred — JSONL format differs, no observed repro), final sweep.
-- **Goal-brain sequencing, steps 3–5**: recall() shape (now with the step-2
-  requirement that it include a dispatch-time hook); then navigator schema; then
-  prompt. Step 2 (pressure test) done 2026-06-10 — findings in Compiled truth.
+- **Goal-brain sequencing, steps 4–5**: navigator decision schema, then navigator
+  prompt. Step 3 (recall() shape) done 2026-06-10 — `docs/RECALL_DESIGN.md` +
+  `src/recall.py` v0 (dispatch slice live: ancestry consulted, prior attempts
+  matched, guard on the requeue path). Step 4 consumes the navigator-slice
+  contract defined there.
 - **Run↔thread linkage**: done 2026-06-10 — tasks carry an `origin` ancestry dict
-  (parent handle/loop/goal) from enqueue through `handle_task` into run metadata.
-  Ancestry is now *recorded* at every requeue boundary; *consulting* it at
-  dispatch is the recall() work (step 3).
+  (parent handle/loop/goal) from enqueue through `handle_task` into run metadata,
+  and recall() now consults it at dispatch (ThreadIdentity walk).
+- **recall() loop-slice wiring**: agent_loop still reads lessons / standing rules /
+  decisions / knowledge at four separate sites (agent_loop.py:2826–2915); the
+  recall() loop slice exists and should replace them so the seam is the only
+  reader. Mechanical follow-up, also the spot to stamp `lesson-cited` edges.
 
 Dormant (deliberately parked, not dropped):
 - Thread Architecture implementation (`arch/thread-navigator`) — parked pending
@@ -210,8 +220,11 @@ Dormant (deliberately parked, not dropped):
 
 ## Open questions (system-maintained)
 
-- **recall() shape** — what slice of goal-brain + correspondence the navigator sees
-  per turn. Blocks: navigator schema, correspondence edge vocabulary.
+- ~~**recall() shape**~~ — answered 2026-06-10 (`docs/RECALL_DESIGN.md`); edge
+  vocabulary pinned there too. Successor questions: guard thresholds are unmeasured
+  (watch RECALL_GUARD_TRIPPED), and per-thread goal-brain creation (the navigator
+  slice injects "the" goal-brain, but only the project's own exists today) is a
+  step-4/5 question.
 - **Fan-out recoverability mechanism** — how unfinished sub-threads stay visible and
   get revisited, concretely (this file's Threads section is the manual v0; the
   runtime mechanism is undesigned). Blocks: thread architecture implementation.
