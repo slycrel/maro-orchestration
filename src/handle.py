@@ -882,7 +882,22 @@ def _handle_impl(
                 except Exception:
                     _proj_dir = None
 
-                if _scope is not None and _scope.is_empty():
+                if _scope is None:
+                    # Generator returned None (adapter failure swallowed inside
+                    # generate_scope). Record the skip — during the May-2026
+                    # rc=1 outage every run silently lost its scope and nothing
+                    # in the artifacts showed scoping had been attempted.
+                    try:
+                        from captains_log import log_event, SCOPE_SKIPPED
+                        log_event(
+                            SCOPE_SKIPPED,
+                            subject="scope_skipped",
+                            summary="Scope generation enabled but returned nothing (adapter failure).",
+                            context={"goal_preview": message[:200], "reason": "generator_returned_none"},
+                        )
+                    except Exception:
+                        pass
+                elif _scope.is_empty():
                     # Parse failed. Persist the raw LLM response so the next
                     # debug pass has evidence, and record a captain's log event
                     # so closure/scope observability runs can count parse failures.
@@ -910,7 +925,7 @@ def _handle_impl(
                     except Exception:
                         pass
                     _scope = None  # treat as "no scope" for the rest of the pipeline
-                elif _scope is not None and not _scope.is_empty():
+                else:
                     # Successful parse. Persist scope.md + resolved_intent.md
                     # + emit captain's log event.
                     # Per-run isolation: prefer run-dir/source when active,
@@ -1004,6 +1019,17 @@ def _handle_impl(
                                  "detection deferred")
             except Exception as _scope_exc:
                 log.warning("scope: generation failed, continuing without scope: %s", _scope_exc)
+                try:
+                    from captains_log import log_event, SCOPE_SKIPPED
+                    log_event(
+                        SCOPE_SKIPPED,
+                        subject="scope_skipped",
+                        summary=f"Scope generation raised; continuing without scope: {str(_scope_exc)[:120]}",
+                        context={"goal_preview": message[:200], "reason": "exception",
+                                 "error": str(_scope_exc)[:300]},
+                    )
+                except Exception:
+                    pass
 
         if _extra_ctx_parts:
             _loop_kwargs["ancestry_context_extra"] = "\n\n".join(_extra_ctx_parts)

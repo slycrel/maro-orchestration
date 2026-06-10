@@ -1204,6 +1204,37 @@ class TestClosureRestart:
         assert passed_scope is not None, "scope not plumbed into verify_goal_completion"
         assert passed_scope.failure_modes == ["server never started"]
 
+    def test_scope_skipped_event_when_generator_returns_none(self, monkeypatch, tmp_path):
+        """When scope generation is enabled but produces nothing (adapter
+        failure swallowed inside generate_scope), a SCOPE_SKIPPED captain's-log
+        event must record the skip. During the May-2026 rc=1 outage every run
+        silently lost its scope with no trace in the artifacts."""
+        self._setup(monkeypatch, tmp_path)
+        from unittest.mock import patch
+
+        done_result = self._fake_loop_result(status="done")
+
+        def _cfg(name, default=None):
+            if name == "scope_generation":
+                return True
+            return default
+
+        events = []
+        def _fake_log_event(event_type, *args, **kwargs):
+            events.append((event_type, kwargs))
+
+        with patch("agent_loop.run_agent_loop", return_value=done_result), \
+             patch("intent.check_goal_clarity", return_value={"clear": True}), \
+             patch("scope.generate_resolved_intent", return_value=None), \
+             patch("captains_log.log_event", side_effect=_fake_log_event), \
+             patch("config.get", side_effect=_cfg), \
+             self._no_quality_gate():
+            handle("build X", force_lane="agenda", dry_run=False)
+
+        skipped = [e for e in events if e[0] == "SCOPE_SKIPPED"]
+        assert skipped, f"no SCOPE_SKIPPED event recorded (events: {[e[0] for e in events]})"
+        assert skipped[0][1]["context"]["reason"] == "generator_returned_none"
+
     def test_diagnosis_plumbed_to_closure(self, monkeypatch, tmp_path):
         """Loop diagnosis should reach closure so it can distrust broad runs."""
         self._setup(monkeypatch, tmp_path)

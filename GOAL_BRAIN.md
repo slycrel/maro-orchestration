@@ -153,8 +153,10 @@ Sample: the 2026-05-13..17 window of `~/.poe/workspace/runs/` (478 dirs total;
    `prompt.txt` (no scope.md / resolved_intent.md — scope generation returns None
    silently on adapter failure), and `metadata.json` has no thread/parent field. A
    run cannot be traced back to the intent it serves except by string matching.
-   Fixed same day: tasks carry an `origin` ancestry dict from enqueue through
-   `handle_task` into run metadata (recorded, not yet consulted — see Threads).
+   Fixed same day, both halves: tasks carry an `origin` ancestry dict from enqueue
+   through `handle_task` into run metadata (recorded, not yet consulted — see
+   Threads), and scope-generation failure now emits a `SCOPE_SKIPPED` captain's-log
+   event (reason: generator_returned_none | exception) so scope outages are visible.
 
 ## Decisions (system-maintained, append-only)
 

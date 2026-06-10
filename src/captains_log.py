@@ -79,6 +79,10 @@ METACOGNITIVE_DECISION = "METACOGNITIVE_DECISION"  # mid-loop re-decompose/retry
 # Phase 65 scope + closure observability
 SCOPE_GENERATED = "SCOPE_GENERATED"
 SCOPE_PARSE_FAILED = "SCOPE_PARSE_FAILED"
+# Scope generation was enabled but produced nothing (adapter error or None
+# return). During the May-2026 rc=1 outage every run silently lost its scope —
+# nothing recorded that scoping was skipped (goal-brain pressure test finding).
+SCOPE_SKIPPED = "SCOPE_SKIPPED"
 CLOSURE_VERDICT = "CLOSURE_VERDICT"  # per-check modality distribution + pass/gap counts
 CLAIM_PROBED = "CLAIM_PROBED"  # adversarial-review grounding: per-claim probe outcome
 CLAIM_VERIFIER_OUTCOME = "CLAIM_VERIFIER_OUTCOME"  # per-step: file/symbol claim verification outcome + downstream action
@@ -105,7 +109,7 @@ EVENT_TYPES = {
     EVOLVER_APPLIED, EVOLVER_GENERATED, EVOLVER_SKIPPED, GRADUATION_PROPOSED,
     AUTO_RECOVERY, DIAGNOSIS, INPUT_MISMATCH,
     DECISION_RECORDED, METACOGNITIVE_DECISION,
-    SCOPE_GENERATED, SCOPE_PARSE_FAILED, CLOSURE_VERDICT, CLAIM_PROBED,
+    SCOPE_GENERATED, SCOPE_PARSE_FAILED, SCOPE_SKIPPED, CLOSURE_VERDICT, CLAIM_PROBED,
     CLAIM_VERIFIER_OUTCOME,
     LOOP_CREATED, QUALITY_GATE_VERDICT, STEP_TOO_BROAD,
 }
