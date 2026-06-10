@@ -11,8 +11,9 @@ Slices (same seam, different depth):
   pressure-test findings 1+3: the same goal ran ~25x in 35 minutes on
   2026-05-17 because nothing at the requeue boundary asked "have we seen this
   before, and how did it go?"
-- "loop" — dispatch plus the four knowledge injections agent_loop reads today
-  (lessons, standing rules, decisions, knowledge nodes), unified.
+- "loop" — dispatch plus the knowledge injections agent_loop reads today.
+  Currently a PARTIAL composition with no caller — see the correction note
+  at the slice implementation below before wiring anything to it.
 - "navigator" — defined in RECALL_DESIGN.md, not implemented; no consumer
   exists until the navigator schema (step 4) ships.
 
@@ -251,10 +252,13 @@ def recall(
     result = RecallResult(thread=thread, prior_attempts=prior, sources=sources)
 
     if slice in ("loop", "navigator"):
-        # The four injections agent_loop reads piecemeal today, unified.
-        # Each degrades independently — a broken substrate never takes the
-        # seam down. (navigator slice additionally wants goal-brain +
-        # correspondence walk — not implemented, see RECALL_DESIGN.md.)
+        # PARTIAL composition (4 of 8 substrates) with no production caller
+        # yet. agent_loop's `_build_loop_context` already composes all 8 —
+        # this slice becomes real when its memory half relocates here (see
+        # the RECALL_DESIGN.md correction). Each substrate degrades
+        # independently — a broken one never takes the seam down.
+        # (navigator slice additionally wants goal-brain + correspondence
+        # walk — not implemented.)
         try:
             from memory import inject_lessons_for_task
             result.lessons = inject_lessons_for_task("agenda", goal, max_lessons=3)

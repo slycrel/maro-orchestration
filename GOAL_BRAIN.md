@@ -204,10 +204,13 @@ Active:
 - **Run↔thread linkage**: done 2026-06-10 — tasks carry an `origin` ancestry dict
   (parent handle/loop/goal) from enqueue through `handle_task` into run metadata,
   and recall() now consults it at dispatch (ThreadIdentity walk).
-- **recall() loop-slice wiring**: agent_loop still reads lessons / standing rules /
-  decisions / knowledge at four separate sites (agent_loop.py:2826–2915); the
-  recall() loop slice exists and should replace them so the seam is the only
-  reader. Mechanical follow-up, also the spot to stamp `lesson-cited` edges.
+- **recall() loop-slice relocation**: corrected same day — the loop-start read
+  path is ALREADY unified in `_build_loop_context()` (agent_loop.py:2791),
+  composing 8 memory substrates, not 4 scattered sites as RECALL_DESIGN.md first
+  claimed. The work is relocating its memory half behind recall(slice="loop")
+  (skills/cost/graph stay in agent_loop). Until then recall()'s loop slice is a
+  partial composition with no caller — don't wire anything to it first. Also the
+  spot to stamp `lesson-cited` edges.
 
 Dormant (deliberately parked, not dropped):
 - Thread Architecture implementation (`arch/thread-navigator`) — parked pending

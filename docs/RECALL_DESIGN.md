@@ -16,16 +16,24 @@ pipeline's) single question: **"what do I already know that's relevant right now
 
 From `THREAD_ARCHITECTURE.md`: the substrates exist (memory.py, knowledge_web.py,
 knowledge_lens.py, runs/, captain's log, dev-correspondence) but are read piecemeal
-at scattered injection sites. Verified against code, 2026-06-10 — the current read
-sites are:
+at scattered injection sites. **Correction after reading the code (2026-06-10,
+same day):** the loop-start read path is already unified in one function —
+`_build_loop_context()` (agent_loop.py:2791) — which composes EIGHT memory
+substrates into `lessons_context` (tiered lessons, standing rules, decisions,
+graveyard resurrection, failure notes, captain's-log read bridge, playbook,
+knowledge nodes) plus non-memory contexts (skills, cost, codebase graph). So:
 
 | Site | What it reads | Where |
 |---|---|---|
-| loop start | `inject_lessons_for_task("agenda", goal)` | agent_loop.py:2826 |
-| loop start | `inject_standing_rules(domain=project)` | agent_loop.py:2834 |
-| loop start | `inject_decisions(goal, domain=project)` | agent_loop.py:2843 |
-| loop start | `inject_knowledge_for_goal(goal)` | agent_loop.py:2914 |
+| loop start | 8 memory substrates, one composer | agent_loop.py `_build_loop_context` |
 | **dispatch** | **nothing** | — |
+
+The loop-slice work is therefore a **relocation**, not a unification: move the
+memory half of `_build_loop_context` behind recall(slice="loop") so the seam owns
+it and instruments it; skills/cost/graph stay in agent_loop (they're selection
+and planning context, not memory recall). Until that lands, recall()'s loop slice
+is a partial composition (4 of the 8) with no caller — do not wire anything to it
+before the relocation makes it complete.
 
 The dispatch row is the step-2 finding: the same goal ran ~25× in 35 minutes on
 2026-05-17 (findings 1 and 3) because nothing at the task-queue → `handle_task` →
