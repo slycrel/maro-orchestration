@@ -2592,3 +2592,39 @@ class TestFormatImpactSummary:
         )
         result = format_impact_summary([record])
         assert "insufficient data" in result
+
+
+class TestRewriteSkillSignature:
+    """Session 40 regression: rewrite_skill lost its verbose param — both
+    production call sites pass verbose=verbose, so every call raised
+    TypeError, silently swallowed by the callers' broad except blocks.
+    Skill rewriting (circuit-breaker recovery) was dead since the param
+    was dropped."""
+
+    def _make_skill(self):
+        from skills import Skill
+        return Skill(
+            id="rw01", name="rewrite-me", description="A skill that fails",
+            trigger_patterns=["x"], steps_template=["do the thing"],
+            source_loop_ids=[], created_at="2026-01-01T00:00:00+00:00",
+            tier="provisional", utility_score=0.2,
+        )
+
+    def test_accepts_verbose_kwarg_with_junk_adapter(self, tmp_path, monkeypatch):
+        """The caller contract: rewrite_skill(skill, adapter=..., verbose=...).
+        A junk adapter response exercises the parse-error path, which also
+        referenced the missing verbose name."""
+        from evolver import rewrite_skill
+
+        class _JunkAdapter:
+            def complete(self, messages, **kw):
+                class _R:
+                    content = "this is not json"
+                return _R()
+
+        result = rewrite_skill(self._make_skill(), adapter=_JunkAdapter(), verbose=True)
+        assert result is None
+
+    def test_none_adapter_returns_none(self):
+        from evolver import rewrite_skill
+        assert rewrite_skill(self._make_skill(), adapter=None, verbose=False) is None

@@ -745,7 +745,7 @@ def _process_blocked_step(ctx: LoopContext, blk: BlockedStepContext) -> tuple:
     # Terminal failure — reached when no branch returned (redecompose fallthrough, or
     # explicit stuck decision from _handle_blocked_step)
     _loop_status = _decision.loop_status or "stuck"
-    _stuck_reason = _decision.stuck_reason or block_reason
+    _stuck_reason = _decision.stuck_reason or outcome.get("stuck_reason", "blocked")
     failure_chain.append(f"step {step_idx} terminal: {_stuck_reason[:80]}")
     if item_index >= 0:
         o.mark_item(ctx.project, item_index, o.STATE_BLOCKED)
@@ -3480,7 +3480,10 @@ def _finalize_loop(
         from introspect import run_lenses as _run_lenses, aggregate_lenses as _aggregate
         from introspect import plan_recovery as _plan_recovery
         from introspect import _build_step_profiles, _load_loop_events
-        _diag = _diagnose(loop_id, project=ctx.project or "")
+        # NOTE: `project` is the local param — a `ctx.project` here was a
+        # NameError that silently killed this whole block for six weeks
+        # (2026-04-26 → session 40); the outer except swallowed it every run.
+        _diag = _diagnose(loop_id, project=project or "")
         _save_diag(_diag)
         if _diag.failure_class != "healthy":
             log.warning("introspect: %s", _diag.summary())
@@ -3501,6 +3504,25 @@ def _finalize_loop(
             if _recovery:
                 _tag = "AUTO-RECOVERABLE" if _recovery.auto_apply else "NEEDS-REVIEW"
                 log.warning("recovery[%s] risk=%s: %s", _tag, _recovery.risk, _recovery.action)
+                # M3 (session 40): the plan itself is a recovery insight —
+                # record it typed so the next similar run gets it injected at
+                # decompose time instead of re-deriving it from a fresh
+                # failure. Stable text (failure_class + table action) means
+                # recurring plans reinforce via near-duplicate dedup rather
+                # than duplicating, feeding the standing-rule pipeline.
+                if not dry_run:
+                    try:
+                        from memory import record_tiered_lesson as _record_lesson
+                        _record_lesson(
+                            lesson_text=f"[recovery-plan] {_diag.failure_class}: {_recovery.action}",
+                            task_type="agenda",
+                            outcome=loop_status,
+                            source_goal=goal[:120],
+                            confidence=0.5,  # suggested, not yet verified by a completed run
+                            lesson_type="recovery",
+                        )
+                    except Exception as _rp_exc:
+                        log.debug("recovery-plan lesson record failed: %s", _rp_exc)
         # Inject diagnosis-derived lessons directly into memory
         # so the planner sees them via inject_lessons_for_task on the next run
         if _diag.failure_class != "healthy":
@@ -3521,6 +3543,35 @@ def _finalize_loop(
                 log.warning("failed to persist diagnosis lesson (learning data lost): %s", _store_exc)
     except Exception as exc:
         log.debug("introspect failed: %s", exc)
+
+    # M3 (session 40): a completed run that needed recovery actions is a
+    # *verified* recovery — the failure_chain says what went wrong and which
+    # metacognitive action fixed it. Record it typed ("recovery") at higher
+    # confidence than LLM-extracted lessons: the run finishing IS the
+    # verification. Recurring identical recoveries reinforce via dedup.
+    if not dry_run and loop_status == "done" and recovery_steps > 0 and failure_chain:
+        try:
+            from memory import record_tiered_lesson as _record_lesson
+            _kind_markers = (
+                ("re-decomposing", "re-decompose"),
+                ("split", "step-split"),
+                ("retry", "retry-with-hint"),
+            )
+            _kinds = sorted({k for e in failure_chain for m, k in _kind_markers if m in e})
+            _record_lesson(
+                lesson_text=(
+                    f"[recovery-verified] {', '.join(_kinds) or 'recovery'} unblocked a run: "
+                    f"{failure_chain[0][:100]}"
+                ),
+                task_type="agenda",
+                outcome="done",
+                source_goal=goal[:120],
+                confidence=0.7,  # verified — the run completed after the recovery
+                lesson_type="recovery",
+            )
+            log.info("recorded verified-recovery lesson (%d recovery steps)", recovery_steps)
+        except Exception as _vr_exc:
+            log.debug("verified-recovery lesson record failed: %s", _vr_exc)
 
     # Phase 5: Reflexion — record outcome + extract lessons
     try:

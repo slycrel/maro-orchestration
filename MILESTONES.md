@@ -2,7 +2,7 @@
 
 What to do next, in what order. Updated each session. Strategic phases live in ROADMAP.md; deferred ideas live in BACKLOG.md. This file is the bridge — the executable queue.
 
-Last updated: 2026-06-10 (session 40 — M1 + M2 shipped: consolidation, dry-run hermeticity, standing-rule accretion)
+Last updated: 2026-06-10 (session 40 — M1–M3 shipped: consolidation, dry-run hermeticity, standing-rule accretion, recovery lessons + dead introspect block revived)
 
 ---
 
@@ -25,7 +25,14 @@ Before M2, `standing_rules.jsonl`/`hypotheses.jsonl` could never grow: `observe_
 - [x] **Cross-tier dedup in record_tiered_lesson** — re-learning an already-promoted lesson now reinforces the LONG record (triggering observe_pattern) instead of silently creating a duplicate MEDIUM lesson. This was the gap that would have kept the pipeline dead in production even with the hooks: lessons are recorded via record_tiered_lesson, which only deduped within its own tier. Both dedup loads now use `limit=None` (truncated dedup misses matches).
 - [x] Regression tests: promotion-at-reinforcement (incl. the day-old-eligible-lesson race), hypothesis creation + 2nd-confirmation rule promotion, hook failures never break reinforcement, cross-tier dedup, full medium→standing-rule pipeline end-to-end.
 
-Remaining in this arc: M3 (recovery-plan insights recorded as lessons), M4 (goal-brain doc — doubles as step 1 below), M5 (portability pass).
+## Done (session 40, 2026-06-10 — M3: recovery lessons + dead self-reflection block revived)
+
+- [x] **Post-loop self-reflection was dead for six weeks** — `_finalize_loop`'s Phase 44-45 block referenced `ctx.project` (no `ctx` in scope since the 2026-04-26 extraction): NameError every run, swallowed by its own except. Diagnosis save, lenses, recovery planning, and the diagnosis lesson never ran. Fixed; found while wiring M3 (the new test wouldn't pass — the test was the detector).
+- [x] **Recovery insights recorded as typed lessons** (M3 proper, mechanical/no-LLM): stuck run + table plan → `[recovery-plan] <failure_class>: <action>` (confidence 0.5); completed run with recovery_steps > 0 → `[recovery-verified] <kinds> unblocked a run: <first failure>` (confidence 0.7 — completion is the verification). Stable text → dedup reinforcement → eligible for the M2 standing-rule pipeline.
+- [x] **Same-class bugs from a pyflakes sweep**: `evolver.rewrite_skill` lost its `verbose` param while both callers pass `verbose=verbose` — TypeError on every call, swallowed by callers' excepts, skill rewriting (circuit-breaker recovery) dead; `llm.py` bare `thinking_budget` in the no-kwarg fallback branch; `agent_loop` terminal handler bare `block_reason`. All fixed.
+- [x] **Bug class locked out**: `tests/test_static_undefined_names.py` runs pyflakes' undefined-name check over src/ as part of the suite; evolver's annotation-only `Skill` imports moved under TYPE_CHECKING so the report stays clean.
+
+Remaining in this arc: M4 (goal-brain doc — doubles as step 1 below), M5 (portability pass).
 
 ---
 

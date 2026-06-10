@@ -1041,7 +1041,7 @@ class AnthropicSDKAdapter(LLMAdapter):
             api_kwargs["system"] = system
 
         # Extended thinking: pass budget to Anthropic API when requested
-        _thinking = kwargs.get("thinking_budget") if "thinking_budget" in kwargs else thinking_budget
+        _thinking = kwargs.get("thinking_budget", 0)
         if _thinking and _thinking > 0:
             api_kwargs["thinking"] = {
                 "type": "enabled",
