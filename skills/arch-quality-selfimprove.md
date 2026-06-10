@@ -84,6 +84,12 @@ Discovery, scoring, promotion/demotion with circuit breaker. Shared types (`Skil
 
 **Gap:** Auto-promote/demote works for existing skills. New skill discovery from outcomes is rare.
 
+### Post-loop self-reflection was dead for six weeks (session 40)
+
+The entire Phase 44-45 block in `agent_loop._finalize_loop` (diagnosis save, lenses, recovery plan, diagnosis lesson) referenced `ctx.project` after the monolith extraction removed `ctx` from that scope — a NameError on every run, silently swallowed by the block's own broad `except`. Fixed 2026-06-10. Same sweep found `evolver.rewrite_skill` missing its `verbose` param (both callers passed it → TypeError → skill rewriting/circuit-breaker recovery dead) and two more latent NameErrors (llm.py `thinking_budget` fallback, agent_loop terminal-handler `block_reason`). The bug class is now locked out by `tests/test_static_undefined_names.py` (pyflakes undefined-name sweep over src/).
+
+**Recovery lessons (session 40 M3):** `_finalize_loop` now records typed `lesson_type="recovery"` lessons mechanically (no LLM calls): a stuck run with a table recovery plan records `[recovery-plan] <failure_class>: <action>` (confidence 0.5, suggestion); a *completed* run with `recovery_steps > 0` records `[recovery-verified] <kinds> unblocked a run: <first failure>` (confidence 0.7 — the run finishing is the verification). Stable text means recurring recoveries reinforce via dedup and can accrete toward standing rules (M2 pipeline).
+
 ## The Self-Improvement Gap
 
 What's autonomous today:

@@ -30,8 +30,11 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
 from llm_parse import extract_json, safe_float, safe_str, safe_list, content_or_empty
+
+if TYPE_CHECKING:  # annotation-only; runtime imports stay inside functions
+    from skill_types import Skill
 
 log = logging.getLogger("poe.evolver")
 
@@ -2187,7 +2190,7 @@ def _top_peer_skills(failing_skill: "Skill", k: int = 2) -> List["Skill"]:
     return scored[:k]
 
 
-def rewrite_skill(skill: "Skill", adapter) -> Optional["Skill"]:
+def rewrite_skill(skill: "Skill", adapter, *, verbose: bool = False) -> Optional["Skill"]:
     """LLM-rewrite a skill whose circuit breaker is OPEN.
 
     Analyses the skill's failure_notes and current body, produces a revised

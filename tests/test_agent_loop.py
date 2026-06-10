@@ -1510,6 +1510,118 @@ def test_finalize_loop_skips_reflexion_in_dry_run(monkeypatch):
     assert adapter_used.get("value") is None
 
 
+# ---------------------------------------------------------------------------
+# _finalize_loop — recovery lessons (session 40 M3)
+# ---------------------------------------------------------------------------
+
+def _run_finalize_for_recovery(monkeypatch, *, loop_status, recovery_steps,
+                               failure_chain, dry_run=False, diag=None):
+    """Call _finalize_loop with reflexion stubbed out, capturing every
+    record_tiered_lesson call. Optionally force a specific diagnosis."""
+    recorded = []
+
+    import memory
+    monkeypatch.setattr(memory, "reflect_and_record", lambda *a, **kw: None)
+    monkeypatch.setattr(
+        memory, "record_tiered_lesson",
+        lambda *a, **kw: recorded.append(kw.get("lesson_text") or (a[0] if a else "")),
+    )
+    if diag is not None:
+        import introspect
+        monkeypatch.setattr(introspect, "diagnose_loop", lambda *a, **kw: diag)
+
+    _finalize_loop(
+        loop_id="rec-test",
+        goal="recover this goal",
+        project="proj",
+        loop_status=loop_status,
+        step_outcomes=[],
+        adapter=None,
+        dry_run=dry_run,
+        verbose=False,
+        total_tokens_in=0,
+        total_tokens_out=0,
+        elapsed_ms=100,
+        had_no_matching_skill=False,
+        failure_chain=failure_chain,
+        recovery_steps=recovery_steps,
+    )
+    return recorded
+
+
+def test_finalize_records_verified_recovery_lesson(monkeypatch, tmp_path):
+    """A done run with recovery actions records a typed verified-recovery lesson."""
+    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    recorded = _run_finalize_for_recovery(
+        monkeypatch,
+        loop_status="done",
+        recovery_steps=2,
+        failure_chain=[
+            "step 2 blocked (TIMEOUT: step exceeded 600s); retry 1 with hint",
+            "step 2 re-decomposing: diagnose_loop: retry_churn",
+        ],
+    )
+    verified = [r for r in recorded if r.startswith("[recovery-verified]")]
+    assert len(verified) == 1
+    assert "re-decompose" in verified[0]
+    assert "retry-with-hint" in verified[0]
+    assert "step 2 blocked (TIMEOUT" in verified[0]
+
+
+def test_finalize_no_recovery_lesson_without_recovery_steps(monkeypatch, tmp_path):
+    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    recorded = _run_finalize_for_recovery(
+        monkeypatch, loop_status="done", recovery_steps=0, failure_chain=[],
+    )
+    assert not any(r.startswith("[recovery-verified]") for r in recorded)
+
+
+def test_finalize_no_recovery_lesson_when_stuck(monkeypatch, tmp_path):
+    """Recovery actions on a stuck run are not verified — no lesson."""
+    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    recorded = _run_finalize_for_recovery(
+        monkeypatch,
+        loop_status="stuck",
+        recovery_steps=1,
+        failure_chain=["step 1 terminal: gave up"],
+    )
+    assert not any(r.startswith("[recovery-verified]") for r in recorded)
+
+
+def test_finalize_skips_recovery_lessons_in_dry_run(monkeypatch, tmp_path):
+    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    recorded = _run_finalize_for_recovery(
+        monkeypatch,
+        loop_status="done",
+        recovery_steps=2,
+        failure_chain=["step 2 blocked (x); retry 1 with hint"],
+        dry_run=True,
+    )
+    assert recorded == []
+
+
+def test_finalize_records_recovery_plan_lesson_for_failed_loop(monkeypatch, tmp_path):
+    """A non-healthy diagnosis with a table plan records a [recovery-plan] lesson."""
+    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    from introspect import LoopDiagnosis
+    diag = LoopDiagnosis(
+        loop_id="rec-test",
+        failure_class="empty_model_output",
+        severity="warning",
+        recommendation="retry with tool-call hint",
+    )
+    recorded = _run_finalize_for_recovery(
+        monkeypatch,
+        loop_status="stuck",
+        recovery_steps=0,
+        failure_chain=[],
+        diag=diag,
+    )
+    plans = [r for r in recorded if r.startswith("[recovery-plan]")]
+    assert len(plans) == 1
+    assert plans[0].startswith("[recovery-plan] empty_model_output:")
+
+
 @pytest.mark.slow
 def test_generate_refinement_hint_uses_llm_response():
     """Uses LLM response when adapter works."""
