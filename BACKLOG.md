@@ -5,7 +5,36 @@ Read this at the start of every session. Update it as items are completed or new
 
 **Completed items live in [BACKLOG_DONE.md](BACKLOG_DONE.md)** — move items there with their full context when they ship; that file is the archive of what we've already decided, tried, or superseded, and it's ingested by `dev-recall` for historical context.
 
-Last reviewed: 2026-04-27 (Thread Architecture sketch — see top entry).
+Last reviewed: 2026-06-10 (session 40 — memory lifecycle fixes + dry-run hermeticity; see entry below).
+
+---
+
+### Dry-run hermeticity — fixed two leak sites, two more fail-safe-by-accident (2026-06-10)
+
+Session 40 found `dry_run=True` runs making **real authenticated `claude -p` CLI calls** (subprocess adapter needs no API key, so conftest key-isolation didn't stop it). test_handle.py alone took 2h06m of real token burn. Fixed:
+
+- [x] `_decompose_goal` planner-lift: `build_adapter()` was called unconditionally, replacing `_DryRunAdapter` with a live adapter. Now guarded on `ctx.dry_run`.
+- [x] `_select_step_adapter` (Phase F5): `_DryRunAdapter` has no `model_key` attr → `getattr(..., "")` slipped past the explicit-model check → live adapter per step. Now early-returns on `ctx.dry_run`.
+- [x] conftest guard: `tests/conftest.py` now blocks `claude`/`codex` binaries at the `llm._run_subprocess_safe` seam (other commands pass through so its unit tests still run). Tests needing LLM behavior must mock the adapter.
+- [x] Adapter-swap seam made principled: the decompose planner-lift and Phase F5 per-step selection now only re-tier adapters that are `isinstance(_, LLMAdapter)` (i.e. build_adapter products they know how to rebuild). Injected test doubles and `_DryRunAdapter` are plain classes and pass through untouched — this is the injection contract.
+- [x] Step-shape auto-split was non-convergent: analysis-first steps with an incidental exec keyword (e.g. "Analyze findings from build X") split into a replacement that re-tripped the detector every iteration until max_iterations → stuck. `_split_exec_analyze` now strips analysis clauses from the run part, and the executor-side leak guard executes as-is when a split wouldn't converge. (Also fixed `lstrip('Rr un')` char-set bug.)
+- [ ] **Fragile fail-safes left in place** (deliberately, don't-refactor-mid-feature): `_run_steps_parallel`/`_run_steps_dag` only avoid building live adapters in dry-run because `adapter.model_key` raises AttributeError on `_DryRunAdapter` and the except-path falls back. Same for `_generate_timeout_split` (unreachable in dry-run today). Make these explicit when next touching agent_loop step execution.
+- [ ] **Hardcoded `_CODEX_BIN = "/home/linuxbrew/.linuxbrew/bin/codex"`** in llm.py — machine-specific path, belongs in config. Fold into the portability pass (M5).
+- [ ] **5 pre-existing worker_session_bridge failures in test_orch_core.py** (`test_worker_session_bridge_from_manifest_json` + 4 siblings, validation status 'blocked' instead of 'done'). Fail on clean HEAD too — came in with the build-loop merge stream (Apr 27–May 16), likely never ran green on this box. Fast failures (~0.1s), so not LLM-related; probably an environment/spec-resolution issue in `orch_bridges.resolve_worker_session_spec` or the validation bridge. Not M1 scope; triage separately.
+- [ ] **Pre-existing: test_scheduler.py `test_inflight_job_not_returned_until_lease_stale`** — fails on clean HEAD ("scheduler: clearing stale dispatch lease" fires when the test expects the lease to still be held). Lease-staleness threshold vs the test's +5min probe; triage with the orch_core group.
+- [ ] **Pre-existing: 4 plan-manifest tests in test_agent_loop.py are order-dependent** — pass when the file runs alone, fail after tests/regression/test_regression.py (manifest written under a stale orch root despite `importlib.reload(agent_loop)` + `POE_ORCH_ROOT`; some module caches the root at import). Suite-pollution bug, fails on clean HEAD too.
+
+---
+
+### Memory lifecycle was write-dead / decay-corrupting — core fixed, wiring shipped (2026-06-10)
+
+Session 40 audit confirmed consolidation **never ran** (only entry point was the `poe-memory decay` CLI, never invoked) and the lifecycle had three latent data-corruption bugs, all fixed in knowledge_web.py:
+
+- [x] Tier-blind decay on load: LONG-tier lessons decayed on read despite "no decay by design" (22 long lessons were reading at ~0.85^46 effective score).
+- [x] `run_decay_cycle` persisted decayed scores without moving the `last_reinforced` anchor → compounding rot on every RMW write (reinforce/forget/promote all re-persisted decayed bystander scores). Decay is now strictly a read-time derivation; rewrites use `raw=True`.
+- [x] RMW paths loaded with default `limit=50` → stores >50 lessons would be silently truncated on rewrite. All rewrite paths now load `raw=True, limit=None`.
+- [x] In-process consolidation ("dream cycle"): `maybe_consolidate()` marker-gated to once per `memory.consolidation_interval_hours` (default 24h), wired into `handle()` (post-request, never affects outcome), heartbeat tick, and `poe-memory consolidate [--force]`. In-process by design — **no cron/daemon** (Jeremy: rogue-process history).
+- [ ] Promotion timing race remains (M2 scope): one day of decay drops 1.0 → 0.85, below the 0.9 promote threshold, so promotion effectively requires reinforcement and consolidation on the *same day*. Fix: evaluate promotion at reinforcement time.
 
 ---
 

@@ -230,7 +230,11 @@ class TestEventTypes:
         assert DECISION_RECORDED in EVENT_TYPES
 
     def test_event_type_count(self):
-        assert len(EVENT_TYPES) == 39
+        assert len(EVENT_TYPES) == 40
+
+    def test_memory_consolidated_in_set(self):
+        from captains_log import MEMORY_CONSOLIDATED
+        assert MEMORY_CONSOLIDATED in EVENT_TYPES
 
     def test_input_mismatch_in_set(self):
         from captains_log import INPUT_MISMATCH

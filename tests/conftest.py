@@ -99,3 +99,37 @@ def _isolate_workspace(tmp_path):
             os.environ.pop(var, None)
         else:
             os.environ[var] = val
+
+
+# Subprocess LLM adapters (claude -p / codex CLI) authenticate via the box's
+# CLI session, not an API key — so the key isolation above doesn't stop them.
+# Session 40 found dry_run leaks where tests silently invoked the real
+# authenticated `claude` CLI: each call burned real tokens and took minutes
+# (test_handle.py alone ran 2h06m). Block the CLI binaries at the one seam
+# all subprocess adapters share, leaving non-LLM commands (sh, echo) alone so
+# the _run_subprocess_safe unit tests still exercise the real implementation.
+_BLOCKED_LLM_BINS = ("claude", "codex")
+
+
+@pytest.fixture(autouse=True)
+def _block_subprocess_llm(monkeypatch):
+    try:
+        import llm
+    except Exception:
+        yield
+        return
+
+    _real = llm._run_subprocess_safe
+
+    def _guarded(cmd, **kwargs):
+        bin_name = os.path.basename(str(cmd[0])) if cmd else ""
+        if bin_name in _BLOCKED_LLM_BINS:
+            raise RuntimeError(
+                f"Blocked real LLM CLI call in tests: {bin_name!r}. This would "
+                "invoke the box's authenticated CLI and burn real tokens. Use "
+                "a mock adapter (_DryRunAdapter) or patch llm._run_subprocess_safe."
+            )
+        return _real(cmd, **kwargs)
+
+    monkeypatch.setattr(llm, "_run_subprocess_safe", _guarded)
+    yield

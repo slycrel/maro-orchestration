@@ -545,6 +545,156 @@ class TestRunDecayCycle:
         result = run_decay_cycle(tier=MemoryTier.MEDIUM)
         assert result == {"decayed": 0, "promoted": 0, "gc": 0}
 
+    def test_decay_cycle_long_tier_is_noop(self, tmp_path):
+        """Long tier doesn't decay by design — cycle on it is a no-op."""
+        old_date = (datetime.now(timezone.utc) - timedelta(days=30)).strftime("%Y-%m-%d")
+        _write_lesson_to_file(tmp_path, _make_lesson(
+            lesson_id="lt1", score=0.95, last_reinforced=old_date, tier=MemoryTier.LONG,
+        ), tier=MemoryTier.LONG)
+        result = run_decay_cycle(tier=MemoryTier.LONG)
+        assert result == {"decayed": 0, "promoted": 0, "gc": 0}
+        long_ = load_tiered_lessons(tier=MemoryTier.LONG, min_score=0.0)
+        assert long_[0].score == pytest.approx(0.95)
+
+    def test_decay_cycle_never_persists_decayed_scores(self, tmp_path):
+        """Regression: decay is read-time derivation. The cycle must not
+        write decayed scores back without moving the last_reinforced anchor —
+        that compounds decay on every run."""
+        old_date = (datetime.now(timezone.utc) - timedelta(days=3)).strftime("%Y-%m-%d")
+        _write_lesson_to_file(tmp_path, _make_lesson(
+            lesson_id="np1", score=0.8, last_reinforced=old_date,
+        ))
+        run_decay_cycle(tier=MemoryTier.MEDIUM)
+        stored = load_tiered_lessons(tier=MemoryTier.MEDIUM, raw=True, limit=None)
+        found = next(l for l in stored if l.lesson_id == "np1")
+        assert found.score == pytest.approx(0.8)
+        assert found.last_reinforced == old_date
+
+    def test_decay_cycle_idempotent_same_day(self, tmp_path):
+        """Running the cycle twice must not change stored state the second time."""
+        old_date = (datetime.now(timezone.utc) - timedelta(days=3)).strftime("%Y-%m-%d")
+        _write_lesson_to_file(tmp_path, _make_lesson(
+            lesson_id="idem1", score=0.8, last_reinforced=old_date,
+        ))
+        run_decay_cycle(tier=MemoryTier.MEDIUM)
+        first = [asdict(l) for l in load_tiered_lessons(tier=MemoryTier.MEDIUM, raw=True, limit=None)]
+        run_decay_cycle(tier=MemoryTier.MEDIUM)
+        second = [asdict(l) for l in load_tiered_lessons(tier=MemoryTier.MEDIUM, raw=True, limit=None)]
+        assert first == second
+
+
+# ===========================================================================
+# Tier-aware read-time decay + raw loading (session 40 regressions)
+# ===========================================================================
+
+class TestTierAwareDecay:
+    def test_long_tier_never_decays_on_load(self, tmp_path):
+        """Regression: load_tiered_lessons applied decay tier-blind, eroding
+        long-tier lessons that are permanent by design."""
+        old_date = (datetime.now(timezone.utc) - timedelta(days=46)).strftime("%Y-%m-%d")
+        _write_lesson_to_file(tmp_path, _make_lesson(
+            lesson_id="long1", score=1.0, last_reinforced=old_date, tier=MemoryTier.LONG,
+        ), tier=MemoryTier.LONG)
+        result = load_tiered_lessons(tier=MemoryTier.LONG, min_score=0.0)
+        assert result[0].score == pytest.approx(1.0)
+
+    def test_raw_load_skips_decay_and_min_score(self, tmp_path):
+        old_date = (datetime.now(timezone.utc) - timedelta(days=10)).strftime("%Y-%m-%d")
+        _write_lesson_to_file(tmp_path, _make_lesson(
+            lesson_id="raw1", score=0.05, last_reinforced=old_date,
+        ))
+        result = load_tiered_lessons(tier=MemoryTier.MEDIUM, raw=True, limit=None)
+        assert len(result) == 1
+        assert result[0].score == pytest.approx(0.05)
+
+    def test_limit_none_returns_all(self, tmp_path):
+        """Regression: RMW paths loaded with the default limit=50, silently
+        truncating stores >50 lessons on rewrite."""
+        for i in range(60):
+            _write_lesson_to_file(tmp_path, _make_lesson(lesson_id=f"bulk{i}"))
+        result = load_tiered_lessons(tier=MemoryTier.MEDIUM, raw=True, limit=None)
+        assert len(result) == 60
+
+    def test_rmw_does_not_truncate_large_store(self, tmp_path):
+        for i in range(60):
+            _write_lesson_to_file(tmp_path, _make_lesson(lesson_id=f"big{i}"))
+        reinforce_lesson("big7", tier=MemoryTier.MEDIUM)
+        result = load_tiered_lessons(tier=MemoryTier.MEDIUM, raw=True, limit=None)
+        assert len(result) == 60
+
+    def test_rmw_does_not_persist_bystander_decay(self, tmp_path):
+        """Regression: reinforcing one lesson rewrote the file with decayed
+        scores for every other lesson, without re-anchoring last_reinforced."""
+        old_date = (datetime.now(timezone.utc) - timedelta(days=5)).strftime("%Y-%m-%d")
+        _write_lesson_to_file(tmp_path, _make_lesson(
+            lesson_id="bystander", score=0.9, last_reinforced=old_date,
+        ))
+        _write_lesson_to_file(tmp_path, _make_lesson(lesson_id="target", score=0.5))
+        reinforce_lesson("target", tier=MemoryTier.MEDIUM)
+        stored = load_tiered_lessons(tier=MemoryTier.MEDIUM, raw=True, limit=None)
+        by = next(l for l in stored if l.lesson_id == "bystander")
+        assert by.score == pytest.approx(0.9)
+        assert by.last_reinforced == old_date
+
+
+# ===========================================================================
+# In-process consolidation (dream cycle)
+# ===========================================================================
+
+class TestConsolidation:
+    def test_due_when_no_marker(self, tmp_path):
+        assert kw.consolidation_due() is True
+
+    def test_not_due_after_run(self, tmp_path):
+        result = kw.maybe_consolidate()
+        assert result is not None
+        assert kw.consolidation_due() is False
+
+    def test_second_call_skips(self, tmp_path):
+        assert kw.maybe_consolidate() is not None
+        assert kw.maybe_consolidate() is None
+
+    def test_force_bypasses_marker(self, tmp_path):
+        assert kw.maybe_consolidate() is not None
+        assert kw.maybe_consolidate(force=True) is not None
+
+    def test_due_when_marker_stale(self, tmp_path):
+        kw.maybe_consolidate()
+        marker = kw._consolidation_marker_path()
+        stale_ts = (datetime.now(timezone.utc) - timedelta(hours=25)).isoformat()
+        marker.write_text(json.dumps({"ts": stale_ts}), encoding="utf-8")
+        assert kw.consolidation_due() is True
+
+    def test_due_when_marker_unreadable(self, tmp_path):
+        kw._consolidation_marker_path().write_text("not json", encoding="utf-8")
+        assert kw.consolidation_due() is True
+
+    def test_summary_shape_and_marker_written(self, tmp_path):
+        old_date = (datetime.now(timezone.utc) - timedelta(days=3)).strftime("%Y-%m-%d")
+        _write_lesson_to_file(tmp_path, _make_lesson(
+            lesson_id="c1", score=0.8, last_reinforced=old_date,
+        ))
+        result = kw.maybe_consolidate()
+        assert set(result["medium"]) == {"decayed", "promoted", "gc"}
+        marker = json.loads(kw._consolidation_marker_path().read_text(encoding="utf-8"))
+        assert "ts" in marker and "medium" in marker
+
+    def test_disabled_via_config_skips(self, tmp_path):
+        def fake_get(key, default=None):
+            if key == "memory.consolidation_enabled":
+                return False
+            return default
+        with patch("config.get", side_effect=fake_get):
+            assert kw.maybe_consolidate() is None
+
+    def test_never_raises_on_cycle_failure(self, tmp_path):
+        with patch.object(kw, "run_decay_cycle", side_effect=RuntimeError("boom")):
+            assert kw.maybe_consolidate() is None
+
+    def test_interval_hours_override(self, tmp_path):
+        kw.maybe_consolidate()
+        assert kw.consolidation_due(interval_hours=0.0) is True
+
 
 # ===========================================================================
 # search_graveyard

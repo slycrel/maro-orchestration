@@ -332,6 +332,50 @@ def handle(
 ) -> HandleResult:
     """Process an incoming request through Poe's handle.
 
+    Thin lifecycle wrapper around :func:`_handle_impl` (see its docstring for
+    argument semantics). After the request completes — success or failure —
+    opportunistic memory consolidation runs (knowledge_web.maybe_consolidate):
+    marker-gated to at most once per interval, in-process by design (no
+    cron/daemon), and never allowed to affect the request's outcome. Skipped
+    on dry_run so dry runs stay side-effect free.
+    """
+    try:
+        return _handle_impl(
+            message,
+            project=project,
+            repo_path=repo_path,
+            model=model,
+            adapter=adapter,
+            force_lane=force_lane,
+            dry_run=dry_run,
+            verbose=verbose,
+            channel=channel,
+            prior_context=prior_context,
+        )
+    finally:
+        if not dry_run:
+            try:
+                from knowledge_web import maybe_consolidate
+                maybe_consolidate()
+            except Exception:
+                pass  # consolidation must never affect the request outcome
+
+
+def _handle_impl(
+    message: str,
+    *,
+    project: Optional[str] = None,
+    repo_path: str = "",
+    model: Optional[str] = None,
+    adapter=None,
+    force_lane: Optional[str] = None,   # "now" | "agenda" | None (auto)
+    dry_run: bool = False,
+    verbose: bool = False,
+    channel: Optional["ConversationChannel"] = None,
+    prior_context: Optional[str] = None,
+) -> HandleResult:
+    """Process an incoming request through Poe's handle.
+
     Args:
         message: The natural language request.
         project: Project slug to attach AGENDA work to.

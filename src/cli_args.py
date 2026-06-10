@@ -361,6 +361,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_mem_decay = memory_sub.add_parser("decay", help="Run decay cycle: apply daily decay, auto-promote eligibles, GC stale entries")
     p_mem_decay.add_argument("--dry-run", action="store_true", help="Preview what would happen without writing")
     p_mem_decay.add_argument("--tier", choices=["medium", "long"], default="medium")
+    p_mem_consolidate = memory_sub.add_parser("consolidate", help="Run in-process consolidation (dream cycle) if due — marker-gated to once per interval")
+    p_mem_consolidate.add_argument("--force", action="store_true", help="Run even if not due yet")
     p_mem_promote = memory_sub.add_parser("promote", help="Promote a medium-tier lesson to long-tier")
     p_mem_promote.add_argument("lesson_id", help="Lesson ID to promote")
     p_mem_list = memory_sub.add_parser("list", help="List lessons in a tier")

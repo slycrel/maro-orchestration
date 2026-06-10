@@ -275,6 +275,9 @@ def _append_tiered_lesson(tl: TieredLesson, *, tier: str) -> None:
 def _reinforce_tiered_lesson(tl: TieredLesson, *, tier: str) -> TieredLesson:
     """Reinforce an existing lesson: bump score and sessions_validated, rewrite file.
 
+    ``tl.score`` is expected to be the *effective* (decay-derived) score —
+    reinforcement re-anchors it: score = effective + bonus, anchor = today.
+
     Phase 59 Feynman F5: once sessions_validated reaches 3, confidence is bumped
     to _CONFIDENCE_MULTI_SESSION (0.9+) — independently confirmed across sessions.
     """
@@ -285,10 +288,10 @@ def _reinforce_tiered_lesson(tl: TieredLesson, *, tier: str) -> TieredLesson:
     # F5: multi-session confidence promotion
     if tl.sessions_validated >= 3:
         tl.confidence = max(tl.confidence, _CONFIDENCE_MULTI_SESSION)
-    # Reload all lessons, replace the mutated one, and rewrite.
-    # Without this, _rewrite_tiered_lessons(tier) re-reads from disk and loses
-    # the in-memory mutations above.
-    all_lessons = load_tiered_lessons(tier=tier, min_score=0.0)
+    # Reload all lessons RAW (stored scores, no limit) and replace the mutated
+    # one. A non-raw load here would persist decay-derived scores for every
+    # bystander lesson — compounding decay on each write.
+    all_lessons = load_tiered_lessons(tier=tier, min_score=0.0, limit=None, raw=True)
     updated = [tl if l.lesson_id == tl.lesson_id else l for l in all_lessons]
     _rewrite_tiered_lessons(tier, lessons=updated)
     return tl
@@ -300,23 +303,34 @@ def load_tiered_lessons(
     task_type: Optional[str] = None,
     lesson_type: Optional[str] = None,
     min_score: float = 0.0,
-    limit: int = 50,
+    limit: Optional[int] = 50,
     max_age_days: Optional[int] = None,
+    raw: bool = False,
 ) -> List[TieredLesson]:
     """Load tiered lessons from disk, applying current-day decay inline.
+
+    Decay is a *read-time derivation*: the stored score is the score as of
+    ``last_reinforced`` (the anchor), and the effective score is computed
+    here as ``stored * DECAY_FACTOR^days``. Stored scores must never be
+    overwritten with decayed values — that would compound decay on every
+    rewrite. Only MEDIUM decays; LONG is promoted-permanent by design.
 
     Args:
         lesson_type:  If set, only return lessons with this lesson_type
                       (Phase 59 NeMo S1 typed taxonomy filter).
+        limit:        Max results (None = unlimited — required for any
+                      read-modify-write that rewrites the file, otherwise
+                      the rewrite silently truncates the store).
         max_age_days: If set, skip lessons last reinforced more than this many days ago.
                       Useful for pruning stale lessons in retrieval contexts.
+        raw:          Skip decay derivation and return stored scores as-is.
+                      Use for read-modify-write paths that persist records.
     """
     path = _tiered_lessons_path(tier)
     if not path.exists():
         return []
 
     results: List[TieredLesson] = []
-    today = _current_date()
     try:
         for line in path.read_text(encoding="utf-8").splitlines():
             line = line.strip()
@@ -325,13 +339,13 @@ def load_tiered_lessons(
             try:
                 d = json.loads(line)
                 tl = TieredLesson(**{k: d[k] for k in TieredLesson.__dataclass_fields__ if k in d})
-                # Apply decay inline (days since last reinforcement)
                 days = _days_since(tl.last_reinforced)
                 if max_age_days is not None and days > max_age_days:
                     continue  # lesson too stale
-                if days > 0:
+                # Derive effective score (MEDIUM only — LONG does not decay)
+                if not raw and tier == MemoryTier.MEDIUM and days > 0:
                     tl.score = decay_score(tl.score, days)
-                if tl.score < min_score:
+                if not raw and tl.score < min_score:
                     continue
                 if task_type and tl.task_type != task_type:
                     continue
@@ -344,13 +358,17 @@ def load_tiered_lessons(
         pass
 
     results.sort(key=lambda x: x.score, reverse=True)
-    return results[:limit]
+    return results[:limit] if limit is not None else results
 
 
 def _rewrite_tiered_lessons(tier: str, lessons: Optional[List[TieredLesson]] = None) -> None:
-    """Rewrite the tiered lessons file with the current state (after updates/GC)."""
+    """Rewrite the tiered lessons file with the current state (after updates/GC).
+
+    When no lesson list is supplied, reloads RAW and unlimited — persisting
+    decay-derived scores or a truncated load would corrupt the store.
+    """
     if lessons is None:
-        lessons = load_tiered_lessons(tier=tier, min_score=0.0)
+        lessons = load_tiered_lessons(tier=tier, min_score=0.0, limit=None, raw=True)
     path = _tiered_lessons_path(tier)
     try:
         from file_lock import locked_write
@@ -374,17 +392,14 @@ def reinforce_lesson(lesson_id: str, tier: str = MemoryTier.MEDIUM) -> Optional[
     Phase 59 Feynman F5: once sessions_validated reaches 3, confidence is
     promoted to >= _CONFIDENCE_MULTI_SESSION (0.9).
     """
-    lessons = load_tiered_lessons(tier=tier, min_score=0.0)
+    # Non-raw load: target's effective (decay-derived) score is the
+    # reinforcement base. The rewrite inside _reinforce_tiered_lesson
+    # reloads raw, so bystander lessons keep their stored scores.
+    lessons = load_tiered_lessons(tier=tier, min_score=0.0, limit=None)
     target = next((l for l in lessons if l.lesson_id == lesson_id), None)
     if not target:
         return None
-    target.score = reinforce_score(target.score)
-    target.sessions_validated += 1
-    target.times_reinforced += 1
-    target.last_reinforced = _current_date()
-    if target.sessions_validated >= 3:
-        target.confidence = max(target.confidence, _CONFIDENCE_MULTI_SESSION)
-    _rewrite_tiered_lessons(tier=tier, lessons=lessons)
+    target = _reinforce_tiered_lesson(target, tier=tier)
 
     # Captain's log
     try:
@@ -454,7 +469,7 @@ def search_graveyard(
 
 def forget_lesson(lesson_id: str, tier: str = MemoryTier.MEDIUM) -> bool:
     """Permanently remove a lesson from a tier. Returns True if found and removed."""
-    lessons = load_tiered_lessons(tier=tier, min_score=0.0)
+    lessons = load_tiered_lessons(tier=tier, min_score=0.0, limit=None, raw=True)
     before = len(lessons)
     lessons = [l for l in lessons if l.lesson_id != lesson_id]
     if len(lessons) == before:
@@ -466,18 +481,24 @@ def forget_lesson(lesson_id: str, tier: str = MemoryTier.MEDIUM) -> bool:
 def promote_lesson(lesson_id: str) -> bool:
     """Promote a medium-tier lesson to long-tier.
 
-    Eligibility: score >= PROMOTE_MIN_SCORE AND sessions_validated >= PROMOTE_MIN_SESSIONS.
+    Eligibility: effective score >= PROMOTE_MIN_SCORE AND
+    sessions_validated >= PROMOTE_MIN_SESSIONS.
     Returns True if promotion succeeded.
     """
-    lessons = load_tiered_lessons(tier=MemoryTier.MEDIUM, min_score=0.0)
-    target = next((l for l in lessons if l.lesson_id == lesson_id), None)
+    # Eligibility is judged on the effective (decay-derived) score...
+    effective = load_tiered_lessons(tier=MemoryTier.MEDIUM, min_score=0.0, limit=None)
+    target = next((l for l in effective if l.lesson_id == lesson_id), None)
     if not target:
         return False
     if target.score < PROMOTE_MIN_SCORE or target.sessions_validated < PROMOTE_MIN_SESSIONS:
         return False
-    # Remove from medium, add to long
-    lessons = [l for l in lessons if l.lesson_id != lesson_id]
-    _rewrite_tiered_lessons(tier=MemoryTier.MEDIUM, lessons=lessons)
+    # ...but the record that moves tiers is the stored (raw) one.
+    raw_lessons = load_tiered_lessons(tier=MemoryTier.MEDIUM, min_score=0.0, limit=None, raw=True)
+    target = next((l for l in raw_lessons if l.lesson_id == lesson_id), None)
+    if not target:
+        return False
+    remaining = [l for l in raw_lessons if l.lesson_id != lesson_id]
+    _rewrite_tiered_lessons(tier=MemoryTier.MEDIUM, lessons=remaining)
     target.tier = MemoryTier.LONG
     _append_tiered_lesson(target, tier=MemoryTier.LONG)
 
@@ -493,7 +514,7 @@ def promote_lesson(lesson_id: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Decay cycle (run daily / on session start)
+# Decay cycle (run via maybe_consolidate() or `poe-memory decay`)
 # ---------------------------------------------------------------------------
 
 def run_decay_cycle(
@@ -501,29 +522,34 @@ def run_decay_cycle(
     *,
     dry_run: bool = False,
 ) -> Dict[str, int]:
-    """Apply decay to all lessons in a tier, auto-promote eligibles, GC below threshold.
+    """Promote eligible lessons and GC dead ones, judged on effective scores.
+
+    Decay itself is a read-time derivation (see load_tiered_lessons) and is
+    never persisted — this cycle's job is the *consequences* of decay:
+    promotion (effective score held >= PROMOTE_MIN_SCORE with enough
+    validated sessions) and garbage collection (effective score below
+    GC_THRESHOLD). The ``decayed`` count is informational: lessons whose
+    effective score is currently below their stored score.
+
+    Only MEDIUM has promote/GC semantics; calling with LONG is a no-op
+    (long-tier lessons neither decay nor expire by design).
 
     Returns a dict with counts: decayed, promoted, gc'd.
     """
-    lessons = load_tiered_lessons(tier=tier, min_score=0.0)
+    if tier != MemoryTier.MEDIUM:
+        return {"decayed": 0, "promoted": 0, "gc": 0}
 
-    decayed = 0
+    effective = load_tiered_lessons(tier=tier, min_score=0.0, limit=None)
+
+    decayed = sum(1 for tl in effective if _days_since(tl.last_reinforced) > 0)
     promoted_ids = []
     gc_ids = []
 
-    for tl in lessons:
-        days = _days_since(tl.last_reinforced)
-        if days > 0:
-            old_score = tl.score
-            tl.score = decay_score(tl.score, days)
-            if tl.score != old_score:
-                decayed += 1
-
-        if tier == MemoryTier.MEDIUM:
-            if tl.score >= PROMOTE_MIN_SCORE and tl.sessions_validated >= PROMOTE_MIN_SESSIONS:
-                promoted_ids.append(tl.lesson_id)
-            elif tl.score < GC_THRESHOLD:
-                gc_ids.append(tl.lesson_id)
+    for tl in effective:
+        if tl.score >= PROMOTE_MIN_SCORE and tl.sessions_validated >= PROMOTE_MIN_SESSIONS:
+            promoted_ids.append(tl.lesson_id)
+        elif tl.score < GC_THRESHOLD:
+            gc_ids.append(tl.lesson_id)
 
     if not dry_run:
         # Audit trail: log the decay cycle before mutating lesson store.
@@ -535,7 +561,7 @@ def run_decay_cycle(
                 "module": "knowledge_web",
                 "action": "run_decay_cycle",
                 "tier": tier,
-                "total": len(lessons),
+                "total": len(effective),
                 "decayed": decayed,
                 "promoted": len(promoted_ids),
                 "gc": len(gc_ids),
@@ -547,18 +573,105 @@ def run_decay_cycle(
         except Exception:
             pass  # audit trail must never block execution
 
-        # Promote eligible lessons
+        # Promote eligible lessons (each promote rewrites the medium file)
         for lid in promoted_ids:
             promote_lesson(lid)
 
-        # Rewrite remaining lessons using the in-memory list (with updated decay scores).
-        # Do NOT reload from disk here — a reload would lose the score changes computed above.
-        promoted_set = set(promoted_ids)
-        gc_set = set(gc_ids)
-        remaining = [l for l in lessons if l.lesson_id not in promoted_set and l.lesson_id not in gc_set]
-        _rewrite_tiered_lessons(tier=tier, lessons=remaining)
+        # GC: reload raw AFTER promotions so the rewrite reflects them,
+        # then drop the GC'd ids. Stored scores stay untouched.
+        if gc_ids:
+            gc_set = set(gc_ids)
+            raw_lessons = load_tiered_lessons(tier=tier, min_score=0.0, limit=None, raw=True)
+            remaining = [l for l in raw_lessons if l.lesson_id not in gc_set]
+            _rewrite_tiered_lessons(tier=tier, lessons=remaining)
 
     return {"decayed": decayed, "promoted": len(promoted_ids), "gc": len(gc_ids)}
+
+
+# ---------------------------------------------------------------------------
+# In-process consolidation — the "dream cycle" (session 40)
+# ---------------------------------------------------------------------------
+# Deliberately NOT a daemon or cron job: consolidation rides along inside
+# normal app lifecycle calls (end of handle(), heartbeat ticks, CLI) and
+# self-gates via a marker file so it runs at most once per interval no
+# matter how many entry points call it. A concurrent double-run is safe:
+# decay is read-derived (never persisted), promotion is eligibility-gated
+# (second attempt finds the lesson already moved), and GC is idempotent.
+
+CONSOLIDATION_INTERVAL_HOURS = 24.0
+
+
+def _consolidation_marker_path() -> Path:
+    return _memory_dir() / "last_consolidation.json"
+
+
+def consolidation_due(*, interval_hours: Optional[float] = None) -> bool:
+    """True if no consolidation has run within the interval."""
+    if interval_hours is None:
+        try:
+            from config import get as _cfg_get
+            interval_hours = float(_cfg_get("memory.consolidation_interval_hours",
+                                            CONSOLIDATION_INTERVAL_HOURS))
+        except Exception:
+            interval_hours = CONSOLIDATION_INTERVAL_HOURS
+    marker = _consolidation_marker_path()
+    if not marker.exists():
+        return True
+    try:
+        last = json.loads(marker.read_text(encoding="utf-8"))
+        last_ts = datetime.fromisoformat(last["ts"])
+        elapsed_h = (datetime.now(timezone.utc) - last_ts).total_seconds() / 3600.0
+        return elapsed_h >= interval_hours
+    except Exception:
+        return True  # unreadable marker → treat as due
+
+
+def maybe_consolidate(*, force: bool = False) -> Optional[Dict[str, Any]]:
+    """Run memory consolidation if due. The in-process dream cycle.
+
+    Config (workspace-level):
+        memory.consolidation_enabled         default True
+        memory.consolidation_interval_hours  default 24
+
+    Returns the consolidation summary dict if it ran, None if skipped.
+    Never raises — callers sit on the app's exit path.
+    """
+    try:
+        if not force:
+            try:
+                from config import get as _cfg_get
+                if not _cfg_get("memory.consolidation_enabled", True):
+                    return None
+            except Exception:
+                pass  # config unavailable → default enabled
+            if not consolidation_due():
+                return None
+
+        cycle = run_decay_cycle(tier=MemoryTier.MEDIUM)
+        summary: Dict[str, Any] = {
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "medium": cycle,
+        }
+
+        marker = _consolidation_marker_path()
+        marker.write_text(json.dumps(summary), encoding="utf-8")
+
+        try:
+            from captains_log import log_event, MEMORY_CONSOLIDATED
+            log_event(
+                event_type=MEMORY_CONSOLIDATED,
+                subject="consolidation",
+                summary=(f"Consolidation: decayed={cycle['decayed']} "
+                         f"promoted={cycle['promoted']} gc={cycle['gc']}"),
+                context=cycle,
+            )
+        except Exception:
+            pass
+
+        return summary
+    except Exception as exc:
+        log.warning("maybe_consolidate failed (non-fatal): %s", exc)
+        return None
 
 
 # ---------------------------------------------------------------------------
