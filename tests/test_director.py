@@ -844,6 +844,95 @@ class TestVerifyGoalCompletion:
         result = verify_goal_completion("build X", [], adapter)
         assert result.complete is True
 
+    # ------------------------------------------------------------------
+    # Regression: CLOSURE_VERDICT must be emitted on ALL early-exit paths
+    # (root cause of run-03-treat missing the event in captain's log).
+    # ------------------------------------------------------------------
+
+    def test_closure_verdict_emitted_when_no_checks_generated(self, tmp_path):
+        """CLOSURE_VERDICT must be emitted even when the plan LLM returns no
+        checks (e.g. for research goals or malformed JSON).  Previously the
+        function silently returned _null, leaving the captain's log without any
+        record that closure had been attempted."""
+        from unittest.mock import MagicMock, patch
+
+        adapter = MagicMock()
+        captured = []
+
+        def _spy(*args, **kwargs):
+            captured.append(kwargs)
+
+        with patch("director.extract_json", return_value={"checks": []}):
+            with patch("director.content_or_empty", return_value="{}"):
+                with patch("captains_log.log_event", side_effect=_spy):
+                    verify_goal_completion(
+                        "summarize docs", [], adapter,
+                        loop_id="loop-abc",
+                    )
+
+        assert len(captured) == 1, "expected exactly one CLOSURE_VERDICT event"
+        ctx = captured[0].get("context", {})
+        assert ctx.get("skip_reason") == "no_checks_generated"
+        assert ctx.get("checks_run") == 0
+        assert captured[0].get("loop_id") == "loop-abc"
+
+    def test_closure_verdict_emitted_when_no_check_results(self, tmp_path):
+        """CLOSURE_VERDICT emitted when checks were generated but none ran."""
+        from unittest.mock import MagicMock, patch
+
+        adapter = MagicMock()
+        captured = []
+
+        def _spy(*args, **kwargs):
+            captured.append(kwargs)
+
+        # Return a check with no command so check_results stays empty
+        with patch("director.extract_json", return_value={"checks": [{"description": "x", "command": ""}]}):
+            with patch("director.content_or_empty", return_value="{}"):
+                with patch("captains_log.log_event", side_effect=_spy):
+                    verify_goal_completion(
+                        "do a thing", [], adapter,
+                        workspace_path=str(tmp_path),
+                        loop_id="loop-def",
+                    )
+
+        assert len(captured) == 1
+        ctx = captured[0].get("context", {})
+        assert ctx.get("skip_reason") == "no_check_results"
+
+    def test_closure_verdict_emitted_on_exception(self):
+        """CLOSURE_VERDICT emitted even when the adapter raises."""
+        from unittest.mock import MagicMock, patch
+
+        adapter = MagicMock()
+        adapter.complete.side_effect = RuntimeError("API down")
+        captured = []
+
+        def _spy(*args, **kwargs):
+            captured.append(kwargs)
+
+        with patch("captains_log.log_event", side_effect=_spy):
+            verify_goal_completion("build X", [], adapter, loop_id="loop-ghi")
+
+        assert len(captured) == 1
+        ctx = captured[0].get("context", {})
+        assert ctx.get("skip_reason") == "exception"
+        assert captured[0].get("loop_id") == "loop-ghi"
+
+    def test_closure_verdict_not_emitted_on_dry_run(self):
+        """dry_run=True is an intentional skip — no captain's log entry expected."""
+        from unittest.mock import patch
+
+        captured = []
+
+        def _spy(*args, **kwargs):
+            captured.append(kwargs)
+
+        with patch("captains_log.log_event", side_effect=_spy):
+            verify_goal_completion("build X", [], None, dry_run=True)
+
+        assert len(captured) == 0, "dry_run must not emit CLOSURE_VERDICT"
+
     def test_closure_verdict_event_carries_loop_id(self, tmp_path):
         """CLOSURE_VERDICT captains_log event must include loop_id when supplied.
 

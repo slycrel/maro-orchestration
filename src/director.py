@@ -1396,6 +1396,43 @@ def verify_goal_completion(
         inconclusive_count=0,
     )
 
+    # Emit CLOSURE_VERDICT for any early-exit path so the captain's log always
+    # has a record that closure ran (or was skipped and why).  The normal
+    # success path at the bottom emits its own richer event; this helper covers
+    # the silent early returns where no checks were generated, no results came
+    # back, or an unexpected exception was caught.  dry_run / no-adapter are
+    # intentional skips and don't need a log entry.
+    def _emit_skip(reason: str) -> None:
+        try:
+            from captains_log import log_event as _le, CLOSURE_VERDICT as _CV
+            _le(
+                _CV,
+                subject="closure_verdict",
+                summary=f"Closure skipped ({reason}): verification did not run",
+                context={
+                    "goal_preview": goal[:200],
+                    "complete": True,
+                    "confidence": 0.5,
+                    "checks_run": 0,
+                    "checks_passed": 0,
+                    "gap_count": 0,
+                    "scope_supplied": scope is not None,
+                    "modality_distribution": {},
+                    "inconclusive_count": 0,
+                    "behavioral_gap_downgrade": "",
+                    "diagnosis_failure_class": safe_str(
+                        getattr(diagnosis, "failure_class", "")
+                    ) if diagnosis is not None else "",
+                    "diagnosis_gap_downgrade": "",
+                    "commands": [],
+                    "summary": "Verification skipped.",
+                    "skip_reason": reason,
+                },
+                loop_id=loop_id or None,
+            )
+        except Exception:
+            pass
+
     if dry_run or adapter is None:
         return _null
 
@@ -1479,6 +1516,7 @@ def verify_goal_completion(
 
         if not checks:
             # Research/writing goal — no executable checks, skip
+            _emit_skip("no_checks_generated")
             return _null
 
         # Phase 2: run checks mechanically
@@ -1532,6 +1570,7 @@ def verify_goal_completion(
             check_results = _preflight_results + check_results
 
         if not check_results:
+            _emit_skip("no_check_results")
             return _null
 
         checks_run = len(check_results)
@@ -1568,6 +1607,7 @@ def verify_goal_completion(
                                     log_tag="director.closure_verdict")
 
         if not verdict_data:
+            _emit_skip("verdict_parse_failed")
             return _null
 
         complete = bool(verdict_data.get("complete", True))
@@ -1697,6 +1737,7 @@ def verify_goal_completion(
 
     except Exception:
         log.debug("closure check error — treating as complete", exc_info=True)
+        _emit_skip("exception")
         return _null
 
 
