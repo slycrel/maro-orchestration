@@ -275,6 +275,50 @@ What round 1 establishes:
   than the pipeline. Round 2 must be a *random* sample, and over-escalation is
   the specific thing to count.
 
+## Shadow round 2 — random sample, false-escalate rate (2026-06-11)
+
+Seeded random sample (seed 42), stratified 12 done / 4 stuck / 4 error from the
+459 eligible runs, excluding round-1's five. Dispatch point, 20 live decisions.
+Moves: 8 escalate, 6 extend, 4 execute, 2 close. Tiers: 16 cheap, 4 mid, 0 power.
+
+**The question round 2 asked: does the navigator nanny healthy goals?**
+
+- The sample contained 6 clearly well-formed goals ("Read
+  docs/ADVERSARIAL_VERIFICATION.md…", "Write docs/research/
+  productive_persistence.md following the README format…", "Research
+  zoom-in/zoom-out metacognition…", "Read artifacts/persistence_recall.txt and
+  identify unaddressed sources…", …). **False escalates on these: 0/6.** Four
+  drew `execute`; two drew `extend` (one planning turn — mild conservatism on
+  under-scoped research/update goals, not a human interrupt).
+- **All 8 escalates targeted debris or burn**: chop fragments ("md [after:7]",
+  "[after:1]" with 16/19 prior errors, "Define success criteria" with no
+  referent, "md files and verify each claim…"), or referent-less plan steps with
+  long failure histories.
+
+**What the random sample exposed that the biased panel couldn't:** 11 of 20
+goals were decompose-chop fragments or referent-less plan steps — *including
+most of the pipeline-"done" ones*. Pipeline `done` is not ground truth for goal
+health ("py design implications in a final section" ran to "done" twice in the
+sample). The navigator independently flagged the debris class every time
+regardless of recorded status — the step-2 pressure-test finding, reconfirmed
+at random-sample scale.
+
+Emergent behaviors worth keeping an eye on (all desirable, none prompted for
+explicitly):
+- **Dedup via recall**: a goal with 4 prior `done` runs drew `close` ("the goal
+  was delivered") instead of a 5th execution — dispatch-time dedup falling out
+  of history-injection.
+- **The chain corrects in both directions**: on "Read
+  artifacts/persistence_recall.txt…", cheap idunno'd (couldn't confirm the file
+  exists) and mid overrode with `execute` plus a locate-then-read plan —
+  tier escalation isn't a caution ratchet.
+- **Honest confidence**: one debris escalate came in at confidence 0.05 — the
+  field is being used as designed, not pegged high.
+
+Verdict: the dispatch decision class is strong enough to earn the next
+integration step (live shadow at dispatch, still decide-only). Cutover still
+waits on live-shadow agreement data.
+
 ## Open ends carried forward
 
 - **Per-thread goal-brain creation** — `NavigatorInput.goal_brain` assumes one per
@@ -283,12 +327,11 @@ What round 1 establishes:
   scope, system-maintained sections updated at close).
 - **Async fork join + `wait`** — deferred until a real thread needs it; sync join
   covers the worked examples we have.
-- **Shadow round 2: random sample, count over-escalation** — round 1 was
-  selection-biased toward known failures (see above). Before any cutover
-  discussion, replay a random N≥20 of healthy + failed runs and measure the
-  false-escalate rate on goals the pipeline handled fine.
-- **Live shadow callsite** — round 1 replayed history offline. Wiring `decide()`
-  as a shadow call at live dispatch (where recall() already runs) is the next
-  integration step; replay-offline first kept the loop untouched.
+- ~~**Shadow round 2: random sample, count over-escalation**~~ — done same day,
+  results above: 0/6 false escalates on well-formed goals; all 8 escalates
+  targeted debris/burn.
+- **Live shadow callsite** — rounds 1–2 replayed history offline. Wiring
+  `decide()` as a shadow call at live dispatch (where recall() already runs) is
+  the next integration step; replay-offline first kept the loop untouched.
 - **Fork cap (8), confidence semantics** — made calls; revisit against
   NAVIGATOR_DECIDED data.

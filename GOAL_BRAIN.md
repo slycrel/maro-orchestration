@@ -272,12 +272,17 @@ Active:
 - **Goal-brain sequencing: COMPLETE** (steps 1–5, 2026-06-10/11): artifact →
   pressure test → recall() → navigator schema → navigator prompt + shadow
   replay. Successor thread below.
-- **Navigator shadow rounds → cutover**: round 1 done (biased panel, navigator
-  won every divergence — `docs/NAVIGATOR_SCHEMA.md` results table). Next:
-  round 2 random sample (N≥20, measure false-escalate rate on healthy goals),
-  then wire `decide()` as a live shadow call at dispatch (recall() callsite,
-  still decide-only), then cutover per decision class where shadow agreement
-  earns it. No class cuts over on round-1 evidence.
+- **Navigator shadow rounds → cutover**: rounds 1 AND 2 done 2026-06-11
+  (`docs/NAVIGATOR_SCHEMA.md` results). Round 2 (seeded random N=20, stratified
+  by status): **0/6 false escalates on well-formed goals**; all 8 escalates
+  targeted chop debris or repeat burn; 16/20 decided at cheap tier, 0 needed
+  power. Side finding: 11/20 randomly sampled goals were decompose-chop debris
+  *including most pipeline-"done" ones* — `done` status is not goal-health
+  ground truth. Emergent (unprompted): dedup-via-recall (4-prior-dones drew
+  close-already-delivered), chain corrects both directions (mid overrode a
+  timid cheap idunno with execute), honest 0.05-confidence escalate. Next:
+  wire `decide()` as a live shadow call at dispatch (recall() callsite,
+  decide-only), accumulate live agreement data, then per-class cutover.
 - **Run↔thread linkage**: done 2026-06-10 — tasks carry an `origin` ancestry dict
   (parent handle/loop/goal) from enqueue through `handle_task` into run metadata,
   and recall() now consults it at dispatch (ThreadIdentity walk).
