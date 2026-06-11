@@ -17,8 +17,15 @@ Two halves:
 2. **Data (pending):** for each point, does the navigator agree with what the
    heuristic did? Where they diverge, who was right? Query in
    `docs/NAVIGATOR_SCHEMA.md` (NAVIGATOR_DECIDED + pipeline_actual). As of
-   2026-06-11 there is ~1 live event — explicitly not enough; no cutover
-   conversation until volume exists.
+   2026-06-11 evening: 6 live dispatch events — 5 agreements (well-formed
+   goals → execute on both sides) and **1 divergence with adjudicated ground
+   truth**: on the deliberately vague goal "improve things" the navigator said
+   escalate (0.95) while the pipeline executed — and the pipeline's "done"
+   included 4.09M tokens and an unreviewed `git push` to mainline authored as
+   the owner (BACKLOG governance item). Navigator was right for exactly the
+   reason its reasoning gave ("no interpretable scope... any next action would
+   be a guess"). Strong single data point for the dispatch class; still not
+   volume — keep accumulating.
 
 ## Decision points by file
 

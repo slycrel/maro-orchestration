@@ -275,6 +275,20 @@ Sample: the 2026-05-13..17 window of `~/.poe/workspace/runs/` (478 dirs total;
   worked. Panel was deliberately biased toward known failures — **no cutover
   conversation until a random-sample round 2 measures false-escalate rate on
   healthy goals.** Goal-brain sequencing (2026-05-18 plan) steps 1–5 complete.
+- **2026-06-11 (evening)** — First live orchestration batch post-suite-green (4
+  real task-path goals) surfaced and same-day-fixed three production defects:
+  (1) task-path runs were never finalized — finalize lived only in CLI main(),
+  so recall read every drained run as "unknown"/failing (9402d3d, finalize now
+  in handle()'s finally for all callers); (2) lesson extraction silently
+  returned [] on every real run — safe_list's str default dropped the typed
+  lesson dicts the prompt asks for; verify→learn was dead at the extraction
+  step since Phase 59 S1 and no test fed dicts (fixed + live-verified, 2 typed
+  lessons from a real call); (3) transcript naming/numbering warts (RESULT.md,
+  ledger-vs-position). Also produced the first live navigator divergence with
+  ground truth: "improve things" → navigator escalate 0.95, pipeline executed
+  into a 4.09M-token run that pushed unreviewed code to mainline as Jeremy
+  (good code, kept post-review; governance gap recorded in BACKLOG — proposal:
+  workers.allow_git_push gate, default off, needs Jeremy's call).
 - **2026-06-11** — Per-thread goal-brain v0 shipped (`src/thread_brain.py`):
   every run-dir is seeded with `source/goal_brain.md` at creation — goal
   verbatim + origin ancestry, this file's section grammar scaled down. First

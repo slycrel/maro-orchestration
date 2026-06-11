@@ -58,9 +58,46 @@ validity are different signals and we only track one.
 
 ### Live orchestration run findings (2026-06-11, first post-suite-green session)
 
-From real task-path runs (enqueue → drain_task_store → handle_task → handle). The
-big one — task-path runs never finalized, poisoning recall's all_failing — was
-fixed same day (9402d3d). Remaining observations:
+From real task-path runs (enqueue → drain_task_store → handle_task → handle).
+Fixed same day: task-path runs never finalized, poisoning recall's all_failing
+(9402d3d); lesson extraction silently returned [] on every real run — safe_list's
+str default dropped the typed lesson dicts the prompt asks for (verify→learn was
+dead at the extraction step since Phase 59 S1). Remaining observations:
+
+- [ ] **GOVERNANCE: a vague goal pipeline-executed into an unreviewed mainline
+  push as Jeremy.** "improve things" (deliberately vague test goal) decomposed
+  itself into "pick an improvement from MILESTONES/BACKLOG and implement it
+  end-to-end", wrote a real fix (CLOSURE_VERDICT skip-path emission, 06c3764,
+  reviewed post-hoc: good code, kept), committed as author "Jeremy Stone" and
+  **pushed to origin/main** — 4.09M tokens, no human or quality gate between a
+  worker and a public push under Jeremy's identity. The live navigator shadow
+  said **escalate (0.95)** at dispatch — the pipeline executed anyway and
+  declared done. This is the strongest single cutover data point yet (dispatch
+  decision class) AND a missing guardrail regardless of cutover: proposal —
+  config gate `workers.allow_git_push` (default false) enforced at the worker
+  exec layer; pushes require explicit goal-level authorization. Heartbeat is
+  not running, so autonomous dispatch exposure is currently limited to manual
+  drains. Decision needed from Jeremy: gate design + whether worker commits
+  should use a distinct git author.
+- [ ] **Workspace boundary: build-goal artifacts landed in the repo root** —
+  run_health.py + example output were written to cwd (the repo) instead of the
+  run's artifact dir; goal even said "as an artifact file". Moved them into
+  `e1b9f95e-humble-lantern/artifact/` post-hoc. Existing bounded-workspace
+  BACKLOG item covers the general fix; this is a concrete repro.
+- [ ] **NOW-lane runs produce no learning data and no artifact discipline** —
+  the run_health build goal (e1b9f95e-humble-lantern) was classified NOW, which
+  (a) skips `reflect_and_record` entirely — reflection only fires in the agenda
+  loop's finalize (agent_loop.py:3515), nothing on the NOW path calls it, so the
+  run finalized `done` with no outcome/lesson record — and (b) writes relative
+  to cwd (the workspace-boundary repro below is the same run). Two angles:
+  a slim NOW-lane reflection call, and revisiting `_is_complex_directive`
+  thresholds — a multi-step "write a script AND run it AND save outputs" goal
+  is not a NOW request.
+- [ ] **First in-process consolidation gc'd the whole MEDIUM lesson store** —
+  5 weeks of decay-age applied in one cycle (decayed 38, promoted 0, gc 38).
+  Arguably correct on stale data (M2 promotes at reinforcement time, LONG
+  survived: 22), but a gentler policy for long-gap catch-up (cap effective
+  decay-days? amnesty pass?) is worth considering before the store matters.
 
 - [x] **`loop-*-PARTIAL.md` is misnamed on done runs** — fixed same day: the
   transcript is `loop-<id>-RESULT.md` when the loop finished done, `-PARTIAL.md`
