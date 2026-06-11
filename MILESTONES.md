@@ -98,7 +98,7 @@ M1–M5 complete: the session-40 arc (memory lifecycle → standing rules → re
 
 ## Next Up (refreshed 2026-06-11 — goal-brain sequencing complete, queue rebuilt)
 
-1. **Async fork join + `wait`** — `fork` exists in the navigator schema; the runner has no join semantics.
+1. **Async fork join + `wait`** — `fork` exists in the navigator schema; the runner has no join semantics. *Reconciled 2026-06-11 with NAVIGATOR_SCHEMA.md's recorded deferral ("until a real thread needs it; sync join in v1"): the navigator is shadow-only, so no thread can issue a fork yet — this is gated behind per-class cutover (#2), not ahead of it. Don't build join semantics for a move that can't fire.*
 2. **Per-decision-class cutover** — only after live shadow agreement data accumulates (`navigator.shadow_dispatch` is on for this box; analysis query in NAVIGATOR_SCHEMA.md). Explicitly not before.
 3. **Dumb-loop audit** — *static half done 2026-06-11* (`docs/DUMB_LOOP_AUDIT.md`: full decision-point inventory, navigator-move mapping, high-consequence priority order — `_handle_blocked_step` tree, dispatch guard, max-iterations ceiling first). Data half (agreement per decision point) waits on live shadow volume.
 4. **Skill/playbook freshness layers** — only if staleness shows up there in practice (rules have it; skills have score + circuit breaker).
