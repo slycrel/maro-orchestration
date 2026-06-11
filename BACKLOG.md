@@ -111,6 +111,14 @@ dead at the extraction step since Phase 59 S1). Remaining observations:
   (origin present, no human reading the text) get a cheap self-verdict and
   demote to `incomplete` when the response reports non-fulfillment
   (`_verify_now_outcome`, fails open). Interactive NOW calls keep raw speed.
+- [ ] **Closure demotion doesn't reach the outcome store** — when handle's
+  closure verdict demotes done→incomplete (02b0263), run metadata is honest
+  (recall/guard read that) but the loop already called reflect_and_record
+  with status=done from inside agent_loop's finalize — so outcomes.jsonl and
+  any lessons extracted carry the un-demoted framing. Small mismatch, noted
+  not fixed: moving reflection after closure would delay it for every run to
+  serve the rare demotion; an outcome-amendment hook is probably the right
+  shape if this starts to matter.
 - [ ] **NOW artifacts write to a stale prototype path** — `_write_now_artifact`
   resolves orch_root and appends `prototypes/poe-orchestration/artifacts/now/`,
   landing files at `~/prototypes/poe-orchestration/prototypes/poe-orchestration/…`
