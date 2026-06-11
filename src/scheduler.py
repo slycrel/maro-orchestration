@@ -221,20 +221,25 @@ def check_due_jobs(*, now: Optional[datetime] = None) -> List[Dict[str, Any]]:
     return due
 
 
-def mark_job_dispatched(job_id: str) -> bool:
-    """Persist an in-flight lease so the same due job is not re-submitted."""
+def mark_job_dispatched(job_id: str, *, now: Optional[datetime] = None) -> bool:
+    """Persist an in-flight lease so the same due job is not re-submitted.
+
+    `now` mirrors check_due_jobs's seam: the lease timestamp, defaulting to
+    wall clock. Tests probing lease staleness at synthetic times must stamp
+    the lease at a synthetic time too, or the result depends on time of day.
+    """
     jobs = _load_jobs()
     found = False
-    now = datetime.now(timezone.utc).isoformat()
+    _now = now or datetime.now(timezone.utc)
     for job in jobs:
         if job.get("job_id") != job_id:
             continue
         found = True
         if not job.get("enabled", True):
             break
-        if job.get("dispatch_started_at") and not _dispatch_is_stale(job):
+        if job.get("dispatch_started_at") and not _dispatch_is_stale(job, now=_now):
             return False
-        job["dispatch_started_at"] = now
+        job["dispatch_started_at"] = _now.isoformat()
         job["dispatch_pid"] = os.getpid()
         break
     if found:
