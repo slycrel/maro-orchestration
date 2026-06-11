@@ -6,6 +6,14 @@ Last updated: 2026-06-11 (session 40 continued — goal-brain steps 1–5 comple
 
 ---
 
+## Done (2026-06-11 — captain's log rotation: hot-path read cost)
+
+The active log had grown to 6MB / 19K entries, and `load_log` JSON-parses the whole file on every call — it sits on every dispatch recall. Rotation is about read cost, not disk.
+
+- [x] **Size-gated rotation riding on `log_event`** (no cron — no-scheduler invariant): past `captains_log.rotate_mb` (default 5, `0` disables), everything but the newest `captains_log.rotate_keep` entries (default 1000) moves to a timestamped archive beside the active file. Data never deleted; head/tail split is disjoint. `LOG_ROTATED` event (47th type) opens each fresh active file as the audit trail. Re-entrancy guard stops the audit-append cascade; same-second archives get a collision suffix instead of overwriting (test-caught data-loss bug).
+- [x] **Readers split by purpose** — `query_log`/`timeline` (archaeology) span archives oldest-first; `load_log` (hot path) stays active-file-only, which the retained tail makes safe. Dashboard/dev-script direct readers only want recent entries — unaffected.
+- [x] **First live rotation verified on this box**: 18,345 entries archived, 1,001 retained (tail + audit entry), zero loss; active file 6MB → 552KB (~11× hot-path read reduction). Archive reachable through `query_log` post-rotation.
+
 ## Done (2026-06-11 — last_verified freshness signal, rule layer)
 
 Entropy thread companion to decay v0: reinforcement and validity are different signals; the most-reinforced rule is the most dangerous one at world-shift time. Trust at injection is now f(record, time-since-verified), read-time only.

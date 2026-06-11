@@ -230,7 +230,7 @@ class TestEventTypes:
         assert DECISION_RECORDED in EVENT_TYPES
 
     def test_event_type_count(self):
-        assert len(EVENT_TYPES) == 46
+        assert len(EVENT_TYPES) == 47
 
     def test_rule_refought_in_set(self):
         from captains_log import RULE_REFOUGHT
@@ -239,6 +239,10 @@ class TestEventTypes:
     def test_rule_verified_in_set(self):
         from captains_log import RULE_VERIFIED
         assert RULE_VERIFIED in EVENT_TYPES
+
+    def test_log_rotated_in_set(self):
+        from captains_log import LOG_ROTATED
+        assert LOG_ROTATED in EVENT_TYPES
 
     def test_scope_skipped_in_set(self):
         from captains_log import SCOPE_SKIPPED
@@ -605,3 +609,108 @@ class TestEdgeCases:
         tl = timeline()
         assert len(tl) == 1
         assert tl[0]["total"] == 2  # 2 valid entries on same day
+
+
+# ---------------------------------------------------------------------------
+# Rotation — size-gated, rides on log_event, data never deleted
+# ---------------------------------------------------------------------------
+
+def _rotation_cfg(rotate_mb, keep):
+    def _get(key, default=None):
+        if key == "captains_log.rotate_mb":
+            return rotate_mb
+        if key == "captains_log.rotate_keep":
+            return keep
+        return default
+    return _get
+
+
+class TestRotation:
+    def _fill(self, n=50):
+        for i in range(n):
+            log_event(event_type=DIAGNOSIS, subject=f"s{i}", summary=f"entry {i}")
+
+    def test_rotation_moves_head_keeps_tail(self, _tmp_log, tmp_path):
+        self._fill(50)
+        with patch("config.get", side_effect=_rotation_cfg(0.0001, 10)):
+            log_event(event_type=DIAGNOSIS, subject="trigger", summary="tips over")
+        archives = sorted(tmp_path.glob("captains_log.*.jsonl"))
+        assert len(archives) == 1
+        active_lines = [l for l in _tmp_log.read_text().splitlines() if l.strip()]
+        # 10 retained + the LOG_ROTATED audit entry appended after rotation
+        assert len(active_lines) == 11
+        last = json.loads(active_lines[-1])
+        assert last["event_type"] == "LOG_ROTATED"
+        # Newest pre-rotation entry stayed in the active tail
+        assert any(json.loads(l)["subject"] == "trigger" for l in active_lines[:-1])
+
+    def test_no_data_lost_across_rotation(self, _tmp_log, tmp_path):
+        self._fill(50)
+        with patch("config.get", side_effect=_rotation_cfg(0.0001, 10)):
+            log_event(event_type=DIAGNOSIS, subject="trigger", summary="tips over")
+        archive = next(iter(tmp_path.glob("captains_log.*.jsonl")))
+        archived = [l for l in archive.read_text().splitlines() if l.strip()]
+        active = [l for l in _tmp_log.read_text().splitlines() if l.strip()]
+        # 50 + trigger + LOG_ROTATED, split disjointly across the two files
+        assert len(archived) + len(active) == 52
+        subjects = {json.loads(l)["subject"] for l in archived + active}
+        assert {f"s{i}" for i in range(50)} <= subjects
+
+    def test_rotation_disabled_with_zero(self, _tmp_log, tmp_path):
+        self._fill(20)
+        with patch("config.get", side_effect=_rotation_cfg(0, 10)):
+            log_event(event_type=DIAGNOSIS, subject="trigger", summary="no rotate")
+        assert list(tmp_path.glob("captains_log.*.jsonl")) == []
+        assert len(_tmp_log.read_text().splitlines()) == 21
+
+    def test_no_rotation_below_threshold(self, _tmp_log, tmp_path):
+        self._fill(5)
+        log_event(event_type=DIAGNOSIS, subject="small", summary="default 5MB gate")
+        assert list(tmp_path.glob("captains_log.*.jsonl")) == []
+
+    def test_query_log_spans_archives(self, _tmp_log, tmp_path):
+        archive = tmp_path / "captains_log.20260101-000000.jsonl"
+        archive.write_text(json.dumps({
+            "timestamp": "2026-01-01T00:00:00+00:00",
+            "event_type": "DIAGNOSIS", "subject": "ancient",
+            "summary": "from the archive"}) + "\n")
+        log_event(event_type=DIAGNOSIS, subject="current", summary="in active file")
+        results = query_log("", limit=0)
+        subjects = [e["subject"] for e in results]
+        assert "ancient" in subjects and "current" in subjects
+        # Most recent first: active entry before archived one
+        assert subjects.index("current") < subjects.index("ancient")
+
+    def test_load_log_reads_active_only(self, _tmp_log, tmp_path):
+        archive = tmp_path / "captains_log.20260101-000000.jsonl"
+        archive.write_text(json.dumps({
+            "timestamp": "2026-01-01T00:00:00+00:00",
+            "event_type": "DIAGNOSIS", "subject": "ancient",
+            "summary": "archived"}) + "\n")
+        log_event(event_type=DIAGNOSIS, subject="current", summary="active")
+        subjects = [e["subject"] for e in load_log(limit=50)]
+        assert subjects == ["current"]
+
+    def test_timeline_spans_archives(self, _tmp_log, tmp_path):
+        archive = tmp_path / "captains_log.20260101-000000.jsonl"
+        archive.write_text(json.dumps({
+            "timestamp": "2026-01-01T00:00:00+00:00",
+            "event_type": "DIAGNOSIS", "subject": "ancient",
+            "summary": "archived"}) + "\n")
+        log_event(event_type=DIAGNOSIS, subject="current", summary="active")
+        dates = [row["date"] for row in timeline()]
+        assert "2026-01-01" in dates
+
+    def test_same_second_rotations_do_not_overwrite(self, _tmp_log, tmp_path):
+        self._fill(50)
+        with patch("config.get", side_effect=_rotation_cfg(0.0001, 10)):
+            log_event(event_type=DIAGNOSIS, subject="trigger-1", summary="rotate one")
+            log_event(event_type=DIAGNOSIS, subject="trigger-2", summary="rotate two")
+        archives = sorted(tmp_path.glob("captains_log.*.jsonl"))
+        assert len(archives) == 2  # second got a collision suffix, not an overwrite
+        total = sum(
+            len([l for l in p.read_text().splitlines() if l.strip()])
+            for p in [*archives, _tmp_log]
+        )
+        # 50 fill + 2 triggers + 2 LOG_ROTATED entries, nothing lost
+        assert total == 54

@@ -66,6 +66,10 @@ RULE_REFOUGHT = "RULE_REFOUGHT"
 # the signal that keeps an uncontradicted rule out of the stale
 # verify-before-relying injection block.
 RULE_VERIFIED = "RULE_VERIFIED"
+# Log maintenance (2026-06-11): the active file exceeded its size gate and
+# older entries moved to a timestamped archive (data never deleted). First
+# entry of each fresh active file — the rotation audit trail.
+LOG_ROTATED = "LOG_ROTATED"
 
 # Evolver actions
 EVOLVER_APPLIED = "EVOLVER_APPLIED"
@@ -132,7 +136,7 @@ EVENT_TYPES = {
     MEMORY_CONSOLIDATED,
     HYPOTHESIS_CREATED, HYPOTHESIS_PROMOTED, HYPOTHESIS_CONTRADICTED,
     STANDING_RULE_CONTRADICTED, RULE_GRADUATED, RULE_DEMOTED, CANON_CANDIDATE,
-    RULE_REFOUGHT, RULE_VERIFIED,
+    RULE_REFOUGHT, RULE_VERIFIED, LOG_ROTATED,
     EVOLVER_APPLIED, EVOLVER_GENERATED, EVOLVER_SKIPPED, GRADUATION_PROPOSED,
     AUTO_RECOVERY, DIAGNOSIS, INPUT_MISMATCH,
     DECISION_RECORDED, METACOGNITIVE_DECISION,
@@ -161,6 +165,23 @@ def set_log_path(path: Optional[Path]) -> None:
     """Override log path (for testing)."""
     global _log_path_override
     _log_path_override = path
+
+
+def _archive_paths() -> List[Path]:
+    """Rotated archive files, oldest first. The timestamped name pattern
+    (captains_log.<stamp>.jsonl) never matches the active captains_log.jsonl,
+    and lexicographic sort == chronological for the fixed-width stamp."""
+    try:
+        return sorted(_log_path().parent.glob("captains_log.*.jsonl"))
+    except Exception:
+        return []
+
+
+def _all_log_paths() -> List[Path]:
+    """Archives (oldest first) + the active file — the full corpus, in
+    chronological order. Used by the archaeology readers (query_log,
+    timeline); the hot-path reader (load_log) stays active-file-only."""
+    return [*_archive_paths(), _log_path()]
 
 
 # ---------------------------------------------------------------------------
@@ -241,7 +262,84 @@ def log_event(
     except Exception as exc:
         logger.warning("captains_log: write failed: %s", exc)
 
+    _maybe_rotate()
     return entry
+
+
+_rotation_in_progress = False
+
+
+def _maybe_rotate() -> None:
+    """Size-gated rotation, riding on log_event (no cron — the no-scheduler
+    invariant). Never raises; never deletes data.
+
+    When the active file exceeds `captains_log.rotate_mb` (default 5, 0
+    disables), everything but the most recent `captains_log.rotate_keep`
+    entries (default 1000) moves to a timestamped archive beside it. The
+    retained tail keeps recent-window reads (load_log on the recall hot
+    path) working without spanning files; query_log/timeline span archives.
+    The point is read cost, not disk: load_log JSON-parses the whole active
+    file per call, and it sits on every dispatch recall.
+    """
+    global _rotation_in_progress
+    if _rotation_in_progress:
+        # The LOG_ROTATED audit append lands in the fresh active file; without
+        # this guard a threshold smaller than the retained tail cascades.
+        return
+    try:
+        path = _log_path()
+        if not path.exists():
+            return
+        try:
+            from config import get as _cfg_get
+            rotate_mb = float(_cfg_get("captains_log.rotate_mb", 5))
+            keep = int(_cfg_get("captains_log.rotate_keep", 1000))
+        except Exception:
+            rotate_mb, keep = 5.0, 1000
+        if rotate_mb <= 0:
+            return
+        max_bytes = int(rotate_mb * 1024 * 1024)
+        if path.stat().st_size < max_bytes:
+            return
+
+        from file_lock import locked_write
+        rotated_to = None
+        _rotation_in_progress = True
+        with locked_write(path):
+            # Re-check under the lock — another process may have rotated.
+            if not path.exists() or path.stat().st_size < max_bytes:
+                return
+            lines = [l for l in path.read_text(encoding="utf-8").splitlines() if l.strip()]
+            keep = max(keep, 0)
+            head, tail = (lines[:-keep], lines[-keep:]) if keep else (lines, [])
+            if not head:
+                return  # fewer entries than the tail retention; nothing to move
+            stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+            archive = path.with_name(f"captains_log.{stamp}.jsonl")
+            n = 0
+            while archive.exists():  # same-second rotation must not overwrite
+                n += 1
+                archive = path.with_name(f"captains_log.{stamp}-{n}.jsonl")
+            archive.write_text("\n".join(head) + "\n", encoding="utf-8")
+            path.write_text(
+                "\n".join(tail) + ("\n" if tail else ""), encoding="utf-8")
+            rotated_to = archive
+
+        if rotated_to is not None:
+            logger.info("captains_log: rotated %d entries to %s (kept %d)",
+                        len(head), rotated_to.name, len(tail))
+            log_event(
+                event_type=LOG_ROTATED,
+                subject=rotated_to.name,
+                summary=(f"Rotated {len(head)} entries to {rotated_to.name}; "
+                         f"{len(tail)} retained in the active file"),
+                context={"archived": len(head), "retained": len(tail),
+                         "archive": rotated_to.name},
+            )
+    except Exception as exc:
+        logger.warning("captains_log: rotation failed: %s", exc)
+    finally:
+        _rotation_in_progress = False
 
 
 # ---------------------------------------------------------------------------
@@ -262,6 +360,10 @@ def load_log(
         event_type: Filter by event type prefix (e.g. "SKILL" matches all SKILL_* events).
         subject: Substring match on subject field.
         limit: Max entries to return (most recent first).
+
+    Reads the active file only — this sits on the dispatch recall hot path,
+    and rotation retains a recent tail precisely so this stays one small
+    file. Use query_log for history that may span rotated archives.
     """
     path = _log_path()
     if not path.exists():
@@ -352,47 +454,49 @@ def query_log(
 
     Returns:
         Matching entries, most recent first.
-    """
-    path = _log_path()
-    if not path.exists():
-        return []
 
+    Spans rotated archives (oldest first) plus the active file, so rotation
+    never hides history from archaeology.
+    """
     query_lower = query.lower()
     entries: List[Dict[str, Any]] = []
 
-    with open(path, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                entry = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-
-            ts = entry.get("timestamp", "")
-            if since and ts < since:
-                continue
-            if until and ts >= until:
-                continue
-            if event_type and not entry.get("event_type", "").startswith(event_type.upper()):
-                continue
-
-            # Full-text match across all string fields
-            if query_lower:
-                searchable = " ".join([
-                    entry.get("subject", ""),
-                    entry.get("summary", ""),
-                    entry.get("note", ""),
-                    entry.get("loop_id", ""),
-                    " ".join(entry.get("related_ids", [])),
-                    # Flatten context values
-                    " ".join(str(v) for v in (entry.get("context") or {}).values()),
-                ]).lower()
-                if query_lower not in searchable:
+    for path in _all_log_paths():
+        if not path.exists():
+            continue
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
                     continue
 
-            entries.append(entry)
+                ts = entry.get("timestamp", "")
+                if since and ts < since:
+                    continue
+                if until and ts >= until:
+                    continue
+                if event_type and not entry.get("event_type", "").startswith(event_type.upper()):
+                    continue
+
+                # Full-text match across all string fields
+                if query_lower:
+                    searchable = " ".join([
+                        entry.get("subject", ""),
+                        entry.get("summary", ""),
+                        entry.get("note", ""),
+                        entry.get("loop_id", ""),
+                        " ".join(entry.get("related_ids", [])),
+                        # Flatten context values
+                        " ".join(str(v) for v in (entry.get("context") or {}).values()),
+                    ]).lower()
+                    if query_lower not in searchable:
+                        continue
+
+                entries.append(entry)
 
     entries.reverse()  # Most recent first
     if limit > 0:
@@ -418,38 +522,39 @@ def timeline(
     Args:
         since/until: Date range filters.
         bucket: "day" (default) or "hour".
-    """
-    path = _log_path()
-    if not path.exists():
-        return []
 
+    Spans rotated archives plus the active file.
+    """
     from collections import Counter
 
     buckets: Dict[str, Counter] = {}
-    with open(path, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                entry = json.loads(line)
-            except json.JSONDecodeError:
-                continue
+    for path in _all_log_paths():
+        if not path.exists():
+            continue
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
 
-            ts = entry.get("timestamp", "")
-            if since and ts < since:
-                continue
-            if until and ts >= until:
-                continue
+                ts = entry.get("timestamp", "")
+                if since and ts < since:
+                    continue
+                if until and ts >= until:
+                    continue
 
-            if bucket == "hour":
-                key = ts[:13]  # "2026-04-10T03"
-            else:
-                key = ts[:10]  # "2026-04-10"
+                if bucket == "hour":
+                    key = ts[:13]  # "2026-04-10T03"
+                else:
+                    key = ts[:10]  # "2026-04-10"
 
-            if key not in buckets:
-                buckets[key] = Counter()
-            buckets[key][entry.get("event_type", "UNKNOWN")] += 1
+                if key not in buckets:
+                    buckets[key] = Counter()
+                buckets[key][entry.get("event_type", "UNKNOWN")] += 1
 
     result = []
     for date_key in sorted(buckets.keys()):

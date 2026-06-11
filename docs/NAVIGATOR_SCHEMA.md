@@ -346,8 +346,9 @@ Smoke-verified live 2026-06-11: real cheap-tier call returned `execute` at
 0.92 on a well-formed goal; NAVIGATOR_DECIDED landed in the workspace
 captain's log with `pipeline_actual.live: true`.
 
-Analysis query, when enough rows accumulate:
-`grep NAVIGATOR_DECIDED captains_log.jsonl | jq 'select(.context.pipeline_actual.live)'`
+Analysis query, when enough rows accumulate (the `*` spans rotated archives —
+the log rotates at 5MB as of 2026-06-11):
+`cat captains_log*.jsonl | grep NAVIGATOR_DECIDED | jq 'select(.context.pipeline_actual.live)'`
 — agreement rate per move class is the cutover evidence.
 
 ## Open ends carried forward
