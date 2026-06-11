@@ -231,6 +231,83 @@ def replay_run(
     return results
 
 
+def shadow_dispatch_live(
+    goal: str,
+    *,
+    origin: Optional[Dict[str, Any]] = None,
+    recall_result: Optional[RecallResult] = None,
+    pipeline_move: str = "execute",
+    extra: Optional[Dict[str, Any]] = None,
+    tiers: Optional[List[str]] = None,
+    adapter_factory=None,
+) -> Optional[Any]:
+    """Live shadow at the autonomous dispatch boundary: decide-only.
+
+    Called from handle_task() right after the dispatch guard verdict is known
+    (pipeline_move is "execute" or "guard_refused"). Reuses the guard's
+    RecallResult so dispatch pays no extra file scanning — only the one
+    cheap-tier model call. Config-gated by navigator.shadow_dispatch
+    (default OFF in code: a model call per dispatch is real spend and real
+    latency, so a deployment opts in via workspace config — this box has).
+    Never raises; never alters dispatch. Returns the decision or None.
+    """
+    try:
+        from config import get as cfg_get
+        if not bool(cfg_get("navigator.shadow_dispatch", False)):
+            return None
+        if tiers is None:
+            # Default cheap-only: live shadow wants volume of dispatch-class
+            # decisions, not chain depth; an idunno is recorded as the
+            # synthesized escalate with escalated_via="idunno_chain" and is
+            # distinguishable in analysis.
+            tiers = list(cfg_get("navigator.shadow_tiers", ["cheap"]))
+    except Exception:
+        return None
+
+    try:
+        thread: Dict[str, Any] = {}
+        rr = recall_result
+        if rr is not None and rr.thread is not None:
+            thread = {
+                "parent_goal": rr.thread.parent_goal,
+                "parent_handle_id": rr.thread.parent_handle_id,
+                "chain": list(rr.thread.chain),
+                "source": rr.thread.source,
+            }
+        elif origin:
+            thread = {
+                "parent_goal": str(origin.get("parent_goal") or ""),
+                "parent_handle_id": str(origin.get("parent_handle_id") or ""),
+                "chain": [],
+                "source": str(origin.get("source") or "unknown"),
+            }
+        nav_input = NavigatorInput(
+            goal=goal,
+            thread=thread,
+            recall_block=rr.as_context_block() if rr is not None else "",
+            budget={"note": "live dispatch shadow; loop budget not yet allocated"},
+        )
+        pipeline_actual = {
+            "point": "dispatch",
+            "move_equivalent": pipeline_move,
+            "live": True,
+            **(extra or {}),
+        }
+        from navigator_prompt import decide
+        decision, _meta = decide(
+            nav_input,
+            tiers=tiers,
+            adapter_factory=adapter_factory,
+            shadow=True,
+            pipeline_actual=pipeline_actual,
+        )
+        return decision
+    except Exception as exc:
+        import logging
+        logging.getLogger("navigator").debug("live dispatch shadow skipped: %s", exc)
+        return None
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         description="Shadow-replay historical runs through the navigator "

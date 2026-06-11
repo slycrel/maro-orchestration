@@ -1564,41 +1564,65 @@ def handle_task(
                 _guard_window = float(_cfg_get("recall.guard_window_minutes", 60))
             except Exception:
                 _guard_on, _guard_attempts, _guard_window = True, 3, 60.0
+            # One recall serves both the guard and the live navigator shadow.
+            _rr = None
             if _guard_on:
                 try:
                     from recall import recall as _recall_fn
-                    _sig = _recall_fn(
-                        reason, slice="dispatch", origin=_origin,
-                    ).dispatch_signals(window_minutes=_guard_window)
+                    _rr = _recall_fn(reason, slice="dispatch", origin=_origin)
                 except Exception as _guard_exc:
                     log.debug("handle_task recall guard skipped: %s", _guard_exc)
+            _sig = None
+            if _rr is not None:
+                try:
+                    _sig = _rr.dispatch_signals(window_minutes=_guard_window)
+                except Exception:
                     _sig = None
-                if _sig and _sig["repeat_count"] >= _guard_attempts and _sig["all_failing"]:
-                    _msg = (
-                        f"recall guard: {_sig['repeat_count']} attempts at this goal "
-                        f"in the last {int(_guard_window)}m, all failed — refusing to "
-                        f"re-run without a change of approach (docs/RECALL_DESIGN.md)"
+            _guard_tripped = bool(
+                _sig and _sig["repeat_count"] >= _guard_attempts and _sig["all_failing"]
+            )
+            # Live navigator shadow (goal-brain step 5, docs/NAVIGATOR_SCHEMA.md):
+            # decide-only beside the pipeline; NAVIGATOR_DECIDED records the
+            # navigator's move next to what dispatch actually did. Config-gated
+            # (navigator.shadow_dispatch, default off) and failure-isolated —
+            # it can never change dispatch behavior.
+            try:
+                from navigator_shadow import shadow_dispatch_live
+                shadow_dispatch_live(
+                    reason,
+                    origin=_origin,
+                    recall_result=_rr,
+                    pipeline_move="guard_refused" if _guard_tripped else "execute",
+                    extra={"job_id": job_id, "source": source or "task_store"},
+                )
+            except Exception as _shadow_exc:
+                log.debug("handle_task navigator shadow skipped: %s", _shadow_exc)
+            if _guard_tripped:
+                _msg = (
+                    f"recall guard: {_sig['repeat_count']} attempts at this goal "
+                    f"in the last {int(_guard_window)}m, all failed — refusing to "
+                    f"re-run without a change of approach (docs/RECALL_DESIGN.md)"
+                )
+                log.warning("handle_task %s job_id=%s", _msg, job_id)
+                try:
+                    from captains_log import log_event, RECALL_GUARD_TRIPPED
+                    log_event(
+                        RECALL_GUARD_TRIPPED,
+                        subject="recall_guard",
+                        summary=_msg,
+                        context={"goal_preview": reason[:200], "job_id": job_id, **_sig},
                     )
-                    log.warning("handle_task %s job_id=%s", _msg, job_id)
-                    try:
-                        from captains_log import log_event, RECALL_GUARD_TRIPPED
-                        log_event(
-                            RECALL_GUARD_TRIPPED,
-                            subject="recall_guard",
-                            summary=_msg,
-                            context={"goal_preview": reason[:200], "job_id": job_id, **_sig},
-                        )
-                    except Exception:
-                        pass
-                    return HandleResult(
-                        handle_id="",
-                        lane="agenda",
-                        lane_confidence=1.0,
-                        classification_reason="recall_guard",
-                        message=reason,
-                        status="error",
-                        result=_msg,
-                    )
+                except Exception:
+                    pass
+                return HandleResult(
+                    handle_id="",
+                    lane="agenda",
+                    lane_confidence=1.0,
+                    classification_reason="recall_guard",
+                    message=reason,
+                    status="error",
+                    result=_msg,
+                )
         return handle(reason, adapter=adapter, dry_run=dry_run, verbose=verbose, origin=_origin)
 
 

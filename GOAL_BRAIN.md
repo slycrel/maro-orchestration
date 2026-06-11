@@ -280,9 +280,14 @@ Active:
   *including most pipeline-"done" ones* — `done` status is not goal-health
   ground truth. Emergent (unprompted): dedup-via-recall (4-prior-dones drew
   close-already-delivered), chain corrects both directions (mid overrode a
-  timid cheap idunno with execute), honest 0.05-confidence escalate. Next:
-  wire `decide()` as a live shadow call at dispatch (recall() callsite,
-  decide-only), accumulate live agreement data, then per-class cutover.
+  timid cheap idunno with execute), honest 0.05-confidence escalate.
+  **Live shadow wired 2026-06-11**: `shadow_dispatch_live()` called from
+  handle_task after the guard verdict, sharing the guard's RecallResult;
+  config-gated (`navigator.shadow_dispatch`, off in code, this box opted in
+  via workspace config), cheap-tier-only by default, never raises.
+  Smoke-verified against the real adapter (execute 0.92, NAVIGATOR_DECIDED
+  with `live: true` in the workspace log). Now accumulating agreement data;
+  then the per-class cutover discussion — explicitly not before.
 - **Run↔thread linkage**: done 2026-06-10 — tasks carry an `origin` ancestry dict
   (parent handle/loop/goal) from enqueue through `handle_task` into run metadata,
   and recall() now consults it at dispatch (ThreadIdentity walk).

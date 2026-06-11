@@ -319,6 +319,37 @@ Verdict: the dispatch decision class is strong enough to earn the next
 integration step (live shadow at dispatch, still decide-only). Cutover still
 waits on live-shadow agreement data.
 
+## Live dispatch shadow (wired 2026-06-11)
+
+`navigator_shadow.shadow_dispatch_live()` is called from `handle_task()`'s
+autonomous requeue path, immediately after the dispatch-guard verdict. It is
+decide-only and failure-isolated (never raises, never alters dispatch); the
+guard remains the deterministic floor. Mechanics:
+
+- **One recall, two consumers** — handle_task computes the dispatch-slice
+  `RecallResult` once; the guard takes `dispatch_signals()` from it, the
+  shadow takes the thread identity + context block. No extra file scanning
+  per dispatch.
+- **`pipeline_actual.move_equivalent`** is the guard verdict: `"execute"`
+  (dispatch proceeded) or `"guard_refused"` (guard blocked it). With
+  `live: true` plus `job_id`/`source`, every NAVIGATOR_DECIDED row is a
+  navigator-vs-pipeline agreement datapoint.
+- **Config-gated, off in code** — `navigator.shadow_dispatch` defaults False
+  (a model call per dispatch is real spend); this box opts in via
+  `~/.poe/workspace/config.yml`. `navigator.shadow_tiers` defaults
+  `["cheap"]`: live shadow wants decision volume, not chain depth — a cheap
+  idunno is recorded as the synthesized escalate (`escalated_via:
+  "idunno_chain"`) and is distinguishable in analysis.
+- Skipped on `dry_run`, same as the guard (previews burn nothing).
+
+Smoke-verified live 2026-06-11: real cheap-tier call returned `execute` at
+0.92 on a well-formed goal; NAVIGATOR_DECIDED landed in the workspace
+captain's log with `pipeline_actual.live: true`.
+
+Analysis query, when enough rows accumulate:
+`grep NAVIGATOR_DECIDED captains_log.jsonl | jq 'select(.context.pipeline_actual.live)'`
+— agreement rate per move class is the cutover evidence.
+
 ## Open ends carried forward
 
 - **Per-thread goal-brain creation** — `NavigatorInput.goal_brain` assumes one per
@@ -330,8 +361,9 @@ waits on live-shadow agreement data.
 - ~~**Shadow round 2: random sample, count over-escalation**~~ — done same day,
   results above: 0/6 false escalates on well-formed goals; all 8 escalates
   targeted debris/burn.
-- **Live shadow callsite** — rounds 1–2 replayed history offline. Wiring
-  `decide()` as a shadow call at live dispatch (where recall() already runs) is
-  the next integration step; replay-offline first kept the loop untouched.
+- ~~**Live shadow callsite**~~ — wired 2026-06-11 (section above):
+  `shadow_dispatch_live()` from handle_task, sharing the guard's recall,
+  config-gated off in code. Next: accumulate live agreement data, then the
+  per-class cutover discussion.
 - **Fork cap (8), confidence semantics** — made calls; revisit against
   NAVIGATOR_DECIDED data.

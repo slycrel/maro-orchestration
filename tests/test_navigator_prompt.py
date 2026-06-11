@@ -249,3 +249,100 @@ class TestShadowReplay:
             resolve_run_dir("fff")
         with pytest.raises(FileNotFoundError):
             resolve_run_dir("zzz9")
+
+
+class TestShadowDispatchLive:
+    """shadow_dispatch_live: config gate, never-raises contract, and that
+    the guard's RecallResult actually reaches the navigator's prompt."""
+
+    GOAL = "research thinkpad prices on reddit"
+
+    def _cfg(self, overrides):
+        def get(name, default=None):
+            return overrides.get(name, default)
+        return get
+
+    def test_off_by_default_in_code(self):
+        from unittest.mock import patch
+        from navigator_shadow import shadow_dispatch_live
+        built = []
+        with patch("config.get", side_effect=self._cfg({})):
+            result = shadow_dispatch_live(
+                self.GOAL,
+                adapter_factory=lambda t: built.append(t) or _FakeAdapter(
+                    [_resp("execute", instruction="go")]),
+            )
+        assert result is None
+        assert built == [], "no adapter should be built when the gate is off"
+
+    def test_enabled_returns_decision_and_instruments(self):
+        from unittest.mock import patch
+        from navigator_shadow import shadow_dispatch_live
+        events = []
+        with patch("config.get",
+                   side_effect=self._cfg({"navigator.shadow_dispatch": True})), \
+             patch("captains_log.log_event",
+                   side_effect=lambda et, **kw: events.append((et, kw))):
+            decision = shadow_dispatch_live(
+                self.GOAL,
+                pipeline_move="guard_refused",
+                extra={"job_id": "task-042"},
+                adapter_factory=lambda t: _FakeAdapter(
+                    [_resp("escalate", question="why repeat?", why="burn")]),
+            )
+        assert decision is not None
+        assert decision.move == "escalate"
+        decided = [kw for et, kw in events if et == "NAVIGATOR_DECIDED"]
+        assert len(decided) == 1
+        actual = decided[0]["context"]["pipeline_actual"]
+        assert actual["live"] is True
+        assert actual["move_equivalent"] == "guard_refused"
+        assert actual["job_id"] == "task-042"
+
+    def test_recall_result_reaches_prompt(self):
+        from unittest.mock import patch
+        from recall import PriorAttempt, RecallResult, ThreadIdentity
+        from navigator_shadow import shadow_dispatch_live
+        rr = RecallResult(
+            thread=ThreadIdentity(
+                parent_goal="the big mission", parent_handle_id="abc123",
+                chain=["abc123"], source="loop_continuation"),
+            prior_attempts=[PriorAttempt(
+                goal=self.GOAL, handle_id="old1", status="stuck",
+                when="2026-06-10T00:00:00+00:00", match="exact")],
+        )
+        adapter = _FakeAdapter([_resp("execute", instruction="go")])
+        with patch("config.get",
+                   side_effect=self._cfg({"navigator.shadow_dispatch": True})):
+            decision = shadow_dispatch_live(
+                self.GOAL, recall_result=rr,
+                adapter_factory=lambda t: adapter,
+            )
+        assert decision is not None
+        user_text = adapter.calls[0][-1].content
+        assert "the big mission" in user_text
+        assert "old1" in user_text or "stuck" in user_text
+
+    def test_never_raises_when_decide_explodes(self):
+        from unittest.mock import patch
+        from navigator_shadow import shadow_dispatch_live
+        with patch("config.get",
+                   side_effect=self._cfg({"navigator.shadow_dispatch": True})), \
+             patch("navigator_prompt.decide",
+                   side_effect=RuntimeError("decide blew up")):
+            result = shadow_dispatch_live(self.GOAL)
+        assert result is None
+
+    def test_default_tiers_come_from_config(self):
+        from unittest.mock import patch
+        from navigator_shadow import shadow_dispatch_live
+        built = []
+        with patch("config.get", side_effect=self._cfg({
+                "navigator.shadow_dispatch": True,
+                "navigator.shadow_tiers": ["mid"]})):
+            shadow_dispatch_live(
+                self.GOAL,
+                adapter_factory=_factory_for(
+                    {"mid": [_resp("execute", instruction="go")]}, built),
+            )
+        assert built == ["mid"]

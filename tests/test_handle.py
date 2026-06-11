@@ -625,6 +625,102 @@ class TestRecallDispatchGuard:
         assert "RECALL_GUARD_TRIPPED" in events
 
 
+class TestNavigatorDispatchShadow:
+    """handle_task calls the live navigator shadow (decide-only) after the
+    guard verdict, reusing the guard's RecallResult. The shadow is config-
+    gated inside shadow_dispatch_live itself; these tests cover the wiring:
+    when it's invoked and what verdict it's told (docs/NAVIGATOR_SCHEMA.md)."""
+
+    GOAL = "verify the polymarket rate limit handling end to end"
+
+    def _task(self):
+        return {"job_id": "task-011", "source": "user_goal", "reason": self.GOAL}
+
+    def _patch_shadow(self, monkeypatch, calls):
+        import navigator_shadow
+
+        def _fake_shadow(goal, **kwargs):
+            calls.append({"goal": goal, **kwargs})
+            return None
+
+        monkeypatch.setattr(navigator_shadow, "shadow_dispatch_live", _fake_shadow)
+
+    def _patch_handle(self, monkeypatch):
+        import handle as handle_mod
+
+        def _fake_handle(message, **kwargs):
+            return HandleResult(
+                handle_id="x", lane="agenda", lane_confidence=1.0,
+                classification_reason="t", message=message, status="done", result="",
+            )
+
+        monkeypatch.setattr(handle_mod, "handle", _fake_handle)
+
+    def test_shadow_sees_execute_on_normal_dispatch(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        import handle as handle_mod
+        calls = []
+        self._patch_shadow(monkeypatch, calls)
+        self._patch_handle(monkeypatch)
+
+        result = handle_mod.handle_task(self._task(), dry_run=False)
+
+        assert result.status == "done"
+        assert len(calls) == 1
+        assert calls[0]["goal"] == self.GOAL
+        assert calls[0]["pipeline_move"] == "execute"
+        assert calls[0]["extra"]["job_id"] == "task-011"
+
+    def test_shadow_sees_guard_refused_on_trip(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        import handle as handle_mod
+        import runs
+        import uuid
+        for _ in range(3):
+            handle_id = uuid.uuid4().hex[:12]
+            rd = runs.create_run_dir(handle_id, prompt=self.GOAL)
+            meta_path = rd / "metadata.json"
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            meta["status"] = "stuck"
+            meta_path.write_text(json.dumps(meta), encoding="utf-8")
+        calls = []
+        self._patch_shadow(monkeypatch, calls)
+        self._patch_handle(monkeypatch)
+
+        result = handle_mod.handle_task(self._task(), dry_run=False)
+
+        assert result.classification_reason == "recall_guard"
+        assert len(calls) == 1
+        assert calls[0]["pipeline_move"] == "guard_refused"
+        assert calls[0]["recall_result"] is not None
+
+    def test_shadow_skipped_on_dry_run(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        import handle as handle_mod
+        calls = []
+        self._patch_shadow(monkeypatch, calls)
+        self._patch_handle(monkeypatch)
+
+        handle_mod.handle_task(self._task(), dry_run=True)
+
+        assert calls == []
+
+    def test_shadow_failure_never_blocks_dispatch(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        import handle as handle_mod
+        import navigator_shadow
+
+        def _boom(goal, **kwargs):
+            raise RuntimeError("shadow exploded")
+
+        monkeypatch.setattr(navigator_shadow, "shadow_dispatch_live", _boom)
+        self._patch_handle(monkeypatch)
+
+        result = handle_mod.handle_task(self._task(), dry_run=False)
+
+        assert result.status == "done"
+
+
 # ---------------------------------------------------------------------------
 # _apply_prefixes registry unit tests
 # ---------------------------------------------------------------------------
