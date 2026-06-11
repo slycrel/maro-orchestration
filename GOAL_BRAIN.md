@@ -239,6 +239,17 @@ Sample: the 2026-05-13..17 window of `~/.poe/workspace/runs/` (478 dirs total;
   layer stays perfect, only compiled confidence decays); Stages 4–5 demotable to
   language form. No scheduled re-verification — collision detection rides on use
   (no-cron invariant). Queued behind navigator (BACKLOG.md 2026-06-11 section).
+- **2026-06-11** — Navigator decision schema pinned (step 4, `docs/NAVIGATOR_SCHEMA.md`
+  + `src/navigator.py` types-only): six moves + `idunno` as admission-not-move
+  (tier re-run, top-tier converts to escalate); one flat JSON envelope with
+  mandatory reasoning; `NavigatorInput` always carries goal-brain (whole) +
+  every undispositioned child; **close requires explicit disposition of every
+  open child** (the fan-out lesson as a validator — resolves THREAD_ARCHITECTURE
+  open decision #2's failure-visibility half; retry/abandon policy stays
+  judgment). **v1 deploys in shadow mode**: decide-only beside the existing
+  pipeline, NAVIGATOR_DECIDED records decision + pipeline-actual, divergence is
+  the eval data, cutover per decision class. Fork cap 8 and confidence semantics
+  are made calls; revisit against NAVIGATOR_DECIDED data.
 
 ## Threads (system-maintained — nothing leaves this list silently)
 
@@ -249,11 +260,12 @@ Active:
   backtest_metrics.py, doctor.py), fresh-venv install verified under a foreign
   HOME, rc=1 payload-first fix shipped. Remaining: codex-side payload check
   decision (deferred — JSONL format differs, no observed repro), final sweep.
-- **Goal-brain sequencing, steps 4–5**: navigator decision schema, then navigator
-  prompt. Step 3 (recall() shape) done 2026-06-10 — `docs/RECALL_DESIGN.md` +
-  `src/recall.py` v0 (dispatch slice live: ancestry consulted, prior attempts
-  matched, guard on the requeue path). Step 4 consumes the navigator-slice
-  contract defined there.
+- **Goal-brain sequencing, step 5 (last)**: the navigator prompt + shadow harness.
+  Step 4 (decision schema) done 2026-06-11 — `docs/NAVIGATOR_SCHEMA.md` +
+  `src/navigator.py` (types/validation/parsing, no callers — do not build a turn
+  runner before the prompt exists). Step 5 = hand-write the prompt against the
+  envelope, replay 3–5 real threads from `~/.poe/workspace/runs/` in shadow mode,
+  compare navigator-said vs pipeline-did. Step 3 (recall()) done 2026-06-10.
 - **Run↔thread linkage**: done 2026-06-10 — tasks carry an `origin` ancestry dict
   (parent handle/loop/goal) from enqueue through `handle_task` into run metadata,
   and recall() now consults it at dispatch (ThreadIdentity walk).
@@ -283,9 +295,11 @@ Dormant (deliberately parked, not dropped):
   (watch RECALL_GUARD_TRIPPED), and per-thread goal-brain creation (the navigator
   slice injects "the" goal-brain, but only the project's own exists today) is a
   step-4/5 question.
-- **Fan-out recoverability mechanism** — how unfinished sub-threads stay visible and
-  get revisited, concretely (this file's Threads section is the manual v0; the
-  runtime mechanism is undesigned). Blocks: thread architecture implementation.
+- **Fan-out recoverability mechanism** — *visibility half answered 2026-06-11 at the
+  schema layer*: `open_children` rides in every NavigatorInput and close is invalid
+  while any child is undispositioned (`docs/NAVIGATOR_SCHEMA.md`). Still open:
+  *revisit policy* (when does the navigator go back to an abandoned/failed child?)
+  — judgment, lands in the step-5 prompt and gets measured via NAVIGATOR_DECIDED.
 - **When to pull full work-LLM output** — criteria for the "sometimes" in the
   2026-06-10 visibility decision. Deliberately unpinned until examples accumulate.
 - **Capability-form paradigm** — when a pattern stabilizes, does it live as a skill
