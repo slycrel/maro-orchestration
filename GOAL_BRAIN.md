@@ -54,6 +54,21 @@ On what matters most (Jeremy, 2026-06-10): *"my gut says that a real, working me
 is the key (meaningful facts, pattern matching and fuzzy logic, skills and/or maybe
 learned lessons and so on... all the flavors of persistent working knowledge)."*
 
+The orchestrator litmus test (Jeremy, 2026-06-11): *"I think our orchestrator litmus
+test is going to be something in the direction of a bunch of lesser local models +
+orchestration being greater than the sum of it's parts. Kind of a ways off and a
+high bar, unclear if it's realistic or not."*
+
+On the capability-form paradigm — skills-as-prompt-injection vs crystallize-to-code
+(Jeremy, 2026-06-11): *"His [Garry Tan's] paradigm might be a bit more efficient,
+turning data into prompt injection just in time, rather than saying 'we keep
+scraping X links, so let's write a python script to handle that for us'. Potentially
+both work just fine, but one grows with the model over time, while the other
+doesn't."* And: *"the hard part; choosing one of the paradigms above (or finding a
+new one) should all be on the table if we do this right. Hard to find the right
+equatinos up front before we do it all longhand over and over again."* — paradigm
+choice is deliberately deferred to data, not decided upfront.
+
 ## Invariants (human-steerable, quoted)
 
 - **Fix in place, don't rewrite** — *"If you think we're on the right track and fixing
@@ -249,6 +264,12 @@ Dormant (deliberately parked, not dropped):
   runtime mechanism is undesigned). Blocks: thread architecture implementation.
 - **When to pull full work-LLM output** — criteria for the "sometimes" in the
   2026-06-10 visibility decision. Deliberately unpinned until examples accumulate.
+- **Capability-form paradigm** — when a pattern stabilizes, does it live as a skill
+  (language, JIT-injected, grows with the model) or as code (deterministic, frozen,
+  zero inference cost)? Jeremy 2026-06-11: on the table, decided by data, not
+  upfront. Implies crystallization Stages 4–5 must be reversible and re-evaluated
+  at model upgrades ("re-fight the champion"). Blocks: nothing yet — gather
+  longhand reps first.
 - **End-to-end standing-rule observation** — does the medium → long → standing-rule
   path actually fire in real runs post-M2? Needs production runtime, then check
   `standing_rules.jsonl`.
