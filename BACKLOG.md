@@ -56,6 +56,29 @@ validity are different signals and we only track one.
 
 ---
 
+### Live orchestration run findings (2026-06-11, first post-suite-green session)
+
+From real task-path runs (enqueue → drain_task_store → handle_task → handle). The
+big one — task-path runs never finalized, poisoning recall's all_failing — was
+fixed same day (9402d3d). Remaining observations:
+
+- [ ] **`loop-*-PARTIAL.md` is misnamed on done runs** — agent_loop.py:1757 writes
+  the loop transcript unconditionally under a `-PARTIAL` name; a `done` run's
+  report literally opens "Partial result … Status: done". Cosmetic but actively
+  misleading when auditing runs. Rename to `-RESULT.md` (or stamp status into the
+  name) after checking nothing greps for the PARTIAL suffix.
+- [ ] **Closure restart doubled a trivial run** — the standing-rule report goal
+  (049599c8-sturdy-ridge) finished done 4/4 in loop 1 (~300k tokens), then the
+  closure-restart heuristic (handle.py:1091–1180) ran a full second loop (6/6,
+  ~370k more) to chase "gaps" on a goal whose artifact already existed. The
+  navigator's close judgment is the structural replacement (DUMB_LOOP_AUDIT.md
+  priority list); until then consider a cheap "artifact exists + verifier passed"
+  short-circuit before restarting.
+- [ ] **Step numbering in transcripts starts mid-sequence** — PARTIAL.md showed
+  "Step 11..14" on a 4-step plan (dry-run showed 11–13 too). Indexing offset
+  between plan revisions and transcript labels; confusing when reading runs.
+  Find where `s.index` diverges from plan position.
+
 ### Goal-brain pressure-test findings — runtime gaps (2026-06-10)
 
 From sequencing step 2 (GOAL_BRAIN.md Compiled truth has the full findings; sample = the 2026-05-13..17 run-dir window). The decompose-fallback chop is fixed; these are the remaining mechanical gaps:
