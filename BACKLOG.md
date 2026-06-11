@@ -109,7 +109,17 @@ dead at the extraction step since Phase 59 S1). Remaining observations:
   ~370k more) to chase "gaps" on a goal whose artifact already existed. The
   navigator's close judgment is the structural replacement (DUMB_LOOP_AUDIT.md
   priority list); until then consider a cheap "artifact exists + verifier passed"
-  short-circuit before restarting.
+  short-circuit before restarting. One repro so far — the 2026-06-11 verification
+  run (c677fda8) also doubled, but that was the *quality gate* tier escalation
+  (ESCALATE 0.90) and it correctly caught loop 1 writing its summary to the
+  wrong location — gate working as intended, don't conflate the two.
+- [ ] **"Count the files" closure blessed two different answers** — same goal,
+  loop 1 counted 45 (docs/ top-level), gate-escalated loop 2 counted 80
+  (recursive); *both* closure verdicts called their count "correct and
+  verified". Ground truth: both defensible readings of an ambiguous goal —
+  but closure verification inherits the executor's interpretation instead of
+  pinning one. Resolved-intent/scope is the existing seam that should pin
+  countable deliverables ("N = recursive count") before execution.
 - [x] **Step numbering in transcripts starts mid-sequence** — root-caused same
   day: `s.index` is the NEXT.md *ledger line* (orch_items.append_next_items
   returns file-line offsets, headers included), not plan position. Display-only
