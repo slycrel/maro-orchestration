@@ -94,7 +94,28 @@ dead at the extraction step since Phase 59 S1). Remaining observations:
   "now", no LLM lesson extraction — quick-answer lane must not pay a
   reflection call per request). Still open: `_is_complex_directive`
   thresholds — a multi-step "write a script AND run it AND save outputs" goal
-  is not a NOW request.
+  is not a NOW request (heuristic-tested: it does NOT catch that goal today).
+- [x] **NOW lane recorded an honest "this cannot be done" as `done`** — found
+  by the impossible-binary probe batch (3× "run /usr/bin/nonexistent-binary-xyz"):
+  intent routed the execution goal NOW, the completion honestly replied "the
+  goal is incomplete... cannot be fulfilled", and the run was recorded `done`
+  in 18s — NOW status meant "the completion call returned", not "the goal was
+  achieved". The false done then poisoned every judgment layer above it:
+  recall reported a done prior, so the dispatch guard could never trip, and
+  the navigator's attempt-2 `close` was reasonable-on-poisoned-input. (The
+  navigator still said `escalate 0.95` on attempts 1 and 3 — attempt 3
+  explicitly caught the contradiction "prior attempts are marked done" vs an
+  impossible goal. Divergences #2 and #3, both adjudicated navigator-right.)
+  **Fixed same day:** (1) `now_lane.escalate_to_director` default flipped to
+  True — complex directives route to the agenda lane; (2) autonomous NOW runs
+  (origin present, no human reading the text) get a cheap self-verdict and
+  demote to `incomplete` when the response reports non-fulfillment
+  (`_verify_now_outcome`, fails open). Interactive NOW calls keep raw speed.
+- [ ] **NOW artifacts write to a stale prototype path** — `_write_now_artifact`
+  resolves orch_root and appends `prototypes/poe-orchestration/artifacts/now/`,
+  landing files at `~/prototypes/poe-orchestration/prototypes/poe-orchestration/…`
+  (doubled segment, outside the workspace). Should write under
+  `~/.poe/workspace/` like everything else.
 - [ ] **First in-process consolidation gc'd the whole MEDIUM lesson store** —
   5 weeks of decay-age applied in one cycle (decayed 38, promoted 0, gc 38).
   Arguably correct on stale data (M2 promotes at reinforcement time, LONG

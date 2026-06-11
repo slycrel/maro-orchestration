@@ -288,6 +288,46 @@ def _run_now(
         }
 
 
+_NOW_VERIFY_SYSTEM = (
+    "You judge whether a response fulfilled a request. Reply with JSON only: "
+    '{"fulfilled": true} or {"fulfilled": false}. '
+    "fulfilled=false when the response states the task could not be done, is "
+    "incomplete or impossible, or only explains why it failed. "
+    "fulfilled=true when the response delivers what was asked."
+)
+
+
+def _verify_now_outcome(message: str, outcome: Dict[str, Any], adapter) -> Dict[str, Any]:
+    """Demote an autonomous NOW 'done' to 'incomplete' when the response itself
+    reports failure. Fails open — any error keeps the original status."""
+    try:
+        from llm import LLMMessage
+        from llm_parse import extract_json
+        resp = adapter.complete(
+            [
+                LLMMessage("system", _NOW_VERIFY_SYSTEM),
+                LLMMessage(
+                    "user",
+                    f"Request:\n{message[:2000]}\n\n"
+                    f"Response:\n{str(outcome.get('result', ''))[:2000]}",
+                ),
+            ],
+            max_tokens=64,
+            temperature=0.0,
+        )
+        verdict = extract_json(resp.content, dict, log_tag="now_verify")
+        if verdict.get("fulfilled") is False:
+            out = dict(outcome)
+            out["status"] = "incomplete"
+            out["tokens_in"] = outcome.get("tokens_in", 0) + getattr(resp, "input_tokens", 0)
+            out["tokens_out"] = outcome.get("tokens_out", 0) + getattr(resp, "output_tokens", 0)
+            log.info("now-verify: response reports non-fulfillment — status demoted to incomplete")
+            return out
+    except Exception as exc:
+        log.debug("now-verify failed open (keeping done): %s", exc)
+    return outcome
+
+
 # ---------------------------------------------------------------------------
 # User config loader
 # ---------------------------------------------------------------------------
@@ -593,12 +633,15 @@ def _handle_impl(
 
     # Route to lane
     if lane == "now":
-        # Optional escalation: if now_lane.escalate_to_director is enabled and the
-        # message looks complex, reclassify to agenda so the Director can plan it.
-        _now_escalate_enabled = False
+        # Escalation: if the message looks like a complex directive, reclassify
+        # to agenda so the Director can plan it. Default ON since 2026-06-11 —
+        # live runs showed execution-shaped goals ("run X and save the output")
+        # landing in NOW, where a single completion can't do the work but the
+        # run is still recorded done. Disable via now_lane.escalate_to_director.
+        _now_escalate_enabled = True
         try:
             from config import get as _cfg_get
-            _now_escalate_enabled = bool(_cfg_get("now_lane.escalate_to_director", False))
+            _now_escalate_enabled = bool(_cfg_get("now_lane.escalate_to_director", True))
         except Exception:
             pass
         if _now_escalate_enabled and _is_complex_directive(message):
@@ -609,6 +652,17 @@ def _handle_impl(
 
     if lane == "now":
         outcome = _run_now(message, handle_id, adapter, verbose=verbose)
+
+        # Status honesty for autonomous callers: NOW "done" means the
+        # completion call returned, not that the goal was achieved — a
+        # response honestly stating "this cannot be done" was recorded done
+        # (live find 2026-06-11), which poisons recall, the dispatch guard,
+        # and the navigator downstream. Task-path runs (origin present — no
+        # human reading the text) get a cheap self-verdict and demote to
+        # "incomplete" when the response reports non-fulfillment.
+        # Interactive calls keep raw speed.
+        if origin is not None and not dry_run and outcome.get("status") == "done":
+            outcome = _verify_now_outcome(message, outcome, adapter)
         elapsed = int((time.monotonic() - started_at) * 1000)
 
         # Write artifact

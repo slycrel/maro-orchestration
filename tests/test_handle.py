@@ -925,8 +925,9 @@ class TestNowDirectorEscalation:
         monkeypatch.setenv("ANTHROPIC_API_KEY", "")
         monkeypatch.setenv("OPENAI_API_KEY", "")
 
-    def test_escalation_disabled_by_default_runs_now_lane(self, monkeypatch, tmp_path):
-        """When escalate_to_director is False (default), complex messages still use NOW."""
+    def test_escalation_disabled_via_config_runs_now_lane(self, monkeypatch, tmp_path):
+        """When escalate_to_director is configured False (default flipped to
+        True on 2026-06-11), complex messages still use NOW."""
         self._setup(monkeypatch, tmp_path)
         from handle import handle
         monkeypatch.setattr("config.get", lambda key, default=None: False if "escalate_to_director" in key else default, raising=False)
@@ -1697,3 +1698,77 @@ class TestNowLaneOutcomeRecord:
         handle("what time is it?", dry_run=True, force_lane="now")
         from memory import load_outcomes
         assert not any(o.task_type == "now" for o in load_outcomes(limit=10))
+
+
+class TestNowStatusHonesty:
+    """Autonomous NOW runs demote 'done' to 'incomplete' when the response
+    itself reports non-fulfillment (live find 2026-06-11: an impossible
+    execution goal was recorded done by a quick-lane completion that honestly
+    said it could not be done — poisoning recall, the guard, and the navigator)."""
+
+    def _verdict_adapter(self, fulfilled):
+        from unittest.mock import MagicMock
+        adapter = MagicMock()
+        resp = MagicMock()
+        resp.content = '{"fulfilled": %s}' % ("true" if fulfilled else "false")
+        resp.input_tokens = 5
+        resp.output_tokens = 2
+        adapter.complete.return_value = resp
+        return adapter
+
+    def test_verify_demotes_unfulfilled(self):
+        from handle import _verify_now_outcome
+        outcome = {"status": "done", "result": "The goal is incomplete.",
+                   "tokens_in": 10, "tokens_out": 4}
+        out = _verify_now_outcome("run the thing", outcome, self._verdict_adapter(False))
+        assert out["status"] == "incomplete"
+        assert out["tokens_in"] == 15 and out["tokens_out"] == 6
+
+    def test_verify_keeps_fulfilled(self):
+        from handle import _verify_now_outcome
+        outcome = {"status": "done", "result": "Here is the answer: 42.",
+                   "tokens_in": 10, "tokens_out": 4}
+        out = _verify_now_outcome("what is the answer", outcome, self._verdict_adapter(True))
+        assert out["status"] == "done"
+        assert out["tokens_in"] == 10  # no verdict tokens added when kept
+
+    def test_verify_fails_open(self):
+        from unittest.mock import MagicMock
+        from handle import _verify_now_outcome
+        adapter = MagicMock()
+        adapter.complete.side_effect = RuntimeError("adapter down")
+        outcome = {"status": "done", "result": "x", "tokens_in": 1, "tokens_out": 1}
+        out = _verify_now_outcome("goal", outcome, adapter)
+        assert out["status"] == "done"
+
+    def test_autonomous_now_run_demoted_end_to_end(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        from unittest.mock import patch
+        canned = {"status": "done", "result": "The binary does not exist; goal incomplete.",
+                  "tokens_in": 7, "tokens_out": 3}
+        with patch("handle._run_now", return_value=canned):
+            with patch("intent.classify", return_value=("now", 0.9, "simple")):
+                result = handle(
+                    "do it",
+                    adapter=self._verdict_adapter(False),
+                    force_lane="now",
+                    dry_run=False,
+                    origin={"parent_handle_id": "abc", "source": "user_goal"},
+                )
+        assert result.status == "incomplete"
+        # Finalized run metadata carries the honest status for recall.
+        from runs import run_dir
+        meta = json.loads((run_dir(result.handle_id) / "metadata.json").read_text())
+        assert meta["status"] == "incomplete"
+
+    def test_interactive_now_skips_verification(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        from unittest.mock import patch
+        canned = {"status": "done", "result": "cannot be done",
+                  "tokens_in": 1, "tokens_out": 1}
+        adapter = self._verdict_adapter(False)
+        with patch("handle._run_now", return_value=canned):
+            with patch("intent.classify", return_value=("now", 0.9, "simple")):
+                result = handle("do it", adapter=adapter, force_lane="now", dry_run=False)
+        assert result.status == "done"
+        adapter.complete.assert_not_called()

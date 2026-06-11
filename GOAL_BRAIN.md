@@ -275,6 +275,19 @@ Sample: the 2026-05-13..17 window of `~/.poe/workspace/runs/` (478 dirs total;
   worked. Panel was deliberately biased toward known failures — **no cutover
   conversation until a random-sample round 2 measures false-escalate rate on
   healthy goals.** Goal-brain sequencing (2026-05-18 plan) steps 1–5 complete.
+- **2026-06-11 (night)** — Impossible-goal probe batch (3× "run a nonexistent
+  binary") found **status integrity is broken at the NOW seam and everything
+  above it trusts status**: intent routed the execution goal NOW, the
+  completion honestly said "cannot be fulfilled", and the run was recorded
+  `done` in 18s — so recall reported done priors, the dispatch guard could
+  never trip, and the navigator's poisoned-input `close` looked reasonable.
+  The navigator caught it anyway on attempts 1 and 3 (`escalate 0.95`;
+  attempt 3 named the contradiction outright) — divergences #2/#3, both
+  navigator-right. Fixed same day: `now_lane.escalate_to_director` default
+  ON, and autonomous NOW runs self-verify ("did this response fulfill the
+  request?") demoting to `incomplete` on honest failure. Verified-done-not-
+  reported-done now has a mechanism at the quick lane. NOW lane also records
+  slim outcomes now (no LLM reflection — lane economy).
 - **2026-06-11 (evening)** — First live orchestration batch post-suite-green (4
   real task-path goals) surfaced and same-day-fixed three production defects:
   (1) task-path runs were never finalized — finalize lived only in CLI main(),
