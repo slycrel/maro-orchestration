@@ -2837,8 +2837,8 @@ def test_artifact_cleanup_glob_pattern_does_not_match_permanent_files():
     loop_id = "abc123"
     pattern = f"loop-{loop_id}-step-*.md"
     step_files = [f"loop-{loop_id}-step-01.md", f"loop-{loop_id}-step-09.md"]
-    permanent_files = [f"loop-{loop_id}-PARTIAL.md", f"loop-{loop_id}-plan.md",
-                       f"loop-{loop_id}-scratchpad"]
+    permanent_files = [f"loop-{loop_id}-PARTIAL.md", f"loop-{loop_id}-RESULT.md",
+                       f"loop-{loop_id}-plan.md", f"loop-{loop_id}-scratchpad"]
     for f in step_files:
         assert fnmatch.fnmatch(f, pattern), f"{f} should match step pattern"
     for f in permanent_files:

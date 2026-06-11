@@ -1727,11 +1727,17 @@ def _build_result_and_finalize(
         pre_flight_review=pf_review,
     )
 
-    # Write partial-result artifact
+    # Write the loop transcript artifact: RESULT.md for a completed loop,
+    # PARTIAL.md otherwise (the old unconditional -PARTIAL name made done
+    # runs open with "Partial result ... Status: done" — BACKLOG 2026-06-11).
     _done_steps = [s for s in step_outcomes if s.status == "done"]
     if _done_steps:
         try:
-            _partial_lines = [f"# Partial result: {ctx.goal}\n"]
+            _transcript_kind = "RESULT" if loop_status == "done" else "PARTIAL"
+            _partial_lines = [
+                f"# {'Result' if loop_status == 'done' else 'Partial result'}: "
+                f"{ctx.goal}\n"
+            ]
             _partial_lines.append(f"Status: {loop_status} | "
                                   f"{len(_done_steps)}/{len(step_outcomes)} steps done | "
                                   f"tokens: {total_tokens_in+total_tokens_out} | "
@@ -1754,9 +1760,10 @@ def _build_result_and_finalize(
             except Exception:
                 _art_dir = _project_dir_root() / ctx.project / "artifacts"
                 _art_dir.mkdir(parents=True, exist_ok=True)
-            (_art_dir / f"loop-{ctx.loop_id}-PARTIAL.md").write_text(
+            (_art_dir / f"loop-{ctx.loop_id}-{_transcript_kind}.md").write_text(
                 "\n".join(_partial_lines), encoding="utf-8")
-            log.info("wrote partial result: %s (%d steps)", f"loop-{ctx.loop_id}-PARTIAL.md", len(_done_steps))
+            log.info("wrote loop transcript: %s (%d steps)",
+                     f"loop-{ctx.loop_id}-{_transcript_kind}.md", len(_done_steps))
             # Persist scratchpad
             _scratch_dir = _art_dir / f"loop-{ctx.loop_id}-scratchpad"
             _scratch_dir.mkdir(exist_ok=True)
@@ -1799,7 +1806,7 @@ def _build_result_and_finalize(
 
     # Artifact cleanup: per-step artifacts are temp by default.
     # Only keep them if config `keep_artifacts: true` is set.
-    # Plan manifests, PARTIAL.md, loop logs, and scratchpad are always kept.
+    # Plan manifests, RESULT/PARTIAL.md, loop logs, and scratchpad are always kept.
     if not ctx.dry_run and ctx.project:
         try:
             from config import get as _cfg_get
