@@ -9,6 +9,33 @@ Last reviewed: 2026-06-10 (session 40 — memory lifecycle fixes + dry-run herme
 
 ---
 
+### Entropy / decay-by-invalidation (2026-06-11, queued behind navigator)
+
+Steering context in GOAL_BRAIN.md Intent (entropy quote). Crystallized artifacts
+(skills, standing rules, playbook entries) rot when the world changes under them —
+distinct from decay-by-disuse, which tiered lessons already have. The most-reinforced
+artifact is the most dangerous one at world-shift time, because reinforcement and
+validity are different signals and we only track one.
+
+- [ ] **Decay v0 — re-fight on collision (Jeremy's pinned first pass).** When a
+  crystallized artifact fails, inject the existing mechanism + the failure into the
+  prompt and re-derive. *"at worst we have better context, at best it's a slight
+  tweak and we fix forward."* Seed exists: the skill circuit breaker → rewrite_skill
+  path is already collision-detection + repair for skills; v0 is verifying that path
+  works live and generalizing the pattern beyond skills. No scheduled re-verification
+  (no-cron invariant) — verification rides on use.
+- [ ] **Freshness signal on crystallized artifacts.** `last_verified` (last
+  successful run against the real world) distinct from `last_reinforced`. Trust at
+  injection time = f(score, time-since-verified); stale-but-promoted gets a
+  "verify before relying" flag, not silent confident injection.
+- [ ] **Design constraint, not a task: decay trust, never data.** Append-only
+  evidence layer stays perfect (the computerization edge over human forgetting);
+  only compiled-truth confidence decays. Crystallization Stages 4–5 must be
+  demotable back to language form — world-change is the frequent trigger,
+  model upgrades the rare one.
+
+---
+
 ### Goal-brain pressure-test findings — runtime gaps (2026-06-10)
 
 From sequencing step 2 (GOAL_BRAIN.md Compiled truth has the full findings; sample = the 2026-05-13..17 run-dir window). The decompose-fallback chop is fixed; these are the remaining mechanical gaps:
