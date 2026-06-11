@@ -614,6 +614,25 @@ def _handle_impl(
         # Write artifact
         artifact_path = _write_now_artifact(handle_id, message, outcome.get("result", ""), elapsed)
 
+        # Slim outcome record — NOW runs feed attempt history and outcome
+        # stats but skip LLM lesson extraction (a quick-answer lane must not
+        # pay a reflection model call per request; lessons stay agenda-only).
+        if not dry_run:
+            try:
+                from memory import record_outcome as _record_outcome
+                _record_outcome(
+                    goal=message,
+                    status=outcome["status"],
+                    summary=str(outcome.get("result", ""))[:500],
+                    task_type="now",
+                    tokens_in=outcome["tokens_in"],
+                    tokens_out=outcome["tokens_out"],
+                    elapsed_ms=elapsed,
+                    model=model or "",
+                )
+            except Exception:
+                pass  # outcome recording must never block the NOW response
+
         return HandleResult(
             handle_id=handle_id,
             lane="now",

@@ -1650,3 +1650,50 @@ class TestHandleFinalizesRun:
 
         # Task A's metadata must be untouched (not re-finalized as "error").
         assert self._run_meta(prior.handle_id) == prior_meta_before
+
+
+class TestNowLaneOutcomeRecord:
+    """NOW-lane runs record a slim outcome (no LLM lesson extraction)."""
+
+    def test_now_run_records_outcome(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        from unittest.mock import patch, MagicMock
+
+        fake_adapter = MagicMock()
+        canned = {"status": "done", "result": "the answer",
+                  "tokens_in": 7, "tokens_out": 3}
+        with patch("handle._run_now", return_value=canned):
+            with patch("intent.classify", return_value=("now", 0.9, "simple")):
+                result = handle(
+                    "what time is it?",
+                    adapter=fake_adapter,
+                    force_lane="now",
+                    dry_run=False,
+                )
+        assert result.lane == "now"
+        from memory import load_outcomes
+        recs = load_outcomes(limit=5)
+        assert any(
+            o.task_type == "now" and o.status == "done"
+            and "what time is it" in o.goal
+            for o in recs
+        ), f"no NOW outcome recorded: {[(o.task_type, o.goal) for o in recs]}"
+
+    def test_now_outcome_skips_lesson_extraction(self, monkeypatch, tmp_path):
+        """The slim record must not invoke the LLM reflection path."""
+        _setup(monkeypatch, tmp_path)
+        from unittest.mock import patch, MagicMock
+
+        fake_adapter = MagicMock()
+        canned = {"status": "done", "result": "x", "tokens_in": 1, "tokens_out": 1}
+        with patch("memory.extract_lessons_via_llm") as mock_extract:
+            with patch("handle._run_now", return_value=canned):
+                with patch("intent.classify", return_value=("now", 0.9, "simple")):
+                    handle("ping", adapter=fake_adapter, force_lane="now", dry_run=False)
+        mock_extract.assert_not_called()
+
+    def test_dry_run_now_records_nothing(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        handle("what time is it?", dry_run=True, force_lane="now")
+        from memory import load_outcomes
+        assert not any(o.task_type == "now" for o in load_outcomes(limit=10))

@@ -89,8 +89,10 @@ dead at the extraction step since Phase 59 S1). Remaining observations:
   (a) skips `reflect_and_record` entirely — reflection only fires in the agenda
   loop's finalize (agent_loop.py:3515), nothing on the NOW path calls it, so the
   run finalized `done` with no outcome/lesson record — and (b) writes relative
-  to cwd (the workspace-boundary repro below is the same run). Two angles:
-  a slim NOW-lane reflection call, and revisiting `_is_complex_directive`
+  to cwd (the workspace-boundary repro below is the same run). **(a) fixed
+  2026-06-11:** NOW path records a slim outcome (record_outcome, task_type
+  "now", no LLM lesson extraction — quick-answer lane must not pay a
+  reflection call per request). Still open: `_is_complex_directive`
   thresholds — a multi-step "write a script AND run it AND save outputs" goal
   is not a NOW request.
 - [ ] **First in-process consolidation gc'd the whole MEDIUM lesson store** —
