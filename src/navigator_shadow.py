@@ -114,8 +114,16 @@ def _prior_attempts_asof(
 
 
 def _goal_brain_standin(run_path: Path) -> str:
-    """Per-thread goal-brains don't exist yet; scope / resolved intent are
-    the pinned stand-in (NAVIGATOR_SCHEMA.md open ends)."""
+    """Prefer the real per-thread goal-brain (source/goal_brain.md, created
+    at run-dir creation since 2026-06-11); fall back to the resolved-intent /
+    scope stand-in for runs that predate it (NAVIGATOR_SCHEMA.md open ends)."""
+    try:
+        import thread_brain
+        text = thread_brain.load_thread_brain(run_path)
+        if text:
+            return text
+    except Exception:
+        pass
     parts: List[str] = []
     for name in ("resolved_intent.md", "scope.md"):
         f = run_path / "source" / name
@@ -281,10 +289,25 @@ def shadow_dispatch_live(
                 "chain": [],
                 "source": str(origin.get("source") or "unknown"),
             }
+        # At dispatch this thread's own run-dir doesn't exist yet; the
+        # decision is being made in the parent's context, so the parent
+        # thread's goal-brain is the right steering input. Top-level goals
+        # have no parent and get "" — the goal verbatim is their whole
+        # intent at this point anyway.
+        goal_brain = ""
+        parent_id = str(thread.get("parent_handle_id") or "")
+        if parent_id:
+            try:
+                import runs as _runs
+                import thread_brain as _tb
+                goal_brain = _tb.load_thread_brain(_runs.run_dir(parent_id))
+            except Exception:
+                goal_brain = ""
         nav_input = NavigatorInput(
             goal=goal,
             thread=thread,
             recall_block=rr.as_context_block() if rr is not None else "",
+            goal_brain=goal_brain,
             budget={"note": "live dispatch shadow; loop budget not yet allocated"},
         )
         pipeline_actual = {

@@ -66,7 +66,7 @@ Pinned fields (dataclass in `src/navigator.py`):
 | Field | Type | What / why |
 |---|---|---|
 | `goal` | str | The thread's goal text, verbatim. |
-| `goal_brain` | str | The thread's goal-brain content — the intent anchor, injected **whole, every turn**. This is the intent-preservation mechanism ("we're not escaping LLM trust, we're redistributing it"). v1 stand-in: scope.md / resolved_intent.md / project GOAL_BRAIN.md until per-thread goal-brains exist (open question, step 5+). |
+| `goal_brain` | str | The thread's goal-brain content — the intent anchor, injected **whole, every turn**. This is the intent-preservation mechanism ("we're not escaping LLM trust, we're redistributing it"). Real per-thread artifact since 2026-06-11: `<run_dir>/source/goal_brain.md` via `src/thread_brain.py` (scope/resolved-intent remain the fallback for runs that predate it). At dispatch the **parent** thread's brain is injected — this thread's run-dir doesn't exist yet. |
 | `thread` | dict | Ancestry — `ThreadIdentity` shape from recall() (parent goal, handle chain, source). |
 | `turn_index` | int | 0-based turn counter for this thread. |
 | `last_work` | WorkReport \| None | What the last work turn returned (None on turn 0). |
@@ -353,10 +353,14 @@ the log rotates at 5MB as of 2026-06-11):
 
 ## Open ends carried forward
 
-- **Per-thread goal-brain creation** — `NavigatorInput.goal_brain` assumes one per
-  thread; today only the project's own exists. v1 stand-in: scope/resolved-intent.
-  Real answer is a step-5+ design (likely: seeded at thread kickoff from goal +
-  scope, system-maintained sections updated at close).
+- ~~**Per-thread goal-brain creation**~~ — done 2026-06-11: `src/thread_brain.py`;
+  every run-dir gets `source/goal_brain.md` (goal verbatim + origin ancestry,
+  GOAL_BRAIN.md section grammar scaled down) at `runs.create_run_dir`; child
+  registers in parent's Threads section; `finalize_run` appends the close.
+  Shadow harness prefers the real artifact (stand-in remains the fallback for
+  pre-existing runs); live dispatch shadow injects the **parent** thread's brain.
+  Still open: per-turn maintenance of Compiled truth / Decisions during a run —
+  queued behind navigator going live (MILESTONES Next Up #5).
 - **Async fork join + `wait`** — deferred until a real thread needs it; sync join
   covers the worked examples we have.
 - ~~**Shadow round 2: random sample, count over-escalation**~~ — done same day,
