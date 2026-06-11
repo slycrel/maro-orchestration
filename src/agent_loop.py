@@ -1745,9 +1745,13 @@ def _build_result_and_finalize(
             if stuck_reason:
                 _partial_lines.append(f"Stuck reason: {stuck_reason}\n")
             _partial_lines.append("---\n")
-            for s in step_outcomes:
+            for _pos, s in enumerate(step_outcomes, start=1):
                 _icon = "Done" if s.status == "done" else "BLOCKED"
-                _partial_lines.append(f"\n## Step {s.index if s.index >= 0 else '?'}: {s.text[:100]}")
+                # s.index is the NEXT.md ledger line, not plan position — it
+                # starts wherever the project ledger left off, so rendering it
+                # as the step number read as "Step 11 of a 4-step plan".
+                _partial_lines.append(f"\n## Step {_pos}/{len(step_outcomes)}"
+                                      f" (ledger #{s.index}): {s.text[:100]}")
                 _partial_lines.append(f"*[{_icon}]*\n")
                 if s.result:
                     _partial_lines.append(s.result[:2000])
@@ -4945,10 +4949,13 @@ def _write_plan_manifest(
     exec_lines: List[str] = []
     if step_outcomes:
         exec_lines = ["", "## Execution Log", ""]
-        for s in step_outcomes:
+        for _pos, s in enumerate(step_outcomes, start=1):
             icon = "✅" if s.status == "done" else "❌"
             t_total = s.tokens_in + s.tokens_out
-            exec_lines.append(f"### Step {s.index} {icon} | {s.elapsed_ms}ms | {t_total} tok")
+            # s.index is the NEXT.md ledger line, not plan position.
+            exec_lines.append(
+                f"### Step {_pos} (ledger #{s.index}) {icon}"
+                f" | {s.elapsed_ms}ms | {t_total} tok")
             exec_lines.append(f"**{s.text[:120]}**")
             blurb = getattr(s, "summary", None) or s.result
             if blurb:

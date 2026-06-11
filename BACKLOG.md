@@ -62,11 +62,10 @@ From real task-path runs (enqueue → drain_task_store → handle_task → handl
 big one — task-path runs never finalized, poisoning recall's all_failing — was
 fixed same day (9402d3d). Remaining observations:
 
-- [ ] **`loop-*-PARTIAL.md` is misnamed on done runs** — agent_loop.py:1757 writes
-  the loop transcript unconditionally under a `-PARTIAL` name; a `done` run's
-  report literally opens "Partial result … Status: done". Cosmetic but actively
-  misleading when auditing runs. Rename to `-RESULT.md` (or stamp status into the
-  name) after checking nothing greps for the PARTIAL suffix.
+- [x] **`loop-*-PARTIAL.md` is misnamed on done runs** — fixed same day: the
+  transcript is `loop-<id>-RESULT.md` when the loop finished done, `-PARTIAL.md`
+  otherwise. Verified no production code reads the filename (only synthetic-name
+  tests + cleanup glob, which matches neither).
 - [ ] **Closure restart doubled a trivial run** — the standing-rule report goal
   (049599c8-sturdy-ridge) finished done 4/4 in loop 1 (~300k tokens), then the
   closure-restart heuristic (handle.py:1091–1180) ran a full second loop (6/6,
@@ -74,10 +73,11 @@ fixed same day (9402d3d). Remaining observations:
   navigator's close judgment is the structural replacement (DUMB_LOOP_AUDIT.md
   priority list); until then consider a cheap "artifact exists + verifier passed"
   short-circuit before restarting.
-- [ ] **Step numbering in transcripts starts mid-sequence** — PARTIAL.md showed
-  "Step 11..14" on a 4-step plan (dry-run showed 11–13 too). Indexing offset
-  between plan revisions and transcript labels; confusing when reading runs.
-  Find where `s.index` diverges from plan position.
+- [x] **Step numbering in transcripts starts mid-sequence** — root-caused same
+  day: `s.index` is the NEXT.md *ledger line* (orch_items.append_next_items
+  returns file-line offsets, headers included), not plan position. Display-only
+  fix: transcripts and the execution log now render `Step <pos>/<n> (ledger #i)`;
+  the ledger index stays untouched (load-bearing for get_item/_by_idx).
 
 ### Goal-brain pressure-test findings — runtime gaps (2026-06-10)
 
