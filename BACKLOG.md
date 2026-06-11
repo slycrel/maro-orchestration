@@ -111,6 +111,15 @@ dead at the extraction step since Phase 59 S1). Remaining observations:
   (origin present, no human reading the text) get a cheap self-verdict and
   demote to `incomplete` when the response reports non-fulfillment
   (`_verify_now_outcome`, fails open). Interactive NOW calls keep raw speed.
+  **Agenda twin fixed same night (02b0263):** the same goal re-run through
+  the loop still finalized done — closure said complete=False at 0.95–0.99
+  but restarted loops were never re-verified and the verdict never gated
+  status. Now: re-verify after closure restart; final complete=False at
+  conf ≥0.7 demotes done→incomplete. **Both fixes live-verified:** the
+  impossible-file probe finalized `incomplete` end-to-end, and the 4th
+  attempt at the binary goal drew the first live RECALL_GUARD_TRIPPED
+  (6 honest non-done priors) with the navigator concurring (close 0.99 /
+  guard_refused).
 - [ ] **Closure demotion doesn't reach the outcome store** — when handle's
   closure verdict demotes done→incomplete (02b0263), run metadata is honest
   (recall/guard read that) but the loop already called reflect_and_record

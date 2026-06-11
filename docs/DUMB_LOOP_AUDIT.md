@@ -17,15 +17,21 @@ Two halves:
 2. **Data (pending):** for each point, does the navigator agree with what the
    heuristic did? Where they diverge, who was right? Query in
    `docs/NAVIGATOR_SCHEMA.md` (NAVIGATOR_DECIDED + pipeline_actual). As of
-   2026-06-11 evening: 6 live dispatch events — 5 agreements (well-formed
-   goals → execute on both sides) and **1 divergence with adjudicated ground
-   truth**: on the deliberately vague goal "improve things" the navigator said
-   escalate (0.95) while the pipeline executed — and the pipeline's "done"
-   included 4.09M tokens and an unreviewed `git push` to mainline authored as
-   the owner (BACKLOG governance item). Navigator was right for exactly the
-   reason its reasoning gave ("no interpretable scope... any next action would
-   be a guess"). Strong single data point for the dispatch class; still not
-   volume — keep accumulating.
+   2026-06-11 night: **15 live dispatch events** — 7 (execute, execute)
+   agreements on well-formed goals, 1 (close, guard_refused) agreement-in-kind
+   (the first live dispatch-guard fire: 4th attempt at an impossible goal,
+   navigator close 0.99 — guard and navigator concur), and 7 divergences
+   (5 escalate-vs-execute, 2 close-vs-execute), **every adjudicated one
+   navigator-right**: (a) vague "improve things" → navigator escalate 0.95,
+   pipeline executed into a 4.09M-token run and an unreviewed mainline push as
+   the owner (BACKLOG governance item); (b) impossible-binary probes →
+   navigator escalate/close 0.95–0.99 (attempt 3 named the done-vs-impossible
+   status contradiction outright), pipeline executed and falsely declared done
+   at both lanes — the status-integrity arc (NOW self-verdict + closure
+   demotion fixes, 59ecacd/02b0263) came from adjudicating these. Caveat: the
+   divergence sample is probe-heavy (deliberately broken goals); agreement
+   rate on organic goals is 8/8. Keep accumulating organic volume before
+   cutover claims.
 
 ## Decision points by file
 
