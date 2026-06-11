@@ -648,6 +648,19 @@ def _handle_impl(
             lane = "agenda"
             reason = reason + " [now→agenda: complex directive escalated to Director]"
             log.info("handle: now→agenda escalation for: %s", message[:80])
+            # Keep run metadata honest about the lane that actually executes —
+            # it was written at classify time, before this flip.
+            try:
+                from runs import write_metadata as _write_meta_esc
+                from runs import current_run_dir as _crd_esc
+                _rd_esc = _crd_esc()
+                if _rd_esc is not None:
+                    _write_meta_esc(
+                        _rd_esc, handle_id=handle_id, prompt=_raw_input,
+                        lane="agenda", model=model,
+                    )
+            except Exception:
+                pass
             # Fall through to the agenda branch below
 
     if lane == "now":
