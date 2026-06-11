@@ -275,6 +275,16 @@ Sample: the 2026-05-13..17 window of `~/.poe/workspace/runs/` (478 dirs total;
   worked. Panel was deliberately biased toward known failures — **no cutover
   conversation until a random-sample round 2 measures false-escalate rate on
   healthy goals.** Goal-brain sequencing (2026-05-18 plan) steps 1–5 complete.
+- **2026-06-11** — Per-thread goal-brain v0 shipped (`src/thread_brain.py`):
+  every run-dir is seeded with `source/goal_brain.md` at creation — goal
+  verbatim + origin ancestry, this file's section grammar scaled down. First
+  call wins (prompt.txt rule). `create_run_dir` registers children in the
+  parent's Threads section (fan-out defense mechanized at the artifact layer);
+  `finalize_run` appends the close. The shadow harness prefers the real
+  artifact; the live dispatch shadow injects the *parent's* brain (the child's
+  run-dir doesn't exist at dispatch time). Per-turn maintenance deliberately
+  deferred to navigator-live (MILESTONES Next Up #5) — writing it from the
+  dumb pipeline would duplicate the navigator's job.
 
 ## Threads (system-maintained — nothing leaves this list silently)
 
@@ -332,9 +342,10 @@ Dormant (deliberately parked, not dropped):
 
 - ~~**recall() shape**~~ — answered 2026-06-10 (`docs/RECALL_DESIGN.md`); edge
   vocabulary pinned there too. Successor questions: guard thresholds are unmeasured
-  (watch RECALL_GUARD_TRIPPED), and per-thread goal-brain creation (the navigator
-  slice injects "the" goal-brain, but only the project's own exists today) is a
-  step-4/5 question.
+  (watch RECALL_GUARD_TRIPPED). ~~Per-thread goal-brain creation~~ answered
+  2026-06-11: `src/thread_brain.py` seeds `source/goal_brain.md` in every run-dir
+  (this file's section grammar scaled down); remaining piece is per-turn
+  maintenance once the navigator goes live.
 - **Fan-out recoverability mechanism** — *visibility half answered 2026-06-11 at the
   schema layer*: `open_children` rides in every NavigatorInput and close is invalid
   while any child is undispositioned (`docs/NAVIGATOR_SCHEMA.md`). Still open:

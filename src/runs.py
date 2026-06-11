@@ -111,6 +111,20 @@ def create_run_dir(
     if not prompt_path.exists():
         prompt_path.write_text(prompt, encoding="utf-8")
 
+    # Per-thread goal-brain — first call wins, same rule as prompt.txt.
+    try:
+        import thread_brain
+        origin = (extra_metadata or {}).get("origin")
+        origin = origin if isinstance(origin, dict) else None
+        created = thread_brain.create_thread_brain(rd, goal=prompt, origin=origin)
+        # Fan-out defense: a new child registers in its parent's Threads
+        # section so nothing leaves the parent's list silently.
+        parent_id = str((origin or {}).get("parent_handle_id") or "")
+        if created is not None and parent_id:
+            thread_brain.record_child(run_dir(parent_id), handle_id, prompt)
+    except Exception:
+        pass  # a thread-brain failure must not block run-dir creation
+
     write_metadata(
         rd,
         handle_id=handle_id,
@@ -190,6 +204,11 @@ def finalize_run(
     meta["status"] = status
     meta["ended_at"] = ended_at or datetime.now(timezone.utc).isoformat()
     meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+    try:
+        import thread_brain
+        thread_brain.record_close(rd, status=status)
+    except Exception:
+        pass  # never block finalize on the audit artifact
     return rd
 
 

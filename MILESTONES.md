@@ -96,7 +96,19 @@ M1–M5 complete: the session-40 arc (memory lifecycle → standing rules → re
 
 ---
 
-## Next Up — Goal-brain artifact definition (per 2026-05-18 conversation)
+## Next Up (refreshed 2026-06-11 — goal-brain sequencing complete, queue rebuilt)
+
+1. **Async fork join + `wait`** — `fork` exists in the navigator schema; the runner has no join semantics.
+2. **Per-decision-class cutover** — only after live shadow agreement data accumulates (`navigator.shadow_dispatch` is on for this box; analysis query in NAVIGATOR_SCHEMA.md). Explicitly not before.
+3. **Dumb-loop audit** — after navigator v1 has data; which pipeline decision points the navigator makes redundant.
+4. **Skill/playbook freshness layers** — only if staleness shows up there in practice (rules have it; skills have score + circuit breaker).
+5. **Thread-brain per-turn maintenance** — v0 writes at open/close + fork registration; nothing writes Compiled truth / Decisions *during* a run yet. Wire `append_decision` / `append_compiled_truth` into the loop once the navigator goes live (the navigator is the natural maintainer; doing it from the dumb pipeline would duplicate that work).
+
+## Done (2026-06-11 — per-thread goal-brain v0)
+
+- [x] **Per-thread goal-brain creation** — `src/thread_brain.py`: every run-dir gets `source/goal_brain.md` seeded at creation (goal **verbatim** + origin ancestry; same section grammar as `GOAL_BRAIN.md` scaled down: Intent / Compiled truth / Decisions append-only / Threads / Open questions). First call wins (prompt.txt rule) so re-creates never clobber accreted state. Lifecycle wired in `runs.py`: `create_run_dir` seeds it and registers the child in its **parent's** Threads section (fan-out defense — nothing leaves the list silently); `finalize_run` appends `thread closed: <status>`. `navigator_shadow._goal_brain_standin` now prefers the real artifact, falling back to resolved_intent/scope for pre-existing runs; `shadow_dispatch_live` loads the **parent** thread's brain at dispatch (this thread's run-dir doesn't exist yet — the decision is made in the parent's context). `load_thread_brain` caps at 4k chars keeping head+tail (intent + newest decisions). All writers never-raise. 19 new tests (test_thread_brain.py).
+
+## Done (2026-06-10/11 — goal-brain artifact definition, steps 1–5, per 2026-05-18 conversation)
 
 _Sequencing agreed in `docs/conversations/2026-05-18-memory-and-goal-brain.md` (Claude + Poe-codex converged). Phase 65 implementation is **paused** — see session-38 delta-audit; its minimum experiment already shipped as `src/scope.py` + `ResolvedIntent`._
 

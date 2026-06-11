@@ -138,7 +138,9 @@ This is already the skeleton in `src/runs.py` (shipped 2026-04-25/26 as transpar
 
 ```
 ~/.poe/workspace/runs/<handle_id>-<nickname>/
-  source/      # original goal, user context, scope.md, resolved_intent.md
+  source/      # original goal, user context, scope.md, resolved_intent.md,
+               # goal_brain.md (per-thread goal-brain — seeded at creation,
+               # src/thread_brain.py, 2026-06-11)
   build/       # plans, scratchpads, captains_log_slice, intermediate artifacts
   artifact/    # final deliverables, repo bundles, output the user gets
   children/    # sub-thread folders (recursive structure)
