@@ -1770,3 +1770,69 @@ class TestDeduplicateLessons:
         assert stats["after"] == 0
         assert stats["removed_exact"] == 0
         assert stats["removed_near"] == 0
+
+
+class TestTypedLessonExtraction:
+    """The production prompt asks for [{"lesson": ..., "type": ...}] objects;
+    safe_list's str default silently dropped every dict, so extraction
+    returned [] on every real run (found live 2026-06-11)."""
+
+    class _DictAdapter:
+        def complete(self, messages, **kw):
+            import types, json
+            return types.SimpleNamespace(content=json.dumps([
+                {"lesson": "validate file readability before aggregation",
+                 "type": "verification"},
+                {"lesson": "parallelize independent reads", "type": "execution"},
+            ]))
+
+    def test_typed_dict_lessons_survive_parsing(self):
+        from memory import extract_lessons_via_llm
+        result = extract_lessons_via_llm(
+            "goal", "done", "summary", "agenda",
+            adapter=self._DictAdapter(), return_typed=True,
+        )
+        assert ("validate file readability before aggregation", "verification") in result
+        assert ("parallelize independent reads", "execution") in result
+
+    def test_typed_dicts_flatten_to_strings_for_legacy_callers(self):
+        from memory import extract_lessons_via_llm
+        result = extract_lessons_via_llm(
+            "goal", "done", "summary", "agenda",
+            adapter=self._DictAdapter(), return_typed=False,
+        )
+        assert "validate file readability before aggregation" in result
+
+    def test_mixed_dict_and_string_items(self):
+        from memory import extract_lessons_via_llm
+        import types, json
+
+        class MixedAdapter:
+            def complete(self, messages, **kw):
+                return types.SimpleNamespace(content=json.dumps([
+                    {"lesson": "typed one", "type": "planning"},
+                    "legacy plain string",
+                ]))
+
+        result = extract_lessons_via_llm(
+            "goal", "done", "summary", "agenda",
+            adapter=MixedAdapter(), return_typed=True,
+        )
+        assert ("typed one", "planning") in result
+        assert ("legacy plain string", "execution") in result
+
+    def test_unknown_type_falls_back_to_execution(self):
+        from memory import extract_lessons_via_llm
+        import types, json
+
+        class WeirdTypeAdapter:
+            def complete(self, messages, **kw):
+                return types.SimpleNamespace(content=json.dumps([
+                    {"lesson": "odd typed", "type": "interpretive-dance"},
+                ]))
+
+        result = extract_lessons_via_llm(
+            "goal", "done", "summary", "agenda",
+            adapter=WeirdTypeAdapter(), return_typed=True,
+        )
+        assert result == [("odd typed", "execution")]

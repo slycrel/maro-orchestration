@@ -358,7 +358,11 @@ def extract_lessons_via_llm(
     def _parse_typed(raw: object) -> "List[tuple]":
         """Parse [{"lesson": ..., "type": ...}] or ["plain string", ...] — both accepted."""
         results = []
-        items = safe_list(raw, max_items=3)
+        # element_type must admit dicts: safe_list defaults to str, which
+        # silently dropped every typed lesson object — the shape the prompt
+        # explicitly asks for — so production extraction returned [] on
+        # every run (found live 2026-06-11; tests only fed legacy strings).
+        items = safe_list(raw, element_type=(dict, str), max_items=3)
         for item in items:
             if isinstance(item, dict):
                 lesson_text = str(item.get("lesson", "")).strip()

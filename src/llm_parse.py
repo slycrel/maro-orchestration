@@ -18,7 +18,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from typing import Any, Optional, Union
+from typing import Any, Optional, Tuple, Union
 
 log = logging.getLogger("poe.llm_parse")
 
@@ -197,11 +197,18 @@ def safe_str(value: Any, *, default: str = "", max_len: Optional[int] = None) ->
 # safe_list — ensure a value is a list of a given element type
 # ---------------------------------------------------------------------------
 
-def safe_list(value: Any, *, element_type: type = str, max_items: Optional[int] = None) -> list:
+def safe_list(
+    value: Any,
+    *,
+    element_type: Union[type, Tuple[type, ...]] = str,
+    max_items: Optional[int] = None,
+) -> list:
     """Return value if it's a list of element_type items, else [].
 
     Filters out items that don't match element_type rather than rejecting
-    the whole list.
+    the whole list. element_type accepts a tuple of types (isinstance
+    semantics). NOTE the str default: callers parsing lists of JSON objects
+    must pass element_type=dict (or a tuple) or every item is dropped.
     """
     if not isinstance(value, list):
         return []
