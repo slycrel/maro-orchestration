@@ -1772,3 +1772,21 @@ class TestNowStatusHonesty:
                 result = handle("do it", adapter=adapter, force_lane="now", dry_run=False)
         assert result.status == "done"
         adapter.complete.assert_not_called()
+
+
+class TestEscalationLaneMetadata:
+    def test_escalated_run_metadata_records_agenda(self, monkeypatch, tmp_path):
+        """The now→agenda escalation must rewrite the lane written at classify time."""
+        _setup(monkeypatch, tmp_path)
+        from unittest.mock import patch
+        msg = ("Run the command /usr/bin/some-tool --report and save its complete "
+               "output as an artifact file. Do not substitute another command and "
+               "do not fabricate output. If the tool cannot be run, the goal is incomplete.")
+        from handle import _is_complex_directive
+        assert _is_complex_directive(msg)
+        with patch("intent.classify", return_value=("now", 0.9, "looks quick")):
+            result = handle(msg, dry_run=True)
+        assert result.lane == "agenda"
+        from runs import run_dir
+        meta = json.loads((run_dir(result.handle_id) / "metadata.json").read_text())
+        assert meta["lane"] == "agenda"
