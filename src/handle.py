@@ -340,8 +340,14 @@ def handle(
     cron/daemon), and never allowed to affect the request's outcome. Skipped
     on dry_run so dry runs stay side-effect free.
     """
+    result: Optional[HandleResult] = None
     try:
-        return _handle_impl(
+        from runs import current_handle_id as _pre_hid_fn
+        _pre_hid = _pre_hid_fn()
+    except Exception:
+        _pre_hid = None
+    try:
+        result = _handle_impl(
             message,
             project=project,
             repo_path=repo_path,
@@ -354,7 +360,39 @@ def handle(
             prior_context=prior_context,
             origin=origin,
         )
+        return result
     finally:
+        # Finalize the per-run metadata for EVERY caller, not just the CLI.
+        # Before 2026-06-11 only cli main() finalized, so task-path runs
+        # (drain_task_store -> handle_task -> handle) were left status=None
+        # -> recall read them as "unknown" -> all_failing counted a
+        # *succeeding* repeat goal as failing and could trip the dispatch
+        # guard on it. On an exception the run is closed as "error" via the
+        # pinned run context. The CLI keeps only the context clear.
+        try:
+            from runs import finalize_run as _finalize_run
+            from runs import slice_log_for_run as _slice_log
+            from runs import snapshot_repo_bundle as _snapshot_repo
+            from runs import current_handle_id as _current_hid
+            if result is not None:
+                _hid = result.handle_id
+            else:
+                # Exception path: only trust the pinned run context if THIS
+                # call pinned it — a long-lived process (drain loop) may
+                # still carry the previous task's pin if we raised before
+                # create_run_dir ran.
+                _hid = _current_hid()
+                if _hid == _pre_hid:
+                    _hid = None
+            if _hid:
+                _slice_log(_hid)
+                _snapshot_repo(_hid)
+                _finalize_run(
+                    _hid,
+                    status=result.status if result is not None else "error",
+                )
+        except Exception:
+            pass  # finalize must never affect the request outcome
         if not dry_run:
             try:
                 from knowledge_web import maybe_consolidate
@@ -1770,18 +1808,12 @@ def main(argv=None):
         verbose=args.verbose,
     )
 
-    # Finalize the per-run metadata.json + slice captain's log + repo
-    # bundle + clear the current-run context. The CLI is the paid-spend
-    # entry point; programmatic test callers that care about isolation
-    # can call set_current_run_dir(None) themselves.
+    # Per-run finalize (metadata status, log slice, repo bundle) happens in
+    # handle() itself for every caller as of 2026-06-11. The CLI only clears
+    # the current-run context; programmatic test callers that care about
+    # isolation can call set_current_run_dir(None) themselves.
     try:
-        from runs import finalize_run as _finalize_run
-        from runs import slice_log_for_run as _slice_log
-        from runs import snapshot_repo_bundle as _snapshot_repo
         from runs import set_current_run_dir as _clear_run
-        _slice_log(result.handle_id)
-        _snapshot_repo(result.handle_id)
-        _finalize_run(result.handle_id, status=result.status)
         _clear_run(None)
     except Exception:
         pass

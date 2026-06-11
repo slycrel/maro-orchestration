@@ -1586,3 +1586,67 @@ class TestPostEscalateClosure:
         assert call_count["n"] == 2
         assert result is not None
         assert result.status in ("done", "complete", "stuck", "partial", "restart")
+
+
+# ---------------------------------------------------------------------------
+# Per-run finalize in handle() itself (2026-06-11): every caller — not just
+# the CLI — must leave run metadata with a real status, or recall reads the
+# run as "unknown" and the dispatch guard counts succeeding repeats as
+# failing.
+# ---------------------------------------------------------------------------
+
+class TestHandleFinalizesRun:
+    def _run_meta(self, handle_id):
+        from runs import run_dir
+        return json.loads((run_dir(handle_id) / "metadata.json").read_text())
+
+    def test_programmatic_handle_finalizes_metadata(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        result = handle("what time is it?", dry_run=True)
+        meta = self._run_meta(result.handle_id)
+        assert meta["status"] == result.status
+        assert meta["ended_at"] is not None
+
+    def test_finalize_records_thread_brain_close(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        import thread_brain
+        from runs import run_dir
+        result = handle("what time is it?", dry_run=True)
+        text = thread_brain.load_thread_brain(run_dir(result.handle_id))
+        assert f"thread closed: {result.status}" in text
+
+    def test_exception_path_finalizes_as_error(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        from unittest.mock import patch
+        import runs
+
+        runs.set_current_run_dir(None)
+        with patch("intent.classify", side_effect=RuntimeError("boom")):
+            with pytest.raises(RuntimeError):
+                handle("what time is it?", dry_run=True)
+        # The run dir was pinned by this call before the raise — it must be
+        # closed as error, not left status=None.
+        rd = runs.current_run_dir()
+        assert rd is not None
+        meta = json.loads((rd / "metadata.json").read_text())
+        assert meta["status"] == "error"
+
+    def test_stale_pin_from_prior_task_not_finalized_on_early_raise(
+        self, monkeypatch, tmp_path
+    ):
+        _setup(monkeypatch, tmp_path)
+        from unittest.mock import patch
+
+        # Simulate a drain loop: task A finished and left its pin (only the
+        # CLI clears). Task B raises before _handle_impl pins a new run dir
+        # (in-body failures before create_run_dir are all swallowed, so the
+        # equivalent observable is _handle_impl itself raising early).
+        prior = handle("what time is it?", dry_run=True)
+        prior_meta_before = self._run_meta(prior.handle_id)
+
+        with patch("handle._handle_impl", side_effect=RuntimeError("early boom")):
+            with pytest.raises(RuntimeError):
+                handle("second goal", dry_run=True)
+
+        # Task A's metadata must be untouched (not re-finalized as "error").
+        assert self._run_meta(prior.handle_id) == prior_meta_before
