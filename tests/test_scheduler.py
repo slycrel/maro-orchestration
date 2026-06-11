@@ -137,9 +137,12 @@ class TestCheckDueJobs:
         from datetime import datetime as dt
 
         job = add_job("Inflight", {"type": "once", "time": "09:00"})
-        assert mark_job_dispatched(job["job_id"]) is True
-
         after = dt.fromisoformat(job["next_run"]) + timedelta(minutes=5)
+        # Stamp the lease at the synthetic probe time — stamping at real wall
+        # clock made this test time-of-day dependent (lease read as stale
+        # whenever the next 09:00 was more than the lease timeout away).
+        assert mark_job_dispatched(job["job_id"], now=after) is True
+
         assert check_due_jobs(now=after) == []
 
         stale_after = after + timedelta(hours=7)

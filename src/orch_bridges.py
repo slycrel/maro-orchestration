@@ -206,21 +206,28 @@ def _load_worker_session_manifest(path: Path) -> WorkerSessionSpec:
         raw_args = data.get("argv")
     if raw_args is None and "arguments" in data:
         raw_args = data.get("arguments")
-    command_parts: list[str]
-    if isinstance(raw_command, (list, tuple)):
-        command_parts = [str(part).strip() for part in raw_command]
-    else:
-        command_text = str(raw_command).strip()
-        if not command_text:
-            raise ValueError(f"invalid worker session manifest format in {path}: missing 'command'")
-        command_parts = [command_text]
+    arg_parts: list[str] = []
     if raw_args is not None:
         if not isinstance(raw_args, (list, tuple)):
             raise ValueError(f"invalid worker session args in {path}")
-        command_parts.extend(str(part).strip() for part in raw_args)
-    if not command_parts or any(not part for part in command_parts):
-        raise ValueError(f"invalid worker session command in {path}")
-    command = " ".join(quote(part) for part in command_parts)
+        arg_parts = [str(part).strip() for part in raw_args]
+    if isinstance(raw_command, (list, tuple)):
+        command_parts = [str(part).strip() for part in raw_command] + arg_parts
+        if not command_parts or any(not part for part in command_parts):
+            raise ValueError(f"invalid worker session command in {path}")
+        command = " ".join(quote(part) for part in command_parts)
+    else:
+        # A string command is a shell command line — pass it verbatim, same as
+        # the top-level-string manifest form. Quoting it as a single argv token
+        # makes /bin/sh look for a program literally named the whole line (127).
+        command_text = str(raw_command).strip()
+        if not command_text:
+            raise ValueError(f"invalid worker session manifest format in {path}: missing 'command'")
+        if any(not part for part in arg_parts):
+            raise ValueError(f"invalid worker session command in {path}")
+        command = command_text
+        if arg_parts:
+            command = command_text + " " + " ".join(quote(part) for part in arg_parts)
 
     raw_payload_name = data.get("payload_name")
     if raw_payload_name is None and "payload_file" in data:
