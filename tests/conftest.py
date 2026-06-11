@@ -133,3 +133,22 @@ def _block_subprocess_llm(monkeypatch):
 
     monkeypatch.setattr(llm, "_run_subprocess_safe", _guarded)
     yield
+
+
+@pytest.fixture(autouse=True)
+def _clear_current_run_dir():
+    """Reset the runs.py current-run-dir global between tests.
+
+    handle() pins the run dir via set_current_run_dir() and only the CLI
+    entry point clears it (the documented contract: programmatic callers
+    that care about isolation clear it themselves). Tests are exactly such
+    callers — a leaked run dir makes runs.artifact_dir() route later tests'
+    artifacts into the stale run's build/ instead of projects/<p>/artifacts
+    (the order-dependent plan-manifest failures in test_agent_loop.py).
+    """
+    yield
+    try:
+        import runs
+        runs.set_current_run_dir(None)
+    except Exception:
+        pass
