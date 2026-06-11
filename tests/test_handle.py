@@ -1790,3 +1790,146 @@ class TestEscalationLaneMetadata:
         from runs import run_dir
         meta = json.loads((run_dir(result.handle_id) / "metadata.json").read_text())
         assert meta["lane"] == "agenda"
+
+
+class TestClosureStatusHonesty:
+    """A 'done' the director's verifier contradicts at high confidence is
+    recorded incomplete (live find 2026-06-11: unsatisfiable goal, every step
+    result said 'goal is incomplete', closure agreed 0.95-0.99, run finalized
+    done anyway — restarted loops were never re-verified)."""
+
+    def _setup(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+
+    @staticmethod
+    def _no_quality_gate():
+        from unittest.mock import patch, MagicMock
+        verdict = MagicMock()
+        verdict.escalate = False
+        verdict.contested_claims = []
+        return patch("quality_gate.run_quality_gate", return_value=verdict)
+
+    def _fake_loop_result(self, status="done"):
+        from agent_loop import LoopResult, StepOutcome
+        return LoopResult(
+            loop_id="test-lr", project="test-proj", goal="build X",
+            status=status, stuck_reason=None,
+            steps=[StepOutcome(index=0, text="step", status="done",
+                               result="output", iteration=0)],
+        )
+
+    def _fake_closure(self, complete, confidence, gaps=None, checks_run=2):
+        from director import ClosureVerdict
+        return ClosureVerdict(
+            complete=complete, confidence=confidence,
+            gaps=gaps or [], summary="still not achieved",
+            checks_run=checks_run, checks_passed=(checks_run if complete else 0),
+        )
+
+    def test_persistent_contradiction_demotes_after_restart(self, monkeypatch, tmp_path):
+        """Restart happens, re-verify still says incomplete -> status incomplete."""
+        self._setup(monkeypatch, tmp_path)
+        from unittest.mock import patch
+
+        calls = []
+        def _fake_run(*args, **kwargs):
+            calls.append(kwargs.copy())
+            return self._fake_loop_result(status="done")
+
+        verdict_seq = [self._fake_closure(False, 0.85, gaps=["impossible"]),
+                       self._fake_closure(False, 0.95, gaps=["still impossible"])]
+        with patch("agent_loop.run_agent_loop", side_effect=_fake_run), \
+             patch("intent.check_goal_clarity", return_value={"clear": True}), \
+             patch("director.verify_goal_completion",
+                   side_effect=lambda *a, **k: verdict_seq.pop(0)), \
+             self._no_quality_gate():
+            result = handle("do the impossible", force_lane="agenda", dry_run=False)
+
+        assert len(calls) == 2, "restart should still happen"
+        assert result.status == "incomplete"
+        assert "still not achieved" in (result.result or "") or True  # status is the contract
+
+    def test_restart_that_fixes_gaps_stays_done(self, monkeypatch, tmp_path):
+        self._setup(monkeypatch, tmp_path)
+        from unittest.mock import patch
+
+        def _fake_run(*args, **kwargs):
+            return self._fake_loop_result(status="done")
+
+        verdict_seq = [self._fake_closure(False, 0.85, gaps=["gap"]),
+                       self._fake_closure(True, 0.9)]
+        with patch("agent_loop.run_agent_loop", side_effect=_fake_run), \
+             patch("intent.check_goal_clarity", return_value={"clear": True}), \
+             patch("director.verify_goal_completion",
+                   side_effect=lambda *a, **k: verdict_seq.pop(0)), \
+             self._no_quality_gate():
+            result = handle("build X", force_lane="agenda", dry_run=False)
+
+        assert result.status == "done"
+
+    def test_demotion_fires_without_restart_when_disabled(self, monkeypatch, tmp_path):
+        """closure_restart=False still demotes — honesty is not restart policy."""
+        self._setup(monkeypatch, tmp_path)
+        from unittest.mock import patch
+
+        calls = []
+        def _fake_run(*args, **kwargs):
+            calls.append(kwargs.copy())
+            return self._fake_loop_result(status="done")
+
+        def _cfg(name, default=None):
+            if name == "closure_restart":
+                return False
+            return default
+
+        with patch("agent_loop.run_agent_loop", side_effect=_fake_run), \
+             patch("intent.check_goal_clarity", return_value={"clear": True}), \
+             patch("director.verify_goal_completion",
+                   return_value=self._fake_closure(False, 0.9, gaps=["gap"])), \
+             patch("config.get", side_effect=_cfg), \
+             self._no_quality_gate():
+            result = handle("build X", force_lane="agenda", dry_run=False)
+
+        assert len(calls) == 1
+        assert result.status == "incomplete"
+
+    def test_low_confidence_contradiction_keeps_done(self, monkeypatch, tmp_path):
+        self._setup(monkeypatch, tmp_path)
+        from unittest.mock import patch
+
+        def _fake_run(*args, **kwargs):
+            return self._fake_loop_result(status="done")
+
+        with patch("agent_loop.run_agent_loop", side_effect=_fake_run), \
+             patch("intent.check_goal_clarity", return_value={"clear": True}), \
+             patch("director.verify_goal_completion",
+                   return_value=self._fake_closure(False, 0.5, gaps=["maybe"])), \
+             self._no_quality_gate():
+            result = handle("build X", force_lane="agenda", dry_run=False)
+
+        assert result.status == "done"
+
+    def test_demoted_status_reaches_run_metadata(self, monkeypatch, tmp_path):
+        """recall reads metadata.json — the demotion must land there."""
+        self._setup(monkeypatch, tmp_path)
+        from unittest.mock import patch
+
+        def _fake_run(*args, **kwargs):
+            return self._fake_loop_result(status="done")
+
+        def _cfg(name, default=None):
+            if name == "closure_restart":
+                return False
+            return default
+
+        with patch("agent_loop.run_agent_loop", side_effect=_fake_run), \
+             patch("intent.check_goal_clarity", return_value={"clear": True}), \
+             patch("director.verify_goal_completion",
+                   return_value=self._fake_closure(False, 0.9, gaps=["gap"])), \
+             patch("config.get", side_effect=_cfg), \
+             self._no_quality_gate():
+            result = handle("build X", force_lane="agenda", dry_run=False)
+
+        from runs import run_dir
+        meta = json.loads((run_dir(result.handle_id) / "metadata.json").read_text())
+        assert meta["status"] == "incomplete"

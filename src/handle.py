@@ -1299,8 +1299,51 @@ def _handle_impl(
                 try:
                     loop_result = run_agent_loop(message, **_closure_kwargs)
                     elapsed = int((time.monotonic() - started_at) * 1000)
+                    # Re-verify the restarted loop — its declared status is
+                    # exactly as unverified as the first loop's was. Without
+                    # this, a restart that re-declares done sticks regardless
+                    # of whether the gaps were addressed.
+                    try:
+                        _closure = verify_goal_completion(
+                            message,
+                            loop_result.steps,
+                            adapter,
+                            workspace_path=repo_path or "",
+                            channel=channel,
+                            scope=_scope,
+                            resolved_intent=_resolved_intent,
+                            diagnosis=None,
+                            loop_id=getattr(loop_result, "loop_id", "") or "",
+                        )
+                    except Exception:
+                        _closure = None  # fail open: no re-verdict, no demotion
                 except Exception as _cr_exc:
                     log.warning("handle: closure restart re-run failed: %s", _cr_exc)
+
+            # Status honesty (agenda twin of _verify_now_outcome): when the
+            # director's own verifier contradicts a declared "done" at high
+            # confidence, the run is recorded as incomplete. Live find
+            # 2026-06-11: an unsatisfiable goal ran the loop, every step
+            # result said "goal is incomplete", closure agreed at 0.95–0.99 —
+            # and the run still finalized done, poisoning recall, the
+            # dispatch guard, and the navigator. Verified-done beats
+            # reported-done.
+            if (
+                _closure is not None
+                and not _closure.complete
+                and _closure.confidence >= 0.7
+                and loop_result.status == "done"
+            ):
+                log.info(
+                    "handle: closure contradicts done (conf=%.2f) — status demoted to incomplete: %s",
+                    _closure.confidence,
+                    str(_closure.summary)[:120],
+                )
+                loop_result.status = "incomplete"
+                if loop_result.stuck_reason is None:
+                    loop_result.stuck_reason = (
+                        f"closure verification: {str(_closure.summary)[:300]}"
+                    )
 
         # Notify channel that the main loop completed
         if channel is not None:
