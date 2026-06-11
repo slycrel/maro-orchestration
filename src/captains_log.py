@@ -107,6 +107,13 @@ STEP_TOO_BROAD = "STEP_TOO_BROAD"
 RECALL_PERFORMED = "RECALL_PERFORMED"
 RECALL_GUARD_TRIPPED = "RECALL_GUARD_TRIPPED"
 
+# Navigator instrumentation (goal-brain step 4, docs/NAVIGATOR_SCHEMA.md).
+# One per navigator invocation, shadow or live: input digest, decision, tier,
+# and (in shadow mode) what the static pipeline actually did — the divergence
+# signal that earns per-class cutover. Visibility + crystallization substrate;
+# nothing reads it for control flow.
+NAVIGATOR_DECIDED = "NAVIGATOR_DECIDED"
+
 EVENT_TYPES = {
     SKILL_SYNTHESIZED, SKILL_SYNTHESIS_REJECTED, SKILL_PROMOTED, SKILL_DEMOTED, SKILL_REWRITE,
     SKILL_CIRCUIT_OPEN, SKILL_CIRCUIT_HALF_OPEN, SKILL_CIRCUIT_CLOSED,
@@ -122,6 +129,7 @@ EVENT_TYPES = {
     CLAIM_VERIFIER_OUTCOME,
     LOOP_CREATED, QUALITY_GATE_VERDICT, STEP_TOO_BROAD,
     RECALL_PERFORMED, RECALL_GUARD_TRIPPED,
+    NAVIGATOR_DECIDED,
 }
 
 # ---------------------------------------------------------------------------

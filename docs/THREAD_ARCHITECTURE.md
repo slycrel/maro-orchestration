@@ -238,10 +238,13 @@ The navigator doesn't *force* planning on every thread (today's bug). It also do
 These are the questions we deferred. Ordered roughly by load-bearing-ness.
 
 1. **Navigator's prompt + decision schema.** The single most load-bearing artifact. State it sees, decisions it returns, return-shape for *idunno* vs concrete moves, how it represents thread state compactly. Drafting this will force concrete answers to a lot of the rest.
+   *Schema half resolved 2026-06-11 → `docs/NAVIGATOR_SCHEMA.md` + `src/navigator.py` (goal-brain sequencing step 4). Prompt half is step 5.*
 
 2. **How forks rejoin.** Sync vs async. Failure semantics (one child fails → parent retries that one? abandons? promotes failure?). Partial-collate when only some children return. Probably needs a couple of worked examples (kanji, reddit/marketplace) before pinning.
+   *Schema-layer half resolved 2026-06-11 (NAVIGATOR_SCHEMA.md): v1 join is sync; failed children stay visible in `open_children`; partial-collate is legal; close must disposition every open child. Retry-vs-abandon policy stays navigator judgment (step-5 prompt).*
 
 3. **Recall() interface signature.** Pin it before building. What it takes as input (thread state, current turn, query?). What it returns (ranked list with provenance? typed artifacts?). Behind it can swap; the seam shouldn't.
+   *Resolved 2026-06-10 → `docs/RECALL_DESIGN.md` + `src/recall.py` (goal-brain sequencing step 3).*
 
 4. **Persona library shape.** Fixed curated set vs. navigator-evolved. Today YAML + prefix selection. If navigator picks per-turn, what's the registry? Skill+persona creation as part of self-improvement is a real concern (Jeremy: 5–10 core, evolving).
 
@@ -250,6 +253,7 @@ These are the questions we deferred. Ordered roughly by load-bearing-ness.
 6. **How the navigator improves.** Tied to verify→learn loop closure (currently broken). Crystallization Stages 1→5 is the *what*; the *how* (data flow, attribution, when patterns harden) needs design.
 
 7. **Captain's-log demotion audit.** What's currently relying on captain's log as infrastructure that needs another path? Probably touches inspector, evolver, structured event listeners.
+   *Done 2026-06-11 (GOAL_BRAIN.md Compiled truth has the findings): one load-bearing use found and fixed (`scan_evolver_impact` apply timestamps → now stamped in suggestions.jsonl); two prompt-injection read bridges to be absorbed by recall()'s loop slice; everything else is visibility.*
 
 8. **Stage 5 portability.** If rules are Python code, how do they survive HDD loss / orchestrator switch? Declarative form? Always-regenerable from skill artifacts?
 
