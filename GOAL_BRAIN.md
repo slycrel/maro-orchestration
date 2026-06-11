@@ -80,7 +80,10 @@ different enough from a person's bran so as to not lose the benefits we enjoy fr
 computerization."* And the fidelity intuition: *"feels like there's going to be a
 'close enough' type simulation, like the mesh of the ground in a video game, along
 with a general physics engine; it's not the earth, but it approximates it well
-enough that you don't usually notice."*
+enough that you don't usually notice."* Follow-up same day, pinning the first
+pass: *"my gut's saying that the first pass of a decay is to add the existing
+mechanism + failure to the prompt to re-fight the battle; at worst we have better
+context, at best it's a slight tweak and we fix forward."*
 
 ## Invariants (human-steerable, quoted)
 
@@ -228,6 +231,14 @@ Sample: the 2026-05-13..17 window of `~/.poe/workspace/runs/` (478 dirs total;
   instrumentation. Dispatch guard defaults are a made call, not measured: ≥3
   attempts in 60min all non-done → refuse (autonomous requeue path only; humans
   and dry runs never blocked). Revisit against RECALL_GUARD_TRIPPED data.
+- **2026-06-11** — Decay-by-invalidation v0 pinned (Jeremy's gut, on the list, not
+  in flight): on crystallized-artifact failure, re-fight the battle — inject the
+  existing mechanism + the failure into the prompt and re-derive. Worst case better
+  context, best case fix forward. Companion requirements: `last_verified` freshness
+  signal distinct from reinforcement; decay trust never data (append-only evidence
+  layer stays perfect, only compiled confidence decays); Stages 4–5 demotable to
+  language form. No scheduled re-verification — collision detection rides on use
+  (no-cron invariant). Queued behind navigator (BACKLOG.md 2026-06-11 section).
 
 ## Threads (system-maintained — nothing leaves this list silently)
 
