@@ -267,7 +267,7 @@ Two-part session. First: analyze the 2026-04-22 scope A/B chain (6 runs, 3 treat
 - Step runner has no hang protection / no long-lived-process affordance (run-02 SIGTERM)
 - Rate-limit recovery has no total-backoff cap; phantom `Step -1` on recovery path (run-06)
 - `decomposition_too_broad` miscalibrated post-scope (fires on every 8-step treat run)
-- `run-03-treat` didn't emit CLOSURE_VERDICT (likely short-circuited by a diagnosis)
+- [x] `run-03-treat` CLOSURE_VERDICT missing — fixed 2026-06-11: `_emit_skip()` added to all early-exit paths in `verify_goal_completion` (4 regression tests)
 
 **Explicitly deferred for later steps** (so future session picks them up with shape named):
 - Cross-turn agenda-state carryover (godot-replay finding: dormant-but-open items)
