@@ -1,0 +1,251 @@
+"""Tests for the navigator prompt seam + shadow replay (goal-brain step 5).
+
+All LLM behavior is faked at the adapter seam — conftest blocks the real
+CLIs and these tests never build a live adapter.
+"""
+import json
+
+import pytest
+
+import captains_log
+from navigator import ChildSummary, NavigatorInput, WorkReport
+from navigator_prompt import decide, render_input
+from navigator_shadow import input_from_run, replay_run, resolve_run_dir
+
+
+def _resp(move, reasoning="because", confidence=0.7, **payload):
+    return json.dumps({
+        "move": move, "reasoning": reasoning,
+        "confidence": confidence, "payload": payload,
+    })
+
+
+class _FakeAdapter:
+    """Returns scripted responses in order; repeats the last one."""
+
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.calls = []
+
+    def complete(self, messages, **kwargs):
+        self.calls.append(messages)
+        text = self.responses.pop(0) if len(self.responses) > 1 else self.responses[0]
+
+        class R:
+            content = text
+        return R()
+
+
+def _factory_for(tier_map, built):
+    """tier_map: tier -> list of scripted responses."""
+    def factory(tier):
+        built.append(tier)
+        return _FakeAdapter(tier_map[tier])
+    return factory
+
+
+def _nav_input(**kw):
+    defaults = dict(goal="check reddit for a used thinkpad")
+    defaults.update(kw)
+    return NavigatorInput(**defaults)
+
+
+class TestRenderInput:
+    def test_sections_always_present(self):
+        text = render_input(_nav_input())
+        for header in ("## Goal (verbatim)", "## Goal context", "## Ancestry",
+                       "## Turn", "## Last work turn", "## Open children",
+                       "## What the system already knows"):
+            assert header in text
+        assert "(none — no work has run yet)" in text
+        assert "(nothing relevant on record)" in text
+
+    def test_work_report_and_children_rendered(self):
+        text = render_input(_nav_input(
+            last_work=WorkReport(
+                move="execute", status="failed", summary="fetch died",
+                recommendation="retry with backoff", signals={"errors": 2}),
+            open_children=[ChildSummary("c1", "check craigslist", "failed")],
+            recall_block="Prior attempts: 3 runs, all stuck.",
+        ))
+        assert "fetch died" in text
+        assert "advisory, not binding" in text
+        assert "c1 [failed] check craigslist" in text
+        assert "Prior attempts: 3 runs" in text
+
+
+class TestDecideTierChain:
+    def test_first_tier_decides(self):
+        built = []
+        d, meta = decide(
+            _nav_input(),
+            tiers=["cheap", "mid"],
+            adapter_factory=_factory_for(
+                {"cheap": [_resp("execute", instruction="search reddit")]}, built),
+        )
+        assert d.move == "execute"
+        assert meta["tier"] == "cheap"
+        assert built == ["cheap"]
+
+    def test_idunno_escalates_tier_and_carries_confusion(self):
+        built = []
+        tier_map = {
+            "cheap": [_resp("idunno", confusion="goal ambiguous",
+                            missing=["which model"])],
+            "mid": [_resp("execute", instruction="search for thinkpads")],
+        }
+        d, meta = decide(
+            _nav_input(), tiers=["cheap", "mid"],
+            adapter_factory=_factory_for(tier_map, built))
+        assert d.move == "execute"
+        assert meta["tier"] == "mid"
+        assert built == ["cheap", "mid"]
+
+    def test_confusion_text_reaches_next_tier(self):
+        built = []
+        mid_adapter = _FakeAdapter([_resp("execute", instruction="go")])
+        cheap_adapter = _FakeAdapter(
+            [_resp("idunno", confusion="goal ambiguous")])
+        adapters = {"cheap": cheap_adapter, "mid": mid_adapter}
+
+        def factory(tier):
+            built.append(tier)
+            return adapters[tier]
+        decide(_nav_input(), tiers=["cheap", "mid"], adapter_factory=factory)
+        mid_user_msg = mid_adapter.calls[0][1].content
+        assert "goal ambiguous" in mid_user_msg
+        assert "stronger tier" in mid_user_msg
+
+    def test_exhausted_chain_synthesizes_escalate(self):
+        built = []
+        d, meta = decide(
+            _nav_input(), tiers=["cheap", "mid"],
+            adapter_factory=_factory_for({
+                "cheap": [_resp("idunno", confusion="unclear")],
+                "mid": [_resp("idunno", confusion="still unclear")],
+            }, built))
+        assert d.move == "escalate"
+        assert meta["escalated_via"] == "idunno_chain"
+        assert "unclear" in d.payload["why"]
+        assert d.payload["question"]
+
+    def test_invalid_output_retried_with_feedback_then_fixed(self):
+        adapter = _FakeAdapter([
+            "I think we should execute.",          # unparseable
+            _resp("execute", instruction="do it"),  # corrected
+        ])
+        d, meta = decide(
+            _nav_input(), tiers=["cheap"], adapter_factory=lambda t: adapter)
+        assert d.move == "execute"
+        assert meta["format_failures"] == 1
+        retry_msg = adapter.calls[1][1].content
+        assert "previous response was invalid" in retry_msg
+
+    def test_persistent_garbage_counts_as_idunno(self):
+        d, meta = decide(
+            _nav_input(), tiers=["cheap"],
+            adapter_factory=lambda t: _FakeAdapter(["garbage", "more garbage"]))
+        assert d.move == "escalate"
+        assert meta["escalated_via"] == "idunno_chain"
+        assert "no valid decision" in d.payload["why"]
+
+    def test_validation_failure_close_rule_fed_back(self):
+        nav_in = _nav_input(open_children=[ChildSummary("c9", "child goal", "open")])
+        adapter = _FakeAdapter([
+            _resp("close", closure="delivered", verdict="done"),  # missing disposition
+            _resp("close", closure="delivered", verdict="done",
+                  children_disposition={"c9": "abandoned"}),
+        ])
+        d, _ = decide(nav_in, tiers=["cheap"], adapter_factory=lambda t: adapter)
+        assert d.move == "close"
+        assert "undispositioned" in adapter.calls[1][1].content
+
+    def test_decision_instrumented(self, tmp_path, monkeypatch):
+        events = []
+        monkeypatch.setattr(
+            captains_log, "log_event",
+            lambda etype, **kw: events.append((etype, kw)))
+        decide(
+            _nav_input(), tiers=["cheap"],
+            adapter_factory=lambda t: _FakeAdapter(
+                [_resp("execute", instruction="go")]),
+            shadow=True, pipeline_actual={"move_equivalent": "execute"})
+        assert len(events) == 1
+        etype, kw = events[0]
+        assert etype == "NAVIGATOR_DECIDED"
+        ctx = kw["context"]
+        assert ctx["shadow"] is True
+        assert ctx["pipeline_actual"] == {"move_equivalent": "execute"}
+        assert ctx["move"] == "execute"
+        assert ctx["tier"] == "cheap"
+
+
+def _make_run(tmp_workspace_run, handle_id, goal, status, started_iso, ended_iso=None):
+    from runs import runs_root
+    rd = runs_root() / f"{handle_id}-test-{handle_id}"
+    (rd / "source").mkdir(parents=True, exist_ok=True)
+    (rd / "build").mkdir(parents=True, exist_ok=True)
+    (rd / "source" / "prompt.txt").write_text(goal, encoding="utf-8")
+    meta = {
+        "handle_id": handle_id, "prompt": goal, "lane": "agenda",
+        "model": "cheap", "status": status, "started_at": started_iso,
+    }
+    if ended_iso:
+        meta["ended_at"] = ended_iso
+    (rd / "metadata.json").write_text(json.dumps(meta), encoding="utf-8")
+    return rd
+
+
+class TestShadowReplay:
+    def test_input_from_run_dispatch_sees_asof_history(self, tmp_path):
+        # three earlier failures of the same goal, then the run under replay
+        for i, hid in enumerate(("aaa1", "aaa2", "aaa3")):
+            _make_run(tmp_path, hid, "verify the claims", "stuck",
+                      f"2026-05-17T0{i}:00:00+00:00")
+        target = _make_run(tmp_path, "bbb1", "verify the claims", "stuck",
+                           "2026-05-17T04:00:00+00:00")
+        nav_input, actual = input_from_run(target, point="dispatch")
+        assert actual["prior_attempts_asof"] == 3
+        assert actual["move_equivalent"] == "execute"
+        assert "3 runs" in nav_input.recall_block
+        assert nav_input.last_work is None
+
+    def test_asof_excludes_later_runs(self, tmp_path):
+        target = _make_run(tmp_path, "ccc1", "verify the claims", "done",
+                           "2026-05-17T00:00:00+00:00")
+        _make_run(tmp_path, "ccc2", "verify the claims", "stuck",
+                  "2026-05-17T02:00:00+00:00")  # AFTER the target
+        _, actual = input_from_run(target, point="dispatch")
+        assert actual["prior_attempts_asof"] == 0
+
+    def test_closure_point_builds_work_report(self, tmp_path):
+        target = _make_run(tmp_path, "ddd1", "read the doc", "done",
+                           "2026-05-12T00:00:00+00:00",
+                           "2026-05-12T00:05:00+00:00")
+        nav_input, actual = input_from_run(target, point="closure")
+        assert nav_input.turn_index == 1
+        assert nav_input.last_work.status == "ok"
+        assert nav_input.last_work.signals["duration_s"] == 300
+        assert actual["move_equivalent"] == "ended:done"
+
+    def test_replay_run_end_to_end_with_fake_adapter(self, tmp_path):
+        target = _make_run(tmp_path, "eee1", "read the doc and summarize",
+                           "done", "2026-05-12T00:00:00+00:00")
+        results = replay_run(
+            str(target), points=("dispatch",), tiers=["cheap"],
+            adapter_factory=lambda t: _FakeAdapter(
+                [_resp("execute", instruction="read it")]))
+        assert len(results) == 1
+        r = results[0]
+        assert r["navigator"] == "execute"
+        assert r["pipeline"] == "execute"
+        assert r["tier"] == "cheap"
+
+    def test_resolve_run_dir_prefix_and_ambiguity(self, tmp_path):
+        _make_run(tmp_path, "fff1", "g", "done", "2026-05-12T00:00:00+00:00")
+        _make_run(tmp_path, "fff2", "g", "done", "2026-05-12T00:00:00+00:00")
+        assert resolve_run_dir("fff1").name.startswith("fff1")
+        with pytest.raises(ValueError):
+            resolve_run_dir("fff")
+        with pytest.raises(FileNotFoundError):
+            resolve_run_dir("zzz9")
