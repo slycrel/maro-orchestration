@@ -69,6 +69,19 @@ new one) should all be on the table if we do this right. Hard to find the right
 equatinos up front before we do it all longhand over and over again."* — paradigm
 choice is deliberately deferred to data, not decided upfront.
 
+On entropy (Jeremy, 2026-06-11, background context not a directive): *"whatever we
+do will, at some point, likely need a dose of entropy in it as well; same as
+people's memories decay... life moves forward and is in constant change. as much as
+I want to be able to identify things like skills-as-shell-scripts (which are going
+to exist), that doesn't mean they won't inherently change over time; X's interface
+will change, browsers will have new standards, MCPs will become available, and
+more."* The system must *"allow the system to appropriately change and [be]
+different enough from a person's bran so as to not lose the benefits we enjoy from
+computerization."* And the fidelity intuition: *"feels like there's going to be a
+'close enough' type simulation, like the mesh of the ground in a video game, along
+with a general physics engine; it's not the earth, but it approximates it well
+enough that you don't usually notice."*
+
 ## Invariants (human-steerable, quoted)
 
 - **Fix in place, don't rewrite** — *"If you think we're on the right track and fixing
