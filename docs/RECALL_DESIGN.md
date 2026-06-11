@@ -31,9 +31,23 @@ knowledge nodes) plus non-memory contexts (skills, cost, codebase graph). So:
 The loop-slice work is therefore a **relocation**, not a unification: move the
 memory half of `_build_loop_context` behind recall(slice="loop") so the seam owns
 it and instruments it; skills/cost/graph stay in agent_loop (they're selection
-and planning context, not memory recall). Until that lands, recall()'s loop slice
-is a partial composition (4 of the 8) with no caller — do not wire anything to it
-before the relocation makes it complete.
+and planning context, not memory recall).
+
+**Relocation landed 2026-06-11.** All eight substrates now compose inside
+recall()'s loop slice; `RecallResult.as_loop_block()` reassembles them in the
+historical injection order (standing rules lead, knowledge trails) and
+`_build_loop_context`'s memory half is one recall() call. The evolver's
+captain's-log bridge (`_llm_analyze`) also reads through the seam now, via the
+shared `recall.recent_learning_activity()` helper (each caller keeps its own
+event-type set). Two inherited notes, kept behavior-identical:
+- The graveyard substrate calls `search_graveyard(resurrect=True)`, which
+  un-decays matched lessons — a lifecycle side effect inside a read seam.
+  Documented in recall.py; it belongs to lesson lifecycle, not recall, and is
+  a candidate to move when lifecycle gets its own pass.
+- The loop slice also runs the dispatch base (thread walk + prior-attempt
+  scan), which `_build_loop_context` never did. That's the design (loop ⊃
+  dispatch), costs one capped metadata scan per loop start, and means the
+  planner now sees prior-attempt pressure too.
 
 The dispatch row is the step-2 finding: the same goal ran ~25× in 35 minutes on
 2026-05-17 (findings 1 and 3) because nothing at the task-queue → `handle_task` →
@@ -95,10 +109,13 @@ def recall(goal: str, *,
 | correspondence graph walk (Mage v1) | — | — | ✓ |
 
 Dispatch is deliberately thin — identity + history only, no LLM calls, pure local
-file reads, fast enough to run on every task dequeue. The loop slice is the four
-existing injection sites unified behind the seam (same output, one call,
-instrumented). The navigator slice is **defined here but not implemented** — it has
-no consumer until step 4/5 ship.
+file reads, fast enough to run on every task dequeue. The loop slice (live since
+2026-06-11) is `_build_loop_context`'s eight memory substrates behind the seam —
+the table above predates the relocation; the full set is lessons, standing rules,
+decisions, graveyard, failure notes, learning activity (captain's-log bridge),
+playbook, knowledge nodes. The navigator slice currently equals the loop
+composition; its goal-brain injection + correspondence walk are still future
+work (navigator_shadow builds its own inputs today).
 
 ## Dispatch-time behavior (v0 — the implementable slice)
 
@@ -141,7 +158,7 @@ them before the walk exists:
 | `similar-shape-prior-attempt` | goal-text similarity over outcomes | v0: PriorAttempt match="near" |
 | `persona-used` | run metadata / task ledger | deferred |
 | `skill-used` | skill outcome records | deferred |
-| `lesson-cited` | lesson injection ↔ run linkage | deferred (needs write-side stamp) |
+| `lesson-cited` | lesson injection ↔ run linkage | v0: `lessons_cited` in RECALL_PERFORMED (loop slice, 2026-06-11) |
 
 v0 sympathy function = what exists: TF-IDF rank × recency × tier weight. Tuning by
 example is a post-navigator concern.
@@ -157,9 +174,10 @@ example is a post-navigator concern.
 
 ## Open ends carried forward
 
-- `lesson-cited` edges need a write-side stamp (which lessons were injected into
-  which run) before they're walkable. Cheap to add at the loop-slice call site;
-  do it when the loop slice lands.
+- ~~`lesson-cited` edges need a write-side stamp~~ — done with the loop-slice
+  relocation (2026-06-11): every loop-slice recall stamps `lessons_cited`
+  (injected lesson texts, truncated) into its RECALL_PERFORMED event. The log
+  is the crystallization substrate — the edge is derivable, no new store.
 - The navigator slice's goal-brain injection assumes per-thread goal-brains exist;
   today there is exactly one (`GOAL_BRAIN.md`, the project's own). Per-thread
   goal-brain creation is a step-4/5 question.

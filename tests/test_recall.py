@@ -164,3 +164,137 @@ class TestContextBlock:
         r = RecallResult(thread=None, prior_attempts=attempts,
                          lessons="L" * 5000)
         assert len(r.as_context_block(max_chars=1200)) <= 1200
+
+
+class TestLoopSlice:
+    """The loop slice composes the eight memory substrates relocated from
+    agent_loop._build_loop_context (2026-06-11)."""
+
+    def test_loop_slice_populates_all_substrate_fields(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        import memory
+        import introspect
+        import playbook as playbook_mod
+        import knowledge_web
+
+        class _L:
+            outcome = "done"
+            lesson = "prefer rg over grep on this box"
+
+        monkeypatch.setattr(memory, "load_lessons",
+                            lambda **kw: [_L()] if kw.get("task_type") == "agenda" else [])
+        monkeypatch.setattr(memory, "inject_standing_rules",
+                            lambda domain="": "## Standing Rules\n- always push")
+        monkeypatch.setattr(memory, "inject_decisions",
+                            lambda goal, domain="": "## Decisions\n- chose sqlite")
+        monkeypatch.setattr(memory, "search_graveyard",
+                            lambda goal, resurrect=False: [_L()])
+        monkeypatch.setattr(introspect, "find_relevant_failure_notes",
+                            lambda goal, limit=3, project="": ["decompose_too_broad"])
+        monkeypatch.setattr(playbook_mod, "inject_playbook",
+                            lambda max_chars=800: "## Playbook\n- batch the reads")
+        monkeypatch.setattr(knowledge_web, "inject_knowledge_for_goal",
+                            lambda goal, max_chars=600: "## Knowledge\n- K2 node")
+
+        r = recall("research thinkpads", slice="loop", project="proj")
+
+        assert "prefer rg over grep" in r.lessons
+        assert "always push" in r.standing_rules
+        assert "chose sqlite" in r.decisions
+        assert "resurrected from decay" in r.graveyard
+        assert "decompose_too_broad" in r.failure_notes
+        assert "batch the reads" in r.playbook
+        assert "K2 node" in r.knowledge
+        assert r.sources["knowledge_blocks"] >= 7
+
+    def test_as_loop_block_order_rules_lead_knowledge_trails(self):
+        r = RecallResult(
+            thread=None, prior_attempts=[],
+            lessons="LESSONS", standing_rules="RULES", decisions="DECISIONS",
+            graveyard="GRAVEYARD", failure_notes="FAILURES",
+            learning_activity="ACTIVITY", playbook="PLAYBOOK",
+            knowledge="KNOWLEDGE",
+        )
+        block = r.as_loop_block()
+        order = ["RULES", "LESSONS", "DECISIONS", "GRAVEYARD", "FAILURES",
+                 "ACTIVITY", "PLAYBOOK", "KNOWLEDGE"]
+        positions = [block.index(s) for s in order]
+        assert positions == sorted(positions)
+
+    def test_as_loop_block_empty_when_nothing_known(self):
+        assert RecallResult(thread=None, prior_attempts=[]).as_loop_block() == ""
+
+    def test_lessons_cited_stamp_in_event(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        import memory
+
+        class _L:
+            outcome = "done"
+            lesson = "the cited lesson text"
+
+        monkeypatch.setattr(memory, "load_lessons", lambda **kw: [_L()])
+        events = []
+        with patch("captains_log.log_event",
+                   side_effect=lambda et, **kw: events.append((et, kw))):
+            recall("any goal", slice="loop")
+        performed = [kw for et, kw in events if et == "RECALL_PERFORMED"]
+        assert len(performed) == 1
+        cited = performed[0]["context"]["lessons_cited"]
+        assert cited == ["the cited lesson text"]
+
+    def test_broken_substrate_never_takes_seam_down(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        import memory
+
+        def _boom(**kw):
+            raise RuntimeError("substrate down")
+
+        monkeypatch.setattr(memory, "load_lessons", _boom)
+        monkeypatch.setattr(memory, "inject_lessons_for_task",
+                            lambda *a, **kw: (_ for _ in ()).throw(RuntimeError()))
+        monkeypatch.setattr(memory, "inject_standing_rules",
+                            lambda domain="": "## Standing Rules\n- survives")
+        r = recall("any goal", slice="loop")
+        assert r.lessons == ""
+        assert "survives" in r.standing_rules
+
+
+class TestRecentLearningActivity:
+    def test_filters_and_formats(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        import captains_log as cl
+        entries = [
+            {"event_type": "LESSON_REINFORCED", "summary": "noise"},
+            {"event_type": "SKILL_DEMOTED", "summary": "skill X demoted"},
+            {"event_type": "EVOLVER_APPLIED", "summary": "applied Y"},
+        ]
+        monkeypatch.setattr(cl, "load_log", lambda limit=30: entries)
+        from recall import recent_learning_activity
+        block = recent_learning_activity()
+        assert "skill X demoted" in block
+        assert "applied Y" in block
+        assert "noise" not in block
+        assert block.startswith("## Recent Learning System Activity")
+
+    def test_custom_event_set_and_header(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        import captains_log as cl
+        entries = [
+            {"event_type": "EVOLVER_SKIPPED", "summary": "skipped Z"},
+            {"event_type": "DIAGNOSIS", "summary": "diag"},
+        ]
+        monkeypatch.setattr(cl, "load_log", lambda limit=30: entries)
+        from recall import recent_learning_activity
+        block = recent_learning_activity(
+            event_types=("EVOLVER_SKIPPED",),
+            header="\n\nRecent learning system activity:")
+        assert "skipped Z" in block
+        assert "diag" not in block
+        assert block.startswith("\n\nRecent learning system activity:")
+
+    def test_empty_when_nothing_actionable(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        import captains_log as cl
+        monkeypatch.setattr(cl, "load_log", lambda limit=30: [])
+        from recall import recent_learning_activity
+        assert recent_learning_activity() == ""

@@ -6,6 +6,13 @@ Last updated: 2026-06-11 (session 40 continued — goal-brain steps 1–5 comple
 
 ---
 
+## Done (2026-06-11 — recall() loop-slice relocation: one memory read seam)
+
+- [x] **Loop slice complete** — `_build_loop_context`'s memory half (8 substrates: lessons, standing rules, decisions, graveyard, failure notes, learning activity, playbook, knowledge — ~110 inline lines) relocated behind `recall(slice="loop")`; `RecallResult.as_loop_block()` preserves the historical injection order. Skills/cost/codebase-graph/repo-scan stayed in agent_loop (selection context, not memory).
+- [x] **Captain's-log read bridges absorbed** — agent_loop K3 bridge and evolver `_llm_analyze` context both read via shared `recall.recent_learning_activity()` (each keeps its own event-type set). Log consumers are now visibility + the seam only.
+- [x] **`lesson-cited` edge stamp live** — loop-slice recalls record `lessons_cited` (injected lesson texts) in RECALL_PERFORMED; edge derivable from the log, no new store (RECALL_DESIGN.md vocabulary table updated).
+- Side effects now visible at the seam: loop slice runs the dispatch base too (planner sees prior-attempt pressure); `search_graveyard(resurrect=True)` lifecycle mutation documented as inherited.
+
 ## Done (2026-06-11 — navigator shadow round 2 + live dispatch shadow)
 
 - [x] **Shadow round 2 (random sample)** — answered the round-1 selection-bias caveat. Seeded random N=20 (seed 42, stratified 12 done / 4 stuck / 4 error, excluding round-1 runs): **0/6 false escalates on well-formed goals** (4 execute, 2 extend — mild conservatism, one extra planning turn, never a human interrupt); all 8 escalates targeted chop debris or repeat burn; 16/20 decided at cheap tier, 0 power. Side finding: 11/20 random goals were decompose-chop debris *including most pipeline-"done" ones* — `done` status ≠ goal health. Full results in `docs/NAVIGATOR_SCHEMA.md`.

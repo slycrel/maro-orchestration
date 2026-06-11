@@ -291,15 +291,17 @@ Active:
 - **Run↔thread linkage**: done 2026-06-10 — tasks carry an `origin` ancestry dict
   (parent handle/loop/goal) from enqueue through `handle_task` into run metadata,
   and recall() now consults it at dispatch (ThreadIdentity walk).
-- **recall() loop-slice relocation**: corrected same day — the loop-start read
-  path is ALREADY unified in `_build_loop_context()` (agent_loop.py:2791),
-  composing 8 memory substrates, not 4 scattered sites as RECALL_DESIGN.md first
-  claimed. The work is relocating its memory half behind recall(slice="loop")
-  (skills/cost/graph stay in agent_loop). Until then recall()'s loop slice is a
-  partial composition with no caller — don't wire anything to it first. Also the
-  spot to stamp `lesson-cited` edges, and where the two captain's-log
-  prompt-injection read bridges (agent_loop K3, evolver context) get absorbed so
-  the log's only consumers are visibility + the seam (2026-06-11 audit).
+- **recall() loop-slice relocation**: **done 2026-06-11** — all eight memory
+  substrates compose inside recall(slice="loop"); `_build_loop_context`'s
+  memory half is one seam call (`as_loop_block()`, historical injection order
+  preserved; skills/cost/graph stayed in agent_loop). Both captain's-log
+  prompt-injection read bridges (agent_loop K3, evolver `_llm_analyze`)
+  absorbed via shared `recall.recent_learning_activity()` — the log's
+  consumers are now visibility + the seam, as the 2026-06-11 audit wanted.
+  `lesson-cited` edge stamp live: loop-slice recalls record `lessons_cited`
+  in RECALL_PERFORMED. Inherited wart, documented not fixed:
+  `search_graveyard(resurrect=True)` mutates lesson lifecycle from inside a
+  read seam (pre-existing agent_loop behavior, kept identical).
 
 Dormant (deliberately parked, not dropped):
 - Thread Architecture implementation (`arch/thread-navigator`) — parked pending

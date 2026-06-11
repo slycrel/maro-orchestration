@@ -2806,117 +2806,25 @@ def _build_loop_context(
 
     All failures are swallowed — missing memory or skills never block a loop.
     """
-    # Lessons from tiered memory — backend abstraction with goal-ranked retrieval
+    # Memory context — the eight substrates (lessons, standing rules,
+    # decisions, graveyard, failure notes, learning activity, playbook,
+    # knowledge nodes) live behind the recall() seam (docs/RECALL_DESIGN.md);
+    # this used to be ~110 inline lines here. recall() swallows per-substrate
+    # failures itself and instruments the read (RECALL_PERFORMED, including
+    # the lesson-cited stamp).
     lessons_context = ""
     try:
-        from memory import load_lessons, _MAX_LESSON_INJECT_CHARS
-        _lessons = load_lessons(task_type="agenda", query=goal, limit=3)
-        if not _lessons:
-            _lessons = load_lessons(task_type="general", query=goal, limit=3)
-        if _lessons:
-            _lines = ["## Lessons from Prior Runs (apply these)"]
-            for _l in _lessons:
-                _icon = "✓" if _l.outcome == "done" else "✗"
-                _lines.append(f"- {_icon} {_l.lesson}")
-            lessons_context = "\n".join(_lines)
-            if len(lessons_context) > _MAX_LESSON_INJECT_CHARS:
-                lessons_context = lessons_context[:_MAX_LESSON_INJECT_CHARS].rsplit("\n", 1)[0]
-    except Exception:
-        try:
-            from memory import inject_lessons_for_task
-            lessons_context = inject_lessons_for_task("agenda", goal, max_lessons=3)
-        except Exception as _les_exc:
-            log.debug("lessons fallback injection failed: %s", _les_exc)
-
-    # Phase 56: Standing rules (top tier — apply unconditionally)
-    # Scoped to project domain when available to prevent cross-project bleed
-    try:
-        from memory import inject_standing_rules
-        _rules = inject_standing_rules(domain=project)
-        if _rules:
-            lessons_context = _rules + ("\n\n" + lessons_context if lessons_context else "")
-    except Exception as _exc:
-        log.debug("standing rules injection failed: %s", _exc)
-
-    # Phase 56: Decision journal (relevant prior decisions)
-    try:
-        from memory import inject_decisions
-        _decisions = inject_decisions(goal, domain=project)
-        if _decisions:
-            lessons_context = (lessons_context + "\n\n" + _decisions) if lessons_context else _decisions
-    except Exception as _exc:
-        log.debug("decision journal injection failed: %s", _exc)
-
-    # Resurrected graveyard lessons (topic-relevant, decayed)
-    try:
-        from memory import search_graveyard
-        _graveyard = search_graveyard(goal, resurrect=True)
-        if _graveyard:
-            if verbose:
-                print(
-                    f"[poe] resurrecting {len(_graveyard)} graveyard lesson(s) for goal",
-                    file=sys.stderr, flush=True,
-                )
-            _graveyard_lines = "\n".join(f"- {l.lesson}" for l in _graveyard[:3])
-            lessons_context += f"\n\nPreviously-learned (resurrected from decay):\n{_graveyard_lines}"
-    except Exception as _exc:
-        log.debug("graveyard resurrection failed: %s", _exc)
-
-    # Error nodes: relevant failure patterns from diagnoses.jsonl (Phase 46 follow-on)
-    # Same-project diagnoses always lead — a prior decomposition_too_broad on this
-    # exact project is far more actionable than a vaguely-similar-goal one.
-    try:
-        from introspect import find_relevant_failure_notes
-        _failure_notes = find_relevant_failure_notes(goal, limit=3, project=project or "")
-        if _failure_notes:
-            lessons_context += "\n\nKnown failure patterns for similar goals:\n" + "\n".join(
-                f"- {note}" for note in _failure_notes
+        from recall import recall as _recall_fn
+        _rr = _recall_fn(goal, slice="loop", project=project)
+        lessons_context = _rr.as_loop_block()
+        if verbose and _rr.sources.get("graveyard_count"):
+            print(
+                f"[poe] resurrecting {_rr.sources['graveyard_count']} "
+                f"graveyard lesson(s) for goal",
+                file=sys.stderr, flush=True,
             )
     except Exception as _exc:
-        log.debug("failure notes injection failed: %s", _exc)
-
-    # Captain's log context: what has the learning system been doing recently?
-    # This is the K3 "read bridge" — the first consumer of the captain's log
-    # for reasoning-time context injection. Surfaces recent skill changes,
-    # evolver actions, and diagnoses so the planner can account for them.
-    try:
-        from captains_log import load_log
-        # Focus on actionable events, not noise (skip LESSON_REINFORCED, DECISION_RECORDED)
-        _actionable_types = {
-            "SKILL_PROMOTED", "SKILL_DEMOTED", "SKILL_CIRCUIT_OPEN",
-            "SKILL_REWRITE", "EVOLVER_APPLIED", "DIAGNOSIS",
-            "HYPOTHESIS_PROMOTED", "STANDING_RULE_CONTRADICTED",
-            "RULE_GRADUATED",
-        }
-        _recent = load_log(limit=30)  # last 30 entries
-        _actionable = [e for e in _recent if e.get("event_type") in _actionable_types]
-        if _actionable:
-            _log_lines = [
-                f"- [{e.get('event_type', '?')}] {e.get('summary', '')[:100]}"
-                for e in _actionable[-5:]  # inject at most 5
-            ]
-            _log_ctx = "## Recent Learning System Activity\n" + "\n".join(_log_lines)
-            lessons_context = (lessons_context + "\n\n" + _log_ctx) if lessons_context else _log_ctx
-    except Exception as _exc:
-        log.debug("captains log context injection failed: %s", _exc)
-
-    # Director's operational playbook — evolved wisdom about how to do the job
-    try:
-        from playbook import inject_playbook
-        _playbook = inject_playbook(max_chars=800)
-        if _playbook:
-            lessons_context = (lessons_context + "\n\n" + _playbook) if lessons_context else _playbook
-    except Exception as _exc:
-        log.debug("playbook injection failed: %s", _exc)
-
-    # Knowledge nodes — structured knowledge from imported sources (K2)
-    try:
-        from knowledge_web import inject_knowledge_for_goal
-        _knowledge = inject_knowledge_for_goal(goal, max_chars=600)
-        if _knowledge:
-            lessons_context = (lessons_context + "\n\n" + _knowledge) if lessons_context else _knowledge
-    except Exception as _exc:
-        log.debug("knowledge injection failed: %s", _exc)
+        log.debug("recall loop slice failed: %s", _exc)
 
     # Matching skills for decompose prompt injection
     skills_context = ""

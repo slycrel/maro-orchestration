@@ -983,25 +983,21 @@ def _llm_analyze(outcomes: List[Any], *, dry_run: bool = False) -> tuple[List[st
         summary = _build_outcomes_summary(outcomes)
 
         # Captain's log context: recent learning-system actions for the evolver
-        # to account for (e.g., "skill X was just demoted — don't re-suggest it")
+        # to account for (e.g., "skill X was just demoted — don't re-suggest it").
+        # Shared read bridge with the loop slice; the evolver keeps its own
+        # event set (EVOLVER_SKIPPED matters here, DIAGNOSIS noise doesn't).
         _log_ctx = ""
         try:
-            from captains_log import load_log
-            _recent = load_log(limit=20)
-            _relevant = [
-                e for e in _recent
-                if e.get("event_type") in (
+            from recall import recent_learning_activity
+            _log_ctx = recent_learning_activity(
+                event_types=(
                     "SKILL_PROMOTED", "SKILL_DEMOTED", "SKILL_CIRCUIT_OPEN",
                     "SKILL_REWRITE", "EVOLVER_APPLIED", "EVOLVER_SKIPPED",
                     "STANDING_RULE_CONTRADICTED", "RULE_GRADUATED",
-                )
-            ]
-            if _relevant:
-                _log_lines = [
-                    f"- [{e.get('event_type')}] {e.get('summary', '')[:100]}"
-                    for e in _relevant[-5:]
-                ]
-                _log_ctx = "\n\nRecent learning system activity:\n" + "\n".join(_log_lines)
+                ),
+                scan_limit=20,
+                header="\n\nRecent learning system activity:",
+            )
         except Exception:
             pass
 
