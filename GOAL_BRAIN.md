@@ -239,6 +239,14 @@ Sample: the 2026-05-13..17 window of `~/.poe/workspace/runs/` (478 dirs total;
   layer stays perfect, only compiled confidence decays); Stages 4–5 demotable to
   language form. No scheduled re-verification — collision detection rides on use
   (no-cron invariant). Queued behind navigator (BACKLOG.md 2026-06-11 section).
+  **Shipped same day for the rule layer** (navigator sequencing had completed):
+  contradicted standing rules are *contested* — injected verify-before-relying
+  instead of apply-unconditionally (read-time trust derivation; rule data
+  untouched) — and `refight_rule()` re-derives them against contradiction
+  evidence from the captain's log (keep / revise / retire→hypothesis), run from
+  the evolver cycle beside `rewrite_skill` (the skill-layer seed it
+  generalizes), max 3/cycle, RULE_REFOUGHT audit events. The `last_verified`
+  freshness signal remains open (BACKLOG).
 - **2026-06-11** — Navigator decision schema pinned (step 4, `docs/NAVIGATOR_SCHEMA.md`
   + `src/navigator.py` types-only): six moves + `idunno` as admission-not-move
   (tier re-run, top-tier converts to escalate); one flat JSON envelope with

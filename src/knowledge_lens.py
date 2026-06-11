@@ -49,7 +49,8 @@ class StandingRule:
     source_lesson_id: str           # Long-tier lesson this was promoted from
     domain: str                     # goal domain / task_type tag
     confirmations: int              # times confirmed in production after promotion
-    contradictions: int             # times contradicted (≥1 → demoted back to hypothesis)
+    contradictions: int             # times contradicted (≥1 → contested: injected as
+                                    # verify-before-relying until refight_rule resolves it)
     promoted_at: str
     last_applied: str = ""
 
@@ -416,15 +417,193 @@ def check_contradiction(
 def inject_standing_rules(domain: str = "") -> str:
     """Return standing rules formatted for injection into decompose system prompt.
 
+    Decay-by-invalidation v0 (2026-06-11): a rule with recorded contradictions
+    is *contested* — still injected (data never decays), but demoted from
+    "apply unconditionally" to a verify-before-relying block until the next
+    re-fight resolves it (refight_rule, run from the evolver cycle).
+
     Returns empty string if no rules exist (safe to always call).
     """
     rules = load_standing_rules(domain=domain)
     if not rules:
         return ""
-    lines = ["### Standing Rules (apply unconditionally)"]
-    for r in rules:
-        lines.append(f"- {r.rule}")
+    solid = [r for r in rules if r.contradictions < 1]
+    contested = [r for r in rules if r.contradictions >= 1]
+    lines: List[str] = []
+    if solid:
+        lines.append("### Standing Rules (apply unconditionally)")
+        lines.extend(f"- {r.rule}" for r in solid)
+    if contested:
+        lines.append(
+            "### Contested rules (recently contradicted — verify before relying)")
+        lines.extend(
+            f"- {r.rule} (confirmed {r.confirmations}x, "
+            f"contradicted {r.contradictions}x)"
+            for r in contested
+        )
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Decay-by-invalidation v0: re-fight on collision (2026-06-11)
+# ---------------------------------------------------------------------------
+# Crystallized artifacts rot when the world changes under them — distinct
+# from decay-by-disuse, which tiered lessons already have. The most-reinforced
+# rule is the most dangerous one at world-shift time, because reinforcement
+# and validity are different signals and we only tracked one. v0 is Jeremy's
+# pinned first pass: when an artifact collides with reality, put the existing
+# mechanism + the failure into a prompt and re-fight the battle — "at worst
+# we have better context, at best it's a slight tweak and we fix forward."
+# Skills already have this shape (circuit breaker → evolver.rewrite_skill);
+# this is the same pattern for the rule layer. Trust decays, data never does:
+# counts/text here are compiled trust; the evidence (contradiction events)
+# lives append-only in the captain's log.
+
+
+def contested_rules(
+    rules: Optional[List[StandingRule]] = None,
+) -> List[StandingRule]:
+    """Rules whose unconditional trust is in question: any contradiction on
+    record. Most-contradicted first (worst collision gets re-fought first)."""
+    if rules is None:
+        rules = load_standing_rules()
+    return sorted(
+        (r for r in rules if r.contradictions >= 1),
+        key=lambda r: r.contradictions,
+        reverse=True,
+    )
+
+
+def _rule_contradiction_evidence(rule_id: str, *, limit: int = 5) -> List[str]:
+    """Pull this rule's contradiction event summaries from the captain's log
+    (the append-only evidence layer the compiled counts were derived from)."""
+    try:
+        from captains_log import query_log
+        events = query_log(
+            f"rule:{rule_id}",
+            event_type="STANDING_RULE_CONTRADICTED",
+            limit=limit,
+        )
+        return [str(e.get("summary") or "")[:200] for e in events]
+    except Exception:
+        return []
+
+
+def refight_rule(rule: StandingRule, adapter, *, verbose: bool = False) -> Optional[str]:
+    """Re-fight a contested standing rule against its contradiction evidence.
+
+    Verdicts: "keep" (contradictions were noise — trust restored), "revise"
+    (world shifted, corrected text must re-earn its record), "retire" (demoted
+    back to a hypothesis — data preserved, must re-earn promotion).
+
+    Returns the action taken, or None when the adapter is unavailable or the
+    output unusable — an unresolved collision stays contested rather than
+    being silently re-trusted. Mirrors evolver.rewrite_skill's contract.
+    """
+    if adapter is None:
+        return None
+
+    evidence = _rule_contradiction_evidence(rule.rule_id)
+    evidence_text = "\n".join(f"- {e}" for e in evidence) or (
+        f"(no event detail on record; counted {rule.contradictions} contradiction(s))"
+    )
+    prompt = f"""A standing rule in an autonomous agent system has been contradicted by recent experience and must be re-derived.
+
+The rule (applied unconditionally in planning until now):
+"{rule.rule}"
+(domain: {rule.domain or "general"}; confirmed {rule.confirmations}x since promotion at {rule.promoted_at or "unknown"}; contradicted {rule.contradictions}x)
+
+Contradiction evidence (newest first):
+{evidence_text}
+
+Re-fight the battle that created this rule. Decide:
+- "keep" — the rule is still right; the contradictions were noise or misattribution.
+- "revise" — the rule's core survives but the world shifted; supply corrected rule text.
+- "retire" — the rule no longer holds; demote it back to a hypothesis so it must re-earn trust.
+
+Output ONLY valid JSON:
+{{"action": "keep|revise|retire", "rule": "<revised rule text, only when action is revise>", "reasoning": "<one short paragraph>"}}"""
+
+    try:
+        from llm import LLMMessage
+        from llm_parse import extract_json, content_or_empty
+        resp = adapter.complete(
+            [LLMMessage("user", prompt)], max_tokens=400, temperature=0.2,
+        )
+        parsed = extract_json(content_or_empty(resp), dict,
+                              log_tag="knowledge_lens.refight")
+    except Exception as exc:
+        log.debug("refight_rule: adapter failed for %s: %s", rule.rule_id, exc)
+        return None
+    if not parsed:
+        return None
+
+    action = str(parsed.get("action") or "").strip().lower()
+    reasoning = str(parsed.get("reasoning") or "")[:400]
+    new_text = str(parsed.get("rule") or "").strip()
+    if action not in ("keep", "revise", "retire"):
+        return None
+    if action == "revise" and not new_text:
+        return None
+
+    rules = load_standing_rules()
+    target = next((r for r in rules if r.rule_id == rule.rule_id), None)
+    if target is None:
+        return None
+
+    if action == "keep":
+        target.contradictions = 0  # battle re-fought, rule won; trust restored
+        _rewrite_rules(rules)
+    elif action == "revise":
+        target.rule = new_text
+        target.confirmations = 0   # revised text must re-earn its record
+        target.contradictions = 0
+        _rewrite_rules(rules)
+    else:  # retire → demote to hypothesis: data preserved, trust reset
+        rules = [r for r in rules if r.rule_id != target.rule_id]
+        _rewrite_rules(rules)
+        hyps = load_hypotheses()
+        now = datetime.now(timezone.utc).isoformat()
+        hyps.append(Hypothesis(
+            hyp_id=f"hyp-{target.rule_id}",
+            lesson=target.rule,
+            domain=target.domain,
+            confirmations=0,
+            contradictions=0,
+            source_lesson_ids=(
+                [target.source_lesson_id] if target.source_lesson_id else []
+            ),
+            first_seen=now,
+            last_seen=now,
+        ))
+        _rewrite_hypotheses(hyps)
+
+    log.info("standing rule re-fought: %s -> %s", rule.rule_id, action)
+    if verbose:
+        import sys as _sys
+        print(f"[refight] rule {rule.rule_id}: {action}",
+              file=_sys.stderr, flush=True)
+    try:
+        from captains_log import log_event, RULE_REFOUGHT
+        log_event(
+            event_type=RULE_REFOUGHT,
+            subject=rule.rule_id,
+            summary=(f"Re-fought ({rule.contradictions} contradictions vs "
+                     f"{rule.confirmations} confirmations) -> {action}: "
+                     f"{rule.rule[:80]}"),
+            context={
+                "action": action,
+                "reasoning": reasoning,
+                "old_rule": rule.rule[:200],
+                "new_rule": new_text[:200] if action == "revise" else "",
+                "contradictions": rule.contradictions,
+                "confirmations": rule.confirmations,
+            },
+            related_ids=[f"rule:{rule.rule_id}"],
+        )
+    except Exception:
+        pass
+    return action
 
 
 # ---------------------------------------------------------------------------

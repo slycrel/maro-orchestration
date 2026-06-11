@@ -17,13 +17,20 @@ distinct from decay-by-disuse, which tiered lessons already have. The most-reinf
 artifact is the most dangerous one at world-shift time, because reinforcement and
 validity are different signals and we only track one.
 
-- [ ] **Decay v0 — re-fight on collision (Jeremy's pinned first pass).** When a
+- [x] **Decay v0 — re-fight on collision (Jeremy's pinned first pass).** When a
   crystallized artifact fails, inject the existing mechanism + the failure into the
   prompt and re-derive. *"at worst we have better context, at best it's a slight
-  tweak and we fix forward."* Seed exists: the skill circuit breaker → rewrite_skill
-  path is already collision-detection + repair for skills; v0 is verifying that path
-  works live and generalizing the pattern beyond skills. No scheduled re-verification
-  (no-cron invariant) — verification rides on use.
+  tweak and we fix forward."* **Done 2026-06-11 for the rule layer:** a contradicted
+  standing rule is *contested* — immediately demoted from "apply unconditionally" to
+  a verify-before-relying injection block (read-time trust derivation, data untouched),
+  and `knowledge_lens.refight_rule()` re-derives it against its contradiction evidence
+  (pulled from the captain's log) with verdicts keep / revise / retire (retire demotes
+  back to hypothesis — must re-earn promotion). Runs from `run_skill_maintenance` in
+  the evolver cycle (adapter-gated, max 3/cycle), beside `rewrite_skill` — the skill
+  seed it generalizes. `RULE_REFOUGHT` event is the audit trail. No cron — collision
+  detection rides on contradiction recording, repair rides on the evolver cycle.
+  Note: no standing rules exist on this box yet (accretion only became possible in M2),
+  so first live exercise awaits a real rule + collision.
 - [ ] **Freshness signal on crystallized artifacts.** `last_verified` (last
   successful run against the real world) distinct from `last_reinforced`. Trust at
   injection time = f(score, time-since-verified); stale-but-promoted gets a

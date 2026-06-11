@@ -6,6 +6,15 @@ Last updated: 2026-06-11 (session 40 continued — goal-brain steps 1–5 comple
 
 ---
 
+## Done (2026-06-11 — decay-by-invalidation v0: re-fight on collision, rule layer)
+
+Jeremy's pinned first pass (entropy thread): on crystallized-artifact failure, inject the existing mechanism + the failure into the prompt and re-fight the battle. Skills already had the shape (circuit breaker → `rewrite_skill`); this generalizes it to standing rules — the layer where "most-reinforced is most dangerous at world-shift" bites hardest, because a contradicted rule kept being injected "apply unconditionally" forever.
+
+- [x] **Contested gate at injection** — `inject_standing_rules` splits rules with any recorded contradiction into a "Contested rules (verify before relying)" block with their confirmed/contradicted record. Read-time trust derivation; rule data untouched (decay trust, never data).
+- [x] **`refight_rule()`** (knowledge_lens) — re-derives a contested rule against its contradiction evidence (STANDING_RULE_CONTRADICTED summaries pulled from the captain's log — the append-only evidence layer). Verdicts: **keep** (trust restored, contradictions zeroed), **revise** (corrected text, record reset — must re-earn), **retire** (demoted back to hypothesis — the demotion the dataclass comment promised but code never did). Unusable output leaves the rule contested, never silently re-trusted.
+- [x] **Wired into the evolver cycle** — `run_skill_maintenance` re-fights up to 3 contested rules per cycle when an adapter is present, beside the skill rewrites; agent_loop's adapterless call skips it (spend stays on the evolver path). `RULE_REFOUGHT` event (45th type) is the audit trail.
+- Not yet exercised live: no standing rules exist on this box (accretion became possible in M2). `last_verified` freshness signal still open in BACKLOG.
+
 ## Done (2026-06-11 — recall() loop-slice relocation: one memory read seam)
 
 - [x] **Loop slice complete** — `_build_loop_context`'s memory half (8 substrates: lessons, standing rules, decisions, graveyard, failure notes, learning activity, playbook, knowledge — ~110 inline lines) relocated behind `recall(slice="loop")`; `RecallResult.as_loop_block()` preserves the historical injection order. Skills/cost/codebase-graph/repo-scan stayed in agent_loop (selection context, not memory).

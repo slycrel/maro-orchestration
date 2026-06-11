@@ -278,6 +278,153 @@ class TestStandingRulesInjection:
         assert "Rule for ops." in ops_only
         assert "Rule for research." not in ops_only
 
+    def test_contested_rule_moves_to_verify_block(self, tmp_path):
+        observe_pattern("Always fetch via Jina.", "fetch")
+        observe_pattern("Always fetch via Jina.", "fetch")
+        contradict_pattern("Always fetch via Jina.", "fetch")
+        result = inject_standing_rules()
+        assert "apply unconditionally" not in result
+        assert "verify before relying" in result
+        assert "Always fetch via Jina." in result
+        assert "contradicted 1x" in result
+
+    def test_solid_and_contested_split(self, tmp_path):
+        observe_pattern("Always fetch via Jina.", "fetch")
+        observe_pattern("Always fetch via Jina.", "fetch")
+        observe_pattern("Always run pyflakes before commit.", "build")
+        observe_pattern("Always run pyflakes before commit.", "build")
+        contradict_pattern("Always fetch via Jina.", "fetch")
+        result = inject_standing_rules()
+        solid_pos = result.index("apply unconditionally")
+        contested_pos = result.index("verify before relying")
+        assert solid_pos < contested_pos
+        assert result.index("pyflakes") < contested_pos
+        assert result.index("Jina") > contested_pos
+
+
+# ---------------------------------------------------------------------------
+# Decay-by-invalidation v0: re-fight on collision
+# ---------------------------------------------------------------------------
+
+
+class _RefightAdapter:
+    """Returns a scripted JSON verdict."""
+
+    def __init__(self, payload):
+        self.payload = payload
+        self.calls = []
+
+    def complete(self, messages, **kwargs):
+        self.calls.append(messages)
+
+        class R:
+            content = json.dumps(self.payload) if isinstance(self.payload, dict) \
+                else self.payload
+        return R()
+
+
+def _make_contested_rule(text="Always fetch via Jina.", domain="fetch"):
+    from memory import contested_rules
+    observe_pattern(text, domain)
+    observe_pattern(text, domain)
+    contradict_pattern(text, domain)
+    contested = contested_rules()
+    assert len(contested) == 1
+    return contested[0]
+
+
+class TestContestedRules:
+    def test_uncontradicted_rules_not_listed(self, tmp_path):
+        from memory import contested_rules
+        observe_pattern("Solid rule.", "ops")
+        observe_pattern("Solid rule.", "ops")
+        assert contested_rules() == []
+
+    def test_sorted_most_contradicted_first(self, tmp_path):
+        from memory import contested_rules
+        for text in ("Rule alpha bravo charlie.", "Rule delta echo foxtrot."):
+            observe_pattern(text, "ops")
+            observe_pattern(text, "ops")
+        contradict_pattern("Rule alpha bravo charlie.", "ops")
+        contradict_pattern("Rule delta echo foxtrot.", "ops")
+        contradict_pattern("Rule delta echo foxtrot.", "ops")
+        contested = contested_rules()
+        assert [r.contradictions for r in contested] == [2, 1]
+
+
+class TestRefightRule:
+    def test_keep_restores_trust(self, tmp_path):
+        from memory import refight_rule
+        rule = _make_contested_rule()
+        adapter = _RefightAdapter(
+            {"action": "keep", "reasoning": "contradiction was misattributed"})
+        assert refight_rule(rule, adapter) == "keep"
+        reloaded = load_standing_rules()
+        assert len(reloaded) == 1
+        assert reloaded[0].contradictions == 0
+        assert reloaded[0].confirmations == rule.confirmations
+        assert "apply unconditionally" in inject_standing_rules()
+
+    def test_revise_replaces_text_and_resets_record(self, tmp_path):
+        from memory import refight_rule
+        rule = _make_contested_rule()
+        adapter = _RefightAdapter({
+            "action": "revise",
+            "rule": "Fetch via Jina, fall back to direct GET on 4xx.",
+            "reasoning": "the API changed"})
+        assert refight_rule(rule, adapter) == "revise"
+        reloaded = load_standing_rules()
+        assert len(reloaded) == 1
+        assert reloaded[0].rule == "Fetch via Jina, fall back to direct GET on 4xx."
+        assert reloaded[0].confirmations == 0
+        assert reloaded[0].contradictions == 0
+        assert reloaded[0].rule_id == rule.rule_id
+
+    def test_retire_demotes_to_hypothesis(self, tmp_path):
+        from memory import refight_rule
+        rule = _make_contested_rule()
+        adapter = _RefightAdapter(
+            {"action": "retire", "reasoning": "the world moved on"})
+        assert refight_rule(rule, adapter) == "retire"
+        assert load_standing_rules() == []
+        hyps = load_hypotheses()
+        assert len(hyps) == 1
+        assert hyps[0].lesson == rule.rule
+        assert hyps[0].confirmations == 0
+
+    def test_garbage_output_leaves_rule_contested(self, tmp_path):
+        from memory import refight_rule
+        rule = _make_contested_rule()
+        assert refight_rule(rule, _RefightAdapter("not json at all")) is None
+        reloaded = load_standing_rules()
+        assert reloaded[0].contradictions == 1
+        assert "verify before relying" in inject_standing_rules()
+
+    def test_revise_without_text_rejected(self, tmp_path):
+        from memory import refight_rule
+        rule = _make_contested_rule()
+        adapter = _RefightAdapter({"action": "revise", "reasoning": "no text"})
+        assert refight_rule(rule, adapter) is None
+        assert load_standing_rules()[0].contradictions == 1
+
+    def test_no_adapter_returns_none(self, tmp_path):
+        from memory import refight_rule
+        rule = _make_contested_rule()
+        assert refight_rule(rule, None) is None
+
+    def test_event_logged_with_action(self, tmp_path):
+        from memory import refight_rule
+        rule = _make_contested_rule()
+        events = []
+        with patch("captains_log.log_event",
+                   side_effect=lambda **kw: events.append(kw)):
+            refight_rule(rule, _RefightAdapter(
+                {"action": "keep", "reasoning": "noise"}))
+        refought = [e for e in events
+                    if e.get("event_type") == "RULE_REFOUGHT"]
+        assert len(refought) == 1
+        assert refought[0]["context"]["action"] == "keep"
+
 
 # ---------------------------------------------------------------------------
 # Decision journal

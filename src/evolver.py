@@ -2648,7 +2648,11 @@ def run_skill_maintenance(
       - After rewrite, skill is set to "half_open" (probationary)
       - CIRCUIT_HALFOPEN_RECOVERY (2) consecutive successes closes the breaker
 
-    Returns dict with keys: promoted, demoted, rewritten, rewrite_candidates.
+    Also re-fights contested standing rules (decay-by-invalidation v0) when
+    an adapter is available — same collision→repair shape, rule layer.
+
+    Returns dict with keys: promoted, demoted, rewritten, rewrite_candidates,
+    rules_refought.
     """
     from skills import (
         maybe_auto_promote_skills,
@@ -2766,11 +2770,35 @@ def run_skill_maintenance(
     except Exception as _ab_e:
         log.debug("ab variant retirement failed (non-fatal): %s", _ab_e)
 
+    # Decay-by-invalidation v0 (BACKLOG 2026-06-11): re-fight contested
+    # standing rules — the rewrite_skill collision→repair pattern applied to
+    # the rule layer. A contradicted rule stops being injected "apply
+    # unconditionally" immediately (knowledge_lens.inject_standing_rules);
+    # this is the repair half. Capped per cycle to bound spend.
+    refought: list = []
+    try:
+        from knowledge_lens import contested_rules, refight_rule
+        _contested = contested_rules()
+        if _contested and verbose:
+            print(
+                f"[evolver] contested standing rules (re-fight candidates): "
+                f"{[r.rule_id for r in _contested[:3]]}",
+                file=sys.stderr,
+            )
+        if not dry_run and adapter is not None:
+            for _rule in _contested[:3]:  # max 3 re-fights per cycle
+                _action = refight_rule(_rule, adapter, verbose=verbose)
+                if _action:
+                    refought.append(f"{_rule.rule_id}:{_action}")
+    except Exception as _rf_e:
+        log.debug("rule re-fight scan failed (non-fatal): %s", _rf_e)
+
     return {
         "promoted": promoted,
         "demoted": demoted,
         "rewritten": rewritten,
         "rewrite_candidates": rewrite_candidates,
+        "rules_refought": refought,
     }
 
 
