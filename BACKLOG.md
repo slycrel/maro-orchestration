@@ -31,10 +31,23 @@ validity are different signals and we only track one.
   detection rides on contradiction recording, repair rides on the evolver cycle.
   Note: no standing rules exist on this box yet (accretion only became possible in M2),
   so first live exercise awaits a real rule + collision.
-- [ ] **Freshness signal on crystallized artifacts.** `last_verified` (last
+- [x] **Freshness signal on crystallized artifacts.** `last_verified` (last
   successful run against the real world) distinct from `last_reinforced`. Trust at
   injection time = f(score, time-since-verified); stale-but-promoted gets a
   "verify before relying" flag, not silent confident injection.
+  **Done 2026-06-11 for the rule layer:** `StandingRule.last_verified` stamped at
+  promotion, on production re-confirmation, and on re-fight keep/revise. The
+  anchoring fix: post-promotion re-confirmations never reached the rule —
+  `observe_pattern` only matched hypotheses, so a re-confirmed promoted lesson
+  seeded a *duplicate hypothesis* (which could re-promote into a duplicate rule)
+  while `rule.confirmations` stayed frozen at its promotion value. Now an
+  observation matching an existing rule verifies the rule (`RULE_VERIFIED`
+  event, 46th type). At injection, an uncontradicted rule unverified for
+  `knowledge.rule_staleness_days` (default 30, 0 disables) joins a "Stale rules
+  (unverified for N+ days — verify before relying)" block; contested takes
+  precedence. Read-time derivation only, data untouched; `promoted_at` is the
+  fallback anchor for pre-field rules. Skill/playbook layers still open —
+  skills have score+circuit-breaker already; revisit if staleness shows up there.
 - [ ] **Design constraint, not a task: decay trust, never data.** Append-only
   evidence layer stays perfect (the computerization edge over human forgetting);
   only compiled-truth confidence decays. Crystallization Stages 4–5 must be

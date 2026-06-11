@@ -61,6 +61,11 @@ CANON_CANDIDATE = "CANON_CANDIDATE"
 # run from the evolver cycle). Context carries action (keep|revise|retire),
 # reasoning, and old/new rule text — the audit trail for trust changes.
 RULE_REFOUGHT = "RULE_REFOUGHT"
+# Freshness signal (2026-06-11): a promoted standing rule was re-confirmed in
+# production (observe_pattern matched an existing rule). Stamps last_verified —
+# the signal that keeps an uncontradicted rule out of the stale
+# verify-before-relying injection block.
+RULE_VERIFIED = "RULE_VERIFIED"
 
 # Evolver actions
 EVOLVER_APPLIED = "EVOLVER_APPLIED"
@@ -127,7 +132,7 @@ EVENT_TYPES = {
     MEMORY_CONSOLIDATED,
     HYPOTHESIS_CREATED, HYPOTHESIS_PROMOTED, HYPOTHESIS_CONTRADICTED,
     STANDING_RULE_CONTRADICTED, RULE_GRADUATED, RULE_DEMOTED, CANON_CANDIDATE,
-    RULE_REFOUGHT,
+    RULE_REFOUGHT, RULE_VERIFIED,
     EVOLVER_APPLIED, EVOLVER_GENERATED, EVOLVER_SKIPPED, GRADUATION_PROPOSED,
     AUTO_RECOVERY, DIAGNOSIS, INPUT_MISMATCH,
     DECISION_RECORDED, METACOGNITIVE_DECISION,

@@ -2,9 +2,23 @@
 
 What to do next, in what order. Updated each session. Strategic phases live in ROADMAP.md; deferred ideas live in BACKLOG.md. This file is the bridge — the executable queue.
 
-Last updated: 2026-06-11 (session 40 continued — goal-brain steps 1–5 complete; navigator shadow rounds 1+2 done; live dispatch shadow wired and accumulating agreement data)
+Last updated: 2026-06-11 (session 40 continued — goal-brain steps 1–5 complete; navigator shadow rounds 1+2 done; live dispatch shadow wired and accumulating agreement data; suite fully green; rule freshness signal shipped)
 
 ---
+
+## Done (2026-06-11 — last_verified freshness signal, rule layer)
+
+Entropy thread companion to decay v0: reinforcement and validity are different signals; the most-reinforced rule is the most dangerous one at world-shift time. Trust at injection is now f(record, time-since-verified), read-time only.
+
+- [x] **`StandingRule.last_verified`** — stamped at promotion, on production re-confirmation, and on re-fight keep/revise. `promoted_at` is the fallback anchor for rules written before the field existed. Distinct from `last_applied` (use ≠ verification).
+- [x] **Anchoring bug fixed: post-promotion re-confirmations never reached the rule.** `observe_pattern` only matched hypotheses, so re-confirming a promoted lesson seeded a *duplicate hypothesis* (its original was removed at promotion) that could re-promote into a duplicate rule, while `rule.confirmations` stayed frozen at its promotion value forever. An observation matching an existing rule now verifies the rule instead — `RULE_VERIFIED` event (46th type).
+- [x] **Stale gate at injection** — uncontradicted rules unverified for `knowledge.rule_staleness_days` (default 30, `0` disables) inject under "Stale rules (unverified for N+ days — verify before relying)" instead of "apply unconditionally". Contested takes precedence over stale. Read-time derivation; data untouched.
+- Skill/playbook freshness layers still open (skills have score + circuit breaker already); revisit when staleness shows up there in practice.
+
+## Done (2026-06-11 — suite fully green: 2 pre-existing failures root-caused)
+
+- [x] **Worker-manifest string commands ran as one quoted token** — regression from `a799871`: string commands funneled through the list-argv quote-join became a single `shlex.quote`d token, so `/bin/sh -c` searched for a program literally named the whole command line (127 → 'blocked'). 5 test_orch_core tests affected since the build-loop merge stream. String commands now pass verbatim; args append quoted; list commands unchanged.
+- [x] **Scheduler lease test was time-of-day dependent** — lease stamped at real wall clock vs staleness probed at synthetic `next_run+5min`; only passed 03:05–09:00 UTC. `now` seam added to `mark_job_dispatched` (mirrors `check_due_jobs`).
 
 ## Done (2026-06-11 — decay-by-invalidation v0: re-fight on collision, rule layer)
 
@@ -13,7 +27,7 @@ Jeremy's pinned first pass (entropy thread): on crystallized-artifact failure, i
 - [x] **Contested gate at injection** — `inject_standing_rules` splits rules with any recorded contradiction into a "Contested rules (verify before relying)" block with their confirmed/contradicted record. Read-time trust derivation; rule data untouched (decay trust, never data).
 - [x] **`refight_rule()`** (knowledge_lens) — re-derives a contested rule against its contradiction evidence (STANDING_RULE_CONTRADICTED summaries pulled from the captain's log — the append-only evidence layer). Verdicts: **keep** (trust restored, contradictions zeroed), **revise** (corrected text, record reset — must re-earn), **retire** (demoted back to hypothesis — the demotion the dataclass comment promised but code never did). Unusable output leaves the rule contested, never silently re-trusted.
 - [x] **Wired into the evolver cycle** — `run_skill_maintenance` re-fights up to 3 contested rules per cycle when an adapter is present, beside the skill rewrites; agent_loop's adapterless call skips it (spend stays on the evolver path). `RULE_REFOUGHT` event (45th type) is the audit trail.
-- Not yet exercised live: no standing rules exist on this box (accretion became possible in M2). `last_verified` freshness signal still open in BACKLOG.
+- Not yet exercised live: no standing rules exist on this box (accretion became possible in M2). `last_verified` freshness signal shipped later same day (see entry above).
 
 ## Done (2026-06-11 — recall() loop-slice relocation: one memory read seam)
 

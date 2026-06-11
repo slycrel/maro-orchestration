@@ -53,6 +53,11 @@ class StandingRule:
                                     # verify-before-relying until refight_rule resolves it)
     promoted_at: str
     last_applied: str = ""
+    last_verified: str = ""         # last confirmation against the real world
+                                    # (re-confirmation or re-fight win) — distinct
+                                    # from being applied/injected. Empty on rules
+                                    # written before 2026-06-11; promoted_at is
+                                    # the freshness fallback.
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -60,6 +65,7 @@ class StandingRule:
             "source_lesson_id": self.source_lesson_id, "domain": self.domain,
             "confirmations": self.confirmations, "contradictions": self.contradictions,
             "promoted_at": self.promoted_at, "last_applied": self.last_applied,
+            "last_verified": self.last_verified,
         }
 
     @classmethod
@@ -201,11 +207,43 @@ def observe_pattern(lesson: str, domain: str, *, source_lesson_id: str = "") -> 
     Returns the new StandingRule if promotion occurred, else None.
     """
     now = _current_date()
+    lesson_lower = lesson.lower().strip()
+
+    # Already a standing rule? Re-confirmation verifies the rule itself —
+    # without this, a re-confirmed promoted lesson seeded a fresh hypothesis
+    # (its original was removed at promotion) that could re-promote into a
+    # duplicate rule, and rule.confirmations stayed frozen at its promotion
+    # value forever. last_verified is the freshness signal injection reads.
+    rules = load_standing_rules()
+    for r in rules:
+        if r.rule.lower().strip() == lesson_lower or (
+            r.domain == domain and domain and _text_similarity(r.rule, lesson) > 0.85
+        ):
+            r.confirmations += 1
+            r.last_verified = now
+            _rewrite_rules(rules)
+            log.info("standing rule re-verified: %s (confirmations=%d)",
+                     r.rule_id, r.confirmations)
+            try:
+                from captains_log import log_event, RULE_VERIFIED
+                log_event(
+                    event_type=RULE_VERIFIED,
+                    subject=r.rule_id,
+                    summary=(f"Re-confirmed in production "
+                             f"({r.confirmations} confirmations): {r.rule[:100]}"),
+                    context={"confirmations": r.confirmations,
+                             "contradictions": r.contradictions,
+                             "last_verified": now},
+                    related_ids=[f"rule:{r.rule_id}"],
+                )
+            except Exception:
+                pass
+            return None  # verified an existing rule; no promotion occurred
+
     hyps = load_hypotheses(domain=None)
 
     # Find existing hypothesis by similarity (exact or near-exact lesson text)
     target_hyp: Optional[Hypothesis] = None
-    lesson_lower = lesson.lower().strip()
     for h in hyps:
         if h.lesson.lower().strip() == lesson_lower or (h.domain == domain and domain and _text_similarity(h.lesson, lesson) > 0.85):
             target_hyp = h
@@ -283,6 +321,7 @@ def observe_pattern(lesson: str, domain: str, *, source_lesson_id: str = "") -> 
             confirmations=target_hyp.confirmations,
             contradictions=0,
             promoted_at=now,
+            last_verified=now,
         )
         with open(_rules_path(), "a", encoding="utf-8") as f:
             f.write(json.dumps(rule.to_dict()) + "\n")
@@ -414,6 +453,26 @@ def check_contradiction(
     return None
 
 
+def _rule_is_stale(rule: StandingRule, *, staleness_days: int, today: Optional[str] = None) -> bool:
+    """Read-time freshness check: has this rule gone unverified too long?
+
+    Anchor = last_verified, falling back to promoted_at for rules written
+    before the field existed. No parseable anchor → not stale (fail toward
+    the pre-freshness behavior rather than flagging on bad data).
+    """
+    if staleness_days <= 0:
+        return False  # disabled
+    anchor = (rule.last_verified or rule.promoted_at or "").strip()[:10]
+    if not anchor:
+        return False
+    try:
+        anchor_dt = datetime.strptime(anchor, "%Y-%m-%d")
+        today_dt = datetime.strptime((today or _current_date())[:10], "%Y-%m-%d")
+    except ValueError:
+        return False
+    return (today_dt - anchor_dt).days > staleness_days
+
+
 def inject_standing_rules(domain: str = "") -> str:
     """Return standing rules formatted for injection into decompose system prompt.
 
@@ -422,17 +481,41 @@ def inject_standing_rules(domain: str = "") -> str:
     "apply unconditionally" to a verify-before-relying block until the next
     re-fight resolves it (refight_rule, run from the evolver cycle).
 
+    Freshness signal (same day): an uncontradicted rule that hasn't been
+    verified against the real world in `knowledge.rule_staleness_days`
+    (default 30) is *stale* — reinforcement and validity are different
+    signals, and the most-reinforced rule is the most dangerous one at
+    world-shift time. Stale rules inject as verify-before-relying, not as
+    silent confident truth. Trust derivation is read-time only; the data
+    is untouched. Contested takes precedence over stale.
+
     Returns empty string if no rules exist (safe to always call).
     """
     rules = load_standing_rules(domain=domain)
     if not rules:
         return ""
-    solid = [r for r in rules if r.contradictions < 1]
+    try:
+        from config import get as _cfg_get
+        staleness_days = int(_cfg_get("knowledge.rule_staleness_days", 30))
+    except Exception:
+        staleness_days = 30
     contested = [r for r in rules if r.contradictions >= 1]
+    fresh = [r for r in rules if r.contradictions < 1
+             and not _rule_is_stale(r, staleness_days=staleness_days)]
+    stale = [r for r in rules if r.contradictions < 1
+             and _rule_is_stale(r, staleness_days=staleness_days)]
     lines: List[str] = []
-    if solid:
+    if fresh:
         lines.append("### Standing Rules (apply unconditionally)")
-        lines.extend(f"- {r.rule}" for r in solid)
+        lines.extend(f"- {r.rule}" for r in fresh)
+    if stale:
+        lines.append(
+            f"### Stale rules (unverified for {staleness_days}+ days — "
+            "verify before relying)")
+        lines.extend(
+            f"- {r.rule} (last verified {r.last_verified or r.promoted_at})"
+            for r in stale
+        )
     if contested:
         lines.append(
             "### Contested rules (recently contradicted — verify before relying)")
@@ -553,11 +636,13 @@ Output ONLY valid JSON:
 
     if action == "keep":
         target.contradictions = 0  # battle re-fought, rule won; trust restored
+        target.last_verified = _current_date()
         _rewrite_rules(rules)
     elif action == "revise":
         target.rule = new_text
         target.confirmations = 0   # revised text must re-earn its record
         target.contradictions = 0
+        target.last_verified = _current_date()  # derived against latest evidence
         _rewrite_rules(rules)
     else:  # retire → demote to hypothesis: data preserved, trust reset
         rules = [r for r in rules if r.rule_id != target.rule_id]

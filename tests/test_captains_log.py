@@ -230,11 +230,15 @@ class TestEventTypes:
         assert DECISION_RECORDED in EVENT_TYPES
 
     def test_event_type_count(self):
-        assert len(EVENT_TYPES) == 45
+        assert len(EVENT_TYPES) == 46
 
     def test_rule_refought_in_set(self):
         from captains_log import RULE_REFOUGHT
         assert RULE_REFOUGHT in EVENT_TYPES
+
+    def test_rule_verified_in_set(self):
+        from captains_log import RULE_VERIFIED
+        assert RULE_VERIFIED in EVENT_TYPES
 
     def test_scope_skipped_in_set(self):
         from captains_log import SCOPE_SKIPPED

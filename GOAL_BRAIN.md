@@ -245,8 +245,16 @@ Sample: the 2026-05-13..17 window of `~/.poe/workspace/runs/` (478 dirs total;
   untouched) — and `refight_rule()` re-derives them against contradiction
   evidence from the captain's log (keep / revise / retire→hypothesis), run from
   the evolver cycle beside `rewrite_skill` (the skill-layer seed it
-  generalizes), max 3/cycle, RULE_REFOUGHT audit events. The `last_verified`
-  freshness signal remains open (BACKLOG).
+  generalizes), max 3/cycle, RULE_REFOUGHT audit events. **`last_verified`
+  freshness signal shipped 2026-06-11 (rule layer):** stamped at promotion,
+  production re-confirmation, and re-fight keep/revise; uncontradicted rules
+  unverified for `knowledge.rule_staleness_days` (default 30) inject as a
+  "Stale rules — verify before relying" block (read-time derivation; contested
+  takes precedence). Anchoring fix en route: post-promotion re-confirmations
+  used to seed duplicate hypotheses (potential duplicate rules) while the
+  rule's own record stayed frozen — `observe_pattern` now verifies the
+  matching rule (RULE_VERIFIED event) instead. Skill/playbook freshness still
+  open.
 - **2026-06-11** — Navigator decision schema pinned (step 4, `docs/NAVIGATOR_SCHEMA.md`
   + `src/navigator.py` types-only): six moves + `idunno` as admission-not-move
   (tier re-run, top-tier converts to escalate); one flat JSON envelope with

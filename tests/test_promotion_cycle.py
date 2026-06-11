@@ -425,6 +425,127 @@ class TestRefightRule:
         assert len(refought) == 1
         assert refought[0]["context"]["action"] == "keep"
 
+    def test_keep_and_revise_stamp_last_verified(self, tmp_path):
+        from memory import refight_rule
+        rule = _make_contested_rule()
+        refight_rule(rule, _RefightAdapter(
+            {"action": "keep", "reasoning": "noise"}))
+        assert load_standing_rules()[0].last_verified == _kl_module._current_date()
+
+
+# ---------------------------------------------------------------------------
+# Freshness signal: rule re-verification + staleness at injection
+# ---------------------------------------------------------------------------
+
+
+def _promote_rule(text="Always fetch via Jina.", domain="fetch"):
+    observe_pattern(text, domain)
+    observe_pattern(text, domain)
+    rules = load_standing_rules()
+    assert len(rules) == 1
+    return rules[0]
+
+
+def _backdate_rule(rule_id, *, last_verified, promoted_at=None):
+    rules = load_standing_rules()
+    for r in rules:
+        if r.rule_id == rule_id:
+            r.last_verified = last_verified
+            if promoted_at is not None:
+                r.promoted_at = promoted_at
+    _kl_module._rewrite_rules(rules)
+
+
+class TestRuleVerification:
+    def test_reconfirmation_verifies_rule_not_new_hypothesis(self, tmp_path):
+        rule = _promote_rule()
+        assert observe_pattern(rule.rule, rule.domain) is None
+        reloaded = load_standing_rules()
+        assert len(reloaded) == 1
+        assert reloaded[0].confirmations == rule.confirmations + 1
+        assert reloaded[0].last_verified == _kl_module._current_date()
+        # Pre-fix behavior: a duplicate hypothesis accreted here (the original
+        # was removed at promotion) and could re-promote into a duplicate rule.
+        assert load_hypotheses() == []
+
+    def test_promotion_stamps_last_verified(self, tmp_path):
+        rule = _promote_rule()
+        assert rule.last_verified == rule.promoted_at
+
+    def test_rule_verified_event_logged(self, tmp_path):
+        rule = _promote_rule()
+        events = []
+        with patch("captains_log.log_event",
+                   side_effect=lambda **kw: events.append(kw)):
+            observe_pattern(rule.rule, rule.domain)
+        verified = [e for e in events
+                    if e.get("event_type") == "RULE_VERIFIED"]
+        assert len(verified) == 1
+        assert verified[0]["context"]["confirmations"] == rule.confirmations + 1
+
+    def test_from_dict_tolerates_missing_last_verified(self):
+        r = StandingRule.from_dict({
+            "rule_id": "x", "rule": "r", "source_lesson_id": "", "domain": "",
+            "confirmations": 1, "contradictions": 0, "promoted_at": "2026-01-01"})
+        assert r.last_verified == ""
+
+
+class TestStaleRules:
+    def test_fresh_rule_applies_unconditionally(self, tmp_path):
+        _promote_rule()
+        result = inject_standing_rules()
+        assert "apply unconditionally" in result
+        assert "Stale rules" not in result
+
+    def test_unverified_rule_goes_stale(self, tmp_path):
+        rule = _promote_rule()
+        _backdate_rule(rule.rule_id, last_verified="2026-01-01")
+        result = inject_standing_rules()
+        assert "apply unconditionally" not in result
+        assert "Stale rules" in result
+        assert "verify before relying" in result
+        assert "last verified 2026-01-01" in result
+
+    def test_promoted_at_is_freshness_fallback(self, tmp_path):
+        # Rules written before the last_verified field existed.
+        rule = _promote_rule()
+        _backdate_rule(rule.rule_id, last_verified="", promoted_at="2026-01-01")
+        assert "Stale rules" in inject_standing_rules()
+
+    def test_reverification_restores_freshness(self, tmp_path):
+        rule = _promote_rule()
+        _backdate_rule(rule.rule_id, last_verified="2026-01-01")
+        observe_pattern(rule.rule, rule.domain)
+        result = inject_standing_rules()
+        assert "apply unconditionally" in result
+        assert "Stale rules" not in result
+
+    def test_contested_takes_precedence_over_stale(self, tmp_path):
+        rule = _promote_rule()
+        _backdate_rule(rule.rule_id, last_verified="2026-01-01")
+        contradict_pattern(rule.rule, rule.domain)
+        result = inject_standing_rules()
+        assert "recently contradicted" in result
+        assert "Stale rules" not in result
+
+    def test_staleness_window_configurable(self, tmp_path):
+        from datetime import datetime, timedelta, timezone
+        rule = _promote_rule()
+        ten_days_ago = (datetime.now(timezone.utc)
+                        - timedelta(days=10)).strftime("%Y-%m-%d")
+        _backdate_rule(rule.rule_id, last_verified=ten_days_ago)
+        assert "apply unconditionally" in inject_standing_rules()  # default 30d
+        with patch("config.get", side_effect=lambda key, default=None:
+                   5 if key == "knowledge.rule_staleness_days" else default):
+            assert "Stale rules" in inject_standing_rules()
+
+    def test_zero_window_disables_staleness(self, tmp_path):
+        rule = _promote_rule()
+        _backdate_rule(rule.rule_id, last_verified="2026-01-01")
+        with patch("config.get", side_effect=lambda key, default=None:
+                   0 if key == "knowledge.rule_staleness_days" else default):
+            assert "apply unconditionally" in inject_standing_rules()
+
 
 # ---------------------------------------------------------------------------
 # Decision journal
