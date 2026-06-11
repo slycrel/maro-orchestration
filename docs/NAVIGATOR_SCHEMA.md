@@ -238,6 +238,43 @@ visible, disposition is mandatory, *policy* is the navigator's call per turn.)
 - **Not new authority.** Shadow mode changes no behavior. The existing pipeline
   keeps the wheel until shadow data earns cutover, class by class.
 
+## Step-5 outcome — prompt + shadow replay round 1 (2026-06-11)
+
+The prompt lives in `src/navigator_prompt.py` (`SYSTEM_PROMPT` + `render_input` +
+`decide()` with the tier chain); the replay harness in `src/navigator_shadow.py`
+(`python3 -m navigator_shadow <handle-id>... --point dispatch|closure|both`).
+Replay rebuilds recall context **as of the run's start time**, so the navigator
+sees what the system knew then, not now.
+
+Seven decisions over five historical runs (live LLM calls, cheap→mid→power chain):
+
+| Run | Point | Pipeline did | Navigator said | Tier | Verdict |
+|---|---|---|---|---|---|
+| `e0760af0` "Read CONSTRAINT_ORCHESTRATION_DESIGN.md, note open questions" | dispatch | execute (done) | `execute` 0.95 | cheap | agree |
+| `e0760af0` same | closure | ended done | `close` delivered 0.88 | cheap | agree |
+| `d5136cef` "Adversarial verification…" (the 2026-05-17 burn, 8 prior attempts, 6 stuck) | dispatch | execute (stuck) | `escalate` 0.85 — "well above the three-failure threshold… systemic blocker" | cheap | navigator right |
+| `d5136cef` same | closure | ended stuck (era behavior: requeue verbatim) | `escalate` 0.92 | cheap | navigator right |
+| `711ab9a9` goal `[after:1]` (decompose-chop fragment) | dispatch | execute (error) | cheap **idunno** → mid `close` abandoned 0.88 — "sequencing marker, not a task… spawn artifact" | mid | navigator right, chain worked |
+| `25490296` "Rate each finding: strong/moderate/weak/contested" (fragment, 8 prior) | dispatch | execute (error) | `escalate` 0.95 | cheap | navigator right |
+| `fe22dd61` "Read the captured output and identify 3-5 core dimensions (when to persist" (truncated) | dispatch | execute ("done") | cheap **idunno** → mid `escalate` 0.88 — caught the mid-clause truncation | mid | navigator right |
+
+What round 1 establishes:
+- **Every divergence favored the navigator**, and each one maps to a documented
+  failure class from the step-2 pressure test (repeat burn, chopped fragments,
+  missing referents). The cheap tier correctly applied history-outranks-optimism
+  on its own; the `[after:1]` root-cause read ("spawn artifact… re-enqueue with
+  the actual goal text") came from a Haiku-class admission plus one Sonnet-class
+  turn.
+- **Tier economics work as designed**: 5/7 decided at cheap, 2 needed mid (both
+  after an honest cheap-tier idunno), 0 reached power. The idunno chain fired
+  twice and converted confusion to a decision both times.
+- **Known bias, do not over-read**: this panel was hand-picked to include the
+  known-bad runs. It shows the navigator catches the failure classes we already
+  knew about; it does NOT measure the false-escalate rate on healthy goals — a
+  navigator that nannies every legitimate goal into escalation would be worse
+  than the pipeline. Round 2 must be a *random* sample, and over-escalation is
+  the specific thing to count.
+
 ## Open ends carried forward
 
 - **Per-thread goal-brain creation** — `NavigatorInput.goal_brain` assumes one per
@@ -246,8 +283,12 @@ visible, disposition is mandatory, *policy* is the navigator's call per turn.)
   scope, system-maintained sections updated at close).
 - **Async fork join + `wait`** — deferred until a real thread needs it; sync join
   covers the worked examples we have.
-- **Shadow callsite choice** — dispatch, post-step, closure are the candidates;
-  pick when building the harness (step 5), guided by where `NavigatorInput` is
-  cheapest to assemble from what's already in hand.
+- **Shadow round 2: random sample, count over-escalation** — round 1 was
+  selection-biased toward known failures (see above). Before any cutover
+  discussion, replay a random N≥20 of healthy + failed runs and measure the
+  false-escalate rate on goals the pipeline handled fine.
+- **Live shadow callsite** — round 1 replayed history offline. Wiring `decide()`
+  as a shadow call at live dispatch (where recall() already runs) is the next
+  integration step; replay-offline first kept the loop untouched.
 - **Fork cap (8), confidence semantics** — made calls; revisit against
   NAVIGATOR_DECIDED data.

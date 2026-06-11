@@ -250,6 +250,15 @@ Sample: the 2026-05-13..17 window of `~/.poe/workspace/runs/` (478 dirs total;
   pipeline, NAVIGATOR_DECIDED records decision + pipeline-actual, divergence is
   the eval data, cutover per decision class. Fork cap 8 and confidence semantics
   are made calls; revisit against NAVIGATOR_DECIDED data.
+- **2026-06-11** — Navigator prompt + shadow replay shipped (step 5;
+  `src/navigator_prompt.py`, `src/navigator_shadow.py`). Round-1 replay of 5 real
+  runs / 7 decisions (table in `docs/NAVIGATOR_SCHEMA.md`): agreement on the
+  healthy run, navigator right on every divergence (burn run → escalate at cheap
+  tier; `[after:1]` chop fragment → close-abandoned with correct root cause;
+  truncated goal → escalate), 5/7 decided at cheap, idunno chain fired twice and
+  worked. Panel was deliberately biased toward known failures — **no cutover
+  conversation until a random-sample round 2 measures false-escalate rate on
+  healthy goals.** Goal-brain sequencing (2026-05-18 plan) steps 1–5 complete.
 
 ## Threads (system-maintained — nothing leaves this list silently)
 
@@ -260,12 +269,15 @@ Active:
   backtest_metrics.py, doctor.py), fresh-venv install verified under a foreign
   HOME, rc=1 payload-first fix shipped. Remaining: codex-side payload check
   decision (deferred — JSONL format differs, no observed repro), final sweep.
-- **Goal-brain sequencing, step 5 (last)**: the navigator prompt + shadow harness.
-  Step 4 (decision schema) done 2026-06-11 — `docs/NAVIGATOR_SCHEMA.md` +
-  `src/navigator.py` (types/validation/parsing, no callers — do not build a turn
-  runner before the prompt exists). Step 5 = hand-write the prompt against the
-  envelope, replay 3–5 real threads from `~/.poe/workspace/runs/` in shadow mode,
-  compare navigator-said vs pipeline-did. Step 3 (recall()) done 2026-06-10.
+- **Goal-brain sequencing: COMPLETE** (steps 1–5, 2026-06-10/11): artifact →
+  pressure test → recall() → navigator schema → navigator prompt + shadow
+  replay. Successor thread below.
+- **Navigator shadow rounds → cutover**: round 1 done (biased panel, navigator
+  won every divergence — `docs/NAVIGATOR_SCHEMA.md` results table). Next:
+  round 2 random sample (N≥20, measure false-escalate rate on healthy goals),
+  then wire `decide()` as a live shadow call at dispatch (recall() callsite,
+  still decide-only), then cutover per decision class where shadow agreement
+  earns it. No class cuts over on round-1 evidence.
 - **Run↔thread linkage**: done 2026-06-10 — tasks carry an `origin` ancestry dict
   (parent handle/loop/goal) from enqueue through `handle_task` into run metadata,
   and recall() now consults it at dispatch (ThreadIdentity walk).
