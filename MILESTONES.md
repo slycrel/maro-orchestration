@@ -100,7 +100,7 @@ M1–M5 complete: the session-40 arc (memory lifecycle → standing rules → re
 
 1. **Async fork join + `wait`** — `fork` exists in the navigator schema; the runner has no join semantics.
 2. **Per-decision-class cutover** — only after live shadow agreement data accumulates (`navigator.shadow_dispatch` is on for this box; analysis query in NAVIGATOR_SCHEMA.md). Explicitly not before.
-3. **Dumb-loop audit** — after navigator v1 has data; which pipeline decision points the navigator makes redundant.
+3. **Dumb-loop audit** — *static half done 2026-06-11* (`docs/DUMB_LOOP_AUDIT.md`: full decision-point inventory, navigator-move mapping, high-consequence priority order — `_handle_blocked_step` tree, dispatch guard, max-iterations ceiling first). Data half (agreement per decision point) waits on live shadow volume.
 4. **Skill/playbook freshness layers** — only if staleness shows up there in practice (rules have it; skills have score + circuit breaker).
 5. **Thread-brain per-turn maintenance** — v0 writes at open/close + fork registration; nothing writes Compiled truth / Decisions *during* a run yet. Wire `append_decision` / `append_compiled_truth` into the loop once the navigator goes live (the navigator is the natural maintainer; doing it from the dumb pipeline would duplicate that work).
 
