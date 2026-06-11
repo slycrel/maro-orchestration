@@ -111,6 +111,20 @@ learned lessons and so on... all the flavors of persistent working knowledge)."*
 stuck-class cause (non-convergent step auto-split) fixed in `3bd28cd`. Re-measure
 after the fixes have production runtime.
 
+**Captain's log role audit (2026-06-11; the "audit needed" from
+THREAD_ARCHITECTURE.md's demote-to-visibility note).** Runtime readers, all
+verified in code: observe.py dashboard + runs.py per-run slices = pure
+visibility (fine); two prompt-context injections (agent_loop K3 read bridge,
+evolver's recent-activity context) = advisory data — the blessed "input to
+recall()" role, to be routed through the recall seam when the loop slice
+relocates; **one load-bearing use found and fixed same day**:
+`scan_evolver_impact` (feeds confidence calibration) needed EVOLVER_APPLIED
+log events to learn *when* a change was applied, because `apply_suggestion`
+never persisted a timestamp. `applied_at` is now stamped in suggestions.jsonl
+(the durable store); the log is historical fallback only. Lifecycle state was
+already in dedicated stores (lessons/hypotheses/rules JSONL, consolidation
+marker) — no other control flow hangs off the log.
+
 **Architecture state:**
 - Poe-as-tool works; the verify→learn loop existed but key segments were dead
   (see above). Basis: session-17/40 audits + this arc's fixes.
@@ -210,7 +224,9 @@ Active:
   claimed. The work is relocating its memory half behind recall(slice="loop")
   (skills/cost/graph stay in agent_loop). Until then recall()'s loop slice is a
   partial composition with no caller — don't wire anything to it first. Also the
-  spot to stamp `lesson-cited` edges.
+  spot to stamp `lesson-cited` edges, and where the two captain's-log
+  prompt-injection read bridges (agent_loop K3, evolver context) get absorbed so
+  the log's only consumers are visibility + the seam (2026-06-11 audit).
 
 Dormant (deliberately parked, not dropped):
 - Thread Architecture implementation (`arch/thread-navigator`) — parked pending

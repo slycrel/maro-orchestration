@@ -360,6 +360,27 @@ def test_apply_suggestion_marks_applied(tmp_path):
     assert len(pending) == 0
 
 
+def test_apply_suggestion_stamps_applied_at(tmp_path):
+    """The apply timestamp must live in suggestions.jsonl, not only in the
+    captain's log — scan_evolver_impact reads it from here (the log is
+    visibility/data, not the wire)."""
+    from datetime import datetime
+    path = tmp_path / "suggestions.jsonl"
+    s1 = Suggestion(suggestion_id="s1", category="observation", target="all",
+                    suggestion="test", failure_pattern="x", confidence=0.5,
+                    outcomes_analyzed=5, applied=False)
+    path.write_text(json.dumps(s1.to_dict()) + "\n", encoding="utf-8")
+
+    with patch("evolver._suggestions_path", return_value=path):
+        ok = apply_suggestion("s1")
+    assert ok is True
+
+    d = json.loads(path.read_text(encoding="utf-8").strip())
+    assert d["applied"] is True
+    assert d["applied_at"]
+    datetime.fromisoformat(d["applied_at"])  # parseable, raises otherwise
+
+
 def test_apply_suggestion_not_found(tmp_path):
     path = tmp_path / "suggestions.jsonl"
     s1 = Suggestion(suggestion_id="s1", category="observation", target="all",
@@ -2543,6 +2564,47 @@ class TestScanEvolverImpact:
             with patch("evolver.load_outcomes", return_value=[]):
                 records = scan_evolver_impact()
         assert records == []
+
+    def test_suggestions_store_is_primary_source(self, tmp_path):
+        """applied_at in suggestions.jsonl wins over a log event for the same
+        suggestion — the store is the source of truth, the log is fallback."""
+        path = tmp_path / "suggestions.jsonl"
+        s1 = Suggestion(suggestion_id="dup-sid", category="prompt_tweak",
+                        target="all", suggestion="x", failure_pattern="y",
+                        confidence=0.5, outcomes_analyzed=5, applied=True,
+                        applied_at="2026-04-14T10:00:00+00:00")
+        path.write_text(json.dumps(s1.to_dict()) + "\n", encoding="utf-8")
+        # Same suggestion also has a log event with a DIFFERENT timestamp
+        stale_event = self._make_apply_event(
+            "2026-01-01T00:00:00+00:00", suggestion_id="dup-sid")
+
+        with patch("evolver._suggestions_path", return_value=path), \
+             patch("evolver.query_log", return_value=[stale_event]), \
+             patch("evolver.load_outcomes", return_value=[]):
+            records = scan_evolver_impact(min_outcomes=99)
+
+        assert len(records) == 1
+        assert records[0].applied_at == "2026-04-14T10:00:00+00:00"
+
+    def test_log_fallback_covers_historical_applies(self, tmp_path):
+        """Applies that predate the applied_at stamp still come from the log."""
+        path = tmp_path / "suggestions.jsonl"
+        # Old-style record: applied but never stamped
+        s1 = Suggestion(suggestion_id="old-sid", category="prompt_tweak",
+                        target="all", suggestion="x", failure_pattern="y",
+                        confidence=0.5, outcomes_analyzed=5, applied=True)
+        path.write_text(json.dumps(s1.to_dict()) + "\n", encoding="utf-8")
+        event = self._make_apply_event(
+            "2026-04-14T10:00:00+00:00", suggestion_id="old-sid")
+
+        with patch("evolver._suggestions_path", return_value=path), \
+             patch("evolver.query_log", return_value=[event]), \
+             patch("evolver.load_outcomes", return_value=[]):
+            records = scan_evolver_impact(min_outcomes=99)
+
+        assert len(records) == 1
+        assert records[0].suggestion_id == "old-sid"
+        assert records[0].applied_at == "2026-04-14T10:00:00+00:00"
 
 
 class TestFormatImpactSummary:

@@ -84,6 +84,7 @@ class Suggestion:
     outcomes_analyzed: int  # how many outcomes were reviewed
     generated_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     applied: bool = False
+    applied_at: str = ""  # ISO timestamp stamped by apply_suggestion()
 
     def to_dict(self) -> dict:
         return {
@@ -96,6 +97,7 @@ class Suggestion:
             "outcomes_analyzed": self.outcomes_analyzed,
             "generated_at": self.generated_at,
             "applied": self.applied,
+            "applied_at": self.applied_at,
         }
 
     @classmethod
@@ -511,6 +513,14 @@ def apply_suggestion(suggestion_id: str) -> bool:
                     # observation, sub_mission, etc. — safe to apply
                     d["applied"] = True
                     _apply_suggestion_action(d)
+                if d.get("applied"):
+                    # Apply timestamp lives HERE, not (only) in the captain's
+                    # log. scan_evolver_impact previously had to read
+                    # EVOLVER_APPLIED log events to learn when a change
+                    # landed — making the log the source of truth for a
+                    # system function, which it must not be (captain's log =
+                    # visibility/data, THREAD_ARCHITECTURE.md).
+                    d["applied_at"] = datetime.now(timezone.utc).isoformat()
             new_lines.append(json.dumps(d))
         except Exception:
             new_lines.append(line)
@@ -2968,13 +2978,42 @@ def scan_evolver_impact(
         except Exception:
             return None
 
-    # Load EVOLVER_APPLIED events
+    # Apply records: suggestions.jsonl is the durable source of truth —
+    # apply_suggestion() stamps applied_at at apply time. The captain's log
+    # EVOLVER_APPLIED events remain only as fallback for historical applies
+    # that predate the stamp (captain's log = visibility/data, not the wire
+    # a system function hangs off — THREAD_ARCHITECTURE.md).
+    apply_records: List[dict] = []
+    _seen_ids: set = set()
     try:
-        if query_log is None:
-            return []
-        apply_events = query_log(event_type=_EVOLVER_APPLIED_CONST, limit=limit)
+        for s in load_suggestions(limit=1000):
+            if s.applied and getattr(s, "applied_at", ""):
+                apply_records.append({
+                    "suggestion_id": s.suggestion_id,
+                    "category": s.category,
+                    "applied_at": s.applied_at,
+                })
+                _seen_ids.add(s.suggestion_id)
     except Exception:
+        pass
+    try:
+        if query_log is not None:
+            for _event in query_log(event_type=_EVOLVER_APPLIED_CONST, limit=limit):
+                _ctx = _event.get("context", {}) or {}
+                _sid = str(_ctx.get("suggestion_id", "") or _event.get("subject", ""))
+                if _sid and _sid in _seen_ids:
+                    continue
+                apply_records.append({
+                    "suggestion_id": _sid,
+                    "category": str(_ctx.get("category", "unknown")),
+                    "applied_at": _event.get("timestamp", ""),
+                })
+    except Exception:
+        pass
+    if not apply_records:
         return []
+    apply_records.sort(key=lambda r: r["applied_at"], reverse=True)
+    apply_records = apply_records[:limit]
 
     # Load outcomes for window sampling (use module-level load_outcomes for testability)
     _outcomes_cache: Optional[List[Any]] = None
@@ -3007,15 +3046,14 @@ def scan_evolver_impact(
         return n_stuck / len(outcomes)
 
     records: List[EvolverImpactRecord] = []
-    for event in apply_events:
-        applied_at_str = event.get("timestamp", "")
+    for rec in apply_records:
+        applied_at_str = rec["applied_at"]
         t_apply = _parse_iso(applied_at_str)
         if not t_apply:
             continue
 
-        ctx = event.get("context", {}) or {}
-        suggestion_id = str(ctx.get("suggestion_id", "") or event.get("subject", ""))
-        category = str(ctx.get("category", "unknown"))
+        suggestion_id = rec["suggestion_id"]
+        category = rec["category"]
 
         outcomes_before = _outcomes_for_window(t_apply, lookback_hours, 0)
         outcomes_after = _outcomes_for_window(t_apply, 0, lookahead_hours)
