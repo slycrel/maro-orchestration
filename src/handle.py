@@ -651,7 +651,9 @@ def _handle_impl(
             _now_escalate_enabled = bool(_cfg_get("now_lane.escalate_to_director", True))
         except Exception:
             pass
-        if _now_escalate_enabled and _is_complex_directive(message):
+        # An explicit force_lane="now" wins over escalation — the caller
+        # chose the lane; escalation protects *classified* routing only.
+        if _now_escalate_enabled and not force_lane and _is_complex_directive(message):
             lane = "agenda"
             reason = reason + " [now→agenda: complex directive escalated to Director]"
             log.info("handle: now→agenda escalation for: %s", message[:80])
