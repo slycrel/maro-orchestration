@@ -1722,6 +1722,7 @@ class TestNowStatusHonesty:
                    "tokens_in": 10, "tokens_out": 4}
         out = _verify_now_outcome("run the thing", outcome, self._verdict_adapter(False))
         assert out["status"] == "incomplete"
+        assert out["goal_achieved"] is False
         assert out["tokens_in"] == 15 and out["tokens_out"] == 6
 
     def test_verify_keeps_fulfilled(self):
@@ -1730,6 +1731,7 @@ class TestNowStatusHonesty:
                    "tokens_in": 10, "tokens_out": 4}
         out = _verify_now_outcome("what is the answer", outcome, self._verdict_adapter(True))
         assert out["status"] == "done"
+        assert out["goal_achieved"] is True
         assert out["tokens_in"] == 10  # no verdict tokens added when kept
 
     def test_verify_fails_open(self):
@@ -1740,6 +1742,7 @@ class TestNowStatusHonesty:
         outcome = {"status": "done", "result": "x", "tokens_in": 1, "tokens_out": 1}
         out = _verify_now_outcome("goal", outcome, adapter)
         assert out["status"] == "done"
+        assert "goal_achieved" not in out  # fail-open means unverified, not achieved
 
     def test_autonomous_now_run_demoted_end_to_end(self, monkeypatch, tmp_path):
         _setup(monkeypatch, tmp_path)
@@ -1756,10 +1759,34 @@ class TestNowStatusHonesty:
                     origin={"parent_handle_id": "abc", "source": "user_goal"},
                 )
         assert result.status == "incomplete"
-        # Finalized run metadata carries the honest status for recall.
+        # Finalized run metadata carries the honest status for recall —
+        # and the goal verdict as its own dimension (done != successful).
         from runs import run_dir
         meta = json.loads((run_dir(result.handle_id) / "metadata.json").read_text())
         assert meta["status"] == "incomplete"
+        assert meta["goal_achieved"] is False
+        assert meta["goal_verdict_source"] == "now_self_verdict"
+
+    def test_autonomous_now_verified_done_records_goal_achieved(self, monkeypatch, tmp_path):
+        """A verified-done NOW run records goal_achieved=True, not just status."""
+        _setup(monkeypatch, tmp_path)
+        from unittest.mock import patch
+        canned = {"status": "done", "result": "Here is the report you asked for.",
+                  "tokens_in": 7, "tokens_out": 3}
+        with patch("handle._run_now", return_value=canned):
+            with patch("intent.classify", return_value=("now", 0.9, "simple")):
+                result = handle(
+                    "do it",
+                    adapter=self._verdict_adapter(True),
+                    force_lane="now",
+                    dry_run=False,
+                    origin={"parent_handle_id": "abc", "source": "user_goal"},
+                )
+        assert result.status == "done"
+        from runs import run_dir
+        meta = json.loads((run_dir(result.handle_id) / "metadata.json").read_text())
+        assert meta["goal_achieved"] is True
+        assert meta["goal_verdict_source"] == "now_self_verdict"
 
     def test_interactive_now_skips_verification(self, monkeypatch, tmp_path):
         _setup(monkeypatch, tmp_path)
@@ -1933,3 +1960,30 @@ class TestClosureStatusHonesty:
         from runs import run_dir
         meta = json.loads((run_dir(result.handle_id) / "metadata.json").read_text())
         assert meta["status"] == "incomplete"
+        # Goal verdict recorded as its own dimension alongside process status.
+        assert meta["goal_achieved"] is False
+        assert meta["goal_verdict_source"] == "closure"
+        assert meta["goal_verdict_confidence"] == 0.9
+        assert meta["goal_verdict_summary"]
+
+    def test_closure_complete_records_goal_achieved_true(self, monkeypatch, tmp_path):
+        """done + closure complete=True -> goal_achieved=True in metadata."""
+        self._setup(monkeypatch, tmp_path)
+        from unittest.mock import patch
+
+        def _fake_run(*args, **kwargs):
+            return self._fake_loop_result(status="done")
+
+        with patch("agent_loop.run_agent_loop", side_effect=_fake_run), \
+             patch("intent.check_goal_clarity", return_value={"clear": True}), \
+             patch("director.verify_goal_completion",
+                   return_value=self._fake_closure(True, 0.95)), \
+             self._no_quality_gate():
+            result = handle("build X", force_lane="agenda", dry_run=False)
+
+        assert result.status == "done"
+        from runs import run_dir
+        meta = json.loads((run_dir(result.handle_id) / "metadata.json").read_text())
+        assert meta["goal_achieved"] is True
+        assert meta["goal_verdict_source"] == "closure"
+        assert meta["goal_verdict_confidence"] == 0.95
