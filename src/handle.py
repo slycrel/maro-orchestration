@@ -1582,18 +1582,17 @@ def _write_now_artifact(
     result: str,
     elapsed_ms: int,
 ) -> Optional[str]:
-    """Write NOW-lane result to a shared artifacts directory."""
+    """Write the NOW-lane result into the run dir's artifact/ subtree."""
     try:
-        # Use orch_root if available, else cwd
-        try:
-            import sys as _sys
-            _sys.path.insert(0, str(Path(__file__).parent))
-            from orch import orch_root
-            base = orch_root()
-        except Exception:
-            base = Path.cwd()
-
-        artifacts_dir = base / "prototypes" / "poe-orchestration" / "artifacts" / "now"
+        # The run dir is created at the top of every handle() call; its
+        # artifact/ subtree is where run products belong. If the current-run
+        # pointer is missing, derive the same path from the handle_id.
+        from runs import current_run_dir as _crd_art
+        from runs import run_dir as _run_dir_art
+        _rd = _crd_art()
+        if _rd is None:
+            _rd = _run_dir_art(handle_id)
+        artifacts_dir = _rd / "artifact"
         artifacts_dir.mkdir(parents=True, exist_ok=True)
         fname = f"now-{handle_id}.json"
         path = artifacts_dir / fname
@@ -1606,10 +1605,7 @@ def _write_now_artifact(
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
         path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-        try:
-            return str(path.relative_to(base))
-        except ValueError:
-            return str(path)
+        return str(path)
     except Exception:
         return None
 

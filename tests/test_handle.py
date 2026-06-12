@@ -82,6 +82,17 @@ def test_handle_now_writes_artifact(monkeypatch, tmp_path):
     assert result.artifact_path is not None
 
 
+def test_handle_now_artifact_lands_in_run_dir(monkeypatch, tmp_path):
+    """NOW artifacts belong in the run dir's artifact/ subtree, inside the
+    workspace — not the stale doubled prototype path they used to hit."""
+    _setup(monkeypatch, tmp_path)
+    result = handle("write a haiku", dry_run=True)
+    from runs import run_dir
+    p = Path(result.artifact_path)
+    assert p.exists()
+    assert p.parent == run_dir(result.handle_id) / "artifact"
+
+
 # ---------------------------------------------------------------------------
 # AGENDA lane (dry_run)
 # ---------------------------------------------------------------------------

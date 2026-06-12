@@ -145,11 +145,12 @@ dead at the extraction step since Phase 59 S1). Remaining observations:
   not fixed: moving reflection after closure would delay it for every run to
   serve the rare demotion; an outcome-amendment hook is probably the right
   shape if this starts to matter.
-- [ ] **NOW artifacts write to a stale prototype path** — `_write_now_artifact`
-  resolves orch_root and appends `prototypes/poe-orchestration/artifacts/now/`,
+- [x] **NOW artifacts write to a stale prototype path** — `_write_now_artifact`
+  resolved orch_root and appended `prototypes/poe-orchestration/artifacts/now/`,
   landing files at `~/prototypes/poe-orchestration/prototypes/poe-orchestration/…`
-  (doubled segment, outside the workspace). Should write under
-  `~/.poe/workspace/` like everything else.
+  (doubled segment, outside the workspace). **Fixed 2026-06-12:** NOW artifacts
+  now land in the run dir's `artifact/` subtree (current_run_dir, falling back
+  to run_dir(handle_id) — both workspace-honoring); artifact_path is absolute.
 - [ ] **First in-process consolidation gc'd the whole MEDIUM lesson store** —
   5 weeks of decay-age applied in one cycle (decayed 38, promoted 0, gc 38).
   Arguably correct on stale data (M2 promotes at reinforcement time, LONG
