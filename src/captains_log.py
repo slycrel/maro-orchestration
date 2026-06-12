@@ -128,6 +128,12 @@ RECALL_GUARD_TRIPPED = "RECALL_GUARD_TRIPPED"
 # nothing reads it for control flow.
 NAVIGATOR_DECIDED = "NAVIGATOR_DECIDED"
 
+# One per navigator decision that ACTED (changed dispatch behavior) — the
+# per-class cutover made real. Records the move, confidence, and what was
+# prevented/short-circuited. NAVIGATOR_DECIDED remains the decide-time row;
+# this is the audit trail that the navigator owned the call.
+NAVIGATOR_ACTED = "NAVIGATOR_ACTED"
+
 EVENT_TYPES = {
     SKILL_SYNTHESIZED, SKILL_SYNTHESIS_REJECTED, SKILL_PROMOTED, SKILL_DEMOTED, SKILL_REWRITE,
     SKILL_CIRCUIT_OPEN, SKILL_CIRCUIT_HALF_OPEN, SKILL_CIRCUIT_CLOSED,
@@ -144,7 +150,7 @@ EVENT_TYPES = {
     CLAIM_VERIFIER_OUTCOME,
     LOOP_CREATED, QUALITY_GATE_VERDICT, STEP_TOO_BROAD,
     RECALL_PERFORMED, RECALL_GUARD_TRIPPED,
-    NAVIGATOR_DECIDED,
+    NAVIGATOR_DECIDED, NAVIGATOR_ACTED,
 }
 
 # ---------------------------------------------------------------------------

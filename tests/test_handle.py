@@ -732,6 +732,192 @@ class TestNavigatorDispatchShadow:
         assert result.status == "done"
 
 
+class TestNavigatorDispatchCutover:
+    """Dispatch-class cutover (navigator.act_dispatch): the navigator's
+    escalate/close decisions act instead of being shadow-only. Default OFF;
+    confidence floor; guard keeps the first word; everything else executes."""
+
+    GOAL = "verify the polymarket rate limit handling end to end"
+
+    def _task(self):
+        return {"job_id": "task-012", "source": "user_goal", "reason": self.GOAL}
+
+    def _decision(self, move, confidence, payload=None):
+        from navigator import NavigatorDecision
+        return NavigatorDecision(
+            move=move, reasoning="test reasoning", confidence=confidence,
+            payload=payload or {},
+        )
+
+    def _patch_shadow_returning(self, monkeypatch, decision):
+        import navigator_shadow
+        monkeypatch.setattr(
+            navigator_shadow, "shadow_dispatch_live",
+            lambda goal, **kwargs: decision,
+        )
+
+    def _patch_handle(self, monkeypatch, calls):
+        import handle as handle_mod
+
+        def _fake_handle(message, **kwargs):
+            calls.append(message)
+            return HandleResult(
+                handle_id="x", lane="agenda", lane_confidence=1.0,
+                classification_reason="t", message=message, status="done", result="",
+            )
+
+        monkeypatch.setattr(handle_mod, "handle", _fake_handle)
+
+    def _patch_act_config(self, monkeypatch, enabled=True, floor=0.9):
+        import config
+
+        def _cfg(name, default=None):
+            if name == "navigator.act_dispatch":
+                return enabled
+            if name == "navigator.act_confidence_floor":
+                return floor
+            return default
+
+        monkeypatch.setattr(config, "get", _cfg)
+
+    def test_act_off_by_default_escalate_is_shadow_only(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        import handle as handle_mod
+        calls = []
+        self._patch_shadow_returning(monkeypatch, self._decision("escalate", 0.95))
+        self._patch_handle(monkeypatch, calls)
+
+        result = handle_mod.handle_task(self._task(), dry_run=False)
+
+        assert calls == [self.GOAL], "default off: decision must not act"
+        assert result.status == "done"
+
+    def test_escalate_acts_when_enabled(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        import handle as handle_mod
+        calls = []
+        self._patch_shadow_returning(monkeypatch, self._decision("escalate", 0.95))
+        self._patch_handle(monkeypatch, calls)
+        self._patch_act_config(monkeypatch)
+
+        result = handle_mod.handle_task(self._task(), dry_run=False)
+
+        assert calls == [], "escalate should have prevented the run"
+        assert result.status == "stuck"
+        assert result.classification_reason == "navigator_escalate"
+        assert "test reasoning" in result.result
+
+    def test_close_delivered_acts_as_done(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        import handle as handle_mod
+        calls = []
+        self._patch_shadow_returning(
+            monkeypatch,
+            self._decision("close", 0.99, payload={"closure": "delivered"}),
+        )
+        self._patch_handle(monkeypatch, calls)
+        self._patch_act_config(monkeypatch)
+
+        result = handle_mod.handle_task(self._task(), dry_run=False)
+
+        assert calls == []
+        assert result.status == "done"
+        assert result.classification_reason == "navigator_close"
+
+    def test_close_abandoned_acts_as_incomplete(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        import handle as handle_mod
+        calls = []
+        self._patch_shadow_returning(
+            monkeypatch,
+            self._decision("close", 0.95, payload={"closure": "abandoned"}),
+        )
+        self._patch_handle(monkeypatch, calls)
+        self._patch_act_config(monkeypatch)
+
+        result = handle_mod.handle_task(self._task(), dry_run=False)
+
+        assert calls == []
+        assert result.status == "incomplete"
+
+    def test_below_confidence_floor_executes(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        import handle as handle_mod
+        calls = []
+        self._patch_shadow_returning(monkeypatch, self._decision("escalate", 0.85))
+        self._patch_handle(monkeypatch, calls)
+        self._patch_act_config(monkeypatch, floor=0.9)
+
+        result = handle_mod.handle_task(self._task(), dry_run=False)
+
+        assert calls == [self.GOAL], "below floor: pipeline keeps the wheel"
+        assert result.status == "done"
+
+    def test_execute_decision_proceeds(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        import handle as handle_mod
+        calls = []
+        self._patch_shadow_returning(monkeypatch, self._decision("execute", 0.99))
+        self._patch_handle(monkeypatch, calls)
+        self._patch_act_config(monkeypatch)
+
+        result = handle_mod.handle_task(self._task(), dry_run=False)
+
+        assert calls == [self.GOAL]
+        assert result.status == "done"
+
+    def test_non_dispatch_moves_fall_through_to_execute(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        import handle as handle_mod
+        for move in ("extend", "fork", "collate", "idunno"):
+            calls = []
+            self._patch_shadow_returning(monkeypatch, self._decision(move, 0.99))
+            self._patch_handle(monkeypatch, calls)
+            self._patch_act_config(monkeypatch)
+            handle_mod.handle_task(self._task(), dry_run=False)
+            assert calls == [self.GOAL], f"{move} must not act at dispatch"
+
+    def test_guard_takes_precedence_over_navigator(self, monkeypatch, tmp_path):
+        """A tripped guard refuses before the navigator's decision is consulted."""
+        _setup(monkeypatch, tmp_path)
+        import handle as handle_mod
+        import runs
+        import uuid
+        for _ in range(3):
+            handle_id = uuid.uuid4().hex[:12]
+            rd = runs.create_run_dir(handle_id, prompt=self.GOAL)
+            meta_path = rd / "metadata.json"
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            meta["status"] = "stuck"
+            meta_path.write_text(json.dumps(meta), encoding="utf-8")
+        calls = []
+        # Navigator says close-delivered (done) — guard must still win.
+        self._patch_shadow_returning(
+            monkeypatch,
+            self._decision("close", 0.99, payload={"closure": "delivered"}),
+        )
+        self._patch_handle(monkeypatch, calls)
+        self._patch_act_config(monkeypatch)
+
+        result = handle_mod.handle_task(self._task(), dry_run=False)
+
+        assert result.classification_reason == "recall_guard"
+        assert result.status == "error"
+
+    def test_act_emits_navigator_acted_event(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        import handle as handle_mod
+        self._patch_shadow_returning(monkeypatch, self._decision("escalate", 0.95))
+        self._patch_handle(monkeypatch, [])
+        self._patch_act_config(monkeypatch)
+        events = []
+        from unittest.mock import patch as _patch
+        with _patch("captains_log.log_event",
+                    side_effect=lambda et, *a, **k: events.append(et)):
+            handle_mod.handle_task(self._task(), dry_run=False)
+        assert "NAVIGATOR_ACTED" in events
+
+
 # ---------------------------------------------------------------------------
 # _apply_prefixes registry unit tests
 # ---------------------------------------------------------------------------

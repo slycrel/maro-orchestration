@@ -1702,6 +1702,86 @@ def _parse_continuation_reason(reason: str):
     return reason, ""
 
 
+def _navigator_act_dispatch(
+    decision, goal: str, *, job_id: str, source: str
+):
+    """Dispatch-class cutover: turn a navigator decision into a dispatch
+    outcome, or None to proceed with the normal pipeline.
+
+    Only escalate and close act — they are the moves whose live shadow record
+    earned cutover (every adjudicated divergence navigator-right, 0 false
+    escalates on well-formed goals across replay rounds 1-2 + live data).
+    extend/fork/collate have no dispatch machinery yet and fall through to
+    execute. Acting requires confidence >= navigator.act_confidence_floor
+    (default 0.9); below the floor the pipeline keeps the wheel. Never raises.
+    """
+    if decision is None:
+        return None
+    try:
+        try:
+            from config import get as _cfg_get
+            if not bool(_cfg_get("navigator.act_dispatch", False)):
+                return None
+            _floor = float(_cfg_get("navigator.act_confidence_floor", 0.9))
+        except Exception:
+            return None
+        move = getattr(decision, "move", "")
+        conf = float(getattr(decision, "confidence", 0.0) or 0.0)
+        reasoning = str(getattr(decision, "reasoning", ""))
+        payload = dict(getattr(decision, "payload", {}) or {})
+        if move not in ("escalate", "close") or conf < _floor:
+            return None
+
+        if move == "escalate":
+            status = "stuck"
+            classification = "navigator_escalate"
+            result = (
+                f"navigator escalated at dispatch (conf {conf:.2f}): {reasoning}"
+            )
+        else:  # close
+            closure = str(payload.get("closure", "")) or "abandoned"
+            status = "done" if closure == "delivered" else "incomplete"
+            classification = "navigator_close"
+            result = (
+                f"navigator closed at dispatch ({closure}, conf {conf:.2f}): "
+                f"{reasoning}"
+            )
+
+        log.warning("handle_task navigator %s job_id=%s: %s",
+                    classification, job_id, result[:200])
+        try:
+            from captains_log import log_event, NAVIGATOR_ACTED
+            log_event(
+                NAVIGATOR_ACTED,
+                subject="navigator",
+                summary=f"dispatch: {move} acted (conf {conf:.2f}) — run prevented",
+                context={
+                    "point": "dispatch",
+                    "move": move,
+                    "confidence": conf,
+                    "reasoning": reasoning[:500],
+                    "goal_preview": goal[:200],
+                    "job_id": job_id,
+                    "source": source,
+                    "status": status,
+                },
+            )
+        except Exception:
+            pass
+        return HandleResult(
+            handle_id="",
+            lane="agenda",
+            lane_confidence=1.0,
+            classification_reason=classification,
+            message=goal,
+            status=status,
+            result=result,
+        )
+    except Exception as _act_exc:
+        log.debug("navigator act_dispatch fell through: %s", _act_exc)
+        return None
+
+
 def handle_task(
     task: dict,
     *,
@@ -1799,9 +1879,10 @@ def handle_task(
             # navigator's move next to what dispatch actually did. Config-gated
             # (navigator.shadow_dispatch, default off) and failure-isolated —
             # it can never change dispatch behavior.
+            _nav_decision = None
             try:
                 from navigator_shadow import shadow_dispatch_live
-                shadow_dispatch_live(
+                _nav_decision = shadow_dispatch_live(
                     reason,
                     origin=_origin,
                     recall_result=_rr,
@@ -1836,6 +1917,20 @@ def handle_task(
                     status="error",
                     result=_msg,
                 )
+            # Dispatch-class cutover (navigator.act_dispatch, default OFF):
+            # the navigator's dispatch decision acts instead of being
+            # shadow-only. Earned by shadow agreement data (NAVIGATOR_SCHEMA
+            # cutover rule); the recall guard above stays as the deterministic
+            # backstop and always gets the first word. Conservative by
+            # construction: only escalate/close act, only at or above the
+            # confidence floor, only on this autonomous requeue path —
+            # everything else falls through to execute.
+            _nav_acted = _navigator_act_dispatch(
+                _nav_decision, reason, job_id=job_id,
+                source=source or "task_store",
+            )
+            if _nav_acted is not None:
+                return _nav_acted
         return handle(reason, adapter=adapter, dry_run=dry_run, verbose=verbose, origin=_origin)
 
 

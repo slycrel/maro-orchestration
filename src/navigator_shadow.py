@@ -261,7 +261,10 @@ def shadow_dispatch_live(
     """
     try:
         from config import get as cfg_get
-        if not bool(cfg_get("navigator.shadow_dispatch", False)):
+        # act_dispatch implies the decide call: a deployment that turned the
+        # dispatch class live needs the decision even with shadowing off.
+        if not (bool(cfg_get("navigator.shadow_dispatch", False))
+                or bool(cfg_get("navigator.act_dispatch", False))):
             return None
         if tiers is None:
             # Default cheap-only: live shadow wants volume of dispatch-class

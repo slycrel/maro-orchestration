@@ -351,6 +351,37 @@ the log rotates at 5MB as of 2026-06-11):
 `cat captains_log*.jsonl | grep NAVIGATOR_DECIDED | jq 'select(.context.pipeline_actual.live)'`
 — agreement rate per move class is the cutover evidence.
 
+## Dispatch-class cutover mechanics (2026-06-12 — code shipped, default OFF)
+
+The first per-class cutover, built to the rule above ("enforcement on the
+narrow path the data justified" — the dispatch guard's own playbook):
+
+- **Config:** `navigator.act_dispatch` (default **off** in code; a deployment
+  opts in via workspace config) + `navigator.act_confidence_floor` (default
+  0.9). `act_dispatch` implies the decide call even with `shadow_dispatch` off.
+- **Only `escalate` and `close` act** — the moves whose record earned it
+  (every adjudicated live divergence navigator-right; 0 false escalates on
+  well-formed goals across replay rounds 1–2 and live shadow data).
+  `extend`/`fork`/`collate`/`idunno` have no dispatch machinery and fall
+  through to execute, as does anything below the confidence floor.
+- **Mapping:** `escalate` → HandleResult `stuck` / `navigator_escalate`
+  (run prevented, reasoning in result); `close` → `done` when
+  `closure: delivered`, else `incomplete` / `navigator_close`.
+- **The recall guard keeps the first word** — deterministic backstop fires
+  before the navigator is consulted, exactly as in shadow mode.
+- **Scope:** autonomous requeue path only (`handle_task`); humans calling
+  `handle()` directly are never navigator-refused. Skipped on dry-run.
+- **Audit:** every acted decision logs `NAVIGATOR_ACTED` (48th event type)
+  beside the existing NAVIGATOR_DECIDED row.
+
+Evidence basis at ship time: 18 live dispatch rows — 9/9 agreement on
+well-formed goals (conf 0.85–1.0), all 8 divergences adjudicated
+navigator-right or right-in-kind (impossible-binary batch, "improve things"
+pre-governance-event escalate 0.95, guard-trip close 0.99). Caveat: 10/18
+rows were deliberate probes; enabling on this box waits on the organic batch
+in flight. Cutover for the **closure** decision class stays shadow-only — no
+live closure shadow callsite exists yet.
+
 ## Open ends carried forward
 
 - ~~**Per-thread goal-brain creation**~~ — done 2026-06-11: `src/thread_brain.py`;
