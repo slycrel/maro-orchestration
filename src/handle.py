@@ -319,12 +319,19 @@ def _verify_now_outcome(message: str, outcome: Dict[str, Any], adapter) -> Dict[
         if verdict.get("fulfilled") is False:
             out = dict(outcome)
             out["status"] = "incomplete"
+            out["goal_achieved"] = False
             out["tokens_in"] = outcome.get("tokens_in", 0) + getattr(resp, "input_tokens", 0)
             out["tokens_out"] = outcome.get("tokens_out", 0) + getattr(resp, "output_tokens", 0)
             log.info("now-verify: response reports non-fulfillment — status demoted to incomplete")
             return out
+        if verdict.get("fulfilled") is True:
+            out = dict(outcome)
+            out["goal_achieved"] = True
+            return out
     except Exception as exc:
         log.debug("now-verify failed open (keeping done): %s", exc)
+    # Failed open or no clear verdict: goal achievement stays unverified
+    # (no goal_achieved key) — absence means "not judged", not "failed".
     return outcome
 
 
@@ -677,6 +684,25 @@ def _handle_impl(
         if origin is not None and not dry_run and outcome.get("status") == "done":
             outcome = _verify_now_outcome(message, outcome, adapter)
         elapsed = int((time.monotonic() - started_at) * 1000)
+
+        # Goal verdict as its own metadata dimension (done != successful):
+        # process status says the lane finished; goal_achieved says the
+        # request was actually fulfilled. Absent key = unverified.
+        if not dry_run and "goal_achieved" in outcome:
+            try:
+                from runs import write_metadata as _wm_now
+                from runs import current_run_dir as _crd_now
+                _rd_now = _crd_now()
+                if _rd_now is not None:
+                    _wm_now(
+                        _rd_now, handle_id=handle_id, prompt=_raw_input,
+                        extra={
+                            "goal_achieved": bool(outcome["goal_achieved"]),
+                            "goal_verdict_source": "now_self_verdict",
+                        },
+                    )
+            except Exception:
+                pass
 
         # Write artifact
         artifact_path = _write_now_artifact(handle_id, message, outcome.get("result", ""), elapsed)
@@ -1344,6 +1370,28 @@ def _handle_impl(
                     loop_result.stuck_reason = (
                         f"closure verification: {str(_closure.summary)[:300]}"
                     )
+
+            # Record the goal verdict as its own metadata dimension — process
+            # status ("did the run finish") and goal achievement ("did it
+            # deliver what was asked") are different facts; status alone
+            # conflated them until 2026-06-11.
+            if _closure is not None:
+                try:
+                    from runs import write_metadata as _wm_verdict
+                    from runs import current_run_dir as _crd_verdict
+                    _rd_v = _crd_verdict()
+                    if _rd_v is not None:
+                        _wm_verdict(
+                            _rd_v, handle_id=handle_id, prompt=_raw_input,
+                            extra={
+                                "goal_achieved": bool(_closure.complete),
+                                "goal_verdict_confidence": float(_closure.confidence),
+                                "goal_verdict_source": "closure",
+                                "goal_verdict_summary": str(_closure.summary)[:300],
+                            },
+                        )
+                except Exception:
+                    pass
 
         # Notify channel that the main loop completed
         if channel is not None:
