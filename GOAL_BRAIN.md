@@ -275,6 +275,22 @@ Sample: the 2026-05-13..17 window of `~/.poe/workspace/runs/` (478 dirs total;
   worked. Panel was deliberately biased toward known failures — **no cutover
   conversation until a random-sample round 2 measures false-escalate rate on
   healthy goals.** Goal-brain sequencing (2026-05-18 plan) steps 1–5 complete.
+- **2026-06-11 (Jeremy, on the governance event + done semantics)** — Two
+  calls. (1) *"I'm fine with workers also being authors as if it were me;
+  haven't made that distinction yet, not sure it matters (yet?)."* — the
+  worker-git-author distinction is dropped; the real gap was unreviewed
+  mainline pushes, now a mechanical branch policy (cfab080): Poe subprocesses
+  carry `POE_WORKER_RUN=1`, the pre-push hook blocks main/master from marked
+  processes, bypass via `workers.allow_main_push` (default off). (2) *"done
+  != successful, done just means complete... if we're using done as 'no good
+  output, but I did it' that's a problem."* — process status and goal verdict
+  are now **separate recorded dimensions** (aefb3ed): run metadata carries
+  `goal_achieved` / `goal_verdict_confidence` / `goal_verdict_source`
+  (closure | now_self_verdict) / `goal_verdict_summary` alongside
+  done/stuck/error. Absent key = unverified, never "failed". The status
+  demotions from the night arc stay (status honesty still matters for
+  recall priors), but the verdict no longer has to overload status to be
+  visible.
 - **2026-06-11 (night)** — Impossible-goal probe batch (3× "run a nonexistent
   binary") found **status integrity is broken at the NOW seam and everything
   above it trusts status**: intent routed the execution goal NOW, the

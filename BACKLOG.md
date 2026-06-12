@@ -64,7 +64,7 @@ Fixed same day: task-path runs never finalized, poisoning recall's all_failing
 str default dropped the typed lesson dicts the prompt asks for (verify→learn was
 dead at the extraction step since Phase 59 S1). Remaining observations:
 
-- [ ] **GOVERNANCE: a vague goal pipeline-executed into an unreviewed mainline
+- [x] **GOVERNANCE: a vague goal pipeline-executed into an unreviewed mainline
   push as Jeremy.** "improve things" (deliberately vague test goal) decomposed
   itself into "pick an improvement from MILESTONES/BACKLOG and implement it
   end-to-end", wrote a real fix (CLOSURE_VERDICT skip-path emission, 06c3764,
@@ -72,13 +72,16 @@ dead at the extraction step since Phase 59 S1). Remaining observations:
   **pushed to origin/main** — 4.09M tokens, no human or quality gate between a
   worker and a public push under Jeremy's identity. The live navigator shadow
   said **escalate (0.95)** at dispatch — the pipeline executed anyway and
-  declared done. This is the strongest single cutover data point yet (dispatch
-  decision class) AND a missing guardrail regardless of cutover: proposal —
-  config gate `workers.allow_git_push` (default false) enforced at the worker
-  exec layer; pushes require explicit goal-level authorization. Heartbeat is
-  not running, so autonomous dispatch exposure is currently limited to manual
-  drains. Decision needed from Jeremy: gate design + whether worker commits
-  should use a distinct git author.
+  declared done. **RESOLVED 2026-06-11 (cfab080):** Jeremy's call — workers
+  authoring as him is fine ("haven't made that distinction yet, not sure it
+  matters"); the gate is about unreviewed mainline pushes, not identity.
+  Shipped as branch policy: `_run_subprocess_safe` marks all Poe-spawned
+  subprocesses `POE_WORKER_RUN=1`; `scripts/hooks/pre-push` (installed via
+  `scripts/install-git-hooks.sh`, part of harness install) blocks worker
+  pushes to main/master with a redirect to work branches; explicit bypass
+  via config `workers.allow_main_push` (default false) → `POE_ALLOW_MAIN_PUSH=1`.
+  Humans/interactive sessions unaffected. Still a strong cutover data point
+  for the dispatch decision class.
 - [ ] **Workspace boundary: build-goal artifacts landed in the repo root** —
   run_health.py + example output were written to cwd (the repo) instead of the
   run's artifact dir; goal even said "as an artifact file". Moved them into
