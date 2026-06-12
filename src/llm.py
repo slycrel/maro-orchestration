@@ -520,12 +520,27 @@ def _run_subprocess_safe(cmd, *, input=None, timeout=600,
                 try: os.unlink(p)
                 except OSError: pass
 
+    # Mark Poe-spawned agentic subprocesses so git guards (scripts/hooks/
+    # pre-push) can tell a worker from a human: workers may push work
+    # branches but not the default branch. workers.allow_main_push=true
+    # (config) loosens this for the whole box; a goal can also export
+    # POE_ALLOW_MAIN_PUSH=1 itself when explicitly authorized to push.
+    child_env = dict(os.environ)
+    child_env["POE_WORKER_RUN"] = "1"
+    try:
+        from config import get as _cfg_get
+        if bool(_cfg_get("workers.allow_main_push", False)):
+            child_env["POE_ALLOW_MAIN_PUSH"] = "1"
+    except Exception:
+        pass
+
     proc = subprocess.Popen(
         cmd,
         stdin=stdin_f if stdin_f else subprocess.DEVNULL,
         stdout=combined_f,
         stderr=subprocess.STDOUT,
         start_new_session=True,
+        env=child_env,
     )
     if stdin_f:
         try:
