@@ -123,6 +123,20 @@ dead at the extraction step since Phase 59 S1). Remaining observations:
   attempt at the binary goal drew the first live RECALL_GUARD_TRIPPED
   (6 honest non-done priors) with the navigator concurring (close 0.99 /
   guard_refused).
+- [ ] **LLM classifier routes trivial questions AGENDA — quick-lane economy
+  inverted** — live probe 2026-06-12: "What is 17 multiplied by 23? Reply with
+  just the number." paid the full loop + closure + quality gate (~3.5 min,
+  run ecd4a7bd-eager-kestrel) because the cheap-LLM classifier said agenda;
+  the heuristic classifier says now (0.65, "short or simple request"). One
+  observation, not a pattern yet — but if the LLM classifier systematically
+  out-conservatives the heuristic, the NOW lane is dead on the task path and
+  every quick question costs loop overhead. Check NAVIGATOR_DECIDED /
+  metadata lane distribution once organic volume accumulates. Related:
+  `_is_complex_directive` over-matches imperative-shaped *questions* ("What
+  number am I thinking of? Answer with one number only." escalates) — same
+  economy cost from the other direction. Escalation overriding an explicit
+  `force_lane="now"` fixed 2026-06-12 (force wins; escalation protects
+  classified routing only).
 - [ ] **Closure demotion doesn't reach the outcome store** — when handle's
   closure verdict demotes done→incomplete (02b0263), run metadata is honest
   (recall/guard read that) but the loop already called reflect_and_record

@@ -1819,6 +1819,19 @@ class TestEscalationLaneMetadata:
         assert meta["lane"] == "agenda"
 
 
+class TestEscalationRespectsForceLane:
+    def test_forced_now_is_not_escalated(self, monkeypatch, tmp_path):
+        """force_lane='now' wins over the complex-directive escalation."""
+        _setup(monkeypatch, tmp_path)
+        msg = ("Run the command /usr/bin/some-tool --report and save its complete "
+               "output as an artifact file. Do not substitute another command and "
+               "do not fabricate output. If the tool cannot be run, the goal is incomplete.")
+        from handle import _is_complex_directive
+        assert _is_complex_directive(msg)
+        result = handle(msg, force_lane="now", dry_run=True)
+        assert result.lane == "now"
+
+
 class TestClosureStatusHonesty:
     """A 'done' the director's verifier contradicts at high confidence is
     recorded incomplete (live find 2026-06-11: unsatisfiable goal, every step
