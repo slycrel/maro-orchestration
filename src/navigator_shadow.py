@@ -334,17 +334,106 @@ def shadow_dispatch_live(
         return None
 
 
+def analyze_live_agreement(events: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Tabulate live NAVIGATOR_DECIDED rows into per-move agreement counts —
+    the cutover evidence (NAVIGATOR_SCHEMA.md analysis query, structured).
+
+    Agreement means navigator move == pipeline move_equivalent; a navigator
+    escalate/close against a pipeline guard_refused counts as agreement-in-kind
+    (both refused the run). Everything else is a divergence row, returned
+    verbatim for adjudication — divergence is eval data, not an error.
+    """
+    rows = []
+    for e in events:
+        if e.get("event_type") != "NAVIGATOR_DECIDED":
+            continue
+        c = e.get("context") or {}
+        pa = c.get("pipeline_actual") or {}
+        if not pa.get("live"):
+            continue
+        rows.append({
+            "timestamp": str(e.get("timestamp", ""))[:19],
+            "move": c.get("move"),
+            "confidence": c.get("confidence"),
+            "tier": c.get("tier"),
+            "pipeline": pa.get("move_equivalent"),
+            "goal_preview": str(
+                (c.get("input_digest") or {}).get("goal_preview", ""))[:80],
+        })
+    by_move: Dict[str, Dict[str, int]] = {}
+    divergences = []
+    for r in rows:
+        m, p = r["move"], r["pipeline"]
+        slot = by_move.setdefault(str(m), {"agree": 0, "diverge": 0})
+        in_kind = m in ("close", "escalate") and p == "guard_refused"
+        if m == p or in_kind:
+            slot["agree"] += 1
+        else:
+            slot["diverge"] += 1
+            divergences.append(r)
+    return {
+        "live_rows": len(rows),
+        "by_move": by_move,
+        "agreements": sum(s["agree"] for s in by_move.values()),
+        "divergences": divergences,
+    }
+
+
+def _analyze_main(json_out: bool) -> int:
+    """--agreement mode: read the workspace captain's log (active + rotated
+    archives) and print the live-agreement table."""
+    try:
+        from captains_log import _log_path  # type: ignore
+        base = _log_path().parent
+    except Exception:
+        base = Path.home() / ".poe" / "workspace" / "memory"
+    events: List[Dict[str, Any]] = []
+    for p in sorted(base.glob("captains_log*.jsonl")):
+        try:
+            for line in p.read_text(encoding="utf-8").splitlines():
+                if "NAVIGATOR_DECIDED" not in line:
+                    continue
+                try:
+                    events.append(json.loads(line))
+                except Exception:
+                    continue
+        except Exception:
+            continue
+    summary = analyze_live_agreement(events)
+    if json_out:
+        print(json.dumps(summary, indent=2))
+        return 0
+    print(f"live NAVIGATOR_DECIDED rows: {summary['live_rows']} "
+          f"(agreements {summary['agreements']})")
+    for move, s in sorted(summary["by_move"].items()):
+        print(f"  {move:10s} agree={s['agree']:3d} diverge={s['diverge']:3d}")
+    if summary["divergences"]:
+        print("divergences (adjudicate each — divergence is eval data):")
+        for d in summary["divergences"]:
+            print(f"  {d['timestamp']} {d['move']}({d['confidence']}) "
+                  f"vs {d['pipeline']} | {d['goal_preview']}")
+    return 0
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         description="Shadow-replay historical runs through the navigator "
                     "(decide-only; changes nothing).")
-    parser.add_argument("runs", nargs="+", help="handle ids / prefixes / run-dir paths")
+    parser.add_argument("runs", nargs="*", help="handle ids / prefixes / run-dir paths")
+    parser.add_argument("--agreement", action="store_true",
+                        help="tabulate live NAVIGATOR_DECIDED agreement per move "
+                             "(the per-class cutover evidence) and exit")
     parser.add_argument("--point", choices=("dispatch", "closure", "both"),
                         default="dispatch")
     parser.add_argument("--tiers", default="",
                         help="comma-separated tier list, e.g. cheap,mid,power")
     parser.add_argument("--json", action="store_true", help="emit JSON lines")
     args = parser.parse_args(argv)
+
+    if args.agreement:
+        return _analyze_main(args.json)
+    if not args.runs:
+        parser.error("runs required unless --agreement")
 
     points = ("dispatch", "closure") if args.point == "both" else (args.point,)
     tiers = [t.strip() for t in args.tiers.split(",") if t.strip()] or None

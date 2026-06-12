@@ -346,3 +346,53 @@ class TestShadowDispatchLive:
                     {"mid": [_resp("execute", instruction="go")]}, built),
             )
         assert built == ["mid"]
+
+
+class TestAnalyzeLiveAgreement:
+    """analyze_live_agreement: per-move agreement table from NAVIGATOR_DECIDED
+    rows — the per-class cutover evidence, structured."""
+
+    def _event(self, move, pipeline, *, live=True, conf=0.9, goal="g"):
+        return {
+            "event_type": "NAVIGATOR_DECIDED",
+            "timestamp": "2026-06-12T00:00:00+00:00",
+            "context": {
+                "move": move, "confidence": conf, "tier": "cheap",
+                "input_digest": {"goal_preview": goal},
+                "pipeline_actual": {"move_equivalent": pipeline, "live": live},
+            },
+        }
+
+    def test_agreement_and_divergence_counting(self):
+        from navigator_shadow import analyze_live_agreement
+        events = [
+            self._event("execute", "execute"),
+            self._event("execute", "execute"),
+            self._event("escalate", "execute", goal="debris"),
+        ]
+        s = analyze_live_agreement(events)
+        assert s["live_rows"] == 3
+        assert s["by_move"]["execute"] == {"agree": 2, "diverge": 0}
+        assert s["by_move"]["escalate"] == {"agree": 0, "diverge": 1}
+        assert len(s["divergences"]) == 1
+        assert s["divergences"][0]["goal_preview"] == "debris"
+
+    def test_guard_refused_counts_as_agreement_in_kind(self):
+        from navigator_shadow import analyze_live_agreement
+        events = [
+            self._event("close", "guard_refused"),
+            self._event("escalate", "guard_refused"),
+        ]
+        s = analyze_live_agreement(events)
+        assert s["agreements"] == 2
+        assert s["divergences"] == []
+
+    def test_non_live_and_foreign_events_ignored(self):
+        from navigator_shadow import analyze_live_agreement
+        events = [
+            self._event("execute", "execute", live=False),  # replay row
+            {"event_type": "CLOSURE_VERDICT", "context": {}},
+            self._event("execute", "execute"),
+        ]
+        s = analyze_live_agreement(events)
+        assert s["live_rows"] == 1
