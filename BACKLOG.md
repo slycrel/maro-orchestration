@@ -9,6 +9,32 @@ Last reviewed: 2026-06-10 (session 40 — memory lifecycle fixes + dry-run herme
 
 ---
 
+### **[NEXT]** Per-step worker token explosion on accumulating tasks (2026-06-21)
+
+Live finding from a `verify:` coding run: 485K tokens over 6 steps (47K→111K→**145K**
+→80K→17K→84K per step); introspect flagged `token_explosion` and recommended
+"distill prior step outputs into summaries; keep full output in artifacts." **That
+recommendation is already satisfied at the orchestration layer** — inter-step
+context is truncated (completed_context excerpts 600–800 chars at agent_loop.py
+~1369 / ~2645; env snapshot 200 chars at ~1479). So this is NOT a clean
+"summary-as-output" fix; the cost is *inside the worker subprocess*, which on a
+file-accumulating coding task re-reads/writes the growing artifact each step. A
+research run (run 3, no file accumulation) stayed flat at ~17K/step — no explosion.
+
+Candidate levers (needs design — messy, deeper than the loop's context plumbing):
+- [ ] Pass a distilled running-artifact summary to the worker instead of letting it
+  re-read the full growing file each step (or have it diff/append, not re-ingest).
+- [ ] Bound/refresh worker context per step; cap artifact values cached in
+  `loop_shared_ctx` (`_art_val` is stored full at agent_loop.py ~1483).
+- [ ] Calibrate the `token_explosion` introspect threshold so inherently
+  token-heavy coding tasks aren't false-flagged (research vs build have different
+  baselines).
+- [ ] Measure: is the worker (claude subprocess) re-reading files it already has in
+  context? If so, that's the win; if it's irreducible task work, accept and re-tune
+  the threshold.
+
+---
+
 ### Local validator — deep capability evaluation (2026-06-21, queued)
 
 Shipped: optional local validator (`src/local_models.py`, `docs/LOCAL_VALIDATOR.md`,
