@@ -31,12 +31,17 @@ and the validation ladder in quality_gate.py / verification_agent.py.
 
 from __future__ import annotations
 
+import atexit
 import json
 import logging
 import os
 import platform
+import subprocess
+import threading
+import time
 import urllib.error
 import urllib.request
+from pathlib import Path
 from typing import List, Optional
 
 from llm import LLMAdapter, LLMMessage, LLMResponse
@@ -127,6 +132,46 @@ def escalation_target() -> str:
     'council' (the 3-persona trio in quality_gate.run_llm_council)."""
     target = str(_cfg("escalation", "cheap")).strip().lower()
     return target if target in ("cheap", "council") else "cheap"
+
+
+def idle_shutdown_secs() -> int:
+    """Seconds of validation inactivity after which an orchestration-managed local
+    server is reaped. 0 disables idle reaping (kept until process exit). The
+    lifecycle is owned by the orchestration, not an OS service — spun up on demand,
+    down when idle."""
+    try:
+        return max(0, int(_cfg("idle_shutdown_secs", 300)))
+    except (TypeError, ValueError):
+        return 300
+
+
+def autostart_enabled() -> bool:
+    """Whether the orchestration may spin the local runtime up itself on demand.
+    Opt out with validate.autostart: false (then run scripts/local-validator.sh
+    or point at an externally-managed endpoint)."""
+    val = _cfg("autostart", True)
+    if isinstance(val, str):
+        return val.strip().lower() not in ("false", "0", "no", "off")
+    return bool(val)
+
+
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parent.parent
+
+
+def mlx_python() -> str:
+    """Interpreter that runs mlx_lm.server. Default: the repo's uv-managed venv."""
+    override = str(_cfg("mlx_python", "") or "").strip()
+    if override:
+        return override
+    return str(_repo_root() / ".venv-mlx" / "bin" / "python")
+
+
+def _port_from_endpoint(endpoint: str) -> int:
+    try:
+        return int(endpoint.rsplit(":", 1)[1].split("/", 1)[0])
+    except (IndexError, ValueError):
+        return 8088
 
 
 # ---------------------------------------------------------------------------
@@ -310,3 +355,123 @@ def build_local_validator_adapter(fallback: Optional[LLMAdapter] = None
              usable, endpoint, runtime, " + paid fallback" if fallback else "")
     _CACHE[sig] = result
     return result
+
+
+# ---------------------------------------------------------------------------
+# Orchestration-managed runtime lifecycle
+# ---------------------------------------------------------------------------
+# The local model is NOT an OS service. The orchestration spins it up on demand
+# (first validation), keeps it warm while validations flow, and reaps it after
+# idle (and on process exit). An already-running server — ours or one started by
+# scripts/local-validator.sh — is reused, never duplicated.
+
+_PROC_LOCK = threading.Lock()
+_MANAGED: dict = {"proc": None, "last_use": 0.0, "reaper": None}
+
+
+def _touch_validator() -> None:
+    _MANAGED["last_use"] = time.monotonic()
+
+
+def ensure_validator_running(*, wait_secs: float = 60.0) -> bool:
+    """Make a local validator available, spinning one up on demand if needed.
+
+    Reuses any reachable server (ours or external). Only manages the **mlx**
+    runtime — Ollama is its own daemon. No-op when no models are configured or
+    `validate.autostart` is false. Never raises; returns True if a usable
+    validator is available afterward.
+    """
+    if not configured_models():
+        return False
+    if validator_available():            # already up → reuse, just mark activity
+        _touch_validator()
+        return True
+    if not autostart_enabled() or resolve_runtime() != "mlx":
+        return False
+
+    model = configured_models()[0]
+    endpoint = resolve_endpoint("mlx")
+    port = _port_from_endpoint(endpoint)
+    py = mlx_python()
+    if not Path(py).exists():
+        log.warning("local validator autostart: interpreter missing at %s — "
+                    "run scripts/local-validator.sh setup", py)
+        return False
+
+    with _PROC_LOCK:
+        if validator_available():        # another thread won the race
+            _touch_validator()
+            return True
+        try:
+            proc = subprocess.Popen(
+                [py, "-m", "mlx_lm", "server", "--model", model, "--port", str(port)],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+        except Exception as exc:
+            log.warning("local validator autostart failed to spawn: %s", exc)
+            return False
+        _MANAGED["proc"] = proc
+        atexit.register(shutdown_validator)
+        log.info("local validator: spinning up %s on :%d (pid %s)", model, port, proc.pid)
+
+    deadline = time.monotonic() + wait_secs
+    while time.monotonic() < deadline:
+        if proc.poll() is not None:
+            log.warning("local validator server exited during startup (code %s)", proc.returncode)
+            with _PROC_LOCK:
+                _MANAGED["proc"] = None
+            return False
+        reset_cache()
+        if model in loaded_models(endpoint):
+            _touch_validator()
+            _start_reaper()
+            log.info("local validator ready: %s @ %s", model, endpoint)
+            return True
+        time.sleep(1.0)
+    log.warning("local validator did not become ready within %.0fs", wait_secs)
+    return False
+
+
+def _start_reaper() -> None:
+    if _MANAGED["reaper"] is not None and _MANAGED["reaper"].is_alive():
+        return
+    secs = idle_shutdown_secs()
+    if secs <= 0:
+        return  # reaping disabled; teardown only at process exit
+
+    def _reap() -> None:
+        while True:
+            proc = _MANAGED["proc"]
+            if proc is None or proc.poll() is not None:
+                reset_cache()
+                return
+            if time.monotonic() - _MANAGED["last_use"] >= secs:
+                log.info("local validator idle ≥ %ds — spinning down", secs)
+                shutdown_validator()
+                return
+            time.sleep(min(secs, 30))
+
+    t = threading.Thread(target=_reap, name="local-validator-reaper", daemon=True)
+    _MANAGED["reaper"] = t
+    t.start()
+
+
+def shutdown_validator() -> None:
+    """Terminate the managed server if we started one. Safe to call repeatedly;
+    no-op when the validator is external or already down."""
+    with _PROC_LOCK:
+        proc = _MANAGED["proc"]
+        _MANAGED["proc"] = None
+    if proc is None:
+        return
+    try:
+        if proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=10)
+            except Exception:
+                proc.kill()
+        log.info("local validator: spun down (pid %s)", getattr(proc, "pid", "?"))
+    except Exception as exc:
+        log.debug("local validator shutdown error (non-fatal): %s", exc)
+    reset_cache()
