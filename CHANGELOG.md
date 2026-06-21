@@ -4,16 +4,20 @@
 
 Orchestration-managed local validator lifecycle.
 
-### Added — on-demand spin up / idle reap (`src/local_models.py`)
+### Added — orchestration-owned validator lifecycle (`src/local_models.py`)
 - The local model is now a resource the orchestration owns, not an OS service.
-  `ensure_validator_running()` (called from `verify_step`) reuses any reachable
-  server or spins up `mlx_lm.server` as a managed child on the first validation,
-  waits until ready, then reaps it after `validate.idle_shutdown_secs` (default
-  300s) of inactivity and on process exit (`shutdown_validator` + atexit).
-- Only the **mlx** runtime is managed (Ollama runs its own daemon). Opt out with
-  `validate.autostart: false`; interpreter via `validate.mlx_python`.
-- Reuses an externally-started server (e.g. `scripts/local-validator.sh start`),
-  never duplicating it.
+- **Run-scoped (primary):** `run_agent_loop` is wrapped (`managed_for_run`) to
+  spin the model up once at the start of a run that will use it and tear down what
+  the run started at the end — on completion *or* failure. The server stays warm
+  for the whole run (no between-step reaping); reused/external/parent-run servers
+  are left running (only the spawner reaps; nested/recovery calls are safe).
+- `ensure_validator_running()` reuses any reachable server or spins up
+  `mlx_lm.server` as a managed child and waits until ready. mlx-only (Ollama runs
+  its own daemon). Opt out with `validate.autostart: false`; interpreter via
+  `validate.mlx_python`.
+- **Idle reaper (backstop):** ad-hoc/lazy validations outside a managed run are
+  reaped after `validate.idle_shutdown_secs` (default 300s) and on process exit.
+  Run-scoped spin-ups suppress it (the run owns teardown).
 
 ### Added — free local-validator regression eval
 - `tests/fixtures/validation_cases.json` (real PASS outputs + generated FAIL

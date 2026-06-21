@@ -18,6 +18,7 @@ CLI:
 
 from __future__ import annotations
 
+import functools
 import json
 import logging
 import os
@@ -3630,6 +3631,27 @@ def _finalize_loop(
 # Core loop
 # ---------------------------------------------------------------------------
 
+def _run_scoped_validator(fn):
+    """Own the local validator's lifecycle for the whole run: spin it up at the
+    start (if it'll be used) and tear down what this run started at the end —
+    on completion or failure. Reused/external/parent-run servers are left alone.
+    Non-fatal: any lifecycle hiccup just falls through to lazy per-step spin-up.
+    """
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        goal = args[0] if args else kwargs.get("goal", "")
+        ralph = kwargs.get("ralph_verify", False)
+        try:
+            import local_models as _lm
+            cm = _lm.managed_for_run(goal, ralph)
+        except Exception:
+            return fn(*args, **kwargs)
+        with cm:
+            return fn(*args, **kwargs)
+    return wrapper
+
+
+@_run_scoped_validator
 def run_agent_loop(
     goal: str,
     *,

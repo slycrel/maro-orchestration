@@ -62,24 +62,25 @@ ollama pull <model>        # e.g. a small reasoning/coder model
 ## Lifecycle (orchestration-managed, not an OS service)
 
 The local model is a resource the orchestration owns — **not** a launchd/systemd
-"always-on" service. On the first validation of a run, `ensure_validator_running()`:
+"always-on" service.
 
-1. **reuses** any server already serving a configured model (ours, or one you
-   started with `local-validator.sh` — never duplicated); else
-2. **spins up** `mlx_lm.server` as a managed child and waits until it's ready.
+**Run-scoped (primary).** `run_agent_loop` is wrapped so that, when a run will
+use the local validator, it **spins the model up once at the start of the run and
+tears it down at the end — on completion or failure** (`managed_for_run`). The
+server stays warm for the whole run (no reaping between steps), and only the run
+that actually spawned it reaps — a reused/external server, or a parent run's
+server during nested/recovery calls, is left running.
 
-It then stays warm while validations flow, and is **reaped after
-`idle_shutdown_secs` of inactivity** (and on process exit). So it's up only when
-needed and down otherwise. Only the **mlx** runtime is managed this way — Ollama
-runs its own daemon. Opt out with `validate.autostart: false` (then start it
-yourself or point `endpoint` at an externally-managed server).
+`ensure_validator_running()` does the work: it **reuses** any server already
+serving a configured model (ours, or one started with `local-validator.sh` —
+never duplicated), else **spins up** `mlx_lm.server` as a managed child and waits
+until ready. Only the **mlx** runtime is managed (Ollama runs its own daemon).
+Opt out with `validate.autostart: false`.
 
-> **Tuning `idle_shutdown_secs`:** the idle timer counts time since the last
-> *validation*, and no validation happens *during* a step's execution. Set it
-> comfortably above your typical step duration or the server will reap and
-> respawn between steps (each respawn is a model load). The 300s default keeps it
-> warm across a normal run and reaps ~5 min after the run's last validation.
-> For a long-lived listener that should free memory between runs, lower it.
+**Idle reaper (backstop).** For validations that happen outside a managed run,
+the server is also reaped after `idle_shutdown_secs` of inactivity (and on
+process exit). Run-scoped spin-ups suppress this — the run owns teardown — so it
+only applies to ad-hoc/lazy use.
 
 ## Configuration (`~/.poe/workspace/config.yml`)
 
