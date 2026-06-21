@@ -1168,12 +1168,44 @@ def verify_step(
     Delegates to VerificationAgent for a named, composable implementation.
     Returns a dict with: passed, reason, confidence.
     Non-fatal — returns passed=True on any error so verify never blocks execution.
+
+    Local-first validation ladder (only when `validate.local_models` is set):
+    a free local model judges first; if its confidence is below
+    `validate.min_certainty` (UNDECIDED) we escalate to the paid `adapter`.
+    With no local models configured this is byte-identical to the paid path.
     """
+    # --- Tier 1: free local validator (gated; falls through to paid on anything) ---
+    _escalated = False
+    try:
+        import local_models as _lm
+        if _lm.configured_models():
+            local = _lm.build_local_validator_adapter()  # None if endpoint/model absent
+            if local is not None:
+                from verification_agent import VerificationAgent
+                lv = VerificationAgent(local, confidence_threshold=confidence_threshold,
+                                       max_input_chars=_lm.input_char_budget()).verify_step(step_text, result)
+                if lv.confidence >= _lm.min_certainty():
+                    log.debug("local validator decisive: passed=%s conf=%.2f via %s",
+                              lv.passed, lv.confidence, getattr(local, "model_key", "local"))
+                    return {"passed": lv.passed, "reason": lv.reason, "confidence": lv.confidence,
+                            "decision": "LOCAL_PASS" if lv.passed else "LOCAL_FAIL",
+                            "source": getattr(local, "model_key", "local")}
+                log.info("local validator UNDECIDED (conf=%.2f < %.2f) — escalating to paid",
+                         lv.confidence, _lm.min_certainty())
+                _escalated = True
+    except Exception as exc:
+        log.debug("local validator path skipped (non-fatal): %s", exc)
+
+    # --- Tier 2: paid validator (default path, or escalation target for UNDECIDED) ---
     try:
         from verification_agent import VerificationAgent
         va = VerificationAgent(adapter, confidence_threshold=confidence_threshold)
         verdict = va.verify_step(step_text, result)
-        return {"passed": verdict.passed, "reason": verdict.reason, "confidence": verdict.confidence}
+        out = {"passed": verdict.passed, "reason": verdict.reason, "confidence": verdict.confidence}
+        if _escalated:
+            out["decision"] = "ESCALATED"
+            out["source"] = "paid"
+        return out
     except ImportError:
         pass
 

@@ -43,3 +43,9 @@ test_output.txt
 analyze-data-output/
 .playwright-cli/
 src/memory/
+
+# Local validator MLX runtime (uv venv)
+.venv-mlx/
+
+# Local orchestration test workspace (run artifacts)
+.run-workspace/

@@ -1,5 +1,40 @@
 # Changelog
 
+## [1.20.0] - 2026-06-21
+
+Optional local validator — zero-cost first-pass step validation.
+
+### Added — Local validator runtime (`src/local_models.py`)
+- `LocalValidatorAdapter`: OpenAI-compatible HTTP adapter (pure stdlib) for a
+  local model, serving both `mlx_lm.server` (Apple Silicon, default) and Ollama
+  (`/v1`, Linux). `validate.runtime: auto|mlx|ollama` selects the endpoint.
+- 0..n model list (`validate.local_models`, priority order) wrapped in the
+  existing `FailoverAdapter`. Empty/unset → paid validation, byte-identical to
+  before (fully backward-compatible). Detect-and-use-if-present: returns `None`
+  when the endpoint/model is absent, so callers fall back automatically.
+- Token floor for reasoning models (`validate.local_max_tokens`, default 1024)
+  so a `<think>` trace can reach its final JSON verdict; `reasoning`-field
+  fallback when `content` is empty.
+- `scripts/local-validator.sh` (setup/pull/start/status/stop) — framework-managed
+  MLX install via a uv venv; `poe-doctor` reports endpoint/model status.
+- Reference model: `mlx-community/VibeThinker-3B-8bit` (~3.4 GB, ~90 tok/s M1).
+
+### Changed — validation ladder (`src/step_exec.py:verify_step`)
+- Tier 1 free local validator runs first when configured; if its confidence is
+  below `validate.min_certainty` the verdict is UNDECIDED and escalates to the
+  paid adapter (Tier 2). Result dict gains `decision`
+  (`LOCAL_PASS`|`LOCAL_FAIL`|`ESCALATED`) + `source`. See `docs/LOCAL_VALIDATOR.md`.
+- Ralph verify loop now defaults **on** when a usable local validator is
+  available (`local_models.auto_verify_enabled()`, gated on the endpoint actually
+  serving a configured model) — verification is free, so it should run. Opt out
+  with `validate.auto_verify: false`. Token floor raised 1024 → 2048 after a live
+  run showed a reasoning model truncating before its JSON verdict on long inputs.
+- Validator input window is now configurable (`VerificationAgent(max_input_chars=...)`).
+  The free local validator sees `validate.max_input_chars` (default 6000) of the
+  step result instead of the paid path's cost-conscious 1200 — judging a fuller
+  view. Input window (what it sees) and output ceiling (what it generates) are
+  separate knobs; see `docs/LOCAL_VALIDATOR.md`.
+
 ## [1.19.0] - 2026-04-15
 
 Phase 62: ConversationChannel + dashboard goal chat.

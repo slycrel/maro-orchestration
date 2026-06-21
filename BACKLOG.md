@@ -9,6 +9,76 @@ Last reviewed: 2026-06-10 (session 40 — memory lifecycle fixes + dry-run herme
 
 ---
 
+### **[NEXT]** Per-step worker token explosion on accumulating tasks (2026-06-21)
+
+Live finding from a `verify:` coding run: 485K tokens over 6 steps (47K→111K→**145K**
+→80K→17K→84K per step); introspect flagged `token_explosion` and recommended
+"distill prior step outputs into summaries; keep full output in artifacts." **That
+recommendation is already satisfied at the orchestration layer** — inter-step
+context is truncated (completed_context excerpts 600–800 chars at agent_loop.py
+~1369 / ~2645; env snapshot 200 chars at ~1479). So this is NOT a clean
+"summary-as-output" fix; the cost is *inside the worker subprocess*, which on a
+file-accumulating coding task re-reads/writes the growing artifact each step. A
+research run (run 3, no file accumulation) stayed flat at ~17K/step — no explosion.
+
+Candidate levers (needs design — messy, deeper than the loop's context plumbing):
+- [ ] Pass a distilled running-artifact summary to the worker instead of letting it
+  re-read the full growing file each step (or have it diff/append, not re-ingest).
+- [ ] Bound/refresh worker context per step; cap artifact values cached in
+  `loop_shared_ctx` (`_art_val` is stored full at agent_loop.py ~1483).
+- [ ] Calibrate the `token_explosion` introspect threshold so inherently
+  token-heavy coding tasks aren't false-flagged (research vs build have different
+  baselines).
+- [ ] Measure: is the worker (claude subprocess) re-reading files it already has in
+  context? If so, that's the win; if it's irreducible task work, accept and re-tune
+  the threshold.
+
+---
+
+### Local validator — deep capability evaluation (2026-06-21, queued)
+
+Shipped: optional local validator (`src/local_models.py`, `docs/LOCAL_VALIDATOR.md`,
+v1.20.0). A free local model (reference: VibeThinker-3B on MLX) runs as Tier 1 of
+`verify_step`; below `validate.min_certainty` it escalates to the paid adapter.
+Wiring + unit behavior are proven; **whether the local judge is actually good
+enough, and on which step classes, is not** — that needs measurement, not a tweet.
+
+- [ ] **Shadow-eval harness for validation.** Mirror `navigator_shadow --agreement`:
+  on historical/live runs, run the local validator *and* the paid validator on the
+  same step result, log both verdicts (decide-only, changes nothing), and produce a
+  per-step-class agreement table. This is the evidence that earns (or denies) cutover.
+- [ ] **Agreement + calibration metrics.** Local-vs-paid agreement rate, false-pass /
+  false-fail rates (vs paid as ground truth), and confidence calibration (is "0.8"
+  actually 80% reliable?). Use to set `min_certainty` per step class rather than one
+  global number. Tie into `metrics.py` (pass@k/pass^k already tracked).
+- [ ] **Per-class routing.** Expect high agreement on verifiable code/math steps,
+  low on fuzzy research-quality steps. Route only the classes where the local judge
+  earns it; keep the rest on the paid path. Don't trust benchmark parity globally.
+- [ ] **Tune `local_max_tokens` per model.** Live finding (2026-06-21 verify run):
+  VibeThinker's `<think>` trace on *real* (long) step results overran the 1024
+  floor → empty content → conf 0.00 → spurious escalation on 2/5 steps (the other
+  3/5 validated free at conf 1.00). Bumped default to 2048; deep-eval should find
+  the floor that maximizes decisive-local rate without wasting generation latency.
+- [ ] **Agentic verifier for large artifacts.** Today the validator sees a bounded
+  in-context slice of the result (`validate.max_input_chars`, default 6000 for the
+  free local path vs 1200 paid). For multi-KB artifacts, stuffing the whole thing
+  into context is wasteful — a tool-using verifier that reads the artifact
+  selectively (grep/read a temp file) is the better pattern. Caveat: that needs
+  tool use, which a small specialist (VibeThinker) is weak at — so scope it as an
+  opt-in verifier tier, not the default. (Input/output limits are separate knobs:
+  `max_input_chars` = what it sees; `local_max_tokens` = what it can generate.)
+- [ ] **Token/cost delta report.** Quantify tokens saved vs escalation rate vs added
+  latency, on Poe's own task corpus — the actual ROI of running this.
+- [ ] **Model bake-off.** Compare candidate local validators (VibeThinker-3B 8bit vs
+  4bit vs 1.5B; a Qwen2.5-Coder tune; an Ollama option for the Linux box) on the same
+  eval set. Confirm a 3B-class model is "good enough" on a generally modern machine
+  (≥16 GB RAM; 4-bit for 8 GB) before standardizing on one.
+- [ ] **Extend the ladder to the post-loop quality gate.** Same local-first pattern
+  for `quality_gate.run_quality_gate` / `run_llm_council` (3-persona trio) escalation,
+  reusing the `WEAK_ESCALATE` decision state. (verify_step done; quality_gate pending.)
+
+---
+
 ### Entropy / decay-by-invalidation (2026-06-11, queued behind navigator)
 
 Steering context in GOAL_BRAIN.md Intent (entropy quote). Crystallized artifacts
