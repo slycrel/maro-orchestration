@@ -9,6 +9,37 @@ Last reviewed: 2026-06-10 (session 40 — memory lifecycle fixes + dry-run herme
 
 ---
 
+### Local validator — deep capability evaluation (2026-06-21, queued)
+
+Shipped: optional local validator (`src/local_models.py`, `docs/LOCAL_VALIDATOR.md`,
+v1.20.0). A free local model (reference: VibeThinker-3B on MLX) runs as Tier 1 of
+`verify_step`; below `validate.min_certainty` it escalates to the paid adapter.
+Wiring + unit behavior are proven; **whether the local judge is actually good
+enough, and on which step classes, is not** — that needs measurement, not a tweet.
+
+- [ ] **Shadow-eval harness for validation.** Mirror `navigator_shadow --agreement`:
+  on historical/live runs, run the local validator *and* the paid validator on the
+  same step result, log both verdicts (decide-only, changes nothing), and produce a
+  per-step-class agreement table. This is the evidence that earns (or denies) cutover.
+- [ ] **Agreement + calibration metrics.** Local-vs-paid agreement rate, false-pass /
+  false-fail rates (vs paid as ground truth), and confidence calibration (is "0.8"
+  actually 80% reliable?). Use to set `min_certainty` per step class rather than one
+  global number. Tie into `metrics.py` (pass@k/pass^k already tracked).
+- [ ] **Per-class routing.** Expect high agreement on verifiable code/math steps,
+  low on fuzzy research-quality steps. Route only the classes where the local judge
+  earns it; keep the rest on the paid path. Don't trust benchmark parity globally.
+- [ ] **Token/cost delta report.** Quantify tokens saved vs escalation rate vs added
+  latency, on Poe's own task corpus — the actual ROI of running this.
+- [ ] **Model bake-off.** Compare candidate local validators (VibeThinker-3B 8bit vs
+  4bit vs 1.5B; a Qwen2.5-Coder tune; an Ollama option for the Linux box) on the same
+  eval set. Confirm a 3B-class model is "good enough" on a generally modern machine
+  (≥16 GB RAM; 4-bit for 8 GB) before standardizing on one.
+- [ ] **Extend the ladder to the post-loop quality gate.** Same local-first pattern
+  for `quality_gate.run_quality_gate` / `run_llm_council` (3-persona trio) escalation,
+  reusing the `WEAK_ESCALATE` decision state. (verify_step done; quality_gate pending.)
+
+---
+
 ### Entropy / decay-by-invalidation (2026-06-11, queued behind navigator)
 
 Steering context in GOAL_BRAIN.md Intent (entropy quote). Crystallized artifacts

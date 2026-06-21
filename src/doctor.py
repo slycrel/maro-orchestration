@@ -217,6 +217,27 @@ def run_doctor() -> bool:
     except Exception as exc:
         results.append(_check("Step event bus", False, str(exc)[:80]))
 
+    # Local validator (optional, zero-cost first-pass validation)
+    try:
+        import local_models as _lm
+        _models = _lm.configured_models()
+        if not _models:
+            results.append(_check("Local validator", True, "not configured — paid validation (default)"))
+        else:
+            _rt = _lm.resolve_runtime()
+            _ep = _lm.resolve_endpoint(_rt)
+            _loaded = set(_lm.loaded_models(_ep))
+            _usable = [m for m in _models if m in _loaded]
+            if _usable:
+                results.append(_check("Local validator", True,
+                                      f"{_rt} @ {_ep} — active: {', '.join(_usable)}"))
+            else:
+                results.append(_check("Local validator", False,
+                                      f"{_rt} @ {_ep} unreachable or {_models} not loaded — "
+                                      f"run scripts/local-validator.sh start"))
+    except Exception as exc:
+        results.append(_check("Local validator", True, f"skipped: {exc}"))  # optional, not fatal
+
     # Bughunter scan (quick check)
     try:
         from bughunter import run_bughunter
