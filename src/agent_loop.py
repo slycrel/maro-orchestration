@@ -3639,6 +3639,9 @@ def _run_scoped_validator(fn):
     """
     @functools.wraps(fn)
     def wrapper(*args, **kwargs):
+        # Configure logging up front (idempotent) so the run-start validator
+        # spin-up is visible — otherwise it fires before the in-body setup.
+        _configure_logging(kwargs.get("verbose", False))
         goal = args[0] if args else kwargs.get("goal", "")
         ralph = kwargs.get("ralph_verify", False)
         try:
