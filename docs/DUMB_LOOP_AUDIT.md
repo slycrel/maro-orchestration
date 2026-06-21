@@ -1,6 +1,8 @@
-# Dumb-Loop Audit — pipeline decision-point inventory (static half)
+# Dumb-Loop Audit — pipeline decision-point inventory
 
-**Status: static half done 2026-06-11. Data half gated on live shadow volume.**
+**Status: static half done 2026-06-11. Data half round 1 done 2026-06-21 —
+dispatch boundary only (the single live shadow point); other points await
+their own instrumentation. See "Data half — round 1" below.**
 
 The navigator (`src/navigator.py`, shadow-only) defines six moves: extend /
 execute / fork / collate / close / escalate. The pipeline today makes the same
@@ -133,6 +135,57 @@ rounds 1–2), (c) added latency/cost of the navigator call at that point.
 Cutover criteria per `docs/NAVIGATOR_SCHEMA.md`: per decision class, never
 big-bang. The dispatch boundary goes first — it's where the live shadow
 already sits.
+
+## Data half — round 1 (2026-06-21)
+
+Source: `python3 -m navigator_shadow --agreement` over the live
+`NAVIGATOR_DECIDED` corpus (28 dispatch decisions, 15 raw agreements).
+
+**Coverage caveat, stated first because it bounds everything below:** the
+dispatch boundary (point #2 above, handle.py:1559) is the *only* decision point
+with live data. It is the only live navigator callsite, so it is the only one
+of the five prioritized high-consequence points that has emitted any
+`NAVIGATOR_DECIDED` rows. Points #1 `_handle_blocked_step`, #3 max-iterations,
+#4 scope estimation, and #5 NOW→Director have **no** navigator-vs-pipeline data
+yet — they each need their own shadow instrumentation before they can be
+measured. Round 1 measures exactly one point.
+
+**Dispatch boundary — agreement by move (28 decisions):**
+
+| Navigator move | Agree | Diverge | Reading |
+|----------------|-------|---------|---------|
+| execute        | 14    | 0       | Perfect agreement on healthy goals |
+| escalate       | 0     | 9       | All 9 are correct catches (below) |
+| close          | 1     | 4       | 4 divergences are correct catches |
+
+Raw agreement is 15/28 (54%) — and that headline is **misleading in the
+navigator's favor**. Every one of the 13 divergences is the navigator choosing
+escalate/close where the dumb pipeline would have executed, and adjudication
+against the goal text shows the navigator is right in all 13: the divergent
+goals are synthetic failure-probes and adversarial inputs — a nonexistent
+binary, "improve things", counting grains of sand, "prove 1=2", a $50k wire
+transfer, ordering layoffs, corrupted input ("update the the"). On the 14
+genuinely healthy execute goals the navigator agrees 14/14. **Zero
+false-escalates on healthy work; zero missed catches on doomed/dangerous
+work.** Low raw agreement here is an artifact of a probe-heavy live corpus, not
+navigator noise.
+
+This is the evidence that earned the escalate cutover (now live and proven
+end-to-end — first `NAVIGATOR_ACTED` row written on a $50k-wire probe, the run
+correctly prevented). close stays shadow-only pending more organic close
+divergences to adjudicate (4 so far, all synthetic).
+
+**Latency/cost:** the agreement analyzer does not yet capture per-call latency;
+the dispatch navigator call is one cheap-tier model call (the existing shadow
+cost, already absorbed). A dedicated latency/cost column is deferred until a
+second decision point is instrumented and the comparison is worth the wiring.
+
+**Next for the data half:** instrument one more priority point — #1 the
+blocked-step tree (agent_loop.py:3137–3366) is the highest-value target since
+the step-2 pressure test already quantified ~40 wasted runs at that boundary —
+with shadow logging so round 2 can report a second agreement table. Until then
+the cutover stays scoped to the dispatch boundary, the only point with the
+evidence to justify it.
 
 ## Known gaps (carried to BACKLOG when actionable)
 
