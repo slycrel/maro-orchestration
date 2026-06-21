@@ -222,7 +222,12 @@ def test_fetch_url_content_routes_x_article():
 
 
 def test_fetch_tweet_uses_cli_first(monkeypatch):
-    """When CLI is available and returns content, it should be used before direct fetch."""
+    """When CLI is available and returns content, it should be used before direct fetch.
+
+    Jina is tried first in the code, so stub it to return nothing (hermetic — no
+    live network) and assert the CLI fallback is what populates the result.
+    """
+    monkeypatch.setattr(web_fetch, "_jina_fetch", lambda *a, **k: "")
     monkeypatch.setattr(web_fetch, "_x_cli_available", lambda: True)
     monkeypatch.setattr(web_fetch, "_fetch_via_x_cli", lambda cmd, url: _CLI_TWEET_CONTENT)
     result = fetch_url_content("https://x.com/user/status/12345")
