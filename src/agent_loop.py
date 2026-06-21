@@ -1238,6 +1238,33 @@ def _local_auto_ralph_enabled() -> bool:
         return False
 
 
+def _record_loop_decision(source: str, trigger: str, action: str,
+                          reasoning: str = "") -> bool:
+    """Append a live mid-loop supervisor decision to the active thread's
+    goal-brain Decisions section (Next Up #5 — per-turn maintenance).
+
+    Today the director is the live mid-loop maintainer (Phase 64 adaptive
+    execution); when the navigator goes per-turn it becomes the source at
+    this same seam. Records only the bounded, high-signal course-corrections
+    the director makes on its triggers (stuck / verify_failure /
+    step_threshold), not per-iteration churn — so the Decisions trail reads as
+    "thread opened → director replanned (why) → ... → closed". Never raises: a
+    brain-write failure must not perturb the loop. Returns True if written."""
+    try:
+        from runs import current_run_dir
+        from thread_brain import append_decision
+        rd = current_run_dir()
+        if rd is None:
+            return False
+        msg = f"{source} [{trigger}]: {action}"
+        r = (reasoning or "").strip()
+        if r:
+            msg += f" — {r[:160]}"
+        return bool(append_decision(rd, msg))
+    except Exception:
+        return False
+
+
 def _run_ralph_verify(
     ctx: LoopContext,
     step_text: str,
@@ -4321,6 +4348,10 @@ def run_agent_loop(
                             reasoning="replan budget exhausted",
                             next_check_in=_ae_decision.next_check_in,
                         )
+                    _record_loop_decision(
+                        "director", "stuck",
+                        _ae_decision.action, _ae_decision.reasoning,
+                    )
                     if _ae_decision.action == "continue":
                         stuck_streak = 0
                         log.info("adaptive [stuck/continue]: resetting streak — %s",
@@ -4662,6 +4693,10 @@ def run_agent_loop(
                             reasoning="replan budget exhausted",
                             next_check_in=_ae2_decision.next_check_in,
                         )
+                    _record_loop_decision(
+                        "director", _ae2_trigger,
+                        _ae2_decision.action, _ae2_decision.reasoning,
+                    )
                     if _ae2_decision.action == "adjust" and _ae2_decision.revised_steps:
                         _ae2_new = _ae2_decision.revised_steps
                         remaining_steps[:] = _ae2_new

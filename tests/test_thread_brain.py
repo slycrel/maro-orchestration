@@ -180,3 +180,68 @@ class TestNavigatorShadowWiring:
         (rd / "source" / "resolved_intent.md").write_text("standin intent")
         from navigator_shadow import _goal_brain_standin
         assert "standin intent" in _goal_brain_standin(rd)
+
+
+class TestLoopDecisionSeam:
+    """agent_loop._record_loop_decision — the per-turn maintenance seam (#5):
+    live mid-loop supervisor decisions land in the active thread's Decisions."""
+
+    def _fresh_run(self, workspace):
+        import runs
+        rd = create_run_dir("abcd1234", prompt="ship the thing")
+        runs.set_current_run_dir(rd)
+        return rd
+
+    def test_director_decision_lands_in_decisions(self, workspace):
+        import runs, agent_loop
+        rd = self._fresh_run(workspace)
+        try:
+            assert agent_loop._record_loop_decision(
+                "director", "stuck", "replan", "approach not converging") is True
+            text = thread_brain.brain_path(rd).read_text()
+            assert "director [stuck]: replan" in text
+            assert "approach not converging" in text
+            # landed under Decisions, not another section
+            decisions = text.split("## Decisions", 1)[1].split("## Threads", 1)[0]
+            assert "replan" in decisions
+        finally:
+            runs.set_current_run_dir(None)
+
+    def test_no_active_run_dir_is_safe_noop(self, workspace):
+        import runs, agent_loop
+        runs.set_current_run_dir(None)
+        assert agent_loop._record_loop_decision(
+            "director", "stuck", "replan", "x") is False  # no crash, no write
+
+    def test_empty_reasoning_still_records_action(self, workspace):
+        import runs, agent_loop
+        rd = self._fresh_run(workspace)
+        try:
+            assert agent_loop._record_loop_decision(
+                "director", "verify_failure", "escalate") is True
+            assert "director [verify_failure]: escalate" in thread_brain.brain_path(rd).read_text()
+        finally:
+            runs.set_current_run_dir(None)
+
+    def test_long_reasoning_is_truncated(self, workspace):
+        import runs, agent_loop
+        rd = self._fresh_run(workspace)
+        try:
+            agent_loop._record_loop_decision(
+                "director", "stuck", "adjust", "z" * 500)
+            line = [l for l in thread_brain.brain_path(rd).read_text().splitlines()
+                    if "adjust" in l][0]
+            assert line.count("z") <= 160
+        finally:
+            runs.set_current_run_dir(None)
+
+    def test_multiple_decisions_accrue_in_order(self, workspace):
+        import runs, agent_loop
+        rd = self._fresh_run(workspace)
+        try:
+            agent_loop._record_loop_decision("director", "stuck", "continue", "first")
+            agent_loop._record_loop_decision("director", "step_threshold", "replan", "second")
+            text = thread_brain.brain_path(rd).read_text()
+            assert text.index("first") < text.index("second")
+        finally:
+            runs.set_current_run_dir(None)
