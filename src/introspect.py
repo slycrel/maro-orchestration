@@ -81,9 +81,17 @@ class StepProfile:
     step_idx: int
     text: str
     status: str
-    tokens: int
+    tokens: int                    # total volume (input incl. cache reads + output)
     elapsed_ms: int
     event_type: str = ""
+    cache_read_tokens: int = 0     # input tokens served from cache (~0.1x cost)
+
+    @property
+    def fresh_tokens(self) -> int:
+        """Cost-relevant token count: total minus cache hits. This is what the
+        token_explosion alarm should compare — a worker re-reading a cached file
+        shouldn't read as a cost spike."""
+        return max(0, self.tokens - self.cache_read_tokens)
 
 @dataclass
 class LoopDiagnosis:
@@ -207,6 +215,7 @@ def _build_step_profiles(events: List[dict]) -> List[StepProfile]:
                 tokens=e.get("tokens_in", 0) + e.get("tokens_out", 0),
                 elapsed_ms=e.get("elapsed_ms", 0),
                 event_type=e.get("event_type", ""),
+                cache_read_tokens=e.get("cache_read_tokens", 0),
             ))
     return profiles
 
@@ -311,15 +320,19 @@ def diagnose_loop(loop_id: str, project: str = "") -> LoopDiagnosis:
         _is_research = any(kw in _loop_goal for kw in ("research", "summarize", "fetch", "analyze", "extract"))
 
         for i in range(1, len(profiles)):
-            prev_tok = profiles[i-1].tokens
-            curr_tok = profiles[i].tokens
+            # Compare FRESH tokens, not raw volume: a worker re-reading a cached
+            # file bills ~0.1x for those tokens, so cache hits must not read as a
+            # cost spike. (cache_read_tokens defaults to 0 on legacy events, so
+            # fresh_tokens == tokens for runs recorded before cache-aware accounting.)
+            prev_tok = profiles[i-1].fresh_tokens
+            curr_tok = profiles[i].fresh_tokens
             if prev_tok > 1000 and curr_tok > prev_tok * _TOKEN_EXPLOSION_RATIO:
                 # Research tasks: token growth from fetching external content is expected.
                 # Only flag if growth is extreme (>6x) or steps also blocked.
                 if _is_research and not blocked and curr_tok < prev_tok * 6:
                     # Expected growth for research — note but don't classify as pathology
                     evidence.append(
-                        f"Step {profiles[i].step_idx}: {curr_tok} tokens "
+                        f"Step {profiles[i].step_idx}: {curr_tok} fresh tokens "
                         f"(vs {prev_tok} for step {profiles[i-1].step_idx} — {curr_tok/prev_tok:.1f}x growth, "
                         f"expected for research task)"
                     )
@@ -327,13 +340,15 @@ def diagnose_loop(loop_id: str, project: str = "") -> LoopDiagnosis:
                 failure_class = "token_explosion"
                 severity = "warning"
                 evidence.append(
-                    f"Step {profiles[i].step_idx}: {curr_tok} tokens "
-                    f"(vs {prev_tok} for step {profiles[i-1].step_idx} — {curr_tok/prev_tok:.1f}x growth)"
+                    f"Step {profiles[i].step_idx}: {curr_tok} fresh tokens "
+                    f"(vs {prev_tok} for step {profiles[i-1].step_idx} — {curr_tok/prev_tok:.1f}x growth; "
+                    f"cache reads excluded)"
                 )
                 recommendation = (
-                    "Distill prior step outputs into summaries before injecting as context. "
-                    "Full output should remain in artifacts but only key findings "
-                    "should carry forward to subsequent steps."
+                    "Fresh-token growth is real compute, not cache re-reads. The cost is "
+                    "inside the worker subprocess's own tool loop (re-reading/rewriting a "
+                    "growing artifact). Steer the worker toward patch/diff edits + slice "
+                    "reads, or accept it as intrinsic for file-heavy build steps."
                 )
                 break
 

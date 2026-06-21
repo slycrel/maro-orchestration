@@ -46,7 +46,7 @@ def _write_events(tmp_path, events):
             f.write(json.dumps(e) + "\n")
 
 
-def _make_step_event(loop_id, step_idx, status, tokens_in=100, tokens_out=50, elapsed_ms=5000, step="do something"):
+def _make_step_event(loop_id, step_idx, status, tokens_in=100, tokens_out=50, elapsed_ms=5000, step="do something", cache_read_tokens=0):
     return {
         "event_type": "step_done" if status == "done" else "step_stuck",
         "loop_id": loop_id,
@@ -55,6 +55,7 @@ def _make_step_event(loop_id, step_idx, status, tokens_in=100, tokens_out=50, el
         "status": status,
         "tokens_in": tokens_in,
         "tokens_out": tokens_out,
+        "cache_read_tokens": cache_read_tokens,
         "elapsed_ms": elapsed_ms,
     }
 
@@ -153,6 +154,38 @@ def test_token_explosion(tmp_path, monkeypatch):
     ]
     _write_events(tmp_path, events)
     diag = diagnose_loop("loop05")
+    assert diag.failure_class == "token_explosion"
+
+
+def test_token_explosion_not_flagged_when_growth_is_cache_reads(tmp_path, monkeypatch):
+    # Step 3's raw volume is 9x, but ~all of the growth is cache reads (~0.1x
+    # cost). The alarm compares FRESH tokens, so this must NOT flag.
+    monkeypatch.setattr("introspect._events_path", lambda: tmp_path / "memory" / "events.jsonl")
+    events = [
+        _make_step_event("loop05c", 1, "done", tokens_in=5000, tokens_out=1000),
+        _make_step_event("loop05c", 2, "done", tokens_in=5000, tokens_out=1000),
+        # 50K in, but 49K of it from cache → fresh = 1K in + 5K out = 6K, no spike.
+        _make_step_event("loop05c", 3, "done", tokens_in=50000, tokens_out=5000,
+                         cache_read_tokens=49000),
+        _make_loop_done("loop05c", "done"),
+    ]
+    _write_events(tmp_path, events)
+    diag = diagnose_loop("loop05c")
+    assert diag.failure_class != "token_explosion"
+
+
+def test_token_explosion_still_flags_real_fresh_growth(tmp_path, monkeypatch):
+    # Same raw shape, but the growth is genuine fresh compute (no cache) → flags.
+    monkeypatch.setattr("introspect._events_path", lambda: tmp_path / "memory" / "events.jsonl")
+    events = [
+        _make_step_event("loop05f", 1, "done", tokens_in=5000, tokens_out=1000),
+        _make_step_event("loop05f", 2, "done", tokens_in=5000, tokens_out=1000),
+        _make_step_event("loop05f", 3, "done", tokens_in=50000, tokens_out=5000,
+                         cache_read_tokens=0),
+        _make_loop_done("loop05f", "done"),
+    ]
+    _write_events(tmp_path, events)
+    diag = diagnose_loop("loop05f")
     assert diag.failure_class == "token_explosion"
 
 
