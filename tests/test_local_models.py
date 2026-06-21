@@ -4,7 +4,9 @@ No live server required — the HTTP layer (`_http_json`) is monkeypatched.
 """
 from __future__ import annotations
 
+import sys
 import urllib.error
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -15,7 +17,9 @@ from llm import LLMMessage, FailoverAdapter
 @pytest.fixture(autouse=True)
 def _clean(monkeypatch):
     lm.reset_cache()
+    lm._MANAGED["proc"] = None
     yield
+    lm._MANAGED["proc"] = None
     lm.reset_cache()
 
 
@@ -227,3 +231,94 @@ def test_input_char_budget_default_and_floor(monkeypatch):
     assert lm.input_char_budget() == 20000
     _set_cfg(monkeypatch, max_input_chars="oops")
     assert lm.input_char_budget() == 6000           # parse error → default
+
+
+# --- orchestration-managed lifecycle ---------------------------------------
+
+def test_lifecycle_accessors(monkeypatch):
+    _set_cfg(monkeypatch, idle_shutdown_secs=120, autostart=False)
+    assert lm.idle_shutdown_secs() == 120
+    assert lm.autostart_enabled() is False
+    _set_cfg(monkeypatch, autostart="off")
+    assert lm.autostart_enabled() is False
+    assert lm._port_from_endpoint("http://127.0.0.1:8099/v1") == 8099
+    assert lm._port_from_endpoint("http://h/v1") == 8088  # fallback
+
+
+def test_ensure_unconfigured_no_spawn(monkeypatch):
+    _set_cfg(monkeypatch)
+    pop = MagicMock(); monkeypatch.setattr(lm.subprocess, "Popen", pop)
+    assert lm.ensure_validator_running() is False
+    pop.assert_not_called()
+
+
+def test_ensure_reuses_running_server(monkeypatch):
+    _set_cfg(monkeypatch, local_models=["m1"], runtime="mlx")
+    monkeypatch.setattr(lm, "loaded_models", lambda ep=None: ["m1"])
+    pop = MagicMock(); monkeypatch.setattr(lm.subprocess, "Popen", pop)
+    assert lm.ensure_validator_running() is True
+    pop.assert_not_called()  # reuse, never duplicate
+
+
+def test_ensure_noop_when_autostart_disabled(monkeypatch):
+    _set_cfg(monkeypatch, local_models=["m1"], runtime="mlx", autostart=False)
+    monkeypatch.setattr(lm, "loaded_models", lambda ep=None: [])
+    pop = MagicMock(); monkeypatch.setattr(lm.subprocess, "Popen", pop)
+    assert lm.ensure_validator_running() is False
+    pop.assert_not_called()
+
+
+def test_ensure_noop_for_ollama_runtime(monkeypatch):
+    # Ollama manages its own daemon — orchestration doesn't spawn it.
+    _set_cfg(monkeypatch, local_models=["m1"], runtime="ollama")
+    monkeypatch.setattr(lm, "loaded_models", lambda ep=None: [])
+    pop = MagicMock(); monkeypatch.setattr(lm.subprocess, "Popen", pop)
+    assert lm.ensure_validator_running() is False
+    pop.assert_not_called()
+
+
+def test_ensure_spawns_and_waits_until_ready(monkeypatch):
+    _set_cfg(monkeypatch, local_models=["m1"], runtime="mlx", autostart=True, idle_shutdown_secs=0)
+    monkeypatch.setattr(lm, "mlx_python", lambda: sys.executable)  # exists
+    state = {"spawned": False}
+
+    def fake_popen(*a, **k):
+        state["spawned"] = True
+        p = MagicMock(); p.poll.return_value = None; p.pid = 4242
+        return p
+
+    monkeypatch.setattr(lm.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(lm, "loaded_models", lambda ep=None: ["m1"] if state["spawned"] else [])
+    try:
+        assert lm.ensure_validator_running(wait_secs=5) is True
+        assert state["spawned"] is True
+    finally:
+        lm.shutdown_validator()
+
+
+def test_ensure_returns_false_if_server_exits_during_startup(monkeypatch):
+    _set_cfg(monkeypatch, local_models=["m1"], runtime="mlx", autostart=True, idle_shutdown_secs=0)
+    monkeypatch.setattr(lm, "mlx_python", lambda: sys.executable)
+    monkeypatch.setattr(lm, "loaded_models", lambda ep=None: [])
+
+    def fake_popen(*a, **k):
+        p = MagicMock(); p.poll.return_value = 1; p.returncode = 1; p.pid = 7  # already dead
+        return p
+
+    monkeypatch.setattr(lm.subprocess, "Popen", fake_popen)
+    assert lm.ensure_validator_running(wait_secs=2) is False
+    assert lm._MANAGED["proc"] is None
+
+
+def test_shutdown_terminates_managed_proc():
+    p = MagicMock(); p.poll.return_value = None; p.pid = 999
+    lm._MANAGED["proc"] = p
+    lm.shutdown_validator()
+    p.terminate.assert_called_once()
+    assert lm._MANAGED["proc"] is None
+
+
+def test_shutdown_is_noop_when_external():
+    lm._MANAGED["proc"] = None
+    lm.shutdown_validator()  # must not raise
+    assert lm._MANAGED["proc"] is None

@@ -1,5 +1,31 @@
 # Changelog
 
+## [1.21.0] - 2026-06-21
+
+Orchestration-managed local validator lifecycle.
+
+### Added — on-demand spin up / idle reap (`src/local_models.py`)
+- The local model is now a resource the orchestration owns, not an OS service.
+  `ensure_validator_running()` (called from `verify_step`) reuses any reachable
+  server or spins up `mlx_lm.server` as a managed child on the first validation,
+  waits until ready, then reaps it after `validate.idle_shutdown_secs` (default
+  300s) of inactivity and on process exit (`shutdown_validator` + atexit).
+- Only the **mlx** runtime is managed (Ollama runs its own daemon). Opt out with
+  `validate.autostart: false`; interpreter via `validate.mlx_python`.
+- Reuses an externally-started server (e.g. `scripts/local-validator.sh start`),
+  never duplicating it.
+
+### Added — free local-validator regression eval
+- `tests/fixtures/validation_cases.json` (real PASS outputs + generated FAIL
+  variants) + `tests/test_validator_eval.py`: replays labeled cases through the
+  free local validator and asserts aggregate accuracy. Gated — skips unless a
+  server is serving the model, so normal CI is unaffected. Live result: 88% (7/8).
+
+### Removed
+- The launchd/systemd "install-as-service" path (always-on OS service) — replaced
+  by the orchestration-managed lifecycle above. `local-validator.sh` keeps
+  setup/pull/start/stop/status for dev use (warming the model across runs).
+
 ## [1.20.0] - 2026-06-21
 
 Optional local validator — zero-cost first-pass step validation.

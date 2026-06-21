@@ -81,6 +81,12 @@ cmd_stop() {
   fi
 }
 
+# NOTE: there is intentionally no install-as-OS-service command. The orchestration
+# owns the validator's lifecycle — it spins the model up on demand and reaps it
+# after idle (see local_models.ensure_validator_running / the idle reaper). These
+# manual commands are for dev use: warming the model, or keeping it up across many
+# back-to-back runs so you don't pay the load each time.
+
 case "${1:-}" in
   setup)  cmd_setup ;;
   pull)   cmd_pull ;;
