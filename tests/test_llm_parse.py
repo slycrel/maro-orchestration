@@ -12,8 +12,53 @@ from llm_parse import (
     safe_list,
     content_or_empty,
     strip_markdown_fences,
+    strip_think_blocks,
     _find_json_bounds,
 )
+
+
+# ---------------------------------------------------------------------------
+# strip_think_blocks
+# ---------------------------------------------------------------------------
+
+class TestStripThinkBlocks:
+    def test_no_think_block(self):
+        assert strip_think_blocks('{"a": 1}') == '{"a": 1}'
+
+    def test_closed_block_keeps_answer(self):
+        text = '<think>let me reason</think>\n{"passed": true}'
+        assert strip_think_blocks(text) == '{"passed": true}'
+
+    def test_decoy_json_inside_think_is_dropped(self):
+        # The real bug: a hypothetical verdict inside the trace must NOT win.
+        text = (
+            '<think>maybe {"passed": false, "confidence": 0.1}? '
+            'no, it actually passes.</think>\n'
+            '{"passed": true, "confidence": 0.9}'
+        )
+        assert strip_think_blocks(text) == '{"passed": true, "confidence": 0.9}'
+
+    def test_unclosed_block_drops_to_end(self):
+        # Budget-truncated trace, no verdict emitted → nothing to keep.
+        assert strip_think_blocks('<think>reasoning forever...') == ""
+
+    def test_attributes_on_tag(self):
+        text = '<think type="reasoning">x</think>{"a": 1}'
+        assert strip_think_blocks(text) == '{"a": 1}'
+
+    def test_case_insensitive(self):
+        assert strip_think_blocks('<THINK>x</THINK>{"a": 1}') == '{"a": 1}'
+
+    def test_empty_string(self):
+        assert strip_think_blocks("") == ""
+
+    def test_extract_json_ignores_decoy_in_think(self):
+        # End-to-end through the real chokepoint all callers use.
+        text = (
+            '<think>{"passed": false, "confidence": 0.0}</think>\n'
+            '```json\n{"passed": true, "confidence": 0.95}\n```'
+        )
+        assert extract_json(text, dict) == {"passed": True, "confidence": 0.95}
 
 
 # ---------------------------------------------------------------------------

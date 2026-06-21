@@ -28,6 +28,29 @@ log = logging.getLogger("poe.llm_parse")
 
 _FENCE_RE = re.compile(r"^```[a-zA-Z]*\n?(.*?)\n?```$", re.DOTALL)
 
+# Reasoning models (Qwen/DeepSeek-R1/VibeThinker style) emit a chain-of-thought
+# wrapped in <think>...</think> before the real answer. That trace routinely
+# contains hypothetical/example JSON ({"passed": true, ...}) which our first-
+# balanced-brace extractor would grab as the verdict. Strip the trace first.
+_THINK_RE = re.compile(r"<think\b[^>]*>.*?</think\s*>", re.DOTALL | re.IGNORECASE)
+_THINK_OPEN_RE = re.compile(r"<think\b[^>]*>", re.IGNORECASE)
+
+
+def strip_think_blocks(text: str) -> str:
+    """Remove <think>...</think> reasoning traces before JSON extraction.
+
+    - Closed blocks are removed wholesale (the answer follows after </think>).
+    - An unclosed <think> (the trace was truncated by a token budget before the
+      verdict was emitted) drops everything from the tag onward — there is no
+      answer to keep, so callers fall back to their default, which is the
+      fail-safe direction for the validator/heartbeat gate.
+    """
+    cleaned = _THINK_RE.sub("", text)
+    m = _THINK_OPEN_RE.search(cleaned)
+    if m:
+        cleaned = cleaned[: m.start()]
+    return cleaned.strip()
+
 
 def strip_markdown_fences(text: str) -> str:
     """Remove ```json ... ``` (or bare ``` ```) wrappers if present."""
@@ -101,7 +124,7 @@ def extract_json(
         log.debug("%sextract_json: empty/None content", tag)
         return default
 
-    text = strip_markdown_fences(content)
+    text = strip_markdown_fences(strip_think_blocks(content))
 
     open_char = "{" if expected_type is dict else "["
     close_char = "}" if expected_type is dict else "]"
