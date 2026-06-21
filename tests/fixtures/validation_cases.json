@@ -1,0 +1,61 @@
+{
+  "_comment": "Labeled step-validation cases for the free local-validator regression eval (tests/test_validator_eval.py). Positives are seeded from real run outputs (step result that DID satisfy the goal); negatives are generated alternate versions of the same step — wrong logic, off-topic, empty, or unsupported claim — that the validator MUST reject. Grow this by collating real step results from runs and mutating them. expect_pass = whether verify_step should PASS the result for the goal.",
+  "cases": [
+    {
+      "id": "factorial_correct",
+      "step_text": "write a Python function that returns the factorial of n",
+      "result": "def fact(n):\n    r = 1\n    for i in range(2, n + 1):\n        r *= i\n    return r\n# self-test: fact(5) == 120, fact(0) == 1",
+      "expect_pass": true,
+      "source": "run2 (verify coding)"
+    },
+    {
+      "id": "factorial_wrong_logic",
+      "step_text": "write a Python function that returns the factorial of n",
+      "result": "def fact(n):\n    return n + 1",
+      "expect_pass": false,
+      "source": "generated mutation of factorial_correct"
+    },
+    {
+      "id": "palindrome_correct",
+      "step_text": "write is_palindrome(s) with a docstring and a self-test",
+      "result": "def is_palindrome(s):\n    \"\"\"True if s reads the same forwards and backwards, ignoring case.\"\"\"\n    t = s.lower()\n    return t == t[::-1]\n# self-test: is_palindrome('Racecar') is True; is_palindrome('abc') is False",
+      "expect_pass": true,
+      "source": "run2 (verify coding)"
+    },
+    {
+      "id": "palindrome_offtopic",
+      "step_text": "write is_palindrome(s) with a docstring and a self-test",
+      "result": "The current weather in Tokyo is 22C and partly cloudy with light winds.",
+      "expect_pass": false,
+      "source": "generated off-topic answer"
+    },
+    {
+      "id": "nootropic_rct_supported",
+      "step_text": "find one human RCT for a nootropic and extract sample, dose, and working-memory outcome",
+      "result": "Bacopa monnieri — Roodenrys et al. (2002), double-blind RCT, N=76, 300 mg/day for 12 weeks. Significant improvement in working-memory consolidation (delayed recall) vs placebo. Source: https://pubmed.ncbi.nlm.nih.gov/12093601/",
+      "expect_pass": true,
+      "source": "run1 (nootropics research)"
+    },
+    {
+      "id": "nootropic_rct_vague_unsupported",
+      "step_text": "find one human RCT for a nootropic and extract sample, dose, and working-memory outcome",
+      "result": "Some studies suggest certain supplements might help memory. The evidence is mixed and more research is needed.",
+      "expect_pass": false,
+      "source": "generated vague/unsupported (no trial, no dose, no source)"
+    },
+    {
+      "id": "flatten_correct",
+      "step_text": "write flatten(nested_list) that recursively flattens an arbitrarily nested list",
+      "result": "def flatten(nested_list):\n    out = []\n    for item in nested_list:\n        if isinstance(item, list):\n            out.extend(flatten(item))\n        else:\n            out.append(item)\n    return out\n# self-test: flatten([1,[2,[3,4]],5]) == [1,2,3,4,5]",
+      "expect_pass": true,
+      "source": "run2 (verify coding)"
+    },
+    {
+      "id": "flatten_empty_refusal",
+      "step_text": "write flatten(nested_list) that recursively flattens an arbitrarily nested list",
+      "result": "I was unable to complete this task.",
+      "expect_pass": false,
+      "source": "generated empty/refusal"
+    }
+  ]
+}

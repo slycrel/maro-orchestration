@@ -1179,6 +1179,7 @@ def verify_step(
     try:
         import local_models as _lm
         if _lm.configured_models():
+            _lm.ensure_validator_running()               # spin up on demand (no-op if up/disabled/ollama)
             local = _lm.build_local_validator_adapter()  # None if endpoint/model absent
             if local is not None:
                 from verification_agent import VerificationAgent

@@ -40,20 +40,47 @@ One OpenAI-compatible HTTP adapter serves both:
 
 ## Setup
 
-### Apple Silicon (MLX) — framework-managed
+You install the runtime + model once; the orchestration starts/stops the server
+itself at run time (see **Lifecycle** below). No OS service.
+
+### Apple Silicon (MLX)
 
 ```bash
-scripts/local-validator.sh setup                       # uv venv + mlx-lm
-scripts/local-validator.sh start                       # serve VibeThinker-3B on :8088
-scripts/local-validator.sh status                      # check it's loaded
+scripts/local-validator.sh setup                       # uv venv + mlx-lm (one-time)
+scripts/local-validator.sh pull mlx-community/VibeThinker-3B-8bit   # download the model
+# no manual `start` needed — the loop spins it up on demand.
+# `start`/`stop`/`status` exist for dev (keep it warm across back-to-back runs).
 ```
 
 ### Linux (Ollama)
 
 ```bash
 ollama pull <model>        # e.g. a small reasoning/coder model
-# ollama serve already exposes /v1
+# ollama is its own daemon and exposes /v1; orchestration does NOT manage it.
 ```
+
+## Lifecycle (orchestration-managed, not an OS service)
+
+The local model is a resource the orchestration owns — **not** a launchd/systemd
+"always-on" service.
+
+**Run-scoped (primary).** `run_agent_loop` is wrapped so that, when a run will
+use the local validator, it **spins the model up once at the start of the run and
+tears it down at the end — on completion or failure** (`managed_for_run`). The
+server stays warm for the whole run (no reaping between steps), and only the run
+that actually spawned it reaps — a reused/external server, or a parent run's
+server during nested/recovery calls, is left running.
+
+`ensure_validator_running()` does the work: it **reuses** any server already
+serving a configured model (ours, or one started with `local-validator.sh` —
+never duplicated), else **spins up** `mlx_lm.server` as a managed child and waits
+until ready. Only the **mlx** runtime is managed (Ollama runs its own daemon).
+Opt out with `validate.autostart: false`.
+
+**Idle reaper (backstop).** For validations that happen outside a managed run,
+the server is also reaped after `idle_shutdown_secs` of inactivity (and on
+process exit). Run-scoped spin-ups suppress this — the run owns teardown — so it
+only applies to ad-hoc/lazy use.
 
 ## Configuration (`~/.poe/workspace/config.yml`)
 
@@ -70,6 +97,9 @@ validate:
   max_input_chars: 6000         # INPUT window the local validator sees of the result
   auto_verify: true             # default the ralph verify loop ON when a local
                                 # validator is available (free). false to opt out.
+  autostart: true               # orchestration may spin the mlx server up on demand
+  idle_shutdown_secs: 300       # reap the managed server after this much idle (0=never)
+  mlx_python: ""                # interpreter for mlx_lm.server (default: repo .venv-mlx)
 ```
 
 ### Two limits, and why they're different
