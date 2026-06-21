@@ -87,6 +87,15 @@ dead at the extraction step since Phase 59 S1). Remaining observations:
   run's artifact dir; goal even said "as an artifact file". Moved them into
   `e1b9f95e-humble-lantern/artifact/` post-hoc. Existing bounded-workspace
   BACKLOG item covers the general fix; this is a concrete repro.
+  **2nd organic repro 2026-06-12:** the BACKLOG-claim-audit goal wrote
+  `backlog_claim_audit.md` (a genuinely good 230-line audit, verdict ACCURATE
+  with file:line evidence) to the *repo root* — its run dir
+  `140d2a4f-warm-pebble/artifact/` was empty. Moved post-hoc. This keeps
+  happening to agenda build-goals: the agent's cwd is the repo, and nothing
+  constrains where it writes. The NOW-lane artifact path was fixed (writes to
+  the run dir now) but the agenda loop's worker writes are still cwd-relative.
+  The fix is the bounded-workspace item below; this is the strongest case yet
+  that it's not theoretical — good output is landing in version control.
 - [ ] **NOW-lane runs produce no learning data and no artifact discipline** —
   the run_health build goal (e1b9f95e-humble-lantern) was classified NOW, which
   (a) skips `reflect_and_record` entirely — reflection only fires in the agenda
@@ -137,6 +146,22 @@ dead at the extraction step since Phase 59 S1). Remaining observations:
   economy cost from the other direction. Escalation overriding an explicit
   `force_lane="now"` fixed 2026-06-12 (force wins; escalation protects
   classified routing only).
+- [ ] **done != achieved, confirmed on organic runs — and the gap is large.**
+  First organic batch through the new goal-verdict metadata (2026-06-12, 5
+  real goals): 4 came back `done` but only **1** had `goal_achieved=True`. The
+  three done-but-not-achieved (health-report refresh, roadmap audit, weekly
+  digest) all wrote a structurally-correct artifact the closure verdict judged
+  as falling short — "file created and non-empty" / "5/6 checks" — at low
+  confidence (0.2–0.35). Two implications: (1) the done≠successful split is
+  doing exactly its job — without it this batch reads as 80% success; with it,
+  20% genuinely achieved, the rest flagged for review. Validates Jeremy's
+  "done as 'I did it' not 'it worked'" concern with live data. (2) The verdict
+  confidences are *low* — these are doubt flags, not definitive failures, and
+  they correctly stay `done` (below the 0.7 demotion threshold) rather than
+  flipping to incomplete. Open question worth watching: is the closure verifier
+  systematically harsh on build-artifact goals (false-negative achievement), or
+  are these outputs genuinely thin? Needs a few more organic batches + spot
+  audits before trusting the rate. Don't tune the threshold on n=5.
 - [ ] **Closure demotion doesn't reach the outcome store** — when handle's
   closure verdict demotes done→incomplete (02b0263), run metadata is honest
   (recall/guard read that) but the loop already called reflect_and_record

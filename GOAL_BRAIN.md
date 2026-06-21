@@ -275,6 +275,23 @@ Sample: the 2026-05-13..17 window of `~/.poe/workspace/runs/` (478 dirs total;
   worked. Panel was deliberately biased toward known failures — **no cutover
   conversation until a random-sample round 2 measures false-escalate rate on
   healthy goals.** Goal-brain sequencing (2026-05-18 plan) steps 1–5 complete.
+- **2026-06-12 (dispatch-class cutover — per-move, code shipped, box OFF)** —
+  First per-class cutover built (MILESTONES Next Up #2): `navigator.act_dispatch`
+  (default off) lets a navigator dispatch decision *act* instead of being
+  shadow-only. The live adjudication forced a refinement the original design
+  didn't have — cutover is **per-move, not per-class**. `act_moves` defaults to
+  `["escalate"]`: escalate earned it (6/6 live divergences right, and it defers
+  to a human so it can never assert a wrong resolution), close is opt-in (it
+  asserts a goal resolved *without running it* — higher blast radius, only
+  synthetic-probe evidence). Enable call on this box: **escalate is ready, but
+  left OFF** — 23 live rows show 14/14 execute agreement incl. 5/5 organic, and
+  *every* acting-move divergence is a synthetic probe; zero organic goals
+  triggered escalate/close, so there's no organic evidence the acting moves
+  fire correctly when they should. The flip is one reversible config line with
+  the evidence table (`python3 -m navigator_shadow --agreement`) — Jeremy's call
+  to make, not one to bundle into a code push. Also this batch: the done≠achieved
+  split (shipped 2026-06-11) proved itself on organic data — 4/5 goals `done`,
+  only 1 `goal_achieved=True` (the rest thin artifacts flagged at low conf).
 - **2026-06-11 (Jeremy, on the governance event + done semantics)** — Two
   calls. (1) *"I'm fine with workers also being authors as if it were me;
   haven't made that distinction yet, not sure it matters (yet?)."* — the

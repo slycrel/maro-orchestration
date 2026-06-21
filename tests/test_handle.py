@@ -768,14 +768,19 @@ class TestNavigatorDispatchCutover:
 
         monkeypatch.setattr(handle_mod, "handle", _fake_handle)
 
-    def _patch_act_config(self, monkeypatch, enabled=True, floor=0.9):
+    def _patch_act_config(self, monkeypatch, enabled=True, floor=0.9, moves=None):
         import config
+        # Tests that exercise close pass moves=("escalate", "close"); the
+        # production default (act_moves=["escalate"]) is pinned by its own test.
+        _moves = list(moves) if moves is not None else ["escalate", "close"]
 
         def _cfg(name, default=None):
             if name == "navigator.act_dispatch":
                 return enabled
             if name == "navigator.act_confidence_floor":
                 return floor
+            if name == "navigator.act_moves":
+                return _moves
             return default
 
         monkeypatch.setattr(config, "get", _cfg)
@@ -791,6 +796,35 @@ class TestNavigatorDispatchCutover:
 
         assert calls == [self.GOAL], "default off: decision must not act"
         assert result.status == "done"
+
+    def test_default_act_moves_is_escalate_only_close_stays_shadow(self, monkeypatch, tmp_path):
+        """act_dispatch on, act_moves unset → escalate acts, close does not.
+        Per-move cutover: escalate earned it; close is opt-in (2026-06-12)."""
+        _setup(monkeypatch, tmp_path)
+        import handle as handle_mod
+        import config
+        # Config patch that enables act_dispatch but leaves act_moves to the
+        # code's own default (["escalate"]) by returning the passed default.
+        monkeypatch.setattr(config, "get", lambda name, default=None: (
+            True if name == "navigator.act_dispatch"
+            else 0.9 if name == "navigator.act_confidence_floor"
+            else default))
+
+        # escalate acts under the default
+        calls = []
+        self._patch_shadow_returning(monkeypatch, self._decision("escalate", 0.95))
+        self._patch_handle(monkeypatch, calls)
+        r1 = handle_mod.handle_task(self._task(), dry_run=False)
+        assert calls == [] and r1.classification_reason == "navigator_escalate"
+
+        # close does NOT act under the default — falls through to execute
+        calls2 = []
+        self._patch_shadow_returning(
+            monkeypatch, self._decision("close", 0.99, payload={"closure": "delivered"}))
+        self._patch_handle(monkeypatch, calls2)
+        r2 = handle_mod.handle_task(self._task(), dry_run=False)
+        assert calls2 == [self.GOAL], "close must be opt-in, not in default act_moves"
+        assert r2.status == "done"
 
     def test_escalate_acts_when_enabled(self, monkeypatch, tmp_path):
         _setup(monkeypatch, tmp_path)

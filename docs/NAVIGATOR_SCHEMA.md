@@ -358,12 +358,20 @@ narrow path the data justified" — the dispatch guard's own playbook):
 
 - **Config:** `navigator.act_dispatch` (default **off** in code; a deployment
   opts in via workspace config) + `navigator.act_confidence_floor` (default
-  0.9). `act_dispatch` implies the decide call even with `shadow_dispatch` off.
-- **Only `escalate` and `close` act** — the moves whose record earned it
-  (every adjudicated live divergence navigator-right; 0 false escalates on
-  well-formed goals across replay rounds 1–2 and live shadow data).
-  `extend`/`fork`/`collate`/`idunno` have no dispatch machinery and fall
-  through to execute, as does anything below the confidence floor.
+  0.9) + `navigator.act_moves` (default `["escalate"]`). `act_dispatch`
+  implies the decide call even with `shadow_dispatch` off.
+- **Cutover is per-move, not per-class** — the 2026-06-12 live adjudication
+  forced the split. `act_moves` is the set allowed to act; flipping
+  `act_dispatch` on gets `escalate` by default, and `close` is opt-in on top
+  (`act_moves: [escalate, close]`). `extend`/`fork`/`collate`/`idunno` have no
+  dispatch machinery and fall through to execute, as does anything below the
+  floor or any move not in `act_moves`.
+- **Why escalate first, close opt-in:** escalate **defers to a human** — it
+  cannot assert a wrong resolution, and all 6 of its live divergences were
+  adjudicated right (vague "improve things"; impossible-binary probes). close
+  **asserts a goal is resolved without running it** — a wrong close silently
+  drops real work, and its only divergence evidence is synthetic probes. Same
+  gate, different earned trust.
 - **Mapping:** `escalate` → HandleResult `stuck` / `navigator_escalate`
   (run prevented, reasoning in result); `close` → `done` when
   `closure: delivered`, else `incomplete` / `navigator_close`.
@@ -374,13 +382,29 @@ narrow path the data justified" — the dispatch guard's own playbook):
 - **Audit:** every acted decision logs `NAVIGATOR_ACTED` (48th event type)
   beside the existing NAVIGATOR_DECIDED row.
 
-Evidence basis at ship time: 18 live dispatch rows — 9/9 agreement on
-well-formed goals (conf 0.85–1.0), all 8 divergences adjudicated
-navigator-right or right-in-kind (impossible-binary batch, "improve things"
-pre-governance-event escalate 0.95, guard-trip close 0.99). Caveat: 10/18
-rows were deliberate probes; enabling on this box waits on the organic batch
-in flight. Cutover for the **closure** decision class stays shadow-only — no
-live closure shadow callsite exists yet.
+### Enable decision (2026-06-12) — code shipped, box config still OFF
+
+23 live dispatch rows: **execute 14/14 agreement** (5 of them this batch's
+organic goals — the navigator does **not** false-escalate real work), and 8
+divergences, every one adjudicated navigator-right or right-in-kind. But the
+split by move is decisive: all 6 `escalate` + 2 `close` divergences are
+**synthetic probes or the deliberately-vague "improve things"** — *zero
+organic goals triggered an acting move.*
+
+- **escalate is ready to enable** on this box: 6/6 right, defers to a human
+  (failure mode is "someone looks at it," not "wrong work ships"), and would
+  have changed nothing for the 5 organic goals (all execute). One config line:
+  `navigator: {act_dispatch: true}` (act_moves defaults to escalate-only).
+- **close is not**: its only evidence is the impossible-binary probes + the
+  grains-of-sand probe (right in substance, but the riskiest move and no
+  organic data). Stays opt-in until organic close evidence accumulates.
+- **Decision: leave both OFF on this box for now** — the code + per-move gate
+  are ready so the flip is one reversible config line, but the call to enable
+  escalate-acting on live autonomous dispatch is Jeremy's to make with this
+  table in front of him, not one to bundle into a code push.
+
+Closure **decision class** (the other shadow point) stays shadow-only
+regardless — no live closure callsite exists yet.
 
 ## Open ends carried forward
 

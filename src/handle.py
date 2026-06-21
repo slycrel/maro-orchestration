@@ -1708,10 +1708,14 @@ def _navigator_act_dispatch(
     """Dispatch-class cutover: turn a navigator decision into a dispatch
     outcome, or None to proceed with the normal pipeline.
 
-    Only escalate and close act — they are the moves whose live shadow record
-    earned cutover (every adjudicated divergence navigator-right, 0 false
-    escalates on well-formed goals across replay rounds 1-2 + live data).
-    extend/fork/collate have no dispatch machinery yet and fall through to
+    Cutover is per-move, not per-class — the live data forced the split.
+    `navigator.act_moves` (default ["escalate"]) is the set allowed to act:
+    escalate earned it first (every adjudicated divergence navigator-right,
+    and it defers to a human — it cannot assert a wrong resolution), so
+    flipping `act_dispatch` on gets escalate by default. close is opt-in on
+    top (add it to act_moves) because it asserts a goal is resolved WITHOUT
+    running it; as of 2026-06-12 its only evidence is synthetic probes.
+    extend/fork/collate have no dispatch machinery and fall through to
     execute. Acting requires confidence >= navigator.act_confidence_floor
     (default 0.9); below the floor the pipeline keeps the wheel. Never raises.
     """
@@ -1723,13 +1727,14 @@ def _navigator_act_dispatch(
             if not bool(_cfg_get("navigator.act_dispatch", False)):
                 return None
             _floor = float(_cfg_get("navigator.act_confidence_floor", 0.9))
+            _act_moves = set(_cfg_get("navigator.act_moves", ["escalate"]) or [])
         except Exception:
             return None
         move = getattr(decision, "move", "")
         conf = float(getattr(decision, "confidence", 0.0) or 0.0)
         reasoning = str(getattr(decision, "reasoning", ""))
         payload = dict(getattr(decision, "payload", {}) or {})
-        if move not in ("escalate", "close") or conf < _floor:
+        if move not in _act_moves or move not in ("escalate", "close") or conf < _floor:
             return None
 
         if move == "escalate":
