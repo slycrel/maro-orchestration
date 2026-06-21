@@ -1227,6 +1227,16 @@ def _post_step_checks(
     return step_status, step_result, _step_injected_context
 
 
+def _local_auto_ralph_enabled() -> bool:
+    """Default the ralph verify loop ON when a usable local validator is
+    configured (free verification). Cached + non-fatal."""
+    try:
+        import local_models as _lm
+        return _lm.auto_verify_enabled()
+    except Exception:
+        return False
+
+
 def _run_ralph_verify(
     ctx: LoopContext,
     step_text: str,
@@ -4212,8 +4222,11 @@ def run_agent_loop(
         _raw_summary = outcome.get("summary", step_text)
         step_summary = _raw_summary if isinstance(_raw_summary, str) else step_text
 
-        # Ralph verify loop (Phase F8)
-        _ralph_active = ralph_verify or goal.lower().startswith(("ralph:", "verify:"))
+        # Ralph verify loop (Phase F8). Defaults ON when a usable local validator
+        # is configured — verification is then free (opt out: validate.auto_verify).
+        _ralph_active = (ralph_verify
+                         or goal.lower().startswith(("ralph:", "verify:"))
+                         or _local_auto_ralph_enabled())
         if step_status == "done" and _ralph_active and step_result:
             step_status, step_result, _session_verify_failures, _session_tier_floor = _run_ralph_verify(
                 ctx, step_text, step_idx, step_result, step_status, outcome, _step_adapter,

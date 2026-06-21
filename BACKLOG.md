@@ -28,6 +28,11 @@ enough, and on which step classes, is not** — that needs measurement, not a tw
 - [ ] **Per-class routing.** Expect high agreement on verifiable code/math steps,
   low on fuzzy research-quality steps. Route only the classes where the local judge
   earns it; keep the rest on the paid path. Don't trust benchmark parity globally.
+- [ ] **Tune `local_max_tokens` per model.** Live finding (2026-06-21 verify run):
+  VibeThinker's `<think>` trace on *real* (long) step results overran the 1024
+  floor → empty content → conf 0.00 → spurious escalation on 2/5 steps (the other
+  3/5 validated free at conf 1.00). Bumped default to 2048; deep-eval should find
+  the floor that maximizes decisive-local rate without wasting generation latency.
 - [ ] **Token/cost delta report.** Quantify tokens saved vs escalation rate vs added
   latency, on Poe's own task corpus — the actual ROI of running this.
 - [ ] **Model bake-off.** Compare candidate local validators (VibeThinker-3B 8bit vs

@@ -66,8 +66,20 @@ validate:
   endpoint: ""                  # override; else derived from runtime
   min_certainty: 0.6            # below this, local verdict is UNDECIDED → escalate
   escalation: cheap             # cheap (one paid gate) | council (3-persona trio)
-  local_max_tokens: 1024        # floor; reasoning models need room to finish <think>
+  local_max_tokens: 2048        # floor; reasoning models need room to finish <think>
+  auto_verify: true             # default the ralph verify loop ON when a local
+                                # validator is available (free). false to opt out.
 ```
+
+### Auto-verify
+
+When a usable local validator is available, the per-step **ralph verify loop**
+defaults **on** — verification is free, so it should run. This is equivalent to
+prefixing every goal with `verify:`. It only activates when a configured model
+is actually loaded at the endpoint (so a misconfigured/down validator never
+silently routes verification to the paid path). Set `validate.auto_verify: false`
+to keep verification opt-in (via `verify:`/`ralph:`/`--ralph-verify`) even with a
+local validator present.
 
 ## Validation models — what works, and why
 

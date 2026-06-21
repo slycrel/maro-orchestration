@@ -174,3 +174,45 @@ def test_build_multi_model_wraps_in_failover_with_fallback(monkeypatch):
     a = lm.build_local_validator_adapter(fallback=fb)
     assert isinstance(a, FailoverAdapter)
     assert a._adapters[-1] is fb and len(a._adapters) == 3  # m1, m2, paid
+
+
+# --- auto-verify gating -----------------------------------------------------
+
+def test_validator_available_false_when_unconfigured(monkeypatch):
+    _set_cfg(monkeypatch)
+    assert lm.validator_available() is False
+
+
+def test_validator_available_true_when_loaded(monkeypatch):
+    _set_cfg(monkeypatch, local_models=["m1"], runtime="ollama")
+    monkeypatch.setattr(lm, "loaded_models", lambda ep=None: ["m1"])
+    assert lm.validator_available() is True
+
+
+def test_validator_available_false_when_not_loaded(monkeypatch):
+    _set_cfg(monkeypatch, local_models=["m1"], runtime="ollama")
+    monkeypatch.setattr(lm, "loaded_models", lambda ep=None: ["other"])
+    assert lm.validator_available() is False
+
+
+def test_auto_verify_follows_availability(monkeypatch):
+    _set_cfg(monkeypatch, local_models=["m1"], runtime="ollama", auto_verify=True)
+    monkeypatch.setattr(lm, "loaded_models", lambda ep=None: ["m1"])
+    assert lm.auto_verify_enabled() is True
+
+
+def test_auto_verify_opt_out(monkeypatch):
+    # configured + available, but explicitly disabled
+    _set_cfg(monkeypatch, local_models=["m1"], runtime="ollama", auto_verify=False)
+    monkeypatch.setattr(lm, "loaded_models", lambda ep=None: ["m1"])
+    assert lm.auto_verify_enabled() is False
+    _set_cfg(monkeypatch, local_models=["m1"], runtime="ollama", auto_verify="off")
+    monkeypatch.setattr(lm, "loaded_models", lambda ep=None: ["m1"])
+    assert lm.auto_verify_enabled() is False
+
+
+def test_auto_verify_false_when_unavailable_even_if_configured(monkeypatch):
+    # models listed in config but none loaded → don't silently verify on paid
+    _set_cfg(monkeypatch, local_models=["m1"], runtime="ollama", auto_verify=True)
+    monkeypatch.setattr(lm, "loaded_models", lambda ep=None: [])
+    assert lm.auto_verify_enabled() is False

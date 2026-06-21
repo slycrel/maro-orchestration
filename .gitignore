@@ -46,3 +46,6 @@ src/memory/
 
 # Local validator MLX runtime (uv venv)
 .venv-mlx/
+
+# Local orchestration test workspace (run artifacts)
+.run-workspace/

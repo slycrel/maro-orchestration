@@ -168,7 +168,10 @@ class LocalValidatorAdapter(LLMAdapter):
         # <think> trace before the answer. The paid validation caller passes a
         # tiny budget (128) that's fine for non-reasoners but starves a reasoner
         # mid-thought, leaving `content` empty. Floor the budget so it finishes.
-        self._min_tokens = int(_cfg("local_max_tokens", 1024) if min_tokens is None else min_tokens)
+        # Default floor 2048: live runs showed a reasoning model's <think> trace
+        # on a *real* (long) step result overruns 1024, truncating before the JSON
+        # verdict → empty content → spurious escalation. Tune per model in deep-eval.
+        self._min_tokens = int(_cfg("local_max_tokens", 2048) if min_tokens is None else min_tokens)
 
     def complete(self, messages: List[LLMMessage], *, tools=None,
                  tool_choice: str = "auto", max_tokens: int = 256,
@@ -222,6 +225,34 @@ _CACHE: dict = {}
 
 def reset_cache() -> None:
     _CACHE.clear()
+
+
+def validator_available() -> bool:
+    """True if a local validator is configured AND at least one configured model
+    is currently loaded at the endpoint. Cached for the session (the endpoint is
+    not re-probed on every call)."""
+    models = configured_models()
+    if not models:
+        return False
+    key = ("_avail", resolve_runtime(), resolve_endpoint(), tuple(models))
+    if key not in _CACHE:
+        _CACHE[key] = bool(set(models) & set(loaded_models()))
+    return _CACHE[key]
+
+
+def auto_verify_enabled() -> bool:
+    """Whether to default the ralph verify loop ON because a usable local
+    validator exists (verification is then free). Opt out with
+    `validate.auto_verify: false`. Returns False when no local validator is
+    actually available, so we never silently switch verification to the paid
+    path just because models were listed in config."""
+    val = _cfg("auto_verify", True)
+    if isinstance(val, str):
+        if val.strip().lower() in ("false", "0", "no", "off"):
+            return False
+    elif not val:
+        return False
+    return validator_available()
 
 
 def build_local_validator_adapter(fallback: Optional[LLMAdapter] = None

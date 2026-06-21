@@ -24,6 +24,11 @@ Optional local validator — zero-cost first-pass step validation.
   below `validate.min_certainty` the verdict is UNDECIDED and escalates to the
   paid adapter (Tier 2). Result dict gains `decision`
   (`LOCAL_PASS`|`LOCAL_FAIL`|`ESCALATED`) + `source`. See `docs/LOCAL_VALIDATOR.md`.
+- Ralph verify loop now defaults **on** when a usable local validator is
+  available (`local_models.auto_verify_enabled()`, gated on the endpoint actually
+  serving a configured model) — verification is free, so it should run. Opt out
+  with `validate.auto_verify: false`. Token floor raised 1024 → 2048 after a live
+  run showed a reasoning model truncating before its JSON verdict on long inputs.
 
 ## [1.19.0] - 2026-04-15
 
