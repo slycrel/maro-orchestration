@@ -66,10 +66,32 @@ validate:
   endpoint: ""                  # override; else derived from runtime
   min_certainty: 0.6            # below this, local verdict is UNDECIDED → escalate
   escalation: cheap             # cheap (one paid gate) | council (3-persona trio)
-  local_max_tokens: 2048        # floor; reasoning models need room to finish <think>
+  local_max_tokens: 2048        # OUTPUT ceiling; reasoning models need room for <think>
+  max_input_chars: 6000         # INPUT window the local validator sees of the result
   auto_verify: true             # default the ralph verify loop ON when a local
                                 # validator is available (free). false to opt out.
 ```
+
+### Two limits, and why they're different
+
+The validator has an **output** budget and an **input** window — don't conflate them:
+
+- **`local_max_tokens` (output ceiling).** How many tokens the validator may
+  *generate*. A reasoning model's `<think>` trace plus its JSON verdict must fit,
+  or `content` comes back empty and the verdict escalates. This is a *ceiling*,
+  not a cost dial — you pay for tokens actually generated (the model stops on its
+  own when done), so setting it generously is near-free. It only guards runaways.
+- **`max_input_chars` (input window).** How much of the step result the validator
+  *sees*. The paid path uses a cost-conscious 1200 chars; the **free** local
+  validator can afford much more (default 6000) — judging a fuller view beats
+  judging the first 1200 chars. Bounded by the model's context window.
+
+For **very large artifacts** (a multi-KB file), neither knob is ideal — stuffing
+the whole thing into context is wasteful. The right tool there is an *agentic
+verifier* that reads the artifact selectively (grep/read a temp file) rather than
+ingesting it wholesale. That's a tool-using validator, which a small specialist
+like VibeThinker is weak at — so it's queued as a deep-eval direction in
+`BACKLOG.md`, not the default path.
 
 ### Auto-verify
 

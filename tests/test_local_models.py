@@ -216,3 +216,14 @@ def test_auto_verify_false_when_unavailable_even_if_configured(monkeypatch):
     _set_cfg(monkeypatch, local_models=["m1"], runtime="ollama", auto_verify=True)
     monkeypatch.setattr(lm, "loaded_models", lambda ep=None: [])
     assert lm.auto_verify_enabled() is False
+
+
+def test_input_char_budget_default_and_floor(monkeypatch):
+    _set_cfg(monkeypatch)
+    assert lm.input_char_budget() == 6000           # default, larger than paid 1200
+    _set_cfg(monkeypatch, max_input_chars=500)
+    assert lm.input_char_budget() == 1200           # never below the paid default
+    _set_cfg(monkeypatch, max_input_chars=20000)
+    assert lm.input_char_budget() == 20000
+    _set_cfg(monkeypatch, max_input_chars="oops")
+    assert lm.input_char_budget() == 6000           # parse error → default

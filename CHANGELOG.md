@@ -29,6 +29,11 @@ Optional local validator — zero-cost first-pass step validation.
   serving a configured model) — verification is free, so it should run. Opt out
   with `validate.auto_verify: false`. Token floor raised 1024 → 2048 after a live
   run showed a reasoning model truncating before its JSON verdict on long inputs.
+- Validator input window is now configurable (`VerificationAgent(max_input_chars=...)`).
+  The free local validator sees `validate.max_input_chars` (default 6000) of the
+  step result instead of the paid path's cost-conscious 1200 — judging a fuller
+  view. Input window (what it sees) and output ceiling (what it generates) are
+  separate knobs; see `docs/LOCAL_VALIDATOR.md`.
 
 ## [1.19.0] - 2026-04-15
 

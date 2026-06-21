@@ -1182,7 +1182,8 @@ def verify_step(
             local = _lm.build_local_validator_adapter()  # None if endpoint/model absent
             if local is not None:
                 from verification_agent import VerificationAgent
-                lv = VerificationAgent(local, confidence_threshold=confidence_threshold).verify_step(step_text, result)
+                lv = VerificationAgent(local, confidence_threshold=confidence_threshold,
+                                       max_input_chars=_lm.input_char_budget()).verify_step(step_text, result)
                 if lv.confidence >= _lm.min_certainty():
                     log.debug("local validator decisive: passed=%s conf=%.2f via %s",
                               lv.passed, lv.confidence, getattr(local, "model_key", "local"))

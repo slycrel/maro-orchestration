@@ -110,6 +110,18 @@ def min_certainty() -> float:
         return 0.6
 
 
+def input_char_budget() -> int:
+    """How much of a step result the *local* (free) validator sees. Larger than
+    the paid default (1200) since local validation costs nothing — judging a
+    fuller view beats judging the first 1200 chars. Bounded; for very large
+    artifacts an agentic verifier that reads selectively is the better tool
+    (see the deep-eval task in BACKLOG.md)."""
+    try:
+        return max(1200, int(_cfg("max_input_chars", 6000)))
+    except (TypeError, ValueError):
+        return 6000
+
+
 def escalation_target() -> str:
     """Where an UNDECIDED local verdict escalates: 'cheap' (one paid gate) or
     'council' (the 3-persona trio in quality_gate.run_llm_council)."""

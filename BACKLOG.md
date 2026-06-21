@@ -33,6 +33,14 @@ enough, and on which step classes, is not** — that needs measurement, not a tw
   floor → empty content → conf 0.00 → spurious escalation on 2/5 steps (the other
   3/5 validated free at conf 1.00). Bumped default to 2048; deep-eval should find
   the floor that maximizes decisive-local rate without wasting generation latency.
+- [ ] **Agentic verifier for large artifacts.** Today the validator sees a bounded
+  in-context slice of the result (`validate.max_input_chars`, default 6000 for the
+  free local path vs 1200 paid). For multi-KB artifacts, stuffing the whole thing
+  into context is wasteful — a tool-using verifier that reads the artifact
+  selectively (grep/read a temp file) is the better pattern. Caveat: that needs
+  tool use, which a small specialist (VibeThinker) is weak at — so scope it as an
+  opt-in verifier tier, not the default. (Input/output limits are separate knobs:
+  `max_input_chars` = what it sees; `local_max_tokens` = what it can generate.)
 - [ ] **Token/cost delta report.** Quantify tokens saved vs escalation rate vs added
   latency, on Poe's own task corpus — the actual ROI of running this.
 - [ ] **Model bake-off.** Compare candidate local validators (VibeThinker-3B 8bit vs

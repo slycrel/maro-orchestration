@@ -144,9 +144,14 @@ class VerificationAgent:
     name = "verification_agent"
     role = "verifier"
 
-    def __init__(self, adapter, *, confidence_threshold: float = 0.75):
+    def __init__(self, adapter, *, confidence_threshold: float = 0.75,
+                 max_input_chars: int = 1200):
         self._adapter = adapter
         self._confidence_threshold = confidence_threshold
+        # How much of the step result the validator sees. 1200 is the
+        # cost-conscious default for paid validators; a free local validator can
+        # afford a far larger window (set via validate.max_input_chars).
+        self._max_input_chars = max(200, int(max_input_chars))
 
     # ------------------------------------------------------------------
     # verify_step — ralph verify loop (step-level)
@@ -170,7 +175,8 @@ class VerificationAgent:
                     LLMMessage("system", _VERIFY_STEP_SYSTEM),
                     LLMMessage("user",
                         f"Step goal: {step_text}\n\n"
-                        f"Step result (first 1200 chars):\n{result[:1200]}"
+                        f"Step result (first {self._max_input_chars} chars):\n"
+                        f"{result[:self._max_input_chars]}"
                     ),
                 ],
                 max_tokens=128,
