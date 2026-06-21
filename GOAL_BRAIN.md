@@ -292,6 +292,14 @@ Sample: the 2026-05-13..17 window of `~/.poe/workspace/runs/` (478 dirs total;
   to make, not one to bundle into a code push. Also this batch: the done≠achieved
   split (shipped 2026-06-11) proved itself on organic data — 4/5 goals `done`,
   only 1 `goal_achieved=True` (the rest thin artifacts flagged at low conf).
+- **2026-06-21 (Jeremy: "let's turn it on and make it live")** — escalate-acting
+  ENABLED on this box. `~/.poe/workspace/config.yml` now sets
+  `navigator.act_dispatch: true`, `act_moves: [escalate]`, `act_confidence_floor:
+  0.9`. Navigator escalate decisions ≥0.9 now ACT (status=stuck/navigator_escalate)
+  instead of shadow-only; `NAVIGATOR_ACTED` rows are the live audit. close stays
+  shadow (no organic evidence yet). Reversible: flip `act_dispatch` off. Jeremy also
+  flagged keeping a "local-validator branch" in mind alongside this — no such branch
+  exists yet (not local/remote/worktree/stash); intent to be clarified before acting.
 - **2026-06-11 (Jeremy, on the governance event + done semantics)** — Two
   calls. (1) *"I'm fine with workers also being authors as if it were me;
   haven't made that distinction yet, not sure it matters (yet?)."* — the
