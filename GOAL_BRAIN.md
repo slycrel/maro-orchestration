@@ -298,8 +298,14 @@ Sample: the 2026-05-13..17 window of `~/.poe/workspace/runs/` (478 dirs total;
   0.9`. Navigator escalate decisions ≥0.9 now ACT (status=stuck/navigator_escalate)
   instead of shadow-only; `NAVIGATOR_ACTED` rows are the live audit. close stays
   shadow (no organic evidence yet). Reversible: flip `act_dispatch` off. Jeremy also
-  flagged keeping a "local-validator branch" in mind alongside this — no such branch
-  exists yet (not local/remote/worktree/stash); intent to be clarified before acting.
+  flagged coordinating with `origin/feat/local-validator` (Jeremy editing it live):
+  optional zero-cost local validator (MLX/Ollama) at the **step** layer —
+  `verify_step()` runs a free local model first, escalates to paid only when its
+  confidence < `validate.min_certainty`. Distinct layer from the done≠achieved
+  **goal** verdict I shipped (handle/closure `goal_achieved`) and from `navigator.*`
+  dispatch — they stack, no key/logic collision. Same shadow→agreement→cutover
+  discipline as the navigator (doc cites `navigator_shadow --agreement` as the gate).
+  Only shared file with my recent main commits is BACKLOG.md → watch that at merge.
 - **2026-06-11 (Jeremy, on the governance event + done semantics)** — Two
   calls. (1) *"I'm fine with workers also being authors as if it were me;
   haven't made that distinction yet, not sure it matters (yet?)."* — the
