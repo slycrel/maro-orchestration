@@ -9,29 +9,65 @@ Last reviewed: 2026-06-10 (session 40 — memory lifecycle fixes + dry-run herme
 
 ---
 
-### **[NEXT]** Per-step worker token explosion on accumulating tasks (2026-06-21)
+### Per-step worker token explosion — DIAGNOSED 2026-06-21 (was [NEXT])
 
 Live finding from a `verify:` coding run: 485K tokens over 6 steps (47K→111K→**145K**
-→80K→17K→84K per step); introspect flagged `token_explosion` and recommended
-"distill prior step outputs into summaries; keep full output in artifacts." **That
-recommendation is already satisfied at the orchestration layer** — inter-step
-context is truncated (completed_context excerpts 600–800 chars at agent_loop.py
-~1369 / ~2645; env snapshot 200 chars at ~1479). So this is NOT a clean
-"summary-as-output" fix; the cost is *inside the worker subprocess*, which on a
-file-accumulating coding task re-reads/writes the growing artifact each step. A
-research run (run 3, no file accumulation) stayed flat at ~17K/step — no explosion.
+→80K→17K→84K per step); introspect flagged `token_explosion`.
 
-Candidate levers (needs design — messy, deeper than the loop's context plumbing):
-- [ ] Pass a distilled running-artifact summary to the worker instead of letting it
-  re-read the full growing file each step (or have it diff/append, not re-ingest).
-- [ ] Bound/refresh worker context per step; cap artifact values cached in
-  `loop_shared_ctx` (`_art_val` is stored full at agent_loop.py ~1483).
-- [ ] Calibrate the `token_explosion` introspect threshold so inherently
-  token-heavy coding tasks aren't false-flagged (research vs build have different
-  baselines).
-- [ ] Measure: is the worker (claude subprocess) re-reading files it already has in
-  context? If so, that's the win; if it's irreducible task work, accept and re-tune
-  the threshold.
+**Measured the code (2026-06-21). Conclusion: the original framing was wrong, and so
+was the metric.**
+1. **Every inter-step seam is already hard-capped** — completed_context 800 chars +
+   compress-after-5 (`step_exec.py:660`, `agent_loop.py:1487/1527`), artifact→prompt
+   `str(_v)[:500]` (`step_exec.py:676`), env snapshot 200 chars (`agent_loop.py:1497`),
+   team firewall 5×200 (`team.py:208`). The step's own LLM call is `max_tokens=4096`,
+   single tool (`step_exec.py:833`). So our plumbing physically cannot emit a 145K step.
+2. **The big number is the delegated subprocess worker** (the `claude` CLI path,
+   `_extract_result_object` in `llm.py`) rolled into the step total. It runs its own
+   internal agentic tool loop (Read/Edit/Write on the growing file); we see only totals.
+   Non-monotonic per-step shape (rise to 145K, fall to 17K) confirms intrinsic per-step
+   work, NOT monotonic inherited-context accumulation.
+3. **The metric was cache-blind.** `llm.py` folded `cache_read_input_tokens` into
+   `input_tokens` at full weight, and `token_explosion` fires on raw token *volume*
+   (`introspect.py:42,63`). A worker re-reading a growing file is mostly cache HITS
+   (~0.1x cost; Claude Code reports ~92% hit rate) — so the "explosion" likely overstates
+   real $ by ~10x. We were arguing about a number that was lying.
+
+**DONE (foundation, commit pending):** cache-aware accounting — `LLMResponse.cache_read_tokens`
++ `.fresh_input_tokens`, all 3 adapters populate it on the same total-volume contract,
+`estimate_cost(..., cache_read_tokens=)` prices cache reads at `CACHE_READ_MULTIPLIER` (0.1x).
+
+Conclusion on the original levers: the "summary instead of file" / "cap `_art_val`" levers
+target the orchestration layer, which is NOT the leak — **don't build them.** The durable
+lever for the actual leak is worker-layer caching (CAG: static prefix cached, pay the delta
+only — likely already half-free via Anthropic prompt cache) IF cost is genuinely large.
+Decide that with the now-correct meter, not the old volume number.
+
+### **[NEXT]** Make metric alarms cache-aware (2026-06-21)
+
+The accounting foundation landed (above); the alarms still read cache-blind raw volume.
+Wire the corrected cost through so `token_explosion` (and graduation/eval thresholds) judge
+*fresh*/cost, not total volume.
+- [ ] Carry `cache_read_tokens` through the step record: `step_exec` outcome dict →
+  step_events → `StepProfile.tokens` (add `StepProfile.cache_read_tokens` / `.fresh_tokens`).
+- [ ] Rewire `token_explosion` (`introspect.py:~300`) to compare `fresh_tokens` or
+  cache-adjusted cost between steps instead of `profiles[i].tokens` (raw).
+- [ ] Pass `cache_read_tokens` into `estimate_cost` at the live call sites
+  (`record_step_cost` at `agent_loop.py:~790`, skill telemetry `_est_cost` at ~1550).
+- [ ] Re-measure the 485K run's real cache-adjusted cost. If small → retire the false
+  alarm. If large → worker-layer caching/CAG is the fix (see diagnosed item above).
+
+### Graph memory + recursive-orchestration scoped memory (2026-06-21, vision)
+
+Durable replacement for the fixed-size inter-step truncation caps (the 800/500/200 band-aids
+above — lossy fixed-array-vs-string, the kind of thing that's bitten us). Jeremy's framing:
+orchestration is likely "recursive — orchestration all the way down," so a memory layer must
+support **scoped/hierarchical** access — a sub-agent reads its own scope PLUS the higher
+orchestration scope, built generically enough to serve both. Pairs with CAG-style caching so
+sub-agents lever cached static context instead of re-ingesting. See memory
+`project_retrieval_graph_memory_direction` + `project_recursive_orchestration_memory`.
+NOTE: this replaces the *caps*, not the token-explosion *leak* — justify it on its own merits
+(truncation is a band-aid), not on the 485K number. Ties to hybrid-retrieval priority
+(start BM25+embedding, SQLite adjacency, not Neo4j until thousands of nodes).
 
 ---
 

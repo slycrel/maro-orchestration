@@ -71,6 +71,32 @@ def test_estimate_cost_proportional():
     assert cost == pytest.approx(COST_PER_M_INPUT / 2)
 
 
+def test_estimate_cost_cache_read_defaults_unchanged():
+    # cache_read_tokens defaults to 0 → identical to the old signature.
+    assert estimate_cost(1_000_000, 0, None, 0) == pytest.approx(COST_PER_M_INPUT)
+
+
+def test_estimate_cost_all_cached_is_tenth():
+    # 1M input all from cache → 0.1x the fresh input price.
+    cost = estimate_cost(1_000_000, 0, None, cache_read_tokens=1_000_000)
+    assert cost == pytest.approx(COST_PER_M_INPUT * 0.1)
+
+
+def test_estimate_cost_partial_cache():
+    # 1M input, 900K cached → 100K fresh + 900K at 0.1x.
+    cost = estimate_cost(1_000_000, 0, None, cache_read_tokens=900_000)
+    expected = (100_000 * COST_PER_M_INPUT / 1_000_000) + (
+        900_000 * COST_PER_M_INPUT * 0.1 / 1_000_000
+    )
+    assert cost == pytest.approx(expected)
+
+
+def test_estimate_cost_cache_read_clamped_to_input():
+    # cache_read > tokens_in must not produce negative fresh cost.
+    cost = estimate_cost(100_000, 0, None, cache_read_tokens=500_000)
+    assert cost == pytest.approx(100_000 * COST_PER_M_INPUT * 0.1 / 1_000_000)
+
+
 # ---------------------------------------------------------------------------
 # compute_metrics — empty
 # ---------------------------------------------------------------------------

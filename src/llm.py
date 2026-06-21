@@ -129,9 +129,19 @@ class LLMResponse:
     tool_calls: List[ToolCall] = field(default_factory=list)
     stop_reason: str = "end_turn"
     model: str = ""
-    input_tokens: int = 0
+    input_tokens: int = 0          # total input volume, INCLUDING cache reads
     output_tokens: int = 0
+    cache_read_tokens: int = 0     # portion of input_tokens served from cache (~0.1x cost)
     backend: str = ""
+
+    @property
+    def fresh_input_tokens(self) -> int:
+        """Input tokens actually (re)computed this call — total minus cache hits.
+
+        This is the cost-relevant figure for alarms: a worker re-reading a
+        growing file pays ~full price only for what's NOT already cached.
+        """
+        return max(0, self.input_tokens - self.cache_read_tokens)
 
 
 @dataclass
@@ -825,7 +835,8 @@ class ClaudeSubprocessAdapter(LLMAdapter):
 
         raw_result = data.get("result", "")
         usage = data.get("usage", {})
-        input_tokens = usage.get("input_tokens", 0) + usage.get("cache_read_input_tokens", 0)
+        cache_read = usage.get("cache_read_input_tokens", 0)
+        input_tokens = usage.get("input_tokens", 0) + cache_read
         output_tokens = usage.get("output_tokens", 0)
 
         # Parse tool calls from JSON response
@@ -845,6 +856,7 @@ class ClaudeSubprocessAdapter(LLMAdapter):
             model=list(data.get("modelUsage", {}).keys() or ["claude"])[0] if data.get("modelUsage") else "claude",
             input_tokens=input_tokens,
             output_tokens=output_tokens,
+            cache_read_tokens=cache_read,
             backend=self.backend,
         )
 
@@ -1075,6 +1087,7 @@ class CodexCLIAdapter(LLMAdapter):
             model=resolve_model("codex", self.model_key),
             input_tokens=input_tokens + cached_tokens,
             output_tokens=output_tokens,
+            cache_read_tokens=cached_tokens,
             backend=self.backend,
         )
 
@@ -1193,13 +1206,19 @@ class AnthropicSDKAdapter(LLMAdapter):
         if thinking_content:
             log.debug("thinking (%d chars) for model=%s", len(thinking_content), model_str)
 
+        # Anthropic reports input_tokens as fresh-only; cache reads/writes are
+        # separate, non-overlapping counters. Fold them into the total-volume
+        # contract so input_tokens means the same thing across all adapters.
+        _cache_read = getattr(resp.usage, "cache_read_input_tokens", 0) or 0
+        _cache_creation = getattr(resp.usage, "cache_creation_input_tokens", 0) or 0
         return LLMResponse(
             content=content,
             tool_calls=tool_calls,
             stop_reason=resp.stop_reason or "end_turn",
             model=resp.model,
-            input_tokens=resp.usage.input_tokens,
+            input_tokens=resp.usage.input_tokens + _cache_creation + _cache_read,
             output_tokens=resp.usage.output_tokens,
+            cache_read_tokens=_cache_read,
             backend=self.backend,
         )
 
