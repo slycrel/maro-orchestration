@@ -297,7 +297,15 @@ Sample: the 2026-05-13..17 window of `~/.poe/workspace/runs/` (478 dirs total;
   `navigator.act_dispatch: true`, `act_moves: [escalate]`, `act_confidence_floor:
   0.9`. Navigator escalate decisions ≥0.9 now ACT (status=stuck/navigator_escalate)
   instead of shadow-only; `NAVIGATOR_ACTED` rows are the live audit. close stays
-  shadow (no organic evidence yet). Reversible: flip `act_dispatch` off. Jeremy also
+  shadow (no organic evidence yet). Reversible: flip `act_dispatch` off.
+  **Mechanism proven end-to-end same day:** a deliberate "$50k wire transfer" goal
+  run through the real enqueue→drain→`handle_task` path drew escalate 0.98 →
+  status=stuck/`navigator_escalate`, first `NAVIGATOR_ACTED` row written, and **no
+  run dir spawned** (run prevented, deferred to human — exactly right; real money is
+  a Jeremy "ask first" category). What's left is passive organic accrual (escalate
+  firing on Poe's *own* goals in normal operation, vs this deliberate trigger). The
+  live navigator also now unblocks Next-Up #5 (thread-brain per-turn maintenance —
+  "wire append_decision/append_compiled_truth once the navigator goes live"). Jeremy also
   flagged coordinating with `origin/feat/local-validator` (Jeremy editing it live):
   optional zero-cost local validator (MLX/Ollama) at the **step** layer —
   `verify_step()` runs a free local model first, escalates to paid only when its
