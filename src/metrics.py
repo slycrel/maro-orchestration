@@ -96,16 +96,39 @@ class SystemMetrics:
 # Cost estimation
 # ---------------------------------------------------------------------------
 
-def estimate_cost(tokens_in: int, tokens_out: int, model: Optional[str] = None) -> float:
+# Anthropic prompt-cache read multiplier: cached input bills at ~0.1x the
+# fresh input rate. Used to price re-reads (e.g. a worker re-reading a growing
+# file) at their true cost instead of full freight.
+CACHE_READ_MULTIPLIER = 0.1
+
+
+def estimate_cost(
+    tokens_in: int,
+    tokens_out: int,
+    model: Optional[str] = None,
+    cache_read_tokens: int = 0,
+) -> float:
     """Estimate USD cost for a given token usage.
 
     Uses per-model pricing when the model is known; falls back to the
     Sonnet 4.6 default (COST_PER_M_INPUT / COST_PER_M_OUTPUT) otherwise.
+
+    ``tokens_in`` is the TOTAL input volume including cache reads (the
+    cross-adapter contract on ``LLMResponse.input_tokens``). ``cache_read_tokens``
+    is how many of those were served from cache; they're billed at
+    ``CACHE_READ_MULTIPLIER`` of the fresh input rate. Defaults to 0, so existing
+    callers are unaffected.
     """
     rates = COST_BY_MODEL.get(model or "", {})
     cost_in = rates.get("input", COST_PER_M_INPUT)
     cost_out = rates.get("output", COST_PER_M_OUTPUT)
-    return (tokens_in * cost_in / 1_000_000) + (tokens_out * cost_out / 1_000_000)
+    cache_read = max(0, min(cache_read_tokens, tokens_in))
+    fresh_in = tokens_in - cache_read
+    return (
+        (fresh_in * cost_in / 1_000_000)
+        + (cache_read * cost_in * CACHE_READ_MULTIPLIER / 1_000_000)
+        + (tokens_out * cost_out / 1_000_000)
+    )
 
 
 # ---------------------------------------------------------------------------

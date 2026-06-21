@@ -107,6 +107,19 @@ def test_llm_response_defaults():
     assert r.tool_calls == []
     assert r.stop_reason == "end_turn"
     assert r.input_tokens == 0
+    assert r.cache_read_tokens == 0
+    assert r.fresh_input_tokens == 0
+
+
+def test_llm_response_fresh_input_excludes_cache():
+    r = LLMResponse(content="x", input_tokens=145_000, cache_read_tokens=130_000)
+    assert r.fresh_input_tokens == 15_000
+
+
+def test_llm_response_fresh_input_never_negative():
+    # Defensive: cache_read should never exceed total, but don't go negative.
+    r = LLMResponse(content="x", input_tokens=100, cache_read_tokens=500)
+    assert r.fresh_input_tokens == 0
 
 
 def test_tool_call():
