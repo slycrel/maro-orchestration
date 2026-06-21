@@ -243,3 +243,28 @@ class TestQualityReview:
             contested_claims=[],
         )
         assert verdict.contested_summary() == ""
+
+
+# ---------------------------------------------------------------------------
+# Input window (max_input_chars) — paid default vs larger free-local window
+# ---------------------------------------------------------------------------
+
+class TestInputWindow:
+    def _user_msg_len(self, adapter) -> int:
+        # messages = first positional arg to complete()
+        messages = adapter.complete.call_args.args[0]
+        return len(messages[1].content)
+
+    def test_default_clips_to_paid_window(self):
+        adapter = _make_adapter('{"verdict":"PASS","reason":"ok","confidence":0.9}')
+        big = "X" * 5000
+        VerificationAgent(adapter).verify_step("goal", big)
+        # default 1200-char window → user msg holds ~1200 of the result, not 5000
+        assert self._user_msg_len(adapter) < 1600
+
+    def test_larger_window_passes_more_result(self):
+        adapter = _make_adapter('{"verdict":"PASS","reason":"ok","confidence":0.9}')
+        big = "X" * 5000
+        VerificationAgent(adapter, max_input_chars=4000).verify_step("goal", big)
+        # 4000-char window → far more of the result reaches the validator
+        assert self._user_msg_len(adapter) > 3900
