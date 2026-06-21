@@ -35,6 +35,14 @@ Optional local validator — zero-cost first-pass step validation.
   view. Input window (what it sees) and output ceiling (what it generates) are
   separate knobs; see `docs/LOCAL_VALIDATOR.md`.
 
+### Fixed — `validator_available()` froze auto-verify across lazy spin-up
+- `validator_available()` cached a *negative* probe for the whole session, so a
+  model spun up mid-process was never detected by `auto_verify_enabled()` — the
+  free ralph-verify default stayed OFF for the run even though
+  `build_local_validator_adapter()` (which re-probes per call) had already
+  switched validation to the live local model. Now caches positives only;
+  negatives re-probe, so lazy spin-up is picked up consistently across both paths.
+
 ## [1.19.0] - 2026-04-15
 
 Phase 62: ConversationChannel + dashboard goal chat.

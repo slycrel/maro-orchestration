@@ -195,6 +195,36 @@ def test_validator_available_false_when_not_loaded(monkeypatch):
     assert lm.validator_available() is False
 
 
+def test_validator_available_picks_up_lazy_spinup(monkeypatch):
+    """A negative probe must NOT be cached: if the model is down at first check
+    then spun up mid-process, validator_available() must flip to True without a
+    reset. (build_local_validator_adapter already re-probes per call; this keeps
+    auto_verify consistent with it instead of frozen OFF for the whole run.)"""
+    _set_cfg(monkeypatch, local_models=["m1"], runtime="ollama")
+    state = {"up": False}
+    monkeypatch.setattr(lm, "loaded_models",
+                        lambda ep=None: (["m1"] if state["up"] else []))
+    assert lm.validator_available() is False      # model down at first probe
+    state["up"] = True                            # spin-up happens mid-process
+    assert lm.validator_available() is True        # re-probed, not cached-negative
+
+
+def test_validator_available_caches_positive(monkeypatch):
+    """A positive IS cached — once loaded, stays loaded for the session, so we
+    don't re-probe the endpoint on every step."""
+    _set_cfg(monkeypatch, local_models=["m1"], runtime="ollama")
+    probes = {"n": 0}
+
+    def _probe(ep=None):
+        probes["n"] += 1
+        return ["m1"]
+
+    monkeypatch.setattr(lm, "loaded_models", _probe)
+    assert lm.validator_available() is True
+    assert lm.validator_available() is True
+    assert probes["n"] == 1                        # second call served from cache
+
+
 def test_auto_verify_follows_availability(monkeypatch):
     _set_cfg(monkeypatch, local_models=["m1"], runtime="ollama", auto_verify=True)
     monkeypatch.setattr(lm, "loaded_models", lambda ep=None: ["m1"])

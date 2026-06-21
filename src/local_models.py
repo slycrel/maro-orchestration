@@ -247,9 +247,18 @@ def validator_available() -> bool:
     if not models:
         return False
     key = ("_avail", resolve_runtime(), resolve_endpoint(), tuple(models))
-    if key not in _CACHE:
-        _CACHE[key] = bool(set(models) & set(loaded_models()))
-    return _CACHE[key]
+    # Cache POSITIVES only. A model that is loaded stays loaded for the session,
+    # so caching "available" avoids re-probing every step. But a negative is
+    # transient: spin-up brings the endpoint online mid-process (lazy start), and
+    # build_local_validator_adapter() already re-probes on every call — caching a
+    # negative here would freeze auto_verify_enabled() OFF for the whole run even
+    # after the model comes up, an inconsistency between the two code paths.
+    if _CACHE.get(key):
+        return True
+    avail = bool(set(models) & set(loaded_models()))
+    if avail:
+        _CACHE[key] = True
+    return avail
 
 
 def auto_verify_enabled() -> bool:
