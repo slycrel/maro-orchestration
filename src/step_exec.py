@@ -939,6 +939,7 @@ def execute_step(
                 "summary": _summary_str,
                 "tokens_in": resp.input_tokens,
                 "tokens_out": resp.output_tokens,
+                "cache_read_tokens": getattr(resp, "cache_read_tokens", 0),
             }
             if _confidence:
                 _outcome["confidence"] = _confidence
@@ -975,6 +976,7 @@ def execute_step(
                 "result": tc.arguments.get("attempted", ""),
                 "tokens_in": resp.input_tokens,
                 "tokens_out": resp.output_tokens,
+                "cache_read_tokens": getattr(resp, "cache_read_tokens", 0),
             }
         elif tc.name == "create_team_worker":
             _tw_role = tc.arguments.get("role", "general")
@@ -1006,6 +1008,7 @@ def execute_step(
                 "summary": f"Team worker [{_tw_role}]: {_tw_task[:60]}",
                 "tokens_in": resp.input_tokens,
                 "tokens_out": resp.output_tokens,
+                "cache_read_tokens": getattr(resp, "cache_read_tokens", 0),
             }
         elif tc.name == "schedule_run":
             _sched_goal = tc.arguments.get("goal", "")
@@ -1032,6 +1035,7 @@ def execute_step(
                 "summary": f"Scheduled follow-up: {_sched_goal[:60]}",
                 "tokens_in": resp.input_tokens,
                 "tokens_out": resp.output_tokens,
+                "cache_read_tokens": getattr(resp, "cache_read_tokens", 0),
             }
         elif tc.name == "register_tool":
             _rt_name = tc.arguments.get("name", "").strip()
@@ -1067,6 +1071,7 @@ def execute_step(
                 "summary": f"Registered tool: {_rt_name}",
                 "tokens_in": resp.input_tokens,
                 "tokens_out": resp.output_tokens,
+                "cache_read_tokens": getattr(resp, "cache_read_tokens", 0),
             }
         else:
             # Check runtime tools before giving up — agent may have registered one earlier
@@ -1085,6 +1090,7 @@ def execute_step(
                     "summary": f"Tool {tc.name}: {_rt_output[:60]}",
                     "tokens_in": resp.input_tokens,
                     "tokens_out": resp.output_tokens,
+                    "cache_read_tokens": getattr(resp, "cache_read_tokens", 0),
                 }
             else:
                 # Unknown tool name — treat as blocked
@@ -1094,6 +1100,7 @@ def execute_step(
                     "result": "",
                     "tokens_in": resp.input_tokens,
                     "tokens_out": resp.output_tokens,
+                    "cache_read_tokens": getattr(resp, "cache_read_tokens", 0),
                 }
     elif resp.content and len(resp.content) > 20:
         # No tool call — treat content as result (some models don't always call tools)
@@ -1105,6 +1112,7 @@ def execute_step(
             "summary": step_text,
             "tokens_in": resp.input_tokens,
             "tokens_out": resp.output_tokens,
+            "cache_read_tokens": getattr(resp, "cache_read_tokens", 0),
         }
     else:
         log.warning("step %d BLOCKED (no tool call, content=%d chars) tokens=%d elapsed=%.1fs content=%r",
@@ -1116,6 +1124,7 @@ def execute_step(
             "result": resp.content,
             "tokens_in": resp.input_tokens,
             "tokens_out": resp.output_tokens,
+            "cache_read_tokens": getattr(resp, "cache_read_tokens", 0),
         }
 
     # Phase 41 step 5: PostStepExecution event (non-blocking)

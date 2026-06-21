@@ -42,19 +42,28 @@ lever for the actual leak is worker-layer caching (CAG: static prefix cached, pa
 only — likely already half-free via Anthropic prompt cache) IF cost is genuinely large.
 Decide that with the now-correct meter, not the old volume number.
 
-### **[NEXT]** Make metric alarms cache-aware (2026-06-21)
+### Make metric alarms cache-aware — DONE 2026-06-21
 
-The accounting foundation landed (above); the alarms still read cache-blind raw volume.
-Wire the corrected cost through so `token_explosion` (and graduation/eval thresholds) judge
-*fresh*/cost, not total volume.
-- [ ] Carry `cache_read_tokens` through the step record: `step_exec` outcome dict →
-  step_events → `StepProfile.tokens` (add `StepProfile.cache_read_tokens` / `.fresh_tokens`).
-- [ ] Rewire `token_explosion` (`introspect.py:~300`) to compare `fresh_tokens` or
-  cache-adjusted cost between steps instead of `profiles[i].tokens` (raw).
-- [ ] Pass `cache_read_tokens` into `estimate_cost` at the live call sites
-  (`record_step_cost` at `agent_loop.py:~790`, skill telemetry `_est_cost` at ~1550).
-- [ ] Re-measure the 485K run's real cache-adjusted cost. If small → retire the false
-  alarm. If large → worker-layer caching/CAG is the fix (see diagnosed item above).
+Wired `cache_read_tokens` end-to-end and re-measured. **Verdict: the token explosion was
+a cache-blind metric artifact; caching already absorbs the re-reads. No CAG/retrieval build
+needed for this.**
+- [x] `cache_read_tokens` carried through the step record: `step_exec` outcome (all 9
+  resp-based sites) → `write_event`/`observe` → `events.jsonl` → `StepProfile.cache_read_tokens`
+  + `.fresh_tokens`.
+- [x] `token_explosion` (`introspect.py`) now compares `fresh_tokens`, not raw volume.
+- [x] Re-measured live (sandboxed file-accumulating build, cheap/Haiku, 4 steps re-reading a
+  growing file). **Result: input was ~100% cache reads** (per-step 42K→69K→69K→96K total,
+  fresh_in 4–6 tokens each; whole run 276,894 input / 276,874 cache / **20 fresh**). The same
+  pattern that historically flagged `token_explosion` now diagnoses **healthy**; cache-blind
+  cost was **6.6x overstated** ($0.235 → $0.036). The 485K run's "growth" was cache-read
+  growth at ~0.1x, not fresh compute.
+- [ ] (left, low priority) Pass `cache_read_tokens` into `estimate_cost` at the live recording
+  sites (`record_step_cost` ~`agent_loop.py:790`, skill `_est_cost` ~1550) so persisted cost
+  telemetry is cache-adjusted too. Foundation + alarm already correct; this is just telemetry
+  fidelity. Note: the claude-CLI subprocess reports ~all input as cache_read once the session
+  warms, so fresh-token alarms are now very quiet for subprocess workers — that's correct, but
+  watch that we don't go cache-blind in the other direction (a real fresh-compute spike inside
+  a mostly-cached session is still small in fresh terms; revisit if a genuine runaway slips through).
 
 ### Graph memory + recursive-orchestration scoped memory (2026-06-21, vision)
 

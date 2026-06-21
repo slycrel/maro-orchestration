@@ -605,6 +605,7 @@ def write_event(
     status: str = "",
     tokens_in: int = 0,
     tokens_out: int = 0,
+    cache_read_tokens: int = 0,
     elapsed_ms: int = 0,
     detail: str = "",
 ) -> bool:
@@ -631,6 +632,7 @@ def write_event(
             "status": status,
             "tokens_in": tokens_in,
             "tokens_out": tokens_out,
+            "cache_read_tokens": cache_read_tokens,
             "elapsed_ms": elapsed_ms,
             "detail": detail[:200],
         }
