@@ -322,3 +322,72 @@ def test_shutdown_is_noop_when_external():
     lm._MANAGED["proc"] = None
     lm.shutdown_validator()  # must not raise
     assert lm._MANAGED["proc"] is None
+
+
+# --- run-scoped lifecycle (managed_for_run) --------------------------------
+
+def test_auto_verify_configured_ignores_availability(monkeypatch):
+    _set_cfg(monkeypatch, auto_verify=True)
+    monkeypatch.setattr(lm, "validator_available", lambda: False)
+    assert lm.auto_verify_configured() is True          # config flag only
+    assert lm.auto_verify_enabled() is False             # config on, not available
+    _set_cfg(monkeypatch, auto_verify=False)
+    assert lm.auto_verify_configured() is False
+
+
+def test_managed_for_run_noop_when_unconfigured(monkeypatch):
+    _set_cfg(monkeypatch)
+    ens = MagicMock(); sd = MagicMock()
+    monkeypatch.setattr(lm, "ensure_validator_running", ens)
+    monkeypatch.setattr(lm, "shutdown_validator", sd)
+    with lm.managed_for_run("verify: x"):
+        pass
+    ens.assert_not_called(); sd.assert_not_called()
+
+
+def test_managed_for_run_spawns_then_tears_down(monkeypatch):
+    _set_cfg(monkeypatch, local_models=["m1"], runtime="mlx", autostart=True, auto_verify=True)
+    monkeypatch.setattr(lm, "validator_available", lambda: False)
+
+    def fake_ensure(**k):
+        lm._MANAGED["proc"] = MagicMock()   # simulate a spawn
+        return True
+
+    monkeypatch.setattr(lm, "ensure_validator_running", fake_ensure)
+    sd = MagicMock(); monkeypatch.setattr(lm, "shutdown_validator", sd)
+    with lm.managed_for_run("research x", ralph_verify=False):
+        pass
+    sd.assert_called_once()                  # the spawner reaps
+
+
+def test_managed_for_run_reuses_external_leaves_it_running(monkeypatch):
+    _set_cfg(monkeypatch, local_models=["m1"], autostart=True, auto_verify=True)
+    monkeypatch.setattr(lm, "validator_available", lambda: True)  # already up (external)
+    ens = MagicMock(); sd = MagicMock()
+    monkeypatch.setattr(lm, "ensure_validator_running", ens)
+    monkeypatch.setattr(lm, "shutdown_validator", sd)
+    with lm.managed_for_run("verify: x"):
+        pass
+    ens.assert_not_called(); sd.assert_not_called()   # reuse, never reap external
+
+
+def test_managed_for_run_tears_down_on_exception(monkeypatch):
+    _set_cfg(monkeypatch, local_models=["m1"], autostart=True, auto_verify=True)
+    monkeypatch.setattr(lm, "validator_available", lambda: False)
+    monkeypatch.setattr(lm, "ensure_validator_running",
+                        lambda **k: lm._MANAGED.__setitem__("proc", MagicMock()) or True)
+    sd = MagicMock(); monkeypatch.setattr(lm, "shutdown_validator", sd)
+    with pytest.raises(ValueError):
+        with lm.managed_for_run("research x"):
+            raise ValueError("boom")
+    sd.assert_called_once()                  # finally reaped despite failure
+
+
+def test_managed_for_run_skips_when_validation_not_wanted(monkeypatch):
+    # configured + autostart but auto_verify off and no verify: prefix → don't spin up
+    _set_cfg(monkeypatch, local_models=["m1"], autostart=True, auto_verify=False)
+    monkeypatch.setattr(lm, "validator_available", lambda: False)
+    ens = MagicMock(); monkeypatch.setattr(lm, "ensure_validator_running", ens)
+    with lm.managed_for_run("plain goal, no verify prefix"):
+        pass
+    ens.assert_not_called()

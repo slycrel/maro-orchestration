@@ -32,6 +32,7 @@ and the validation ladder in quality_gate.py / verification_agent.py.
 from __future__ import annotations
 
 import atexit
+import contextlib
 import json
 import logging
 import os
@@ -297,19 +298,23 @@ def validator_available() -> bool:
     return _CACHE[key]
 
 
+def auto_verify_configured() -> bool:
+    """The `validate.auto_verify` config flag alone (default True), independent of
+    whether a server is currently reachable. Used to decide run-start spin-up,
+    where the endpoint is still down (chicken-and-egg with availability)."""
+    val = _cfg("auto_verify", True)
+    if isinstance(val, str):
+        return val.strip().lower() not in ("false", "0", "no", "off")
+    return bool(val)
+
+
 def auto_verify_enabled() -> bool:
     """Whether to default the ralph verify loop ON because a usable local
     validator exists (verification is then free). Opt out with
     `validate.auto_verify: false`. Returns False when no local validator is
     actually available, so we never silently switch verification to the paid
     path just because models were listed in config."""
-    val = _cfg("auto_verify", True)
-    if isinstance(val, str):
-        if val.strip().lower() in ("false", "0", "no", "off"):
-            return False
-    elif not val:
-        return False
-    return validator_available()
+    return auto_verify_configured() and validator_available()
 
 
 def build_local_validator_adapter(fallback: Optional[LLMAdapter] = None
@@ -373,13 +378,17 @@ def _touch_validator() -> None:
     _MANAGED["last_use"] = time.monotonic()
 
 
-def ensure_validator_running(*, wait_secs: float = 60.0) -> bool:
+def ensure_validator_running(*, wait_secs: float = 60.0, start_reaper: bool = True) -> bool:
     """Make a local validator available, spinning one up on demand if needed.
 
     Reuses any reachable server (ours or external). Only manages the **mlx**
     runtime — Ollama is its own daemon. No-op when no models are configured or
     `validate.autostart` is false. Never raises; returns True if a usable
     validator is available afterward.
+
+    start_reaper=False suppresses idle reaping — used when a run owns the
+    lifecycle (spins up at run start, tears down at run end) so the server stays
+    warm for the whole run instead of being reaped between steps.
     """
     if not configured_models():
         return False
@@ -424,7 +433,8 @@ def ensure_validator_running(*, wait_secs: float = 60.0) -> bool:
         reset_cache()
         if model in loaded_models(endpoint):
             _touch_validator()
-            _start_reaper()
+            if start_reaper:
+                _start_reaper()
             log.info("local validator ready: %s @ %s", model, endpoint)
             return True
         time.sleep(1.0)
@@ -475,3 +485,26 @@ def shutdown_validator() -> None:
     except Exception as exc:
         log.debug("local validator shutdown error (non-fatal): %s", exc)
     reset_cache()
+
+
+@contextlib.contextmanager
+def managed_for_run(goal: str = "", ralph_verify: bool = False):
+    """Run-scoped validator lifecycle: spin the model up for the duration of a
+    run (if it'll be used) and tear down what *this run* started when it ends —
+    on success or failure. Reused/external servers and parent-run servers (nested
+    calls) are left running; only the run that actually spawned reaps. Idle
+    reaping is suppressed so the server stays warm across the whole run.
+    """
+    want = (bool(configured_models()) and autostart_enabled()
+            and (ralph_verify
+                 or str(goal or "").lower().startswith(("ralph:", "verify:"))
+                 or auto_verify_configured()))
+    owner = False
+    if want and not validator_available():
+        ensure_validator_running(start_reaper=False)
+        owner = _MANAGED["proc"] is not None   # only the spawner owns teardown
+    try:
+        yield
+    finally:
+        if owner:
+            shutdown_validator()
