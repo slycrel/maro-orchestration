@@ -110,8 +110,12 @@ def _load_yaml(path: Path) -> dict:
         return {}
 
 
-# Cached merged config — loaded once per process
+# Cached merged config — loaded once per process *per config path pair*.
+# Tests and worker subprocesses routinely swap POE_WORKSPACE/OPENCLAW_WORKSPACE
+# at runtime; a path-blind cache leaks the prior workspace's merged config into
+# the new one.
 _config_cache: Optional[dict] = None
+_config_cache_key: Optional[tuple[str, str]] = None
 
 
 def load_config(*, reload: bool = False) -> dict:
@@ -119,12 +123,16 @@ def load_config(*, reload: bool = False) -> dict:
 
     Cached after first call. Pass reload=True to re-read from disk.
     """
-    global _config_cache
-    if _config_cache is not None and not reload:
+    global _config_cache, _config_cache_key
+    user_path = _user_config_path()
+    workspace_path = _workspace_config_path()
+    cache_key = (str(user_path), str(workspace_path))
+
+    if _config_cache is not None and not reload and _config_cache_key == cache_key:
         return _config_cache
 
-    user = _load_yaml(_user_config_path())
-    workspace = _load_yaml(_workspace_config_path())
+    user = _load_yaml(user_path)
+    workspace = _load_yaml(workspace_path)
 
     # Shallow merge: workspace keys override user keys.
     # Nested dicts are merged one level deep (e.g. model.default_tier).
@@ -136,6 +144,7 @@ def load_config(*, reload: bool = False) -> dict:
             merged[k] = v
 
     _config_cache = merged
+    _config_cache_key = cache_key
     return merged
 
 

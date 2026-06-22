@@ -96,10 +96,12 @@ class TestConfigMerge:
     def setup_method(self):
         import config
         config._config_cache = None  # reset cache between tests
+        config._config_cache_key = None
 
     def test_workspace_overrides_user(self, tmp_path, monkeypatch):
         import config
         config._config_cache = None
+        config._config_cache_key = None
 
         user_cfg = tmp_path / "user.yml"
         ws_cfg = tmp_path / "ws.yml"
@@ -116,6 +118,7 @@ class TestConfigMerge:
     def test_nested_merge(self, tmp_path, monkeypatch):
         import config
         config._config_cache = None
+        config._config_cache_key = None
 
         user_cfg = tmp_path / "user.yml"
         ws_cfg = tmp_path / "ws.yml"
@@ -132,6 +135,7 @@ class TestConfigMerge:
     def test_cache_is_used(self, tmp_path, monkeypatch):
         import config
         config._config_cache = None
+        config._config_cache_key = None
 
         user_cfg = tmp_path / "user.yml"
         ws_cfg = tmp_path / "ws.yml"
@@ -149,6 +153,7 @@ class TestConfigMerge:
     def test_reload_clears_cache(self, tmp_path, monkeypatch):
         import config
         config._config_cache = None
+        config._config_cache_key = None
 
         user_cfg = tmp_path / "user.yml"
         ws_cfg = tmp_path / "ws.yml"
@@ -163,6 +168,29 @@ class TestConfigMerge:
         cfg = load_config(reload=True)
         assert cfg["val"] == 2
 
+    def test_workspace_path_change_invalidates_cache(self, tmp_path, monkeypatch):
+        import config
+        config._config_cache = None
+        config._config_cache_key = None
+
+        user_cfg = tmp_path / "user.yml"
+        ws_one = tmp_path / "ws-one.yml"
+        ws_two = tmp_path / "ws-two.yml"
+        user_cfg.write_text(yaml.dump({"navigator": {"act_dispatch": False}}))
+        ws_one.write_text(yaml.dump({"navigator": {"act_dispatch": True}}))
+        ws_two.write_text(yaml.dump({"navigator": {"act_dispatch": False}}))
+
+        monkeypatch.setattr(config, "_user_config_path", lambda: user_cfg)
+        current = {"path": ws_one}
+        monkeypatch.setattr(config, "_workspace_config_path", lambda: current["path"])
+
+        first = load_config(reload=True)
+        current["path"] = ws_two
+        second = load_config()
+
+        assert first["navigator"]["act_dispatch"] is True
+        assert second["navigator"]["act_dispatch"] is False
+
 
 # ---------------------------------------------------------------------------
 # get() dot-path access
@@ -173,10 +201,12 @@ class TestGet:
     def setup_method(self):
         import config
         config._config_cache = None
+        config._config_cache_key = None
 
     def test_simple_key(self, tmp_path, monkeypatch):
         import config
         config._config_cache = None
+        config._config_cache_key = None
 
         p = tmp_path / "cfg.yml"
         p.write_text(yaml.dump({"yolo": True}))
@@ -188,6 +218,7 @@ class TestGet:
     def test_nested_key(self, tmp_path, monkeypatch):
         import config
         config._config_cache = None
+        config._config_cache_key = None
 
         p = tmp_path / "cfg.yml"
         p.write_text(yaml.dump({"model": {"advisor_tier": "power"}}))
@@ -199,6 +230,7 @@ class TestGet:
     def test_missing_key_returns_default(self, tmp_path, monkeypatch):
         import config
         config._config_cache = None
+        config._config_cache_key = None
 
         p = tmp_path / "cfg.yml"
         p.write_text(yaml.dump({"a": 1}))
