@@ -46,7 +46,7 @@ def _write_events(tmp_path, events):
             f.write(json.dumps(e) + "\n")
 
 
-def _make_step_event(loop_id, step_idx, status, tokens_in=100, tokens_out=50, elapsed_ms=5000, step="do something", cache_read_tokens=0):
+def _make_step_event(loop_id, step_idx, status, tokens_in=100, tokens_out=50, elapsed_ms=5000, step="do something", cache_read_tokens=0, model=""):
     return {
         "event_type": "step_done" if status == "done" else "step_stuck",
         "loop_id": loop_id,
@@ -56,6 +56,7 @@ def _make_step_event(loop_id, step_idx, status, tokens_in=100, tokens_out=50, el
         "tokens_in": tokens_in,
         "tokens_out": tokens_out,
         "cache_read_tokens": cache_read_tokens,
+        "model": model,
         "elapsed_ms": elapsed_ms,
     }
 
@@ -187,6 +188,76 @@ def test_token_explosion_still_flags_real_fresh_growth(tmp_path, monkeypatch):
     _write_events(tmp_path, events)
     diag = diagnose_loop("loop05f")
     assert diag.failure_class == "token_explosion"
+
+
+def test_decomposition_not_flagged_when_tokens_are_cache_reads(tmp_path, monkeypatch):
+    # 250K input, but ~all of it cache reads → fresh well under the 200K limit.
+    # decomposition_too_broad is fresh-token-based, so this must NOT flag.
+    monkeypatch.setattr("introspect._events_path", lambda: tmp_path / "memory" / "events.jsonl")
+    events = [
+        _make_step_event("loop04c", 1, "done", tokens_in=10000, tokens_out=2000),
+        _make_step_event("loop04c", 2, "done", tokens_in=250000, tokens_out=5000,
+                         elapsed_ms=130000, cache_read_tokens=249000),
+        _make_step_event("loop04c", 3, "done"),
+        _make_loop_done("loop04c", "done"),
+    ]
+    _write_events(tmp_path, events)
+    diag = diagnose_loop("loop04c")
+    assert diag.failure_class != "decomposition_too_broad"
+
+
+# ---------------------------------------------------------------------------
+# Cost spike (absolute, cache-aware dollar cost)
+# ---------------------------------------------------------------------------
+
+def test_cost_spike_flags_expensive_cache_reads_on_pricey_model(tmp_path, monkeypatch):
+    # Fresh growth is flat (token_explosion can't see it), but a power-model step
+    # carries a huge cached prefix. Even at 0.1x, that's real dollars → cost_spike.
+    monkeypatch.setattr("introspect._events_path", lambda: tmp_path / "memory" / "events.jsonl")
+    events = [
+        _make_step_event("loop_cs1", 1, "done", tokens_in=10000, tokens_out=500,
+                         cache_read_tokens=9000, model="power"),
+        _make_step_event("loop_cs1", 2, "done", tokens_in=300000, tokens_out=2000,
+                         cache_read_tokens=298000, model="power"),  # ~$0.63, fresh flat
+        _make_step_event("loop_cs1", 3, "done", tokens_in=10000, tokens_out=500,
+                         cache_read_tokens=9000, model="power"),
+        _make_loop_done("loop_cs1", "done"),
+    ]
+    _write_events(tmp_path, events)
+    diag = diagnose_loop("loop_cs1")
+    assert diag.failure_class == "cost_spike"
+    assert "$" in str(diag.evidence)
+
+
+def test_cost_spike_flags_high_loop_cost(tmp_path, monkeypatch):
+    # No single step trips the per-step threshold, but the loop total does.
+    monkeypatch.setattr("introspect._events_path", lambda: tmp_path / "memory" / "events.jsonl")
+    events = [
+        _make_step_event(f"loop_cs2", i, "done", tokens_in=205000, tokens_out=1500,
+                         cache_read_tokens=200000, model="power")  # ~$0.49 each
+        for i in range(1, 6)
+    ]
+    events.append(_make_loop_done("loop_cs2", "done"))
+    _write_events(tmp_path, events)
+    diag = diagnose_loop("loop_cs2")
+    assert diag.failure_class == "cost_spike"
+
+
+def test_cost_spike_not_flagged_for_cheap_model_cache_reads(tmp_path, monkeypatch):
+    # Same big cache reads, but on the cheap tier the dollar cost stays tiny → healthy.
+    monkeypatch.setattr("introspect._events_path", lambda: tmp_path / "memory" / "events.jsonl")
+    events = [
+        _make_step_event("loop_cs3", 1, "done", tokens_in=10000, tokens_out=500,
+                         cache_read_tokens=9000, model="cheap"),
+        _make_step_event("loop_cs3", 2, "done", tokens_in=300000, tokens_out=2000,
+                         cache_read_tokens=298000, model="cheap"),
+        _make_step_event("loop_cs3", 3, "done", tokens_in=10000, tokens_out=500,
+                         cache_read_tokens=9000, model="cheap"),
+        _make_loop_done("loop_cs3", "done"),
+    ]
+    _write_events(tmp_path, events)
+    diag = diagnose_loop("loop_cs3")
+    assert diag.failure_class == "healthy"
 
 
 # ---------------------------------------------------------------------------
@@ -323,9 +394,14 @@ def test_failure_classes_documented():
 # ---------------------------------------------------------------------------
 
 def _make_profiles(specs):
-    """Build StepProfile list from (idx, status, tokens, elapsed_ms) tuples."""
+    """Build StepProfile list from (idx, status, tokens, elapsed_ms) tuples.
+
+    `tokens` is treated as total input volume (tokens_in) with no cache reads,
+    so cost_usd (cache-aware dollars, default model pricing) is non-zero.
+    """
     return [
-        StepProfile(step_idx=s[0], text=f"step {s[0]}", status=s[1], tokens=s[2], elapsed_ms=s[3])
+        StepProfile(step_idx=s[0], text=f"step {s[0]}", status=s[1], tokens=s[2],
+                    elapsed_ms=s[3], tokens_in=s[2], tokens_out=0)
         for s in specs
     ]
 

@@ -51,6 +51,22 @@ needed for this.**
   resp-based sites) → `write_event`/`observe` → `events.jsonl` → `StepProfile.cache_read_tokens`
   + `.fresh_tokens`.
 - [x] `token_explosion` (`introspect.py`) now compares `fresh_tokens`, not raw volume.
+- [x] **Consistency pass (2026-06-21):** converted the remaining raw-volume alarms to the
+  same cache-aware basis and closed the false-negative gap the user flagged ("are we skewing
+  the other direction now?"):
+  - `decomposition_too_broad` now gates on `fresh_tokens` (a 250K step that's all cache reads
+    no longer flags as over-broad).
+  - New `cost_spike` failure class (`introspect.py` check 5b): an **absolute** cache-aware
+    dollar guard (`_STEP_COST_WARN_USD=0.50`, `_LOOP_COST_WARN_USD=2.00`). Catches the inverse
+    case the fresh-token alarms miss — a huge cached prefix on a *pricey* model that's flat in
+    fresh terms but still real money at 0.1x. Priced cache-aware, so cheap-tier cache reads
+    never trip it. Registered in `FAILURE_CLASSES`, `_GRADUATION_TEMPLATES`, and `RECOVERY_PLANS`.
+  - `StepProfile` carries `tokens_in`/`tokens_out`/`model` + a `cost_usd` property;
+    `model` (model_key) now flows step_exec → `write_event`/`observe` → `events.jsonl`.
+  - `_cost_lens` ranks steps by cache-aware dollars, not raw tokens.
+  - The crypto-tax framing: fresh = ordinary income (full rate), cache reads = the like-kind
+    0.1x basis. We now tax **net** on growth/bloat and keep a separate **absolute** spend alarm
+    so neither direction goes blind.
 - [x] Re-measured live (sandboxed file-accumulating build, cheap/Haiku, 4 steps re-reading a
   growing file). **Result: input was ~100% cache reads** (per-step 42K→69K→69K→96K total,
   fresh_in 4–6 tokens each; whole run 276,894 input / 276,874 cache / **20 fresh**). The same

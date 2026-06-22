@@ -35,11 +35,12 @@ FAILURE_CLASSES = {
     "setup_failure":              "Step 1 blocks with adapter/import error before real work starts",
     "adapter_timeout":            "Step blocks with tokens=0 and elapsed > 60s (subprocess timeout)",
     "constraint_false_positive":  "Step blocked by constraint with tokens=0 on natural-language step",
-    "decomposition_too_broad":    "Single step consumed > 200K tokens or > 120s",
+    "decomposition_too_broad":    "Single step consumed > 200K fresh tokens (cache reads excluded) or > 120s",
     "empty_model_output":         "Model returned tokens but content < 20 chars with no tool call",
     "retry_churn":                "Same step retried 2+ times with different block reasons",
     "budget_exhaustion":          "max_iterations reached with remaining steps undone",
-    "token_explosion":            "Token growth rate > 3x between consecutive steps (research tasks exempt for moderate growth)",
+    "token_explosion":            "Fresh-token growth rate > 3x between consecutive steps (cache reads excluded; research tasks exempt for moderate growth)",
+    "cost_spike":                 "Single step or whole-loop cache-aware dollar cost exceeds threshold (real spend, not raw token volume)",
     "artifact_missing":           "Loop completed but no readable output in done steps",
     "integration_drift":          "ImportError or AttributeError caught in execution path",
     "healthy":                    "No pathology detected",
@@ -71,6 +72,14 @@ _RETRY_CHURN_LIMIT = 2
 # of total loop token spend.
 _COST_SPIKE_FRACTION = 0.90   # step consumed 90%+ of total loop tokens
 
+# cost_spike (absolute): a single step whose cache-aware DOLLAR cost exceeds this
+# warrants attention even if its fresh-token growth is flat. Catches the case the
+# growth/fresh alarms miss: very large but cheap-per-token cache reads on a pricey
+# model (e.g. ~4M cached input on Opus ≈ several $ in one step). Priced cache-aware,
+# so it does NOT fire on cheap cache re-reads.
+_STEP_COST_WARN_USD = 0.50
+_LOOP_COST_WARN_USD = 2.00
+
 
 # ---------------------------------------------------------------------------
 # Data model
@@ -85,13 +94,27 @@ class StepProfile:
     elapsed_ms: int
     event_type: str = ""
     cache_read_tokens: int = 0     # input tokens served from cache (~0.1x cost)
+    tokens_in: int = 0             # total input volume (incl. cache reads)
+    tokens_out: int = 0
+    model: str = ""                # model_key used, for accurate pricing
 
     @property
     def fresh_tokens(self) -> int:
         """Cost-relevant token count: total minus cache hits. This is what the
-        token_explosion alarm should compare — a worker re-reading a cached file
-        shouldn't read as a cost spike."""
+        bloat/growth alarms compare — a worker re-reading a cached file shouldn't
+        read as a spike (cache reads bill at ~0.1x)."""
         return max(0, self.tokens - self.cache_read_tokens)
+
+    @property
+    def cost_usd(self) -> float:
+        """Cache-aware dollar cost of this step. The right unit for absolute
+        spend guards: cache reads priced at ~0.1x, output at its own rate. Falls
+        back to default model pricing when model is unknown (legacy events)."""
+        from metrics import estimate_cost
+        return estimate_cost(
+            self.tokens_in, self.tokens_out, self.model or None,
+            cache_read_tokens=self.cache_read_tokens,
+        )
 
 @dataclass
 class LoopDiagnosis:
@@ -216,6 +239,9 @@ def _build_step_profiles(events: List[dict]) -> List[StepProfile]:
                 elapsed_ms=e.get("elapsed_ms", 0),
                 event_type=e.get("event_type", ""),
                 cache_read_tokens=e.get("cache_read_tokens", 0),
+                tokens_in=e.get("tokens_in", 0),
+                tokens_out=e.get("tokens_out", 0),
+                model=e.get("model", ""),
             ))
     return profiles
 
@@ -291,20 +317,22 @@ def diagnose_loop(loop_id: str, project: str = "") -> LoopDiagnosis:
                 evidence.append(f"  Step {p.step_idx}: {p.text[:80]}")
             recommendation = "Review constraint tier patterns — likely overly broad for natural language steps"
 
-    # 4. Decomposition too broad: single step > _BROAD_STEP_TOKEN_LIMIT tokens or > _BROAD_STEP_ELAPSED_MS ms
+    # 4. Decomposition too broad: single step did > _BROAD_STEP_TOKEN_LIMIT FRESH
+    # tokens of real work, or ran > _BROAD_STEP_ELAPSED_MS ms. Fresh, not raw
+    # volume — a step re-reading a big cached file isn't "too broad", it's cached.
     if failure_class == "healthy":
         for p in profiles:
-            if p.tokens > _BROAD_STEP_TOKEN_LIMIT:
+            if p.fresh_tokens > _BROAD_STEP_TOKEN_LIMIT:
                 failure_class = "decomposition_too_broad"
                 severity = "warning"
-                evidence.append(f"Step {p.step_idx} consumed {p.tokens} tokens ({p.elapsed_ms}ms)")
+                evidence.append(f"Step {p.step_idx} did {p.fresh_tokens} fresh tokens ({p.elapsed_ms}ms; cache reads excluded)")
                 evidence.append(f"Step text: {p.text[:100]}")
                 recommendation = "Decompose further — cap code review at 3-5 files / ~2000 lines per step"
                 break
-            if p.elapsed_ms > _BROAD_STEP_ELAPSED_MS and p.tokens > _BROAD_STEP_ELAPSED_MIN_TOKENS:
+            if p.elapsed_ms > _BROAD_STEP_ELAPSED_MS and p.fresh_tokens > _BROAD_STEP_ELAPSED_MIN_TOKENS:
                 failure_class = "decomposition_too_broad"
                 severity = "warning"
-                evidence.append(f"Step {p.step_idx} took {p.elapsed_ms}ms with {p.tokens} tokens")
+                evidence.append(f"Step {p.step_idx} took {p.elapsed_ms}ms with {p.fresh_tokens} fresh tokens")
                 evidence.append(f"Step text: {p.text[:100]}")
                 recommendation = "Step is too large — split into smaller focused substeps"
                 break
@@ -351,6 +379,30 @@ def diagnose_loop(loop_id: str, project: str = "") -> LoopDiagnosis:
                     "reads, or accept it as intrinsic for file-heavy build steps."
                 )
                 break
+
+    # 5b. Cost spike (absolute, cache-aware): a single step's dollar cost is high
+    # even though its fresh-token growth is flat. This is the case the growth/fresh
+    # alarms miss — large but cheap-per-token cache reads on a pricey model. Priced
+    # cache-aware (reads at ~0.1x), so cheap cache re-reads never trip it.
+    if failure_class == "healthy" and profiles:
+        _costliest = max(profiles, key=lambda p: p.cost_usd)
+        _loop_cost = sum(p.cost_usd for p in profiles)
+        if _costliest.cost_usd >= _STEP_COST_WARN_USD or _loop_cost >= _LOOP_COST_WARN_USD:
+            failure_class = "cost_spike"
+            severity = "warning"
+            if _costliest.cost_usd >= _STEP_COST_WARN_USD:
+                evidence.append(
+                    f"Step {_costliest.step_idx} cost ${_costliest.cost_usd:.2f} "
+                    f"(model={_costliest.model or 'default'}, {_costliest.tokens_in:,} in / "
+                    f"{_costliest.cache_read_tokens:,} cached / {_costliest.tokens_out:,} out)"
+                )
+            if _loop_cost >= _LOOP_COST_WARN_USD:
+                evidence.append(f"Loop cache-aware cost ${_loop_cost:.2f} across {len(profiles)} steps")
+            recommendation = (
+                "High absolute spend, not a growth/bloat issue. Even cache reads bill at "
+                "~0.1x and add up on pricey models. Consider routing this step class to a "
+                "cheaper model, or reducing the cached context the worker carries per turn."
+            )
 
     # 6. Empty model output: tokens > 0 but blocked
     if failure_class == "healthy":
@@ -644,25 +696,29 @@ class LensRegistry:
 # ---------------------------------------------------------------------------
 
 def _cost_lens(diag: LoopDiagnosis, profiles: List[StepProfile]) -> LensResult:
-    """Which steps burned the most tokens? Was there a cheaper path?"""
+    """Which steps cost the most dollars? Was there a cheaper path?
+
+    Dollars, not raw tokens: a step dominated by cache reads (~0.1x) shouldn't
+    read as the loop's cost center just because its token count is large.
+    """
     findings: List[str] = []
     action = None
 
     if not profiles:
         return LensResult(lens_name="cost")
 
-    total = sum(p.tokens for p in profiles)
+    total = sum(p.cost_usd for p in profiles)
     if total == 0:
-        return LensResult(lens_name="cost", findings=["No tokens recorded"])
+        return LensResult(lens_name="cost", findings=["No cost recorded"])
 
-    # Find the most expensive step
-    top = max(profiles, key=lambda p: p.tokens)
-    top_pct = (top.tokens / total * 100) if total > 0 else 0
+    # Find the most expensive step (by cache-aware dollars)
+    top = max(profiles, key=lambda p: p.cost_usd)
+    top_pct = (top.cost_usd / total * 100) if total > 0 else 0
 
     if top_pct > 50:  # flag when a single step dominates > 50% of loop spend
         findings.append(
-            f"Step {top.step_idx} consumed {top_pct:.0f}% of total tokens "
-            f"({top.tokens:,} / {total:,})"
+            f"Step {top.step_idx} drove {top_pct:.0f}% of loop cost "
+            f"(${top.cost_usd:.3f} / ${total:.3f})"
         )
         action = f"Split step {top.step_idx} into smaller substeps or route to cheaper model"
 
@@ -1263,6 +1319,14 @@ _RECOVERY_TABLE: Dict[str, List[RecoveryPlan]] = {
             action="Distill prior step outputs to key findings before continuing. Keep full output in artifacts.",
             auto_apply=False, risk="medium",
             params={"suggestion": "summarize completed_context entries to key findings, not raw truncation"},
+        ),
+    ],
+    "cost_spike": [
+        RecoveryPlan(
+            failure_class="cost_spike",
+            action="Route the costly step class to a cheaper model tier, or shrink the cached context the worker carries per turn.",
+            auto_apply=False, risk="medium",
+            params={"suggestion": "real spend (fresh full-rate + cache reads at 0.1x) — not a cache artifact; lower the model tier or per-turn context"},
         ),
     ],
     "retry_churn": [

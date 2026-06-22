@@ -1110,6 +1110,7 @@ def _post_step_checks(
             tokens_in=outcome.get("tokens_in", 0),
             tokens_out=outcome.get("tokens_out", 0),
             cache_read_tokens=outcome.get("cache_read_tokens", 0),
+            model=getattr(ctx.adapter, "model_key", "") or "",
             elapsed_ms=step_elapsed,
             detail=step_summary[:200] if step_summary else "",
         )

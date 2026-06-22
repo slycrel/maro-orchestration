@@ -83,6 +83,20 @@ _GRADUATION_TEMPLATES: Dict[str, dict] = {
         # Verify token cap instruction in step_exec.py
         "verify_pattern": "grep -n 'under 500\\|500 tokens\\|Target.*token' src/step_exec.py 2>/dev/null | head -1",
     },
+    "cost_spike": {
+        "category": "observation",
+        "suggestion": (
+            "cost_spike detected {count}x (loops {loop_ids}): a single step or the whole "
+            "loop exceeded the cache-aware dollar-cost threshold. Unlike token_explosion this "
+            "is real spend (fresh tokens priced at full rate, cache reads at 0.1x), so it "
+            "survives caching. Likely a pricey model doing genuinely large fresh work — route "
+            "the costly step to a cheaper model tier, or split the step so the expensive model "
+            "sees less fresh context. Evidence: {evidence}"
+        ),
+        "confidence": 0.70,
+        # Verify model-tier routing / cost guard exists in the routing path
+        "verify_pattern": "grep -n 'model_key\\|model_for\\|cheap.*mid.*power\\|estimate_cost' src/director.py src/agent_loop.py 2>/dev/null | head -1",
+    },
     "empty_model_output": {
         "category": "new_guardrail",
         "suggestion": (
