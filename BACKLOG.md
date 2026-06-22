@@ -73,13 +73,23 @@ needed for this.**
   pattern that historically flagged `token_explosion` now diagnoses **healthy**; cache-blind
   cost was **6.6x overstated** ($0.235 → $0.036). The 485K run's "growth" was cache-read
   growth at ~0.1x, not fresh compute.
-- [ ] (left, low priority) Pass `cache_read_tokens` into `estimate_cost` at the live recording
-  sites (`record_step_cost` ~`agent_loop.py:790`, skill `_est_cost` ~1550) so persisted cost
-  telemetry is cache-adjusted too. Foundation + alarm already correct; this is just telemetry
-  fidelity. Note: the claude-CLI subprocess reports ~all input as cache_read once the session
-  warms, so fresh-token alarms are now very quiet for subprocess workers — that's correct, but
-  watch that we don't go cache-blind in the other direction (a real fresh-compute spike inside
-  a mostly-cached session is still small in fresh terms; revisit if a genuine runaway slips through).
+- [x] **DONE 2026-06-22:** Passed `cache_read_tokens` into `estimate_cost` at the live recording
+  sites — `record_step_cost` (now takes + persists `cache_read_tokens` to step-costs.jsonl),
+  skill `_est_cost` (success + fail paths), and the per-step/running cost log. Persisted cost
+  telemetry is now cache-adjusted, matching what the introspect alarms judge. **Also fixed a
+  bug found while here:** the running `cost_total` log/budget-breaker repriced *all* accumulated
+  tokens at the latest step's model, so the figure swung when steps switched cheap↔mid↔power
+  (seen live: $0.63 at a mid step → $0.26 at the next cheap step). Now accumulated per-step
+  (`total_cost_usd`), correct across model switches and more accurate for the cost-budget circuit
+  breaker. `StepOutcome` carries `cache_read_tokens` so the run-summary ✅ cost string is
+  cache-aware too. Note: the claude-CLI subprocess reports ~all input as cache_read once the
+  session warms, so fresh-token alarms are now very quiet for subprocess workers — confirmed
+  live (run1 2026-06-22: per-step cache_read=83979 of in=83984, ~99.99%). Watch we don't go
+  cache-blind the other way; the absolute `cost_spike` alarm is the backstop for that.
+- **Live validation 2026-06-22 (run1, real spend):** a 9-step `verify:` build goal did
+  **457,322 total tokens** and diagnosed **`healthy`** — pre-fix that volume would have tripped
+  `token_explosion`/`decomposition_too_broad`; now correctly healthy because fresh tokens/step
+  are ~5 (rest cache reads). The cache-aware introspect works on organic data.
 
 ### Graph memory + recursive-orchestration scoped memory (2026-06-21, vision)
 
@@ -103,6 +113,19 @@ v1.20.0). A free local model (reference: VibeThinker-3B on MLX) runs as Tier 1 o
 `verify_step`; below `validate.min_certainty` it escalates to the paid adapter.
 Wiring + unit behavior are proven; **whether the local judge is actually good
 enough, and on which step classes, is not** — that needs measurement, not a tweet.
+
+**Live finding 2026-06-22 (qwen2.5-coder:3b on this box, ollama, real runs):**
+First end-to-end live test of the ladder on the Linux box (config: `validate.local_models:
+[qwen2.5-coder:3b]`, runtime ollama, min_certainty 0.6). Run1 (9-step `verify:` build goal)
+→ **9/9 verifications handled decisively by the local model at conf 1.00, zero escalations,
+zero paid validation calls.** Direct smoke test confirmed sane verdicts: good code → PASS
+1.00, failed step → FAIL 0.80, ambiguous research → conf 0.50 (< min_certainty → escalates,
+correct). Latency: ~34s cold (first call, model load) then ~10–13s/call. One quirk to watch:
+on the ambiguous case the model returned `passed=True` but a reason saying it did NOT address
+the goal — self-contradictory, but conf 0.50 < 0.60 escalated it anyway, so the ladder caught
+it. **So far qwen2.5-coder:3b looks viable as the Tier-1 judge for code/verifiable steps on
+this box** — the shadow-eval harness below is still the rigorous next step to quantify
+agreement vs paid and set per-class min_certainty.
 
 - [ ] **Shadow-eval harness for validation.** Mirror `navigator_shadow --agreement`:
   on historical/live runs, run the local validator *and* the paid validator on the

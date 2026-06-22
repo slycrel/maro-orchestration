@@ -103,6 +103,7 @@ class StepOutcome:
     iteration: int       # which loop iteration produced this
     tokens_in: int = 0
     tokens_out: int = 0
+    cache_read_tokens: int = 0   # subset of tokens_in served from cache (~0.1x cost)
     elapsed_ms: int = 0
     confidence: str = ""         # "strong" | "weak" | "inferred" | "unverified" | ""
     injected_steps: List[str] = field(default_factory=list)  # steps added mid-plan by this step
@@ -117,6 +118,7 @@ def step_from_decompose(
     iteration: int = 0,
     tokens_in: int = 0,
     tokens_out: int = 0,
+    cache_read_tokens: int = 0,
     elapsed_ms: int = 0,
     confidence: str = "unverified",
     injected_steps: Optional[List[str]] = None,
@@ -130,6 +132,7 @@ def step_from_decompose(
         iteration=iteration,
         tokens_in=tokens_in,
         tokens_out=tokens_out,
+        cache_read_tokens=cache_read_tokens,
         elapsed_ms=elapsed_ms,
         confidence=confidence,
         injected_steps=injected_steps if injected_steps is not None else [],
@@ -772,6 +775,7 @@ def _process_blocked_step(ctx: LoopContext, blk: BlockedStepContext) -> tuple:
             int(outcome.get("tokens_in", 0)),
             int(outcome.get("tokens_out", 0)),
             getattr(step_adapter, "model_key", None),
+            cache_read_tokens=int(outcome.get("cache_read_tokens", 0)),
         )
         for _sk in find_matching_skills(step_text + " " + ctx.goal, use_router=False, project=ctx.project):
             if getattr(_sk, "variant_of", None) is not None:
@@ -796,6 +800,7 @@ def _process_blocked_step(ctx: LoopContext, blk: BlockedStepContext) -> tuple:
             goal=ctx.goal,
             model=getattr(ctx.adapter, "model_key", ""),
             elapsed_ms=step_elapsed,
+            cache_read_tokens=outcome.get("cache_read_tokens", 0),
         )
     except Exception as _exc:
         log.debug("metrics.record_step_cost failed for stuck step %d: %s", step_idx, _exc)
@@ -1553,6 +1558,7 @@ def _process_done_step(
             int(outcome.get("tokens_in", 0)),
             int(outcome.get("tokens_out", 0)),
             step_model,
+            cache_read_tokens=int(outcome.get("cache_read_tokens", 0)),
         )
         for _sk in find_matching_skills(step_text + " " + ctx.goal, use_router=False, project=ctx.project):
             update_skill_utility(_sk.id, success=True)
@@ -1580,6 +1586,7 @@ def _process_done_step(
             goal=ctx.goal,
             model=getattr(ctx.adapter, "model_key", ""),
             elapsed_ms=step_elapsed,
+            cache_read_tokens=outcome.get("cache_read_tokens", 0),
         )
     except Exception as _cost_exc:
         log.debug("record_step_cost failed (non-critical): %s", _cost_exc)
@@ -3861,6 +3868,8 @@ def run_agent_loop(
     step_outcomes: List[StepOutcome] = list(_resume_completed)
     total_tokens_in = 0
     total_tokens_out = 0
+    total_cache_read = 0
+    total_cost_usd = 0.0   # accumulated per-step (correct across model switches)
     stuck_streak = 0
     last_action: Optional[str] = None
     _consecutive_max_timeouts = 0  # ceiling-hit timeouts across different steps — adapter health signal
@@ -4110,6 +4119,14 @@ def run_agent_loop(
             )
             total_tokens_in += _tin
             total_tokens_out += _tout
+            # Keep total_cost_usd honest for the budget breaker. The batch helper
+            # doesn't surface cache_read, so price at full rate — the safe (slight
+            # over-estimate) direction for a circuit breaker.
+            try:
+                from metrics import estimate_cost as _batch_est
+                total_cost_usd += _batch_est(_tin, _tout, model=getattr(ctx.adapter, "model_key", "") or None)
+            except ImportError:
+                pass
             continue  # Skip the single-step execution below
 
         iteration += 1
@@ -4221,15 +4238,20 @@ def run_agent_loop(
 
         total_tokens_in += outcome.get("tokens_in", 0)
         total_tokens_out += outcome.get("tokens_out", 0)
-        # Per-step cost estimate
+        total_cache_read += outcome.get("cache_read_tokens", 0)
+        # Per-step cost estimate (cache-aware: cache reads priced at ~0.1x)
         _step_model = getattr(_step_adapter, "model_key", "")
         try:
             from metrics import estimate_cost
-            _step_cost = estimate_cost(outcome.get("tokens_in", 0), outcome.get("tokens_out", 0), model=_step_model)
-            _total_cost = estimate_cost(total_tokens_in, total_tokens_out, model=_step_model)
+            _step_cost = estimate_cost(outcome.get("tokens_in", 0), outcome.get("tokens_out", 0), model=_step_model,
+                                       cache_read_tokens=outcome.get("cache_read_tokens", 0))
+            # Accumulate per step: repricing the running total at the latest step's
+            # model swings the figure when steps switch cheap<->mid<->power.
+            total_cost_usd += _step_cost
+            _total_cost = total_cost_usd
         except ImportError:
             _step_cost = 0.0
-            _total_cost = 0.0
+            _total_cost = total_cost_usd
         log.info("step %d %s tokens_step=%d tokens_total=%d cost_step=$%.4f cost_total=$%.4f model=%s elapsed=%dms iter=%d/%d",
                  step_idx, outcome.get("status", "?"),
                  outcome.get("tokens_in", 0) + outcome.get("tokens_out", 0),
@@ -4484,6 +4506,7 @@ def run_agent_loop(
                 iteration=iteration,
                 tokens_in=outcome.get("tokens_in", 0),
                 tokens_out=outcome.get("tokens_out", 0),
+                cache_read_tokens=outcome.get("cache_read_tokens", 0),
                 elapsed_ms=step_elapsed,
             ))
             if item_index >= 0:
@@ -4595,6 +4618,7 @@ def run_agent_loop(
             iteration=iteration,
             tokens_in=outcome.get("tokens_in", 0),
             tokens_out=outcome.get("tokens_out", 0),
+            cache_read_tokens=outcome.get("cache_read_tokens", 0),
             elapsed_ms=step_elapsed,
             confidence=outcome.get("confidence", ""),
             injected_steps=outcome.get("inject_steps", []),
@@ -5012,7 +5036,7 @@ def _write_plan_manifest(
             t_total = outcome.tokens_in + outcome.tokens_out
             try:
                 from metrics import estimate_cost as _est
-                cost_str = f" | ${_est(outcome.tokens_in, outcome.tokens_out):.4f}"
+                cost_str = f" | ${_est(outcome.tokens_in, outcome.tokens_out, cache_read_tokens=getattr(outcome, 'cache_read_tokens', 0)):.4f}"
             except Exception:
                 cost_str = ""
             suffix = f" | {outcome.elapsed_ms}ms | {t_total} tok{cost_str}"

@@ -173,16 +173,23 @@ def record_step_cost(
     goal: str = "",
     model: str = "",
     elapsed_ms: int = 0,
+    cache_read_tokens: int = 0,
 ) -> dict:
     """Record per-step token cost to memory/step-costs.jsonl.
 
     Classifies the step type via heuristic and estimates USD cost.
     Never raises — cost recording failure must not break the agent loop.
 
+    `cost_usd` is cache-aware: cache reads (`cache_read_tokens`, a subset of
+    `tokens_in`) are priced at ``CACHE_READ_MULTIPLIER`` of the fresh rate, so
+    persisted telemetry matches what the introspect alarms judge. Defaults to 0
+    (legacy callers / no cache) → byte-identical to the old full-rate estimate.
+
     Returns the recorded entry dict (useful for testing).
     """
     step_type = classify_step_type(step_text)
-    cost_usd = estimate_cost(tokens_in, tokens_out, model=model or None)
+    cost_usd = estimate_cost(tokens_in, tokens_out, model=model or None,
+                             cache_read_tokens=cache_read_tokens)
     entry = {
         "id": str(uuid.uuid4())[:12],
         "recorded_at": datetime.now(timezone.utc).isoformat(),
@@ -190,6 +197,7 @@ def record_step_cost(
         "step_text_preview": step_text[:120],
         "tokens_in": tokens_in,
         "tokens_out": tokens_out,
+        "cache_read_tokens": cache_read_tokens,
         "total_tokens": tokens_in + tokens_out,
         "cost_usd": round(cost_usd, 8),
         "status": status,

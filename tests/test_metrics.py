@@ -547,6 +547,27 @@ def test_record_step_cost_returns_dict(monkeypatch, tmp_path):
     assert "recorded_at" in entry
 
 
+def test_record_step_cost_is_cache_aware(monkeypatch, tmp_path):
+    """cache_read_tokens (subset of tokens_in) is priced at 0.1x and persisted,
+    so step-costs.jsonl matches what the introspect alarms judge."""
+    monkeypatch.setattr("metrics._step_costs_path", lambda: tmp_path / "step-costs.jsonl")
+    full = record_step_cost("build module", 100000, 1000, "done", model="power")
+    cached = record_step_cost("build module", 100000, 1000, "done", model="power",
+                              cache_read_tokens=99000)
+    assert cached["cache_read_tokens"] == 99000
+    # 99k of 100k input billed at 0.1x → materially cheaper than full rate.
+    assert cached["cost_usd"] < full["cost_usd"]
+    assert cached["cost_usd"] == pytest.approx(full["cost_usd"] / 6.6, rel=0.1)
+
+
+def test_record_step_cost_cache_default_is_backward_compatible(monkeypatch, tmp_path):
+    """No cache_read_tokens → identical to the old full-rate estimate."""
+    monkeypatch.setattr("metrics._step_costs_path", lambda: tmp_path / "step-costs.jsonl")
+    e = record_step_cost("research x", 1000, 500, "done", model="mid")
+    assert e["cache_read_tokens"] == 0
+    assert e["cost_usd"] == pytest.approx(estimate_cost(1000, 500, "mid"))
+
+
 def test_record_step_cost_writes_file(monkeypatch, tmp_path):
     path = tmp_path / "step-costs.jsonl"
     monkeypatch.setattr("metrics._step_costs_path", lambda: path)
