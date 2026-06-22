@@ -1,4 +1,6 @@
 import json
+import os
+import time
 from pathlib import Path
 
 import orch
@@ -402,6 +404,46 @@ def test_worker_session_manifest_timeout_applies_without_cli_override(monkeypatc
     assert tick is not None
     assert tick.validation.status == "blocked"
     assert tick.run.status == "blocked"
+
+
+def test_session_execution_bridge_timeout_kills_lingering_child_processes(monkeypatch, tmp_path):
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    _mkproj(tmp_path, "demo", "- [ ] first\n", priority=3)
+
+    tick = orch.run_tick(
+        "demo",
+        worker="tester",
+        execution=orch.session_execution_bridge(
+            "python3 - <<'PY'\n"
+            "import os, signal, subprocess, sys\n"
+            "from pathlib import Path\n"
+            "artifact_dir = Path(os.environ['ORCH_RUN_ARTIFACT_DIR'])\n"
+            "child = subprocess.Popen([\n"
+            "    sys.executable,\n"
+            "    '-c',\n"
+            "    'import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(60)',\n"
+            "])\n"
+            "(artifact_dir / 'child.pid').write_text(str(child.pid), encoding='utf-8')\n"
+            "signal.pause()\n"
+            "PY",
+            timeout_seconds=0.1,
+        ),
+    )
+
+    assert tick is not None
+    assert tick.validation.status == "blocked"
+    artifact_root = tmp_path / "prototypes" / "poe-orchestration" / tick.run.artifact_path
+    child_pid = int((artifact_root / "child.pid").read_text(encoding="utf-8").strip())
+
+    deadline = time.time() + 2.0
+    while time.time() < deadline:
+        try:
+            os.kill(child_pid, 0)
+        except OSError:
+            break
+        time.sleep(0.05)
+    else:
+        raise AssertionError(f"timed-out session child still running: pid={child_pid}")
 
 
 def test_worker_session_bridge_manifest_supports_nested_artifacts_and_env(monkeypatch, tmp_path):

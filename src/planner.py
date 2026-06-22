@@ -296,7 +296,17 @@ def parse_steps(content: str, max_steps: int) -> Optional[List[str]]:
     """Extract a JSON step list from LLM response content."""
     steps = extract_json(content, list, log_tag="planner.parse_steps")
     if steps and isinstance(steps, list) and all(isinstance(s, str) for s in steps):
-        return [s.strip() for s in steps if s.strip()][:max_steps]
+        parsed: List[str] = []
+        for raw in steps:
+            step = raw.strip()
+            if not step:
+                continue
+            # Drop malformed dependency-only placeholders like "[after:4]":
+            # they become empty tasks downstream and can stall autonomous runs.
+            if _AFTER_RE.fullmatch(step):
+                continue
+            parsed.append(step)
+        return parsed[:max_steps]
     return None
 
 

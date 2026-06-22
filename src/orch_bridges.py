@@ -7,7 +7,9 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import signal
 import subprocess
+import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from shlex import quote, split as shell_split
@@ -374,6 +376,13 @@ def _extract_json_result(raw: str) -> Optional[dict]:
     if isinstance(payload, dict):
         return payload
     return None
+
+
+def _tail_lines(text: str, *, limit: int = 3) -> str:
+    lines = [line.strip() for line in (text or "").splitlines() if line.strip()]
+    if not lines:
+        return ""
+    return " | ".join(lines[-limit:])
 
 
 def _resolve_session_command(session_command: str, *, source_directory: Optional[Path]) -> str:
@@ -777,6 +786,65 @@ def session_execution_bridge(
             raise ExecutionBridgeError(f"session result payload must be an object: {result_path}")
         return _coerce_result_payload(parsed, default_artifact_path=artifact_path, run_id=run.run_id)
 
+    def _write_timeout_result(
+        *,
+        default_artifact_path: str,
+        result_path: Path,
+        stdout_text: str,
+        stderr_text: str,
+        resolved_command: str,
+        timeout_value: Optional[float],
+    ) -> None:
+        if result_path.exists():
+            return
+
+        note = f"session timed out after {timeout_value}s: {resolved_command}"
+        stdout_tail = _tail_lines(stdout_text)
+        stderr_tail = _tail_lines(stderr_text)
+        if stdout_tail:
+            note = f"{note}; stdout={stdout_tail}"
+        if stderr_tail:
+            note = f"{note}; stderr={stderr_tail}"
+
+        payload = {
+            "status": "blocked",
+            "note": note,
+            "artifact_path": default_artifact_path,
+        }
+        result_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+    def _process_group_exists(pgid: int) -> bool:
+        try:
+            os.killpg(pgid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        return True
+
+    def _terminate_process_group(pgid: int, *, grace_seconds: float = 5.0) -> None:
+        try:
+            os.killpg(pgid, signal.SIGTERM)
+        except ProcessLookupError:
+            return
+
+        deadline = time.monotonic() + max(0.0, grace_seconds)
+        while time.monotonic() < deadline:
+            if not _process_group_exists(pgid):
+                return
+            time.sleep(0.05)
+
+        try:
+            os.killpg(pgid, signal.SIGKILL)
+        except ProcessLookupError:
+            return
+
+        deadline = time.monotonic() + 1.0
+        while time.monotonic() < deadline:
+            if not _process_group_exists(pgid):
+                return
+            time.sleep(0.05)
+
     def _execute(run: RunRecord) -> ExecutionResult:
         artifact_dir = _run_artifact_root(run)
         stdout_path = artifact_dir / "session-stdout.log"
@@ -844,47 +912,71 @@ def session_execution_bridge(
             source_directory=cwd,
         )
 
+        proc = subprocess.Popen(
+            resolved_command,
+            shell=True,
+            cwd=cwd,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+        )
+
         try:
-            proc = subprocess.run(
-                resolved_command,
-                shell=True,
-                cwd=cwd,
-                env=env,
-                capture_output=True,
-                text=True,
-                timeout=timeout_seconds,
-            )
+            stdout_text, stderr_text = proc.communicate(timeout=timeout_seconds)
         except subprocess.TimeoutExpired as exc:
+            _terminate_process_group(proc.pid, grace_seconds=5.0)
+            stdout_text, stderr_text = proc.communicate()
+
+            stdout_text = stdout_text if isinstance(stdout_text, str) else (
+                stdout_text.decode("utf-8", errors="replace") if stdout_text else ""
+            )
+            stderr_text = stderr_text if isinstance(stderr_text, str) else (
+                stderr_text.decode("utf-8", errors="replace") if stderr_text else ""
+            )
+            if not stdout_text:
+                stdout_text = exc.stdout if isinstance(exc.stdout, str) else (
+                    exc.stdout.decode("utf-8", errors="replace") if exc.stdout else ""
+                )
+            if not stderr_text:
+                stderr_text = exc.stderr if isinstance(exc.stderr, str) else (
+                    exc.stderr.decode("utf-8", errors="replace") if exc.stderr else ""
+                )
+            stdout_path.write_text(stdout_text, encoding="utf-8")
+            stderr_path.write_text(stderr_text, encoding="utf-8")
+            _write_timeout_result(
+                default_artifact_path=default_artifact_path,
+                result_path=result_path,
+                stdout_text=stdout_text,
+                stderr_text=stderr_text,
+                resolved_command=resolved_command,
+                timeout_value=timeout_seconds,
+            )
             raise ExecutionBridgeError(f"session timed out after {timeout_seconds}s: {resolved_command}") from exc
         except Exception as exc:
             raise ExecutionBridgeError(f"session execution failed: {resolved_command}: {exc}") from exc
 
-        stdout_path.write_text(proc.stdout or "", encoding="utf-8")
-        stderr_path.write_text(proc.stderr or "", encoding="utf-8")
+        stdout_path.write_text(stdout_text or "", encoding="utf-8")
+        stderr_path.write_text(stderr_text or "", encoding="utf-8")
 
         payload_result = _parse_result_file_payload(run, artifact_dir, default_artifact_path)
         if payload_result:
             return payload_result
-        stdout_result = _read_result_payload(proc.stdout or "", default_artifact_path=default_artifact_path, run_id=run.run_id)
+        stdout_result = _read_result_payload(stdout_text or "", default_artifact_path=default_artifact_path, run_id=run.run_id)
         if stdout_result:
             return stdout_result
 
-        def _tail_lines(text: str, *, limit: int = 3) -> str:
-            lines = [line.strip() for line in (text or "").splitlines() if line.strip()]
-            if not lines:
-                return ""
-            return " | ".join(lines[-limit:])
-
         if proc.returncode == 0:
             note = f"session succeeded: {resolved_command}"
-            stdout_tail = _tail_lines(proc.stdout)
+            stdout_tail = _tail_lines(stdout_text)
             if stdout_tail:
                 note = f"{note}; stdout={stdout_tail}"
             return ExecutionResult(status="done", note=note, artifact_path=default_artifact_path)
 
         note = f"session failed ({proc.returncode}): {resolved_command}"
-        stdout_tail = _tail_lines(proc.stdout)
-        stderr_tail = _tail_lines(proc.stderr)
+        stdout_tail = _tail_lines(stdout_text)
+        stderr_tail = _tail_lines(stderr_text)
         if stdout_tail:
             note = f"{note}; stdout={stdout_tail}"
         if stderr_tail:

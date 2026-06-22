@@ -30,6 +30,10 @@ def test_parse_steps_returns_none_on_invalid():
     assert parse_steps("not json at all", 10) is None
 
 
+def test_parse_steps_drops_dependency_only_placeholders():
+    assert parse_steps('["real step", "[after:4]"]', 10) == ["real step"]
+
+
 # ---------------------------------------------------------------------------
 # parse_dependencies
 # ---------------------------------------------------------------------------

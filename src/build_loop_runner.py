@@ -12,12 +12,36 @@ import fcntl
 import json
 import os
 import re
+import signal
+import subprocess
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator, Optional
 
-from orch import run_loop, select_global_next, select_next_item, worker_session_bridge
+from orch import (
+    _load_run_records,
+    finalize_run,
+    run_loop,
+    select_global_next,
+    select_next_item,
+    worker_session_bridge,
+)
 from orch_items import now_utc_iso, orch_root, output_root, relative_display_path
+from orch_bridges import resolve_worker_session_spec
+
+
+# Agenda-heavy handle worker sessions routinely exceed 15 minutes when they
+# complete multiple artifact-writing steps plus closure/quality passes.
+DEFAULT_BUILD_LOOP_SESSION_TIMEOUT_SECONDS = 1800.0
+
+
+class BuildLoopInterrupted(RuntimeError):
+    """Raised when the build loop receives a termination signal."""
+
+    def __init__(self, signum: int):
+        self.signum = int(signum)
+        sig = signal.Signals(signum)
+        super().__init__(f"received {sig.name}")
 
 
 def build_loop_status_path() -> Path:
@@ -39,9 +63,64 @@ def _write_status(payload: dict) -> dict:
     return payload
 
 
+def _status_exists() -> bool:
+    return build_loop_status_path().exists()
+
+
 def _safe_filename(value: str) -> str:
     cleaned = re.sub(r"[^A-Za-z0-9._-]+", "-", value).strip("-._")
     return cleaned or "run"
+
+
+def _build_loop_session_timeout_seconds() -> float:
+    raw = os.environ.get("POE_BUILD_LOOP_SESSION_TIMEOUT_SECONDS", "").strip()
+    if not raw:
+        return DEFAULT_BUILD_LOOP_SESSION_TIMEOUT_SECONDS
+    try:
+        value = float(raw)
+    except ValueError:
+        return DEFAULT_BUILD_LOOP_SESSION_TIMEOUT_SECONDS
+    if value <= 0:
+        return DEFAULT_BUILD_LOOP_SESSION_TIMEOUT_SECONDS
+    return value
+
+
+def _worker_session_already_active(worker_session: str) -> bool:
+    spec = resolve_worker_session_spec(worker_session)
+    if spec is None:
+        return False
+
+    command = spec.command.strip()
+    if not command:
+        return False
+
+    try:
+        result = subprocess.run(
+            ["pgrep", "-u", str(os.getuid()), "-f", command],
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+    except Exception:
+        return False
+
+    if result.returncode != 0 or not result.stdout.strip():
+        return False
+
+    current_pid = os.getpid()
+    parent_pid = os.getppid()
+    for raw_pid in result.stdout.splitlines():
+        raw_pid = raw_pid.strip()
+        if not raw_pid:
+            continue
+        try:
+            pid = int(raw_pid)
+        except ValueError:
+            continue
+        if pid in {current_pid, parent_pid}:
+            continue
+        return True
+    return False
 
 
 def _write_heartbeat_run(summary: dict) -> str:
@@ -73,6 +152,49 @@ def _write_heartbeat_run(summary: dict) -> str:
     }
     path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     return relative_display_path(path)
+
+
+@contextmanager
+def _interrupt_guard() -> Iterator[None]:
+    handlers: dict[int, object] = {}
+
+    def _handle(signum, _frame):
+        raise BuildLoopInterrupted(signum)
+
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        handlers[int(sig)] = signal.getsignal(sig)
+        signal.signal(sig, _handle)
+    try:
+        yield
+    finally:
+        for signum, handler in handlers.items():
+            signal.signal(signum, handler)
+
+
+def _cleanup_running_build_loop_runs(note: str) -> None:
+    for record in _load_run_records():
+        if record.status != "running" or record.source != "build-loop":
+            continue
+        try:
+            finalize_run(record.run_id, "blocked", note=note)
+        except ValueError:
+            continue
+
+
+@contextmanager
+def _temporary_env(name: str, value: Optional[str]) -> Iterator[None]:
+    previous = os.environ.get(name)
+    if value is None:
+        os.environ.pop(name, None)
+    else:
+        os.environ[name] = value
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop(name, None)
+        else:
+            os.environ[name] = previous
 
 
 @contextmanager
@@ -110,11 +232,13 @@ def run_build_loop(
         os.environ.setdefault("POE_ORCH_ROOT", str(orch_root()))
     started_at = now_utc_iso()
 
-    def finalize(summary: dict) -> dict:
+    def finalize(summary: dict, *, write_status: bool = True) -> dict:
         summary["duration_seconds"] = round(max(0.0, os.times().elapsed - started_wall), 3)
         heartbeat_record = _write_heartbeat_run(summary)
         summary["heartbeat_run_path"] = heartbeat_record
-        return _write_status(summary)
+        if write_status:
+            return _write_status(summary)
+        return summary
 
     next_item = select_next_item(project) if project else None
     if project is None:
@@ -141,6 +265,22 @@ def run_build_loop(
             }
         )
 
+    if _worker_session_already_active(worker_session):
+        return finalize(
+            {
+                "status": "busy",
+                "reason": "worker_session_active",
+                "started_at": started_at,
+                "finished_at": now_utc_iso(),
+                "project": project,
+                "selected_project": next_project,
+                "worker": worker,
+                "worker_session": worker_session,
+                "runs": 0,
+                "orch_root": str(orch_root()),
+            }
+        )
+
     with _try_lock(build_loop_lock_path()) as acquired:
         if not acquired:
             return finalize(
@@ -154,20 +294,65 @@ def run_build_loop(
                     "worker_session": worker_session,
                     "runs": 0,
                     "orch_root": str(orch_root()),
-                }
+                },
+                write_status=not _status_exists(),
             )
 
-        ticks = run_loop(
-            project=project,
-            worker=worker,
-            source="build-loop",
-            max_runs=max_runs,
-            max_retry_streak=max_retry_streak,
-            max_attempts_per_item=max_attempts_per_item,
-            execution=worker_session_bridge(worker_session),
-            continue_on_retry=continue_on_retry,
-            continue_on_blocked=continue_on_blocked,
+        _write_status(
+            {
+                "status": "running",
+                "reason": "lock_acquired",
+                "started_at": started_at,
+                "finished_at": None,
+                "project": project,
+                "selected_project": next_project,
+                "worker": worker,
+                "worker_session": worker_session,
+                "runs": 0,
+                "orch_root": str(orch_root()),
+            }
         )
+
+        # The dedicated build loop is an unattended execution path. Force the
+        # handle worker into YOLO mode so ambiguity checks do not dead-end on
+        # tasks generated by orchestration itself.
+        try:
+            with _interrupt_guard(), _temporary_env("POE_YOLO", "true"):
+                ticks = run_loop(
+                    project=project,
+                    worker=worker,
+                    source="build-loop",
+                    max_runs=max_runs,
+                    max_retry_streak=max_retry_streak,
+                    max_attempts_per_item=max_attempts_per_item,
+                    execution=worker_session_bridge(
+                        worker_session,
+                        timeout_seconds=_build_loop_session_timeout_seconds(),
+                    ),
+                    continue_on_retry=continue_on_retry,
+                    continue_on_blocked=continue_on_blocked,
+                )
+        except (BuildLoopInterrupted, KeyboardInterrupt) as exc:
+            if isinstance(exc, BuildLoopInterrupted):
+                reason = signal.Signals(exc.signum).name.lower()
+            else:
+                reason = "keyboard_interrupt"
+            note = f"build loop interrupted: {reason}"
+            _cleanup_running_build_loop_runs(note)
+            return finalize(
+                {
+                    "status": "interrupted",
+                    "reason": reason,
+                    "started_at": started_at,
+                    "finished_at": now_utc_iso(),
+                    "project": project,
+                    "selected_project": next_project,
+                    "worker": worker,
+                    "worker_session": worker_session,
+                    "runs": 0,
+                    "orch_root": str(orch_root()),
+                }
+            )
 
         statuses = [tick.validation.status for tick in ticks]
         summary = {
@@ -223,6 +408,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         print(build_loop_status_path())
     else:
         print(json.dumps(summary, indent=2))
+    if summary.get("status") == "interrupted":
+        return 130
     return 0
 
 

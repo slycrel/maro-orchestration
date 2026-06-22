@@ -3,6 +3,7 @@
 import json
 import sys
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -124,6 +125,56 @@ def test_handle_agenda_result_has_content(monkeypatch, tmp_path):
     _setup(monkeypatch, tmp_path)
     result = handle("build a research report on X strategies", dry_run=True)
     assert len(result.result) > 0
+
+
+def test_handle_poe_yolo_env_skips_clarity_block(monkeypatch, tmp_path):
+    _setup(monkeypatch, tmp_path)
+    monkeypatch.setenv("POE_YOLO", "true")
+
+    from agent_loop import LoopResult, StepOutcome
+
+    fake_loop = LoopResult(
+        loop_id="test-lr-yolo",
+        project="test-proj-yolo",
+        goal="ambiguous goal",
+        status="done",
+        steps=[StepOutcome(index=0, text="step 1", status="done", result="output", iteration=0)],
+    )
+    gate_verdict = MagicMock()
+    gate_verdict.escalate = False
+    gate_verdict.contested_claims = []
+
+    with patch("intent.check_goal_clarity", return_value={"clear": False, "question": "Need more context?"}), \
+         patch("agent_loop.run_agent_loop", return_value=fake_loop), \
+         patch("quality_gate.run_quality_gate", return_value=gate_verdict):
+        result = handle("ambiguous goal", force_lane="agenda", dry_run=False, adapter=MagicMock())
+
+    assert result.status == "done"
+    assert result.project == "test-proj-yolo"
+
+
+def test_handle_build_loop_source_skips_quality_gate(monkeypatch, tmp_path):
+    _setup(monkeypatch, tmp_path)
+    monkeypatch.setenv("POE_YOLO", "true")
+    monkeypatch.setenv("ORCH_SOURCE", "build-loop")
+
+    from agent_loop import LoopResult, StepOutcome
+
+    fake_loop = LoopResult(
+        loop_id="test-lr-build-loop",
+        project="test-proj-build-loop",
+        goal="autonomous build loop goal",
+        status="done",
+        steps=[StepOutcome(index=0, text="step 1", status="done", result="output", iteration=0)],
+    )
+
+    with patch("intent.check_goal_clarity", return_value={"clear": True}), \
+         patch("agent_loop.run_agent_loop", return_value=fake_loop), \
+         patch("quality_gate.run_quality_gate", side_effect=AssertionError("quality gate should be skipped")):
+        result = handle("autonomous build loop goal", force_lane="agenda", dry_run=False, adapter=MagicMock())
+
+    assert result.status == "done"
+    assert result.project == "test-proj-build-loop"
 
 
 # ---------------------------------------------------------------------------

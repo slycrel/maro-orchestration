@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 
 import sys
 import time
@@ -242,6 +243,13 @@ def _is_complex_directive(message: str) -> bool:
         return True
 
     return False
+
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _run_now(
@@ -797,7 +805,10 @@ def _handle_impl(
                 pass  # rewrite failures must never block a run
 
         # Clarification milestone — check goal clarity before starting (skipped if yolo=true)
-        _yolo = _cfg.get("yolo", "false").strip().lower() == "true"
+        _yolo = _env_flag(
+            "POE_YOLO",
+            str(_cfg.get("yolo", "false")).strip().lower() == "true",
+        )
         if not dry_run and not _yolo:
             try:
                 from intent import check_goal_clarity
@@ -1427,7 +1438,9 @@ def _handle_impl(
         _gate_statuses = ("done", "partial", "stuck", "restart")
         _ran_any_step_for_gate = any(getattr(s, "status", "") == "done"
                                       for s in (loop_result.steps or []))
+        _skip_quality_gate = os.environ.get("ORCH_SOURCE", "").strip().lower() == "build-loop"
         if (not dry_run
+                and not _skip_quality_gate
                 and loop_result.status in _gate_statuses
                 and _ran_any_step_for_gate
                 and _cfg.get("quality_gate", "true") == "true"):

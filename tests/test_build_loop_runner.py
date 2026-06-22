@@ -1,73 +1,196 @@
 from __future__ import annotations
 
+import json
+import os
+import sys
 from pathlib import Path
+from types import SimpleNamespace
 
-import orch
-from build_loop_runner import build_loop_lock_path, build_loop_status_path, run_build_loop, _try_lock
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
 
-
-def _mkproj(root: Path, slug: str, content: str, priority: int = 0) -> None:
-    project = root / "prototypes" / "poe-orchestration" / "projects" / slug
-    project.mkdir(parents=True, exist_ok=True)
-    (project / "NEXT.md").write_text(content, encoding="utf-8")
-    (project / "PRIORITY").write_text(f"{priority}\n", encoding="utf-8")
+import build_loop_runner as blr
 
 
-def _mk_worker(root: Path, name: str = "done") -> Path:
-    workers = root / "prototypes" / "poe-orchestration" / "workers"
-    workers.mkdir(parents=True, exist_ok=True)
-    script = workers / f"{name}.sh"
-    script.write_text(
-        "#!/usr/bin/env bash\n"
-        "set -euo pipefail\n"
-        "printf '%s' \"${ORCH_ITEM_TEXT}\" > \"${ORCH_RUN_ARTIFACT_DIR}/item.txt\"\n",
-        encoding="utf-8",
-    )
-    script.chmod(0o755)
-    return script
-
-
-def test_run_build_loop_idle_when_no_work(monkeypatch, tmp_path):
+def test_run_build_loop_sets_poe_yolo_for_autonomous_worker(monkeypatch, tmp_path):
     monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    monkeypatch.delenv("POE_YOLO", raising=False)
 
-    summary = run_build_loop(worker_session="missing-ok-because-idle")
+    repo = tmp_path / "prototypes" / "poe-orchestration"
+    (repo / "output").mkdir(parents=True, exist_ok=True)
+
+    next_item = SimpleNamespace(index=1, text="ambiguous task")
+    observed = {}
+
+    monkeypatch.setattr(blr, "select_next_item", lambda project: next_item)
+    monkeypatch.setattr(blr, "worker_session_bridge", lambda worker_session, timeout_seconds=None: object())
+
+    def _fake_run_loop(**kwargs):
+        observed["poe_yolo"] = os.environ.get("POE_YOLO")
+        return []
+
+    monkeypatch.setattr(blr, "run_loop", _fake_run_loop)
+
+    summary = blr.run_build_loop(project="demo", worker_session="handle", max_runs=1)
 
     assert summary["status"] == "idle"
-    assert summary["reason"] == "no_work"
-    assert summary["runs"] == 0
-    assert build_loop_status_path().exists()
+    assert observed["poe_yolo"] == "true"
+    assert os.environ.get("POE_YOLO") is None
 
 
-def test_run_build_loop_executes_claimed_work(monkeypatch, tmp_path):
+def test_run_build_loop_passes_bounded_session_timeout(monkeypatch, tmp_path):
     monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
-    _mk_worker(tmp_path)
-    _mkproj(tmp_path, "demo", "- [ ] first task\n", priority=1)
-    item_index = 0
+    monkeypatch.setenv("POE_BUILD_LOOP_SESSION_TIMEOUT_SECONDS", "12.5")
 
-    summary = run_build_loop(worker="fake", worker_session="done", max_runs=1)
+    repo = tmp_path / "prototypes" / "poe-orchestration"
+    (repo / "output").mkdir(parents=True, exist_ok=True)
 
-    assert summary["status"] == "ok"
-    assert summary["runs"] == 1
-    item = orch.get_item("demo", item_index)
-    assert item.state == orch.STATE_DONE
+    next_item = SimpleNamespace(index=1, text="potentially hanging task")
+    observed = {}
 
-    artifact_rel = orch.load_run_record(summary["run_ids"][0]).artifact_path
-    assert artifact_rel
-    artifact_root = (tmp_path / "prototypes" / "poe-orchestration" / artifact_rel)
-    assert (artifact_root / "item.txt").read_text(encoding="utf-8") == "first task"
+    monkeypatch.setattr(blr, "select_next_item", lambda project: next_item)
+
+    def _fake_worker_session_bridge(worker_session, timeout_seconds=None):
+        observed["worker_session"] = worker_session
+        observed["timeout_seconds"] = timeout_seconds
+        return object()
+
+    monkeypatch.setattr(blr, "worker_session_bridge", _fake_worker_session_bridge)
+    monkeypatch.setattr(blr, "run_loop", lambda **kwargs: [])
+
+    summary = blr.run_build_loop(project="demo", worker_session="handle", max_runs=1)
+
+    assert summary["status"] == "idle"
+    assert observed["worker_session"] == "handle"
+    assert observed["timeout_seconds"] == 12.5
 
 
-def test_run_build_loop_reports_busy_when_lock_is_held(monkeypatch, tmp_path):
+def test_run_build_loop_writes_running_status_before_work(monkeypatch, tmp_path):
     monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
-    _mk_worker(tmp_path)
-    _mkproj(tmp_path, "demo", "- [ ] first task\n", priority=1)
-    item_index = 0
 
-    with _try_lock(build_loop_lock_path()) as acquired:
-        assert acquired is True
-        summary = run_build_loop(worker="fake", worker_session="done", max_runs=1)
+    repo = tmp_path / "prototypes" / "poe-orchestration"
+    (repo / "output").mkdir(parents=True, exist_ok=True)
+
+    next_item = SimpleNamespace(index=1, text="active task")
+
+    monkeypatch.setattr(blr, "select_next_item", lambda project: next_item)
+    monkeypatch.setattr(blr, "worker_session_bridge", lambda worker_session, timeout_seconds=None: object())
+
+    def _fake_run_loop(**kwargs):
+        status = json.loads(blr.build_loop_status_path().read_text(encoding="utf-8"))
+        assert status["status"] == "running"
+        assert status["reason"] == "lock_acquired"
+        assert status["selected_project"] == "demo"
+        return []
+
+    monkeypatch.setattr(blr, "run_loop", _fake_run_loop)
+
+    summary = blr.run_build_loop(project="demo", worker_session="handle", max_runs=1)
+
+    assert summary["status"] == "idle"
+
+
+def test_run_build_loop_busy_preserves_existing_status(monkeypatch, tmp_path):
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+
+    repo = tmp_path / "prototypes" / "poe-orchestration"
+    output_dir = repo / "output"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    next_item = SimpleNamespace(index=1, text="queued task")
+    existing_status = {
+        "status": "running",
+        "reason": "lock_acquired",
+        "started_at": "2026-06-21T23:45:47Z",
+        "finished_at": None,
+        "project": None,
+        "selected_project": "demo",
+        "worker": "handle",
+        "worker_session": "handle",
+        "runs": 0,
+        "orch_root": str(repo),
+    }
+    blr.build_loop_status_path().write_text(json.dumps(existing_status, indent=2) + "\n", encoding="utf-8")
+
+    monkeypatch.setattr(blr, "select_global_next", lambda: ("demo", next_item))
+
+    class _BusyLock:
+        def __enter__(self):
+            return False
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(blr, "_try_lock", lambda path: _BusyLock())
+
+    summary = blr.run_build_loop(worker_session="handle", max_runs=1)
 
     assert summary["status"] == "busy"
-    assert summary["reason"] == "lock_held"
-    item = orch.get_item("demo", item_index)
-    assert item.state == orch.STATE_TODO
+    preserved = json.loads(blr.build_loop_status_path().read_text(encoding="utf-8"))
+    assert preserved == existing_status
+
+
+def test_run_build_loop_busy_when_worker_session_already_active(monkeypatch, tmp_path):
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+
+    repo = tmp_path / "prototypes" / "poe-orchestration"
+    (repo / "output").mkdir(parents=True, exist_ok=True)
+
+    next_item = SimpleNamespace(index=1, text="queued task")
+
+    monkeypatch.setattr(blr, "select_global_next", lambda: ("demo", next_item))
+    monkeypatch.setattr(blr, "_worker_session_already_active", lambda worker_session: True)
+
+    summary = blr.run_build_loop(worker_session="handle", max_runs=1)
+
+    assert summary["status"] == "busy"
+    assert summary["reason"] == "worker_session_active"
+    status = json.loads(blr.build_loop_status_path().read_text(encoding="utf-8"))
+    assert status["status"] == "busy"
+    assert status["reason"] == "worker_session_active"
+
+
+def test_run_build_loop_interrupt_cleans_up_running_items(monkeypatch, tmp_path):
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+
+    repo = tmp_path / "prototypes" / "poe-orchestration"
+    (repo / "output").mkdir(parents=True, exist_ok=True)
+
+    next_item = SimpleNamespace(index=1, text="interruptible task")
+    cleaned = []
+
+    monkeypatch.setattr(blr, "select_next_item", lambda project: next_item)
+    monkeypatch.setattr(blr, "worker_session_bridge", lambda worker_session, timeout_seconds=None: object())
+    monkeypatch.setattr(
+        blr,
+        "_load_run_records",
+        lambda: [SimpleNamespace(run_id="run-123", status="running", source="build-loop")],
+    )
+    monkeypatch.setattr(
+        blr,
+        "finalize_run",
+        lambda run_id, status, note=None: cleaned.append((run_id, status, note)),
+    )
+
+    def _boom(**kwargs):
+        raise KeyboardInterrupt()
+
+    monkeypatch.setattr(blr, "run_loop", _boom)
+
+    summary = blr.run_build_loop(project="demo", worker_session="handle", max_runs=1)
+
+    assert summary["status"] == "interrupted"
+    assert summary["reason"] == "keyboard_interrupt"
+    assert cleaned == [("run-123", "blocked", "build loop interrupted: keyboard_interrupt")]
+    status = json.loads(blr.build_loop_status_path().read_text(encoding="utf-8"))
+    assert status["status"] == "interrupted"
+    assert status["reason"] == "keyboard_interrupt"
+
+
+def test_main_returns_130_for_interrupted_summary(monkeypatch):
+    monkeypatch.setattr(
+        blr,
+        "run_build_loop",
+        lambda **kwargs: {"status": "interrupted", "reason": "sigterm"},
+    )
+    assert blr.main(["--format", "json"]) == 130

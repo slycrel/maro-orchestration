@@ -1,6 +1,8 @@
 """Tests for orch_bridges.py — execution bridges, worker session specs, validation bridges."""
 
 import json
+import signal
+import subprocess
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -713,14 +715,16 @@ class TestCommandExecutionBridge:
 
 
 class TestSessionExecutionBridge:
-    @patch("orch_bridges.subprocess.run")
-    def test_failed_session_includes_stdout_and_stderr_tails(self, mock_run, tmp_path, monkeypatch):
+    @patch("orch_bridges.subprocess.Popen")
+    def test_failed_session_includes_stdout_and_stderr_tails(self, mock_popen, tmp_path, monkeypatch):
         monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
-        mock_run.return_value = MagicMock(
-            returncode=1,
-            stdout="line a\nNOW lane error: 429 Client Error\nfinal stdout line\n",
-            stderr="warn one\nwarn two\nfinal stderr line\n",
+        proc = MagicMock()
+        proc.communicate.return_value = (
+            "line a\nNOW lane error: 429 Client Error\nfinal stdout line\n",
+            "warn one\nwarn two\nfinal stderr line\n",
         )
+        proc.returncode = 1
+        mock_popen.return_value = proc
         bridge = session_execution_bridge("false")
         with pytest.raises(ExecutionBridgeError) as excinfo:
             bridge(_make_run())
@@ -729,6 +733,40 @@ class TestSessionExecutionBridge:
         assert "session failed" in msg
         assert "stdout=line a | NOW lane error: 429 Client Error | final stdout line" in msg
         assert "stderr=warn one | warn two | final stderr line" in msg
+
+    @patch("orch_bridges.os.killpg")
+    @patch("orch_bridges.subprocess.Popen")
+    def test_timeout_writes_logs_and_result_payload(self, mock_popen, mock_killpg, tmp_path, monkeypatch):
+        monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+        proc = MagicMock()
+        proc.pid = 12345
+        proc.communicate.side_effect = [
+            subprocess.TimeoutExpired(
+                cmd="sleep 10",
+                timeout=0.25,
+                output="partial stdout\nfinal stdout\n",
+                stderr="warn one\nfinal stderr\n",
+            ),
+            ("partial stdout\nfinal stdout\n", "warn one\nfinal stderr\n"),
+        ]
+        mock_popen.return_value = proc
+        bridge = session_execution_bridge("sleep 10", timeout_seconds=0.25)
+        run = _make_run()
+
+        with pytest.raises(ExecutionBridgeError, match="session timed out after 0.25s"):
+            bridge(run)
+
+        assert mock_killpg.call_args_list[0] == ((proc.pid, signal.SIGTERM), {})
+        assert ((proc.pid, signal.SIGKILL), {}) in mock_killpg.call_args_list
+
+        artifact_root = tmp_path / "prototypes" / "poe-orchestration" / "output" / "runs" / run.run_id
+        assert (artifact_root / "session-stdout.log").read_text(encoding="utf-8") == "partial stdout\nfinal stdout\n"
+        assert (artifact_root / "session-stderr.log").read_text(encoding="utf-8") == "warn one\nfinal stderr\n"
+        payload = json.loads((artifact_root / "session-result.json").read_text(encoding="utf-8"))
+        assert payload["status"] == "blocked"
+        assert "session timed out after 0.25s" in payload["note"]
+        assert "stdout=partial stdout | final stdout" in payload["note"]
+        assert "stderr=warn one | final stderr" in payload["note"]
 
 
 # ---------------------------------------------------------------------------
