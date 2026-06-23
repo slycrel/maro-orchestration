@@ -15,6 +15,13 @@ Two replayable decision points per run:
   pipeline's actual behavior was to end the run with metadata.status
   (and, historically, the heartbeat often re-enqueued failures verbatim).
 
+Live decide-only taps (called from the running pipeline, config-gated off):
+- shadow_dispatch_live() — at the autonomous dispatch boundary.
+- shadow_blocked_step_live() — at the heuristic recovery decision
+  (agent_loop._handle_blocked_step), the dumb-loop audit priority-1 point.
+Both emit NAVIGATOR_DECIDED rows with pipeline_actual.point set, so
+analyze_live_agreement() can break agreement down per decision point.
+
 CLI (dev tool, like poe-introspect):
     PYTHONPATH=src python3 -m navigator_shadow <handle-id>... \
         [--point dispatch|closure|both] [--tiers cheap,mid,power]
@@ -334,6 +341,104 @@ def shadow_dispatch_live(
         return None
 
 
+# The heuristic recovery tree (agent_loop._handle_blocked_step) emits one of
+# four actions; each maps to the navigator move that subsumes it. This is the
+# mapping the dumb-loop audit (docs/DUMB_LOOP_AUDIT.md, priority-1 point) names:
+# retry == keep going on this thread (extend), redecompose/split == break the
+# work apart (fork), stuck == give up on this thread (close).
+_BLOCKED_ACTION_TO_MOVE = {
+    "retry": "extend",
+    "redecompose": "fork",
+    "split": "fork",
+    "stuck": "close",
+}
+
+
+def shadow_blocked_step_live(
+    goal: str,
+    *,
+    run_dir: Optional[Any] = None,
+    heuristic_action: str = "",
+    block_reason: str = "",
+    signals: Optional[Dict[str, Any]] = None,
+    turn_index: int = 0,
+    tiers: Optional[List[str]] = None,
+    adapter_factory=None,
+) -> Optional[Any]:
+    """Live shadow at the blocked-step recovery decision: decide-only.
+
+    Called from agent_loop's blocked-step handler right after the heuristic
+    tree (`_handle_blocked_step`) picks retry / redecompose / split / stuck.
+    The navigator independently judges the SAME block from the goal-brain plus
+    the work-report signals (retries, convergence, sibling-failure rate,
+    replan count). This is the priority-1 point of the dumb-loop audit data
+    half — the densest threshold cluster, where a wrong extend-vs-close call
+    wastes runs or strands goals.
+
+    Config-gated by `navigator.shadow_blocked_step` (default OFF in code: a
+    model call per blocked step is real spend and latency, so a deployment
+    opts in via workspace config). Never raises; never alters recovery.
+    Returns the decision or None.
+    """
+    try:
+        from config import get as cfg_get
+        if not bool(cfg_get("navigator.shadow_blocked_step", False)):
+            return None
+        if tiers is None:
+            tiers = list(cfg_get("navigator.shadow_tiers", ["cheap"]))
+    except Exception:
+        return None
+
+    try:
+        sig = dict(signals or {})
+        move_equivalent = _BLOCKED_ACTION_TO_MOVE.get(heuristic_action, heuristic_action)
+        # stuck is the only terminal action — everything else is the loop
+        # still trying. status feeds the navigator's extend-vs-close instinct.
+        status = "failed" if heuristic_action == "stuck" else "partial"
+        work = WorkReport(
+            move="execute",
+            status=status,
+            summary=(block_reason or "step blocked")[:300],
+            recommendation=heuristic_action,
+            signals=sig,
+        )
+        goal_brain = ""
+        if run_dir is not None:
+            try:
+                import thread_brain as _tb
+                goal_brain = _tb.load_thread_brain(run_dir)
+            except Exception:
+                goal_brain = ""
+        nav_input = NavigatorInput(
+            goal=goal,
+            goal_brain=goal_brain,
+            turn_index=turn_index,
+            last_work=work,
+            budget={"note": "live blocked-step shadow"},
+        )
+        pipeline_actual = {
+            "point": "blocked_step",
+            "move_equivalent": move_equivalent,
+            "heuristic_action": heuristic_action,
+            "live": True,
+            **{k: sig[k] for k in ("retries", "converging", "sibling_fail_rate",
+                                   "replan_count") if k in sig},
+        }
+        from navigator_prompt import decide
+        decision, _meta = decide(
+            nav_input,
+            tiers=tiers,
+            adapter_factory=adapter_factory,
+            shadow=True,
+            pipeline_actual=pipeline_actual,
+        )
+        return decision
+    except Exception as exc:
+        import logging
+        logging.getLogger("navigator").debug("live blocked-step shadow skipped: %s", exc)
+        return None
+
+
 def analyze_live_agreement(events: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Tabulate live NAVIGATOR_DECIDED rows into per-move agreement counts —
     the cutover evidence (NAVIGATOR_SCHEMA.md analysis query, structured).
@@ -357,23 +462,30 @@ def analyze_live_agreement(events: List[Dict[str, Any]]) -> Dict[str, Any]:
             "confidence": c.get("confidence"),
             "tier": c.get("tier"),
             "pipeline": pa.get("move_equivalent"),
+            "point": pa.get("point") or "dispatch",
             "goal_preview": str(
                 (c.get("input_digest") or {}).get("goal_preview", ""))[:80],
         })
     by_move: Dict[str, Dict[str, int]] = {}
+    by_point: Dict[str, Dict[str, int]] = {}
     divergences = []
     for r in rows:
         m, p = r["move"], r["pipeline"]
-        slot = by_move.setdefault(str(m), {"agree": 0, "diverge": 0})
         in_kind = m in ("close", "escalate") and p == "guard_refused"
-        if m == p or in_kind:
+        agree = (m == p or in_kind)
+        slot = by_move.setdefault(str(m), {"agree": 0, "diverge": 0})
+        pslot = by_point.setdefault(str(r["point"]), {"agree": 0, "diverge": 0})
+        if agree:
             slot["agree"] += 1
+            pslot["agree"] += 1
         else:
             slot["diverge"] += 1
+            pslot["diverge"] += 1
             divergences.append(r)
     return {
         "live_rows": len(rows),
         "by_move": by_move,
+        "by_point": by_point,
         "agreements": sum(s["agree"] for s in by_move.values()),
         "divergences": divergences,
     }
@@ -405,12 +517,17 @@ def _analyze_main(json_out: bool) -> int:
         return 0
     print(f"live NAVIGATOR_DECIDED rows: {summary['live_rows']} "
           f"(agreements {summary['agreements']})")
+    print("by decision point:")
+    for point, s in sorted(summary.get("by_point", {}).items()):
+        print(f"  {point:12s} agree={s['agree']:3d} diverge={s['diverge']:3d}")
+    print("by navigator move:")
     for move, s in sorted(summary["by_move"].items()):
         print(f"  {move:10s} agree={s['agree']:3d} diverge={s['diverge']:3d}")
     if summary["divergences"]:
         print("divergences (adjudicate each — divergence is eval data):")
         for d in summary["divergences"]:
-            print(f"  {d['timestamp']} {d['move']}({d['confidence']}) "
+            print(f"  {d['timestamp']} [{d.get('point','dispatch')}] "
+                  f"{d['move']}({d['confidence']}) "
                   f"vs {d['pipeline']} | {d['goal_preview']}")
     return 0
 

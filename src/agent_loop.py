@@ -592,6 +592,14 @@ def _process_blocked_step(ctx: LoopContext, blk: BlockedStepContext) -> tuple:
         loop_id=ctx.loop_id,
     )
 
+    # The heuristic recovery tree's chosen action (used by both the
+    # METACOGNITIVE_DECISION log and the navigator shadow below).
+    _heuristic_action = "retry" if _decision.retry else (
+        "redecompose" if _decision.redecompose else (
+            "split" if _decision.split_into else "stuck"
+        )
+    )
+
     # Phase 62: Log metacognitive reasoning
     if _decision.metacognitive_reason:
         log.info("metacognitive decision: %s", _decision.metacognitive_reason)
@@ -606,15 +614,39 @@ def _process_blocked_step(ctx: LoopContext, blk: BlockedStepContext) -> tuple:
                     "retries": _prior_retries,
                     "fingerprints": _fps[-3:],  # last 3
                     "replan_count": replan_count,
-                    "action": "retry" if _decision.retry else (
-                        "redecompose" if _decision.redecompose else (
-                            "split" if _decision.split_into else "stuck"
-                        )
-                    ),
+                    "action": _heuristic_action,
                 },
             )
         except Exception as _exc:
             log.debug("captain's log emit for recovery decision failed: %s", _exc)
+
+    # Dumb-loop audit priority-1 point: shadow the navigator against this
+    # heuristic recovery decision (decide-only, config-gated off by default,
+    # never raises, never alters recovery). The navigator judges the same
+    # block from the goal-brain + the convergence/sibling signals the
+    # heuristic used. Divergence is the cutover evidence. Skipped on dry_run:
+    # the shadow builds its own real adapter (not ctx.adapter), so the
+    # hermeticity guard belongs at the call site.
+    try:
+        if not ctx.dry_run:
+            import navigator_shadow as _ns
+            _ns.shadow_blocked_step_live(
+                ctx.goal,
+                run_dir=_current_run_dir_safe(),
+                heuristic_action=_heuristic_action,
+                block_reason=outcome.get("stuck_reason", "blocked"),
+                signals={
+                    "retries": _prior_retries,
+                    "replan_count": replan_count,
+                    "converging": _is_converging(_fps),
+                    "sibling_fail_rate": round(_sibling_failure_rate(step_outcomes), 2)
+                    if step_outcomes else 0.0,
+                    "block_reason": outcome.get("stuck_reason", "blocked")[:80],
+                },
+                turn_index=iteration,
+            )
+    except Exception as _nav_exc:
+        log.debug("blocked-step navigator shadow skipped: %s", _nav_exc)
     _recovery_delta = 0
 
     if _decision.retry:
@@ -1243,6 +1275,16 @@ def _local_auto_ralph_enabled() -> bool:
         return _lm.auto_verify_enabled()
     except Exception:
         return False
+
+
+def _current_run_dir_safe():
+    """current_run_dir() that never raises — returns None if unavailable.
+    Used by decide-only instrumentation that must not perturb the loop."""
+    try:
+        from runs import current_run_dir
+        return current_run_dir()
+    except Exception:
+        return None
 
 
 def _record_loop_decision(source: str, trigger: str, action: str,

@@ -348,20 +348,119 @@ class TestShadowDispatchLive:
         assert built == ["mid"]
 
 
+class TestShadowBlockedStepLive:
+    """shadow_blocked_step_live: the dumb-loop audit priority-1 point.
+    Config gate, heuristic->move mapping, instrumentation, never-raises."""
+
+    GOAL = "summarize the quarterly report"
+
+    def _cfg(self, overrides):
+        def get(name, default=None):
+            return overrides.get(name, default)
+        return get
+
+    def test_off_by_default_in_code(self):
+        from unittest.mock import patch
+        from navigator_shadow import shadow_blocked_step_live
+        built = []
+        with patch("config.get", side_effect=self._cfg({})):
+            result = shadow_blocked_step_live(
+                self.GOAL, heuristic_action="retry",
+                adapter_factory=lambda t: built.append(t) or _FakeAdapter(
+                    [_resp("extend")]),
+            )
+        assert result is None
+        assert built == [], "no adapter should be built when the gate is off"
+
+    def test_records_move_equivalent_and_signals(self):
+        from unittest.mock import patch
+        from navigator_shadow import shadow_blocked_step_live
+        events = []
+        with patch("config.get",
+                   side_effect=self._cfg({"navigator.shadow_blocked_step": True})), \
+             patch("captains_log.log_event",
+                   side_effect=lambda et, **kw: events.append((et, kw))):
+            decision = shadow_blocked_step_live(
+                self.GOAL,
+                heuristic_action="redecompose",
+                block_reason="subprocess timed out",
+                signals={"retries": 2, "converging": False,
+                         "sibling_fail_rate": 0.6, "replan_count": 1},
+                turn_index=4,
+                adapter_factory=lambda t: _FakeAdapter([_resp(
+                    "fork", children=[{"goal": "fetch report"},
+                                      {"goal": "extract figures"}])]),
+            )
+        assert decision is not None and decision.move == "fork"
+        decided = [kw for et, kw in events if et == "NAVIGATOR_DECIDED"]
+        assert len(decided) == 1
+        actual = decided[0]["context"]["pipeline_actual"]
+        assert actual["live"] is True
+        assert actual["point"] == "blocked_step"
+        # redecompose maps to the fork move equivalent.
+        assert actual["move_equivalent"] == "fork"
+        assert actual["heuristic_action"] == "redecompose"
+        # the heuristic's signals ride along for adjudication.
+        assert actual["retries"] == 2 and actual["sibling_fail_rate"] == 0.6
+
+    def test_stuck_maps_to_close_and_failed_status(self):
+        from unittest.mock import patch
+        from navigator_shadow import shadow_blocked_step_live
+        adapter = _FakeAdapter([_resp("close", closure="abandoned",
+                                      verdict="exhausted retries")])
+        with patch("config.get",
+                   side_effect=self._cfg({"navigator.shadow_blocked_step": True})):
+            shadow_blocked_step_live(
+                self.GOAL, heuristic_action="stuck",
+                block_reason="exhausted retries",
+                adapter_factory=lambda t: adapter,
+            )
+        # "stuck" is terminal -> WorkReport.status failed reaches the prompt.
+        user_text = adapter.calls[0][-1].content
+        assert "failed" in user_text
+
+    def test_never_raises_when_decide_explodes(self):
+        from unittest.mock import patch
+        from navigator_shadow import shadow_blocked_step_live
+        with patch("config.get",
+                   side_effect=self._cfg({"navigator.shadow_blocked_step": True})), \
+             patch("navigator_prompt.decide",
+                   side_effect=RuntimeError("decide blew up")):
+            result = shadow_blocked_step_live(self.GOAL, heuristic_action="retry")
+        assert result is None
+
+
 class TestAnalyzeLiveAgreement:
     """analyze_live_agreement: per-move agreement table from NAVIGATOR_DECIDED
     rows — the per-class cutover evidence, structured."""
 
-    def _event(self, move, pipeline, *, live=True, conf=0.9, goal="g"):
+    def _event(self, move, pipeline, *, live=True, conf=0.9, goal="g", point=None):
+        pa = {"move_equivalent": pipeline, "live": live}
+        if point is not None:
+            pa["point"] = point
         return {
             "event_type": "NAVIGATOR_DECIDED",
             "timestamp": "2026-06-12T00:00:00+00:00",
             "context": {
                 "move": move, "confidence": conf, "tier": "cheap",
                 "input_digest": {"goal_preview": goal},
-                "pipeline_actual": {"move_equivalent": pipeline, "live": live},
+                "pipeline_actual": pa,
             },
         }
+
+    def test_by_point_breakdown(self):
+        from navigator_shadow import analyze_live_agreement
+        events = [
+            self._event("execute", "execute", point="dispatch"),
+            self._event("extend", "extend", point="blocked_step"),
+            self._event("close", "fork", point="blocked_step", goal="bad"),
+            self._event("execute", "execute"),  # no point -> defaults dispatch
+        ]
+        s = analyze_live_agreement(events)
+        assert s["by_point"]["dispatch"] == {"agree": 2, "diverge": 0}
+        assert s["by_point"]["blocked_step"] == {"agree": 1, "diverge": 1}
+        # divergence row carries its point for adjudication.
+        assert s["divergences"][0]["point"] == "blocked_step"
 
     def test_agreement_and_divergence_counting(self):
         from navigator_shadow import analyze_live_agreement

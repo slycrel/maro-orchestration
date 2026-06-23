@@ -1,8 +1,11 @@
 # Dumb-Loop Audit — pipeline decision-point inventory
 
 **Status: static half done 2026-06-11. Data half round 1 done 2026-06-21 —
-dispatch boundary only (the single live shadow point); other points await
-their own instrumentation. See "Data half — round 1" below.**
+dispatch boundary only (the single live shadow point). Round 2 instrumentation
+wired 2026-06-23 — priority-1 point `_handle_blocked_step` now has a live
+navigator shadow tap (`navigator_shadow.shadow_blocked_step_live`), config-gated
+off; awaiting data. See "Data half — round 1" and "Round 2 — blocked-step
+instrumentation" below.**
 
 The navigator (`src/navigator.py`, shadow-only) defines six moves: extend /
 execute / fork / collate / close / escalate. The pipeline today makes the same
@@ -186,6 +189,36 @@ the step-2 pressure test already quantified ~40 wasted runs at that boundary —
 with shadow logging so round 2 can report a second agreement table. Until then
 the cutover stays scoped to the dispatch boundary, the only point with the
 evidence to justify it.
+
+## Round 2 — blocked-step instrumentation (2026-06-23)
+
+Priority-1 point `_handle_blocked_step` (agent_loop.py:3137–3366) now has a
+live navigator shadow tap, mirroring the dispatch tap. After the heuristic
+recovery tree picks its action, `navigator_shadow.shadow_blocked_step_live()`
+asks the navigator to judge the same block from the goal-brain + the signals
+the heuristic used (retries, error convergence, sibling-failure rate, replan
+count), and logs a `NAVIGATOR_DECIDED` row with `pipeline_actual.point =
+"blocked_step"`. Decide-only: never alters recovery, never raises, skipped on
+dry_run, config-gated **off** by `navigator.shadow_blocked_step` (default
+False — a model call per blocked step is real spend).
+
+Heuristic action → navigator move equivalent (the agreement mapping):
+
+| Heuristic action | Navigator move | Meaning |
+|------------------|----------------|---------|
+| `retry`          | extend         | keep going on this thread |
+| `redecompose`    | fork           | break the work apart |
+| `split`          | fork           | break the work apart |
+| `stuck`          | close          | give up on this thread |
+
+`analyze_live_agreement()` now breaks agreement down per decision point
+(`by_point`), so `python3 -m navigator_shadow --agreement` reports dispatch and
+blocked_step separately. **Awaiting data:** enable `navigator.shadow_blocked_step`
+in `~/.poe/workspace/config.yml` for a batch of real runs that hit blocked
+steps, then read the table. The cutover question this answers: does the
+navigator's extend-vs-fork-vs-close judgment match the threshold cluster
+(retry 3 / replan 2 / sibling 50% / convergence), and on divergence, who was
+right by run outcome?
 
 ## Known gaps (carried to BACKLOG when actionable)
 
