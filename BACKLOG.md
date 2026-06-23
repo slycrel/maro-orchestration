@@ -144,6 +144,13 @@ agreement vs paid and set per-class min_certainty.
   Config knobs: `validate.cpu_affinity` / `cpu_nice` / `ollama_keep_alive`. Enabled in the live
   workspace config (was "left OFF"); reversible via `validate.autostart: false`. Tests:
   `test_local_models.py` (ollama-managed spawn, missing-binary fallback, cap-prefix matrix).
+  **Portable, not box-specific (2026-06-22):** the cap's core list is *derived from the actual
+  CPU count* (`_default_cpu_affinity`: reserve lower half for the system, pin validator to upper
+  half — 4 CPUs→"2-3", 8→"4-7", ≤2→no pin/nice-only), and any explicit `cpu_affinity` is clamped
+  to cores that exist. A hardcoded "2,3" would have made `taskset` fail (→ validator silently
+  never starts) on any box with <4 logical CPUs. `nice`/`taskset` are also Linux+tool-presence
+  guarded (`_cpu_cap_prefix` → [] on macOS/missing tools). So the fix installs and runs unchanged
+  on any Linux box; on macOS/mlx the cap is a graceful no-op.
 - [ ] **Shadow-eval harness for validation.** Mirror `navigator_shadow --agreement`:
   on historical/live runs, run the local validator *and* the paid validator on the
   same step result, log both verdicts (decide-only, changes nothing), and produce a

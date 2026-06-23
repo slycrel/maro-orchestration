@@ -147,14 +147,61 @@ def idle_shutdown_secs() -> int:
         return 300
 
 
+def _cpu_count() -> int:
+    return os.cpu_count() or 1
+
+
+def _default_cpu_affinity() -> str:
+    """Portable default: reserve the lower half of logical CPUs for the system and
+    pin the validator to the upper half (a `taskset -c` range). Derived from the
+    actual CPU count so the harness works unchanged on any Linux box — a hardcoded
+    list would make `taskset` fail on a machine that lacks those cores, silently
+    preventing the validator from starting. Boxes with ≤2 CPUs can't spare a core
+    to isolate, so they get no pin (nice alone keeps inference polite). Examples:
+    4 CPUs → "2-3", 8 → "4-7", 64 → "32-63", ≤2 → ""."""
+    n = _cpu_count()
+    if n <= 2:
+        return ""
+    lo = max(2, n // 2)
+    return f"{lo}-{n - 1}"
+
+
+def _parse_cpu_list(spec: str) -> set:
+    """Parse a `taskset -c` spec ("0,2,4" or "2-3" or a mix) into a set of ints."""
+    out: set = set()
+    for part in spec.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "-" in part:
+            a, _, b = part.partition("-")
+            try:
+                out.update(range(int(a), int(b) + 1))
+            except ValueError:
+                continue
+        else:
+            try:
+                out.add(int(part))
+            except ValueError:
+                continue
+    return out
+
+
 def cpu_affinity() -> str:
-    """Logical CPUs the *managed* local runtime may use (a `taskset -c` list, e.g.
-    "2,3"). Caps the validator so inference can't starve the box or the test suite
-    on a small machine — local inference on a slow CPU pins >1 core for seconds per
-    call. Empty string disables pinning. Linux only (taskset). Default "2,3": the
-    upper two logical CPUs on the 2-core/4-thread box, leaving the lower pair free
-    for the orchestration and other tenants."""
-    return str(_cfg("cpu_affinity", "2,3") or "").strip()
+    """Logical CPUs the *managed* local runtime may use (normalized `taskset -c`
+    list). Caps the validator so inference can't starve the box on a small machine
+    — local inference pins >1 core for seconds per call. Config `validate.cpu_affinity`
+    overrides the portable derived default (`_default_cpu_affinity`). Either way the
+    cores are clamped to those that actually exist, so a stale or borrowed config
+    can't make `taskset` fail (which would silently keep the validator from
+    starting). Empty → no pinning (nice only). Linux only (taskset)."""
+    raw = _cfg("cpu_affinity", None)
+    spec = _default_cpu_affinity() if raw is None else str(raw or "").strip()
+    if not spec:
+        return ""
+    n = _cpu_count()
+    valid = sorted(c for c in _parse_cpu_list(spec) if 0 <= c < n)
+    return ",".join(str(c) for c in valid)
 
 
 def cpu_nice() -> int:
