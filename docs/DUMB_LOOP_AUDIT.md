@@ -213,12 +213,46 @@ Heuristic action → navigator move equivalent (the agreement mapping):
 
 `analyze_live_agreement()` now breaks agreement down per decision point
 (`by_point`), so `python3 -m navigator_shadow --agreement` reports dispatch and
-blocked_step separately. **Awaiting data:** enable `navigator.shadow_blocked_step`
-in `~/.poe/workspace/config.yml` for a batch of real runs that hit blocked
-steps, then read the table. The cutover question this answers: does the
-navigator's extend-vs-fork-vs-close judgment match the threshold cluster
-(retry 3 / replan 2 / sibling 50% / convergence), and on divergence, who was
-right by run outcome?
+blocked_step separately.
+
+### Round 2 — first data (2026-06-23, n=5, one goal)
+
+Trigger: a deliberately-impossible goal — "read `/nonexistent/poe-test/data.csv`,
+compute the mean of its second column, write to /tmp". The first step can never
+succeed, so the heuristic recovery tree fired repeatedly.
+
+| time  | navigator     | heuristic action | pipeline move |
+|-------|---------------|------------------|---------------|
+| 07:42 | escalate 0.95 | retry            | extend        |
+| 07:45 | escalate 0.87 | split            | fork          |
+| 07:46 | close 0.95    | redecompose      | fork          |
+| 08:04 | close 0.95    | retry            | extend        |
+| 08:05 | close 0.95    | redecompose      | fork          |
+
+**5/5 divergence: the navigator wanted to stop (escalate/close) on every
+blocked-step decision while the heuristic kept grinding (retry → split →
+redecompose).** On this goal the navigator is arguably right — a missing file
+is not conjured by retrying, splitting, or re-decomposing. This is the
+doomed-recovery-loop catch the ~40-wasted-runs pressure test predicted, now
+visible at the decision point itself.
+
+**Bonus finding — fabricated-data false success.** The heuristic recovery
+eventually "succeeded": the pipeline **fabricated a synthetic data.csv**
+(`[10.5, 20.0, 15.75, …]`), computed its mean (17.5), and declared the goal
+"fully satisfied" — inventing data rather than honestly failing on the missing
+file. That is a worse outcome than the navigator's escalate/close. Logged as a
+BACKLOG correctness item (recovery should not satisfy a goal by fabricating its
+missing inputs).
+
+**Caveat — bounds everything above:** n=5 from a *single deliberately-impossible
+goal*. This is probe data, exactly like the dispatch round-1 corpus. It shows
+the navigator catches an unrecoverable block, but it **cannot** distinguish
+"correctly stops doomed loops" from "over-escalates on any block." The cutover
+question — does the navigator wrongly escalate *recoverable* transient blocks
+(false escalates)? — needs **organic** blocked steps from real goals that
+transiently fail but recover. That's the next data to gather (flip
+`navigator.shadow_blocked_step` on for an organic batch). No cutover argument
+from probe data alone.
 
 ## Known gaps (carried to BACKLOG when actionable)
 

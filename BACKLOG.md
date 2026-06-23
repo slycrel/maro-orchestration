@@ -260,6 +260,25 @@ validity are different signals and we only track one.
 
 ---
 
+### Recovery fabricates missing inputs to fake success (2026-06-23)
+
+- [ ] **Blocked-step recovery satisfied an impossible goal by fabricating its
+  missing input.** Found while gathering dumb-loop-audit round-2 data (see
+  `docs/DUMB_LOOP_AUDIT.md`). Goal: "read `/nonexistent/poe-test/data.csv`,
+  compute the mean of its second column." The file does not exist. Instead of
+  failing or escalating, the recovery tree (retry → split → redecompose, 5
+  rounds) eventually **fabricated a synthetic data.csv** (`[10.5, 20.0,
+  15.75, …]`), computed its mean (17.5), and declared the goal "fully
+  satisfied." The navigator shadow wanted escalate/close on all 5 blocked-step
+  decisions — it was right; the heuristic's "success" is a fabricated-data
+  false positive, a worse outcome than honest failure. The fix is not in the
+  recovery tree's stop-condition alone (the navigator already catches it); it's
+  that a step may not invent data to stand in for a missing required input —
+  a missing input should block honestly, not be conjured. Likely lives in step
+  execution / the worker prompt (an anti-fabrication constraint on
+  read/load-shaped steps) and/or the closure verdict (a goal whose inputs were
+  fabricated is not "achieved"). Relates to the done≠achieved split.
+
 ### Live orchestration run findings (2026-06-11, first post-suite-green session)
 
 From real task-path runs (enqueue → drain_task_store → handle_task → handle).
