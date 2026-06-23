@@ -134,6 +134,12 @@ NAVIGATOR_DECIDED = "NAVIGATOR_DECIDED"
 # this is the audit trail that the navigator owned the call.
 NAVIGATOR_ACTED = "NAVIGATOR_ACTED"
 
+# Validation shadow-eval (BACKLOG: local-vs-paid agreement harness). One per
+# validated step while `validate.shadow_eval` is on: the local (free) verdict and
+# the paid verdict on the same result, tagged by step class. Decide-only evidence
+# for per-class min_certainty / routing; nothing reads it for control flow.
+VALIDATOR_SHADOWED = "VALIDATOR_SHADOWED"
+
 EVENT_TYPES = {
     SKILL_SYNTHESIZED, SKILL_SYNTHESIS_REJECTED, SKILL_PROMOTED, SKILL_DEMOTED, SKILL_REWRITE,
     SKILL_CIRCUIT_OPEN, SKILL_CIRCUIT_HALF_OPEN, SKILL_CIRCUIT_CLOSED,
@@ -151,6 +157,7 @@ EVENT_TYPES = {
     LOOP_CREATED, QUALITY_GATE_VERDICT, STEP_TOO_BROAD,
     RECALL_PERFORMED, RECALL_GUARD_TRIPPED,
     NAVIGATOR_DECIDED, NAVIGATOR_ACTED,
+    VALIDATOR_SHADOWED,
 }
 
 # ---------------------------------------------------------------------------

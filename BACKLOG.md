@@ -151,17 +151,28 @@ agreement vs paid and set per-class min_certainty.
   never starts) on any box with <4 logical CPUs. `nice`/`taskset` are also Linux+tool-presence
   guarded (`_cpu_cap_prefix` → [] on macOS/missing tools). So the fix installs and runs unchanged
   on any Linux box; on macOS/mlx the cap is a graceful no-op.
-- [ ] **Shadow-eval harness for validation.** Mirror `navigator_shadow --agreement`:
-  on historical/live runs, run the local validator *and* the paid validator on the
-  same step result, log both verdicts (decide-only, changes nothing), and produce a
-  per-step-class agreement table. This is the evidence that earns (or denies) cutover.
-- [ ] **Agreement + calibration metrics.** Local-vs-paid agreement rate, false-pass /
-  false-fail rates (vs paid as ground truth), and confidence calibration (is "0.8"
-  actually 80% reliable?). Use to set `min_certainty` per step class rather than one
-  global number. Tie into `metrics.py` (pass@k/pass^k already tracked).
-- [ ] **Per-class routing.** Expect high agreement on verifiable code/math steps,
-  low on fuzzy research-quality steps. Route only the classes where the local judge
-  earns it; keep the rest on the paid path. Don't trust benchmark parity globally.
+- [x] **Shadow-eval harness for validation (2026-06-22).** `src/validation_shadow.py`,
+  mirroring `navigator_shadow --agreement`. On a validated step it records BOTH the
+  local verdict and the paid verdict on the same result, tagged by step class, as a
+  `VALIDATOR_SHADOWED` captain's-log row (decide-only — the actual validation verdict
+  is unchanged). Two data sources: the **escalation path** (local UNDECIDED → paid
+  already called → log the pair free) and the **decisive path** (local confident →
+  production skips paid → make an EXTRA paid call to learn whether local was right).
+  The extra call is real spend, so the whole harness is gated behind
+  `validate.shadow_eval` (default off; opt in to gather data) and only fires for a real
+  `llm.LLMAdapter` (dry-run / test doubles inert). Wired into `step_exec.verify_step`
+  at both tiers. Tests in `tests/test_validation_shadow.py`. **Agreement + calibration
+  metrics folded in** (was a separate bullet): `analyze_validation_agreement` /
+  `python3 -m validation_shadow --agreement` produces per-class agreement %, the two
+  error directions (false_pass = local PASS / paid FAIL, the dangerous one; false_fail
+  = wasted escalation), and a local-confidence calibration table (does a "0.9" agree
+  ~90% of the time?). **Next: gather data** — flip `validate.shadow_eval` on for a
+  batch of real runs, then read the table.
+- [ ] **Per-class routing (needs shadow-eval data first).** Expect high agreement on
+  verifiable code/math steps, low on fuzzy research-quality steps. Once the
+  `--agreement` table has enough rows, route only the classes where the local judge
+  earns it (per-class `min_certainty`); keep the rest on the paid path. Don't trust
+  benchmark parity globally. Blocked on accumulating VALIDATOR_SHADOWED rows.
 - [ ] **Tune `local_max_tokens` per model.** Live finding (2026-06-21 verify run):
   VibeThinker's `<think>` trace on *real* (long) step results overran the 1024
   floor → empty content → conf 0.00 → spurious escalation on 2/5 steps (the other

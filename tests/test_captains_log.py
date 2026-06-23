@@ -230,11 +230,15 @@ class TestEventTypes:
         assert DECISION_RECORDED in EVENT_TYPES
 
     def test_event_type_count(self):
-        assert len(EVENT_TYPES) == 48
+        assert len(EVENT_TYPES) == 49
 
     def test_navigator_acted_in_set(self):
         from captains_log import NAVIGATOR_ACTED
         assert NAVIGATOR_ACTED in EVENT_TYPES
+
+    def test_validator_shadowed_in_set(self):
+        from captains_log import VALIDATOR_SHADOWED
+        assert VALIDATOR_SHADOWED in EVENT_TYPES
 
     def test_rule_refought_in_set(self):
         from captains_log import RULE_REFOUGHT

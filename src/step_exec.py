@@ -1185,6 +1185,7 @@ def verify_step(
     """
     # --- Tier 1: free local validator (gated; falls through to paid on anything) ---
     _escalated = False
+    _local_lv = None   # (verdict, source) carried to Tier 2 for shadow-eval (no-op unless enabled)
     try:
         import local_models as _lm
         if _lm.configured_models():
@@ -1194,12 +1195,24 @@ def verify_step(
                 from verification_agent import VerificationAgent
                 lv = VerificationAgent(local, confidence_threshold=confidence_threshold,
                                        max_input_chars=_lm.input_char_budget()).verify_step(step_text, result)
+                _local_source = getattr(local, "model_key", "local")
+                _local_lv = (lv, _local_source)
                 if lv.confidence >= _lm.min_certainty():
                     log.debug("local validator decisive: passed=%s conf=%.2f via %s",
-                              lv.passed, lv.confidence, getattr(local, "model_key", "local"))
+                              lv.passed, lv.confidence, _local_source)
+                    # Decisive → production uses local and skips paid. Shadow-eval
+                    # (opt-in) asks paid anyway to learn whether local was right —
+                    # the only place that agreement signal exists. Decide-only.
+                    try:
+                        import validation_shadow as _vs
+                        _vs.shadow_eval(step_text, result, lv, _local_source,
+                                        paid_adapter=adapter,
+                                        confidence_threshold=confidence_threshold)
+                    except Exception:
+                        pass
                     return {"passed": lv.passed, "reason": lv.reason, "confidence": lv.confidence,
                             "decision": "LOCAL_PASS" if lv.passed else "LOCAL_FAIL",
-                            "source": getattr(local, "model_key", "local")}
+                            "source": _local_source}
                 log.info("local validator UNDECIDED (conf=%.2f < %.2f) — escalating to paid",
                          lv.confidence, _lm.min_certainty())
                 _escalated = True
@@ -1211,6 +1224,15 @@ def verify_step(
         from verification_agent import VerificationAgent
         va = VerificationAgent(adapter, confidence_threshold=confidence_threshold)
         verdict = va.verify_step(step_text, result)
+        # Escalation path: local + paid verdicts both exist now — log the pair for
+        # shadow-eval (free; no extra call). No-op unless validate.shadow_eval is on.
+        if _local_lv is not None:
+            try:
+                import validation_shadow as _vs
+                _vs.shadow_eval(step_text, result, _local_lv[0], _local_lv[1],
+                                paid_verdict=verdict, escalated=True)
+            except Exception:
+                pass
         out = {"passed": verdict.passed, "reason": verdict.reason, "confidence": verdict.confidence}
         if _escalated:
             out["decision"] = "ESCALATED"
