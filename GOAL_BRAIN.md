@@ -367,6 +367,27 @@ Sample: the 2026-05-13..17 window of `~/.poe/workspace/runs/` (478 dirs total;
   run-dir doesn't exist at dispatch time). Per-turn maintenance deliberately
   deferred to navigator-live (MILESTONES Next Up #5) — writing it from the
   dumb pipeline would duplicate the navigator's job.
+- **2026-06-22/23** — Local-validator hardening + measurement arc. (1) ollama
+  made safe to leave running: orchestration-managed lifecycle, CPU-capped
+  (`nice`/`taskset`, cores auto-derived from cpu_count so it's portable, not
+  Mac-Mini-specific), process-group reaped, `POE_PYTEST_ACTIVE` guard. (2)
+  Shadow-eval harness shipped (`src/validation_shadow.py`) + live-verified:
+  n=29 across 3 real goals, local qwen2.5-coder:3b vs paid validator 96.6%
+  agreement, **0 false_pass** (the dangerous direction) across every step
+  class; lone miss was a false_fail (local too strict on a file-save). Basis:
+  `VALIDATOR_SHADOWED` rows, `python3 -m validation_shadow --agreement`. 29
+  rows is a smoke sample — per-class `min_certainty` routing still needs a
+  larger batch. Both gated off by default (real spend on the decisive path).
+- **2026-06-23** — Dumb-loop audit round-2 instrumentation: navigator shadow
+  tap at the blocked-step recovery decision (`_handle_blocked_step`, the
+  priority-1 point). Live n=5 on an impossible goal — navigator escalate/close
+  5/5 vs heuristic keep-trying (retry→split→redecompose). Surfaced a
+  correctness bug: the recovery tree faked success by **fabricating** the
+  missing input file (synthetic data.csv → computed mean → "satisfied").
+  BACKLOG'd. Caveat: probe data; organic blocked steps needed to rule out
+  navigator over-escalation before any cutover. Both shadow taps (dispatch
+  live, blocked-step) now emit `pipeline_actual.point`; `--agreement` reports
+  `by_point`.
 
 ## Threads (system-maintained — nothing leaves this list silently)
 
