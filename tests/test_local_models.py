@@ -348,10 +348,35 @@ def test_ensure_ollama_missing_binary_falls_back(monkeypatch):
 
 
 def test_cpu_cap_prefix_linux(monkeypatch):
+    monkeypatch.setattr(lm.os, "cpu_count", lambda: 4)
     _set_cfg(monkeypatch, cpu_affinity="2,3", cpu_nice=10)
     monkeypatch.setattr(lm.platform, "system", lambda: "Linux")
     monkeypatch.setattr(lm.shutil, "which", lambda exe: f"/usr/bin/{exe}", raising=False)
     assert lm._cpu_cap_prefix() == ["nice", "-n", "10", "taskset", "-c", "2,3"]
+
+
+def test_default_cpu_affinity_derives_from_cpu_count(monkeypatch):
+    cases = {1: "", 2: "", 3: "2-2", 4: "2-3", 8: "4-7", 16: "8-15", 64: "32-63"}
+    for n, expected in cases.items():
+        monkeypatch.setattr(lm.os, "cpu_count", lambda n=n: n)
+        assert lm._default_cpu_affinity() == expected, n
+
+
+def test_cpu_affinity_uses_derived_default_when_unset(monkeypatch):
+    # No explicit config → portable derived default, normalized to a list.
+    monkeypatch.setattr(lm.os, "cpu_count", lambda: 8)
+    _set_cfg(monkeypatch)  # no cpu_affinity key
+    assert lm.cpu_affinity() == "4,5,6,7"
+
+
+def test_cpu_affinity_clamps_out_of_range_cores(monkeypatch):
+    # A borrowed/stale config naming cores this box lacks must not make taskset
+    # fail — out-of-range cores are dropped (here only 0,1 exist).
+    monkeypatch.setattr(lm.os, "cpu_count", lambda: 2)
+    _set_cfg(monkeypatch, cpu_affinity="2,3")
+    assert lm.cpu_affinity() == ""  # 2,3 don't exist → no pin, falls to nice-only
+    _set_cfg(monkeypatch, cpu_affinity="0,1,2,3")
+    assert lm.cpu_affinity() == "0,1"
 
 
 def test_cpu_cap_prefix_noop_off_linux(monkeypatch):
