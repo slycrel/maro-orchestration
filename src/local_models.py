@@ -37,6 +37,7 @@ import json
 import logging
 import os
 import platform
+import shutil
 import subprocess
 import threading
 import time
@@ -144,6 +145,33 @@ def idle_shutdown_secs() -> int:
         return max(0, int(_cfg("idle_shutdown_secs", 300)))
     except (TypeError, ValueError):
         return 300
+
+
+def cpu_affinity() -> str:
+    """Logical CPUs the *managed* local runtime may use (a `taskset -c` list, e.g.
+    "2,3"). Caps the validator so inference can't starve the box or the test suite
+    on a small machine — local inference on a slow CPU pins >1 core for seconds per
+    call. Empty string disables pinning. Linux only (taskset). Default "2,3": the
+    upper two logical CPUs on the 2-core/4-thread box, leaving the lower pair free
+    for the orchestration and other tenants."""
+    return str(_cfg("cpu_affinity", "2,3") or "").strip()
+
+
+def cpu_nice() -> int:
+    """nice increment for the managed local runtime, so it always yields to the
+    orchestration and interactive work. 0 disables. Clamped 0..19; default 10."""
+    try:
+        return max(0, min(19, int(_cfg("cpu_nice", 10))))
+    except (TypeError, ValueError):
+        return 10
+
+
+def ollama_keep_alive() -> str:
+    """OLLAMA_KEEP_ALIVE for a *managed* ollama: how long a model stays resident
+    after its last request. Short keeps idle RAM low (the model reloads in a few
+    seconds on the next call); the model burns ~0% CPU while merely resident, so
+    this is a RAM knob, not a CPU one. Default "5m" (ollama's own default)."""
+    return str(_cfg("ollama_keep_alive", "5m") or "5m").strip()
 
 
 def autostart_enabled() -> bool:
@@ -377,7 +405,9 @@ def build_local_validator_adapter(fallback: Optional[LLMAdapter] = None
 # The local model is NOT an OS service. The orchestration spins it up on demand
 # (first validation), keeps it warm while validations flow, and reaps it after
 # idle (and on process exit). An already-running server — ours or one started by
-# scripts/local-validator.sh — is reused, never duplicated.
+# scripts/local-validator.sh — is reused, never duplicated. Both runtimes (mlx
+# and ollama's `serve`) are managed the same way: launched under a CPU cap and
+# torn down by process group, so neither can outlive the run or starve the box.
 
 _PROC_LOCK = threading.Lock()
 _MANAGED: dict = {"proc": None, "last_use": 0.0, "reaper": None}
@@ -387,11 +417,85 @@ def _touch_validator() -> None:
     _MANAGED["last_use"] = time.monotonic()
 
 
+def _cpu_cap_prefix() -> List[str]:
+    """`nice`/`taskset` prefix that caps a managed runtime's CPU so it can't
+    starve the box. Linux only, and only for tools that exist; returns [] on
+    macOS (mlx) or when the tools are absent."""
+    if platform.system() != "Linux":
+        return []
+    prefix: List[str] = []
+    n = cpu_nice()
+    if n > 0 and shutil.which("nice"):
+        prefix += ["nice", "-n", str(n)]
+    cores = cpu_affinity()
+    if cores and shutil.which("taskset"):
+        prefix += ["taskset", "-c", cores]
+    return prefix
+
+
+def _launch_argv_env(runtime: str, model: str, endpoint: str):
+    """Build (argv, env_overrides) to start `runtime` serving `model` at
+    `endpoint`. Returns (None, None) when the runtime can't be managed here
+    (missing interpreter/binary, or an unknown runtime → use the paid path)."""
+    if runtime == "mlx":
+        py = mlx_python()
+        if not Path(py).exists():
+            log.warning("local validator autostart: interpreter missing at %s — "
+                        "run scripts/local-validator.sh setup", py)
+            return None, None
+        port = _port_from_endpoint(endpoint)
+        return [py, "-m", "mlx_lm", "server", "--model", model, "--port", str(port)], {}
+    if runtime == "ollama":
+        exe = shutil.which("ollama")
+        if not exe:
+            log.warning("local validator autostart: 'ollama' not on PATH — "
+                        "install ollama or point validate.endpoint at a running one")
+            return None, None
+        # Serve serially with one resident model; the model loads lazily on the
+        # first request. KEEP_ALIVE bounds idle RAM (CPU is capped via the prefix).
+        env = {
+            "OLLAMA_KEEP_ALIVE": ollama_keep_alive(),
+            "OLLAMA_NUM_PARALLEL": "1",
+            "OLLAMA_MAX_LOADED_MODELS": "1",
+        }
+        return [exe, "serve"], env
+    return None, None
+
+
+def _terminate_group(proc, timeout: float = 10.0) -> None:
+    """SIGTERM (then SIGKILL) the managed server's whole process group, so a
+    daemon's children die with it — ollama's `serve` spawns a `llama-server`
+    child that a bare proc.terminate() would orphan (last seen surviving a
+    pkill and pinning cores). Safe when the process is already gone."""
+    import signal
+    try:
+        pgid = os.getpgid(proc.pid)
+    except (ProcessLookupError, OSError):
+        pgid = None
+    try:
+        if pgid is not None:
+            os.killpg(pgid, signal.SIGTERM)
+        else:
+            proc.terminate()
+        try:
+            proc.wait(timeout=timeout)
+        except Exception:
+            if pgid is not None:
+                with contextlib.suppress(OSError):
+                    os.killpg(pgid, signal.SIGKILL)
+            else:
+                proc.kill()
+    except (ProcessLookupError, OSError):
+        pass
+
+
 def ensure_validator_running(*, wait_secs: float = 60.0, start_reaper: bool = True) -> bool:
     """Make a local validator available, spinning one up on demand if needed.
 
-    Reuses any reachable server (ours or external). Only manages the **mlx**
-    runtime — Ollama is its own daemon. No-op when no models are configured or
+    Reuses any reachable server (ours or external). Manages both supported
+    runtimes — **mlx** (`mlx_lm.server`) and **ollama** (`ollama serve`) — each
+    launched under a CPU cap (`nice`/`taskset`, see `_cpu_cap_prefix`) so local
+    inference can't starve the box. No-op when no models are configured or
     `validate.autostart` is false. Never raises; returns True if a usable
     validator is available afterward.
 
@@ -404,17 +508,23 @@ def ensure_validator_running(*, wait_secs: float = 60.0, start_reaper: bool = Tr
     if validator_available():            # already up → reuse, just mark activity
         _touch_validator()
         return True
-    if not autostart_enabled() or resolve_runtime() != "mlx":
+    if not autostart_enabled():
+        return False
+    # Never spin a *real* local server up from inside the test harness. Integration
+    # and e2e tests run real loop code (managed_for_run → here); with the live config
+    # carrying autostart + local_models, that would otherwise launch an actual
+    # ollama/mlx process mid-suite. conftest sets POE_PYTEST_ACTIVE in os.environ
+    # (inherited by subprocesses); unit tests that exercise the spawn path clear it.
+    if os.environ.get("POE_PYTEST_ACTIVE"):
         return False
 
+    runtime = resolve_runtime()
     model = configured_models()[0]
-    endpoint = resolve_endpoint("mlx")
-    port = _port_from_endpoint(endpoint)
-    py = mlx_python()
-    if not Path(py).exists():
-        log.warning("local validator autostart: interpreter missing at %s — "
-                    "run scripts/local-validator.sh setup", py)
+    endpoint = resolve_endpoint(runtime)
+    argv, env_over = _launch_argv_env(runtime, model, endpoint)
+    if argv is None:                     # unmanageable runtime / missing binary
         return False
+    argv = _cpu_cap_prefix() + argv
 
     with _PROC_LOCK:
         if validator_available():        # another thread won the race
@@ -422,15 +532,18 @@ def ensure_validator_running(*, wait_secs: float = 60.0, start_reaper: bool = Tr
             return True
         try:
             proc = subprocess.Popen(
-                [py, "-m", "mlx_lm", "server", "--model", model, "--port", str(port)],
+                argv,
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                env={**os.environ, **env_over} if env_over else None,
+                start_new_session=True,  # own process group → clean group teardown
             )
         except Exception as exc:
             log.warning("local validator autostart failed to spawn: %s", exc)
             return False
         _MANAGED["proc"] = proc
         atexit.register(shutdown_validator)
-        log.info("local validator: spinning up %s on :%d (pid %s)", model, port, proc.pid)
+        log.info("local validator: spinning up %s (%s) → %s (pid %s)",
+                 model, runtime, endpoint, proc.pid)
 
     deadline = time.monotonic() + wait_secs
     while time.monotonic() < deadline:
@@ -485,11 +598,7 @@ def shutdown_validator() -> None:
         return
     try:
         if proc.poll() is None:
-            proc.terminate()
-            try:
-                proc.wait(timeout=10)
-            except Exception:
-                proc.kill()
+            _terminate_group(proc)
         log.info("local validator: spun down (pid %s)", getattr(proc, "pid", "?"))
     except Exception as exc:
         log.debug("local validator shutdown error (non-fatal): %s", exc)

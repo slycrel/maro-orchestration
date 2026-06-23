@@ -298,16 +298,87 @@ def test_ensure_noop_when_autostart_disabled(monkeypatch):
     pop.assert_not_called()
 
 
-def test_ensure_noop_for_ollama_runtime(monkeypatch):
-    # Ollama manages its own daemon — orchestration doesn't spawn it.
-    _set_cfg(monkeypatch, local_models=["m1"], runtime="ollama")
+def test_ensure_manages_ollama_runtime(monkeypatch):
+    # Ollama is now orchestration-managed: spun up via `ollama serve`, capped.
+    monkeypatch.delenv("POE_PYTEST_ACTIVE", raising=False)  # exercise the real spawn path
+    _set_cfg(monkeypatch, local_models=["m1"], runtime="ollama",
+             autostart=True, idle_shutdown_secs=0)
+    monkeypatch.setattr(lm.shutil, "which", lambda exe: f"/usr/bin/{exe}", raising=False)
+    state = {"spawned": False, "argv": None, "env": None}
+
+    def fake_popen(argv, *a, **k):
+        state["spawned"] = True
+        state["argv"] = argv
+        state["env"] = k.get("env")
+        p = MagicMock(); p.poll.return_value = None; p.pid = 5151
+        return p
+
+    monkeypatch.setattr(lm.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(lm, "loaded_models", lambda ep=None: ["m1"] if state["spawned"] else [])
+    monkeypatch.setattr(lm, "_terminate_group", lambda proc, timeout=10.0: None)
+    try:
+        assert lm.ensure_validator_running(wait_secs=5) is True
+        assert state["spawned"] is True
+        # `ollama serve` is the tail of the argv (a CPU-cap prefix may precede it).
+        assert state["argv"][-2:] == ["/usr/bin/ollama", "serve"]
+        assert state["env"]["OLLAMA_NUM_PARALLEL"] == "1"
+    finally:
+        lm.shutdown_validator()
+
+
+def test_ensure_no_real_spawn_under_pytest(monkeypatch):
+    # The test-harness guard: even with autostart + a managed runtime, no real
+    # server is spawned while POE_PYTEST_ACTIVE is set (set by conftest).
+    monkeypatch.setenv("POE_PYTEST_ACTIVE", "1")
+    _set_cfg(monkeypatch, local_models=["m1"], runtime="ollama", autostart=True)
     monkeypatch.setattr(lm, "loaded_models", lambda ep=None: [])
     pop = MagicMock(); monkeypatch.setattr(lm.subprocess, "Popen", pop)
     assert lm.ensure_validator_running() is False
     pop.assert_not_called()
 
 
+def test_ensure_ollama_missing_binary_falls_back(monkeypatch):
+    monkeypatch.delenv("POE_PYTEST_ACTIVE", raising=False)
+    _set_cfg(monkeypatch, local_models=["m1"], runtime="ollama", autostart=True)
+    monkeypatch.setattr(lm.shutil, "which", lambda exe: None, raising=False)
+    monkeypatch.setattr(lm, "loaded_models", lambda ep=None: [])
+    pop = MagicMock(); monkeypatch.setattr(lm.subprocess, "Popen", pop)
+    assert lm.ensure_validator_running() is False
+    pop.assert_not_called()
+
+
+def test_cpu_cap_prefix_linux(monkeypatch):
+    _set_cfg(monkeypatch, cpu_affinity="2,3", cpu_nice=10)
+    monkeypatch.setattr(lm.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(lm.shutil, "which", lambda exe: f"/usr/bin/{exe}", raising=False)
+    assert lm._cpu_cap_prefix() == ["nice", "-n", "10", "taskset", "-c", "2,3"]
+
+
+def test_cpu_cap_prefix_noop_off_linux(monkeypatch):
+    _set_cfg(monkeypatch)
+    monkeypatch.setattr(lm.platform, "system", lambda: "Darwin")
+    assert lm._cpu_cap_prefix() == []
+
+
+def test_cpu_cap_prefix_empty_affinity_skips_taskset(monkeypatch):
+    _set_cfg(monkeypatch, cpu_affinity="", cpu_nice=0)
+    monkeypatch.setattr(lm.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(lm.shutil, "which", lambda exe: f"/usr/bin/{exe}", raising=False)
+    assert lm._cpu_cap_prefix() == []
+
+
+def test_launch_argv_env_ollama_and_unknown(monkeypatch):
+    _set_cfg(monkeypatch, ollama_keep_alive="30s")
+    monkeypatch.setattr(lm.shutil, "which", lambda exe: "/usr/bin/ollama", raising=False)
+    argv, env = lm._launch_argv_env("ollama", "m1", "http://127.0.0.1:11434/v1")
+    assert argv == ["/usr/bin/ollama", "serve"]
+    assert env["OLLAMA_KEEP_ALIVE"] == "30s"
+    assert env["OLLAMA_MAX_LOADED_MODELS"] == "1"
+    assert lm._launch_argv_env("bogus", "m1", "http://x")[0] is None
+
+
 def test_ensure_spawns_and_waits_until_ready(monkeypatch):
+    monkeypatch.delenv("POE_PYTEST_ACTIVE", raising=False)
     _set_cfg(monkeypatch, local_models=["m1"], runtime="mlx", autostart=True, idle_shutdown_secs=0)
     monkeypatch.setattr(lm, "mlx_python", lambda: sys.executable)  # exists
     state = {"spawned": False}

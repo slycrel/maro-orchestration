@@ -127,6 +127,23 @@ it. **So far qwen2.5-coder:3b looks viable as the Tier-1 judge for code/verifiab
 this box** — the shadow-eval harness below is still the rigorous next step to quantify
 agreement vs paid and set per-class min_certainty.
 
+- [x] **Make ollama safe to leave running — CPU cap + orchestration-managed lifecycle
+  (2026-06-22).** Root cause of the 2026-06-22 "load 7 for ~52 min" incident, re-diagnosed:
+  *not* idle busy-spin (instantaneously measured: idle llama-server burns **0%** CPU; my
+  earlier "162% idle" was a misread of cumulative `ps %cpu`). The real cost is **active
+  inference** — each validation pins ~1.5 cores for ~6–8s on this i5, and ollama was the one
+  runtime with **no CPU cap and no managed lifecycle** (`ensure_validator_running` explicitly
+  bailed: "Ollama is its own daemon"). Running the full suite + OpenClaw against an uncapped
+  ollama = contention. Fix in `src/local_models.py`: (1) `ensure_validator_running` now manages
+  **both** runtimes; ollama launches via `ollama serve` under a `nice`/`taskset` cap
+  (`_cpu_cap_prefix`, default cores `2,3` @ nice 12 — mirrors `test-safe.sh`), env
+  `OLLAMA_NUM_PARALLEL=1 / MAX_LOADED_MODELS=1 / KEEP_ALIVE`; (2) `start_new_session=True` +
+  `_terminate_group` (process-group SIGTERM→SIGKILL) so the child `llama-server` dies with the
+  daemon — last night's orphan that survived `pkill`. Live-verified: child llama-server inherits
+  the `2,3` affinity cap (cores 0,1 always free for the box); group teardown leaves zero orphans.
+  Config knobs: `validate.cpu_affinity` / `cpu_nice` / `ollama_keep_alive`. Enabled in the live
+  workspace config (was "left OFF"); reversible via `validate.autostart: false`. Tests:
+  `test_local_models.py` (ollama-managed spawn, missing-binary fallback, cap-prefix matrix).
 - [ ] **Shadow-eval harness for validation.** Mirror `navigator_shadow --agreement`:
   on historical/live runs, run the local validator *and* the paid validator on the
   same step result, log both verdicts (decide-only, changes nothing), and produce a

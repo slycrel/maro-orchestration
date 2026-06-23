@@ -7,7 +7,12 @@
 #
 # Apple Silicon -> MLX (mlx_lm.server, in a uv-managed venv decoupled from the
 # system Python). On Linux, use Ollama instead: `ollama pull <model>` and point
-# `validate.runtime: ollama` at http://127.0.0.1:11434/v1 (no script needed).
+# `validate.runtime: ollama` at http://127.0.0.1:11434/v1. With `validate.autostart`
+# on, the orchestration spins ollama up itself under a CPU cap and reaps it — no
+# script needed. If you instead start it by hand to keep it warm across many runs,
+# cap it the same way so it can't starve the box (the orchestration only manages
+# what it launches):
+#   OLLAMA_KEEP_ALIVE=30s OLLAMA_NUM_PARALLEL=1 nice -n 12 taskset -c 2,3 ollama serve
 #
 # Usage:
 #   scripts/local-validator.sh setup            # create venv + install mlx-lm
