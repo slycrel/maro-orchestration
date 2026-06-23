@@ -166,13 +166,28 @@ agreement vs paid and set per-class min_certainty.
   `python3 -m validation_shadow --agreement` produces per-class agreement %, the two
   error directions (false_pass = local PASS / paid FAIL, the dangerous one; false_fail
   = wasted escalation), and a local-confidence calibration table (does a "0.9" agree
-  ~90% of the time?). **Next: gather data** — flip `validate.shadow_eval` on for a
-  batch of real runs, then read the table.
-- [ ] **Per-class routing (needs shadow-eval data first).** Expect high agreement on
+  ~90% of the time?). **Live-verified 2026-06-23** across 3 real runs (fizzbuzz,
+  sorting-algo comparison, essay+self-critique) — see per-class routing below for the
+  numbers. Harness works end-to-end; rows land; the one disagreement adjudicates
+  correctly.
+- [ ] **Per-class routing (gathering shadow-eval data).** Expect high agreement on
   verifiable code/math steps, low on fuzzy research-quality steps. Once the
   `--agreement` table has enough rows, route only the classes where the local judge
   earns it (per-class `min_certainty`); keep the rest on the paid path. Don't trust
-  benchmark parity globally. Blocked on accumulating VALIDATOR_SHADOWED rows.
+  benchmark parity globally.
+  **First data (2026-06-23, n=29, qwen2.5-coder:3b vs paid):** overall agreement
+  96.6%, **0 false_pass across every class** (the dangerous direction — local PASS /
+  paid FAIL — never happened). Per class: analyze 4/4, exec_command 4/4, synthesize
+  3/3, read_artifact 1/1 all 100%; `general` 16/17 (94.1%) with the lone miss a
+  **false_fail** (local FAIL@0.90 vs paid PASS on a routine file-save — local was
+  *too strict*, costs a wasted escalation, not a missed defect). Surprise: the fuzzy
+  synthesize/analyze essay-critique steps held at 100% — divergence showed up on a
+  mundane `general` step, not the subjective work we expected to break it.
+  Calibration: 0.9–1.0 bucket = 96.6% (slightly overconfident, erring strict).
+  **Caveat: 29 rows is a smoke sample, not enough to set thresholds.** Next: a larger
+  deliberate batch (more runs with diverse step mixes) before committing per-class
+  `min_certainty` — and watch specifically for any `false_pass`, since that's the
+  only error direction that can let a real defect through.
 - [ ] **Tune `local_max_tokens` per model.** Live finding (2026-06-21 verify run):
   VibeThinker's `<think>` trace on *real* (long) step results overran the 1024
   floor → empty content → conf 0.00 → spurious escalation on 2/5 steps (the other

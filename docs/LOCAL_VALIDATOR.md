@@ -148,10 +148,30 @@ and the model's training signal matters more than its size.
 - **It's a prior, not an oracle.** The local verdict is the cheap first pass;
   the confidence band exists precisely because a small model will be unsure on
   hard cases. Tune `min_certainty` up if you want more escalation to paid.
-- **Measure before you trust it.** Run the local validator in *shadow* against
-  the paid validator on historical runs and compare agreement (the same pattern
-  as `src/navigator_shadow.py --agreement`) before relying on it for a given
-  class of step. See the deep-eval task in `BACKLOG.md`.
+- **Measure before you trust it.** The shadow-eval harness
+  (`src/validation_shadow.py`, shipped 2026-06-22) runs the local validator
+  *and* the paid validator on the same step result, decide-only, and logs both:
+
+  ```bash
+  # gather data: enable in ~/.poe/workspace/config.yml, run real goals, then:
+  #   validate: { shadow_eval: true }   # off by default — the decisive path
+  #                                      # makes an EXTRA paid call (real spend)
+  python3 -m validation_shadow --agreement
+  ```
+
+  It prints per-step-class agreement %, the two error directions, and a
+  confidence-calibration table. The error directions are **not symmetric**:
+  - `false_pass` = local PASS / paid FAIL — **the dangerous one** (a real defect
+    slips through). Watch this; it should stay at 0.
+  - `false_fail` = local FAIL / paid PASS — merely a wasted escalation (cost, not
+    correctness).
+
+  **First live data (2026-06-23, qwen2.5-coder:3b, n=29):** 96.6% agreement,
+  **0 false_pass across every class.** analyze/exec_command/synthesize/
+  read_artifact all 100%; `general` 94.1% (one false_fail — local too strict on a
+  file-save). Encouraging, but 29 rows is a smoke sample — gather a larger batch
+  before setting per-class `min_certainty`. See the per-class-routing item in
+  `BACKLOG.md`.
 
 ### Reference + alternatives
 
