@@ -388,6 +388,27 @@ Sample: the 2026-05-13..17 window of `~/.poe/workspace/runs/` (478 dirs total;
   navigator over-escalation before any cutover. Both shadow taps (dispatch
   live, blocked-step) now emit `pipeline_actual.point`; `--agreement` reports
   `by_point`.
+- **2026-06-24** — Anti-fabrication / provenance arc (sequenced fix → #1 → #3 →
+  #2; the three converged on one root: text-only validation can't see whether a
+  side effect happened). (1) **Fabricated-input fix** — guard at the top of
+  `_handle_blocked_step`: a missing-external-input block on an input-consuming
+  step short-circuits to honest `MISSING_INPUT` stuck before retry/split/
+  redecompose, so the recovery tree can no longer manufacture a missing input
+  (commit 86dbe5f). (2) **#1 organic blocked-step data** — 12 real goals, 2
+  organic recoverable blocks (both network-fetch transients); navigator chose
+  `execute(0.88-0.90)` both times (keep going), **zero false escalates**;
+  divergence was execute-vs-extend (benign). n=2/one class — not yet a rate; no
+  blocked_step cutover. (3) **#3 per-class routing** — corpus 29→42, **first
+  false_pass** (general, local PASS@1.00 vs paid FAIL: a "save to artifacts/X"
+  step saved elsewhere). DECIDED: do not set per-class `min_certainty` — the
+  false_pass was at max confidence, so no threshold catches it; lever is
+  provenance. (4) **#2 v0 output-provenance guard** — deterministic verdict
+  demotion (both `_verify_now_outcome` and agenda twin) when a goal names a
+  dir-qualified output path that never landed → `incomplete`/`goal_achieved=
+  False`; default on (`validate.output_provenance`), strictness rule = honor
+  *where* the user specified, ignore bare filenames (commit cced84a). Both
+  shadow gates OFF after the batches; provenance guard ON. Residuals (input-
+  provenance at verdict, bare-filename outputs) in BACKLOG.
 
 ## Threads (system-maintained — nothing leaves this list silently)
 
