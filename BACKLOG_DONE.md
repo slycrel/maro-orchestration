@@ -52,9 +52,33 @@ Last split: 2026-04-16 (session 34).
     dir-qualified check (exact path) from v0.
 
   12 tests (`TestOutputProvenanceGuard`) + now-status suite green; full suite
-  green (4,278+). Open follow-up (deeper, not started): tool-evidence provenance
-  — plumb real read/write tool evidence to the verdict to catch fabrication where
-  the goal text names no path at all. See BACKLOG.
+  green (4,278+).
+
+  **Tool-evidence layer SHIPPED same arc (2026-06-24).** A fourth check that
+  scans the RESULT text (not the goal) for paths the run claims it wrote
+  (`_result_claimed_outputs` / `_missing_or_stale_result_outputs`,
+  `validate.result_provenance`, default on). A claimed-written path demotes
+  unless it exists AND its mtime falls within this run's wall-clock window
+  (`_run_window_start` = now − elapsed_ms − 120s buffer; `_is_fresh`). **The
+  mtime gate is the actual side-effect evidence** — a pre-existing stale
+  same-named file does NOT prove the run wrote it, which a pure existence check
+  (and the text-only judge) can't distinguish. This is the layer that catches
+  fabrication when the GOAL names no path (the *claim* names it) and the n=42
+  "narrated success, saved elsewhere/nowhere" case. Window start is None when
+  elapsed is unknown → the gate is skipped (fail-open); remote/transient paths
+  skipped. Both verdict paths pass `result_text` + `window_start` into the
+  unified `_provenance_missing()` aggregator (NOW: `outcome["result"]` +
+  `elapsed_ms`; AGENDA: concatenated done-step results + `loop_result.elapsed_ms`).
+  6 new tests (18 in `TestOutputProvenanceGuard`), full suite green.
+
+  **Investigated and ruled out — no transcript available.** `claude -p
+  --output-format json` returns only `{result, is_error, usage, stop_reason}` —
+  no `messages`/tool-call list/`num_turns`. So real "did a read/write tool fire
+  on path X" evidence isn't exposed by the backend; the mtime-on-claimed-path
+  approach is the strongest deterministic signal reachable without re-plumbing
+  the subprocess to `--output-format stream-json`. Residual left in BACKLOG:
+  fabrication that names NO path at all ("ran the tests: 142 passed", writes
+  nothing) — genuinely unreachable without execution-trace evidence.
 
 ### Recovery fabricated missing inputs to fake success (2026-06-23) — FIXED
 

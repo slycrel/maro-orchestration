@@ -295,13 +295,24 @@ Both residual layers SHIPPED 2026-06-24 (see BACKLOG_DONE):
   workspace/output, projects/*) demotes; location isn't part of the contract so
   a present-but-elsewhere file passes.
 
-Open follow-up (deeper, not started):
+- [x] **Tool-evidence provenance (2026-06-24, SHIPPED — see BACKLOG_DONE).**
+  The three checks above scan the GOAL text. This adds a fourth that scans the
+  RESULT text for paths the run claims it wrote ("saved to X") and demotes unless
+  the path exists AND its mtime falls in this run's wall-clock window (now -
+  elapsed - 120s). The mtime gate is the side-effect evidence — a stale
+  same-named file doesn't prove the run wrote it. Catches fabrication when the
+  goal named no path (the *claim* names it) + the n=42 "saved elsewhere" case.
+  `validate.result_provenance`, default on, fail-open.
 
-- [ ] **Tool-evidence provenance.** All three checks above are goal-text
-  heuristics. A stronger signal would plumb real tool evidence (did a read/write
-  tool actually fire on path X?) to the verdict — catches fabrication where the
-  goal text names no path at all (wholesale invented results). Bigger change;
-  revisit if text-heuristic coverage proves insufficient.
+Genuinely unreachable without backend changes (parked):
+
+- [ ] **No-file-claim fabrication.** A run that fabricates a result naming no
+  path at all ("ran the tests: 142 passed", writing nothing) leaves no
+  deterministic trace — `claude -p --output-format json` returns only final
+  text, no tool-call transcript (investigated 2026-06-24 and ruled out). Would
+  require `--output-format stream-json` parsing (re-plumb the subprocess
+  pipeline) or a filesystem-snapshot diff with a fabrication-shape classifier.
+  Out of proportion to the risk for now; revisit if it shows up organically.
 
 ### Live orchestration run findings (2026-06-11, first post-suite-green session)
 

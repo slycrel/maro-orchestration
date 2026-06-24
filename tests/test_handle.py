@@ -2214,6 +2214,92 @@ class TestOutputProvenanceGuard:
                                   outcome, self._fulfilled_adapter())
         assert out["status"] == "done"
 
+    # --- tool-evidence layer: RESULT-claimed outputs must exist AND be fresh ---
+    # The goal names NO path here; the *result narration* claims the write. The
+    # mtime gate (now - elapsed - 120s buffer) is the side-effect evidence.
+
+    def test_result_claims_missing_output_demotes(self, tmp_path, monkeypatch):
+        import config
+        from handle import _verify_now_outcome
+        monkeypatch.setattr(config, "workspace_root", lambda: tmp_path)
+        monkeypatch.chdir(tmp_path)
+        outcome = {"status": "done",
+                   "result": "Done — saved the analysis to artifacts/analysis-8842.json",
+                   "tokens_in": 3, "tokens_out": 1, "elapsed_ms": 5000}
+        out = _verify_now_outcome("analyze the data and report findings", outcome,
+                                  self._adapter_that_must_not_be_called())
+        assert out["status"] == "incomplete"
+        assert out["goal_achieved"] is False
+        assert any("analysis-8842.json" in m for m in out["provenance_missing"])
+
+    def test_result_claims_fresh_output_passes(self, tmp_path, monkeypatch):
+        import config
+        from handle import _verify_now_outcome
+        monkeypatch.setattr(config, "workspace_root", lambda: tmp_path)
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "artifacts").mkdir()
+        (tmp_path / "artifacts" / "out-1.json").write_text("{}")   # just written → fresh
+        outcome = {"status": "done", "result": "saved results to artifacts/out-1.json",
+                   "tokens_in": 3, "tokens_out": 1, "elapsed_ms": 5000}
+        out = _verify_now_outcome("analyze the data", outcome, self._fulfilled_adapter())
+        assert out["status"] == "done"
+        assert out["goal_achieved"] is True
+
+    def test_result_claims_stale_output_demotes(self, tmp_path, monkeypatch):
+        import config, os, time
+        from handle import _verify_now_outcome
+        monkeypatch.setattr(config, "workspace_root", lambda: tmp_path)
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "artifacts").mkdir()
+        f = tmp_path / "artifacts" / "stale-2.json"
+        f.write_text("old")
+        old = time.time() - 3600          # 1h ago, well before the run window
+        os.utime(f, (old, old))
+        outcome = {"status": "done", "result": "saved results to artifacts/stale-2.json",
+                   "tokens_in": 3, "tokens_out": 1, "elapsed_ms": 5000}
+        out = _verify_now_outcome("analyze the data", outcome,
+                                  self._adapter_that_must_not_be_called())
+        assert out["status"] == "incomplete"
+        assert out["goal_achieved"] is False
+        assert any("predates this run" in m for m in out["provenance_missing"])
+
+    def test_result_provenance_disabled(self, tmp_path, monkeypatch):
+        import config
+        from handle import _verify_now_outcome
+        monkeypatch.setattr(config, "get", lambda key, default=None:
+                            False if key == "validate.result_provenance" else default)
+        monkeypatch.setattr(config, "workspace_root", lambda: tmp_path)
+        monkeypatch.chdir(tmp_path)
+        outcome = {"status": "done", "result": "saved to artifacts/never-made-9.json",
+                   "tokens_in": 3, "tokens_out": 1, "elapsed_ms": 5000}
+        out = _verify_now_outcome("analyze the data", outcome, self._fulfilled_adapter())
+        assert out["status"] == "done"
+
+    def test_result_provenance_skipped_without_window(self, tmp_path, monkeypatch):
+        import config
+        from handle import _verify_now_outcome
+        monkeypatch.setattr(config, "workspace_root", lambda: tmp_path)
+        monkeypatch.chdir(tmp_path)
+        # no elapsed_ms → no window → mtime gate can't run → must not demote
+        outcome = {"status": "done", "result": "saved to artifacts/no-window-3.json",
+                   "tokens_in": 3, "tokens_out": 1}
+        out = _verify_now_outcome("analyze the data", outcome, self._fulfilled_adapter())
+        assert out["status"] == "done"
+
+    def test_run_window_start_helper(self):
+        import time
+        from handle import _run_window_start
+        assert _run_window_start(None) is None
+        assert _run_window_start(0) is None
+        w = _run_window_start(5000)
+        assert w is not None and w < time.time()
+
+    def test_result_claimed_outputs_filters_remote_transient(self):
+        from handle import _result_claimed_outputs
+        assert "out/real.json" in _result_claimed_outputs("saved to out/real.json")
+        assert _result_claimed_outputs("stored to https://x/y.json") == []
+        assert _result_claimed_outputs("saved to /tmp/scratch/z.json") == []
+
 
 class TestEscalationLaneMetadata:
     def test_escalated_run_metadata_records_agenda(self, monkeypatch, tmp_path):

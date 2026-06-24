@@ -414,9 +414,17 @@ Sample: the 2026-05-13..17 window of `~/.poe/workspace/runs/` (478 dirs total;
   net behind the recovery-seam guard, which only fires on a block; remote URLs +
   /tmp/scratchpad skipped), and **bare-filename outputs** demote when a bare
   "save report.md" basename exists nowhere reasonable (lenient — location not
-  contractual). 12 `TestOutputProvenanceGuard` tests, full suite green. Open
-  follow-up: tool-evidence provenance (catch fabrication when goal text names no
-  path at all) — deferred in BACKLOG.
+  contractual). 12 `TestOutputProvenanceGuard` tests, full suite green. (6)
+  **Tool-evidence layer shipped — arc CLOSED** (commit pending): a fourth check
+  scans the RESULT text for claimed-written paths and demotes unless the path
+  exists AND its mtime is within the run's wall-clock window (now − elapsed −
+  120s); the mtime gate is the side-effect evidence a pure existence check can't
+  give. Catches fabrication when the goal names no path (the claim does) + the
+  n=42 saved-elsewhere case. `validate.result_provenance`, default on. Confirmed
+  `claude -p --output-format json` exposes NO tool-call transcript, so this
+  mtime-on-claim signal is the deterministic ceiling without re-plumbing to
+  stream-json; the only residual (fabricated result naming NO path) is parked as
+  genuinely unreachable. 18 tests total.
 
 ## Threads (system-maintained — nothing leaves this list silently)
 

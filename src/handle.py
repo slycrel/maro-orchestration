@@ -491,9 +491,120 @@ def _missing_claimed_inputs(goal: str) -> List[str]:
     return [rel for rel in claimed if not _exists_at_exact(rel, bases)]
 
 
-def _provenance_missing(goal: str) -> List[str]:
-    """Aggregate deterministic provenance failures for a goal, honoring config
-    flags. Empty = nothing to flag. Never raises (fails open)."""
+# --- Tool-evidence layer ----------------------------------------------------
+# The three checks above scan the GOAL text. This one scans the RESULT text for
+# paths the run CLAIMS it wrote ("saved to X", "wrote report.md") and demotes
+# unless that path exists AND was modified during this run's wall-clock window.
+# The mtime gate is the actual evidence of a side effect: a pre-existing stale
+# file with the right name does NOT prove the run wrote it. This is what catches
+# fabrication when the GOAL named no path (the *claim* names it) and the n=42
+# "narrated success, saved elsewhere/nowhere" case the text-only judge missed.
+# Window is intentionally generous (buffer) — a missed fabrication is cheaper
+# than a false demotion (fail-open).
+# Residual it CANNOT catch (no execution transcript is available from `claude -p
+# --output-format json` — only the final text): a run that fabricates a result
+# with no file claim at all ("ran the tests: 142 passed" writing nothing). That
+# needs tool-call evidence the backend doesn't expose. Documented, not solved.
+_WINDOW_BUFFER_SECS = 120.0
+
+
+def _run_window_start(elapsed_ms) -> Optional[float]:
+    """Wall-clock instant before which a file mtime can't be evidence of THIS
+    run: now - elapsed - buffer. None (skip the gate) when elapsed is unknown."""
+    try:
+        ems = float(elapsed_ms or 0)
+        if ems <= 0:
+            return None
+        return time.time() - ems / 1000.0 - _WINDOW_BUFFER_SECS
+    except Exception:
+        return None
+
+
+def _resolve_exact(rel: str, bases: List[Path]) -> Optional[Path]:
+    """Like _exists_at_exact but returns the resolved existing Path (or None)."""
+    p = Path(rel)
+    if p.is_absolute():
+        return p if p.exists() else None
+    for b in bases:
+        if (b / rel).exists():
+            return b / rel
+    try:
+        from config import workspace_root
+        ws_projects = Path(workspace_root()) / "projects"
+        if ws_projects.is_dir():
+            for d in ws_projects.glob("*"):
+                if d.is_dir() and (d / rel).exists():
+                    return d / rel
+    except Exception:
+        pass
+    return None
+
+
+def _resolve_bare(name: str, bases: List[Path]) -> Optional[Path]:
+    """Like _exists_bare_anywhere but returns the resolved existing Path (or None)."""
+    for b in bases:
+        if (b / name).exists():
+            return b / name
+    for d in _bare_search_dirs():
+        try:
+            if (d / name).exists():
+                return d / name
+            for hit in list(d.glob(f"*/{name}")) + list(d.glob(f"*/*/{name}")):
+                return hit
+        except Exception:
+            pass
+    return None
+
+
+def _is_fresh(path: Path, window_start: float) -> bool:
+    """True if the file was modified at/after the run window start. Can't stat →
+    True (fail open — never punish on an inability to check)."""
+    try:
+        return path.stat().st_mtime >= window_start
+    except Exception:
+        return True
+
+
+def _result_claimed_outputs(text: str) -> List[str]:
+    """Output paths a result narration claims to have written — dir-qualified
+    and bare — minus remote/transient (can't have been written locally now)."""
+    out: List[str] = []
+    for rel in _claimed_output_paths(text) + _claimed_output_bare(text):
+        low = rel.lower()
+        if low.startswith(_REMOTE_PREFIXES):
+            continue
+        if any(seg in low for seg in _TRANSIENT_SEGMENTS):
+            continue
+        out.append(rel)
+    return out
+
+
+def _missing_or_stale_result_outputs(result_text: str, window_start: float) -> List[str]:
+    """Output paths the RESULT claims to have written that either don't exist or
+    predate the run window (so the run did not actually write them). Fails open."""
+    claimed = _result_claimed_outputs(result_text or "")
+    if not claimed:
+        return []
+    bases = _output_provenance_bases()
+    flagged: List[str] = []
+    for rel in claimed:
+        if "/" in rel and not rel.endswith("/"):
+            found = _resolve_exact(rel, bases)
+        else:
+            found = _resolve_bare(rel, bases)
+        if found is None:
+            flagged.append(f"{rel} (claimed written, not found)")
+        elif not _is_fresh(found, window_start):
+            flagged.append(f"{rel} (claimed written, but predates this run)")
+    return flagged
+
+
+def _provenance_missing(goal: str, *, result_text: Optional[str] = None,
+                        window_start: Optional[float] = None) -> List[str]:
+    """Aggregate deterministic provenance failures, honoring config flags. Scans
+    the GOAL (output/input claims) and, when result_text + window_start are
+    given, the RESULT (tool-evidence: claimed-written paths must exist and be
+    fresh). Empty = nothing to flag. Never raises (fails open)."""
     missing: List[str] = []
     try:
         from config import get as _cfg_get
@@ -502,9 +613,12 @@ def _provenance_missing(goal: str) -> List[str]:
             missing.extend(_missing_output_bare(goal))
         if _cfg_get("validate.input_provenance", True):
             missing.extend(_missing_claimed_inputs(goal))
+        if (result_text and window_start is not None
+                and _cfg_get("validate.result_provenance", True)):
+            missing.extend(_missing_or_stale_result_outputs(result_text, window_start))
     except Exception as exc:
         log.debug("provenance check skipped: %s", exc)
-    return missing
+    return list(dict.fromkeys(missing))  # dedup, preserve order
 
 
 def _verify_now_outcome(message: str, outcome: Dict[str, Any], adapter) -> Dict[str, Any]:
@@ -514,7 +628,11 @@ def _verify_now_outcome(message: str, outcome: Dict[str, Any], adapter) -> Dict[
     # an input that isn't on disk or an output that never landed, the goal is not
     # achieved regardless of how the response narrates it. Catches what the
     # text-only validator can't see; also saves the judge LLM call when it fires.
-    _missing = _provenance_missing(message)
+    _missing = _provenance_missing(
+        message,
+        result_text=str(outcome.get("result", "")),
+        window_start=_run_window_start(outcome.get("elapsed_ms")),
+    )
     if _missing:
         out = dict(outcome)
         out["status"] = "incomplete"
@@ -1582,7 +1700,15 @@ def _handle_impl(
             # Works even when closure is None. Catches the false_pass a text-only
             # verdict can't see (shadow-eval n=42, 2026-06-24).
             if loop_result.status == "done":
-                _prov_missing = _provenance_missing(_raw_input)
+                _done_results = "\n\n".join(
+                    s.result for s in loop_result.steps
+                    if s.status == "done" and s.result
+                )
+                _prov_missing = _provenance_missing(
+                    _raw_input,
+                    result_text=_done_results,
+                    window_start=_run_window_start(loop_result.elapsed_ms),
+                )
                 if _prov_missing:
                     log.info(
                         "provenance (agenda): claimed input/output(s) not found %s — demoted to incomplete",
