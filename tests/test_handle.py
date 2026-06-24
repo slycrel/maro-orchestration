@@ -2152,6 +2152,68 @@ class TestOutputProvenanceGuard:
         out = _verify_now_outcome(f"save it to {missing}", outcome, self._fulfilled_adapter())
         assert out["status"] == "done"
 
+    # --- bare-filename outputs (lenient: basename must exist *somewhere*) ---
+
+    def test_bare_output_missing_everywhere_demotes(self, tmp_path, monkeypatch):
+        import config
+        from handle import _verify_now_outcome
+        # point workspace + cwd at empty tmp dirs so the basename exists nowhere
+        monkeypatch.setattr(config, "workspace_root", lambda: tmp_path)
+        monkeypatch.chdir(tmp_path)
+        outcome = {"status": "done", "result": "saved!", "tokens_in": 3, "tokens_out": 1}
+        out = _verify_now_outcome("compute X and save to zzz-never-made-7731.md",
+                                  outcome, self._adapter_that_must_not_be_called())
+        assert out["status"] == "incomplete"
+        assert out["goal_achieved"] is False
+
+    def test_bare_output_present_passes(self, tmp_path, monkeypatch):
+        import config
+        from handle import _verify_now_outcome
+        monkeypatch.setattr(config, "workspace_root", lambda: tmp_path)
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "report.md").write_text("done")   # bare name exists under cwd
+        outcome = {"status": "done", "result": "saved", "tokens_in": 3, "tokens_out": 1}
+        out = _verify_now_outcome("write the report to report.md", outcome,
+                                  self._fulfilled_adapter())
+        assert out["status"] == "done"
+
+    # --- input provenance (strict: a read input must exist) ---
+
+    def test_missing_input_demotes(self):
+        from handle import _verify_now_outcome
+        # non-transient absolute path that does not exist (the fabricated-input case)
+        missing = "/nonexistent/poe-test/absent-9931.csv"
+        outcome = {"status": "done", "result": "the mean is 17.5", "tokens_in": 3, "tokens_out": 1}
+        out = _verify_now_outcome(f"read the file {missing} and compute the mean",
+                                  outcome, self._adapter_that_must_not_be_called())
+        assert out["status"] == "incomplete"
+        assert out["goal_achieved"] is False
+        assert missing in out["provenance_missing"]
+
+    def test_existing_input_passes(self):
+        from handle import _verify_now_outcome
+        # a real repo file (resolves under the repo-root base), non-transient
+        outcome = {"status": "done", "result": "ok", "tokens_in": 3, "tokens_out": 1}
+        out = _verify_now_outcome("read src/handle.py and summarize it",
+                                  outcome, self._fulfilled_adapter())
+        assert out["status"] == "done"
+
+    def test_remote_and_transient_inputs_skipped(self):
+        from handle import _claimed_input_paths
+        assert _claimed_input_paths("fetch https://example.com/x.csv and summarize") == []
+        assert _claimed_input_paths("read /tmp/run/scratch.csv and analyze") == []
+        assert _claimed_input_paths("load the data from the database") == []   # no path token
+
+    def test_input_provenance_disabled(self, monkeypatch):
+        import config
+        from handle import _verify_now_outcome
+        monkeypatch.setattr(config, "get", lambda key, default=None:
+                            False if key == "validate.input_provenance" else default)
+        outcome = {"status": "done", "result": "ok", "tokens_in": 3, "tokens_out": 1}
+        out = _verify_now_outcome("read /nonexistent/poe-test/absent-9931.csv and summarize",
+                                  outcome, self._fulfilled_adapter())
+        assert out["status"] == "done"
+
 
 class TestEscalationLaneMetadata:
     def test_escalated_run_metadata_records_agenda(self, monkeypatch, tmp_path):

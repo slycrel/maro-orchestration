@@ -407,8 +407,16 @@ Sample: the 2026-05-13..17 window of `~/.poe/workspace/runs/` (478 dirs total;
   dir-qualified output path that never landed → `incomplete`/`goal_achieved=
   False`; default on (`validate.output_provenance`), strictness rule = honor
   *where* the user specified, ignore bare filenames (commit cced84a). Both
-  shadow gates OFF after the batches; provenance guard ON. Residuals (input-
-  provenance at verdict, bare-filename outputs) in BACKLOG.
+  shadow gates OFF after the batches; provenance guard ON. (5) **Both residuals
+  shipped same arc** — unified `_provenance_missing(goal)` aggregator both verdict
+  paths call: **input-provenance** (`validate.input_provenance`, default on)
+  demotes a goal naming a local non-transient input that's absent (verdict-layer
+  net behind the recovery-seam guard, which only fires on a block; remote URLs +
+  /tmp/scratchpad skipped), and **bare-filename outputs** demote when a bare
+  "save report.md" basename exists nowhere reasonable (lenient — location not
+  contractual). 12 `TestOutputProvenanceGuard` tests, full suite green. Open
+  follow-up: tool-evidence provenance (catch fabrication when goal text names no
+  path at all) — deferred in BACKLOG.
 
 ## Threads (system-maintained — nothing leaves this list silently)
 
