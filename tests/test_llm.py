@@ -354,6 +354,53 @@ def test_subprocess_complete_timeout(monkeypatch):
             a.complete([LLMMessage("user", "test")])
 
 
+def test_subprocess_rate_limit_total_backoff_cap(monkeypatch):
+    """Perpetual rate-limiting bails at the total-backoff wall-clock cap.
+
+    BACKLOG #2: the per-cycle cap let the default 6 retries sum to ~61 min of
+    sleeping. The total cap stops retrying once the next sleep would exceed the
+    ceiling and soft-fails with a 'retry later' error instead.
+    """
+    a = ClaudeSubprocessAdapter()
+    mock_result = MagicMock()
+    mock_result.returncode = 1
+    mock_result.stdout = "Error: you have hit your limit. Try again later."
+    mock_result.stderr = ""
+
+    # Cap at 100s: first wait (60s) fits, second (120s) would push to 180 > 100,
+    # so it bails after exactly one sleep instead of all six.
+    monkeypatch.setenv("POE_CLAUDE_RATE_LIMIT_TOTAL_CAP", "100")
+    slept = []
+
+    with patch("llm._run_subprocess_safe", return_value=mock_result), \
+         patch("time.sleep", side_effect=lambda s: slept.append(s)):
+        with pytest.raises(RuntimeError, match=r"bailed after \d+s of backoff"):
+            a.complete([LLMMessage("user", "test")])
+
+    assert slept == [60], f"expected a single 60s backoff before cap-out, got {slept}"
+
+
+def test_subprocess_rate_limit_total_cap_disabled_with_zero(monkeypatch):
+    """Total cap of 0 disables the wall-clock ceiling (falls back to retry count)."""
+    a = ClaudeSubprocessAdapter()
+    mock_result = MagicMock()
+    mock_result.returncode = 1
+    mock_result.stdout = "rate limit reached"
+    mock_result.stderr = ""
+
+    monkeypatch.setenv("POE_CLAUDE_RATE_LIMIT_TOTAL_CAP", "0")
+    monkeypatch.setenv("POE_CLAUDE_RATE_LIMIT_MAX_RETRIES", "3")
+    slept = []
+
+    with patch("llm._run_subprocess_safe", return_value=mock_result), \
+         patch("time.sleep", side_effect=lambda s: slept.append(s)):
+        with pytest.raises(RuntimeError, match="rate-limited after 3 retries"):
+            a.complete([LLMMessage("user", "test")])
+
+    # All 3 retries sleep — the total cap did not intervene.
+    assert len(slept) == 3, f"expected 3 backoffs with cap disabled, got {slept}"
+
+
 def test_subprocess_complete_plain_text_fallback(monkeypatch):
     """If output is not JSON, treat as plain text."""
     a = ClaudeSubprocessAdapter()

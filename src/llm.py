@@ -748,14 +748,32 @@ class ClaudeSubprocessAdapter(LLMAdapter):
                     _env_int("POE_CLAUDE_RATE_LIMIT_MAX_RETRIES", 6),
                 )
                 _RATE_LIMIT_CYCLE_CAP = 1800  # 30 minutes max per wait
+                # Total-backoff wall-clock cap: the per-cycle cap alone let the
+                # default 6 retries sum to 60+120+240+480+960+1800 = 61 min of
+                # pure sleeping (scope-ab run-06, 2026-04-23). When the next
+                # sleep would push cumulative backoff past this ceiling, stop
+                # retrying and soft-fail with a "rate-limited, retry later" error
+                # rather than committing to another 30-minute sleep.
+                _RATE_LIMIT_TOTAL_CAP = _env_int("POE_CLAUDE_RATE_LIMIT_TOTAL_CAP", 600)
+                _total_slept = 0
                 _wait = getattr(self, "_rate_limit_wait", 60)
                 _retry_success = False
+                _capped_out = False
                 for _attempt in range(_RATE_LIMIT_MAX_RETRIES):
+                    if _RATE_LIMIT_TOTAL_CAP > 0 and _total_slept + _wait > _RATE_LIMIT_TOTAL_CAP:
+                        log.warning(
+                            "rate limit: total backoff cap reached (%ds slept, next wait %ds "
+                            "would exceed %ds cap) — bailing cleanly after %d attempt(s)",
+                            _total_slept, _wait, _RATE_LIMIT_TOTAL_CAP, _attempt,
+                        )
+                        _capped_out = True
+                        break
                     log.warning(
                         "rate limit detected (attempt %d/%d), waiting %ds before retry",
                         _attempt + 1, _RATE_LIMIT_MAX_RETRIES, _wait,
                     )
                     _time.sleep(_wait)
+                    _total_slept += _wait
                     _wait = min(_wait * 2, _RATE_LIMIT_CYCLE_CAP)
                     try:
                         result = _run_subprocess_safe(cmd, input=prompt, timeout=_timeout)
@@ -777,6 +795,12 @@ class ClaudeSubprocessAdapter(LLMAdapter):
                     self._rate_limit_wait = _wait  # persist longer wait for next call
                 if not _retry_success:
                     if result.returncode != 0:
+                        if _capped_out:
+                            raise RuntimeError(
+                                f"claude rate-limited; bailed after {_total_slept}s of backoff "
+                                f"(total cap {_RATE_LIMIT_TOTAL_CAP}s) — retry later: "
+                                f"{result.stdout[:200]}"
+                            )
                         raise RuntimeError(
                             f"claude rate-limited after {_RATE_LIMIT_MAX_RETRIES} retries: "
                             f"{result.stdout[:200]}"
