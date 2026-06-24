@@ -23,7 +23,6 @@ import json
 import logging
 import os
 import sys
-import textwrap
 import time
 import re as _re
 import uuid
@@ -327,10 +326,9 @@ class LoopStateMachine(LoopContext):
 
 # Prompts and tools — extracted to planner.py and step_exec.py for readability.
 # Re-exported here for backward compatibility with existing imports.
-from planner import DECOMPOSE_SYSTEM, parse_steps as _parse_steps, decompose as _decompose_impl
+from planner import DECOMPOSE_SYSTEM, decompose as _decompose_impl
 from step_exec import (
     EXECUTE_SYSTEM, EXECUTE_TOOLS,
-    EXECUTE_TOOLS_WORKER, EXECUTE_TOOLS_SHORT, EXECUTE_TOOLS_INSPECTOR,
     execute_step as _execute_step,
     generate_refinement_hint as _generate_refinement_hint,
     verify_step as _verify_step,
@@ -1048,7 +1046,7 @@ def _check_loop_interrupts(
             loop_status = "interrupted"
             stuck_reason = f"kill switch: {_ks_msg}"
             if ctx.verbose:
-                print(f"[poe] kill switch active — stopping loop", file=sys.stderr, flush=True)
+                print("[poe] kill switch active — stopping loop", file=sys.stderr, flush=True)
     except Exception as _exc:
         # Safety mechanism — silent failure means a kill switch could be ignored.
         log.error("kill switch check FAILED for loop %s — safety mechanism may be compromised: %s",
@@ -1655,7 +1653,7 @@ def _select_step_adapter(
 
     Returns the adapter to use for this step (may be different from ctx.adapter).
     """
-    from llm import build_adapter, MODEL_CHEAP, MODEL_MID, LLMAdapter as _LLMAdapterBase
+    from llm import build_adapter, MODEL_CHEAP, LLMAdapter as _LLMAdapterBase
 
     # Only re-tier adapters we know how to rebuild (build_adapter products all
     # subclass LLMAdapter). _DryRunAdapter and injected test doubles are plain
@@ -2214,7 +2212,6 @@ def _preflight_checks(
     loop_shared_ctx: Dict[str, Any] = {}
 
     # Compute parallel path info
-    o = _orch()
     proj_fanout_dir = ""
     if ctx.project:
         try:
@@ -2259,7 +2256,7 @@ def _decompose_goal(
     from llm import build_adapter, MODEL_MID, THINKING_HIGH
 
     if ctx.verbose:
-        print(f"[poe] decomposing goal...", file=sys.stderr, flush=True)
+        print("[poe] decomposing goal...", file=sys.stderr, flush=True)
     _lessons_context, _skills_context, _cost_context, _had_no_matching_skill, _matched_rule = (
         _build_loop_context(ctx.goal, verbose=ctx.verbose, permission_context=permission_context,
                             project=ctx.project or "", repo_path=ctx.repo_path or "")
@@ -4934,24 +4931,17 @@ def run_agent_loop(
 
     ctx.channel = channel  # Phase 64C: mid-loop escalation channel
 
-    # Re-import lazy deps used by subsequent phases (same lazy-import pattern)
-    from llm import LLMMessage, LLMTool, build_adapter, MODEL_CHEAP, MODEL_MID, MODEL_POWER
-    from interrupt import InterruptQueue, apply_interrupt_to_steps, set_loop_running, clear_loop_running
-
-    # Tier ordering for floor comparisons (Phase 57: session-level tier floor)
+    # Model constants for the session-level tier floor ordering (Phase 57).
+    from llm import MODEL_CHEAP, MODEL_MID, MODEL_POWER
     _TIER_ORDER = {MODEL_CHEAP: 0, MODEL_MID: 1, MODEL_POWER: 2}
 
-    # Unpack ctx into locals used by subsequent phases.
-    # These aliases will be eliminated as phases B-G are extracted to use ctx directly.
+    # Unpack ctx into the locals the orchestrator still threads into phase
+    # calls and the auto-recovery re-run.
     loop_id = ctx.loop_id
-    started_at = ctx.started_at
     start_ts = ctx.start_ts
     project = ctx.project
     adapter = ctx.adapter
     interrupt_queue = ctx.interrupt_queue
-    _hook_registry = ctx.hook_registry
-    _ancestry_context = ctx.ancestry_context
-    _loop_timeout_secs = ctx.loop_timeout_secs
     _perm_ctx = ctx.perm_ctx
 
     def _resolve_tools() -> list:
@@ -4960,8 +4950,6 @@ def run_agent_loop(
             _get_tools_for_role(_perm_ctx.role, _perm_ctx.deny_patterns)
             if _perm_ctx is not None else list(_EXECUTE_TOOLS)
         )
-
-    o = _orch()
 
     # Phase B: Decompose goal into steps
     ctx.set_phase(LoopPhase.DECOMPOSE)
@@ -4992,7 +4980,6 @@ def run_agent_loop(
     _parallel_levels = _pf["parallel_levels"]
     _manifest_steps = _pf["manifest_steps"]
     _replan_count = _pf["replan_count"]
-    _manifest_path_str = _pf["manifest_path_str"]
     _loop_shared_ctx = _pf["loop_shared_ctx"]
     _proj_fanout_dir = _pf["proj_fanout_dir"]
     _use_dag = _pf["use_dag"]
