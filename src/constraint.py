@@ -20,6 +20,16 @@ classified by *semantic action tier*:
 Use ``classify_action_tier()`` to determine the tier and ``hitl_policy()``
 to get a combined policy decision.
 
+Persistence-install guardrail (BACKLOG #3): steps that install or enable a
+persistence mechanism (systemd unit, cron entry, launchd agent, login item,
+init script) are blocked by default — an autonomous/unattended run must never
+silently make itself survive a reboot.  This block survives the planner-
+description softening (unlike a stray ``rm -rf`` hint, the stated intent IS the
+action).  An attended operator can permit it for a single run via the explicit
+high-trust gate ``POE_PERSISTENCE_ALLOW=1`` (env) or
+``constraints.allow_persistence_install: true`` (config), which downgrades the
+flag to a warning.  Background/scheduled paths must never set that gate.
+
 Constraints are pluggable: add a callable to CONSTRAINT_REGISTRY to extend.
 Each constraint is a function(step_text, goal) -> Optional[ConstraintFlag].
 
@@ -294,14 +304,69 @@ _EXEC_PATTERNS = [
     (r"\b__import__\s*\(",                  "HIGH",  "dynamic __import__() found"),
 ]
 
+# Patterns that indicate INSTALLING or ENABLING a persistence mechanism
+# (systemd unit, cron entry, launchd agent/daemon, login item, SysV init script).
+# Installing persistence is the one class of action an unattended/autonomous run
+# must never apply silently: the April-2026 live-box incident — a revived stale
+# goal ("Monitor BTC price") installed both cron and systemd automation — is
+# exactly this failure mode.  These match the *act of installing/enabling*, not
+# merely mentioning a mechanism, and (unlike the destructive-op group) are NOT
+# softened by the planner-description path, because for persistence the stated
+# intent IS the action.  Default policy is HIGH/block; an operator who genuinely
+# wants to install persistence in an attended run sets the explicit high-trust
+# gate (POE_PERSISTENCE_ALLOW=1 / constraints.allow_persistence_install) which
+# downgrades these to MEDIUM (warn + proceed).
+_PERSISTENCE_PATTERNS = [
+    (r"\bsystemctl\s+(--user\s+)?(enable|start|--now)\b", "HIGH", "systemctl enable/start (systemd persistence)"),
+    (r"\bsystemctl\s+daemon-reload\b",                    "HIGH", "systemctl daemon-reload (systemd unit install)"),
+    (r"/etc/systemd/system/",                             "HIGH", "write to /etc/systemd/system/ (systemd unit)"),
+    (r"/lib/systemd/system/",                             "HIGH", "write to /lib/systemd/system/ (systemd unit)"),
+    (r"~/\.config/systemd/user/",                         "HIGH", "write to user systemd unit dir"),
+    (r"\bsystemd-run\b",                                  "HIGH", "systemd-run (transient persistence)"),
+    (r"\bloginctl\s+enable-linger\b",                     "HIGH", "loginctl enable-linger (user services persist after logout)"),
+    (r"\bcrontab\s+-",                                    "HIGH", "crontab -e / crontab - (cron install)"),
+    (r"\bcrontab\s+\S+\.\w+",                             "HIGH", "crontab <file> (cron install)"),
+    (r"@reboot\b",                                        "HIGH", "@reboot cron entry"),
+    (r"/etc/cron\.(d|daily|hourly|weekly|monthly)/",      "HIGH", "write to /etc/cron.*/"),
+    (r"/etc/crontab\b",                                   "HIGH", "write to /etc/crontab"),
+    (r"\blaunchctl\s+(load|bootstrap|enable|submit)\b",   "HIGH", "launchctl load/bootstrap (launchd persistence)"),
+    (r"/Library/Launch(Agents|Daemons)/",                 "HIGH", "write to /Library/Launch{Agents,Daemons}/"),
+    (r"~/Library/LaunchAgents/",                          "HIGH", "write to ~/Library/LaunchAgents/"),
+    (r"\bupdate-rc\.d\b",                                 "HIGH", "update-rc.d (SysV init persistence)"),
+    (r"\bchkconfig\s+\S+\s+on\b",                         "HIGH", "chkconfig <svc> on (init persistence)"),
+    (r"\b(add|install|enable|register|set\s+up|create|schedule)\b[^.\n]{0,40}\b(systemd\s+(unit|service|timer)|cron\s+(job|entry|tab)|launchd\s+(agent|daemon)|login\s+item|startup\s+item|init\s+script|boot\s+service)\b",
+                                                          "HIGH", "natural-language persistence-install intent"),
+]
+
 # All pattern groups with their constraint name
 _ALL_PATTERNS: List[tuple] = [
-    ("destructive_op",  _DESTRUCTIVE_PATTERNS),
-    ("secret_access",   _SECRET_PATTERNS),
-    ("path_escape",     _PATH_ESCAPE_PATTERNS),
-    ("unsafe_network",  _NETWORK_PATTERNS),
-    ("unsafe_exec",     _EXEC_PATTERNS),
+    ("destructive_op",    _DESTRUCTIVE_PATTERNS),
+    ("secret_access",     _SECRET_PATTERNS),
+    ("path_escape",       _PATH_ESCAPE_PATTERNS),
+    ("unsafe_network",    _NETWORK_PATTERNS),
+    ("unsafe_exec",       _EXEC_PATTERNS),
+    ("persistence_install", _PERSISTENCE_PATTERNS),
 ]
+
+
+def _persistence_allowed() -> bool:
+    """Return True if the explicit high-trust persistence-install gate is set.
+
+    Default is False (fail-safe): persistence-install flags stay HIGH and block.
+    The gate is for attended runs where an operator deliberately wants to install
+    a service/cron/timer — set POE_PERSISTENCE_ALLOW=1 (env) or
+    constraints.allow_persistence_install: true (config) for that run.
+    Background/scheduled paths must never set this.
+    """
+    import os as _os
+    val = _os.environ.get("POE_PERSISTENCE_ALLOW")
+    if val is not None:
+        return val.strip().lower() in ("1", "true", "yes", "on")
+    try:
+        from config import get as _cfg_get
+        return bool(_cfg_get("constraints.allow_persistence_install", False))
+    except Exception:
+        return False
 
 
 def _check_patterns(
@@ -423,6 +488,15 @@ def check_step_constraints(step_text: str, goal: str = "") -> ConstraintResult:
             all_flags.extend(checker(step_text, goal))
         except Exception:
             pass  # constraint failures must never block legitimate work
+
+    # Persistence-install gate: by default these stay HIGH (block). If the
+    # explicit high-trust gate is set (attended run, operator opt-in), downgrade
+    # to MEDIUM so the step warns + proceeds instead of blocking.
+    if _persistence_allowed():
+        for f in all_flags:
+            if f.name == "persistence_install" and f.risk == "HIGH":
+                f.risk = "MEDIUM"
+                f.detail = f.detail + " (permitted via high-trust gate)"
 
     # Determine worst risk level
     if not all_flags:
@@ -638,13 +712,28 @@ def hitl_policy(step_text: str, goal: str = "", *, is_description: bool = False)
     constraint_result = check_step_constraints(step_text, goal)
     tier = classify_action_tier(step_text, goal)
 
+    # Persistence-install guardrail: a step that installs/enables a persistence
+    # mechanism (systemd, cron, launchd, login item, init script) must block even
+    # on the planner-description path — unlike a "(rm -rf first)" hint, here the
+    # stated intent IS the action.  If the high-trust gate is set, the flags were
+    # already downgraded to MEDIUM in check_step_constraints, so this list is empty.
+    _persistence_flags = [
+        f for f in constraint_result.flags
+        if f.name == "persistence_install" and f.risk == "HIGH"
+    ]
+
     # Soften DESTROY tier and HIGH risk for step descriptions: the decomposer
     # may include shell command fragments like "(rm -rf first)" as clarifying
     # notes, but the execution agent will decide how to accomplish the task
     # safely.  Blocking here loses work; warning surfaces the concern without
     # halting.  Both the tier AND the risk level are downgraded so that neither
-    # independent path can block.
-    if is_description and (tier == ACTION_TIER_DESTROY or constraint_result.risk_level == "HIGH"):
+    # independent path can block.  Persistence-install flags are exempt — they
+    # must keep blocking through the description path.
+    if (
+        is_description
+        and not _persistence_flags
+        and (tier == ACTION_TIER_DESTROY or constraint_result.risk_level == "HIGH")
+    ):
         if tier == ACTION_TIER_DESTROY:
             tier = ACTION_TIER_WRITE  # downgrade → warn gate, not block
         # Cap risk at MEDIUM — HIGH blocks even for WRITE/READ tiers
@@ -668,6 +757,17 @@ def hitl_policy(step_text: str, goal: str = "", *, is_description: bool = False)
 
     allowed = constraint_result.allowed and tier != ACTION_TIER_DESTROY
 
+    # Persistence-install always blocks (unless gated → already downgraded above).
+    reason = constraint_result.reason
+    if _persistence_flags:
+        allowed = False
+        effective_gate = "block"
+        _p = _persistence_flags[0].detail
+        reason = (
+            f"persistence-install blocked (autonomous runs must not install/enable "
+            f"persistence silently): {_p}. Set POE_PERSISTENCE_ALLOW=1 to permit in an attended run."
+        )
+
     if not allowed:
         log.debug("hitl_policy BLOCKED: tier=%s risk=%s gate=%s step=%r",
                   tier, constraint_result.risk_level, effective_gate, step_text[:80])
@@ -681,5 +781,5 @@ def hitl_policy(step_text: str, goal: str = "", *, is_description: bool = False)
         "allowed": allowed,
         "risk_level": constraint_result.risk_level,
         "flags": [{"name": f.name, "risk": f.risk, "detail": f.detail} for f in constraint_result.flags],
-        "reason": constraint_result.reason,
+        "reason": reason,
     }
