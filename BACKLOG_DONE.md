@@ -8,6 +8,14 @@ Last split: 2026-04-16 (session 34).
 
 ---
 
+### Captain's-log event contract doc — DONE (2026-06-24, was AFK chunk #8)
+
+**Source:** Actionable Stack #8. "We have 36+ event types emitted across 10+ modules. No single doc says here's every event, field schema, when it fires."
+
+**What shipped:** `docs/CAPTAINS_LOG_EVENTS.md` — entry schema (the 4 required + 4 optional `log_event` fields), rotation/reader behavior, and a category-grouped table of all **45 actively-emitted event types** (~52 call sites across 16 modules) with emitter file:line, `context` field names, and when-it-fires. Inventory done via an Explore-agent call-site sweep, then the load-bearing claims were code-verified.
+
+**Bonus findings (now BACKLOG #8):** the inventory surfaced registry drift — 3 events emitted via string literals but missing from `EVENT_TYPES` (`EVOLVER_REVERTED`, `EVOLVER_VERIFY`, `PLAYBOOK_UPDATED`), and 3 defined-but-unemitted (`CANON_CANDIDATE`, `LESSON_RECOVERED`, `SKILL_REWRITE` — the last referenced by consumers in recall.py/evolver.py yet never produced). Documented in the doc's "Integrity gaps" section and filed as a cheap follow-up.
+
 ### Persistence-install guardrail for autonomous runs — DONE (2026-06-24, was BLOCKER #3)
 
 **Source:** Actionable Stack #3 (BLOCKER). April 22 live-box cleanup found a stale scheduled goal (`Monitor BTC price`, created April 4) had been revived and installed BOTH cron and systemd automation — exactly the rogue-process failure that has burned tokens before. Background/scheduled paths (heartbeat, backlog drains, timers) must never install or enable persistence (systemd units, launchd agents, cron entries, login items, init scripts, long-lived daemons) without an explicit high-trust gate.

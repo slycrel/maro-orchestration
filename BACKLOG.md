@@ -120,15 +120,22 @@ have" not "build a sandboxing subsystem."
   for `quality_gate.run_quality_gate` / `run_llm_council` (3-persona trio) escalation,
   reusing the `WEAK_ESCALATE` decision state. (verify_step done; quality_gate pending.)
 
-### 8. Ready AFK chunk — Captain's-log event contract doc
+### 8. Captain's-log event-type registry integrity
 
-- [ ] **Captain's log event contract doc.** We have 36+ event types
-  emitted across 10+ modules. No single doc says "here's every event,
-  here's the field schema, here's when it fires." Blind collaborator
-  can't reason about observability without reading every emitter.
-  Produce `docs/CAPTAINS_LOG_EVENTS.md` with one table: event / fields /
-  emitter / when-it-fires. Pure documentation chunk — zero code risk.
-  Size: half-day. Excellent AFK starter.
+Surfaced by the 2026-06-24 inventory that produced `docs/CAPTAINS_LOG_EVENTS.md`.
+Two drift classes, both cheap to fix:
+
+- [ ] **3 emitted-but-unregistered events.** `EVOLVER_REVERTED` (evolver.py:664),
+  `EVOLVER_VERIFY` (evolver.py:2072), `PLAYBOOK_UPDATED` (playbook.py:235) fire in
+  production via string literals not in `captains_log.EVENT_TYPES`. Any consumer
+  that validates against `EVENT_TYPES` silently drops them. Add the three
+  constants + register them, switch emitters to the constants.
+- [ ] **3 defined-but-unemitted events.** `CANON_CANDIDATE`, `LESSON_RECOVERED`,
+  `SKILL_REWRITE` are in `EVENT_TYPES` but nothing emits them. `SKILL_REWRITE` is
+  worse — it's referenced by consumers (`recall.py:54`, `evolver.py:995`) yet never
+  produced (dead expectation). Either wire the emitter or remove the constant +
+  consumer references. (CANON_CANDIDATE / LESSON_RECOVERED map to the known Stage
+  2→3 crystallization gaps — may be intentionally-pending rather than dead.)
 
 ### 9. Local-validator measurement — token/cost delta report
 

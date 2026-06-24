@@ -101,7 +101,7 @@ Two capabilities, often conflated but distinct:
 - `knowledge_web.py`: Cross-linked concept nodes (lat.md graph).
 - `knowledge_lens.py`: Focused analysis lenses for memory data.
 - Tiered memory: MEDIUM (decays 15%/day) → LONG (promoted at 0.9+ score, 3+ sessions). Standing rules (zero-cost, always active).
-- Captain's log: 11K+ event stream tracking knowledge lifecycle transitions.
+- Captain's log: 11K+ event stream tracking knowledge lifecycle transitions. Full event contract (every type, fields, emitter, when-it-fires) in `docs/CAPTAINS_LOG_EVENTS.md`.
 
 **Where intent has drifted — this is the biggest gap:**
 - **Stage 1→2 works:** Lessons get extracted from outcomes and stored in tiered memory.
