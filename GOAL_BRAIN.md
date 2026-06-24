@@ -452,8 +452,15 @@ Active:
   config-gated (`navigator.shadow_dispatch`, off in code, this box opted in
   via workspace config), cheap-tier-only by default, never raises.
   Smoke-verified against the real adapter (execute 0.92, NAVIGATOR_DECIDED
-  with `live: true` in the workspace log). Now accumulating agreement data;
-  then the per-class cutover discussion — explicitly not before.
+  with `live: true` in the workspace log).
+  **Cutover shipped per-MOVE, not per-class (2026-06-12 code, ENABLED LIVE
+  2026-06-21 — see Decisions):** `navigator.act_dispatch: true`,
+  `act_moves: [escalate]`, `act_confidence_floor: 0.9`. Escalate earned it
+  (defers to a human, can't assert a wrong resolution) and now ACTS; `close`
+  stays shadow-only until it has organic evidence. Remaining on this thread:
+  passive organic accrual of escalate decisions, then the `close`-cutover
+  discussion. (Supersedes the earlier "accumulating data, not before" status —
+  escalate is live.)
 - **Run↔thread linkage**: done 2026-06-10 — tasks carry an `origin` ancestry dict
   (parent handle/loop/goal) from enqueue through `handle_task` into run metadata,
   and recall() now consults it at dispatch (ThreadIdentity walk).
@@ -484,8 +491,10 @@ Dormant (deliberately parked, not dropped):
   vocabulary pinned there too. Successor questions: guard thresholds are unmeasured
   (watch RECALL_GUARD_TRIPPED). ~~Per-thread goal-brain creation~~ answered
   2026-06-11: `src/thread_brain.py` seeds `source/goal_brain.md` in every run-dir
-  (this file's section grammar scaled down); remaining piece is per-turn
-  maintenance once the navigator goes live.
+  (this file's section grammar scaled down). Per-turn maintenance: the navigator
+  went live 2026-06-21 and the **decision-half shipped**; remaining pieces are
+  (a) the compiled-truth half and (b) feeding the dispatch-navigator's rationale
+  into the spawned run's brain.
 - **Fan-out recoverability mechanism** — *visibility half answered 2026-06-11 at the
   schema layer*: `open_children` rides in every NavigatorInput and close is invalid
   while any child is undispositioned (`docs/NAVIGATOR_SCHEMA.md`). Still open:

@@ -101,9 +101,9 @@ Append-only event stream tracking knowledge lifecycle:
 
 | File | Lines | Role |
 |------|-------|------|
-| src/memory.py | ~530 | Core: outcomes, lessons, injection, reflection |
-| src/memory_ledger.py | ~943 | Task execution traces |
-| src/knowledge_web.py | ~1330 | Cross-linked concept nodes, K2 schema/storage/query |
-| src/knowledge_lens.py | ~835 | Focused analysis lenses |
-| src/playbook.py | ~221 | Director operational wisdom (append/read) |
+| src/memory.py | ~545 | Core: outcomes, lessons, injection, reflection |
+| src/memory_ledger.py | ~1030 | Task execution traces |
+| src/knowledge_web.py | ~1630 | Cross-linked concept nodes, K2 schema/storage/query |
+| src/knowledge_lens.py | ~1100 | Focused analysis lenses |
+| src/playbook.py | ~240 | Director operational wisdom (append/read) |
 | docs/KNOWLEDGE_CRYSTALLIZATION.md | | Design spec (sapling→tree) |

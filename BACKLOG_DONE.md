@@ -473,3 +473,348 @@ Items moved here when done, for reference:
 - [x] Agent-generated tools (backtester) — 2026-03-30
 
 From jeremy (clean up and integrate with the above later)
+
+---
+
+## Archived from BACKLOG 2026-06-24 (bulk triage)
+
+### Per-step worker token explosion — DIAGNOSED 2026-06-21 (was [NEXT])
+
+Live finding from a `verify:` coding run: 485K tokens over 6 steps (47K→111K→**145K**
+→80K→17K→84K per step); introspect flagged `token_explosion`.
+
+**Measured the code (2026-06-21). Conclusion: the original framing was wrong, and so
+was the metric.**
+1. **Every inter-step seam is already hard-capped** — completed_context 800 chars +
+   compress-after-5 (`step_exec.py:660`, `agent_loop.py:1487/1527`), artifact→prompt
+   `str(_v)[:500]` (`step_exec.py:676`), env snapshot 200 chars (`agent_loop.py:1497`),
+   team firewall 5×200 (`team.py:208`). The step's own LLM call is `max_tokens=4096`,
+   single tool (`step_exec.py:833`). So our plumbing physically cannot emit a 145K step.
+2. **The big number is the delegated subprocess worker** (the `claude` CLI path,
+   `_extract_result_object` in `llm.py`) rolled into the step total. It runs its own
+   internal agentic tool loop (Read/Edit/Write on the growing file); we see only totals.
+   Non-monotonic per-step shape (rise to 145K, fall to 17K) confirms intrinsic per-step
+   work, NOT monotonic inherited-context accumulation.
+3. **The metric was cache-blind.** `llm.py` folded `cache_read_input_tokens` into
+   `input_tokens` at full weight, and `token_explosion` fires on raw token *volume*
+   (`introspect.py:42,63`). A worker re-reading a growing file is mostly cache HITS
+   (~0.1x cost; Claude Code reports ~92% hit rate) — so the "explosion" likely overstates
+   real $ by ~10x. We were arguing about a number that was lying.
+
+**DONE (foundation, commit pending):** cache-aware accounting — `LLMResponse.cache_read_tokens`
++ `.fresh_input_tokens`, all 3 adapters populate it on the same total-volume contract,
+`estimate_cost(..., cache_read_tokens=)` prices cache reads at `CACHE_READ_MULTIPLIER` (0.1x).
+
+Conclusion on the original levers: the "summary instead of file" / "cap `_art_val`" levers
+target the orchestration layer, which is NOT the leak — **don't build them.** The durable
+lever for the actual leak is worker-layer caching (CAG: static prefix cached, pay the delta
+only — likely already half-free via Anthropic prompt cache) IF cost is genuinely large.
+Decide that with the now-correct meter, not the old volume number.
+
+### Make metric alarms cache-aware — DONE 2026-06-21
+
+Wired `cache_read_tokens` end-to-end and re-measured. **Verdict: the token explosion was
+a cache-blind metric artifact; caching already absorbs the re-reads. No CAG/retrieval build
+needed for this.**
+- [x] `cache_read_tokens` carried through the step record: `step_exec` outcome (all 9
+  resp-based sites) → `write_event`/`observe` → `events.jsonl` → `StepProfile.cache_read_tokens`
+  + `.fresh_tokens`.
+- [x] `token_explosion` (`introspect.py`) now compares `fresh_tokens`, not raw volume.
+- [x] **Consistency pass (2026-06-21):** converted the remaining raw-volume alarms to the
+  same cache-aware basis and closed the false-negative gap the user flagged ("are we skewing
+  the other direction now?"):
+  - `decomposition_too_broad` now gates on `fresh_tokens` (a 250K step that's all cache reads
+    no longer flags as over-broad).
+  - New `cost_spike` failure class (`introspect.py` check 5b): an **absolute** cache-aware
+    dollar guard (`_STEP_COST_WARN_USD=0.50`, `_LOOP_COST_WARN_USD=2.00`). Catches the inverse
+    case the fresh-token alarms miss — a huge cached prefix on a *pricey* model that's flat in
+    fresh terms but still real money at 0.1x. Priced cache-aware, so cheap-tier cache reads
+    never trip it. Registered in `FAILURE_CLASSES`, `_GRADUATION_TEMPLATES`, and `RECOVERY_PLANS`.
+  - `StepProfile` carries `tokens_in`/`tokens_out`/`model` + a `cost_usd` property;
+    `model` (model_key) now flows step_exec → `write_event`/`observe` → `events.jsonl`.
+  - `_cost_lens` ranks steps by cache-aware dollars, not raw tokens.
+  - The crypto-tax framing: fresh = ordinary income (full rate), cache reads = the like-kind
+    0.1x basis. We now tax **net** on growth/bloat and keep a separate **absolute** spend alarm
+    so neither direction goes blind.
+- [x] Re-measured live (sandboxed file-accumulating build, cheap/Haiku, 4 steps re-reading a
+  growing file). **Result: input was ~100% cache reads** (per-step 42K→69K→69K→96K total,
+  fresh_in 4–6 tokens each; whole run 276,894 input / 276,874 cache / **20 fresh**). The same
+  pattern that historically flagged `token_explosion` now diagnoses **healthy**; cache-blind
+  cost was **6.6x overstated** ($0.235 → $0.036). The 485K run's "growth" was cache-read
+  growth at ~0.1x, not fresh compute.
+- [x] **DONE 2026-06-22:** Passed `cache_read_tokens` into `estimate_cost` at the live recording
+  sites — `record_step_cost` (now takes + persists `cache_read_tokens` to step-costs.jsonl),
+  skill `_est_cost` (success + fail paths), and the per-step/running cost log. Persisted cost
+  telemetry is now cache-adjusted, matching what the introspect alarms judge. **Also fixed a
+  bug found while here:** the running `cost_total` log/budget-breaker repriced *all* accumulated
+  tokens at the latest step's model, so the figure swung when steps switched cheap↔mid↔power
+  (seen live: $0.63 at a mid step → $0.26 at the next cheap step). Now accumulated per-step
+  (`total_cost_usd`), correct across model switches and more accurate for the cost-budget circuit
+  breaker. `StepOutcome` carries `cache_read_tokens` so the run-summary ✅ cost string is
+  cache-aware too. Note: the claude-CLI subprocess reports ~all input as cache_read once the
+  session warms, so fresh-token alarms are now very quiet for subprocess workers — confirmed
+  live (run1 2026-06-22: per-step cache_read=83979 of in=83984, ~99.99%). Watch we don't go
+  cache-blind the other way; the absolute `cost_spike` alarm is the backstop for that.
+- **Live validation 2026-06-22 (run1, real spend):** a 9-step `verify:` build goal did
+  **457,322 total tokens** and diagnosed **`healthy`** — pre-fix that volume would have tripped
+  `token_explosion`/`decomposition_too_broad`; now correctly healthy because fresh tokens/step
+  are ~5 (rest cache reads). The cache-aware introspect works on organic data.
+
+### Entropy / decay-by-invalidation (2026-06-11, queued behind navigator)
+
+Steering context in GOAL_BRAIN.md Intent (entropy quote). Crystallized artifacts
+(skills, standing rules, playbook entries) rot when the world changes under them —
+distinct from decay-by-disuse, which tiered lessons already have. The most-reinforced
+artifact is the most dangerous one at world-shift time, because reinforcement and
+validity are different signals and we only track one.
+
+- [x] **Decay v0 — re-fight on collision (Jeremy's pinned first pass).** When a
+  crystallized artifact fails, inject the existing mechanism + the failure into the
+  prompt and re-derive. *"at worst we have better context, at best it's a slight
+  tweak and we fix forward."* **Done 2026-06-11 for the rule layer:** a contradicted
+  standing rule is *contested* — immediately demoted from "apply unconditionally" to
+  a verify-before-relying injection block (read-time trust derivation, data untouched),
+  and `knowledge_lens.refight_rule()` re-derives it against its contradiction evidence
+  (pulled from the captain's log) with verdicts keep / revise / retire (retire demotes
+  back to hypothesis — must re-earn promotion). Runs from `run_skill_maintenance` in
+  the evolver cycle (adapter-gated, max 3/cycle), beside `rewrite_skill` — the skill
+  seed it generalizes. `RULE_REFOUGHT` event is the audit trail. No cron — collision
+  detection rides on contradiction recording, repair rides on the evolver cycle.
+  Note: no standing rules exist on this box yet (accretion only became possible in M2),
+  so first live exercise awaits a real rule + collision.
+- [x] **Freshness signal on crystallized artifacts.** `last_verified` (last
+  successful run against the real world) distinct from `last_reinforced`. Trust at
+  injection time = f(score, time-since-verified); stale-but-promoted gets a
+  "verify before relying" flag, not silent confident injection.
+  **Done 2026-06-11 for the rule layer:** `StandingRule.last_verified` stamped at
+  promotion, on production re-confirmation, and on re-fight keep/revise. The
+  anchoring fix: post-promotion re-confirmations never reached the rule —
+  `observe_pattern` only matched hypotheses, so a re-confirmed promoted lesson
+  seeded a *duplicate hypothesis* (which could re-promote into a duplicate rule)
+  while `rule.confirmations` stayed frozen at its promotion value. Now an
+  observation matching an existing rule verifies the rule (`RULE_VERIFIED`
+  event, 46th type). At injection, an uncontradicted rule unverified for
+  `knowledge.rule_staleness_days` (default 30, 0 disables) joins a "Stale rules
+  (unverified for N+ days — verify before relying)" block; contested takes
+  precedence. Read-time derivation only, data untouched; `promoted_at` is the
+  fallback anchor for pre-field rules. Skill/playbook layers still open —
+  skills have score+circuit-breaker already; revisit if staleness shows up there.
+
+### Live orchestration run findings (2026-06-11, first post-suite-green session) — governance push
+
+From real task-path runs (enqueue → drain_task_store → handle_task → handle).
+Fixed same day: task-path runs never finalized, poisoning recall's all_failing
+(9402d3d); lesson extraction silently returned [] on every real run — safe_list's
+str default dropped the typed lesson dicts the prompt asks for (verify→learn was
+dead at the extraction step since Phase 59 S1). Remaining observations:
+
+- [x] **GOVERNANCE: a vague goal pipeline-executed into an unreviewed mainline
+  push as Jeremy.** "improve things" (deliberately vague test goal) decomposed
+  itself into "pick an improvement from MILESTONES/BACKLOG and implement it
+  end-to-end", wrote a real fix (CLOSURE_VERDICT skip-path emission, 06c3764,
+  reviewed post-hoc: good code, kept), committed as author "Jeremy Stone" and
+  **pushed to origin/main** — 4.09M tokens, no human or quality gate between a
+  worker and a public push under Jeremy's identity. The live navigator shadow
+  said **escalate (0.95)** at dispatch — the pipeline executed anyway and
+  declared done. **RESOLVED 2026-06-11 (cfab080):** Jeremy's call — workers
+  authoring as him is fine ("haven't made that distinction yet, not sure it
+  matters"); the gate is about unreviewed mainline pushes, not identity.
+  Shipped as branch policy: `_run_subprocess_safe` marks all Poe-spawned
+  subprocesses `POE_WORKER_RUN=1`; `scripts/hooks/pre-push` (installed via
+  `scripts/install-git-hooks.sh`, part of harness install) blocks worker
+  pushes to main/master with a redirect to work branches; explicit bypass
+  via config `workers.allow_main_push` (default false) → `POE_ALLOW_MAIN_PUSH=1`.
+  Humans/interactive sessions unaffected. Still a strong cutover data point
+  for the dispatch decision class.
+
+- [x] **NOW lane recorded an honest "this cannot be done" as `done`** — found
+  by the impossible-binary probe batch (3× "run /usr/bin/nonexistent-binary-xyz"):
+  intent routed the execution goal NOW, the completion honestly replied "the
+  goal is incomplete... cannot be fulfilled", and the run was recorded `done`
+  in 18s — NOW status meant "the completion call returned", not "the goal was
+  achieved". The false done then poisoned every judgment layer above it:
+  recall reported a done prior, so the dispatch guard could never trip, and
+  the navigator's attempt-2 `close` was reasonable-on-poisoned-input. (The
+  navigator still said `escalate 0.95` on attempts 1 and 3 — attempt 3
+  explicitly caught the contradiction "prior attempts are marked done" vs an
+  impossible goal. Divergences #2 and #3, both adjudicated navigator-right.)
+  **Fixed same day:** (1) `now_lane.escalate_to_director` default flipped to
+  True — complex directives route to the agenda lane; (2) autonomous NOW runs
+  (origin present, no human reading the text) get a cheap self-verdict and
+  demote to `incomplete` when the response reports non-fulfillment
+  (`_verify_now_outcome`, fails open). Interactive NOW calls keep raw speed.
+  **Agenda twin fixed same night (02b0263):** the same goal re-run through
+  the loop still finalized done — closure said complete=False at 0.95–0.99
+  but restarted loops were never re-verified and the verdict never gated
+  status. Now: re-verify after closure restart; final complete=False at
+  conf ≥0.7 demotes done→incomplete. **Both fixes live-verified:** the
+  impossible-file probe finalized `incomplete` end-to-end, and the 4th
+  attempt at the binary goal drew the first live RECALL_GUARD_TRIPPED
+  (6 honest non-done priors) with the navigator concurring (close 0.99 /
+  guard_refused).
+
+- [x] **NOW artifacts write to a stale prototype path** — `_write_now_artifact`
+  resolved orch_root and appended `prototypes/poe-orchestration/artifacts/now/`,
+  landing files at `~/prototypes/poe-orchestration/prototypes/poe-orchestration/…`
+  (doubled segment, outside the workspace). **Fixed 2026-06-12:** NOW artifacts
+  now land in the run dir's `artifact/` subtree (current_run_dir, falling back
+  to run_dir(handle_id) — both workspace-honoring); artifact_path is absolute.
+
+- [x] **`loop-*-PARTIAL.md` is misnamed on done runs** — fixed same day: the
+  transcript is `loop-<id>-RESULT.md` when the loop finished done, `-PARTIAL.md`
+  otherwise. Verified no production code reads the filename (only synthetic-name
+  tests + cleanup glob, which matches neither).
+
+- [x] **Step numbering in transcripts starts mid-sequence** — root-caused same
+  day: `s.index` is the NEXT.md *ledger line* (orch_items.append_next_items
+  returns file-line offsets, headers included), not plan position. Display-only
+  fix: transcripts and the execution log now render `Step <pos>/<n> (ledger #i)`;
+  the ledger index stays untouched (load-bearing for get_item/_by_idx).
+
+### Goal-brain pressure-test findings — runtime gaps (2026-06-10)
+
+From sequencing step 2 (GOAL_BRAIN.md Compiled truth has the full findings; sample = the 2026-05-13..17 run-dir window). The decompose-fallback chop is fixed; these are the remaining mechanical gaps:
+
+- [x] **Run↔thread linkage** — fixed 2026-06-10: tasks carry an `origin` dict (parent_handle_id via `runs.current_handle_id()`, parent_loop_id, parent_goal) set at the agent_loop continuation/escalation enqueues and propagated by director escalation follow-ups; `handle_task` threads it (plus source/job_id/parent_job_id) into `handle(origin=...)`, which stamps it into run-dir `metadata.json` and `handle_inputs.jsonl`. Every requeued run is now traceable to the work that spawned it. Note: ancestry is *recorded*, not yet *consulted* — the dispatch-time read is the recall() work.
+- [x] **Dispatch-time dedup/memory** — the same agenda goal ran ~25× in ~35 min on 2026-05-17 (mixed stuck/done) with nothing consulting prior outcomes. **Fixed 2026-06-10 (goal-brain step 3):** `src/recall.py` dispatch slice — `handle()` injects prior-attempt history + thread ancestry into context on every run; `handle_task()` guards the autonomous requeue path (≥3 attempts in 60min all non-done → task errors with a readable reason instead of running; `RECALL_GUARD_TRIPPED` event). Design: `docs/RECALL_DESIGN.md`. Follow-up done 2026-06-11: `_build_loop_context`'s memory half (8 substrates, not 4 sites) relocated behind recall(slice="loop"); evolver's captain's-log bridge absorbed; lesson-cited stamp live in RECALL_PERFORMED.
+- [x] **Scope generation fails silently** — `generate_scope` returns None on any adapter failure, so during the rc=1 outage no run got a scope.md and nothing recorded that scope was skipped. **Fixed 2026-06-10:** new `SCOPE_SKIPPED` captain's-log event emitted from handle.py when scope generation is enabled but yields nothing — both the returned-None path (`reason: generator_returned_none`) and the raised-exception path (`reason: exception`, with error preview). Outages now show up in the captain's log alongside `SCOPE_PARSE_FAILED`.
+
+### Dry-run hermeticity — fixed two leak sites, two more fail-safe-by-accident (2026-06-10)
+
+Session 40 found `dry_run=True` runs making **real authenticated `claude -p` CLI calls** (subprocess adapter needs no API key, so conftest key-isolation didn't stop it). test_handle.py alone took 2h06m of real token burn. Fixed:
+
+- [x] `_decompose_goal` planner-lift: `build_adapter()` was called unconditionally, replacing `_DryRunAdapter` with a live adapter. Now guarded on `ctx.dry_run`.
+- [x] `_select_step_adapter` (Phase F5): `_DryRunAdapter` has no `model_key` attr → `getattr(..., "")` slipped past the explicit-model check → live adapter per step. Now early-returns on `ctx.dry_run`.
+- [x] conftest guard: `tests/conftest.py` now blocks `claude`/`codex` binaries at the `llm._run_subprocess_safe` seam (other commands pass through so its unit tests still run). Tests needing LLM behavior must mock the adapter.
+- [x] Adapter-swap seam made principled: the decompose planner-lift and Phase F5 per-step selection now only re-tier adapters that are `isinstance(_, LLMAdapter)` (i.e. build_adapter products they know how to rebuild). Injected test doubles and `_DryRunAdapter` are plain classes and pass through untouched — this is the injection contract.
+- [x] Step-shape auto-split was non-convergent: analysis-first steps with an incidental exec keyword (e.g. "Analyze findings from build X") split into a replacement that re-tripped the detector every iteration until max_iterations → stuck. `_split_exec_analyze` now strips analysis clauses from the run part, and the executor-side leak guard executes as-is when a split wouldn't converge. (Also fixed `lstrip('Rr un')` char-set bug.)
+- [x] **Hardcoded `_CODEX_BIN = "/home/linuxbrew/.linuxbrew/bin/codex"`** in llm.py — fixed in M5 (2026-06-10): `_find_codex_bin()` resolves CODEX_BIN env → PATH → common locations → bare name, mirroring `_find_claude_bin()`.
+- [x] **5 pre-existing worker_session_bridge failures in test_orch_core.py** — root-caused + fixed 2026-06-11. Regression from `a799871` ("support worker manifest args arrays"): the refactor funneled *string* manifest commands through the list-argv quote-join, so the whole shell line became one `shlex.quote`d token and `/bin/sh -c` looked for a program literally named `printf "%s" ... > ...` (exit 127, surfaced as validation 'blocked'). Every string command containing shell syntax (`$VAR`, `>`, heredocs) broke; bare names like `./run.sh` survived because quote was a no-op, and the timeout test passed for the wrong reason (127 also raises → blocked). Fix in `_load_worker_session_manifest`: string commands pass verbatim (matching the top-level-string manifest form), args (if any) appended quoted; list commands keep quote-join. All existing string+args pins (`"python3" + ["-m","worker"]` → `python3 -m worker`) unchanged.
+- [x] **Pre-existing: test_scheduler.py `test_inflight_job_not_returned_until_lease_stale`** — root-caused + fixed 2026-06-11. Time-of-day-dependent test: `mark_job_dispatched` stamped the lease at real wall clock while the test probed staleness at synthetic `next_run + 5min`; with the 6h lease the first probe only read fresh between 03:05–09:00 UTC. Fix: `now` seam param on `mark_job_dispatched(job_id, *, now=None)` (mirrors `check_due_jobs`); test stamps the lease at the synthetic probe time.
+- [x] **Pre-existing: 4 plan-manifest tests in test_agent_loop.py are order-dependent** — root-caused + fixed 2026-06-11. Not an orch-root cache: `runs._current_run_dir` (module global, pinned by `handle()` via `set_current_run_dir`) leaked across tests, so `runs.artifact_dir()` routed later tests' plan manifests into the stale run's `build/` instead of `projects/<p>/artifacts/`. Production contract is deliberate (CLI clears; programmatic callers clear themselves — handle.py comment) and tests are exactly such callers: autouse conftest fixture now resets the global after every test. Whole pollution class closed, not just these 4.
+
+### Memory lifecycle was write-dead / decay-corrupting — core fixed, wiring shipped (2026-06-10)
+
+Session 40 audit confirmed consolidation **never ran** (only entry point was the `poe-memory decay` CLI, never invoked) and the lifecycle had three latent data-corruption bugs, all fixed in knowledge_web.py:
+
+- [x] Tier-blind decay on load: LONG-tier lessons decayed on read despite "no decay by design" (22 long lessons were reading at ~0.85^46 effective score).
+- [x] `run_decay_cycle` persisted decayed scores without moving the `last_reinforced` anchor → compounding rot on every RMW write (reinforce/forget/promote all re-persisted decayed bystander scores). Decay is now strictly a read-time derivation; rewrites use `raw=True`.
+- [x] RMW paths loaded with default `limit=50` → stores >50 lessons would be silently truncated on rewrite. All rewrite paths now load `raw=True, limit=None`.
+- [x] In-process consolidation ("dream cycle"): `maybe_consolidate()` marker-gated to once per `memory.consolidation_interval_hours` (default 24h), wired into `handle()` (post-request, never affects outcome), heartbeat tick, and `poe-memory consolidate [--force]`. In-process by design — **no cron/daemon** (Jeremy: rogue-process history).
+- [x] Promotion timing race (M2, shipped 2026-06-10): promotion now evaluated at reinforcement time via `_post_reinforce_hooks` — score is freshly re-anchored, so eligibility is real. Consolidation-cycle promotion stays as a backstop.
+- [x] Standing rules accrete (M2, shipped 2026-06-10): LONG re-confirmation calls `observe_pattern`; `record_tiered_lesson` dedups cross-tier so re-learning a promoted lesson reinforces the LONG record instead of duplicating into MEDIUM. Full path medium → long → standing rule now reachable in production.
+
+### Build-loop wiring — cron wakeups are hitting the wrong abstraction (2026-05-06)
+
+The repeated `poe-orchestration-build-loop` duty-cycle alerts finally coughed up a concrete diagnosis: the 5-minute cron is not running a dedicated autonomous build loop. It is waking the main session with the generic reminder text:
+
+> Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.
+
+That explains the observed pattern:
+- `last_status=ok`
+- duty cycle usually ~5–7%, occasionally a bit higher
+- background checkpoints fine
+- repo often clean
+
+In other words: the system is succeeding at the wrong thing. A reminder wake can only do opportunistic work; it is not a real build-runner substrate.
+
+- [x] **Route build-loop cron to a dedicated autonomous runner/supervisor.** Completed 2026-05-06.
+  - The dedicated runner lives in `src/build_loop_runner.py` with a lockfile/status contract plus a default `workers/handle.sh` bridge.
+  - `python3 src/cli.py build-loop` is the first-class entrypoint and `scripts/build-loop.sh` is the stable cron-facing wrapper.
+  - The live OpenClaw cron job `poe-orchestration-build-loop` now targets the dedicated persistent session with a payload instructing it to run the build-loop wrapper instead of the old generic HEARTBEAT reminder text.
+
+### Comprehensive run transparency (audit phase, queued 2026-04-26) — shipped pieces
+
+- [x] **Per-run isolation: branch-name front-loaded into the prompt.** Shipped in `scope_ab_runner.py` 2026-04-26 as the test-side affordance — `scope-ab-r{NN}-{arm}-{TS}` branch pre-created and named in the prompt. Generalized variant for non-test invocations of handle.py is part of the next backlog wave (`--repo-branch-prefix` or auto-derived from goal slug + handle_id).
+- [x] **Run-dir as the write destination (not a copy target).** Shipped 2026-04-26 (commits `13a6470`, `8a68e37`). `src/runs.py` creates `~/.poe/workspace/runs/<handle_id>-<nickname>/` at handle start; `set_current_run_dir` pins it as a process-level context var; `artifact_dir()` and `source_dir()` route writes there from agent_loop (PARTIAL.md, scratchpad, step files, plan manifest, loop log) and handle.py (scope.md, resolved_intent.md). Fallback to project_dir/artifacts when no run-dir is active — behavior-preserving for existing callers.
+- [x] **Run nickname module.** Shipped 2026-04-26 (commit `13a6470`). 50 adjectives × 50 nouns = 2500 combos; sha1-hashed handle_id for even distribution. 13 tests.
+- [x] **Per-run repo bundle.** Shipped 2026-04-26 (commit `a99771b`). `record_repo_base()` at run start when `--repo` is given; `snapshot_repo_bundle()` on finalize writes `repo.bundle` (`git bundle --all`), `git_log.txt`, `branch_diff.patch`, `base_sha.txt` into `<run-dir>/artifact/`. Restorable with `git clone repo.bundle`. 5 tests.
+- [x] **Per-run captain's log slice.** Shipped 2026-04-26 (commit `17fb0e9`). `record_log_offset()` at run start, `slice_log_for_run()` on finalize writes `<run-dir>/build/captains_log_slice.jsonl` covering only this run's events. Same pattern `scope_ab_runner.py` used externally — now centralized so every paid run gets a slice. 4 tests.
+- [x] **Quality-gate verdict as a captain's log event.** Shipped 2026-04-26 (commit `c644d82`). `QUALITY_GATE_VERDICT` event with verdict/confidence/escalate/reason/step_count/loop_id; emitted from `quality_gate.py::run_quality_gate` after pass1 verdict parsing.
+- [x] **`LOOP_CREATED` captain's log event with `reason` + `parent_loop_id`.** Shipped 2026-04-26 (commit `c644d82`). Emitted in `agent_loop._initialize_loop` with reason ∈ {initial, director_restart, closure_restart, quality_gate_escalate}, parent_loop_id, project, max_steps, continuation_depth, dry_run. Threaded through handle.py spawn sites for closure-restart, director-restart, and quality-gate escalation.
+
+### Runtime visibility (tracked 2026-04-17) — shipped pieces
+
+- [x] **Current-step symlink.** `/tmp/poe-current-step.log` → active
+  streaming merged-output file, updated atomically as each subprocess
+  starts. (Shipped 2026-04-17 — commit 58a91dd; symlink target extended
+  to merged stream in b188e5f.)
+- [x] **Claim-verifier outcome event.** Structured CLAIM_VERIFIER_OUTCOME
+  event now emitted with step id + file_not_found/symbol_not_found lists
+  + downstream action taken. (Shipped 2026-04-17 — commit 58a91dd.)
+- [x] **Closure + quality_gate run on partial/stuck/restart.** Previously
+  gated on `status == "done"`; metacognitive-recovery paths produced
+  material work but emitted no CLOSURE_VERDICT / CLAIM_VERIFIER_OUTCOME /
+  CLAIM_PROBED events because terminal status wasn't "done". Widened to
+  run on any terminal state that produced ≥1 successful step; kept the
+  *escalation* branches gated on "done" only. (Shipped 2026-04-18 —
+  commit 7f907bd.)
+- [x] **Merged stdout+stderr stream.** `_run_subprocess_safe` pipes both
+  streams into a single temp file via `stderr=subprocess.STDOUT`.
+  Operator view via `/tmp/poe-current-step.log` now matches what the
+  subprocess would print to a terminal. JSON parser tolerant of
+  interleaved non-JSON prose. (Shipped 2026-04-18 — commit b188e5f.)
+- [x] **CPU-activity liveness signal.** Secondary liveness check sums
+  utime+stime across every proc whose session == subprocess pid. A
+  silent-but-computing local model burns CPU → last_seen advances →
+  liveness timer doesn't fire. Protects slow/local-model inference paths
+  from false-kills. (Shipped 2026-04-18 — commit b188e5f.)
+
+### Step-process visibility + elevation (discovered 2026-04-17) — shipped piece
+
+Run 5 of slycrel-go lost step 9 to a hard 600s wall-clock kill of the
+`claude -p` subprocess. No way to distinguish "hung" from "working hard",
+no partial output captured. Jeremy's framing: "if a step is going to take
+that long, it should probably be a sub-milestone/goal on its own, not
+just a step" — mirrors the ralph-within-structure feedback (a step that
+needs 10+ minutes is a goal the decomposer miscategorized).
+
+- [x] **Heartbeat / liveness timeout.** Stream step subprocess stdout+stderr
+  to disk instead of buffering. Kill on *no output for N seconds*, not
+  wall clock. Partial output survives the kill. See
+  `src/llm.py::_run_subprocess_safe`. (Shipped 2026-04-17 — commit
+  a44eb6a.)
+
+### Session 20 (2026-04-14) — adversarial review findings (`output/self-review-report-20260414T040637Z-blind.md`)
+
+- [~] **HIGH: Test coverage width not depth** — PARTIAL. pytest-cov with 70% floor: DONE (session 20.5, .coveragerc). Concurrent task_store tests: DONE (session 20.5, +5 tests). End-to-end integration tests: DONE (test_integration.py, 23 tests). Remaining: mutation testing (aspirational, no tooling) and real-LLM-fixture tests (expensive, defer). Item substantially closed.
+- [~] **MINOR: Persona auto-selection missing** — Hallucinated. Auto-selection already exists: `persona.py:793` (`persona_for_goal`) with keyword routing + scoring + LLM fallback + freeform creation; called from `handle.py:615` in AGENDA flow. NOW lane intentionally skips persona injection (1-shot path). No fix needed.
+
+### Step runner hang protection / long-lived-process affordance (2026-04-26)
+
+- [x] **Step runner has no hang protection / no long-lived-process affordance.** Partially closed 2026-04-26 (commit TBD): step_exec.py now classifies long-lived steps via `_is_long_lived_step` (phrase set + verb-noun regex catching "start/launch/run/spawn/boot the X server/service/daemon/listener/broker/worker/api"); when matched, injects `_LONG_LIVED_PROCESS_EXTRA` into user_msg telling the executor to (a) background-spawn (`run_in_background`/`& disown`/`nohup &`), (b) probe readiness via curl/nc/log-grep, (c) call complete_step on readiness signal — not on exit. 14 new tests in `tests/test_step_exec.py::TestIsLongLivedStep` cover the audit case ("Start server with --headless flag on localhost:8080"), each long-lived phrase, the verb-noun regex, and false-positive guards (test/read/analyze steps).
+
+  Original audit case: scope A/B run-02-control (2026-04-23, `~/.poe/experiments/scope-ab-2026-04-22/run-02-control/`) hit step 27 "Start server with --headless flag on localhost:8080", hung indefinitely until SIGTERM (rc=-15). Planner treated "start the server" as a discrete decompose step; the executor had no signal to spawn-and-detach.
+
+  **Still open** (deferred — escalate if observed in the next A/B run):
+  - step-runner hard timeout: per-step wall-clock cap that produces a `requires_background_mode` outcome rather than a generic timeout (currently the adapter-level 600s cap fires, but the step is marked blocked rather than actionable)
+  - decompose-time classification: emit `background=true` on the step manifest so introspection sees the structural mismatch when later steps depend on a non-terminating one
+  - planner prompt change: instruct the decomposer to *not* emit "start server" as a terminal step — servers should start inside a verification step that also probes and shuts down
+
+  **Why this matters:** until this is fully closed, any blind-test goal that produces a long-running binary remains a hazard on the control arm. Scope-injected arms compress to 8 steps and keep server startup inside the verification phase, so they sidestep it; the prompt nudge above should help control arms too.
+
+### decomposition_too_broad threshold miscalibrated post-scope (2026-04-23)
+
+- [~] **`decomposition_too_broad` threshold is miscalibrated post-scope.** Scope A/B 2026-04-23: every treat run (scope injected) got `DIAGNOSIS: decomposition_too_broad (warning). 8/8 steps done.` — despite 8 being the *narrowest* decomposition achieved across the whole experiment (controls were 15/37/40). The diagnostic threshold was tuned on pre-scope runs; scope-injected plans are now systematically compressed enough to trip the threshold as a baseline. The warning has become noise.
+  - **LARGELY ADDRESSED by the cache-aware conversion (2026-06-22).** The threshold now gates on `fresh_tokens`, not raw volume. Most of the spurious flagging was a step's *cache reads* (subprocess worker re-reading files) counting toward the 200K cap. **Live evidence, same day:** three real runs at **457K / 393K / 547K total tokens** all diagnosed **`healthy`** — none tripped `decomposition_too_broad` — because fresh tokens/step are ~5 (the rest cache reads). The exact scenario that used to flag noise now reads clean. Remaining open question (hence ~, not done): whether a step doing genuinely >200K *fresh* tokens on an otherwise-successful run should warn at all, or only when the loop also shows stress (blocked steps / budget exhaustion). Revisit only if a real fresh-heavy run flags spuriously — the cache fix removed the observed noise source.
+
+  **Candidates:**
+  - re-tune the threshold against the post-scope decomposition distribution (8 steps for a medium-complexity blind-test goal is fine; treat that as the new normal)
+  - condition the threshold on `scope_supplied=true` — scope-gated plans should be *expected* to be tighter
+  - separate "too few steps" from "too many steps" — current single-dimension warning fires on both ends ambiguously
+
+### run-03-treat CLOSURE_VERDICT emission (2026-04-23 → fixed 2026-06-11)
+
+- [x] **`run-03-treat` didn't emit CLOSURE_VERDICT despite reaching adversarial review.** Scope A/B run-03 (2026-04-23): 8/8 steps completed, adversarial review fired (3 claim probes), `decomposition_too_broad` diagnosis logged, rc=0 — but no `CLOSURE_VERDICT` event in captain's log and no `closure check: complete=...` line in handle.log. **Root cause (2026-06-11):** `verify_goal_completion` had three silent `return _null` early-exit paths (`no_checks_generated`, `no_check_results`, `verdict_parse_failed`) and an outer-except path that all returned without emitting CLOSURE_VERDICT. Run-03-treat hit `no_checks_generated` (LLM plan returned empty checks). **Fix:** added `_emit_skip(reason)` local helper emitting CLOSURE_VERDICT with `skip_reason` context before each silent return; outer except now also emits. 4 regression tests added (`test_closure_verdict_emitted_when_no_checks_generated`, `…_no_check_results`, `…_on_exception`, `…_not_emitted_on_dry_run`). Shipped 2026-06-11.
+
+### Introspect-sees-no-action: decomposition_too_broad (and siblings)
+
+- [x] **`decomposition_too_broad` fires but nothing acts on it.** Partially closed 2026-04-26: introspect now stamps `LoopDiagnosis.project` so retrieval can prioritize same-project history; `find_relevant_failure_notes` ranks same-project diagnoses above goal-token overlap; `decomposition_too_broad` notes render with concrete numbers (e.g. "Step 8 took 534s with 277K tok") and append the actionable cap (`≤120s/200K tok per step; split if a step touches >3 files`). The next loop on the same project sees this in `lessons_context` ahead of all other failure-pattern injections. Phase 62 (mid-loop redecompose on `_handle_blocked_step`) was already live for the blocked path; this closes the *post-mortem → next-decompose* feedback that was previously generic-lesson-only. Original Apr 16 finding (`loop 85ac29ee-*`) is the canonical case this addresses.
+
+  **Mid-loop visibility added 2026-04-26 (commit TBD):** new `STEP_TOO_BROAD` captain's log event fires the moment a `done` step exceeds both caps (>120s elapsed AND >200K tokens). Wired in `_write_iteration_artifacts` after march-of-nines. Visible in the per-run `captains_log_slice.jsonl` and as a project decision. The post-mortem path already feeds the next decompose; this closes the visibility gap on the in-flight loop. 7 new tests in `tests/test_agent_loop.py` cover the predicate (above caps, below caps, only-one-cap, blocked/skipped/zero-metric guards, EVENT_TYPES registration).
+
+  **Still open** (deferred — needs more A/B data before committing to mid-loop intervention): actually *acting* on the signal mid-loop (kill + replan vs continue with warning logged). Visibility-first is the cheapest credible upgrade today; the action question deserves data on how often the signal fires and whether the loop completes successfully despite it.
+
+### Semantic memory deduplication (2026-04-12)
+
+- [~] **Semantic memory deduplication** — SUBSTANTIALLY ADDRESSED. `record_lesson()` already does at-write-time near-dedup: exact-text match + word-overlap Jaccard ≥ 0.8 within most-recent 100 lessons. Unbounded growth prevented. Embedding-based similarity (true semantic) remains aspirational P3 — requires API call at every write, cost not justified given current lesson volume.

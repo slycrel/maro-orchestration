@@ -67,7 +67,7 @@ Two capabilities, often conflated but distinct:
 - Persona system exists but personas aren't auto-selected based on goal type — it's manual via prefixes.
 - The "never off" vision (VISION §9) is not the default operating mode: manual runs work without background services, and always-on behavior must be intentionally enabled.
 
-**Key files:** `handle.py` (1104 lines), `intent.py`, `director.py`, `workers.py`, `persona.py`
+**Key files:** `handle.py` (~2526 lines), `intent.py`, `director.py`, `workers.py`, `persona.py`
 
 ---
 
@@ -76,7 +76,7 @@ Two capabilities, often conflated but distinct:
 **Intent:** Goal → decompose into steps → execute each step → learn from results. The loop should handle stuck detection, retries, budget limits, parallel execution, and checkpoint/resume — all autonomously.
 
 **What exists:**
-- `agent_loop.py` (3938 lines): Seven-phase pipeline (INIT → DECOMPOSE → PRE_FLIGHT → PARALLEL → PREPARE → EXECUTE → FINALIZE). Recently extracted from monolith into sub-methods.
+- `agent_loop.py` (~5400 lines): Seven-phase pipeline (INIT → DECOMPOSE → PRE_FLIGHT → PARALLEL → PREPARE → EXECUTE → FINALIZE). Recently extracted from monolith into sub-methods.
 - `planner.py`: Decomposes goals. Routes by scope (narrow/medium/wide/deep). Multi-plan comparison for complex goals.
 - `step_exec.py`: Executes individual steps via LLM with tool calling.
 - `pre_flight.py`: Cheap plan criticism before execution. Detects scope explosions, hidden assumptions, milestone candidates.
@@ -133,7 +133,7 @@ Two capabilities, often conflated but distinct:
 - `constraint.py`: Pre-execution enforcement. Tiered gates (READ/WRITE/DESTROY/EXTERNAL).
 
 **Where intent has drifted:**
-- **The self-improvement loop isn't closed.** Evolver proposes → changes are applied (low-risk) or held (high-risk) → but nobody verifies that applied changes actually fixed the problem. The verify→learn→apply cycle is broken at the verify step.
+- **The verify→learn plumbing is closed; the learning input was dead until recently.** Evolver self-changes are verified via `_verify_post_apply()` (pytest after auto-apply, session 17). But the learning *input* — lesson extraction from runs — was silently dead until 2026-06-11: a `safe_list` bug dropped the typed lesson dicts the prompt produces, so verify→learn extracted nothing (fixed, commit `d088ca7`). It is now live-verified but only lightly exercised (~2 typed lessons from one real call). The open question is whether the full medium→long→standing-rule accretion actually fires on organic runtime, not just in tests.
 - **Inspector and evolver share almost no data structures.** Inspector produces friction signals; evolver reads outcomes. They should feed each other directly.
 - **Graduation templates exist but verification isn't automated.** `verify_graduation_rules()` exists but isn't called in the heartbeat loop.
 - **Quality gate is comprehensive but expensive.** 5 passes × LLM calls. In practice, most runs skip the expensive passes. The gate degrades gracefully but this means the system runs mostly unreviewed.

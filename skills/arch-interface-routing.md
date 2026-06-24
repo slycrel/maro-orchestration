@@ -138,8 +138,8 @@ Composable agent identities from YAML + markdown files. Each spec defines:
 
 | File | Lines | Role |
 |------|-------|------|
-| src/handle.py | ~1104 | Unified entry point, prefix registry, lane dispatch |
-| src/intent.py | ~230 | NOW/AGENDA classification |
-| src/director.py | ~1590 | Plan-delegate-review hierarchy + adaptive supervision |
-| src/workers.py | ~388 | Specialized executors |
-| src/persona.py | ~1218 | Composable identities |
+| src/handle.py | ~2526 | Unified entry point, prefix registry, lane dispatch |
+| src/intent.py | ~320 | NOW/AGENDA classification |
+| src/director.py | ~2150 | Plan-delegate-review hierarchy + adaptive supervision |
+| src/workers.py | ~390 | Specialized executors |
+| src/persona.py | ~1375 | Composable identities |

@@ -25,11 +25,11 @@ Run completes
   → Loop closes
 ```
 
-**Current reality:** The loop runs from "detect" through "verify." Session 17 closed the verify→learn gap: `_verify_post_apply()` in evolver.py runs pytest after auto-applying suggestions, records outcome to memory_ledger and captain's log, and fires EVOLVER_VERIFY event. Graduation verification and proactive lesson testing remain open.
+**Current reality:** The verify→learn *plumbing* is closed — session 17's `_verify_post_apply()` in evolver.py runs pytest after auto-applying suggestions, records outcome to memory_ledger and captain's log, and fires EVOLVER_VERIFY. But the learning *input* — lesson extraction from runs — was silently dead until 2026-06-11: a `safe_list` bug dropped the typed lesson dicts the prompt produces, so extraction returned `[]` on every real run (fixed, commit `d088ca7`). It is now live-verified but only lightly exercised (~2 typed lessons from one real call). The open question is whether the full medium→long→standing-rule accretion actually fires on organic runtime, not just in tests. Graduation verification and proactive lesson testing also remain open.
 
 ## Per-Run Quality (zoom in)
 
-### Inspector (inspector.py, ~1964 lines)
+### Inspector (inspector.py, ~2065 lines)
 Post-hoc analyzer of outcomes.jsonl. Detects 7 friction signals:
 - error_events, repeated_rephrasing, escalation_tone, platform_confusion, abandoned_tool_flow, backtracking, context_churn
 
@@ -45,7 +45,7 @@ Multi-pass review system. 5 optional passes:
 
 All passes use cheap model. Defaults to PASS on any error. In practice, most runs only get pass 1 — the expensive passes are rarely triggered.
 
-### Introspect (introspect.py, ~1448 lines)
+### Introspect (introspect.py, ~1590 lines)
 Failure classification (11 types: setup_failure, adapter_timeout, token_explosion, etc.). Each diagnosis has severity, evidence, recommendation. Written to diagnoses.jsonl.
 
 Lenses: infrastructure exists but not fully wired. Heuristic lenses (free) run always; LLM lenses run selectively.
@@ -57,7 +57,7 @@ Pre-execution enforcement. Tiered gates: READ (observe), WRITE (warn), DESTROY (
 
 ## Over-Time Improvement (zoom out)
 
-### Evolver (evolver.py, ~2126 lines)
+### Evolver (evolver.py, ~3265 lines)
 Proposes improvements from outcome patterns. Triggered by heartbeat (~every 10 ticks) or manually.
 
 Suggestion types:
@@ -74,7 +74,7 @@ Scans diagnoses.jsonl for repeated failure classes (≥3 occurrences). Promotes 
 
 **Gap:** verify_graduation_rules() exists but isn't called automatically.
 
-### Skills (skills.py, ~2164 lines + skill_types.py)
+### Skills (skills.py, ~2055 lines + skill_types.py)
 Discovery, scoring, promotion/demotion with circuit breaker. Shared types (`Skill`, `SkillStats`, `SkillTestCase`, `SkillMutationResult`, `compute_skill_hash`, `verify_skill_hash`, `skill_to_dict`, `dict_to_skill`) extracted to `src/skill_types.py` (session 17) to break circular import with evolver. `skills.py` re-exports for backward compat.
 - **Score:** use_count, success_rate, utility_score (EMA), consecutive streaks
 - **Circuit states:** closed (normal) → half_open (recovering) → open (rewrite eligible)
@@ -96,7 +96,7 @@ What's autonomous today:
 - ✅ Prompt tweaks auto-applied as lessons
 - ✅ Skills auto-promoted/demoted based on success rate
 - ✅ Low-risk recovery auto-applied (Phase 45)
-- ✅ Verify→learn loop closed (session 17): evolver runs pytest after auto-apply, records to memory_ledger + captain's log, fires EVOLVER_VERIFY
+- ✅ Verify→learn *plumbing* closed (session 17): evolver runs pytest after auto-apply, records to memory_ledger + captain's log, fires EVOLVER_VERIFY. But lesson extraction (the learning input) was silently dead until 2026-06-11 — a `safe_list` bug dropped typed lesson dicts (fixed, commit `d088ca7`); now live-verified but only lightly exercised (~2 typed lessons from one real call). Open question: does medium→long→standing-rule accretion fire on organic runtime, not just in tests?
 - ✅ Constraint audit trail: flag events logged to constraint_log.jsonl
 - ✅ Playbook entry validation: empty entries rejected, truncation at 500 chars
 
@@ -112,12 +112,12 @@ The infrastructure is ~90% built. Main remaining gaps are graduation auto-verifi
 
 | File | Lines | Role |
 |------|-------|------|
-| src/inspector.py | ~1964 | Friction detection, alignment check |
-| src/evolver.py | ~2126 | Improvement proposals, auto-apply, advisor wiring |
-| src/graduation.py | ~482 | Repeated-pattern promotion |
-| src/introspect.py | ~1448 | Failure classification, lenses |
-| src/quality_gate.py | ~655 | Multi-pass review |
-| src/skill_types.py | | Shared types (Skill, SkillStats, hash fns) — breaks circular import |
-| src/skills.py | ~2164 | Discovery, scoring, circuit breaker (re-exports skill_types) |
-| src/constraint.py | ~623 | Pre-execution enforcement, audit trail (constraint_log.jsonl) |
-| src/eval.py | ~979 | Evals-as-training-data flywheel |
+| src/inspector.py | ~2065 | Friction detection, alignment check |
+| src/evolver.py | ~3265 | Improvement proposals, auto-apply, advisor wiring |
+| src/graduation.py | ~495 | Repeated-pattern promotion |
+| src/introspect.py | ~1590 | Failure classification, lenses |
+| src/quality_gate.py | ~840 | Multi-pass review |
+| src/skill_types.py | ~225 | Shared types (Skill, SkillStats, hash fns) — breaks circular import |
+| src/skills.py | ~2055 | Discovery, scoring, circuit breaker (re-exports skill_types) |
+| src/constraint.py | ~685 | Pre-execution enforcement, audit trail (constraint_log.jsonl) |
+| src/eval.py | ~1140 | Evals-as-training-data flywheel |

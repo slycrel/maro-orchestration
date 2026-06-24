@@ -5,341 +5,16 @@ Read this at the start of every session. Update it as items are completed or new
 
 **Completed items live in [BACKLOG_DONE.md](BACKLOG_DONE.md)** — move items there with their full context when they ship; that file is the archive of what we've already decided, tried, or superseded, and it's ingested by `dev-recall` for historical context.
 
-Last reviewed: 2026-06-10 (session 40 — memory lifecycle fixes + dry-run hermeticity; see entry below).
+Last reviewed: 2026-06-24 (full triage + reorg).
 
 ---
 
-### Per-step worker token explosion — DIAGNOSED 2026-06-21 (was [NEXT])
+## Actionable Stack
 
-Live finding from a `verify:` coding run: 485K tokens over 6 steps (47K→111K→**145K**
-→80K→17K→84K per step); introspect flagged `token_explosion`.
+Ordered open work that matters. Top of the list is next.
 
-**Measured the code (2026-06-21). Conclusion: the original framing was wrong, and so
-was the metric.**
-1. **Every inter-step seam is already hard-capped** — completed_context 800 chars +
-   compress-after-5 (`step_exec.py:660`, `agent_loop.py:1487/1527`), artifact→prompt
-   `str(_v)[:500]` (`step_exec.py:676`), env snapshot 200 chars (`agent_loop.py:1497`),
-   team firewall 5×200 (`team.py:208`). The step's own LLM call is `max_tokens=4096`,
-   single tool (`step_exec.py:833`). So our plumbing physically cannot emit a 145K step.
-2. **The big number is the delegated subprocess worker** (the `claude` CLI path,
-   `_extract_result_object` in `llm.py`) rolled into the step total. It runs its own
-   internal agentic tool loop (Read/Edit/Write on the growing file); we see only totals.
-   Non-monotonic per-step shape (rise to 145K, fall to 17K) confirms intrinsic per-step
-   work, NOT monotonic inherited-context accumulation.
-3. **The metric was cache-blind.** `llm.py` folded `cache_read_input_tokens` into
-   `input_tokens` at full weight, and `token_explosion` fires on raw token *volume*
-   (`introspect.py:42,63`). A worker re-reading a growing file is mostly cache HITS
-   (~0.1x cost; Claude Code reports ~92% hit rate) — so the "explosion" likely overstates
-   real $ by ~10x. We were arguing about a number that was lying.
+### 1. Bound worker writes to run-dir / workspace (artifacts leaking into repo root)
 
-**DONE (foundation, commit pending):** cache-aware accounting — `LLMResponse.cache_read_tokens`
-+ `.fresh_input_tokens`, all 3 adapters populate it on the same total-volume contract,
-`estimate_cost(..., cache_read_tokens=)` prices cache reads at `CACHE_READ_MULTIPLIER` (0.1x).
-
-Conclusion on the original levers: the "summary instead of file" / "cap `_art_val`" levers
-target the orchestration layer, which is NOT the leak — **don't build them.** The durable
-lever for the actual leak is worker-layer caching (CAG: static prefix cached, pay the delta
-only — likely already half-free via Anthropic prompt cache) IF cost is genuinely large.
-Decide that with the now-correct meter, not the old volume number.
-
-### Make metric alarms cache-aware — DONE 2026-06-21
-
-Wired `cache_read_tokens` end-to-end and re-measured. **Verdict: the token explosion was
-a cache-blind metric artifact; caching already absorbs the re-reads. No CAG/retrieval build
-needed for this.**
-- [x] `cache_read_tokens` carried through the step record: `step_exec` outcome (all 9
-  resp-based sites) → `write_event`/`observe` → `events.jsonl` → `StepProfile.cache_read_tokens`
-  + `.fresh_tokens`.
-- [x] `token_explosion` (`introspect.py`) now compares `fresh_tokens`, not raw volume.
-- [x] **Consistency pass (2026-06-21):** converted the remaining raw-volume alarms to the
-  same cache-aware basis and closed the false-negative gap the user flagged ("are we skewing
-  the other direction now?"):
-  - `decomposition_too_broad` now gates on `fresh_tokens` (a 250K step that's all cache reads
-    no longer flags as over-broad).
-  - New `cost_spike` failure class (`introspect.py` check 5b): an **absolute** cache-aware
-    dollar guard (`_STEP_COST_WARN_USD=0.50`, `_LOOP_COST_WARN_USD=2.00`). Catches the inverse
-    case the fresh-token alarms miss — a huge cached prefix on a *pricey* model that's flat in
-    fresh terms but still real money at 0.1x. Priced cache-aware, so cheap-tier cache reads
-    never trip it. Registered in `FAILURE_CLASSES`, `_GRADUATION_TEMPLATES`, and `RECOVERY_PLANS`.
-  - `StepProfile` carries `tokens_in`/`tokens_out`/`model` + a `cost_usd` property;
-    `model` (model_key) now flows step_exec → `write_event`/`observe` → `events.jsonl`.
-  - `_cost_lens` ranks steps by cache-aware dollars, not raw tokens.
-  - The crypto-tax framing: fresh = ordinary income (full rate), cache reads = the like-kind
-    0.1x basis. We now tax **net** on growth/bloat and keep a separate **absolute** spend alarm
-    so neither direction goes blind.
-- [x] Re-measured live (sandboxed file-accumulating build, cheap/Haiku, 4 steps re-reading a
-  growing file). **Result: input was ~100% cache reads** (per-step 42K→69K→69K→96K total,
-  fresh_in 4–6 tokens each; whole run 276,894 input / 276,874 cache / **20 fresh**). The same
-  pattern that historically flagged `token_explosion` now diagnoses **healthy**; cache-blind
-  cost was **6.6x overstated** ($0.235 → $0.036). The 485K run's "growth" was cache-read
-  growth at ~0.1x, not fresh compute.
-- [x] **DONE 2026-06-22:** Passed `cache_read_tokens` into `estimate_cost` at the live recording
-  sites — `record_step_cost` (now takes + persists `cache_read_tokens` to step-costs.jsonl),
-  skill `_est_cost` (success + fail paths), and the per-step/running cost log. Persisted cost
-  telemetry is now cache-adjusted, matching what the introspect alarms judge. **Also fixed a
-  bug found while here:** the running `cost_total` log/budget-breaker repriced *all* accumulated
-  tokens at the latest step's model, so the figure swung when steps switched cheap↔mid↔power
-  (seen live: $0.63 at a mid step → $0.26 at the next cheap step). Now accumulated per-step
-  (`total_cost_usd`), correct across model switches and more accurate for the cost-budget circuit
-  breaker. `StepOutcome` carries `cache_read_tokens` so the run-summary ✅ cost string is
-  cache-aware too. Note: the claude-CLI subprocess reports ~all input as cache_read once the
-  session warms, so fresh-token alarms are now very quiet for subprocess workers — confirmed
-  live (run1 2026-06-22: per-step cache_read=83979 of in=83984, ~99.99%). Watch we don't go
-  cache-blind the other way; the absolute `cost_spike` alarm is the backstop for that.
-- **Live validation 2026-06-22 (run1, real spend):** a 9-step `verify:` build goal did
-  **457,322 total tokens** and diagnosed **`healthy`** — pre-fix that volume would have tripped
-  `token_explosion`/`decomposition_too_broad`; now correctly healthy because fresh tokens/step
-  are ~5 (rest cache reads). The cache-aware introspect works on organic data.
-
-### Graph memory + recursive-orchestration scoped memory (2026-06-21, vision)
-
-Durable replacement for the fixed-size inter-step truncation caps (the 800/500/200 band-aids
-above — lossy fixed-array-vs-string, the kind of thing that's bitten us). Jeremy's framing:
-orchestration is likely "recursive — orchestration all the way down," so a memory layer must
-support **scoped/hierarchical** access — a sub-agent reads its own scope PLUS the higher
-orchestration scope, built generically enough to serve both. Pairs with CAG-style caching so
-sub-agents lever cached static context instead of re-ingesting. See memory
-`project_retrieval_graph_memory_direction` + `project_recursive_orchestration_memory`.
-NOTE: this replaces the *caps*, not the token-explosion *leak* — justify it on its own merits
-(truncation is a band-aid), not on the 485K number. Ties to hybrid-retrieval priority
-(start BM25+embedding, SQLite adjacency, not Neo4j until thousands of nodes).
-
----
-
-### Local validator — deep capability evaluation (2026-06-21, queued)
-
-Shipped: optional local validator (`src/local_models.py`, `docs/LOCAL_VALIDATOR.md`,
-v1.20.0). A free local model (reference: VibeThinker-3B on MLX) runs as Tier 1 of
-`verify_step`; below `validate.min_certainty` it escalates to the paid adapter.
-Wiring + unit behavior are proven; **whether the local judge is actually good
-enough, and on which step classes, is not** — that needs measurement, not a tweet.
-
-**Live finding 2026-06-22 (qwen2.5-coder:3b on this box, ollama, real runs):**
-First end-to-end live test of the ladder on the Linux box (config: `validate.local_models:
-[qwen2.5-coder:3b]`, runtime ollama, min_certainty 0.6). Run1 (9-step `verify:` build goal)
-→ **9/9 verifications handled decisively by the local model at conf 1.00, zero escalations,
-zero paid validation calls.** Direct smoke test confirmed sane verdicts: good code → PASS
-1.00, failed step → FAIL 0.80, ambiguous research → conf 0.50 (< min_certainty → escalates,
-correct). Latency: ~34s cold (first call, model load) then ~10–13s/call. One quirk to watch:
-on the ambiguous case the model returned `passed=True` but a reason saying it did NOT address
-the goal — self-contradictory, but conf 0.50 < 0.60 escalated it anyway, so the ladder caught
-it. **So far qwen2.5-coder:3b looks viable as the Tier-1 judge for code/verifiable steps on
-this box** — the shadow-eval harness below is still the rigorous next step to quantify
-agreement vs paid and set per-class min_certainty.
-
-- [x] **Make ollama safe to leave running — CPU cap + orchestration-managed lifecycle
-  (2026-06-22).** Root cause of the 2026-06-22 "load 7 for ~52 min" incident, re-diagnosed:
-  *not* idle busy-spin (instantaneously measured: idle llama-server burns **0%** CPU; my
-  earlier "162% idle" was a misread of cumulative `ps %cpu`). The real cost is **active
-  inference** — each validation pins ~1.5 cores for ~6–8s on this i5, and ollama was the one
-  runtime with **no CPU cap and no managed lifecycle** (`ensure_validator_running` explicitly
-  bailed: "Ollama is its own daemon"). Running the full suite + OpenClaw against an uncapped
-  ollama = contention. Fix in `src/local_models.py`: (1) `ensure_validator_running` now manages
-  **both** runtimes; ollama launches via `ollama serve` under a `nice`/`taskset` cap
-  (`_cpu_cap_prefix`, default cores `2,3` @ nice 12 — mirrors `test-safe.sh`), env
-  `OLLAMA_NUM_PARALLEL=1 / MAX_LOADED_MODELS=1 / KEEP_ALIVE`; (2) `start_new_session=True` +
-  `_terminate_group` (process-group SIGTERM→SIGKILL) so the child `llama-server` dies with the
-  daemon — last night's orphan that survived `pkill`. Live-verified: child llama-server inherits
-  the `2,3` affinity cap (cores 0,1 always free for the box); group teardown leaves zero orphans.
-  Config knobs: `validate.cpu_affinity` / `cpu_nice` / `ollama_keep_alive`. Enabled in the live
-  workspace config (was "left OFF"); reversible via `validate.autostart: false`. Tests:
-  `test_local_models.py` (ollama-managed spawn, missing-binary fallback, cap-prefix matrix).
-  **Portable, not box-specific (2026-06-22):** the cap's core list is *derived from the actual
-  CPU count* (`_default_cpu_affinity`: reserve lower half for the system, pin validator to upper
-  half — 4 CPUs→"2-3", 8→"4-7", ≤2→no pin/nice-only), and any explicit `cpu_affinity` is clamped
-  to cores that exist. A hardcoded "2,3" would have made `taskset` fail (→ validator silently
-  never starts) on any box with <4 logical CPUs. `nice`/`taskset` are also Linux+tool-presence
-  guarded (`_cpu_cap_prefix` → [] on macOS/missing tools). So the fix installs and runs unchanged
-  on any Linux box; on macOS/mlx the cap is a graceful no-op.
-- [x] **Shadow-eval harness for validation (2026-06-22).** `src/validation_shadow.py`,
-  mirroring `navigator_shadow --agreement`. On a validated step it records BOTH the
-  local verdict and the paid verdict on the same result, tagged by step class, as a
-  `VALIDATOR_SHADOWED` captain's-log row (decide-only — the actual validation verdict
-  is unchanged). Two data sources: the **escalation path** (local UNDECIDED → paid
-  already called → log the pair free) and the **decisive path** (local confident →
-  production skips paid → make an EXTRA paid call to learn whether local was right).
-  The extra call is real spend, so the whole harness is gated behind
-  `validate.shadow_eval` (default off; opt in to gather data) and only fires for a real
-  `llm.LLMAdapter` (dry-run / test doubles inert). Wired into `step_exec.verify_step`
-  at both tiers. Tests in `tests/test_validation_shadow.py`. **Agreement + calibration
-  metrics folded in** (was a separate bullet): `analyze_validation_agreement` /
-  `python3 -m validation_shadow --agreement` produces per-class agreement %, the two
-  error directions (false_pass = local PASS / paid FAIL, the dangerous one; false_fail
-  = wasted escalation), and a local-confidence calibration table (does a "0.9" agree
-  ~90% of the time?). **Live-verified 2026-06-23** across 3 real runs (fizzbuzz,
-  sorting-algo comparison, essay+self-critique) — see per-class routing below for the
-  numbers. Harness works end-to-end; rows land; the one disagreement adjudicates
-  correctly.
-- [ ] **Per-class routing (gathering shadow-eval data).** Expect high agreement on
-  verifiable code/math steps, low on fuzzy research-quality steps. Once the
-  `--agreement` table has enough rows, route only the classes where the local judge
-  earns it (per-class `min_certainty`); keep the rest on the paid path. Don't trust
-  benchmark parity globally.
-  **First data (2026-06-23, n=29, qwen2.5-coder:3b vs paid):** overall agreement
-  96.6%, **0 false_pass across every class** (the dangerous direction — local PASS /
-  paid FAIL — never happened). Per class: analyze 4/4, exec_command 4/4, synthesize
-  3/3, read_artifact 1/1 all 100%; `general` 16/17 (94.1%) with the lone miss a
-  **false_fail** (local FAIL@0.90 vs paid PASS on a routine file-save — local was
-  *too strict*, costs a wasted escalation, not a missed defect). Surprise: the fuzzy
-  synthesize/analyze essay-critique steps held at 100% — divergence showed up on a
-  mundane `general` step, not the subjective work we expected to break it.
-  Calibration: 0.9–1.0 bucket = 96.6% (slightly overconfident, erring strict).
-  **Caveat: 29 rows is a smoke sample, not enough to set thresholds.** Next: a larger
-  deliberate batch (more runs with diverse step mixes) before committing per-class
-  `min_certainty` — and watch specifically for any `false_pass`, since that's the
-  only error direction that can let a real defect through.
-  **Larger batch (2026-06-24, n=42):** 92.9% overall, and the **first `false_pass`
-  appeared** — `general` class, local PASS@**1.00** vs paid FAIL. The step was
-  "list skills/ and save the listing to `artifacts/skills-listing.txt`"; the worker
-  saved to a *different* path and narrated success. Local can't see the artifact
-  never landed where asked — a requirement/side-effect miss, not a confidence
-  problem (it fired at max confidence). Concrete classes held: exec_command 5/5,
-  analyze 5/5, synthesize 3/3 — 100%, 0 false_pass; read_artifact 4 (75%, all misses
-  false_fail/safe). **Decision: do NOT set per-class `min_certainty`.** (a) The
-  safe-class n (3–5) is too small to justify lowering thresholds; (b) the danger
-  class `general` can't be made safe by a threshold — the false_pass was at conf
-  1.00. The lever the data actually points at is **provenance verification** (did
-  the side effect land / was the requirement met?), which is the same root as the
-  fabricated-input bug and is exactly the closure-verdict-provenance-net item above.
-  So #3 feeds #2. Keep global `min_certainty: 0.6`; revisit per-class only after the
-  safe-class corpus is much larger. Full write-up: `docs/LOCAL_VALIDATOR.md`.
-- [ ] **Tune `local_max_tokens` per model.** Live finding (2026-06-21 verify run):
-  VibeThinker's `<think>` trace on *real* (long) step results overran the 1024
-  floor → empty content → conf 0.00 → spurious escalation on 2/5 steps (the other
-  3/5 validated free at conf 1.00). Bumped default to 2048; deep-eval should find
-  the floor that maximizes decisive-local rate without wasting generation latency.
-- [ ] **Agentic verifier for large artifacts.** Today the validator sees a bounded
-  in-context slice of the result (`validate.max_input_chars`, default 6000 for the
-  free local path vs 1200 paid). For multi-KB artifacts, stuffing the whole thing
-  into context is wasteful — a tool-using verifier that reads the artifact
-  selectively (grep/read a temp file) is the better pattern. Caveat: that needs
-  tool use, which a small specialist (VibeThinker) is weak at — so scope it as an
-  opt-in verifier tier, not the default. (Input/output limits are separate knobs:
-  `max_input_chars` = what it sees; `local_max_tokens` = what it can generate.)
-- [ ] **Token/cost delta report.** Quantify tokens saved vs escalation rate vs added
-  latency, on Poe's own task corpus — the actual ROI of running this.
-- [ ] **Model bake-off.** Compare candidate local validators (VibeThinker-3B 8bit vs
-  4bit vs 1.5B; a Qwen2.5-Coder tune; an Ollama option for the Linux box) on the same
-  eval set. Confirm a 3B-class model is "good enough" on a generally modern machine
-  (≥16 GB RAM; 4-bit for 8 GB) before standardizing on one.
-- [ ] **Extend the ladder to the post-loop quality gate.** Same local-first pattern
-  for `quality_gate.run_quality_gate` / `run_llm_council` (3-persona trio) escalation,
-  reusing the `WEAK_ESCALATE` decision state. (verify_step done; quality_gate pending.)
-
----
-
-### Entropy / decay-by-invalidation (2026-06-11, queued behind navigator)
-
-Steering context in GOAL_BRAIN.md Intent (entropy quote). Crystallized artifacts
-(skills, standing rules, playbook entries) rot when the world changes under them —
-distinct from decay-by-disuse, which tiered lessons already have. The most-reinforced
-artifact is the most dangerous one at world-shift time, because reinforcement and
-validity are different signals and we only track one.
-
-- [x] **Decay v0 — re-fight on collision (Jeremy's pinned first pass).** When a
-  crystallized artifact fails, inject the existing mechanism + the failure into the
-  prompt and re-derive. *"at worst we have better context, at best it's a slight
-  tweak and we fix forward."* **Done 2026-06-11 for the rule layer:** a contradicted
-  standing rule is *contested* — immediately demoted from "apply unconditionally" to
-  a verify-before-relying injection block (read-time trust derivation, data untouched),
-  and `knowledge_lens.refight_rule()` re-derives it against its contradiction evidence
-  (pulled from the captain's log) with verdicts keep / revise / retire (retire demotes
-  back to hypothesis — must re-earn promotion). Runs from `run_skill_maintenance` in
-  the evolver cycle (adapter-gated, max 3/cycle), beside `rewrite_skill` — the skill
-  seed it generalizes. `RULE_REFOUGHT` event is the audit trail. No cron — collision
-  detection rides on contradiction recording, repair rides on the evolver cycle.
-  Note: no standing rules exist on this box yet (accretion only became possible in M2),
-  so first live exercise awaits a real rule + collision.
-- [x] **Freshness signal on crystallized artifacts.** `last_verified` (last
-  successful run against the real world) distinct from `last_reinforced`. Trust at
-  injection time = f(score, time-since-verified); stale-but-promoted gets a
-  "verify before relying" flag, not silent confident injection.
-  **Done 2026-06-11 for the rule layer:** `StandingRule.last_verified` stamped at
-  promotion, on production re-confirmation, and on re-fight keep/revise. The
-  anchoring fix: post-promotion re-confirmations never reached the rule —
-  `observe_pattern` only matched hypotheses, so a re-confirmed promoted lesson
-  seeded a *duplicate hypothesis* (which could re-promote into a duplicate rule)
-  while `rule.confirmations` stayed frozen at its promotion value. Now an
-  observation matching an existing rule verifies the rule (`RULE_VERIFIED`
-  event, 46th type). At injection, an uncontradicted rule unverified for
-  `knowledge.rule_staleness_days` (default 30, 0 disables) joins a "Stale rules
-  (unverified for N+ days — verify before relying)" block; contested takes
-  precedence. Read-time derivation only, data untouched; `promoted_at` is the
-  fallback anchor for pre-field rules. Skill/playbook layers still open —
-  skills have score+circuit-breaker already; revisit if staleness shows up there.
-- [ ] **Design constraint, not a task: decay trust, never data.** Append-only
-  evidence layer stays perfect (the computerization edge over human forgetting);
-  only compiled-truth confidence decays. Crystallization Stages 4–5 must be
-  demotable back to language form — world-change is the frequent trigger,
-  model upgrades the rare one.
-
----
-
-### Anti-fabrication defense-in-depth (2026-06-23)
-
-**Output-provenance guard — v0 SHIPPED 2026-06-24** (see BACKLOG_DONE). The
-verdict (`_verify_now_outcome` + agenda twin) now deterministically demotes a
-goal to `incomplete`/`goal_achieved=False` when it named a *dir-qualified*
-output path ("save … to artifacts/X.txt") that never landed. Closes the
-reproduced false_pass (shadow-eval n=42). Default on (`validate.output_provenance`).
-
-Both residual layers SHIPPED 2026-06-24 (see BACKLOG_DONE):
-
-- [x] **Input-provenance at the verdict.** `_missing_claimed_inputs` —
-  verdict-layer net: a goal that names a local, non-transient input path that
-  doesn't exist demotes to incomplete (you can't read a missing file). Catches
-  silent fabrication that reaches `done` without the read step blocking (the
-  recovery guard only fires on a block). Remote URLs + /tmp/scratchpad skipped.
-- [x] **Bare-filename outputs.** `_missing_output_bare` — lenient basename check:
-  a bare "save report.md" whose basename exists nowhere reasonable (run dir,
-  workspace/output, projects/*) demotes; location isn't part of the contract so
-  a present-but-elsewhere file passes.
-
-- [x] **Tool-evidence provenance (2026-06-24, SHIPPED — see BACKLOG_DONE).**
-  The three checks above scan the GOAL text. This adds a fourth that scans the
-  RESULT text for paths the run claims it wrote ("saved to X") and demotes unless
-  the path exists AND its mtime falls in this run's wall-clock window (now -
-  elapsed - 120s). The mtime gate is the side-effect evidence — a stale
-  same-named file doesn't prove the run wrote it. Catches fabrication when the
-  goal named no path (the *claim* names it) + the n=42 "saved elsewhere" case.
-  `validate.result_provenance`, default on, fail-open.
-
-Genuinely unreachable without backend changes (parked):
-
-- [ ] **No-file-claim fabrication.** A run that fabricates a result naming no
-  path at all ("ran the tests: 142 passed", writing nothing) leaves no
-  deterministic trace — `claude -p --output-format json` returns only final
-  text, no tool-call transcript (investigated 2026-06-24 and ruled out). Would
-  require `--output-format stream-json` parsing (re-plumb the subprocess
-  pipeline) or a filesystem-snapshot diff with a fabrication-shape classifier.
-  Out of proportion to the risk for now; revisit if it shows up organically.
-
-### Live orchestration run findings (2026-06-11, first post-suite-green session)
-
-From real task-path runs (enqueue → drain_task_store → handle_task → handle).
-Fixed same day: task-path runs never finalized, poisoning recall's all_failing
-(9402d3d); lesson extraction silently returned [] on every real run — safe_list's
-str default dropped the typed lesson dicts the prompt asks for (verify→learn was
-dead at the extraction step since Phase 59 S1). Remaining observations:
-
-- [x] **GOVERNANCE: a vague goal pipeline-executed into an unreviewed mainline
-  push as Jeremy.** "improve things" (deliberately vague test goal) decomposed
-  itself into "pick an improvement from MILESTONES/BACKLOG and implement it
-  end-to-end", wrote a real fix (CLOSURE_VERDICT skip-path emission, 06c3764,
-  reviewed post-hoc: good code, kept), committed as author "Jeremy Stone" and
-  **pushed to origin/main** — 4.09M tokens, no human or quality gate between a
-  worker and a public push under Jeremy's identity. The live navigator shadow
-  said **escalate (0.95)** at dispatch — the pipeline executed anyway and
-  declared done. **RESOLVED 2026-06-11 (cfab080):** Jeremy's call — workers
-  authoring as him is fine ("haven't made that distinction yet, not sure it
-  matters"); the gate is about unreviewed mainline pushes, not identity.
-  Shipped as branch policy: `_run_subprocess_safe` marks all Poe-spawned
-  subprocesses `POE_WORKER_RUN=1`; `scripts/hooks/pre-push` (installed via
-  `scripts/install-git-hooks.sh`, part of harness install) blocks worker
-  pushes to main/master with a redirect to work branches; explicit bypass
-  via config `workers.allow_main_push` (default false) → `POE_ALLOW_MAIN_PUSH=1`.
-  Humans/interactive sessions unaffected. Still a strong cutover data point
-  for the dispatch decision class.
 - [ ] **Workspace boundary: build-goal artifacts landed in the repo root** —
   run_health.py + example output were written to cwd (the repo) instead of the
   run's artifact dir; goal even said "as an artifact file". Moved them into
@@ -354,6 +29,78 @@ dead at the extraction step since Phase 59 S1). Remaining observations:
   the run dir now) but the agenda loop's worker writes are still cwd-relative.
   The fix is the bounded-workspace item below; this is the strongest case yet
   that it's not theoretical — good output is landing in version control.
+
+**Bounded workspace / sandboxing (discovered 2026-04-17)**
+
+Run 4 of slycrel-go blind test was contaminated by stale local clones. Four
+`slycrel-go` trees existed on disk (`~/slycrel-go`, `~/.openclaw/.../slycrel-go`,
+`~/.poe/workspace/projects/slycrel-go`, `/tmp/slycrel-go`) — the worker
+surveyed one of them instead of cloning fresh into the expected workspace
+`repo/` subdirectory. Result: step 1 asserted "project already has a
+complete headless server implementation" from the stale tree.
+
+Right behavior: orchestrator should clone the repo into its own workspace,
+not scavenge from elsewhere on the filesystem.
+
+- [ ] **Low-effort: workspace-folder constraint option.** A config flag /
+  per-goal setting that restricts file access (or at minimum, search paths)
+  to the project workspace `repo/` subdir. Not full sandboxing — just
+  "don't wander." Cheap win.
+- [ ] **Medium-effort: document the bounded-workspace spectrum.** Three
+  tiers worth naming: (a) docker/container (full isolation, heavy setup),
+  (b) orchestrator workspace only (soft fence — honor convention, no
+  enforcement), (c) full machine (current default). Short doc in
+  `docs/` noting when to use which and what each protects against.
+- [ ] **Diagnostic: detect scavenging.** Captain's log event when a worker
+  reads a file outside the project workspace root. Cheap instrumentation,
+  makes contamination visible.
+
+Not ambitious; the goal is "constraint to a folder isn't a bad option to
+have" not "build a sandboxing subsystem."
+
+### 2. Closure treats failed-to-run commands as checks-passed (silent-verification bug)
+
+- [ ] **Closure treats failed-to-run commands as checks-passed (silent-verification bug).** Scope A/B run-00 (2026-04-22 baseline, `~/.poe/experiments/scope-ab-2026-04-22/run-00-treat-preFix-baseline/`) ran closure's generated behavioral-verification commands as subprocesses that inherited a PATH *without* `/home/clawd/go/bin`. Every `go build ... && /tmp/test-server ... && curl ...` compound died at the first `&&` with `go: command not found`. Closure's own summary captured it: *"integration verification failed due to missing Go toolchain in test environment — cannot confirm end-to-end HTTP flow actually works."* Closure then returned `complete=True, confidence=0.75, checks_passed=5/5, gap_count=3`. Deliverable was actually correct (manual post-hoc: server builds, serves `/` HTTP 200 / 5444 bytes, creates sessions on POST `/api/session`) — so this didn't burn us; but the verdict was infra-blind.
+
+  **Not a hallucination; equivalent in effect.** Model's claims matched reality; the verification layer just couldn't observe them. The bug is in closure's probe-result interpretation: "command returned (even with exit 127)" is being conflated with "check passed." The path fix is trivial (symlinked for this experiment); the detection-mechanism fix is the real work — closure needs to distinguish *"probe affirmatively confirmed the claim,"* *"probe ran and affirmatively refuted,"* *"probe failed to execute / produced no usable signal."* The third case must NOT count toward `checks_passed`. Candidates for implementation:
+  - probes emit a structured verdict (PASS / FAIL / INCONCLUSIVE) instead of free-text output parsed by regex; INCONCLUSIVE never counts as passed
+  - pre-flight: resolve every binary referenced in a probe command via `shutil.which`; if any is missing, mark the probe INCONCLUSIVE and surface "missing tool: X" as a closure gap
+  - detect shell command-not-found via exit 127 + "command not found" in stderr; auto-demote to INCONCLUSIVE
+  - when `checks_passed < checks_run` OR any probe is INCONCLUSIVE, closure should NOT return `complete=True` at confidence > ~0.5 without explicit re-plan
+
+  **Related:** sibling to the "runtime-probe bias" item in Vision / Deferred (verifier-synthesis block). That one is about closure *choosing* static over behavioral probes; this is about closure *mis-reading* the behavioral probes it does choose. Both resolve to: **the verification verdict is decoupled from whether the thing was actually verified.** Fix one without the other and the same failure surfaces on a different axis.
+
+### 3. Rate-limit recovery: no total-backoff cap + phantom Step -1
+
+- [ ] **Rate-limit recovery has no total-backoff cap; recovery path emits phantom `Step -1`.** Scope A/B run-06-control (2026-04-23, `~/.poe/experiments/scope-ab-2026-04-22/run-06-control/`) hit 6 rate-limit retries with exponential backoff (60→120→240→480→960→1800s = 61 min total wall-clock in backoff alone). Per-attempt cap is enforced; **total-backoff-wall-clock is not.** After step 20 finally completed, the recovery path fired with `recovery[NEEDS-REVIEW] risk=medium: Retry with smaller step scope or switch to API adapter` — and produced a `Step -1` marker that the main loop doesn't know how to handle. Run exited rc=1 with no closure verdict. Total runtime: 2h30m for 20 completed steps.
+
+  **Candidates:**
+  - cap total backoff wall-clock at ~10 min; if exceeded, bail cleanly (soft-fail with "rate-limited, retry later" rather than another 30-min sleep)
+  - recovery path should trigger an actual replan (fewer steps, smaller scope) or adapter switch, not a phantom `Step -1` ordinal
+  - while in rate-limit backoff, pause the cost meter or at least annotate "backoff-idle tokens=0" — run-06 showed $41 cost accumulating during 61 min of no real work (cost meter is probably accumulating during retries before the API call; worth auditing)
+
+  **Related:** `decomposition_too_broad` miscalibration (now archived). Both are recovery-layer bugs that only surface on long plans.
+
+### 4. Persistence-install guardrail for autonomous runs (safety)
+
+- [ ] **BLOCKER: Persistence-install guardrail for autonomous runs.** Background/scheduled paths (heartbeat, cron-owned jobs, timers, backlog drains) must not be allowed to install or enable persistence mechanisms such as systemd units, launchd agents, cron entries, login items, or long-lived daemon processes without an explicit high-trust gate. April 22 live-box cleanup showed a stale scheduled goal (`Monitor BTC price`, originally created April 4) was later revived and installed both cron and systemd automation. Need a policy-layer guardrail in constraint/orchestration so unattended runs can propose persistence changes but cannot apply them silently.
+
+### 5. Stream-json token visibility
+
+- [ ] **Stream-json token visibility (next up, per Jeremy 2026-04-18).**
+  `claude -p --output-format stream-json` emits newline-delimited JSON
+  events (init, assistant chunks, tool calls, result). Switch the
+  subprocess adapter + `/tmp/poe-current-step.log` to this mode so
+  operators see live tokens instead of 0 bytes until burst-at-end. Each
+  new line becomes the primary liveness signal; CPU-activity demotes to
+  a fallback for adapters that don't stream. Parser work: line-reader
+  that accumulates assistant deltas + handles tool_use events + parses
+  the final `result` event for usage stats. Tests need fake streaming
+  fixtures. Size: ~half-day. Coordinates with the adapter protocol
+  extraction (stream shape is the point of the Adapter interface).
+
+### 6. `_is_complex_directive` threshold for NOW-lane misrouting
+
 - [ ] **NOW-lane runs produce no learning data and no artifact discipline** —
   the run_health build goal (e1b9f95e-humble-lantern) was classified NOW, which
   (a) skips `reflect_and_record` entirely — reflection only fires in the agenda
@@ -365,85 +112,9 @@ dead at the extraction step since Phase 59 S1). Remaining observations:
   reflection call per request). Still open: `_is_complex_directive`
   thresholds — a multi-step "write a script AND run it AND save outputs" goal
   is not a NOW request (heuristic-tested: it does NOT catch that goal today).
-- [x] **NOW lane recorded an honest "this cannot be done" as `done`** — found
-  by the impossible-binary probe batch (3× "run /usr/bin/nonexistent-binary-xyz"):
-  intent routed the execution goal NOW, the completion honestly replied "the
-  goal is incomplete... cannot be fulfilled", and the run was recorded `done`
-  in 18s — NOW status meant "the completion call returned", not "the goal was
-  achieved". The false done then poisoned every judgment layer above it:
-  recall reported a done prior, so the dispatch guard could never trip, and
-  the navigator's attempt-2 `close` was reasonable-on-poisoned-input. (The
-  navigator still said `escalate 0.95` on attempts 1 and 3 — attempt 3
-  explicitly caught the contradiction "prior attempts are marked done" vs an
-  impossible goal. Divergences #2 and #3, both adjudicated navigator-right.)
-  **Fixed same day:** (1) `now_lane.escalate_to_director` default flipped to
-  True — complex directives route to the agenda lane; (2) autonomous NOW runs
-  (origin present, no human reading the text) get a cheap self-verdict and
-  demote to `incomplete` when the response reports non-fulfillment
-  (`_verify_now_outcome`, fails open). Interactive NOW calls keep raw speed.
-  **Agenda twin fixed same night (02b0263):** the same goal re-run through
-  the loop still finalized done — closure said complete=False at 0.95–0.99
-  but restarted loops were never re-verified and the verdict never gated
-  status. Now: re-verify after closure restart; final complete=False at
-  conf ≥0.7 demotes done→incomplete. **Both fixes live-verified:** the
-  impossible-file probe finalized `incomplete` end-to-end, and the 4th
-  attempt at the binary goal drew the first live RECALL_GUARD_TRIPPED
-  (6 honest non-done priors) with the navigator concurring (close 0.99 /
-  guard_refused).
-- [ ] **LLM classifier routes trivial questions AGENDA — quick-lane economy
-  inverted** — live probe 2026-06-12: "What is 17 multiplied by 23? Reply with
-  just the number." paid the full loop + closure + quality gate (~3.5 min,
-  run ecd4a7bd-eager-kestrel) because the cheap-LLM classifier said agenda;
-  the heuristic classifier says now (0.65, "short or simple request"). One
-  observation, not a pattern yet — but if the LLM classifier systematically
-  out-conservatives the heuristic, the NOW lane is dead on the task path and
-  every quick question costs loop overhead. Check NAVIGATOR_DECIDED /
-  metadata lane distribution once organic volume accumulates. Related:
-  `_is_complex_directive` over-matches imperative-shaped *questions* ("What
-  number am I thinking of? Answer with one number only." escalates) — same
-  economy cost from the other direction. Escalation overriding an explicit
-  `force_lane="now"` fixed 2026-06-12 (force wins; escalation protects
-  classified routing only).
-- [ ] **done != achieved, confirmed on organic runs — and the gap is large.**
-  First organic batch through the new goal-verdict metadata (2026-06-12, 5
-  real goals): 4 came back `done` but only **1** had `goal_achieved=True`. The
-  three done-but-not-achieved (health-report refresh, roadmap audit, weekly
-  digest) all wrote a structurally-correct artifact the closure verdict judged
-  as falling short — "file created and non-empty" / "5/6 checks" — at low
-  confidence (0.2–0.35). Two implications: (1) the done≠successful split is
-  doing exactly its job — without it this batch reads as 80% success; with it,
-  20% genuinely achieved, the rest flagged for review. Validates Jeremy's
-  "done as 'I did it' not 'it worked'" concern with live data. (2) The verdict
-  confidences are *low* — these are doubt flags, not definitive failures, and
-  they correctly stay `done` (below the 0.7 demotion threshold) rather than
-  flipping to incomplete. Open question worth watching: is the closure verifier
-  systematically harsh on build-artifact goals (false-negative achievement), or
-  are these outputs genuinely thin? Needs a few more organic batches + spot
-  audits before trusting the rate. Don't tune the threshold on n=5.
-- [ ] **Closure demotion doesn't reach the outcome store** — when handle's
-  closure verdict demotes done→incomplete (02b0263), run metadata is honest
-  (recall/guard read that) but the loop already called reflect_and_record
-  with status=done from inside agent_loop's finalize — so outcomes.jsonl and
-  any lessons extracted carry the un-demoted framing. Small mismatch, noted
-  not fixed: moving reflection after closure would delay it for every run to
-  serve the rare demotion; an outcome-amendment hook is probably the right
-  shape if this starts to matter.
-- [x] **NOW artifacts write to a stale prototype path** — `_write_now_artifact`
-  resolved orch_root and appended `prototypes/poe-orchestration/artifacts/now/`,
-  landing files at `~/prototypes/poe-orchestration/prototypes/poe-orchestration/…`
-  (doubled segment, outside the workspace). **Fixed 2026-06-12:** NOW artifacts
-  now land in the run dir's `artifact/` subtree (current_run_dir, falling back
-  to run_dir(handle_id) — both workspace-honoring); artifact_path is absolute.
-- [ ] **First in-process consolidation gc'd the whole MEDIUM lesson store** —
-  5 weeks of decay-age applied in one cycle (decayed 38, promoted 0, gc 38).
-  Arguably correct on stale data (M2 promotes at reinforcement time, LONG
-  survived: 22), but a gentler policy for long-gap catch-up (cap effective
-  decay-days? amnesty pass?) is worth considering before the store matters.
 
-- [x] **`loop-*-PARTIAL.md` is misnamed on done runs** — fixed same day: the
-  transcript is `loop-<id>-RESULT.md` when the loop finished done, `-PARTIAL.md`
-  otherwise. Verified no production code reads the filename (only synthetic-name
-  tests + cleanup glob, which matches neither).
+### 7. Closure restart short-circuit (artifact exists + verifier passed)
+
 - [ ] **Closure restart doubled a trivial run** — the standing-rule report goal
   (049599c8-sturdy-ridge) finished done 4/4 in loop 1 (~300k tokens), then the
   closure-restart heuristic (handle.py:1091–1180) ran a full second loop (6/6,
@@ -454,79 +125,92 @@ dead at the extraction step since Phase 59 S1). Remaining observations:
   run (c677fda8) also doubled, but that was the *quality gate* tier escalation
   (ESCALATE 0.90) and it correctly caught loop 1 writing its summary to the
   wrong location — gate working as intended, don't conflate the two.
-- [ ] **"Count the files" closure blessed two different answers** — same goal,
-  loop 1 counted 45 (docs/ top-level), gate-escalated loop 2 counted 80
-  (recursive); *both* closure verdicts called their count "correct and
-  verified". Ground truth: both defensible readings of an ambiguous goal —
-  but closure verification inherits the executor's interpretation instead of
-  pinning one. Resolved-intent/scope is the existing seam that should pin
-  countable deliverables ("N = recursive count") before execution.
-- [x] **Step numbering in transcripts starts mid-sequence** — root-caused same
-  day: `s.index` is the NEXT.md *ledger line* (orch_items.append_next_items
-  returns file-line offsets, headers included), not plan position. Display-only
-  fix: transcripts and the execution log now render `Step <pos>/<n> (ledger #i)`;
-  the ledger index stays untouched (load-bearing for get_item/_by_idx).
 
-### Goal-brain pressure-test findings — runtime gaps (2026-06-10)
+### 8. NEXT.md ↔ git activity sync at closure
 
-From sequencing step 2 (GOAL_BRAIN.md Compiled truth has the full findings; sample = the 2026-05-13..17 run-dir window). The decompose-fallback chop is fixed; these are the remaining mechanical gaps:
+- [ ] **NEXT.md ↔ git activity sync.** Control's NEXT.md showed steps 6–8 unchecked while the repo had matching commits. Either NEXT.md updates lag, or the agent didn't reflect the work back. Either way: closure should compare claimed-done against repo activity and surface the divergence.
 
-- [x] **Run↔thread linkage** — fixed 2026-06-10: tasks carry an `origin` dict (parent_handle_id via `runs.current_handle_id()`, parent_loop_id, parent_goal) set at the agent_loop continuation/escalation enqueues and propagated by director escalation follow-ups; `handle_task` threads it (plus source/job_id/parent_job_id) into `handle(origin=...)`, which stamps it into run-dir `metadata.json` and `handle_inputs.jsonl`. Every requeued run is now traceable to the work that spawned it. Note: ancestry is *recorded*, not yet *consulted* — the dispatch-time read is the recall() work.
-- [x] **Dispatch-time dedup/memory** — the same agenda goal ran ~25× in ~35 min on 2026-05-17 (mixed stuck/done) with nothing consulting prior outcomes. **Fixed 2026-06-10 (goal-brain step 3):** `src/recall.py` dispatch slice — `handle()` injects prior-attempt history + thread ancestry into context on every run; `handle_task()` guards the autonomous requeue path (≥3 attempts in 60min all non-done → task errors with a readable reason instead of running; `RECALL_GUARD_TRIPPED` event). Design: `docs/RECALL_DESIGN.md`. Follow-up done 2026-06-11: `_build_loop_context`'s memory half (8 substrates, not 4 sites) relocated behind recall(slice="loop"); evolver's captain's-log bridge absorbed; lesson-cited stamp live in RECALL_PERFORMED.
-- [x] **Scope generation fails silently** — `generate_scope` returns None on any adapter failure, so during the rc=1 outage no run got a scope.md and nothing recorded that scope was skipped. **Fixed 2026-06-10:** new `SCOPE_SKIPPED` captain's-log event emitted from handle.py when scope generation is enabled but yields nothing — both the returned-None path (`reason: generator_returned_none`) and the raised-exception path (`reason: exception`, with error preview). Outages now show up in the captain's log alongside `SCOPE_PARSE_FAILED`.
+### 9. Extend local-validator ladder to post-loop quality gate
 
-### Dry-run hermeticity — fixed two leak sites, two more fail-safe-by-accident (2026-06-10)
+- [ ] **Extend the ladder to the post-loop quality gate.** Same local-first pattern
+  for `quality_gate.run_quality_gate` / `run_llm_council` (3-persona trio) escalation,
+  reusing the `WEAK_ESCALATE` decision state. (verify_step done; quality_gate pending.)
 
-Session 40 found `dry_run=True` runs making **real authenticated `claude -p` CLI calls** (subprocess adapter needs no API key, so conftest key-isolation didn't stop it). test_handle.py alone took 2h06m of real token burn. Fixed:
+### 10. Ready AFK chunk — handle.py prefix registry
 
-- [x] `_decompose_goal` planner-lift: `build_adapter()` was called unconditionally, replacing `_DryRunAdapter` with a live adapter. Now guarded on `ctx.dry_run`.
-- [x] `_select_step_adapter` (Phase F5): `_DryRunAdapter` has no `model_key` attr → `getattr(..., "")` slipped past the explicit-model check → live adapter per step. Now early-returns on `ctx.dry_run`.
-- [x] conftest guard: `tests/conftest.py` now blocks `claude`/`codex` binaries at the `llm._run_subprocess_safe` seam (other commands pass through so its unit tests still run). Tests needing LLM behavior must mock the adapter.
-- [x] Adapter-swap seam made principled: the decompose planner-lift and Phase F5 per-step selection now only re-tier adapters that are `isinstance(_, LLMAdapter)` (i.e. build_adapter products they know how to rebuild). Injected test doubles and `_DryRunAdapter` are plain classes and pass through untouched — this is the injection contract.
-- [x] Step-shape auto-split was non-convergent: analysis-first steps with an incidental exec keyword (e.g. "Analyze findings from build X") split into a replacement that re-tripped the detector every iteration until max_iterations → stuck. `_split_exec_analyze` now strips analysis clauses from the run part, and the executor-side leak guard executes as-is when a split wouldn't converge. (Also fixed `lstrip('Rr un')` char-set bug.)
-- [ ] **Fragile fail-safes left in place** (deliberately, don't-refactor-mid-feature): `_run_steps_parallel`/`_run_steps_dag` only avoid building live adapters in dry-run because `adapter.model_key` raises AttributeError on `_DryRunAdapter` and the except-path falls back. Same for `_generate_timeout_split` (unreachable in dry-run today). Make these explicit when next touching agent_loop step execution.
-- [x] **Hardcoded `_CODEX_BIN = "/home/linuxbrew/.linuxbrew/bin/codex"`** in llm.py — fixed in M5 (2026-06-10): `_find_codex_bin()` resolves CODEX_BIN env → PATH → common locations → bare name, mirroring `_find_claude_bin()`.
-- [x] **5 pre-existing worker_session_bridge failures in test_orch_core.py** — root-caused + fixed 2026-06-11. Regression from `a799871` ("support worker manifest args arrays"): the refactor funneled *string* manifest commands through the list-argv quote-join, so the whole shell line became one `shlex.quote`d token and `/bin/sh -c` looked for a program literally named `printf "%s" ... > ...` (exit 127, surfaced as validation 'blocked'). Every string command containing shell syntax (`$VAR`, `>`, heredocs) broke; bare names like `./run.sh` survived because quote was a no-op, and the timeout test passed for the wrong reason (127 also raises → blocked). Fix in `_load_worker_session_manifest`: string commands pass verbatim (matching the top-level-string manifest form), args (if any) appended quoted; list commands keep quote-join. All existing string+args pins (`"python3" + ["-m","worker"]` → `python3 -m worker`) unchanged.
-- [x] **Pre-existing: test_scheduler.py `test_inflight_job_not_returned_until_lease_stale`** — root-caused + fixed 2026-06-11. Time-of-day-dependent test: `mark_job_dispatched` stamped the lease at real wall clock while the test probed staleness at synthetic `next_run + 5min`; with the 6h lease the first probe only read fresh between 03:05–09:00 UTC. Fix: `now` seam param on `mark_job_dispatched(job_id, *, now=None)` (mirrors `check_due_jobs`); test stamps the lease at the synthetic probe time.
-- [x] **Pre-existing: 4 plan-manifest tests in test_agent_loop.py are order-dependent** — root-caused + fixed 2026-06-11. Not an orch-root cache: `runs._current_run_dir` (module global, pinned by `handle()` via `set_current_run_dir`) leaked across tests, so `runs.artifact_dir()` routed later tests' plan manifests into the stale run's `build/` instead of `projects/<p>/artifacts/`. Production contract is deliberate (CLI clears; programmatic callers clear themselves — handle.py comment) and tests are exactly such callers: autouse conftest fixture now resets the global after every test. Whole pollution class closed, not just these 4.
+- [ ] **handle.py prefix registry.** `apply_prefixes()` is a chain of
+  if/elif on magic strings (`ralph:`, `verify:`, `pipeline:`, `strict:`,
+  `effort:`, `ultraplan:`, `btw:`, `direct:`, `mode:thin`). Collect into
+  a `PREFIX_HANDLERS: dict[str, Callable]` registry so "what modifiers
+  exist?" is a one-line grep. Preserve stacking semantics. Tests
+  already cover every modifier so regression risk is low. Size:
+  half-day. Good starter AFK chunk.
 
----
+### 11. Ready AFK chunk — Captain's-log event contract doc
 
-### Memory lifecycle was write-dead / decay-corrupting — core fixed, wiring shipped (2026-06-10)
+- [ ] **Captain's log event contract doc.** We have 36+ event types
+  emitted across 10+ modules. No single doc says "here's every event,
+  here's the field schema, here's when it fires." Blind collaborator
+  can't reason about observability without reading every emitter.
+  Produce `docs/CAPTAINS_LOG_EVENTS.md` with one table: event / fields /
+  emitter / when-it-fires. Pure documentation chunk — zero code risk.
+  Size: half-day. Excellent AFK starter.
 
-Session 40 audit confirmed consolidation **never ran** (only entry point was the `poe-memory decay` CLI, never invoked) and the lifecycle had three latent data-corruption bugs, all fixed in knowledge_web.py:
+### 12. Local-validator measurement — token/cost delta report
 
-- [x] Tier-blind decay on load: LONG-tier lessons decayed on read despite "no decay by design" (22 long lessons were reading at ~0.85^46 effective score).
-- [x] `run_decay_cycle` persisted decayed scores without moving the `last_reinforced` anchor → compounding rot on every RMW write (reinforce/forget/promote all re-persisted decayed bystander scores). Decay is now strictly a read-time derivation; rewrites use `raw=True`.
-- [x] RMW paths loaded with default `limit=50` → stores >50 lessons would be silently truncated on rewrite. All rewrite paths now load `raw=True, limit=None`.
-- [x] In-process consolidation ("dream cycle"): `maybe_consolidate()` marker-gated to once per `memory.consolidation_interval_hours` (default 24h), wired into `handle()` (post-request, never affects outcome), heartbeat tick, and `poe-memory consolidate [--force]`. In-process by design — **no cron/daemon** (Jeremy: rogue-process history).
-- [x] Promotion timing race (M2, shipped 2026-06-10): promotion now evaluated at reinforcement time via `_post_reinforce_hooks` — score is freshly re-anchored, so eligibility is real. Consolidation-cycle promotion stays as a backstop.
-- [x] Standing rules accrete (M2, shipped 2026-06-10): LONG re-confirmation calls `observe_pattern`; `record_tiered_lesson` dedups cross-tier so re-learning a promoted lesson reinforces the LONG record instead of duplicating into MEDIUM. Full path medium → long → standing rule now reachable in production.
+- [ ] **Token/cost delta report.** Quantify tokens saved vs escalation rate vs added
+  latency, on Poe's own task corpus — the actual ROI of running this.
 
----
+### 13. Local-validator measurement — tune `local_max_tokens` per model
 
-### Build-loop wiring — cron wakeups are hitting the wrong abstraction (2026-05-06)
+- [ ] **Tune `local_max_tokens` per model.** Live finding (2026-06-21 verify run):
+  VibeThinker's `<think>` trace on *real* (long) step results overran the 1024
+  floor → empty content → conf 0.00 → spurious escalation on 2/5 steps (the other
+  3/5 validated free at conf 1.00). Bumped default to 2048; deep-eval should find
+  the floor that maximizes decisive-local rate without wasting generation latency.
 
-The repeated `poe-orchestration-build-loop` duty-cycle alerts finally coughed up a concrete diagnosis: the 5-minute cron is not running a dedicated autonomous build loop. It is waking the main session with the generic reminder text:
+### 14. Spend-gated transparency mandate
 
-> Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.
+- [ ] **Spend-gated transparency mandate.** Define a threshold (e.g., $2 estimated spend) above which the full source/build/artifact bundle is mandatory and visible to the user without grep. Below that, current behavior is fine.
 
-That explains the observed pattern:
-- `last_status=ok`
-- duty cycle usually ~5–7%, occasionally a bit higher
-- background checkpoints fine
-- repo often clean
+### 15. M5 portability final sweep
 
-In other words: the system is succeeding at the wrong thing. A reminder wake can only do opportunistic work; it is not a real build-runner substrate.
-
-- [x] **Route build-loop cron to a dedicated autonomous runner/supervisor.** Completed 2026-05-06.
-  - The dedicated runner lives in `src/build_loop_runner.py` with a lockfile/status contract plus a default `workers/handle.sh` bridge.
-  - `python3 src/cli.py build-loop` is the first-class entrypoint and `scripts/build-loop.sh` is the stable cron-facing wrapper.
-  - The live OpenClaw cron job `poe-orchestration-build-loop` now targets the dedicated persistent session with a payload instructing it to run the build-loop wrapper instead of the old generic HEARTBEAT reminder text.
-- [ ] **Define the success condition operationally.** "Fixed" means more than cleaner logs: while active work exists, measured duty should stay above the 60% floor (target 85%+) without relying on human-visible heartbeat chatter.
-- [ ] **Preserve health-only heartbeat semantics.** The 2026-04-22 split was correct; do not regress into making every generic heartbeat wake an autonomy daemon again. The fix needs to be explicit build-loop wiring, not re-coupling everything.
+- [ ] **M5 portability final sweep** — codex-side payload check decision (deferred) + final sweep (per GOAL_BRAIN active thread).
 
 ---
+
+## Vision / Deferred
+
+### Graph memory + recursive-orchestration scoped memory (2026-06-21, vision)
+
+Durable replacement for the fixed-size inter-step truncation caps (the 800/500/200 band-aids
+above — lossy fixed-array-vs-string, the kind of thing that's bitten us). Jeremy's framing:
+orchestration is likely "recursive — orchestration all the way down," so a memory layer must
+support **scoped/hierarchical** access — a sub-agent reads its own scope PLUS the higher
+orchestration scope, built generically enough to serve both. Pairs with CAG-style caching so
+sub-agents lever cached static context instead of re-ingesting. See memory
+`project_retrieval_graph_memory_direction` + `project_recursive_orchestration_memory`.
+NOTE: this replaces the *caps*, not the token-explosion *leak* — justify it on its own merits
+(truncation is a band-aid), not on the 485K number. Ties to hybrid-retrieval priority
+(start BM25+embedding, SQLite adjacency, not Neo4j until thousands of nodes).
+
+### Design constraint: decay trust, never data
+
+- [ ] **Design constraint, not a task: decay trust, never data.** Append-only
+  evidence layer stays perfect (the computerization edge over human forgetting);
+  only compiled-truth confidence decays. Crystallization Stages 4–5 must be
+  demotable back to language form — world-change is the frequent trigger,
+  model upgrades the rare one.
+
+### No-file-claim fabrication (parked — backend changes required)
+
+- [ ] **No-file-claim fabrication.** A run that fabricates a result naming no
+  path at all ("ran the tests: 142 passed", writing nothing) leaves no
+  deterministic trace — `claude -p --output-format json` returns only final
+  text, no tool-call transcript (investigated 2026-06-24 and ruled out). Would
+  require `--output-format stream-json` parsing (re-plumb the subprocess
+  pipeline) or a filesystem-snapshot diff with a fabrication-shape classifier.
+  Out of proportion to the risk for now; revisit if it shows up organically.
 
 ### ACTIVE DESIGN SPACE — Thread Architecture (2026-04-26 → 2026-04-27, Jeremy + Claude)
 
@@ -547,8 +231,6 @@ Don't implement yet — the architecture doc has 9 open decisions to work throug
 - Recall() interface (new) — single seam over memory substrates the navigator queries
 - Crystallization Stage 5 (existing gap in `KNOWLEDGE_CRYSTALLIZATION.md`) — the navigator's cheaper-over-time mechanism
 - Shared-learning portability (new) — self-learned artifacts should survive HDD loss / orchestrator switch
-
----
 
 ### Intent resolution — naming the "side-quests before decompose" shape (discovered 2026-04-18)
 
@@ -586,7 +268,7 @@ experiment proposal.
   side-quest outputs live in `~/.poe/workspace/projects/<slug>/
   artifacts/` and survive across reruns of the same goal family.
 
-### Modular refactoring (AFK-friendly chunks, queued 2026-04-18)
+### Modular refactoring (AFK-friendly chunks, queued 2026-04-18) — deferred chunks
 
 Jeremy's framing: LLMs don't feel rework cost the way humans do, so our
 codebase has accumulated seams that are hidden (not broken, just hostile
@@ -603,25 +285,11 @@ looking for an AFK-friendly chore. Principles in `docs/CODING_NOTES.md`.
   incrementally. Dependency: stream-json parsing lands first (see
   separate item) — the streaming shape is the point of the extraction.
   Size: ~half day per adapter once protocol is spec'd.
-- [ ] **handle.py prefix registry.** `apply_prefixes()` is a chain of
-  if/elif on magic strings (`ralph:`, `verify:`, `pipeline:`, `strict:`,
-  `effort:`, `ultraplan:`, `btw:`, `direct:`, `mode:thin`). Collect into
-  a `PREFIX_HANDLERS: dict[str, Callable]` registry so "what modifiers
-  exist?" is a one-line grep. Preserve stacking semantics. Tests
-  already cover every modifier so regression risk is low. Size:
-  half-day. Good starter AFK chunk.
 - [ ] **agent_loop.py phase extraction (continuation).** `LoopPhase` +
   `LoopContext` shipped (memory: project_monolith_extraction.md).
   Next 2 phases to extract: `scope_generation_phase` and
   `step_execution_phase`. Module is ~74KB; want to get under 40KB per
   file. Size: one phase per session, ~half-day each.
-- [ ] **Captain's log event contract doc.** We have 36+ event types
-  emitted across 10+ modules. No single doc says "here's every event,
-  here's the field schema, here's when it fires." Blind collaborator
-  can't reason about observability without reading every emitter.
-  Produce `docs/CAPTAINS_LOG_EVENTS.md` with one table: event / fields /
-  emitter / when-it-fires. Pure documentation chunk — zero code risk.
-  Size: half-day. Excellent AFK starter.
 - [ ] **Test clutter trim.** Jeremy's outside-in-testing posture
   applied to the suite: tests that poke private functions with mocked
   collaborators and assert call-shape are performative. Sweep tests
@@ -631,97 +299,25 @@ looking for an AFK-friendly chore. Principles in `docs/CODING_NOTES.md`.
   a mass pass; trim opportunistically when editing neighboring code.
   (Tracked as a posture, not a standalone chunk.)
 
----
+### Captain's log viewer (low-priority; partially covered by command center)
 
-### Comprehensive run transparency (audit phase, queued 2026-04-26)
-
-When a user pays real money for a run, they should be able to reconstruct exactly what was done — not because the test framework needs it, but because that's what spending non-trivial dollars demands. The 2026-04-25 scope A/B 1+1 surfaced this concretely: treat made commits, control's setup-reset wiped them, and we couldn't tell after the fact what code each arm produced. That's not a test-tooling problem; it's a systemic transparency gap.
-
-**Mental model (Jeremy's framing):** treat a run like a project compile.
-- **Source** — the inputs: prompt, scope, resolved-intent (deliverable map), plan(s).
-- **Build** — interim objects: per-step outputs, tool calls + results, captain's log slice, agent reasoning, intermediate artifacts (scratchpad/PARTIAL files), recovery decisions.
-- **Artifact** — the final result: code diff (or a branch with the commits), report, decisions log, NEXT.md state.
-
-Every paid-spend run should produce all three, durably, in one inspectable bundle. Some pieces exist (NEXT.md, scratchpad, captain's log slice when a runner extracts it); the gap is comprehensive coverage + a default per-run capture, not opt-in test instrumentation.
-
-**Design principle (Jeremy, 2026-04-26):** route writes to the run-dir *from the start*. Don't capture-at-end. The system already does the work — scratchpad, PARTIAL files, scope.md, resolved_intent.md, step outputs, NEXT.md — it just writes them to scattered locations. The fix is organization, not new instrumentation: pick the destination at run-start, point all the existing writers at it, and the bundle falls out the other end with everything already collected. **No copy/extract phase at end of handle. No "if a runner extracts it." The run-dir is the destination.**
-
-A per-run nickname (memorable 2-word label, deterministic from handle_id) makes runs referenceable in conversation without copy-pasting UUIDs. Run-dir shape: `~/.poe/workspace/runs/<handle_id>-<nickname>/` containing source/ (prompt, scope, resolved_intent, plans), build/ (per-step outputs, scratchpad, PARTIAL files, captain's log slice, recovery decisions), artifact/ (final code diff or repo.bundle, NEXT.md state, decisions log).
-
-- [x] **Per-run isolation: branch-name front-loaded into the prompt.** Shipped in `scope_ab_runner.py` 2026-04-26 as the test-side affordance — `scope-ab-r{NN}-{arm}-{TS}` branch pre-created and named in the prompt. Generalized variant for non-test invocations of handle.py is part of the next backlog wave (`--repo-branch-prefix` or auto-derived from goal slug + handle_id).
-- [x] **Run-dir as the write destination (not a copy target).** Shipped 2026-04-26 (commits `13a6470`, `8a68e37`). `src/runs.py` creates `~/.poe/workspace/runs/<handle_id>-<nickname>/` at handle start; `set_current_run_dir` pins it as a process-level context var; `artifact_dir()` and `source_dir()` route writes there from agent_loop (PARTIAL.md, scratchpad, step files, plan manifest, loop log) and handle.py (scope.md, resolved_intent.md). Fallback to project_dir/artifacts when no run-dir is active — behavior-preserving for existing callers.
-- [x] **Run nickname module.** Shipped 2026-04-26 (commit `13a6470`). 50 adjectives × 50 nouns = 2500 combos; sha1-hashed handle_id for even distribution. 13 tests.
-- [x] **Per-run repo bundle.** Shipped 2026-04-26 (commit `a99771b`). `record_repo_base()` at run start when `--repo` is given; `snapshot_repo_bundle()` on finalize writes `repo.bundle` (`git bundle --all`), `git_log.txt`, `branch_diff.patch`, `base_sha.txt` into `<run-dir>/artifact/`. Restorable with `git clone repo.bundle`. 5 tests.
-- [x] **Per-run captain's log slice.** Shipped 2026-04-26 (commit `17fb0e9`). `record_log_offset()` at run start, `slice_log_for_run()` on finalize writes `<run-dir>/build/captains_log_slice.jsonl` covering only this run's events. Same pattern `scope_ab_runner.py` used externally — now centralized so every paid run gets a slice. 4 tests.
-- [x] **Quality-gate verdict as a captain's log event.** Shipped 2026-04-26 (commit `c644d82`). `QUALITY_GATE_VERDICT` event with verdict/confidence/escalate/reason/step_count/loop_id; emitted from `quality_gate.py::run_quality_gate` after pass1 verdict parsing.
-- [x] **`LOOP_CREATED` captain's log event with `reason` + `parent_loop_id`.** Shipped 2026-04-26 (commit `c644d82`). Emitted in `agent_loop._initialize_loop` with reason ∈ {initial, director_restart, closure_restart, quality_gate_escalate}, parent_loop_id, project, max_steps, continuation_depth, dry_run. Threaded through handle.py spawn sites for closure-restart, director-restart, and quality-gate escalation.
 - [ ] **Captain's log viewer (low-priority; partially covered by command center).** Render a slice as a sortable timeline (ts, event, loop_id, slug, key fields). Until cross-run queries become a pattern, this is a thin reader over JSONL — no storage migration warranted.
-- [ ] **NEXT.md ↔ git activity sync.** Control's NEXT.md showed steps 6–8 unchecked while the repo had matching commits. Either NEXT.md updates lag, or the agent didn't reflect the work back. Either way: closure should compare claimed-done against repo activity and surface the divergence.
+
+### Storage decision — sqlite indexer (deferred)
+
 - [ ] **Storage decision (deferred).** JSONL captain's log is fine for within-run analysis. Sqlite *indexer* on top (not replacement) is the right pattern when cross-run queries become routine — "median treat-vs-control delta across N runs," "all CLOSURE_VERDICT < 0.5 in last 30 days." Defer until we have a concrete query we keep wanting.
-- [ ] **Spend-gated transparency mandate.** Define a threshold (e.g., $2 estimated spend) above which the full source/build/artifact bundle is mandatory and visible to the user without grep. Below that, current behavior is fine.
 
-Items already shipped that fit this frame are listed under **Runtime visibility** below — that section becomes the historical record of partial coverage; this section is the umbrella spec for completing it.
+### Rolling reviewer-calibration metric
 
----
-
-### Runtime visibility (tracked 2026-04-17)
-
-- [x] **Current-step symlink.** `/tmp/poe-current-step.log` → active
-  streaming merged-output file, updated atomically as each subprocess
-  starts. (Shipped 2026-04-17 — commit 58a91dd; symlink target extended
-  to merged stream in b188e5f.)
-- [x] **Claim-verifier outcome event.** Structured CLAIM_VERIFIER_OUTCOME
-  event now emitted with step id + file_not_found/symbol_not_found lists
-  + downstream action taken. (Shipped 2026-04-17 — commit 58a91dd.)
 - [ ] **Rolling reviewer-calibration metric.** `scripts/probe-stats.sh`
   scans last N days of captain's log, reports
   `dismissed/validated/unprobed` rates for CLAIM_PROBED. Tells us if the
   adversarial reviewer is getting more or less trustworthy over time —
   the reason we built the grounding. (ITEM #3 — deferred; revisit after
   more probe data accumulates.)
-- [ ] **Stream-json token visibility (next up, per Jeremy 2026-04-18).**
-  `claude -p --output-format stream-json` emits newline-delimited JSON
-  events (init, assistant chunks, tool calls, result). Switch the
-  subprocess adapter + `/tmp/poe-current-step.log` to this mode so
-  operators see live tokens instead of 0 bytes until burst-at-end. Each
-  new line becomes the primary liveness signal; CPU-activity demotes to
-  a fallback for adapters that don't stream. Parser work: line-reader
-  that accumulates assistant deltas + handles tool_use events + parses
-  the final `result` event for usage stats. Tests need fake streaming
-  fixtures. Size: ~half-day. Coordinates with the adapter protocol
-  extraction (stream shape is the point of the Adapter interface).
-- [x] **Closure + quality_gate run on partial/stuck/restart.** Previously
-  gated on `status == "done"`; metacognitive-recovery paths produced
-  material work but emitted no CLOSURE_VERDICT / CLAIM_VERIFIER_OUTCOME /
-  CLAIM_PROBED events because terminal status wasn't "done". Widened to
-  run on any terminal state that produced ≥1 successful step; kept the
-  *escalation* branches gated on "done" only. (Shipped 2026-04-18 —
-  commit 7f907bd.)
-- [x] **Merged stdout+stderr stream.** `_run_subprocess_safe` pipes both
-  streams into a single temp file via `stderr=subprocess.STDOUT`.
-  Operator view via `/tmp/poe-current-step.log` now matches what the
-  subprocess would print to a terminal. JSON parser tolerant of
-  interleaved non-JSON prose. (Shipped 2026-04-18 — commit b188e5f.)
-- [x] **CPU-activity liveness signal.** Secondary liveness check sums
-  utime+stime across every proc whose session == subprocess pid. A
-  silent-but-computing local model burns CPU → last_seen advances →
-  liveness timer doesn't fire. Protects slow/local-model inference paths
-  from false-kills. (Shipped 2026-04-18 — commit b188e5f.)
 
-### Step-process visibility + elevation (discovered 2026-04-17)
+### Step-to-goal elevation
 
-Run 5 of slycrel-go lost step 9 to a hard 600s wall-clock kill of the
-`claude -p` subprocess. No way to distinguish "hung" from "working hard",
-no partial output captured. Jeremy's framing: "if a step is going to take
-that long, it should probably be a sub-milestone/goal on its own, not
-just a step" — mirrors the ralph-within-structure feedback (a step that
-needs 10+ minutes is a goal the decomposer miscategorized).
-
-- [x] **Heartbeat / liveness timeout.** Stream step subprocess stdout+stderr
-  to disk instead of buffering. Kill on *no output for N seconds*, not
-  wall clock. Partial output survives the kill. See
-  `src/llm.py::_run_subprocess_safe`. (Shipped 2026-04-17 — commit
-  a44eb6a.)
 - [ ] **Step-to-goal elevation.** When a step's elapsed time or token
   spend crosses a threshold, pause it, capture its state, respawn as a
   child goal with its own decompose/execute/verify loop, merge result
@@ -729,47 +325,11 @@ needs 10+ minutes is a goal the decomposer miscategorized).
   wait for heartbeat signal to tell us *which* steps actually need this
   before building.
 
-### Bounded workspace / sandboxing (discovered 2026-04-17)
-
-Run 4 of slycrel-go blind test was contaminated by stale local clones. Four
-`slycrel-go` trees existed on disk (`~/slycrel-go`, `~/.openclaw/.../slycrel-go`,
-`~/.poe/workspace/projects/slycrel-go`, `/tmp/slycrel-go`) — the worker
-surveyed one of them instead of cloning fresh into the expected workspace
-`repo/` subdirectory. Result: step 1 asserted "project already has a
-complete headless server implementation" from the stale tree.
-
-Right behavior: orchestrator should clone the repo into its own workspace,
-not scavenge from elsewhere on the filesystem.
-
-- [ ] **Low-effort: workspace-folder constraint option.** A config flag /
-  per-goal setting that restricts file access (or at minimum, search paths)
-  to the project workspace `repo/` subdir. Not full sandboxing — just
-  "don't wander." Cheap win.
-- [ ] **Medium-effort: document the bounded-workspace spectrum.** Three
-  tiers worth naming: (a) docker/container (full isolation, heavy setup),
-  (b) orchestrator workspace only (soft fence — honor convention, no
-  enforcement), (c) full machine (current default). Short doc in
-  `docs/` noting when to use which and what each protects against.
-- [ ] **Diagnostic: detect scavenging.** Captain's log event when a worker
-  reads a file outside the project workspace root. Cheap instrumentation,
-  makes contamination visible.
-
-Not ambitious; the goal is "constraint to a folder isn't a bad option to
-have" not "build a sandboxing subsystem."
-
----
-
-### Session 20 (2026-04-14) — adversarial review findings (`output/self-review-report-20260414T040637Z-blind.md`)
-
-- [~] **HIGH: Test coverage width not depth** — PARTIAL. pytest-cov with 70% floor: DONE (session 20.5, .coveragerc). Concurrent task_store tests: DONE (session 20.5, +5 tests). End-to-end integration tests: DONE (test_integration.py, 23 tests). Remaining: mutation testing (aspirational, no tooling) and real-LLM-fixture tests (expensive, defer). Item substantially closed.
-- [~] **MINOR: Persona auto-selection missing** — Hallucinated. Auto-selection already exists: `persona.py:793` (`persona_for_goal`) with keyword routing + scoring + LLM fallback + freeform creation; called from `handle.py:615` in AGENDA flow. NOW lane intentionally skips persona injection (1-shot path). No fix needed.
-
 ### Phase 65 — Constraint/Premise Orchestration (proposed, not yet implemented)
 
-See `docs/CONSTRAINT_ORCHESTRATION_DESIGN.md` + `docs/CONSTRAINT_ORCHESTRATION_REVIEW.md`. Items below are the review's sharp findings that must be resolved before code lands.
+See `docs/CONSTRAINT_ORCHESTRATION_DESIGN.md` + `docs/CONSTRAINT_ORCHESTRATION_REVIEW.md`. Items below are the review's sharp findings that must be resolved before code lands. (Persistence-install guardrail pulled out to the Actionable Stack as a standalone safety item.)
 
 - [ ] **BLOCKER: Autonomous-path behavior.** Design says "human gate (unless yolo)" as if binary. Heartbeat/cron path has no channel. Document the behavior: skip? auto-approve after N? block+fail? Default should probably be "log inversion output for post-hoc review, continue with it as planner context, no gate."
-- [ ] **BLOCKER: Persistence-install guardrail for autonomous runs.** Background/scheduled paths (heartbeat, cron-owned jobs, timers, backlog drains) must not be allowed to install or enable persistence mechanisms such as systemd units, launchd agents, cron entries, login items, or long-lived daemon processes without an explicit high-trust gate. April 22 live-box cleanup showed a stale scheduled goal (`Monitor BTC price`, originally created April 4) was later revived and installed both cron and systemd automation. Need a policy-layer guardrail in constraint/orchestration so unattended runs can propose persistence changes but cannot apply them silently.
 - [ ] **BLOCKER: A/B mechanism.** Cannot evaluate "bounded planning produces measurably better outcomes than unbounded planning" without running goals both ways. Build the A/B capability before enabling anywhere. Probably a config flag or `inversion:` prefix.
 - [ ] **BLOCKER: Cost ceiling.** Given April 7-9 token burn, do not ship a feature adding per-goal LLM calls without a per-goal token budget + circuit breaker. Instrumentation first.
 - [ ] **Gate heuristic.** Design's "AGENDA goals above N words" is wrong (short goals often benefit most, long ones often don't). Needs an actual judgment signal — possibly complexity classifier, or "use for goals with ≥3 deliverables."
@@ -807,7 +367,7 @@ See `docs/CONSTRAINT_ORCHESTRATION_DESIGN.md` + `docs/CONSTRAINT_ORCHESTRATION_R
   (c) interaction with completion-standard — does the probe subsume it, or both run?
   (d) cost ceiling — synthesizing + running a probe adds LLM calls and execution time; need per-goal budget.
 
-  Related: BDD (Given/When/Then framing), TDD (red-green cycle), property-based testing (∀ operation, property holds), mutation testing (probe-of-probe bounded version). Sibling of Phase 65 "Scope: verification sibling" blocker above — this IS that sibling.
+  Related: BDD (Given/When/Then framing), TDD (red-green cycle), property-based testing (∀ operation, property holds), mutation testing (probe-of-probe bounded version). Sibling of Phase 65 "Scope: verification sibling" blocker above — this IS that sibling. **Cross-link:** also the sibling of the Actionable "Closure treats failed-to-run commands as checks-passed" item — runtime-probe bias is closure *choosing* static over behavioral probes; the closure-failed-to-run item is closure *mis-reading* the behavioral probes it does choose. Same root: the verdict is decoupled from whether the thing was verified.
 
   **Replay raw numbers** (evidence for the bias finding above): `~/.poe/workspace/projects/slycrel-replay/artifacts/summary.json` — `complete=False, confidence=0.35, 3/5 checks passed`. The two failing probes: (i) overly-strict grep for `!RemoteAddr.*username` false-positived on a legit log line `log.Printf(... username, r.RemoteAddr)`; (ii) `grep -qi xterm web/*` correctly caught that the work summary hallucinated xterm.js integration. The `_CLOSURE_PLAN_SYSTEM` prompt at `director.py:1137` says "Commands must be fast (<15s), safe (read-only or self-cleaning), exit 0 on success. Wrap background processes with `timeout` and always clean up PIDs" — permits live probes but nudges toward grep via path-of-least-resistance.
 
@@ -815,142 +375,158 @@ See `docs/CONSTRAINT_ORCHESTRATION_DESIGN.md` + `docs/CONSTRAINT_ORCHESTRATION_R
 
   **Cross-cutting: adversarial review was the hallucinator on this run.** The loop's own adversarial review contested "Go not installed on this machine" and "headless-browser-client branch does not exist" — both false (Go 1.24.2 at `~/go/bin/go`, branch at `origin/headless-browser-client@4fdf0202`). Step output was substantially accurate; the review fabricated contradictions. Suggests the review path needs the same inversion-at-verification discipline: dispute a claim → run the probe that settles it. Currently reviews reason from priors without grounding.
 
-- [ ] **Closure treats failed-to-run commands as checks-passed (silent-verification bug).** Scope A/B run-00 (2026-04-22 baseline, `~/.poe/experiments/scope-ab-2026-04-22/run-00-treat-preFix-baseline/`) ran closure's generated behavioral-verification commands as subprocesses that inherited a PATH *without* `/home/clawd/go/bin`. Every `go build ... && /tmp/test-server ... && curl ...` compound died at the first `&&` with `go: command not found`. Closure's own summary captured it: *"integration verification failed due to missing Go toolchain in test environment — cannot confirm end-to-end HTTP flow actually works."* Closure then returned `complete=True, confidence=0.75, checks_passed=5/5, gap_count=3`. Deliverable was actually correct (manual post-hoc: server builds, serves `/` HTTP 200 / 5444 bytes, creates sessions on POST `/api/session`) — so this didn't burn us; but the verdict was infra-blind.
+### Composable decision-point hooks (design exploration)
 
-  **Not a hallucination; equivalent in effect.** Model's claims matched reality; the verification layer just couldn't observe them. The bug is in closure's probe-result interpretation: "command returned (even with exit 127)" is being conflated with "check passed." The path fix is trivial (symlinked for this experiment); the detection-mechanism fix is the real work — closure needs to distinguish *"probe affirmatively confirmed the claim,"* *"probe ran and affirmatively refuted,"* *"probe failed to execute / produced no usable signal."* The third case must NOT count toward `checks_passed`. Candidates for implementation:
-  - probes emit a structured verdict (PASS / FAIL / INCONCLUSIVE) instead of free-text output parsed by regex; INCONCLUSIVE never counts as passed
-  - pre-flight: resolve every binary referenced in a probe command via `shutil.which`; if any is missing, mark the probe INCONCLUSIVE and surface "missing tool: X" as a closure gap
-  - detect shell command-not-found via exit 127 + "command not found" in stderr; auto-demote to INCONCLUSIVE
-  - when `checks_passed < checks_run` OR any probe is INCONCLUSIVE, closure should NOT return `complete=True` at confidence > ~0.5 without explicit re-plan
-
-  **Related:** sibling to the "runtime-probe bias" item above. That one is about closure *choosing* static over behavioral probes; this is about closure *mis-reading* the behavioral probes it does choose. Both resolve to: the verification verdict is decoupled from whether the thing was actually verified. Fix one without the other and the same failure surfaces on a different axis.
-
-- [x] **Step runner has no hang protection / no long-lived-process affordance.** Partially closed 2026-04-26 (commit TBD): step_exec.py now classifies long-lived steps via `_is_long_lived_step` (phrase set + verb-noun regex catching "start/launch/run/spawn/boot the X server/service/daemon/listener/broker/worker/api"); when matched, injects `_LONG_LIVED_PROCESS_EXTRA` into user_msg telling the executor to (a) background-spawn (`run_in_background`/`& disown`/`nohup &`), (b) probe readiness via curl/nc/log-grep, (c) call complete_step on readiness signal — not on exit. 14 new tests in `tests/test_step_exec.py::TestIsLongLivedStep` cover the audit case ("Start server with --headless flag on localhost:8080"), each long-lived phrase, the verb-noun regex, and false-positive guards (test/read/analyze steps).
-
-  Original audit case: scope A/B run-02-control (2026-04-23, `~/.poe/experiments/scope-ab-2026-04-22/run-02-control/`) hit step 27 "Start server with --headless flag on localhost:8080", hung indefinitely until SIGTERM (rc=-15). Planner treated "start the server" as a discrete decompose step; the executor had no signal to spawn-and-detach.
-
-  **Still open** (deferred — escalate if observed in the next A/B run):
-  - step-runner hard timeout: per-step wall-clock cap that produces a `requires_background_mode` outcome rather than a generic timeout (currently the adapter-level 600s cap fires, but the step is marked blocked rather than actionable)
-  - decompose-time classification: emit `background=true` on the step manifest so introspection sees the structural mismatch when later steps depend on a non-terminating one
-  - planner prompt change: instruct the decomposer to *not* emit "start server" as a terminal step — servers should start inside a verification step that also probes and shuts down
-
-  **Why this matters:** until this is fully closed, any blind-test goal that produces a long-running binary remains a hazard on the control arm. Scope-injected arms compress to 8 steps and keep server startup inside the verification phase, so they sidestep it; the prompt nudge above should help control arms too.
-
-- [ ] **Rate-limit recovery has no total-backoff cap; recovery path emits phantom `Step -1`.** Scope A/B run-06-control (2026-04-23, `~/.poe/experiments/scope-ab-2026-04-22/run-06-control/`) hit 6 rate-limit retries with exponential backoff (60→120→240→480→960→1800s = 61 min total wall-clock in backoff alone). Per-attempt cap is enforced; **total-backoff-wall-clock is not.** After step 20 finally completed, the recovery path fired with `recovery[NEEDS-REVIEW] risk=medium: Retry with smaller step scope or switch to API adapter` — and produced a `Step -1` marker that the main loop doesn't know how to handle. Run exited rc=1 with no closure verdict. Total runtime: 2h30m for 20 completed steps.
-
-  **Candidates:**
-  - cap total backoff wall-clock at ~10 min; if exceeded, bail cleanly (soft-fail with "rate-limited, retry later" rather than another 30-min sleep)
-  - recovery path should trigger an actual replan (fewer steps, smaller scope) or adapter switch, not a phantom `Step -1` ordinal
-  - while in rate-limit backoff, pause the cost meter or at least annotate "backoff-idle tokens=0" — run-06 showed $41 cost accumulating during 61 min of no real work (cost meter is probably accumulating during retries before the API call; worth auditing)
-
-  **Related:** `decomposition_too_broad` miscalibration (next item). Both are recovery-layer bugs that only surface on long plans.
-
-- [~] **`decomposition_too_broad` threshold is miscalibrated post-scope.** Scope A/B 2026-04-23: every treat run (scope injected) got `DIAGNOSIS: decomposition_too_broad (warning). 8/8 steps done.` — despite 8 being the *narrowest* decomposition achieved across the whole experiment (controls were 15/37/40). The diagnostic threshold was tuned on pre-scope runs; scope-injected plans are now systematically compressed enough to trip the threshold as a baseline. The warning has become noise.
-  - **LARGELY ADDRESSED by the cache-aware conversion (2026-06-22).** The threshold now gates on `fresh_tokens`, not raw volume. Most of the spurious flagging was a step's *cache reads* (subprocess worker re-reading files) counting toward the 200K cap. **Live evidence, same day:** three real runs at **457K / 393K / 547K total tokens** all diagnosed **`healthy`** — none tripped `decomposition_too_broad` — because fresh tokens/step are ~5 (the rest cache reads). The exact scenario that used to flag noise now reads clean. Remaining open question (hence ~, not done): whether a step doing genuinely >200K *fresh* tokens on an otherwise-successful run should warn at all, or only when the loop also shows stress (blocked steps / budget exhaustion). Revisit only if a real fresh-heavy run flags spuriously — the cache fix removed the observed noise source.
-
-  **Candidates:**
-  - re-tune the threshold against the post-scope decomposition distribution (8 steps for a medium-complexity blind-test goal is fine; treat that as the new normal)
-  - condition the threshold on `scope_supplied=true` — scope-gated plans should be *expected* to be tighter
-  - separate "too few steps" from "too many steps" — current single-dimension warning fires on both ends ambiguously
-
-- [x] **`run-03-treat` didn't emit CLOSURE_VERDICT despite reaching adversarial review.** Scope A/B run-03 (2026-04-23): 8/8 steps completed, adversarial review fired (3 claim probes), `decomposition_too_broad` diagnosis logged, rc=0 — but no `CLOSURE_VERDICT` event in captain's log and no `closure check: complete=...` line in handle.log. **Root cause (2026-06-11):** `verify_goal_completion` had three silent `return _null` early-exit paths (`no_checks_generated`, `no_check_results`, `verdict_parse_failed`) and an outer-except path that all returned without emitting CLOSURE_VERDICT. Run-03-treat hit `no_checks_generated` (LLM plan returned empty checks). **Fix:** added `_emit_skip(reason)` local helper emitting CLOSURE_VERDICT with `skip_reason` context before each silent return; outer except now also emits. 4 regression tests added (`test_closure_verdict_emitted_when_no_checks_generated`, `…_no_check_results`, `…_on_exception`, `…_not_emitted_on_dry_run`). Shipped 2026-06-11.
-
-### Introspect-sees-no-action: `decomposition_too_broad` (and siblings)
-
-- [x] **`decomposition_too_broad` fires but nothing acts on it.** Partially closed 2026-04-26: introspect now stamps `LoopDiagnosis.project` so retrieval can prioritize same-project history; `find_relevant_failure_notes` ranks same-project diagnoses above goal-token overlap; `decomposition_too_broad` notes render with concrete numbers (e.g. "Step 8 took 534s with 277K tok") and append the actionable cap (`≤120s/200K tok per step; split if a step touches >3 files`). The next loop on the same project sees this in `lessons_context` ahead of all other failure-pattern injections. Phase 62 (mid-loop redecompose on `_handle_blocked_step`) was already live for the blocked path; this closes the *post-mortem → next-decompose* feedback that was previously generic-lesson-only. Original Apr 16 finding (`loop 85ac29ee-*`) is the canonical case this addresses.
-
-  **Mid-loop visibility added 2026-04-26 (commit TBD):** new `STEP_TOO_BROAD` captain's log event fires the moment a `done` step exceeds both caps (>120s elapsed AND >200K tokens). Wired in `_write_iteration_artifacts` after march-of-nines. Visible in the per-run `captains_log_slice.jsonl` and as a project decision. The post-mortem path already feeds the next decompose; this closes the visibility gap on the in-flight loop. 7 new tests in `tests/test_agent_loop.py` cover the predicate (above caps, below caps, only-one-cap, blocked/skipped/zero-metric guards, EVENT_TYPES registration).
-
-  **Still open** (deferred — needs more A/B data before committing to mid-loop intervention): actually *acting* on the signal mid-loop (kill + replan vs continue with warning logged). Visibility-first is the cheapest credible upgrade today; the action question deserves data on how often the signal fires and whether the loop completes successfully despite it.
-
-### From X research (2026-04-11 — 10 posts, live orchestration, 2 loops)
-
-Full report: `~/.poe/workspace/output/x-research-20260411T081706Z.md`
-
-- [ ] **Large Memory Models (LMMs)** — Engramme: new architecture beyond RAG. Watch list — monitor for API release. **Priority 6/10.** Source: @svpino.
-- [ ] **Google MCP Toolbox** — Opinionated MCP server for data tools. Forward-looking; adopt when JSONL memory needs structured DB. **Priority 5/10.** Source: @_vmlops.
-- [ ] **Polymarket 36GB dataset + backtester** — 72M trades, free on GitHub. Useful for polymarket-backtest skill. **Priority 4/10.** Source: @recogard.
-
-### From real-world regression runs (2026-04-12, session 18 — 4 parallel goals)
-
-Ran 4 live goals: Polymarket research, nootropic synthesis, recipe site build, self-audit.
-
-
-**Test goal results:**
-- Polymarket: 8/8 done, 1.47M tokens, 16min, quality gate PASS (0.85), 3 contested claims
-- Nootropic: 8/8 done, 544K tokens, 12min, quality gate PASS (0.80), 5 contested claims
-- Recipe site: 10/10 done (pending confirmation)
-- Self-audit: 11/11 done, found 5 contradictions + structural bugs, 2 critical races
-
-**Test goals (future runs):**
-- [ ] **Local LLM research** — Research tiny LLMs suitable for bundling with the orchestrator or self-hosting on cheap hardware (e.g. local network). Evaluate: inference speed, quality at orchestration tasks (step decomposition, lesson extraction), memory footprint, quantization options. Goal: reduce API dependency for cheap-tier work.
-- [ ] **Recipe site PM agent** — Recurring goal against slycrel/orchestrator-test-recipes: review code, open issues for missing features, review PRs, suggest architectural improvements. Tests GitHub integration + multi-step judgment.
-- [ ] **Recipe site dev agent** — Recurring goal: pick open issues, implement on branches, open PRs, maintain running Docker instance on this machine. Tests code generation + git workflow + deployment.
-
-
-### From adversarial review (2026-04-12, 3 rounds — haiku + full model)
-- [~] **Semantic memory deduplication** — SUBSTANTIALLY ADDRESSED. `record_lesson()` already does at-write-time near-dedup: exact-text match + word-overlap Jaccard ≥ 0.8 within most-recent 100 lessons. Unbounded growth prevented. Embedding-based similarity (true semantic) remains aspirational P3 — requires API call at every write, cost not justified given current lesson volume.
-
-### Self-Extensibility / Decision Point Hooks (design exploration)
 - [ ] **Composable decision-point hooks** — The system currently has pre/post step hooks (step_events.py), inspector observation, quality gate, and prompt injection (standing rules/lessons/skills into decompose). But these aren't composable: you can't say "after decompose, before execution, run extra verification on steps 3 and 5." MTG-style stack where effects can be intercepted at targeted points. For now, prompt-stage injection is sufficient. Revisit when operational experience shows which decision points actually need interception. Key constraint: any self-extensibility must be human-gated (see evolver guardrail auto-apply fix).
 
 ### Phase Transition Contracts (architecture — revisit after operational data)
+
 - [ ] **Formal stage contracts between pipeline phases** — Currently phase transitions are implicit: decompose outputs strings, execute takes strings, finalize takes outcomes. No typed contracts, no hard validation gates between phases. Pre-flight is advisory-only (loop proceeds regardless). Trajectory check is the first real mid-pipeline gate. Need: (1) typed output contracts per phase (not just "a list of strings" but "atomic steps that cover the goal scope"); (2) hard gates that re-plan or abort instead of proceeding with garbage input; (3) audit which existing checks are load-bearing vs noise. The Starship optimization: delete the advisory checks that never change behavior and replace with fewer, harder gates. Defer until operational data shows which gates actually matter.
 
-### From X research runs (2026-04-09)
+### Phase 38 subpackage move
 
-Six X posts researched via live Poe missions. Actionable items extracted:
-
-- [ ] **TOOLS.md + STYLE.md gaps** — @imjustinbrooke's "7 files to run your business" framework maps to Poe: SOUL.md ✓, AGENTS.md ✓, USER.md ✓, MEMORY.md ✓, HEARTBEAT.md ≈ heartbeat scripts. Missing: explicit TOOLS.md (tool registry covers this partially) and STYLE.md (persona covers this partially). Consider whether explicit files add value.
-- [~] **Eval-driven harness hill-climbing** — Superseded by "Harness hill-climbing as autonomous loop" below (session 30 entry has the concrete wire-up plan: `run_nightly_eval()` → failure trace analysis → harness proposal → evolver suggestion → `_verify_post_apply`). Left here for source attribution: @mr_r0b0t/@ashpreetbedi/@Vtrivedy10.
-- [ ] **Letta API comparison** — @carsonfarmer/@sarahwooders: Anthropic's Managed Agents API mirrors Letta's 1yr-old API. Provider-managed memory = lock-in. Poe's file-based memory is aligned with "memory outside providers" thesis. Monitor Managed Agents API for useful features without adopting their memory model.
-- [ ] **Team OS / shared context layer** — @aakashgupta: 250+ structured docs/quarter compound into organizational knowledge. Validates knowledge layer K1-K2 investment. The "learning flywheel" pattern (each commit makes the repo smarter) is the vision for standing rules + lesson promotion.
-
-### Infrastructure
 - [ ] **Phase 38 subpackage move** — src/ is flat with 49 modules. Deferred (33+ imports per group), revisit when it causes real problems.
 
-### Links fetched but not fully digested
-- [ ] **Polymarket behavioral analysis** (hrundel75) — 400M trades / 2400 wallets. Good prompt for different Polymarket test: "find behavioral patterns not picks."
-- [ ] **Build-your-own-X** (agenticgirl) — 484k star repo, learning methodology. Low priority.
-
-### Steal-list items from Miessler/Zakin (grok-response-3.txt)
-- [ ] **Dashboard: replay as factory mode** — "Replay this run as factory mode" button. Re-runs the original goal but lets evolver inject one self-generated sub-goal from recent signals. Instant Mode 3 visibility. Low priority until dashboard gets real usage.
-- [~] **Eval-driven harness hill-climbing** — Superseded by "Harness hill-climbing as autonomous loop" in the 18-link research runs section below; that entry has the concrete wire-up plan. Source: @mr_r0b0t/@ashpreetbedi.
-
-### From link-farm (2026-04-09–11 batch)
-
-- [ ] **Latent Briefing — KV cache compaction for multi-agent memory** — Ramp Labs paper (quoted by @vral). KV cache compaction technique for efficient context sharing across hierarchical multi-agent systems; eliminates need to pass full .md files between agents. Currently Poe passes context as text files; this approach would let child agents share a compressed parent context layer directly. **Priority 5/10 — monitor until implementation details are public.** Source: @vral.
+### Isolated worktree per sub-agent
 
 - [ ] **Isolated worktree per sub-agent** — from Alpha Batcher's breakdown of Claude Code's architecture (@alphabatcher). Each sub-agent gets its own git worktree so writes don't collide. Relevant to concurrent run safety (Phase 62 project isolation). Current `is_project_running()` + per-project lock file is a simpler version; worktree isolation is stronger. **Priority 6/10 — revisit when parallel missions are actually running.** Source: @alphabatcher.
 
+### Harness hill-climbing as autonomous loop
 
-- [ ] **Kronos financial foundation model** — Nav Toor (@heynavtoor). Open-source time-series model trained on 12B candlestick records from 45 exchanges, 93% more accurate than leading models, zero-shot across any asset/timeframe, 4M–499M param sizes. Available on HuggingFace. **Watch list — if Polymarket research resumes, evaluate as price-prediction layer instead of LLM-based price inference.** Source: @heynavtoor.
+- [ ] **Harness hill-climbing as autonomous loop** — @ashpreetbedi/@mr_r0b0t: use eval benchmark scores as autonomous hill-climbing signal for harness improvement (LangChain TerminalBench 2.0: 52.8→66.5% with no model change). Poe has `eval.py` + `evolver.py` but they're not wired as an autonomous feedback loop. Fix: `run_nightly_eval()` → failure trace analysis → harness proposal → evolver suggestion → `_verify_post_apply`. **Priority 6/10 — closes the verify→learn loop that's currently 80% done.** Source: @ashpreetbedi + @Vtrivedy10. (Collapsed in the eval-driven harness hill-climbing duplicates from the X-research sections.)
 
-### From 18-link research runs (2026-04-14, session 30)
-
-Full reports: `docs/research/ai-agent-memory-synthesis.md`, `docs/research/ai-agent-memory-steal-list.md`, `docs/research/x-posts-steal-list-20260414.md`
-
-
-- [ ] **Eval harness + holdout discipline** — evals = new training data (@realsigridjin/Better Harness). Reward-hacking risk: evolver currently evaluates on the same outcomes it was trained on. Fix: add train/holdout split to `run_nightly_eval()` → evolver validates on holdout set only. Prevents self-congratulatory loops where evolver improves its own eval metrics without improving real behavior. **Priority 6/10 — addresses reward-hacking as system matures.** Source: @realsigridjin.
-
-- [ ] **Harness hill-climbing as autonomous loop** — @ashpreetbedi/@mr_r0b0t: use eval benchmark scores as autonomous hill-climbing signal for harness improvement (LangChain TerminalBench 2.0: 52.8→66.5% with no model change). Poe has `eval.py` + `evolver.py` but they're not wired as an autonomous feedback loop. Fix: `run_nightly_eval()` → failure trace analysis → harness proposal → evolver suggestion → `_verify_post_apply`. **Priority 6/10 — closes the verify→learn loop that's currently 80% done.** Source: @ashpreetbedi + @Vtrivedy10.
-
-- [ ] **Associative JSONL memory links (related_ids)** — Engramme: associative recall surfaces neighboring memories without explicit query. Portable: add `related_ids` field to JSONL memory nodes; cosine-similarity pass in `reflect_and_record()` links new nodes to nearby existing ones; when a node is accessed, inject linked neighbors. Approximate associative recall at file-based scale. **Priority 5/10 — medium effort, enhances memory depth.** Source: @svpino/Engramme.
+### Dumb loop audit (scaffolding designed to be removed)
 
 - [ ] **Dumb loop audit (scaffolding designed to be removed)** — Alpha Batcher breakdown of Claude Code: Anthropic's deliberate "thin harness" philosophy. Each scaffold should pass the future-proof test: dropping in a more powerful model should improve performance WITHOUT requiring harness complexity changes. Run a scaffolding audit on agent_loop.py — label each check as load-bearing vs removable. Manus precedent: rebuilt agent 5× in 6 months, each rewrite removed complexity. **Priority 5/10 — strategic/architectural, no code cost.** Source: @alphabatcher/@akshay_pachaar.
 
-### Grok Round 4 feedback (2026-04-07)
-- [ ] **SERV model family** — (open_founder tweet) "SERV-nano matched GPT-5.4 at 20x lower cost and 3x speed." New model family worth tracking as potential OpenRouter routing option. Research: is there an API? What benchmarks? Low priority until available.
+### Agentic verifier for large artifacts
 
-## Test Ideas
+- [ ] **Agentic verifier for large artifacts.** Today the validator sees a bounded
+  in-context slice of the result (`validate.max_input_chars`, default 6000 for the
+  free local path vs 1200 paid). For multi-KB artifacts, stuffing the whole thing
+  into context is wasteful — a tool-using verifier that reads the artifact
+  selectively (grep/read a temp file) is the better pattern. Caveat: that needs
+  tool use, which a small specialist (VibeThinker) is weak at — so scope it as an
+  opt-in verifier tier, not the default. (Input/output limits are separate knobs:
+  `max_input_chars` = what it sees; `local_max_tokens` = what it can generate.)
 
+### Model bake-off
+
+- [ ] **Model bake-off.** Compare candidate local validators (VibeThinker-3B 8bit vs
+  4bit vs 1.5B; a Qwen2.5-Coder tune; an Ollama option for the Linux box) on the same
+  eval set. Confirm a 3B-class model is "good enough" on a generally modern machine
+  (≥16 GB RAM; 4-bit for 8 GB) before standardizing on one.
+
+### Closure demotion doesn't reach the outcome store
+
+- [ ] **Closure demotion doesn't reach the outcome store** — when handle's
+  closure verdict demotes done→incomplete (02b0263), run metadata is honest
+  (recall/guard read that) but the loop already called reflect_and_record
+  with status=done from inside agent_loop's finalize — so outcomes.jsonl and
+  any lessons extracted carry the un-demoted framing. Small mismatch, noted
+  not fixed: moving reflection after closure would delay it for every run to
+  serve the rare demotion; an outcome-amendment hook is probably the right
+  shape if this starts to matter.
+
+### "Count the files" closure scope
+
+- [ ] **"Count the files" closure blessed two different answers** — same goal,
+  loop 1 counted 45 (docs/ top-level), gate-escalated loop 2 counted 80
+  (recursive); *both* closure verdicts called their count "correct and
+  verified". Ground truth: both defensible readings of an ambiguous goal —
+  but closure verification inherits the executor's interpretation instead of
+  pinning one. Resolved-intent/scope is the existing seam that should pin
+  countable deliverables ("N = recursive count") before execution.
+
+### First in-process consolidation gc policy
+
+- [ ] **First in-process consolidation gc'd the whole MEDIUM lesson store** —
+  5 weeks of decay-age applied in one cycle (decayed 38, promoted 0, gc 38).
+  Arguably correct on stale data (M2 promotes at reinforcement time, LONG
+  survived: 22), but a gentler policy for long-gap catch-up (cap effective
+  decay-days? amnesty pass?) is worth considering before the store matters.
+
+### Standing test-goal menu (future ideas)
+
+- [ ] **Recipe site PM agent** — Recurring goal against slycrel/orchestrator-test-recipes: review code, open issues for missing features, review PRs, suggest architectural improvements. Tests GitHub integration + multi-step judgment.
+- [ ] **Recipe site dev agent** — Recurring goal: pick open issues, implement on branches, open PRs, maintain running Docker instance on this machine. Tests code generation + git workflow + deployment.
 - [ ] **Polymarket behavioral test** — "Analyze 400M+ Polymarket trades to find behavioral patterns among top wallets — what do winners do differently?" (from hrundel75 link)
 - [ ] **"Get Jeremy rich" prompt** — long-term, after trading patterns are validated and backtested. Baby steps.
 
-## Completed (archive)
+### Conservative — verify before dropping
 
-Items moved here when done, for reference:
+These four are kept (not deleted) this triage pending verification against current code/data.
 
+- [ ] **done != achieved, confirmed on organic runs — and the gap is large.** (verify before dropping)
+  First organic batch through the new goal-verdict metadata (2026-06-12, 5
+  real goals): 4 came back `done` but only **1** had `goal_achieved=True`. The
+  three done-but-not-achieved (health-report refresh, roadmap audit, weekly
+  digest) all wrote a structurally-correct artifact the closure verdict judged
+  as falling short — "file created and non-empty" / "5/6 checks" — at low
+  confidence (0.2–0.35). Two implications: (1) the done≠successful split is
+  doing exactly its job — without it this batch reads as 80% success; with it,
+  20% genuinely achieved, the rest flagged for review. Validates Jeremy's
+  "done as 'I did it' not 'it worked'" concern with live data. (2) The verdict
+  confidences are *low* — these are doubt flags, not definitive failures, and
+  they correctly stay `done` (below the 0.7 demotion threshold) rather than
+  flipping to incomplete. Open question worth watching: is the closure verifier
+  systematically harsh on build-artifact goals (false-negative achievement), or
+  are these outputs genuinely thin? Needs a few more organic batches + spot
+  audits before trusting the rate. Don't tune the threshold on n=5.
 
-From jeremy (clean up and integrate with the above later)
-- [ ] Examine the research in research/orchestration-knowledge-layer, and the follow-up research in docs/knowledge-layer (and consolidate into one or the other location). document proper implementation paths and implement the framework, with notes on how to flesh this out as needed. **Note (2026-04-10):** Tracked above in "Memory / Knowledge Layer" section. K0 baseline done; memory.py decomposition + K1-K8 implementation plan needed.
+- [~] **`decomposition_too_broad` residual.** (verify before dropping) The cache-aware conversion (2026-06-22) removed the observed noise source; remaining open question is whether a step doing genuinely >200K *fresh* tokens on an otherwise-successful run should warn at all, or only when the loop also shows stress (blocked steps / budget exhaustion). Revisit only if a real fresh-heavy run flags spuriously. (Full block archived to BACKLOG_DONE; this is the residual watch-item.)
+
+- [ ] **Per-class routing (gathering shadow-eval data).** (verify before dropping — open children retained) Expect high agreement on
+  verifiable code/math steps, low on fuzzy research-quality steps. Once the
+  `--agreement` table has enough rows, route only the classes where the local judge
+  earns it (per-class `min_certainty`); keep the rest on the paid path. Don't trust
+  benchmark parity globally.
+  **First data (2026-06-23, n=29, qwen2.5-coder:3b vs paid):** overall agreement
+  96.6%, **0 false_pass across every class** (the dangerous direction — local PASS /
+  paid FAIL — never happened). Per class: analyze 4/4, exec_command 4/4, synthesize
+  3/3, read_artifact 1/1 all 100%; `general` 16/17 (94.1%) with the lone miss a
+  **false_fail** (local FAIL@0.90 vs paid PASS on a routine file-save — local was
+  *too strict*, costs a wasted escalation, not a missed defect). Surprise: the fuzzy
+  synthesize/analyze essay-critique steps held at 100% — divergence showed up on a
+  mundane `general` step, not the subjective work we expected to break it.
+  Calibration: 0.9–1.0 bucket = 96.6% (slightly overconfident, erring strict).
+  **Caveat: 29 rows is a smoke sample, not enough to set thresholds.** Next: a larger
+  deliberate batch (more runs with diverse step mixes) before committing per-class
+  `min_certainty` — and watch specifically for any `false_pass`, since that's the
+  only error direction that can let a real defect through.
+  **Larger batch (2026-06-24, n=42):** 92.9% overall, and the **first `false_pass`
+  appeared** — `general` class, local PASS@**1.00** vs paid FAIL. The step was
+  "list skills/ and save the listing to `artifacts/skills-listing.txt`"; the worker
+  saved to a *different* path and narrated success. Local can't see the artifact
+  never landed where asked — a requirement/side-effect miss, not a confidence
+  problem (it fired at max confidence). Concrete classes held: exec_command 5/5,
+  analyze 5/5, synthesize 3/3 — 100%, 0 false_pass; read_artifact 4 (75%, all misses
+  false_fail/safe). **Decision: do NOT set per-class `min_certainty`.** (a) The
+  safe-class n (3–5) is too small to justify lowering thresholds; (b) the danger
+  class `general` can't be made safe by a threshold — the false_pass was at conf
+  1.00. The lever the data actually points at is **provenance verification** (did
+  the side effect land / was the requirement met?), which is the same root as the
+  fabricated-input bug and is exactly the closure-verdict-provenance-net item above.
+  So #3 feeds #2. Keep global `min_certainty: 0.6`; revisit per-class only after the
+  safe-class corpus is much larger. Full write-up: `docs/LOCAL_VALIDATOR.md`.
+
+---
+
+## Stale — dropped this triage
+
+Titles deleted as obsolete (auditable; full history in git):
+
+- Build-loop "Define the success condition operationally" + "Preserve health-only heartbeat semantics" notes
+- Per-class-routing "decided" sub-item (the decided routing paragraph; open children local_max_tokens / agentic-verifier kept)
+- done≠achieved finding (the closure-demotion-not-reaching-outcome-store-adjacent organic batch — retained as a conservative watch-item, not dropped)
+- X research watch-lists (Large Memory Models, Google MCP Toolbox, Polymarket 36GB dataset / TOOLS.md+STYLE.md gaps, Letta API comparison, Team OS / shared context layer)
+- Local-LLM-research test goal
+- Links-not-digested (Polymarket behavioral analysis, Build-your-own-X)
+- Miessler steal-list (Dashboard: replay as factory mode; superseded eval-driven harness hill-climbing dup)
+- Latent Briefing / Kronos / Eval harness + holdout / Associative JSONL memory links (link-farm + 18-link watch entries)
+- SERV model-watch
+- Trailing K-layer dup ("Examine the research in research/orchestration-knowledge-layer..." — already tracked under Memory/Knowledge Layer)
+
+---
+
+Full history in [BACKLOG_DONE.md](BACKLOG_DONE.md).

@@ -10,7 +10,7 @@ always_inject: false
 
 Operational substrate everything runs on. Model-agnostic, cost-aware, resilient.
 
-## LLM Adapter Hierarchy (llm.py, ~1168 lines)
+## LLM Adapter Hierarchy (llm.py, ~1700 lines)
 
 Unified `.complete(messages, tools, ...)` interface across backends:
 
@@ -46,7 +46,7 @@ Workspace inherits from user; workspace keys override. Nested dicts merge one le
 Access: `from config import get; get("inspector.breach_threshold", 0.30)`
 Priority: env var > config.yml > hardcoded default.
 
-## Heartbeat (heartbeat.py, ~998 lines)
+## Heartbeat (heartbeat.py, ~1100 lines)
 
 Periodic health check + tiered self-healing (runs every 60s in loop mode):
 
@@ -115,10 +115,11 @@ Per-model, per-step-type cost tracking to `memory/step-costs.jsonl`:
 
 | File | Lines | Role |
 |------|-------|------|
-| src/llm.py | ~1168 | Adapter hierarchy, model abstraction, thinking budget, advisor |
-| src/config.py | ~243 | Two-tier YAML config |
-| src/heartbeat.py | ~998 | Health checks, session guard, backlog drain |
-| src/orch_items.py | ~653 | Project/item management, NEXT.md |
-| src/task_store.py | ~419 | File-per-task queue, DAG deps |
-| src/metrics.py | ~582 | Cost tracking, step classification |
+| src/llm.py | ~1700 | Adapter hierarchy, model abstraction, thinking budget, advisor |
+| src/config.py | ~250 | Two-tier YAML config |
+| src/heartbeat.py | ~1100 | Health checks, session guard, backlog drain |
+| src/orch_items.py | ~655 | Project/item management, NEXT.md |
+| src/task_store.py | ~425 | File-per-task queue, DAG deps |
+| src/metrics.py | ~615 | Cost tracking, step classification |
+| src/observe.py | ~1690 | Observe dashboard (runtime visibility) |
 | scripts/heartbeat-ctl.sh | | Lifecycle management (start/stop/status) |
