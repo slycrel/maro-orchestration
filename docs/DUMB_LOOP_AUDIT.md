@@ -270,6 +270,41 @@ transiently fail but recover. That's the next data to gather (flip
 `navigator.shadow_blocked_step` on for an organic batch). No cutover argument
 from probe data alone.
 
+### Round 3 — first organic data (2026-06-23/24, 12 real goals, 2 batches)
+
+Flipped `shadow_blocked_step` on and ran 12 real goals across 2 batches
+designed for block surface (combined exec+analyze → structural split; network
+fetches; multi-step). **Yield: 2 organic recoverable blocks.** Organic blocks
+are rare/expensive on this box — 4 of every 6 goals hit the wall-clock
+`timeout` and were SIGKILLed mid-step, never reaching the blocked-step handler;
+the combined exec+analyze goals were atomized by decompose and didn't block.
+Both organic blocks were network-fetch transients:
+
+| when | navigator | heuristic | class |
+|---|---|---|---|
+| 2026-06-24T02:14 | execute(0.88) | extend | recoverable (fetch transient) |
+| 2026-06-24T03:04 | execute(0.90)  | extend | recoverable (fetch transient) |
+
+**Finding — the false-escalate question, preliminary answer: no false
+escalates.** On both organic recoverable blocks the navigator chose `execute`
+(keep going), not escalate/close. The divergence from the heuristic was
+`execute`-vs-`extend` — both *forward* moves (run-the-work vs retry-with-hint),
+the benign direction. Contrast the 5 doomed-goal probe rows, where the
+navigator chose escalate/close. So the navigator is **not** uniformly
+escalating every block; it keeps going on recoverable ones and stops the doomed
+ones.
+
+**Calibration signal:** confidence tracks correctness direction —
+escalate/close on doomed blocks fires at 0.95+, keep-going on recoverable
+blocks fires at 0.88–0.90. The navigator is appropriately *less* certain when
+it decides to continue. Good sign for a confidence-floored cutover.
+
+**Still bounded:** n=2 organic, all one class (network-fetch transient). Clean
+and consistent, but not a rate. The other recoverable classes (LLM-confusion
+retries, redecompose-recoveries) are unsampled. No blocked_step cutover yet —
+let organic data accrue across future deliberate batches; gate stays OFF
+between them (per-blocked-step model call = real spend).
+
 ## Known gaps (carried to BACKLOG when actionable)
 
 - No calibration tracking for director escalation confidence (≥5 gate).
