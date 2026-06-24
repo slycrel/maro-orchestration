@@ -1082,6 +1082,63 @@ def test_handle_blocked_step_missing_reason_uses_fallback():
 
 
 # ---------------------------------------------------------------------------
+# Missing-external-input guard (anti-fabrication)
+# ---------------------------------------------------------------------------
+
+def test_missing_input_read_step_escalates_not_retries():
+    """A read step whose file is absent → honest stuck on FIRST block, no retry."""
+    decision = _handle_blocked_step(
+        step_text="read /nonexistent/poe-test/data.csv and compute the mean of column 2",
+        outcome={"stuck_reason": "No such file or directory: /nonexistent/poe-test/data.csv",
+                 "result": ""},
+        prior_retries=0,
+        adapter=None,
+    )
+    assert decision.retry is False
+    assert decision.loop_status == "stuck"
+    assert decision.redecompose is False
+    assert decision.split_into == []
+    assert decision.stuck_reason.startswith("MISSING_INPUT:")
+
+
+def test_missing_input_detected_in_step_result():
+    """The missing-resource signal may be in result, not stuck_reason."""
+    decision = _handle_blocked_step(
+        step_text="load config from /etc/poe/missing.yml",
+        outcome={"stuck_reason": "blocked",
+                 "result": "Traceback: FileNotFoundError: [Errno 2] ENOENT"},
+        prior_retries=0,
+        adapter=None,
+    )
+    assert decision.retry is False
+    assert decision.stuck_reason.startswith("MISSING_INPUT:")
+
+
+def test_missing_input_producing_step_not_short_circuited():
+    """A 'create' step that doesn't yet find its target is NOT a missing-input fail."""
+    decision = _handle_blocked_step(
+        step_text="create report.csv with the summary table",
+        outcome={"stuck_reason": "file not found", "result": ""},
+        prior_retries=0,
+        adapter=None,
+    )
+    # Not input-consuming → falls through to normal retry, not the guard.
+    assert not decision.stuck_reason.startswith("MISSING_INPUT:")
+
+
+def test_input_consuming_step_normal_error_not_short_circuited():
+    """A read step with an ordinary transient error still retries normally."""
+    decision = _handle_blocked_step(
+        step_text="read the dataset from the API",
+        outcome={"stuck_reason": "network timeout", "result": ""},
+        prior_retries=0,
+        adapter=None,
+    )
+    assert decision.retry is True
+    assert not decision.stuck_reason.startswith("MISSING_INPUT:")
+
+
+# ---------------------------------------------------------------------------
 # Phase 62: Convergence tracking + metacognitive decisions
 # ---------------------------------------------------------------------------
 
