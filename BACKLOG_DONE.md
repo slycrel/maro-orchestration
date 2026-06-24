@@ -8,6 +8,20 @@ Last split: 2026-04-16 (session 34).
 
 ---
 
+### Closure treats failed-to-run commands as checks-passed — FIXED (2026-06-24 backlog-audit catch)
+
+**Source:** Actionable Stack #2. Scope A/B run-00 (2026-04-22): closure ran behavioral-verification commands as subprocesses with a PATH missing `/home/clawd/go/bin`; every compound died at the first `&&` with `go: command not found`, yet closure returned `complete=True, confidence=0.75, checks_passed=5/5`. The verification verdict was decoupled from whether anything was actually verified.
+
+**What shipped (verified in code 2026-06-24):** `src/director.py:_check_outcome(exit_code, stderr)` (1343) classifies a probe as `pass` (exit 0), `inconclusive` (exit -1/126/127, or stderr matching "command not found"/"not on path"/"no such file or directory"/"timeout"), or `fail`. Probe results carry an `outcome` field; `verify_goal_completion` computes `inconclusive_checks = [r ... outcome == "inconclusive"]` (1578) and then **forces the verdict down** (1669–1681): `if complete and inconclusive_checks: complete = False`, confidence clamped to 0.6, and a gap "N verification probe(s) were inconclusive and cannot be counted as proof of completion" is appended. `inconclusive_count` is surfaced on the `ClosureVerdict` and the `CLOSURE_VERDICT` event. This is exactly the demanded behavior: INCONCLUSIVE never counts as passed, and an inconclusive probe blocks `complete=True`.
+
+(Found still listed as open during the 2026-06-24 audit; the fix predated the audit. Sibling "runtime-probe bias" item in Vision/Deferred is a different axis — closure *choosing* static over behavioral probes — and remains open.)
+
+### handle.py prefix registry (AFK chunk) — DONE (2026-06-24 backlog-audit catch)
+
+**Source:** Actionable Stack #10. `apply_prefixes()` was a chain of if/elif on magic strings (`ralph:`, `verify:`, `pipeline:`, `strict:`, `effort:`, etc.); "what modifiers exist?" required reading the whole chain.
+
+**What shipped (verified in code 2026-06-24):** `src/handle.py` now has a `_PrefixRule` dataclass (52), a `_PrefixResult` (61), a declarative `_PREFIX_REGISTRY: List[_PrefixRule]` (77) holding the rule set, and `_apply_prefixes(message) -> _PrefixResult` (98) that iterates the registry preserving stacking semantics. Called at handle.py:889. "What modifiers exist?" is now a one-line grep of `_PREFIX_REGISTRY`. Regression risk was low (tests already covered every modifier) and the suite is green.
+
 ### agent_loop.py monolith decomposition — COMPLETE (Phase F extracted, 2026-06-24)
 
 **Source:** project_monolith_extraction.md memory; long-running incremental refactor (`LoopPhase` + `LoopContext` seam shipped early, phases A–E + G extracted across prior sessions).
