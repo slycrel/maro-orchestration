@@ -125,11 +125,12 @@ have" not "build a sandboxing subsystem."
 Surfaced by the 2026-06-24 inventory that produced `docs/CAPTAINS_LOG_EVENTS.md`.
 Two drift classes, both cheap to fix:
 
-- [ ] **3 emitted-but-unregistered events.** `EVOLVER_REVERTED` (evolver.py:664),
+- [x] **3 emitted-but-unregistered events.** ~~`EVOLVER_REVERTED` (evolver.py:664),
   `EVOLVER_VERIFY` (evolver.py:2072), `PLAYBOOK_UPDATED` (playbook.py:235) fire in
-  production via string literals not in `captains_log.EVENT_TYPES`. Any consumer
-  that validates against `EVENT_TYPES` silently drops them. Add the three
-  constants + register them, switch emitters to the constants.
+  production via string literals not in `captains_log.EVENT_TYPES`.~~ **DONE
+  2026-06-24:** added the 3 constants + registered them in `EVENT_TYPES`, switched
+  emitters to the constants, bumped the count-guard test (49→52) + added a
+  membership test.
 - [ ] **3 defined-but-unemitted events.** `CANON_CANDIDATE`, `LESSON_RECOVERED`,
   `SKILL_REWRITE` are in `EVENT_TYPES` but nothing emits them. `SKILL_REWRITE` is
   worse — it's referenced by consumers (`recall.py:54`, `evolver.py:995`) yet never

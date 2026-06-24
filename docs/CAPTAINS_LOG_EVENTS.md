@@ -80,9 +80,10 @@ Written by `captains_log.log_event(...)`. Every entry has the four required fiel
 | `EVOLVER_GENERATED` | evolver.py:1889 | run_id, outcomes_reviewed, suggestions, auto_applied, patterns | An evolver cycle ran and produced improvement suggestions. |
 | `EVOLVER_APPLIED` | evolver.py:353 | suggestion_id, category, confidence | A low-risk evolver suggestion was auto-applied. |
 | `EVOLVER_SKIPPED` | evolver.py:1902 | run_id, outcomes_reviewed | An evolver cycle ran but produced nothing to apply. |
-| `EVOLVER_REVERTED` | evolver.py:663 *(unregistered — see gaps)* | suggestion_id, category, target | An applied suggestion was rolled back. |
-| `EVOLVER_VERIFY` | evolver.py:2071 *(unregistered — see gaps)* | run_id, auto_applied, passed, summary, reverted | Post-apply verification (pytest) ran on auto-applied changes. |
+| `EVOLVER_REVERTED` | evolver.py:664 | suggestion_id, category, target | An applied suggestion was rolled back. |
+| `EVOLVER_VERIFY` | evolver.py:2072 | run_id, auto_applied, passed, summary, reverted | Post-apply verification (pytest) ran on auto-applied changes. |
 | `GRADUATION_PROPOSED` | graduation.py:353 | category, confidence | A repeated failure-class diagnosis was proposed for graduation to a permanent fix. |
+| `PLAYBOOK_UPDATED` | playbook.py:235 | source, section | A line was appended to a playbook section (director's operational wisdom). |
 
 ### Recovery & diagnosis
 
@@ -150,9 +151,9 @@ These are not bugs in running code, but contract drift worth tracking. They live
 
 Note `SKILL_REWRITE` is worse than merely unemitted: it is **referenced by consumers** (`recall.py:54` and `evolver.py:995` both list it in their event-of-interest sets) while nothing ever produces it — a dead expectation. The skill-rewrite path either never logs, or logs under a different event.
 
-### Emitted but NOT registered in `EVENT_TYPES` (3)
+### Emitted but NOT registered in `EVENT_TYPES` (3) — FIXED 2026-06-24
 
-`EVOLVER_REVERTED` (evolver.py:663), `EVOLVER_VERIFY` (evolver.py:2071), `PLAYBOOK_UPDATED` (playbook.py:234). These fire in production with string literals that aren't in the `EVENT_TYPES` set. Consumers that validate against `EVENT_TYPES` (e.g. a strict renderer or filter) will silently drop them. Fix: add the three constants to `captains_log.py` and the `EVENT_TYPES` set, and switch the emitters to the constants.
+`EVOLVER_REVERTED` (evolver.py:664), `EVOLVER_VERIFY` (evolver.py:2072), `PLAYBOOK_UPDATED` (playbook.py:235) fired in production with string literals not in the `EVENT_TYPES` set, so consumers that validate against it silently dropped them. **Fixed:** the three constants were added to `captains_log.py` + the `EVENT_TYPES` set, and the emitters now use the constants. They are listed in the tables above.
 
 ### Multi-signature events
 

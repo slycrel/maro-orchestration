@@ -230,9 +230,9 @@ def append_to_playbook(
     # Captain's log (outside lock — doesn't need file exclusivity)
     if entry_line:
         try:
-            from captains_log import log_event
+            from captains_log import log_event, PLAYBOOK_UPDATED
             log_event(
-                event_type="PLAYBOOK_UPDATED",
+                event_type=PLAYBOOK_UPDATED,
                 subject=section,
                 summary=entry_line[:200],
                 context={"source": source, "section": section},

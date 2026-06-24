@@ -230,7 +230,16 @@ class TestEventTypes:
         assert DECISION_RECORDED in EVENT_TYPES
 
     def test_event_type_count(self):
-        assert len(EVENT_TYPES) == 49
+        # +3 (2026-06-24): EVOLVER_REVERTED, EVOLVER_VERIFY, PLAYBOOK_UPDATED —
+        # previously emitted via string literals but missing from the set, so
+        # consumers validating against EVENT_TYPES silently dropped them.
+        assert len(EVENT_TYPES) == 52
+
+    def test_previously_unregistered_events_in_set(self):
+        from captains_log import EVOLVER_REVERTED, EVOLVER_VERIFY, PLAYBOOK_UPDATED
+        assert EVOLVER_REVERTED in EVENT_TYPES
+        assert EVOLVER_VERIFY in EVENT_TYPES
+        assert PLAYBOOK_UPDATED in EVENT_TYPES
 
     def test_navigator_acted_in_set(self):
         from captains_log import NAVIGATOR_ACTED

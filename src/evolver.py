@@ -659,9 +659,9 @@ def revert_suggestion(suggestion_id: str) -> dict:
 
     # Captain's log
     try:
-        from captains_log import log_event
+        from captains_log import log_event, EVOLVER_REVERTED
         log_event(
-            event_type="EVOLVER_REVERTED",
+            event_type=EVOLVER_REVERTED,
             subject=suggestion_id,
             summary=f"Reverted suggestion {suggestion_id} ({category}): {detail}",
             context={"suggestion_id": suggestion_id, "category": category, "target": target},
@@ -2067,9 +2067,9 @@ def _verify_post_apply(applied_ids, run_id: str, *, verbose: bool = False) -> No
 
     # Captain's log
     try:
-        from captains_log import log_event
+        from captains_log import log_event, EVOLVER_VERIFY
         log_event(
-            event_type="EVOLVER_VERIFY",
+            event_type=EVOLVER_VERIFY,
             subject=f"run-{run_id}",
             summary=f"Post-mutation tests {'PASSED' if passed else 'FAILED'} after {auto_applied} auto-applied suggestions. {summary}",
             context={"run_id": run_id, "auto_applied": auto_applied, "passed": passed,
