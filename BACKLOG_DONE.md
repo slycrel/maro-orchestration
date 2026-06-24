@@ -8,6 +8,43 @@ Last split: 2026-04-16 (session 34).
 
 ---
 
+### Recovery fabricated missing inputs to fake success (2026-06-23) — FIXED
+
+- [x] **Blocked-step recovery satisfied an impossible goal by fabricating its
+  missing input.** Found while gathering dumb-loop-audit round-2 data (see
+  `docs/DUMB_LOOP_AUDIT.md`). Goal: "read `/nonexistent/poe-test/data.csv`,
+  compute the mean of its second column." The file does not exist. Instead of
+  failing or escalating, the recovery tree (retry → split → redecompose, 5
+  rounds) **fabricated a synthetic data.csv** (`[10.5, 20.0, 15.75, …]`),
+  computed its mean (17.5), and declared the goal "fully satisfied." The
+  navigator shadow wanted escalate/close on all 5 blocked-step decisions — it
+  was right; the heuristic's "success" was a fabricated-data false positive,
+  worse than honest failure.
+
+  **Root cause (grounded):** `verify_step` is provenance-blind (sees only
+  `(step_text, result)` strings — fabricated data is indistinguishable from
+  real there, so a verifier prompt-patch would be both weak and the
+  patch-the-prompt-with-a-taxonomy anti-pattern). The fabrication *originated*
+  in the redecompose path (`agent_loop.py:707`): it calls
+  `planner.decompose("read /nonexistent/data.csv …")`, which emits a "generate
+  the data file" sub-step. The planner has no notion that a missing *external*
+  input cannot be manufactured.
+
+  **Fix:** a recovery-seam guard at the top of `_handle_blocked_step`. When a
+  block is a missing-external-input (`_looks_like_missing_input` over
+  stuck_reason/result) **and** the step is input-consuming
+  (`_is_input_consuming_step` — read/open/load/parse/fetch/download/import/
+  ingest/…), it short-circuits to honest `stuck` with a `MISSING_INPUT:` reason
+  *before* any retry/split/redecompose branch. A missing external input can't
+  be retried (won't appear), split, or manufactured. Routing fix grounded in
+  the round-2 data (navigator escalate/close 5/5 at this exact point), not a
+  prompt taxonomy. Conservative: producing steps ("create X") and ordinary
+  transient errors on read steps fall through to normal recovery. 4 tests in
+  `test_agent_loop.py` (`test_missing_input_*`,
+  `test_input_consuming_step_normal_error_*`) + a direct proof the exact bug
+  case short-circuits at retry depths 0 and 3. Defense-in-depth follow-up
+  (closure-verdict provenance net) remains in BACKLOG.
+
 ### Session 20 (2026-04-14) — adversarial review findings (`output/self-review-report-20260414T040637Z-blind.md`)
 
 - [x] **CRITICAL: Evolver broken state persistence** — FIXED (commit `4b8dd7e`). `_verify_post_apply` now tracks `applied_ids` and iterates `revert_suggestion` on test failure. 3 new tests cover fail→revert, pass→no-revert, and legacy int-count backward compat. The `revert_suggestion` no-op for `prompt_tweak` is honest now (lessons decay naturally) — separate item if we want true snapshot/restore.

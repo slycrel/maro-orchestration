@@ -244,6 +244,22 @@ file. That is a worse outcome than the navigator's escalate/close. Logged as a
 BACKLOG correctness item (recovery should not satisfy a goal by fabricating its
 missing inputs).
 
+**FIXED (2026-06-23).** A recovery-seam guard now short-circuits this class
+*before* any retry/split/redecompose. At the top of `_handle_blocked_step`, a
+block whose error reads like a missing external resource
+(`_looks_like_missing_input`) on an input-consuming step
+(`_is_input_consuming_step` — read/open/load/parse/fetch/download/import/ingest)
+returns an honest `stuck` with a `MISSING_INPUT:` reason. A missing external
+input can't be retried (won't appear), split, or manufactured — so the
+re-decompose path that conjured the synthetic data.csv is now unreachable for
+this class. Grounded in this very table (navigator escalate/close 5/5 here), and
+it's a routing fix, not a verifier prompt-patch (`verify_step` is
+provenance-blind — it can't tell fabricated data from real). Proof: the exact
+bug goal short-circuits at retry depths 0 and 3; 4 new tests in
+`test_agent_loop.py`. A path-independent closure-verdict provenance net remains
+a BACKLOG follow-up (defense-in-depth for fabrication that arrives by other
+paths). See BACKLOG_DONE.md.
+
 **Caveat — bounds everything above:** n=5 from a *single deliberately-impossible
 goal*. This is probe data, exactly like the dispatch round-1 corpus. It shows
 the navigator catches an unrecoverable block, but it **cannot** distinguish

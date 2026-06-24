@@ -2872,6 +2872,47 @@ _SIBLING_THRESHOLD = 0.5     # >50% sibling failure → redecompose parent
 _REDECOMPOSE_THRESHOLD = 2   # max re-decompositions before flagging stuck
 _NEED_INFO_PREFIX = "NEED_INFO:"  # step output prefix requesting more context
 
+# A required external input is absent (file/url/resource does not exist). Such a
+# block must NOT be retried (the resource won't appear), split, or re-decomposed
+# (re-decomposition manufactures a synthetic stand-in and fakes success — see the
+# fabricated-input false-success bug, dumb-loop audit round 2). It is an honest
+# escalate/fail: ask for the real input, don't conjure one.
+_MISSING_INPUT_SIGNALS = (
+    "no such file or directory",
+    "no such file",
+    "no such path",
+    "filenotfounderror",
+    "errno 2",
+    "enoent",
+    "does not exist",
+    "doesn't exist",
+    "cannot find",
+    "could not find",
+    "couldn't find",
+    "404",
+    "not found",
+)
+
+# Verbs that mean the step *consumes* an external input (vs. produces one). We
+# only short-circuit on missing-input when the step was trying to read it — a
+# "create X" step legitimately may not find X yet.
+_INPUT_CONSUMING_KEYWORDS = (
+    "read ", "open ", "load ", "parse ", "fetch ", "download ", "import ",
+    "ingest ", "contents of", "from the file", "from the url", "cat ",
+)
+
+
+def _looks_like_missing_input(text: str) -> bool:
+    """True if text reads like a referenced external resource is absent."""
+    low = (text or "").lower()
+    return any(sig in low for sig in _MISSING_INPUT_SIGNALS)
+
+
+def _is_input_consuming_step(step: str) -> bool:
+    """True if the step's job is to consume an external input (read/fetch/load)."""
+    low = (step or "").lower()
+    return any(kw in low for kw in _INPUT_CONSUMING_KEYWORDS)
+
 # ---------------------------------------------------------------------------
 # Loop context / decompose helpers
 # ---------------------------------------------------------------------------
@@ -3282,6 +3323,29 @@ def _handle_blocked_step(
             stuck_reason="",
             split_into=_research_steps + [step_text],  # research first, then retry original
             metacognitive_reason=f"step requested info: {_info_needed[:100]}",
+        )
+
+    # Missing external input: the step tried to consume a resource (file/url)
+    # that does not exist. Retrying won't make it appear; splitting won't help;
+    # re-decomposing FABRICATES a synthetic stand-in and fakes success (the
+    # fabricated-input false-success bug). Honest escalate/fail instead — the
+    # navigator wanted escalate/close 5/5 at exactly this point.
+    if _is_input_consuming_step(step_text) and (
+        _looks_like_missing_input(block_reason)
+        or _looks_like_missing_input(step_result)
+    ):
+        log.info("missing external input on %r (%s) — escalating, not fabricating",
+                 step_text[:60], block_reason[:60])
+        return _BlockDecision(
+            retry=False,
+            hint="",
+            loop_status="stuck",
+            stuck_reason=(
+                f"MISSING_INPUT: a required input appears absent — {block_reason[:120]}. "
+                "A missing external input cannot be retried, split, or manufactured; "
+                "escalate for the real input rather than fabricating one."
+            ),
+            metacognitive_reason="missing external input — honest fail, do not fabricate",
         )
 
     # Combined exec+analyze steps are structurally wrong — retrying identically
