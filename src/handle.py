@@ -307,39 +307,82 @@ _NOW_VERIFY_SYSTEM = (
 
 
 # ---------------------------------------------------------------------------
-# Output-provenance guard (deterministic done != achieved check)
+# Provenance guard (deterministic done != achieved check)
 # ---------------------------------------------------------------------------
 # A text-only verdict (the LLM judge below, or the local validator) can't see
-# whether a claimed artifact actually landed. Live find (shadow-eval n=42,
-# 2026-06-24): a "save the listing to artifacts/skills-listing.txt" step saved
-# to a DIFFERENT path and narrated success — local PASSed at conf 1.00, paid
-# FAILed. Deterministic fix: when the goal names an output path WITH a directory
-# component (the user said *where*), verify the file is actually there; demote
-# the verdict if not. Bare filenames (no dir — user said only *what*) are out of
-# scope: where they land is ambiguous, so we don't punish location. Same
-# provenance-blindness root as the fabricated-input recovery bug.
+# whether a claimed input was actually read or a claimed output actually landed.
+# Live find (shadow-eval n=42, 2026-06-24): "save the listing to
+# artifacts/skills-listing.txt" saved to a DIFFERENT path and narrated success —
+# local PASSed at conf 1.00, paid FAILed. Three deterministic checks:
+#   * OUTPUT, dir-qualified  ("save … to artifacts/X")  → STRICT: must be at that
+#     exact path. The user said *where*; honor it.
+#   * OUTPUT, bare filename   ("save … to report.md")    → LENIENT: the basename
+#     must exist *somewhere* reasonable (location ambiguous → don't punish it).
+#   * INPUT, dir-qualified    ("read /nonexistent/X")     → STRICT: the input must
+#     exist (you can't read a file that isn't there). Remote (URLs) and transient
+#     (/tmp, scratchpad) inputs are skipped — can't/shouldn't verify them.
+# Same provenance-blindness root as the fabricated-input recovery guard; this is
+# the verdict-layer net for fabrication that reaches "done" without blocking.
 
 _OUTPUT_CLAIM_RE = re.compile(
     r"\b(?:sav\w*|writ\w*|creat\w*|output\w*|stor\w*|export\w*|generat\w*|dump\w*)\b"
     r"[^.\n]*?\b(?:to|into|at|as)\s+[`'\"(]?(?P<path>[^\s`'\")]+)",
     re.IGNORECASE,
 )
+_INPUT_CLAIM_RE = re.compile(
+    r"\b(?:read|load|open|pars\w*|fetch|import|ingest)\w*\s+"
+    r"(?:the\s+|a\s+|file\s+|from\s+|contents?\s+of\s+|in\s+)*"
+    r"[`'\"(]?(?P<path>[^\s`'\")]+)",
+    re.IGNORECASE,
+)
+_EXT_RE = re.compile(r"\.[A-Za-z0-9]{1,6}$")
+_REMOTE_PREFIXES = ("http://", "https://", "ftp://", "s3://", "gs://", "git@", "ssh://")
+_TRANSIENT_SEGMENTS = ("/tmp/", "scratchpad", "/dev/", "/proc/", "/var/tmp/")
+
+
+def _clean_path_token(tok: str) -> str:
+    return tok.strip().strip("`'\"()").rstrip(".,;:")
 
 
 def _claimed_output_paths(goal: str) -> List[str]:
-    """Output paths the goal explicitly asks to be written, restricted to ones
-    with a directory component (the user specified *where* it must land)."""
+    """Dir-qualified output paths the goal asks to be written (user said *where*)."""
     out: List[str] = []
     for m in _OUTPUT_CLAIM_RE.finditer(goal or ""):
-        tok = m.group("path").strip().rstrip("`'\".,;:)")
+        tok = _clean_path_token(m.group("path"))
         if "/" in tok and tok not in ("/", "./", "../") and not tok.endswith("/"):
             out.append(tok)
     return out
 
 
+def _claimed_output_bare(goal: str) -> List[str]:
+    """Bare output filenames (no dir, has an extension) — user said only *what*."""
+    out: List[str] = []
+    for m in _OUTPUT_CLAIM_RE.finditer(goal or ""):
+        tok = _clean_path_token(m.group("path"))
+        if "/" not in tok and _EXT_RE.search(tok):
+            out.append(tok)
+    return out
+
+
+def _claimed_input_paths(goal: str) -> List[str]:
+    """Dir-qualified, local, non-transient input paths the goal asks to read."""
+    out: List[str] = []
+    for m in _INPUT_CLAIM_RE.finditer(goal or ""):
+        tok = _clean_path_token(m.group("path"))
+        low = tok.lower()
+        if low.startswith(_REMOTE_PREFIXES):
+            continue                      # remote — can't cheaply verify
+        if "/" not in tok:
+            continue                      # bare name — ambiguous
+        if any(seg in low for seg in _TRANSIENT_SEGMENTS):
+            continue                      # may be gone by verdict time
+        out.append(tok)
+    return out
+
+
 def _output_provenance_bases() -> List[Path]:
-    """Candidate base dirs a relative output path could legitimately resolve
-    under. Generous on purpose — a false demotion is worse than a missed one."""
+    """Candidate base dirs a relative path could legitimately resolve under.
+    Generous on purpose — a false demotion is worse than a missed one."""
     bases: List[Path] = []
     for fn in (
         lambda: Path.cwd(),
@@ -365,61 +408,123 @@ def _output_provenance_bases() -> List[Path]:
     return bases
 
 
+def _exists_at_exact(rel: str, bases: List[Path]) -> bool:
+    """True if a (possibly relative) path resolves to an existing file. For
+    relative paths, also checks one level under workspace/projects/<slug>/."""
+    p = Path(rel)
+    if p.is_absolute():
+        return p.exists()
+    if any((b / rel).exists() for b in bases):
+        return True
+    try:
+        from config import workspace_root
+        ws_projects = Path(workspace_root()) / "projects"
+        if ws_projects.is_dir():
+            return any((d / rel).exists() for d in ws_projects.glob("*") if d.is_dir())
+    except Exception:
+        pass
+    return False
+
+
+def _bare_search_dirs() -> List[Path]:
+    """Small, bounded landing spots to scan for a bare output basename."""
+    dirs: List[Path] = []
+    try:
+        from runs import current_run_dir
+        rd = current_run_dir()
+        if rd:
+            dirs.append(Path(rd))
+    except Exception:
+        pass
+    try:
+        from config import workspace_root
+        ws = Path(workspace_root())
+        dirs.extend([ws / "output", ws / "projects"])
+    except Exception:
+        pass
+    return [d for d in dirs if d.is_dir()]
+
+
+def _exists_bare_anywhere(name: str, bases: List[Path]) -> bool:
+    """True if a bare basename exists under any base (direct) or any landing
+    spot (one or two levels deep — where run/project/output files land)."""
+    if any((b / name).exists() for b in bases):
+        return True
+    for d in _bare_search_dirs():
+        try:
+            if (d / name).exists():
+                return True
+            if any(d.glob(f"*/{name}")) or any(d.glob(f"*/*/{name}")):
+                return True
+        except Exception:
+            pass
+    return False
+
+
 def _missing_claimed_outputs(goal: str) -> List[str]:
-    """Dir-qualified output paths named in the goal that don't exist anywhere
-    reasonable. Empty = nothing claimed, or everything landed. Fails open."""
+    """Dir-qualified output paths named in the goal that don't exist at that
+    exact location. Empty = nothing claimed, or everything landed. Fails open."""
     claimed = _claimed_output_paths(goal)
     if not claimed:
         return []
     bases = _output_provenance_bases()
-    ws_projects = None
-    try:
-        from config import workspace_root
-        ws_projects = Path(workspace_root()) / "projects"
-    except Exception:
-        pass
+    return [rel for rel in claimed if not _exists_at_exact(rel, bases)]
+
+
+def _missing_output_bare(goal: str) -> List[str]:
+    """Bare output filenames whose basename exists nowhere reasonable (the
+    output was never produced). Lenient: location is not part of the contract."""
+    bare = _claimed_output_bare(goal)
+    if not bare:
+        return []
+    bases = _output_provenance_bases()
+    return [name for name in bare if not _exists_bare_anywhere(name, bases)]
+
+
+def _missing_claimed_inputs(goal: str) -> List[str]:
+    """Dir-qualified local input paths the goal asks to read that don't exist —
+    you can't legitimately read a file that isn't there. Fails open."""
+    claimed = _claimed_input_paths(goal)
+    if not claimed:
+        return []
+    bases = _output_provenance_bases()
+    return [rel for rel in claimed if not _exists_at_exact(rel, bases)]
+
+
+def _provenance_missing(goal: str) -> List[str]:
+    """Aggregate deterministic provenance failures for a goal, honoring config
+    flags. Empty = nothing to flag. Never raises (fails open)."""
     missing: List[str] = []
-    for rel in claimed:
-        p = Path(rel)
-        if p.is_absolute():
-            if not p.exists():
-                missing.append(rel)
-            continue
-        found = any((b / rel).exists() for b in bases)
-        if not found and ws_projects is not None and ws_projects.is_dir():
-            # project-relative saves land under projects/<slug>/ — glob one level
-            try:
-                found = any((d / rel).exists() for d in ws_projects.glob("*") if d.is_dir())
-            except Exception:
-                pass
-        if not found:
-            missing.append(rel)
+    try:
+        from config import get as _cfg_get
+        if _cfg_get("validate.output_provenance", True):
+            missing.extend(_missing_claimed_outputs(goal))
+            missing.extend(_missing_output_bare(goal))
+        if _cfg_get("validate.input_provenance", True):
+            missing.extend(_missing_claimed_inputs(goal))
+    except Exception as exc:
+        log.debug("provenance check skipped: %s", exc)
     return missing
 
 
 def _verify_now_outcome(message: str, outcome: Dict[str, Any], adapter) -> Dict[str, Any]:
     """Demote an autonomous NOW 'done' to 'incomplete' when the response itself
     reports failure. Fails open — any error keeps the original status."""
-    # Deterministic output-provenance guard, ahead of the text judge: if the goal
-    # named a dir-qualified output that isn't on disk, the goal is not achieved
-    # regardless of how the response narrates it. Catches the false_pass the
+    # Deterministic provenance guard, ahead of the text judge: if the goal named
+    # an input that isn't on disk or an output that never landed, the goal is not
+    # achieved regardless of how the response narrates it. Catches what the
     # text-only validator can't see; also saves the judge LLM call when it fires.
-    try:
-        from config import get as _cfg_get
-        if _cfg_get("validate.output_provenance", True):
-            _missing = _missing_claimed_outputs(message)
-            if _missing:
-                out = dict(outcome)
-                out["status"] = "incomplete"
-                out["goal_achieved"] = False
-                out["provenance_missing"] = _missing
-                log.info(
-                    "output-provenance: claimed output(s) not found %s — demoted to incomplete",
-                    _missing,
-                )
-                return out
-    except Exception as exc:
-        log.debug("output-provenance check skipped: %s", exc)
+    _missing = _provenance_missing(message)
+    if _missing:
+        out = dict(outcome)
+        out["status"] = "incomplete"
+        out["goal_achieved"] = False
+        out["provenance_missing"] = _missing
+        log.info(
+            "provenance: claimed input/output(s) not found %s — demoted to incomplete",
+            _missing,
+        )
+        return out
     try:
         from llm import LLMMessage
         from llm_parse import extract_json
@@ -1471,43 +1576,39 @@ def _handle_impl(
                 except Exception as _cr_exc:
                     log.warning("handle: closure restart re-run failed: %s", _cr_exc)
 
-            # Deterministic output-provenance guard (agenda twin of the NOW
-            # guard): a dir-qualified output the goal asked for that never
-            # landed means not-achieved, regardless of closure/narrative. Works
-            # even when closure is None. Catches the false_pass a text-only
+            # Deterministic provenance guard (agenda twin of the NOW guard): an
+            # input the goal asked to read that isn't on disk, or an output that
+            # never landed, means not-achieved — regardless of closure/narrative.
+            # Works even when closure is None. Catches the false_pass a text-only
             # verdict can't see (shadow-eval n=42, 2026-06-24).
-            try:
-                from config import get as _cfg_get_p
-                if _cfg_get_p("validate.output_provenance", True) and loop_result.status == "done":
-                    _prov_missing = _missing_claimed_outputs(_raw_input)
-                    if _prov_missing:
-                        log.info(
-                            "output-provenance (agenda): claimed output(s) not found %s — demoted to incomplete",
-                            _prov_missing,
+            if loop_result.status == "done":
+                _prov_missing = _provenance_missing(_raw_input)
+                if _prov_missing:
+                    log.info(
+                        "provenance (agenda): claimed input/output(s) not found %s — demoted to incomplete",
+                        _prov_missing,
+                    )
+                    loop_result.status = "incomplete"
+                    if loop_result.stuck_reason is None:
+                        loop_result.stuck_reason = (
+                            f"provenance: claimed input/output(s) not found: {_prov_missing}"
                         )
-                        loop_result.status = "incomplete"
-                        if loop_result.stuck_reason is None:
-                            loop_result.stuck_reason = (
-                                f"output-provenance: claimed output(s) not found: {_prov_missing}"
+                    try:
+                        from runs import write_metadata as _wm_prov
+                        from runs import current_run_dir as _crd_prov
+                        _rd_p = _crd_prov()
+                        if _rd_p is not None:
+                            _wm_prov(
+                                _rd_p, handle_id=handle_id, prompt=_raw_input,
+                                extra={
+                                    "goal_achieved": False,
+                                    "goal_verdict_source": "provenance",
+                                    "goal_verdict_summary":
+                                        f"claimed input/output(s) not found: {_prov_missing}",
+                                },
                             )
-                        try:
-                            from runs import write_metadata as _wm_prov
-                            from runs import current_run_dir as _crd_prov
-                            _rd_p = _crd_prov()
-                            if _rd_p is not None:
-                                _wm_prov(
-                                    _rd_p, handle_id=handle_id, prompt=_raw_input,
-                                    extra={
-                                        "goal_achieved": False,
-                                        "goal_verdict_source": "output_provenance",
-                                        "goal_verdict_summary":
-                                            f"claimed output(s) not found: {_prov_missing}",
-                                    },
-                                )
-                        except Exception:
-                            pass
-            except Exception as _pv_exc:
-                log.debug("output-provenance (agenda) skipped: %s", _pv_exc)
+                    except Exception:
+                        pass
 
             # Status honesty (agenda twin of _verify_now_outcome): when the
             # director's own verifier contradicts a declared "done" at high

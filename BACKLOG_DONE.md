@@ -8,7 +8,7 @@ Last split: 2026-04-16 (session 34).
 
 ---
 
-### Output-provenance guard — done!=achieved when claimed output never landed (2026-06-24) — v0 SHIPPED
+### Provenance guards — done!=achieved when claimed I/O never happened (2026-06-24) — COMPLETE (v0 + both residuals)
 
 - [x] **The verdict couldn't see whether a claimed artifact actually landed.**
   Surfaced by the shadow-eval per-class batch (n=42): a `general` step "list
@@ -31,9 +31,30 @@ Last split: 2026-04-16 (session 34).
   said *where* (a path with a dir) → honor it exactly; a bare filename (just
   *what*) is out of scope (location ambiguous) to avoid false demotions.
   Deterministic, fail-open, default on (`validate.output_provenance`), reversible.
-  5 tests (`TestOutputProvenanceGuard`) + existing now-status suite still green;
-  full suite green. Residuals (input-provenance at verdict; bare filenames) left
-  in BACKLOG.
+
+  **Residuals shipped same arc (2026-06-24):** both BACKLOG residuals closed,
+  unified under a `_provenance_missing(goal)` aggregator that both verdict paths
+  now call.
+  - **Input-provenance** (`_claimed_input_paths` / `_missing_claimed_inputs`,
+    `validate.input_provenance`, default on): a goal that names a *local,
+    non-transient* input path ("read `/data/x.csv`") that doesn't exist demotes —
+    you can't read a missing file. This is the verdict-layer net behind the
+    recovery-seam guard: the recovery guard only fires on a *block*, so silent
+    fabrication that reaches `done` without blocking now still gets caught. Remote
+    URLs (`http(s)://`, `s3://`, `git@`, …) and transient paths (`/tmp/`,
+    `scratchpad`, `/dev/`, `/proc/`) are skipped — they can't be checked or are
+    legitimately ephemeral.
+  - **Bare-filename outputs** (`_claimed_output_bare` / `_missing_output_bare`):
+    a bare "save `report.md`" (no directory, but has an extension) whose basename
+    exists *nowhere reasonable* (run dir, `workspace/output`, `projects/*`, incl.
+    one/two levels deep) demotes — lenient because location isn't part of the
+    contract, so a present-but-elsewhere file passes. Complements the strict
+    dir-qualified check (exact path) from v0.
+
+  12 tests (`TestOutputProvenanceGuard`) + now-status suite green; full suite
+  green (4,278+). Open follow-up (deeper, not started): tool-evidence provenance
+  — plumb real read/write tool evidence to the verdict to catch fabrication where
+  the goal text names no path at all. See BACKLOG.
 
 ### Recovery fabricated missing inputs to fake success (2026-06-23) — FIXED
 

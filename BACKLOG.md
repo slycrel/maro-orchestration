@@ -283,21 +283,25 @@ goal to `incomplete`/`goal_achieved=False` when it named a *dir-qualified*
 output path ("save … to artifacts/X.txt") that never landed. Closes the
 reproduced false_pass (shadow-eval n=42). Default on (`validate.output_provenance`).
 
-Residual layers (still open):
+Both residual layers SHIPPED 2026-06-24 (see BACKLOG_DONE):
 
-- [ ] **Input-provenance at the verdict (defense-in-depth).** The recovery-seam
-  guard (#1, BACKLOG_DONE) honest-fails a read/fetch of a *missing* resource
-  before completion, so most missing-input fabrication can't reach `done`. A
-  verdict-layer check would catch fabrication that arrives by other paths
-  (wholesale invented results, unmatched error strings) — but needs a real
-  provenance signal (was the input actually read?) plumbed to the verdict;
-  `verify_step` is provenance-blind (sees only `(step_text, result)` strings).
-  Lower priority now that both the input (recovery guard) and output (v0 guard)
-  primaries are covered.
-- [ ] **Bare-filename outputs.** v0 only checks output paths with a directory
-  component (the user said *where*). A bare "save report.md" is out of scope —
-  where it should land is ambiguous. Revisit if a bare-filename false_pass
-  shows up; would need the run/project dir as the canonical expected location.
+- [x] **Input-provenance at the verdict.** `_missing_claimed_inputs` —
+  verdict-layer net: a goal that names a local, non-transient input path that
+  doesn't exist demotes to incomplete (you can't read a missing file). Catches
+  silent fabrication that reaches `done` without the read step blocking (the
+  recovery guard only fires on a block). Remote URLs + /tmp/scratchpad skipped.
+- [x] **Bare-filename outputs.** `_missing_output_bare` — lenient basename check:
+  a bare "save report.md" whose basename exists nowhere reasonable (run dir,
+  workspace/output, projects/*) demotes; location isn't part of the contract so
+  a present-but-elsewhere file passes.
+
+Open follow-up (deeper, not started):
+
+- [ ] **Tool-evidence provenance.** All three checks above are goal-text
+  heuristics. A stronger signal would plumb real tool evidence (did a read/write
+  tool actually fire on path X?) to the verdict — catches fabrication where the
+  goal text names no path at all (wholesale invented results). Bigger change;
+  revisit if text-heuristic coverage proves insufficient.
 
 ### Live orchestration run findings (2026-06-11, first post-suite-green session)
 

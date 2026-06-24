@@ -200,6 +200,17 @@ and the model's training signal matters more than its size.
   risk class; the real fix is provenance verification (the closure-verdict net,
   `BACKLOG.md`). See the per-class-routing item in `BACKLOG.md`.
 
+  **Provenance verification SHIPPED (2026-06-24) — closes this gap.** The
+  conclusion above ("the real fix is provenance verification") is now built:
+  deterministic done≠achieved guards in `handle.py`, default on, free
+  (no model call), wired into both verdict paths via `_provenance_missing(goal)`.
+  Three checks — dir-qualified output (strict, exact path), bare-filename output
+  (lenient, basename anywhere reasonable), and input (strict, local non-transient
+  path must exist). The n=42 `false_pass` (worker saved to a different path,
+  local PASS@1.00) is exactly what the output guard now demotes. Gates:
+  `validate.output_provenance`, `validate.input_provenance`. This is the lever the
+  shadow-eval data pointed at — *not* a confidence threshold. See BACKLOG_DONE.md.
+
 ### Reference + alternatives
 
 | Model | Backend | Footprint | Role fit |
