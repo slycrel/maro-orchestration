@@ -425,6 +425,21 @@ Sample: the 2026-05-13..17 window of `~/.poe/workspace/runs/` (478 dirs total;
   mtime-on-claim signal is the deterministic ceiling without re-plumbing to
   stream-json; the only residual (fabricated result naming NO path) is parked as
   genuinely unreachable. 18 tests total.
+- **2026-06-24 (persistence-install guardrail — block-by-default)** — Resolved
+  the standing BLOCKER (BACKLOG #3) for the "off switches must stay off / no
+  cron / rogue-process" invariant. A new `persistence_install` constraint group
+  (`constraint.py`, in the always-on zero-cost layer) treats installing/enabling
+  any persistence mechanism (systemd, cron, launchd, login item, init script) as
+  HIGH/**block by default**, and — unlike the destructive-op group — is **exempt
+  from the `is_description` softening**, so it blocks at the real call site
+  (`step_exec` passes `is_description=True`); for persistence the stated intent
+  IS the action. Made call: block *everywhere* by default rather than only when
+  an "unattended" flag is set — simpler, strictly safer, and an attended operator
+  can opt in per-run via the explicit high-trust gate `POE_PERSISTENCE_ALLOW=1`
+  (or `constraints.allow_persistence_install`), which downgrades HIGH→MEDIUM
+  (warn+proceed). Background/scheduled paths must never set the gate. This is the
+  policy-layer guardrail the April-22 incident (revived stale goal installed cron
+  + systemd) demanded. Reversible (env/config + the exemption). 23 tests.
 
 ## Threads (system-maintained — nothing leaves this list silently)
 
