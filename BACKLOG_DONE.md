@@ -8,6 +8,18 @@ Last split: 2026-04-16 (session 34).
 
 ---
 
+### Persistence-install guardrail for autonomous runs — DONE (2026-06-24, was BLOCKER #3)
+
+**Source:** Actionable Stack #3 (BLOCKER). April 22 live-box cleanup found a stale scheduled goal (`Monitor BTC price`, created April 4) had been revived and installed BOTH cron and systemd automation — exactly the rogue-process failure that has burned tokens before. Background/scheduled paths (heartbeat, backlog drains, timers) must never install or enable persistence (systemd units, launchd agents, cron entries, login items, init scripts, long-lived daemons) without an explicit high-trust gate.
+
+**What shipped (`src/constraint.py`):**
+- New `persistence_install` pattern group (`_PERSISTENCE_PATTERNS`) wired into `_ALL_PATTERNS`, so it runs in the always-on, zero-cost, no-LLM constraint layer before any subprocess spawns. Covers `systemctl enable/start/daemon-reload`, writes to `/etc/systemd/system`, `/lib/systemd/system`, `~/.config/systemd/user`, `systemd-run`, `loginctl enable-linger`, `crontab -e/-`, `@reboot`, `/etc/cron.*`, `/etc/crontab`, `launchctl load/bootstrap`, `/Library/Launch{Agents,Daemons}`, `update-rc.d`, `chkconfig … on`, plus a natural-language intent pattern ("set up a cron job", "install a systemd service", "register a launchd agent", "add a login item", "schedule a systemd timer", …).
+- **Fail-safe default: HIGH → block.** Unlike a `(rm -rf …)` hint in a plan, a persistence-install step's stated intent IS the action, so it is **exempt from the `is_description` softening** in `hitl_policy()` — it blocks at the real call site (`step_exec.py:688`, which passes `is_description=True`), not just on verified tool output. Blocked steps are recorded as stuck with a clear reason; that is the "propose but do not apply" outcome the backlog asked for.
+- **Explicit high-trust opt-in:** `_persistence_allowed()` reads `POE_PERSISTENCE_ALLOW=1` (env) or `constraints.allow_persistence_install: true` (config). When set (attended run, deliberate operator choice), the flags downgrade HIGH→MEDIUM (warn + proceed). Background/scheduled paths must never set it — and the default is off, so "off switches stay off."
+- Hits are logged to `constraint_log.jsonl` via the existing audit trail.
+
+**Tests:** `tests/test_constraint.py::TestPersistenceInstallGuardrail` — 15 install patterns block by default, 8 benign steps don't false-positive ("create a service class", "enable verbose logging", "start the analysis", …), block survives the `is_description` path, the destructive-hint softening still works, and the high-trust gate downgrades to warn. Chose block-everywhere-by-default over block-only-when-unattended: simpler, strictly safer, and an attended operator can opt in per-run. Did not add a separate "unattended-mode" signal — the fail-safe default makes one unnecessary.
+
 ### Closure treats failed-to-run commands as checks-passed — FIXED (2026-06-24 backlog-audit catch)
 
 **Source:** Actionable Stack #2. Scope A/B run-00 (2026-04-22): closure ran behavioral-verification commands as subprocesses with a PATH missing `/home/clawd/go/bin`; every compound died at the first `&&` with `go: command not found`, yet closure returned `complete=True, confidence=0.75, checks_passed=5/5`. The verification verdict was decoupled from whether anything was actually verified.

@@ -5,7 +5,7 @@ Read this at the start of every session. Update it as items are completed or new
 
 **Completed items live in [BACKLOG_DONE.md](BACKLOG_DONE.md)** — move items there with their full context when they ship; that file is the archive of what we've already decided, tried, or superseded, and it's ingested by `dev-recall` for historical context.
 
-Last reviewed: 2026-06-24 (full triage + reorg; follow-up code-verified audit moved 2 silently-completed items — closure inconclusive-probe handling, handle.py prefix registry — to BACKLOG_DONE.md and renumbered the stack 1–13).
+Last reviewed: 2026-06-24 (full triage + reorg; follow-up code-verified audit moved 2 silently-completed items — closure inconclusive-probe handling, handle.py prefix registry — to BACKLOG_DONE.md. Then shipped the persistence-install guardrail (was BLOCKER #3) and moved it to BACKLOG_DONE.md; stack renumbered 1–12).
 
 ---
 
@@ -69,11 +69,7 @@ have" not "build a sandboxing subsystem."
 
   **Related:** `decomposition_too_broad` miscalibration (now archived). Both are recovery-layer bugs that only surface on long plans.
 
-### 3. Persistence-install guardrail for autonomous runs (safety)
-
-- [ ] **BLOCKER: Persistence-install guardrail for autonomous runs.** Background/scheduled paths (heartbeat, cron-owned jobs, timers, backlog drains) must not be allowed to install or enable persistence mechanisms such as systemd units, launchd agents, cron entries, login items, or long-lived daemon processes without an explicit high-trust gate. April 22 live-box cleanup showed a stale scheduled goal (`Monitor BTC price`, originally created April 4) was later revived and installed both cron and systemd automation. Need a policy-layer guardrail in constraint/orchestration so unattended runs can propose persistence changes but cannot apply them silently.
-
-### 4. Stream-json token visibility
+### 3. Stream-json token visibility
 
 - [ ] **Stream-json token visibility (next up, per Jeremy 2026-04-18).**
   `claude -p --output-format stream-json` emits newline-delimited JSON
@@ -87,7 +83,7 @@ have" not "build a sandboxing subsystem."
   fixtures. Size: ~half-day. Coordinates with the adapter protocol
   extraction (stream shape is the point of the Adapter interface).
 
-### 5. `_is_complex_directive` threshold for NOW-lane misrouting
+### 4. `_is_complex_directive` threshold for NOW-lane misrouting
 
 - [ ] **NOW-lane runs produce no learning data and no artifact discipline** —
   the run_health build goal (e1b9f95e-humble-lantern) was classified NOW, which
@@ -101,7 +97,7 @@ have" not "build a sandboxing subsystem."
   thresholds — a multi-step "write a script AND run it AND save outputs" goal
   is not a NOW request (heuristic-tested: it does NOT catch that goal today).
 
-### 6. Closure restart short-circuit (artifact exists + verifier passed)
+### 5. Closure restart short-circuit (artifact exists + verifier passed)
 
 - [ ] **Closure restart doubled a trivial run** — the standing-rule report goal
   (049599c8-sturdy-ridge) finished done 4/4 in loop 1 (~300k tokens), then the
@@ -114,17 +110,17 @@ have" not "build a sandboxing subsystem."
   (ESCALATE 0.90) and it correctly caught loop 1 writing its summary to the
   wrong location — gate working as intended, don't conflate the two.
 
-### 7. NEXT.md ↔ git activity sync at closure
+### 6. NEXT.md ↔ git activity sync at closure
 
 - [ ] **NEXT.md ↔ git activity sync.** Control's NEXT.md showed steps 6–8 unchecked while the repo had matching commits. Either NEXT.md updates lag, or the agent didn't reflect the work back. Either way: closure should compare claimed-done against repo activity and surface the divergence.
 
-### 8. Extend local-validator ladder to post-loop quality gate
+### 7. Extend local-validator ladder to post-loop quality gate
 
 - [ ] **Extend the ladder to the post-loop quality gate.** Same local-first pattern
   for `quality_gate.run_quality_gate` / `run_llm_council` (3-persona trio) escalation,
   reusing the `WEAK_ESCALATE` decision state. (verify_step done; quality_gate pending.)
 
-### 9. Ready AFK chunk — Captain's-log event contract doc
+### 8. Ready AFK chunk — Captain's-log event contract doc
 
 - [ ] **Captain's log event contract doc.** We have 36+ event types
   emitted across 10+ modules. No single doc says "here's every event,
@@ -134,12 +130,12 @@ have" not "build a sandboxing subsystem."
   emitter / when-it-fires. Pure documentation chunk — zero code risk.
   Size: half-day. Excellent AFK starter.
 
-### 10. Local-validator measurement — token/cost delta report
+### 9. Local-validator measurement — token/cost delta report
 
 - [ ] **Token/cost delta report.** Quantify tokens saved vs escalation rate vs added
   latency, on Poe's own task corpus — the actual ROI of running this.
 
-### 11. Local-validator measurement — tune `local_max_tokens` per model
+### 10. Local-validator measurement — tune `local_max_tokens` per model
 
 - [ ] **Tune `local_max_tokens` per model.** Live finding (2026-06-21 verify run):
   VibeThinker's `<think>` trace on *real* (long) step results overran the 1024
@@ -147,11 +143,11 @@ have" not "build a sandboxing subsystem."
   3/5 validated free at conf 1.00). Bumped default to 2048; deep-eval should find
   the floor that maximizes decisive-local rate without wasting generation latency.
 
-### 12. Spend-gated transparency mandate
+### 11. Spend-gated transparency mandate
 
 - [ ] **Spend-gated transparency mandate.** Define a threshold (e.g., $2 estimated spend) above which the full source/build/artifact bundle is mandatory and visible to the user without grep. Below that, current behavior is fine.
 
-### 13. M5 portability final sweep
+### 12. M5 portability final sweep
 
 - [ ] **M5 portability final sweep** — codex-side payload check decision (deferred) + final sweep (per GOAL_BRAIN active thread).
 

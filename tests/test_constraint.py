@@ -22,6 +22,11 @@ from constraint import (
     ACTION_TIER_DESTROY,
     ACTION_TIER_EXTERNAL,
 )
+import constraint as _constraint_mod
+
+# Captured before any fixture patches the module attribute; the real impl reads
+# os.environ directly, so this reference exercises the actual env-gating logic.
+_REAL_PERSISTENCE_ALLOWED = _constraint_mod._persistence_allowed
 
 
 # ---------------------------------------------------------------------------
@@ -536,6 +541,99 @@ class TestDynamicConstraintCircuitBreaker:
         # Advance step counter past cooldown
         c._dynamic_step_counter = c._dynamic_circuit_open_until
         assert c._dynamic_circuit_is_open() is False
+
+
+class TestPersistenceInstallGuardrail:
+    """BACKLOG #3: autonomous runs must not install/enable persistence silently.
+
+    Default policy is HIGH/block for systemd/cron/launchd/login-item/init-script
+    installs. The guardrail must survive the is_description softening path (the
+    only call site in step_exec), and an explicit high-trust gate downgrades to
+    warn-and-proceed.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _no_gate(self, monkeypatch):
+        # Ensure the high-trust gate is OFF by default and config never grants it.
+        monkeypatch.delenv("POE_PERSISTENCE_ALLOW", raising=False)
+        import constraint as c
+        monkeypatch.setattr(c, "_persistence_allowed", lambda: False)
+
+    @pytest.mark.parametrize("step", [
+        "systemctl enable poe-heartbeat.service",
+        "systemctl --user enable --now poe.timer",
+        "run systemctl daemon-reload after writing the unit",
+        "write the unit file to /etc/systemd/system/poe.service",
+        "create a file in ~/.config/systemd/user/ and enable it",
+        "crontab -e to add the monitor",
+        "add an @reboot entry to keep it alive",
+        "echo job >> /etc/crontab",
+        "launchctl load ~/Library/LaunchAgents/com.poe.plist",
+        "update-rc.d poe defaults",
+        "set up a cron job to poll the price every 5 minutes",
+        "install a systemd service for the heartbeat",
+        "register a launchd agent so it starts on login",
+        "add a login item that launches the bot",
+        "schedule a systemd timer for the drain",
+    ])
+    def test_persistence_install_blocks_by_default(self, step):
+        res = check_step_constraints(step)
+        assert res.blocked, f"expected block for: {step!r}"
+        assert res.risk_level == "HIGH"
+        assert any(f.name == "persistence_install" for f in res.flags)
+
+    @pytest.mark.parametrize("step", [
+        "enable verbose logging for the run",
+        "create a service class in the Python module",
+        "start the analysis of the dataset",
+        "restart the main loop after the fix",
+        "register the new user in the database",
+        "set up the test fixtures",
+        "schedule the next review for tomorrow",
+        "summarize the systemd journal output",  # mentions systemd but no install verb+noun
+    ])
+    def test_benign_steps_do_not_false_positive(self, step):
+        res = check_step_constraints(step)
+        assert not any(f.name == "persistence_install" for f in res.flags), (
+            f"unexpected persistence flag for benign step: {step!r}"
+        )
+
+    def test_blocks_through_is_description_path(self):
+        # The only loop call site uses is_description=True, which softens HIGH→warn
+        # for ordinary flags. Persistence-install must stay blocking anyway.
+        hp = hitl_policy("install a systemd service for the heartbeat",
+                         is_description=True)
+        assert hp["allowed"] is False
+        assert hp["gate"] == "block"
+        assert "persistence-install blocked" in (hp["reason"] or "")
+
+    def test_destructive_hint_still_softens_through_description(self):
+        # Sanity: the persistence guard didn't break the existing softening for
+        # non-persistence HIGH hints.
+        hp = hitl_policy("clean the temp dir (rm -rf /tmp/scratch first)",
+                         is_description=True)
+        assert hp["allowed"] is True
+
+    def test_high_trust_gate_downgrades_to_warn(self, monkeypatch):
+        import constraint as c
+        monkeypatch.setattr(c, "_persistence_allowed", lambda: True)
+        res = check_step_constraints("install a systemd service for the heartbeat")
+        assert res.allowed is True
+        assert res.risk_level == "MEDIUM"
+        pf = [f for f in res.flags if f.name == "persistence_install"]
+        assert pf and pf[0].risk == "MEDIUM"
+        assert "high-trust gate" in pf[0].detail
+
+    def test_gate_env_var_truthy(self, monkeypatch):
+        # Call the real implementation (the autouse fixture replaced the module
+        # attribute with a stub; _REAL_PERSISTENCE_ALLOWED still points at the
+        # original function, whose env read is unaffected by the patch).
+        monkeypatch.setenv("POE_PERSISTENCE_ALLOW", "1")
+        assert _REAL_PERSISTENCE_ALLOWED() is True
+        monkeypatch.setenv("POE_PERSISTENCE_ALLOW", "0")
+        assert _REAL_PERSISTENCE_ALLOWED() is False
+        monkeypatch.setenv("POE_PERSISTENCE_ALLOW", "yes")
+        assert _REAL_PERSISTENCE_ALLOWED() is True
 
 
 class TestDynamicConstraintTTL:
