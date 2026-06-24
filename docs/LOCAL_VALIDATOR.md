@@ -169,9 +169,36 @@ and the model's training signal matters more than its size.
   **First live data (2026-06-23, qwen2.5-coder:3b, n=29):** 96.6% agreement,
   **0 false_pass across every class.** analyze/exec_command/synthesize/
   read_artifact all 100%; `general` 94.1% (one false_fail — local too strict on a
-  file-save). Encouraging, but 29 rows is a smoke sample — gather a larger batch
-  before setting per-class `min_certainty`. See the per-class-routing item in
-  `BACKLOG.md`.
+  file-save).
+
+  **Larger batch (2026-06-24, n=42):** 92.9% agreement, and **the first
+  `false_pass` appeared** — in `general`, at local confidence **1.00**. The step
+  was "list the skills/ directory and save the listing to
+  `artifacts/skills-listing.txt`"; the worker saved to a *different* path and
+  narrated success. Paid FAILed it (requirement unmet); local PASSed. The
+  concrete classes held: exec_command (n=5), analyze (n=5), synthesize (n=3) all
+  100% / 0 false_pass; read_artifact (n=4) 75% but every miss a *false_fail*
+  (safe). Per-class table:
+
+  | class | n | agree | false_pass | false_fail |
+  |---|---|---|---|---|
+  | exec_command | 5 | 100% | 0 | 0 |
+  | analyze | 5 | 100% | 0 | 0 |
+  | synthesize | 3 | 100% | 0 | 0 |
+  | read_artifact | 4 | 75% | 0 | 1 |
+  | general | 24 | 91.7% | **1** | 1 |
+
+  **Routing conclusion — do NOT set per-class `min_certainty` yet.** The lever
+  the data points at is *not* a confidence threshold: the lone false_pass fired
+  at conf 1.00, so no certainty gate would have caught it. It's a
+  requirement/side-effect-completion miss — the text-only local validator can't
+  see that the artifact never landed at the asked-for path. Same
+  provenance-blindness root as the fabricated-input bug (`verify_step` sees only
+  strings). The safe concrete classes *could* eventually be trusted more (lower
+  `min_certainty` → fewer paid escalations), but n=3–5 is too small to justify
+  it. Keep global `min_certainty: 0.6`; treat `general`/save-shaped steps as the
+  risk class; the real fix is provenance verification (the closure-verdict net,
+  `BACKLOG.md`). See the per-class-routing item in `BACKLOG.md`.
 
 ### Reference + alternatives
 

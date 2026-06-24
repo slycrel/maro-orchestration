@@ -188,6 +188,21 @@ agreement vs paid and set per-class min_certainty.
   deliberate batch (more runs with diverse step mixes) before committing per-class
   `min_certainty` — and watch specifically for any `false_pass`, since that's the
   only error direction that can let a real defect through.
+  **Larger batch (2026-06-24, n=42):** 92.9% overall, and the **first `false_pass`
+  appeared** — `general` class, local PASS@**1.00** vs paid FAIL. The step was
+  "list skills/ and save the listing to `artifacts/skills-listing.txt`"; the worker
+  saved to a *different* path and narrated success. Local can't see the artifact
+  never landed where asked — a requirement/side-effect miss, not a confidence
+  problem (it fired at max confidence). Concrete classes held: exec_command 5/5,
+  analyze 5/5, synthesize 3/3 — 100%, 0 false_pass; read_artifact 4 (75%, all misses
+  false_fail/safe). **Decision: do NOT set per-class `min_certainty`.** (a) The
+  safe-class n (3–5) is too small to justify lowering thresholds; (b) the danger
+  class `general` can't be made safe by a threshold — the false_pass was at conf
+  1.00. The lever the data actually points at is **provenance verification** (did
+  the side effect land / was the requirement met?), which is the same root as the
+  fabricated-input bug and is exactly the closure-verdict-provenance-net item above.
+  So #3 feeds #2. Keep global `min_certainty: 0.6`; revisit per-class only after the
+  safe-class corpus is much larger. Full write-up: `docs/LOCAL_VALIDATOR.md`.
 - [ ] **Tune `local_max_tokens` per model.** Live finding (2026-06-21 verify run):
   VibeThinker's `<think>` trace on *real* (long) step results overran the 1024
   floor → empty content → conf 0.00 → spurious escalation on 2/5 steps (the other
