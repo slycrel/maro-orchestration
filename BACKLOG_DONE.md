@@ -8,6 +8,33 @@ Last split: 2026-04-16 (session 34).
 
 ---
 
+### Output-provenance guard — done!=achieved when claimed output never landed (2026-06-24) — v0 SHIPPED
+
+- [x] **The verdict couldn't see whether a claimed artifact actually landed.**
+  Surfaced by the shadow-eval per-class batch (n=42): a `general` step "list
+  skills/ and save the listing to `artifacts/skills-listing.txt`" saved to a
+  *different* path (`projects/<slug>/skills-listing.txt`) and narrated success.
+  Local validator PASSed at confidence **1.00**; paid FAILed (requirement
+  unmet). Confidence gating gave zero protection — the lever is provenance, not
+  certainty. Same provenance-blindness root as the fabricated-input recovery
+  bug and `verify_step` (text-only validators can't see side effects).
+
+  **Fix (v0):** a deterministic output-provenance guard in `handle.py`
+  (`_claimed_output_paths` / `_missing_claimed_outputs`) wired into both verdict
+  paths — `_verify_now_outcome` (NOW/task-path, ahead of the LLM judge so it
+  also saves the call) and the agenda twin (before the closure status-honesty
+  block, works even when closure is None). When the goal names an output path
+  **with a directory component** ("save … to `artifacts/X`") and the file isn't
+  found under any reasonable base (cwd, repo root, run dir, workspace,
+  workspace/output, `projects/*`), the run is demoted to `incomplete` /
+  `goal_achieved=False` with `provenance_missing`. **Strictness rule:** the user
+  said *where* (a path with a dir) → honor it exactly; a bare filename (just
+  *what*) is out of scope (location ambiguous) to avoid false demotions.
+  Deterministic, fail-open, default on (`validate.output_provenance`), reversible.
+  5 tests (`TestOutputProvenanceGuard`) + existing now-status suite still green;
+  full suite green. Residuals (input-provenance at verdict; bare filenames) left
+  in BACKLOG.
+
 ### Recovery fabricated missing inputs to fake success (2026-06-23) — FIXED
 
 - [x] **Blocked-step recovery satisfied an impossible goal by fabricating its

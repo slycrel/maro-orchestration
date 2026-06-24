@@ -2083,6 +2083,76 @@ class TestNowStatusHonesty:
         adapter.complete.assert_not_called()
 
 
+class TestOutputProvenanceGuard:
+    """Deterministic done!=achieved guard: when the goal names a dir-qualified
+    output path that never landed, demote regardless of the text narrative.
+    Catches the false_pass the text-only validator can't see (shadow-eval n=42,
+    2026-06-24: 'save listing to artifacts/X' saved elsewhere, local PASS@1.00)."""
+
+    def _adapter_that_must_not_be_called(self):
+        from unittest.mock import MagicMock
+        adapter = MagicMock()
+        adapter.complete.side_effect = AssertionError("judge should not be reached")
+        return adapter
+
+    def _fulfilled_adapter(self):
+        from unittest.mock import MagicMock
+        adapter = MagicMock()
+        resp = MagicMock()
+        resp.content = '{"fulfilled": true}'
+        resp.input_tokens = 1
+        resp.output_tokens = 1
+        adapter.complete.return_value = resp
+        return adapter
+
+    def test_extraction_dir_qualified_only(self):
+        from handle import _claimed_output_paths
+        assert _claimed_output_paths("save the listing to artifacts/skills-listing.txt") == \
+            ["artifacts/skills-listing.txt"]
+        assert _claimed_output_paths("save it to report.md") == []          # bare name
+        assert _claimed_output_paths("read data/in.csv and summarize") == []  # input, not output
+        assert _claimed_output_paths("create a function in src/foo.py") == []  # 'in', not a write target
+
+    def test_missing_dir_qualified_output_demotes(self, tmp_path):
+        from handle import _verify_now_outcome
+        missing = tmp_path / "nope" / "missing.txt"   # absolute, does not exist
+        outcome = {"status": "done", "result": "All set — saved the report.",
+                   "tokens_in": 3, "tokens_out": 1}
+        adapter = self._adapter_that_must_not_be_called()
+        out = _verify_now_outcome(f"compute X and write the report to {missing}", outcome, adapter)
+        assert out["status"] == "incomplete"
+        assert out["goal_achieved"] is False
+        assert str(missing) in out["provenance_missing"]
+        adapter.complete.assert_not_called()   # deterministic short-circuit, no judge call
+
+    def test_existing_output_passes_to_judge(self, tmp_path):
+        from handle import _verify_now_outcome
+        landed = tmp_path / "out.txt"
+        landed.write_text("done")
+        outcome = {"status": "done", "result": "saved", "tokens_in": 3, "tokens_out": 1}
+        out = _verify_now_outcome(f"write the summary to {landed}", outcome, self._fulfilled_adapter())
+        # provenance satisfied → falls through to the (fulfilled) judge → kept
+        assert out["status"] == "done"
+        assert out["goal_achieved"] is True
+
+    def test_no_claim_unchanged(self):
+        from handle import _verify_now_outcome
+        outcome = {"status": "done", "result": "the answer is 42", "tokens_in": 3, "tokens_out": 1}
+        out = _verify_now_outcome("what is the answer", outcome, self._fulfilled_adapter())
+        assert out["status"] == "done"  # no output claimed → judge path, unchanged behavior
+
+    def test_disabled_by_config_skips_guard(self, tmp_path, monkeypatch):
+        import config
+        from handle import _verify_now_outcome
+        monkeypatch.setattr(config, "get", lambda key, default=None:
+                            False if key == "validate.output_provenance" else default)
+        missing = tmp_path / "gone" / "x.txt"
+        outcome = {"status": "done", "result": "ok", "tokens_in": 3, "tokens_out": 1}
+        # guard off → provenance does not demote; judge (fulfilled) keeps done
+        out = _verify_now_outcome(f"save it to {missing}", outcome, self._fulfilled_adapter())
+        assert out["status"] == "done"
+
+
 class TestEscalationLaneMetadata:
     def test_escalated_run_metadata_records_agenda(self, monkeypatch, tmp_path):
         """The now→agenda escalation must rewrite the lane written at classify time."""

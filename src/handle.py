@@ -24,12 +24,13 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 
 import sys
 import time
 import uuid
 
-from typing import TYPE_CHECKING
+from typing import List, TYPE_CHECKING
 if TYPE_CHECKING:
     from conversation import ConversationChannel
 
@@ -305,9 +306,120 @@ _NOW_VERIFY_SYSTEM = (
 )
 
 
+# ---------------------------------------------------------------------------
+# Output-provenance guard (deterministic done != achieved check)
+# ---------------------------------------------------------------------------
+# A text-only verdict (the LLM judge below, or the local validator) can't see
+# whether a claimed artifact actually landed. Live find (shadow-eval n=42,
+# 2026-06-24): a "save the listing to artifacts/skills-listing.txt" step saved
+# to a DIFFERENT path and narrated success — local PASSed at conf 1.00, paid
+# FAILed. Deterministic fix: when the goal names an output path WITH a directory
+# component (the user said *where*), verify the file is actually there; demote
+# the verdict if not. Bare filenames (no dir — user said only *what*) are out of
+# scope: where they land is ambiguous, so we don't punish location. Same
+# provenance-blindness root as the fabricated-input recovery bug.
+
+_OUTPUT_CLAIM_RE = re.compile(
+    r"\b(?:sav\w*|writ\w*|creat\w*|output\w*|stor\w*|export\w*|generat\w*|dump\w*)\b"
+    r"[^.\n]*?\b(?:to|into|at|as)\s+[`'\"(]?(?P<path>[^\s`'\")]+)",
+    re.IGNORECASE,
+)
+
+
+def _claimed_output_paths(goal: str) -> List[str]:
+    """Output paths the goal explicitly asks to be written, restricted to ones
+    with a directory component (the user specified *where* it must land)."""
+    out: List[str] = []
+    for m in _OUTPUT_CLAIM_RE.finditer(goal or ""):
+        tok = m.group("path").strip().rstrip("`'\".,;:)")
+        if "/" in tok and tok not in ("/", "./", "../") and not tok.endswith("/"):
+            out.append(tok)
+    return out
+
+
+def _output_provenance_bases() -> List[Path]:
+    """Candidate base dirs a relative output path could legitimately resolve
+    under. Generous on purpose — a false demotion is worse than a missed one."""
+    bases: List[Path] = []
+    for fn in (
+        lambda: Path.cwd(),
+        lambda: Path(__file__).resolve().parent.parent,
+    ):
+        try:
+            bases.append(fn())
+        except Exception:
+            pass
+    try:
+        from runs import current_run_dir
+        rd = current_run_dir()
+        if rd:
+            bases.append(Path(rd))
+    except Exception:
+        pass
+    try:
+        from config import workspace_root
+        ws = Path(workspace_root())
+        bases.extend([ws, ws / "output"])
+    except Exception:
+        pass
+    return bases
+
+
+def _missing_claimed_outputs(goal: str) -> List[str]:
+    """Dir-qualified output paths named in the goal that don't exist anywhere
+    reasonable. Empty = nothing claimed, or everything landed. Fails open."""
+    claimed = _claimed_output_paths(goal)
+    if not claimed:
+        return []
+    bases = _output_provenance_bases()
+    ws_projects = None
+    try:
+        from config import workspace_root
+        ws_projects = Path(workspace_root()) / "projects"
+    except Exception:
+        pass
+    missing: List[str] = []
+    for rel in claimed:
+        p = Path(rel)
+        if p.is_absolute():
+            if not p.exists():
+                missing.append(rel)
+            continue
+        found = any((b / rel).exists() for b in bases)
+        if not found and ws_projects is not None and ws_projects.is_dir():
+            # project-relative saves land under projects/<slug>/ — glob one level
+            try:
+                found = any((d / rel).exists() for d in ws_projects.glob("*") if d.is_dir())
+            except Exception:
+                pass
+        if not found:
+            missing.append(rel)
+    return missing
+
+
 def _verify_now_outcome(message: str, outcome: Dict[str, Any], adapter) -> Dict[str, Any]:
     """Demote an autonomous NOW 'done' to 'incomplete' when the response itself
     reports failure. Fails open — any error keeps the original status."""
+    # Deterministic output-provenance guard, ahead of the text judge: if the goal
+    # named a dir-qualified output that isn't on disk, the goal is not achieved
+    # regardless of how the response narrates it. Catches the false_pass the
+    # text-only validator can't see; also saves the judge LLM call when it fires.
+    try:
+        from config import get as _cfg_get
+        if _cfg_get("validate.output_provenance", True):
+            _missing = _missing_claimed_outputs(message)
+            if _missing:
+                out = dict(outcome)
+                out["status"] = "incomplete"
+                out["goal_achieved"] = False
+                out["provenance_missing"] = _missing
+                log.info(
+                    "output-provenance: claimed output(s) not found %s — demoted to incomplete",
+                    _missing,
+                )
+                return out
+    except Exception as exc:
+        log.debug("output-provenance check skipped: %s", exc)
     try:
         from llm import LLMMessage
         from llm_parse import extract_json
@@ -1358,6 +1470,44 @@ def _handle_impl(
                         _closure = None  # fail open: no re-verdict, no demotion
                 except Exception as _cr_exc:
                     log.warning("handle: closure restart re-run failed: %s", _cr_exc)
+
+            # Deterministic output-provenance guard (agenda twin of the NOW
+            # guard): a dir-qualified output the goal asked for that never
+            # landed means not-achieved, regardless of closure/narrative. Works
+            # even when closure is None. Catches the false_pass a text-only
+            # verdict can't see (shadow-eval n=42, 2026-06-24).
+            try:
+                from config import get as _cfg_get_p
+                if _cfg_get_p("validate.output_provenance", True) and loop_result.status == "done":
+                    _prov_missing = _missing_claimed_outputs(_raw_input)
+                    if _prov_missing:
+                        log.info(
+                            "output-provenance (agenda): claimed output(s) not found %s — demoted to incomplete",
+                            _prov_missing,
+                        )
+                        loop_result.status = "incomplete"
+                        if loop_result.stuck_reason is None:
+                            loop_result.stuck_reason = (
+                                f"output-provenance: claimed output(s) not found: {_prov_missing}"
+                            )
+                        try:
+                            from runs import write_metadata as _wm_prov
+                            from runs import current_run_dir as _crd_prov
+                            _rd_p = _crd_prov()
+                            if _rd_p is not None:
+                                _wm_prov(
+                                    _rd_p, handle_id=handle_id, prompt=_raw_input,
+                                    extra={
+                                        "goal_achieved": False,
+                                        "goal_verdict_source": "output_provenance",
+                                        "goal_verdict_summary":
+                                            f"claimed output(s) not found: {_prov_missing}",
+                                    },
+                                )
+                        except Exception:
+                            pass
+            except Exception as _pv_exc:
+                log.debug("output-provenance (agenda) skipped: %s", _pv_exc)
 
             # Status honesty (agenda twin of _verify_now_outcome): when the
             # director's own verifier contradicts a declared "done" at high

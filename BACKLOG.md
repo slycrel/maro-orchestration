@@ -277,20 +277,27 @@ validity are different signals and we only track one.
 
 ### Anti-fabrication defense-in-depth (2026-06-23)
 
-- [ ] **Closure-verdict provenance safety net.** The recovery-seam guard
-  (shipped 2026-06-23, see BACKLOG_DONE) closes the *missing-external-input*
-  fabrication class at its origin — a read/fetch step whose resource is absent
-  now honest-fails instead of being re-decomposed into a "manufacture the
-  input" sub-step. That catches the reproduced bug and the common case, but it
-  is pattern-matched (recognizable missing-resource errors + input-consuming
-  step shape). A second, path-independent layer belongs at the **closure
-  verdict**: a goal whose required real-world input was never actually obtained
-  is `done` but not `achieved`. This catches fabrication that arrives by any
-  other path (wholesale invented results, unmatched error strings). Needs a
-  provenance signal (was the input actually read?) plumbed to the verdict —
-  `verify_step` is currently provenance-blind (sees only `(step_text, result)`
-  strings). Relates to the done≠achieved split (`goal_achieved`/`_verdict_*`).
-  Inference-level, not a prompt taxonomy (per feedback_inference_not_prompting).
+**Output-provenance guard — v0 SHIPPED 2026-06-24** (see BACKLOG_DONE). The
+verdict (`_verify_now_outcome` + agenda twin) now deterministically demotes a
+goal to `incomplete`/`goal_achieved=False` when it named a *dir-qualified*
+output path ("save … to artifacts/X.txt") that never landed. Closes the
+reproduced false_pass (shadow-eval n=42). Default on (`validate.output_provenance`).
+
+Residual layers (still open):
+
+- [ ] **Input-provenance at the verdict (defense-in-depth).** The recovery-seam
+  guard (#1, BACKLOG_DONE) honest-fails a read/fetch of a *missing* resource
+  before completion, so most missing-input fabrication can't reach `done`. A
+  verdict-layer check would catch fabrication that arrives by other paths
+  (wholesale invented results, unmatched error strings) — but needs a real
+  provenance signal (was the input actually read?) plumbed to the verdict;
+  `verify_step` is provenance-blind (sees only `(step_text, result)` strings).
+  Lower priority now that both the input (recovery guard) and output (v0 guard)
+  primaries are covered.
+- [ ] **Bare-filename outputs.** v0 only checks output paths with a directory
+  component (the user said *where*). A bare "save report.md" is out of scope —
+  where it should land is ambiguous. Revisit if a bare-filename false_pass
+  shows up; would need the run/project dir as the canonical expected location.
 
 ### Live orchestration run findings (2026-06-11, first post-suite-green session)
 
