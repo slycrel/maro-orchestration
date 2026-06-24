@@ -8,6 +8,18 @@ Last split: 2026-04-16 (session 34).
 
 ---
 
+### agent_loop.py monolith decomposition — COMPLETE (Phase F extracted, 2026-06-24)
+
+**Source:** project_monolith_extraction.md memory; long-running incremental refactor (`LoopPhase` + `LoopContext` seam shipped early, phases A–E + G extracted across prior sessions).
+
+**What shipped:** the last inline phase — Phase F (the ~900-line main execute loop, EXECUTE) — extracted from `run_agent_loop()` into a module-level `_execute_main_loop(ctx, steps, step_indices, *, ...) -> dict`, mirroring the established extracted-phase pattern (`_initialize_loop`, `_decompose_goal`, `_preflight_checks`, `_run_parallel_path`, `_prepare_execution`, `_build_result_and_finalize`). `run_agent_loop()` is now the thin orchestrator: it `set_phase`s and calls each phase in turn.
+
+**How:** pure structural move (no behavior change). The loop body was copied verbatim; an alias block at the top of the new function reproduces the locals it relied on (`goal`, `max_iterations`, ctx-derived config, phase-result inputs). The function returns a dict of terminal state (`step_outcomes`, `loop_status`, `stuck_reason`, token totals, mutated `manifest_steps`/`replan_count`/`milestone_expanded`/`failure_chain`/`recovery_step_count`/`scratchpad`, and the possibly-mutated `goal`/`max_iterations`) consumed by Phase G and the auto-recovery re-run. `ctx.goal`/`ctx.max_iterations` are intentionally left untouched, matching pre-extraction behavior (finalize reads ctx.goal; auto-recovery reads the returned, interrupt/bump-mutated values).
+
+**Why it mattered:** removes the dead-`ctx` NameError bug class that incomplete extraction risked (guarded by `tests/test_static_undefined_names.py`, which stayed green). The note "Phase F still inline / not yet extracted" is removed from `skills/arch-core-loop.md` and `docs/ARCHITECTURE_OVERVIEW.md`. Verified: py_compile OK, zero pyflakes undefined-names, full safe suite green (all 128 items).
+
+(Backlog item text was "Next 2 phases: scope_generation_phase and step_execution_phase" — those were provisional names; the real decomposition followed the A–G phase boundaries and is now complete.)
+
 ### Provenance guards — done!=achieved when claimed I/O never happened (2026-06-24) — COMPLETE (v0 + both residuals)
 
 - [x] **The verdict couldn't see whether a claimed artifact actually landed.**

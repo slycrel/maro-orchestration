@@ -19,9 +19,11 @@ run_agent_loop(goal, adapter, ...)
   → C: _preflight_checks()    — cheap plan review, DAG parsing, checkpoint resume
   → D: _run_parallel_path()   — if steps are independent, fan-out via ThreadPoolExecutor
   → E: _prepare_execution()   — shape steps (split compound exec+analyze), write manifest
-  → F: main loop (inline)     — iterate steps: execute, verify, handle blocked/done
+  → F: _execute_main_loop()   — iterate steps: execute, verify, handle blocked/done
   → G: _build_result_and_finalize() — aggregate outcomes, record to memory, return LoopResult
 ```
+
+All 7 phases (A–G) are now extracted as module-level functions taking `LoopContext`; `run_agent_loop()` is the thin orchestrator that sets the phase and calls each in turn. `_execute_main_loop()` returns a dict of terminal loop state (outcomes, status, token totals, mutated manifest/replan/goal/max_iterations) consumed by Phase G and the auto-recovery re-run.
 
 ## Key Data Structures
 
@@ -64,7 +66,6 @@ Pre-flight flags steps that are really sub-goals. At execution time, those steps
 
 ## Known Gaps
 
-- Phase F (main execute loop) still inline in run_agent_loop() — not yet extracted
 - Checkpoint resume exists but isn't auto-triggered on crash
 - Budget ceiling creates continuation tasks but doesn't auto-enqueue them
 - Parallel fan-out is conservative (heuristic independence check only)

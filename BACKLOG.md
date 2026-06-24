@@ -285,11 +285,6 @@ looking for an AFK-friendly chore. Principles in `docs/CODING_NOTES.md`.
   incrementally. Dependency: stream-json parsing lands first (see
   separate item) — the streaming shape is the point of the extraction.
   Size: ~half day per adapter once protocol is spec'd.
-- [ ] **agent_loop.py phase extraction (continuation).** `LoopPhase` +
-  `LoopContext` shipped (memory: project_monolith_extraction.md).
-  Next 2 phases to extract: `scope_generation_phase` and
-  `step_execution_phase`. Module is ~74KB; want to get under 40KB per
-  file. Size: one phase per session, ~half-day each.
 - [ ] **Test clutter trim.** Jeremy's outside-in-testing posture
   applied to the suite: tests that poke private functions with mocked
   collaborators and assert call-shape are performative. Sweep tests

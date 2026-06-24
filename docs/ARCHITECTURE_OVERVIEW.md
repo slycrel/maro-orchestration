@@ -76,14 +76,13 @@ Two capabilities, often conflated but distinct:
 **Intent:** Goal → decompose into steps → execute each step → learn from results. The loop should handle stuck detection, retries, budget limits, parallel execution, and checkpoint/resume — all autonomously.
 
 **What exists:**
-- `agent_loop.py` (~5400 lines): Seven-phase pipeline (INIT → DECOMPOSE → PRE_FLIGHT → PARALLEL → PREPARE → EXECUTE → FINALIZE). Recently extracted from monolith into sub-methods.
+- `agent_loop.py` (~5400 lines): Seven-phase pipeline (INIT → DECOMPOSE → PRE_FLIGHT → PARALLEL → PREPARE → EXECUTE → FINALIZE). Monolith decomposition complete — all seven phases (incl. EXECUTE via `_execute_main_loop`) are now extracted as functions taking `LoopContext`; `run_agent_loop()` is the thin orchestrator.
 - `planner.py`: Decomposes goals. Routes by scope (narrow/medium/wide/deep). Multi-plan comparison for complex goals.
 - `step_exec.py`: Executes individual steps via LLM with tool calling.
 - `pre_flight.py`: Cheap plan criticism before execution. Detects scope explosions, hidden assumptions, milestone candidates.
 - `LoopContext`: Mutable state bundle. `LoopPhase` constants for each phase.
 
 **Where intent has drifted:**
-- The monolith extraction is incomplete — Phase F (main execute loop) is still inline in `run_agent_loop()`.
 - Checkpoint/resume exists but isn't automatically triggered on crash recovery.
 - Budget ceiling creates continuation tasks but doesn't autonomously re-queue them.
 - Parallel fan-out is conservative (heuristic independence check).

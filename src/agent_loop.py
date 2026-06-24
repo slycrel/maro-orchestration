@@ -3797,177 +3797,64 @@ def _run_scoped_validator(fn):
 
 
 @_run_scoped_validator
-def run_agent_loop(
-    goal: str,
+def _execute_main_loop(
+    ctx: LoopContext,
+    steps: List[str],
+    step_indices: List[int],
     *,
-    project: Optional[str] = None,
-    repo_path: str = "",
-    model: Optional[str] = None,
-    backend: Optional[str] = None,
-    adapter=None,
-    knowledge_sub_goals: bool = False,
-    max_steps: int = 8,
-    max_iterations: int = 40,
-    dry_run: bool = False,
-    verbose: bool = False,
-    interrupt_queue=None,
-    hook_registry=None,
-    ancestry_context_extra: str = "",
-    step_callback=None,
-    parallel_fan_out: int = 0,
-    token_budget: Optional[int] = None,
-    cost_budget: Optional[float] = None,
-    ralph_verify: bool = False,
-    resume_from_loop_id: Optional[str] = None,
-    permission_context=None,
-    continuation_depth: int = 0,
-    preset_steps: Optional[List[str]] = None,
-    channel=None,  # Optional ConversationChannel for mid-loop escalation (Phase 64C)
-    loop_reason: str = "initial",  # why this loop was spawned — for run-transparency captain's log
-    parent_loop_id: Optional[str] = None,
-) -> LoopResult:
-    """Run the autonomous loop for a goal.
+    resume_completed: List[StepOutcome],
+    prereq_context: Dict[int, str],
+    pf_review,
+    levels,
+    manifest_steps: List[str],
+    replan_count: int,
+    loop_shared_ctx: Dict[str, Any],
+    resolve_tools_fn,
+    tier_order: Dict[str, int],
+    parallel_fan_out: int,
+) -> dict:
+    """Phase F: the main execute loop.
 
-    Args:
-        goal: Natural language goal description.
-        project: Existing project slug to attach to, or None to auto-create.
-        model: LLM model string (defaults to MODEL_CHEAP).
-        step_callback: Optional callable(step_num, step_text, summary, status) called
-            after each step completes. Useful for live progress updates (e.g. Telegram).
-        parallel_fan_out: If > 0 and all decomposed steps are independent (no inter-step
-            references), run up to this many steps concurrently via ThreadPoolExecutor.
-            Falls back to sequential if steps have dependencies. Default 0 (sequential).
-        adapter: Pre-built LLMAdapter instance (skips build_adapter()).
-        max_steps: Maximum steps to decompose the goal into.
-        max_iterations: Hard cap on total LLM calls.
-        dry_run: Simulate without LLM calls (uses stub responses).
-        verbose: Print progress to stdout.
-        interrupt_queue: InterruptQueue instance (or None). If None, a default
-            queue is created automatically so any interface can post interrupts.
-        resume_from_loop_id: If set, load the checkpoint for this loop_id and
-            skip already-completed steps. The original goal and steps are
-            replayed from checkpoint; new steps start from where it left off.
-
-    Returns:
-        LoopResult with full outcome.
+    Iterates remaining steps — executing each (with parallel-peer batching,
+    ralph-verify, post-step checks, stuck detection, adaptive-execution
+    triggers, recovery and interrupt handling) — until no steps remain or a
+    terminal status is reached. Returns a dict of the terminal loop state
+    consumed by Phase G (_build_result_and_finalize) and the auto-recovery
+    path. ctx.goal / ctx.max_iterations are intentionally left untouched; the
+    (possibly interrupt-mutated) goal and the (possibly bumped) max_iterations
+    are returned for the auto-recovery re-run, matching the pre-extraction
+    inline behavior.
     """
-    # Reset per-run state (cost-warn flag persists across calls otherwise)
-    run_agent_loop._cost_warned = False  # type: ignore[attr-defined]
+    from llm import LLMTool, MODEL_CHEAP, MODEL_MID
+    from interrupt import apply_interrupt_to_steps
 
-    # Phase A: Initialize loop state
-    ctx, _early_return = _initialize_loop(
-        goal,
-        project=project,
-        repo_path=repo_path,
-        model=model,
-        backend=backend,
-        adapter=adapter,
-        dry_run=dry_run,
-        verbose=verbose,
-        interrupt_queue=interrupt_queue,
-        hook_registry=hook_registry,
-        ancestry_context_extra=ancestry_context_extra,
-        permission_context=permission_context,
-        continuation_depth=continuation_depth,
-        cost_budget=cost_budget,
-        token_budget=token_budget,
-        ralph_verify=ralph_verify,
-        max_steps=max_steps,
-        max_iterations=max_iterations,
-        step_callback=step_callback,
-        loop_reason=loop_reason,
-        parent_loop_id=parent_loop_id,
-    )
-    if _early_return is not None:
-        return _early_return
+    o = _orch()
 
-    ctx.channel = channel  # Phase 64C: mid-loop escalation channel
-
-    # Re-import lazy deps used by subsequent phases (same lazy-import pattern)
-    from llm import LLMMessage, LLMTool, build_adapter, MODEL_CHEAP, MODEL_MID, MODEL_POWER
-    from interrupt import InterruptQueue, apply_interrupt_to_steps, set_loop_running, clear_loop_running
-
-    # Tier ordering for floor comparisons (Phase 57: session-level tier floor)
-    _TIER_ORDER = {MODEL_CHEAP: 0, MODEL_MID: 1, MODEL_POWER: 2}
-
-    # Unpack ctx into locals used by subsequent phases.
-    # These aliases will be eliminated as phases B-G are extracted to use ctx directly.
+    # Aliases from ctx / phase inputs — keep the loop body verbatim against the
+    # pre-extraction inline version.
+    goal = ctx.goal
+    max_iterations = ctx.max_iterations
+    continuation_depth = ctx.continuation_depth
+    token_budget = ctx.token_budget
+    cost_budget = ctx.cost_budget
+    ralph_verify = ctx.ralph_verify
+    dry_run = ctx.dry_run
+    verbose = ctx.verbose
     loop_id = ctx.loop_id
-    started_at = ctx.started_at
     start_ts = ctx.start_ts
     project = ctx.project
     adapter = ctx.adapter
     interrupt_queue = ctx.interrupt_queue
-    _hook_registry = ctx.hook_registry
     _ancestry_context = ctx.ancestry_context
-    _loop_timeout_secs = ctx.loop_timeout_secs
-    _perm_ctx = ctx.perm_ctx
-
-    def _resolve_tools() -> list:
-        """Re-query tool registry on each call to pick up runtime-registered tools."""
-        return (
-            _get_tools_for_role(_perm_ctx.role, _perm_ctx.deny_patterns)
-            if _perm_ctx is not None else list(_EXECUTE_TOOLS)
-        )
-
-    o = _orch()
-
-    # Phase B: Decompose goal into steps
-    ctx.set_phase(LoopPhase.DECOMPOSE)
-    steps, _prereq_context, _lessons_context, _skills_context, _cost_context, _had_no_matching_skill = _decompose_goal(
-        ctx,
-        preset_steps=preset_steps,
-        max_steps=max_steps,
-        knowledge_sub_goals=knowledge_sub_goals,
-        permission_context=permission_context,
-    )
-
-    # Phase C: Pre-flight checks
-    ctx.set_phase(LoopPhase.PRE_FLIGHT)
-    steps, _pf, _pf_early_return = _preflight_checks(
-        ctx, steps,
-        resume_from_loop_id=resume_from_loop_id,
-        parallel_fan_out=parallel_fan_out,
-    )
-    if _pf_early_return is not None:
-        return _pf_early_return
-
-    # Unpack pre-flight results into locals used by subsequent phases
-    _resume_completed = _pf["resume_completed"]
-    _pf_review = _pf["pf_review"]
-    _clean_steps = _pf["clean_steps"]
-    _deps = _pf["deps"]
-    _levels = _pf["levels"]
-    _parallel_levels = _pf["parallel_levels"]
-    _manifest_steps = _pf["manifest_steps"]
-    _replan_count = _pf["replan_count"]
-    _manifest_path_str = _pf["manifest_path_str"]
-    _loop_shared_ctx = _pf["loop_shared_ctx"]
-    _proj_fanout_dir = _pf["proj_fanout_dir"]
-    _use_dag = _pf["use_dag"]
-    _use_fanout = _pf["use_fanout"]
-
-    # Phase D: Parallel fan-out (early return if applicable)
-    if _use_dag or _use_fanout:
-        ctx.set_phase(LoopPhase.PARALLEL)
-        _parallel_result = _run_parallel_path(
-            ctx, steps,
-            clean_steps=_clean_steps,
-            deps=_deps,
-            levels=_levels,
-            parallel_levels=_parallel_levels,
-            parallel_fan_out=parallel_fan_out,
-            proj_fanout_dir=_proj_fanout_dir,
-            loop_shared_ctx=_loop_shared_ctx,
-            use_dag=_use_dag,
-            resolve_tools_fn=_resolve_tools,
-        )
-        if _parallel_result is not None:
-            return _parallel_result
-
-    # Phase E: Shape steps and write to NEXT.md
-    ctx.set_phase(LoopPhase.PREPARE)
-    steps, step_indices, _manifest_steps = _prepare_execution(ctx, steps, _manifest_steps)
+    _resolve_tools = resolve_tools_fn
+    _TIER_ORDER = tier_order
+    _resume_completed = resume_completed
+    _prereq_context = prereq_context
+    _pf_review = pf_review
+    _levels = levels
+    _loop_shared_ctx = loop_shared_ctx
+    _manifest_steps = manifest_steps
+    _replan_count = replan_count
 
     # Step 2: Execute each step in order (dynamic — interrupts may add/replace steps)
     # Pre-populate with any completed steps from a checkpoint resume
@@ -4037,7 +3924,6 @@ def run_agent_loop(
 
     # Phase F: Main execute loop
     _budget_bumped = False  # guard: mid-loop budget bump fires at most once
-    ctx.set_phase(LoopPhase.EXECUTE)
     while remaining_steps:
         if iteration >= max_iterations:
             loop_status = "stuck"
@@ -4941,6 +4827,230 @@ def run_agent_loop(
             loop_status = _intr_status
             stuck_reason = _intr_reason
             break
+
+    return {
+        "step_outcomes": step_outcomes,
+        "loop_status": loop_status,
+        "stuck_reason": stuck_reason,
+        "total_tokens_in": total_tokens_in,
+        "total_tokens_out": total_tokens_out,
+        "interrupts_applied": interrupts_applied,
+        "march_of_nines_alert": _march_of_nines_alert,
+        "manifest_steps": _manifest_steps,
+        "replan_count": _replan_count,
+        "milestone_expanded": _milestone_expanded,
+        "failure_chain": _failure_chain,
+        "recovery_step_count": _recovery_step_count,
+        "scratchpad": _scratchpad,
+        "scratchpad_lock": _scratchpad_lock,
+        "goal": goal,
+        "max_iterations": max_iterations,
+    }
+
+
+def run_agent_loop(
+    goal: str,
+    *,
+    project: Optional[str] = None,
+    repo_path: str = "",
+    model: Optional[str] = None,
+    backend: Optional[str] = None,
+    adapter=None,
+    knowledge_sub_goals: bool = False,
+    max_steps: int = 8,
+    max_iterations: int = 40,
+    dry_run: bool = False,
+    verbose: bool = False,
+    interrupt_queue=None,
+    hook_registry=None,
+    ancestry_context_extra: str = "",
+    step_callback=None,
+    parallel_fan_out: int = 0,
+    token_budget: Optional[int] = None,
+    cost_budget: Optional[float] = None,
+    ralph_verify: bool = False,
+    resume_from_loop_id: Optional[str] = None,
+    permission_context=None,
+    continuation_depth: int = 0,
+    preset_steps: Optional[List[str]] = None,
+    channel=None,  # Optional ConversationChannel for mid-loop escalation (Phase 64C)
+    loop_reason: str = "initial",  # why this loop was spawned — for run-transparency captain's log
+    parent_loop_id: Optional[str] = None,
+) -> LoopResult:
+    """Run the autonomous loop for a goal.
+
+    Args:
+        goal: Natural language goal description.
+        project: Existing project slug to attach to, or None to auto-create.
+        model: LLM model string (defaults to MODEL_CHEAP).
+        step_callback: Optional callable(step_num, step_text, summary, status) called
+            after each step completes. Useful for live progress updates (e.g. Telegram).
+        parallel_fan_out: If > 0 and all decomposed steps are independent (no inter-step
+            references), run up to this many steps concurrently via ThreadPoolExecutor.
+            Falls back to sequential if steps have dependencies. Default 0 (sequential).
+        adapter: Pre-built LLMAdapter instance (skips build_adapter()).
+        max_steps: Maximum steps to decompose the goal into.
+        max_iterations: Hard cap on total LLM calls.
+        dry_run: Simulate without LLM calls (uses stub responses).
+        verbose: Print progress to stdout.
+        interrupt_queue: InterruptQueue instance (or None). If None, a default
+            queue is created automatically so any interface can post interrupts.
+        resume_from_loop_id: If set, load the checkpoint for this loop_id and
+            skip already-completed steps. The original goal and steps are
+            replayed from checkpoint; new steps start from where it left off.
+
+    Returns:
+        LoopResult with full outcome.
+    """
+    # Reset per-run state (cost-warn flag persists across calls otherwise)
+    run_agent_loop._cost_warned = False  # type: ignore[attr-defined]
+
+    # Phase A: Initialize loop state
+    ctx, _early_return = _initialize_loop(
+        goal,
+        project=project,
+        repo_path=repo_path,
+        model=model,
+        backend=backend,
+        adapter=adapter,
+        dry_run=dry_run,
+        verbose=verbose,
+        interrupt_queue=interrupt_queue,
+        hook_registry=hook_registry,
+        ancestry_context_extra=ancestry_context_extra,
+        permission_context=permission_context,
+        continuation_depth=continuation_depth,
+        cost_budget=cost_budget,
+        token_budget=token_budget,
+        ralph_verify=ralph_verify,
+        max_steps=max_steps,
+        max_iterations=max_iterations,
+        step_callback=step_callback,
+        loop_reason=loop_reason,
+        parent_loop_id=parent_loop_id,
+    )
+    if _early_return is not None:
+        return _early_return
+
+    ctx.channel = channel  # Phase 64C: mid-loop escalation channel
+
+    # Re-import lazy deps used by subsequent phases (same lazy-import pattern)
+    from llm import LLMMessage, LLMTool, build_adapter, MODEL_CHEAP, MODEL_MID, MODEL_POWER
+    from interrupt import InterruptQueue, apply_interrupt_to_steps, set_loop_running, clear_loop_running
+
+    # Tier ordering for floor comparisons (Phase 57: session-level tier floor)
+    _TIER_ORDER = {MODEL_CHEAP: 0, MODEL_MID: 1, MODEL_POWER: 2}
+
+    # Unpack ctx into locals used by subsequent phases.
+    # These aliases will be eliminated as phases B-G are extracted to use ctx directly.
+    loop_id = ctx.loop_id
+    started_at = ctx.started_at
+    start_ts = ctx.start_ts
+    project = ctx.project
+    adapter = ctx.adapter
+    interrupt_queue = ctx.interrupt_queue
+    _hook_registry = ctx.hook_registry
+    _ancestry_context = ctx.ancestry_context
+    _loop_timeout_secs = ctx.loop_timeout_secs
+    _perm_ctx = ctx.perm_ctx
+
+    def _resolve_tools() -> list:
+        """Re-query tool registry on each call to pick up runtime-registered tools."""
+        return (
+            _get_tools_for_role(_perm_ctx.role, _perm_ctx.deny_patterns)
+            if _perm_ctx is not None else list(_EXECUTE_TOOLS)
+        )
+
+    o = _orch()
+
+    # Phase B: Decompose goal into steps
+    ctx.set_phase(LoopPhase.DECOMPOSE)
+    steps, _prereq_context, _lessons_context, _skills_context, _cost_context, _had_no_matching_skill = _decompose_goal(
+        ctx,
+        preset_steps=preset_steps,
+        max_steps=max_steps,
+        knowledge_sub_goals=knowledge_sub_goals,
+        permission_context=permission_context,
+    )
+
+    # Phase C: Pre-flight checks
+    ctx.set_phase(LoopPhase.PRE_FLIGHT)
+    steps, _pf, _pf_early_return = _preflight_checks(
+        ctx, steps,
+        resume_from_loop_id=resume_from_loop_id,
+        parallel_fan_out=parallel_fan_out,
+    )
+    if _pf_early_return is not None:
+        return _pf_early_return
+
+    # Unpack pre-flight results into locals used by subsequent phases
+    _resume_completed = _pf["resume_completed"]
+    _pf_review = _pf["pf_review"]
+    _clean_steps = _pf["clean_steps"]
+    _deps = _pf["deps"]
+    _levels = _pf["levels"]
+    _parallel_levels = _pf["parallel_levels"]
+    _manifest_steps = _pf["manifest_steps"]
+    _replan_count = _pf["replan_count"]
+    _manifest_path_str = _pf["manifest_path_str"]
+    _loop_shared_ctx = _pf["loop_shared_ctx"]
+    _proj_fanout_dir = _pf["proj_fanout_dir"]
+    _use_dag = _pf["use_dag"]
+    _use_fanout = _pf["use_fanout"]
+
+    # Phase D: Parallel fan-out (early return if applicable)
+    if _use_dag or _use_fanout:
+        ctx.set_phase(LoopPhase.PARALLEL)
+        _parallel_result = _run_parallel_path(
+            ctx, steps,
+            clean_steps=_clean_steps,
+            deps=_deps,
+            levels=_levels,
+            parallel_levels=_parallel_levels,
+            parallel_fan_out=parallel_fan_out,
+            proj_fanout_dir=_proj_fanout_dir,
+            loop_shared_ctx=_loop_shared_ctx,
+            use_dag=_use_dag,
+            resolve_tools_fn=_resolve_tools,
+        )
+        if _parallel_result is not None:
+            return _parallel_result
+
+    # Phase E: Shape steps and write to NEXT.md
+    ctx.set_phase(LoopPhase.PREPARE)
+    steps, step_indices, _manifest_steps = _prepare_execution(ctx, steps, _manifest_steps)
+
+    # Phase F: Main execute loop
+    ctx.set_phase(LoopPhase.EXECUTE)
+    _ex = _execute_main_loop(
+        ctx, steps, step_indices,
+        resume_completed=_resume_completed,
+        prereq_context=_prereq_context,
+        pf_review=_pf_review,
+        levels=_levels,
+        manifest_steps=_manifest_steps,
+        replan_count=_replan_count,
+        loop_shared_ctx=_loop_shared_ctx,
+        resolve_tools_fn=_resolve_tools,
+        tier_order=_TIER_ORDER,
+        parallel_fan_out=parallel_fan_out,
+    )
+    step_outcomes = _ex["step_outcomes"]
+    loop_status = _ex["loop_status"]
+    stuck_reason = _ex["stuck_reason"]
+    total_tokens_in = _ex["total_tokens_in"]
+    total_tokens_out = _ex["total_tokens_out"]
+    interrupts_applied = _ex["interrupts_applied"]
+    _march_of_nines_alert = _ex["march_of_nines_alert"]
+    _manifest_steps = _ex["manifest_steps"]
+    _replan_count = _ex["replan_count"]
+    _milestone_expanded = _ex["milestone_expanded"]
+    _failure_chain = _ex["failure_chain"]
+    _recovery_step_count = _ex["recovery_step_count"]
+    _scratchpad = _ex["scratchpad"]
+    _scratchpad_lock = _ex["scratchpad_lock"]
+    goal = _ex["goal"]
+    max_iterations = _ex["max_iterations"]
 
     # Phase G: Build result, write artifacts, run finalize side-effects
     ctx.set_phase(LoopPhase.FINALIZE)
