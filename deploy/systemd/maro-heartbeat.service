@@ -1,5 +1,5 @@
 [Unit]
-Description=Poe Heartbeat — optional health monitor (manual runs do not require this service)
+Description=Maro Heartbeat — optional health monitor (manual runs do not require this service)
 # Update Documentation path if repo location changes
 Documentation=file:///home/clawd/claude/openclaw-orchestration/CLAUDE.md
 After=network.target
@@ -22,14 +22,13 @@ RestartSec=30
 RuntimeMaxSec=14400
 
 # Environment — PYTHONPATH must match WorkingDirectory
-# No POE_MEMORY_DIR needed — defaults to ~/.poe/workspace/memory (same as config.py)
+# No MARO_MEMORY_DIR needed — defaults to ~/.maro/workspace/memory (same as config.py)
 Environment=PYTHONPATH=/home/clawd/claude/openclaw-orchestration/src
-Environment=OPENCLAW_WORKSPACE=/home/clawd/.openclaw/workspace
 
 # Logging
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=poe-heartbeat
+SyslogIdentifier=maro-heartbeat
 
 [Install]
 WantedBy=default.target
