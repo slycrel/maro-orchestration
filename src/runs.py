@@ -271,6 +271,78 @@ def artifact_dir(project: str, project_root_fn=None) -> Path:
     return out
 
 
+# ---------------------------------------------------------------------------
+# Run recorder — per-call prompt/response/tool_events capture (record-mode)
+# ---------------------------------------------------------------------------
+# Default-ON capture of the paid-for LLM traffic so a finished run is replayable
+# and mineable later (skills, scripts, decision priors, rephrased re-attempts).
+# Completes rungs 4-6 of the visibility ladder (see ROADMAP). Adornment on the
+# existing run-dir plan: writes land in `<run-dir>/build/calls/`, same as every
+# other run-scoped write. Turn off with `MARO_RECORD=0` or config
+# `record.enabled: false` (a real off-switch, per good-system-citizen).
+
+import threading as _threading
+
+_CALL_COUNTERS: dict = {}
+_CALL_LOCK = _threading.Lock()
+
+
+def recording_enabled() -> bool:
+    """Record-mode is on unless explicitly disabled (env wins over config)."""
+    env = os.environ.get("MARO_RECORD")
+    if env is not None:
+        return env.strip().lower() not in ("0", "false", "no", "off", "")
+    try:
+        from config import get as _get
+        return bool(_get("record.enabled", True))
+    except Exception:
+        return True
+
+
+def _next_call_seq(rd: Path) -> int:
+    key = str(rd)
+    with _CALL_LOCK:
+        n = _CALL_COUNTERS.get(key, 0) + 1
+        _CALL_COUNTERS[key] = n
+        return n
+
+
+def record_llm_call(prompt, response_text, *, backend="", model="",
+                    tool_events=None, tokens_in=None, tokens_out=None,
+                    run_dir: Optional[Path] = None) -> Optional[Path]:
+    """Persist one LLM call to `<run-dir>/build/calls/call-NNNNN.json` (scrubbed).
+
+    No-op (returns None) when record-mode is off or no run-dir is active —
+    capture must never affect the request outcome, so all errors are swallowed.
+    """
+    try:
+        if not recording_enabled():
+            return None
+        rd = run_dir or current_run_dir()
+        if rd is None:
+            return None
+        from secret_scrub import scrub
+        calls = Path(rd) / "build" / "calls"
+        calls.mkdir(parents=True, exist_ok=True)
+        seq = _next_call_seq(Path(rd))
+        rec = scrub({
+            "seq": seq,
+            "backend": backend,
+            "model": model,
+            "prompt": prompt if isinstance(prompt, str) else str(prompt),
+            "response": response_text if isinstance(response_text, str) else str(response_text),
+            "tool_events": tool_events or [],
+            "tokens_in": tokens_in,
+            "tokens_out": tokens_out,
+            "ts": datetime.now(timezone.utc).isoformat(),
+        })
+        out = calls / f"call-{seq:05d}.json"
+        out.write_text(json.dumps(rec, default=str))
+        return out
+    except Exception:
+        return None
+
+
 def source_dir() -> Optional[Path]:
     """`<run-dir>/source/` if a run-dir is active, else None.
 

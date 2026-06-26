@@ -23,14 +23,30 @@ slices committed, full git-ignored + reproducible). 24 slices, 5,646 raw records
 quality-gate escalate formula against 122 real verdicts (0 mismatches). Workspace
 data is preserved, not deleted.
 
-**Remaining ("later") — the two layers we DON'T have:**
-- [ ] **Forward byte-level record mode.** We never persisted the assembled
-  per-step LLM prompt + raw response, so the corpus supports logic-level replay,
-  not byte-level LLM mocking. Add an opt-in (env/config) capture that writes
-  `{prompt, response, tool_events}` per step to the run dir, so future runs yield
-  true replay fixtures. The tool_events transcript (shipped this session) is the
-  first piece; prompt+response is the rest. Gate it (bloat + secrets) and reuse
-  the harvester's scrubber.
+**Shipped 2026-06-26 (forward record-mode + curation):**
+- [x] **Forward byte-level record mode.** `FailoverAdapter.complete` now captures
+  `{prompt, response, tool_events, tokens}` per call to
+  `<run-dir>/build/calls/call-NNNNN.json` via `runs.record_llm_call`. One seam
+  over every backend; secret-scrubbed through the new single-source
+  `src/secret_scrub.py` (harvester now imports the same module — no divergence).
+  **Default ON**; off via `MARO_RECORD=0` or config `record.enabled: false`
+  (`runs.recording_enabled`). Future runs now yield true byte-level replay
+  fixtures. Tests: `tests/test_record_mode.py`.
+- [x] **Post-goal curation pass.** `src/run_curation.py` runs at goal-end (hooked
+  in handle.py finalize), writes `run_card.json` (outcome class + mineable
+  inventory) so the paid-for capture is parked for later mining, not discarded.
+  Miner registry (v0: classify + inventory). User-visible/prunable CLI
+  (`python3 -m run_curation list|show|curate|prune`). Tests:
+  `tests/test_run_curation.py`.
+
+**Remaining ("later"):**
+- [ ] **Mining passes on the parked data.** The curation registry is the hook;
+  the actual miners are TODO — skill scraper, script scraper, decision-prior
+  indexer (feed a similar/rephrased re-attempt), partial-run rescue. Append to
+  `run_curation.CURATORS`.
+- [ ] **Unify rung-4 step I/O.** loop-log still stores a truncated result excerpt;
+  cross-reference the full captured call so the loop view links to the byte-level
+  record.
 - [ ] **Full raw archive (optional).** If/when `runs/`+`projects/` (~79M) get
   pruned, snapshot the full (non-thinned) slices somewhere durable first — they're
   only reproducible while the workspace exists.

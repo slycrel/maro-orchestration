@@ -363,6 +363,17 @@ class FailoverAdapter(LLMAdapter):
     def model_key(self) -> str:
         return getattr(self._adapters[self._current_idx], "model_key", "")
 
+    @staticmethod
+    def _render_for_record(messages) -> str:
+        """Flatten the message list into a single string for the call record."""
+        try:
+            return "\n\n".join(
+                f"[{getattr(m, 'role', '?')}]\n{getattr(m, 'content', '')}"
+                for m in (messages or [])
+            )
+        except Exception:
+            return str(messages)
+
     def complete(
         self,
         messages: List["LLMMessage"],
@@ -392,6 +403,22 @@ class FailoverAdapter(LLMAdapter):
                         "FailoverAdapter: succeeded on %s (index %d/%d)",
                         adapter.backend, idx + 1, len(self._adapters),
                     )
+                # Record-mode: capture the paid-for call for replay/mining. One
+                # seam covers every backend. No-op when off / no active run-dir;
+                # never affects the outcome (record_llm_call swallows errors).
+                try:
+                    from runs import record_llm_call
+                    record_llm_call(
+                        self._render_for_record(messages),
+                        getattr(result, "content", "") or "",
+                        backend=getattr(result, "backend", "") or getattr(adapter, "backend", ""),
+                        model=getattr(result, "model", "") or "",
+                        tool_events=getattr(result, "tool_events", None),
+                        tokens_in=getattr(result, "input_tokens", None),
+                        tokens_out=getattr(result, "output_tokens", None),
+                    )
+                except Exception:
+                    pass
                 return result
             except Exception as exc:
                 last_exc = exc

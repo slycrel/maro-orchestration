@@ -45,29 +45,10 @@ OUT_DIR = REPO / "tests" / "fixtures" / "orchestration_corpus"
 
 # --- secret scrubbing -------------------------------------------------------
 # The corpus is committed to git, so redact anything credential-shaped before
-# it lands. Conservative: a false redaction is harmless, a leaked key is not.
-_SECRET_RES = [
-    re.compile(r"sk-[A-Za-z0-9_\-]{16,}"),
-    re.compile(r"sk-ant-[A-Za-z0-9_\-]{16,}"),
-    re.compile(r"gh[pousr]_[A-Za-z0-9]{20,}"),
-    re.compile(r"xox[baprs]-[A-Za-z0-9\-]{10,}"),
-    re.compile(r"AKIA[0-9A-Z]{16}"),
-    re.compile(r"(?i)(bearer|authorization|api[_-]?key|token|secret|password)\s*[:=]\s*\S{8,}"),
-]
-
-
-def scrub(obj):
-    """Recursively redact secret-shaped substrings from any JSON value."""
-    if isinstance(obj, str):
-        s = obj
-        for rx in _SECRET_RES:
-            s = rx.sub("[REDACTED]", s)
-        return s
-    if isinstance(obj, list):
-        return [scrub(x) for x in obj]
-    if isinstance(obj, dict):
-        return {k: scrub(v) for k, v in obj.items()}
-    return obj
+# it lands. Single-source via secret_scrub so the harvest path and the runtime
+# recorder (runs.record_llm_call) can never diverge on what counts as a secret.
+sys.path.insert(0, str(REPO / "src"))
+from secret_scrub import scrub  # noqa: E402
 
 
 def _norm_sig(text: str) -> str:
