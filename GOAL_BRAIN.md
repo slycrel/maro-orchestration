@@ -137,6 +137,31 @@ context, at best it's a slight tweak and we fix forward."*
   Please run /login") — now surfaced verbatim. Basis: live repro under a foreign
   HOME + `/tmp/claude_rc1_*.txt` dumps + regression tests in test_llm.py.
 
+**Visibility/replayability, as of 2026-06-26:**
+- "Visibility" was being vibe-claimed as done while the runtime record was lossier
+  than we said — the test-corpus harvest (`scripts/harvest_corpus.py`, 569 captains-log
+  slices distilled into committed fixtures) proved we had decision-level data
+  (verdicts/scope/probes/step shapes) but NEVER persisted the assembled LLM prompt
+  or raw response — no byte-level replay possible. Encoded as a 6-rung ladder in
+  ROADMAP (definition-of-done); line was ~3.5/6.
+- Forward record-mode shipped (commit `04cb52e`): `FailoverAdapter.complete()` is the
+  single capture seam — `{prompt, response, tool_events, tokens}` per call →
+  `<run-dir>/build/calls/call-NNNNN.json`, secret-scrubbed via single-source
+  `src/secret_scrub.py` (shared with harvester). **Default ON**, off via
+  `MARO_RECORD=0` / `record.enabled=false`. Carries rungs 5–6 forward-only; no
+  historical backfill. This is the keystone that unlocks the Replayability stage.
+- Post-goal curation shipped (same commit): `run_curation.curate_run` hooked in
+  handle.py finalize writes `run_card.json` (outcome class — done≠achieved aware —
+  + mineable inventory). Miner registry; v0 classify+inventory, miners (skill/script
+  scrapers, decision-prior indexer, re-attempt hinter) are TODO. Intent (Jeremy,
+  2026-06-25): "rather than just discarding the (probably paid for) data we've just
+  gathered" — park it for later mining, keep it user-visible + prunable.
+- Also closed this arc: the cwd leak in non-executor agentic paths (verify/quality_gate/
+  pre_flight/claim_probe inherited launch cwd → verifiers re-created missing artifacts,
+  fabricating ground truth). Fixed via run-scoped `_DEFAULT_SUBPROCESS_CWD` ContextVar
+  in llm.py (commits `2d0acef`/`a886b46`). Basis: live repro, leak gone, verifier
+  escalated honestly.
+
 **Execution quality, as of the session-40 audit (not yet re-measured post-fixes):**
 478 run dirs Apr 26–May 16; recent runs ~50% stuck / 30% error / 15% done. One
 stuck-class cause (non-convergent step auto-split) fixed in `3bd28cd`. Re-measure
