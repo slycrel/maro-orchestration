@@ -337,12 +337,23 @@ def decompose(
     """
     from llm import LLMMessage
 
-    # Inject Poe's persistent identity block (GAP 1 fix — always in context)
+    # The framework plans as a neutral orchestration role — no persona by
+    # default. Set `planner.persona` in config to a persona name (e.g. "poe")
+    # to have planning wear that persona's identity. Unset = neutral role.
+    system = DECOMPOSE_SYSTEM
     try:
-        from poe_self import with_poe_identity
-        system = with_poe_identity(DECOMPOSE_SYSTEM)
+        from config import get as _cfg_get
+        _persona_name = _cfg_get("planner.persona", None)
     except Exception:
-        system = DECOMPOSE_SYSTEM
+        _persona_name = None
+    if _persona_name:
+        try:
+            from persona import PersonaRegistry
+            _spec = PersonaRegistry().load(str(_persona_name))
+            if _spec and _spec.system_prompt.strip():
+                system = f"## Who I Am\n\n{_spec.system_prompt.strip()}\n\n---\n\n{DECOMPOSE_SYSTEM}"
+        except Exception:
+            pass
     extras = [x for x in [skills_context, ancestry_context, lessons_context, cost_context] if x]
 
     # Auto-inject user context if available (capped at 500 chars per file

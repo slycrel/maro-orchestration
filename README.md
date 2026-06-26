@@ -88,8 +88,8 @@ All share one interface: `LLMAdapter.complete(messages, tools) → LLMResponse`
 
 ```bash
 # 1. Clone and install
-git clone https://github.com/slycrel/maro.git
-cd maro
+git clone https://github.com/slycrel/maro-orchestration.git
+cd maro-orchestration
 pip install -e ".[dev]"
 
 # 2. Set your API key (at minimum, one of these)
@@ -126,7 +126,7 @@ python3 src/cli.py build-loop --worker-session handle --format json
 ./scripts/build-loop.sh --worker-session handle --format json
 
 # Example cron target (every 5 minutes)
-*/5 * * * * cd /path/to/maro && OPENCLAW_WORKSPACE=/path/to/workspace ./scripts/build-loop.sh --worker-session handle --format json >> /tmp/poe-build-loop.log 2>&1
+*/5 * * * * cd /path/to/maro-orchestration && OPENCLAW_WORKSPACE=/path/to/workspace ./scripts/build-loop.sh --worker-session handle --format json >> /tmp/poe-build-loop.log 2>&1
 
 # Memory status
 python3 src/cli.py memory context
