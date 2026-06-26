@@ -5,8 +5,8 @@ Exports ~/.maro/workspace/ to a timestamped tar.gz, excluding secrets.
 Import restores from a tar.gz, merging with existing data.
 
 Usage:
-    python3 scripts/poe_export.py export [--output PATH]
-    python3 scripts/poe_export.py import ARCHIVE_PATH [--dry-run]
+    python3 scripts/maro_export.py export [--output PATH]
+    python3 scripts/maro_export.py import ARCHIVE_PATH [--dry-run]
 """
 
 from __future__ import annotations
@@ -178,7 +178,7 @@ def import_workspace(
 def main():
     parser = argparse.ArgumentParser(
         prog="maro-export",
-        description="Export/import Poe workspace for backup or machine transfer",
+        description="Export/import Maro workspace for backup or machine transfer",
     )
     sub = parser.add_subparsers(dest="command")
 

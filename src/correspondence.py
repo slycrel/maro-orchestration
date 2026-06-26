@@ -2,17 +2,17 @@
 
 SCOPE: this is DEV-FACING TOOLING. It helps *us* (the people building the
 orchestration system) recall our own design decisions, conversations, reviews,
-and rationale across sessions. It is NOT part of Poe's runtime self-improvement
+and rationale across sessions. It is NOT part of Maro's runtime self-improvement
 loop — that's `knowledge_web.py`, `memory.py`, and the lesson/skill graduation
-pipeline (`knowledge.py` dashboard at Stages 1-5). Those serve Poe operating on
+pipeline (`knowledge.py` dashboard at Stages 1-5). Those serve Maro operating on
 its own goals. This module serves the developers.
 
 The distinction matters: it's easy to conflate "how we build the system" with
-"what we're building." The underlying library here is reusable — Poe could
+"what we're building." The underlying library here is reusable — Maro could
 eventually use the same retrieval substrate for self-recall of our
 correspondence, closing the dogfooding loop — but v1 is strictly a dev tool
-invoked via the `dev-recall` CLI. Keeping the call site explicit (no `poe-`
-prefix, no import from Poe runtime paths) prevents accidental coupling.
+invoked via the `dev-recall` CLI. Keeping the call site explicit (no `maro-`
+prefix, no import from Maro runtime paths) prevents accidental coupling.
 
 Problem this solves: the project's "correspondence" (design conversations,
 decisions, rationale, review feedback) accumulates across sessions in multiple
@@ -1110,7 +1110,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     p = argparse.ArgumentParser(
         prog="dev-recall",
         description="Dev-facing correspondence retrieval (design docs, conversations, memory). "
-                    "NOT part of Poe runtime — see `poe-knowledge` for Poe's own self-improvement layer.",
+                    "NOT part of Maro runtime — see `maro-knowledge` for Maro's own self-improvement layer.",
     )
     sub = p.add_subparsers(dest="cmd", required=True)
 

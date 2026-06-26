@@ -466,7 +466,7 @@ def test_run_subprocess_safe_walltime_timeout_kills_and_raises():
             ["sh", "-c", "sleep 10"],
             input="", timeout=1, liveness_timeout=0,
         )
-    reason = getattr(exc_info.value, "poe_kill_reason", "")
+    reason = getattr(exc_info.value, "maro_kill_reason", "")
     assert "wall-clock" in reason
 
 
@@ -494,7 +494,7 @@ def test_run_subprocess_safe_liveness_kills_silent_process():
             ["sh", "-c", "sleep 10"],
             input="", timeout=60, liveness_timeout=2, poll_interval=0.2,
         )
-    reason = getattr(exc_info.value, "poe_kill_reason", "")
+    reason = getattr(exc_info.value, "maro_kill_reason", "")
     assert "liveness" in reason
 
 
@@ -547,7 +547,7 @@ def test_run_subprocess_safe_liveness_env_var_override(monkeypatch):
             ["sh", "-c", "sleep 10"],
             input="", timeout=30, poll_interval=0.2,
         )
-    reason = getattr(exc_info.value, "poe_kill_reason", "")
+    reason = getattr(exc_info.value, "maro_kill_reason", "")
     assert "liveness" in reason
 
 
@@ -934,10 +934,10 @@ class TestRateLimitMultiCycleRetry:
 
 
 # ---------------------------------------------------------------------------
-# MARO_BACKEND env var + poe-run --backend
+# MARO_BACKEND env var + maro-run --backend
 # ---------------------------------------------------------------------------
 
-def test_poe_backend_env_var_selects_openrouter(monkeypatch):
+def test_maro_backend_env_var_selects_openrouter(monkeypatch):
     """MARO_BACKEND=openrouter should route auto-detect to OpenRouter."""
     monkeypatch.setenv("MARO_BACKEND", "openrouter")
     monkeypatch.setattr("llm._load_env_file", lambda *a, **kw: {"OPENROUTER_API_KEY": "sk-or-test"})
@@ -947,7 +947,7 @@ def test_poe_backend_env_var_selects_openrouter(monkeypatch):
     assert isinstance(a, OpenRouterAdapter)
 
 
-def test_poe_backend_env_var_ignored_when_explicit_backend(monkeypatch):
+def test_maro_backend_env_var_ignored_when_explicit_backend(monkeypatch):
     """MARO_BACKEND env var should not override an explicit backend= argument."""
     monkeypatch.setenv("MARO_BACKEND", "openrouter")
     monkeypatch.setattr("llm._load_env_file", lambda *a, **kw: {})
@@ -985,7 +985,7 @@ def test_run_agent_loop_passes_backend_to_build_adapter(monkeypatch):
 
 
 def test_poe_run_cli_accepts_backend_flag():
-    """poe-run --backend openrouter should be parseable (dry-run)."""
+    """maro-run --backend openrouter should be parseable (dry-run)."""
     import agent_loop
     import sys
     # Verify argparse accepts --backend without raising

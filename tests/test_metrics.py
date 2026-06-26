@@ -231,7 +231,7 @@ def test_format_metrics_report_empty():
     m = compute_metrics([])
     report = format_metrics_report(m)
     assert "Total goals: 0" in report
-    assert "Poe System Metrics" in report
+    assert "Maro System Metrics" in report
 
 
 def test_format_metrics_report_with_data():
@@ -323,7 +323,7 @@ def test_cli_poe_metrics_text(capsys):
         rc = cli.main(["metrics"])
     assert rc == 0
     out = capsys.readouterr().out
-    assert "Poe System Metrics" in out
+    assert "Maro System Metrics" in out
 
 
 def test_cli_poe_metrics_json(capsys):

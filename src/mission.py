@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Phase 10: Mission Layer for Poe orchestration.
+"""Phase 10: Mission Layer for Maro orchestration.
 
 Formal hierarchy: Mission → Milestone → Feature → Worker Session
 
@@ -13,7 +13,7 @@ Usage:
     print(result.summary())
 
 CLI:
-    orch poe-mission "multi-day goal" [--project SLUG] [--dry-run] [--verbose]
+    orch maro-mission "multi-day goal" [--project SLUG] [--dry-run] [--verbose]
 """
 
 from __future__ import annotations
@@ -340,7 +340,7 @@ def run_mission(
 
     def _log(msg: str):
         if verbose:
-            print(f"[poe:mission] {msg}", file=sys.stderr, flush=True)
+            print(f"[maro:mission] {msg}", file=sys.stderr, flush=True)
 
     # Build adapter
     if adapter is None and not dry_run:

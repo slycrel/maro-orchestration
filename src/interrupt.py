@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Interrupt queue for the Poe orchestration system.
+"""Interrupt queue for the Maro orchestration system.
 
 Source-agnostic: Telegram, CLI, Slack, heartbeat — any interface can post an
 interrupt. The agent loop polls between steps and handles it.

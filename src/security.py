@@ -1,8 +1,8 @@
-"""Security utilities for Poe orchestration — prompt injection detection.
+"""Security utilities for Maro orchestration — prompt injection detection.
 
-Prompt injection is the most realistic attack surface when Poe fetches external
+Prompt injection is the most realistic attack surface when Maro fetches external
 content (web pages, APIs, user-provided text) and that content ends up in an LLM
-prompt context. An attacker can embed instructions that try to redirect Poe's
+prompt context. An attacker can embed instructions that try to redirect Maro's
 behavior.
 
 This module provides a lightweight scanner that flags suspicious content BEFORE

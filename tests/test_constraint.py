@@ -560,7 +560,7 @@ class TestPersistenceInstallGuardrail:
         monkeypatch.setattr(c, "_persistence_allowed", lambda: False)
 
     @pytest.mark.parametrize("step", [
-        "systemctl enable poe-heartbeat.service",
+        "systemctl enable maro-heartbeat.service",
         "systemctl --user enable --now poe.timer",
         "run systemctl daemon-reload after writing the unit",
         "write the unit file to /etc/systemd/system/poe.service",

@@ -712,7 +712,7 @@ def render_correlated_entry(entry: Dict[str, Any]) -> str:
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    """CLI: poe-log [--since DATE] [--type EVENT_TYPE] [--subject PATTERN] [--limit N]"""
+    """CLI: maro-log [--since DATE] [--type EVENT_TYPE] [--subject PATTERN] [--limit N]"""
     import argparse
 
     parser = argparse.ArgumentParser(

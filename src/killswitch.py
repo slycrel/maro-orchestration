@@ -1,4 +1,4 @@
-"""Global kill switch for Poe orchestration loops.
+"""Global kill switch for Maro orchestration loops.
 
 A sentinel file at memory/STOP engages the kill switch. Any running loop
 checks this file at each step boundary and exits cleanly if present.
@@ -12,9 +12,9 @@ Usage:
         break  # stop gracefully
 
 CLI:
-    poe-stop              # engage + post STOP interrupt to any running loop
-    poe-stop --clear      # clear the sentinel, allow loops to run again
-    poe-stop --status     # show current state
+    maro-stop              # engage + post STOP interrupt to any running loop
+    maro-stop --clear      # clear the sentinel, allow loops to run again
+    maro-stop --status     # show current state
 """
 
 from __future__ import annotations
@@ -115,12 +115,12 @@ def main(argv: Optional[list] = None) -> int:
 
     parser = argparse.ArgumentParser(
         prog="maro-stop",
-        description="Engage or clear the Poe orchestration kill switch.",
+        description="Engage or clear the Maro orchestration kill switch.",
     )
     sub = parser.add_subparsers(dest="cmd")
 
     p_engage = sub.add_parser("engage", help="Engage kill switch (default action)")
-    p_engage.add_argument("--reason", default="manual poe-stop", help="Reason to record in sentinel")
+    p_engage.add_argument("--reason", default="manual maro-stop", help="Reason to record in sentinel")
     p_engage.add_argument("--no-interrupt", action="store_true", help="Write sentinel only; skip posting interrupt")
 
     sub.add_parser("clear", help="Clear kill switch, allow loops to run")
@@ -130,7 +130,7 @@ def main(argv: Optional[list] = None) -> int:
 
     # Default action with no subcommand: engage
     cmd = args.cmd or "engage"
-    reason = getattr(args, "reason", "manual poe-stop")
+    reason = getattr(args, "reason", "manual maro-stop")
     no_interrupt = getattr(args, "no_interrupt", False)
 
     if cmd == "engage":
@@ -140,7 +140,7 @@ def main(argv: Optional[list] = None) -> int:
         if not no_interrupt:
             posted = post_stop_interrupt()
             print(f"interrupt posted: {posted}")
-        print("Run 'poe-stop clear' to re-enable loops.")
+        print("Run 'maro-stop clear' to re-enable loops.")
         return 0
 
     if cmd == "clear":

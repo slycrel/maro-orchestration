@@ -149,7 +149,7 @@ def run_memory_backend_slice(output_dir: Path, *, iterations: int = 5, records: 
     operations = ["append_lessons", "read_all_lessons"]
     samples: List[Sample] = []
 
-    with TemporaryDirectory(prefix="poe-memory-bench-") as tmp:
+    with TemporaryDirectory(prefix="maro-memory-bench-") as tmp:
         temp_root = Path(tmp)
         for backend_name in backends:
             for iteration in range(1, iterations + 1):
@@ -240,7 +240,7 @@ def run_memory_backend_filtered_lookup_slice(
     )
     expected_returned = min(limit, expected_matches)
 
-    with TemporaryDirectory(prefix="poe-memory-bench-filtered-") as tmp:
+    with TemporaryDirectory(prefix="maro-memory-bench-filtered-") as tmp:
         temp_root = Path(tmp)
         for backend_name in backends:
             for iteration in range(1, iterations + 1):
@@ -448,7 +448,7 @@ def run_memory_backend_append_contention_slice(
     samples: List[Sample] = []
     contention_results: Dict[str, List[Dict[str, Any]]] = {backend: [] for backend in backends}
 
-    with TemporaryDirectory(prefix="poe-memory-bench-contention-") as tmp:
+    with TemporaryDirectory(prefix="maro-memory-bench-contention-") as tmp:
         temp_root = Path(tmp)
         for backend_name in backends:
             for worker_count in workers:

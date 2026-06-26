@@ -214,7 +214,7 @@ class TestRunDirector:
 # CLI integration
 # ---------------------------------------------------------------------------
 
-def test_cli_poe_director_text(monkeypatch, tmp_path, capsys):
+def test_cli_director_text(monkeypatch, tmp_path, capsys):
     _setup(monkeypatch, tmp_path)
     import cli
     rc = cli.main(["director", "research polymarket strategies", "--dry-run"])
@@ -224,7 +224,7 @@ def test_cli_poe_director_text(monkeypatch, tmp_path, capsys):
     assert "REPORT" in out
 
 
-def test_cli_poe_director_json(monkeypatch, tmp_path, capsys):
+def test_cli_director_json(monkeypatch, tmp_path, capsys):
     _setup(monkeypatch, tmp_path)
     import cli
     rc = cli.main(["director", "build a report", "--dry-run", "--format", "json"])
@@ -236,7 +236,7 @@ def test_cli_poe_director_json(monkeypatch, tmp_path, capsys):
     assert data["status"] == "done"
 
 
-def test_cli_poe_director_explicit_acceptance(monkeypatch, tmp_path, capsys):
+def test_cli_director_explicit_acceptance(monkeypatch, tmp_path, capsys):
     _setup(monkeypatch, tmp_path)
     import cli
     rc = cli.main(["director", "send email to users", "--dry-run", "--format", "json"])

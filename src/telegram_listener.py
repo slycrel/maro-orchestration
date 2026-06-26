@@ -1,4 +1,4 @@
-"""Telegram listener for Poe — polls for messages and routes through handle().
+"""Telegram listener for Maro — polls for messages and routes through handle().
 
 Reads bot token and allowed chat IDs from:
   1. TELEGRAM_BOT_TOKEN env var
@@ -213,7 +213,7 @@ def _dispatch_slash(
 ) -> str:
     """Route a slash command to the appropriate handler."""
     if cmd == "status":
-        # Route through Poe CEO layer for executive summary
+        # Route through Maro CEO layer for executive summary
         try:
             if conduct is not None:
                 response = conduct("/status", dry_run=dry_run)
@@ -228,7 +228,7 @@ def _dispatch_slash(
             state = read_heartbeat_state() or {}
             last_check = state.get("checked_at", "never")
             lines = [
-                f"*Poe Status*",
+                f"*Maro Status*",
                 f"Health: {health.status}",
                 f"Last heartbeat: {last_check}",
                 f"Stuck projects: {', '.join(stuck) if stuck else 'none'}",
@@ -238,7 +238,7 @@ def _dispatch_slash(
             return f"Status check failed: {e}"
 
     elif cmd == "map":
-        # Goal relationship map via Poe CEO layer
+        # Goal relationship map via Maro CEO layer
         try:
             if conduct is not None:
                 response = conduct("/map", dry_run=dry_run)
@@ -335,7 +335,7 @@ def _dispatch_slash(
 
     elif cmd == "help":
         return (
-            "*Poe commands*\n"
+            "*Maro commands*\n"
             "/status — executive summary (active missions, quality)\n"
             "/map — goal relationship map\n"
             "/director <directive> — run full Director/Worker pipeline\n"
@@ -448,11 +448,11 @@ def _process_message(
         elif cmd:
             response = _dispatch_slash(cmd, args, project=project, dry_run=False, verbose=verbose, progress_fn=_progress_fn)
         else:
-            # Route natural language through Poe CEO layer when no loop is active
+            # Route natural language through Maro CEO layer when no loop is active
             if conduct is not None:
                 try:
-                    poe_resp = conduct(text, dry_run=False)
-                    response = poe_resp.message or "(no response)"
+                    conductor_resp = conduct(text, dry_run=False)
+                    response = conductor_resp.message or "(no response)"
                 except Exception:
                     # Fallback to handle
                     result = handle(text, project=project, dry_run=False, verbose=verbose)
@@ -527,7 +527,7 @@ def poll_loop(
     allowed = _resolve_allowed_chats()
 
     if verbose:
-        print(f"[telegram] Poe listening (allowed_chats={allowed or 'all'})", file=sys.stderr)
+        print(f"[telegram] Maro listening (allowed_chats={allowed or 'all'})", file=sys.stderr)
 
     offset = _load_offset()
 
@@ -558,7 +558,7 @@ def poll_loop(
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description="Poe Telegram listener")
+    parser = argparse.ArgumentParser(description="Maro Telegram listener")
     parser.add_argument("--once", action="store_true", help="Process pending updates once and exit")
     parser.add_argument("--dry-run", action="store_true", help="Process but don't send responses")
     parser.add_argument("--project", default="maro-telegram", help="Project slug for memory")

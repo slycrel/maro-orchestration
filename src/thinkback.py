@@ -23,7 +23,7 @@ Usage:
     report = run_thinkback_from_outcome(outcome)
 
 CLI:
-    poe-thinkback [--latest] [--outcome-id ID] [--dry-run] [--save]
+    maro-thinkback [--latest] [--outcome-id ID] [--dry-run] [--save]
 """
 
 from __future__ import annotations

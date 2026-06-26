@@ -22,7 +22,7 @@ Live decide-only taps (called from the running pipeline, config-gated off):
 Both emit NAVIGATOR_DECIDED rows with pipeline_actual.point set, so
 analyze_live_agreement() can break agreement down per decision point.
 
-CLI (dev tool, like poe-introspect):
+CLI (dev tool, like maro-introspect):
     PYTHONPATH=src python3 -m navigator_shadow <handle-id>... \
         [--point dispatch|closure|both] [--tiers cheap,mid,power]
 """

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Phase 19: Worker Boot Protocol for Poe orchestration.
+"""Phase 19: Worker Boot Protocol for Maro orchestration.
 
 Mandatory startup sequence for Worker sessions. Prevents re-doing completed
 work or declaring premature success by reading progress state, git HEAD, and

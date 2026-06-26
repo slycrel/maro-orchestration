@@ -2182,7 +2182,7 @@ class TestOutputProvenanceGuard:
     def test_missing_input_demotes(self):
         from handle import _verify_now_outcome
         # non-transient absolute path that does not exist (the fabricated-input case)
-        missing = "/nonexistent/poe-test/absent-9931.csv"
+        missing = "/nonexistent/maro-test/absent-9931.csv"
         outcome = {"status": "done", "result": "the mean is 17.5", "tokens_in": 3, "tokens_out": 1}
         out = _verify_now_outcome(f"read the file {missing} and compute the mean",
                                   outcome, self._adapter_that_must_not_be_called())
@@ -2210,7 +2210,7 @@ class TestOutputProvenanceGuard:
         monkeypatch.setattr(config, "get", lambda key, default=None:
                             False if key == "validate.input_provenance" else default)
         outcome = {"status": "done", "result": "ok", "tokens_in": 3, "tokens_out": 1}
-        out = _verify_now_outcome("read /nonexistent/poe-test/absent-9931.csv and summarize",
+        out = _verify_now_outcome("read /nonexistent/maro-test/absent-9931.csv and summarize",
                                   outcome, self._fulfilled_adapter())
         assert out["status"] == "done"
 

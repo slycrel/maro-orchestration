@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Phase 15: OpenClaw gateway integration for Poe orchestration.
+"""Phase 15: OpenClaw gateway integration for Maro orchestration.
 
 Connects to the OpenClaw WebSocket gateway at ws://127.0.0.1:18789.
 Reads auth from ~/.openclaw/openclaw.json (never logs or prints the token).

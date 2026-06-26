@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Temporal/recording layer of the Poe memory system.
+"""Temporal/recording layer of the Maro memory system.
 
 Extracted from memory.py — contains the outcome ledger, lesson storage,
 daily log, task ledger, step traces, compression pipeline, and memory

@@ -1088,8 +1088,8 @@ def test_handle_blocked_step_missing_reason_uses_fallback():
 def test_missing_input_read_step_escalates_not_retries():
     """A read step whose file is absent → honest stuck on FIRST block, no retry."""
     decision = _handle_blocked_step(
-        step_text="read /nonexistent/poe-test/data.csv and compute the mean of column 2",
-        outcome={"stuck_reason": "No such file or directory: /nonexistent/poe-test/data.csv",
+        step_text="read /nonexistent/maro-test/data.csv and compute the mean of column 2",
+        outcome={"stuck_reason": "No such file or directory: /nonexistent/maro-test/data.csv",
                  "result": ""},
         prior_retries=0,
         adapter=None,

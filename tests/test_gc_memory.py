@@ -1,4 +1,4 @@
-"""Tests for poe-gc memory garbage collection (Phase 25)."""
+"""Tests for maro-gc memory garbage collection (Phase 25)."""
 
 from __future__ import annotations
 

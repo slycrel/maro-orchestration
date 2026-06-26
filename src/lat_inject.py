@@ -1,7 +1,7 @@
 """lat_inject.py — TF-IDF selection of lat.md knowledge graph nodes for planning context.
 
 Closes the lat.md runtime integration gap: the lat.md/ directory contains 9 cross-linked
-concept nodes about Poe's architecture. This module selects the 1-2 most relevant nodes
+concept nodes about Maro's architecture. This module selects the 1-2 most relevant nodes
 for a given goal and returns their content for injection into director / decompose prompts.
 
 Zero-LLM, zero-cost — pure TF-IDF over node titles + first paragraphs. Cached on first

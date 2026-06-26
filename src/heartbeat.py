@@ -1,6 +1,6 @@
 """Heartbeat — Phase 4 completion (ROADMAP.md §4)
 
-Periodic health check + tiered self-healing for the Poe orchestration system.
+Periodic health check + tiered self-healing for the Maro orchestration system.
 
 Tiers of recovery:
   1. Scripted/deterministic fixes (disk cleanup hints, config validation)
@@ -332,7 +332,7 @@ def _tier3_escalate(report: HeartbeatReport) -> bool:
     if report.health_status not in ("critical", "degraded") and not report.stuck_projects:
         return False
 
-    lines = [f"🔔 Poe Heartbeat Alert — {report.health_status.upper()}"]
+    lines = [f"🔔 Maro Heartbeat Alert — {report.health_status.upper()}"]
     if report.stuck_projects:
         lines.append(f"Stuck projects: {', '.join(report.stuck_projects)}")
 
@@ -533,7 +533,7 @@ _harness_optimizer_active = False
 _harness_optimizer_lock = threading.Lock()
 
 # SlowUpdateScheduler: gates heavy background LLM work to idle windows.
-# Exposed at module level so poe-doctor can query its status.
+# Exposed at module level so maro-doctor can query its status.
 try:
     from slow_update_scheduler import SlowUpdateScheduler as _SlowUpdateScheduler
     _slow_update_sched = _SlowUpdateScheduler(idle_cooldown=30)
@@ -1076,7 +1076,7 @@ def heartbeat_loop(
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description="Poe heartbeat")
+    parser = argparse.ArgumentParser(description="Maro heartbeat")
     parser.add_argument("--loop", action="store_true", help="Run forever on an interval")
     parser.add_argument("--interval", type=float, default=60.0, help="Seconds between checks (default: 60)")
     parser.add_argument("--dry-run", action="store_true", help="Check without recovery or alerting")

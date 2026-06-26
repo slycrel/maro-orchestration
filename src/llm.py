@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Platform-agnostic LLM adapter layer for Poe orchestration.
+"""Platform-agnostic LLM adapter layer for Maro orchestration.
 
 All agents talk to LLMAdapter.complete() — the same interface regardless of
 which backend is actually serving the call:
@@ -472,7 +472,7 @@ def _run_subprocess_safe(cmd, *, input=None, timeout=600,
 
     Returns a subprocess.CompletedProcess with stdout=merged output and
     stderr="". On wall-clock or liveness timeout raises
-    subprocess.TimeoutExpired with `.poe_kill_reason` attached so callers
+    subprocess.TimeoutExpired with `.maro_kill_reason` attached so callers
     can distinguish.
     """
     import signal
@@ -530,7 +530,7 @@ def _run_subprocess_safe(cmd, *, input=None, timeout=600,
                 try: os.unlink(p)
                 except OSError: pass
 
-    # Mark Poe-spawned agentic subprocesses so git guards (scripts/hooks/
+    # Mark Maro-spawned agentic subprocesses so git guards (scripts/hooks/
     # pre-push) can tell a worker from a human: workers may push work
     # branches but not the default branch. workers.allow_main_push=true
     # (config) loosens this for the whole box; a goal can also export
@@ -611,7 +611,7 @@ def _run_subprocess_safe(cmd, *, input=None, timeout=600,
             exc = subprocess.TimeoutExpired(cmd, timeout or liveness_timeout,
                                             output=stdout, stderr="")
             # Attach reason for caller introspection; not used by base class.
-            exc.poe_kill_reason = kill_reason  # type: ignore[attr-defined]
+            exc.maro_kill_reason = kill_reason  # type: ignore[attr-defined]
             raise exc
     except subprocess.TimeoutExpired:
         raise
@@ -1259,7 +1259,7 @@ class OpenRouterAdapter(LLMAdapter):
 
     backend = "openrouter"
 
-    def __init__(self, api_key: str, model: str = MODEL_CHEAP, site_name: str = "poe-orch"):
+    def __init__(self, api_key: str, model: str = MODEL_CHEAP, site_name: str = "maro-orch"):
         self._api_key = api_key
         self.model_key = model
         self._site_name = site_name
@@ -1565,9 +1565,9 @@ def build_adapter(
     assert backend == "auto", f"Unknown backend: {backend!r}"
 
     # MARO_BACKEND env var overrides auto-detection priority without forcing a specific key
-    _poe_backend = os.environ.get("MARO_BACKEND", "").strip().lower()
-    if _poe_backend and _poe_backend != "auto":
-        return build_adapter(backend=_poe_backend, model=model, api_key=api_key, timeout=timeout)
+    _maro_backend = os.environ.get("MARO_BACKEND", "").strip().lower()
+    if _maro_backend and _maro_backend != "auto":
+        return build_adapter(backend=_maro_backend, model=model, api_key=api_key, timeout=timeout)
 
     # Explicit api_key overrides — try Anthropic first, then OpenRouter
     if api_key:

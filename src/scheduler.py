@@ -21,10 +21,10 @@ Usage:
         mark_job_done(job["job_id"])
 
     # CLI
-    poe-schedule --list
-    poe-schedule --add "Research X" --schedule daily --time 09:00
-    poe-schedule --remove JOB_ID
-    poe-schedule --run-due   # execute all due jobs now (one-shot mode)
+    maro-schedule --list
+    maro-schedule --add "Research X" --schedule daily --time 09:00
+    maro-schedule --remove JOB_ID
+    maro-schedule --run-due   # execute all due jobs now (one-shot mode)
 """
 
 from __future__ import annotations
@@ -358,7 +358,7 @@ def main() -> None:
     import argparse
     import sys
 
-    p = argparse.ArgumentParser(description="poe-schedule — manage persistent cron jobs")
+    p = argparse.ArgumentParser(description="maro-schedule — manage persistent cron jobs")
     sub = p.add_subparsers(dest="cmd")
 
     # list

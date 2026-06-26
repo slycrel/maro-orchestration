@@ -1,4 +1,4 @@
-"""Project/item management, path utilities, and run record I/O for Poe orchestration.
+"""Project/item management, path utilities, and run record I/O for Maro orchestration.
 
 Extracted from orch.py — no dependency on orch.py (safe to import from orch_bridges.py and orch.py).
 """

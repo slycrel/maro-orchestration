@@ -14,7 +14,7 @@ let the model figure out the how.
 
 Usage:
     python3 factory_thin.py "your goal here" [--model cheap|mid|power]
-    poe-factory-thin "your goal here"
+    maro-factory-thin "your goal here"
 """
 
 from __future__ import annotations

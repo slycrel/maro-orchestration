@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Phase 10: Background execution primitive for Poe orchestration.
+"""Phase 10: Background execution primitive for Maro orchestration.
 
 Non-blocking subprocess runner with polling. Start a long-running command,
 return immediately, poll/wait for result asynchronously.

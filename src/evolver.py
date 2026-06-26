@@ -3,7 +3,7 @@
 Periodically reviews recent run outcomes to identify failure patterns,
 propose prompt improvements, and generate new guardrails.
 
-This is the "Poe gets better over time" component. It:
+This is the "Maro gets better over time" component. It:
   1. Loads the last N outcomes from memory/outcomes.jsonl
   2. Asks an LLM to identify failure patterns and suggest improvements
   3. Writes structured suggestions to memory/suggestions.jsonl
@@ -505,7 +505,7 @@ def apply_suggestion(suggestion_id: str) -> bool:
                     d["applied"] = False
                     d["status"] = "pending_human_review"
                     d["block_reason"] = (
-                        "crystallization requires human review: run `poe-memory canon-candidates` "
+                        "crystallization requires human review: run `maro-memory canon-candidates` "
                         "to inspect and manually promote to AGENTS.md"
                     )
                     log.info("evolver: crystallization held for human review: %s", d.get("suggestion", "")[:100])
@@ -2089,7 +2089,7 @@ def _notify_telegram(report: EvolverReport) -> None:
         allowed = _resolve_allowed_chats()
         if not allowed:
             return
-        lines = [f"🧠 *Poe Meta-Evolver* — {len(report.suggestions)} suggestions"]
+        lines = [f"🧠 *Maro Meta-Evolver* — {len(report.suggestions)} suggestions"]
         for fp in report.failure_patterns[:3]:
             lines.append(f"• Pattern: {fp}")
         for s in report.suggestions[:3]:
@@ -3152,14 +3152,14 @@ def format_impact_summary(records: List[EvolverImpactRecord]) -> str:
 
 
 # ---------------------------------------------------------------------------
-# CLI entry point (poe-evolver)
+# CLI entry point (maro-evolver)
 # ---------------------------------------------------------------------------
 
 def main() -> int:
-    """CLI entry point for poe-evolver."""
+    """CLI entry point for maro-evolver."""
     import argparse
 
-    parser = argparse.ArgumentParser(description="Poe meta-evolver — analyze outcomes, manage suggestions")
+    parser = argparse.ArgumentParser(description="Maro meta-evolver — analyze outcomes, manage suggestions")
     subparsers = parser.add_subparsers(dest="cmd")
 
     # Default: run evolver analysis

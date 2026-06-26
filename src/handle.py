@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Poe's Handle — unified entry point for all incoming requests.
+"""Maro's Handle — unified entry point for all incoming requests.
 
 Routes to NOW lane (1-shot) or AGENDA lane (multi-step loop) based on
 intent classification. This is the interface Jeremy sends messages through.
@@ -16,7 +16,7 @@ Usage:
 
 CLI:
     python -m handle "your request here" [--project SLUG] [--dry-run]
-    orch poe-handle "your request here"
+    orch maro-handle "your request here"
 """
 
 from __future__ import annotations
@@ -263,7 +263,7 @@ def _run_now(
     from llm import LLMMessage
 
     if verbose:
-        print(f"[poe:{handle_id}] NOW lane — executing...", file=sys.stderr, flush=True)
+        print(f"[maro:{handle_id}] NOW lane — executing...", file=sys.stderr, flush=True)
 
     t0 = time.monotonic()
     try:
@@ -721,7 +721,7 @@ def handle(
     prior_context: Optional[str] = None,
     origin: Optional[dict] = None,
 ) -> HandleResult:
-    """Process an incoming request through Poe's handle.
+    """Process an incoming request through Maro's handle.
 
     Thin lifecycle wrapper around :func:`_handle_impl` (see its docstring for
     argument semantics). After the request completes — success or failure —
@@ -805,7 +805,7 @@ def _handle_impl(
     prior_context: Optional[str] = None,
     origin: Optional[dict] = None,
 ) -> HandleResult:
-    """Process an incoming request through Poe's handle.
+    """Process an incoming request through Maro's handle.
 
     Args:
         message: The natural language request.
@@ -835,7 +835,7 @@ def _handle_impl(
     started_at = time.monotonic()
 
     if verbose:
-        print(f"[poe:{handle_id}] handle: {message!r}", file=sys.stderr, flush=True)
+        print(f"[maro:{handle_id}] handle: {message!r}", file=sys.stderr, flush=True)
 
     # Persist raw input before any prefix stripping — visibility hole fix.
     # Writes to memory/handle_inputs.jsonl so every goal + its prefixes are recoverable.
@@ -931,7 +931,7 @@ def _handle_impl(
         lane, confidence, reason = classify(message, adapter=adapter if not dry_run else None, dry_run=dry_run)
 
     if verbose:
-        print(f"[poe:{handle_id}] classified lane={lane} confidence={confidence:.2f}: {reason}", file=sys.stderr, flush=True)
+        print(f"[maro:{handle_id}] classified lane={lane} confidence={confidence:.2f}: {reason}", file=sys.stderr, flush=True)
 
     # direct: forces AGENDA lane regardless of classifier — the whole point is to bypass
     # Director overhead (which only applies to AGENDA) and go straight to run_agent_loop.
@@ -1086,7 +1086,7 @@ def _handle_impl(
         )
 
     else:  # agenda
-        # Only route through poe CEO layer for meta-commands (status, inspect, goal-map).
+        # Only route through the Conductor for meta-commands (status, inspect, goal-map).
         # For actual mission goals, always go direct to run_agent_loop to avoid stale
         # mission data being returned instead of a fresh run.
         _is_meta_command = False
@@ -1104,23 +1104,23 @@ def _handle_impl(
             try:
                 from conductor import conduct
                 from agent_loop import _goal_to_slug
-                poe_response = conduct(
+                conductor_response = conduct(
                     message,
                     adapter=adapter,
                     model=model,
                     dry_run=False,
                 )
                 elapsed = int((time.monotonic() - started_at) * 1000)
-                _poe_project = _goal_to_slug(message)
+                conductor_project = _goal_to_slug(message)
                 return HandleResult(
                     handle_id=handle_id,
                     lane="agenda",
                     lane_confidence=confidence,
-                    classification_reason=reason + " [routed via poe CEO layer]",
+                    classification_reason=reason + " [routed via Conductor]",
                     message=message,
                     status="done",
-                    result=poe_response.message,
-                    project=_poe_project,
+                    result=conductor_response.message,
+                    project=conductor_project,
                     elapsed_ms=elapsed,
                     artifact_path=None,
                 )
@@ -1134,7 +1134,7 @@ def _handle_impl(
                 _rewritten = rewrite_imperative_goal(message, adapter=adapter)
                 if _rewritten != message:
                     if verbose:
-                        print(f"[poe:{handle_id}] BLE rewrite: imperative goal → outcome goal", file=sys.stderr, flush=True)
+                        print(f"[maro:{handle_id}] BLE rewrite: imperative goal → outcome goal", file=sys.stderr, flush=True)
                     message = _rewritten
             except Exception:
                 pass  # rewrite failures must never block a run
@@ -1151,7 +1151,7 @@ def _handle_impl(
                 if not _clarity.get("clear"):
                     _q = _clarity.get("question", "Could you clarify the goal?")
                     if verbose:
-                        print(f"[poe:{handle_id}] clarity check: UNCLEAR — {_q}", file=sys.stderr, flush=True)
+                        print(f"[maro:{handle_id}] clarity check: UNCLEAR — {_q}", file=sys.stderr, flush=True)
                     if channel is not None:
                         # Ask via channel and wait for reply — then continue with enriched goal
                         _reply = channel.ask(_q)
@@ -1179,7 +1179,7 @@ def _handle_impl(
                 pass  # clarity check must never block execution
 
         if verbose:
-            print(f"[poe:{handle_id}] AGENDA lane — starting loop...", file=sys.stderr, flush=True)
+            print(f"[maro:{handle_id}] AGENDA lane — starting loop...", file=sys.stderr, flush=True)
 
         # mode:thin — use factory_thin loop (faster, lower cost) instead of full Mode 2
         if _use_thin_mode and not dry_run:
@@ -1220,7 +1220,7 @@ def _handle_impl(
                 _pipe_steps = [s.strip() for s in _pipe_raw.splitlines() if s.strip()]
             if _pipe_steps:
                 if verbose:
-                    print(f"[poe] pipeline: {len(_pipe_steps)} steps: {_pipe_steps}", file=sys.stderr, flush=True)
+                    print(f"[maro] pipeline: {len(_pipe_steps)} steps: {_pipe_steps}", file=sys.stderr, flush=True)
                 _pipe_result = run_agent_loop(
                     _pipe_raw,
                     project=project,
@@ -1240,7 +1240,7 @@ def _handle_impl(
         # Uses parallel_fan_out=4 so _run_steps_dag fires when [after:N] parallelism is found.
         if _team_prefix:
             if verbose:
-                print("[poe] team: dag execution mode (parallel_fan_out=4)", file=sys.stderr, flush=True)
+                print("[maro] team: dag execution mode (parallel_fan_out=4)", file=sys.stderr, flush=True)
             _team_result = run_agent_loop(
                 _pfx.message,
                 project=project,
@@ -1835,11 +1835,11 @@ def _handle_impl(
                     _action = _cfg.get("quality_gate_action", "escalate").strip().lower()
                     _gate_note = f"\n\n⚠️ Quality gate: ESCALATE — {_gate_verdict.reason}"
                     if verbose:
-                        print(f"[poe:{handle_id}] quality gate: ESCALATE → {_next_tier} ({_gate_verdict.reason})",
+                        print(f"[maro:{handle_id}] quality gate: ESCALATE → {_next_tier} ({_gate_verdict.reason})",
                               file=sys.stderr, flush=True)
                     if _action == "escalate" and _next_tier:
                         if verbose:
-                            print(f"[poe:{handle_id}] re-running with model={_next_tier}",
+                            print(f"[maro:{handle_id}] re-running with model={_next_tier}",
                                   file=sys.stderr, flush=True)
                         _escalated_adapter = build_adapter(model=_next_tier)
                         loop_result = run_agent_loop(
@@ -1886,7 +1886,7 @@ def _handle_impl(
                                 )
                                 if verbose and _post_closure is not None:
                                     print(
-                                        f"[poe:{handle_id}] post-escalate closure: "
+                                        f"[maro:{handle_id}] post-escalate closure: "
                                         f"complete={_post_closure.complete} "
                                         f"confidence={_post_closure.confidence:.2f}",
                                         file=sys.stderr, flush=True,
@@ -2345,7 +2345,7 @@ def drain_task_store(
     Args:
         max_tasks: Max tasks to process per call (avoids monopolizing the heartbeat).
         sources: Which task sources to drain. Includes user_goal for
-                 ad-hoc goals enqueued via ``poe-enqueue``.
+                 ad-hoc goals enqueued via ``maro-enqueue``.
     """
     try:
         from task_store import list_tasks, claim, complete, fail as task_fail
@@ -2450,7 +2450,7 @@ def enqueue_goals(goals: List[str], *, sequential: bool = True) -> List[str]:
 def main(argv=None):
     import argparse
 
-    parser = argparse.ArgumentParser(prog="maro-handle", description="Poe's unified request handler")
+    parser = argparse.ArgumentParser(prog="maro-handle", description="Maro's unified request handler")
     parser.add_argument("message", nargs="+", help="The request to handle")
     parser.add_argument("--project", "-p", help="Project slug for AGENDA work")
     parser.add_argument("--repo", help="Path to target repo (auto-injects stack context into decompose)")
@@ -2488,7 +2488,7 @@ def main(argv=None):
 
 
 def enqueue_main(argv=None):
-    """CLI entry point for ``poe-enqueue``."""
+    """CLI entry point for ``maro-enqueue``."""
     import argparse
 
     parser = argparse.ArgumentParser(

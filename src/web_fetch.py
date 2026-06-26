@@ -51,7 +51,7 @@ _UA_STANDARD = (
     "Chrome/120.0.0.0 Safari/537.36"
 )
 # Minimal UA for redirect-following — t.co returns 301 with this, 200+JS with Chrome UA
-_UA_REDIRECT = "Mozilla/5.0 (compatible; PoeBot/1.0)"
+_UA_REDIRECT = "Mozilla/5.0 (compatible; MaroBot/1.0)"
 
 # Path to OpenClaw's authenticated X scraping CLI.
 # Override via X_CLI_SCRIPT env var; falls back to the standard OpenClaw install location.
@@ -241,7 +241,7 @@ def _jina_fetch(url: str, max_chars: int = _MAX_TEXT_CHARS) -> str:
     Returns the markdown content capped at max_chars, or "" on failure.
     """
     jina_url = _JINA_BASE + url
-    status, body = _http_get(jina_url, ua="PoeBot/1.0 (+https://github.com/slycrel/openclaw-orchestration)")
+    status, body = _http_get(jina_url, ua="MaroBot/1.0 (+https://github.com/slycrel/openclaw-orchestration)")
     if status != 200 or not body:
         return ""
     # Jina response is already markdown — just cap length

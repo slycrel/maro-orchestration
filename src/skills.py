@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Phase 10/14: Skill library for Poe orchestration.
+"""Phase 10/14: Skill library for Maro orchestration.
 
 A skill is a reusable execution pattern extracted from completed goal chains.
 Skills are injected into future agent_loop._decompose() prompts when a goal

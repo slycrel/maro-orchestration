@@ -703,13 +703,13 @@ def execute_step(
         _tier = _hp["tier"]
         if _tier == ACTION_TIER_EXTERNAL:
             print(
-                f"[poe] HITL confirm: step {step_num} is EXTERNAL (gate=confirm) — proceeding autonomously",
+                f"[maro] HITL confirm: step {step_num} is EXTERNAL (gate=confirm) — proceeding autonomously",
                 file=sys.stderr, flush=True,
             )
         elif _tier == ACTION_TIER_WRITE and verbose:
-            print(f"[poe] HITL warn: step {step_num} is WRITE tier", file=sys.stderr, flush=True)
+            print(f"[maro] HITL warn: step {step_num} is WRITE tier", file=sys.stderr, flush=True)
         elif _hp["risk_level"] == "MEDIUM" and verbose:
-            print(f"[poe] constraint MEDIUM on step {step_num}: {_hp['reason']}", file=sys.stderr, flush=True)
+            print(f"[maro] constraint MEDIUM on step {step_num}: {_hp['reason']}", file=sys.stderr, flush=True)
     except Exception:
         pass  # constraint module optional
 
@@ -761,7 +761,7 @@ def execute_step(
     _pipeline_block = ""
     if _data_heavy:
         _pipeline_block = "\n\n" + _DATA_PIPELINE_EXTRA.format(
-            project_dir=project_dir or "/tmp/poe_step"
+            project_dir=project_dir or "/tmp/maro_step"
         )
         log.debug("step %d data_heavy=True — injecting pipeline enforcement", step_num)
 

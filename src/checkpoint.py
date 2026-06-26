@@ -339,7 +339,7 @@ def branch_checkpoint(loop_id: str) -> Optional[str]:
 
 def _cli_main() -> None:
     import argparse
-    parser = argparse.ArgumentParser(description="Poe checkpoint manager")
+    parser = argparse.ArgumentParser(description="Maro checkpoint manager")
     sub = parser.add_subparsers(dest="cmd")
 
     sub.add_parser("list", help="List all saved checkpoints")
@@ -391,7 +391,7 @@ def _cli_main() -> None:
             print(f"No checkpoint found for {args.loop_id}")
             return
         print(f"Branch created: {new_id}  (parent: {args.loop_id})")
-        print(f"Resume with: poe-run --resume {new_id}")
+        print(f"Resume with: maro-run --resume {new_id}")
     elif args.cmd == "delete":
         delete_checkpoint(args.loop_id)
         print(f"Deleted checkpoint {args.loop_id}")

@@ -14,7 +14,7 @@ Usage:
     verdict = va.quality_review(goal, step_outcomes)   # pass/escalate verdict
 
 CLI:
-    poe-verify --step "Fetch market data" --result "Got 42 records" [--adversarial]
+    maro-verify --step "Fetch market data" --result "Got 42 records" [--adversarial]
 """
 
 from __future__ import annotations
@@ -322,7 +322,7 @@ class VerificationAgent:
 # ---------------------------------------------------------------------------
 
 def main(argv: list = None) -> int:
-    """poe-verify CLI — run verification agent against a step or result text."""
+    """maro-verify CLI — run verification agent against a step or result text."""
     import argparse
     import sys
 
@@ -367,8 +367,8 @@ def main(argv: list = None) -> int:
                 print(f"  [{c.verdict}] {c.claim[:80]} — {c.reason[:80]}")
         return 0
 
-    print("Usage: poe-verify --step TEXT --result TEXT")
-    print("       poe-verify --adversarial --result TEXT [--goal GOAL]")
+    print("Usage: maro-verify --step TEXT --result TEXT")
+    print("       maro-verify --adversarial --result TEXT [--goal GOAL]")
     return 1
 
 

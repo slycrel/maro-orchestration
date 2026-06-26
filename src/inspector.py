@@ -1267,7 +1267,7 @@ def _build_spec_executive_summary(
         )
 
     _EXEC_SYS = (
-        "You are writing a brief executive quality summary for Poe's autonomous system. "
+        "You are writing a brief executive quality summary for Maro's autonomous system. "
         "2-4 sentences max. Lead with the most important finding."
     )
     data_text = (
@@ -1974,7 +1974,7 @@ def run_inspector(
 
 
 # ---------------------------------------------------------------------------
-# Inspector loop (for systemd: poe-inspector --loop)
+# Inspector loop (for systemd: maro-inspector --loop)
 # ---------------------------------------------------------------------------
 
 def inspector_loop(
@@ -1984,7 +1984,7 @@ def inspector_loop(
 ) -> None:
     """Run inspector on a fixed interval forever.
 
-    Designed for systemd: poe-inspector --loop
+    Designed for systemd: maro-inspector --loop
     Role: quality oversight, separate from heartbeat (health oversight).
     """
     if verbose:
@@ -2042,7 +2042,7 @@ def get_friction_summary() -> str:
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description="Poe Inspector — quality oversight")
+    parser = argparse.ArgumentParser(description="Maro Inspector — quality oversight")
     parser.add_argument("--loop", action="store_true", help="Run forever on an interval (for systemd)")
     parser.add_argument("--interval", type=float, default=3600.0, help="Seconds between runs (default: 3600)")
     parser.add_argument("--limit", type=int, default=50, help="Number of outcomes to inspect (default: 50)")

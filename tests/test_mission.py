@@ -507,7 +507,7 @@ def test_list_missions_returns_summaries(monkeypatch, tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_cli_poe_mission_dry_run(monkeypatch, tmp_path, capsys):
-    """poe-mission CLI subcommand with --dry-run returns 0."""
+    """maro-mission CLI subcommand with --dry-run returns 0."""
     _setup_workspace(monkeypatch, tmp_path)
     import cli
     rc = cli.main(["mission", "build a test pipeline", "--project", "cli-mission-test", "--dry-run"])
@@ -517,7 +517,7 @@ def test_cli_poe_mission_dry_run(monkeypatch, tmp_path, capsys):
 
 
 def test_cli_poe_mission_status(monkeypatch, tmp_path, capsys):
-    """poe-mission-status after running a mission shows the mission."""
+    """maro-mission-status after running a mission shows the mission."""
     _setup_workspace(monkeypatch, tmp_path)
     import cli
     cli.main(["mission", "status test goal", "--project", "status-cli-test", "--dry-run"])

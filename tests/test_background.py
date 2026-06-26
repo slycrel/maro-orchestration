@@ -249,7 +249,7 @@ def test_list_background_tasks_deduplicates(monkeypatch, tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_cli_poe_background(monkeypatch, tmp_path, capsys):
-    """poe-background CLI starts a task and returns 0."""
+    """maro-background CLI starts a task and returns 0."""
     _setup_workspace(monkeypatch, tmp_path)
     import cli
     rc = cli.main(["background", "echo", "cli-test"])
@@ -259,7 +259,7 @@ def test_cli_poe_background(monkeypatch, tmp_path, capsys):
 
 
 def test_cli_poe_background_wait(monkeypatch, tmp_path, capsys):
-    """poe-background --wait completes for a fast command."""
+    """maro-background --wait completes for a fast command."""
     _setup_workspace(monkeypatch, tmp_path)
     import cli
     rc = cli.main(["background", "echo", "wait-test", "--wait", "--timeout", "10"])

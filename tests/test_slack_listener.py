@@ -103,7 +103,7 @@ def test_parse_slash_command_empty():
 def test_dispatch_slash_help_returns_text():
     mock_client = MagicMock()
     result = slack_listener._dispatch_slash("help", "", "C01", mock_client, dry_run=True)
-    assert "Poe Slack commands" in result
+    assert "Maro Slack commands" in result
     assert "/status" in result
     assert "/observe" in result
 
@@ -185,7 +185,7 @@ def test_process_message_help_sends_response():
     mock_client.chat_postMessage.assert_called_once()
     call_kwargs = mock_client.chat_postMessage.call_args[1]
     assert call_kwargs["channel"] == "C01"
-    assert "Poe Slack commands" in call_kwargs["text"]
+    assert "Maro Slack commands" in call_kwargs["text"]
 
 
 def test_process_message_routes_to_interrupt_when_loop_active():

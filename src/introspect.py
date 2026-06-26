@@ -11,9 +11,9 @@ Usage:
     print(diag.failure_class, diag.recommendation)
 
 CLI:
-    poe-introspect <loop_id>
-    poe-introspect --latest
-    poe-introspect --latest --lenses
+    maro-introspect <loop_id>
+    maro-introspect --latest
+    maro-introspect --latest --lenses
 """
 
 from __future__ import annotations

@@ -432,7 +432,7 @@ def fetch_channel(url_or_query: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Health check (for poe-doctor)
+# Health check (for maro-doctor)
 # ---------------------------------------------------------------------------
 
 def channels_health_check() -> Dict[str, Any]:

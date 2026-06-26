@@ -1,4 +1,4 @@
-"""Phase 8: Quality + Cost tracking for Poe orchestration.
+"""Phase 8: Quality + Cost tracking for Maro orchestration.
 Phase 19 adds pass@k / pass^k metrics and skill promotion eligibility.
 
 
@@ -564,7 +564,7 @@ def _get_skill_success_rate(skill_id: str) -> Optional[float]:
 def format_metrics_report(metrics: SystemMetrics) -> str:
     """Format metrics as a human-readable text report."""
     lines = [
-        "=== Poe System Metrics ===",
+        "=== Maro System Metrics ===",
         f"Computed: {metrics.computed_at[:19]}Z",
         f"Total goals: {metrics.total_goals}",
         f"Overall success rate: {metrics.overall_success_rate:.1%}",

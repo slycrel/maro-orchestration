@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # @lat: [[core-loop]]
-"""Phase 1: Autonomous loop runner for Poe orchestration.
+"""Phase 1: Autonomous loop runner for Maro orchestration.
 
-The critical unlock: give Poe a goal, watch it work until done or stuck.
+The critical unlock: give Maro a goal, watch it work until done or stuck.
 
 Loop model:
     goal → decompose → for each step: [act → observe → decide] → done | stuck
@@ -682,7 +682,7 @@ def _process_blocked_step(ctx: LoopContext, blk: BlockedStepContext) -> tuple:
         step_idx -= 1
         if ctx.verbose:
             _br = outcome.get("stuck_reason", "blocked")
-            print(f"[poe] step {step_idx+1} blocked ({_br[:80]}), retrying with fallback hint", file=sys.stderr, flush=True)
+            print(f"[maro] step {step_idx+1} blocked ({_br[:80]}), retrying with fallback hint", file=sys.stderr, flush=True)
         step_outcomes.append(step_from_decompose(
             step_text, item_index,
             status="blocked", result=step_result, iteration=iteration,
@@ -718,7 +718,7 @@ def _process_blocked_step(ctx: LoopContext, blk: BlockedStepContext) -> tuple:
                          step_idx, len(_sub_shaped), replan_count)
                 if ctx.verbose:
                     print(
-                        f"[poe] step {step_idx} re-decomposed into {len(_sub_shaped)} sub-steps "
+                        f"[maro] step {step_idx} re-decomposed into {len(_sub_shaped)} sub-steps "
                         f"(replan #{replan_count})",
                         file=sys.stderr, flush=True,
                     )
@@ -760,7 +760,7 @@ def _process_blocked_step(ctx: LoopContext, blk: BlockedStepContext) -> tuple:
                 log.warning("adapter-hung detection: %d consecutive max-timeouts — bailing out",
                             consecutive_max_timeouts)
                 if ctx.verbose:
-                    print(f"[poe] adapter appears hung ({consecutive_max_timeouts} consecutive "
+                    print(f"[maro] adapter appears hung ({consecutive_max_timeouts} consecutive "
                           f"ceiling timeouts) — stopping loop", file=sys.stderr, flush=True)
                 return ("break", step_idx, "stuck", _stuck_reason, next_step_injected_context,
                         consecutive_max_timeouts, _recovery_delta, replan_count)
@@ -774,7 +774,7 @@ def _process_blocked_step(ctx: LoopContext, blk: BlockedStepContext) -> tuple:
         replan_count += 1
         if ctx.verbose:
             print(
-                f"[poe] step {step_idx} timed out — split into {len(_decision.split_into)} steps "
+                f"[maro] step {step_idx} timed out — split into {len(_decision.split_into)} steps "
                 f"(step-shape replan #{replan_count})",
                 file=sys.stderr, flush=True,
             )
@@ -796,7 +796,7 @@ def _process_blocked_step(ctx: LoopContext, blk: BlockedStepContext) -> tuple:
     if item_index >= 0:
         o.mark_item(ctx.project, item_index, o.STATE_BLOCKED)
     if ctx.verbose:
-        print(f"[poe] step {step_idx} stuck after retry: {_stuck_reason}", file=sys.stderr, flush=True)
+        print(f"[maro] step {step_idx} stuck after retry: {_stuck_reason}", file=sys.stderr, flush=True)
     try:
         from skills import attribute_failure_to_skills, find_matching_skills, record_variant_outcome, record_skill_outcome
         from metrics import estimate_cost as _est_cost
@@ -1046,7 +1046,7 @@ def _check_loop_interrupts(
             loop_status = "interrupted"
             stuck_reason = f"kill switch: {_ks_msg}"
             if ctx.verbose:
-                print("[poe] kill switch active — stopping loop", file=sys.stderr, flush=True)
+                print("[maro] kill switch active — stopping loop", file=sys.stderr, flush=True)
     except Exception as _exc:
         # Safety mechanism — silent failure means a kill switch could be ignored.
         log.error("kill switch check FAILED for loop %s — safety mechanism may be compromised: %s",
@@ -1060,7 +1060,7 @@ def _check_loop_interrupts(
             loop_status = "interrupted"
             stuck_reason = f"wall-clock timeout ({ctx.loop_timeout_secs:.0f}s)"
             if ctx.verbose:
-                print(f"[poe] wall-clock timeout after {_elapsed_secs:.0f}s — stopping", file=sys.stderr, flush=True)
+                print(f"[maro] wall-clock timeout after {_elapsed_secs:.0f}s — stopping", file=sys.stderr, flush=True)
 
     if loop_status:
         return loop_status, stuck_reason, goal, interrupts_applied, remaining_steps, remaining_indices
@@ -1079,7 +1079,7 @@ def _check_loop_interrupts(
                     stuck_reason = f"stopped by {intr.source}: {intr.message[:80]}"
                     if ctx.verbose:
                         print(
-                            f"[poe] interrupt: stop requested by {intr.source}",
+                            f"[maro] interrupt: stop requested by {intr.source}",
                             file=sys.stderr, flush=True,
                         )
                     remaining_steps = []
@@ -1100,7 +1100,7 @@ def _check_loop_interrupts(
                     ])
                     if ctx.verbose:
                         print(
-                            f"[poe] interrupt({intr.intent}) from {intr.source}: {len(remaining_steps)} steps remaining",
+                            f"[maro] interrupt({intr.intent}) from {intr.source}: {len(remaining_steps)} steps remaining",
                             file=sys.stderr, flush=True,
                         )
         except Exception as _exc:
@@ -1158,7 +1158,7 @@ def _post_step_checks(
         try:
             _scan = scan_content_fn(
                 step_result,
-                log_fn=lambda msg: print(f"[poe] {msg}", file=sys.stderr, flush=True),
+                log_fn=lambda msg: print(f"[maro] {msg}", file=sys.stderr, flush=True),
             )
             if _scan.risk >= injection_risk_cls.HIGH:
                 log.warning("step %d injection HIGH in result — redacting before context injection (signals=%s)",
@@ -1357,11 +1357,11 @@ def _run_ralph_verify(
                                 "raising floor to mid for remaining steps",
                                 session_verify_failures)
                     if ctx.verbose:
-                        print(f"[poe] session tier-up: {session_verify_failures} verify "
+                        print(f"[maro] session tier-up: {session_verify_failures} verify "
                               "failures → floor raised to mid",
                               file=sys.stderr, flush=True)
             if ctx.verbose:
-                print(f"[poe] ralph verify: step {step_idx} RETRY — {_vr['reason'][:80]}",
+                print(f"[maro] ralph verify: step {step_idx} RETRY — {_vr['reason'][:80]}",
                       file=sys.stderr, flush=True)
             outcome["status"] = "blocked"
             outcome["stuck_reason"] = f"[ralph verify] {_vr['reason']}"
@@ -1402,7 +1402,7 @@ def _run_parallel_batch(
     iteration += len(_batch_steps)
     _batch_start = time.monotonic()
     if ctx.verbose:
-        print(f"[poe] parallel batch: {len(_batch_steps)} steps at level", file=sys.stderr, flush=True)
+        print(f"[maro] parallel batch: {len(_batch_steps)} steps at level", file=sys.stderr, flush=True)
 
     _batch_outcomes = _run_steps_parallel(
         goal=ctx.goal,
@@ -1444,7 +1444,7 @@ def _run_parallel_batch(
             _b_excerpt = _b_result[:800] if _b_result else ""
             completed_context.append(f"Step {step_idx} ({_batch_text[:80]}):\n{_b_excerpt}")
             if ctx.verbose:
-                print(f"[poe] step {step_idx} done (parallel): {_batch_oc.get('summary', '')[:80]}", file=sys.stderr, flush=True)
+                print(f"[maro] step {step_idx} done (parallel): {_batch_oc.get('summary', '')[:80]}", file=sys.stderr, flush=True)
             _bi_inject = _batch_oc.get("inject_steps", [])
             if _bi_inject and isinstance(_bi_inject, list):
                 _batch_injected.extend(
@@ -1452,7 +1452,7 @@ def _run_parallel_batch(
                 )
         elif _b_status == "blocked":
             if ctx.verbose:
-                print(f"[poe] step {step_idx} blocked (parallel): {_batch_oc.get('stuck_reason', '')[:80]}", file=sys.stderr, flush=True)
+                print(f"[maro] step {step_idx} blocked (parallel): {_batch_oc.get('stuck_reason', '')[:80]}", file=sys.stderr, flush=True)
 
     # Inject collected steps from batch
     if _batch_injected:
@@ -1463,7 +1463,7 @@ def _run_parallel_batch(
                  len(_capped_inject))
         if ctx.verbose:
             for _s in _capped_inject:
-                print(f"[poe] injected step (from parallel batch): {_s[:80]}",
+                print(f"[maro] injected step (from parallel batch): {_s[:80]}",
                       file=sys.stderr, flush=True)
 
     # Log batch cost
@@ -1566,7 +1566,7 @@ def _process_done_step(
                      [s[:40] for s in _clean_injected])
             if ctx.verbose:
                 for _s in _clean_injected:
-                    print(f"[poe] injected step: {_s[:80]}", file=sys.stderr, flush=True)
+                    print(f"[maro] injected step: {_s[:80]}", file=sys.stderr, flush=True)
 
     # Context compression
     _CTX_KEEP_FULL = 3
@@ -1585,7 +1585,7 @@ def _process_done_step(
         completed_context[:] = _compressed + list(_new_entries)
 
     if ctx.verbose:
-        print(f"[poe] step {step_idx} done: {step_summary[:120]}", file=sys.stderr, flush=True)
+        print(f"[maro] step {step_idx} done: {step_summary[:120]}", file=sys.stderr, flush=True)
 
     # Phase 32: update skill utility + Phase 59: record skill cost/latency telemetry
     try:
@@ -1672,7 +1672,7 @@ def _select_step_adapter(
                 _step_adapter = build_adapter(model=_tier_override)
                 if ctx.verbose:
                     _tier_name = {"cheap": "haiku", "mid": "sonnet", "power": "opus"}.get(_tier_override, _tier_override)
-                    print(f"[poe] step {step_idx}: escalated to {_tier_name} (retry tier-up)", file=sys.stderr, flush=True)
+                    print(f"[maro] step {step_idx}: escalated to {_tier_name} (retry tier-up)", file=sys.stderr, flush=True)
             except Exception as _ta_exc:
                 log.debug("tier-override adapter build failed for step %d, using default: %s", step_idx, _ta_exc)
         else:
@@ -1685,7 +1685,7 @@ def _select_step_adapter(
                     _step_adapter = build_adapter(model=_step_model)
                     if ctx.verbose:
                         _tier = "haiku" if _step_model == MODEL_CHEAP else "sonnet"
-                        print(f"[poe] step {step_idx}: routing to {_tier} (classify_step_model)", file=sys.stderr, flush=True)
+                        print(f"[maro] step {step_idx}: routing to {_tier} (classify_step_model)", file=sys.stderr, flush=True)
             except Exception as _cm_exc:
                 log.debug("classify_step_model failed for step %d, using default: %s", step_idx, _cm_exc)
     return _step_adapter
@@ -1868,7 +1868,7 @@ def _build_result_and_finalize(
             log.debug("partial result write failed: %s", exc)
 
     if ctx.verbose:
-        print(f"[poe] {result.summary()}", file=sys.stderr, flush=True)
+        print(f"[maro] {result.summary()}", file=sys.stderr, flush=True)
 
     _finalize_loop(
         loop_id=ctx.loop_id,
@@ -1956,7 +1956,7 @@ def _prepare_execution(
     if len(_shaped_steps) != len(steps):
         if ctx.verbose:
             print(
-                f"[poe] step-shape: {len(steps)} planned → {len(_shaped_steps)} after splitting "
+                f"[maro] step-shape: {len(steps)} planned → {len(_shaped_steps)} after splitting "
                 f"combined exec+analyze steps",
                 file=sys.stderr, flush=True,
             )
@@ -1997,7 +1997,7 @@ def _run_parallel_path(
     if use_dag:
         if ctx.verbose:
             print(
-                f"[poe] dag: running {len(clean_steps)} steps with dep-aware scheduling "
+                f"[maro] dag: running {len(clean_steps)} steps with dep-aware scheduling "
                 f"(max_workers={parallel_fan_out}, levels={len(levels)}, "
                 f"parallel_levels={len(parallel_levels)})",
                 file=sys.stderr, flush=True,
@@ -2017,7 +2017,7 @@ def _run_parallel_path(
         _fanout_step_texts = clean_steps
     else:
         if ctx.verbose:
-            print(f"[poe] fan-out: running {len(steps)} steps in parallel (max_workers={parallel_fan_out})", file=sys.stderr, flush=True)
+            print(f"[maro] fan-out: running {len(steps)} steps in parallel (max_workers={parallel_fan_out})", file=sys.stderr, flush=True)
         _fanout_outcomes = _run_steps_parallel(
             goal=ctx.goal,
             steps=steps,
@@ -2109,7 +2109,7 @@ def _preflight_checks(
                 steps = _remaining
                 if ctx.verbose:
                     print(
-                        f"[poe] resuming from checkpoint {resume_from_loop_id}: "
+                        f"[maro] resuming from checkpoint {resume_from_loop_id}: "
                         f"{len(resume_completed)} steps already done, {len(steps)} remaining",
                         file=sys.stderr, flush=True,
                     )
@@ -2149,7 +2149,7 @@ def _preflight_checks(
         if _pre_est > 0:
             log.info("pre-run estimate: %d steps, ~$%.2f", len(steps), _pre_est)
             if ctx.verbose:
-                print(f"[poe] pre-run: {len(steps)} steps, estimated ~${_pre_est:.2f}", file=sys.stderr, flush=True)
+                print(f"[maro] pre-run: {len(steps)} steps, estimated ~${_pre_est:.2f}", file=sys.stderr, flush=True)
         else:
             log.info("pre-run: %d steps (no cost estimate available)", len(steps))
     except Exception:
@@ -2204,7 +2204,7 @@ def _preflight_checks(
                 start_ts=ctx.start_ts,
             )
             if ctx.verbose and manifest_path_str:
-                print(f"[poe] plan manifest: {manifest_path_str}", file=sys.stderr, flush=True)
+                print(f"[maro] plan manifest: {manifest_path_str}", file=sys.stderr, flush=True)
         except Exception as _mf_exc:
             log.warning("initial plan manifest write failed: %s", _mf_exc)
 
@@ -2256,7 +2256,7 @@ def _decompose_goal(
     from llm import build_adapter, MODEL_MID, THINKING_HIGH
 
     if ctx.verbose:
-        print("[poe] decomposing goal...", file=sys.stderr, flush=True)
+        print("[maro] decomposing goal...", file=sys.stderr, flush=True)
     _lessons_context, _skills_context, _cost_context, _had_no_matching_skill, _matched_rule = (
         _build_loop_context(ctx.goal, verbose=ctx.verbose, permission_context=permission_context,
                             project=ctx.project or "", repo_path=ctx.repo_path or "")
@@ -2266,11 +2266,11 @@ def _decompose_goal(
     if preset_steps is not None and preset_steps:
         steps = [str(s).strip() for s in preset_steps if str(s).strip()]
         if ctx.verbose:
-            print(f"[poe] pipeline: using {len(steps)} preset steps (no decompose)", file=sys.stderr, flush=True)
+            print(f"[maro] pipeline: using {len(steps)} preset steps (no decompose)", file=sys.stderr, flush=True)
     elif _matched_rule is not None and _matched_rule.steps_template:
         steps = list(_matched_rule.steps_template)
         if ctx.verbose:
-            print(f"[poe] using {len(steps)} rule steps from {_matched_rule.name!r}", file=sys.stderr, flush=True)
+            print(f"[maro] using {len(steps)} rule steps from {_matched_rule.name!r}", file=sys.stderr, flush=True)
     else:
         steps = None
 
@@ -2310,7 +2310,7 @@ def _decompose_goal(
             thinking_budget=_decompose_thinking,
         )
     if ctx.verbose:
-        print(f"[poe] plan ({len(steps)} steps) loop_id={ctx.loop_id}:", file=sys.stderr, flush=True)
+        print(f"[maro] plan ({len(steps)} steps) loop_id={ctx.loop_id}:", file=sys.stderr, flush=True)
         for _pi, _ps in enumerate(steps, 1):
             print(f"  {_pi}. {_ps[:100]}", file=sys.stderr, flush=True)
 
@@ -2329,7 +2329,7 @@ def _decompose_goal(
             )
             if _prereq_context and ctx.verbose:
                 print(
-                    f"[poe] prereq: {len(_prereq_context)} step(s) have injected knowledge context",
+                    f"[maro] prereq: {len(_prereq_context)} step(s) have injected knowledge context",
                     file=sys.stderr, flush=True,
                 )
         except Exception:
@@ -2441,7 +2441,7 @@ def _initialize_loop(
         ctx.loop_timeout_secs = 7200.0
 
     if verbose:
-        print(f"[poe] loop_id={ctx.loop_id} goal={goal!r}", file=sys.stderr, flush=True)
+        print(f"[maro] loop_id={ctx.loop_id} goal={goal!r}", file=sys.stderr, flush=True)
 
     # Resolve tool set from PermissionContext (Phase 41 — prompt-composition-time gating)
     ctx.perm_ctx = permission_context
@@ -2477,13 +2477,13 @@ def _initialize_loop(
         _proj_existed = o.project_dir(project).exists()
         o.ensure_project(project, goal[:80])
         if verbose and not _proj_existed:
-            print(f"[poe] created project={project}", file=sys.stderr, flush=True)
+            print(f"[maro] created project={project}", file=sys.stderr, flush=True)
     else:
         project = _goal_to_slug(goal)
         _proj_existed = o.project_dir(project).exists()
         o.ensure_project(project, goal[:80])
         if verbose and not _proj_existed:
-            print(f"[poe] created project={project}", file=sys.stderr, flush=True)
+            print(f"[maro] created project={project}", file=sys.stderr, flush=True)
     ctx.project = project
 
     # Advertise this loop as running so other interfaces can route interrupts
@@ -2611,7 +2611,7 @@ def _run_steps_parallel(
         if verbose:
             status_label = outcome.get("status", "?")
             summary = outcome.get("summary", "")[:80]
-            print(f"[poe] parallel step {step_idx} {status_label}: {summary}", file=sys.stderr, flush=True)
+            print(f"[maro] parallel step {step_idx} {status_label}: {summary}", file=sys.stderr, flush=True)
         return step_idx, outcome
 
     n_workers = min(max_workers, len(steps))
@@ -2744,7 +2744,7 @@ def _run_steps_dag(
         if verbose:
             status_label = outcome.get("status", "?")
             summary = outcome.get("summary", "")[:80]
-            print(f"[poe] dag step {step_idx} {status_label}: {summary}", file=sys.stderr, flush=True)
+            print(f"[maro] dag step {step_idx} {status_label}: {summary}", file=sys.stderr, flush=True)
         with results_lock:
             results[step_idx] = outcome
         return step_idx, outcome
@@ -2957,7 +2957,7 @@ def _build_loop_context(
         lessons_context = _rr.as_loop_block()
         if verbose and _rr.sources.get("graveyard_count"):
             print(
-                f"[poe] resurrecting {_rr.sources['graveyard_count']} "
+                f"[maro] resurrecting {_rr.sources['graveyard_count']} "
                 f"graveyard lesson(s) for goal",
                 file=sys.stderr, flush=True,
             )
@@ -2978,7 +2978,7 @@ def _build_loop_context(
         skills_context = format_skills_for_prompt(_matched_and_routed)
         if _matched_and_routed and verbose:
             print(
-                f"[poe] injecting {len(_matched_and_routed)} skill(s) into decompose",
+                f"[maro] injecting {len(_matched_and_routed)} skill(s) into decompose",
                 file=sys.stderr, flush=True,
             )
         had_no_matching_skill = not _matched_and_routed
@@ -2998,7 +2998,7 @@ def _build_loop_context(
             if verbose:
                 _curated_count = len(_skill_loader.find_matching(goal, role=_role))
                 print(
-                    f"[poe] injecting {_curated_count} curated skill(s) into decompose",
+                    f"[maro] injecting {_curated_count} curated skill(s) into decompose",
                     file=sys.stderr, flush=True,
                 )
             if had_no_matching_skill:
@@ -3039,7 +3039,7 @@ def _build_loop_context(
                 if _cg_ctx:
                     lessons_context = (lessons_context + "\n\n" + _cg_ctx) if lessons_context else _cg_ctx
                     if verbose:
-                        print(f"[poe] codebase graph: {_cg.total_files} files, top={_cg.ranked_files[0] if _cg.ranked_files else '?'}", file=sys.stderr, flush=True)
+                        print(f"[maro] codebase graph: {_cg.total_files} files, top={_cg.ranked_files[0] if _cg.ranked_files else '?'}", file=sys.stderr, flush=True)
     except Exception as _cg_exc:
         log.debug("codebase graph injection failed: %s", _cg_exc)
 
@@ -3072,7 +3072,7 @@ def _build_loop_context(
                 _repo_ctx = format_repo_context(_stack)
                 lessons_context = (lessons_context + "\n\n" + _repo_ctx) if lessons_context else _repo_ctx
                 if verbose:
-                    print(f"[poe] repo context: {_stack.summary}", file=sys.stderr, flush=True)
+                    print(f"[maro] repo context: {_stack.summary}", file=sys.stderr, flush=True)
     except Exception as _repo_exc:
         log.debug("repo context injection failed: %s", _repo_exc)
 
@@ -3085,7 +3085,7 @@ def _build_loop_context(
             record_rule_use(matched_rule.id)
             if verbose:
                 print(
-                    f"[poe] Stage 5 rule hit: {matched_rule.name!r} — skipping LLM decompose",
+                    f"[maro] Stage 5 rule hit: {matched_rule.name!r} — skipping LLM decompose",
                     file=sys.stderr, flush=True,
                 )
     except Exception as _rul_exc:
@@ -3714,7 +3714,7 @@ def _finalize_loop(
                 if skill.name not in existing_skills:
                     save_skill(skill)
                     if verbose:
-                        print(f"[poe] skill crystallised: {skill.name}", file=sys.stderr, flush=True)
+                        print(f"[maro] skill crystallised: {skill.name}", file=sys.stderr, flush=True)
         except Exception as _skill_exc:
             log.warning("skill extraction failed — loop %s may not contribute to skill library: %s", loop_id, _skill_exc)
 
@@ -4035,7 +4035,7 @@ def _execute_main_loop(
                              _would_be_step_idx, step_text[:60], len(_ms_sub))
                     if verbose:
                         import sys as _ms_sys
-                        print(f"[poe] milestone step {_would_be_step_idx} expanded → "
+                        print(f"[maro] milestone step {_would_be_step_idx} expanded → "
                               f"{len(_ms_sub)} sub-steps", file=_ms_sys.stderr, flush=True)
                     continue  # Run sub-steps instead of this milestone step directly
             except Exception as _ms_exc:
@@ -4121,7 +4121,7 @@ def _execute_main_loop(
         iteration += 1
         step_idx += 1
         if verbose:
-            print(f"[poe] step {step_idx}: {step_text!r}", file=sys.stderr, flush=True)
+            print(f"[maro] step {step_idx}: {step_text!r}", file=sys.stderr, flush=True)
 
         # vtrivedy10/systematicls: re-inject goal + key constraints at step 5+ (every 5 steps)
         # Counteracts instruction fade-out as context grows.
@@ -4152,7 +4152,7 @@ def _execute_main_loop(
             )
             if verbose and _ctx_chars > 50_000:
                 import sys as _sys
-                print(f"[poe] step {step_idx}: accumulated context {_ctx_chars:,} chars "
+                print(f"[maro] step {step_idx}: accumulated context {_ctx_chars:,} chars "
                       f"({len(completed_context)} entries) — synthesis quality may degrade",
                       file=_sys.stderr, flush=True)
 
@@ -4205,7 +4205,7 @@ def _execute_main_loop(
                 remaining_indices[:0] = [-1] * len(_parts)
                 if verbose:
                     print(
-                        f"[poe] step {step_idx}: recovered compound step by splitting into {len(_parts)} steps",
+                        f"[maro] step {step_idx}: recovered compound step by splitting into {len(_parts)} steps",
                         file=sys.stderr,
                         flush=True,
                     )
@@ -4257,7 +4257,7 @@ def _execute_main_loop(
                 f"({total_tokens_in + total_tokens_out} total tokens after step {step_idx})"
             )
             if verbose:
-                print(f"[poe] {stuck_reason}", file=sys.stderr, flush=True)
+                print(f"[maro] {stuck_reason}", file=sys.stderr, flush=True)
             break
 
         # Cost budget — warn at 80%, hard stop at budget + 20% slush
@@ -4272,7 +4272,7 @@ def _execute_main_loop(
                 )
                 log.warning("cost hard stop: %s", stuck_reason)
                 if verbose:
-                    print(f"[poe] {stuck_reason}", file=sys.stderr, flush=True)
+                    print(f"[maro] {stuck_reason}", file=sys.stderr, flush=True)
                 break
             elif _cost_pct >= 80 and not getattr(run_agent_loop, "_cost_warned", False):
                 log.warning("cost approaching budget: $%.4f / $%.2f (%.0f%%)",
@@ -4378,7 +4378,7 @@ def _execute_main_loop(
                         log.info("adaptive [stuck/adjust]: replaced %d steps — %s",
                                  len(_ae_new), _ae_decision.reasoning[:100])
                         if verbose:
-                            print(f"[poe] adaptive adjust (stuck): {len(_ae_new)} steps — "
+                            print(f"[maro] adaptive adjust (stuck): {len(_ae_new)} steps — "
                                   f"{_ae_decision.reasoning[:60]}", file=sys.stderr, flush=True)
                         continue
                     elif _ae_decision.action == "replan":
@@ -4411,7 +4411,7 @@ def _execute_main_loop(
                                 )
                                 if verbose:
                                     print(
-                                        f"[poe] adaptive replan (stuck): "
+                                        f"[maro] adaptive replan (stuck): "
                                         f"{len(_ae_replan_steps)} steps — "
                                         f"{_ae_decision.reasoning[:60]}",
                                         file=sys.stderr, flush=True,
@@ -4433,7 +4433,7 @@ def _execute_main_loop(
                                  ctx.director_replan_count, ctx.director_budget_ceiling,
                                  _ae_restart_ctx[:100])
                         if verbose:
-                            print(f"[poe] adaptive restart (stuck) — "
+                            print(f"[maro] adaptive restart (stuck) — "
                                   f"{_ae_restart_ctx[:80]}", file=sys.stderr, flush=True)
                         break
                     elif _ae_decision.action == "escalate":
@@ -4475,7 +4475,7 @@ def _execute_main_loop(
                     # Advisor says rephrase — extract suggestion and retry once
                     log.info("advisor: suggests rephrasing stuck step %d — trying once more", step_idx)
                     if verbose:
-                        print(f"[poe] advisor (Opus): rephrase step {step_idx}", file=sys.stderr)
+                        print(f"[maro] advisor (Opus): rephrase step {step_idx}", file=sys.stderr)
                     stuck_streak = 0  # reset streak to give one more attempt
                     # Don't break — let the loop continue with the same step
                     # The advisor's advice is logged but the step text stays the same
@@ -4640,7 +4640,7 @@ def _execute_main_loop(
                             _traj_rate * 100, _traj_done, len(step_outcomes),
                             len(step_outcomes))
                 if verbose:
-                    print(f"[poe] trajectory check: {_traj_done}/{len(step_outcomes)} steps done "
+                    print(f"[maro] trajectory check: {_traj_done}/{len(step_outcomes)} steps done "
                           f"({_traj_rate:.0%}) → floor raised to mid",
                           file=sys.stderr, flush=True)
 
@@ -4720,7 +4720,7 @@ def _execute_main_loop(
                                  _ae2_trigger, len(_ae2_new), _ae2_decision.reasoning[:100])
                         if verbose:
                             print(
-                                f"[poe] adaptive adjust ({_ae2_trigger}): {len(_ae2_new)} steps — "
+                                f"[maro] adaptive adjust ({_ae2_trigger}): {len(_ae2_new)} steps — "
                                 f"{_ae2_decision.reasoning[:60]}", file=sys.stderr, flush=True,
                             )
                     elif _ae2_decision.action == "replan":
@@ -4753,7 +4753,7 @@ def _execute_main_loop(
                                 )
                                 if verbose:
                                     print(
-                                        f"[poe] adaptive replan ({_ae2_trigger}): "
+                                        f"[maro] adaptive replan ({_ae2_trigger}): "
                                         f"{len(_ae2_replan_steps)} steps — "
                                         f"{_ae2_decision.reasoning[:60]}",
                                         file=sys.stderr, flush=True,
@@ -4774,7 +4774,7 @@ def _execute_main_loop(
                                  ctx.director_replan_count, ctx.director_budget_ceiling,
                                  _ae2_restart_ctx[:100])
                         if verbose:
-                            print(f"[poe] adaptive restart ({_ae2_trigger}) — "
+                            print(f"[maro] adaptive restart ({_ae2_trigger}) — "
                                   f"{_ae2_restart_ctx[:80]}", file=sys.stderr, flush=True)
                     elif _ae2_decision.action == "escalate":
                         _ae2_question = (
@@ -5418,7 +5418,7 @@ class _DryRunAdapter:
 def main(argv=None):
     import argparse
 
-    parser = argparse.ArgumentParser(prog="maro-run", description="Run Poe's autonomous loop on a goal")
+    parser = argparse.ArgumentParser(prog="maro-run", description="Run Maro's autonomous loop on a goal")
     parser.add_argument("goal", nargs="+", help="Goal description")
     parser.add_argument("--project", "-p", help="Project slug (auto-created if not exists)")
     parser.add_argument("--model", "-m", help="LLM model string (e.g. anthropic/claude-haiku-4-5)")

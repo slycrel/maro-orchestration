@@ -1,6 +1,6 @@
 """Local, zero-cost model runtime for step/quality validation.
 
-Poe's most frequent LLM call is *validation* — "did this step result actually
+Maro's most frequent LLM call is *validation* — "did this step result actually
 satisfy the goal?" Those calls are high-volume and mostly easy, so paying a
 frontier API for each one is the single biggest avoidable token sink. This
 module lets a local model (running on the same box) act as the first-pass

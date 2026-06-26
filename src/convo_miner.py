@@ -12,13 +12,13 @@ Sources scanned:
 - ~/.claude/projects/*/  JSONL session logs (user messages only)
 - ~/.openclaw/workspace/{MEMORY,TASKS,GOALS,SOUL}.md
 - git log of the mainline repo (commit messages)
-- Poe conversation history (output/telegram/ artifacts)
+- Maro conversation history (output/telegram/ artifacts)
 
 Usage:
-    poe-mine                        # scan all sources, print report
-    poe-mine --since 2026-03-01     # limit to messages after date
-    poe-mine --output research/     # write report to file
-    poe-mine --inject-backlog       # append high-confidence ideas to BACKLOG.md
+    maro-mine                        # scan all sources, print report
+    maro-mine --since 2026-03-01     # limit to messages after date
+    maro-mine --output research/     # write report to file
+    maro-mine --inject-backlog       # append high-confidence ideas to BACKLOG.md
 """
 
 from __future__ import annotations
@@ -58,7 +58,7 @@ _DOMAIN_KEYWORDS: List[str] = [
     "agent", "loop", "memory", "skill", "persona", "evolver", "heartbeat",
     "mission", "director", "worker", "inspector", "orchestrat", "interrupt",
     "token", "model", "llm", "decompos", "context", "lesson", "graveyard",
-    "phase", "backlog", "roadmap", "kill switch", "poe-", "telegram", "slack",
+    "phase", "backlog", "roadmap", "kill switch", "maro-", "telegram", "slack",
     "openrouter", "local model", "self-improv", "sub-goal", "sub-loop",
     "phase 4", "phase 5", "researcher", "knowledge", "graduation",
 ]
@@ -249,7 +249,7 @@ def scan_git_log(repo: Optional[Path] = None, max_commits: int = 500) -> List[Id
     return ideas
 
 
-def scan_poe_memory(workspace: Optional[Path] = None) -> List[Idea]:
+def scan_maro_memory(workspace: Optional[Path] = None) -> List[Idea]:
     """Scan the orchestration repo's own BACKLOG/ROADMAP for open items."""
     if workspace is None:
         # Use the repo root (parent of src/) — orch_root() points to runtime
@@ -276,7 +276,7 @@ def scan_poe_memory(workspace: Optional[Path] = None) -> List[Idea]:
                         signals=["unchecked-todo"],
                     ))
         except Exception as exc:
-            log.debug("scan_poe_memory: skipping %s: %s", fname, exc)
+            log.debug("scan_maro_memory: skipping %s: %s", fname, exc)
 
     return ideas
 
@@ -377,7 +377,7 @@ def inject_into_backlog(
     backlog_path: Optional[Path] = None,
     *,
     threshold: float = 0.70,
-    section_header: str = "### Mined Ideas (poe-mine injection)",
+    section_header: str = "### Mined Ideas (maro-mine injection)",
 ) -> int:
     """Append high-confidence ideas to BACKLOG.md as unchecked items.
 
@@ -519,7 +519,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     # 4. Repo BACKLOG / ROADMAP open items
     if args.verbose:
         print("Scanning repo BACKLOG/ROADMAP...", file=sys.stderr)
-    ideas = scan_poe_memory()
+    ideas = scan_maro_memory()
     if args.verbose:
         print(f"  → {len(ideas)} open items from repo", file=sys.stderr)
     all_ideas.extend(ideas)

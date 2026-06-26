@@ -27,11 +27,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-CONFIG = Path.home() / ".poe" / "config.yml"
-CAPTAINS_LOG = Path.home() / ".poe" / "workspace" / "memory" / "captains_log.jsonl"
+CONFIG = Path.home() / ".maro" / "config.yml"
+CAPTAINS_LOG = Path.home() / ".maro" / "workspace" / "memory" / "captains_log.jsonl"
 PROJECT_SLUG = "ive-set-up-a-working"  # derived from prompt.txt
-PROJECT_DIR = Path.home() / ".poe" / "workspace" / "projects" / PROJECT_SLUG
-DEFAULT_EXP_DIR = Path.home() / ".poe" / "experiments" / "scope-ab-2026-04-22"
+PROJECT_DIR = Path.home() / ".maro" / "workspace" / "projects" / PROJECT_SLUG
+DEFAULT_EXP_DIR = Path.home() / ".maro" / "experiments" / "scope-ab-2026-04-22"
 TEST_REPO_DIR = Path("/tmp/slycrel-blind-run/repo")
 
 

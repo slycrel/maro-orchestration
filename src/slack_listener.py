@@ -1,4 +1,4 @@
-"""Slack listener for Poe — Socket Mode polling, routes through handle().
+"""Slack listener for Maro — Socket Mode polling, routes through handle().
 
 Mirrors telegram_listener.py: same slash commands, same interrupt routing,
 same dry_run / verbose API. Uses Slack's Socket Mode (no public endpoint needed —
@@ -174,7 +174,7 @@ def _dispatch_slash(
         return "[conduct not available]"
 
     elif cmd == "observe":
-        # Quick snapshot via poe-observe
+        # Quick snapshot via maro-observe
         try:
             from observe import print_snapshot
             import io
@@ -231,7 +231,7 @@ def _dispatch_slash(
 
     elif cmd == "help":
         return (
-            "*Poe Slack commands*\n"
+            "*Maro Slack commands*\n"
             "/status — executive summary\n"
             "/observe — execution snapshot (loop, heartbeat, outcomes, audit)\n"
             "/knowledge — crystallization dashboard\n"
@@ -354,7 +354,7 @@ def listen_socket_mode(
     socket_client = SocketModeClient(app_token=app_token, web_client=web_client)
 
     if verbose:
-        print(f"[slack] Poe listening via Socket Mode (allowed_channels={allowed or 'all'})", file=sys.stderr)
+        print(f"[slack] Maro listening via Socket Mode (allowed_channels={allowed or 'all'})", file=sys.stderr)
 
     def _on_event(client: SocketModeClient, req: SocketModeRequest) -> None:
         client.send_socket_mode_response(SocketModeResponse(envelope_id=req.envelope_id))
@@ -405,7 +405,7 @@ def main(argv: list[str] | None = None) -> None:
     import argparse
     parser = argparse.ArgumentParser(
         prog="maro-slack",
-        description="Slack Socket Mode listener for Poe",
+        description="Slack Socket Mode listener for Maro",
     )
     parser.add_argument("--dry-run", action="store_true", help="Log messages but don't execute")
     parser.add_argument("--project", default="maro-slack", help="Project name for loop runs")

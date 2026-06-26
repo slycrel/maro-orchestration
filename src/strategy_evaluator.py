@@ -344,17 +344,17 @@ def evaluate_suggestion(suggestion: Any) -> StrategyFitnessReport:
 
 
 # ---------------------------------------------------------------------------
-# CLI — poe-replay
+# CLI — maro-replay
 # ---------------------------------------------------------------------------
 
 def main() -> int:  # noqa: C901
-    """CLI entry point: poe-replay.
+    """CLI entry point: maro-replay.
 
     Usage:
-        poe-replay "research Polymarket trends"
-        poe-replay "fix build failures" --compare
-        poe-replay --outcome-id ab12cd34
-        poe-replay --outcome-id ab12cd34 --compare
+        maro-replay "research Polymarket trends"
+        maro-replay "fix build failures" --compare
+        maro-replay --outcome-id ab12cd34
+        maro-replay --outcome-id ab12cd34 --compare
 
     --compare mode runs evaluation twice: once without lessons injected into
     the strategy text, once with lessons prepended. Shows the fitness delta

@@ -13,7 +13,7 @@ Usage:
     context = format_graph_context(graph, goal="fix the N+1 query bug")
 
 CLI:
-    poe-codebase-graph [--path .] [--top 10] [--json] [--context]
+    maro-codebase-graph [--path .] [--top 10] [--json] [--context]
 """
 
 from __future__ import annotations

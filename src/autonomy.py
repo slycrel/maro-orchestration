@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Phase 13: Autonomy tier system for Poe orchestration.
+"""Phase 13: Autonomy tier system for Maro orchestration.
 
 Three tiers govern how much human oversight is required before executing actions:
 

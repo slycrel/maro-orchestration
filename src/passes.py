@@ -22,9 +22,9 @@ Usage:
         print(f"Escalate: {report.escalation_reason}")
 
 CLI:
-    poe-passes --goal "..." --passes council,debate
-    poe-passes --passes all    # all five passes
-    poe-passes --passes quick  # quality_gate only
+    maro-passes --goal "..." --passes council,debate
+    maro-passes --passes all    # all five passes
+    maro-passes --passes quick  # quality_gate only
 """
 
 from __future__ import annotations

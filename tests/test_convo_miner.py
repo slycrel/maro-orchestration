@@ -170,7 +170,7 @@ class TestScanOpenclawDocs:
 
 
 # ---------------------------------------------------------------------------
-# scan_poe_memory
+# scan_maro_memory
 # ---------------------------------------------------------------------------
 
 class TestScanPoeMemory:
@@ -181,16 +181,16 @@ class TestScanPoeMemory:
             - [ ] Add evolver self-improvement to the heartbeat
             - [ ] Another open memory task for the agent
         """))
-        from convo_miner import scan_poe_memory
-        ideas = scan_poe_memory(workspace=tmp_path)
+        from convo_miner import scan_maro_memory
+        ideas = scan_maro_memory(workspace=tmp_path)
         assert len(ideas) == 2
         assert all(i.confidence >= 0.8 for i in ideas)
 
     def test_skips_checked_items(self, tmp_path):
         backlog = tmp_path / "BACKLOG.md"
         backlog.write_text("- [x] Completed agent evolver task\n")
-        from convo_miner import scan_poe_memory
-        ideas = scan_poe_memory(workspace=tmp_path)
+        from convo_miner import scan_maro_memory
+        ideas = scan_maro_memory(workspace=tmp_path)
         assert ideas == []
 
 
@@ -278,7 +278,7 @@ class TestCLI:
     def test_no_sessions_no_git_runs(self, tmp_path, monkeypatch, capsys):
         """With minimal flags, should run without error."""
         monkeypatch.setattr("convo_miner.scan_openclaw_docs", lambda *a, **kw: [])
-        monkeypatch.setattr("convo_miner.scan_poe_memory", lambda *a, **kw: [])
+        monkeypatch.setattr("convo_miner.scan_maro_memory", lambda *a, **kw: [])
         from convo_miner import main
         rc = main(["--no-sessions", "--no-git"])
         assert rc == 0
@@ -289,7 +289,7 @@ class TestCLI:
         monkeypatch.setattr("convo_miner.scan_session_logs", lambda *a, **kw: [])
         monkeypatch.setattr("convo_miner.scan_openclaw_docs", lambda *a, **kw: [])
         monkeypatch.setattr("convo_miner.scan_git_log", lambda *a, **kw: [])
-        monkeypatch.setattr("convo_miner.scan_poe_memory", lambda *a, **kw: [])
+        monkeypatch.setattr("convo_miner.scan_maro_memory", lambda *a, **kw: [])
         out_file = tmp_path / "report.md"
         from convo_miner import main
         rc = main(["--output", str(out_file)])
@@ -367,7 +367,7 @@ class TestInjectIntoBacklog:
         monkeypatch.setattr("convo_miner.scan_session_logs", lambda *a, **kw: [high_idea])
         monkeypatch.setattr("convo_miner.scan_openclaw_docs", lambda *a, **kw: [])
         monkeypatch.setattr("convo_miner.scan_git_log", lambda *a, **kw: [])
-        monkeypatch.setattr("convo_miner.scan_poe_memory", lambda *a, **kw: [])
+        monkeypatch.setattr("convo_miner.scan_maro_memory", lambda *a, **kw: [])
         monkeypatch.setattr("convo_miner.inject_into_backlog",
                             lambda ideas, threshold=0.70: inject_into_backlog(ideas, backlog, threshold=threshold))
 

@@ -22,7 +22,7 @@ Key design decisions:
 Usage:
     python3 harness_optimizer.py               # run once
     python3 harness_optimizer.py --dry-run     # analyze without saving suggestions
-    poe-harness-optimizer                      # CLI alias
+    maro-harness-optimizer                      # CLI alias
 """
 
 from __future__ import annotations

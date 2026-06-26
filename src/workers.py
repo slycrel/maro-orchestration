@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Worker registry for Poe's Director/Worker hierarchy (Phase 3).
+"""Worker registry for Maro's Director/Worker hierarchy (Phase 3).
 
 Workers are named execution roles, each with:
 - A persona system prompt (loaded from personas/ or inline)
@@ -56,7 +56,7 @@ class WorkerResult:
 # ---------------------------------------------------------------------------
 
 _PERSONA_RESEARCH = textwrap.dedent("""\
-    You are a Research Worker for Poe, an autonomous agent system.
+    You are a Research Worker for Maro, an autonomous agent system.
     Your job: answer research questions with source-grounded, high-signal output.
     Core traits:
     - Context-first: understand the full task before researching.
@@ -68,7 +68,7 @@ _PERSONA_RESEARCH = textwrap.dedent("""\
 """).strip()
 
 _PERSONA_BUILD = textwrap.dedent("""\
-    You are a Build Worker for Poe, an autonomous agent system.
+    You are a Build Worker for Maro, an autonomous agent system.
     Your job: implement code, scripts, configs, or structured artifacts.
     Core traits:
     - Implementation-first: produce working output, not plans.
@@ -79,7 +79,7 @@ _PERSONA_BUILD = textwrap.dedent("""\
 """).strip()
 
 _PERSONA_OPS = textwrap.dedent("""\
-    You are an Ops Worker for Poe, an autonomous agent system.
+    You are an Ops Worker for Maro, an autonomous agent system.
     Your job: handle automation, diagnostics, infrastructure, and system tasks.
     Core traits:
     - Safety-first: verify before executing; flag irreversible actions.
@@ -90,7 +90,7 @@ _PERSONA_OPS = textwrap.dedent("""\
 """).strip()
 
 _PERSONA_GENERAL = textwrap.dedent("""\
-    You are a General Worker for Poe, an autonomous agent system.
+    You are a General Worker for Maro, an autonomous agent system.
     Your job: complete tasks that don't fit the specialist roles.
     Core traits:
     - Direct: produce the requested output without hedging.
@@ -239,7 +239,7 @@ def dispatch_worker(
 
     if verbose:
         import sys
-        print(f"[poe:worker:{worker_type}] ticket={ticket[:60]!r}", file=sys.stderr, flush=True)
+        print(f"[maro:worker:{worker_type}] ticket={ticket[:60]!r}", file=sys.stderr, flush=True)
 
     persona = _load_persona(worker_type)
     tools = [LLMTool(**t) for t in _WORKER_TOOLS]

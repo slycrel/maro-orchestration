@@ -257,7 +257,7 @@ class MCPServerClient:
     """Client for a single MCP tool server.
 
     Handles the initialize handshake, tool discovery, and tool invocation.
-    Naming convention for tools registered into the Poe registry:
+    Naming convention for tools registered into the Maro registry:
         mcp__<server_name>__<tool_name>
 
     Create via class methods:

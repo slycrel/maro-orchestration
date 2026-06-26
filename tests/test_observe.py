@@ -1,4 +1,4 @@
-"""Tests for poe-observe execution snapshot (Phase 23 first cut)."""
+"""Tests for maro-observe execution snapshot (Phase 23 first cut)."""
 
 from __future__ import annotations
 
@@ -394,7 +394,7 @@ def test_print_events_tail_shows_events(monkeypatch, tmp_path, capsys):
 
 
 def test_main_events_subcommand(monkeypatch, tmp_path, capsys):
-    """poe-observe events subcommand prints events tail."""
+    """maro-observe events subcommand prints events tail."""
     monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
     _ws(tmp_path)
     write_event("step_done", goal="goal", loop_id="zzz", step="do it", status="done")
@@ -606,7 +606,7 @@ class TestFactoryReplay:
 
 
 # ---------------------------------------------------------------------------
-# Project status board (Phase 61 — poe-observe projects)
+# Project status board (Phase 61 — maro-observe projects)
 # ---------------------------------------------------------------------------
 
 class TestProjectStatusBoard:
@@ -695,7 +695,7 @@ class TestProjectStatusBoard:
         assert "no data" in out.lower() or out.strip() == ""
 
     def test_main_projects_subcommand(self, monkeypatch, tmp_path, capsys):
-        """'poe-observe projects' CLI subcommand calls print_project_status."""
+        """'maro-observe projects' CLI subcommand calls print_project_status."""
         monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
         with __import__("unittest.mock", fromlist=["patch"]).patch(
             "observe.print_project_status"

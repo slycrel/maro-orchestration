@@ -230,7 +230,7 @@ class TestCheckpointCLI(unittest.TestCase):
         import checkpoint as cp
 
         output = io.StringIO()
-        with patch.object(sys, "argv", ["poe-checkpoint"] + args):
+        with patch.object(sys, "argv", ["maro-checkpoint"] + args):
             with patch("builtins.print", side_effect=lambda *a, **k: output.write(" ".join(str(x) for x in a) + "\n")):
                 with patch("checkpoint.load_checkpoint", return_value=ckpt):
                     with patch("checkpoint.branch_checkpoint", return_value="newbranch1") as mock_branch:
@@ -256,7 +256,7 @@ class TestCheckpointCLI(unittest.TestCase):
     def test_export_not_found(self):
         import checkpoint as cp
         import io
-        with patch.object(sys, "argv", ["poe-checkpoint", "export", "nope"]):
+        with patch.object(sys, "argv", ["maro-checkpoint", "export", "nope"]):
             with patch("checkpoint.export_human", return_value=None):
                 with patch("builtins.print") as mock_print:
                     cp._cli_main()

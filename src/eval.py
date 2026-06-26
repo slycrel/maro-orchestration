@@ -1,6 +1,6 @@
-"""Phase 8 + Evals-as-Training-Data: Evaluation suite for Poe orchestration.
+"""Phase 8 + Evals-as-Training-Data: Evaluation suite for Maro orchestration.
 
-Benchmark Poe against known-good goals with expected outcomes.
+Benchmark Maro against known-good goals with expected outcomes.
 Flywheel: mine prod failures → auto-generate evals → harness tweaks.
 
 Usage:

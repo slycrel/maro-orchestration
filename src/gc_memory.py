@@ -1,4 +1,4 @@
-"""poe-gc — Memory garbage collection and JSONL rotation (Phase 25).
+"""maro-gc — Memory garbage collection and JSONL rotation (Phase 25).
 
 Prevents unbounded disk growth from:
 - outcomes.jsonl accumulating indefinitely
@@ -7,10 +7,10 @@ Prevents unbounded disk growth from:
 - Daily narrative logs (YYYY-MM-DD.md) older than retention window
 
 Usage:
-    poe-gc status          → show what would be collected (dry run)
-    poe-gc run             → execute GC (with confirmation in interactive mode)
-    poe-gc run --yes       → execute without prompting (for cron/systemd)
-    poe-gc run --dry-run   → alias for status
+    maro-gc status          → show what would be collected (dry run)
+    maro-gc run             → execute GC (with confirmation in interactive mode)
+    maro-gc run --yes       → execute without prompting (for cron/systemd)
+    maro-gc run --dry-run   → alias for status
 """
 
 from __future__ import annotations

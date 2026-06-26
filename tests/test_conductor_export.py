@@ -1,4 +1,4 @@
-"""Tests for poe-export / poe-import workspace backup."""
+"""Tests for maro-export / maro-import workspace backup."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 # Import from the script
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
-from poe_export import export_workspace, import_workspace, _should_exclude
+from maro_export import export_workspace, import_workspace, _should_exclude
 
 
 @pytest.fixture
