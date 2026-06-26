@@ -283,7 +283,7 @@ def run_gc(
 def main(argv: list[str] | None = None) -> None:
     import argparse
     parser = argparse.ArgumentParser(
-        prog="poe-gc",
+        prog="maro-gc",
         description="Memory GC — prevent unbounded disk growth",
     )
     sub = parser.add_subparsers(dest="cmd")

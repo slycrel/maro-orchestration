@@ -2450,7 +2450,7 @@ def enqueue_goals(goals: List[str], *, sequential: bool = True) -> List[str]:
 def main(argv=None):
     import argparse
 
-    parser = argparse.ArgumentParser(prog="poe-handle", description="Poe's unified request handler")
+    parser = argparse.ArgumentParser(prog="maro-handle", description="Poe's unified request handler")
     parser.add_argument("message", nargs="+", help="The request to handle")
     parser.add_argument("--project", "-p", help="Project slug for AGENDA work")
     parser.add_argument("--repo", help="Path to target repo (auto-injects stack context into decompose)")
@@ -2492,7 +2492,7 @@ def enqueue_main(argv=None):
     import argparse
 
     parser = argparse.ArgumentParser(
-        prog="poe-enqueue",
+        prog="maro-enqueue",
         description="Enqueue goals for the director to process sequentially.",
     )
     parser.add_argument("goals", nargs="+", help="Goal(s) to enqueue. Each arg is one goal.")

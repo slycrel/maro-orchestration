@@ -332,7 +332,7 @@ class MCPServerClient:
                     "sampling": {},
                 },
                 "clientInfo": {
-                    "name": "poe-orchestration",
+                    "name": "maro-orchestration",
                     "version": "1.0.0",
                 },
             },

@@ -427,7 +427,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     import argparse
 
     parser = argparse.ArgumentParser(
-        prog="poe-mine",
+        prog="maro-mine",
         description="Mine conversation history for orchestration ideas (Phase 48).",
     )
     parser.add_argument(

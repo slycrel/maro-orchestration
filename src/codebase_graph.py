@@ -421,7 +421,7 @@ def main() -> None:
     import dataclasses
 
     parser = argparse.ArgumentParser(
-        prog="poe-codebase-graph",
+        prog="maro-codebase-graph",
         description="Build AST-based call graph for a Python codebase",
     )
     parser.add_argument("path", nargs="?", default=".", help="Repo path (default: .)")

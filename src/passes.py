@@ -431,7 +431,7 @@ def run_passes(
 def _cli_main(argv=None) -> int:
     import argparse
     p = argparse.ArgumentParser(
-        prog="poe-passes",
+        prog="maro-passes",
         description="Run multi-pass review on a goal + step outcomes.",
     )
     p.add_argument("--goal", required=True, help="The mission goal to review")

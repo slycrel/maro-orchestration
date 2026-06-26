@@ -164,7 +164,7 @@ def _dispatch_slash(
     client: Any,   # WebClient
     *,
     dry_run: bool = False,
-    project: str = "poe-slack",
+    project: str = "maro-slack",
     verbose: bool = True,
 ) -> str:
     """Route a Slack slash command to the appropriate handler. Returns response text."""
@@ -260,7 +260,7 @@ def _process_message(
     user: str = "unknown",
     *,
     dry_run: bool = False,
-    project: str = "poe-slack",
+    project: str = "maro-slack",
     verbose: bool = True,
 ) -> None:
     """Route a Slack message through the handle layer."""
@@ -326,7 +326,7 @@ def _send(client: Any, channel_id: str, text: str) -> None:
 def listen_socket_mode(
     *,
     dry_run: bool = False,
-    project: str = "poe-slack",
+    project: str = "maro-slack",
     verbose: bool = True,
 ) -> None:
     """Connect via Socket Mode and listen for messages indefinitely.
@@ -404,11 +404,11 @@ def listen_socket_mode(
 def main(argv: list[str] | None = None) -> None:
     import argparse
     parser = argparse.ArgumentParser(
-        prog="poe-slack",
+        prog="maro-slack",
         description="Slack Socket Mode listener for Poe",
     )
     parser.add_argument("--dry-run", action="store_true", help="Log messages but don't execute")
-    parser.add_argument("--project", default="poe-slack", help="Project name for loop runs")
+    parser.add_argument("--project", default="maro-slack", help="Project name for loop runs")
     parser.add_argument("--verbose", action="store_true", default=True)
     parser.add_argument("--quiet", action="store_true", help="Suppress verbose output")
     args = parser.parse_args(argv)

@@ -1636,7 +1636,7 @@ def serve_dashboard(host: str = "0.0.0.0", port: int = 7700) -> None:
 def main(argv: list[str] | None = None) -> None:
     import argparse
     parser = argparse.ArgumentParser(
-        prog="poe-observe",
+        prog="maro-observe",
         description="Execution snapshot — loop state, heartbeat, outcomes, audit",
     )
     sub = parser.add_subparsers(dest="cmd")

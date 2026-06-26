@@ -1,4 +1,4 @@
-"""Bootstrap poe-orchestration from a fresh machine.
+"""Bootstrap maro-orchestration from a fresh machine.
 
 Handles:
 - Creating workspace directory structure
@@ -6,11 +6,11 @@ Handles:
 - Smoke-testing the install by running a manual NOW-lane request once
 
 Entry points:
-  poe-bootstrap install    -- workspace + optional service file templates + smoke test
-  poe-bootstrap dirs       -- create workspace dirs only
-  poe-bootstrap services   -- write optional service files only
-  poe-bootstrap status     -- show current workspace and service status
-  poe-bootstrap smoke      -- run a dry-run NOW-lane task and verify output
+  maro-bootstrap install    -- workspace + optional service file templates + smoke test
+  maro-bootstrap dirs       -- create workspace dirs only
+  maro-bootstrap services   -- write optional service files only
+  maro-bootstrap status     -- show current workspace and service status
+  maro-bootstrap smoke      -- run a dry-run NOW-lane task and verify output
 """
 
 from __future__ import annotations
@@ -112,22 +112,22 @@ def _launchd_plist(label: str, description: str, exec_args: list[str], workspace
 
 _SERVICES: list[dict] = [
     {
-        "name": "poe-heartbeat",
-        "label": "com.poe.heartbeat",
+        "name": "maro-heartbeat",
+        "label": "com.maro.heartbeat",
         "description": "Poe Orchestration — Optional Heartbeat Monitor",
         "exec_cmd": f"{_PYTHON} {_SRC_DIR}/sheriff.py --heartbeat",
         "exec_args": [_PYTHON, str(_SRC_DIR / "sheriff.py"), "--heartbeat"],
     },
     {
-        "name": "poe-telegram",
-        "label": "com.poe.telegram",
+        "name": "maro-telegram",
+        "label": "com.maro.telegram",
         "description": "Poe Orchestration — Optional Telegram Listener",
         "exec_cmd": f"{_PYTHON} {_SRC_DIR}/telegram_listener.py",
         "exec_args": [_PYTHON, str(_SRC_DIR / "telegram_listener.py")],
     },
     {
-        "name": "poe-inspector",
-        "label": "com.poe.inspector",
+        "name": "maro-inspector",
+        "label": "com.maro.inspector",
         "description": "Poe Orchestration — Optional Inspector Loop",
         "exec_cmd": f"{_PYTHON} {_SRC_DIR}/inspector.py --loop",
         "exec_args": [_PYTHON, str(_SRC_DIR / "inspector.py"), "--loop"],
@@ -238,7 +238,7 @@ def show_status() -> None:
 
 def install(run_smoke: bool = True) -> None:
     ws = workspace_root()
-    print(f"Installing poe-orchestration into {ws}")
+    print(f"Installing maro-orchestration into {ws}")
 
     print("  Creating workspace directories...")
     create_workspace_dirs(ws)
@@ -274,14 +274,14 @@ def install(run_smoke: bool = True) -> None:
 
 
 # ---------------------------------------------------------------------------
-# CLI (invoked directly or via poe-bootstrap entry point)
+# CLI (invoked directly or via maro-bootstrap entry point)
 # ---------------------------------------------------------------------------
 
 def main(argv: list[str] | None = None) -> None:
     import argparse
     parser = argparse.ArgumentParser(
-        prog="poe-bootstrap",
-        description="Bootstrap poe-orchestration on a new machine",
+        prog="maro-bootstrap",
+        description="Bootstrap maro-orchestration on a new machine",
     )
     sub = parser.add_subparsers(dest="cmd")
 

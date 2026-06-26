@@ -1478,7 +1478,7 @@ def main(argv=None) -> None:
     import argparse
 
     parser = argparse.ArgumentParser(
-        prog="poe-introspect",
+        prog="maro-introspect",
         description="Diagnose execution traces — classify failures and recommend fixes",
     )
     parser.add_argument("loop_id", nargs="?", help="Loop ID to diagnose (or --latest)")
