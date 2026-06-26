@@ -364,7 +364,7 @@ def main() -> int:  # noqa: C901
     import sys
 
     parser = argparse.ArgumentParser(
-        prog="poe-replay",
+        prog="maro-replay",
         description="Replay-based fitness oracle for goals/strategies/outcomes",
     )
     parser.add_argument("goal", nargs="*", help="Goal or strategy text to evaluate")

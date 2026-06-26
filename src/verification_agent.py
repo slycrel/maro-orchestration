@@ -327,7 +327,7 @@ def main(argv: list = None) -> int:
     import sys
 
     parser = argparse.ArgumentParser(
-        prog="poe-verify",
+        prog="maro-verify",
         description="Run VerificationAgent against a step result or completed output.",
     )
     parser.add_argument("--step", help="Step goal text (for step-level verify)")

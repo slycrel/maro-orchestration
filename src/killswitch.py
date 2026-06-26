@@ -114,7 +114,7 @@ def main(argv: Optional[list] = None) -> int:
     import argparse
 
     parser = argparse.ArgumentParser(
-        prog="poe-stop",
+        prog="maro-stop",
         description="Engage or clear the Poe orchestration kill switch.",
     )
     sub = parser.add_subparsers(dest="cmd")

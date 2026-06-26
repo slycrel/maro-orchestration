@@ -390,7 +390,7 @@ def main() -> None:
     import sys
 
     parser = argparse.ArgumentParser(
-        prog="poe-repo-scan",
+        prog="maro-repo-scan",
         description="Detect tech stack and surface relevant skills",
     )
     parser.add_argument("path", nargs="?", default=".", help="Repo path to scan (default: .)")

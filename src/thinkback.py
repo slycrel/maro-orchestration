@@ -485,7 +485,7 @@ def _save_thinkback_lessons(goal: str, lessons: List[str], run_id: str) -> None:
 def _cli_main(argv=None) -> int:
     import argparse
     p = argparse.ArgumentParser(
-        prog="poe-thinkback",
+        prog="maro-thinkback",
         description="Replay a completed mission with hindsight analysis.",
     )
     p.add_argument("--latest", action="store_true", help="Replay the latest outcome")

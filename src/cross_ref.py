@@ -368,7 +368,7 @@ def cross_ref_annotation(report: CrossRefReport) -> str:
 def _cli_main(argv=None) -> int:
     import argparse
     p = argparse.ArgumentParser(
-        prog="poe-cross-ref",
+        prog="maro-cross-ref",
         description="Cross-reference factual claims in research output against a fresh LLM context.",
     )
     group = p.add_mutually_exclusive_group(required=True)

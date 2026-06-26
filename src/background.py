@@ -138,7 +138,7 @@ def start_background(command: str, timeout_seconds: int = 300) -> BackgroundTask
 
     # Temp file for output
     tmp = tempfile.NamedTemporaryFile(
-        prefix=f"poe-bg-{task_id}-",
+        prefix=f"maro-bg-{task_id}-",
         suffix=".log",
         delete=False,
         mode="w",

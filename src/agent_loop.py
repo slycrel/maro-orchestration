@@ -5418,7 +5418,7 @@ class _DryRunAdapter:
 def main(argv=None):
     import argparse
 
-    parser = argparse.ArgumentParser(prog="poe-run", description="Run Poe's autonomous loop on a goal")
+    parser = argparse.ArgumentParser(prog="maro-run", description="Run Poe's autonomous loop on a goal")
     parser.add_argument("goal", nargs="+", help="Goal description")
     parser.add_argument("--project", "-p", help="Project slug (auto-created if not exists)")
     parser.add_argument("--model", "-m", help="LLM model string (e.g. anthropic/claude-haiku-4-5)")

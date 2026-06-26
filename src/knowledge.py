@@ -303,7 +303,7 @@ def print_promote_actions() -> None:
 def main(argv: list[str] | None = None) -> None:
     import argparse
     parser = argparse.ArgumentParser(
-        prog="poe-knowledge",
+        prog="maro-knowledge",
         description="Crystallization dashboard — view all knowledge graduation stages",
     )
     sub = parser.add_subparsers(dest="cmd")

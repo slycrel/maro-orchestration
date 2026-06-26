@@ -716,7 +716,7 @@ def main() -> None:
     import argparse
 
     parser = argparse.ArgumentParser(
-        prog="poe-log",
+        prog="maro-log",
         description="Captain's Log — learning system changelog",
     )
     parser.add_argument("query", nargs="?", default="",

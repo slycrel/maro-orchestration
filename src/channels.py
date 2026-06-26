@@ -28,7 +28,7 @@ from typing import Any, Dict, List, Optional
 
 log = logging.getLogger("maro.channels")
 
-_USER_AGENT = "poe-orchestration/1.0 (research; github.com/slycrel/openclaw-orchestration)"
+_USER_AGENT = "maro-orchestration/1.0 (research; github.com/slycrel/maro-orchestration)"
 _TIMEOUT_S = 15
 
 

@@ -366,7 +366,7 @@ def _process_message(
     allowed_chats: set[int],
     *,
     dry_run: bool = False,
-    project: str = "poe-telegram",
+    project: str = "maro-telegram",
     verbose: bool = True,
 ) -> None:
     chat_id = message.get("chat", {}).get("id")
@@ -485,7 +485,7 @@ def _process_message(
 def poll_once(
     *,
     dry_run: bool = False,
-    project: str = "poe-telegram",
+    project: str = "maro-telegram",
     verbose: bool = True,
 ) -> int:
     """Process all pending updates once. Returns number of updates processed."""
@@ -515,7 +515,7 @@ def poll_loop(
     *,
     poll_interval: float = 1.0,
     dry_run: bool = False,
-    project: str = "poe-telegram",
+    project: str = "maro-telegram",
     verbose: bool = True,
 ) -> None:
     """Long-poll Telegram indefinitely, routing messages through handle()."""
@@ -561,7 +561,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Poe Telegram listener")
     parser.add_argument("--once", action="store_true", help="Process pending updates once and exit")
     parser.add_argument("--dry-run", action="store_true", help="Process but don't send responses")
-    parser.add_argument("--project", default="poe-telegram", help="Project slug for memory")
+    parser.add_argument("--project", default="maro-telegram", help="Project slug for memory")
     parser.add_argument("--verbose", action="store_true", default=True)
     args = parser.parse_args()
 

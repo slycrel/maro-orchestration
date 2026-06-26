@@ -2108,7 +2108,7 @@ def director_evaluate(
 def main(argv=None):
     import argparse
 
-    parser = argparse.ArgumentParser(prog="poe-director", description="Run Poe's Director on a directive")
+    parser = argparse.ArgumentParser(prog="maro-director", description="Run Poe's Director on a directive")
     parser.add_argument("directive", nargs="+", help="The directive to execute")
     parser.add_argument("--project", "-p", help="Project slug")
     parser.add_argument("--model", "-m", help="LLM model string")
