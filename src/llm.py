@@ -133,6 +133,11 @@ class LLMResponse:
     output_tokens: int = 0
     cache_read_tokens: int = 0     # portion of input_tokens served from cache (~0.1x cost)
     backend: str = ""
+    # Real tools the inner agent actually invoked this call (subprocess agents
+    # only; empty otherwise). Each entry: {name, input, output, is_error, id}.
+    # This is ground truth for "did it really run X / write Y" — see
+    # _parse_stream_json. Other adapters leave it empty and verifiers skip.
+    tool_events: List[dict] = field(default_factory=list)
 
     @property
     def fresh_input_tokens(self) -> int:
@@ -665,6 +670,100 @@ def _extract_result_object(text: str) -> Optional[dict]:
     return None
 
 
+def _stringify_tool_result(content) -> str:
+    """Flatten a Claude Code tool_result `content` (str | list-of-blocks |
+    other) into a plain string for verification."""
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for b in content:
+            if isinstance(b, dict):
+                parts.append(b.get("text", "") if b.get("type") == "text" else json.dumps(b))
+            else:
+                parts.append(str(b))
+        return "\n".join(p for p in parts if p)
+    return json.dumps(content)
+
+
+def _parse_stream_json(text: str) -> dict:
+    """Parse `claude -p --output-format stream-json` NDJSON output.
+
+    Returns {result, tool_events, rate_limited}:
+      result      — the final {"type":"result"} event dict (or None). Identical
+                    payload to the old --output-format json single object, so
+                    all downstream result handling is unchanged.
+      tool_events — ordered list of {name, input, output, is_error, id} for the
+                    REAL tools the inner agent invoked. This is the recovered
+                    ground truth: --output-format json only handed us the
+                    agent's final narrated message and discarded the actual
+                    Bash/Write/Read calls behind it — the done≠achieved blind
+                    spot. stream-json exposes them so "ran tests: 142 passed"
+                    can be checked against whether a Bash tool actually ran.
+      rate_limited — True iff a rate_limit_event reported a non-"allowed"
+                    status. Structured signal replacing the old bare "resets"
+                    substring match, which now false-positives because every
+                    stream embeds resetsAt.
+
+    Tolerant of interleaved system events, non-JSON noise lines, and a trailing
+    partial line. Falls back to the whole-text result scanner when no per-line
+    events parse (e.g. a pretty-printed single object).
+    """
+    out = {"result": None, "tool_events": [], "rate_limited": False}
+    text = (text or "").strip()
+    if not text:
+        return out
+    uses = []            # ordered [(id, name, input)]
+    results_by_id = {}   # id -> {output, is_error}
+    saw_any_event = False
+    for line in text.splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            ev = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(ev, dict):
+            continue
+        saw_any_event = True
+        etype = ev.get("type")
+        if etype == "assistant":
+            for block in (ev.get("message") or {}).get("content") or []:
+                if isinstance(block, dict) and block.get("type") == "tool_use":
+                    uses.append((block.get("id"), block.get("name", ""), block.get("input")))
+        elif etype == "user":
+            content = (ev.get("message") or {}).get("content")
+            if isinstance(content, list):
+                for block in content:
+                    if isinstance(block, dict) and block.get("type") == "tool_result":
+                        results_by_id[block.get("tool_use_id")] = {
+                            "output": _stringify_tool_result(block.get("content")),
+                            "is_error": bool(block.get("is_error", False)),
+                        }
+        elif etype == "result":
+            out["result"] = ev
+        elif etype == "rate_limit_event":
+            status = (ev.get("rate_limit_info") or {}).get("status")
+            if status is not None and status != "allowed":
+                out["rate_limited"] = True
+    out["tool_events"] = [
+        {
+            "name": name,
+            "input": inp,
+            "output": results_by_id.get(uid, {}).get("output", ""),
+            "is_error": results_by_id.get(uid, {}).get("is_error", False),
+            "id": uid,
+        }
+        for (uid, name, inp) in uses
+    ]
+    if out["result"] is None and not saw_any_event:
+        out["result"] = _extract_result_object(text)
+    return out
+
+
 def _extract_success_result(text: str) -> Optional[dict]:
     """Return the parsed claude CLI result payload if `text` contains a
     genuinely successful `--output-format json` result object, else None.
@@ -718,8 +817,13 @@ class ClaudeSubprocessAdapter(LLMAdapter):
 
         # Build command
         model_str = resolve_model("subprocess", self.model_key)
-        cmd = [self.claude_bin, "-p", "--output-format", "json", "--dangerously-skip-permissions",
-               "--disallowedTools", "WebFetch,WebSearch"]
+        # stream-json (not plain json) so the inner agent's REAL tool calls are
+        # visible, not just its final narrated message. --verbose is required by
+        # the CLI for stream-json. The final {"type":"result"} event carries the
+        # identical payload the old --output-format json produced, so result
+        # handling below is unchanged; tool_events are parsed additively.
+        cmd = [self.claude_bin, "-p", "--output-format", "stream-json", "--verbose",
+               "--dangerously-skip-permissions", "--disallowedTools", "WebFetch,WebSearch"]
         if model_str not in (MODEL_CHEAP, MODEL_MID, MODEL_POWER, "cheap", "mid", "power"):
             # Only add --model if it's a real model name, not our constants
             cmd += ["--model", model_str]
@@ -754,9 +858,14 @@ class ClaudeSubprocessAdapter(LLMAdapter):
             merged = result.stdout.strip()
             detail = merged[:300] or "(no output)"
 
-            # Rate limit detection: "hit your limit" or "resets" in output
+            # Rate limit detection: prefer the structured rate_limit_event
+            # status from stream-json. The old bare "resets" substring match is
+            # gone — every stream-json response embeds "resetsAt", so it now
+            # false-positives on ordinary errors. Keep the phrase checks as a
+            # backup for any plain-text error surface.
             _combined = merged.lower()
-            if "hit your limit" in _combined or "rate limit" in _combined or "resets" in _combined:
+            if (_parse_stream_json(result.stdout)["rate_limited"]
+                    or "hit your limit" in _combined or "rate limit" in _combined):
                 import time as _time
                 # Multi-cycle polling: retry up to _RATE_LIMIT_MAX_RETRIES times.
                 # Each cycle waits exponentially longer (60→120→240→480→900→1800s, capped).
@@ -853,25 +962,20 @@ class ClaudeSubprocessAdapter(LLMAdapter):
         # parse first; if that fails, scan for the first `{` that begins a
         # valid JSON object.
         _stdout_text = result.stdout.strip()
+        # Parse the NDJSON stream once: the {"type":"result"} event is the
+        # success payload; tool_events are the inner agent's real tool calls.
+        # Note plain json.loads(_stdout_text) would grab the first event
+        # (system/init), not the result — _parse_stream_json finds the result.
+        _stream = _parse_stream_json(_stdout_text)
+        _tool_events = _stream["tool_events"]
         # If we accepted a non-zero exit on the strength of its success
-        # payload, parse from that payload rather than re-scanning stdout.
-        data = _rc_payload
-        if data is None:
-            try:
-                data = json.loads(_stdout_text)
-            except json.JSONDecodeError:
-                _decoder = json.JSONDecoder()
-                _start = _stdout_text.find("{")
-                while _start != -1:
-                    try:
-                        data, _ = _decoder.raw_decode(_stdout_text[_start:])
-                        break
-                    except json.JSONDecodeError:
-                        _start = _stdout_text.find("{", _start + 1)
+        # payload, prefer that payload.
+        data = _rc_payload or _stream["result"]
         if data is None:
             # Fallback: treat as plain text
             return LLMResponse(
                 content=_stdout_text,
+                tool_events=_tool_events,
                 backend=self.backend,
             )
 
@@ -899,6 +1003,7 @@ class ClaudeSubprocessAdapter(LLMAdapter):
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             cache_read_tokens=cache_read,
+            tool_events=_tool_events,
             backend=self.backend,
         )
 

@@ -601,6 +601,69 @@ def _parse_when(when: str) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Inner-agent tool-call transcript capture
+# ---------------------------------------------------------------------------
+#
+# The executor's inner `claude -p` is genuinely agentic: it really runs
+# Bash/Write/Read via its own tools, then reports a final narrated message.
+# --output-format json discarded everything but that final message — the
+# done≠achieved blind spot. With stream-json the adapter now surfaces the real
+# tool calls on resp.tool_events. We (1) keep a compacted copy on the outcome
+# for the in-process verifier, and (2) persist the full transcript and expose a
+# discoverable handle through the EXISTING Phase 62 artifacts seam so later
+# steps can pull the real execution evidence instead of re-deriving it.
+
+_MAX_TRANSCRIPT_EVENTS = 50
+_TRANSCRIPT_OUTPUT_CAP = 2000
+
+
+def _summarize_tool_events(tool_events: List[dict]) -> List[dict]:
+    """Compact a raw tool_events list for the outcome dict: truncate each
+    output, keep name/input/is_error. Bounds step-trace bloat while keeping
+    enough for verification (claims like '142 passed' appear early in output)."""
+    compact = []
+    for te in (tool_events or [])[:_MAX_TRANSCRIPT_EVENTS]:
+        compact.append({
+            "name": te.get("name", ""),
+            "input": te.get("input"),
+            "output": str(te.get("output", ""))[:_TRANSCRIPT_OUTPUT_CAP],
+            "is_error": bool(te.get("is_error", False)),
+        })
+    return compact
+
+
+def _persist_tool_transcript(tool_events: List[dict], project_dir: str, step_num: int) -> Optional[str]:
+    """Write the inner agent's full tool-call transcript to
+    {project_dir}/artifacts/step-{N}-transcript.json and return a compact
+    discoverable handle (tool count + names + path), or None when empty.
+
+    Reuses the existing per-step artifact directory ({project_dir}/artifacts)
+    so the handle rides the Phase 62 artifacts → shared_ctx → "Artifacts from
+    prior steps" path with no new propagation plumbing."""
+    if not tool_events:
+        return None
+    names = [str(te.get("name", "?")) for te in tool_events]
+    n_err = sum(1 for te in tool_events if te.get("is_error"))
+    path = None
+    if project_dir:
+        try:
+            _dir = os.path.join(project_dir, "artifacts")
+            os.makedirs(_dir, exist_ok=True)
+            path = os.path.join(_dir, f"step-{step_num}-transcript.json")
+            with open(path, "w") as _f:
+                json.dump(tool_events, _f, indent=2, default=str)
+        except OSError as _exc:
+            log.warning("step %d transcript persist failed: %s", step_num, _exc)
+            path = None
+    handle = f"{len(tool_events)} tool call(s): [{', '.join(names[:12])}]"
+    if n_err:
+        handle += f"; {n_err} errored"
+    if path:
+        handle += f"; full transcript: {path}"
+    return handle
+
+
+# ---------------------------------------------------------------------------
 # Step execution
 # ---------------------------------------------------------------------------
 
@@ -969,6 +1032,16 @@ def execute_step(
                     log.info("step %d artifacts: %d item(s) (%s)",
                              step_num, len(_clean_artifacts),
                              ", ".join(_clean_artifacts.keys()))
+            # Capture the inner agent's REAL tool calls (stream-json transcript):
+            # compacted on the outcome for the verifier, full transcript persisted
+            # to disk with a discoverable handle in the artifacts seam.
+            _tool_events = getattr(resp, "tool_events", None) or []
+            if _tool_events:
+                _outcome["tool_events"] = _summarize_tool_events(_tool_events)
+                _t_handle = _persist_tool_transcript(_tool_events, project_dir, step_num)
+                if _t_handle:
+                    _outcome.setdefault("artifacts", {})["tool_transcript"] = _t_handle
+                    log.info("step %d tool transcript: %s", step_num, _t_handle[:120])
             # Mutable task graph: pick up any injected steps from the worker
             _raw_inject = tc.arguments.get("inject_steps") or []
             if isinstance(_raw_inject, list):

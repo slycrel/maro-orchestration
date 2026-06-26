@@ -84,17 +84,28 @@ have" not "build a sandboxing subsystem."
 
 ### 3. Stream-json token visibility
 
-- [ ] **Stream-json token visibility (next up, per Jeremy 2026-04-18).**
-  `claude -p --output-format stream-json` emits newline-delimited JSON
-  events (init, assistant chunks, tool calls, result). Switch the
-  subprocess adapter + `/tmp/maro-current-step.log` to this mode so
-  operators see live tokens instead of 0 bytes until burst-at-end. Each
-  new line becomes the primary liveness signal; CPU-activity demotes to
-  a fallback for adapters that don't stream. Parser work: line-reader
-  that accumulates assistant deltas + handles tool_use events + parses
-  the final `result` event for usage stats. Tests need fake streaming
-  fixtures. Size: ~half-day. Coordinates with the adapter protocol
-  extraction (stream shape is the point of the Adapter interface).
+- [x] **Adapter switch + tool-call capture (shipped 2026-06-26).**
+  `ClaudeSubprocessAdapter` now invokes `claude -p --output-format stream-json
+  --verbose` and parses the NDJSON (`_parse_stream_json` in `llm.py`): the final
+  `{"type":"result"}` event carries the identical payload the old `json` format
+  produced (result handling unchanged), and the inner agent's REAL tool calls
+  are surfaced on `LLMResponse.tool_events` (name/input/output/is_error). This
+  closes the done≠achieved blind spot at the capture layer — the executor's
+  inner `claude -p` is genuinely agentic (runs Bash/Write/Read) and `json` mode
+  was discarding everything but its final narrated message. Verified live
+  against the real CLI (Bash call + real output captured). Also fixed a latent
+  regression: the old bare `"resets"` substring rate-limit match now
+  false-positives (every stream embeds `resetsAt`) → replaced with the
+  structured `rate_limit_event.status` signal. Per-step transcripts persist to
+  `{project_dir}/artifacts/step-N-transcript.json` and a compact handle rides
+  the Phase 62 artifacts seam so later steps discover real execution evidence
+  (per Jeremy 2026-06-26: "capture all the output and allow it to be
+  discoverable with the ancestry stuff").
+- [ ] **Remaining: live liveness signal.** Wire the per-line stream into
+  `/tmp/maro-current-step.log` so operators see live tokens instead of 0 bytes
+  until burst-at-end; each new line becomes the primary liveness signal, with
+  CPU-activity demoted to a fallback for non-streaming adapters. (The parsing is
+  now in place; this is the operator-visibility plumbing on top of it.)
 
 ### 4. `_is_complex_directive` threshold for NOW-lane misrouting
 
@@ -237,14 +248,18 @@ NOTE: this replaces the *caps*, not the token-explosion *leak* — justify it on
   positive evidence (a named-but-absent file, or an inert file vs a concrete
   output claim).
 
-- [ ] **No-path *execution* fabrication (still parked).** The residual hole:
-  "ran the tests: 142 passed" naming no file and producing none — no artifact to
-  AST-check. The inert-output layer needs a produced `.py` to inspect; a claim of
-  test/run results with zero artifacts leaves no deterministic trace (`claude -p
-  --output-format json` gives only final text, no tool-call transcript; ruled out
-  2026-06-24). Would need `--output-format stream-json` parsing, or actually
-  *executing* the artifact to compare real vs claimed output (deliberately not
-  done — keeps the guard execution-free). Revisit if it recurs organically.
+- [~] **No-path *execution* fabrication — capture prerequisite SHIPPED, verifier
+  pending.** The residual hole: "ran the tests: 142 passed" naming no file and
+  producing none — no artifact to AST-check. The blocker was that `--output-format
+  json` gave only final text, no tool-call transcript (ruled out 2026-06-24).
+  **That blocker is now gone (item #3 above):** the adapter streams the inner
+  agent's real tool calls onto `resp.tool_events`, persisted per-step. The
+  remaining piece is the verifier that *consumes* them — given a result claiming
+  "ran X / N passed", check whether a `Bash` tool actually ran and its
+  `tool_result` corroborates (positive-evidence: a complete tool-call record
+  showing the agent never invoked Bash while claiming run results is real
+  evidence of fabrication, not an absence heuristic). Stays execution-free (reads
+  the transcript, doesn't re-run). Next chunk in the anti-hallucination thread.
 
 ### ACTIVE DESIGN SPACE — Thread Architecture (2026-04-26 → 2026-04-27, Jeremy + Claude)
 

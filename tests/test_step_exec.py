@@ -797,6 +797,110 @@ class TestArtifactContextInjection:
         assert "Artifacts from prior steps" not in captured["user"]
 
 
+class TestToolTranscriptCapture:
+    """The inner agent's real tool calls (resp.tool_events) are compacted onto
+    the outcome, persisted to disk, and exposed via the artifacts seam."""
+
+    def _adapter_with_tool_events(self, tool_events):
+        from llm import LLMResponse, ToolCall
+
+        class _Cap:
+            def complete(self, messages, **kw):
+                return LLMResponse(
+                    content="",
+                    tool_calls=[ToolCall(name="complete_step",
+                                         arguments={"result": "ran tests, 142 passed", "summary": "done"})],
+                    tool_events=tool_events,
+                )
+
+        return _Cap()
+
+    def test_summarize_truncates_output(self):
+        from step_exec import _summarize_tool_events, _TRANSCRIPT_OUTPUT_CAP
+        big = [{"name": "Bash", "input": {"command": "x"}, "output": "y" * 9999, "is_error": False}]
+        out = _summarize_tool_events(big)
+        assert len(out) == 1
+        assert out[0]["name"] == "Bash"
+        assert len(out[0]["output"]) == _TRANSCRIPT_OUTPUT_CAP
+
+    def test_persist_returns_none_when_empty(self):
+        from step_exec import _persist_tool_transcript
+        assert _persist_tool_transcript([], "/tmp", 1) is None
+
+    def test_persist_handle_without_project_dir(self):
+        from step_exec import _persist_tool_transcript
+        h = _persist_tool_transcript(
+            [{"name": "Bash", "is_error": False}, {"name": "Write", "is_error": True}], "", 2)
+        assert "2 tool call(s)" in h
+        assert "Bash" in h and "Write" in h
+        assert "1 errored" in h
+        assert "full transcript" not in h  # no path without project_dir
+
+    def test_outcome_captures_and_persists_transcript(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("MARO_ORCH_ROOT", str(tmp_path))
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        import json as _json
+        from step_exec import execute_step, EXECUTE_TOOLS
+
+        tool_events = [
+            {"name": "Bash", "input": {"command": "pytest -q"}, "output": "142 passed", "is_error": False, "id": "t0"},
+            {"name": "Write", "input": {"file_path": "out.py"}, "output": "created", "is_error": False, "id": "t1"},
+        ]
+        proj = str(tmp_path / "proj")
+        adapter = self._adapter_with_tool_events(tool_events)
+        outcome = execute_step(
+            goal="g", step_text="run the tests", step_num=4, total_steps=5,
+            completed_context=[], adapter=adapter, tools=EXECUTE_TOOLS,
+            project_dir=proj,
+        )
+        # Compacted structured events for the verifier
+        assert [e["name"] for e in outcome["tool_events"]] == ["Bash", "Write"]
+        assert outcome["tool_events"][0]["output"] == "142 passed"
+        # Discoverable handle via the artifacts seam
+        handle = outcome["artifacts"]["tool_transcript"]
+        assert "2 tool call(s)" in handle and "Bash" in handle
+        # Full transcript persisted to {project_dir}/artifacts/
+        path = Path(proj) / "artifacts" / "step-4-transcript.json"
+        assert path.exists()
+        assert _json.loads(path.read_text())[0]["output"] == "142 passed"
+
+    def test_no_transcript_keys_when_no_tool_events(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("MARO_ORCH_ROOT", str(tmp_path))
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        from step_exec import execute_step, EXECUTE_TOOLS
+        adapter = self._adapter_with_tool_events([])
+        outcome = execute_step(
+            goal="g", step_text="think about it", step_num=1, total_steps=1,
+            completed_context=[], adapter=adapter, tools=EXECUTE_TOOLS,
+            project_dir=str(tmp_path / "proj"),
+        )
+        assert "tool_events" not in outcome
+        assert "tool_transcript" not in outcome.get("artifacts", {})
+
+    def test_transcript_handle_discoverable_in_later_step(self, tmp_path, monkeypatch):
+        """The persisted handle, once in shared_ctx, surfaces in a later step's
+        prompt via the existing 'Artifacts from prior steps' block."""
+        monkeypatch.setenv("MARO_ORCH_ROOT", str(tmp_path))
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        from llm import LLMResponse, ToolCall
+        from step_exec import execute_step, EXECUTE_TOOLS
+        captured = {}
+
+        class _Cap:
+            def complete(self, messages, **kw):
+                captured["user"] = next((m.content for m in reversed(messages) if m.role == "user"), "")
+                return LLMResponse(content="", tool_calls=[ToolCall("complete_step", {"result": "ok", "summary": "done"})])
+
+        execute_step(
+            goal="g", step_text="use the prior tool output", step_num=5, total_steps=6,
+            completed_context=[], adapter=_Cap(), tools=EXECUTE_TOOLS,
+            shared_ctx={"artifact:4:tool_transcript": "2 tool call(s): [Bash, Write]; full transcript: /x/step-4-transcript.json"},
+        )
+        assert "Artifacts from prior steps" in captured["user"]
+        assert "tool_transcript (from step 4)" in captured["user"]
+        assert "step-4-transcript.json" in captured["user"]
+
+
 # ---------------------------------------------------------------------------
 # Long-running timeout classification
 # ---------------------------------------------------------------------------

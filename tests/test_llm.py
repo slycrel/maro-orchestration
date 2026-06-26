@@ -38,7 +38,37 @@ from llm import (
     _load_env_file,
     _claude_bin_available,
     _retry_complete,
+    _parse_stream_json,
+    _stringify_tool_result,
 )
+
+
+def _make_stream_output(result="ok", tool_events=None, input_tokens=100, output_tokens=50,
+                        rate_limit_status="allowed"):
+    """Build a claude -p --output-format stream-json NDJSON stream:
+    system/init, a rate_limit_event, assistant+user pairs for each tool call,
+    and the final result event (identical payload to the old --output-format
+    json single object)."""
+    lines = [
+        json.dumps({"type": "system", "subtype": "init", "session_id": "s"}),
+        json.dumps({"type": "rate_limit_event",
+                    "rate_limit_info": {"status": rate_limit_status, "resetsAt": 123}}),
+    ]
+    for i, te in enumerate(tool_events or []):
+        tid = f"t{i}"
+        lines.append(json.dumps({"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "id": tid, "name": te["name"], "input": te.get("input", {})}]}}))
+        lines.append(json.dumps({"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": tid,
+             "is_error": te.get("is_error", False),
+             "content": te.get("output", "")}]}}))
+    lines.append(json.dumps({
+        "type": "result", "subtype": "success", "is_error": False, "result": result,
+        "stop_reason": "end_turn",
+        "usage": {"input_tokens": input_tokens, "cache_read_input_tokens": 0, "output_tokens": output_tokens},
+        "modelUsage": {"claude-sonnet-4-6": {"inputTokens": input_tokens, "outputTokens": output_tokens}},
+    }))
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -872,7 +902,7 @@ class TestRateLimitMultiCycleRetry:
             calls.append(len(calls))
             if len(calls) == 1:
                 return _make_subprocess_result(1, stderr="You have hit your limit", stdout="You have hit your limit")
-            return _make_subprocess_result(0, stdout=json.dumps({"result": "done", "usage": {}}))
+            return _make_subprocess_result(0, stdout=json.dumps({"type": "result", "result": "done", "usage": {}}))
 
         monkeypatch.setattr("llm._run_subprocess_safe", _fake_run)
         monkeypatch.setattr("time.sleep", lambda s: None)
@@ -961,7 +991,7 @@ class TestRateLimitMultiCycleRetry:
             calls.append(1)
             if len(calls) == 1:
                 return _make_subprocess_result(1, stderr="hit your limit", stdout="hit your limit")
-            return _make_subprocess_result(0, stdout=json.dumps({"result": "ok", "usage": {}}))
+            return _make_subprocess_result(0, stdout=json.dumps({"type": "result", "result": "ok", "usage": {}}))
 
         monkeypatch.setattr("llm._run_subprocess_safe", _fake_run)
         monkeypatch.setattr("time.sleep", lambda s: None)
@@ -1334,3 +1364,90 @@ class TestFailoverAdapter:
         from llm import LLMMessage
         fa.complete([LLMMessage("user", "test")])
         assert fa.model_key == "cheap"  # now on FallbackAdapter
+
+
+# ---------------------------------------------------------------------------
+# stream-json transcript parsing — the inner agent's REAL tool calls
+# ---------------------------------------------------------------------------
+
+class TestStreamJsonParsing:
+    def test_stringify_tool_result_variants(self):
+        assert _stringify_tool_result(None) == ""
+        assert _stringify_tool_result("plain") == "plain"
+        assert _stringify_tool_result([{"type": "text", "text": "hi"}]) == "hi"
+        # non-text blocks fall back to json
+        out = _stringify_tool_result([{"type": "image", "x": 1}])
+        assert "image" in out
+        assert _stringify_tool_result({"k": "v"}) == json.dumps({"k": "v"})
+
+    def test_parse_extracts_result_and_tool_events_in_order(self):
+        stream = _make_stream_output(
+            result="done. 142 passed.",
+            tool_events=[
+                {"name": "Bash", "input": {"command": "pytest -q"}, "output": "142 passed"},
+                {"name": "Write", "input": {"file_path": "out.py"}, "output": "perm denied", "is_error": True},
+            ],
+        )
+        p = _parse_stream_json(stream)
+        assert p["result"]["result"] == "done. 142 passed."
+        assert p["rate_limited"] is False
+        names = [e["name"] for e in p["tool_events"]]
+        assert names == ["Bash", "Write"]
+        assert p["tool_events"][0]["output"] == "142 passed"
+        assert p["tool_events"][0]["is_error"] is False
+        assert p["tool_events"][1]["is_error"] is True
+        assert p["tool_events"][1]["output"] == "perm denied"
+
+    def test_parse_rate_limited_status(self):
+        assert _parse_stream_json(json.dumps(
+            {"type": "rate_limit_event", "rate_limit_info": {"status": "rejected"}}
+        ))["rate_limited"] is True
+        # allowed (with resetsAt present) must NOT be flagged — the old "resets"
+        # substring match false-positived on every stream.
+        assert _make_stream_output() and _parse_stream_json(_make_stream_output())["rate_limited"] is False
+
+    def test_parse_tolerates_noise_and_empty(self):
+        assert _parse_stream_json("")["result"] is None
+        assert _parse_stream_json("garbage\nnot json\n")["tool_events"] == []
+
+    def test_parse_backcompat_pretty_single_object(self):
+        pretty = json.dumps({"type": "result", "result": "hi", "is_error": False}, indent=2)
+        assert _parse_stream_json(pretty)["result"]["result"] == "hi"
+
+    def test_complete_populates_tool_events(self):
+        a = ClaudeSubprocessAdapter()
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = _make_stream_output(
+            result="wrote fizzbuzz.py and ran it",
+            tool_events=[{"name": "Write", "input": {"file_path": "fizzbuzz.py"}, "output": "File created"}],
+        )
+        mock_result.stderr = ""
+        with patch("llm._run_subprocess_safe", return_value=mock_result):
+            resp = a.complete([LLMMessage("user", "make fizzbuzz")])
+        assert resp.content == "wrote fizzbuzz.py and ran it"
+        assert len(resp.tool_events) == 1
+        assert resp.tool_events[0]["name"] == "Write"
+        assert resp.tool_events[0]["input"]["file_path"] == "fizzbuzz.py"
+
+    def test_complete_uses_stream_json_flags(self):
+        a = ClaudeSubprocessAdapter()
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = _make_stream_output(result="ok")
+        mock_result.stderr = ""
+        with patch("llm._run_subprocess_safe", return_value=mock_result) as mock_run:
+            a.complete([LLMMessage("user", "hi")])
+        cmd = mock_run.call_args.args[0]
+        assert "stream-json" in cmd
+        assert "--verbose" in cmd
+
+    def test_complete_no_tool_events_when_none(self):
+        a = ClaudeSubprocessAdapter()
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = _make_stream_output(result="just text")
+        mock_result.stderr = ""
+        with patch("llm._run_subprocess_safe", return_value=mock_result):
+            resp = a.complete([LLMMessage("user", "hi")])
+        assert resp.tool_events == []
