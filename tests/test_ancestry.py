@@ -1,4 +1,4 @@
-"""Tests for ancestry.py — goal ancestry chain (§18 poe_orchestration_spec.md)."""
+"""Tests for ancestry.py — goal ancestry chain (§18 maro_orchestration_spec.md)."""
 
 import json
 import sys

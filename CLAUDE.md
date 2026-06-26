@@ -18,7 +18,7 @@ PYTHONPATH=src python3 -m correspondence ingest --since 1d   # re-embed recent c
 PYTHONPATH=src python3 -m correspondence status
 ```
 
-This is **dev-facing tooling only** — not part of Poe's runtime self-improvement. See `src/correspondence.py` module docstring. Don't blur these.
+This is **dev-facing tooling only** — not part of Maro's runtime self-improvement. See `src/correspondence.py` module docstring. Don't blur these.
 
 **Before modifying a subsystem, load its architecture skill.** The `skills/arch-*.md` files describe intent, interfaces, gaps, and file maps for each subsystem. Read the relevant one before making design decisions:
 
@@ -55,7 +55,7 @@ exploration.
 
 ## What this is
 
-**Poe** — an autonomous AI concierge (named after the AI from *Altered Carbon*). Takes a high-level mission, breaks it into milestones, executes over days/weeks, learns from what works, reports progress without hand-holding. User's job: mission definition + exception handling.
+**Maro** — an autonomous agent framework. Takes a high-level mission, breaks it into milestones, executes over days/weeks, learns from what works, reports progress without hand-holding. The framework orchestrates as a neutral role (the Conductor) and can optionally wear a persona (e.g. `personas/poe.md`). User's job: mission definition + exception handling.
 
 North star: self-improving, autonomous agent. Visible → Reliable → Replayable.
 
@@ -74,8 +74,8 @@ See `docs/ARCHITECTURE_OVERVIEW.md` for the full map with intent-vs-implementati
 | **Platform** | LLM adapters, config, heartbeat, projects, tasks, metrics | llm.py, config.py, heartbeat.py, orch_items.py, task_store.py | `skills/arch-platform.md` |
 
 **Two things, often conflated:**
-- **Poe-as-tool**: Execute tasks autonomously. *Works today.*
-- **Poe-as-self-improving-system**: Detect friction → change behavior → verify it worked → learn. *Infrastructure 80% built; verify→learn loop not closed.*
+- **Maro-as-tool**: Execute tasks autonomously. *Works today.*
+- **Maro-as-self-improving-system**: Detect friction → change behavior → verify it worked → learn. *Infrastructure 80% built; verify→learn loop not closed.*
 
 ---
 
@@ -105,10 +105,11 @@ scripts/             smoke.sh, audit-phases.sh, enqueue.sh
 personas/            YAML persona specs
 docs/                Architecture, memory systems, self-reflection design
 lat.md/              Knowledge graph: 9 cross-linked concept nodes + index
-memory/              Repo-local: stale copies (tests write here via OPENCLAW_WORKSPACE). Real data is in ~/.poe/workspace/memory/
-output/              Repo-local output (real output in ~/.poe/workspace/output/)
+memory/              Repo-local: stale copies (tests write here via OPENCLAW_WORKSPACE). Real data is in ~/.maro/workspace/memory/
+output/              Repo-local output (real output in ~/.maro/workspace/output/)
 research/            Research outputs: X link synthesis, Polymarket validation, Phase 41 design
-user/                POE_IDENTITY.md — durable Poe identity (editable)
+user/                Operator docs: GOALS, CONFIG, CONTEXT, SIGNALS, COMPLETION_STANDARD
+personas/poe.md      Optional Poe persona (the framework defaults to a neutral role)
 deploy/              systemd service files
 ```
 
@@ -156,9 +157,9 @@ Reference implementation: `~/.openclaw/workspace/prototypes/poe-orchestrator/` �
 | `~/.openclaw/workspace/prototypes/poe-orchestrator/` | Old prototype — reference only, do not continue work here |
 | `~/.openclaw/workspace/scripts/` | ~80 shell scripts: heartbeat, task queue, X/Telegram/email |
 | `~/.claude/projects/.../memory/` | Claude Code persistent memory across sessions |
-| `/home/clawd/.poe/workspace/` | **Stable runtime workspace** — all learning data, self-evolved artifacts, and runtime state. Not in git. |
+| `/home/clawd/.maro/workspace/` | **Stable runtime workspace** — all learning data, self-evolved artifacts, and runtime state. Not in git. |
 
-**Workspace layout (`~/.poe/workspace/`):**
+**Workspace layout (`~/.maro/workspace/`):**
 
 | Path | What | Written by |
 |------|------|-----------|
@@ -180,8 +181,8 @@ Two-tier YAML config (like git's `~/.gitconfig` vs `.git/config`):
 
 | File | Scope | What goes here |
 |------|-------|---------------|
-| `~/.poe/config.yml` | User-level | API keys, model prefs, yolo mode, notifications |
-| `~/.poe/workspace/config.yml` | Workspace-level | Evolver, inspector thresholds, constraint settings, quality gate |
+| `~/.maro/config.yml` | User-level | API keys, model prefs, yolo mode, notifications |
+| `~/.maro/workspace/config.yml` | Workspace-level | Evolver, inspector thresholds, constraint settings, quality gate |
 
 Workspace inherits from user; workspace keys override. Nested dicts merge one level deep.
 
@@ -215,16 +216,16 @@ bash scripts/smoke.sh
 # Phase audit
 bash scripts/audit-phases.sh
 
-# Run a goal (defaults to ~/.poe/workspace/ — no env vars needed)
+# Run a goal (defaults to ~/.maro/workspace/ — no env vars needed)
 cd /home/clawd/claude/openclaw-orchestration
 PYTHONPATH=src python3 -m handle "your goal here"
 
 # Introspection (Phase 44)
-poe-introspect --latest
-poe-introspect --latest --lenses
+maro-introspect --latest
+maro-introspect --latest --lenses
 
 # Observe dashboard (Phase 36)
-poe-observe serve
+maro-observe serve
 ```
 
 ---

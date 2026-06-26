@@ -29,7 +29,7 @@ Phase 0 from the roadmap — see `ROADMAP.md`. Then Phase 1: the autonomous loop
 cd openclaw-orchestration
 python3 -m pytest tests/
 bash scripts/smoke.sh
-git add VISION.md ROADMAP.md MAINLINE_PLAN.md docs/poe_intent.md docs/poe_orchestration_spec.md docs/poe_miscommunication_patterns.md
+git add VISION.md ROADMAP.md MAINLINE_PLAN.md docs/maro_intent.md docs/maro_orchestration_spec.md docs/maro_miscommunication_patterns.md
 git commit -m "feat: add vision guide, reset roadmap for autonomy-first build"
 git tag -a v0.5.0 -m "v0.5.0: honest foundation audit + autonomy roadmap"
 git push origin HEAD --follow-tags

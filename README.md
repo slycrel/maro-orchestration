@@ -46,7 +46,7 @@ flowchart TD
         AL --> RC["Rules check\nrules.jsonl — zero-cost match"]
         RC -->|hit| STEPS
         RC -->|miss| DC["_decompose()\nLLM step planner"]
-        ID["poe_self.py\nidentity block"] -->|prepend| DC
+        PER["persona (optional)\nplanner.persona config"] -->|prepend| DC
         DC --> STEPS["Steps queue\nparallel fan-out where independent"]
 
         STEPS --> WK["Workers\nresearch · build · ops · reporter"]
@@ -61,7 +61,7 @@ flowchart TD
     EV -->|new skill| MEM
     EV -->|guardrail| CON[constraint.py\nHITL gating]
 
-    LOOP --> CEO["poe.py — CEO layer\ndistil + report"]
+    LOOP --> CEO["conductor.py — Conductor role\ndistil + report"]
     NOW --> CEO
     CEO --> OUT["Telegram / Slack / stdout"]
 
@@ -97,8 +97,8 @@ export ANTHROPIC_API_KEY=sk-ant-...
 # or: export OPENROUTER_API_KEY=...
 # or: export OPENAI_API_KEY=...
 
-# 3. Bootstrap workspace (creates ~/.poe/workspace/ and optional service templates)
-python3 src/cli.py poe-bootstrap install
+# 3. Bootstrap workspace (creates ~/.maro/workspace/ and optional service templates)
+maro-bootstrap install
 
 # 4. Run your first goal
 PYTHONPATH=src python3 -m handle "what time is it in Tokyo?"          # quick answer (NOW lane)
@@ -108,7 +108,7 @@ PYTHONPATH=src python3 -m handle "research the top 3 LLM frameworks"  # multi-st
 python3 src/agent_loop.py "research winning polymarket strategies"
 ```
 
-No OpenClaw installation required. Set `POE_WORKSPACE` to any directory to use a custom workspace root.
+No OpenClaw installation required. Set `MARO_WORKSPACE` to any directory to use a custom workspace root.
 
 ### More commands
 
@@ -119,67 +119,67 @@ python3 src/telegram_listener.py --once    # process pending and exit
 
 # System health
 python3 src/cli.py sheriff health
-python3 src/cli.py poe-observe
+maro-observe
 
 # Dedicated autonomous build-loop runner
 python3 src/cli.py build-loop --worker-session handle --format json
 ./scripts/build-loop.sh --worker-session handle --format json
 
 # Example cron target (every 5 minutes)
-*/5 * * * * cd /path/to/maro-orchestration && OPENCLAW_WORKSPACE=/path/to/workspace ./scripts/build-loop.sh --worker-session handle --format json >> /tmp/poe-build-loop.log 2>&1
+*/5 * * * * cd /path/to/maro-orchestration && OPENCLAW_WORKSPACE=/path/to/workspace ./scripts/build-loop.sh --worker-session handle --format json >> /tmp/maro-build-loop.log 2>&1
 
 # Memory status
-python3 src/cli.py memory context
-python3 src/cli.py poe-memory status
+python3 src/cli.py outcomes context
+python3 src/cli.py memory status
 ```
 
 ### Logging
 
-Structured logging via stdlib `logging`. All loggers live under the `poe.*` namespace.
+Structured logging via stdlib `logging`. All loggers live under the `maro.*` namespace.
 
 ```bash
 # Quiet (default) — only warnings and errors
 python3 src/agent_loop.py "your goal"
 
 # Step lifecycle, timing, tokens, block reasons
-POE_LOG_LEVEL=INFO python3 src/agent_loop.py "your goal"
+MARO_LOG_LEVEL=INFO python3 src/agent_loop.py "your goal"
 
 # Full detail — constraint checks, adapter type, content lengths
-POE_LOG_LEVEL=DEBUG python3 src/agent_loop.py "your goal"
+MARO_LOG_LEVEL=DEBUG python3 src/agent_loop.py "your goal"
 ```
 
-The `--verbose` CLI flag is equivalent to `POE_LOG_LEVEL=DEBUG`. Output goes to stderr so it doesn't interfere with result output.
+The `--verbose` CLI flag is equivalent to `MARO_LOG_LEVEL=DEBUG`. Output goes to stderr so it doesn't interfere with result output.
 
 ### Benchmarking and cost reporting
 
 ```bash
 # Summarize step telemetry
-poe-tool-costs --metrics memory/step-costs.jsonl
+maro-tool-costs --metrics memory/step-costs.jsonl
 
 # Write markdown + JSON reports
-poe-tool-costs \
+maro-tool-costs \
   --metrics memory/step-costs.jsonl \
   --write-report output/benchmarks/tool-cost-report-live.md \
   --write-json output/benchmarks/tool-cost-report-live.json
 
 # Run fixture benchmarks
-poe-tool-costs --run-fixtures --fixtures benchmarks/fixture-workloads.json --output-dir output/benchmarks
+maro-tool-costs --run-fixtures --fixtures benchmarks/fixture-workloads.json --output-dir output/benchmarks
 
 # Backend benchmarks (memory append/read, filtered lookup, concurrent contention)
-poe-benchmark --slice memory-backend --output-dir output/benchmarks
-poe-benchmark --slice memory-backend-filtered-lookup --output-dir output/benchmarks
-poe-benchmark --slice memory-backend-append-contention --output-dir output/benchmarks --workers 2 4
+maro-benchmark --slice memory-backend --output-dir output/benchmarks
+maro-benchmark --slice memory-backend-filtered-lookup --output-dir output/benchmarks
+maro-benchmark --slice memory-backend-append-contention --output-dir output/benchmarks --workers 2 4
 ```
 
 Reports include: task class grouping, ok/error split, median/p95 latency and tokens, total cost, and contention analysis.
 
 | Logger | What it covers |
 |--------|---------------|
-| `poe.loop` | Step start/done/blocked, adapter timing, USD cost per step, loop lifecycle |
-| `poe.planner` | Multi-plan decomposition, dependency graph, execution levels |
-| `poe.persona` | Persona spawn, adapter resolution, spawn completion |
-| `poe.evolver` | Meta-evolution cycles, suggestion apply, skill synthesis |
-| `poe.introspect` | Failure diagnosis, lens analysis, recovery planning |
+| `maro.loop` | Step start/done/blocked, adapter timing, USD cost per step, loop lifecycle |
+| `maro.planner` | Multi-plan decomposition, dependency graph, execution levels |
+| `maro.persona` | Persona spawn, adapter resolution, spawn completion |
+| `maro.evolver` | Meta-evolution cycles, suggestion apply, skill synthesis |
+| `maro.introspect` | Failure diagnosis, lens analysis, recovery planning |
 
 ---
 
@@ -198,9 +198,9 @@ python3 src/telegram_listener.py
 If you intentionally want a 24/7 listener, generate or deploy the service template and enable it:
 
 ```bash
-# generated by `python3 src/cli.py poe-bootstrap services`
-sudo cp deploy/poe-telegram.service /etc/systemd/system/
-sudo systemctl enable --now poe-telegram
+# generated by `maro-bootstrap services`
+sudo cp deploy/maro-telegram.service /etc/systemd/system/
+sudo systemctl enable --now maro-telegram
 ```
 
 Slash commands:
@@ -251,16 +251,16 @@ print(result.summary())
 # Enable only the interfaces or daemons you intentionally want.
 
 # Heartbeat: optional health monitor; autonomy stays off unless explicitly configured.
-sudo cp deploy/poe-heartbeat.service /etc/systemd/system/
-sudo systemctl enable --now poe-heartbeat
+sudo cp deploy/maro-heartbeat.service /etc/systemd/system/
+sudo systemctl enable --now maro-heartbeat
 
 # Telegram: optional always-on chat ingress.
-sudo cp deploy/poe-telegram.service /etc/systemd/system/
-sudo systemctl enable --now poe-telegram
+sudo cp deploy/maro-telegram.service /etc/systemd/system/
+sudo systemctl enable --now maro-telegram
 
 # Inspector: optional background review loop.
-sudo cp deploy/poe-inspector.service /etc/systemd/system/
-sudo systemctl enable --now poe-inspector
+sudo cp deploy/maro-inspector.service /etc/systemd/system/
+sudo systemctl enable --now maro-inspector
 ```
 
 Heartbeat recovery tiers:
@@ -271,15 +271,15 @@ Heartbeat recovery tiers:
 Autonomous background work can be enabled explicitly:
 
 ```bash
-python3 src/cli.py poe-heartbeat --loop --autonomy
+python3 src/cli.py heartbeat --loop --autonomy
 ```
 
-If you run `poe-heartbeat --loop` without either flag, it now defers to `heartbeat.autonomy` config. Use `--no-autonomy` to force health-only mode regardless of config.
+If you run `heartbeat --loop` without either flag, it now defers to `heartbeat.autonomy` config. Use `--no-autonomy` to force health-only mode regardless of config.
 
 You can also skip services entirely and run the pieces manually when needed:
 
 ```bash
-python3 src/cli.py poe-heartbeat --loop
+python3 src/cli.py heartbeat --loop
 python3 src/telegram_listener.py
 python3 src/inspector.py --loop
 ```
@@ -290,19 +290,19 @@ python3 src/inspector.py --loop
 
 Credentials are read in priority order:
 1. Environment variables: `ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`, `OPENAI_API_KEY`, `TELEGRAM_BOT_TOKEN`
-2. `$POE_ENV_FILE` or `<workspace>/secrets/.env`
+2. `$MARO_ENV_FILE` or `<workspace>/secrets/.env`
 3. `~/.openclaw/openclaw.json` (OpenClaw config, if present)
 
-Workspace root resolves as: `POE_WORKSPACE` → `OPENCLAW_WORKSPACE` → `WORKSPACE_ROOT` → `~/.poe/workspace`
+Workspace root resolves as: `MARO_WORKSPACE` → `OPENCLAW_WORKSPACE` → `WORKSPACE_ROOT` → `~/.maro/workspace`
 
 OpenClaw is fully optional. The system runs standalone on any machine with Python 3.10+ and a Claude/OpenAI API key.
 
 ### Workspace layout
 
-The workspace (`~/.poe/workspace/` by default) holds all runtime state, learning data, and self-evolved artifacts. It is **not** checked into git — the repo ships defaults, and the workspace accumulates improvements over time.
+The workspace (`~/.maro/workspace/` by default) holds all runtime state, learning data, and self-evolved artifacts. It is **not** checked into git — the repo ships defaults, and the workspace accumulates improvements over time.
 
 ```
-~/.poe/workspace/
+~/.maro/workspace/
 ├── memory/           # Outcomes, lessons, knowledge nodes, captain's log, diagnoses
 ├── skills/           # Self-created/evolved skill .md files (override repo defaults)
 ├── personas/         # Self-created/evolved persona specs (override repo defaults)
@@ -320,8 +320,8 @@ Two-tier YAML config (like git's `~/.gitconfig` vs `.git/config`):
 
 | File | Scope | What goes here |
 |------|-------|---------------|
-| `~/.poe/config.yml` | User-level | API keys, model prefs, yolo mode, notifications |
-| `~/.poe/workspace/config.yml` | Workspace-level | Evolver, inspector thresholds, constraint settings |
+| `~/.maro/config.yml` | User-level | API keys, model prefs, yolo mode, notifications |
+| `~/.maro/workspace/config.yml` | Workspace-level | Evolver, inspector thresholds, constraint settings |
 
 Workspace inherits from user; workspace keys override. Access in code: `from config import get; get("inspector.breach_threshold", 0.30)`
 
@@ -338,7 +338,7 @@ Workspace inherits from user; workspace keys override. Access in code: `from con
 | `skills.py` | Reusable step patterns: extract, score, test-gate, promote |
 | `persona.py` | Composable agent identities (researcher, builder, ops, companion, psyche-researcher) |
 | `hooks.py` | Pluggable callbacks at step/loop/mission level |
-| `poe.py` | CEO layer: distill active missions → executive summary |
+| `conductor.py` | Conductor role: distill active missions → executive summary |
 | `handle.py` | Entry point: classify intent → route → execute → respond |
 | `telegram_listener.py` | Optional Telegram polling, slash commands, ack+edit UX, live step progress |
 | `slack_listener.py` | Slack Socket Mode, mirrors Telegram commands |
@@ -354,9 +354,8 @@ Workspace inherits from user; workspace keys override. Access in code: `from con
 | `constraint.py` | Pre-execution action validator: 5 pattern groups (destructive/secret/path/network/exec), HIGH blocks, MEDIUM warns, pluggable registry |
 | `security.py` | Prompt injection detection on external content (pre-loop scanning) |
 | `config.py` | Workspace resolution, credential discovery, env var priority |
-| `bootstrap.py` | `poe-bootstrap install`: dirs, services, smoke test |
+| `bootstrap.py` | `maro-bootstrap install`: dirs, services, smoke test |
 | `orch.py` | Core file-first state: NEXT.md tasks, run records, project lifecycle |
-| `poe_self.py` | Persistent identity block: `load_poe_identity()`, `with_poe_identity()` — injected into every decompose call |
 | `checkpoint.py` | Per-step loop checkpointing: `write_checkpoint()`, `resume_from()`, `delete_checkpoint()` — enables loop resume |
 | `claim_verifier.py` | Hallucination detection: file-path and Python symbol existence checking on step results; `annotate_result()` surfaces `NOT_FOUND` / `SYMBOL_CLAIMS_NOT_FOUND` |
 
@@ -437,8 +436,8 @@ python3 -m pytest tests/ -q
 
 # Dry-run (no LLM calls)
 python3 src/agent_loop.py "test goal" --dry-run --verbose
-python3 src/cli.py poe-heartbeat --dry-run
-python3 src/cli.py poe-eval --dry-run
+python3 src/cli.py heartbeat --dry-run
+python3 src/cli.py eval --dry-run
 ```
 
 ---

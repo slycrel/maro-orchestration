@@ -1,4 +1,4 @@
-"""Goal Ancestry — §18 of poe_orchestration_spec.md
+"""Goal Ancestry — §18 of maro_orchestration_spec.md
 
 Every project carries a reverse-linked chain back to the top-level mission.
 This prevents drift, keeps agents aligned with the big picture, and enables
