@@ -114,7 +114,7 @@ class ScriptedAdapter:
 
 def _setup(monkeypatch, tmp_path):
     monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
-    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
 
 
 def _patch_side_effects(monkeypatch):

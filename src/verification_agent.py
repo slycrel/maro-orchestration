@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 from llm_parse import extract_json, safe_float, content_or_empty
 
-log = logging.getLogger("poe.verification")
+log = logging.getLogger("maro.verification")
 
 
 # ---------------------------------------------------------------------------
@@ -34,7 +34,7 @@ log = logging.getLogger("poe.verification")
 # ---------------------------------------------------------------------------
 
 _VERIFY_STEP_SYSTEM = textwrap.dedent("""\
-    You are Poe's verification agent. A step in an autonomous task just completed.
+    You are a verification agent. A step in an autonomous task just completed.
     Your job: did the result actually accomplish what the step asked for?
 
     PASS: the result directly addresses the step goal with specific content.
@@ -49,7 +49,7 @@ _VERIFY_STEP_SYSTEM = textwrap.dedent("""\
 """).strip()
 
 _ADVERSARIAL_SYSTEM = textwrap.dedent("""\
-    You are Poe's adversarial reviewer. A research or analysis task just completed.
+    You are a adversarial reviewer. A research or analysis task just completed.
     Challenge the claims before they reach the user.
 
     For each significant claim in the output:
@@ -68,7 +68,7 @@ _ADVERSARIAL_SYSTEM = textwrap.dedent("""\
 """).strip()
 
 _QUALITY_REVIEW_SYSTEM = textwrap.dedent("""\
-    You are Poe's quality reviewer. A research or analysis task just completed.
+    You are a quality reviewer. A research or analysis task just completed.
     Decide if the output meets the bar for the stated goal.
 
     PASS criteria (all must hold):

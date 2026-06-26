@@ -24,7 +24,7 @@ from runs import (
 
 @pytest.fixture
 def workspace(tmp_path, monkeypatch):
-    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
     return tmp_path
 
 
@@ -196,7 +196,7 @@ def test_artifact_dir_falls_back_to_project_root_fn(workspace):
 
 
 def test_artifact_dir_default_fallback_when_no_project_root_fn(workspace):
-    # No run-dir set, no project_root_fn — must default into POE_WORKSPACE.
+    # No run-dir set, no project_root_fn — must default into MARO_WORKSPACE.
     out = artifact_dir("my-proj")
     assert out == workspace / "projects" / "my-proj" / "artifacts"
     assert out.exists()

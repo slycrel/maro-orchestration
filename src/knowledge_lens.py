@@ -26,7 +26,7 @@ from typing import Any, Dict, List, Optional
 
 from memory_ledger import _memory_dir, _text_similarity
 
-log = logging.getLogger("poe.memory")
+log = logging.getLogger("maro.memory")
 
 # ---------------------------------------------------------------------------
 # Phase 56: Standing Rules — promotion cycle top tier

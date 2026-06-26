@@ -86,7 +86,7 @@ class MinimalScriptedAdapter:
 
 def _env(monkeypatch, tmp_path):
     monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
-    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
 
 
 def _suppress_side_effects(monkeypatch):
@@ -554,7 +554,7 @@ class TestAgendaLaneHeartbeat:
 
     def _setup(self, monkeypatch, tmp_path):
         monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
-        monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
 
     def test_enqueued_task_is_processed_by_drain(self, monkeypatch, tmp_path):
         """enqueue_goal() creates a task; drain_task_store() executes it end-to-end."""

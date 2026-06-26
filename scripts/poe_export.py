@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""poe-export / poe-import — workspace backup and restore.
+"""maro-export / maro-import — workspace backup and restore.
 
-Exports ~/.poe/workspace/ to a timestamped tar.gz, excluding secrets.
+Exports ~/.maro/workspace/ to a timestamped tar.gz, excluding secrets.
 Import restores from a tar.gz, merging with existing data.
 
 Usage:
@@ -60,7 +60,7 @@ def export_workspace(output_path: Path = None, verbose: bool = False) -> Path:
     """Export workspace to a tar.gz archive.
 
     Args:
-        output_path: Where to write the archive. Default: ~/poe-export-TIMESTAMP.tar.gz
+        output_path: Where to write the archive. Default: ~/maro-export-TIMESTAMP.tar.gz
         verbose: Print files being added.
 
     Returns:
@@ -75,7 +75,7 @@ def export_workspace(output_path: Path = None, verbose: bool = False) -> Path:
 
     if output_path is None:
         timestamp = time.strftime("%Y%m%dT%H%M%S")
-        output_path = Path.home() / f"poe-export-{timestamp}.tar.gz"
+        output_path = Path.home() / f"maro-export-{timestamp}.tar.gz"
 
     file_count = 0
     total_bytes = 0
@@ -116,7 +116,7 @@ def import_workspace(
 ) -> int:
     """Import (restore) workspace from a tar.gz archive.
 
-    Extracts into ~/.poe/workspace/, creating directories as needed.
+    Extracts into ~/.maro/workspace/, creating directories as needed.
     Existing files are overwritten. This is a merge, not a clean restore —
     files not in the archive are left untouched.
 
@@ -177,7 +177,7 @@ def import_workspace(
 
 def main():
     parser = argparse.ArgumentParser(
-        prog="poe-export",
+        prog="maro-export",
         description="Export/import Poe workspace for backup or machine transfer",
     )
     sub = parser.add_subparsers(dest="command")

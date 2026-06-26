@@ -22,7 +22,7 @@ import textwrap
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-log = logging.getLogger("poe.team")
+log = logging.getLogger("maro.team")
 
 # ---------------------------------------------------------------------------
 # Known role → persona fragment mappings

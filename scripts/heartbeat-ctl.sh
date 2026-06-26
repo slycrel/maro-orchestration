@@ -12,7 +12,7 @@
 
 set -euo pipefail
 
-HEARTBEAT_PID_FILE="/tmp/poe-heartbeat.pid"
+HEARTBEAT_PID_FILE="/tmp/maro-heartbeat.pid"
 MAX_RUNTIME_SECS=14400  # 4 hours
 
 # Resolve repo root from this script's location (scripts/ is one level down)

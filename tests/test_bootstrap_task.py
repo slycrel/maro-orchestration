@@ -15,7 +15,7 @@ def _read(path: Path) -> str:
 
 
 def test_define_success_criteria_creates_file_and_result(tmp_path, monkeypatch):
-    monkeypatch.setenv("POE_ORCH_ROOT", str(tmp_path))
+    monkeypatch.setenv("MARO_ORCH_ROOT", str(tmp_path))
     ensure_project("demo", "Fetch and summarize an article")
     result_path = tmp_path / "session-result.json"
     monkeypatch.setenv("ORCH_SESSION_RESULT_PATH", str(result_path))
@@ -31,7 +31,7 @@ def test_define_success_criteria_creates_file_and_result(tmp_path, monkeypatch):
 
 
 def test_create_first_pass_plan_adds_concrete_steps(tmp_path, monkeypatch):
-    monkeypatch.setenv("POE_ORCH_ROOT", str(tmp_path))
+    monkeypatch.setenv("MARO_ORCH_ROOT", str(tmp_path))
     ensure_project("demo", "Fetch and summarize an article")
     result_path = tmp_path / "session-result.json"
     monkeypatch.setenv("ORCH_SESSION_RESULT_PATH", str(result_path))
@@ -47,7 +47,7 @@ def test_create_first_pass_plan_adds_concrete_steps(tmp_path, monkeypatch):
 
 
 def test_execute_next_leaf_task_unblocks_when_concrete_step_exists(tmp_path, monkeypatch):
-    monkeypatch.setenv("POE_ORCH_ROOT", str(tmp_path))
+    monkeypatch.setenv("MARO_ORCH_ROOT", str(tmp_path))
     ensure_project("demo", "Fetch and summarize an article")
     result_path = tmp_path / "session-result.json"
     monkeypatch.setenv("ORCH_SESSION_RESULT_PATH", str(result_path))
@@ -62,7 +62,7 @@ def test_execute_next_leaf_task_unblocks_when_concrete_step_exists(tmp_path, mon
 
 
 def test_gather_inputs_collects_urls_and_refs(tmp_path, monkeypatch):
-    monkeypatch.setenv("POE_ORCH_ROOT", str(tmp_path))
+    monkeypatch.setenv("MARO_ORCH_ROOT", str(tmp_path))
     ensure_project("tweet-demo", "Fetch and summarize https://x.com/example/status/1234567890 — get the key takeaway")
     result_path = tmp_path / "session-result.json"
     monkeypatch.setenv("ORCH_SESSION_RESULT_PATH", str(result_path))
@@ -78,7 +78,7 @@ def test_gather_inputs_collects_urls_and_refs(tmp_path, monkeypatch):
 
 
 def test_bootstrap_artifact_and_review_steps_write_files(tmp_path, monkeypatch):
-    monkeypatch.setenv("POE_ORCH_ROOT", str(tmp_path))
+    monkeypatch.setenv("MARO_ORCH_ROOT", str(tmp_path))
     ensure_project("research-demo", "Research and write docs/research/productive_persistence.md using the format in docs/research/README.md")
     result_path = tmp_path / "session-result.json"
     monkeypatch.setenv("ORCH_SESSION_RESULT_PATH", str(result_path))

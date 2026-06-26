@@ -37,9 +37,9 @@ def test_build_loop_shell_wrapper_runs_cli(tmp_path):
 
     env = os.environ.copy()
     env.pop("OPENCLAW_WORKSPACE", None)
-    env.pop("POE_WORKSPACE", None)
+    env.pop("MARO_WORKSPACE", None)
     env.pop("WORKSPACE_ROOT", None)
-    env.pop("POE_ORCH_ROOT", None)
+    env.pop("MARO_ORCH_ROOT", None)
     try:
         proc = subprocess.run(
             [str(script), "--max-runs", "1", "--worker-session", "done"],
@@ -86,9 +86,9 @@ def test_build_loop_shell_wrapper_accepts_trailing_workspace_dir(tmp_path):
 
     env = os.environ.copy()
     env.pop("OPENCLAW_WORKSPACE", None)
-    env.pop("POE_WORKSPACE", None)
+    env.pop("MARO_WORKSPACE", None)
     env.pop("WORKSPACE_ROOT", None)
-    env.pop("POE_ORCH_ROOT", None)
+    env.pop("MARO_ORCH_ROOT", None)
     try:
         proc = subprocess.run(
             [str(script), "--max-runs", "1", "--worker-session", "done", "--format", "json", "."],

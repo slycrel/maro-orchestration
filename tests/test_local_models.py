@@ -300,7 +300,7 @@ def test_ensure_noop_when_autostart_disabled(monkeypatch):
 
 def test_ensure_manages_ollama_runtime(monkeypatch):
     # Ollama is now orchestration-managed: spun up via `ollama serve`, capped.
-    monkeypatch.delenv("POE_PYTEST_ACTIVE", raising=False)  # exercise the real spawn path
+    monkeypatch.delenv("MARO_PYTEST_ACTIVE", raising=False)  # exercise the real spawn path
     _set_cfg(monkeypatch, local_models=["m1"], runtime="ollama",
              autostart=True, idle_shutdown_secs=0)
     monkeypatch.setattr(lm.shutil, "which", lambda exe: f"/usr/bin/{exe}", raising=False)
@@ -328,8 +328,8 @@ def test_ensure_manages_ollama_runtime(monkeypatch):
 
 def test_ensure_no_real_spawn_under_pytest(monkeypatch):
     # The test-harness guard: even with autostart + a managed runtime, no real
-    # server is spawned while POE_PYTEST_ACTIVE is set (set by conftest).
-    monkeypatch.setenv("POE_PYTEST_ACTIVE", "1")
+    # server is spawned while MARO_PYTEST_ACTIVE is set (set by conftest).
+    monkeypatch.setenv("MARO_PYTEST_ACTIVE", "1")
     _set_cfg(monkeypatch, local_models=["m1"], runtime="ollama", autostart=True)
     monkeypatch.setattr(lm, "loaded_models", lambda ep=None: [])
     pop = MagicMock(); monkeypatch.setattr(lm.subprocess, "Popen", pop)
@@ -338,7 +338,7 @@ def test_ensure_no_real_spawn_under_pytest(monkeypatch):
 
 
 def test_ensure_ollama_missing_binary_falls_back(monkeypatch):
-    monkeypatch.delenv("POE_PYTEST_ACTIVE", raising=False)
+    monkeypatch.delenv("MARO_PYTEST_ACTIVE", raising=False)
     _set_cfg(monkeypatch, local_models=["m1"], runtime="ollama", autostart=True)
     monkeypatch.setattr(lm.shutil, "which", lambda exe: None, raising=False)
     monkeypatch.setattr(lm, "loaded_models", lambda ep=None: [])
@@ -403,7 +403,7 @@ def test_launch_argv_env_ollama_and_unknown(monkeypatch):
 
 
 def test_ensure_spawns_and_waits_until_ready(monkeypatch):
-    monkeypatch.delenv("POE_PYTEST_ACTIVE", raising=False)
+    monkeypatch.delenv("MARO_PYTEST_ACTIVE", raising=False)
     _set_cfg(monkeypatch, local_models=["m1"], runtime="mlx", autostart=True, idle_shutdown_secs=0)
     monkeypatch.setattr(lm, "mlx_python", lambda: sys.executable)  # exists
     state = {"spawned": False}

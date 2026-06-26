@@ -12,7 +12,7 @@ the normal CI suite (no MLX/Ollama server) is unaffected. To run it:
     scripts/local-validator.sh start            # serve VibeThinker on :8088
     PYTHONPATH=src pytest tests/test_validator_eval.py -q -s
 
-Override target via env: POE_VALIDATOR_EVAL_MODEL, LOCAL_VALIDATOR_ENDPOINT.
+Override target via env: MARO_VALIDATOR_EVAL_MODEL, LOCAL_VALIDATOR_ENDPOINT.
 Assertion is on aggregate accuracy (not per-case verdicts) so it's robust to a
 small model's sampling noise.
 """
@@ -28,10 +28,10 @@ import local_models as lm
 from verification_agent import VerificationAgent
 
 _FIXTURES = Path(__file__).parent / "fixtures" / "validation_cases.json"
-_MODEL = os.environ.get("POE_VALIDATOR_EVAL_MODEL", "mlx-community/VibeThinker-3B-8bit")
+_MODEL = os.environ.get("MARO_VALIDATOR_EVAL_MODEL", "mlx-community/VibeThinker-3B-8bit")
 _ENDPOINT = os.environ.get("LOCAL_VALIDATOR_ENDPOINT", "http://127.0.0.1:8088/v1")
 # A small specialist won't be perfect; require clear majority-correct discrimination.
-_MIN_ACCURACY = float(os.environ.get("POE_VALIDATOR_EVAL_MIN_ACC", "0.75"))
+_MIN_ACCURACY = float(os.environ.get("MARO_VALIDATOR_EVAL_MIN_ACC", "0.75"))
 
 
 def _load_cases() -> list[dict]:

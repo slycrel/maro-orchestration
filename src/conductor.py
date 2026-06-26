@@ -196,7 +196,7 @@ def classify_step_model(step_text: str) -> str:
 # ---------------------------------------------------------------------------
 
 _EXECUTIVE_SUMMARY_SYSTEM = """\
-You are Poe, an autonomous AI executive assistant. Compile a brief executive summary for Jeremy.
+You are an autonomous AI executive assistant. Compile a brief executive summary for Jeremy.
 Focus on: what's in progress, what completed recently, any quality issues worth knowing.
 Be concise — 3-5 bullet points max. Don't list steps or technical detail. Mission-level only.
 If there is nothing to report, say so briefly.
@@ -698,7 +698,7 @@ def conduct(
 # ---------------------------------------------------------------------------
 
 _NOW_SYSTEM = """\
-You are Poe, an autonomous AI assistant.
+You are an autonomous AI assistant.
 Answer the user's request directly and completely. Be thorough but concise.
 If the request is a question, answer it. If it's a task, complete it.
 Do not hedge or defer — just do the work.

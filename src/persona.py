@@ -55,7 +55,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-log = logging.getLogger("poe.persona")
+log = logging.getLogger("maro.persona")
 
 
 # ---------------------------------------------------------------------------
@@ -163,7 +163,7 @@ class PersonaRegistry:
     """Scans workspace + repo personas/ directories.
 
     Resolution order (workspace wins on name collisions):
-      1. ~/.poe/workspace/personas/  — self-created/evolved personas
+      1. ~/.maro/workspace/personas/  — self-created/evolved personas
       2. repo/personas/              — shipped persona specs
     """
 
@@ -1256,7 +1256,7 @@ def _dispatch_log_path() -> Path:
         from orch_items import memory_dir
         return memory_dir() / "persona-dispatch-log.jsonl"
     except Exception:
-        return Path.home() / ".poe" / "workspace" / "memory" / "persona-dispatch-log.jsonl"
+        return Path.home() / ".maro" / "workspace" / "memory" / "persona-dispatch-log.jsonl"
 
 
 def record_persona_dispatch(

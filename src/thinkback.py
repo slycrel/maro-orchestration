@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 from llm_parse import safe_float
 
-log = logging.getLogger("poe.thinkback")
+log = logging.getLogger("maro.thinkback")
 
 
 # ---------------------------------------------------------------------------

@@ -36,7 +36,7 @@ from knowledge_web import (
 @pytest.fixture(autouse=True)
 def _isolate_workspace(monkeypatch, tmp_path):
     """Point all memory paths to a temp dir."""
-    monkeypatch.setenv("POE_MEMORY_DIR", str(tmp_path / "memory"))
+    monkeypatch.setenv("MARO_MEMORY_DIR", str(tmp_path / "memory"))
     monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
     (tmp_path / "memory").mkdir(parents=True, exist_ok=True)
 

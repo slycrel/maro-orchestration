@@ -405,7 +405,7 @@ def test_run_backlog_step_no_todo_items():
 
 def test_run_backlog_step_dry_run_marks_done(tmp_path, monkeypatch):
     """In dry-run mode, backlog drain claims a TODO item and marks it done."""
-    monkeypatch.setenv("POE_ORCH_ROOT", str(tmp_path))
+    monkeypatch.setenv("MARO_ORCH_ROOT", str(tmp_path))
 
     import importlib
     import orch_items as oi
@@ -431,7 +431,7 @@ def test_run_backlog_step_dry_run_marks_done(tmp_path, monkeypatch):
 
 def test_run_backlog_step_loop_done_marks_done(tmp_path, monkeypatch):
     """When agent loop returns 'done', item is marked STATE_DONE."""
-    monkeypatch.setenv("POE_ORCH_ROOT", str(tmp_path))
+    monkeypatch.setenv("MARO_ORCH_ROOT", str(tmp_path))
 
     import importlib
     import orch_items as oi
@@ -460,7 +460,7 @@ def test_run_backlog_step_loop_done_marks_done(tmp_path, monkeypatch):
 
 def test_run_backlog_step_loop_stuck_marks_blocked(tmp_path, monkeypatch):
     """When agent loop returns 'stuck', item is marked STATE_BLOCKED (no infinite retry)."""
-    monkeypatch.setenv("POE_ORCH_ROOT", str(tmp_path))
+    monkeypatch.setenv("MARO_ORCH_ROOT", str(tmp_path))
 
     import importlib
     import orch_items as oi
@@ -489,7 +489,7 @@ def test_run_backlog_step_loop_stuck_marks_blocked(tmp_path, monkeypatch):
 
 def test_run_backlog_step_loop_exception_marks_blocked(tmp_path, monkeypatch):
     """If agent loop raises, item is marked STATE_BLOCKED and flag is cleared."""
-    monkeypatch.setenv("POE_ORCH_ROOT", str(tmp_path))
+    monkeypatch.setenv("MARO_ORCH_ROOT", str(tmp_path))
 
     import importlib
     import orch_items as oi
@@ -515,7 +515,7 @@ def test_run_backlog_step_loop_exception_marks_blocked(tmp_path, monkeypatch):
 
 def test_run_backlog_step_processes_multiple_items_per_wake(tmp_path, monkeypatch):
     """Backlog drain should chew through a small batch instead of one item per wake."""
-    monkeypatch.setenv("POE_ORCH_ROOT", str(tmp_path))
+    monkeypatch.setenv("MARO_ORCH_ROOT", str(tmp_path))
 
     import importlib
     import orch_items as oi

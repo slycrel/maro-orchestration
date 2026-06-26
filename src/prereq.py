@@ -23,7 +23,7 @@ import logging
 import re
 from typing import Dict, List, Optional
 
-log = logging.getLogger("poe.prereq")
+log = logging.getLogger("maro.prereq")
 
 # Keywords that signal a step is explicitly asking for domain knowledge.
 # Longer patterns checked first; stop on first match.

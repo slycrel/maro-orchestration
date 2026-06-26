@@ -357,7 +357,7 @@ def test_hitl_policy_description_false_still_blocks_destroy():
 def test_hitl_policy_description_downgrade_logs_debug(caplog):
     """Downgrade of DESTROY→WRITE is logged at DEBUG level."""
     import logging
-    with caplog.at_level(logging.DEBUG, logger="poe.constraint"):
+    with caplog.at_level(logging.DEBUG, logger="maro.constraint"):
         hitl_policy("Clone repo (rm -rf first)", is_description=True)
     assert any("downgrade" in r.message.lower() for r in caplog.records)
 
@@ -555,7 +555,7 @@ class TestPersistenceInstallGuardrail:
     @pytest.fixture(autouse=True)
     def _no_gate(self, monkeypatch):
         # Ensure the high-trust gate is OFF by default and config never grants it.
-        monkeypatch.delenv("POE_PERSISTENCE_ALLOW", raising=False)
+        monkeypatch.delenv("MARO_PERSISTENCE_ALLOW", raising=False)
         import constraint as c
         monkeypatch.setattr(c, "_persistence_allowed", lambda: False)
 
@@ -628,11 +628,11 @@ class TestPersistenceInstallGuardrail:
         # Call the real implementation (the autouse fixture replaced the module
         # attribute with a stub; _REAL_PERSISTENCE_ALLOWED still points at the
         # original function, whose env read is unaffected by the patch).
-        monkeypatch.setenv("POE_PERSISTENCE_ALLOW", "1")
+        monkeypatch.setenv("MARO_PERSISTENCE_ALLOW", "1")
         assert _REAL_PERSISTENCE_ALLOWED() is True
-        monkeypatch.setenv("POE_PERSISTENCE_ALLOW", "0")
+        monkeypatch.setenv("MARO_PERSISTENCE_ALLOW", "0")
         assert _REAL_PERSISTENCE_ALLOWED() is False
-        monkeypatch.setenv("POE_PERSISTENCE_ALLOW", "yes")
+        monkeypatch.setenv("MARO_PERSISTENCE_ALLOW", "yes")
         assert _REAL_PERSISTENCE_ALLOWED() is True
 
 

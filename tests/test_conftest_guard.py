@@ -26,7 +26,7 @@ def _tiny_collect():
 
 def test_recursion_guard_blocks_preset_active_env():
     env = os.environ.copy()
-    env["POE_PYTEST_ACTIVE"] = "99999"  # pretend a parent pytest is running
+    env["MARO_PYTEST_ACTIVE"] = "99999"  # pretend a parent pytest is running
     env.pop("PYTEST_CURRENT_TEST", None)
     result = subprocess.run(
         _tiny_collect(), cwd=str(REPO_ROOT), env=env,
@@ -39,15 +39,15 @@ def test_recursion_guard_blocks_preset_active_env():
 def test_recursion_guard_can_be_cleared_for_legitimate_reentry():
     """If a harness explicitly needs nested pytest, clearing the env unblocks it.
 
-    Documents the intended escape hatch: `del env['POE_PYTEST_ACTIVE']` before
+    Documents the intended escape hatch: `del env['MARO_PYTEST_ACTIVE']` before
     spawning a child pytest. Scoped subprocess pytest that doesn't pick up this
     conftest wouldn't need this; this is only for something re-entering *this*
     tree deliberately (e.g. a future meta-test of the guard itself).
     """
     env = os.environ.copy()
-    env["POE_PYTEST_ACTIVE"] = "99999"  # pretend a parent is running
+    env["MARO_PYTEST_ACTIVE"] = "99999"  # pretend a parent is running
     # ... but the caller clears it before exec, proving it's the escape hatch.
-    env.pop("POE_PYTEST_ACTIVE", None)
+    env.pop("MARO_PYTEST_ACTIVE", None)
     result = subprocess.run(
         _tiny_collect(), cwd=str(REPO_ROOT), env=env,
         capture_output=True, text=True, timeout=60,
@@ -58,7 +58,7 @@ def test_recursion_guard_can_be_cleared_for_legitimate_reentry():
 def test_recursion_guard_clean_invocation():
     """No env var set → pytest runs normally."""
     env = os.environ.copy()
-    env.pop("POE_PYTEST_ACTIVE", None)
+    env.pop("MARO_PYTEST_ACTIVE", None)
     result = subprocess.run(
         _tiny_collect(), cwd=str(REPO_ROOT), env=env,
         capture_output=True, text=True, timeout=60,

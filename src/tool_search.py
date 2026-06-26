@@ -30,7 +30,7 @@ import fnmatch
 import logging
 from typing import List, Optional
 
-log = logging.getLogger("poe.tool_search")
+log = logging.getLogger("maro.tool_search")
 
 
 # ---------------------------------------------------------------------------

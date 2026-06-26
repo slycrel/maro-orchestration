@@ -45,7 +45,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 from llm_parse import extract_json, safe_list, content_or_empty
 
-log = logging.getLogger("poe.memory")
+log = logging.getLogger("maro.memory")
 
 # ---------------------------------------------------------------------------
 # Re-exports from memory_ledger.py (decomposition Phase 1)

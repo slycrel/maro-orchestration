@@ -1,6 +1,6 @@
 """Director's Playbook — evolving operational wisdom.
 
-The playbook is a living markdown document at ~/.poe/workspace/playbook.md
+The playbook is a living markdown document at ~/.maro/workspace/playbook.md
 that captures what the system has learned about doing its job well. Unlike
 personas (identity) or skills (procedures), this is meta-level operational
 knowledge: when to use which approach, what failure patterns to watch for,
@@ -12,7 +12,7 @@ Three sources feed the playbook:
   3. Manual edits — operator can directly edit the playbook
 
 The playbook is injected into director and decompose context alongside
-POE_IDENTITY. It's meant to be short, opinionated, and actionable.
+MARO_IDENTITY. It's meant to be short, opinionated, and actionable.
 
 Usage:
     from playbook import load_playbook, inject_playbook, append_to_playbook

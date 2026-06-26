@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
-log = logging.getLogger("poe.introspect")
+log = logging.getLogger("maro.introspect")
 
 
 # ---------------------------------------------------------------------------
@@ -1342,7 +1342,7 @@ _RECOVERY_TABLE: Dict[str, List[RecoveryPlan]] = {
             failure_class="setup_failure",
             action="Check adapter resolution and import chain; surface real exception",
             auto_apply=False, risk="medium",
-            params={"suggestion": "run with POE_LOG_LEVEL=DEBUG to see the swallowed error"},
+            params={"suggestion": "run with MARO_LOG_LEVEL=DEBUG to see the swallowed error"},
         ),
     ],
     "integration_drift": [

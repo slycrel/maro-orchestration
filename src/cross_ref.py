@@ -39,7 +39,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 from llm_parse import safe_float
 
-log = logging.getLogger("poe.cross_ref")
+log = logging.getLogger("maro.cross_ref")
 
 
 # ---------------------------------------------------------------------------

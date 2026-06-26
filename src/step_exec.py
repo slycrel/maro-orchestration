@@ -19,7 +19,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
-log = logging.getLogger("poe.loop")
+log = logging.getLogger("maro.loop")
 
 from llm_parse import extract_json, safe_float, safe_str, content_or_empty  # noqa: E402
 
@@ -29,7 +29,7 @@ from llm_parse import extract_json, safe_float, safe_str, content_or_empty  # no
 # ---------------------------------------------------------------------------
 
 EXECUTE_SYSTEM = textwrap.dedent("""\
-    You are Poe, an autonomous execution agent.
+    You are an autonomous execution agent.
     Complete the given step and call exactly one tool:
       - complete_step: successfully completed
       - flag_stuck: genuinely blocked (explain precisely)
@@ -797,14 +797,14 @@ def execute_step(
     # Detect steps that run external commands — give them a longer timeout.
     # Long-running steps: test suites, builds, installs.
     # Default is 1800s (30 min) — covers pytest on large suites (~100-300s) + LLM
-    # analysis time on constrained hardware. Override via POE_LONG_RUNNING_TIMEOUT.
+    # analysis time on constrained hardware. Override via MARO_LONG_RUNNING_TIMEOUT.
     # The step text can further hint at scale: "full suite" / "all tests" / "tests/ -q"
     # get an extra multiplier vs single-file runs.
     _long_running_keywords = {"pytest", "test suite", "npm run", "make ", "docker ", "pip install",
                               "git clone", "build ", "compile", "deploy", "cargo ", "mvn "}
     _step_lower = step_text.lower()
     _is_long_running = any(kw in _step_lower for kw in _long_running_keywords)
-    _default_long_timeout = int(os.environ.get("POE_LONG_RUNNING_TIMEOUT", "1800"))
+    _default_long_timeout = int(os.environ.get("MARO_LONG_RUNNING_TIMEOUT", "1800"))
     # Full test suite runs need more headroom than targeted single-file runs.
     # "tests/ " (trailing space) matches "pytest tests/ -q" but NOT "tests/test_foo.py"
     # (which would be "tests/t...").

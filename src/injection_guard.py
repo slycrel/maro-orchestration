@@ -65,7 +65,7 @@ _EXFIL_PATTERNS: List[re.Pattern] = [
 _ALLOWED_SOURCE_DIRS: frozenset = frozenset([
     "skills",        # repo skills/
     "personas",      # repo personas/
-    "workspace",     # ~/.poe/workspace/skills/ or personas/
+    "workspace",     # ~/.maro/workspace/skills/ or personas/
     "builtin",       # shipped default
     "internal",      # programmatic (evolver, graduation)
 ])

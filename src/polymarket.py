@@ -24,7 +24,7 @@ import subprocess
 import sys
 from typing import Any, Dict, Optional
 
-log = logging.getLogger("poe.polymarket")
+log = logging.getLogger("maro.polymarket")
 
 _CLI = "polymarket-cli"
 _DEFAULT_LIMIT = 10

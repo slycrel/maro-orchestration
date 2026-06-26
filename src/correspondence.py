@@ -65,14 +65,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-log = logging.getLogger("poe.correspondence")
+log = logging.getLogger("maro.correspondence")
 
 
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
 
-_DEFAULT_DB_PATH = Path.home() / ".poe" / "workspace" / "correspondence.db"
+_DEFAULT_DB_PATH = Path.home() / ".maro" / "workspace" / "correspondence.db"
 _DEFAULT_MAX_CHUNK_CHARS = 6000
 _DEFAULT_TOP_K = 8
 

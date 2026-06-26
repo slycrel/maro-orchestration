@@ -26,7 +26,7 @@ from typing import Any, Dict, List, Optional
 
 from llm_parse import extract_json, safe_list, content_or_empty
 
-log = logging.getLogger("poe.memory.ledger")
+log = logging.getLogger("maro.memory.ledger")
 
 # Hybrid retrieval (BM25 + RRF) — graceful fallback to TF-IDF if unavailable
 try:

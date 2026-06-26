@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import List, Optional
 from llm_parse import extract_json
 
-log = logging.getLogger("poe.planner")
+log = logging.getLogger("maro.planner")
 
 
 # ---------------------------------------------------------------------------
@@ -112,7 +112,7 @@ def _is_large_scope_review(goal: str) -> bool:
 # Staged-pass decomposition prompt: when a goal is too broad for 8 flat steps,
 # break it into domain-area passes each small enough to execute within budget.
 _STAGED_PASS_SYSTEM = textwrap.dedent("""\
-    You are Poe, an autonomous planning agent.
+    You are an autonomous planning agent.
     The goal covers a scope too large for a single execution pass.
     Decompose it into 3-5 STAGED PASSES — thematic sub-goals each independently executable.
 
@@ -138,7 +138,7 @@ _STAGED_PASS_SYSTEM = _STAGED_PASS_SYSTEM + "\n\n" + ANTI_SYCOPHANCY_RULES
 # ---------------------------------------------------------------------------
 
 DECOMPOSE_SYSTEM = textwrap.dedent("""\
-    You are Poe, an autonomous planning agent.
+    You are an autonomous planning agent.
     Decompose a goal into 3-8 concrete, independently-executable steps.
     Each step is a clear action or deliverable, not a vague meta-step.
 
@@ -570,7 +570,7 @@ def decompose_to_dag(
     parallel_levels = [lvl for lvl in levels if len(lvl) > 1]
     if verbose and parallel_levels:
         import logging
-        logging.getLogger("poe.planner").info(
+        logging.getLogger("maro.planner").info(
             "decompose_to_dag: %d steps, %d levels, %d parallelizable",
             len(clean_steps), len(levels), len(parallel_levels),
         )

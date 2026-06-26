@@ -26,7 +26,7 @@ init script) are blocked by default — an autonomous/unattended run must never
 silently make itself survive a reboot.  This block survives the planner-
 description softening (unlike a stray ``rm -rf`` hint, the stated intent IS the
 action).  An attended operator can permit it for a single run via the explicit
-high-trust gate ``POE_PERSISTENCE_ALLOW=1`` (env) or
+high-trust gate ``MARO_PERSISTENCE_ALLOW=1`` (env) or
 ``constraints.allow_persistence_install: true`` (config), which downgrades the
 flag to a warning.  Background/scheduled paths must never set that gate.
 
@@ -47,7 +47,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, List, Optional
 
-log = logging.getLogger("poe.constraint")
+log = logging.getLogger("maro.constraint")
 
 # ---------------------------------------------------------------------------
 # Dynamic constraint circuit breaker
@@ -71,9 +71,9 @@ def _constraint_cfg_int(config_key: str, env_key: str, default: int) -> int:
         pass
     return default
 
-_DYNAMIC_BLOCK_CIRCUIT_BREAKER = _constraint_cfg_int("constraints.circuit_breaker", "POE_DYNAMIC_CONSTRAINT_CIRCUIT_BREAKER", 5)
-_DYNAMIC_CIRCUIT_COOLDOWN_STEPS = _constraint_cfg_int("constraints.circuit_cooldown", "POE_DYNAMIC_CIRCUIT_COOLDOWN", 50)
-_DYNAMIC_CONSTRAINT_TTL_DAYS = _constraint_cfg_int("constraints.ttl_days", "POE_DYNAMIC_CONSTRAINT_TTL_DAYS", 30)
+_DYNAMIC_BLOCK_CIRCUIT_BREAKER = _constraint_cfg_int("constraints.circuit_breaker", "MARO_DYNAMIC_CONSTRAINT_CIRCUIT_BREAKER", 5)
+_DYNAMIC_CIRCUIT_COOLDOWN_STEPS = _constraint_cfg_int("constraints.circuit_cooldown", "MARO_DYNAMIC_CIRCUIT_COOLDOWN", 50)
+_DYNAMIC_CONSTRAINT_TTL_DAYS = _constraint_cfg_int("constraints.ttl_days", "MARO_DYNAMIC_CONSTRAINT_TTL_DAYS", 30)
 
 _dynamic_consecutive_blocks: int = 0   # steps blocked solely by dynamic constraints
 _dynamic_circuit_open_until: int = 0   # step counter; 0 = closed (normal)
@@ -314,7 +314,7 @@ _EXEC_PATTERNS = [
 # softened by the planner-description path, because for persistence the stated
 # intent IS the action.  Default policy is HIGH/block; an operator who genuinely
 # wants to install persistence in an attended run sets the explicit high-trust
-# gate (POE_PERSISTENCE_ALLOW=1 / constraints.allow_persistence_install) which
+# gate (MARO_PERSISTENCE_ALLOW=1 / constraints.allow_persistence_install) which
 # downgrades these to MEDIUM (warn + proceed).
 _PERSISTENCE_PATTERNS = [
     (r"\bsystemctl\s+(--user\s+)?(enable|start|--now)\b", "HIGH", "systemctl enable/start (systemd persistence)"),
@@ -354,12 +354,12 @@ def _persistence_allowed() -> bool:
 
     Default is False (fail-safe): persistence-install flags stay HIGH and block.
     The gate is for attended runs where an operator deliberately wants to install
-    a service/cron/timer — set POE_PERSISTENCE_ALLOW=1 (env) or
+    a service/cron/timer — set MARO_PERSISTENCE_ALLOW=1 (env) or
     constraints.allow_persistence_install: true (config) for that run.
     Background/scheduled paths must never set this.
     """
     import os as _os
-    val = _os.environ.get("POE_PERSISTENCE_ALLOW")
+    val = _os.environ.get("MARO_PERSISTENCE_ALLOW")
     if val is not None:
         return val.strip().lower() in ("1", "true", "yes", "on")
     try:
@@ -765,7 +765,7 @@ def hitl_policy(step_text: str, goal: str = "", *, is_description: bool = False)
         _p = _persistence_flags[0].detail
         reason = (
             f"persistence-install blocked (autonomous runs must not install/enable "
-            f"persistence silently): {_p}. Set POE_PERSISTENCE_ALLOW=1 to permit in an attended run."
+            f"persistence silently): {_p}. Set MARO_PERSISTENCE_ALLOW=1 to permit in an attended run."
         )
 
     if not allowed:

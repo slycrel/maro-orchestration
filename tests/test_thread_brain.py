@@ -17,7 +17,7 @@ from runs import create_run_dir, finalize_run, run_dir
 
 @pytest.fixture
 def workspace(tmp_path, monkeypatch):
-    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
     return tmp_path
 
 

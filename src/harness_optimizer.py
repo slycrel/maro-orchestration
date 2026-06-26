@@ -37,7 +37,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-log = logging.getLogger("poe.harness_optimizer")
+log = logging.getLogger("maro.harness_optimizer")
 
 # ---------------------------------------------------------------------------
 # Imports (graceful fallback for test patching)
@@ -645,7 +645,7 @@ def scan_harness_friction(
             total_traces=n_traces,
             examples=examples,
             suggestion=(
-                "Timeout hotspot detected. Consider: (1) increasing POE_LONG_RUNNING_TIMEOUT for "
+                "Timeout hotspot detected. Consider: (1) increasing MARO_LONG_RUNNING_TIMEOUT for "
                 "full-suite steps, (2) splitting long steps into smaller atomic units, "
                 "(3) adding streaming progress checks."
             ),

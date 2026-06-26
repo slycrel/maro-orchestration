@@ -92,7 +92,7 @@ fi
 echo "--- Starting review loop ---"
 PYTHONPATH=src python3 -c "
 import os, time
-os.environ.setdefault('POE_LOG_LEVEL', 'INFO')
+os.environ.setdefault('MARO_LOG_LEVEL', 'INFO')
 
 from handle import handle
 

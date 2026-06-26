@@ -36,7 +36,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 from llm_parse import extract_json, content_or_empty
 
-log = logging.getLogger("poe.interrupt")
+log = logging.getLogger("maro.interrupt")
 
 # ---------------------------------------------------------------------------
 # Typed event graph nodes (STEAL_LIST: events as first-class graph nodes)
@@ -547,7 +547,7 @@ def _default_lock_path() -> Path:
         from config import memory_dir
         return memory_dir() / "loop.lock"
     except Exception:
-        return Path.home() / ".poe" / "workspace" / "memory" / "loop.lock"
+        return Path.home() / ".maro" / "workspace" / "memory" / "loop.lock"
 
 
 def set_loop_running(loop_id: str, goal: str = "", project: str = "") -> None:

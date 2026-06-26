@@ -280,7 +280,7 @@ def flywheel_workspace(monkeypatch, tmp_path):
     mem.mkdir()
     (mem / "medium").mkdir()
     (mem / "long").mkdir()
-    monkeypatch.setenv("POE_MEMORY_DIR", str(mem))
+    monkeypatch.setenv("MARO_MEMORY_DIR", str(mem))
     monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
 
     # Write sample diagnoses
@@ -358,7 +358,7 @@ class TestFailureMining:
     def test_mine_empty_diagnoses(self, monkeypatch, tmp_path):
         mem = tmp_path / "memory"
         mem.mkdir()
-        monkeypatch.setenv("POE_MEMORY_DIR", str(mem))
+        monkeypatch.setenv("MARO_MEMORY_DIR", str(mem))
         monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
         patterns = mine_failure_patterns()
         assert patterns == []

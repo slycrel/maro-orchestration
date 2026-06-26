@@ -27,8 +27,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VENV="$ROOT/.venv-mlx"
 PY="$VENV/bin/python"
-PIDFILE="${TMPDIR:-/tmp}/poe-local-validator.pid"
-LOGFILE="${TMPDIR:-/tmp}/poe-local-validator.log"
+PIDFILE="${TMPDIR:-/tmp}/maro-local-validator.pid"
+LOGFILE="${TMPDIR:-/tmp}/maro-local-validator.log"
 
 MODEL="${2:-${LOCAL_VALIDATOR_MODEL:-mlx-community/VibeThinker-3B-8bit}}"
 PORT="${3:-${LOCAL_VALIDATOR_PORT:-8088}}"

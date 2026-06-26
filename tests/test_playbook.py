@@ -20,7 +20,7 @@ from playbook import (
 @pytest.fixture(autouse=True)
 def _isolate_workspace(monkeypatch, tmp_path):
     """Point workspace to temp dir."""
-    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
     monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
 
 

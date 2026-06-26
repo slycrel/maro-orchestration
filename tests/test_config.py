@@ -28,33 +28,33 @@ from config import (
 # ---------------------------------------------------------------------------
 
 def test_workspace_root_default(monkeypatch):
-    """Default workspace root is ~/.poe/workspace."""
-    for var in ("POE_WORKSPACE", "OPENCLAW_WORKSPACE", "WORKSPACE_ROOT"):
+    """Default workspace root is ~/.maro/workspace."""
+    for var in ("MARO_WORKSPACE", "OPENCLAW_WORKSPACE", "WORKSPACE_ROOT"):
         monkeypatch.delenv(var, raising=False)
-    assert workspace_root() == Path.home() / ".poe" / "workspace"
+    assert workspace_root() == Path.home() / ".maro" / "workspace"
 
 
 def test_workspace_root_env_override(monkeypatch, tmp_path):
-    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
     assert workspace_root() == tmp_path
 
 
 def test_memory_dir_creates(monkeypatch, tmp_path):
-    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
     p = memory_dir()
     assert p == tmp_path / "memory"
     assert p.is_dir()
 
 
 def test_output_dir_creates(monkeypatch, tmp_path):
-    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
     p = output_dir()
     assert p == tmp_path / "output"
     assert p.is_dir()
 
 
 def test_projects_dir_creates(monkeypatch, tmp_path):
-    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
     p = projects_dir()
     assert p == tmp_path / "projects"
     assert p.is_dir()

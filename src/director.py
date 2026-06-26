@@ -42,7 +42,7 @@ from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 if TYPE_CHECKING:
     from conversation import ConversationChannel
 
-log = logging.getLogger("poe.director")
+log = logging.getLogger("maro.director")
 
 from workers import WorkerResult, dispatch_worker, infer_worker_type, WORKER_TYPES
 from llm_parse import extract_json, safe_float, safe_str, safe_list, content_or_empty

@@ -26,7 +26,7 @@ import bootstrap
 # ---------------------------------------------------------------------------
 
 def test_workspace_root_poe_workspace(monkeypatch, tmp_path):
-    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
     monkeypatch.delenv("OPENCLAW_WORKSPACE", raising=False)
     monkeypatch.delenv("WORKSPACE_ROOT", raising=False)
     # Reload to pick up env — workspace_root() reads os.environ at call time
@@ -35,7 +35,7 @@ def test_workspace_root_poe_workspace(monkeypatch, tmp_path):
 
 
 def test_workspace_root_openclaw_workspace(monkeypatch, tmp_path):
-    monkeypatch.delenv("POE_WORKSPACE", raising=False)
+    monkeypatch.delenv("MARO_WORKSPACE", raising=False)
     monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
     monkeypatch.delenv("WORKSPACE_ROOT", raising=False)
     result = config.workspace_root()
@@ -43,7 +43,7 @@ def test_workspace_root_openclaw_workspace(monkeypatch, tmp_path):
 
 
 def test_workspace_root_workspace_root(monkeypatch, tmp_path):
-    monkeypatch.delenv("POE_WORKSPACE", raising=False)
+    monkeypatch.delenv("MARO_WORKSPACE", raising=False)
     monkeypatch.delenv("OPENCLAW_WORKSPACE", raising=False)
     monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
     result = config.workspace_root()
@@ -55,18 +55,18 @@ def test_workspace_root_priority_poe_over_openclaw(monkeypatch, tmp_path):
     openclaw_dir = tmp_path / "openclaw"
     poe_dir.mkdir()
     openclaw_dir.mkdir()
-    monkeypatch.setenv("POE_WORKSPACE", str(poe_dir))
+    monkeypatch.setenv("MARO_WORKSPACE", str(poe_dir))
     monkeypatch.setenv("OPENCLAW_WORKSPACE", str(openclaw_dir))
     result = config.workspace_root()
     assert result == poe_dir.resolve()
 
 
 def test_workspace_root_default_no_env(monkeypatch):
-    monkeypatch.delenv("POE_WORKSPACE", raising=False)
+    monkeypatch.delenv("MARO_WORKSPACE", raising=False)
     monkeypatch.delenv("OPENCLAW_WORKSPACE", raising=False)
     monkeypatch.delenv("WORKSPACE_ROOT", raising=False)
     result = config.workspace_root()
-    assert result == Path.home() / ".poe" / "workspace"
+    assert result == Path.home() / ".maro" / "workspace"
 
 
 # ---------------------------------------------------------------------------
@@ -76,14 +76,14 @@ def test_workspace_root_default_no_env(monkeypatch):
 def test_credentials_env_file_poe_env_file(monkeypatch, tmp_path):
     env_file = tmp_path / "my.env"
     env_file.write_text("KEY=val\n")
-    monkeypatch.setenv("POE_ENV_FILE", str(env_file))
+    monkeypatch.setenv("MARO_ENV_FILE", str(env_file))
     result = config.credentials_env_file()
     assert result == env_file
 
 
 def test_credentials_env_file_workspace_local(monkeypatch, tmp_path):
-    monkeypatch.delenv("POE_ENV_FILE", raising=False)
-    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    monkeypatch.delenv("MARO_ENV_FILE", raising=False)
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
     local = tmp_path / "secrets" / ".env"
     local.parent.mkdir(parents=True, exist_ok=True)
     local.write_text("KEY=val\n")
@@ -92,8 +92,8 @@ def test_credentials_env_file_workspace_local(monkeypatch, tmp_path):
 
 
 def test_load_credentials_env_parses_file(monkeypatch, tmp_path):
-    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
-    monkeypatch.delenv("POE_ENV_FILE", raising=False)
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+    monkeypatch.delenv("MARO_ENV_FILE", raising=False)
     secrets = tmp_path / "secrets"
     secrets.mkdir()
     (secrets / ".env").write_text("API_KEY=abc123\nOTHER=xyz\n# comment=ignored\n")
@@ -105,8 +105,8 @@ def test_load_credentials_env_parses_file(monkeypatch, tmp_path):
 
 def test_load_credentials_env_empty_when_no_file(monkeypatch, tmp_path):
     """When no local secrets file exists and legacy path is patched away, returns {}."""
-    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
-    monkeypatch.delenv("POE_ENV_FILE", raising=False)
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+    monkeypatch.delenv("MARO_ENV_FILE", raising=False)
     # Patch credentials_env_file to return a non-existent path so no fallback
     with patch.object(config, "credentials_env_file", return_value=tmp_path / "nonexistent.env"):
         result = config.load_credentials_env()
@@ -165,7 +165,7 @@ def test_create_workspace_dirs_idempotent(monkeypatch, tmp_path):
 
 
 def test_create_workspace_dirs_uses_config_default(monkeypatch, tmp_path):
-    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path / "poe"))
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path / "poe"))
     result = bootstrap.create_workspace_dirs()
     assert result == (tmp_path / "poe").resolve()
     assert result.is_dir()
@@ -184,7 +184,7 @@ def test_write_service_files_linux_creates_systemd(monkeypatch, tmp_path):
         assert path.suffix == ".service"
         content = path.read_text()
         assert "ExecStart=" in content
-        assert "POE_WORKSPACE=" in content
+        assert "MARO_WORKSPACE=" in content
 
 
 def test_write_service_files_macos_creates_launchd(monkeypatch, tmp_path):
@@ -196,7 +196,7 @@ def test_write_service_files_macos_creates_launchd(monkeypatch, tmp_path):
         assert path.suffix == ".plist"
         content = path.read_text()
         assert "<plist" in content
-        assert "POE_WORKSPACE" in content
+        assert "MARO_WORKSPACE" in content
 
 
 def test_systemd_service_content(monkeypatch, tmp_path):
@@ -230,7 +230,7 @@ def test_launchd_plist_content(monkeypatch, tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_show_status_runs_without_error(monkeypatch, tmp_path, capsys):
-    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
     bootstrap.create_workspace_dirs(tmp_path)
     bootstrap.show_status()
     out = capsys.readouterr().out

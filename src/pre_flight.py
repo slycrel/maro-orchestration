@@ -29,7 +29,7 @@ try:
 except Exception:
     build_adapter = None  # type: ignore[assignment]
 
-log = logging.getLogger("poe.pre_flight")
+log = logging.getLogger("maro.pre_flight")
 
 _REVIEW_SYSTEM = textwrap.dedent("""\
     You are a plan critic. A planning agent has decomposed a goal into steps.

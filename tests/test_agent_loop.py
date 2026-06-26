@@ -1487,7 +1487,7 @@ def test_diagnosis_exception_swallowed(monkeypatch):
 
 def test_finalize_loop_does_not_raise_on_empty_outcomes(tmp_path, monkeypatch):
     """_finalize_loop never raises even with empty step_outcomes."""
-    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
     _finalize_loop(
         loop_id="test-loop",
         goal="test goal",
@@ -1608,7 +1608,7 @@ def _run_finalize_for_recovery(monkeypatch, *, loop_status, recovery_steps,
 
 def test_finalize_records_verified_recovery_lesson(monkeypatch, tmp_path):
     """A done run with recovery actions records a typed verified-recovery lesson."""
-    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
     recorded = _run_finalize_for_recovery(
         monkeypatch,
         loop_status="done",
@@ -1626,7 +1626,7 @@ def test_finalize_records_verified_recovery_lesson(monkeypatch, tmp_path):
 
 
 def test_finalize_no_recovery_lesson_without_recovery_steps(monkeypatch, tmp_path):
-    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
     recorded = _run_finalize_for_recovery(
         monkeypatch, loop_status="done", recovery_steps=0, failure_chain=[],
     )
@@ -1635,7 +1635,7 @@ def test_finalize_no_recovery_lesson_without_recovery_steps(monkeypatch, tmp_pat
 
 def test_finalize_no_recovery_lesson_when_stuck(monkeypatch, tmp_path):
     """Recovery actions on a stuck run are not verified — no lesson."""
-    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
     recorded = _run_finalize_for_recovery(
         monkeypatch,
         loop_status="stuck",
@@ -1646,7 +1646,7 @@ def test_finalize_no_recovery_lesson_when_stuck(monkeypatch, tmp_path):
 
 
 def test_finalize_skips_recovery_lessons_in_dry_run(monkeypatch, tmp_path):
-    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
     recorded = _run_finalize_for_recovery(
         monkeypatch,
         loop_status="done",
@@ -1659,7 +1659,7 @@ def test_finalize_skips_recovery_lessons_in_dry_run(monkeypatch, tmp_path):
 
 def test_finalize_records_recovery_plan_lesson_for_failed_loop(monkeypatch, tmp_path):
     """A non-healthy diagnosis with a table plan records a [recovery-plan] lesson."""
-    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
     from introspect import LoopDiagnosis
     diag = LoopDiagnosis(
         loop_id="rec-test",
@@ -1838,7 +1838,7 @@ def test_execute_step_read_tier_proceeds_silently(capsys):
 
 def test_run_agent_loop_recovers_from_partial_project(monkeypatch, tmp_path):
     """Loop runs without error when project dir exists but NEXT.md is missing."""
-    monkeypatch.setenv("POE_ORCH_ROOT", str(tmp_path))
+    monkeypatch.setenv("MARO_ORCH_ROOT", str(tmp_path))
     # Pre-create the project dir WITHOUT NEXT.md to simulate a crashed previous run
     slug = _goal_to_slug("check out this repo at http://example.com")
     proj_dir = tmp_path / "projects" / slug
@@ -1856,7 +1856,7 @@ def test_run_agent_loop_recovers_from_partial_project(monkeypatch, tmp_path):
 
 def test_run_agent_loop_ensure_project_always_called_even_when_dir_exists(monkeypatch, tmp_path):
     """ensure_project is called even when project dir already exists."""
-    monkeypatch.setenv("POE_ORCH_ROOT", str(tmp_path))
+    monkeypatch.setenv("MARO_ORCH_ROOT", str(tmp_path))
     # Create via ensure_project to get a fully-initialised dir
     orch.ensure_project("pre-existing", "initial mission")
     proj_dir = tmp_path / "projects" / "pre-existing"
@@ -1876,7 +1876,7 @@ def test_run_agent_loop_ensure_project_always_called_even_when_dir_exists(monkey
 
 def test_write_plan_manifest_creates_file(monkeypatch, tmp_path):
     """_write_plan_manifest writes a markdown file before execution starts."""
-    monkeypatch.setenv("POE_ORCH_ROOT", str(tmp_path))
+    monkeypatch.setenv("MARO_ORCH_ROOT", str(tmp_path))
     import importlib, agent_loop as al
     importlib.reload(al)
 
@@ -1904,7 +1904,7 @@ def test_write_plan_manifest_creates_file(monkeypatch, tmp_path):
 
 def test_write_plan_manifest_shows_step_status(monkeypatch, tmp_path):
     """Plan manifest marks completed steps with ✅ and blocked with ❌."""
-    monkeypatch.setenv("POE_ORCH_ROOT", str(tmp_path))
+    monkeypatch.setenv("MARO_ORCH_ROOT", str(tmp_path))
     import importlib, agent_loop as al
     importlib.reload(al)
 
@@ -1933,7 +1933,7 @@ def test_write_plan_manifest_shows_step_status(monkeypatch, tmp_path):
 
 def test_write_plan_manifest_final_status(monkeypatch, tmp_path):
     """Final manifest write includes done/stuck status and total elapsed."""
-    monkeypatch.setenv("POE_ORCH_ROOT", str(tmp_path))
+    monkeypatch.setenv("MARO_ORCH_ROOT", str(tmp_path))
     import importlib, agent_loop as al
     importlib.reload(al)
 
@@ -1959,7 +1959,7 @@ def test_write_plan_manifest_final_status(monkeypatch, tmp_path):
 
 def test_run_agent_loop_writes_plan_manifest(monkeypatch, tmp_path):
     """run_agent_loop writes a plan manifest to artifacts/ after decomposition."""
-    monkeypatch.setenv("POE_ORCH_ROOT", str(tmp_path))
+    monkeypatch.setenv("MARO_ORCH_ROOT", str(tmp_path))
     result = run_agent_loop(
         "write a plan for research",
         project="vis-test",
@@ -2016,7 +2016,7 @@ def test_split_exec_analyze_returns_two_steps():
 
 def test_step_shape_splits_combined_steps_before_execution(monkeypatch, tmp_path):
     """Pre-execution step-shape check splits combined steps in the manifest."""
-    monkeypatch.setenv("POE_ORCH_ROOT", str(tmp_path))
+    monkeypatch.setenv("MARO_ORCH_ROOT", str(tmp_path))
     result = run_agent_loop(
         "check repo health",
         project="shape-test",
@@ -2130,7 +2130,7 @@ def test_budget_ceiling_enqueues_continuation(monkeypatch, tmp_path):
     """Below depth threshold: budget ceiling enqueues a continuation task."""
     import unittest.mock as mock
     monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
-    monkeypatch.setenv("POE_MAX_CONTINUATION_DEPTH", "4")
+    monkeypatch.setenv("MARO_MAX_CONTINUATION_DEPTH", "4")
 
     enqueued = {}
 
@@ -2168,7 +2168,7 @@ def test_budget_ceiling_escalates_at_depth_limit(monkeypatch, tmp_path):
     """At depth threshold: budget ceiling writes an escalation task, not a continuation."""
     import unittest.mock as mock
     monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
-    monkeypatch.setenv("POE_MAX_CONTINUATION_DEPTH", "2")
+    monkeypatch.setenv("MARO_MAX_CONTINUATION_DEPTH", "2")
 
     enqueued = {}
 
@@ -2525,7 +2525,7 @@ def test_preflight_calibration_false_positive_classification(monkeypatch, tmp_pa
 
 def test_project_dir_root_uses_canonical_path(tmp_path, monkeypatch):
     """_project_dir_root() delegates to projects_root(), not hardcoded path."""
-    monkeypatch.setenv("POE_ORCH_ROOT", str(tmp_path))
+    monkeypatch.setenv("MARO_ORCH_ROOT", str(tmp_path))
     monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
     from agent_loop import _project_dir_root
     from orch_items import projects_root

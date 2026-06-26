@@ -31,7 +31,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-log = logging.getLogger("poe.convo_miner")
+log = logging.getLogger("maro.convo_miner")
 
 # ---------------------------------------------------------------------------
 # Idea scoring keywords

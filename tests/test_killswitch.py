@@ -174,8 +174,8 @@ class TestAgentLoopKillswitch:
 
 class TestWallClockTimeout:
     def test_timeout_zero_triggers_immediately(self, tmp_sentinel, monkeypatch):
-        """POE_LOOP_TIMEOUT_SECS=0 should trigger timeout on first step boundary check."""
-        monkeypatch.setenv("POE_LOOP_TIMEOUT_SECS", "0")
+        """MARO_LOOP_TIMEOUT_SECS=0 should trigger timeout on first step boundary check."""
+        monkeypatch.setenv("MARO_LOOP_TIMEOUT_SECS", "0")
         import importlib, agent_loop
         importlib.reload(agent_loop)  # pick up env var at import time... not needed since read per-call
 

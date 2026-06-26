@@ -1419,7 +1419,7 @@ class TestSubMissionAutoEnqueue:
 
     def test_auto_enqueue_when_enabled(self, monkeypatch, tmp_path):
         """When evolver.auto_enqueue_signals=True, sub_mission is enqueued via enqueue_goal."""
-        monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
         monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
 
         enqueued = []
@@ -1446,7 +1446,7 @@ class TestSubMissionAutoEnqueue:
 
     def test_hold_for_review_when_disabled(self, monkeypatch, tmp_path):
         """When evolver.auto_enqueue_signals=False (default), sub_mission goes to playbook."""
-        monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
         monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
 
         enqueued = []
@@ -1474,7 +1474,7 @@ class TestSubMissionAutoEnqueue:
 
     def test_default_is_hold_not_enqueue(self, monkeypatch, tmp_path):
         """Default config (no key set) does not auto-enqueue."""
-        monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
         monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
 
         enqueued = []
@@ -2301,7 +2301,7 @@ class TestScanSuggestionOutcomes:
         import json
         from evolver import _record_suggestion_outcomes
 
-        # Conftest autouse fixture sets POE_WORKSPACE=tmp_path; memory_dir()
+        # Conftest autouse fixture sets MARO_WORKSPACE=tmp_path; memory_dir()
         # will resolve to tmp_path/memory and create it automatically.
         # Write a fake change_log so _record_suggestion_outcomes can look up
         # category/confidence for each suggestion_id.

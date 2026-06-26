@@ -40,7 +40,7 @@ import traceback
 from dataclasses import dataclass, field
 from typing import Any, Callable, List, Optional
 
-log = logging.getLogger("poe.step_events")
+log = logging.getLogger("maro.step_events")
 
 
 # ---------------------------------------------------------------------------

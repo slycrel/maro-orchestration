@@ -28,7 +28,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional
 
-log = logging.getLogger("poe.skill_loader")
+log = logging.getLogger("maro.skill_loader")
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -156,7 +156,7 @@ class SkillLoader:
     """Loads SKILL.md files from workspace + repo skills/ directories.
 
     Resolution order (workspace wins on name collisions):
-      1. ~/.poe/workspace/skills/  — self-created/evolved skills
+      1. ~/.maro/workspace/skills/  — self-created/evolved skills
       2. repo/skills/              — architecture docs, curated skills
 
     Usage:

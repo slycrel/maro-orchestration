@@ -30,7 +30,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
-log = logging.getLogger("poe.strategy_evaluator")
+log = logging.getLogger("maro.strategy_evaluator")
 
 # ---------------------------------------------------------------------------
 # Configuration

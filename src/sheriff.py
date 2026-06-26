@@ -432,7 +432,7 @@ def _read_env_file_key() -> Optional[str]:
         from config import credentials_env_file
         env_file = credentials_env_file()
     except Exception:
-        env_file = Path.home() / ".poe" / "workspace" / "secrets" / ".env"
+        env_file = Path.home() / ".maro" / "workspace" / "secrets" / ".env"
     if not env_file.exists():
         return None
     try:

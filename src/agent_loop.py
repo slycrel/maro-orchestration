@@ -32,15 +32,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, ClassVar, Dict, List, Optional
 
-log = logging.getLogger("poe.loop")
+log = logging.getLogger("maro.loop")
 
 _logging_configured = False
 
 def _configure_logging(verbose: bool = False) -> None:
-    """Set up poe.* logger hierarchy once.
+    """Set up maro.* logger hierarchy once.
 
     Level resolution (first match wins):
-      1. POE_LOG_LEVEL env var (DEBUG, INFO, WARNING, ERROR)
+      1. MARO_LOG_LEVEL env var (DEBUG, INFO, WARNING, ERROR)
       2. verbose=True → DEBUG
       3. default → WARNING (quiet)
 
@@ -51,7 +51,7 @@ def _configure_logging(verbose: bool = False) -> None:
         return
     _logging_configured = True
 
-    env_level = os.environ.get("POE_LOG_LEVEL", "").upper()
+    env_level = os.environ.get("MARO_LOG_LEVEL", "").upper()
     if env_level and hasattr(logging, env_level):
         level = getattr(logging, env_level)
     elif verbose:
@@ -59,7 +59,7 @@ def _configure_logging(verbose: bool = False) -> None:
     else:
         level = logging.WARNING
 
-    root_logger = logging.getLogger("poe")
+    root_logger = logging.getLogger("maro")
     if not root_logger.handlers:
         handler = logging.StreamHandler(sys.stderr)
         handler.setFormatter(logging.Formatter(
@@ -434,7 +434,7 @@ def _handle_budget_ceiling(
             )
             _next_depth = continuation_depth + 1
 
-            _max_depth = int(os.environ.get("POE_MAX_CONTINUATION_DEPTH", "4"))
+            _max_depth = int(os.environ.get("MARO_MAX_CONTINUATION_DEPTH", "4"))
 
             if continuation_depth >= _max_depth:
                 _esc_reason = (
@@ -2434,9 +2434,9 @@ def _initialize_loop(
     except Exception as _ks_exc:
         log.debug("killswitch check failed (non-blocking): %s", _ks_exc)
 
-    # Wall-clock timeout — default 2 hours, override via POE_LOOP_TIMEOUT_SECS
+    # Wall-clock timeout — default 2 hours, override via MARO_LOOP_TIMEOUT_SECS
     try:
-        ctx.loop_timeout_secs = float(os.environ.get("POE_LOOP_TIMEOUT_SECS", "7200"))
+        ctx.loop_timeout_secs = float(os.environ.get("MARO_LOOP_TIMEOUT_SECS", "7200"))
     except (ValueError, TypeError):
         ctx.loop_timeout_secs = 7200.0
 
@@ -2617,7 +2617,7 @@ def _run_steps_parallel(
     n_workers = min(max_workers, len(steps))
     outcomes_by_idx: Dict[int, dict] = {}
 
-    _fanout_timeout = int(os.environ.get("POE_STEP_TIMEOUT", "600"))  # 10 min default
+    _fanout_timeout = int(os.environ.get("MARO_STEP_TIMEOUT", "600"))  # 10 min default
 
     with ThreadPoolExecutor(max_workers=n_workers) as pool:
         futures = {
@@ -2706,7 +2706,7 @@ def _run_steps_dag(
         i: set(deps.get(i, set())) for i in range(1, n + 1)
     }
 
-    _fanout_timeout = int(os.environ.get("POE_STEP_TIMEOUT", "600"))
+    _fanout_timeout = int(os.environ.get("MARO_STEP_TIMEOUT", "600"))
 
     def _run_one(step_idx: int) -> tuple:
         step_text = steps[step_idx - 1]
@@ -5430,7 +5430,7 @@ def main(argv=None):
         "--backend", "-b",
         choices=["auto", "anthropic", "openrouter", "openai", "subprocess", "codex"],
         default=None,
-        help="LLM backend (default: auto-detect; POE_BACKEND env var also accepted)",
+        help="LLM backend (default: auto-detect; MARO_BACKEND env var also accepted)",
     )
 
     args = parser.parse_args(argv)

@@ -1,6 +1,6 @@
 """Global test fixtures — workspace isolation + recursion guard.
 
-Every test gets its own tmp workspace so nothing leaks into ~/.poe/workspace/.
+Every test gets its own tmp workspace so nothing leaks into ~/.maro/workspace/.
 Individual tests that already set OPENCLAW_WORKSPACE via monkeypatch will
 override this (monkeypatch wins over os.environ in the same scope).
 
@@ -27,7 +27,7 @@ import pytest
 # test dir) is fine — that child won't load this conftest.py. The guard only
 # catches children that re-enter *this* project's test tree.
 
-_ACTIVE_ENV = "POE_PYTEST_ACTIVE"
+_ACTIVE_ENV = "MARO_PYTEST_ACTIVE"
 
 
 def pytest_configure(config):
@@ -60,7 +60,7 @@ _API_KEY_VARS = (
 # Env vars that point at credential files — redirect to nowhere so tests
 # never discover real keys from disk (e.g. legacy ~/.openclaw/ fallback).
 _CREDENTIAL_PATH_VARS = (
-    "POE_ENV_FILE",
+    "MARO_ENV_FILE",
     "OPENCLAW_CFG",
 )
 
@@ -69,7 +69,7 @@ _CREDENTIAL_PATH_VARS = (
 def _isolate_workspace(tmp_path):
     """Route all workspace resolution to a per-test tmp dir.
 
-    Sets POE_WORKSPACE (highest priority in config.workspace_root()) so that
+    Sets MARO_WORKSPACE (highest priority in config.workspace_root()) so that
     memory_dir(), output_dir(), projects_dir(), and everything downstream
     writes to tmp_path instead of the real workspace.
 
@@ -78,8 +78,8 @@ def _isolate_workspace(tmp_path):
     """
     saved = {}
     # Workspace isolation
-    saved["POE_WORKSPACE"] = os.environ.get("POE_WORKSPACE")
-    os.environ["POE_WORKSPACE"] = str(tmp_path)
+    saved["MARO_WORKSPACE"] = os.environ.get("MARO_WORKSPACE")
+    os.environ["MARO_WORKSPACE"] = str(tmp_path)
 
     # API key isolation — stash and remove
     for var in _API_KEY_VARS:

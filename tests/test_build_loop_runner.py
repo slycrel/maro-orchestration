@@ -14,7 +14,7 @@ import build_loop_runner as blr
 
 def test_run_build_loop_sets_poe_yolo_for_autonomous_worker(monkeypatch, tmp_path):
     monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
-    monkeypatch.delenv("POE_YOLO", raising=False)
+    monkeypatch.delenv("MARO_YOLO", raising=False)
 
     repo = tmp_path / "prototypes" / "poe-orchestration"
     (repo / "output").mkdir(parents=True, exist_ok=True)
@@ -26,7 +26,7 @@ def test_run_build_loop_sets_poe_yolo_for_autonomous_worker(monkeypatch, tmp_pat
     monkeypatch.setattr(blr, "worker_session_bridge", lambda worker_session, timeout_seconds=None: object())
 
     def _fake_run_loop(**kwargs):
-        observed["poe_yolo"] = os.environ.get("POE_YOLO")
+        observed["poe_yolo"] = os.environ.get("MARO_YOLO")
         return []
 
     monkeypatch.setattr(blr, "run_loop", _fake_run_loop)
@@ -35,12 +35,12 @@ def test_run_build_loop_sets_poe_yolo_for_autonomous_worker(monkeypatch, tmp_pat
 
     assert summary["status"] == "idle"
     assert observed["poe_yolo"] == "true"
-    assert os.environ.get("POE_YOLO") is None
+    assert os.environ.get("MARO_YOLO") is None
 
 
 def test_run_build_loop_passes_bounded_session_timeout(monkeypatch, tmp_path):
     monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
-    monkeypatch.setenv("POE_BUILD_LOOP_SESSION_TIMEOUT_SECONDS", "12.5")
+    monkeypatch.setenv("MARO_BUILD_LOOP_SESSION_TIMEOUT_SECONDS", "12.5")
 
     repo = tmp_path / "prototypes" / "poe-orchestration"
     (repo / "output").mkdir(parents=True, exist_ok=True)

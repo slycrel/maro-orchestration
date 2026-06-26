@@ -10,7 +10,7 @@ import task_store
 @pytest.fixture(autouse=True)
 def _use_tmp_workspace(tmp_path, monkeypatch):
     """Point task_store at a temp directory for every test."""
-    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
 
 
 # ---------------------------------------------------------------------------
@@ -386,13 +386,13 @@ import threading
 
 
 def _worker_claim(workspace: str, job_id: str, result_list, hold_secs: float = 0.0) -> None:
-    """Subprocess entry: set POE_WORKSPACE, attempt to claim, append result.
+    """Subprocess entry: set MARO_WORKSPACE, attempt to claim, append result.
 
     If hold_secs > 0, sleep that long after a successful claim — keeps the
     worker PID alive so the peer's stale-claim-recovery path doesn't trigger.
     """
     import os as _os
-    _os.environ["POE_WORKSPACE"] = workspace
+    _os.environ["MARO_WORKSPACE"] = workspace
     # Force re-import under the new env so tasks_dir() resolves correctly.
     import importlib
     import time as _time
@@ -411,7 +411,7 @@ def _worker_claim(workspace: str, job_id: str, result_list, hold_secs: float = 0
 
 def _worker_enqueue(workspace: str, job_id: str, result_list) -> None:
     import os as _os
-    _os.environ["POE_WORKSPACE"] = workspace
+    _os.environ["MARO_WORKSPACE"] = workspace
     import importlib
     import task_store as _ts
     importlib.reload(_ts)
@@ -430,7 +430,7 @@ class TestConcurrency:
         `claim()` stale-recovery check sees a live PID and raises on the others.
         This validates the exclusive-lock path is actually serializing claims.
         """
-        monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
         task_store.enqueue(job_id="race-1")
 
         results: list = []
@@ -472,8 +472,8 @@ class TestConcurrency:
         recovery correctly hands the task to the second worker).
         """
         import os as _os
-        orig_ws = _os.environ.get("POE_WORKSPACE")
-        _os.environ["POE_WORKSPACE"] = str(tmp_path)
+        orig_ws = _os.environ.get("MARO_WORKSPACE")
+        _os.environ["MARO_WORKSPACE"] = str(tmp_path)
         try:
             import importlib
             importlib.reload(task_store)
@@ -498,9 +498,9 @@ class TestConcurrency:
             assert len(rejected) == 1
         finally:
             if orig_ws is None:
-                _os.environ.pop("POE_WORKSPACE", None)
+                _os.environ.pop("MARO_WORKSPACE", None)
             else:
-                _os.environ["POE_WORKSPACE"] = orig_ws
+                _os.environ["MARO_WORKSPACE"] = orig_ws
 
     def test_multiprocess_stale_claim_recovery(self, tmp_path):
         """When a prior claimer exits without completing, the next claimer
@@ -508,8 +508,8 @@ class TestConcurrency:
         should succeed, not be treated as a double-claim bug.
         """
         import os as _os
-        orig_ws = _os.environ.get("POE_WORKSPACE")
-        _os.environ["POE_WORKSPACE"] = str(tmp_path)
+        orig_ws = _os.environ.get("MARO_WORKSPACE")
+        _os.environ["MARO_WORKSPACE"] = str(tmp_path)
         try:
             import importlib
             importlib.reload(task_store)
@@ -537,9 +537,9 @@ class TestConcurrency:
             assert pids[0] != pids[1]
         finally:
             if orig_ws is None:
-                _os.environ.pop("POE_WORKSPACE", None)
+                _os.environ.pop("MARO_WORKSPACE", None)
             else:
-                _os.environ["POE_WORKSPACE"] = orig_ws
+                _os.environ["MARO_WORKSPACE"] = orig_ws
 
     def test_concurrent_enqueue_of_different_tasks_all_succeed(self, tmp_path, monkeypatch):
         """Writing to 20 different task files concurrently must produce 20
@@ -547,7 +547,7 @@ class TestConcurrency:
         contention between different job_ids — this validates we aren't
         accidentally sharing a lock path.
         """
-        monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
 
         job_ids = [f"concurrent-{i:03d}" for i in range(20)]
         results: list = []
@@ -585,7 +585,7 @@ class TestConcurrency:
         """Interleaved claim + complete operations on the same task must
         serialize correctly — no half-written state visible between them.
         """
-        monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
         task_store.enqueue(job_id="serial-1")
         task_store.claim("serial-1")
 

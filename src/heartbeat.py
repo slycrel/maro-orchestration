@@ -30,7 +30,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-log = logging.getLogger("poe.heartbeat")
+log = logging.getLogger("maro.heartbeat")
 
 DEFAULT_BACKLOG_EVERY = 5
 DEFAULT_BACKLOG_BATCH_SIZE = 3
@@ -65,7 +65,7 @@ def _is_interactive_session_active() -> bool:
             return False
 
         roots = {Path.cwd().resolve(), Path(__file__).resolve().parent.parent.resolve()}
-        for env_name in ("POE_WORKSPACE", "OPENCLAW_WORKSPACE", "WORKSPACE_ROOT"):
+        for env_name in ("MARO_WORKSPACE", "OPENCLAW_WORKSPACE", "WORKSPACE_ROOT"):
             value = os.environ.get(env_name)
             if value:
                 try:
@@ -242,7 +242,7 @@ def _mark_diagnosis_ran(project: str) -> None:
 
 
 _DIAGNOSIS_SYSTEM = """\
-You are Poe's diagnostic agent. A project loop appears to be stuck or unhealthy.
+You are a diagnostic agent. A project loop appears to be stuck or unhealthy.
 Analyze the provided project state and suggest ONE specific recovery action.
 Be brief and concrete. Respond in this format:
 ACTION: <one sentence describing what should be done>

@@ -102,7 +102,7 @@ def run_doctor() -> bool:
     # Memory directory — use the canonical resolution (env > config > orch
     # fallback), not a repo-relative guess. The repo-local memory/ is a stale
     # copy (tests write there); reporting it here misled diagnostics on any
-    # box where the real data lives in ~/.poe/workspace/memory.
+    # box where the real data lives in ~/.maro/workspace/memory.
     try:
         from orch_items import memory_dir as _canonical_memory_dir
         mem_dir = _canonical_memory_dir()
@@ -124,7 +124,7 @@ def run_doctor() -> bool:
 
     # Phase 62: Check workspace skills for duplicates (same content_hash)
     try:
-        workspace_skills = Path.home() / ".poe" / "workspace" / "memory" / "skills.jsonl"
+        workspace_skills = Path.home() / ".maro" / "workspace" / "memory" / "skills.jsonl"
         if workspace_skills.exists():
             from collections import defaultdict
             all_skills = []
@@ -252,16 +252,16 @@ def run_doctor() -> bool:
         results.append(_check("Bughunter (src/)", True, f"skipped: {exc}"))  # optional, not fatal
 
     # Continuation traversal config
-    _max_depth = os.environ.get("POE_MAX_CONTINUATION_DEPTH", "")
+    _max_depth = os.environ.get("MARO_MAX_CONTINUATION_DEPTH", "")
     results.append(_check(
-        "POE_MAX_CONTINUATION_DEPTH",
+        "MARO_MAX_CONTINUATION_DEPTH",
         True,  # optional — default of 4 is fine, warn only when unset for awareness
         f"={_max_depth}" if _max_depth else "not set (default: 4 passes before escalation)",
     ))
 
-    _step_timeout = os.environ.get("POE_STEP_TIMEOUT", "")
+    _step_timeout = os.environ.get("MARO_STEP_TIMEOUT", "")
     results.append(_check(
-        "POE_STEP_TIMEOUT",
+        "MARO_STEP_TIMEOUT",
         True,  # optional
         f"={_step_timeout}s" if _step_timeout else "not set (default: 600s per step)",
     ))
@@ -369,7 +369,7 @@ def cleanup_workspace_skills(skills_path: "Path | None" = None) -> None:
         skills_path: Override the default workspace path (for testing).
     """
     from collections import defaultdict
-    workspace_skills = skills_path or (Path.home() / ".poe" / "workspace" / "memory" / "skills.jsonl")
+    workspace_skills = skills_path or (Path.home() / ".maro" / "workspace" / "memory" / "skills.jsonl")
 
     if not workspace_skills.exists():
         print("Workspace skills file not found — nothing to clean")

@@ -36,7 +36,7 @@ from llm_parse import extract_json, safe_float, safe_str, safe_list, content_or_
 if TYPE_CHECKING:  # annotation-only; runtime imports stay inside functions
     from skill_types import Skill
 
-log = logging.getLogger("poe.evolver")
+log = logging.getLogger("maro.evolver")
 
 # Module-level imports for clean test patching
 try:
@@ -450,15 +450,15 @@ def apply_suggestion(suggestion_id: str) -> bool:
                 elif category == "new_guardrail":
                     # Guardrails can permanently block execution paths. Gate on
                     # environment + explicit override:
-                    #   POE_AUTO_APPLY_GUARDRAILS=0 → always hold for review (prod-safe override)
-                    #   POE_AUTO_APPLY_GUARDRAILS=1 → always auto-apply (dev override)
+                    #   MARO_AUTO_APPLY_GUARDRAILS=0 → always hold for review (prod-safe override)
+                    #   MARO_AUTO_APPLY_GUARDRAILS=1 → always auto-apply (dev override)
                     #   unset → auto-apply in non-prod, hold in prod
                     #
                     # Session 20 adversarial review finding 3.13: the previous
                     # default (hold unless env=1) silently disabled the
                     # guardrail self-improvement path everywhere. Most runs are
                     # dev/experiment — guardrails should evolve there by default.
-                    _env_override = os.environ.get("POE_AUTO_APPLY_GUARDRAILS")
+                    _env_override = os.environ.get("MARO_AUTO_APPLY_GUARDRAILS")
                     if _env_override == "1":
                         _should_apply = True
                     elif _env_override == "0":
@@ -481,7 +481,7 @@ def apply_suggestion(suggestion_id: str) -> bool:
                         d["status"] = "held_for_review"
                         d["block_reason"] = (
                             "new_guardrail held: production environment (set "
-                            "POE_AUTO_APPLY_GUARDRAILS=1 to override, or change "
+                            "MARO_AUTO_APPLY_GUARDRAILS=1 to override, or change "
                             "config 'environment' from 'production')"
                         )
                         log.info("evolver: guardrail held for review (production env): %s",
@@ -739,7 +739,7 @@ def _run_skill_test_gate(suggestion_dict: dict) -> Optional[dict]:
 # ---------------------------------------------------------------------------
 
 _SIGNAL_SYSTEM = """\
-You are Poe's signal scanner. You analyze completed run outcomes to identify
+You are a signal scanner. You analyze completed run outcomes to identify
 actionable business opportunities, follow-up leads, and domain insights that
 should become autonomous sub-missions.
 
@@ -894,7 +894,7 @@ def scan_outcomes_for_signals(
 # ---------------------------------------------------------------------------
 
 _EVOLVER_SYSTEM = """\
-You are Poe's meta-evolution agent. You analyze patterns across many completed and failed runs
+You are a meta-evolution agent. You analyze patterns across many completed and failed runs
 to identify systemic improvements.
 
 You will receive a summary of recent run outcomes. Identify:

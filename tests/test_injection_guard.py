@@ -38,7 +38,7 @@ class TestSourceIsAllowed:
         assert _source_is_allowed("internal") is True
 
     def test_path_containing_skills_allowed(self):
-        assert _source_is_allowed("/home/clawd/.poe/workspace/skills/my_skill.md") is True
+        assert _source_is_allowed("/home/clawd/.maro/workspace/skills/my_skill.md") is True
 
     def test_external_url_not_allowed(self):
         assert _source_is_allowed("github.com/evil/repo") is False

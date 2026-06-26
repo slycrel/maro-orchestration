@@ -234,21 +234,21 @@ class TestMigration:
 
 class TestGetBackend:
     def test_default_returns_jsonl(self, tmpdir, monkeypatch):
-        monkeypatch.delenv("POE_MEMORY_BACKEND", raising=False)
+        monkeypatch.delenv("MARO_MEMORY_BACKEND", raising=False)
         backend = get_backend(tmpdir)
         assert isinstance(backend, JSONLBackend)
 
     def test_env_jsonl_returns_jsonl(self, tmpdir, monkeypatch):
-        monkeypatch.setenv("POE_MEMORY_BACKEND", "jsonl")
+        monkeypatch.setenv("MARO_MEMORY_BACKEND", "jsonl")
         backend = get_backend(tmpdir)
         assert isinstance(backend, JSONLBackend)
 
     def test_env_sqlite_returns_sqlite(self, tmpdir, monkeypatch):
-        monkeypatch.setenv("POE_MEMORY_BACKEND", "sqlite")
+        monkeypatch.setenv("MARO_MEMORY_BACKEND", "sqlite")
         backend = get_backend(tmpdir)
         assert isinstance(backend, SQLiteBackend)
 
     def test_unknown_env_falls_back_to_jsonl(self, tmpdir, monkeypatch):
-        monkeypatch.setenv("POE_MEMORY_BACKEND", "redis")
+        monkeypatch.setenv("MARO_MEMORY_BACKEND", "redis")
         backend = get_backend(tmpdir)
         assert isinstance(backend, JSONLBackend)

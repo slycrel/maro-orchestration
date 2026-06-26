@@ -7,7 +7,7 @@ Defines the abstract MemoryBackend interface and two concrete implementations:
 
 Usage:
     from memory_backends import get_backend
-    backend = get_backend()  # reads POE_MEMORY_BACKEND env var (default: jsonl)
+    backend = get_backend()  # reads MARO_MEMORY_BACKEND env var (default: jsonl)
 
 Collections (match existing jsonl filenames):
     outcomes        — structured outcome ledger (append-only)
@@ -34,7 +34,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional
 
-log = logging.getLogger("poe.memory_backends")
+log = logging.getLogger("maro.memory_backends")
 
 # ---------------------------------------------------------------------------
 # Abstract base
@@ -294,7 +294,7 @@ class SQLiteBackend(MemoryBackend):
 def get_backend(memory_dir: Optional[Path] = None) -> MemoryBackend:
     """Return the configured backend.
 
-    Reads POE_MEMORY_BACKEND (default: "jsonl").
+    Reads MARO_MEMORY_BACKEND (default: "jsonl").
     Supported values: "jsonl", "sqlite".
 
     Args:
@@ -308,7 +308,7 @@ def get_backend(memory_dir: Optional[Path] = None) -> MemoryBackend:
         except ImportError:
             memory_dir = Path("memory")
 
-    backend_name = os.environ.get("POE_MEMORY_BACKEND", "jsonl").lower().strip()
+    backend_name = os.environ.get("MARO_MEMORY_BACKEND", "jsonl").lower().strip()
 
     if backend_name == "sqlite":
         db_path = memory_dir / "memory.db"
@@ -316,7 +316,7 @@ def get_backend(memory_dir: Optional[Path] = None) -> MemoryBackend:
         return SQLiteBackend(db_path)
 
     if backend_name != "jsonl":
-        log.warning("Unknown POE_MEMORY_BACKEND=%r, falling back to jsonl", backend_name)
+        log.warning("Unknown MARO_MEMORY_BACKEND=%r, falling back to jsonl", backend_name)
 
     log.debug("Using JSONLBackend at %s", memory_dir)
     return JSONLBackend(memory_dir)

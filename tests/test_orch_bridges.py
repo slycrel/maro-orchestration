@@ -688,7 +688,7 @@ class TestCommandExecutionBridge:
 
     @patch("orch_bridges.subprocess.run")
     def test_successful_command(self, mock_run, tmp_path, monkeypatch):
-        monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
         mock_run.return_value = MagicMock(
             returncode=0,
             stdout="output line\n",
@@ -703,7 +703,7 @@ class TestCommandExecutionBridge:
 
     @patch("orch_bridges.subprocess.run")
     def test_failed_command_raises(self, mock_run, tmp_path, monkeypatch):
-        monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
         mock_run.return_value = MagicMock(
             returncode=1,
             stdout="",
@@ -717,7 +717,7 @@ class TestCommandExecutionBridge:
 class TestSessionExecutionBridge:
     @patch("orch_bridges.subprocess.Popen")
     def test_failed_session_includes_stdout_and_stderr_tails(self, mock_popen, tmp_path, monkeypatch):
-        monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
         proc = MagicMock()
         proc.communicate.return_value = (
             "line a\nNOW lane error: 429 Client Error\nfinal stdout line\n",
@@ -737,7 +737,7 @@ class TestSessionExecutionBridge:
     @patch("orch_bridges.os.killpg")
     @patch("orch_bridges.subprocess.Popen")
     def test_timeout_writes_logs_and_result_payload(self, mock_popen, mock_killpg, tmp_path, monkeypatch):
-        monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
         proc = MagicMock()
         proc.pid = 12345
         proc.communicate.side_effect = [

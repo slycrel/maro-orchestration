@@ -6,9 +6,9 @@ Runs the blind-test harness with `scope_ab_skip` flipped per arm:
   - control: scope_generation=true, scope_ab_skip=true   (scope recorded, NOT injected)
 
 Both arms generate the scope so we can compare what it would have said.
-Artifacts land at ~/.poe/experiments/scope-ab-<DATE>/run-NN-<arm>/ with:
+Artifacts land at ~/.maro/experiments/scope-ab-<DATE>/run-NN-<arm>/ with:
   - handle.log                 full stdout/stderr
-  - project_workspace/         ~/.poe/workspace/projects/<slug>/ snapshot
+  - project_workspace/         ~/.maro/workspace/projects/<slug>/ snapshot
   - captains_log_slice.jsonl   captain's log events during this run
   - config.yml                 snapshot of the config used
   - metadata.json              arm, timings, rc, prompt
@@ -36,7 +36,7 @@ TEST_REPO_DIR = Path("/tmp/slycrel-blind-run/repo")
 
 
 def set_scope_flags(ab_skip: bool) -> None:
-    """Line-surgical flip of scope_ab_skip in ~/.poe/config.yml; preserves comments."""
+    """Line-surgical flip of scope_ab_skip in ~/.maro/config.yml; preserves comments."""
     text = CONFIG.read_text()
     lines = text.splitlines()
     target = f"scope_ab_skip: {'true' if ab_skip else 'false'}"
@@ -181,7 +181,7 @@ def main() -> int:
         f"Commit all changes to this branch — do not create another."
     )
     env = os.environ.copy()
-    env["POE_LOG_LEVEL"] = "INFO"
+    env["MARO_LOG_LEVEL"] = "INFO"
     env["PYTHONPATH"] = str(REPO / "src")
 
     handle_log = out / "handle.log"

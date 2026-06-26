@@ -20,7 +20,7 @@ import logging
 import re
 from typing import Any, Optional, Tuple, Union
 
-log = logging.getLogger("poe.llm_parse")
+log = logging.getLogger("maro.llm_parse")
 
 # ---------------------------------------------------------------------------
 # Markdown fence stripping

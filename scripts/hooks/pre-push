@@ -2,20 +2,20 @@
 # Poe git guard: worker subprocesses may push work branches, not the
 # default branch. Installed by scripts/install-git-hooks.sh.
 #
-# Humans and interactive sessions are unaffected (POE_WORKER_RUN unset).
-# Bypass for an explicitly authorized goal: POE_ALLOW_MAIN_PUSH=1
+# Humans and interactive sessions are unaffected (MARO_WORKER_RUN unset).
+# Bypass for an explicitly authorized goal: MARO_ALLOW_MAIN_PUSH=1
 # (or box-wide via config workers.allow_main_push=true, which the
 # subprocess adapter translates into this env var).
 
-[ -z "${POE_WORKER_RUN:-}" ] && exit 0
-[ -n "${POE_ALLOW_MAIN_PUSH:-}" ] && exit 0
+[ -z "${MARO_WORKER_RUN:-}" ] && exit 0
+[ -n "${MARO_ALLOW_MAIN_PUSH:-}" ] && exit 0
 
 while read -r _local_ref _local_sha remote_ref _remote_sha; do
   case "$remote_ref" in
     refs/heads/main|refs/heads/master)
       echo "poe: worker pushes to the default branch are blocked." >&2
       echo "poe: push a work branch instead (git push origin HEAD:work/<topic>)," >&2
-      echo "poe: or run with POE_ALLOW_MAIN_PUSH=1 under goal-level authorization." >&2
+      echo "poe: or run with MARO_ALLOW_MAIN_PUSH=1 under goal-level authorization." >&2
       exit 1
       ;;
   esac

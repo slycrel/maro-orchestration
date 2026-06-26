@@ -38,7 +38,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-log = logging.getLogger("poe.scheduler")
+log = logging.getLogger("maro.scheduler")
 
 _DISPATCH_LEASE_SECS = 6 * 60 * 60
 

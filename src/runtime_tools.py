@@ -23,7 +23,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-log = logging.getLogger("poe.runtime_tools")
+log = logging.getLogger("maro.runtime_tools")
 
 _NAME_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789_")
 

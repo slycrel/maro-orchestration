@@ -65,7 +65,7 @@ After=network.target
 Type=simple
 User={os.getenv('USER', 'poe')}
 WorkingDirectory={_SRC_DIR}
-Environment=POE_WORKSPACE={workspace}
+Environment=MARO_WORKSPACE={workspace}
 ExecStart={exec_cmd}
 Restart=on-failure
 RestartSec=30
@@ -92,7 +92,7 @@ def _launchd_plist(label: str, description: str, exec_args: list[str], workspace
     </array>
     <key>EnvironmentVariables</key>
     <dict>
-        <key>POE_WORKSPACE</key>
+        <key>MARO_WORKSPACE</key>
         <string>{workspace}</string>
     </dict>
     <key>WorkingDirectory</key>
@@ -188,7 +188,7 @@ def run_smoke_test() -> bool:
             capture_output=True,
             text=True,
             timeout=30,
-            env={**os.environ, "POE_WORKSPACE": str(workspace_root())},
+            env={**os.environ, "MARO_WORKSPACE": str(workspace_root())},
         )
         if result.returncode == 0:
             print("  [smoke] NOW-lane task succeeded.")

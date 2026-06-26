@@ -28,7 +28,7 @@ from dataclasses import dataclass, field
 from typing import Any, List, Optional
 from llm_parse import extract_json, safe_float, safe_str, safe_list, content_or_empty
 
-log = logging.getLogger("poe.quality_gate")
+log = logging.getLogger("maro.quality_gate")
 
 
 # ---------------------------------------------------------------------------

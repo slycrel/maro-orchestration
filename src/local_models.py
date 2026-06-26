@@ -48,7 +48,7 @@ from typing import List, Optional
 
 from llm import LLMAdapter, LLMMessage, LLMResponse
 
-log = logging.getLogger("poe.local_models")
+log = logging.getLogger("maro.local_models")
 
 # Default endpoints for each runtime (OpenAI-compatible base URLs).
 _DEFAULT_ENDPOINTS = {
@@ -560,9 +560,9 @@ def ensure_validator_running(*, wait_secs: float = 60.0, start_reaper: bool = Tr
     # Never spin a *real* local server up from inside the test harness. Integration
     # and e2e tests run real loop code (managed_for_run → here); with the live config
     # carrying autostart + local_models, that would otherwise launch an actual
-    # ollama/mlx process mid-suite. conftest sets POE_PYTEST_ACTIVE in os.environ
+    # ollama/mlx process mid-suite. conftest sets MARO_PYTEST_ACTIVE in os.environ
     # (inherited by subprocesses); unit tests that exercise the spawn path clear it.
-    if os.environ.get("POE_PYTEST_ACTIVE"):
+    if os.environ.get("MARO_PYTEST_ACTIVE"):
         return False
 
     runtime = resolve_runtime()

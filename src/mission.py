@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import List, Optional
 from llm_parse import extract_json, safe_str, safe_list, content_or_empty
 
-log = logging.getLogger("poe.mission")
+log = logging.getLogger("maro.mission")
 
 
 # ---------------------------------------------------------------------------
@@ -100,7 +100,7 @@ class MissionResult:
 # ---------------------------------------------------------------------------
 
 _DECOMPOSE_SYSTEM = textwrap.dedent("""\
-    You are Poe, a mission planning agent.
+    You are a mission planning agent.
     Decompose a multi-day goal into 2-4 milestones with validation criteria,
     and 2-4 features per milestone.
     Each feature is a discrete unit of work completable in one agent session.
@@ -118,7 +118,7 @@ _DECOMPOSE_SYSTEM = textwrap.dedent("""\
 """).strip()
 
 _VALIDATE_SYSTEM = textwrap.dedent("""\
-    You are Poe, a milestone validation agent.
+    You are a milestone validation agent.
     Given completed feature work and validation criteria, decide if this milestone succeeded.
     Respond ONLY with JSON: {"passed": true or false, "reason": "one sentence"}
 """).strip()

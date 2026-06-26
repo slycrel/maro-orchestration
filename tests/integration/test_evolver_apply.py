@@ -11,7 +11,7 @@ Coverage:
   4. apply_suggestion creates a NEW skill when target doesn't exist
   5. apply_suggestion on prompt_tweak records a tiered lesson
   6. apply_suggestion on new_guardrail held for review by default
-  7. apply_suggestion on new_guardrail applied when POE_AUTO_APPLY_GUARDRAILS=1
+  7. apply_suggestion on new_guardrail applied when MARO_AUTO_APPLY_GUARDRAILS=1
   8. apply_suggestion on observation is a safe no-op (applied=True, no side effects)
   9. High-confidence suggestion (>=0.8) auto-applied via run_evolver
   10. Low-confidence suggestion (<0.8) NOT auto-applied via run_evolver
@@ -266,7 +266,7 @@ def test_apply_guardrail_held_in_production(monkeypatch):
     _seed_suggestion(sug)
 
     # Ensure env override is unset so we hit the config-based branch
-    monkeypatch.delenv("POE_AUTO_APPLY_GUARDRAILS", raising=False)
+    monkeypatch.delenv("MARO_AUTO_APPLY_GUARDRAILS", raising=False)
 
     # Simulate production environment via config
     monkeypatch.setattr("config.get", lambda key, default=None:
@@ -296,7 +296,7 @@ def test_apply_guardrail_auto_applied_in_dev():
     _seed_suggestion(sug)
 
     # No env override, no config mock → defaults to dev → auto-apply
-    os.environ.pop("POE_AUTO_APPLY_GUARDRAILS", None)
+    os.environ.pop("MARO_AUTO_APPLY_GUARDRAILS", None)
 
     result = apply_suggestion("sug-guard-dev")
     assert result is True
@@ -308,7 +308,7 @@ def test_apply_guardrail_auto_applied_in_dev():
 
 
 def test_apply_guardrail_override_off_holds(monkeypatch):
-    """POE_AUTO_APPLY_GUARDRAILS=0 explicitly holds even in dev."""
+    """MARO_AUTO_APPLY_GUARDRAILS=0 explicitly holds even in dev."""
     sug = _make_suggestion(
         category="new_guardrail",
         target="all",
@@ -318,7 +318,7 @@ def test_apply_guardrail_override_off_holds(monkeypatch):
     )
     _seed_suggestion(sug)
 
-    monkeypatch.setenv("POE_AUTO_APPLY_GUARDRAILS", "0")
+    monkeypatch.setenv("MARO_AUTO_APPLY_GUARDRAILS", "0")
 
     result = apply_suggestion("sug-guard-off")
     assert result is True
@@ -330,11 +330,11 @@ def test_apply_guardrail_override_off_holds(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# 7. new_guardrail applied with POE_AUTO_APPLY_GUARDRAILS=1
+# 7. new_guardrail applied with MARO_AUTO_APPLY_GUARDRAILS=1
 # ---------------------------------------------------------------------------
 
 def test_apply_guardrail_with_env_override(monkeypatch):
-    """new_guardrail IS applied when POE_AUTO_APPLY_GUARDRAILS=1."""
+    """new_guardrail IS applied when MARO_AUTO_APPLY_GUARDRAILS=1."""
     sug = _make_suggestion(
         category="new_guardrail",
         target="all",
@@ -344,7 +344,7 @@ def test_apply_guardrail_with_env_override(monkeypatch):
     )
     _seed_suggestion(sug)
 
-    monkeypatch.setenv("POE_AUTO_APPLY_GUARDRAILS", "1")
+    monkeypatch.setenv("MARO_AUTO_APPLY_GUARDRAILS", "1")
 
     result = apply_suggestion("sug-guard-ok")
     assert result is True

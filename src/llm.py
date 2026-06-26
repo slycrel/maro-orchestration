@@ -14,7 +14,7 @@ which backend is actually serving the call:
 
 Auto-detection order (highest to lowest priority):
     1. Explicit backend= or api_key= arg to build_adapter()
-    2. POE_BACKEND env var (single backend, no fallback)
+    2. MARO_BACKEND env var (single backend, no fallback)
     3. config `model.backend_order` (ordered list; first available wins)
     4. DEFAULT_BACKEND_ORDER (anthropic, subprocess, openrouter, openai)
 
@@ -55,7 +55,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-log = logging.getLogger("poe.llm")
+log = logging.getLogger("maro.llm")
 
 
 # ---------------------------------------------------------------------------
@@ -219,11 +219,11 @@ def _retry_complete(fn, *args, max_retries: int = 3, **kwargs) -> "LLMResponse":
     server errors, and connection failures. Non-retryable errors propagate
     immediately.
 
-    `POE_LLM_MAX_RETRIES` overrides the retry budget when set. This is useful
+    `MARO_LLM_MAX_RETRIES` overrides the retry budget when set. This is useful
     for unattended worker runs where fast failure is better than camping on a
     rate limit for over a minute.
     """
-    max_retries = _env_int("POE_LLM_MAX_RETRIES", max_retries)
+    max_retries = _env_int("MARO_LLM_MAX_RETRIES", max_retries)
     last_exc = None
     for attempt in range(max_retries + 1):
         try:
@@ -462,7 +462,7 @@ def _run_subprocess_safe(cmd, *, input=None, timeout=600,
          false-kills of silent-but-computing local models.
 
     `liveness_timeout` defaults to min(timeout, 180). Pass 0 or None-like to
-    disable (falls back to wall-clock only). Env var `POE_LIVENESS_TIMEOUT`
+    disable (falls back to wall-clock only). Env var `MARO_LIVENESS_TIMEOUT`
     overrides the default for the whole process.
 
     Partial output captured up to the kill is preserved in the returned
@@ -480,7 +480,7 @@ def _run_subprocess_safe(cmd, *, input=None, timeout=600,
     import time
 
     if liveness_timeout is None:
-        env_override = os.environ.get("POE_LIVENESS_TIMEOUT")
+        env_override = os.environ.get("MARO_LIVENESS_TIMEOUT")
         if env_override:
             try:
                 liveness_timeout = int(env_override)
@@ -505,8 +505,8 @@ def _run_subprocess_safe(cmd, *, input=None, timeout=600,
     # anywhere shows the in-flight subprocess's merged output. Updated
     # atomically on each new subprocess; dangles between steps (by
     # design — means "no step running"). Disable with
-    # POE_CURRENT_STEP_SYMLINK=0.
-    if os.environ.get("POE_CURRENT_STEP_SYMLINK", "1") != "0":
+    # MARO_CURRENT_STEP_SYMLINK=0.
+    if os.environ.get("MARO_CURRENT_STEP_SYMLINK", "1") != "0":
         try:
             link_target = "/tmp/poe-current-step.log"
             tmp_link = f"{link_target}.{os.getpid()}.tmp"
@@ -534,13 +534,13 @@ def _run_subprocess_safe(cmd, *, input=None, timeout=600,
     # pre-push) can tell a worker from a human: workers may push work
     # branches but not the default branch. workers.allow_main_push=true
     # (config) loosens this for the whole box; a goal can also export
-    # POE_ALLOW_MAIN_PUSH=1 itself when explicitly authorized to push.
+    # MARO_ALLOW_MAIN_PUSH=1 itself when explicitly authorized to push.
     child_env = dict(os.environ)
-    child_env["POE_WORKER_RUN"] = "1"
+    child_env["MARO_WORKER_RUN"] = "1"
     try:
         from config import get as _cfg_get
         if bool(_cfg_get("workers.allow_main_push", False)):
-            child_env["POE_ALLOW_MAIN_PUSH"] = "1"
+            child_env["MARO_ALLOW_MAIN_PUSH"] = "1"
     except Exception:
         pass
 
@@ -745,7 +745,7 @@ class ClaudeSubprocessAdapter(LLMAdapter):
                 _RATE_LIMIT_MAX_RETRIES = getattr(
                     self,
                     "_rate_limit_max_retries",
-                    _env_int("POE_CLAUDE_RATE_LIMIT_MAX_RETRIES", 6),
+                    _env_int("MARO_CLAUDE_RATE_LIMIT_MAX_RETRIES", 6),
                 )
                 _RATE_LIMIT_CYCLE_CAP = 1800  # 30 minutes max per wait
                 # Total-backoff wall-clock cap: the per-cycle cap alone let the
@@ -754,7 +754,7 @@ class ClaudeSubprocessAdapter(LLMAdapter):
                 # sleep would push cumulative backoff past this ceiling, stop
                 # retrying and soft-fail with a "rate-limited, retry later" error
                 # rather than committing to another 30-minute sleep.
-                _RATE_LIMIT_TOTAL_CAP = _env_int("POE_CLAUDE_RATE_LIMIT_TOTAL_CAP", 600)
+                _RATE_LIMIT_TOTAL_CAP = _env_int("MARO_CLAUDE_RATE_LIMIT_TOTAL_CAP", 600)
                 _total_slept = 0
                 _wait = getattr(self, "_rate_limit_wait", 60)
                 _retry_success = False
@@ -1421,7 +1421,7 @@ def _load_env_file(path: Optional[str] = None) -> Dict[str, str]:
     except Exception:
         pass
     result: Dict[str, str] = {}
-    env_path = path or str(Path.home() / ".poe" / "workspace" / "secrets" / ".env")
+    env_path = path or str(Path.home() / ".maro" / "workspace" / "secrets" / ".env")
     if not os.path.exists(env_path):
         return result
     try:
@@ -1455,7 +1455,7 @@ def _claude_bin_available() -> bool:
 # Backend-order config
 # ---------------------------------------------------------------------------
 
-# Default auto-detect order. Configurable via ~/.poe/config.yml:
+# Default auto-detect order. Configurable via ~/.maro/config.yml:
 #     model:
 #       backend_order: [subprocess, anthropic, openrouter, openai]
 #
@@ -1564,8 +1564,8 @@ def build_adapter(
     # Auto-detect
     assert backend == "auto", f"Unknown backend: {backend!r}"
 
-    # POE_BACKEND env var overrides auto-detection priority without forcing a specific key
-    _poe_backend = os.environ.get("POE_BACKEND", "").strip().lower()
+    # MARO_BACKEND env var overrides auto-detection priority without forcing a specific key
+    _poe_backend = os.environ.get("MARO_BACKEND", "").strip().lower()
     if _poe_backend and _poe_backend != "auto":
         return build_adapter(backend=_poe_backend, model=model, api_key=api_key, timeout=timeout)
 

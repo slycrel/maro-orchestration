@@ -116,7 +116,7 @@ ValidationBridge = Callable[[RunRecord, ExecutionResult], ValidationResult]
 # ---------------------------------------------------------------------------
 
 def ws_root() -> Path:
-    for var in ("POE_WORKSPACE", "OPENCLAW_WORKSPACE", "WORKSPACE_ROOT"):
+    for var in ("MARO_WORKSPACE", "OPENCLAW_WORKSPACE", "WORKSPACE_ROOT"):
         val = os.environ.get(var)
         if val:
             return Path(val).expanduser().resolve()
@@ -139,13 +139,13 @@ def orch_root() -> Path:
     """Resolve the poe-orchestration root directory.
 
     Resolution order:
-      1. POE_ORCH_ROOT env var — explicit override for containers / CI
+      1. MARO_ORCH_ROOT env var — explicit override for containers / CI
       2. Traditional prototype path (ws_root/prototypes/poe-orchestration) if it exists
       3. Mainline repo root (src/agent_loop.py present) — only when NO workspace
          env var is set (preserves test isolation when OPENCLAW_WORKSPACE is pinned)
       4. Traditional path regardless (original fallback)
     """
-    override = os.environ.get("POE_ORCH_ROOT")
+    override = os.environ.get("MARO_ORCH_ROOT")
     if override:
         return Path(override).expanduser().resolve()
 
@@ -156,7 +156,7 @@ def orch_root() -> Path:
     # Only fall through to repo-root detection when no explicit workspace is pinned.
     # If a workspace env var IS set, the caller expects isolation to that workspace
     # (e.g. tests use OPENCLAW_WORKSPACE=tmp_path) — don't escape to the real repo.
-    _ws_pinned = any(os.environ.get(v) for v in ("POE_WORKSPACE", "OPENCLAW_WORKSPACE", "WORKSPACE_ROOT"))
+    _ws_pinned = any(os.environ.get(v) for v in ("MARO_WORKSPACE", "OPENCLAW_WORKSPACE", "WORKSPACE_ROOT"))
     if not _ws_pinned:
         here = Path(__file__).resolve()
         repo_root = here.parents[1]  # one up from src/
@@ -170,20 +170,20 @@ def memory_dir() -> Path:
     """Canonical memory directory — used by memory.py, observe.py, gc_memory.py, router.py.
 
     Resolution order:
-      1. $POE_MEMORY_DIR     (explicit override — tests use this)
-      2. config.memory_dir() (aligns with captains_log.py — defaults to ~/.poe/workspace/memory)
+      1. $MARO_MEMORY_DIR     (explicit override — tests use this)
+      2. config.memory_dir() (aligns with captains_log.py — defaults to ~/.maro/workspace/memory)
       3. orch_root()/memory  (fallback for containers/CI)
       4. cwd/memory          (last resort)
 
     IMPORTANT: This must resolve to the SAME directory as config.memory_dir()
     so that captain's log, outcomes, lessons, and skills all live together.
     Previous bug: orch_items.memory_dir() → repo/memory while config.memory_dir()
-    → ~/.poe/workspace/memory, causing captain's log to live in a different
+    → ~/.maro/workspace/memory, causing captain's log to live in a different
     location from the rest of the learning data.
 
     Always creates the directory.  Never raises.
     """
-    override = os.environ.get("POE_MEMORY_DIR")
+    override = os.environ.get("MARO_MEMORY_DIR")
     if override:
         p = Path(override).expanduser().resolve()
         p.mkdir(parents=True, exist_ok=True)
@@ -191,11 +191,11 @@ def memory_dir() -> Path:
 
     # Align with config.py — the canonical workspace path
     _ws_pinned = any(os.environ.get(v) for v in (
-        "POE_WORKSPACE", "OPENCLAW_WORKSPACE", "WORKSPACE_ROOT", "POE_ORCH_ROOT",
+        "MARO_WORKSPACE", "OPENCLAW_WORKSPACE", "WORKSPACE_ROOT", "MARO_ORCH_ROOT",
     ))
     if not _ws_pinned:
-        # Default: ~/.poe/workspace/memory (matches config.memory_dir())
-        p = Path.home() / ".poe" / "workspace" / "memory"
+        # Default: ~/.maro/workspace/memory (matches config.memory_dir())
+        p = Path.home() / ".maro" / "workspace" / "memory"
         p.mkdir(parents=True, exist_ok=True)
         return p
 
@@ -215,11 +215,11 @@ def projects_root() -> Path:
 
     Resolution order:
       1. config.projects_dir() when no workspace env var is pinned
-         (defaults to ~/.poe/workspace/projects)
+         (defaults to ~/.maro/workspace/projects)
       2. orch_root()/projects when a workspace env var IS set (tests, CI)
     """
     _ws_pinned = any(os.environ.get(v) for v in (
-        "POE_WORKSPACE", "OPENCLAW_WORKSPACE", "WORKSPACE_ROOT", "POE_ORCH_ROOT",
+        "MARO_WORKSPACE", "OPENCLAW_WORKSPACE", "WORKSPACE_ROOT", "MARO_ORCH_ROOT",
     ))
     if not _ws_pinned:
         from config import projects_dir
@@ -234,11 +234,11 @@ def output_root() -> Path:
 
     Resolution order:
       1. config.output_dir() when no workspace env var is pinned
-         (defaults to ~/.poe/workspace/output)
+         (defaults to ~/.maro/workspace/output)
       2. orch_root()/output when a workspace env var IS set (tests, CI)
     """
     _ws_pinned = any(os.environ.get(v) for v in (
-        "POE_WORKSPACE", "OPENCLAW_WORKSPACE", "WORKSPACE_ROOT", "POE_ORCH_ROOT",
+        "MARO_WORKSPACE", "OPENCLAW_WORKSPACE", "WORKSPACE_ROOT", "MARO_ORCH_ROOT",
     ))
     if not _ws_pinned:
         from config import output_dir

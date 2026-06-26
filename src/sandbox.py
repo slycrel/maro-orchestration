@@ -373,7 +373,7 @@ def run_skill_sandboxed(
                 timeout=config.timeout_seconds,
                 text=True,
                 cwd=str(tmp_dir),
-                env={**os.environ, "POE_SANDBOX": "1"},  # marker for runner awareness
+                env={**os.environ, "MARO_SANDBOX": "1"},  # marker for runner awareness
                 preexec_fn=preexec_fn,
             )
             exit_code = proc.returncode

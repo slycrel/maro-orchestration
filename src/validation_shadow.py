@@ -218,7 +218,7 @@ def _read_events(base: Optional[Path] = None) -> List[Dict[str, Any]]:
             from captains_log import _log_path  # type: ignore
             base = _log_path().parent
         except Exception:
-            base = Path.home() / ".poe" / "workspace" / "memory"
+            base = Path.home() / ".maro" / "workspace" / "memory"
     events: List[Dict[str, Any]] = []
     for p in sorted(base.glob("captains_log*.jsonl")):
         try:

@@ -1,7 +1,7 @@
 """Per-run isolation: nickname + run-dir destination.
 
 Each `handle()` invocation gets a run-dir at
-`~/.poe/workspace/runs/<handle_id>-<nickname>/` that is the destination
+`~/.maro/workspace/runs/<handle_id>-<nickname>/` that is the destination
 for run-specific writes (prompt, scope, resolved_intent, scratchpad,
 PARTIAL files, step outputs, captain's log slice, repo bundle).
 
@@ -67,11 +67,11 @@ def nickname(handle_id: str) -> str:
 
 
 def runs_root() -> Path:
-    """Workspace runs/ directory. Honors POE_WORKSPACE for tests."""
-    ws = os.environ.get("POE_WORKSPACE") or os.environ.get("OPENCLAW_WORKSPACE")
+    """Workspace runs/ directory. Honors MARO_WORKSPACE for tests."""
+    ws = os.environ.get("MARO_WORKSPACE") or os.environ.get("OPENCLAW_WORKSPACE")
     if ws:
         return Path(ws) / "runs"
-    return Path.home() / ".poe" / "workspace" / "runs"
+    return Path.home() / ".maro" / "workspace" / "runs"
 
 
 def run_dir(handle_id: str) -> Path:
@@ -262,8 +262,8 @@ def artifact_dir(project: str, project_root_fn=None) -> Path:
         return out
     if project_root_fn is None:
         # No run-dir AND no fallback — punt to the workspace default.
-        ws = os.environ.get("POE_WORKSPACE") or os.environ.get("OPENCLAW_WORKSPACE")
-        root = Path(ws) / "projects" if ws else Path.home() / ".poe" / "workspace" / "projects"
+        ws = os.environ.get("MARO_WORKSPACE") or os.environ.get("OPENCLAW_WORKSPACE")
+        root = Path(ws) / "projects" if ws else Path.home() / ".maro" / "workspace" / "projects"
     else:
         root = project_root_fn()
     out = Path(root) / project / "artifacts"

@@ -28,7 +28,7 @@ import time
 from pathlib import Path
 from typing import Any, Optional
 
-log = logging.getLogger("poe.io.slack")
+log = logging.getLogger("maro.io.slack")
 
 # ---------------------------------------------------------------------------
 # Optional Slack SDK import (graceful degradation)

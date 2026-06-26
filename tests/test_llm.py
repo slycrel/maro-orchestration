@@ -369,7 +369,7 @@ def test_subprocess_rate_limit_total_backoff_cap(monkeypatch):
 
     # Cap at 100s: first wait (60s) fits, second (120s) would push to 180 > 100,
     # so it bails after exactly one sleep instead of all six.
-    monkeypatch.setenv("POE_CLAUDE_RATE_LIMIT_TOTAL_CAP", "100")
+    monkeypatch.setenv("MARO_CLAUDE_RATE_LIMIT_TOTAL_CAP", "100")
     slept = []
 
     with patch("llm._run_subprocess_safe", return_value=mock_result), \
@@ -388,8 +388,8 @@ def test_subprocess_rate_limit_total_cap_disabled_with_zero(monkeypatch):
     mock_result.stdout = "rate limit reached"
     mock_result.stderr = ""
 
-    monkeypatch.setenv("POE_CLAUDE_RATE_LIMIT_TOTAL_CAP", "0")
-    monkeypatch.setenv("POE_CLAUDE_RATE_LIMIT_MAX_RETRIES", "3")
+    monkeypatch.setenv("MARO_CLAUDE_RATE_LIMIT_TOTAL_CAP", "0")
+    monkeypatch.setenv("MARO_CLAUDE_RATE_LIMIT_MAX_RETRIES", "3")
     slept = []
 
     with patch("llm._run_subprocess_safe", return_value=mock_result), \
@@ -537,11 +537,11 @@ def test_run_subprocess_safe_liveness_spares_cpu_busy_silent_process():
 
 
 def test_run_subprocess_safe_liveness_env_var_override(monkeypatch):
-    """POE_LIVENESS_TIMEOUT env var overrides the default liveness window."""
+    """MARO_LIVENESS_TIMEOUT env var overrides the default liveness window."""
     from llm import _run_subprocess_safe
     import subprocess as sp
 
-    monkeypatch.setenv("POE_LIVENESS_TIMEOUT", "1")
+    monkeypatch.setenv("MARO_LIVENESS_TIMEOUT", "1")
     with pytest.raises(sp.TimeoutExpired) as exc_info:
         _run_subprocess_safe(
             ["sh", "-c", "sleep 10"],
@@ -587,7 +587,7 @@ def test_run_subprocess_safe_updates_current_step_symlink():
 
 
 def test_run_subprocess_safe_symlink_disabled_by_env(monkeypatch):
-    """POE_CURRENT_STEP_SYMLINK=0 suppresses the symlink update."""
+    """MARO_CURRENT_STEP_SYMLINK=0 suppresses the symlink update."""
     from llm import _run_subprocess_safe
 
     # Record the symlink target (or absence) before our call.
@@ -598,7 +598,7 @@ def test_run_subprocess_safe_symlink_disabled_by_env(monkeypatch):
         except OSError:
             pass
 
-    monkeypatch.setenv("POE_CURRENT_STEP_SYMLINK", "0")
+    monkeypatch.setenv("MARO_CURRENT_STEP_SYMLINK", "0")
     _run_subprocess_safe(["sh", "-c", "printf ok"], input="", timeout=5)
 
     after_target = None
@@ -809,7 +809,7 @@ def test_retry_complete_respects_env_override(monkeypatch):
         calls.append(1)
         raise RuntimeError("429 Client Error")
 
-    monkeypatch.setenv("POE_LLM_MAX_RETRIES", "0")
+    monkeypatch.setenv("MARO_LLM_MAX_RETRIES", "0")
     monkeypatch.setattr("time.sleep", lambda s: None)
 
     with pytest.raises(RuntimeError, match="429"):
@@ -869,7 +869,7 @@ class TestRateLimitMultiCycleRetry:
 
         monkeypatch.setattr("llm._run_subprocess_safe", _fake_run)
         monkeypatch.setattr("time.sleep", lambda s: None)
-        monkeypatch.setenv("POE_CLAUDE_RATE_LIMIT_MAX_RETRIES", "0")
+        monkeypatch.setenv("MARO_CLAUDE_RATE_LIMIT_MAX_RETRIES", "0")
 
         adapter = ClaudeSubprocessAdapter()
         with pytest.raises(RuntimeError, match="rate-limited after 0 retries"):
@@ -934,12 +934,12 @@ class TestRateLimitMultiCycleRetry:
 
 
 # ---------------------------------------------------------------------------
-# POE_BACKEND env var + poe-run --backend
+# MARO_BACKEND env var + poe-run --backend
 # ---------------------------------------------------------------------------
 
 def test_poe_backend_env_var_selects_openrouter(monkeypatch):
-    """POE_BACKEND=openrouter should route auto-detect to OpenRouter."""
-    monkeypatch.setenv("POE_BACKEND", "openrouter")
+    """MARO_BACKEND=openrouter should route auto-detect to OpenRouter."""
+    monkeypatch.setenv("MARO_BACKEND", "openrouter")
     monkeypatch.setattr("llm._load_env_file", lambda *a, **kw: {"OPENROUTER_API_KEY": "sk-or-test"})
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.setattr("llm._claude_bin_available", lambda: False)
@@ -948,8 +948,8 @@ def test_poe_backend_env_var_selects_openrouter(monkeypatch):
 
 
 def test_poe_backend_env_var_ignored_when_explicit_backend(monkeypatch):
-    """POE_BACKEND env var should not override an explicit backend= argument."""
-    monkeypatch.setenv("POE_BACKEND", "openrouter")
+    """MARO_BACKEND env var should not override an explicit backend= argument."""
+    monkeypatch.setenv("MARO_BACKEND", "openrouter")
     monkeypatch.setattr("llm._load_env_file", lambda *a, **kw: {})
     monkeypatch.setattr("llm._claude_bin_available", lambda: True)
     a = build_adapter("subprocess")

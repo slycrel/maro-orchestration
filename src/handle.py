@@ -34,7 +34,7 @@ from typing import List, TYPE_CHECKING
 if TYPE_CHECKING:
     from conversation import ConversationChannel
 
-log = logging.getLogger("poe.handle")
+log = logging.getLogger("maro.handle")
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -117,7 +117,7 @@ def _apply_prefixes(message: str) -> _PrefixResult:
                 if rule.model_tier:
                     if result.model_tier and result.model_tier != rule.model_tier:
                         import logging as _logging
-                        _logging.getLogger("poe.handle").warning(
+                        _logging.getLogger("maro.handle").warning(
                             "conflicting model tiers: %r already set, ignoring %r (from prefix %r)",
                             result.model_tier, rule.model_tier, rule.prefix,
                         )
@@ -186,13 +186,13 @@ class HandleResult:
 # NOW lane executor
 # ---------------------------------------------------------------------------
 
-_NOW_SYSTEM = """You are Poe, an autonomous AI assistant.
+_NOW_SYSTEM = """You are an autonomous AI assistant.
 Answer the user's request directly and completely. Be thorough but concise.
 If the request is a question, answer it. If it's a task, complete it.
 Do not hedge or defer — just do the work.
 """
 
-_BTW_SYSTEM = """You are Poe, surfacing a non-blocking observation.
+_BTW_SYSTEM = """You are an autonomous agent surfacing a non-blocking observation.
 Note what you observe, briefly and specifically. Do not attempt to fix or solve anything.
 Keep it to 1–3 sentences max. Format: one sentence per observation, plain text.
 This is a side-note, not a task result.
@@ -857,7 +857,7 @@ def _handle_impl(
 
     # Per-run isolation: create the run-dir at start and pin it as the
     # current-run context so artifact writers downstream land directly
-    # in `~/.poe/workspace/runs/<id>-<nick>/` rather than scattered
+    # in `~/.maro/workspace/runs/<id>-<nick>/` rather than scattered
     # across project_workspace/. See src/runs.py.
     # Never block the run on a runs/ failure.
     try:
@@ -1141,7 +1141,7 @@ def _handle_impl(
 
         # Clarification milestone — check goal clarity before starting (skipped if yolo=true)
         _yolo = _env_flag(
-            "POE_YOLO",
+            "MARO_YOLO",
             str(_cfg.get("yolo", "false")).strip().lower() == "true",
         )
         if not dry_run and not _yolo:
@@ -1364,7 +1364,7 @@ def _handle_impl(
         # is the paired A/B flag — when true, we'd-have-generated is recorded
         # but not injected, so the same goal can be run with/without scope for
         # comparison. Uses the same config system as adaptive_execution (reads
-        # from ~/.poe/config.yml, not the repo-local user/CONFIG.md).
+        # from ~/.maro/config.yml, not the repo-local user/CONFIG.md).
         # See docs/PHASE_65_IMPLEMENTATION_PLAN.md.
         _scope = None
         _resolved_intent = None
@@ -1396,7 +1396,7 @@ def _handle_impl(
                 try:
                     from agent_loop import _goal_to_slug
                     _scope_project = project or _goal_to_slug(message)
-                    _proj_dir = Path.home() / ".poe" / "workspace" / "projects" / _scope_project / "artifacts"
+                    _proj_dir = Path.home() / ".maro" / "workspace" / "projects" / _scope_project / "artifacts"
                     _proj_dir.mkdir(parents=True, exist_ok=True)
                 except Exception:
                     _proj_dir = None

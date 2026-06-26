@@ -50,7 +50,7 @@ def test_persona_loads_valid_fields(persona_name):
 @pytest.mark.parametrize("persona_name", _ALL_PERSONAS)
 def test_persona_dry_run_spawn(monkeypatch, tmp_path, persona_name):
     """Dry-run spawn returns dry_run status and correct persona name."""
-    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
     (tmp_path / "memory").mkdir()
 
     result = spawn_persona(persona_name, goal="describe your role in one sentence", dry_run=True)

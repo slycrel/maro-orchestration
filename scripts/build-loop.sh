@@ -19,7 +19,7 @@ if (( ${#args[@]} > 0 )); then
       resolved_workspace="$(cd "$workspace_arg" && pwd -P)"
       unset 'args[$last_index]'
       args=("${args[@]}")
-      if [[ -z "${POE_WORKSPACE:-}" && -z "${OPENCLAW_WORKSPACE:-}" && -z "${WORKSPACE_ROOT:-}" && -z "${POE_ORCH_ROOT:-}" ]]; then
+      if [[ -z "${MARO_WORKSPACE:-}" && -z "${OPENCLAW_WORKSPACE:-}" && -z "${WORKSPACE_ROOT:-}" && -z "${MARO_ORCH_ROOT:-}" ]]; then
         export OPENCLAW_WORKSPACE="$resolved_workspace"
       fi
     fi
@@ -27,8 +27,8 @@ if (( ${#args[@]} > 0 )); then
 fi
 
 cd "$REPO_ROOT"
-if [[ -z "${POE_ORCH_ROOT:-}" && -z "${POE_WORKSPACE:-}" && -z "${OPENCLAW_WORKSPACE:-}" && -z "${WORKSPACE_ROOT:-}" ]]; then
-  export POE_ORCH_ROOT="$REPO_ROOT"
+if [[ -z "${MARO_ORCH_ROOT:-}" && -z "${MARO_WORKSPACE:-}" && -z "${OPENCLAW_WORKSPACE:-}" && -z "${WORKSPACE_ROOT:-}" ]]; then
+  export MARO_ORCH_ROOT="$REPO_ROOT"
 fi
 export PYTHONPATH="$REPO_ROOT/src${PYTHONPATH:+:$PYTHONPATH}"
 exec python3 "$REPO_ROOT/src/cli.py" build-loop "${args[@]}"

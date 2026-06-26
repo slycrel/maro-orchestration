@@ -20,7 +20,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-log = logging.getLogger("poe.io.telegram")
+log = logging.getLogger("maro.io.telegram")
 
 try:
     import requests
@@ -65,7 +65,7 @@ try:
     _OFFSET_FILE = _workspace_root() / "telegram_offset.txt"
 except Exception:
     _OPENCLAW_CFG = Path.home() / ".openclaw" / "openclaw.json"
-    _ws = os.environ.get("POE_WORKSPACE") or os.environ.get("OPENCLAW_WORKSPACE") or str(Path.home() / ".poe" / "workspace")
+    _ws = os.environ.get("MARO_WORKSPACE") or os.environ.get("OPENCLAW_WORKSPACE") or str(Path.home() / ".maro" / "workspace")
     _OFFSET_FILE = Path(_ws) / "telegram_offset.txt"
 
 

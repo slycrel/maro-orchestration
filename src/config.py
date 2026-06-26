@@ -1,18 +1,18 @@
 """Centralized configuration and path resolution for poe-orchestration.
 
 Two-tier config (like git):
-  ~/.poe/config.yml          — user-level (API keys, model prefs, notifications)
-  ~/.poe/workspace/config.yml — workspace-level (evolver, inspector, personas)
+  ~/.maro/config.yml          — user-level (API keys, model prefs, notifications)
+  ~/.maro/workspace/config.yml — workspace-level (evolver, inspector, personas)
   Workspace inherits from user; workspace keys override user keys.
 
 Priority order for workspace root:
-  1. POE_WORKSPACE env var (new canonical name)
+  1. MARO_WORKSPACE env var (new canonical name)
   2. OPENCLAW_WORKSPACE env var (backward compat)
   3. WORKSPACE_ROOT env var (backward compat)
-  4. ~/.poe/workspace (default — no OpenClaw dependency)
+  4. ~/.maro/workspace (default — no OpenClaw dependency)
 
 Credentials env file priority:
-  1. POE_ENV_FILE env var
+  1. MARO_ENV_FILE env var
   2. <workspace_root>/secrets/.env
   3. ~/.openclaw/workspace/secrets/recovered/runtime-credentials/.env (legacy)
 
@@ -32,11 +32,11 @@ from typing import Any, Optional
 
 def workspace_root() -> Path:
     """Return the canonical workspace root directory."""
-    for var in ("POE_WORKSPACE", "OPENCLAW_WORKSPACE", "WORKSPACE_ROOT"):
+    for var in ("MARO_WORKSPACE", "OPENCLAW_WORKSPACE", "WORKSPACE_ROOT"):
         val = os.environ.get(var)
         if val:
             return Path(val).expanduser().resolve()
-    return Path.home() / ".poe" / "workspace"
+    return Path.home() / ".maro" / "workspace"
 
 
 def memory_dir() -> Path:
@@ -85,8 +85,8 @@ def playbook_path() -> Path:
 # ---------------------------------------------------------------------------
 
 def _poe_dir() -> Path:
-    """~/.poe — user-level Poe directory."""
-    return Path.home() / ".poe"
+    """~/.maro — user-level Poe directory."""
+    return Path.home() / ".maro"
 
 
 def _user_config_path() -> Path:
@@ -111,7 +111,7 @@ def _load_yaml(path: Path) -> dict:
 
 
 # Cached merged config — loaded once per process *per config path pair*.
-# Tests and worker subprocesses routinely swap POE_WORKSPACE/OPENCLAW_WORKSPACE
+# Tests and worker subprocesses routinely swap MARO_WORKSPACE/OPENCLAW_WORKSPACE
 # at runtime; a path-blind cache leaks the prior workspace's merged config into
 # the new one.
 _config_cache: Optional[dict] = None
@@ -185,7 +185,7 @@ def config_paths() -> dict:
 
 def credentials_env_file() -> Path:
     """Return path to the .env credentials file (may not exist)."""
-    custom = os.environ.get("POE_ENV_FILE")
+    custom = os.environ.get("MARO_ENV_FILE")
     if custom:
         return Path(custom).expanduser()
 

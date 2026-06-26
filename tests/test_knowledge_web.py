@@ -54,10 +54,10 @@ from knowledge_web import (
 
 @pytest.fixture(autouse=True)
 def _set_memory_dir(tmp_path, monkeypatch):
-    """Point POE_MEMORY_DIR at tmp_path/memory so _memory_dir() resolves there."""
+    """Point MARO_MEMORY_DIR at tmp_path/memory so _memory_dir() resolves there."""
     mem = tmp_path / "memory"
     mem.mkdir(exist_ok=True)
-    monkeypatch.setenv("POE_MEMORY_DIR", str(mem))
+    monkeypatch.setenv("MARO_MEMORY_DIR", str(mem))
 
 
 # ---------------------------------------------------------------------------

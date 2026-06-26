@@ -34,7 +34,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
 
-log = logging.getLogger("poe.rules")
+log = logging.getLogger("maro.rules")
 
 
 # ---------------------------------------------------------------------------

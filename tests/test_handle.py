@@ -129,7 +129,7 @@ def test_handle_agenda_result_has_content(monkeypatch, tmp_path):
 
 def test_handle_poe_yolo_env_skips_clarity_block(monkeypatch, tmp_path):
     _setup(monkeypatch, tmp_path)
-    monkeypatch.setenv("POE_YOLO", "true")
+    monkeypatch.setenv("MARO_YOLO", "true")
 
     from agent_loop import LoopResult, StepOutcome
 
@@ -155,7 +155,7 @@ def test_handle_poe_yolo_env_skips_clarity_block(monkeypatch, tmp_path):
 
 def test_handle_build_loop_source_skips_quality_gate(monkeypatch, tmp_path):
     _setup(monkeypatch, tmp_path)
-    monkeypatch.setenv("POE_YOLO", "true")
+    monkeypatch.setenv("MARO_YOLO", "true")
     monkeypatch.setenv("ORCH_SOURCE", "build-loop")
 
     from agent_loop import LoopResult, StepOutcome

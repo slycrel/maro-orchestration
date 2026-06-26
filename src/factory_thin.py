@@ -32,7 +32,7 @@ from llm_parse import extract_json
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-log = logging.getLogger("poe.factory.thin")
+log = logging.getLogger("maro.factory.thin")
 
 
 # ---------------------------------------------------------------------------

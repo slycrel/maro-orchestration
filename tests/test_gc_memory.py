@@ -86,7 +86,7 @@ def _write_tiered_lesson(mem: Path, tier: str, score: float) -> None:
 # ---------------------------------------------------------------------------
 
 def test_gc_outcomes_empty_workspace(monkeypatch, tmp_path):
-    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
     _mem_dir(tmp_path)
     total, removed, freed = _gc_outcomes(dry_run=True)
     assert total == 0
@@ -94,7 +94,7 @@ def test_gc_outcomes_empty_workspace(monkeypatch, tmp_path):
 
 
 def test_gc_outcomes_removes_old_entries(monkeypatch, tmp_path):
-    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
     mem = _mem_dir(tmp_path)
     _write_outcome(mem, days_ago=100)  # old
     _write_outcome(mem, days_ago=100)  # old
@@ -105,7 +105,7 @@ def test_gc_outcomes_removes_old_entries(monkeypatch, tmp_path):
 
 
 def test_gc_outcomes_dry_run_does_not_modify(monkeypatch, tmp_path):
-    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
     mem = _mem_dir(tmp_path)
     _write_outcome(mem, days_ago=100)
     _write_outcome(mem, days_ago=1)
@@ -116,7 +116,7 @@ def test_gc_outcomes_dry_run_does_not_modify(monkeypatch, tmp_path):
 
 
 def test_gc_outcomes_live_run_removes_entries(monkeypatch, tmp_path):
-    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
     mem = _mem_dir(tmp_path)
     _write_outcome(mem, days_ago=100)
     _write_outcome(mem, days_ago=1)
@@ -130,7 +130,7 @@ def test_gc_outcomes_live_run_removes_entries(monkeypatch, tmp_path):
 
 
 def test_gc_outcomes_keeps_all_recent(monkeypatch, tmp_path):
-    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
     mem = _mem_dir(tmp_path)
     for i in range(5):
         _write_outcome(mem, days_ago=i)
@@ -143,14 +143,14 @@ def test_gc_outcomes_keeps_all_recent(monkeypatch, tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_gc_audit_empty(monkeypatch, tmp_path):
-    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
     _mem_dir(tmp_path)
     total, removed, freed = _gc_audit(dry_run=True)
     assert total == 0
 
 
 def test_gc_audit_within_limit(monkeypatch, tmp_path):
-    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
     mem = _mem_dir(tmp_path)
     for _ in range(5):
         _write_audit_entry(mem)
@@ -160,7 +160,7 @@ def test_gc_audit_within_limit(monkeypatch, tmp_path):
 
 
 def test_gc_audit_trims_to_limit(monkeypatch, tmp_path):
-    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
     mem = _mem_dir(tmp_path)
     for _ in range(15):
         _write_audit_entry(mem)
@@ -170,7 +170,7 @@ def test_gc_audit_trims_to_limit(monkeypatch, tmp_path):
 
 
 def test_gc_audit_live_trim(monkeypatch, tmp_path):
-    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
     mem = _mem_dir(tmp_path)
     for _ in range(15):
         _write_audit_entry(mem)
@@ -184,14 +184,14 @@ def test_gc_audit_live_trim(monkeypatch, tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_gc_narrative_logs_empty(monkeypatch, tmp_path):
-    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
     _mem_dir(tmp_path)
     found, removed = _gc_narrative_logs(retain_days=180, dry_run=True)
     assert found == 0
 
 
 def test_gc_narrative_logs_removes_old(monkeypatch, tmp_path):
-    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
     mem = _mem_dir(tmp_path)
     _write_narrative(mem, days_ago=200)  # old
     _write_narrative(mem, days_ago=5)    # recent
@@ -201,7 +201,7 @@ def test_gc_narrative_logs_removes_old(monkeypatch, tmp_path):
 
 
 def test_gc_narrative_logs_dry_run_keeps_files(monkeypatch, tmp_path):
-    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
     mem = _mem_dir(tmp_path)
     old = _write_narrative(mem, days_ago=200)
     _gc_narrative_logs(retain_days=180, dry_run=True)
@@ -209,7 +209,7 @@ def test_gc_narrative_logs_dry_run_keeps_files(monkeypatch, tmp_path):
 
 
 def test_gc_narrative_logs_live_deletes(monkeypatch, tmp_path):
-    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
     mem = _mem_dir(tmp_path)
     old = _write_narrative(mem, days_ago=200)
     recent = _write_narrative(mem, days_ago=5)
@@ -223,14 +223,14 @@ def test_gc_narrative_logs_live_deletes(monkeypatch, tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_gc_tiered_lessons_empty(monkeypatch, tmp_path):
-    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
     _mem_dir(tmp_path)
     removed = _gc_tiered_lessons(dry_run=True)
     assert removed == 0
 
 
 def test_gc_tiered_lessons_removes_below_threshold(monkeypatch, tmp_path):
-    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
     mem = _mem_dir(tmp_path)
     _write_tiered_lesson(mem, "medium", score=0.1)  # below GC_THRESHOLD (0.2)
     _write_tiered_lesson(mem, "medium", score=0.5)  # above threshold
@@ -239,7 +239,7 @@ def test_gc_tiered_lessons_removes_below_threshold(monkeypatch, tmp_path):
 
 
 def test_gc_tiered_lessons_live_removes(monkeypatch, tmp_path):
-    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
     mem = _mem_dir(tmp_path)
     _write_tiered_lesson(mem, "medium", score=0.1)
     _write_tiered_lesson(mem, "medium", score=0.8)
@@ -255,7 +255,7 @@ def test_gc_tiered_lessons_live_removes(monkeypatch, tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_run_gc_returns_report(monkeypatch, tmp_path):
-    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
     _mem_dir(tmp_path)
     report = run_gc(dry_run=True)
     assert isinstance(report, GCReport)
@@ -263,7 +263,7 @@ def test_run_gc_returns_report(monkeypatch, tmp_path):
 
 
 def test_run_gc_summary_contains_sections(monkeypatch, tmp_path):
-    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
     _mem_dir(tmp_path)
     report = run_gc(dry_run=True)
     summary = report.summary()
@@ -275,7 +275,7 @@ def test_run_gc_summary_contains_sections(monkeypatch, tmp_path):
 
 
 def test_run_gc_live_cleans_old_data(monkeypatch, tmp_path):
-    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
     mem = _mem_dir(tmp_path)
     _write_outcome(mem, days_ago=100)
     _write_outcome(mem, days_ago=1)
@@ -290,7 +290,7 @@ def test_run_gc_live_cleans_old_data(monkeypatch, tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_main_status_runs(monkeypatch, tmp_path, capsys):
-    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
     _mem_dir(tmp_path)
     gc_memory.main(["status"])
     out = capsys.readouterr().out
@@ -299,7 +299,7 @@ def test_main_status_runs(monkeypatch, tmp_path, capsys):
 
 
 def test_main_no_args_shows_status(monkeypatch, tmp_path, capsys):
-    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
     _mem_dir(tmp_path)
     gc_memory.main([])
     out = capsys.readouterr().out
@@ -307,7 +307,7 @@ def test_main_no_args_shows_status(monkeypatch, tmp_path, capsys):
 
 
 def test_main_run_dry_run_flag(monkeypatch, tmp_path, capsys):
-    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
     _mem_dir(tmp_path)
     gc_memory.main(["run", "--dry-run"])
     out = capsys.readouterr().out
@@ -315,7 +315,7 @@ def test_main_run_dry_run_flag(monkeypatch, tmp_path, capsys):
 
 
 def test_main_run_yes_executes(monkeypatch, tmp_path, capsys):
-    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
     mem = _mem_dir(tmp_path)
     _write_outcome(mem, days_ago=100)
     gc_memory.main(["run", "--yes", "--outcomes-retain-days", "90"])

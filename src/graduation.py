@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional
 
-log = logging.getLogger("poe.graduation")
+log = logging.getLogger("maro.graduation")
 
 
 # ---------------------------------------------------------------------------

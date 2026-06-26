@@ -4,7 +4,7 @@
 # that claimed "DONE" phases actually work.
 #
 # Usage:
-#   POE_LOG_LEVEL=INFO bash scripts/audit-phases.sh
+#   MARO_LOG_LEVEL=INFO bash scripts/audit-phases.sh
 #   bash scripts/audit-phases.sh --dry-run
 
 set -euo pipefail
@@ -38,7 +38,7 @@ mkdir -p output
 python3 -c "
 import sys, os, time
 sys.path.insert(0, 'src')
-os.environ.setdefault('POE_LOG_LEVEL', 'INFO')
+os.environ.setdefault('MARO_LOG_LEVEL', 'INFO')
 
 from agent_loop import run_agent_loop, _configure_logging
 _configure_logging(verbose=True)

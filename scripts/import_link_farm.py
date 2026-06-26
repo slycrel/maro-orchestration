@@ -2,7 +2,7 @@
 """Import link-farm posts into knowledge nodes.
 
 Reads posts_final_v3.json from the link-farm repo and creates
-KnowledgeNode entries in ~/.poe/workspace/memory/knowledge_nodes.jsonl.
+KnowledgeNode entries in ~/.maro/workspace/memory/knowledge_nodes.jsonl.
 
 Usage:
     python3 scripts/import_link_farm.py [--link-farm-path PATH] [--dry-run]
@@ -266,7 +266,7 @@ def import_link_farm(
 
     if verbose:
         print(f"[import] done: {len(nodes)} nodes + {len(edges)} edges written to "
-              f"~/.poe/workspace/memory/", file=sys.stderr)
+              f"~/.maro/workspace/memory/", file=sys.stderr)
 
     return {
         "posts_loaded": len(posts),

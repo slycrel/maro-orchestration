@@ -30,7 +30,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-log = logging.getLogger("poe.compact_ab")
+log = logging.getLogger("maro.compact_ab")
 
 # ---------------------------------------------------------------------------
 # Test prompts — single-turn steps suitable for A/B comparison

@@ -37,7 +37,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-log = logging.getLogger("poe.checkpoint")
+log = logging.getLogger("maro.checkpoint")
 
 _CHECKPOINT_DIR_NAME = "checkpoints"
 

@@ -1036,7 +1036,7 @@ def test_chain_validation_bridge_stops_on_review_failure(monkeypatch, tmp_path):
 
 def test_append_next_items_creates_next_md_when_missing(monkeypatch, tmp_path):
     """append_next_items should not raise when NEXT.md is missing — creates it instead."""
-    monkeypatch.setenv("POE_ORCH_ROOT", str(tmp_path))
+    monkeypatch.setenv("MARO_ORCH_ROOT", str(tmp_path))
     # Create just the project dir (no NEXT.md — simulates partially-initialised project)
     proj_dir = tmp_path / "projects" / "partial-proj"
     proj_dir.mkdir(parents=True)
@@ -1053,7 +1053,7 @@ def test_append_next_items_creates_next_md_when_missing(monkeypatch, tmp_path):
 
 def test_append_next_items_empty_creates_nothing(monkeypatch, tmp_path):
     """append_next_items with empty list returns [] without touching the filesystem."""
-    monkeypatch.setenv("POE_ORCH_ROOT", str(tmp_path))
+    monkeypatch.setenv("MARO_ORCH_ROOT", str(tmp_path))
     proj_dir = tmp_path / "projects" / "empty-proj"
     proj_dir.mkdir(parents=True)
 
@@ -1065,7 +1065,7 @@ def test_append_next_items_empty_creates_nothing(monkeypatch, tmp_path):
 
 def test_ensure_project_is_idempotent(monkeypatch, tmp_path):
     """ensure_project called twice does not overwrite NEXT.md with user content."""
-    monkeypatch.setenv("POE_ORCH_ROOT", str(tmp_path))
+    monkeypatch.setenv("MARO_ORCH_ROOT", str(tmp_path))
     orch.ensure_project("idempotent-test", "first mission")
     proj_dir = tmp_path / "projects" / "idempotent-test"
     # Write custom content to NEXT.md
@@ -1078,7 +1078,7 @@ def test_ensure_project_is_idempotent(monkeypatch, tmp_path):
 
 def test_dir_exists_no_next_md_is_handled(monkeypatch, tmp_path):
     """Project dir exists but NEXT.md missing: append_next_items recovers gracefully."""
-    monkeypatch.setenv("POE_ORCH_ROOT", str(tmp_path))
+    monkeypatch.setenv("MARO_ORCH_ROOT", str(tmp_path))
     # Create project via ensure_project so NEXT.md exists, then delete it
     orch.ensure_project("ghost-next", "test mission")
     proj_dir = tmp_path / "projects" / "ghost-next"

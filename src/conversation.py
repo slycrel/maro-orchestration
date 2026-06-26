@@ -64,7 +64,7 @@ def _threads_dir() -> Path:
         from config import memory_dir  # type: ignore
         return memory_dir() / "threads"
     except Exception:
-        return Path.home() / ".poe" / "workspace" / "memory" / "threads"
+        return Path.home() / ".maro" / "workspace" / "memory" / "threads"
 
 
 class ThreadChannel(ConversationChannel):

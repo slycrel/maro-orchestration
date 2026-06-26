@@ -21,7 +21,7 @@ def workspace(monkeypatch, tmp_path):
     """Create a minimal workspace for testing."""
     ws = tmp_path / "workspace"
     ws.mkdir()
-    monkeypatch.setenv("POE_WORKSPACE", str(ws))
+    monkeypatch.setenv("MARO_WORKSPACE", str(ws))
 
     # Create some files
     (ws / "config.yml").write_text("model: haiku\n")
@@ -135,12 +135,12 @@ class TestImport:
         new_ws.mkdir()
 
         import os
-        old_env = os.environ.get("POE_WORKSPACE")
-        os.environ["POE_WORKSPACE"] = str(new_ws)
+        old_env = os.environ.get("MARO_WORKSPACE")
+        os.environ["MARO_WORKSPACE"] = str(new_ws)
         try:
             import_workspace(archive)
             restored = (new_ws / "memory" / "test.jsonl").read_text()
             assert '{"key":"value"}' in restored
         finally:
             if old_env:
-                os.environ["POE_WORKSPACE"] = old_env
+                os.environ["MARO_WORKSPACE"] = old_env

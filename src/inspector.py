@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 from llm_parse import extract_json, safe_float, content_or_empty
 
-log = logging.getLogger("poe.inspector")
+log = logging.getLogger("maro.inspector")
 
 # Module-level imports so tests can patch cleanly
 try:

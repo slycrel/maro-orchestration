@@ -23,7 +23,7 @@ TICK_OUTPUT="$(python3 "$ROOT_DIR/src/cli.py" tick \
 echo "$TICK_OUTPUT"
 TICK_RUN_ID="$(printf '%s\n' "$TICK_OUTPUT" | tr ' ' '\n' | awk -F= '/^run_id=/{print $2; exit}')"
 TICK_ARTIFACT_REL="$(printf '%s\n' "$TICK_OUTPUT" | tr ' ' '\n' | awk -F= '/^artifact=/{print $2; exit}')"
-TICK_ARTIFACT_DIR="$TMP/prototypes/poe-orchestration/$TICK_ARTIFACT_REL"
+TICK_ARTIFACT_DIR="$TMP/prototypes/maro-orchestration/$TICK_ARTIFACT_REL"
 
 test -f "$TICK_ARTIFACT_DIR/project.txt"
 test -f "$TICK_ARTIFACT_DIR/review/verdict.txt"

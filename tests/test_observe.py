@@ -18,7 +18,7 @@ import observe
 # ---------------------------------------------------------------------------
 
 def _ws(tmp_path) -> Path:
-    """Returns the memory dir that orch_root() will use under POE_WORKSPACE."""
+    """Returns the memory dir that orch_root() will use under MARO_WORKSPACE."""
     mem = tmp_path / "prototypes" / "poe-orchestration" / "memory"
     mem.mkdir(parents=True, exist_ok=True)
     return mem
@@ -73,14 +73,14 @@ def _append_audit(mem: Path, skill: str = "my-skill", success: bool = True) -> N
 # ---------------------------------------------------------------------------
 
 def test_read_loop_state_idle_when_no_lock(monkeypatch, tmp_path):
-    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
     _ws(tmp_path)
     state = observe._read_loop_state()
     assert state["running"] is False
 
 
 def test_read_loop_state_running_when_lock_exists(monkeypatch, tmp_path):
-    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
     mem = _ws(tmp_path)
     _write_loop_lock(mem, goal="paint kanji")
     state = observe._read_loop_state()
@@ -93,14 +93,14 @@ def test_read_loop_state_running_when_lock_exists(monkeypatch, tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_read_heartbeat_unavailable_when_no_file(monkeypatch, tmp_path):
-    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
     _ws(tmp_path)
     hb = observe._read_heartbeat()
     assert hb["available"] is False
 
 
 def test_read_heartbeat_reads_status(monkeypatch, tmp_path):
-    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
     mem = _ws(tmp_path)
     _write_heartbeat(mem, status="degraded")
     hb = observe._read_heartbeat()
@@ -113,13 +113,13 @@ def test_read_heartbeat_reads_status(monkeypatch, tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_read_recent_outcomes_empty_when_no_file(monkeypatch, tmp_path):
-    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
     _ws(tmp_path)
     assert observe._read_recent_outcomes() == []
 
 
 def test_read_recent_outcomes_returns_most_recent_first(monkeypatch, tmp_path):
-    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
     mem = _ws(tmp_path)
     for i in range(5):
         _append_outcome(mem, goal=f"task-{i}", status="success")
@@ -130,7 +130,7 @@ def test_read_recent_outcomes_returns_most_recent_first(monkeypatch, tmp_path):
 
 
 def test_read_recent_outcomes_respects_limit(monkeypatch, tmp_path):
-    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
     mem = _ws(tmp_path)
     for i in range(10):
         _append_outcome(mem, goal=f"task-{i}")
@@ -143,13 +143,13 @@ def test_read_recent_outcomes_respects_limit(monkeypatch, tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_read_audit_tail_empty_when_no_file(monkeypatch, tmp_path):
-    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
     _ws(tmp_path)
     assert observe._read_audit_tail() == []
 
 
 def test_read_audit_tail_returns_entries(monkeypatch, tmp_path):
-    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
     mem = _ws(tmp_path)
     for i in range(3):
         _append_audit(mem, skill=f"skill-{i}")
@@ -158,7 +158,7 @@ def test_read_audit_tail_returns_entries(monkeypatch, tmp_path):
 
 
 def test_read_audit_tail_chronological_order(monkeypatch, tmp_path):
-    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
     mem = _ws(tmp_path)
     for i in range(3):
         _append_audit(mem, skill=f"skill-{i}")
@@ -173,7 +173,7 @@ def test_read_audit_tail_chronological_order(monkeypatch, tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_print_loop_state_idle(monkeypatch, tmp_path, capsys):
-    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
     _ws(tmp_path)
     observe.print_loop_state()
     out = capsys.readouterr().out
@@ -181,7 +181,7 @@ def test_print_loop_state_idle(monkeypatch, tmp_path, capsys):
 
 
 def test_print_loop_state_running(monkeypatch, tmp_path, capsys):
-    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
     mem = _ws(tmp_path)
     _write_loop_lock(mem, goal="research topic X")
     observe.print_loop_state()
@@ -191,7 +191,7 @@ def test_print_loop_state_running(monkeypatch, tmp_path, capsys):
 
 
 def test_print_heartbeat_no_file(monkeypatch, tmp_path, capsys):
-    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
     _ws(tmp_path)
     observe.print_heartbeat()
     out = capsys.readouterr().out
@@ -199,7 +199,7 @@ def test_print_heartbeat_no_file(monkeypatch, tmp_path, capsys):
 
 
 def test_print_heartbeat_with_file(monkeypatch, tmp_path, capsys):
-    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
     mem = _ws(tmp_path)
     _write_heartbeat(mem, "healthy")
     observe.print_heartbeat()
@@ -208,7 +208,7 @@ def test_print_heartbeat_with_file(monkeypatch, tmp_path, capsys):
 
 
 def test_print_recent_outcomes_no_data(monkeypatch, tmp_path, capsys):
-    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
     _ws(tmp_path)
     observe.print_recent_outcomes()
     out = capsys.readouterr().out
@@ -216,7 +216,7 @@ def test_print_recent_outcomes_no_data(monkeypatch, tmp_path, capsys):
 
 
 def test_print_recent_outcomes_with_data(monkeypatch, tmp_path, capsys):
-    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
     mem = _ws(tmp_path)
     _append_outcome(mem, goal="paint a kanji")
     observe.print_recent_outcomes()
@@ -225,7 +225,7 @@ def test_print_recent_outcomes_with_data(monkeypatch, tmp_path, capsys):
 
 
 def test_print_audit_tail_no_data(monkeypatch, tmp_path, capsys):
-    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
     _ws(tmp_path)
     observe.print_audit_tail()
     out = capsys.readouterr().out
@@ -233,7 +233,7 @@ def test_print_audit_tail_no_data(monkeypatch, tmp_path, capsys):
 
 
 def test_print_audit_tail_with_data(monkeypatch, tmp_path, capsys):
-    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
     mem = _ws(tmp_path)
     _append_audit(mem, skill="my-skill")
     observe.print_audit_tail()
@@ -242,7 +242,7 @@ def test_print_audit_tail_with_data(monkeypatch, tmp_path, capsys):
 
 
 def test_print_memory_stats_no_memory(monkeypatch, tmp_path, capsys):
-    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
     _ws(tmp_path)
     observe.print_memory_stats()
     out = capsys.readouterr().out
@@ -250,7 +250,7 @@ def test_print_memory_stats_no_memory(monkeypatch, tmp_path, capsys):
 
 
 def test_print_snapshot_runs(monkeypatch, tmp_path, capsys):
-    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
     _ws(tmp_path)
     observe.print_snapshot()
     out = capsys.readouterr().out
@@ -267,7 +267,7 @@ def test_print_snapshot_runs(monkeypatch, tmp_path, capsys):
 # ---------------------------------------------------------------------------
 
 def test_main_no_args_shows_snapshot(monkeypatch, tmp_path, capsys):
-    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
     _ws(tmp_path)
     observe.main([])
     out = capsys.readouterr().out
@@ -275,7 +275,7 @@ def test_main_no_args_shows_snapshot(monkeypatch, tmp_path, capsys):
 
 
 def test_main_loop_subcommand(monkeypatch, tmp_path, capsys):
-    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
     _ws(tmp_path)
     observe.main(["loop"])
     out = capsys.readouterr().out
@@ -283,7 +283,7 @@ def test_main_loop_subcommand(monkeypatch, tmp_path, capsys):
 
 
 def test_main_heartbeat_subcommand(monkeypatch, tmp_path, capsys):
-    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
     _ws(tmp_path)
     observe.main(["heartbeat"])
     out = capsys.readouterr().out
@@ -291,7 +291,7 @@ def test_main_heartbeat_subcommand(monkeypatch, tmp_path, capsys):
 
 
 def test_main_outcomes_subcommand(monkeypatch, tmp_path, capsys):
-    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
     _ws(tmp_path)
     observe.main(["outcomes"])
     out = capsys.readouterr().out
@@ -299,7 +299,7 @@ def test_main_outcomes_subcommand(monkeypatch, tmp_path, capsys):
 
 
 def test_main_audit_subcommand(monkeypatch, tmp_path, capsys):
-    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
     _ws(tmp_path)
     observe.main(["audit"])
     out = capsys.readouterr().out
@@ -307,7 +307,7 @@ def test_main_audit_subcommand(monkeypatch, tmp_path, capsys):
 
 
 def test_main_memory_subcommand(monkeypatch, tmp_path, capsys):
-    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
     _ws(tmp_path)
     observe.main(["memory"])
     out = capsys.readouterr().out
@@ -315,7 +315,7 @@ def test_main_memory_subcommand(monkeypatch, tmp_path, capsys):
 
 
 def test_main_outcomes_limit_flag(monkeypatch, tmp_path, capsys):
-    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
     mem = _ws(tmp_path)
     for i in range(10):
         _append_outcome(mem, goal=f"task-{i}")
@@ -334,7 +334,7 @@ from observe import write_event, print_events_tail
 
 def test_write_event_creates_events_file(monkeypatch, tmp_path):
     """write_event creates events.jsonl and returns True."""
-    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
     _ws(tmp_path)
     ok = write_event(
         "step_done",
@@ -361,7 +361,7 @@ def test_write_event_creates_events_file(monkeypatch, tmp_path):
 
 def test_write_event_appends_multiple(monkeypatch, tmp_path):
     """write_event appends entries; file grows with each call."""
-    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
     _ws(tmp_path)
     write_event("loop_start", goal="goal A", loop_id="aaa", status="start")
     write_event("step_done", goal="goal A", loop_id="aaa", step="step 1", status="done")
@@ -375,7 +375,7 @@ def test_write_event_appends_multiple(monkeypatch, tmp_path):
 
 def test_print_events_tail_no_file(monkeypatch, tmp_path, capsys):
     """print_events_tail says 'No events recorded' when file missing."""
-    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
     _ws(tmp_path)
     print_events_tail()
     out = capsys.readouterr().out
@@ -384,7 +384,7 @@ def test_print_events_tail_no_file(monkeypatch, tmp_path, capsys):
 
 def test_print_events_tail_shows_events(monkeypatch, tmp_path, capsys):
     """print_events_tail displays recent events."""
-    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
     _ws(tmp_path)
     write_event("step_done", goal="my goal", loop_id="x1", step="fetch data", status="done")
     print_events_tail(limit=5)
@@ -395,7 +395,7 @@ def test_print_events_tail_shows_events(monkeypatch, tmp_path, capsys):
 
 def test_main_events_subcommand(monkeypatch, tmp_path, capsys):
     """poe-observe events subcommand prints events tail."""
-    monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
     _ws(tmp_path)
     write_event("step_done", goal="goal", loop_id="zzz", step="do it", status="done")
     observe.main(["events"])
@@ -416,14 +416,14 @@ def _ws_root(tmp_path) -> Path:
 
 class TestReadCostSummary:
     def test_empty_step_costs(self, monkeypatch, tmp_path):
-        monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
         _ws(tmp_path)
         result = observe._read_cost_summary(hours=24)
         assert result["total_usd"] == 0.0
         assert result["step_count"] == 0
 
     def test_sums_costs(self, monkeypatch, tmp_path):
-        monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
         mem = _ws(tmp_path)
         from datetime import datetime, timezone
         ts = datetime.now(timezone.utc).isoformat()
@@ -441,7 +441,7 @@ class TestReadCostSummary:
         assert result["tokens_out"] == 150
 
     def test_by_model_breakdown(self, monkeypatch, tmp_path):
-        monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
         mem = _ws(tmp_path)
         from datetime import datetime, timezone
         ts = datetime.now(timezone.utc).isoformat()
@@ -457,7 +457,7 @@ class TestReadCostSummary:
         assert abs(result["by_model"]["opus"] - 0.003) < 1e-9
 
     def test_returns_error_key_on_failure(self, monkeypatch, tmp_path):
-        monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
         _ws(tmp_path)
         # Force load_step_costs to raise
         import metrics
@@ -468,13 +468,13 @@ class TestReadCostSummary:
 
 class TestReadAncestryTree:
     def test_no_projects_dir(self, monkeypatch, tmp_path):
-        monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
         _ws(tmp_path)
         result = observe._read_ancestry_tree()
         assert result == []
 
     def test_project_with_ancestry(self, monkeypatch, tmp_path):
-        monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
         root = _ws_root(tmp_path)
         proj = root / "projects" / "my-project"
         proj.mkdir(parents=True)
@@ -490,7 +490,7 @@ class TestReadAncestryTree:
         assert node["ancestry"][0]["title"] == "Root Goal"
 
     def test_project_without_ancestry_is_root(self, monkeypatch, tmp_path):
-        monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
         root = _ws_root(tmp_path)
         proj = root / "projects" / "standalone"
         proj.mkdir(parents=True)
@@ -501,7 +501,7 @@ class TestReadAncestryTree:
         assert node["parent_id"] is None
 
     def test_multiple_projects(self, monkeypatch, tmp_path):
-        monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
         root = _ws_root(tmp_path)
         for name in ["alpha", "beta", "gamma"]:
             (root / "projects" / name).mkdir(parents=True)
@@ -512,14 +512,14 @@ class TestReadAncestryTree:
 
 class TestSnapshotJsonIncludes:
     def test_cost_key_present(self, monkeypatch, tmp_path):
-        monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
         _ws(tmp_path)
         snap = observe._snapshot_json()
         assert "cost" in snap
         assert "total_usd" in snap["cost"]
 
     def test_ancestry_key_present(self, monkeypatch, tmp_path):
-        monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
         _ws(tmp_path)
         snap = observe._snapshot_json()
         assert "ancestry" in snap
@@ -539,7 +539,7 @@ class TestDashboardReplayEndpoint:
         return None  # signal to use the functional test below
 
     def test_replay_with_no_outcomes_returns_404(self, monkeypatch, tmp_path):
-        monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
         _ws(tmp_path)
         monkeypatch.setattr(observe, "_read_recent_outcomes", lambda limit=1: [])
         # Verify the logic path — can't easily test the HTTP layer without a live server
@@ -548,7 +548,7 @@ class TestDashboardReplayEndpoint:
         assert outcomes == []
 
     def test_replay_with_outcomes_finds_goal(self, monkeypatch, tmp_path):
-        monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
         mem = _ws(tmp_path)
         from datetime import datetime, timezone
         ts = datetime.now(timezone.utc).isoformat()
@@ -571,7 +571,7 @@ class TestFactoryReplay:
 
     def test_factory_replay_returns_202_with_outcomes(self, monkeypatch, tmp_path):
         """When outcomes exist and signals fire, endpoint returns 202."""
-        monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
         mem = _ws(tmp_path)
         from datetime import datetime, timezone
         ts = datetime.now(timezone.utc).isoformat()
@@ -585,7 +585,7 @@ class TestFactoryReplay:
 
     def test_factory_replay_no_outcomes_returns_404_equivalent(self, monkeypatch, tmp_path):
         """When no outcomes, factory replay path should detect and abort."""
-        monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
         _ws(tmp_path)
         monkeypatch.setattr(observe, "_read_recent_outcomes", lambda limit=10: [])
         outcomes = observe._read_recent_outcomes(limit=10)
@@ -775,7 +775,7 @@ class TestCaptainLogDashboard:
         """Redirect memory_dir to tmp_path/memory for all tests in this class."""
         mem = tmp_path / "memory"
         mem.mkdir(parents=True, exist_ok=True)
-        monkeypatch.setenv("POE_MEMORY_DIR", str(mem))
+        monkeypatch.setenv("MARO_MEMORY_DIR", str(mem))
         return mem
 
     def test_read_captain_log_empty_when_no_file(self, tmp_path):
@@ -844,7 +844,7 @@ class TestSuggestionStats:
     def _mem(self, tmp_path, monkeypatch):
         mem = tmp_path / "memory"
         mem.mkdir()
-        monkeypatch.setenv("POE_MEMORY_DIR", str(mem))
+        monkeypatch.setenv("MARO_MEMORY_DIR", str(mem))
         self._mem_path = mem
 
     def test_empty_when_no_file(self):

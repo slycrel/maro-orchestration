@@ -23,7 +23,7 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-log = logging.getLogger("poe.killswitch")
+log = logging.getLogger("maro.killswitch")
 
 _SENTINEL_NAME = "STOP"
 

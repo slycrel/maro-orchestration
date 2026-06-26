@@ -81,7 +81,7 @@ CIRCUIT_HALFOPEN_RECOVERY = 2   # consecutive successes to close HALF_OPEN→CLO
 # ---------------------------------------------------------------------------
 
 _EXTRACT_SYSTEM = textwrap.dedent("""\
-    You are Poe, a skill extraction agent.
+    You are a skill extraction agent.
     Analyze successful goal completions and find patterns worth generalizing.
     A skill is a step sequence that solved a class of problems and could be
     reused for similar future goals.
@@ -471,7 +471,7 @@ def cull_island_bottom_half(
     Returns:
         List of skill IDs that were (or would be) culled.
     """
-    logger = logging.getLogger("poe.skills.island")
+    logger = logging.getLogger("maro.skills.island")
     all_skills = load_skills()
     island_skills = [s for s in all_skills if s.island == island_name or
                      (not s.island and assign_island(s) == island_name)]
@@ -1122,7 +1122,7 @@ def validate_skill_for_promotion(skill: "Skill", adapter: Any) -> Dict[str, Any]
                 "repair_hint": str(parsed.get("repair_hint", "")),
             }
     except Exception as exc:
-        logging.getLogger("poe.skills.validate").debug("validate_skill_for_promotion failed: %s", exc)
+        logging.getLogger("maro.skills.validate").debug("validate_skill_for_promotion failed: %s", exc)
     # Fail-open: if we can't validate, allow promotion (don't block the cycle)
     return {"valid": True, "reason": "validation unavailable (fail-open)", "repair_hint": ""}
 
@@ -1157,7 +1157,7 @@ def maybe_auto_promote_skills(adapter: Any = None, max_repair_attempts: int = 3)
 
         # Voyager/Agent0 steal: validation harness with repair loop
         if adapter is not None:
-            _logger = logging.getLogger("poe.skills.promote")
+            _logger = logging.getLogger("maro.skills.promote")
             _candidate = skill
             _valid = False
             for _attempt in range(max_repair_attempts):
@@ -1197,7 +1197,7 @@ def maybe_auto_promote_skills(adapter: Any = None, max_repair_attempts: int = 3)
         skill.content_hash = compute_skill_hash(skill)
         promoted.append(skill.id)
         changed = True
-        logging.getLogger("poe.skills").info("[skills] auto-promoted skill %s (%s)", skill.id, skill.name)
+        logging.getLogger("maro.skills").info("[skills] auto-promoted skill %s (%s)", skill.id, skill.name)
         try:
             from captains_log import log_event, SKILL_PROMOTED
             log_event(

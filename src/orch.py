@@ -235,7 +235,7 @@ def write_operator_status() -> dict:
             # Can happen if a previous run crashed during project init or if workspace
             # paths are inconsistent (e.g. orch_root mismatch between runs).
             import logging as _log
-            _log.getLogger("poe.orch").warning("write_operator_status: skipping %r — no NEXT.md", slug)
+            _log.getLogger("maro.orch").warning("write_operator_status: skipping %r — no NEXT.md", slug)
             continue
     active = [s for s in statuses if s.doing > 0]
     blocked = [s for s in statuses if s.blocked > 0]

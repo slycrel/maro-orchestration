@@ -36,7 +36,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-log = logging.getLogger("poe.mcp_client")
+log = logging.getLogger("maro.mcp_client")
 
 # MCP JSON-RPC protocol version
 _JSONRPC_VERSION = "2.0"

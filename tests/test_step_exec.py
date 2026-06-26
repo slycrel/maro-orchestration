@@ -102,7 +102,7 @@ class _ScheduleRunAdapter:
 class TestScheduleRunTool:
     def test_schedule_run_daily(self, tmp_path, monkeypatch):
         monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
-        monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
 
         from step_exec import execute_step, EXECUTE_TOOLS
 
@@ -125,7 +125,7 @@ class TestScheduleRunTool:
 
     def test_schedule_run_in_hours(self, tmp_path, monkeypatch):
         monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
-        monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
 
         from step_exec import execute_step, EXECUTE_TOOLS
 
@@ -147,7 +147,7 @@ class TestScheduleRunTool:
 
     def test_schedule_run_with_note(self, tmp_path, monkeypatch):
         monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
-        monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
 
         from step_exec import execute_step, EXECUTE_TOOLS
 
@@ -171,7 +171,7 @@ class TestScheduleRunTool:
     def test_schedule_run_persists_job(self, tmp_path, monkeypatch):
         """Job should actually be saved to jobs.json."""
         monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
-        monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
 
         from step_exec import execute_step, EXECUTE_TOOLS
 
@@ -357,7 +357,7 @@ class TestDataPipelineEnforcementInExecuteStep:
     def test_data_heavy_step_injects_enforcement(self, tmp_path, monkeypatch):
         """When step is data-heavy, user_msg contains the pipeline enforcement block."""
         monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
-        monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
 
         captured_msgs = []
         adapter = MagicMock()
@@ -385,7 +385,7 @@ class TestDataPipelineEnforcementInExecuteStep:
 
     def test_non_data_heavy_step_no_injection(self, tmp_path, monkeypatch):
         monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
-        monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
 
         captured_msgs = []
         adapter = MagicMock()
@@ -412,7 +412,7 @@ class TestDataPipelineEnforcementInExecuteStep:
     def test_raw_dump_result_gets_flagged(self, tmp_path, monkeypatch):
         """If the agent ignores pipeline enforcement and returns raw output, flag it."""
         monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
-        monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
 
         # 35 braces + long result (>2000 chars) = raw dump signal
         raw_result = "{" * 20 + "data" * 600 + "}" * 20
@@ -433,7 +433,7 @@ class TestDataPipelineEnforcementInExecuteStep:
 
     def test_clean_result_not_flagged(self, tmp_path, monkeypatch):
         monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
-        monkeypatch.setenv("POE_WORKSPACE", str(tmp_path))
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
 
         clean_result = "Top 3 markets by volume: BTC-USD ($1.2B), ETH-USD ($0.8B), SOL-USD ($0.3B)."
 
@@ -513,7 +513,7 @@ class TestArtifactMaterialization:
         return _Cap(), captured
 
     def test_exec_step_injects_artifact_path(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("POE_ORCH_ROOT", str(tmp_path))
+        monkeypatch.setenv("MARO_ORCH_ROOT", str(tmp_path))
         monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
 
         from step_exec import execute_step, EXECUTE_TOOLS
@@ -532,7 +532,7 @@ class TestArtifactMaterialization:
         assert "step-1-output.txt" in captured["user"]
 
     def test_non_exec_step_no_artifact_injection(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("POE_ORCH_ROOT", str(tmp_path))
+        monkeypatch.setenv("MARO_ORCH_ROOT", str(tmp_path))
         monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
 
         from step_exec import execute_step, EXECUTE_TOOLS
@@ -551,7 +551,7 @@ class TestArtifactMaterialization:
 
     def test_step_type_label_in_user_msg(self, tmp_path, monkeypatch):
         """Step type is embedded in the user message for the executor."""
-        monkeypatch.setenv("POE_ORCH_ROOT", str(tmp_path))
+        monkeypatch.setenv("MARO_ORCH_ROOT", str(tmp_path))
         monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
 
         from step_exec import execute_step, EXECUTE_TOOLS
@@ -750,7 +750,7 @@ class TestArtifactContextInjection:
         return _Cap(), captured
 
     def test_artifacts_injected_into_step_context(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("POE_ORCH_ROOT", str(tmp_path))
+        monkeypatch.setenv("MARO_ORCH_ROOT", str(tmp_path))
         monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
 
         from step_exec import execute_step, EXECUTE_TOOLS
@@ -778,7 +778,7 @@ class TestArtifactContextInjection:
         assert "some step" not in captured["user"].split("Artifacts from prior steps")[1].split("Completed")[0]
 
     def test_no_artifacts_block_when_empty(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("POE_ORCH_ROOT", str(tmp_path))
+        monkeypatch.setenv("MARO_ORCH_ROOT", str(tmp_path))
         monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
 
         from step_exec import execute_step, EXECUTE_TOOLS
@@ -825,7 +825,7 @@ class TestLongRunningTimeout:
     def test_pytest_step_gets_long_timeout(self, tmp_path, monkeypatch):
         """A step containing 'pytest' gets the long-running timeout (1800s default)."""
         monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
-        monkeypatch.delenv("POE_LONG_RUNNING_TIMEOUT", raising=False)
+        monkeypatch.delenv("MARO_LONG_RUNNING_TIMEOUT", raising=False)
 
         from step_exec import execute_step, EXECUTE_TOOLS
         adapter, captured = self._adapter_capturing_kwargs()
@@ -844,7 +844,7 @@ class TestLongRunningTimeout:
     def test_full_suite_step_gets_doubled_timeout(self, tmp_path, monkeypatch):
         """A step with 'tests/' in it gets 2× the long-running timeout."""
         monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
-        monkeypatch.delenv("POE_LONG_RUNNING_TIMEOUT", raising=False)
+        monkeypatch.delenv("MARO_LONG_RUNNING_TIMEOUT", raising=False)
 
         from step_exec import execute_step, EXECUTE_TOOLS
         adapter, captured = self._adapter_capturing_kwargs()
@@ -878,9 +878,9 @@ class TestLongRunningTimeout:
         assert "timeout" not in captured.get("kw", {})
 
     def test_poe_long_running_timeout_env_override(self, tmp_path, monkeypatch):
-        """POE_LONG_RUNNING_TIMEOUT overrides the default 1800s for long-running steps."""
+        """MARO_LONG_RUNNING_TIMEOUT overrides the default 1800s for long-running steps."""
         monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
-        monkeypatch.setenv("POE_LONG_RUNNING_TIMEOUT", "600")
+        monkeypatch.setenv("MARO_LONG_RUNNING_TIMEOUT", "600")
 
         from step_exec import execute_step, EXECUTE_TOOLS
         adapter, captured = self._adapter_capturing_kwargs()
@@ -898,7 +898,7 @@ class TestLongRunningTimeout:
     def test_docker_step_gets_long_timeout(self, tmp_path, monkeypatch):
         """Docker build steps also get the long-running timeout."""
         monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
-        monkeypatch.delenv("POE_LONG_RUNNING_TIMEOUT", raising=False)
+        monkeypatch.delenv("MARO_LONG_RUNNING_TIMEOUT", raising=False)
 
         from step_exec import execute_step, EXECUTE_TOOLS
         adapter, captured = self._adapter_capturing_kwargs()

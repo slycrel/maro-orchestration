@@ -2,9 +2,9 @@
 
 Governance event 2026-06-11: a vague goal pipeline-executed into an
 unreviewed push to origin/main authored as the owner. The guard makes the
-policy mechanical: Poe-spawned subprocesses (POE_WORKER_RUN=1, set by the
+policy mechanical: Poe-spawned subprocesses (MARO_WORKER_RUN=1, set by the
 subprocess adapter) may push work branches but not the default branch,
-unless explicitly authorized (POE_ALLOW_MAIN_PUSH=1).
+unless explicitly authorized (MARO_ALLOW_MAIN_PUSH=1).
 """
 
 import os
@@ -53,34 +53,34 @@ def repo_pair(tmp_path):
 class TestPushGuard:
     def test_human_push_to_main_allowed(self, repo_pair):
         r = _git(["push", "origin", "main"], cwd=repo_pair,
-                 env={"POE_WORKER_RUN": "", "POE_ALLOW_MAIN_PUSH": ""})
+                 env={"MARO_WORKER_RUN": "", "MARO_ALLOW_MAIN_PUSH": ""})
         assert r.returncode == 0, r.stderr
 
     def test_worker_push_to_main_blocked(self, repo_pair):
         r = _git(["push", "origin", "main"], cwd=repo_pair,
-                 env={"POE_WORKER_RUN": "1", "POE_ALLOW_MAIN_PUSH": ""})
+                 env={"MARO_WORKER_RUN": "1", "MARO_ALLOW_MAIN_PUSH": ""})
         assert r.returncode != 0
         assert "worker pushes to the default branch are blocked" in r.stderr
 
     def test_worker_push_to_work_branch_allowed(self, repo_pair):
         r = _git(["push", "origin", "HEAD:work/topic"], cwd=repo_pair,
-                 env={"POE_WORKER_RUN": "1", "POE_ALLOW_MAIN_PUSH": ""})
+                 env={"MARO_WORKER_RUN": "1", "MARO_ALLOW_MAIN_PUSH": ""})
         assert r.returncode == 0, r.stderr
 
     def test_authorized_worker_push_to_main_allowed(self, repo_pair):
         r = _git(["push", "origin", "main"], cwd=repo_pair,
-                 env={"POE_WORKER_RUN": "1", "POE_ALLOW_MAIN_PUSH": "1"})
+                 env={"MARO_WORKER_RUN": "1", "MARO_ALLOW_MAIN_PUSH": "1"})
         assert r.returncode == 0, r.stderr
 
     def test_worker_push_to_master_blocked(self, repo_pair):
         r = _git(["push", "origin", "HEAD:master"], cwd=repo_pair,
-                 env={"POE_WORKER_RUN": "1", "POE_ALLOW_MAIN_PUSH": ""})
+                 env={"MARO_WORKER_RUN": "1", "MARO_ALLOW_MAIN_PUSH": ""})
         assert r.returncode != 0
 
 
 class TestSubprocessEnvMarker:
     def test_adapter_subprocess_env_carries_worker_marker(self, monkeypatch):
-        """_run_subprocess_safe marks children as POE_WORKER_RUN=1."""
+        """_run_subprocess_safe marks children as MARO_WORKER_RUN=1."""
         import llm
         captured = {}
 
@@ -99,8 +99,8 @@ class TestSubprocessEnvMarker:
         monkeypatch.setattr("subprocess.Popen", _fake_popen)
         llm._run_subprocess_safe(["true"], timeout=5)
         assert captured["env"] is not None
-        assert captured["env"].get("POE_WORKER_RUN") == "1"
-        assert "POE_ALLOW_MAIN_PUSH" not in captured["env"]
+        assert captured["env"].get("MARO_WORKER_RUN") == "1"
+        assert "MARO_ALLOW_MAIN_PUSH" not in captured["env"]
 
     def test_config_allow_main_push_sets_bypass(self, monkeypatch):
         import llm
@@ -124,4 +124,4 @@ class TestSubprocessEnvMarker:
             lambda key, default=None: True if key == "workers.allow_main_push" else default,
         )
         llm._run_subprocess_safe(["true"], timeout=5)
-        assert captured["env"].get("POE_ALLOW_MAIN_PUSH") == "1"
+        assert captured["env"].get("MARO_ALLOW_MAIN_PUSH") == "1"
