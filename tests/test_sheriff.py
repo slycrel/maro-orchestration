@@ -320,7 +320,7 @@ def test_cli_sheriff_all_json(monkeypatch, tmp_path, capsys):
 
 
 # ---------------------------------------------------------------------------
-# Project lifecycle state (.poe-failed / .poe-paused marker files)
+# Project lifecycle state (.maro-failed / .maro-paused marker files)
 # ---------------------------------------------------------------------------
 
 class TestProjectLifecycleState:
@@ -355,8 +355,8 @@ class TestProjectLifecycleState:
         _setup(monkeypatch, tmp_path)
         proj_dir = _mkproj(tmp_path, "both-markers")
         # Write both markers manually
-        (proj_dir / ".poe-failed").write_text("failed\n", encoding="utf-8")
-        (proj_dir / ".poe-paused").write_text("paused\n", encoding="utf-8")
+        (proj_dir / ".maro-failed").write_text("failed\n", encoding="utf-8")
+        (proj_dir / ".maro-paused").write_text("paused\n", encoding="utf-8")
         assert project_lifecycle_state("both-markers") == "failed"
 
     def test_failed_marker_writes_reason(self, monkeypatch, tmp_path):

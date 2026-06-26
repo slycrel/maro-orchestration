@@ -99,12 +99,12 @@ STUCK_REPETITION_THRESHOLD = 3
 DECISION_WINDOW = 20
 
 
-_FAILED_MARKER = ".poe-failed"
-_PAUSED_MARKER = ".poe-paused"
+_FAILED_MARKER = ".maro-failed"
+_PAUSED_MARKER = ".maro-paused"
 
 
 def mark_project_failed(slug: str, reason: str = "") -> Path:
-    """Write a .poe-failed marker in the project directory.
+    """Write a .maro-failed marker in the project directory.
 
     Sheriff, backlog drain, and heartbeat diagnosis all skip failed projects.
     The marker persists until manually removed. Returns the marker path.
@@ -120,7 +120,7 @@ def mark_project_failed(slug: str, reason: str = "") -> Path:
 
 
 def mark_project_paused(slug: str, reason: str = "") -> Path:
-    """Write a .poe-paused marker — sheriff monitors but backlog drain skips."""
+    """Write a .maro-paused marker — sheriff monitors but backlog drain skips."""
     import sys as _sys
     _sys.path.insert(0, str(Path(__file__).parent))
     from orch import project_dir
@@ -151,7 +151,7 @@ def check_project(slug: str, *, window_minutes: int = 30) -> SheriffReport:
     """Check a single project for loop health.
 
     Checks:
-    0. Lifecycle markers: .poe-failed → status=failed (skip all other checks)
+    0. Lifecycle markers: .maro-failed → status=failed (skip all other checks)
     1. Repetition: same TODO selected multiple times with no progress
     2. Artifact freshness: artifacts changing?
     3. Decision log freshness: new decisions being appended?
@@ -179,14 +179,14 @@ def check_project(slug: str, *, window_minutes: int = 30) -> SheriffReport:
             return SheriffReport(
                 project=slug,
                 status="failed",
-                diagnosis="Marked failed (.poe-failed)",
+                diagnosis="Marked failed (.maro-failed)",
                 evidence=[],
             )
         if _lc == "paused":
             return SheriffReport(
                 project=slug,
                 status="paused",
-                diagnosis="Marked paused (.poe-paused)",
+                diagnosis="Marked paused (.maro-paused)",
                 evidence=[],
             )
 
