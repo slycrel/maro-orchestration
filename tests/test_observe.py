@@ -660,7 +660,7 @@ class TestProjectStatusBoard:
     def test_failed_project_appears_as_failed(self, monkeypatch, tmp_path):
         """A failed project shows 'failed' status in rows."""
         monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
-        report = self._make_sheriff_report("dead-proj", "failed", "Marked failed (.poe-failed)")
+        report = self._make_sheriff_report("dead-proj", "failed", "Marked failed (.maro-failed)")
         with __import__("unittest.mock", fromlist=["patch"]).patch(
             "sheriff.check_all_projects", return_value=[report]
         ):
