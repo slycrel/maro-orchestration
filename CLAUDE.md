@@ -1,6 +1,6 @@
-# Claude Code — openclaw-orchestration
+# Claude Code — Maro
 
-**This is the mainline repo.** All orchestration work happens here unless explicitly directed elsewhere.
+**This is the mainline repo** (`maro`, formerly `openclaw-orchestration`). All orchestration work happens here unless explicitly directed elsewhere.
 
 **Start-of-session checklist:**
 1. Read this file (CLAUDE.md)
@@ -47,7 +47,7 @@ exploration.
 | Scope + constraint orchestration (Phase 65) | `docs/CONSTRAINT_ORCHESTRATION_DESIGN.md` + review |
 | Adaptive execution | `docs/ADAPTIVE_EXECUTION_DESIGN.md` |
 
-- GitHub: https://github.com/slycrel/openclaw-orchestration
+- GitHub: https://github.com/slycrel/maro
 - Machine: Ubuntu headless, user `clawd`, `/home/clawd/claude/openclaw-orchestration/`
 - Owner: Jeremy Stone (`slycrel`) — 25+ years engineering, AI orchestration
 

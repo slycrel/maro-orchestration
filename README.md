@@ -1,4 +1,6 @@
-# Poe Orchestration
+# Maro
+
+> Named for Publius Vergilius **Maro** — the poet Virgil, who in Dante's *Inferno* guides the traveler down through the dark and safely out the other side. Maro does the same for autonomous agents: hand it a goal and it finds the path through — decompose, execute, recover, report.
 
 Autonomous agent framework. Give it a goal; it decomposes, executes, learns, and reports. No hand-holding required.
 
@@ -86,8 +88,8 @@ All share one interface: `LLMAdapter.complete(messages, tools) → LLMResponse`
 
 ```bash
 # 1. Clone and install
-git clone https://github.com/slycrel/openclaw-orchestration.git
-cd openclaw-orchestration
+git clone https://github.com/slycrel/maro.git
+cd maro
 pip install -e ".[dev]"
 
 # 2. Set your API key (at minimum, one of these)
@@ -124,7 +126,7 @@ python3 src/cli.py build-loop --worker-session handle --format json
 ./scripts/build-loop.sh --worker-session handle --format json
 
 # Example cron target (every 5 minutes)
-*/5 * * * * cd /path/to/openclaw-orchestration && OPENCLAW_WORKSPACE=/path/to/workspace ./scripts/build-loop.sh --worker-session handle --format json >> /tmp/poe-build-loop.log 2>&1
+*/5 * * * * cd /path/to/maro && OPENCLAW_WORKSPACE=/path/to/workspace ./scripts/build-loop.sh --worker-session handle --format json >> /tmp/poe-build-loop.log 2>&1
 
 # Memory status
 python3 src/cli.py memory context
@@ -415,7 +417,7 @@ Next run with similar task:
 
 ## Worker session manifests
 
-`poe-orchestration` execution bridges accept either a named worker script or a JSON manifest via `--worker-session`.
+Maro execution bridges accept either a named worker script or a JSON manifest via `--worker-session`.
 
 Manifests now support both the explicit keys and short aliases:
 - `command` or `cmd` (optionally with `args`, `argv`, or `arguments` arrays)
