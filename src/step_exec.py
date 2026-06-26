@@ -835,6 +835,16 @@ def execute_step(
         )
         if _step_timeout is not None:
             _call_kwargs["timeout"] = _step_timeout
+        # Bind the executor subprocess to the project workspace so relative file
+        # writes land in-workspace (enforces the "save to {project_dir}/" prompt
+        # instruction rather than trusting the agent to honor it). Adapters that
+        # don't spawn subprocesses ignore cwd via **kwargs.
+        if project_dir:
+            try:
+                os.makedirs(project_dir, exist_ok=True)
+                _call_kwargs["cwd"] = project_dir
+            except OSError:
+                pass
         resp = adapter.complete(
             [
                 LLMMessage("system", EXECUTE_SYSTEM),
@@ -908,6 +918,7 @@ def execute_step(
                         tool_choice="required",
                         max_tokens=4096,
                         temperature=0.3,
+                        cwd=_call_kwargs.get("cwd"),
                     )
                     _tok = resp.input_tokens + resp.output_tokens
                     _tool_name_used = resp.tool_calls[0].name if resp.tool_calls else None

@@ -30,6 +30,19 @@ Ordered open work that matters. Top of the list is next.
   The fix is the bounded-workspace item below; this is the strongest case yet
   that it's not theoretical — good output is landing in version control.
 
+  **Root cause found + soft-fence shipped (2026-06-26):** the agentic
+  subprocess (`claude -p` / `codex exec`) was spawned with **no `cwd`** —
+  `_run_subprocess_safe` → `Popen` inherited the parent's cwd, so relative
+  writes landed wherever that happened to be (repro: a fizzbuzz build wrote
+  `fizzbuzz.py` to `/tmp/claude-1001/` instead of the workspace, while the
+  prompt's "save to {project_dir}/" was simply ignored). Fixed by threading
+  `cwd` through `complete()` → `_run_subprocess_safe(cwd=...)` → `Popen(cwd=)`,
+  and binding it to `project_dir` in `step_exec.execute_step` (makedirs first;
+  non-existent cwd is ignored, no regression). This is the **soft-fence (tier b)**
+  from the spectrum below — relative writes now land in-workspace by default,
+  but nothing stops an agent from writing an absolute path elsewhere. The
+  scavenging diagnostic + hard fence (tier a) are still open.
+
 **Bounded workspace / sandboxing (discovered 2026-04-17)**
 
 Run 4 of slycrel-go blind test was contaminated by stale local clones. Four
@@ -193,6 +206,16 @@ NOTE: this replaces the *caps*, not the token-explosion *leak* — justify it on
   require `--output-format stream-json` parsing (re-plumb the subprocess
   pipeline) or a filesystem-snapshot diff with a fabrication-shape classifier.
   Out of proportion to the risk for now; revisit if it shows up organically.
+
+  **Organic repro (2026-06-26):** showed up during a post-rename smoke test. A
+  fizzbuzz AGENDA build marked all 4 steps `done` and narrated *"Verified
+  output: 1,2,Fizz,4,Buzz,…"* — but the written file had no `__main__` block
+  (produces nothing) and, pre-cwd-fix, wasn't even in the workspace. The
+  "verification" was fabricated; no step actually executed the file. Note the
+  cwd soft-fence (#1) makes a filesystem-snapshot diff approach viable now:
+  with writes bounded to `project_dir`, a before/after diff of that dir is a
+  cheap ground-truth signal for "did this step actually produce the claimed
+  artifact?" — cheaper than stream-json re-plumbing. Candidate next step.
 
 ### ACTIVE DESIGN SPACE — Thread Architecture (2026-04-26 → 2026-04-27, Jeremy + Claude)
 
