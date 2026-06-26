@@ -197,25 +197,31 @@ NOTE: this replaces the *caps*, not the token-explosion *leak* — justify it on
   demotable back to language form — world-change is the frequent trigger,
   model upgrades the rare one.
 
-### No-file-claim fabrication (parked — backend changes required)
+### File-claim fabrication — FS-diff ground-truth guard SHIPPED (2026-06-26)
 
-- [ ] **No-file-claim fabrication.** A run that fabricates a result naming no
-  path at all ("ran the tests: 142 passed", writing nothing) leaves no
-  deterministic trace — `claude -p --output-format json` returns only final
-  text, no tool-call transcript (investigated 2026-06-24 and ruled out). Would
-  require `--output-format stream-json` parsing (re-plumb the subprocess
-  pipeline) or a filesystem-snapshot diff with a fabrication-shape classifier.
-  Out of proportion to the risk for now; revisit if it shows up organically.
+- [x] **Write-claim fabrication (v1 shipped 2026-06-26).** A step that claims to
+  write a file but produces no artifact is now demoted `done`→`blocked` by a
+  zero-LLM filesystem-diff guard (`src/artifact_check.py`, wired into the AGENDA
+  build loop in `agent_loop.py` before ralph verify; config gate
+  `validate.artifact_check`, default on, fail-open). Conservative v1 rule:
+  flag iff (≥1 file write-claim) AND (empty `project_dir` before/after diff) AND
+  (no claimed path exists on disk). Emits captain's-log `FABRICATION_DETECTED`.
+  This is the AGENDA-loop sibling of handle.py's NOW-lane `_provenance_missing`.
+  Enabled by the #1 cwd fix: writes are bounded to `project_dir`, so its diff is
+  reliable ground truth. Tests: `tests/test_artifact_check.py` (16 unit) +
+  2 full-loop integration tests in `tests/test_agent_loop.py`.
+  - Side fix: removed a leaked `fizzbuzz.py` test artifact accidentally committed
+    to repo root in 7ea4d7b (the #1 cwd-fix commit); its basename collision in
+    cwd actually surfaced the design flaw that `_exists_anywhere` must NOT consult
+    `Path.cwd()` (orchestrator cwd = repo root, full of unrelated files).
 
-  **Organic repro (2026-06-26):** showed up during a post-rename smoke test. A
-  fizzbuzz AGENDA build marked all 4 steps `done` and narrated *"Verified
-  output: 1,2,Fizz,4,Buzz,…"* — but the written file had no `__main__` block
-  (produces nothing) and, pre-cwd-fix, wasn't even in the workspace. The
-  "verification" was fabricated; no step actually executed the file. Note the
-  cwd soft-fence (#1) makes a filesystem-snapshot diff approach viable now:
-  with writes bounded to `project_dir`, a before/after diff of that dir is a
-  cheap ground-truth signal for "did this step actually produce the claimed
-  artifact?" — cheaper than stream-json re-plumbing. Candidate next step.
+- [ ] **No-PATH fabrication (still parked).** The harder sibling: a result that
+  names no path at all ("ran the tests: 142 passed", writing nothing) leaves no
+  deterministic trace — `claude -p --output-format json` returns only final text,
+  no tool-call transcript (investigated 2026-06-24, ruled out). The v1 FS-diff
+  guard above does NOT catch this (no claimed path to check). Would still require
+  `--output-format stream-json` parsing or a fabrication-shape classifier on the
+  narrative. Out of proportion to the risk for now; revisit if it recurs.
 
 ### ACTIVE DESIGN SPACE — Thread Architecture (2026-04-26 → 2026-04-27, Jeremy + Claude)
 

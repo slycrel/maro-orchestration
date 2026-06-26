@@ -4210,6 +4210,23 @@ def _execute_main_loop(
                         flush=True,
                     )
                 continue
+        # Fabrication ground-truth (done≠achieved): snapshot the workspace before
+        # the step so a write-claim with an empty diff + no on-disk file can be
+        # caught after. The cwd fix (#1) makes project_dir a reliable diff target.
+        _artifact_check_on = True
+        try:
+            from config import get as _ac_cfg_get
+            _artifact_check_on = bool(_ac_cfg_get("validate.artifact_check", True))
+        except Exception:
+            pass
+        _artifact_snapshot = {}
+        if _artifact_check_on:
+            try:
+                from artifact_check import snapshot_dir as _ac_snapshot
+                _artifact_snapshot = _ac_snapshot(_proj_artifact_dir)
+            except Exception:
+                _artifact_check_on = False
+
         outcome = _execute_step(
             goal=goal,
             step_text=step_text,
@@ -4286,6 +4303,50 @@ def _execute_main_loop(
         step_result = _raw_result if isinstance(_raw_result, str) else str(_raw_result) if _raw_result else ""
         _raw_summary = outcome.get("summary", step_text)
         step_summary = _raw_summary if isinstance(_raw_summary, str) else step_text
+
+        # Fabrication ground-truth check (done≠achieved). Runs before ralph verify
+        # so a fabricated "done" is demoted to "blocked" and never reaches the
+        # text-only verifier (which can't see the filesystem). Conservative: only
+        # fires on a write-claim with an empty workspace diff AND no on-disk file.
+        if _artifact_check_on and step_status == "done" and step_result:
+            try:
+                from artifact_check import check_fabrication as _ac_check
+                _ac_verdict = _ac_check(step_result, _proj_artifact_dir, _artifact_snapshot)
+                if _ac_verdict.fabricated:
+                    log.warning(
+                        "FABRICATION step=%d: %s", step_idx, _ac_verdict.reason
+                    )
+                    step_status = "blocked"
+                    outcome["status"] = "blocked"
+                    outcome["stuck_reason"] = f"artifact-fabrication: {_ac_verdict.reason}"
+                    step_result = (
+                        f"{step_result}\n\n[fabrication-guard] This step claimed to write "
+                        f"{_ac_verdict.claims} but no matching file was produced in the "
+                        f"workspace and none exist on disk. Marked blocked — re-run and "
+                        f"actually create the file(s) before reporting done."
+                    )
+                    try:
+                        from captains_log import log_event as _ac_log_event, FABRICATION_DETECTED
+                        _ac_log_event(
+                            FABRICATION_DETECTED,
+                            subject=f"step {step_idx}",
+                            summary=_ac_verdict.reason,
+                            context={
+                                "step_text": step_text[:200],
+                                "claims": _ac_verdict.claims,
+                                "missing": _ac_verdict.missing,
+                                "changed_count": _ac_verdict.changed_count,
+                            },
+                        )
+                    except Exception:
+                        pass
+                    if verbose:
+                        print(
+                            f"[maro] step {step_idx}: fabrication guard blocked — {_ac_verdict.reason}",
+                            file=sys.stderr, flush=True,
+                        )
+            except Exception:
+                pass
 
         # Ralph verify loop (Phase F8). Defaults ON when a usable local validator
         # is configured — verification is then free (opt out: validate.auto_verify).

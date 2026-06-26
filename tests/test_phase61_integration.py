@@ -236,6 +236,12 @@ class TestCheckpointRecovery:
     def test_fresh_run_uses_all_steps(self, monkeypatch, tmp_path):
         """No checkpoint → full run with specific goal text, all steps complete."""
         _setup(monkeypatch, tmp_path)
+        # This test simulates a successful run with a scripted adapter that narrates
+        # a file write ("Summary written to output/report.txt") without creating one
+        # — exactly the shape the fabrication guard (validate.artifact_check) flags.
+        # The guard is correct; this test exercises checkpoint mechanics, not artifact
+        # reality, so disable the FS-diff guard here.
+        (tmp_path / "config.yml").write_text("validate:\n  artifact_check: false\n")
         from agent_loop import run_agent_loop
 
         adapter = ScriptedAdapter([

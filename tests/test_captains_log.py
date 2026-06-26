@@ -233,7 +233,9 @@ class TestEventTypes:
         # +3 (2026-06-24): EVOLVER_REVERTED, EVOLVER_VERIFY, PLAYBOOK_UPDATED —
         # previously emitted via string literals but missing from the set, so
         # consumers validating against EVENT_TYPES silently dropped them.
-        assert len(EVENT_TYPES) == 52
+        # +1 (2026-06-26): FABRICATION_DETECTED — AGENDA build-loop done≠achieved
+        # ground-truth guard (artifact_check).
+        assert len(EVENT_TYPES) == 53
 
     def test_previously_unregistered_events_in_set(self):
         from captains_log import EVOLVER_REVERTED, EVOLVER_VERIFY, PLAYBOOK_UPDATED

@@ -1871,6 +1871,79 @@ def test_run_agent_loop_ensure_project_always_called_even_when_dir_exists(monkey
 
 
 # ---------------------------------------------------------------------------
+# Fabrication ground-truth guard (done≠achieved) — artifact_check integration
+# ---------------------------------------------------------------------------
+
+def test_run_agent_loop_blocks_fabricated_write_claim(monkeypatch, tmp_path):
+    """A step that claims a file write but produces no artifact is demoted to blocked."""
+    monkeypatch.setenv("MARO_ORCH_ROOT", str(tmp_path))
+    import agent_loop as al
+    # Keep the text-only verifier out of the way so we isolate the FS guard.
+    monkeypatch.setattr(al, "_local_auto_ralph_enabled", lambda: False)
+
+    class _FabAdapter:
+        model_key = "test"
+
+        def complete(self, messages, **kwargs):
+            from llm import LLMResponse, ToolCall
+            return LLMResponse(
+                content="",
+                tool_calls=[ToolCall(name="complete_step", arguments={
+                    "result": "Wrote the FizzBuzz solution to fizzbuzz.py and verified it prints 1..15.",
+                    "summary": "implemented fizzbuzz",
+                })],
+                input_tokens=1, output_tokens=1,
+            )
+
+    result = al.run_agent_loop(
+        "build fizzbuzz",
+        adapter=_FabAdapter(),
+        preset_steps=["Write the FizzBuzz solution to fizzbuzz.py"],
+        max_steps=1,
+        max_iterations=3,
+    )
+    blocked = [s for s in result.steps if s.status == "blocked"]
+    assert blocked, f"expected a blocked step, got {[s.status for s in result.steps]}"
+    assert any("fabrication-guard" in (s.result or "") for s in blocked)
+
+
+def test_run_agent_loop_allows_real_write(monkeypatch, tmp_path):
+    """A step that actually creates the claimed file is NOT flagged as fabrication."""
+    monkeypatch.setenv("MARO_ORCH_ROOT", str(tmp_path))
+    import agent_loop as al
+    monkeypatch.setattr(al, "_local_auto_ralph_enabled", lambda: False)
+
+    slug = al._goal_to_slug("build fizzbuzz for real")
+    proj_dir = tmp_path / "projects" / slug
+
+    class _RealAdapter:
+        model_key = "test"
+
+        def complete(self, messages, **kwargs):
+            from llm import LLMResponse, ToolCall
+            # Actually land the artifact the step claims to write.
+            proj_dir.mkdir(parents=True, exist_ok=True)
+            (proj_dir / "fizzbuzz.py").write_text("print('fizz')\n")
+            return LLMResponse(
+                content="",
+                tool_calls=[ToolCall(name="complete_step", arguments={
+                    "result": "Wrote the FizzBuzz solution to fizzbuzz.py.",
+                    "summary": "implemented fizzbuzz",
+                })],
+                input_tokens=1, output_tokens=1,
+            )
+
+    result = al.run_agent_loop(
+        "build fizzbuzz for real",
+        adapter=_RealAdapter(),
+        preset_steps=["Write the FizzBuzz solution to fizzbuzz.py"],
+        max_steps=1,
+        max_iterations=3,
+    )
+    assert not any("fabrication-guard" in (s.result or "") for s in result.steps)
+
+
+# ---------------------------------------------------------------------------
 # Plan manifest (run visibility)
 # ---------------------------------------------------------------------------
 
