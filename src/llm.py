@@ -501,14 +501,14 @@ def _run_subprocess_safe(cmd, *, input=None, timeout=600,
         mode="w+b", suffix=".out", delete=False)
     combined_path = combined_f.name
 
-    # Operator-visibility symlink: `tail -f /tmp/poe-current-step.log` from
+    # Operator-visibility symlink: `tail -f /tmp/maro-current-step.log` from
     # anywhere shows the in-flight subprocess's merged output. Updated
     # atomically on each new subprocess; dangles between steps (by
     # design — means "no step running"). Disable with
     # MARO_CURRENT_STEP_SYMLINK=0.
     if os.environ.get("MARO_CURRENT_STEP_SYMLINK", "1") != "0":
         try:
-            link_target = "/tmp/poe-current-step.log"
+            link_target = "/tmp/maro-current-step.log"
             tmp_link = f"{link_target}.{os.getpid()}.tmp"
             try: os.unlink(tmp_link)
             except OSError: pass

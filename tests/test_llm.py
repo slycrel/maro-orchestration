@@ -577,13 +577,13 @@ def test_run_subprocess_safe_no_stdin_uses_devnull():
 
 
 def test_run_subprocess_safe_updates_current_step_symlink():
-    """During a run, /tmp/poe-current-step.log is created/updated as a symlink."""
+    """During a run, /tmp/maro-current-step.log is created/updated as a symlink."""
     from llm import _run_subprocess_safe
 
     _run_subprocess_safe(["sh", "-c", "printf ok"], input="", timeout=5)
     # The stdout temp file gets deleted on cleanup, so the symlink dangles
     # after completion — that's by design. Just verify the link exists.
-    assert os.path.islink("/tmp/poe-current-step.log")
+    assert os.path.islink("/tmp/maro-current-step.log")
 
 
 def test_run_subprocess_safe_symlink_disabled_by_env(monkeypatch):
@@ -592,9 +592,9 @@ def test_run_subprocess_safe_symlink_disabled_by_env(monkeypatch):
 
     # Record the symlink target (or absence) before our call.
     before_target = None
-    if os.path.islink("/tmp/poe-current-step.log"):
+    if os.path.islink("/tmp/maro-current-step.log"):
         try:
-            before_target = os.readlink("/tmp/poe-current-step.log")
+            before_target = os.readlink("/tmp/maro-current-step.log")
         except OSError:
             pass
 
@@ -602,9 +602,9 @@ def test_run_subprocess_safe_symlink_disabled_by_env(monkeypatch):
     _run_subprocess_safe(["sh", "-c", "printf ok"], input="", timeout=5)
 
     after_target = None
-    if os.path.islink("/tmp/poe-current-step.log"):
+    if os.path.islink("/tmp/maro-current-step.log"):
         try:
-            after_target = os.readlink("/tmp/poe-current-step.log")
+            after_target = os.readlink("/tmp/maro-current-step.log")
         except OSError:
             pass
     # When disabled, the link either stays at its pre-call target or stays absent.

@@ -1,4 +1,4 @@
-# Goal-Brain: openclaw-orchestration
+# Goal-Brain: maro-orchestration
 
 This file is two things at once:
 
@@ -171,7 +171,7 @@ marker) — no other control flow hangs off the log.
   (plan-manifest order-dependence ×4, orch_core bridge ×5, scheduler lease ×1).
 
 **Goal-brain pressure test against real runs (sequencing step 2, 2026-06-10).**
-Sample: the 2026-05-13..17 window of `~/.poe/workspace/runs/` (478 dirs total;
+Sample: the 2026-05-13..17 window of `~/.maro/workspace/runs/` (478 dirs total;
 ~60 examined via metadata + captain's log traces). Where the artifact leaks:
 
 1. **Goal identity does not survive the requeue boundary.** Plan-step text
@@ -293,7 +293,7 @@ Sample: the 2026-05-13..17 window of `~/.poe/workspace/runs/` (478 dirs total;
   split (shipped 2026-06-11) proved itself on organic data — 4/5 goals `done`,
   only 1 `goal_achieved=True` (the rest thin artifacts flagged at low conf).
 - **2026-06-21 (Jeremy: "let's turn it on and make it live")** — escalate-acting
-  ENABLED on this box. `~/.poe/workspace/config.yml` now sets
+  ENABLED on this box. `~/.maro/workspace/config.yml` now sets
   `navigator.act_dispatch: true`, `act_moves: [escalate]`, `act_confidence_floor:
   0.9`. Navigator escalate decisions ≥0.9 now ACT (status=stuck/navigator_escalate)
   instead of shadow-only; `NAVIGATOR_ACTED` rows are the live audit. close stays

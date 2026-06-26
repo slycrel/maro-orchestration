@@ -34,7 +34,7 @@ Ordered open work that matters. Top of the list is next.
 
 Run 4 of slycrel-go blind test was contaminated by stale local clones. Four
 `slycrel-go` trees existed on disk (`~/slycrel-go`, `~/.openclaw/.../slycrel-go`,
-`~/.poe/workspace/projects/slycrel-go`, `/tmp/slycrel-go`) — the worker
+`~/.maro/workspace/projects/slycrel-go`, `/tmp/slycrel-go`) — the worker
 surveyed one of them instead of cloning fresh into the expected workspace
 `repo/` subdirectory. Result: step 1 asserted "project already has a
 complete headless server implementation" from the stale tree.
@@ -60,7 +60,7 @@ have" not "build a sandboxing subsystem."
 
 ### 2. Rate-limit recovery: no total-backoff cap + phantom Step -1
 
-- [ ] **Rate-limit recovery has no total-backoff cap; recovery path emits phantom `Step -1`.** Scope A/B run-06-control (2026-04-23, `~/.poe/experiments/scope-ab-2026-04-22/run-06-control/`) hit 6 rate-limit retries with exponential backoff (60→120→240→480→960→1800s = 61 min total wall-clock in backoff alone). Per-attempt cap is enforced; **total-backoff-wall-clock is not.** After step 20 finally completed, the recovery path fired with `recovery[NEEDS-REVIEW] risk=medium: Retry with smaller step scope or switch to API adapter` — and produced a `Step -1` marker that the main loop doesn't know how to handle. Run exited rc=1 with no closure verdict. Total runtime: 2h30m for 20 completed steps.
+- [ ] **Rate-limit recovery has no total-backoff cap; recovery path emits phantom `Step -1`.** Scope A/B run-06-control (2026-04-23, `~/.maro/experiments/scope-ab-2026-04-22/run-06-control/`) hit 6 rate-limit retries with exponential backoff (60→120→240→480→960→1800s = 61 min total wall-clock in backoff alone). Per-attempt cap is enforced; **total-backoff-wall-clock is not.** After step 20 finally completed, the recovery path fired with `recovery[NEEDS-REVIEW] risk=medium: Retry with smaller step scope or switch to API adapter` — and produced a `Step -1` marker that the main loop doesn't know how to handle. Run exited rc=1 with no closure verdict. Total runtime: 2h30m for 20 completed steps.
 
   **Candidates:**
   - ~~cap total backoff wall-clock at ~10 min; if exceeded, bail cleanly (soft-fail with "rate-limited, retry later" rather than another 30-min sleep)~~ **DONE 2026-06-24** — `llm.py` subprocess rate-limit loop now tracks cumulative sleep and bails before the next sleep would exceed `POE_CLAUDE_RATE_LIMIT_TOTAL_CAP` (default 600s). Soft-fails with a "bailed after Ns of backoff … retry later" RuntimeError. `=0` disables (falls back to retry-count). Tests in test_llm.py.
@@ -74,7 +74,7 @@ have" not "build a sandboxing subsystem."
 - [ ] **Stream-json token visibility (next up, per Jeremy 2026-04-18).**
   `claude -p --output-format stream-json` emits newline-delimited JSON
   events (init, assistant chunks, tool calls, result). Switch the
-  subprocess adapter + `/tmp/poe-current-step.log` to this mode so
+  subprocess adapter + `/tmp/maro-current-step.log` to this mode so
   operators see live tokens instead of 0 bytes until burst-at-end. Each
   new line becomes the primary liveness signal; CPU-activity demotes to
   a fallback for adapters that don't stream. Parser work: line-reader
@@ -247,7 +247,7 @@ experiment proposal.
 - [ ] **Pivot reuse / workspace persistence as first-class.** The
   `polymarket-edges` pattern proves the value of persistent workspaces
   (project_polymarket_edges.md memory). Generalize: every goal's
-  side-quest outputs live in `~/.poe/workspace/projects/<slug>/
+  side-quest outputs live in `~/.maro/workspace/projects/<slug>/
   artifacts/` and survive across reruns of the same goal family.
 
 ### Modular refactoring (AFK-friendly chunks, queued 2026-04-18) — deferred chunks
@@ -346,7 +346,7 @@ See `docs/CONSTRAINT_ORCHESTRATION_DESIGN.md` + `docs/CONSTRAINT_ORCHESTRATION_R
 
   Related: BDD (Given/When/Then framing), TDD (red-green cycle), property-based testing (∀ operation, property holds), mutation testing (probe-of-probe bounded version). Sibling of Phase 65 "Scope: verification sibling" blocker above — this IS that sibling. **Cross-link:** also the sibling of the Actionable "Closure treats failed-to-run commands as checks-passed" item — runtime-probe bias is closure *choosing* static over behavioral probes; the closure-failed-to-run item is closure *mis-reading* the behavioral probes it does choose. Same root: the verdict is decoupled from whether the thing was verified.
 
-  **Replay raw numbers** (evidence for the bias finding above): `~/.poe/workspace/projects/slycrel-replay/artifacts/summary.json` — `complete=False, confidence=0.35, 3/5 checks passed`. The two failing probes: (i) overly-strict grep for `!RemoteAddr.*username` false-positived on a legit log line `log.Printf(... username, r.RemoteAddr)`; (ii) `grep -qi xterm web/*` correctly caught that the work summary hallucinated xterm.js integration. The `_CLOSURE_PLAN_SYSTEM` prompt at `director.py:1137` says "Commands must be fast (<15s), safe (read-only or self-cleaning), exit 0 on success. Wrap background processes with `timeout` and always clean up PIDs" — permits live probes but nudges toward grep via path-of-least-resistance.
+  **Replay raw numbers** (evidence for the bias finding above): `~/.maro/workspace/projects/slycrel-replay/artifacts/summary.json` — `complete=False, confidence=0.35, 3/5 checks passed`. The two failing probes: (i) overly-strict grep for `!RemoteAddr.*username` false-positived on a legit log line `log.Printf(... username, r.RemoteAddr)`; (ii) `grep -qi xterm web/*` correctly caught that the work summary hallucinated xterm.js integration. The `_CLOSURE_PLAN_SYSTEM` prompt at `director.py:1137` says "Commands must be fast (<15s), safe (read-only or self-cleaning), exit 0 on success. Wrap background processes with `timeout` and always clean up PIDs" — permits live probes but nudges toward grep via path-of-least-resistance.
 
   **Second full run (2026-04-17, after observability fixes) — modality chart is stark.** CLOSURE_VERDICT event recorded `modality_distribution={"static": 4, "process": 1}`, zero http/ws/browser — on a goal explicitly about "headless server with browser as a client." Closure's own summary admits: *"Gap: runtime validation (server startup + browser connection) was not performed."* Yet it still returned `complete=True confidence=0.92`. Manual post-hoc runtime probe (3 curl calls, ~5 seconds): `/health → 200`, `/ → 200`, `/ws → 101 upgrade`, server logs `player "test" connected/disconnected`. The thing works; closure lucked into being right via static checks. The cheap, mechanical proof would have been three curls — and the system *had time*: the loop ran 810s / 3M tokens / 39 steps. Budget was not the constraint; scaffolding was.
 
