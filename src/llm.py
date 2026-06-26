@@ -1191,7 +1191,10 @@ class CodexCLIAdapter(LLMAdapter):
             "-",  # read prompt from stdin
         ]
 
-        _cwd = kwargs.get("cwd")
+        # Explicit cwd= wins; else fall back to the run-scoped ambient default
+        # (parity with ClaudeSubprocessAdapter) so codex-backed non-executor
+        # agentic calls also bind in-workspace instead of the launch cwd.
+        _cwd = kwargs.get("cwd") or get_default_subprocess_cwd()
         try:
             result = _run_subprocess_safe(cmd, input=prompt, timeout=_timeout, cwd=_cwd)
         except subprocess.TimeoutExpired:
