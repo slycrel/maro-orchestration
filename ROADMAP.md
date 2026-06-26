@@ -28,6 +28,27 @@ We're currently at the **visibility→reliability boundary**. The introspection 
 
 A short version: **stop debugging by seance, then stop failing the same way twice, then make past runs reusable for future improvement.**
 
+### Visibility — definition of done (the ladder)
+
+"Visibility" is easy to vibe-claim. It is NOT done until every rung is durably
+recorded to the run trace. Established 2026-06-26 after the test-corpus harvest
+revealed the runtime record is lossier than we'd been saying — we'd casually
+called visibility "closed" while the line was really at ~3.5/6.
+
+| Rung | Visibility of… | Status | Where it lives |
+|------|----------------|--------|----------------|
+| 1 | Outcome (status, verdict, tokens, timing) | ✅ | loop-log.json, run metadata, captains log |
+| 2 | Decisions (scope, diagnosis, quality-gate, claim probes, navigator) | ✅ | captains-log event types |
+| 3 | Plan/structure (steps, deps, shared ctx) | ✅ | steps.json, shared.json |
+| 4 | Step I/O (full input context + full output) | ⚠️ partial | step text yes; result is a **truncated excerpt**; assembled prompt not stored |
+| 5 | Agent actions (inner Bash/Write/Read + results) | ⚠️ nascent | tool_events — new, **forward-only**, in per-step artifact files, not unified into the run trace, zero historical |
+| 6 | LLM call (exact prompt + raw response) — the replay tier | ❌ | not persisted |
+
+Rungs 4–6 are the open work; the keystone is **forward record-mode** (persist
+`{full_prompt, raw_response, tool_events}` per call — see BACKLOG #0). It
+completes Visibility AND unlocks the Replayability stage, which is otherwise
+unreachable: you cannot replay a call whose prompt you never kept.
+
 ---
 
 ## Completed Phases (0–56)
