@@ -13,6 +13,32 @@ Last reviewed: 2026-06-24 (full triage + reorg; follow-up code-verified audit mo
 
 Ordered open work that matters. Top of the list is next.
 
+### 0. Test corpus — capture the missing layers (forward record-mode + full archive)
+
+**Shipped 2026-06-26 (the "now" half):** `scripts/harvest_corpus.py` distills the
+live workspace history (`runs/` 569 captains-log slices + `projects/`) into
+deduped fixture slices under `tests/fixtures/orchestration_corpus/` (thinned
+slices committed, full git-ignored + reproducible). 24 slices, 5,646 raw records;
+`tests/test_orchestration_corpus.py` proves consumability + regression-guards the
+quality-gate escalate formula against 122 real verdicts (0 mismatches). Workspace
+data is preserved, not deleted.
+
+**Remaining ("later") — the two layers we DON'T have:**
+- [ ] **Forward byte-level record mode.** We never persisted the assembled
+  per-step LLM prompt + raw response, so the corpus supports logic-level replay,
+  not byte-level LLM mocking. Add an opt-in (env/config) capture that writes
+  `{prompt, response, tool_events}` per step to the run dir, so future runs yield
+  true replay fixtures. The tool_events transcript (shipped this session) is the
+  first piece; prompt+response is the rest. Gate it (bloat + secrets) and reuse
+  the harvester's scrubber.
+- [ ] **Full raw archive (optional).** If/when `runs/`+`projects/` (~79M) get
+  pruned, snapshot the full (non-thinned) slices somewhere durable first — they're
+  only reproducible while the workspace exists.
+- [ ] **Wire more slices into real tests.** The corpus has rich unused signal:
+  `event_step_too_broad` (decompose quality), `event_diagnosis`/`event_metacognitive_decision`
+  (recovery), `event_closure_verdict`, `event_claim_verifier_outcome`. Each can
+  back a fixture-driven regression test the way quality_gate now does.
+
 ### 1. Bound worker writes to run-dir / workspace (artifacts leaking into repo root)
 
 - [ ] **Workspace boundary: build-goal artifacts landed in the repo root** —

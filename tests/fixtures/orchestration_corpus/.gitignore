@@ -1,0 +1,5 @@
+# Commit only the thinned (deduped, representative) slices + MANIFEST + README.
+# The full slices are large and reproducible from the workspace via
+# `scripts/harvest_corpus.py`, so they stay out of git.
+*.jsonl
+!*.thinned.jsonl

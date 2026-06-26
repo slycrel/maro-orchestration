@@ -1,0 +1,1 @@
+{"timestamp": "2026-06-22T14:59:50.258966+00:00", "event_type": "MEMORY_CONSOLIDATED", "subject": "consolidation", "summary": "Consolidation: decayed=47 promoted=0 gc=47", "context": {"decayed": 47, "promoted": 0, "gc": 47}, "_provenance": "runs/9021dec6-amber-thorn/build/captains_log_slice.jsonl", "_cluster_size": 1}
