@@ -13,19 +13,33 @@ workspace didn't change and the claimed file exists nowhere on disk, the step
 fabricated its result.
 
 This is the AGENDA build-loop sibling of handle.py's NOW-lane provenance guard
-(`_provenance_missing`). Zero LLM, runs in <10ms, and fails open — any internal
-error yields a "not fabricated" verdict so the check never blocks legitimate
-work on its own bug.
+(`_provenance_missing`). Zero LLM, NO code execution, runs in <10ms, and fails
+open — any internal error yields a "not fabricated" verdict so the check never
+blocks legitimate work on its own bug.
 
-Deliberately conservative (v1): a step is flagged ONLY when it claims a write,
-the project_dir diff is empty (zero files created/modified), AND none of the
-claimed paths exist anywhere checkable. That triple is unambiguous fabrication;
-misplaced-but-real writes (the #1 cwd bug, now fixed) and explicit
-out-of-workspace writes both leave on-disk evidence and are not flagged.
+Two layered rules, both grounded in POSITIVE evidence (see check_fabrication):
+
+  1. missing-artifact — a named file write-claim whose target landed nowhere
+     (empty project_dir diff AND no claimed path on disk). Misplaced-but-real
+     writes (the #1 cwd bug, now fixed) and explicit out-of-workspace writes
+     both leave on-disk evidence and are NOT flagged.
+  2. inert-output — a concrete stdout claim ("verified output: 1,2,Fizz,4,Buzz")
+     against a .py the step produced that is provably inert (purely definitions,
+     no __main__/top-level code → prints nothing when run). This is the actual
+     organic repro: the file exists (so rule 1 passes) but cannot have produced
+     the claimed output. Caught by static AST analysis, not by running the code.
+
+A third "no-path write claim" rule (write-ish words + empty diff, no path named)
+was prototyped and REJECTED: it is absence-based, not evidence-based — an empty
+diff does not prove fabrication (analysis/planning steps and out-of-workspace
+writes legitimately leave it empty), and it false-positived on real completions.
+A verifier that hallucinates is its own failure mode; we only flag on positive
+evidence.
 """
 
 from __future__ import annotations
 
+import ast
 import os
 import re
 from dataclasses import dataclass, field
@@ -48,6 +62,30 @@ _OUTPUT_CLAIM_RE = re.compile(
 # drops "saved to memory", "wrote to the database", "stored as a draft", etc.
 _EXT_RE = re.compile(r"\.[A-Za-z0-9]{1,6}$")
 
+# --- Layer 2: claimed-output-from-an-inert-artifact -----------------------
+# The organic repro: a step writes fizzbuzz.py (so the v1 missing-artifact check
+# passes — the file exists), then narrates "Verified output: 1,2,Fizz,4,Buzz,…".
+# But the file has no `if __name__ == "__main__"` block and no top-level code, so
+# running it prints nothing. The claimed output is fabricated. We catch this by
+# static analysis (NO code execution): if the result claims concrete stdout AND
+# the produced .py is provably inert (purely definitions), it can't have produced
+# that output.
+#
+# Two-part gate keeps false positives near zero: the result must (a) use a verb
+# that asserts runtime stdout — NOT a function "returns" claim, which is true of
+# an inert module — and (b) contain concrete output-looking content (a digit, or
+# a quoted/backtick literal). A "wrote some helper functions" result has neither.
+_STDOUT_CLAIM_RE = re.compile(
+    r"\b(?:prints?|printed|printing|stdout|"
+    r"output(?:s|ted|ting)?\b(?!\s+(?:file|to|into|path|dir))|"
+    r"verified\s+(?:the\s+)?output|confirmed\s+(?:the\s+)?output|"
+    r"the\s+output\s+(?:is|was)|produces?\s+(?:the\s+)?output|"
+    r"(?:when|after)\s+(?:you\s+)?run|running\s+(?:it|the\b))",
+    re.IGNORECASE,
+)
+# Concrete output-looking content: a digit, a quoted literal, or a backtick span.
+_CONCRETE_OUTPUT_RE = re.compile(r"\d|'[^']+'|\"[^\"]+\"|`[^`]+`")
+
 # Directories never worth walking for a workspace diff.
 _SKIP_DIRS = frozenset({".git", "__pycache__", ".mypy_cache", ".pytest_cache", "node_modules"})
 # Safety cap so a pathological workspace can't make the diff walk unbounded.
@@ -65,6 +103,7 @@ class ArtifactVerdict:
     missing: List[str] = field(default_factory=list)     # claims with no on-disk evidence
     changed_count: int = 0                               # files created/modified in project_dir
     reason: str = ""
+    kind: str = ""  # "" | "missing-artifact" | "inert-output"
 
 
 def _clean_token(tok: str) -> str:
@@ -156,42 +195,173 @@ def _exists_anywhere(claim: str, project_dir: Optional[str | os.PathLike]) -> bo
     return False
 
 
+def _claims_concrete_stdout(text: str) -> bool:
+    """True if the result asserts concrete program stdout (not just a return value).
+
+    Requires BOTH a runtime-stdout verb (prints/output/"when run"/…) AND concrete
+    output-looking content (a digit or a quoted/backtick literal). "The function
+    returns FizzBuzz for 15" is true of an inert module, so `returns` is excluded.
+    """
+    if not text:
+        return False
+    return bool(_STDOUT_CLAIM_RE.search(text) and _CONCRETE_OUTPUT_RE.search(text))
+
+
+# Top-level AST node types that produce no stdout when a module is run directly.
+# Note: class bodies and assignment RHS *can* in principle execute and print, but
+# that is rare and the check is additionally gated on a concrete-stdout claim, so
+# the residual false-positive surface is negligible.
+_INERT_TOPLEVEL = (
+    ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef,
+    ast.Import, ast.ImportFrom,
+    ast.Assign, ast.AnnAssign, ast.AugAssign, ast.Pass,
+)
+
+
+def _python_is_inert(source: str) -> Optional[bool]:
+    """True if running this module as `python3 file` provably produces no stdout.
+
+    Inert == the module body is purely definitions/imports/assignments (no
+    `if __name__ == "__main__"` block, no top-level calls, loops, or bare
+    expressions). Returns None when we can't tell (syntax error) so the caller
+    fails open. A docstring (bare constant expression) counts as inert.
+    """
+    try:
+        tree = ast.parse(source)
+    except (SyntaxError, ValueError):
+        return None
+    for node in tree.body:
+        if isinstance(node, _INERT_TOPLEVEL):
+            continue
+        if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant):
+            continue  # bare docstring / constant — no output
+        return False  # If/For/While/With/Try/bare-call/etc. → may print
+    return True
+
+
+def _python_candidates(
+    claims: List[str],
+    project_dir: Optional[str | os.PathLike],
+    changed: Set[str],
+) -> List[Path]:
+    """Existing .py files this step plausibly produced (claim paths + fresh files)."""
+    out: List[Path] = []
+    seen: Set[str] = set()
+
+    def _add(p: Path) -> None:
+        try:
+            rp = str(p.resolve())
+        except OSError:
+            rp = str(p)
+        if rp not in seen and p.is_file():
+            seen.add(rp)
+            out.append(p)
+
+    for c in claims:
+        if not c.endswith(".py"):
+            continue
+        cp = Path(c)
+        if cp.is_absolute():
+            _add(cp)
+        elif project_dir:
+            _add(Path(project_dir) / c)
+    if project_dir:
+        base = Path(project_dir)
+        for rel in changed:
+            if rel.endswith(".py"):
+                _add(base / rel)
+    return out
+
+
+def _inert_output_verdict(
+    result_text: str,
+    project_dir: Optional[str | os.PathLike],
+    claims: List[str],
+    changed: Set[str],
+) -> Optional[ArtifactVerdict]:
+    """Layer 2: a concrete stdout claim against a provably-inert .py artifact.
+
+    Returns a fabricated verdict if confirmed, else None (no opinion → caller
+    continues). Fails open: any ambiguity (non-Python, parse error, a non-inert
+    candidate) yields None.
+    """
+    if not _claims_concrete_stdout(result_text):
+        return None
+    cands = _python_candidates(claims, project_dir, changed)
+    if not cands:
+        return None
+    inert_any = False
+    for path in cands:
+        try:
+            src = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return None  # can't read → can't judge
+        verdict = _python_is_inert(src)
+        if verdict is None:
+            return None  # unparseable → fail open
+        if verdict is False:
+            return None  # a candidate CAN produce output → claim is plausible
+        inert_any = True
+    if not inert_any:
+        return None
+    names = [p.name for p in cands]
+    return ArtifactVerdict(
+        fabricated=True,
+        claims=claims,
+        changed_count=len(changed),
+        reason=(
+            f"step claimed concrete program output but the produced file(s) {names} "
+            f"are inert (no __main__/top-level code) and print nothing when run"
+        ),
+        kind="inert-output",
+    )
+
+
 def check_fabrication(
     result_text: str,
     project_dir: Optional[str | os.PathLike],
     before_snapshot: Dict[str, float],
 ) -> ArtifactVerdict:
-    """Ground-truth check: did a write-claiming step actually produce anything?
+    """Ground-truth check: did a step actually do what it claims?
 
-    Conservative v1 rule — fabricated iff ALL hold:
-      1. the result contains >=1 file write-claim, AND
-      2. the project_dir before/after diff is empty (no file created/modified), AND
-      3. none of the claimed paths exist anywhere checkable.
+    Two evidence-based, layered rules (all fail open on any internal error):
 
-    Fails open: any internal error returns fabricated=False.
+      1. missing-artifact — a file write-claim whose target landed nowhere
+         (empty workspace diff AND no claimed path on disk).
+      2. inert-output — a concrete stdout claim against a .py that is provably
+         inert (purely definitions; prints nothing when run). Catches the
+         "wrote the file, fabricated the output" shape that rule 1 misses.
     """
     try:
         claims = extract_write_claims(result_text)
-        if not claims:
-            return ArtifactVerdict(False, reason="no write-claims")
-
         changed = changed_since(before_snapshot, project_dir)
-        missing = [c for c in claims if not _exists_anywhere(c, project_dir)]
 
-        fabricated = len(changed) == 0 and len(missing) == len(claims)
-        if fabricated:
-            reason = (
-                f"step claimed to write {claims} but produced no files in the "
-                f"workspace and none exist on disk"
-            )
-        else:
-            reason = "write-claims have on-disk evidence"
+        # Layer 1: missing artifact (a named write-claim with no on-disk evidence).
+        if claims:
+            missing = [c for c in claims if not _exists_anywhere(c, project_dir)]
+            if len(changed) == 0 and len(missing) == len(claims):
+                return ArtifactVerdict(
+                    fabricated=True,
+                    claims=claims,
+                    missing=missing,
+                    changed_count=len(changed),
+                    reason=(
+                        f"step claimed to write {claims} but produced no files in "
+                        f"the workspace and none exist on disk"
+                    ),
+                    kind="missing-artifact",
+                )
+
+        # Layer 2: claimed output from a provably-inert artifact.
+        inert = _inert_output_verdict(result_text, project_dir, claims, changed)
+        if inert is not None:
+            return inert
+
         return ArtifactVerdict(
-            fabricated=fabricated,
+            fabricated=False,
             claims=claims,
-            missing=missing,
             changed_count=len(changed),
-            reason=reason,
+            reason="no fabrication signal",
         )
     except Exception:
         return ArtifactVerdict(False, reason="check error (fail-open)")

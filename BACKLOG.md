@@ -208,20 +208,43 @@ NOTE: this replaces the *caps*, not the token-explosion *leak* — justify it on
   (no claimed path exists on disk). Emits captain's-log `FABRICATION_DETECTED`.
   This is the AGENDA-loop sibling of handle.py's NOW-lane `_provenance_missing`.
   Enabled by the #1 cwd fix: writes are bounded to `project_dir`, so its diff is
-  reliable ground truth. Tests: `tests/test_artifact_check.py` (16 unit) +
-  2 full-loop integration tests in `tests/test_agent_loop.py`.
+  reliable ground truth.
   - Side fix: removed a leaked `fizzbuzz.py` test artifact accidentally committed
     to repo root in 7ea4d7b (the #1 cwd-fix commit); its basename collision in
     cwd actually surfaced the design flaw that `_exists_anywhere` must NOT consult
     `Path.cwd()` (orchestrator cwd = repo root, full of unrelated files).
 
-- [ ] **No-PATH fabrication (still parked).** The harder sibling: a result that
-  names no path at all ("ran the tests: 142 passed", writing nothing) leaves no
-  deterministic trace — `claude -p --output-format json` returns only final text,
-  no tool-call transcript (investigated 2026-06-24, ruled out). The v1 FS-diff
-  guard above does NOT catch this (no claimed path to check). Would still require
-  `--output-format stream-json` parsing or a fabrication-shape classifier on the
-  narrative. Out of proportion to the risk for now; revisit if it recurs.
+- [x] **Inert-output fabrication (shipped 2026-06-26, same module).** New layer
+  in `artifact_check.py`, still zero-LLM and NO code execution. The actual
+  organic repro: a step writes `fizzbuzz.py` (so the missing-artifact layer
+  passes — the file exists) then narrates *"verified output: 1,2,Fizz,4,Buzz"*,
+  but the file has no `__main__`/top-level code and prints nothing when run.
+  Caught by **static AST analysis**: if the result asserts concrete stdout (a
+  runtime verb like prints/output/"when run" — NOT a function `returns` claim —
+  AND concrete content like digits/quotes) while every produced `.py` is provably
+  inert (`_python_is_inert`: body is purely defs/imports/assigns/docstring), it
+  cannot have produced that output. `ArtifactVerdict.kind` distinguishes
+  `missing-artifact|inert-output`. Tests: `tests/test_artifact_check.py` +
+  3 full-loop integration tests in `tests/test_agent_loop.py` (missing /
+  inert-output / real-write).
+
+- **REJECTED: no-path-write layer.** Prototyped (write-ish words + empty diff +
+  no path named) and reverted same day: it is **absence-based, not
+  evidence-based** — an empty workspace diff does not prove fabrication
+  (analysis/planning steps and out-of-workspace writes legitimately leave it
+  empty). It false-positived on 4 real test completions in the full suite. A
+  verifier that hallucinates is its own failure mode; the guard now only fires on
+  positive evidence (a named-but-absent file, or an inert file vs a concrete
+  output claim).
+
+- [ ] **No-path *execution* fabrication (still parked).** The residual hole:
+  "ran the tests: 142 passed" naming no file and producing none — no artifact to
+  AST-check. The inert-output layer needs a produced `.py` to inspect; a claim of
+  test/run results with zero artifacts leaves no deterministic trace (`claude -p
+  --output-format json` gives only final text, no tool-call transcript; ruled out
+  2026-06-24). Would need `--output-format stream-json` parsing, or actually
+  *executing* the artifact to compare real vs claimed output (deliberately not
+  done — keeps the guard execution-free). Revisit if it recurs organically.
 
 ### ACTIVE DESIGN SPACE — Thread Architecture (2026-04-26 → 2026-04-27, Jeremy + Claude)
 

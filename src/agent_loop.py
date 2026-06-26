@@ -4306,24 +4306,25 @@ def _execute_main_loop(
 
         # Fabrication ground-truth check (done≠achieved). Runs before ralph verify
         # so a fabricated "done" is demoted to "blocked" and never reaches the
-        # text-only verifier (which can't see the filesystem). Conservative: only
-        # fires on a write-claim with an empty workspace diff AND no on-disk file.
+        # text-only verifier (which can't see the filesystem). Evidence-based, zero
+        # code execution: catches a write-claim with no artifact (missing-artifact)
+        # and a concrete-output claim against a provably-inert .py (inert-output).
         if _artifact_check_on and step_status == "done" and step_result:
             try:
                 from artifact_check import check_fabrication as _ac_check
                 _ac_verdict = _ac_check(step_result, _proj_artifact_dir, _artifact_snapshot)
                 if _ac_verdict.fabricated:
                     log.warning(
-                        "FABRICATION step=%d: %s", step_idx, _ac_verdict.reason
+                        "FABRICATION step=%d kind=%s: %s",
+                        step_idx, _ac_verdict.kind, _ac_verdict.reason,
                     )
                     step_status = "blocked"
                     outcome["status"] = "blocked"
-                    outcome["stuck_reason"] = f"artifact-fabrication: {_ac_verdict.reason}"
+                    outcome["stuck_reason"] = f"artifact-fabrication[{_ac_verdict.kind}]: {_ac_verdict.reason}"
                     step_result = (
-                        f"{step_result}\n\n[fabrication-guard] This step claimed to write "
-                        f"{_ac_verdict.claims} but no matching file was produced in the "
-                        f"workspace and none exist on disk. Marked blocked — re-run and "
-                        f"actually create the file(s) before reporting done."
+                        f"{step_result}\n\n[fabrication-guard] {_ac_verdict.reason}. "
+                        f"Marked blocked — re-run and actually produce the claimed "
+                        f"artifact/output before reporting done."
                     )
                     try:
                         from captains_log import log_event as _ac_log_event, FABRICATION_DETECTED
@@ -4333,6 +4334,7 @@ def _execute_main_loop(
                             summary=_ac_verdict.reason,
                             context={
                                 "step_text": step_text[:200],
+                                "kind": _ac_verdict.kind,
                                 "claims": _ac_verdict.claims,
                                 "missing": _ac_verdict.missing,
                                 "changed_count": _ac_verdict.changed_count,

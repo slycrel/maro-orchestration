@@ -1943,6 +1943,54 @@ def test_run_agent_loop_allows_real_write(monkeypatch, tmp_path):
     assert not any("fabrication-guard" in (s.result or "") for s in result.steps)
 
 
+def test_run_agent_loop_blocks_inert_output_claim(monkeypatch, tmp_path):
+    """A step that writes an inert .py but narrates concrete output is blocked.
+
+    The organic repro: fizzbuzz.py with no __main__ block (prints nothing) but a
+    result claiming "verified output: 1,2,Fizz,4,Buzz". The file exists, so the
+    missing-artifact layer passes; the inert-output layer catches it.
+    """
+    monkeypatch.setenv("MARO_ORCH_ROOT", str(tmp_path))
+    import agent_loop as al
+    monkeypatch.setattr(al, "_local_auto_ralph_enabled", lambda: False)
+
+    slug = al._goal_to_slug("build fizzbuzz with output")
+    proj_dir = tmp_path / "projects" / slug
+
+    class _InertAdapter:
+        model_key = "test"
+
+        def complete(self, messages, **kwargs):
+            from llm import LLMResponse, ToolCall
+            proj_dir.mkdir(parents=True, exist_ok=True)
+            # Definitions only — running this prints nothing.
+            (proj_dir / "fizzbuzz.py").write_text(
+                "def fizzbuzz(n):\n"
+                "    if n % 15 == 0:\n"
+                "        return 'FizzBuzz'\n"
+                "    return str(n)\n"
+            )
+            return LLMResponse(
+                content="",
+                tool_calls=[ToolCall(name="complete_step", arguments={
+                    "result": "Wrote fizzbuzz.py and verified output: 1,2,Fizz,4,Buzz,FizzBuzz.",
+                    "summary": "implemented and verified fizzbuzz",
+                })],
+                input_tokens=1, output_tokens=1,
+            )
+
+    result = al.run_agent_loop(
+        "build fizzbuzz with output",
+        adapter=_InertAdapter(),
+        preset_steps=["Write the FizzBuzz solution to fizzbuzz.py and verify its output"],
+        max_steps=1,
+        max_iterations=3,
+    )
+    blocked = [s for s in result.steps if s.status == "blocked"]
+    assert blocked, f"expected a blocked step, got {[s.status for s in result.steps]}"
+    assert any("fabrication-guard" in (s.result or "") for s in blocked)
+
+
 # ---------------------------------------------------------------------------
 # Plan manifest (run visibility)
 # ---------------------------------------------------------------------------
