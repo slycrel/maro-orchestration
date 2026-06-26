@@ -1668,7 +1668,7 @@ class TestDeduplicateLessons:
 
     def _lessons_path(self, tmp_path):
         """Return the lessons.jsonl path under the orch_items memory_dir for this workspace."""
-        return tmp_path / "prototypes" / "poe-orchestration" / "memory" / "lessons.jsonl"
+        return tmp_path / "prototypes" / "maro-orchestration" / "memory" / "lessons.jsonl"
 
     def _make_lesson(self, text, task_type="build", lesson_id=None):
         """Build a complete Lesson-compatible dict."""

@@ -96,7 +96,7 @@
 # Run daily at midnight UTC
 
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-OUTDIR="/home/clawd/claude/openclaw-orchestration/research/data/snapshots"
+OUTDIR="/home/clawd/claude/maro-orchestration/research/data/snapshots"
 
 # Fetch leaderboard
 curl -s "https://data-api.polymarket.com/v1/leaderboard?limit=500" \
@@ -311,8 +311,8 @@ curl -s "https://data-api.polymarket.com/v1/leaderboard?username=<handle>" \
 
 ## Files Generated
 
-- ✅ `/home/clawd/claude/openclaw-orchestration/research/PREDICTION_MARKETS_RESEARCH.md` — Full compendium
-- ✅ `/home/clawd/claude/openclaw-orchestration/research/QUICK_REFERENCE.md` — This file
+- ✅ `/home/clawd/claude/maro-orchestration/research/PREDICTION_MARKETS_RESEARCH.md` — Full compendium
+- ✅ `/home/clawd/claude/maro-orchestration/research/QUICK_REFERENCE.md` — This file
 
 **Next step:** Set up automated data collection pipeline using polymarket-cli.
 

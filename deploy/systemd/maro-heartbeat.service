@@ -1,7 +1,7 @@
 [Unit]
 Description=Maro Heartbeat — optional health monitor (manual runs do not require this service)
 # Update Documentation path if repo location changes
-Documentation=file:///home/clawd/claude/openclaw-orchestration/CLAUDE.md
+Documentation=file:///home/clawd/claude/maro-orchestration/CLAUDE.md
 After=network.target
 
 [Service]
@@ -12,7 +12,7 @@ User=clawd
 # This service intentionally runs heartbeat in health-only mode by default.
 # Pass --autonomy only in environments where always-on background execution
 # is explicitly desired.
-WorkingDirectory=/home/clawd/claude/openclaw-orchestration
+WorkingDirectory=/home/clawd/claude/maro-orchestration
 ExecStart=/usr/bin/python3 src/heartbeat.py --loop --interval 60
 Restart=on-failure
 RestartSec=30
@@ -23,7 +23,7 @@ RuntimeMaxSec=14400
 
 # Environment — PYTHONPATH must match WorkingDirectory
 # No MARO_MEMORY_DIR needed — defaults to ~/.maro/workspace/memory (same as config.py)
-Environment=PYTHONPATH=/home/clawd/claude/openclaw-orchestration/src
+Environment=PYTHONPATH=/home/clawd/claude/maro-orchestration/src
 
 # Logging
 StandardOutput=journal

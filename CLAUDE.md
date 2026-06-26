@@ -48,7 +48,7 @@ exploration.
 | Adaptive execution | `docs/ADAPTIVE_EXECUTION_DESIGN.md` |
 
 - GitHub: https://github.com/slycrel/maro
-- Machine: Ubuntu headless, user `clawd`, `/home/clawd/claude/openclaw-orchestration/`
+- Machine: Ubuntu headless, user `clawd`, `/home/clawd/claude/maro-orchestration/`
 - Owner: Jeremy Stone (`slycrel`) — 25+ years engineering, AI orchestration
 
 ---
@@ -152,7 +152,7 @@ Reference implementation: `~/.openclaw/workspace/prototypes/poe-orchestrator/` �
 
 | Path | What |
 |------|------|
-| `/home/clawd/claude/openclaw-orchestration/` | **This repo — mainline** |
+| `/home/clawd/claude/maro-orchestration/` | **This repo — mainline** |
 | `~/.openclaw/workspace/` | OpenClaw system (GPT/Codex-based). Has SOUL.md, TASKS.md, AGENTS.md, GOALS.md |
 | `~/.openclaw/workspace/prototypes/poe-orchestrator/` | Old prototype — reference only, do not continue work here |
 | `~/.openclaw/workspace/scripts/` | ~80 shell scripts: heartbeat, task queue, X/Telegram/email |
@@ -196,7 +196,7 @@ Priority: env var > config.yml > hardcoded default. Tests are isolated (config r
 
 ```bash
 # Tests — targeted (safe to run alongside TUI)
-cd /home/clawd/claude/openclaw-orchestration
+cd /home/clawd/claude/maro-orchestration
 python3 -m pytest tests/test_agent_loop.py -q
 
 # Tests — full suite (use this one — caps CPU to 2 cores + nice 15)
@@ -217,7 +217,7 @@ bash scripts/smoke.sh
 bash scripts/audit-phases.sh
 
 # Run a goal (defaults to ~/.maro/workspace/ — no env vars needed)
-cd /home/clawd/claude/openclaw-orchestration
+cd /home/clawd/claude/maro-orchestration
 PYTHONPATH=src python3 -m handle "your goal here"
 
 # Introspection (Phase 44)

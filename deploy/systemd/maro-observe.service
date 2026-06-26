@@ -1,12 +1,12 @@
 [Unit]
 Description=Maro Command Center — live dashboard + goal chat (port 80)
-Documentation=file:///home/clawd/claude/openclaw-orchestration/CLAUDE.md
+Documentation=file:///home/clawd/claude/maro-orchestration/CLAUDE.md
 After=network.target
 
 [Service]
 Type=simple
 User=clawd
-WorkingDirectory=/home/clawd/claude/openclaw-orchestration
+WorkingDirectory=/home/clawd/claude/maro-orchestration
 ExecStart=/usr/bin/python3 -m observe serve --port 80
 Restart=on-failure
 RestartSec=10
@@ -15,7 +15,7 @@ RestartSec=10
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 
-Environment=PYTHONPATH=/home/clawd/claude/openclaw-orchestration/src
+Environment=PYTHONPATH=/home/clawd/claude/maro-orchestration/src
 
 StandardOutput=journal
 StandardError=journal

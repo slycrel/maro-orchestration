@@ -82,7 +82,7 @@ def _orch():
 def _project_dir_root():
     """Canonical projects root — delegates to orch_items.projects_root().
 
-    Replaces the hardcoded `orch_root() / "prototypes" / "poe-orchestration" / "projects"`
+    Replaces the hardcoded `orch_root() / "prototypes" / "maro-orchestration" / "projects"`
     that previously caused output files to land in wrong directories.
     """
     from orch_items import projects_root

@@ -798,9 +798,9 @@ def _write_director_log(
             base = Path.cwd()
 
         if project:
-            log_dir = base / "prototypes" / "poe-orchestration" / "projects" / project / "artifacts"
+            log_dir = base / "prototypes" / "maro-orchestration" / "projects" / project / "artifacts"
         else:
-            log_dir = base / "prototypes" / "poe-orchestration" / "artifacts" / "director"
+            log_dir = base / "prototypes" / "maro-orchestration" / "artifacts" / "director"
         log_dir.mkdir(parents=True, exist_ok=True)
 
         fname = f"director-{director_id}-log.json"

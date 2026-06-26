@@ -29,7 +29,7 @@ def _make_lesson(tmp_path, lesson_text, score, tier=MemoryTier.MEDIUM, acquired_
     """Write a TieredLesson directly with the given score (bypasses normal 1.0 start).
 
     Path mirrors memory._tiered_lessons_path():
-      {MARO_WORKSPACE}/prototypes/poe-orchestration/memory/{tier}/lessons.jsonl
+      {MARO_WORKSPACE}/prototypes/maro-orchestration/memory/{tier}/lessons.jsonl
     """
     import json, uuid
     from dataclasses import asdict
@@ -46,8 +46,8 @@ def _make_lesson(tmp_path, lesson_text, score, tier=MemoryTier.MEDIUM, acquired_
         last_reinforced=date.today().isoformat(),  # today → no inline decay
         acquired_for=acquired_for,
     )
-    # orch_root() = MARO_WORKSPACE/prototypes/poe-orchestration
-    tier_file = tmp_path / "prototypes" / "poe-orchestration" / "memory" / tier / "lessons.jsonl"
+    # orch_root() = MARO_WORKSPACE/prototypes/maro-orchestration
+    tier_file = tmp_path / "prototypes" / "maro-orchestration" / "memory" / tier / "lessons.jsonl"
     tier_file.parent.mkdir(parents=True, exist_ok=True)
     with open(tier_file, "a") as f:
         f.write(json.dumps(asdict(tl)) + "\n")
@@ -237,7 +237,7 @@ def test_graveyard_lessons_resurrected_during_loop(monkeypatch, tmp_path):
     import sys, io
     monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
     # Write a graveyard lesson matching the goal topic
-    # Note: loop uses OPENCLAW_WORKSPACE → orch_root = tmp_path/prototypes/poe-orchestration
+    # Note: loop uses OPENCLAW_WORKSPACE → orch_root = tmp_path/prototypes/maro-orchestration
     _make_lesson(tmp_path, "kanji calligraphy stroke order is critical", score=0.3)
 
     from agent_loop import run_agent_loop

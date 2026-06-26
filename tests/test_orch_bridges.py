@@ -759,7 +759,7 @@ class TestSessionExecutionBridge:
         assert mock_killpg.call_args_list[0] == ((proc.pid, signal.SIGTERM), {})
         assert ((proc.pid, signal.SIGKILL), {}) in mock_killpg.call_args_list
 
-        artifact_root = tmp_path / "prototypes" / "poe-orchestration" / "output" / "runs" / run.run_id
+        artifact_root = tmp_path / "prototypes" / "maro-orchestration" / "output" / "runs" / run.run_id
         assert (artifact_root / "session-stdout.log").read_text(encoding="utf-8") == "partial stdout\nfinal stdout\n"
         assert (artifact_root / "session-stderr.log").read_text(encoding="utf-8") == "warn one\nfinal stderr\n"
         payload = json.loads((artifact_root / "session-result.json").read_text(encoding="utf-8"))

@@ -1,4 +1,4 @@
-"""Centralized configuration and path resolution for poe-orchestration.
+"""Centralized configuration and path resolution for maro-orchestration.
 
 Two-tier config (like git):
   ~/.maro/config.yml          — user-level (API keys, model prefs, notifications)

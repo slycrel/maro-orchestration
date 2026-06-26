@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Dedicated autonomous build-loop runner for poe-orchestration.
+"""Dedicated autonomous build-loop runner for maro-orchestration.
 
 This is the thing the cron should wake, instead of poking a generic reminder
 session and hoping it opportunistically does useful work.
@@ -382,7 +382,7 @@ def run_build_loop(
 
 
 def main(argv: Optional[list[str]] = None) -> int:
-    parser = argparse.ArgumentParser(description="Run the dedicated poe-orchestration build loop")
+    parser = argparse.ArgumentParser(description="Run the dedicated maro-orchestration build loop")
     parser.add_argument("--project")
     parser.add_argument("--worker", default="handle")
     parser.add_argument("--worker-session", default="handle")

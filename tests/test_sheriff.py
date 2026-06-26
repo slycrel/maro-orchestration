@@ -32,7 +32,7 @@ def _setup(monkeypatch, tmp_path):
 
 
 def _mkproj(tmp_path, slug, content="- [ ] first task\n- [ ] second task\n"):
-    p = tmp_path / "prototypes" / "poe-orchestration" / "projects" / slug
+    p = tmp_path / "prototypes" / "maro-orchestration" / "projects" / slug
     p.mkdir(parents=True)
     (p / "NEXT.md").write_text(content, encoding="utf-8")
     (p / "PRIORITY").write_text("0\n", encoding="utf-8")
@@ -78,7 +78,7 @@ def test_fingerprint_changes_when_next_changes(monkeypatch, tmp_path):
     fp1 = fingerprint_project_state("fp-test")
 
     # Modify NEXT.md
-    proj_dir = tmp_path / "prototypes" / "poe-orchestration" / "projects" / "fp-test"
+    proj_dir = tmp_path / "prototypes" / "maro-orchestration" / "projects" / "fp-test"
     (proj_dir / "NEXT.md").write_text("- [x] done\n- [ ] remaining\n", encoding="utf-8")
 
     fp2 = fingerprint_project_state("fp-test")

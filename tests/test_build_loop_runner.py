@@ -16,7 +16,7 @@ def test_run_build_loop_sets_poe_yolo_for_autonomous_worker(monkeypatch, tmp_pat
     monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
     monkeypatch.delenv("MARO_YOLO", raising=False)
 
-    repo = tmp_path / "prototypes" / "poe-orchestration"
+    repo = tmp_path / "prototypes" / "maro-orchestration"
     (repo / "output").mkdir(parents=True, exist_ok=True)
 
     next_item = SimpleNamespace(index=1, text="ambiguous task")
@@ -42,7 +42,7 @@ def test_run_build_loop_passes_bounded_session_timeout(monkeypatch, tmp_path):
     monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
     monkeypatch.setenv("MARO_BUILD_LOOP_SESSION_TIMEOUT_SECONDS", "12.5")
 
-    repo = tmp_path / "prototypes" / "poe-orchestration"
+    repo = tmp_path / "prototypes" / "maro-orchestration"
     (repo / "output").mkdir(parents=True, exist_ok=True)
 
     next_item = SimpleNamespace(index=1, text="potentially hanging task")
@@ -68,7 +68,7 @@ def test_run_build_loop_passes_bounded_session_timeout(monkeypatch, tmp_path):
 def test_run_build_loop_writes_running_status_before_work(monkeypatch, tmp_path):
     monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
 
-    repo = tmp_path / "prototypes" / "poe-orchestration"
+    repo = tmp_path / "prototypes" / "maro-orchestration"
     (repo / "output").mkdir(parents=True, exist_ok=True)
 
     next_item = SimpleNamespace(index=1, text="active task")
@@ -93,7 +93,7 @@ def test_run_build_loop_writes_running_status_before_work(monkeypatch, tmp_path)
 def test_run_build_loop_busy_preserves_existing_status(monkeypatch, tmp_path):
     monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
 
-    repo = tmp_path / "prototypes" / "poe-orchestration"
+    repo = tmp_path / "prototypes" / "maro-orchestration"
     output_dir = repo / "output"
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -133,7 +133,7 @@ def test_run_build_loop_busy_preserves_existing_status(monkeypatch, tmp_path):
 def test_run_build_loop_busy_when_worker_session_already_active(monkeypatch, tmp_path):
     monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
 
-    repo = tmp_path / "prototypes" / "poe-orchestration"
+    repo = tmp_path / "prototypes" / "maro-orchestration"
     (repo / "output").mkdir(parents=True, exist_ok=True)
 
     next_item = SimpleNamespace(index=1, text="queued task")
@@ -153,7 +153,7 @@ def test_run_build_loop_busy_when_worker_session_already_active(monkeypatch, tmp
 def test_run_build_loop_interrupt_cleans_up_running_items(monkeypatch, tmp_path):
     monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
 
-    repo = tmp_path / "prototypes" / "poe-orchestration"
+    repo = tmp_path / "prototypes" / "maro-orchestration"
     (repo / "output").mkdir(parents=True, exist_ok=True)
 
     next_item = SimpleNamespace(index=1, text="interruptible task")

@@ -7,7 +7,7 @@ from pathlib import Path
 
 
 def _mkproj(root: Path, slug: str, content: str, priority: int = 0) -> None:
-    project = root / "prototypes" / "poe-orchestration" / "projects" / slug
+    project = root / "prototypes" / "maro-orchestration" / "projects" / slug
     project.mkdir(parents=True, exist_ok=True)
     (project / "NEXT.md").write_text(content, encoding="utf-8")
     (project / "PRIORITY").write_text(f"{priority}\n", encoding="utf-8")
@@ -68,12 +68,12 @@ def test_build_loop_shell_wrapper_accepts_trailing_workspace_dir(tmp_path):
 
     workspace_root = tmp_path / "workspace"
     workspace_root.mkdir(parents=True, exist_ok=True)
-    project = workspace_root / "prototypes" / "poe-orchestration" / "projects" / "workspace-local-check"
+    project = workspace_root / "prototypes" / "maro-orchestration" / "projects" / "workspace-local-check"
     project.mkdir(parents=True, exist_ok=True)
     (project / "NEXT.md").write_text("- [ ] workspace local\n", encoding="utf-8")
     (project / "PRIORITY").write_text("99\n", encoding="utf-8")
 
-    workers = workspace_root / "prototypes" / "poe-orchestration" / "workers"
+    workers = workspace_root / "prototypes" / "maro-orchestration" / "workers"
     workers.mkdir(parents=True, exist_ok=True)
     worker = workers / "done.sh"
     worker.write_text(
@@ -104,6 +104,6 @@ def test_build_loop_shell_wrapper_accepts_trailing_workspace_dir(tmp_path):
         assert payload["status"] == "ok"
         assert payload["runs"] == 1
         assert payload["items"][0]["project"] == "workspace-local-check"
-        assert payload["orch_root"] == str(workspace_root / "prototypes" / "poe-orchestration")
+        assert payload["orch_root"] == str(workspace_root / "prototypes" / "maro-orchestration")
     finally:
         worker.unlink(missing_ok=True)

@@ -30,7 +30,7 @@ from gc_memory import (
 
 def _mem_dir(tmp_path) -> Path:
     """Return the memory dir that _memory_dir() will resolve to."""
-    mem = tmp_path / "prototypes" / "poe-orchestration" / "memory"
+    mem = tmp_path / "prototypes" / "maro-orchestration" / "memory"
     mem.mkdir(parents=True, exist_ok=True)
     return mem
 

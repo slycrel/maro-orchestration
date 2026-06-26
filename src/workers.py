@@ -147,7 +147,7 @@ def _load_persona(worker_type: str) -> str:
             import os
             ws = os.environ.get("OPENCLAW_WORKSPACE")
             if ws:
-                candidates.append(Path(ws) / "prototypes" / "poe-orchestration" / "personas" / fname)
+                candidates.append(Path(ws) / "prototypes" / "maro-orchestration" / "personas" / fname)
         except Exception:
             pass
 

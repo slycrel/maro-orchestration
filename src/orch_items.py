@@ -121,7 +121,7 @@ def ws_root() -> Path:
         if val:
             return Path(val).expanduser().resolve()
     # parents[3] is designed for the prototype layout:
-    #   <ws>/prototypes/poe-orchestration/src/orch_items.py
+    #   <ws>/prototypes/maro-orchestration/src/orch_items.py
     # Guard against shallow checkouts (container/CI) where parents[3] hits / or near-root.
     here = Path(__file__).resolve()
     try:
@@ -136,11 +136,11 @@ def ws_root() -> Path:
 
 
 def orch_root() -> Path:
-    """Resolve the poe-orchestration root directory.
+    """Resolve the maro-orchestration root directory.
 
     Resolution order:
       1. MARO_ORCH_ROOT env var — explicit override for containers / CI
-      2. Traditional prototype path (ws_root/prototypes/poe-orchestration) if it exists
+      2. Traditional prototype path (ws_root/prototypes/maro-orchestration) if it exists
       3. Mainline repo root (src/agent_loop.py present) — only when NO workspace
          env var is set (preserves test isolation when OPENCLAW_WORKSPACE is pinned)
       4. Traditional path regardless (original fallback)
@@ -149,7 +149,7 @@ def orch_root() -> Path:
     if override:
         return Path(override).expanduser().resolve()
 
-    traditional = ws_root() / "prototypes" / "poe-orchestration"
+    traditional = ws_root() / "prototypes" / "maro-orchestration"
     if traditional.exists():
         return traditional
 

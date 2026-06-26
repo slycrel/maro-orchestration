@@ -33,14 +33,14 @@ research/
 ### Step 1: Set Up Data Collection
 ```bash
 # Make collection script executable
-chmod +x /home/clawd/claude/openclaw-orchestration/research/data_collection_template.sh
+chmod +x /home/clawd/claude/maro-orchestration/research/data_collection_template.sh
 
 # Test run
-bash /home/clawd/claude/openclaw-orchestration/research/data_collection_template.sh
+bash /home/clawd/claude/maro-orchestration/research/data_collection_template.sh
 
 # Schedule daily collection (e.g., 00:30 UTC)
 crontab -e
-# Add: 30 0 * * * bash /home/clawd/claude/openclaw-orchestration/research/data_collection_template.sh
+# Add: 30 0 * * * bash /home/clawd/claude/maro-orchestration/research/data_collection_template.sh
 ```
 
 ### Step 2: Install Analysis Dependencies
@@ -53,7 +53,7 @@ pip install polymarket-cli
 
 ### Step 3: Run Phase 1 Analysis (Population Analysis)
 ```bash
-cd /home/clawd/claude/openclaw-orchestration/research
+cd /home/clawd/claude/maro-orchestration/research
 python3 << 'EOF'
 # See analysis_framework.md Phase 1 for detailed code
 # Expected output: cohort_distribution.csv
@@ -150,11 +150,11 @@ EOF
 **Setup:**
 ```bash
 # Test
-bash /home/clawd/claude/openclaw-orchestration/research/data_collection_template.sh
+bash /home/clawd/claude/maro-orchestration/research/data_collection_template.sh
 
 # Schedule
 crontab -e
-# 30 0 * * * bash /home/clawd/claude/openclaw-orchestration/research/data_collection_template.sh
+# 30 0 * * * bash /home/clawd/claude/maro-orchestration/research/data_collection_template.sh
 ```
 
 ---
@@ -330,7 +330,7 @@ crontab -e
 - **matplotlib/seaborn** — Visualization
 
 ### Version Control
-- Store analysis code in `/home/clawd/claude/openclaw-orchestration/research/`
+- Store analysis code in `/home/clawd/claude/maro-orchestration/research/`
 - Commit `analysis_framework.md`, `PREDICTION_MARKETS_RESEARCH.md` to git
 - Raw data snapshots in `.gitignore` (too large)
 - Analysis outputs (CSVs) tracked separately

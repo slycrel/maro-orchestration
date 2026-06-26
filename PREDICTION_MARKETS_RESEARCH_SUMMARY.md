@@ -2,7 +2,7 @@
 
 **Status:** COMPLETE
 **Date:** 2026-03-31
-**Location:** `/home/clawd/claude/openclaw-orchestration/research/`
+**Location:** `/home/clawd/claude/maro-orchestration/research/`
 
 ---
 
@@ -229,7 +229,7 @@ Based on Tetlock/GJP research + Polymarket baseline:
 
 ## Files Generated & Ready to Use
 
-All files are in `/home/clawd/claude/openclaw-orchestration/research/`:
+All files are in `/home/clawd/claude/maro-orchestration/research/`:
 
 ```
 research/
@@ -252,7 +252,7 @@ research/
 
 ### 1. Deploy Data Collection
 ```bash
-cd /home/clawd/claude/openclaw-orchestration/research
+cd /home/clawd/claude/maro-orchestration/research
 
 # Make executable
 chmod +x data_collection_template.sh
@@ -262,7 +262,7 @@ chmod +x data_collection_template.sh
 
 # Schedule (daily, 00:30 UTC)
 crontab -e
-# Add line: 30 0 * * * bash /home/clawd/claude/openclaw-orchestration/research/data_collection_template.sh
+# Add line: 30 0 * * * bash /home/clawd/claude/maro-orchestration/research/data_collection_template.sh
 ```
 
 ### 2. Install Analysis Tools
@@ -272,7 +272,7 @@ pip install pandas numpy scipy scikit-learn matplotlib seaborn polymarket-cli
 
 ### 3. Start Phase 1
 ```bash
-cd /home/clawd/claude/openclaw-orchestration/research
+cd /home/clawd/claude/maro-orchestration/research
 # Follow code in analysis_framework.md, Phase 1
 # Run: 01_cohort_distribution.py (code provided in analysis_framework.md)
 ```
@@ -353,5 +353,5 @@ Follow the 6-week roadmap above; output one CSV per analysis task. Share results
 **Next:** Deploy data collection pipeline (Week 1)
 **Estimated ROI:** 2-5% annual alpha with proper execution
 
-All source files are in `/home/clawd/claude/openclaw-orchestration/research/` — ready to fork and implement.
+All source files are in `/home/clawd/claude/maro-orchestration/research/` — ready to fork and implement.
 

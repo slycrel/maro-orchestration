@@ -51,7 +51,7 @@ def classify_market(title: str) -> str:
 
 
 def main():
-    workspace = Path('/home/clawd/claude/openclaw-orchestration/projects/find-10-highly-profitable-polymarket')
+    workspace = Path('/home/clawd/claude/maro-orchestration/projects/find-10-highly-profitable-polymarket')
     input_file = workspace / 'trades_raw.jsonl'
     output_file = workspace / 'categorized_trades.jsonl'
 

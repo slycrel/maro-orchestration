@@ -4,7 +4,7 @@ Key insight from Claude Code architecture: gate tools at prompt-composition time
 not at call time. A tool that never appears in the system prompt cannot be
 hallucinated by the model.
 
-Current poe-orchestration uses imperative lists (EXECUTE_TOOLS_WORKER/SHORT/INSPECTOR)
+Current maro-orchestration uses imperative lists (EXECUTE_TOOLS_WORKER/SHORT/INSPECTOR)
 selected at execution time. This module replaces that with:
 
   1. ToolDefinition  — declarative per-tool object (schema, roles, feature gate)

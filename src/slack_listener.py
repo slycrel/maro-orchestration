@@ -338,7 +338,7 @@ def listen_socket_mode(
     if not _SLACK_AVAILABLE:
         raise RuntimeError(
             "slack-sdk not installed. Run: pip install slack-sdk\n"
-            "Or: pip install 'poe-orchestration[slack]'"
+            "Or: pip install 'maro-orchestration[slack]'"
         )
 
     bot_token = _resolve_bot_token()

@@ -671,7 +671,7 @@ def test_run_mission_creates_feature_manifest(monkeypatch, tmp_path):
 
 def _missions_root(tmp_path: Path) -> Path:
     """Return the projects root that orch resolves under tmp_path."""
-    return tmp_path / "prototypes" / "poe-orchestration" / "projects"
+    return tmp_path / "prototypes" / "maro-orchestration" / "projects"
 
 
 def _write_mission_json(project_name: str, tmp_path: Path, goal: str, status: str, milestones: list) -> None:

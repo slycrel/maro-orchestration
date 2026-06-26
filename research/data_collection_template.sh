@@ -7,7 +7,7 @@
 set -e
 
 # Configuration
-RESEARCH_DIR="/home/clawd/claude/openclaw-orchestration/research"
+RESEARCH_DIR="/home/clawd/claude/maro-orchestration/research"
 DATA_DIR="$RESEARCH_DIR/data"
 SNAPSHOTS_DIR="$DATA_DIR/snapshots"
 ARCHIVE_DIR="$DATA_DIR/archive"
@@ -208,17 +208,17 @@ exit 0
 #    (or ensure curl is available)
 #
 # 2. Test run:
-#    bash /home/clawd/claude/openclaw-orchestration/research/data_collection_template.sh
+#    bash /home/clawd/claude/maro-orchestration/research/data_collection_template.sh
 #
 # 3. Set up cron job (e.g., daily at 00:30 UTC):
-#    30 0 * * * bash /home/clawd/claude/openclaw-orchestration/research/data_collection_template.sh
+#    30 0 * * * bash /home/clawd/claude/maro-orchestration/research/data_collection_template.sh
 #
 # 4. Monitor logs:
-#    tail -f /home/clawd/claude/openclaw-orchestration/research/data/logs/collection_*.log
+#    tail -f /home/clawd/claude/maro-orchestration/research/data/logs/collection_*.log
 #
 # 5. Query accumulated data:
 #    jq '.leaderboard[] | select(.rank <= 10)' \
-#      /home/clawd/claude/openclaw-orchestration/research/data/snapshots/leaderboard_*.json
+#      /home/clawd/claude/maro-orchestration/research/data/snapshots/leaderboard_*.json
 #
 # ============================================================================
 

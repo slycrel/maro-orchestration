@@ -8,7 +8,7 @@ import pytest
 
 
 def _mkproj(tmp_path: Path, slug: str, content: str, priority: int = 0):
-    p = tmp_path / "prototypes" / "poe-orchestration" / "projects" / slug
+    p = tmp_path / "prototypes" / "maro-orchestration" / "projects" / slug
     p.mkdir(parents=True)
     (p / "NEXT.md").write_text(content, encoding="utf-8")
     (p / "PRIORITY").write_text(f"{priority}\n", encoding="utf-8")
@@ -292,7 +292,7 @@ def test_worker_session_bridge_by_name(monkeypatch, tmp_path):
     monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
     _mkproj(tmp_path, "demo", "- [ ] first\n", priority=3)
 
-    workers = tmp_path / "prototypes" / "poe-orchestration" / "workers"
+    workers = tmp_path / "prototypes" / "maro-orchestration" / "workers"
     workers.mkdir(parents=True)
     script = workers / "handle.sh"
     script.write_text(
@@ -319,7 +319,7 @@ def test_worker_session_bridge_from_manifest_json(monkeypatch, tmp_path):
     monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
     _mkproj(tmp_path, "demo", "- [ ] first\n", priority=3)
 
-    workers = tmp_path / "prototypes" / "poe-orchestration" / "workers"
+    workers = tmp_path / "prototypes" / "maro-orchestration" / "workers"
     workers.mkdir(parents=True)
     manifest = workers / "researcher.json"
     manifest.write_text(
@@ -344,7 +344,7 @@ def test_worker_session_bridge_from_manifest_json(monkeypatch, tmp_path):
     assert tick is not None
     assert tick.validation.status == "done"
     assert tick.run.status == "done"
-    artifact_root = tmp_path / "prototypes" / "poe-orchestration" / tick.run.artifact_path
+    artifact_root = tmp_path / "prototypes" / "maro-orchestration" / tick.run.artifact_path
     assert (artifact_root / "researcher-result.json").exists()
     assert not (artifact_root / "worker-result.json").exists()
 
@@ -353,7 +353,7 @@ def test_worker_session_bridge_manifest_command_list(monkeypatch, tmp_path):
     monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
     _mkproj(tmp_path, "demo", "- [ ] first\n", priority=3)
 
-    workers = tmp_path / "prototypes" / "poe-orchestration" / "workers"
+    workers = tmp_path / "prototypes" / "maro-orchestration" / "workers"
     workers.mkdir(parents=True)
     manifest = workers / "list.json"
     manifest.write_text(
@@ -374,7 +374,7 @@ def test_worker_session_bridge_manifest_command_list(monkeypatch, tmp_path):
     assert tick is not None
     assert tick.validation.status == "done"
     assert tick.run.status == "done"
-    artifact_root = tmp_path / "prototypes" / "poe-orchestration" / tick.run.artifact_path
+    artifact_root = tmp_path / "prototypes" / "maro-orchestration" / tick.run.artifact_path
     assert (artifact_root / "cmd.txt").read_text(encoding="utf-8") == "first"
 
 
@@ -382,7 +382,7 @@ def test_worker_session_manifest_timeout_applies_without_cli_override(monkeypatc
     monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
     _mkproj(tmp_path, "demo", "- [ ] first\n", priority=3)
 
-    workers = tmp_path / "prototypes" / "poe-orchestration" / "workers"
+    workers = tmp_path / "prototypes" / "maro-orchestration" / "workers"
     workers.mkdir(parents=True)
     manifest = workers / "slow.json"
     manifest.write_text(
@@ -432,7 +432,7 @@ def test_session_execution_bridge_timeout_kills_lingering_child_processes(monkey
 
     assert tick is not None
     assert tick.validation.status == "blocked"
-    artifact_root = tmp_path / "prototypes" / "poe-orchestration" / tick.run.artifact_path
+    artifact_root = tmp_path / "prototypes" / "maro-orchestration" / tick.run.artifact_path
     child_pid = int((artifact_root / "child.pid").read_text(encoding="utf-8").strip())
 
     deadline = time.time() + 2.0
@@ -450,7 +450,7 @@ def test_worker_session_bridge_manifest_supports_nested_artifacts_and_env(monkey
     monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
     _mkproj(tmp_path, "demo", "- [ ] first\n", priority=3)
 
-    workers = tmp_path / "prototypes" / "poe-orchestration" / "workers"
+    workers = tmp_path / "prototypes" / "maro-orchestration" / "workers"
     workers.mkdir(parents=True)
     manifest = workers / "nested.json"
     manifest.write_text(
@@ -479,7 +479,7 @@ def test_worker_session_bridge_manifest_supports_nested_artifacts_and_env(monkey
     assert tick.validation.status == "done"
     assert tick.run.status == "done"
     assert tick.run.note and "token:abc123" in tick.run.note
-    artifact_root = tmp_path / "prototypes" / "poe-orchestration" / tick.run.artifact_path
+    artifact_root = tmp_path / "prototypes" / "maro-orchestration" / tick.run.artifact_path
     assert (artifact_root / "nested" / "payload.json").exists()
     assert (artifact_root / "nested" / "result.json").exists()
 
@@ -488,7 +488,7 @@ def test_worker_session_bridge_supports_working_directory(monkeypatch, tmp_path)
     monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
     _mkproj(tmp_path, "demo", "- [ ] first\n", priority=3)
 
-    workers = tmp_path / "prototypes" / "poe-orchestration" / "workers"
+    workers = tmp_path / "prototypes" / "maro-orchestration" / "workers"
     worker_dir = workers / "worker-dir"
     worker_dir.mkdir(parents=True, exist_ok=True)
     manifest = worker_dir / "runner.json"
@@ -511,7 +511,7 @@ def test_worker_session_bridge_supports_working_directory(monkeypatch, tmp_path)
     assert tick is not None
     assert tick.validation.status == "done"
     assert tick.run.status == "done"
-    artifact_root = tmp_path / "prototypes" / "poe-orchestration" / tick.run.artifact_path
+    artifact_root = tmp_path / "prototypes" / "maro-orchestration" / tick.run.artifact_path
     expected = str(worker_dir)
     assert (artifact_root / "working_directory.txt").read_text(encoding="utf-8") == expected
 
@@ -520,7 +520,7 @@ def test_worker_session_bridge_defaults_cwd_to_manifest_directory(monkeypatch, t
     monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
     _mkproj(tmp_path, "demo", "- [ ] first\n", priority=3)
 
-    workers = tmp_path / "prototypes" / "poe-orchestration" / "workers"
+    workers = tmp_path / "prototypes" / "maro-orchestration" / "workers"
     worker_dir = workers / "relative-worker"
     worker_dir.mkdir(parents=True, exist_ok=True)
     helper = worker_dir / "write-note.sh"
@@ -538,7 +538,7 @@ def test_worker_session_bridge_defaults_cwd_to_manifest_directory(monkeypatch, t
     assert tick is not None
     assert tick.validation.status == "done"
     assert tick.run.status == "done"
-    artifact_root = tmp_path / "prototypes" / "poe-orchestration" / tick.run.artifact_path
+    artifact_root = tmp_path / "prototypes" / "maro-orchestration" / tick.run.artifact_path
     assert (artifact_root / "from-relative-command.txt").read_text(encoding="utf-8") == "manifest-cwd"
 
 
@@ -546,7 +546,7 @@ def test_worker_session_bridge_resolves_relative_working_directory_from_manifest
     monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
     _mkproj(tmp_path, "demo", "- [ ] first\n", priority=3)
 
-    workers = tmp_path / "prototypes" / "poe-orchestration" / "workers"
+    workers = tmp_path / "prototypes" / "maro-orchestration" / "workers"
     worker_dir = workers / "rel-workdir"
     workdir = worker_dir / "workspace"
     workdir.mkdir(parents=True, exist_ok=True)
@@ -570,7 +570,7 @@ def test_worker_session_bridge_resolves_relative_working_directory_from_manifest
     assert tick is not None
     assert tick.validation.status == "done"
     assert tick.run.status == "done"
-    artifact_root = tmp_path / "prototypes" / "poe-orchestration" / tick.run.artifact_path
+    artifact_root = tmp_path / "prototypes" / "maro-orchestration" / tick.run.artifact_path
     assert (artifact_root / "resolved-cwd.txt").read_text(encoding="utf-8").strip() == str(workdir)
 
 
@@ -761,12 +761,12 @@ def test_x_capture_salvage_bridge_writes_evidence(monkeypatch, tmp_path):
     assert tick is not None
     assert tick.validation.status == "retry"
     assert tick.run.status == "running"
-    artifact_root = tmp_path / "prototypes" / "poe-orchestration" / tick.run.artifact_path
+    artifact_root = tmp_path / "prototypes" / "maro-orchestration" / tick.run.artifact_path
     salvage = artifact_root / "x-capture-salvage.json"
     assert salvage.exists()
     payload = json.loads(salvage.read_text(encoding="utf-8"))
     assert payload["matches"]
-    salvage_index = tmp_path / "prototypes" / "poe-orchestration" / "output" / "x-capture" / "salvage-index.jsonl"
+    salvage_index = tmp_path / "prototypes" / "maro-orchestration" / "output" / "x-capture" / "salvage-index.jsonl"
     assert salvage_index.exists()
     records = [json.loads(line) for line in salvage_index.read_text(encoding="utf-8").splitlines() if line.strip()]
     assert any(record["run_id"] == tick.run.run_id for record in records)
@@ -875,7 +875,7 @@ def test_command_execution_bridge_success(monkeypatch, tmp_path):
     assert tick is not None
     assert tick.validation.status == "done"
     assert tick.run.status == "done"
-    artifact_dir = tmp_path / "prototypes" / "poe-orchestration" / tick.run.artifact_path
+    artifact_dir = tmp_path / "prototypes" / "maro-orchestration" / tick.run.artifact_path
     assert (artifact_dir / "result.txt").read_text(encoding="utf-8") == "first"
     assert (artifact_dir / "stdout.log").exists()
     assert (artifact_dir / "stderr.log").exists()
@@ -883,7 +883,7 @@ def test_command_execution_bridge_success(monkeypatch, tmp_path):
     assert summary.exists()
     assert '"status": "done"' in summary.read_text(encoding="utf-8")
 
-    prov = tmp_path / "prototypes" / "poe-orchestration" / "projects" / "demo" / "PROVENANCE.md"
+    prov = tmp_path / "prototypes" / "maro-orchestration" / "projects" / "demo" / "PROVENANCE.md"
     assert "validation-summary.json" in prov.read_text(encoding="utf-8")
 
 
@@ -1005,7 +1005,7 @@ def test_review_command_validation_bridge_passes(monkeypatch, tmp_path):
     assert tick is not None
     assert tick.validation.status == "done"
     assert tick.run.status == "done"
-    review_dir = tmp_path / "prototypes" / "poe-orchestration" / tick.run.artifact_path / "review"
+    review_dir = tmp_path / "prototypes" / "maro-orchestration" / tick.run.artifact_path / "review"
     assert (review_dir / "verdict.txt").read_text(encoding="utf-8") == "reviewed"
 
 
@@ -1105,7 +1105,7 @@ def test_write_operator_status_skips_missing_next_md(monkeypatch, tmp_path):
     # Create a well-formed project
     _mkproj(tmp_path, "good-project", "- [ ] step one\n", priority=1)
     # Create a project directory WITHOUT NEXT.md (simulates partial init / crashed run)
-    broken_dir = tmp_path / "prototypes" / "poe-orchestration" / "projects" / "broken-project"
+    broken_dir = tmp_path / "prototypes" / "maro-orchestration" / "projects" / "broken-project"
     broken_dir.mkdir(parents=True)
     # No NEXT.md written — this is the broken state
 
@@ -1120,7 +1120,7 @@ def test_worker_session_bridge_supports_cwd_alias(monkeypatch, tmp_path):
     monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
     _mkproj(tmp_path, "demo", "- [ ] first\n", priority=3)
 
-    workers = tmp_path / "prototypes" / "poe-orchestration" / "workers"
+    workers = tmp_path / "prototypes" / "maro-orchestration" / "workers"
     worker_dir = workers / "worker-dir"
     worker_dir.mkdir(parents=True, exist_ok=True)
     manifest = workers / "runner-cwd.json"
@@ -1141,6 +1141,6 @@ def test_worker_session_bridge_supports_cwd_alias(monkeypatch, tmp_path):
     assert tick is not None
     assert tick.validation.status == "done"
     assert tick.run.status == "done"
-    artifact_root = tmp_path / "prototypes" / "poe-orchestration" / tick.run.artifact_path
+    artifact_root = tmp_path / "prototypes" / "maro-orchestration" / tick.run.artifact_path
     expected = str(worker_dir)
     assert (artifact_root / "cwd.txt").read_text(encoding="utf-8") == expected

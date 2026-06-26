@@ -549,7 +549,7 @@ def test_record_persona_outcome_writes_to_file(monkeypatch, tmp_path):
         loop_id="abc123",
     )
     assert ok is True
-    out_path = tmp_path / "prototypes" / "poe-orchestration" / "memory" / "persona-outcomes.jsonl"
+    out_path = tmp_path / "prototypes" / "maro-orchestration" / "memory" / "persona-outcomes.jsonl"
     assert out_path.exists()
     entry = json.loads(out_path.read_text().strip())
     assert entry["persona"] == "researcher"
@@ -564,7 +564,7 @@ def test_record_persona_outcome_goal_truncated(monkeypatch, tmp_path):
     monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
     long_goal = "x" * 200
     record_persona_outcome("builder", long_goal, "done")
-    out_path = tmp_path / "prototypes" / "poe-orchestration" / "memory" / "persona-outcomes.jsonl"
+    out_path = tmp_path / "prototypes" / "maro-orchestration" / "memory" / "persona-outcomes.jsonl"
     entry = json.loads(out_path.read_text().strip())
     assert len(entry["goal"]) <= 120
 
