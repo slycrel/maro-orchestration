@@ -777,10 +777,17 @@ def handle(
             if _hid:
                 _slice_log(_hid)
                 _snapshot_repo(_hid)
-                _finalize_run(
-                    _hid,
-                    status=result.status if result is not None else "error",
-                )
+                _status = result.status if result is not None else "error"
+                _finalize_run(_hid, status=_status)
+                # Post-goal curation: classify the now-finalized run and park
+                # the paid-for capture for later mining (skills/scripts/decision
+                # priors/re-attempts). Reads the metadata finalize just wrote, so
+                # it runs AFTER _finalize_run. Best-effort, never affects outcome.
+                try:
+                    from run_curation import curate_run as _curate_run
+                    _curate_run(_hid, status=_status)
+                except Exception:
+                    pass
         except Exception:
             pass  # finalize must never affect the request outcome
         if not dry_run:

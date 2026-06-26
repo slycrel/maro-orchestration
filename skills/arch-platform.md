@@ -38,6 +38,14 @@ Retry: Automatic exponential backoff (5s, 15s, 45s) on rate limits, 5xx, connect
 - NOW lane leaves it unset (None) → inherits Maro's launch cwd, which is correct for an interactive ask.
 - *Why it exists:* the executor always bound cwd, but the non-executor agentic paths (verify/quality_gate/pre_flight/refinement/claim_probe) used to inherit the launch cwd — a verifier that couldn't find a cited artifact would re-create it there, leaking files AND fabricating ground truth. See BACKLOG #1.
 
+**Record-mode (forward LLM capture).** `FailoverAdapter.complete()` is the single capture seam: on every successful call it records `{prompt, response, tool_events, tokens}` to `<run-dir>/build/calls/call-NNNNN.json` via `runs.record_llm_call`. This is the keystone for visibility ladder rungs 5–6 (ROADMAP) — the replay tier.
+- **Default ON.** Off via `MARO_RECORD=0`/`false`/`off` or config `record.enabled: false` (`runs.recording_enabled`; env wins over config). No-op when off or when there's no current run-dir; never raises (swallows all errors — capture must not affect the request outcome).
+- Seq counter is per-run-dir and process-global (`runs._CALL_COUNTERS`, lock-guarded). Tests clear it.
+- Secret-scrubbed through `src/secret_scrub.py` — the **single source** for what counts as a secret, shared with `scripts/harvest_corpus.py` so the runtime recorder and the committed-fixture path can never diverge.
+- *Import direction:* `runs` does not import `llm`; `llm` lazily imports `runs.record_llm_call` inside `complete()`. Keep it that way.
+
+**Post-goal curation (run_curation.py).** Hooked in handle.py's finalize `finally` (after `_finalize_run`, so it reads the just-written status). `curate_run(handle_id, status)` writes `<run-dir>/run_card.json`: outcome class (`success`/`done-not-achieved`/`done-unverified`/`partial`/`failed` — done≠achieved aware via `goal_achieved` metadata) + mineable inventory (calls, scripts, artifacts, steps). It's a **miner registry** (`CURATORS` — ordered pure `(rd, meta, card)->None` fns); v0 ships classify + inventory, future miners (skill/script scrapers, decision-prior indexer, re-attempt hinter, partial rescue) append without touching the hook. User-visible/prunable: `python3 -m run_curation list|show|curate|prune`. Best-effort, never affects request outcome. *Intent:* don't discard paid-for runs — park them for later mining and keep them visible/prunable to the user.
+
 ## Config System (config.py)
 
 Two-tier YAML mirroring git's ~/.gitconfig:
@@ -128,4 +136,7 @@ Per-model, per-step-type cost tracking to `memory/step-costs.jsonl`:
 | src/task_store.py | ~425 | File-per-task queue, DAG deps |
 | src/metrics.py | ~615 | Cost tracking, step classification |
 | src/observe.py | ~1690 | Observe dashboard (runtime visibility) |
+| src/runs.py | ~700 | Run-dir lifecycle, metadata, record-mode capture (record_llm_call) |
+| src/run_curation.py | ~240 | Post-goal curation: classify + inventory → run_card.json; miner registry; list/prune CLI |
+| src/secret_scrub.py | ~40 | Single-source secret scrubber (recorder + harvester share it) |
 | scripts/heartbeat-ctl.sh | | Lifecycle management (start/stop/status) |
