@@ -248,18 +248,25 @@ NOTE: this replaces the *caps*, not the token-explosion *leak* — justify it on
   positive evidence (a named-but-absent file, or an inert file vs a concrete
   output claim).
 
-- [~] **No-path *execution* fabrication — capture prerequisite SHIPPED, verifier
-  pending.** The residual hole: "ran the tests: 142 passed" naming no file and
-  producing none — no artifact to AST-check. The blocker was that `--output-format
-  json` gave only final text, no tool-call transcript (ruled out 2026-06-24).
-  **That blocker is now gone (item #3 above):** the adapter streams the inner
-  agent's real tool calls onto `resp.tool_events`, persisted per-step. The
-  remaining piece is the verifier that *consumes* them — given a result claiming
-  "ran X / N passed", check whether a `Bash` tool actually ran and its
-  `tool_result` corroborates (positive-evidence: a complete tool-call record
-  showing the agent never invoked Bash while claiming run results is real
-  evidence of fabrication, not an absence heuristic). Stays execution-free (reads
-  the transcript, doesn't re-run). Next chunk in the anti-hallucination thread.
+- [x] **No-path *execution* fabrication — v1 SHIPPED 2026-06-26
+  (`check_execution_claim`).** The residual hole: "ran the tests: 142 passed"
+  naming no file and producing none. Unblocked by item #3 (real tool transcript
+  on `resp.tool_events` / `outcome["tool_events"]`). v1 ships ONLY the
+  unimpeachable positive-evidence contradiction: the step claims the run
+  SUCCEEDED, yet every command it actually ran FAILED (non-zero exit / is_error)
+  and the result never acknowledges a failure. Wired into the agent_loop
+  fabrication guard as a fallback after the FS/AST layers (kind
+  `execution-contradiction`); blocks the step the same way. Execution-free
+  (reads the transcript, never re-runs).
+- [ ] **Remaining exec-fabrication shapes (deliberately deferred — false-positive
+  risk).** Two cases the v1 contradiction check intentionally does NOT flag,
+  because each can fire on legitimate runs (same lesson that killed the
+  no-path-write layer): (a) **"claims execution but ran nothing"** — the per-step
+  transcript can't see a prior step's legitimate run, so absence ≠ proof; (b)
+  **partial** — some commands succeeded and a later/key one failed; telling the
+  test command from setup needs intent modeling, and fix-then-succeed is
+  legitimate. Revisit only with a sharper signal (e.g. matching the claimed test
+  count against the real `tool_result`), not a looser gate.
 
 ### ACTIVE DESIGN SPACE — Thread Architecture (2026-04-26 → 2026-04-27, Jeremy + Claude)
 

@@ -1991,6 +1991,76 @@ def test_run_agent_loop_blocks_inert_output_claim(monkeypatch, tmp_path):
     assert any("fabrication-guard" in (s.result or "") for s in blocked)
 
 
+def test_run_agent_loop_blocks_execution_contradiction(monkeypatch, tmp_path):
+    """A step that claims success while the only command it ran failed (real
+    tool transcript, is_error) is demoted to blocked."""
+    monkeypatch.setenv("MARO_ORCH_ROOT", str(tmp_path))
+    import agent_loop as al
+    monkeypatch.setattr(al, "_local_auto_ralph_enabled", lambda: False)
+
+    class _ContradictAdapter:
+        model_key = "test"
+
+        def complete(self, messages, **kwargs):
+            from llm import LLMResponse, ToolCall
+            return LLMResponse(
+                content="",
+                tool_calls=[ToolCall(name="complete_step", arguments={
+                    "result": "Ran the test suite — all 142 tests passed cleanly.",
+                    "summary": "ran tests",
+                })],
+                # The real transcript: the only command run exited non-zero.
+                tool_events=[{"name": "Bash", "input": {"command": "pytest -q"},
+                              "output": "ImportError: no module named app", "is_error": True}],
+                input_tokens=1, output_tokens=1,
+            )
+
+    result = al.run_agent_loop(
+        "run the project tests",
+        adapter=_ContradictAdapter(),
+        preset_steps=["Run the full test suite and report results"],
+        max_steps=1,
+        max_iterations=3,
+    )
+    blocked = [s for s in result.steps if s.status == "blocked"]
+    assert blocked, f"expected a blocked step, got {[s.status for s in result.steps]}"
+    assert any("fabrication-guard" in (s.result or "") for s in blocked)
+
+
+def test_run_agent_loop_allows_real_passing_run(monkeypatch, tmp_path):
+    """A success claim backed by a real passing command is NOT flagged."""
+    monkeypatch.setenv("MARO_ORCH_ROOT", str(tmp_path))
+    import agent_loop as al
+    monkeypatch.setattr(al, "_local_auto_ralph_enabled", lambda: False)
+
+    class _RealRunAdapter:
+        model_key = "test"
+
+        def complete(self, messages, **kwargs):
+            from llm import LLMResponse, ToolCall
+            return LLMResponse(
+                content="",
+                tool_calls=[ToolCall(name="complete_step", arguments={
+                    "result": "Ran the test suite — all 142 tests passed.",
+                    "summary": "ran tests",
+                })],
+                tool_events=[{"name": "Bash", "input": {"command": "pytest -q"},
+                              "output": "142 passed in 3.1s", "is_error": False}],
+                input_tokens=1, output_tokens=1,
+            )
+
+    result = al.run_agent_loop(
+        "run the project tests for real",
+        adapter=_RealRunAdapter(),
+        preset_steps=["Run the full test suite and report results"],
+        max_steps=1,
+        max_iterations=3,
+    )
+    assert not any(
+        "fabrication-guard" in (s.result or "") for s in result.steps
+    ), "real passing run must not be flagged"
+
+
 # ---------------------------------------------------------------------------
 # Plan manifest (run visibility)
 # ---------------------------------------------------------------------------

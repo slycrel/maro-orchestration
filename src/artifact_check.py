@@ -103,7 +103,7 @@ class ArtifactVerdict:
     missing: List[str] = field(default_factory=list)     # claims with no on-disk evidence
     changed_count: int = 0                               # files created/modified in project_dir
     reason: str = ""
-    kind: str = ""  # "" | "missing-artifact" | "inert-output"
+    kind: str = ""  # "" | "missing-artifact" | "inert-output" | "execution-contradiction"
 
 
 def _clean_token(tok: str) -> str:
@@ -365,3 +365,94 @@ def check_fabrication(
         )
     except Exception:
         return ArtifactVerdict(False, reason="check error (fail-open)")
+
+
+# ---------------------------------------------------------------------------
+# Execution-claim check (done≠achieved, exec variant) — consumes the inner
+# agent's REAL tool transcript (resp.tool_events / outcome["tool_events"]).
+# ---------------------------------------------------------------------------
+#
+# The executor's inner `claude -p` actually runs commands via its Bash tool; with
+# stream-json the adapter now records those calls and their real exit status.
+# That is ground truth for "ran the tests: 142 passed" claims, which the FS-diff
+# and AST layers can't reach (no produced .py to inspect).
+
+# Tools whose tool_result reflects a real command execution + exit status.
+_EXECUTION_TOOLS = frozenset({"Bash"})
+
+# The result asserts the run SUCCEEDED.
+_SUCCESS_CLAIM_RE = re.compile(
+    r"\b(?:all\s+)?(?:tests?\s+)?pass(?:ed|es|ing)?\b|"
+    r"succe(?:ss|ssful(?:ly)?|eded)\b|\bworks?\b|"
+    r"no\s+errors?\b|no\s+failures?\b|\b0\s+fail\w*|"
+    r"exit(?:\s+code)?\s+0\b|completed\s+successfully\b|"
+    r"built?\s+(?:cleanly|successfully)\b|✓|✅",
+    re.IGNORECASE,
+)
+
+# The result itself ACKNOWLEDGES a problem — then it is not claiming clean
+# success and we must not flag (the agent is being honest about a failed/partial
+# run). This is the guard that keeps the check positive-evidence-only.
+_FAILURE_ACK_RE = re.compile(
+    r"\b(?:fail(?:ed|s|ing|ure)?|error(?:ed|s)?|traceback|exception|"
+    r"did\s+not|didn'?t|could\s*n'?t|unable|broke(?:n)?|crash\w*|"
+    r"non[- ]zero|exit\s+(?:code\s+)?[1-9])\b",
+    re.IGNORECASE,
+)
+
+
+def _tool_failed(te: dict) -> bool:
+    """A tool call is a failed execution iff the CLI flagged is_error (the Bash
+    tool sets this on non-zero exit). We rely on is_error, NOT a text scan of the
+    output — legitimate output like "0 failed" or a test summary mentioning
+    "failures: 0" would false-positive a marker scan."""
+    return bool(te.get("is_error"))
+
+
+def _claims_clean_success(text: str) -> bool:
+    return bool(_SUCCESS_CLAIM_RE.search(text) and not _FAILURE_ACK_RE.search(text))
+
+
+def check_execution_claim(result_text: str, tool_events: Optional[List[dict]]) -> ArtifactVerdict:
+    """Ground-truth check for execution claims, from the real tool transcript.
+
+    POSITIVE-EVIDENCE only — the single unambiguous contradiction: the step
+    claims the run SUCCEEDED, yet every command it actually ran FAILED (non-zero
+    exit, is_error), and the result never acknowledges a failure. We hold the
+    real exit status, so this is a flat contradiction with ground truth, not an
+    absence heuristic.
+
+    Deliberately NOT flagged (too false-positive-prone — mirrors the rejected
+    no-path-write layer):
+      - "claims execution but ran nothing" — the per-step transcript can't see a
+        prior step's legitimate run, so absence here is not proof.
+      - partial (some commands succeeded, a later one failed) — telling the test
+        command from setup needs intent modeling; a fix-then-succeed flow is
+        legitimate and would false-positive.
+
+    Fails open on any internal error.
+    """
+    try:
+        if not tool_events:
+            return ArtifactVerdict(False, reason="no tool transcript")
+        exec_events = [te for te in tool_events
+                       if isinstance(te, dict) and te.get("name") in _EXECUTION_TOOLS]
+        if not exec_events:
+            return ArtifactVerdict(False, reason="no execution in transcript")
+        failed = [te for te in exec_events if _tool_failed(te)]
+        succeeded = [te for te in exec_events if not _tool_failed(te)]
+        if failed and not succeeded and _claims_clean_success(result_text):
+            cmds = [str((te.get("input") or {}).get("command", te.get("name", "?")))[:80]
+                    for te in failed]
+            return ArtifactVerdict(
+                fabricated=True,
+                changed_count=len(exec_events),
+                reason=(
+                    f"step claimed success but all {len(failed)} command(s) it ran "
+                    f"failed (non-zero exit): {cmds}"
+                ),
+                kind="execution-contradiction",
+            )
+        return ArtifactVerdict(False, reason="execution claim consistent with transcript")
+    except Exception:
+        return ArtifactVerdict(False, reason="exec check error (fail-open)")

@@ -4313,6 +4313,17 @@ def _execute_main_loop(
             try:
                 from artifact_check import check_fabrication as _ac_check
                 _ac_verdict = _ac_check(step_result, _proj_artifact_dir, _artifact_snapshot)
+                # Exec-claim contradiction: agent claimed success but every
+                # command it actually ran failed (real tool transcript). Only
+                # runs when the FS/AST layers found nothing.
+                if not _ac_verdict.fabricated:
+                    try:
+                        from artifact_check import check_execution_claim as _ec_check
+                        _ec_verdict = _ec_check(step_result, outcome.get("tool_events"))
+                        if _ec_verdict.fabricated:
+                            _ac_verdict = _ec_verdict
+                    except Exception:
+                        pass
                 if _ac_verdict.fabricated:
                     log.warning(
                         "FABRICATION step=%d kind=%s: %s",

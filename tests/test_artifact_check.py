@@ -14,12 +14,18 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 from artifact_check import (  # noqa: E402
     ArtifactVerdict,
     _claims_concrete_stdout,
+    _claims_clean_success,
     _python_is_inert,
     changed_since,
+    check_execution_claim,
     check_fabrication,
     extract_write_claims,
     snapshot_dir,
 )
+
+
+def _bash(command="pytest -q", output="", is_error=False):
+    return {"name": "Bash", "input": {"command": command}, "output": output, "is_error": is_error}
 
 
 # Module bodies used by the inert-output tests.
@@ -249,3 +255,70 @@ def test_pure_analysis_not_flagged(tmp_path):
     before = snapshot_dir(tmp_path)
     v = check_fabrication("Analyzed the data and summarized three findings.", str(tmp_path), before)
     assert v.fabricated is False
+
+
+# --- check_execution_claim (exec-contradiction) ---------------------------
+
+class TestExecutionClaim:
+    def test_fabricated_when_all_runs_failed_but_claims_success(self):
+        v = check_execution_claim(
+            "Ran the test suite — all 142 tests passed.",
+            [_bash("pytest -q", output="ImportError", is_error=True)],
+        )
+        assert v.fabricated is True
+        assert v.kind == "execution-contradiction"
+        assert "pytest" in v.reason
+
+    def test_not_flagged_when_result_acknowledges_failure(self):
+        # Agent is honest about the failure → not a fabrication.
+        v = check_execution_claim(
+            "Tried to run the tests but pytest failed with an ImportError.",
+            [_bash("pytest -q", is_error=True)],
+        )
+        assert v.fabricated is False
+
+    def test_not_flagged_fix_then_succeed(self):
+        # First run failed, a later run succeeded → legitimate; success claim ok.
+        v = check_execution_claim(
+            "Fixed the import and the tests pass now.",
+            [_bash("pytest -q", is_error=True), _bash("pytest -q", output="142 passed", is_error=False)],
+        )
+        assert v.fabricated is False
+
+    def test_not_flagged_when_run_succeeded(self):
+        v = check_execution_claim(
+            "All tests passed.",
+            [_bash("pytest -q", output="142 passed", is_error=False)],
+        )
+        assert v.fabricated is False
+
+    def test_not_flagged_when_no_execution_tools(self):
+        # Only file tools ran — the per-step transcript shows no command; we do
+        # NOT flag (could reference a prior step's run).
+        v = check_execution_claim(
+            "The tests pass.",
+            [{"name": "Write", "input": {"file_path": "x.py"}, "is_error": False}],
+        )
+        assert v.fabricated is False
+
+    def test_not_flagged_empty_or_none_transcript(self):
+        assert check_execution_claim("All tests passed.", None).fabricated is False
+        assert check_execution_claim("All tests passed.", []).fabricated is False
+
+    def test_no_success_claim_no_flag_even_if_runs_failed(self):
+        # Result makes no success claim at all → nothing to contradict.
+        v = check_execution_claim(
+            "Investigated the build configuration.",
+            [_bash("make", is_error=True)],
+        )
+        assert v.fabricated is False
+
+    def test_fail_open_on_garbage(self):
+        assert check_execution_claim("passed", ["not-a-dict", 42]).fabricated is False
+
+    def test_claims_clean_success_helper(self):
+        assert _claims_clean_success("all tests passed") is True
+        assert _claims_clean_success("exit code 0, works") is True
+        # Acknowledged failure suppresses the success signal.
+        assert _claims_clean_success("tests passed but one failed") is False
+        assert _claims_clean_success("did the analysis") is False
