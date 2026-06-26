@@ -329,7 +329,7 @@ def test_cli_poe_telegram_no_token(monkeypatch, tmp_path):
     monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
     with patch("telegram_listener._OPENCLAW_CFG", tmp_path / "nofile.json"):
         import cli
-        rc = cli.main(["poe-telegram", "--once"])
+        rc = cli.main(["telegram", "--once"])
     assert rc != 0
 
 
@@ -338,7 +338,7 @@ def test_cli_poe_telegram_once(monkeypatch, tmp_path, capsys):
     with patch("telegram_listener._OFFSET_FILE", tmp_path / "offset.txt"), \
          patch("telegram_listener.TelegramBot.get_updates", return_value=[]):
         import cli
-        rc = cli.main(["poe-telegram", "--once"])
+        rc = cli.main(["telegram", "--once"])
     assert rc == 0
     out = capsys.readouterr().out
     assert "processed=0" in out

@@ -243,7 +243,7 @@ def test_run_eval_dry_run_no_matching():
 
 def test_cli_poe_eval_dry_run_text(capsys):
     import cli
-    rc = cli.main(["poe-eval", "--dry-run"])
+    rc = cli.main(["eval", "--dry-run"])
     assert rc == 0
     out = capsys.readouterr().out
     assert "eval" in out
@@ -252,7 +252,7 @@ def test_cli_poe_eval_dry_run_text(capsys):
 
 def test_cli_poe_eval_dry_run_json(capsys):
     import cli
-    rc = cli.main(["poe-eval", "--dry-run", "--format", "json"])
+    rc = cli.main(["eval", "--dry-run", "--format", "json"])
     assert rc == 0
     out = capsys.readouterr().out
     data = json.loads(out)
@@ -262,7 +262,7 @@ def test_cli_poe_eval_dry_run_json(capsys):
 
 def test_cli_poe_eval_single_benchmark(capsys):
     import cli
-    rc = cli.main(["poe-eval", "--dry-run", "--benchmark", "now-math"])
+    rc = cli.main(["eval", "--dry-run", "--benchmark", "now-math"])
     assert rc == 0
     out = capsys.readouterr().out
     assert "now-math" in out

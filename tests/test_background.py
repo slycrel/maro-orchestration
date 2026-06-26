@@ -252,7 +252,7 @@ def test_cli_poe_background(monkeypatch, tmp_path, capsys):
     """poe-background CLI starts a task and returns 0."""
     _setup_workspace(monkeypatch, tmp_path)
     import cli
-    rc = cli.main(["poe-background", "echo", "cli-test"])
+    rc = cli.main(["background", "echo", "cli-test"])
     assert rc == 0
     out = capsys.readouterr().out
     assert "status=running" in out or "id=" in out
@@ -262,7 +262,7 @@ def test_cli_poe_background_wait(monkeypatch, tmp_path, capsys):
     """poe-background --wait completes for a fast command."""
     _setup_workspace(monkeypatch, tmp_path)
     import cli
-    rc = cli.main(["poe-background", "echo", "wait-test", "--wait", "--timeout", "10"])
+    rc = cli.main(["background", "echo", "wait-test", "--wait", "--timeout", "10"])
     assert rc == 0
     out = capsys.readouterr().out
     assert "id=" in out

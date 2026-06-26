@@ -377,7 +377,7 @@ def test_loop_summary_format(monkeypatch, tmp_path):
 def test_cli_poe_run_dry_run(monkeypatch, tmp_path, capsys):
     _setup_workspace(monkeypatch, tmp_path)
     import cli
-    rc = cli.main(["poe-run", "test goal from cli", "--project", "cli-test", "--dry-run"])
+    rc = cli.main(["run", "test goal from cli", "--project", "cli-test", "--dry-run"])
     assert rc == 0
     out = capsys.readouterr().out
     assert "status=done" in out
@@ -386,7 +386,7 @@ def test_cli_poe_run_dry_run(monkeypatch, tmp_path, capsys):
 def test_cli_poe_run_json_format(monkeypatch, tmp_path, capsys):
     _setup_workspace(monkeypatch, tmp_path)
     import cli
-    rc = cli.main(["poe-run", "json format test", "--project", "cli-json-test", "--dry-run", "--format", "json"])
+    rc = cli.main(["run", "json format test", "--project", "cli-json-test", "--dry-run", "--format", "json"])
     assert rc == 0
     out = capsys.readouterr().out
     data = json.loads(out)

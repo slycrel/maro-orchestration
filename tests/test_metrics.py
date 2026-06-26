@@ -320,7 +320,7 @@ def test_cli_poe_metrics_text(capsys):
     outcomes = [_make_outcome()] * 3
     with patch("metrics.load_outcomes", return_value=outcomes):
         import cli
-        rc = cli.main(["poe-metrics"])
+        rc = cli.main(["metrics"])
     assert rc == 0
     out = capsys.readouterr().out
     assert "Poe System Metrics" in out
@@ -330,7 +330,7 @@ def test_cli_poe_metrics_json(capsys):
     outcomes = [_make_outcome()] * 3
     with patch("metrics.load_outcomes", return_value=outcomes):
         import cli
-        rc = cli.main(["poe-metrics", "--format", "json"])
+        rc = cli.main(["metrics", "--format", "json"])
     assert rc == 0
     out = capsys.readouterr().out
     data = json.loads(out)

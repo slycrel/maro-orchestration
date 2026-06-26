@@ -217,7 +217,7 @@ class TestRunDirector:
 def test_cli_poe_director_text(monkeypatch, tmp_path, capsys):
     _setup(monkeypatch, tmp_path)
     import cli
-    rc = cli.main(["poe-director", "research polymarket strategies", "--dry-run"])
+    rc = cli.main(["director", "research polymarket strategies", "--dry-run"])
     assert rc == 0
     out = capsys.readouterr().out
     assert "director_id=" in out
@@ -227,7 +227,7 @@ def test_cli_poe_director_text(monkeypatch, tmp_path, capsys):
 def test_cli_poe_director_json(monkeypatch, tmp_path, capsys):
     _setup(monkeypatch, tmp_path)
     import cli
-    rc = cli.main(["poe-director", "build a report", "--dry-run", "--format", "json"])
+    rc = cli.main(["director", "build a report", "--dry-run", "--format", "json"])
     assert rc == 0
     out = capsys.readouterr().out
     data = json.loads(out)
@@ -239,7 +239,7 @@ def test_cli_poe_director_json(monkeypatch, tmp_path, capsys):
 def test_cli_poe_director_explicit_acceptance(monkeypatch, tmp_path, capsys):
     _setup(monkeypatch, tmp_path)
     import cli
-    rc = cli.main(["poe-director", "send email to users", "--dry-run", "--format", "json"])
+    rc = cli.main(["director", "send email to users", "--dry-run", "--format", "json"])
     assert rc == 0
     data = json.loads(capsys.readouterr().out)
     assert data["plan_acceptance"] == "explicit"

@@ -465,7 +465,7 @@ def test_cli_poe_skills_list_empty(monkeypatch, tmp_path, capsys):
     """poe-skills --list with no skills prints skills=(none)."""
     _setup_workspace(monkeypatch, tmp_path)
     import cli
-    rc = cli.main(["poe-skills", "--list"])
+    rc = cli.main(["skills", "--list"])
     assert rc == 0
     out = capsys.readouterr().out
     assert "skills=(none)" in out
@@ -477,7 +477,7 @@ def test_cli_poe_skills_list_with_skill(monkeypatch, tmp_path, capsys):
     skill = _make_skill("cli list test skill")
     save_skill(skill)
     import cli
-    rc = cli.main(["poe-skills", "--list"])
+    rc = cli.main(["skills", "--list"])
     assert rc == 0
     out = capsys.readouterr().out
     assert "cli list test skill" in out
@@ -487,7 +487,7 @@ def test_cli_poe_skills_extract_dry_run(monkeypatch, tmp_path, capsys):
     """poe-skills --extract --dry-run doesn't crash."""
     _setup_workspace(monkeypatch, tmp_path)
     import cli
-    rc = cli.main(["poe-skills", "--extract", "--dry-run"])
+    rc = cli.main(["skills", "--extract", "--dry-run"])
     assert rc == 0
     out = capsys.readouterr().out
     assert "dry_run" in out.lower() or "outcomes" in out.lower()

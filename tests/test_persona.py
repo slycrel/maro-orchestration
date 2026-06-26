@@ -663,7 +663,7 @@ def test_poe_persona_manifest_cli(monkeypatch, tmp_path, capsys):
     """poe-persona manifest CLI subcommand shows the manifest table."""
     monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
     import cli
-    cli.main(["poe-persona", "manifest"])
+    cli.main(["persona", "manifest"])
     out = capsys.readouterr().out
     assert "Manifest" in out or "agent" in out.lower()
 
@@ -672,7 +672,7 @@ def test_poe_persona_manifest_json_cli(monkeypatch, tmp_path, capsys):
     """poe-persona manifest --format json outputs valid JSON."""
     monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
     import cli
-    cli.main(["poe-persona", "manifest", "--format", "json"])
+    cli.main(["persona", "manifest", "--format", "json"])
     out = capsys.readouterr().out
     data = json.loads(out)
     assert "agents" in data

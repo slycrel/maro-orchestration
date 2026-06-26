@@ -278,7 +278,7 @@ def test_agent_loop_records_outcome(monkeypatch, tmp_path):
 def test_cli_memory_context_empty(monkeypatch, tmp_path, capsys):
     _setup(monkeypatch, tmp_path)
     import cli
-    rc = cli.main(["memory", "context"])
+    rc = cli.main(["outcomes", "context"])
     assert rc == 0
     out = capsys.readouterr().out
     assert "no memory" in out.lower() or out.strip() == "(no memory yet)"
@@ -288,7 +288,7 @@ def test_cli_memory_outcomes(monkeypatch, tmp_path, capsys):
     _setup(monkeypatch, tmp_path)
     record_outcome("test goal", "done", "summary")
     import cli
-    rc = cli.main(["memory", "outcomes"])
+    rc = cli.main(["outcomes", "outcomes"])
     assert rc == 0
     out = capsys.readouterr().out
     assert "test goal" in out
@@ -298,7 +298,7 @@ def test_cli_memory_lessons(monkeypatch, tmp_path, capsys):
     _setup(monkeypatch, tmp_path)
     record_outcome("goal", "done", "summary", lessons=["a lesson"])
     import cli
-    rc = cli.main(["memory", "lessons"])
+    rc = cli.main(["outcomes", "lessons"])
     assert rc == 0
     out = capsys.readouterr().out
     assert "a lesson" in out
@@ -308,7 +308,7 @@ def test_cli_memory_outcomes_json(monkeypatch, tmp_path, capsys):
     _setup(monkeypatch, tmp_path)
     record_outcome("json goal", "stuck", "failed")
     import cli
-    rc = cli.main(["memory", "outcomes", "--format", "json"])
+    rc = cli.main(["outcomes", "outcomes", "--format", "json"])
     assert rc == 0
     data = json.loads(capsys.readouterr().out)
     assert isinstance(data, list)

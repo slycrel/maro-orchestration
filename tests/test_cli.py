@@ -116,7 +116,7 @@ def test_cli_run_start_finish_status(tmp_path):
     r = _run(tmp_path, "init", "demo", "Build", "loop", "--priority", "5")
     assert r.returncode == 0
 
-    r = _run(tmp_path, "run", "--project", "demo", "--worker", "director", "--source", "test-run")
+    r = _run(tmp_path, "cycle", "--project", "demo", "--worker", "director", "--source", "test-run")
     assert r.returncode == 0
     assert "started run_id=" in r.stdout
     run_id = next(part.split("=", 1)[1] for part in r.stdout.split() if part.startswith("run_id="))
@@ -136,7 +136,7 @@ def test_cli_run_start_finish_status(tmp_path):
     assert payload["status"] == "done"
     assert payload["note"] == "verified"
 
-    r = _run(tmp_path, "status")
+    r = _run(tmp_path, "opstatus")
     assert r.returncode == 0
     status = json.loads(r.stdout)
     assert status["queue"]["doing"] == 0
@@ -750,7 +750,7 @@ def test_cli_empty_paths(tmp_path):
     assert next_r.returncode == 1
     assert "next=(none)" in next_r.stdout
 
-    run_r = _run(tmp_path, "run", "--project", "demo")
+    run_r = _run(tmp_path, "cycle", "--project", "demo")
     assert run_r.returncode == 1
     assert "run=(none)" in run_r.stdout
 

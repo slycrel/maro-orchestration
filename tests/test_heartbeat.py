@@ -285,7 +285,7 @@ def test_cli_poe_heartbeat_once(capsys):
          patch("heartbeat.write_heartbeat_state"), \
          patch("heartbeat._log_heartbeat"):
         import cli
-        rc = cli.main(["poe-heartbeat", "--dry-run", "--no-escalate"])
+        rc = cli.main(["heartbeat", "--dry-run", "--no-escalate"])
     assert rc == 0
     out = capsys.readouterr().out
     assert "heartbeat" in out
@@ -297,7 +297,7 @@ def test_cli_poe_heartbeat_json(capsys):
          patch("heartbeat.write_heartbeat_state"), \
          patch("heartbeat._log_heartbeat"):
         import cli
-        rc = cli.main(["poe-heartbeat", "--dry-run", "--no-escalate", "--format", "json"])
+        rc = cli.main(["heartbeat", "--dry-run", "--no-escalate", "--format", "json"])
     assert rc == 0
     out = capsys.readouterr().out
     data = json.loads(out)
@@ -313,7 +313,7 @@ def test_resolve_backlog_every_defaults_to_active_cadence():
 def test_cli_poe_heartbeat_loop_forwards_backlog_every():
     with patch("heartbeat.heartbeat_loop") as mock_loop:
         import cli
-        rc = cli.main(["poe-heartbeat", "--loop", "--dry-run", "--no-escalate", "--backlog-every", "3"])
+        rc = cli.main(["heartbeat", "--loop", "--dry-run", "--no-escalate", "--backlog-every", "3"])
     assert rc == 0
     assert mock_loop.call_args.kwargs["backlog_every"] == 3
 
@@ -321,7 +321,7 @@ def test_cli_poe_heartbeat_loop_forwards_backlog_every():
 def test_cli_poe_heartbeat_loop_leaves_autonomy_unset_by_default():
     with patch("heartbeat.heartbeat_loop") as mock_loop:
         import cli
-        rc = cli.main(["poe-heartbeat", "--loop", "--dry-run", "--no-escalate"])
+        rc = cli.main(["heartbeat", "--loop", "--dry-run", "--no-escalate"])
     assert rc == 0
     assert mock_loop.call_args.kwargs["autonomy"] is None
 
@@ -329,13 +329,13 @@ def test_cli_poe_heartbeat_loop_leaves_autonomy_unset_by_default():
 def test_cli_poe_heartbeat_loop_accepts_explicit_autonomy_flags():
     with patch("heartbeat.heartbeat_loop") as mock_loop:
         import cli
-        rc = cli.main(["poe-heartbeat", "--loop", "--dry-run", "--no-escalate", "--autonomy"])
+        rc = cli.main(["heartbeat", "--loop", "--dry-run", "--no-escalate", "--autonomy"])
     assert rc == 0
     assert mock_loop.call_args.kwargs["autonomy"] is True
 
     with patch("heartbeat.heartbeat_loop") as mock_loop:
         import cli
-        rc = cli.main(["poe-heartbeat", "--loop", "--dry-run", "--no-escalate", "--no-autonomy"])
+        rc = cli.main(["heartbeat", "--loop", "--dry-run", "--no-escalate", "--no-autonomy"])
     assert rc == 0
     assert mock_loop.call_args.kwargs["autonomy"] is False
 

@@ -330,7 +330,7 @@ def main(argv: list[str] | None = None) -> int:
                         print(f"salvage_detail={first['detail']}")
         return 0
 
-    if args.cmd == "run":
+    if args.cmd == "cycle":
         try:
             run = run_once(project=args.project, worker=args.worker, source=args.source, note=args.note)
         except ValueError as exc:
@@ -347,7 +347,7 @@ def main(argv: list[str] | None = None) -> int:
             _print_run("finished", run)
         return 0
 
-    if args.cmd == "memory":
+    if args.cmd == "outcomes":
         import memory as _mem
         if args.memory_cmd == "context":
             ctx = _mem.bootstrap_context()
@@ -396,7 +396,7 @@ def main(argv: list[str] | None = None) -> int:
             print(health.format(args.format))
             return 0 if health.status == "healthy" else 1
 
-    if args.cmd == "poe-director":
+    if args.cmd == "director":
         import director as _director_mod
         directive = " ".join(args.directive)
         try:
@@ -407,7 +407,7 @@ def main(argv: list[str] | None = None) -> int:
                 verbose=args.verbose,
             )
         except Exception as exc:
-            return fail("E_POE_DIRECTOR", str(exc))
+            return fail("E_DIRECTOR", str(exc))
         if args.format == "json":
             print(json.dumps({
                 "director_id": result.director_id,
@@ -428,7 +428,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(result.report)
         return 0 if result.status == "done" else 1
 
-    if args.cmd == "poe-handle":
+    if args.cmd == "handle":
         import handle as _handle_mod
         msg = " ".join(args.message)
         try:
@@ -441,11 +441,11 @@ def main(argv: list[str] | None = None) -> int:
                 verbose=args.verbose,
             )
         except Exception as exc:
-            return fail("E_POE_HANDLE", str(exc))
+            return fail("E_HANDLE", str(exc))
         print(result.format(mode=args.format))
         return 0 if result.status == "done" else 1
 
-    if args.cmd == "poe-run":
+    if args.cmd == "run":
         import agent_loop as _al
         goal_str = " ".join(args.goal)
         # Wire up ancestry if --parent was specified
@@ -471,7 +471,7 @@ def main(argv: list[str] | None = None) -> int:
                 verbose=args.verbose,
             )
         except Exception as exc:
-            return fail("E_POE_RUN", str(exc))
+            return fail("E_RUN", str(exc))
         if args.format == "json":
             print(json.dumps({
                 "loop_id": result.loop_id,
@@ -490,7 +490,7 @@ def main(argv: list[str] | None = None) -> int:
             print(result.summary())
         return 0 if result.status == "done" else 1
 
-    if args.cmd == "poe-evolver":
+    if args.cmd == "evolver":
         from evolver import run_evolver, list_pending_suggestions, apply_suggestion
 
         if getattr(args, "list_pending", False):
@@ -536,7 +536,7 @@ def main(argv: list[str] | None = None) -> int:
             print(report.summary())
         return 0
 
-    if args.cmd == "poe-heartbeat":
+    if args.cmd == "heartbeat":
         from heartbeat import run_heartbeat, heartbeat_loop
         if args.loop:
             heartbeat_loop(
@@ -559,7 +559,7 @@ def main(argv: list[str] | None = None) -> int:
             print(report.summary())
         return 0
 
-    if args.cmd == "poe-telegram":
+    if args.cmd == "telegram":
         from telegram_listener import poll_once, poll_loop
         try:
             if args.once:
@@ -572,7 +572,7 @@ def main(argv: list[str] | None = None) -> int:
         except RuntimeError as exc:
             return fail("E_TELEGRAM", str(exc))
 
-    if args.cmd == "poe-interrupt":
+    if args.cmd == "interrupt":
         from interrupt import InterruptQueue, is_loop_running, get_running_loop
         import json as _json
 
@@ -738,7 +738,7 @@ def main(argv: list[str] | None = None) -> int:
                     print(d)
         return 0
 
-    if args.cmd == "poe-metrics":
+    if args.cmd == "metrics":
         from metrics import get_metrics, format_metrics_report
         # Phase 19: pass-k subcommand
         if getattr(args, "metrics_cmd", None) == "pass-k":
@@ -774,7 +774,7 @@ def main(argv: list[str] | None = None) -> int:
     # Phase 19: Sprint contract, boot protocol, manifest CLI handlers
     # ---------------------------------------------------------------------------
 
-    if args.cmd == "poe-contract":
+    if args.cmd == "contract":
         from sprint_contract import negotiate_contract, grade_contract, load_contracts
         from dataclasses import asdict
 
@@ -826,7 +826,7 @@ def main(argv: list[str] | None = None) -> int:
                     print(f"  [{status}] {cr['criterion']}: {cr['evidence'][:80]}")
             return 0
 
-    if args.cmd == "poe-boot":
+    if args.cmd == "boot":
         from boot_protocol import run_boot_protocol, format_boot_context
         state = run_boot_protocol(args.project, dry_run=args.dry_run)
         if getattr(args, "format", "text") == "json":
@@ -844,7 +844,7 @@ def main(argv: list[str] | None = None) -> int:
             print(format_boot_context(state))
         return 0
 
-    if args.cmd == "poe-manifest":
+    if args.cmd == "manifest":
         from mission import load_feature_manifest
         manifest = load_feature_manifest(args.project)
         if manifest is None:
@@ -863,7 +863,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"  [{passes:7s}]{score_str} [{f['id']}] {f['title']}")
         return 0
 
-    if args.cmd == "poe-memory":
+    if args.cmd == "memory":
         from memory import (
             memory_status, run_decay_cycle, forget_lesson, promote_lesson,
             load_tiered_lessons, record_tiered_lesson, MemoryTier,
@@ -1003,7 +1003,7 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         return 0
 
-    if args.cmd == "poe-persona":
+    if args.cmd == "persona":
         from persona import PersonaRegistry, compose_persona, spawn_persona, persona_to_dict
         registry = PersonaRegistry()
         persona_cmd = getattr(args, "persona_cmd", None) or "list"
@@ -1095,7 +1095,7 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         return 0
 
-    if args.cmd == "poe-knowledge":
+    if args.cmd == "knowledge":
         from knowledge import print_dashboard, print_promote_actions
         knowledge_cmd = getattr(args, "knowledge_cmd", None)
         if knowledge_cmd == "promote":
@@ -1105,7 +1105,7 @@ def main(argv: list[str] | None = None) -> int:
             print_dashboard(stage_filter=stage)
         return 0
 
-    if args.cmd == "poe-eval":
+    if args.cmd == "eval":
         from eval import run_eval
         benchmark_ids = [args.benchmark_id] if getattr(args, "benchmark_id", None) else None
         report = run_eval(benchmarks=benchmark_ids, dry_run=args.dry_run)
@@ -1115,7 +1115,7 @@ def main(argv: list[str] | None = None) -> int:
             print(report.summary())
         return 0
 
-    if args.cmd == "status":
+    if args.cmd == "opstatus":
         payload = write_operator_status()
         if args.format == "path":
             print(operator_status_path())
@@ -1123,7 +1123,7 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(payload, indent=2))
         return 0
 
-    if args.cmd == "poe-mission":
+    if args.cmd == "mission":
         import mission as _mission_mod
         goal_str = " ".join(args.goal)
         try:
@@ -1134,7 +1134,7 @@ def main(argv: list[str] | None = None) -> int:
                 verbose=args.verbose,
             )
         except Exception as exc:
-            return fail("E_POE_MISSION", str(exc))
+            return fail("E_MISSION", str(exc))
         if args.format == "json":
             print(json.dumps({
                 "mission_id": result.mission_id,
@@ -1151,7 +1151,7 @@ def main(argv: list[str] | None = None) -> int:
             print(result.summary())
         return 0 if result.status == "done" else 1
 
-    if args.cmd == "poe-mission-status":
+    if args.cmd == "mission-status":
         import mission as _mission_mod
         if args.project:
             m = _mission_mod.load_mission(args.project)
@@ -1202,7 +1202,7 @@ def main(argv: list[str] | None = None) -> int:
                         )
         return 0
 
-    if args.cmd == "poe-background":
+    if args.cmd == "background":
         import background as _bg_mod
         command = " ".join(args.command)
         try:
@@ -1210,7 +1210,7 @@ def main(argv: list[str] | None = None) -> int:
             if args.wait:
                 task = _bg_mod.wait_background(task.id, timeout_seconds=args.timeout)
         except Exception as exc:
-            return fail("E_POE_BACKGROUND", str(exc))
+            return fail("E_BACKGROUND", str(exc))
         if args.format == "json":
             print(json.dumps({
                 "id": task.id,
@@ -1228,7 +1228,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"completed_at={task.completed_at} exit_code={task.exit_code}")
         return 0
 
-    if args.cmd == "poe-hooks":
+    if args.cmd == "hooks":
         import hooks as _hooks_mod
 
         registry = _hooks_mod.load_registry()
@@ -1313,7 +1313,7 @@ def main(argv: list[str] | None = None) -> int:
                     print(f"injected_context: {result.injected_context[:200]}")
             return 0
 
-    if args.cmd == "poe-skills":
+    if args.cmd == "skills":
         import skills as _skills_mod
         if getattr(args, "status", False):
             skill_list = _skills_mod.load_skills()
@@ -1413,7 +1413,7 @@ def main(argv: list[str] | None = None) -> int:
         print("Use --status for health dashboard, --list to list skills, --extract to extract from recent outcomes, or --rollback <name> to restore from backup.")
         return 0
 
-    if args.cmd == "poe-inspector":
+    if args.cmd == "inspector":
         from inspector import run_inspector, inspector_loop
         if args.loop:
             inspector_loop(interval_seconds=args.interval)
@@ -1430,7 +1430,7 @@ def main(argv: list[str] | None = None) -> int:
             print(report.summary())
         return 0
 
-    if args.cmd in ("poe-inspector-status", "poe-quality"):
+    if args.cmd in ("inspector-status", "quality"):
         from inspector import get_latest_inspection, get_friction_summary
         if getattr(args, "format", "text") == "json":
             report = get_latest_inspection()
@@ -1463,7 +1463,7 @@ def main(argv: list[str] | None = None) -> int:
             print(response.message)
         return 0
 
-    if args.cmd == "poe-status":
+    if args.cmd == "status":
         from conductor import _compile_executive_summary
         dry_run = getattr(args, "dry_run", False)
         if dry_run:
@@ -1481,12 +1481,12 @@ def main(argv: list[str] | None = None) -> int:
             print(summary)
         return 0
 
-    if args.cmd == "poe-map":
+    if args.cmd == "map":
         from goal_map import build_goal_map
         try:
             gmap = build_goal_map()
         except Exception as exc:
-            return fail("E_POE_MAP", str(exc))
+            return fail("E_MAP", str(exc))
         if args.format == "json":
             nodes_list = [n.to_dict() for n in gmap.nodes.values()]
             print(json.dumps(nodes_list, indent=2))
@@ -1494,7 +1494,7 @@ def main(argv: list[str] | None = None) -> int:
             print(gmap.summary())
         return 0
 
-    if args.cmd == "poe-autonomy":
+    if args.cmd == "autonomy":
         from autonomy import (
             load_config, set_default_tier, set_project_tier, set_action_tier,
             TIER_MANUAL, TIER_SAFE, TIER_FULL,
@@ -1535,7 +1535,7 @@ def main(argv: list[str] | None = None) -> int:
     # Phase 14: Failure attribution + skill stats + skill test CLI
     # ---------------------------------------------------------------------------
 
-    if args.cmd == "poe-attribution":
+    if args.cmd == "attribution":
         from attribution import attribute_batch, load_attributions
         from memory import load_outcomes as _load_outcomes
         limit = getattr(args, "limit", 20)
@@ -1550,7 +1550,7 @@ def main(argv: list[str] | None = None) -> int:
                     outcomes_dicts.append(o.__dict__ if hasattr(o, "__dict__") else {})
             report = attribute_batch(outcomes_dicts[:limit])
         except Exception as exc:
-            return fail("E_POE_ATTRIBUTION", str(exc))
+            return fail("E_ATTRIBUTION", str(exc))
         if args.format == "json":
             print(json.dumps(report.to_dict(), indent=2))
         else:
@@ -1562,7 +1562,7 @@ def main(argv: list[str] | None = None) -> int:
                     print(f"  [{attr.failure_mode}] conf={attr.confidence:.2f} | {attr.failed_step[:60]}")
         return 0
 
-    if args.cmd == "poe-skill-stats":
+    if args.cmd == "skill-stats":
         from skills import get_all_skill_stats, get_skills_needing_escalation, ESCALATION_THRESHOLD
         escalated = getattr(args, "escalated", False)
         try:
@@ -1571,7 +1571,7 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 stats_list = get_all_skill_stats()
         except Exception as exc:
-            return fail("E_POE_SKILL_STATS", str(exc))
+            return fail("E_SKILL_STATS", str(exc))
         if args.format == "json":
             print(json.dumps([s.to_dict() for s in stats_list], indent=2))
         else:
@@ -1594,7 +1594,7 @@ def main(argv: list[str] | None = None) -> int:
                     )
         return 0
 
-    if args.cmd == "poe-skill-test":
+    if args.cmd == "skill-test":
         from skills import load_skills, generate_skill_tests, run_skill_tests
         skill_id = args.skill_id
         generate = getattr(args, "generate", False)
@@ -1636,14 +1636,14 @@ def main(argv: list[str] | None = None) -> int:
                 for t in tests:
                     print(f"  - [{t.input_description[:60]}] expect: {t.expected_keywords}")
         except Exception as exc:
-            return fail("E_POE_SKILL_TEST", str(exc))
+            return fail("E_SKILL_TEST", str(exc))
         return 0
 
     # ---------------------------------------------------------------------------
     # Phase 15: Gateway + Sandbox CLI handlers
     # ---------------------------------------------------------------------------
 
-    if args.cmd == "poe-gateway":
+    if args.cmd == "gateway":
         from gateway import check_gateway_connection, send_to_gateway
 
         if args.gateway_cmd == "status":
@@ -1674,7 +1674,7 @@ def main(argv: list[str] | None = None) -> int:
                     print(f"error={result.error}")
             return 0 if result.sent else 1
 
-    if args.cmd == "poe-sandbox":
+    if args.cmd == "sandbox":
         from sandbox import run_skill_tests_sandboxed, load_audit_log, SandboxConfig
 
         sandbox_cmd = getattr(args, "sandbox_cmd", "test")
@@ -1761,13 +1761,13 @@ def main(argv: list[str] | None = None) -> int:
                 for t in tests:
                     print(f"  - [{t.input_description[:60]}] expect: {t.expected_keywords}")
         except Exception as exc:
-            return fail("E_POE_SANDBOX", str(exc))
+            return fail("E_SANDBOX", str(exc))
         return 0 if (not tests or passed == total) else 1
 
     # Phase 17: Behavior-aligned skill router CLI handlers
     # ---------------------------------------------------------------------------
 
-    if args.cmd == "poe-router":
+    if args.cmd == "router":
         from router import get_router_stats, train_router, route_skills as _route_skills
         from skills import load_skills as _load_skills_r
 
@@ -1830,19 +1830,19 @@ if __name__ == "__main__":
 
 def _memory_main() -> None:
     import sys
-    raise SystemExit(main(["poe-memory"] + sys.argv[1:]))
+    raise SystemExit(main(["memory"] + sys.argv[1:]))
 
 
 def _persona_main() -> None:
     import sys
-    raise SystemExit(main(["poe-persona"] + sys.argv[1:]))
+    raise SystemExit(main(["persona"] + sys.argv[1:]))
 
 
 def _sandbox_main() -> None:
     import sys
-    raise SystemExit(main(["poe-sandbox"] + sys.argv[1:]))
+    raise SystemExit(main(["sandbox"] + sys.argv[1:]))
 
 
 def _skills_main() -> None:
     import sys
-    raise SystemExit(main(["poe-skills"] + sys.argv[1:]))
+    raise SystemExit(main(["skills"] + sys.argv[1:]))

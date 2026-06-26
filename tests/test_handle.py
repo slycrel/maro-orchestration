@@ -212,7 +212,7 @@ def test_handle_tracks_tokens(monkeypatch, tmp_path):
 def test_cli_poe_handle_now(monkeypatch, tmp_path, capsys):
     _setup(monkeypatch, tmp_path)
     import cli
-    rc = cli.main(["poe-handle", "what is 2 plus 2?", "--dry-run", "--lane", "now"])
+    rc = cli.main(["handle", "what is 2 plus 2?", "--dry-run", "--lane", "now"])
     assert rc == 0
     out = capsys.readouterr().out
     assert "lane=now" in out
@@ -221,7 +221,7 @@ def test_cli_poe_handle_now(monkeypatch, tmp_path, capsys):
 def test_cli_poe_handle_agenda(monkeypatch, tmp_path, capsys):
     _setup(monkeypatch, tmp_path)
     import cli
-    rc = cli.main(["poe-handle", "research polymarket strategies", "--dry-run", "--lane", "agenda"])
+    rc = cli.main(["handle", "research polymarket strategies", "--dry-run", "--lane", "agenda"])
     assert rc == 0
     out = capsys.readouterr().out
     assert "lane=agenda" in out
@@ -230,7 +230,7 @@ def test_cli_poe_handle_agenda(monkeypatch, tmp_path, capsys):
 def test_cli_poe_handle_json(monkeypatch, tmp_path, capsys):
     _setup(monkeypatch, tmp_path)
     import cli
-    rc = cli.main(["poe-handle", "hello", "--dry-run", "--lane", "now", "--format", "json"])
+    rc = cli.main(["handle", "hello", "--dry-run", "--lane", "now", "--format", "json"])
     assert rc == 0
     out = capsys.readouterr().out
     data = json.loads(out)

@@ -290,7 +290,7 @@ def test_run_evolver_load_outcomes_failure():
 def test_cli_poe_evolver_skips_no_outcomes(capsys):
     with patch("evolver.load_outcomes", return_value=[]):
         import cli
-        rc = cli.main(["poe-evolver", "--dry-run", "--min-outcomes", "1"])
+        rc = cli.main(["evolver", "--dry-run", "--min-outcomes", "1"])
     # Should succeed (just skip with message)
     assert rc == 0
     out = capsys.readouterr().out
@@ -302,7 +302,7 @@ def test_cli_poe_evolver_json(capsys):
     with patch("evolver.load_outcomes", return_value=outcomes), \
          patch("evolver._llm_analyze", return_value=([], [])):
         import cli
-        rc = cli.main(["poe-evolver", "--dry-run", "--format", "json"])
+        rc = cli.main(["evolver", "--dry-run", "--format", "json"])
     assert rc == 0
     out = capsys.readouterr().out
     data = json.loads(out)
@@ -516,7 +516,7 @@ def test_cli_poe_evolver_list(capsys, tmp_path):
                     confidence=0.8, outcomes_analyzed=10, applied=False)
     with patch("evolver.list_pending_suggestions", return_value=[s1]):
         import cli
-        rc = cli.main(["poe-evolver", "--list"])
+        rc = cli.main(["evolver", "--list"])
     assert rc == 0
     out = capsys.readouterr().out
     assert "s1" in out
@@ -529,7 +529,7 @@ def test_cli_poe_evolver_list_json(capsys, tmp_path):
                     confidence=0.8, outcomes_analyzed=10, applied=False)
     with patch("evolver.list_pending_suggestions", return_value=[s1]):
         import cli
-        rc = cli.main(["poe-evolver", "--list", "--format", "json"])
+        rc = cli.main(["evolver", "--list", "--format", "json"])
     assert rc == 0
     out = capsys.readouterr().out
     data = json.loads(out)
@@ -540,7 +540,7 @@ def test_cli_poe_evolver_list_json(capsys, tmp_path):
 def test_cli_poe_evolver_apply(capsys):
     with patch("evolver.apply_suggestion", return_value=True):
         import cli
-        rc = cli.main(["poe-evolver", "--apply", "s1"])
+        rc = cli.main(["evolver", "--apply", "s1"])
     assert rc == 0
     out = capsys.readouterr().out
     assert "applied=s1" in out
@@ -549,7 +549,7 @@ def test_cli_poe_evolver_apply(capsys):
 def test_cli_poe_evolver_apply_not_found(capsys):
     with patch("evolver.apply_suggestion", return_value=False):
         import cli
-        rc = cli.main(["poe-evolver", "--apply", "nonexistent"])
+        rc = cli.main(["evolver", "--apply", "nonexistent"])
     assert rc == 2
 
 

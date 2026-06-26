@@ -510,7 +510,7 @@ def test_cli_poe_mission_dry_run(monkeypatch, tmp_path, capsys):
     """poe-mission CLI subcommand with --dry-run returns 0."""
     _setup_workspace(monkeypatch, tmp_path)
     import cli
-    rc = cli.main(["poe-mission", "build a test pipeline", "--project", "cli-mission-test", "--dry-run"])
+    rc = cli.main(["mission", "build a test pipeline", "--project", "cli-mission-test", "--dry-run"])
     assert rc == 0
     out = capsys.readouterr().out
     assert "status=done" in out
@@ -520,9 +520,9 @@ def test_cli_poe_mission_status(monkeypatch, tmp_path, capsys):
     """poe-mission-status after running a mission shows the mission."""
     _setup_workspace(monkeypatch, tmp_path)
     import cli
-    cli.main(["poe-mission", "status test goal", "--project", "status-cli-test", "--dry-run"])
+    cli.main(["mission", "status test goal", "--project", "status-cli-test", "--dry-run"])
     capsys.readouterr()  # flush stdout
-    rc = cli.main(["poe-mission-status", "status-cli-test"])
+    rc = cli.main(["mission-status", "status-cli-test"])
     assert rc == 0
     out = capsys.readouterr().out
     assert "status-cli-test" in out
