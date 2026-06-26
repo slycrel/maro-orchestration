@@ -25,6 +25,7 @@ import textwrap
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 from llm_parse import extract_json, safe_float, content_or_empty
+from claim_probe import probe_contested_claims, SETTLED_BY_COMMAND_CLAUSE
 
 log = logging.getLogger("maro.verification")
 
@@ -62,10 +63,13 @@ _ADVERSARIAL_SYSTEM = textwrap.dedent("""\
     Be specific — cite what's wrong, not just that something is uncertain.
     Skip claims that are clearly solid. Focus on what would change a decision.
 
+    {settled_clause}
+
     Produce a concise list of contested claims with verdict and one-sentence reason.
     If everything checks out, respond with an empty list: []
-    Format: JSON array of {"claim": "...", "verdict": "...", "reason": "..."}
-""").strip()
+    Format: JSON array of {{"claim": "...", "verdict": "...", "reason": "...",
+                            "settled_by_command": "..." or null}}
+""").strip().format(settled_clause=SETTLED_BY_COMMAND_CLAUSE)
 
 _QUALITY_REVIEW_SYSTEM = textwrap.dedent("""\
     You are a quality reviewer. A research or analysis task just completed.
@@ -104,8 +108,9 @@ class StepVerdict:
 @dataclass
 class ClaimContest:
     claim: str
-    verdict: str  # CONFIRMED / DOWNGRADED / CONTESTED / OVERCLAIMED
+    verdict: str  # CONFIRMED / DOWNGRADED / CONTESTED / OVERCLAIMED / DISMISSED_BY_PROBE
     reason: str
+    probe_status: str = ""  # "" | unprobed | dismissed | validated | unrunnable
 
 
 @dataclass
@@ -117,11 +122,18 @@ class QualityVerdict:
     contested_claims: List[ClaimContest] = field(default_factory=list)
 
     def contested_summary(self) -> str:
-        """Format contested claims as a readable addendum for appending to results."""
-        if not self.contested_claims:
+        """Format contested claims as a readable addendum for appending to results.
+
+        Probe-dismissed contestations (the reviewer was wrong about a concrete
+        fact, settled by running its own probe) are excluded — surfacing them
+        would re-introduce the fabricated contradiction we just disproved.
+        """
+        surfaced = [c for c in self.contested_claims
+                    if getattr(c, "verdict", "") != "DISMISSED_BY_PROBE"]
+        if not surfaced:
             return ""
         lines = ["\n\n---\n**Verification notes:**"]
-        for c in self.contested_claims:
+        for c in surfaced:
             lines.append(f"- [{c.verdict}] {c.claim} — {c.reason}")
         return "\n".join(lines)
 
@@ -223,16 +235,25 @@ class VerificationAgent:
             )
             raw = extract_json(content_or_empty(resp), list, log_tag="verification_agent.adversarial_pass")
             if raw is not None:
+                # Ground each contestation against its own probe BEFORE returning.
+                # The reviewer is an LLM and fabricates contradictions ("Go not
+                # installed", "branch X missing") — running the settled_by_command
+                # it supplied turns the verdict mechanical. exit 0 → the
+                # contestation was wrong → DISMISSED_BY_PROBE.
+                dicts = [item for item in raw if isinstance(item, dict)]
+                probed = probe_contested_claims(dicts)
                 claims = []
-                for item in raw:
+                for item in probed:
                     if isinstance(item, dict):
                         claims.append(ClaimContest(
                             claim=str(item.get("claim", ""))[:200],
                             verdict=str(item.get("verdict", "CONTESTED")).upper(),
                             reason=str(item.get("reason", ""))[:200],
+                            probe_status=str(item.get("probe_status", "")),
                         ))
-                log.info("adversarial_pass: %d contested claims for goal=%r",
-                         len(claims), goal[:60])
+                _dismissed = sum(1 for c in claims if c.verdict == "DISMISSED_BY_PROBE")
+                log.info("adversarial_pass: %d contested claims (%d dismissed by probe) for goal=%r",
+                         len(claims), _dismissed, goal[:60])
                 return claims
         except Exception as exc:
             log.debug("adversarial_pass failed (non-fatal): %s", exc)

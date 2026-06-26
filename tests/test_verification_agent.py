@@ -151,6 +151,59 @@ class TestAdversarialPass:
 
 
 # ---------------------------------------------------------------------------
+# adversarial_pass grounding — fabricated contestations are probed away
+# (regression for the logged "Go not installed" / "branch X missing" fabrications)
+# ---------------------------------------------------------------------------
+
+class TestAdversarialGrounding:
+    def test_fabricated_contestation_dismissed_by_probe(self):
+        # Reviewer claims a tool is missing; its own probe exits 0 (`true`),
+        # proving the contestation wrong → DISMISSED_BY_PROBE, not asserted.
+        claims_json = json.dumps([
+            {"claim": "Go is not installed on this machine", "verdict": "CONTESTED",
+             "reason": "build would fail", "settled_by_command": "true"},
+        ])
+        va = VerificationAgent(_make_adapter(claims_json))
+        claims = va.adversarial_pass("ship the Go service", "result mentioning go build")
+        assert len(claims) == 1
+        assert claims[0].verdict == "DISMISSED_BY_PROBE"
+        assert claims[0].probe_status == "dismissed"
+
+    def test_valid_contestation_survives_probe(self):
+        # Probe exits non-zero (`false`) → reviewer was right, verdict stands.
+        claims_json = json.dumps([
+            {"claim": "config.yml does not exist", "verdict": "CONTESTED",
+             "reason": "referenced but absent", "settled_by_command": "false"},
+        ])
+        va = VerificationAgent(_make_adapter(claims_json))
+        claims = va.adversarial_pass("goal", "result")
+        assert len(claims) == 1
+        assert claims[0].verdict == "CONTESTED"
+        assert claims[0].probe_status == "validated"
+
+    def test_unprobeable_claim_left_alone(self):
+        # No settled_by_command (subjective claim) → unprobed, verdict unchanged.
+        claims_json = json.dumps([
+            {"claim": "The tone is too informal", "verdict": "CONTESTED",
+             "reason": "subjective", "settled_by_command": None},
+        ])
+        va = VerificationAgent(_make_adapter(claims_json))
+        claims = va.adversarial_pass("goal", "result")
+        assert len(claims) == 1
+        assert claims[0].verdict == "CONTESTED"
+        assert claims[0].probe_status == "unprobed"
+
+    def test_dismissed_claim_excluded_from_summary(self):
+        # A probe-dismissed fabrication must not reach user-facing verification notes.
+        dismissed = ClaimContest("Go not installed", "DISMISSED_BY_PROBE", "wrong", "dismissed")
+        real = ClaimContest("Overstated effect size", "OVERCLAIMED", "p>0.05", "unprobed")
+        qv = QualityVerdict("PASS", "ok", 0.9, False, contested_claims=[dismissed, real])
+        summary = qv.contested_summary()
+        assert "Go not installed" not in summary
+        assert "Overstated effect size" in summary
+
+
+# ---------------------------------------------------------------------------
 # quality_review
 # ---------------------------------------------------------------------------
 

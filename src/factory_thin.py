@@ -363,7 +363,7 @@ def _ground_adversarial_findings(raw: str) -> str:
     Falls back to the raw text when the reviewer didn't emit parseable JSON
     — the compiler can still consume prose findings. When parsing succeeds,
     every claim with a `settled_by_command` gets probed by
-    quality_gate._probe_contested_claims, which mutates verdict to
+    claim_probe.probe_contested_claims, which mutates verdict to
     DISMISSED_BY_PROBE on exit 0 and emits a CLAIM_PROBED event.
     """
     if not raw:
@@ -376,8 +376,8 @@ def _ground_adversarial_findings(raw: str) -> str:
         return raw
 
     try:
-        from quality_gate import _probe_contested_claims
-        grounded = _probe_contested_claims(claims)
+        from claim_probe import probe_contested_claims
+        grounded = probe_contested_claims(claims)
     except Exception as exc:  # noqa: BLE001 — grounding is best-effort
         log.warning("adversarial grounding failed (non-fatal): %s", exc)
         return raw
