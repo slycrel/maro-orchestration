@@ -912,3 +912,63 @@ class TestLongRunningTimeout:
             tools=EXECUTE_TOOLS,
         )
         assert captured["kw"]["timeout"] == 1800
+
+
+class TestCwdBinding:
+    """execute_step binds the executor's cwd to project_dir so relative file
+    writes land in-workspace instead of the inherited parent cwd."""
+
+    def _adapter_capturing_kwargs(self):
+        from llm import LLMResponse, ToolCall
+        captured = {}
+
+        class _Cap:
+            def complete(self, messages, **kw):
+                captured["kw"] = kw
+                return LLMResponse(
+                    content="",
+                    tool_calls=[ToolCall(
+                        name="complete_step",
+                        arguments={"result": "wrote foo.py", "summary": "ok"},
+                    )],
+                )
+
+        return _Cap(), captured
+
+    def test_cwd_bound_to_project_dir(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+
+        from step_exec import execute_step, EXECUTE_TOOLS
+        adapter, captured = self._adapter_capturing_kwargs()
+        proj = tmp_path / "proj-workspace"
+        execute_step(
+            goal="build a thing",
+            step_text="Write a file foo.py with a hello() function",
+            step_num=1,
+            total_steps=1,
+            completed_context=[],
+            adapter=adapter,
+            tools=EXECUTE_TOOLS,
+            project_dir=str(proj),
+        )
+        assert captured["kw"]["cwd"] == str(proj)
+        # execute_step creates the workspace so the cwd is valid at spawn time.
+        assert proj.is_dir()
+
+    def test_no_cwd_when_no_project_dir(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+
+        from step_exec import execute_step, EXECUTE_TOOLS
+        adapter, captured = self._adapter_capturing_kwargs()
+        execute_step(
+            goal="build a thing",
+            step_text="Write a file foo.py with a hello() function",
+            step_num=1,
+            total_steps=1,
+            completed_context=[],
+            adapter=adapter,
+            tools=EXECUTE_TOOLS,
+        )
+        assert "cwd" not in captured.get("kw", {})

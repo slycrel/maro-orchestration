@@ -449,7 +449,7 @@ def _session_cpu_ticks(leader_pid: int) -> int:
 
 
 def _run_subprocess_safe(cmd, *, input=None, timeout=600,
-                         liveness_timeout=None, poll_interval=2.0):
+                         liveness_timeout=None, poll_interval=2.0, cwd=None):
     """Run a subprocess in its own process group with streaming + liveness check.
 
     Streams the subprocess's stdout+stderr (merged) to a single temp file
@@ -544,6 +544,20 @@ def _run_subprocess_safe(cmd, *, input=None, timeout=600,
     except Exception:
         pass
 
+    # Bind the subprocess working directory to the caller's workspace when one
+    # is supplied and exists. Without this, an agentic subprocess (`claude -p`)
+    # inherits the parent's cwd and writes relative paths wherever that happens
+    # to be — files leaked outside the run/project dir despite the prompt asking
+    # for {project_dir}/. Enforcing cwd makes relative writes land in-workspace.
+    _cwd = None
+    if cwd:
+        if os.path.isdir(cwd):
+            _cwd = cwd
+        else:
+            log.warning(
+                "_run_subprocess_safe: cwd %r is not a directory; inheriting parent cwd", cwd
+            )
+
     proc = subprocess.Popen(
         cmd,
         stdin=stdin_f if stdin_f else subprocess.DEVNULL,
@@ -551,6 +565,7 @@ def _run_subprocess_safe(cmd, *, input=None, timeout=600,
         stderr=subprocess.STDOUT,
         start_new_session=True,
         env=child_env,
+        cwd=_cwd,
     )
     if stdin_f:
         try:
@@ -712,8 +727,11 @@ class ClaudeSubprocessAdapter(LLMAdapter):
             cmd += ["--model", model_str]
 
         _timeout = timeout or self.timeout
+        # cwd: bind the agent's working dir to the caller's workspace so relative
+        # file writes land in-workspace instead of the inherited parent cwd.
+        _cwd = kwargs.get("cwd")
         try:
-            result = _run_subprocess_safe(cmd, input=prompt, timeout=_timeout)
+            result = _run_subprocess_safe(cmd, input=prompt, timeout=_timeout, cwd=_cwd)
         except subprocess.TimeoutExpired:
             raise RuntimeError(f"claude subprocess timed out after {_timeout}s")
         except FileNotFoundError:
@@ -776,7 +794,7 @@ class ClaudeSubprocessAdapter(LLMAdapter):
                     _total_slept += _wait
                     _wait = min(_wait * 2, _RATE_LIMIT_CYCLE_CAP)
                     try:
-                        result = _run_subprocess_safe(cmd, input=prompt, timeout=_timeout)
+                        result = _run_subprocess_safe(cmd, input=prompt, timeout=_timeout, cwd=_cwd)
                     except subprocess.TimeoutExpired:
                         log.warning("rate limit retry timed out after %ds, will retry", _timeout)
                         continue
@@ -1025,8 +1043,9 @@ class CodexCLIAdapter(LLMAdapter):
             "-",  # read prompt from stdin
         ]
 
+        _cwd = kwargs.get("cwd")
         try:
-            result = _run_subprocess_safe(cmd, input=prompt, timeout=_timeout)
+            result = _run_subprocess_safe(cmd, input=prompt, timeout=_timeout, cwd=_cwd)
         except subprocess.TimeoutExpired:
             raise RuntimeError(f"codex subprocess timed out after {_timeout}s")
         except FileNotFoundError:

@@ -233,6 +233,45 @@ def test_subprocess_complete_plain(monkeypatch):
     assert resp.output_tokens == 50
 
 
+def test_subprocess_complete_threads_cwd(monkeypatch):
+    """complete(cwd=...) forwards cwd into _run_subprocess_safe (bounded writes)."""
+    a = ClaudeSubprocessAdapter()
+    mock_result = MagicMock()
+    mock_result.returncode = 0
+    mock_result.stdout = _make_subprocess_output("ok")
+    mock_result.stderr = ""
+
+    with patch("llm._run_subprocess_safe", return_value=mock_result) as mock_run:
+        a.complete([LLMMessage("user", "write a file")], cwd="/some/workspace")
+
+    assert mock_run.call_args.kwargs.get("cwd") == "/some/workspace"
+
+
+def test_run_subprocess_safe_honors_cwd(tmp_path):
+    """The subprocess actually runs in the supplied cwd, so relative writes land there."""
+    from llm import _run_subprocess_safe
+    result = _run_subprocess_safe(
+        ["python3", "-c", "import os; print(os.getcwd())"],
+        timeout=30,
+        cwd=str(tmp_path),
+    )
+    assert result.returncode == 0
+    assert str(tmp_path.resolve()) in result.stdout
+
+
+def test_run_subprocess_safe_ignores_missing_cwd(tmp_path):
+    """A non-existent cwd is ignored (inherits parent) rather than crashing."""
+    from llm import _run_subprocess_safe
+    missing = str(tmp_path / "does-not-exist")
+    result = _run_subprocess_safe(
+        ["python3", "-c", "print('ran')"],
+        timeout=30,
+        cwd=missing,
+    )
+    assert result.returncode == 0
+    assert "ran" in result.stdout
+
+
 def test_subprocess_complete_with_tool_call(monkeypatch):
     """Mock subprocess to return a JSON tool call response."""
     a = ClaudeSubprocessAdapter()
