@@ -32,6 +32,12 @@ Model tiers (callers use constants, backends map to native IDs):
 
 Retry: Automatic exponential backoff (5s, 15s, 45s) on rate limits, 5xx, connection failures.
 
+**Agentic subprocess cwd contract.** Subprocess adapters (`claude -p`, `codex`) spawn an agent that does *real* file tool work, so where it writes matters. The cwd is resolved as `kwargs["cwd"] or get_default_subprocess_cwd()` in both subprocess adapters' `complete()`. `_DEFAULT_SUBPROCESS_CWD` is a run-scoped `ContextVar`:
+- `run_agent_loop` sets it to the project dir; `handle.py` scopes it around `run_quality_gate`; `claim_probe` reads it for its `settled_by_command` runner.
+- **Deliberately NOT reset on loop exit** — quality_gate runs *after* the loop returns and must inherit the same project dir; recursive/fan-out sub-loops re-set it on their own entry. Tests reset it via an autouse conftest fixture (`_clear_default_subprocess_cwd`). Do not "fix" the no-reset — it's load-bearing.
+- NOW lane leaves it unset (None) → inherits Maro's launch cwd, which is correct for an interactive ask.
+- *Why it exists:* the executor always bound cwd, but the non-executor agentic paths (verify/quality_gate/pre_flight/refinement/claim_probe) used to inherit the launch cwd — a verifier that couldn't find a cited artifact would re-create it there, leaking files AND fabricating ground truth. See BACKLOG #1.
+
 ## Config System (config.py)
 
 Two-tier YAML mirroring git's ~/.gitconfig:
