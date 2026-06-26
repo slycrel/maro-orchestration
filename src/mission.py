@@ -146,7 +146,7 @@ def decompose_mission(
     """LLM call to decompose goal into milestones + features. Falls back to heuristic."""
     from llm import LLMMessage, MODEL_POWER
     try:
-        from poe import assign_model_by_role as _amr
+        from conductor import assign_model_by_role as _amr
         _ = _amr("orchestrator")  # ensure assign_model_by_role("orchestrator") → MODEL_POWER
     except Exception:
         pass
@@ -251,7 +251,7 @@ def _validate_milestone(
 
     from llm import LLMMessage, MODEL_MID
     try:
-        from poe import assign_model_by_role as _amr
+        from conductor import assign_model_by_role as _amr
         _ = _amr("reviewer")  # ensure assign_model_by_role("reviewer") → MODEL_POWER
     except Exception:
         pass

@@ -1091,7 +1091,7 @@ def _handle_impl(
         # mission data being returned instead of a fresh run.
         _is_meta_command = False
         try:
-            from poe import _looks_like_status, _looks_like_inspect, _looks_like_goal_map
+            from conductor import _looks_like_status, _looks_like_inspect, _looks_like_goal_map
             _is_meta_command = (
                 _looks_like_status(message)
                 or _looks_like_inspect(message)
@@ -1102,9 +1102,9 @@ def _handle_impl(
 
         if not dry_run and not project and _is_meta_command:
             try:
-                from poe import poe_handle
+                from conductor import conduct
                 from agent_loop import _goal_to_slug
-                poe_response = poe_handle(
+                poe_response = conduct(
                     message,
                     adapter=adapter,
                     model=model,

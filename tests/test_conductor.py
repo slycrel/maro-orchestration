@@ -10,11 +10,11 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from poe import (
-    PoeResponse,
+from conductor import (
+    ConductorResponse,
     assign_model_by_role,
     classify_step_model,
-    poe_handle,
+    conduct,
     _compile_executive_summary,
     _describe_goal_relationships,
     _looks_like_status,
@@ -100,11 +100,11 @@ def test_assign_model_by_role_is_pure():
 
 
 # ---------------------------------------------------------------------------
-# PoeResponse dataclass
+# ConductorResponse dataclass
 # ---------------------------------------------------------------------------
 
 def test_poe_response_fields():
-    r = PoeResponse(
+    r = ConductorResponse(
         message="hello",
         routed_to="now_lane",
         mission_id="abc123",
@@ -117,7 +117,7 @@ def test_poe_response_fields():
 
 
 def test_poe_response_optional_defaults():
-    r = PoeResponse(message="hi", routed_to="status")
+    r = ConductorResponse(message="hi", routed_to="status")
     assert r.mission_id is None
     assert r.executive_summary is None
 
@@ -184,51 +184,51 @@ def test_looks_like_multi_day_short():
 
 
 # ---------------------------------------------------------------------------
-# poe_handle — dry_run paths
+# conduct — dry_run paths
 # ---------------------------------------------------------------------------
 
 def test_poe_handle_dry_run():
-    """dry_run=True returns PoeResponse without LLM calls."""
-    response = poe_handle("do something useful", dry_run=True)
-    assert isinstance(response, PoeResponse)
+    """dry_run=True returns ConductorResponse without LLM calls."""
+    response = conduct("do something useful", dry_run=True)
+    assert isinstance(response, ConductorResponse)
     assert "[dry-run]" in response.message
 
 
 def test_poe_handle_dry_run_status():
-    response = poe_handle("/status", dry_run=True)
+    response = conduct("/status", dry_run=True)
     assert response.routed_to == "status"
     assert "[dry-run]" in response.message
 
 
 def test_poe_handle_dry_run_inspect():
-    response = poe_handle("/inspect", dry_run=True)
+    response = conduct("/inspect", dry_run=True)
     assert response.routed_to == "inspector"
 
 
 def test_poe_handle_dry_run_map():
-    response = poe_handle("/map", dry_run=True)
+    response = conduct("/map", dry_run=True)
     assert response.routed_to == "goal_map"
 
 
 def test_poe_handle_dry_run_now():
-    response = poe_handle("what is 2+2?", dry_run=True)
+    response = conduct("what is 2+2?", dry_run=True)
     assert response.routed_to == "now_lane"
     assert isinstance(response.message, str)
 
 
 # ---------------------------------------------------------------------------
-# poe_handle — with mock adapter
+# conduct — with mock adapter
 # ---------------------------------------------------------------------------
 
 def test_poe_handle_now_intent():
     """NOW message → routed_to=now_lane."""
     adapter = _mock_adapter("2+2 is 4")
-    with patch("poe.classify", return_value=("now", 0.95, "simple question")):
-        with patch("poe.evaluate_action") as mock_eval:
+    with patch("conductor.classify", return_value=("now", 0.95, "simple question")):
+        with patch("conductor.evaluate_action") as mock_eval:
             mock_decision = MagicMock()
             mock_decision.requires_human = False
             mock_eval.return_value = mock_decision
-            response = poe_handle("what is 2+2?", adapter=adapter)
+            response = conduct("what is 2+2?", adapter=adapter)
     assert response.routed_to == "now_lane"
     assert isinstance(response.message, str)
 
@@ -236,58 +236,58 @@ def test_poe_handle_now_intent():
 def test_poe_handle_agenda_intent():
     """AGENDA message → routed_to=mission or director."""
     adapter = _mock_adapter("task completed")
-    with patch("poe.classify", return_value=("agenda", 0.85, "multi-step")):
-        with patch("poe.evaluate_action") as mock_eval:
+    with patch("conductor.classify", return_value=("agenda", 0.85, "multi-step")):
+        with patch("conductor.evaluate_action") as mock_eval:
             mock_decision = MagicMock()
             mock_decision.requires_human = False
             mock_eval.return_value = mock_decision
-            with patch("poe.run_agent_loop") as mock_loop:
+            with patch("conductor.run_agent_loop") as mock_loop:
                 mock_result = MagicMock()
                 mock_result.steps = []
                 mock_result.status = "done"
                 mock_result.stuck_reason = None
                 mock_loop.return_value = mock_result
-                response = poe_handle("research polymarket strategies", adapter=adapter)
+                response = conduct("research polymarket strategies", adapter=adapter)
     assert response.routed_to in ("mission", "director", "now_lane")
 
 
 def test_poe_handle_status_message():
     """Status message → executive summary."""
     adapter = _mock_adapter("Summary: all good")
-    with patch("poe.list_missions", return_value=[]):
-        with patch("poe.get_latest_inspection", return_value=None):
-            response = poe_handle("/status", adapter=adapter)
+    with patch("conductor.list_missions", return_value=[]):
+        with patch("conductor.get_latest_inspection", return_value=None):
+            response = conduct("/status", adapter=adapter)
     assert response.routed_to == "status"
     assert isinstance(response.message, str)
 
 
 def test_poe_handle_inspect_message():
     """Quality/inspect request → inspector output."""
-    with patch("poe.get_latest_inspection", return_value=None):
-        response = poe_handle("/inspect", adapter=None)
+    with patch("conductor.get_latest_inspection", return_value=None):
+        response = conduct("/inspect", adapter=None)
     assert response.routed_to == "inspector"
     assert isinstance(response.message, str)
 
 
 def test_poe_handle_goal_map_message():
     """Goal map message → goal_map routing."""
-    with patch("poe.build_goal_map") as mock_map:
+    with patch("conductor.build_goal_map") as mock_map:
         from goal_map import GoalMap
         mock_map.return_value = GoalMap()
-        response = poe_handle("/map", adapter=None)
+        response = conduct("/map", adapter=None)
     assert response.routed_to == "goal_map"
 
 
 def test_poe_handle_requires_human_escalation():
     """When autonomy tier requires human, return escalation message."""
     adapter = _mock_adapter("ok")
-    with patch("poe.classify", return_value=("agenda", 0.8, "multi-step")):
-        with patch("poe.evaluate_action") as mock_eval:
+    with patch("conductor.classify", return_value=("agenda", 0.8, "multi-step")):
+        with patch("conductor.evaluate_action") as mock_eval:
             mock_decision = MagicMock()
             mock_decision.requires_human = True
             mock_decision.reason = "Manual tier: human approval required"
             mock_eval.return_value = mock_decision
-            response = poe_handle("deploy the system", adapter=adapter)
+            response = conduct("deploy the system", adapter=adapter)
     assert "approval" in response.message.lower() or "requires" in response.message.lower()
 
 
@@ -297,8 +297,8 @@ def test_poe_handle_requires_human_escalation():
 
 def test_compile_executive_summary_empty():
     """No outcomes → graceful summary."""
-    with patch("poe.list_missions", return_value=[]):
-        with patch("poe.get_latest_inspection", return_value=None):
+    with patch("conductor.list_missions", return_value=[]):
+        with patch("conductor.get_latest_inspection", return_value=None):
             summary = _compile_executive_summary(adapter=None)
     assert isinstance(summary, str)
     assert len(summary) > 0
@@ -310,8 +310,8 @@ def test_compile_executive_summary_with_missions():
         {"goal": "Build polymarket bot", "project": "poly", "status": "running"},
         {"goal": "Setup monitoring", "project": "monitor", "status": "done"},
     ]
-    with patch("poe.list_missions", return_value=missions):
-        with patch("poe.get_latest_inspection", return_value=None):
+    with patch("conductor.list_missions", return_value=missions):
+        with patch("conductor.get_latest_inspection", return_value=None):
             summary = _compile_executive_summary(adapter=None)
     assert isinstance(summary, str)
 
@@ -319,8 +319,8 @@ def test_compile_executive_summary_with_missions():
 def test_compile_executive_summary_with_adapter():
     """With adapter, LLM summary is called."""
     adapter = _mock_adapter("- Mission in progress: poly-bot\n- Quality is good")
-    with patch("poe.list_missions", return_value=[]):
-        with patch("poe.get_latest_inspection", return_value=None):
+    with patch("conductor.list_missions", return_value=[]):
+        with patch("conductor.get_latest_inspection", return_value=None):
             summary = _compile_executive_summary(adapter=adapter)
     assert isinstance(summary, str)
     assert len(summary) > 0
@@ -330,8 +330,8 @@ def test_compile_executive_summary_llm_failure():
     """LLM failure → graceful fallback."""
     adapter = MagicMock()
     adapter.complete.side_effect = RuntimeError("LLM unavailable")
-    with patch("poe.list_missions", return_value=[]):
-        with patch("poe.get_latest_inspection", return_value=None):
+    with patch("conductor.list_missions", return_value=[]):
+        with patch("conductor.get_latest_inspection", return_value=None):
             summary = _compile_executive_summary(adapter=adapter)
     assert isinstance(summary, str)
 
@@ -363,7 +363,7 @@ def test_handle_now_lane_adapter_error():
 # ---------------------------------------------------------------------------
 
 def test_describe_goal_relationships_empty():
-    with patch("poe.build_goal_map") as mock_map:
+    with patch("conductor.build_goal_map") as mock_map:
         from goal_map import GoalMap
         mock_map.return_value = GoalMap()
         result = _describe_goal_relationships("polymarket", adapter=None)
@@ -371,7 +371,7 @@ def test_describe_goal_relationships_empty():
 
 
 def test_describe_goal_relationships_no_build_goal_map():
-    with patch("poe.build_goal_map", None):
+    with patch("conductor.build_goal_map", None):
         result = _describe_goal_relationships("anything", adapter=None)
     assert "not available" in result.lower() or isinstance(result, str)
 

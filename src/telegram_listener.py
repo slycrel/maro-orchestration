@@ -36,9 +36,9 @@ except ImportError:  # pragma: no cover
     handle = None  # type: ignore[assignment]
 
 try:
-    from poe import poe_handle
+    from conductor import conduct
 except ImportError:  # pragma: no cover
-    poe_handle = None  # type: ignore[assignment]
+    conduct = None  # type: ignore[assignment]
 
 try:
     from sheriff import check_system_health, check_all_projects, read_heartbeat_state
@@ -215,8 +215,8 @@ def _dispatch_slash(
     if cmd == "status":
         # Route through Poe CEO layer for executive summary
         try:
-            if poe_handle is not None:
-                response = poe_handle("/status", dry_run=dry_run)
+            if conduct is not None:
+                response = conduct("/status", dry_run=dry_run)
                 return response.message
         except Exception:
             pass
@@ -240,8 +240,8 @@ def _dispatch_slash(
     elif cmd == "map":
         # Goal relationship map via Poe CEO layer
         try:
-            if poe_handle is not None:
-                response = poe_handle("/map", dry_run=dry_run)
+            if conduct is not None:
+                response = conduct("/map", dry_run=dry_run)
                 return response.message
             from goal_map import build_goal_map
             gmap = build_goal_map()
@@ -449,9 +449,9 @@ def _process_message(
             response = _dispatch_slash(cmd, args, project=project, dry_run=False, verbose=verbose, progress_fn=_progress_fn)
         else:
             # Route natural language through Poe CEO layer when no loop is active
-            if poe_handle is not None:
+            if conduct is not None:
                 try:
-                    poe_resp = poe_handle(text, dry_run=False)
+                    poe_resp = conduct(text, dry_run=False)
                     response = poe_resp.message or "(no response)"
                 except Exception:
                     # Fallback to handle

@@ -1443,15 +1443,15 @@ def main(argv: list[str] | None = None) -> int:
                 print("No inspection report available. Run poe-inspector first.")
         return 0
 
-    # Phase 13: Poe CEO layer commands
+    # Conductor — top-level orchestration role
 
-    if args.cmd == "poe":
-        from poe import poe_handle
+    if args.cmd == "conductor":
+        from conductor import conduct
         msg = " ".join(args.message)
         try:
-            response = poe_handle(msg, model=args.model, dry_run=args.dry_run)
+            response = conduct(msg, model=args.model, dry_run=args.dry_run)
         except Exception as exc:
-            return fail("E_POE_CEO", str(exc))
+            return fail("E_CONDUCTOR", str(exc))
         if args.format == "json":
             print(json.dumps({
                 "message": response.message,
@@ -1464,7 +1464,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.cmd == "poe-status":
-        from poe import _compile_executive_summary
+        from conductor import _compile_executive_summary
         dry_run = getattr(args, "dry_run", False)
         if dry_run:
             summary = "[dry-run] Executive summary: no active missions."

@@ -1677,7 +1677,7 @@ def _select_step_adapter(
                 log.debug("tier-override adapter build failed for step %d, using default: %s", step_idx, _ta_exc)
         else:
             try:
-                from poe import classify_step_model
+                from conductor import classify_step_model
                 _step_model = classify_step_model(step_text)
                 if session_tier_floor and tier_order.get(_step_model, 0) < tier_order.get(session_tier_floor, 0):
                     _step_model = session_tier_floor
@@ -2280,7 +2280,7 @@ def _decompose_goal(
         # — same surface director.py uses, so the planner-tier choice lives in
         # one place. Step execution stays on whatever the loop adapter selected.
         from llm import LLMAdapter as _LLMAdapterBase
-        from poe import assign_model_by_role as _assign
+        from conductor import assign_model_by_role as _assign
         _decompose_adapter = ctx.adapter
         # Only lift adapters we know how to rebuild (build_adapter products all
         # subclass LLMAdapter). Dry-run and injected test doubles are plain
@@ -2369,7 +2369,7 @@ def _initialize_loop(
     """
     from llm import build_adapter
     from interrupt import InterruptQueue, set_loop_running
-    from poe import assign_model_by_role
+    from conductor import assign_model_by_role
 
     ctx = LoopStateMachine()
     ctx.goal = goal
@@ -2559,7 +2559,7 @@ def _run_steps_parallel(
 
     def _run_one(step_idx: int, step_text: str) -> tuple[int, dict]:
         try:
-            from poe import classify_step_model
+            from conductor import classify_step_model
             step_model = classify_step_model(step_text)
             step_adapter = build_adapter(model=step_model) if step_model != adapter.model_key else adapter
         except Exception as _cla_exc:
@@ -2721,7 +2721,7 @@ def _run_steps_dag(
                 dep_ctx.append(f"Step {dep_idx} ({dep_step_text[:60]}):\n{dep_result[:600]}")
 
         try:
-            from poe import classify_step_model
+            from conductor import classify_step_model
             step_model = classify_step_model(step_text)
             step_adapter = build_adapter(model=step_model) if step_model != adapter.model_key else adapter
         except Exception as _cla_exc:

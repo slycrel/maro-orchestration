@@ -241,8 +241,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_poe_quality = sub.add_parser("poe-quality", help="Show quality summary (alias for poe-inspector-status)")
     p_poe_quality.add_argument("--format", choices=["text", "json"], default="text")
 
-    # Phase 13: Poe CEO layer commands
-    p_poe_ceo = sub.add_parser("poe", help="Send a request through the Poe CEO layer (Phase 13)")
+    # Conductor — top-level orchestration role
+    p_poe_ceo = sub.add_parser("conductor", help="Send a request through the Conductor (top-level orchestration role)")
     p_poe_ceo.add_argument("message", nargs="+", help="The request to handle")
     p_poe_ceo.add_argument("--model", "-m", help="LLM model string override")
     p_poe_ceo.add_argument("--dry-run", action="store_true", help="Simulate without API calls")

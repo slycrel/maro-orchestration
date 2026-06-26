@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""Phase 13: Poe CEO layer — top-level entry point for new sessions.
+"""Conductor — the top-level orchestration role and entry point for sessions.
 
-Poe is a communicator and planner, not an executor.
+The Conductor is a communicator and planner, not an executor. It is a neutral
+role, not a persona (a persona can be applied on top via config).
 
 Role contract (enforced here, not just in docs):
-  - Poe routes to Director/Mission — never executes steps directly
-  - Poe communicates at mission/goal level — doesn't surface step detail by default
-  - If the intent is trivial (NOW lane), Poe still handles it directly (CEO, not bureaucrat)
+  - The Conductor routes to Director/Mission — never executes steps directly
+  - It communicates at mission/goal level — doesn't surface step detail by default
+  - If the intent is trivial (NOW lane), it still handles it directly (lead, not bureaucrat)
 
 Routing logic:
   1. Classify intent (NOW/AGENDA)
@@ -18,15 +19,15 @@ Routing logic:
   7. Goal relationship queries → goal_map traversal
 
 Usage:
-    from poe import poe_handle
-    response = poe_handle("research winning polymarket strategies")
+    from conductor import conduct
+    response = conduct("research winning polymarket strategies")
     print(response.message)
 
 CLI:
-    orch poe "message"
-    orch poe-status
-    orch poe-map
-    orch poe-autonomy [--tier TIER] [--project PROJECT] [--action ACTION]
+    maro conductor "message"
+    maro conductor-status
+    maro conductor-map
+    maro conductor-autonomy [--tier TIER] [--project PROJECT] [--action ACTION]
 """
 
 from __future__ import annotations
@@ -88,7 +89,7 @@ except ImportError:  # pragma: no cover
 # ---------------------------------------------------------------------------
 
 @dataclass
-class PoeResponse:
+class ConductorResponse:
     message: str           # what to send back to Jeremy
     routed_to: str         # "now_lane" | "mission" | "director" | "inspector" | "status" | "goal_map"
     mission_id: Optional[str] = None
@@ -456,16 +457,16 @@ def _looks_like_multi_day(goal: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Core poe_handle function
+# Core conduct function
 # ---------------------------------------------------------------------------
 
-def poe_handle(
+def conduct(
     message: str,
     *,
     adapter=None,
     model: Optional[str] = None,
     dry_run: bool = False,
-) -> PoeResponse:
+) -> ConductorResponse:
     """Process a request through the Poe CEO layer.
 
     Poe routes — never executes steps directly.
@@ -477,28 +478,28 @@ def poe_handle(
         dry_run: Simulate without API calls.
 
     Returns:
-        PoeResponse with message and routing info.
+        ConductorResponse with message and routing info.
     """
     # dry_run path — no LLM calls, no imports needed
     if dry_run:
         if _looks_like_status(message):
-            return PoeResponse(
+            return ConductorResponse(
                 message="[dry-run] Executive summary: no active missions.",
                 routed_to="status",
                 executive_summary="[dry-run]",
             )
         if _looks_like_inspect(message):
-            return PoeResponse(
+            return ConductorResponse(
                 message="[dry-run] No inspection report available.",
                 routed_to="inspector",
             )
         if _looks_like_goal_map(message):
-            return PoeResponse(
+            return ConductorResponse(
                 message="[dry-run] Goal map: empty.",
                 routed_to="goal_map",
             )
         # Default dry-run: route as NOW lane
-        return PoeResponse(
+        return ConductorResponse(
             message=f"[dry-run] Would handle: {message[:80]}",
             routed_to="now_lane",
         )
@@ -515,7 +516,7 @@ def poe_handle(
 
     if _looks_like_status(message):
         summary = _compile_executive_summary(adapter=adapter)
-        return PoeResponse(
+        return ConductorResponse(
             message=summary,
             routed_to="status",
             executive_summary=summary,
@@ -543,11 +544,11 @@ def poe_handle(
                 msg = "Inspector not available."
         except Exception as exc:
             msg = f"Inspection query failed: {exc}"
-        return PoeResponse(message=msg, routed_to="inspector")
+        return ConductorResponse(message=msg, routed_to="inspector")
 
     if _looks_like_goal_map(message):
         goal_desc = _describe_goal_relationships(message, adapter=adapter)
-        return PoeResponse(message=goal_desc, routed_to="goal_map")
+        return ConductorResponse(message=goal_desc, routed_to="goal_map")
 
     # --- Intent classification ---
 
@@ -573,7 +574,7 @@ def poe_handle(
         )
         decision = evaluate_action(req)
         if decision.requires_human:
-            return PoeResponse(
+            return ConductorResponse(
                 message=(
                     "This action requires your approval before I proceed.\n"
                     f"Action: {action_type}\n"
@@ -587,7 +588,7 @@ def poe_handle(
 
     if lane == "now":
         now_response = _handle_now_lane(message, adapter=adapter)
-        return PoeResponse(
+        return ConductorResponse(
             message=now_response,
             routed_to="now_lane",
         )
@@ -605,7 +606,7 @@ def poe_handle(
                 f"Milestones: {result.milestones_done}/{result.milestones_total}\n"
                 f"Features: {result.features_done}/{result.features_total}"
             )
-            return PoeResponse(
+            return ConductorResponse(
                 message=summary,
                 routed_to="mission",
                 mission_id=result.mission_id,
@@ -674,19 +675,19 @@ def poe_handle(
             )
             if loop_result.status == "stuck" and loop_result.stuck_reason:
                 summary += f"\nStuck: {loop_result.stuck_reason}"
-            return PoeResponse(
+            return ConductorResponse(
                 message=summary,
                 routed_to="director",
                 executive_summary=summary,
             )
         except Exception as exc:
-            return PoeResponse(
+            return ConductorResponse(
                 message=f"Task failed to execute: {exc}",
                 routed_to="director",
             )
 
     # Fallback
-    return PoeResponse(
+    return ConductorResponse(
         message=f"Received: {message[:80]}. No executor available.",
         routed_to="now_lane",
     )

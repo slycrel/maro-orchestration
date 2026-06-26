@@ -391,7 +391,7 @@ def run_director(
     # Build adapter — planner role uses MODEL_POWER for spec production
     if adapter is None and not dry_run:
         from llm import build_adapter
-        from poe import assign_model_by_role
+        from conductor import assign_model_by_role
         adapter = build_adapter(model=assign_model_by_role("planner"))
 
     total_tokens_in = 0
@@ -952,7 +952,7 @@ def handle_escalation(
     try:
         if adapter is None:
             from llm import build_adapter
-            from poe import assign_model_by_role
+            from conductor import assign_model_by_role
             adapter = build_adapter(model=assign_model_by_role("planner"))
 
         resp = adapter.complete(

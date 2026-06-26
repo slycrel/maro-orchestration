@@ -55,9 +55,9 @@ except ImportError:
     handle = None  # type: ignore[assignment]
 
 try:
-    from poe import poe_handle
+    from conductor import conduct
 except ImportError:
-    poe_handle = None  # type: ignore[assignment]
+    conduct = None  # type: ignore[assignment]
 
 try:
     from interrupt import InterruptQueue, is_loop_running, get_running_loop
@@ -169,9 +169,9 @@ def _dispatch_slash(
 ) -> str:
     """Route a Slack slash command to the appropriate handler. Returns response text."""
     if cmd == "status":
-        if poe_handle is not None:
-            return poe_handle("/status", dry_run=dry_run)
-        return "[poe_handle not available]"
+        if conduct is not None:
+            return conduct("/status", dry_run=dry_run)
+        return "[conduct not available]"
 
     elif cmd == "observe":
         # Quick snapshot via poe-observe
@@ -299,9 +299,9 @@ def _process_message(
 
 def _run_natural(text: str, *, dry_run: bool, project: str, verbose: bool) -> str:
     """Run a natural language message through the agent loop."""
-    if poe_handle is not None:
+    if conduct is not None:
         try:
-            return poe_handle(text, dry_run=dry_run)
+            return conduct(text, dry_run=dry_run)
         except Exception as e:
             return f"Error: {e}"
     elif handle is not None:
@@ -309,7 +309,7 @@ def _run_natural(text: str, *, dry_run: bool, project: str, verbose: bool) -> st
             return handle(text)
         except Exception as e:
             return f"Error: {e}"
-    return "poe_handle not available"
+    return "conduct not available"
 
 
 def _send(client: Any, channel_id: str, text: str) -> None:
