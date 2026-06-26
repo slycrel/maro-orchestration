@@ -99,9 +99,15 @@ def probe_contested_claims(claims: list) -> list:
         probe_exit = None
         probe_out = ""
         try:
+            # Run the probe in the run-scoped project dir, not Maro's launch
+            # cwd — otherwise `git status` / file checks resolve against the
+            # wrong directory (the bug that made probes dismiss correct
+            # path-mismatch contestations). None → inherit launch cwd (NOW lane).
+            from llm import get_default_subprocess_cwd
+            _probe_cwd = get_default_subprocess_cwd()
             result = subprocess.run(
                 cmd, shell=True, capture_output=True, text=True,
-                timeout=PROBE_TIMEOUT_SEC,
+                timeout=PROBE_TIMEOUT_SEC, cwd=_probe_cwd,
             )
             probe_exit = result.returncode
             combined = (result.stdout or "") + (result.stderr or "")

@@ -43,6 +43,26 @@ Ordered open work that matters. Top of the list is next.
   but nothing stops an agent from writing an absolute path elsewhere. The
   scavenging diagnostic + hard fence (tier a) are still open.
 
+  **Soft-fence extended to ALL agentic paths (2026-06-26):** the executor fix
+  above bound cwd *only* for `step_exec.execute_step`. The done≠achieved
+  verification runs caught the gap on camera: the non-executor agentic paths
+  (`verification_agent` verify/adversarial/quality, `quality_gate`
+  council/debate/adversarial, `pre_flight`, `step_exec` refinement, and
+  `claim_probe`'s `settled_by_command` runner) still inherited the launch cwd.
+  When a verifier couldn't find the cited artifact at the workspace path (wrong
+  cwd) it **re-created the script and re-ran it to "verify"** — leaking files
+  into the launch dir AND fabricating ground truth (then its own probe dismissed
+  the correct path-mismatch contestation). Confirmed by experiment: leak follows
+  the launch dir (repo root vs scratchpad). Fixed with a run-scoped ambient cwd:
+  `llm._DEFAULT_SUBPROCESS_CWD` (ContextVar) resolved in `complete()` as
+  `kwargs["cwd"] or get_default_subprocess_cwd()`; `run_agent_loop` sets it to
+  the project dir, `handle.py` scopes it around `run_quality_gate`, `claim_probe`
+  reads it for `subprocess.run(cwd=…)`. NOW lane leaves it unset → inherits
+  launch cwd (correct for an interactive ask). Tests reset it via an autouse
+  conftest fixture. This closes the leak *and* an anti-hallucination hole (a
+  verifier that can see ground truth stops fabricating it). Tier-a hard fence
+  still open.
+
 **Bounded workspace / sandboxing (discovered 2026-04-17)**
 
 Run 4 of slycrel-go blind test was contaminated by stale local clones. Four

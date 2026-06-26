@@ -45,6 +45,8 @@ Usage:
 
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import json
 import logging
 import os
@@ -56,6 +58,44 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 log = logging.getLogger("maro.llm")
+
+
+# ---------------------------------------------------------------------------
+# Ambient subprocess working directory (the "where do agentic writes land" fix)
+# ---------------------------------------------------------------------------
+# The executor binds cwd per-call (step_exec passes cwd=project_dir). But the
+# non-executor agentic paths — verification_agent, quality_gate, pre_flight,
+# refinement, and claim_probe's settled_by_command runner — used to inherit
+# whatever directory Maro was launched from. When one of those agents did real
+# tool work (e.g. a verifier re-creating + running a script to "check" it),
+# files leaked into the user's cwd AND the verifier fabricated ground truth it
+# couldn't find at the cited path. This ContextVar is the run-scoped default:
+# run_agent_loop sets it to the project dir, so EVERY agentic call defaults
+# in-workspace unless a caller explicitly overrides cwd. NOW-lane leaves it
+# unset (None) → inherits launch cwd, which is what an interactive ask wants.
+_DEFAULT_SUBPROCESS_CWD: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "maro_default_subprocess_cwd", default=None
+)
+
+
+def get_default_subprocess_cwd() -> Optional[str]:
+    """Run-scoped default cwd for agentic subprocesses (None → inherit launch cwd)."""
+    return _DEFAULT_SUBPROCESS_CWD.get()
+
+
+def set_default_subprocess_cwd(path: Optional[str]) -> None:
+    """Set the run-scoped default agentic cwd. Pass None to clear."""
+    _DEFAULT_SUBPROCESS_CWD.set(str(path) if path else None)
+
+
+@contextlib.contextmanager
+def default_subprocess_cwd(path: Optional[str]):
+    """Scope the default agentic cwd to a block, restoring the prior value after."""
+    token = _DEFAULT_SUBPROCESS_CWD.set(str(path) if path else None)
+    try:
+        yield
+    finally:
+        _DEFAULT_SUBPROCESS_CWD.reset(token)
 
 
 # ---------------------------------------------------------------------------
@@ -833,7 +873,10 @@ class ClaudeSubprocessAdapter(LLMAdapter):
         _timeout = timeout or self.timeout
         # cwd: bind the agent's working dir to the caller's workspace so relative
         # file writes land in-workspace instead of the inherited parent cwd.
-        _cwd = kwargs.get("cwd")
+        # Explicit cwd= wins; otherwise fall back to the run-scoped ambient
+        # default (set by run_agent_loop) so non-executor agentic paths
+        # (verify/quality_gate/pre_flight/refinement) don't leak to launch cwd.
+        _cwd = kwargs.get("cwd") or get_default_subprocess_cwd()
         try:
             result = _run_subprocess_safe(cmd, input=prompt, timeout=_timeout, cwd=_cwd)
         except subprocess.TimeoutExpired:

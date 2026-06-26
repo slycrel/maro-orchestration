@@ -536,6 +536,27 @@ class TestProbeContestedClaims:
         assert out["verdict"] == "CONTESTED"
         assert "exec error" in out["probe_output_preview"]
 
+    def test_probe_runs_in_ambient_cwd(self, tmp_path):
+        # The settled_by_command must resolve relative paths against the
+        # run-scoped project dir, not Maro's launch cwd — the bug that made a
+        # probe dismiss a correct path-mismatch contestation. Create a file in
+        # tmp_path, set the ambient cwd there, probe with a RELATIVE test.
+        import llm
+        (tmp_path / "marker.txt").write_text("here")
+        llm.set_default_subprocess_cwd(str(tmp_path))
+        try:
+            claim = {
+                "claim": "marker.txt does not exist",
+                "verdict": "CONTESTED",
+                "settled_by_command": "test -f marker.txt",  # relative
+            }
+            [out] = _probe_contested_claims([claim])
+        finally:
+            llm.set_default_subprocess_cwd(None)
+        # Resolved in tmp_path → file found → exit 0 → contestation dismissed.
+        assert out["probe_status"] == "dismissed"
+        assert out["probe_exit_code"] == 0
+
     def test_mixed_batch_classifies_each_independently(self):
         # Dismissed + validated + unprobed together in one batch — each slot
         # is independent, per-claim captain's log emission too.

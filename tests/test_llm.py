@@ -277,6 +277,73 @@ def test_subprocess_complete_threads_cwd(monkeypatch):
     assert mock_run.call_args.kwargs.get("cwd") == "/some/workspace"
 
 
+def test_subprocess_complete_uses_ambient_cwd(monkeypatch):
+    """With no explicit cwd, complete() falls back to the run-scoped ambient cwd."""
+    import llm
+    a = ClaudeSubprocessAdapter()
+    mock_result = MagicMock()
+    mock_result.returncode = 0
+    mock_result.stdout = _make_subprocess_output("ok")
+    mock_result.stderr = ""
+
+    llm.set_default_subprocess_cwd("/run/scoped/project")
+    try:
+        with patch("llm._run_subprocess_safe", return_value=mock_result) as mock_run:
+            a.complete([LLMMessage("user", "write a file")])
+    finally:
+        llm.set_default_subprocess_cwd(None)
+
+    assert mock_run.call_args.kwargs.get("cwd") == "/run/scoped/project"
+
+
+def test_subprocess_explicit_cwd_overrides_ambient(monkeypatch):
+    """An explicit cwd= kwarg wins over the run-scoped ambient default."""
+    import llm
+    a = ClaudeSubprocessAdapter()
+    mock_result = MagicMock()
+    mock_result.returncode = 0
+    mock_result.stdout = _make_subprocess_output("ok")
+    mock_result.stderr = ""
+
+    llm.set_default_subprocess_cwd("/ambient/dir")
+    try:
+        with patch("llm._run_subprocess_safe", return_value=mock_result) as mock_run:
+            a.complete([LLMMessage("user", "x")], cwd="/explicit/dir")
+    finally:
+        llm.set_default_subprocess_cwd(None)
+
+    assert mock_run.call_args.kwargs.get("cwd") == "/explicit/dir"
+
+
+def test_default_subprocess_cwd_context_manager_restores():
+    """The default_subprocess_cwd context manager sets within the block and restores after."""
+    from llm import default_subprocess_cwd, get_default_subprocess_cwd, set_default_subprocess_cwd
+    set_default_subprocess_cwd("/outer")
+    try:
+        assert get_default_subprocess_cwd() == "/outer"
+        with default_subprocess_cwd("/inner"):
+            assert get_default_subprocess_cwd() == "/inner"
+        assert get_default_subprocess_cwd() == "/outer"
+    finally:
+        set_default_subprocess_cwd(None)
+
+
+def test_no_ambient_cwd_inherits_launch_cwd(monkeypatch):
+    """With ambient unset (NOW lane), no cwd is forced — inherits launch cwd."""
+    import llm
+    a = ClaudeSubprocessAdapter()
+    mock_result = MagicMock()
+    mock_result.returncode = 0
+    mock_result.stdout = _make_subprocess_output("ok")
+    mock_result.stderr = ""
+
+    llm.set_default_subprocess_cwd(None)
+    with patch("llm._run_subprocess_safe", return_value=mock_result) as mock_run:
+        a.complete([LLMMessage("user", "x")])
+
+    assert mock_run.call_args.kwargs.get("cwd") is None
+
+
 def test_run_subprocess_safe_honors_cwd(tmp_path):
     """The subprocess actually runs in the supplied cwd, so relative writes land there."""
     from llm import _run_subprocess_safe

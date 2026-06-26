@@ -1823,12 +1823,21 @@ def _handle_impl(
                 and _cfg.get("quality_gate", "true") == "true"):
             try:
                 from quality_gate import run_quality_gate, next_model_tier
-                _gate_verdict = run_quality_gate(
-                    message, loop_result.steps, adapter,
-                    run_council=_strict_prefix,
-                    run_cross_ref=_strict_prefix,
-                    loop_id=getattr(loop_result, "loop_id", None),
-                )
+                from llm import default_subprocess_cwd
+                from agent_loop import _project_dir_root
+                # Quality gate runs agentic council/adversarial/probe calls after
+                # the loop returns — scope their cwd to the just-run project dir
+                # so they (and the settled_by_command probe) resolve files
+                # in-workspace, not against Maro's launch cwd.
+                _qg_proj = getattr(loop_result, "project", "") or ""
+                _qg_cwd = str(_project_dir_root() / _qg_proj) if _qg_proj else None
+                with default_subprocess_cwd(_qg_cwd):
+                    _gate_verdict = run_quality_gate(
+                        message, loop_result.steps, adapter,
+                        run_council=_strict_prefix,
+                        run_cross_ref=_strict_prefix,
+                        loop_id=getattr(loop_result, "loop_id", None),
+                    )
                 _contested_claims = _gate_verdict.contested_claims or []
                 if _gate_verdict.escalate and loop_result.status == "done":
                     _next_tier = next_model_tier(model or "cheap")

@@ -152,3 +152,26 @@ def _clear_current_run_dir():
         runs.set_current_run_dir(None)
     except Exception:
         pass
+
+
+@pytest.fixture(autouse=True)
+def _clear_default_subprocess_cwd():
+    """Reset the run-scoped ambient agentic cwd between tests.
+
+    run_agent_loop sets llm._DEFAULT_SUBPROCESS_CWD to the project dir and does
+    NOT reset it in production (quality_gate, which runs after the loop, should
+    inherit it). Across tests that global would otherwise bleed — a loop test
+    leaving it set could make a later test's subprocess resolution point at a
+    stale tmp project dir. Clear it both before and after each test.
+    """
+    try:
+        import llm
+        llm.set_default_subprocess_cwd(None)
+    except Exception:
+        pass
+    yield
+    try:
+        import llm
+        llm.set_default_subprocess_cwd(None)
+    except Exception:
+        pass

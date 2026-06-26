@@ -5018,6 +5018,20 @@ def run_agent_loop(
     interrupt_queue = ctx.interrupt_queue
     _perm_ctx = ctx.perm_ctx
 
+    # Bind the run-scoped default cwd to this loop's project dir so EVERY
+    # agentic subprocess (verify/quality_gate/pre_flight/refinement/claim_probe)
+    # writes in-workspace instead of inheriting Maro's launch cwd. The executor
+    # still binds cwd per-call (same value); recursive/fan-out sub-loops re-set
+    # this on their own entry. Not reset on exit by design — quality_gate runs
+    # after the loop returns and should inherit the same project dir (handle.py
+    # also scopes it explicitly). Tests reset it via an autouse fixture.
+    try:
+        from llm import set_default_subprocess_cwd
+        if project:
+            set_default_subprocess_cwd(str(_project_dir_root() / project))
+    except Exception:
+        pass
+
     def _resolve_tools() -> list:
         """Re-query tool registry on each call to pick up runtime-registered tools."""
         return (
