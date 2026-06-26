@@ -10,7 +10,7 @@ PIPE_BUF (4096 bytes). JSON payloads (step outcomes, traces, lessons) easily
 exceed this limit, so bare open('a').write() is NOT safe under concurrent writers.
 
 Behavior: best-effort lock with explicit warning on fallback. The lock
-is advisory — it prevents concurrent Poe processes from corrupting each
+is advisory — it prevents concurrent Maro processes from corrupting each
 other's writes, but can't enforce against external tools. If the lock
 can't be acquired within ~5s, the write proceeds with a WARNING log.
 This is a deliberate tradeoff: blocking indefinitely is worse than a

@@ -1,6 +1,6 @@
-"""bughunter — self-directed static code scan for Poe's own source.
+"""bughunter — self-directed static code scan for Maro's own source.
 
-Inspired by claw-code's verificationAgent pattern: Poe should be able to
+Inspired by claw-code's verificationAgent pattern: Maro should be able to
 scan her own orchestration code for bugs, not just diagnose runtime failures.
 
 This module uses Python's stdlib (ast + py_compile) to scan src/ for:
@@ -18,7 +18,7 @@ Usage:
     print(report.summary())
 
     # CLI:
-    poe-bughunter [--src PATH] [--severity warning|info] [--json]
+    maro-bughunter [--src PATH] [--severity warning|info] [--json]
 """
 
 from __future__ import annotations
@@ -315,7 +315,7 @@ def run_bughunter(
 
 def main() -> None:
     import argparse
-    p = argparse.ArgumentParser(description="bughunter — static code scan for Poe's src/")
+    p = argparse.ArgumentParser(description="bughunter — static code scan for Maro's src/")
     p.add_argument("--src", default=None,
                    help="Directory to scan (default: src/ next to this file)")
     p.add_argument("--severity", choices=["error", "warning", "info"], default="warning",

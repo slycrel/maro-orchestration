@@ -1,4 +1,4 @@
-"""Tests for poe.py — Phase 13: Poe CEO layer."""
+"""Tests for conductor.py — the Conductor layer."""
 
 from __future__ import annotations
 

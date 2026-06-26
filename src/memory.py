@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # @lat: [[memory-system]]
-"""Phase 5: Memory + Learning system for Poe orchestration.
+"""Phase 5: Memory + Learning system for Maro orchestration.
 
 Three memory layers:
 1. Session bootstrap: every session loads prior outcomes for context

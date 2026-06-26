@@ -2,7 +2,7 @@
 
 Governance event 2026-06-11: a vague goal pipeline-executed into an
 unreviewed push to origin/main authored as the owner. The guard makes the
-policy mechanical: Poe-spawned subprocesses (MARO_WORKER_RUN=1, set by the
+policy mechanical: Maro-spawned subprocesses (MARO_WORKER_RUN=1, set by the
 subprocess adapter) may push work branches but not the default branch,
 unless explicitly authorized (MARO_ALLOW_MAIN_PUSH=1).
 """

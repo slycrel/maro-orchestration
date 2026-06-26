@@ -1,15 +1,15 @@
 """Execution snapshot — Phase 23 / Phase 36 event stream.
 
-poe-observe              → full snapshot (loop state, heartbeat, recent outcomes, audit tail)
-poe-observe loop         → active goal / loop lock only
-poe-observe heartbeat    → heartbeat health only
-poe-observe projects     → per-project status at a glance (ACTIVE/STUCK/HEALTHY/UNKNOWN)
-poe-observe outcomes     → recent task outcomes
-poe-observe audit        → sandbox audit log tail
-poe-observe memory       → memory tier stats (same data as Stage 2 of poe-knowledge status)
-poe-observe events       → tail the live event stream (memory/events.jsonl)
-poe-observe watch        → periodic full-snapshot refresh (like `watch`)
-poe-observe serve        → local HTTP dashboard (default port 7700); no deps, stdlib only
+maro-observe              → full snapshot (loop state, heartbeat, recent outcomes, audit tail)
+maro-observe loop         → active goal / loop lock only
+maro-observe heartbeat    → heartbeat health only
+maro-observe projects     → per-project status at a glance (ACTIVE/STUCK/HEALTHY/UNKNOWN)
+maro-observe outcomes     → recent task outcomes
+maro-observe audit        → sandbox audit log tail
+maro-observe memory       → memory tier stats (same data as Stage 2 of maro-knowledge status)
+maro-observe events       → tail the live event stream (memory/events.jsonl)
+maro-observe watch        → periodic full-snapshot refresh (like `watch`)
+maro-observe serve        → local HTTP dashboard (default port 7700); no deps, stdlib only
 
 All reads are local JSONL/JSON — no LLM calls, no side effects.
 
@@ -570,7 +570,7 @@ def print_snapshot(outcomes_limit: int = 10, audit_limit: int = 5) -> None:
     hb = _read_heartbeat()
 
     print("╔══════════════════════════════════════════════════════╗")
-    print("║              Poe Execution Snapshot                  ║")
+    print("║              Maro Execution Snapshot                  ║")
     print("╚══════════════════════════════════════════════════════╝")
     print()
     print_loop_state(loop)
@@ -586,8 +586,8 @@ def print_snapshot(outcomes_limit: int = 10, audit_limit: int = 5) -> None:
     print_memory_stats()
     print()
     print("──────────────────────────────────────────────────────")
-    print("Tip: poe-observe loop | heartbeat | projects | outcomes | audit | memory")
-    print("     poe-knowledge status  for crystallization view")
+    print("Tip: maro-observe loop | heartbeat | projects | outcomes | audit | memory")
+    print("     maro-knowledge status  for crystallization view")
 
 
 # ---------------------------------------------------------------------------
@@ -612,7 +612,7 @@ def write_event(
 ) -> bool:
     """Append a structured event to memory/events.jsonl.
 
-    Called from agent_loop.py after each step so poe-observe events can
+    Called from agent_loop.py after each step so maro-observe events can
     display a live feed of what the system is doing.
 
     Never raises — returns True on success, False on failure.
@@ -688,7 +688,7 @@ _DASHBOARD_HTML = """\
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Poe — Agent Command Center</title>
+<title>Maro — Agent Command Center</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
   :root { --bg:#0d1117; --panel:#161b22; --border:#30363d; --text:#c9d1d9;
@@ -732,7 +732,7 @@ _DASHBOARD_HTML = """\
 </style>
 </head>
 <body>
-<h1>&#x25B6; Poe — Agent Command Center</h1>
+<h1>&#x25B6; Maro — Agent Command Center</h1>
 <div class="grid">
 
   <div class="panel full" id="chat-panel">
@@ -1052,7 +1052,7 @@ async function refresh() {
     const evalTrend = d.eval_trend || [];
     if (!evalTrend.length) {
       document.getElementById('eval-trend-status').innerHTML =
-        '<span class="idle">no eval runs yet — run poe-nightly-eval to populate</span>';
+        '<span class="idle">no eval runs yet — run maro-nightly-eval to populate</span>';
     } else {
       // Show the last 10 runs as a sparkline table
       let rows = evalTrend.slice(0,10).map(e => {
@@ -1619,7 +1619,7 @@ def serve_dashboard(host: str = "0.0.0.0", port: int = 7700) -> None:
 
     server = http.server.HTTPServer((host, port), _Handler)
     url = f"http://{host}:{port}"
-    print(f"Poe Command Center → {url}")
+    print(f"Maro Command Center → {url}")
     print("Ctrl-C to stop")
     try:
         server.serve_forever()

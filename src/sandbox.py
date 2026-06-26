@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Phase 15 + 18: Skill sandbox isolation for Poe orchestration.
+"""Phase 15 + 18: Skill sandbox isolation for Maro orchestration.
 
 Phase 15: subprocess isolation, static safety analysis, sandboxed test runner.
 Phase 18: resource limits (CPU, file size, fd count), soft network blocking,
@@ -182,11 +182,11 @@ _sb_orig_socket_init = _sb_socket.socket.__init__
 
 class _BlockedSocket(_sb_socket.socket):
     def connect(self, *a, **kw):
-        raise ConnectionRefusedError("[sandbox] network access blocked by Poe sandbox")
+        raise ConnectionRefusedError("[sandbox] network access blocked by Maro sandbox")
     def connect_ex(self, *a, **kw):
         return 111  # ECONNREFUSED
     def sendto(self, *a, **kw):
-        raise ConnectionRefusedError("[sandbox] network access blocked by Poe sandbox")
+        raise ConnectionRefusedError("[sandbox] network access blocked by Maro sandbox")
 
 _sb_socket.socket = _BlockedSocket
 _sb_socket.setdefaulttimeout(1)
@@ -320,7 +320,7 @@ def run_skill_sandboxed(
     static_safe, safety_reason = is_skill_safe(skill)
 
     try:
-        tmp_dir = Path(tempfile.mkdtemp(prefix="poe-sb-"))
+        tmp_dir = Path(tempfile.mkdtemp(prefix="maro-sb-"))
 
         # Build runner script
         preamble = _NETWORK_BLOCKER_CODE if config.block_network else ""

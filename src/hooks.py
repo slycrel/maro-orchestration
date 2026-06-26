@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Phase 11: Hook registry and execution engine for Poe orchestration.
+"""Phase 11: Hook registry and execution engine for Maro orchestration.
 
 Pluggable callbacks at each hierarchy level (mission / milestone / feature / step).
 

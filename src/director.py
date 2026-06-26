@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Phase 3: Director agent for Poe's orchestration hierarchy.
+"""Phase 3: Director agent for Maro's orchestration hierarchy.
 
 The Director:
 - Takes a directive (high-level goal or task)
@@ -22,7 +22,7 @@ Usage:
     print(result.report)
 
 CLI:
-    orch poe-director "your directive here" [--dry-run]
+    orch maro-director "your directive here" [--dry-run]
 """
 
 from __future__ import annotations
@@ -124,7 +124,7 @@ class DirectorResult:
 # ---------------------------------------------------------------------------
 
 _SPEC_SYSTEM = textwrap.dedent("""\
-    You are the Director for Poe, an autonomous orchestration system.
+    You are the Director for Maro, an autonomous orchestration system.
     Your job: take a directive and produce a structured work plan.
     You PLAN and REVIEW. You do NOT execute.
 
@@ -166,7 +166,7 @@ _REVIEW_SYSTEM = textwrap.dedent("""\
 """).strip()
 
 _COMPILE_SYSTEM = textwrap.dedent("""\
-    You are the Director compiling a final report for Poe's Handle.
+    You are the Director compiling a final report for Maro's Handle.
     Synthesize the worker outputs into a polished, structured report.
     The report will be relayed to the user (Jeremy) — make it direct and useful.
     Lead with the key findings/deliverables. Include relevant details.
@@ -232,7 +232,7 @@ def _is_large_scope_review(directive: str) -> bool:
 # Spec system prompt for large-scope reviews — raises ticket cap to 6 and
 # instructs domain-area splitting so each worker handles a bounded slice.
 _LARGE_SCOPE_SPEC_SYSTEM = textwrap.dedent("""\
-    You are the Director for Poe, an autonomous orchestration system.
+    You are the Director for Maro, an autonomous orchestration system.
     Your job: take a large-scope review directive and produce a staged work plan.
     You PLAN and REVIEW. You do NOT execute.
 
@@ -336,7 +336,7 @@ def run_director(
 
     def _log(msg: str):
         if verbose:
-            print(f"[poe:director:{director_id}] {msg}", file=sys.stderr, flush=True)
+            print(f"[maro:director:{director_id}] {msg}", file=sys.stderr, flush=True)
 
     _log(f"directive={directive!r}")
 
@@ -834,7 +834,7 @@ def _write_director_log(
 # ---------------------------------------------------------------------------
 
 _ESCALATION_SYSTEM = textwrap.dedent("""\
-    You are the Director for Poe, an autonomous orchestration system.
+    You are the Director for Maro, an autonomous orchestration system.
     A task has been through multiple continuation passes without completing.
     Your job: decide what happens next. You are not an executor — you are a judge.
 
@@ -939,7 +939,7 @@ def handle_escalation(
     log.info("escalation_start job_id=%s depth=%d", job_id, depth)
 
     if verbose:
-        print(f"[poe:director:escalation] job={job_id} depth={depth}", file=sys.stderr, flush=True)
+        print(f"[maro:director:escalation] job={job_id} depth={depth}", file=sys.stderr, flush=True)
 
     # Dry-run: close the escalation without further work
     if dry_run or adapter is None:
@@ -1106,7 +1106,7 @@ def handle_escalation(
             log.warning("escalation %s: failed to write summary: %s", action, exc)
 
     if verbose:
-        print(f"[poe:director:escalation] {action}: {reasoning[:80]}", file=sys.stderr, flush=True)
+        print(f"[maro:director:escalation] {action}: {reasoning[:80]}", file=sys.stderr, flush=True)
 
     # Emit observable event for dashboard visibility into escalation decisions
     try:
@@ -2108,7 +2108,7 @@ def director_evaluate(
 def main(argv=None):
     import argparse
 
-    parser = argparse.ArgumentParser(prog="maro-director", description="Run Poe's Director on a directive")
+    parser = argparse.ArgumentParser(prog="maro-director", description="Run Maro's Director on a directive")
     parser.add_argument("directive", nargs="+", help="The directive to execute")
     parser.add_argument("--project", "-p", help="Project slug")
     parser.add_argument("--model", "-m", help="LLM model string")

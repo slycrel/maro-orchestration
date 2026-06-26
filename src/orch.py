@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Poe orchestration core utilities."""
+"""Maro orchestration core utilities."""
 
 from __future__ import annotations
 

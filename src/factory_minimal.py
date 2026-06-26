@@ -9,7 +9,7 @@ entire Mode 2 stack when given just a good prompt?
 
 Usage:
     python3 factory_minimal.py "your goal here" [--model cheap|mid|power]
-    poe-factory-minimal "your goal here"
+    maro-factory-minimal "your goal here"
 """
 
 from __future__ import annotations

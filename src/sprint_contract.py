@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Phase 19: Sprint Contracts for Poe orchestration.
+"""Phase 19: Sprint Contracts for Maro orchestration.
 
 Before any Feature Worker starts, it negotiates a contract with Inspector
 defining explicit testable success criteria. Inspector grades against the

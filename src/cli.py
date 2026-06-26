@@ -999,7 +999,7 @@ def main(argv: list[str] | None = None) -> int:
             label = "(dry-run) " if dry_run else ""
             print(f"{label}total inserted={total_inserted} skipped={total_skipped} db={db_path}")
         else:
-            print(f"Unknown poe-memory subcommand: {memory_cmd}")
+            print(f"Unknown maro-memory subcommand: {memory_cmd}")
             return 1
         return 0
 
@@ -1091,7 +1091,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"    {result.summary[:200]}")
             return 0 if result.status in ("done", "dry_run") else 1
         else:
-            print(f"Unknown poe-persona subcommand: {persona_cmd}")
+            print(f"Unknown maro-persona subcommand: {persona_cmd}")
             return 1
         return 0
 
@@ -1440,7 +1440,7 @@ def main(argv: list[str] | None = None) -> int:
             if summary:
                 print(summary)
             else:
-                print("No inspection report available. Run poe-inspector first.")
+                print("No inspection report available. Run maro-inspector first.")
         return 0
 
     # Conductor — top-level orchestration role

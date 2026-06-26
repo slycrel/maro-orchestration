@@ -220,7 +220,7 @@ def polymarket_trades(token_id: str, *, limit: int = 20) -> str:
 
 
 # ---------------------------------------------------------------------------
-# poe-doctor health check
+# maro-doctor health check
 # ---------------------------------------------------------------------------
 
 def polymarket_health_check() -> Dict[str, Any]:

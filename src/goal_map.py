@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Phase 13: Goal relationship map — active mission relationship tracking.
 
-Poe needs to know how active missions relate to each other and to north star goals.
+Maro needs to know how active missions relate to each other and to north star goals.
 This module builds and queries a live graph of the goal hierarchy.
 
 Usage:

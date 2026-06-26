@@ -1,8 +1,8 @@
 """Crystallization dashboard — unified view of all knowledge graduation stages.
 
-poe-knowledge status   → full dashboard (all stages)
-poe-knowledge stage N  → show only stage N items
-poe-knowledge promote  → list promotion actions available (doesn't execute)
+maro-knowledge status   → full dashboard (all stages)
+maro-knowledge stage N  → show only stage N items
+maro-knowledge promote  → list promotion actions available (doesn't execute)
 """
 
 from __future__ import annotations
@@ -171,13 +171,13 @@ def print_dashboard(stage_filter: Optional[int] = None) -> None:
             print(f"  medium: {med} lessons{avg_str}")
             print(f"  long:   {lng} lessons")
             if gy:
-                print(f"  graveyard: {gy} recoverable (score 0.2–0.4) — run 'poe-memory list' to inspect")
+                print(f"  graveyard: {gy} recoverable (score 0.2–0.4) — run 'maro-memory list' to inspect")
             if s2.get("incidental_count"):
                 print(f"  incidental: {s2['incidental_count']} lessons tagged acquired_for (sub-goal prerequisites)")
             if gc:
-                print(f"  ⚠  {gc} lessons near GC threshold — consider 'poe-memory decay'")
+                print(f"  ⚠  {gc} lessons near GC threshold — consider 'maro-memory decay'")
             if promo:
-                print(f"  ↑  {promo} ready to promote medium→long — run 'poe-memory promote'")
+                print(f"  ↑  {promo} ready to promote medium→long — run 'maro-memory promote'")
         print()
 
     # Stage 3: Identity / Canon
@@ -193,7 +193,7 @@ def print_dashboard(stage_filter: Optional[int] = None) -> None:
                 print(f"  {n} candidate(s) ready for human review:")
                 for item in s3.get("top", []):
                     print(f"    • [{item['times_applied']}×] {item['lesson']}...")
-                print(f"  Run 'poe-memory canon-candidates' for full list")
+                print(f"  Run 'maro-memory canon-candidates' for full list")
         print()
 
     # Stage 4: Skills
@@ -206,7 +206,7 @@ def print_dashboard(stage_filter: Optional[int] = None) -> None:
             if s4["promote_ready"]:
                 names = ", ".join(s4["promote_ready_names"])
                 print(f"  ↑  {s4['promote_ready']} ready to promote: {names}")
-                print(f"     Run 'poe-skill-stats' then 'poe-skills promote <name>'")
+                print(f"     Run 'maro-skill-stats' then 'maro-skills promote <name>'")
         print()
 
     # Stage 5: Rules
@@ -226,7 +226,7 @@ def print_dashboard(stage_filter: Optional[int] = None) -> None:
                     wa = f"  ⚠ {r['wrong_answers']} wrong answers" if r["wrong_answers"] else ""
                     print(f"    • {r['name']}  ({r['use_count']} uses){wa}")
             if cands:
-                print(f"  ↑  {cands} skill(s) ready to graduate → run 'poe-knowledge graduate <name>'")
+                print(f"  ↑  {cands} skill(s) ready to graduate → run 'maro-knowledge graduate <name>'")
                 for c in s5.get("top_candidates", []):
                     print(f"    • {c['name']}  pass^3={c['pass3']}  uses={c['use_count']}")
         print()
@@ -244,13 +244,13 @@ def print_dashboard(stage_filter: Optional[int] = None) -> None:
                 by_cat = sug.get("by_category", {})
                 cats = ", ".join(f"{v} {k}" for k, v in sorted(by_cat.items(), key=lambda x: -x[1]))
                 print(f"  {n} pending: {cats}")
-                print(f"  Run 'poe-evolver --list' to review, '--apply <id>' to execute")
+                print(f"  Run 'maro-evolver --list' to review, '--apply <id>' to execute")
         print()
 
     print("──────────────────────────────────────────────────────")
     if stage_filter is None:
-        print("Tip: run 'poe-memory canon-candidates' for Stage 3 detail")
-        print("     run 'poe-persona list' to see 15 active personas")
+        print("Tip: run 'maro-memory canon-candidates' for Stage 3 detail")
+        print("     run 'maro-persona list' to see 15 active personas")
 
 
 def print_promote_actions() -> None:
@@ -265,26 +265,26 @@ def print_promote_actions() -> None:
 
     if not _fmt_error(s2) and s2["promote_candidates"]:
         print(f"  Stage 2→3 (medium→long): {s2['promote_candidates']} lesson(s)")
-        print(f"    poe-memory promote <id>")
+        print(f"    maro-memory promote <id>")
         print()
 
     if not _fmt_error(s3) and s3["canon_candidates"]:
         print(f"  Stage 3→identity (long→AGENTS.md): {s3['canon_candidates']} candidate(s)")
-        print(f"    poe-memory canon-candidates  # review first")
-        print(f"    poe-memory canonize <id>     # HUMAN GATE — edits AGENTS.md")
+        print(f"    maro-memory canon-candidates  # review first")
+        print(f"    maro-memory canonize <id>     # HUMAN GATE — edits AGENTS.md")
         print()
 
     if not _fmt_error(s4) and s4["promote_ready"]:
         names = ", ".join(s4["promote_ready_names"])
         print(f"  Stage 4 tier (provisional→established): {names}")
-        print(f"    poe-skills promote <name>")
+        print(f"    maro-skills promote <name>")
         print()
 
     if not _fmt_error(s5) and s5["graduation_candidates"]:
         print(f"  Stage 4→5 (established skill → rule): {s5['graduation_candidates']} candidate(s)")
         for c in s5.get("top_candidates", []):
             print(f"    • {c['name']}  pass^3={c['pass3']}  uses={c['use_count']}")
-        print(f"    poe-knowledge graduate <name>")
+        print(f"    maro-knowledge graduate <name>")
         print()
 
     if not (

@@ -224,13 +224,13 @@ def review_plan(
         log.log(_log_level, review.format_for_log())
         if verbose:
             import sys
-            print(f"[poe] pre-flight: {review.summary()}", file=sys.stderr, flush=True)
+            print(f"[maro] pre-flight: {review.summary()}", file=sys.stderr, flush=True)
             if review.scope == "wide":
-                print(f"[poe] pre-flight: scope WARNING — {scope_note}", file=sys.stderr, flush=True)
+                print(f"[maro] pre-flight: scope WARNING — {scope_note}", file=sys.stderr, flush=True)
             for f in review.flags:
                 if f.severity == "warn":
                     step_str = f"step {f.step}" if f.step else "plan"
-                    print(f"[poe] pre-flight [{f.kind}] {step_str}: {f.message}", file=sys.stderr, flush=True)
+                    print(f"[maro] pre-flight [{f.kind}] {step_str}: {f.message}", file=sys.stderr, flush=True)
 
         return review
 
@@ -375,13 +375,13 @@ def multi_lens_review(
     log.log(_log_level, "multi-lens: %s", review.summary())
     if verbose:
         import sys
-        print(f"[poe] pre-flight multi-lens: {review.summary()}", file=sys.stderr, flush=True)
+        print(f"[maro] pre-flight multi-lens: {review.summary()}", file=sys.stderr, flush=True)
 
     return review
 
 
 # ---------------------------------------------------------------------------
-# Calibration stats CLI (poe-preflight-stats)
+# Calibration stats CLI (maro-preflight-stats)
 # ---------------------------------------------------------------------------
 
 def preflight_calibration_stats(cal_path=None) -> dict:
@@ -447,7 +447,7 @@ def preflight_calibration_stats(cal_path=None) -> dict:
 
 
 def _preflight_stats_main():
-    """CLI entry point for poe-preflight-stats."""
+    """CLI entry point for maro-preflight-stats."""
     import argparse
     import json as _json
 

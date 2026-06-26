@@ -152,7 +152,7 @@ class SlowUpdateScheduler:
     # ------------------------------------------------------------------
 
     def status(self) -> dict:
-        """Return a snapshot dict for observability / poe-doctor."""
+        """Return a snapshot dict for observability / maro-doctor."""
         with self._lock:
             return {
                 "state": self._state.value,

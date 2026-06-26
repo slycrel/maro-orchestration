@@ -63,7 +63,7 @@ After=network.target
 
 [Service]
 Type=simple
-User={os.getenv('USER', 'poe')}
+User={os.getenv('USER', 'maro')}
 WorkingDirectory={_SRC_DIR}
 Environment=MARO_WORKSPACE={workspace}
 ExecStart={exec_cmd}
@@ -114,21 +114,21 @@ _SERVICES: list[dict] = [
     {
         "name": "maro-heartbeat",
         "label": "com.maro.heartbeat",
-        "description": "Poe Orchestration — Optional Heartbeat Monitor",
+        "description": "Maro Orchestration — Optional Heartbeat Monitor",
         "exec_cmd": f"{_PYTHON} {_SRC_DIR}/sheriff.py --heartbeat",
         "exec_args": [_PYTHON, str(_SRC_DIR / "sheriff.py"), "--heartbeat"],
     },
     {
         "name": "maro-telegram",
         "label": "com.maro.telegram",
-        "description": "Poe Orchestration — Optional Telegram Listener",
+        "description": "Maro Orchestration — Optional Telegram Listener",
         "exec_cmd": f"{_PYTHON} {_SRC_DIR}/telegram_listener.py",
         "exec_args": [_PYTHON, str(_SRC_DIR / "telegram_listener.py")],
     },
     {
         "name": "maro-inspector",
         "label": "com.maro.inspector",
-        "description": "Poe Orchestration — Optional Inspector Loop",
+        "description": "Maro Orchestration — Optional Inspector Loop",
         "exec_cmd": f"{_PYTHON} {_SRC_DIR}/inspector.py --loop",
         "exec_args": [_PYTHON, str(_SRC_DIR / "inspector.py"), "--loop"],
     },

@@ -566,7 +566,7 @@ def promote_lesson(lesson_id: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Decay cycle (run via maybe_consolidate() or `poe-memory decay`)
+# Decay cycle (run via maybe_consolidate() or `maro-memory decay`)
 # ---------------------------------------------------------------------------
 
 def run_decay_cycle(

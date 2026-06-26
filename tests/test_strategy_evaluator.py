@@ -452,7 +452,7 @@ class TestStrategyFitnessReportSummary:
 
 
 class TestReplayCLI:
-    """Tests for the poe-replay CLI (main() function)."""
+    """Tests for the maro-replay CLI (main() function)."""
 
     def _make_outcome(self, outcome_id, goal, status, summary=""):
         from memory import Outcome
@@ -468,7 +468,7 @@ class TestReplayCLI:
     def test_main_no_args_prints_help(self, capsys):
         from strategy_evaluator import main
         import sys
-        sys.argv = ["poe-replay"]
+        sys.argv = ["maro-replay"]
         rc = main()
         captured = capsys.readouterr()
         assert rc == 1
@@ -478,7 +478,7 @@ class TestReplayCLI:
         """main() evaluates a goal and prints fitness report."""
         monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
         import sys
-        sys.argv = ["poe-replay", "research polymarket trends"]
+        sys.argv = ["maro-replay", "research polymarket trends"]
         from strategy_evaluator import main
         rc = main()
         captured = capsys.readouterr()
@@ -489,7 +489,7 @@ class TestReplayCLI:
         """--outcome-id with unknown ID returns exit code 1."""
         monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
         import sys
-        sys.argv = ["poe-replay", "--outcome-id", "deadbeef"]
+        sys.argv = ["maro-replay", "--outcome-id", "deadbeef"]
         from strategy_evaluator import main
         rc = main()
         assert rc == 1
@@ -519,7 +519,7 @@ class TestReplayCLI:
         outcomes_file.write_text(json.dumps(asdict(outcome)) + "\n")
 
         import sys
-        sys.argv = ["poe-replay", "--outcome-id", "test1234"]
+        sys.argv = ["maro-replay", "--outcome-id", "test1234"]
         from strategy_evaluator import main
         rc = main()
         captured = capsys.readouterr()
@@ -530,7 +530,7 @@ class TestReplayCLI:
         """--compare mode prints delta between baseline and lesson-augmented fitness."""
         monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
         import sys
-        sys.argv = ["poe-replay", "research polymarket trends", "--compare"]
+        sys.argv = ["maro-replay", "research polymarket trends", "--compare"]
         from strategy_evaluator import main
         rc = main()
         captured = capsys.readouterr()

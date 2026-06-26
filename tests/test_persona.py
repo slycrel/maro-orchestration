@@ -660,7 +660,7 @@ def test_manifest_includes_trigger_keywords_for_known_personas():
 
 
 def test_poe_persona_manifest_cli(monkeypatch, tmp_path, capsys):
-    """poe-persona manifest CLI subcommand shows the manifest table."""
+    """maro-persona manifest CLI subcommand shows the manifest table."""
     monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
     import cli
     cli.main(["persona", "manifest"])
@@ -669,7 +669,7 @@ def test_poe_persona_manifest_cli(monkeypatch, tmp_path, capsys):
 
 
 def test_poe_persona_manifest_json_cli(monkeypatch, tmp_path, capsys):
-    """poe-persona manifest --format json outputs valid JSON."""
+    """maro-persona manifest --format json outputs valid JSON."""
     monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
     import cli
     cli.main(["persona", "manifest", "--format", "json"])

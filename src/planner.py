@@ -370,7 +370,7 @@ def decompose(
         pass
 
     # lat.md architecture context: inject relevant knowledge graph nodes for meta-work
-    # (goals touching Poe's own systems). TF-IDF selection, zero-LLM, zero cost.
+    # (goals touching Maro's own systems). TF-IDF selection, zero-LLM, zero cost.
     # Only injects if relevant (score > 0). Empty string = no injection (no noise).
     try:
         from lat_inject import inject_relevant_nodes as _lat_inject
@@ -386,7 +386,7 @@ def decompose(
     _goal_scope = estimate_goal_scope(goal)
     if verbose:
         import sys
-        print(f"[poe] decompose scope estimate: {_goal_scope}", file=sys.stderr, flush=True)
+        print(f"[maro] decompose scope estimate: {_goal_scope}", file=sys.stderr, flush=True)
 
     if extras:
         system = DECOMPOSE_SYSTEM + "\n\n" + "\n\n".join(extras)
@@ -419,7 +419,7 @@ def decompose(
                 log.info("decompose staged-pass: %d passes for large-scope goal", len(staged))
                 if verbose:
                     import sys
-                    print(f"[poe] large-scope goal → staged-pass decomposition: {len(staged)} passes",
+                    print(f"[maro] large-scope goal → staged-pass decomposition: {len(staged)} passes",
                           file=sys.stderr, flush=True)
                 return staged
         except Exception as exc:
@@ -487,7 +487,7 @@ def decompose(
                          len(candidates), len(composed))
                 if verbose:
                     import sys
-                    print(f"[poe] decomposed into {len(composed)} steps (multi-plan from {len(candidates)} candidates)",
+                    print(f"[maro] decomposed into {len(composed)} steps (multi-plan from {len(candidates)} candidates)",
                           file=sys.stderr, flush=True)
                 return composed
             # Fall through if compose failed — use the first valid candidate
@@ -515,7 +515,7 @@ def decompose(
         log.warning("decompose LLM failed, falling back to heuristic: %s", exc)
         if verbose:
             import sys
-            print(f"[poe] decompose LLM call failed, using heuristic: {exc}", file=sys.stderr, flush=True)
+            print(f"[maro] decompose LLM call failed, using heuristic: {exc}", file=sys.stderr, flush=True)
 
     # --- Fallback: the goal verbatim as a single step ---
     # The old heuristic here (orch.decompose_goal, split on [.;]) manufactured

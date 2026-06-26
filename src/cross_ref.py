@@ -15,7 +15,7 @@ Architecture:
 
 Integration:
   - Called from quality_gate.py Pass 3 (optional)
-  - Also usable standalone: `poe-cross-ref --text "..." --model cheap`
+  - Also usable standalone: `maro-cross-ref --text "..." --model cheap`
   - Results appended to quality output as [cross-ref-disputed:] annotations
 
 Usage:
@@ -25,8 +25,8 @@ Usage:
         print(report.dispute_summary())
 
 CLI:
-    poe-cross-ref --text "The study found X in N=200 subjects..."
-    poe-cross-ref --file result.txt
+    maro-cross-ref --text "The study found X in N=200 subjects..."
+    maro-cross-ref --file result.txt
 """
 
 from __future__ import annotations

@@ -1,4 +1,4 @@
-"""Execution and validation bridge implementations for Poe orchestration.
+"""Execution and validation bridge implementations for Maro orchestration.
 
 Extracted from orch.py — imports from orch_items but not from orch.py (no circular deps).
 """

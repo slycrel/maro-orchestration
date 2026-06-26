@@ -93,7 +93,7 @@ class ConductorResponse:
     message: str           # what to send back to Jeremy
     routed_to: str         # "now_lane" | "mission" | "director" | "inspector" | "status" | "goal_map"
     mission_id: Optional[str] = None
-    executive_summary: Optional[str] = None  # Poe's own framing of what happened/is happening
+    executive_summary: Optional[str] = None  # Maro's own framing of what happened/is happening
 
 
 # ---------------------------------------------------------------------------
@@ -349,7 +349,7 @@ def _describe_goal_relationships(goal_query: str, adapter=None) -> str:
 #                   plain phrases are short, specific, exact (no substring tricks).
 #
 # If we ever need richer NL meta-commands, the right answer is a dedicated
-# command prefix (e.g. "poe: status" or "!status") not more regex cleverness.
+# command prefix (e.g. "maro: status" or "!status") not more regex cleverness.
 # ---------------------------------------------------------------------------
 
 #: Maximum word-count for a message to be considered a meta-command candidate.
@@ -381,7 +381,7 @@ _GOAL_MAP_EXACT = {
     "mission map",
     "how do these relate",
     "how does this relate",
-    "how does poe relate",
+    "how does maro relate",
 }
 
 
@@ -467,9 +467,9 @@ def conduct(
     model: Optional[str] = None,
     dry_run: bool = False,
 ) -> ConductorResponse:
-    """Process a request through the Poe CEO layer.
+    """Process a request through the Conductor.
 
-    Poe routes — never executes steps directly.
+    The Conductor routes — never executes steps directly.
 
     Args:
         message: Natural language request or slash command.
@@ -539,7 +539,7 @@ def conduct(
                     if report.suggestions:
                         msg += f"\n- Top suggestion: {report.suggestions[0][:100]}"
                 else:
-                    msg = "No inspection report available. Run poe-inspector first."
+                    msg = "No inspection report available. Run maro-inspector first."
             else:
                 msg = "Inspector not available."
         except Exception as exc:

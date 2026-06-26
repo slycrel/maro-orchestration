@@ -1,11 +1,11 @@
-"""poe-doctor — pre-flight environment check.
+"""maro-doctor — pre-flight environment check.
 
 Verifies that the tools, credentials, and data directories needed for a run
 are present and functional. Run before kicking off a mission to catch config
 issues early.
 
 Usage:
-    poe-doctor
+    maro-doctor
     python3 doctor.py
 """
 
@@ -29,7 +29,7 @@ def _check(label: str, ok: bool, detail: str = "") -> dict:
 
 def run_doctor() -> bool:
     """Run all checks. Returns True if all pass."""
-    print("poe-doctor — environment check\n")
+    print("maro-doctor — environment check\n")
     results = []
 
     # Python version
@@ -246,7 +246,7 @@ def run_doctor() -> bool:
         results.append(_check(
             "Bughunter (src/)",
             _bh_count == 0,
-            "clean" if _bh_count == 0 else f"{_bh_count} issue(s) — run poe-bughunter for details",
+            "clean" if _bh_count == 0 else f"{_bh_count} issue(s) — run maro-bughunter for details",
         ))
     except Exception as exc:
         results.append(_check("Bughunter (src/)", True, f"skipped: {exc}"))  # optional, not fatal
@@ -442,7 +442,7 @@ def cleanup_workspace_skills(skills_path: "Path | None" = None) -> None:
 
 def main():
     import argparse
-    parser = argparse.ArgumentParser(description="Poe environment health check")
+    parser = argparse.ArgumentParser(description="Maro environment health check")
     parser.add_argument("--json", action="store_true", help="JSON output (not yet implemented, use text)")
     parser.add_argument("--cleanup-skills", action="store_true", help="Remove duplicate skills from workspace")
     parser.add_argument("--cleanup-lessons", action="store_true", help="Deduplicate lessons from workspace")

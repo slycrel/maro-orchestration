@@ -16,7 +16,7 @@ Credentials env file priority:
   2. <workspace_root>/secrets/.env
   3. ~/.openclaw/workspace/secrets/recovered/runtime-credentials/.env (legacy)
 
-This module must import only stdlib + yaml — no other poe modules — to avoid cycles.
+This module must import only stdlib + yaml — no other maro modules — to avoid cycles.
 """
 
 from __future__ import annotations
@@ -84,13 +84,13 @@ def playbook_path() -> Path:
 # YAML config — two-tier (user + workspace)
 # ---------------------------------------------------------------------------
 
-def _poe_dir() -> Path:
-    """~/.maro — user-level Poe directory."""
+def _maro_dir() -> Path:
+    """~/.maro — user-level Maro directory."""
     return Path.home() / ".maro"
 
 
 def _user_config_path() -> Path:
-    return _poe_dir() / "config.yml"
+    return _maro_dir() / "config.yml"
 
 
 def _workspace_config_path() -> Path:

@@ -237,8 +237,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_inspector_status = sub.add_parser("inspector-status", help="Show latest inspector report summary (Phase 12)")
     p_inspector_status.add_argument("--format", choices=["text", "json"], default="text")
 
-    # poe-quality is an alias for poe-inspector-status (shorter to type)
-    p_quality = sub.add_parser("quality", help="Show quality summary (alias for poe-inspector-status)")
+    # maro-quality is an alias for maro-inspector-status (shorter to type)
+    p_quality = sub.add_parser("quality", help="Show quality summary (alias for maro-inspector-status)")
     p_quality.add_argument("--format", choices=["text", "json"], default="text")
 
     # Conductor — top-level orchestration role
