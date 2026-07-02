@@ -41,3 +41,21 @@ Turning it all off: remove `notify.command` from config (stops outbound
 messages) and delete the symlink (stops dispatch). No daemons are involved on
 either side — dispatch runs inside OpenClaw's lifecycle, notify runs inside
 Maro's.
+
+## Teaching the agent to delegate
+
+The dispatch script does nothing until the OpenClaw agent knows when to use
+it. Installed 2026-07-01 into `~/.openclaw/workspace/AGENTS.md` (Delegation
+Architecture section) — the canonical instruction, reproduced here for fresh
+installs:
+
+- Hand Maro **multi-step build/research goals** that benefit from a
+  plan → execute → verify loop and a durable run record; keep seconds-scale
+  asks in the agent's own quick lane.
+- `scripts/maro-dispatch.sh "goal"` blocks until the run finishes;
+  `--queue` only enqueues (nothing drains it later — no background drain).
+- Completion/escalation reaches the human via the notify hook automatically;
+  don't duplicate the alert. Full result: `maro-runs result <handle-id>`.
+- Budget-capped (`budget.per_run_usd` / `budget.daily_usd`); a refused
+  dispatch says "daily budget exhausted" — note it, don't retry until the
+  next UTC day, and never wrap dispatch in a cron loop.
