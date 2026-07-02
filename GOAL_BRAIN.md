@@ -193,6 +193,21 @@ context, at best it's a slight tweak and we fix forward."*
   MARO_WORKER_RUN processes — the substrate itself pushed worker-authored
   content to main outside that env. Surfaced to Jeremy; not self-fixed
   (governance call).
+- Burn-in batch 1 (2026-07-02, 3 goals via the OpenClaw dispatch path):
+  **work 3/3 delivered, verdicts 3/3 false negatives.** Root cause: closure
+  checks ran in Maro's launch cwd (handle passes `workspace_path=repo_path`,
+  empty for non-repo goals) instead of the project dir the executor wrote to —
+  the BACKLOG #1 cwd-binding bug class, one seam over. Fixed:
+  `verify_goal_completion` backfills from `get_default_subprocess_cwd()`
+  (same contract as quality_gate/claim_probe). Live-proven post-fix: haiku
+  goal → `success`, `achieved=True`, verifier read the real file (ec4c1f3).
+  Implication: pre-fix done≠achieved data for non-repo goals is poisoned
+  false-negative (incl. the 2026-07-02 organic claims-run verdicts). Also
+  fixed: status `incomplete` classed `unknown` → now `partial`. Burn-in
+  side-finding: substrate dispatched a degenerate goal (raw step suffix
+  `[after:4]`); Maro's placeholder guard aborted it correctly, but the
+  substrate had already spent a meta-run investigating the string —
+  substrate-side behavior, no Maro fix.
 - Unattended hardening shipped same day (P3): (1) budget gates — nothing was
   setting `cost_budget`, so unattended runs were UNCAPPED; now
   `budget.per_run_usd` defaults it and `budget.daily_usd` gates loop start on
