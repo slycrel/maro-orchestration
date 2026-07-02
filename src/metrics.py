@@ -165,6 +165,36 @@ def _step_costs_path() -> Path:
     return memory_dir() / "step-costs.jsonl"
 
 
+def spend_today() -> float:
+    """Total recorded USD spend since UTC midnight (sums step-costs.jsonl).
+
+    The cross-run half of budget enforcement: per-run caps live in the loop
+    (ctx.cost_budget); this feeds the `budget.daily_usd` gate that stops an
+    unattended substrate from burning through runs one under-cap loop at a
+    time. Never raises; returns 0.0 on any failure.
+    """
+    try:
+        path = _step_costs_path()
+        if not path.exists():
+            return 0.0
+        today = datetime.now(timezone.utc).date().isoformat()
+        total = 0.0
+        with path.open(encoding="utf-8") as fh:
+            for line in fh:
+                # cheap prefix check before parsing — the file grows unbounded
+                if today not in line[:60]:
+                    continue
+                try:
+                    e = json.loads(line)
+                except Exception:
+                    continue
+                if str(e.get("recorded_at", "")).startswith(today):
+                    total += float(e.get("cost_usd", 0.0) or 0.0)
+        return total
+    except Exception:
+        return 0.0
+
+
 def record_step_cost(
     step_text: str,
     tokens_in: int,

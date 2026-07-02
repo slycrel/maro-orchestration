@@ -1969,9 +1969,11 @@ def _loop_result_to_handle(
     """
     elapsed = int((time.monotonic() - started_at) * 1000)
     result_parts = []
-    for s in loop_result.steps:
-        if s.status == "done" and s.result:
-            result_parts.append(f"**Step {s.index}: {s.text}**\n{s.result}")
+    # Number by position, not s.index — index is the NEXT.md item index and
+    # is -1 for injected/parallel-batch steps (the "Step -1" of BACKLOG #2).
+    for _pos, s in enumerate((s for s in loop_result.steps
+                              if s.status == "done" and s.result), 1):
+        result_parts.append(f"**Step {_pos}: {s.text}**\n{s.result}")
     result_text = "\n\n---\n\n".join(result_parts) if result_parts else "[no output]"
     if loop_result.status == "stuck":
         result_text += f"\n\n⚠️ Stuck: {loop_result.stuck_reason}"
@@ -2400,6 +2402,7 @@ def drain_task_store(
     verbose: bool = False,
     max_tasks: int = 3,
     sources: tuple = ("loop_continuation", "loop_escalation", "user_goal"),
+    job_ids: Optional[set] = None,
 ) -> int:
     """Claim and process queued task_store tasks with known sources.
 
@@ -2410,6 +2413,11 @@ def drain_task_store(
         max_tasks: Max tasks to process per call (avoids monopolizing the heartbeat).
         sources: Which task sources to drain. Includes user_goal for
                  ad-hoc goals enqueued via ``maro-enqueue``.
+        job_ids: If set, drain ONLY these tasks. This is the substrate
+                 dispatch contract (enqueue --drain): a dispatch must run
+                 exactly what it enqueued — never an older queued task, whose
+                 notify event the substrate would misattribute and whose
+                 tokens nobody consented to spend right now.
     """
     try:
         from task_store import list_tasks, claim, complete, fail as task_fail
@@ -2420,6 +2428,7 @@ def drain_task_store(
     queued = [
         t for t in list_tasks(status_filter="queued")
         if t.get("source") in sources
+        and (job_ids is None or t.get("job_id") in job_ids)
     ]
     if not queued:
         return 0
@@ -2579,7 +2588,8 @@ def enqueue_main(argv=None):
 
     if args.drain:
         print("\nDraining queue...")
-        n = drain_task_store(verbose=args.verbose, max_tasks=len(job_ids))
+        n = drain_task_store(verbose=args.verbose, max_tasks=len(job_ids),
+                             job_ids=set(job_ids))
         print(f"Processed {n} task(s)")
 
     return 0

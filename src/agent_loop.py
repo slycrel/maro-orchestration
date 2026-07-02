@@ -1390,8 +1390,14 @@ def _run_parallel_batch(
     proj_artifact_dir: str,
     iteration: int,
     step_idx: int,
+    batch_item_indices: Optional[List[int]] = None,
 ) -> tuple:
     """Phase F4: Run this step + peers in parallel batch.
+
+    batch_item_indices carries the NEXT.md item index for the lead step +
+    each peer (parallel to [step_text] + parallel_peers); -1 = not a project
+    item. Recording these (instead of hardcoding -1) is the BACKLOG #2 fix:
+    outcomes keep a real index and done items get marked in NEXT.md.
 
     Returns (iteration, step_idx, total_tokens_in_delta, total_tokens_out_delta).
     Mutates step_outcomes, completed_context, remaining_steps/indices in place.
@@ -1426,9 +1432,12 @@ def _run_parallel_batch(
         _b_elapsed = int((time.monotonic() - _batch_start) * 1000)
         _tokens_in_delta += _batch_oc.get("tokens_in", 0)
         _tokens_out_delta += _batch_oc.get("tokens_out", 0)
+        _b_item_idx = (batch_item_indices[_bi]
+                       if batch_item_indices and _bi < len(batch_item_indices)
+                       else -1)
 
         step_outcomes.append(step_from_decompose(
-            _batch_text, -1,
+            _batch_text, _b_item_idx,
             status=_b_status,
             result=_batch_oc.get("result", ""),
             iteration=iteration,
@@ -1440,6 +1449,12 @@ def _run_parallel_batch(
         ))
 
         if _b_status == "done":
+            if _b_item_idx >= 0:
+                try:
+                    _o = _orch()
+                    _o.mark_item(ctx.project, _b_item_idx, _o.STATE_DONE)
+                except Exception as _mark_exc:
+                    log.debug("parallel batch mark_item failed: %s", _mark_exc)
             _b_result = _batch_oc.get("result", "")
             _b_excerpt = _b_result[:800] if _b_result else ""
             completed_context.append(f"Step {step_idx} ({_batch_text[:80]}):\n{_b_excerpt}")
@@ -2338,6 +2353,65 @@ def _decompose_goal(
     return steps, _prereq_context, _lessons_context, _skills_context, _cost_context, _had_no_matching_skill
 
 
+def _budget_gate(ctx, *, goal: str, project: Optional[str], dry_run: bool):
+    """Budget gates (substrate-trial hardening, 2026-07-01). Two layers:
+
+    - per-run: callers rarely pass cost_budget, so an unattended run was
+      uncapped — config ``budget.per_run_usd`` supplies the default (an
+      explicit caller arg still wins). Enforced mid-loop by the existing
+      cost hard-stop.
+    - daily: per-run caps don't stop a substrate burning through runs one
+      under-cap loop at a time — ``budget.daily_usd`` gates on the cross-run
+      spend ledger (metrics.spend_today) before any tokens are spent.
+
+    Both unset by default = old behavior. dry_run skips (burns nothing).
+    Returns a stuck LoopResult to refuse the run, or None to proceed.
+    Never raises.
+    """
+    if dry_run:
+        return None
+    try:
+        from config import get as _budget_get
+        if ctx.cost_budget is None:
+            _per_run = _budget_get("budget.per_run_usd", None)
+            if _per_run is not None:
+                ctx.cost_budget = float(_per_run)
+                log.info("cost_budget defaulted from config: $%.2f", ctx.cost_budget)
+        _daily_cap = _budget_get("budget.daily_usd", None)
+        if _daily_cap is not None:
+            import metrics as _metrics
+            _spent = _metrics.spend_today()
+            if _spent >= float(_daily_cap):
+                _msg = (f"daily budget exhausted: ${_spent:.2f} spent today >= "
+                        f"budget.daily_usd ${float(_daily_cap):.2f} — refusing to start; "
+                        f"resets at UTC midnight")
+                log.warning("loop refused to start — %s", _msg)
+                try:
+                    from notify import emit as _budget_notify
+                    _budget_notify("escalation", {
+                        "handle_id": "", "goal": goal[:200], "status": "stuck",
+                        "summary": _msg, "reason": "daily budget gate",
+                        "point": "budget_gate",
+                    })
+                except Exception:
+                    pass
+                return LoopResult(
+                    loop_id=ctx.loop_id,
+                    goal=goal,
+                    project=project or "",
+                    steps=[],
+                    status="stuck",
+                    stuck_reason=_msg,
+                    total_tokens_in=0,
+                    total_tokens_out=0,
+                    elapsed_ms=0,
+                    log_path=None,
+                )
+    except Exception as _budget_exc:
+        log.debug("budget gate check failed (non-blocking): %s", _budget_exc)
+    return None
+
+
 def _initialize_loop(
     goal: str,
     *,
@@ -2433,6 +2507,10 @@ def _initialize_loop(
             )
     except Exception as _ks_exc:
         log.debug("killswitch check failed (non-blocking): %s", _ks_exc)
+
+    _budget_refusal = _budget_gate(ctx, goal=goal, project=project, dry_run=dry_run)
+    if _budget_refusal is not None:
+        return ctx, _budget_refusal
 
     # Wall-clock timeout — default 2 hours, override via MARO_LOOP_TIMEOUT_SECS
     try:
@@ -4074,18 +4152,22 @@ def _execute_main_loop(
         # Check for parallel peers: if this step has siblings at the same
         # dependency level, batch them for parallel execution
         _parallel_peers: List[str] = []
+        _peer_item_indices: List[int] = []
         if _levels and parallel_fan_out > 0 and remaining_steps:
             _current_step_num = step_idx + 1  # 1-based
             # Find which level this step belongs to
             for _lvl in _levels:
                 if _current_step_num in _lvl and len(_lvl) > 1:
-                    # Pop remaining peers from the front of remaining_steps
+                    # Pop remaining peers from the front of remaining_steps,
+                    # keeping their NEXT.md item indices so batch outcomes can
+                    # mark items done and record a real index (BACKLOG #2:
+                    # discarding these was the source of phantom "Step -1").
                     _peer_count = 0
                     for _peer_idx in _lvl:
                         if _peer_idx != _current_step_num and remaining_steps:
                             _parallel_peers.append(remaining_steps.pop(0))
-                            if remaining_indices:
-                                remaining_indices.pop(0)
+                            _peer_item_indices.append(
+                                remaining_indices.pop(0) if remaining_indices else -1)
                             _peer_count += 1
                     if _parallel_peers:
                         log.info("parallel batch: step %d + %d peers at same level",
@@ -4105,6 +4187,7 @@ def _execute_main_loop(
                 proj_artifact_dir=_proj_artifact_dir,
                 iteration=iteration,
                 step_idx=step_idx,
+                batch_item_indices=[item_index] + _peer_item_indices,
             )
             total_tokens_in += _tin
             total_tokens_out += _tout
