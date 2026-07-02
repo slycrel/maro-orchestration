@@ -191,6 +191,20 @@ Drain-once contract: `maro-enqueue --drain` processes exactly the tasks it
 just enqueued (`drain_task_store(job_ids=...)`) — an older queued task never
 piggybacks on a dispatch's token consent.
 
+## Workspace sanitization (why the dispatch script unsets env vars)
+
+Maro honors legacy workspace env vars (`OPENCLAW_WORKSPACE`,
+`WORKSPACE_ROOT`, `MARO_ORCH_ROOT`, `MARO_MEMORY_DIR` — and any pinned
+workspace, including `MARO_WORKSPACE`, flips the memory tier into the legacy
+`<ws>/prototypes/maro-orchestration/` layout). A substrate that pins these
+for its own subprocesses (OpenClaw does) would silently split-brain Maro:
+run dirs in `~/.maro/workspace/runs/` but events, lessons, and the
+step-costs ledger **that the daily budget gate reads** in the substrate's
+prototype dirs. Seen live 2026-07-02. `maro-dispatch.sh` therefore unsets
+all of them so every dispatch lands in the canonical `~/.maro/workspace`.
+If you write your own adapter, do the same — or export exactly one
+intentional workspace and know about the prototypes-layout quirk.
+
 ---
 
 ## What Maro does NOT provide (deliberately)

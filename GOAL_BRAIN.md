@@ -181,6 +181,18 @@ context, at best it's a slight tweak and we fix forward."*
   success-class, Telegram API accepted the DM (exit 0). Contract doc:
   `docs/SUBSTRATE_INTEGRATION.md`. Hermes stance unchanged: steal-from-don't-migrate;
   adapter deferred until after the OpenClaw trial.
+- Organic traffic started 2026-07-02 BEFORE the burn-in: a claims-verification
+  pipeline (Poe-authored commits, Haiku co-author, e528c36 pushed to main) ran
+  Maro from an OpenClaw-pinned environment. Two findings: (1) **workspace
+  split-brain** — pinned legacy env vars routed events/step-costs/lessons to
+  the deprecated `prototypes/poe-orchestration` dir while run dirs went to
+  `~/.maro`; the budget ledger the daily gate reads was therefore incomplete.
+  Fixed at the adapter seam (maro-dispatch.sh unsets all workspace vars —
+  live via symlink; today's cost entries merged); deeper layout wart filed as
+  BACKLOG #-1. (2) **Push-guard gap**: the pre-push guard binds only
+  MARO_WORKER_RUN processes — the substrate itself pushed worker-authored
+  content to main outside that env. Surfaced to Jeremy; not self-fixed
+  (governance call).
 - Unattended hardening shipped same day (P3): (1) budget gates — nothing was
   setting `cost_budget`, so unattended runs were UNCAPPED; now
   `budget.per_run_usd` defaults it and `budget.daily_usd` gates loop start on
