@@ -231,7 +231,18 @@ See `docs/CONSTRAINT_ORCHESTRATION_DESIGN.md` + `docs/CONSTRAINT_ORCHESTRATION_R
 
 ### Observability
 - [x] **Dashboard as real tool** — Added: Cost panel (24h spend, per-model breakdown from step-costs.jsonl), Mission Ancestry Tree (scans all workspace projects, shows parent/child depth), Replay button (POST /api/replay re-runs last outcome's goal in background thread). 12 tests. (2026-03-31)
+  **STATUS UPDATE (2026-07-02): needs revisited.** Jeremy's read: "this was a
+  proof of concept that sort of failed." Archived to
+  `archive/observe_dashboard.py` (code + why + how to run it manually), not
+  deleted — see that module's docstring for the full original-intent writeup
+  (give an end user both a high-level view of orchestration work and
+  visibility into the detailed work being done on their behalf) and
+  `docs/ARCHITECTURE_OVERVIEW.md`'s "Goal Lineage" section for the surviving
+  ancestry-visibility surface (`maro ancestry` CLI). `maro-observe serve`
+  now prints a pointer to the archive instead of running it. Revisit the
+  underlying visibility goal later — not via this implementation.
 - [x] **Replay with "factory mode"** — evolver signal scan on recent outcomes → queues highest-confidence sub-missions as new goals. `/api/replay-factory` endpoint + "Factory Mode Replay" button in dashboard. 4 tests. (2026-04-05)
+  **STATUS UPDATE (2026-07-02): needs revisited** — same dashboard archival as above; this endpoint lives on in `archive/observe_dashboard.py`.
 
 ### Factory Mode Experiment (Mode 3 test)
 - [x] **"factory" branch** — created. Two variants: `factory_minimal` (single-call Haiku $0.04-0.06/60s) and `factory_thin` (loop+adversarial Haiku $0.38/375s). Bitter Lesson result: minimal surprisingly competitive; thin+adv matches Mode 2 quality at ~2x lower cost. Scaffolding that's load-bearing: adversarial verification. Scaffolding that's not: persona routing, lesson injection, multi-plan comparison. (2026-03-31)
@@ -370,6 +381,11 @@ Ran 4 live goals: Polymarket research, nootropic synthesis, recipe site build, s
 - [x] **Input classification tag** — DONE (session 23). `classify_input_type()` in captains_log.py (url/code/structured_data/plain_text). `INPUT_MISMATCH` + `METACOGNITIVE_DECISION` event constants. `update_skill_utility()` logs INPUT_MISMATCH when circuit opens on url-skill-vs-non-url-input domain mismatch. `attribute_failure_to_skills()` threads step_text through. 9 tests. EVENT_TYPES 28→30.
 - [x] **Director context hook** — (2026-04-11 session 16) Captain's log context + playbook + knowledge nodes now injected into `_build_loop_context()`. Director sees recent learning events, operational wisdom, and relevant knowledge at decompose time.
 - [x] **Dashboard captain's log panel** — DONE (session 27). `_read_captain_log_entries(limit=20)` in observe.py reads captains_log.jsonl newest-first. Wired into `_snapshot_json()` and `_DASHBOARD_HTML`. Badge color-coding by event type. 6 tests in TestCaptainLogDashboard.
+  **STATUS UPDATE (2026-07-02): needs revisited** — the dashboard panel itself
+  (`_snapshot_json`/`_DASHBOARD_HTML` wiring) was archived to
+  `archive/observe_dashboard.py`; see the "Dashboard as real tool" entry
+  above for the full context. `_read_captain_log_entries` itself is
+  unaffected and remains live in `observe.py`.
 
 ### From X research runs (2026-04-09)
 

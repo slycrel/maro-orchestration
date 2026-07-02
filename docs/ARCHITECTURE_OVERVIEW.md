@@ -172,6 +172,40 @@ Boundaries between subsystems are implicit. There's no explicit contract saying 
 ### Conway's Law
 The system's architecture mirrors its development process: each subsystem was built in a focused session, then wired together. The result is good individual subsystems with loose coupling — but the *interfaces between them* are the weakest points.
 
+### Goal Lineage (Ancestry)
+
+Two invariants Jeremy holds here: (a) a human must be able to **see** a goal's
+lineage (what it descended from, what it spawned), and (b) later work must be
+able to **pull in context from prior related work** downstream, not just
+display it. Four mechanisms currently exist and are not fully unified:
+
+| Mechanism | Granularity | What it tracks | Status |
+|---|---|---|---|
+| `ancestry.py` (spec §12) | per-project | Full multi-hop chain (root mission → ... → immediate parent) in `<project>/ancestry.json` | Live — the only source with real chain depth |
+| `goal_map.py` | per-project | Reads the same `ancestry.json` files across all projects, adds sibling/conflict detection (competing active missions sharing a parent) | Live — used by `conductor.py`, `telegram_listener.py`, `maro map` |
+| `thread_brain.py` | per-thread (run-dir) | One-hop origin only (`parent_handle_id`/`parent_goal`) in a narrative `goal_brain.md` | Part of the in-progress Thread Architecture (`docs/THREAD_ARCHITECTURE.md`), shadow-only |
+| `recall.py`'s `_resolve_thread` | per-run | A *separate* parent-chain walk over run metadata (`origin`), independent of `ancestry.json` | Live — currently the one actually injected into `agent_loop`'s recall slice |
+
+**Known gap:** `agent_loop.py` injects ancestry twice per loop from two
+disagreeing sources (`ancestry.py`'s `ancestry.json` chain and `recall.py`'s
+run-metadata walk) — see BACKLOG.md for the consolidation item. The intended
+end state is one source of truth: `ancestry.py`'s project-level chain,
+consulted by `recall.py` instead of independently re-derived, with
+`thread_brain.py`'s per-thread origin feeding the same `ancestry.json` at
+thread-fork time as the Thread Architecture work lands.
+
+**Visibility today:** `maro ancestry <project> [--set-parent] [--format]`
+(CLI, text or JSON) is the durable surface. The `observe.py` dashboard also
+rendered an ancestry tree panel, but that dashboard was an archived
+proof-of-concept (see `archive/observe_dashboard.py` and BACKLOG_DONE.md) —
+the CLI command is what to build on, not the dashboard.
+
+**Downstream reference today:** partial. `ancestry.py`'s chain is real but
+requires manual `--set-parent` wiring; nothing yet auto-walks it to inject
+"what did the parent goal conclude" into a child run's context. This is the
+open thread — not a new subsystem to build, but wiring the pieces above into
+one path.
+
 ---
 
 ## Reading Order for New Sessions
