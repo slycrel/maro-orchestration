@@ -99,6 +99,20 @@ def _resolve_allowed_chats() -> set[int]:
         except ValueError:
             pass
 
+    # Maro's own config outranks the legacy openclaw.json fallback below —
+    # an installed harness shouldn't need another system's config file.
+    try:
+        from config import get as _cfg_get
+        _ids = _cfg_get("telegram.chat_ids", None) or _cfg_get("telegram.chat_id", None)
+        if _ids is not None:
+            if not isinstance(_ids, (list, tuple, set)):
+                _ids = [_ids]
+            resolved = {int(x) for x in _ids if str(x).lstrip("-").isdigit()}
+            if resolved:
+                return resolved
+    except Exception:
+        pass
+
     cfg = _load_openclaw_cfg()
     tg = cfg.get("channels", {}).get("telegram", {})
     chat_id = tg.get("chatId", "")

@@ -162,6 +162,26 @@ context, at best it's a slight tweak and we fix forward."*
   in llm.py (commits `2d0acef`/`a886b46`). Basis: live repro, leak gone, verifier
   escalated honestly.
 
+**Substrate integration, as of 2026-07-01:**
+- New arc opened (Jeremy, 2026-07-01): *"get the project where we can trial it for
+  real with hermes or openclaw (mostly we've been running it standalone via
+  prompting)"* — a real substrate drives Maro instead of interactive prompting.
+- Recon verified (against code, not docs): submission (`maro-enqueue`/`handle()`),
+  file task queue, run-dirs, and pip packaging were already real; what was missing
+  was the back-channel — no completion signal out, no uniform result retrieval,
+  and a LIVE navigator escalate that never reached a human. OpenClaw had zero Maro
+  wiring.
+- Substrate contract shipped + live-verified same day: `notify.py` hook
+  (config `notify.command`, payload = run_card on stdin, off by default, in-lifecycle
+  — honors program-not-OS), `run_result()` normalizing NOW/AGENDA result shapes,
+  escalation taps at navigator dispatch-escalate + director surface,
+  `maro-notify-telegram` target (chat resolution: env → maro config
+  `telegram.chat_id` → legacy openclaw.json), `deploy/openclaw/maro-dispatch.sh`.
+  Basis: E2E through the OpenClaw-installed symlink — real goal, run_card
+  success-class, Telegram API accepted the DM (exit 0). Contract doc:
+  `docs/SUBSTRATE_INTEGRATION.md`. Hermes stance unchanged: steal-from-don't-migrate;
+  adapter deferred until after the OpenClaw trial.
+
 **Execution quality, as of the session-40 audit (not yet re-measured post-fixes):**
 478 run dirs Apr 26–May 16; recent runs ~50% stuck / 30% error / 15% done. One
 stuck-class cause (non-convergent step auto-split) fixed in `3bd28cd`. Re-measure
@@ -469,6 +489,11 @@ Sample: the 2026-05-13..17 window of `~/.maro/workspace/runs/` (478 dirs total;
 ## Threads (system-maintained — nothing leaves this list silently)
 
 Active:
+- **Substrate trial (OpenClaw → Maro → Telegram)**: opened 2026-07-01, contract
+  half shipped + live-verified same day (see Compiled truth). Remaining:
+  unattended hardening (budget caps, Step -1 recovery), OpenClaw delegation
+  instruction, ~15-goal burn-in adjudicated via run_cards, then the Hermes
+  adapter decision. MILESTONES item 0.
 - **M5 — portability pass**: no hardcoded machine paths (`_CODEX_BIN` etc.),
   `pip install -e` works, installable harness. Last of the session-40 arc.
   Status 2026-06-10: hardcoded paths removed (llm.py, backtester.py,

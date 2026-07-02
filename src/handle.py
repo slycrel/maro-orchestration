@@ -783,9 +783,22 @@ def handle(
                 # the paid-for capture for later mining (skills/scripts/decision
                 # priors/re-attempts). Reads the metadata finalize just wrote, so
                 # it runs AFTER _finalize_run. Best-effort, never affects outcome.
+                _card = None
                 try:
                     from run_curation import curate_run as _curate_run
-                    _curate_run(_hid, status=_status)
+                    _card = _curate_run(_hid, status=_status)
+                except Exception:
+                    pass
+                # Substrate notification: the run_card IS the completion payload
+                # (status, done!=achieved class, result excerpt + path).
+                try:
+                    from notify import emit as _notify_emit
+                    from runs import run_dir as _run_dir_notify
+                    _notify_emit(
+                        "run_completed",
+                        _card or {"handle_id": _hid, "status": _status},
+                        run_dir=str(_run_dir_notify(_hid)),
+                    )
                 except Exception:
                     pass
         except Exception:
@@ -2179,6 +2192,23 @@ def _navigator_act_dispatch(
             )
         except Exception:
             pass
+        if move == "escalate":
+            # Deferring to a human only works if a human finds out. No run-dir
+            # exists (the run was prevented), so this is the only signal out.
+            try:
+                from notify import emit as _notify_emit
+                _notify_emit("escalation", {
+                    "handle_id": "",
+                    "goal": goal,
+                    "status": status,
+                    "summary": result,
+                    "reason": reasoning,
+                    "job_id": job_id,
+                    "source": source,
+                    "point": "dispatch",
+                })
+            except Exception:
+                pass
         return HandleResult(
             handle_id="",
             lane="agenda",
@@ -2220,7 +2250,25 @@ def handle_task(
     if source == "loop_escalation":
         from director import handle_escalation
         log.info("handle_task routing escalation job_id=%s depth=%d", job_id, depth)
-        return handle_escalation(task, adapter=adapter, dry_run=dry_run, verbose=verbose)
+        _esc = handle_escalation(task, adapter=adapter, dry_run=dry_run, verbose=verbose)
+        # "surface" means "for operator review" — that review only happens if
+        # the operator is told. continue/narrow/close are internal dispositions.
+        if getattr(_esc, "action", "") == "surface" and not dry_run:
+            try:
+                from notify import emit as _notify_emit
+                _notify_emit("escalation", {
+                    "handle_id": "",
+                    "goal": reason[:500],
+                    "status": "surfaced",
+                    "summary": getattr(_esc, "summary_for_user", ""),
+                    "reason": getattr(_esc, "reasoning", ""),
+                    "job_id": job_id,
+                    "source": source,
+                    "point": "director_escalation",
+                })
+            except Exception:
+                pass
+        return _esc
 
     elif source == "loop_continuation":
         # Continuations are already classified AGENDA — skip intent classification overhead.

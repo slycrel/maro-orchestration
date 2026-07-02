@@ -51,6 +51,28 @@ def test_resolve_allowed_chats_empty(monkeypatch, tmp_path):
     assert chats == set()
 
 
+def test_resolve_allowed_chats_from_maro_config(monkeypatch, tmp_path):
+    monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)
+    monkeypatch.delenv("TELEGRAM_NOTIFY_CHAT_ID", raising=False)
+    import config as config_mod
+    monkeypatch.setattr(config_mod, "get",
+                        lambda key, default=None: 555666777 if key == "telegram.chat_id" else default)
+    with patch("telegram_listener._OPENCLAW_CFG", tmp_path / "nofile.json"):
+        chats = _resolve_allowed_chats()
+    assert chats == {555666777}
+
+
+def test_resolve_allowed_chats_from_maro_config_list(monkeypatch, tmp_path):
+    monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)
+    monkeypatch.delenv("TELEGRAM_NOTIFY_CHAT_ID", raising=False)
+    import config as config_mod
+    monkeypatch.setattr(config_mod, "get",
+                        lambda key, default=None: [111, "222"] if key == "telegram.chat_ids" else default)
+    with patch("telegram_listener._OPENCLAW_CFG", tmp_path / "nofile.json"):
+        chats = _resolve_allowed_chats()
+    assert chats == {111, 222}
+
+
 # ---------------------------------------------------------------------------
 # TelegramBot helpers
 # ---------------------------------------------------------------------------

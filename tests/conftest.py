@@ -81,6 +81,13 @@ def _isolate_workspace(tmp_path):
     saved["MARO_WORKSPACE"] = os.environ.get("MARO_WORKSPACE")
     os.environ["MARO_WORKSPACE"] = str(tmp_path)
 
+    # User-config isolation — the box's real ~/.maro/config.yml must never
+    # feed a test (found 2026-07-01: notify/telegram keys leaked into
+    # _resolve_allowed_chats through the user tier; the workspace tier was
+    # isolated in session 17, this tier wasn't).
+    saved["MARO_USER_DIR"] = os.environ.get("MARO_USER_DIR")
+    os.environ["MARO_USER_DIR"] = str(tmp_path / "maro-user")
+
     # API key isolation — stash and remove
     for var in _API_KEY_VARS:
         saved[var] = os.environ.pop(var, None)

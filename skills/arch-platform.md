@@ -44,6 +44,8 @@ Retry: Automatic exponential backoff (5s, 15s, 45s) on rate limits, 5xx, connect
 - Secret-scrubbed through `src/secret_scrub.py` — the **single source** for what counts as a secret, shared with `scripts/harvest_corpus.py` so the runtime recorder and the committed-fixture path can never diverge.
 - *Import direction:* `runs` does not import `llm`; `llm` lazily imports `runs.record_llm_call` inside `complete()`. Keep it that way.
 
+**Substrate notify hook (notify.py).** How an external substrate (OpenClaw, Hermes, shell) learns a run finished or a human is needed — `docs/SUBSTRATE_INTEGRATION.md` is the contract. `notify.emit(event_type, payload)`: always appends to `memory/events.jsonl` (via observe.write_event) so polling works; additionally runs config `notify.command` with the payload JSON on stdin + `MARO_EVENT_TYPE`/`MARO_HANDLE_ID`/`MARO_STATUS`/`MARO_RUN_DIR` env when the event is in `notify.events` (default `[run_completed, escalation]`). Off by default; bounded by `notify.timeout_seconds` (30); never raises. Emit sites: handle.py finalize (`run_completed`, payload = the run_card — curation feeds notification), navigator dispatch-escalate (`escalation`, point=dispatch — run prevented, no run-dir, this is the only signal out), director surface adjudication (`escalation`, point=director_escalation). `notify_telegram.py` (`maro-notify-telegram`) is the shipped Telegram target: formats card/escalation → plain-text send via telegram_listener resolvers (env → **maro config `telegram.chat_id`/`chat_ids`** → legacy openclaw.json). Do NOT add a server/daemon variant — pull-based drain + in-lifecycle hooks are the invariant.
+
 **Post-goal curation (run_curation.py).** Hooked in handle.py's finalize `finally` (after `_finalize_run`, so it reads the just-written status). `curate_run(handle_id, status)` writes `<run-dir>/run_card.json`: outcome class (`success`/`done-not-achieved`/`done-unverified`/`partial`/`failed` — done≠achieved aware via `goal_achieved` metadata) + mineable inventory (calls, scripts, artifacts, steps). It's a **miner registry** (`CURATORS` — ordered pure `(rd, meta, card)->None` fns); v0 ships classify + inventory, future miners (skill/script scrapers, decision-prior indexer, re-attempt hinter, partial rescue) append without touching the hook. User-visible/prunable: `python3 -m run_curation list|show|curate|prune`. Best-effort, never affects request outcome. *Intent:* don't discard paid-for runs — park them for later mining and keep them visible/prunable to the user.
 
 ## Config System (config.py)
@@ -137,6 +139,9 @@ Per-model, per-step-type cost tracking to `memory/step-costs.jsonl`:
 | src/metrics.py | ~615 | Cost tracking, step classification |
 | src/observe.py | ~1690 | Observe dashboard (runtime visibility) |
 | src/runs.py | ~700 | Run-dir lifecycle, metadata, record-mode capture (record_llm_call) |
-| src/run_curation.py | ~240 | Post-goal curation: classify + inventory → run_card.json; miner registry; list/prune CLI |
+| src/run_curation.py | ~290 | Post-goal curation: classify + inventory + result excerpt → run_card.json; run_result normalizer; status/result/list/prune CLI |
+| src/notify.py | ~120 | Substrate notify hook: events.jsonl + config notify.command |
+| src/notify_telegram.py | ~120 | Telegram notify target (maro-notify-telegram) |
+| deploy/openclaw/ | | OpenClaw adapter: maro-dispatch.sh + setup README |
 | src/secret_scrub.py | ~40 | Single-source secret scrubber (recorder + harvester share it) |
 | scripts/heartbeat-ctl.sh | | Lifecycle management (start/stop/status) |

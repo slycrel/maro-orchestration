@@ -85,7 +85,15 @@ def playbook_path() -> Path:
 # ---------------------------------------------------------------------------
 
 def _maro_dir() -> Path:
-    """~/.maro — user-level Maro directory."""
+    """~/.maro — user-level Maro directory.
+
+    MARO_USER_DIR overrides (tests point this at tmp so the box's real
+    ~/.maro/config.yml can never leak into a test — the workspace tier was
+    isolated in session 17, this tier wasn't).
+    """
+    override = os.environ.get("MARO_USER_DIR")
+    if override:
+        return Path(override).expanduser()
     return Path.home() / ".maro"
 
 

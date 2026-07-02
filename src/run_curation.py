@@ -59,6 +59,51 @@ def _read_meta(rd: Path) -> dict:
         return {}
 
 
+def run_result(handle_id: str, run_dir: Optional[Path] = None) -> Optional[dict]:
+    """Uniform result retrieval — the substrate-facing 'what was the answer?'.
+
+    Normalizes the two lane shapes into one dict:
+      NOW    → artifact/now-<hid>.json          (payload['result'])
+      AGENDA → build/loop-*-RESULT.md|PARTIAL.md (newest; RESULT preferred)
+
+    Returns {handle_id, lane, status, result, result_path} or None if the run
+    (or any result artifact) doesn't exist.
+    """
+    rd = run_dir or _run_dir_for(handle_id)
+    if rd is None or not rd.is_dir():
+        return None
+    meta = _read_meta(rd)
+    base = {
+        "handle_id": handle_id,
+        "lane": meta.get("lane"),
+        "status": meta.get("status"),
+    }
+
+    now_artifact = rd / "artifact" / f"now-{handle_id}.json"
+    if now_artifact.is_file():
+        try:
+            payload = json.loads(now_artifact.read_text())
+            return {**base, "result": payload.get("result", ""),
+                    "result_path": str(now_artifact)}
+        except Exception:
+            pass
+
+    # AGENDA: prefer a completed RESULT over a PARTIAL; newest wins within kind
+    # (continuation loops write one transcript each).
+    build = rd / "build"
+    for pattern in ("loop-*-RESULT.md", "loop-*-PARTIAL.md"):
+        candidates = sorted(build.glob(pattern),
+                            key=lambda p: p.stat().st_mtime, reverse=True)
+        if candidates:
+            f = candidates[0]
+            try:
+                return {**base, "result": f.read_text(encoding="utf-8"),
+                        "result_path": str(f)}
+            except Exception:
+                continue
+    return None
+
+
 # --- curators (the miner registry) -----------------------------------------
 
 def classify_outcome(rd: Path, meta: dict, card: dict) -> None:
@@ -121,8 +166,19 @@ def inventory_assets(rd: Path, meta: dict, card: dict) -> None:
     card["mineable"] = bool(calls or scripts or artifacts)
 
 
+def excerpt_result(rd: Path, meta: dict, card: dict) -> None:
+    """Put a result excerpt + pointer on the card so a substrate reading only
+    run_card.json gets the answer (or knows where the full text lives)."""
+    res = run_result(meta.get("handle_id", ""), run_dir=rd)
+    if not res:
+        return
+    text = (res.get("result") or "").strip()
+    card["result_excerpt"] = text[:500] + ("…" if len(text) > 500 else "")
+    card["result_path"] = res.get("result_path")
+
+
 # Ordered registry. Append future miners here; the hook never changes.
-CURATORS = [classify_outcome, inventory_assets]
+CURATORS = [classify_outcome, inventory_assets, excerpt_result]
 
 
 def curate_run(handle_id: str, status: Optional[str] = None,
@@ -205,6 +261,8 @@ def main(argv=None):
     sub = ap.add_subparsers(dest="cmd", required=True)
     pl = sub.add_parser("list"); pl.add_argument("--limit", type=int, default=50)
     ps = sub.add_parser("show"); ps.add_argument("handle_id")
+    pt = sub.add_parser("status"); pt.add_argument("handle_id")
+    pr = sub.add_parser("result"); pr.add_argument("handle_id")
     pc = sub.add_parser("curate"); pc.add_argument("handle_id")
     pp = sub.add_parser("prune"); pp.add_argument("handle_id"); pp.add_argument("--yes", action="store_true")
     args = ap.parse_args(argv)
@@ -219,6 +277,26 @@ def main(argv=None):
             print((rd / "run_card.json").read_text())
         else:
             print(json.dumps(curate_run(args.handle_id) or {}, indent=2))
+    elif args.cmd == "status":
+        rd = _run_dir_for(args.handle_id)
+        if rd is None:
+            print("not found")
+            return 1
+        meta = _read_meta(rd)
+        print(json.dumps({
+            "handle_id": args.handle_id,
+            "status": meta.get("status"),
+            "goal_achieved": meta.get("goal_achieved"),
+            "lane": meta.get("lane"),
+            "started_at": meta.get("started_at"),
+            "ended_at": meta.get("ended_at"),
+        }, indent=2))
+    elif args.cmd == "result":
+        res = run_result(args.handle_id)
+        if res is None:
+            print("not found")
+            return 1
+        print(res.get("result", ""))
     elif args.cmd == "curate":
         print(json.dumps(curate_run(args.handle_id) or {}, indent=2))
     elif args.cmd == "prune":
