@@ -181,6 +181,19 @@ context, at best it's a slight tweak and we fix forward."*
   success-class, Telegram API accepted the DM (exit 0). Contract doc:
   `docs/SUBSTRATE_INTEGRATION.md`. Hermes stance unchanged: steal-from-don't-migrate;
   adapter deferred until after the OpenClaw trial.
+- Unattended hardening shipped same day (P3): (1) budget gates — nothing was
+  setting `cost_budget`, so unattended runs were UNCAPPED; now
+  `budget.per_run_usd` defaults it and `budget.daily_usd` gates loop start on
+  `metrics.spend_today()` (cross-run ledger), refusal = stuck + escalation
+  notify; box config: 2.0/10.0 (real-money invariant). (2) Phantom `Step -1`
+  (BACKLOG #2) root-caused: NOT the recovery planner — `_run_parallel_batch`
+  discarded popped NEXT.md item indices and hardcoded index=-1; fixed by
+  threading `batch_item_indices` through (done batch steps now mark NEXT.md
+  items) and numbering the result display by position. (3) Drain-once:
+  `enqueue --drain` now drains exactly its own job_ids — a stale queued task
+  can't ride a dispatch's token consent. (4) Found+closed a test-isolation
+  hole: user tier `~/.maro/config.yml` was never isolated (session-17 overhaul
+  covered only the workspace tier) — `MARO_USER_DIR` override + conftest.
 
 **Execution quality, as of the session-40 audit (not yet re-measured post-fixes):**
 478 run dirs Apr 26–May 16; recent runs ~50% stuck / 30% error / 15% done. One

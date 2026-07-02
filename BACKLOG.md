@@ -139,7 +139,7 @@ have" not "build a sandboxing subsystem."
 
   **Candidates:**
   - ~~cap total backoff wall-clock at ~10 min; if exceeded, bail cleanly (soft-fail with "rate-limited, retry later" rather than another 30-min sleep)~~ **DONE 2026-06-24** — `llm.py` subprocess rate-limit loop now tracks cumulative sleep and bails before the next sleep would exceed `POE_CLAUDE_RATE_LIMIT_TOTAL_CAP` (default 600s). Soft-fails with a "bailed after Ns of backoff … retry later" RuntimeError. `=0` disables (falls back to retry-count). Tests in test_llm.py.
-  - recovery path should trigger an actual replan (fewer steps, smaller scope) or adapter switch, not a phantom `Step -1` ordinal
+  - ~~recovery path should trigger an actual replan (fewer steps, smaller scope) or adapter switch, not a phantom `Step -1` ordinal~~ **DONE 2026-07-01 (root cause was elsewhere)** — the phantom wasn't the recovery planner at all: `_run_parallel_batch` hardcoded `StepOutcome.index = -1` for every batch member (discarding the popped NEXT.md indices), and handle.py rendered `**Step {s.index}**`. Fixed: peer item indices threaded through the batch (`batch_item_indices`), done batch steps now `mark_item` in NEXT.md, and result assembly numbers by position (`**Step {pos}**`) since index -1 is legitimate for injected steps. Tests: test_parallel_batch_indices.py.
   - while in rate-limit backoff, pause the cost meter or at least annotate "backoff-idle tokens=0" — run-06 showed $41 cost accumulating during 61 min of no real work (cost meter is probably accumulating during retries before the API call; worth auditing)
 
   **Related:** `decomposition_too_broad` miscalibration (now archived). Both are recovery-layer bugs that only surface on long plans.

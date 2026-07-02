@@ -163,9 +163,33 @@ payload on stdin).
 
 ```bash
 maro-enqueue "nightly goal"                       # anytime
-maro-heartbeat                                    # one-shot: health + drain
+python3 -m heartbeat                              # one-shot: health + drain
 tail -f $MARO_WORKSPACE/memory/events.jsonl       # live feed
 ```
+
+## Budget caps (unattended safety)
+
+Dispatching a goal is consent to spend tokens — but not unbounded. Two
+config knobs (`~/.maro/config.yml`, both off by default):
+
+```yaml
+budget:
+  per_run_usd: 2.0    # default cost_budget for every run (explicit caller arg wins)
+  daily_usd: 10.0     # cross-run gate: refuse new runs once today's recorded spend hits this
+```
+
+- `per_run_usd` feeds the loop's existing cost hard-stop (upfront estimate
+  abort + mid-loop breaker at cap + 20% slush).
+- `daily_usd` is checked at loop start against `metrics.spend_today()`
+  (sums `memory/step-costs.jsonl` since UTC midnight). A refused run returns
+  status `stuck` with reason "daily budget exhausted…" and emits an
+  `escalation` notify event (`point: budget_gate`) so the substrate hears
+  about it instead of wondering why nothing ran.
+- Dry runs skip both gates.
+
+Drain-once contract: `maro-enqueue --drain` processes exactly the tasks it
+just enqueued (`drain_task_store(job_ids=...)`) — an older queued task never
+piggybacks on a dispatch's token consent.
 
 ---
 

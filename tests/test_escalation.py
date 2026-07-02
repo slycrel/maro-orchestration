@@ -393,3 +393,23 @@ class TestDrainTaskStore:
         with mock.patch("task_store.list_tasks", return_value=tasks):
             count = drain_task_store(dry_run=False)
         assert count == 0
+
+    def test_drain_job_ids_filter_skips_stale_tasks(self, monkeypatch, tmp_path):
+        """Substrate dispatch contract: enqueue --drain runs only what it
+        enqueued, never an older queued task."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        tasks = [
+            {**_make_escalation_task(), "job_id": "stale-001", "status": "queued"},
+            {**_make_escalation_task(), "job_id": "mine-001", "status": "queued"},
+        ]
+        processed = []
+
+        with mock.patch("task_store.list_tasks", return_value=tasks), \
+             mock.patch("task_store.claim", side_effect=lambda jid: None), \
+             mock.patch("task_store.complete", side_effect=lambda jid: None), \
+             mock.patch("handle.handle_task", lambda t, **kw: processed.append(t["job_id"])):
+            count = drain_task_store(dry_run=False, max_tasks=1,
+                                     job_ids={"mine-001"})
+
+        assert count == 1
+        assert processed == ["mine-001"]
