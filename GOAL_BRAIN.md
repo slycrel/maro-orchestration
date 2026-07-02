@@ -208,6 +208,26 @@ context, at best it's a slight tweak and we fix forward."*
   `[after:4]`); Maro's placeholder guard aborted it correctly, but the
   substrate had already spent a meta-run investigating the string —
   substrate-side behavior, no Maro fix.
+- Burn-in COMPLETE (2026-07-02, 14 goals / 4 batches; full adjudicated record
+  in `docs/BURNIN_2026-07-02.md`): **pipeline verdict WORKS** — 12/14
+  delivered, controls behaved, ~$2.45/day, $0.10–0.60/goal (cost now joinable
+  via metadata `loop_ids` → run_card `total_cost_usd`). Batches 2–4 caught
+  three more verdict-integrity bugs, all fixed + re-proven live:
+  (a) inconclusive-as-failure — ANY inconclusive probe (often the verifier's
+  own malformed command) flipped complete→False mechanically AND the verdict
+  prompt pushed the LLM the same way ("Goal achieved." conf 0.95 recorded as
+  not achieved); positive-evidence rule now — flip only when checks_passed==0
+  (9be749b). (b) NOW-lane misroute — goals naming a file deliverable routed
+  NOW (which can't write files); capability override in intent.classify
+  forces agenda (8ed0a09). (c) skipped-closure false POSITIVE — fail-open
+  null verdict ("Verification skipped.", checks_run=0) was recorded as
+  goal_achieved=True on a rate-limit-stuck run; verdicts now recorded only
+  when checks ran (90b4d1b). Environmental: batch 4 hit the shared `claude -p`
+  subscription rate limit; degradation was correct (clean backoff bails,
+  navigator escalate-to-human at dispatch, Telegram ping) but unattended work
+  wants a non-competing model lane — API key / OpenRouter credit / accept
+  contention (Jeremy's call, same family as the MODEL_POWER-on-subprocess
+  warning).
 - Unattended hardening shipped same day (P3): (1) budget gates — nothing was
   setting `cost_budget`, so unattended runs were UNCAPPED; now
   `budget.per_run_usd` defaults it and `budget.daily_usd` gates loop start on
