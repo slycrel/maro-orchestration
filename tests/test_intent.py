@@ -41,6 +41,34 @@ class TestHeuristicNOW:
         assert lane == "now"
 
 
+class TestFileOutputOverride:
+    """Burn-in batch-3 regression: a goal naming a file deliverable cannot be
+    NOW — that lane answers inline and never writes disk. The override applies
+    after classification (LLM or heuristic)."""
+
+    def test_now_shaped_goal_with_artifact_path_forced_to_agenda(self):
+        lane, conf, reason = classify(
+            "Summarize what the unix command 'comm' does and give 3 worked "
+            "examples, saved to artifacts/comm-examples.md",
+            dry_run=True,
+        )
+        assert lane == "agenda"
+        assert conf >= 0.8
+        assert "file deliverable" in reason
+
+    def test_save_to_named_file_forced_to_agenda(self):
+        lane, _, _ = classify("Quick: save the top 5 rows to report.csv", dry_run=True)
+        assert lane == "agenda"
+
+    def test_plain_now_goal_unaffected(self):
+        lane, _, _ = classify("what time is it?", dry_run=True)
+        assert lane == "now"
+
+    def test_inline_transform_unaffected(self):
+        lane, _, _ = classify("translate this to Spanish: hello world", dry_run=True)
+        assert lane == "now"
+
+
 class TestHeuristicAGENDA:
     def test_research(self):
         lane, conf, reason = _heuristic_classify("research winning polymarket prediction strategies")

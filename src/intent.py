@@ -45,12 +45,40 @@ def classify(
         - reason: one-sentence explanation
     """
     if dry_run or adapter is None:
-        return _heuristic_classify(message)
+        lane, confidence, reason = _heuristic_classify(message)
+    else:
+        try:
+            lane, confidence, reason = _llm_classify(message, adapter)
+        except Exception:
+            lane, confidence, reason = _heuristic_classify(message)
 
-    try:
-        return _llm_classify(message, adapter)
-    except Exception:
-        return _heuristic_classify(message)
+    # Capability override, not a classification opinion: the NOW lane answers
+    # inline and cannot write files, so a goal that names a file deliverable
+    # is mechanically un-fulfillable there. Burn-in batch 3 (2026-07-02):
+    # "Summarize what 'comm' does ... saved to artifacts/comm-examples.md"
+    # routed NOW, answered inline, and the self-verdict correctly demoted the
+    # run — honest negative, wrong lane.
+    if lane == "now" and _requires_file_output(message):
+        return (
+            "agenda",
+            max(confidence, 0.8),
+            "Names a file deliverable — NOW lane cannot write files",
+        )
+    return (lane, confidence, reason)
+
+
+_FILE_OUTPUT_RE = re.compile(
+    r"(\bartifacts?/|"
+    r"\b(?:save|write|output|export)\b[^.;\n]{0,40}\bto\s+\S*[\w-]+\.[a-z]{1,6}\b|"
+    r"\bto\s+(?:a\s+)?file\b|"
+    r"\bas\s+(?:its\s+own\s+)?(?:markdown|csv|json|yaml|text)\s+files?\b)",
+    re.I,
+)
+
+
+def _requires_file_output(message: str) -> bool:
+    """Goal explicitly asks for output on disk (path, artifacts/, 'to a file')."""
+    return bool(_FILE_OUTPUT_RE.search(message))
 
 
 # ---------------------------------------------------------------------------
