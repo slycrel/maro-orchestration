@@ -227,7 +227,17 @@ context, at best it's a slight tweak and we fix forward."*
   navigator escalate-to-human at dispatch, Telegram ping) but unattended work
   wants a non-competing model lane — API key / OpenRouter credit / accept
   contention (Jeremy's call, same family as the MODEL_POWER-on-subprocess
-  warning).
+  warning). **RESOLVED 2026-07-02 (Jeremy): accept the contention** — "it's
+  been that way for some time"; subscription stays the shared lane, no API
+  key / OpenRouter credit for now. Rate-limit stucks are an accepted
+  operating cost; the graceful-degradation path (backoff bail → navigator
+  escalate → Telegram) is the designed behavior, not a bug surface.
+- Push-guard gap **RESOLVED 2026-07-02 (Jeremy): OpenClaw pushing commits to
+  main is fine** — "that's not (only) the job of orchestration." The
+  substrate is allowed to author and push its own work outside
+  MARO_WORKER_RUN; the pre-push guard stays scoped to Maro worker runs only
+  (cfab080 unchanged). Not a governance hole — a deliberate division of
+  labor.
 - Unattended hardening shipped same day (P3): (1) budget gates — nothing was
   setting `cost_budget`, so unattended runs were UNCAPPED; now
   `budget.per_run_usd` defaults it and `budget.daily_usd` gates loop start on
