@@ -1794,7 +1794,13 @@ def _handle_impl(
             # status ("did the run finish") and goal achievement ("did it
             # deliver what was asked") are different facts; status alone
             # conflated them until 2026-06-11.
-            if _closure is not None:
+            # Only when closure actually ran checks. The fail-open null
+            # verdict (complete=True, "Verification skipped.", checks_run=0)
+            # exists so closure errors never block execution — recording it
+            # would bless unverified work as achieved (burn-in batch 4,
+            # 2026-07-02: a rate-limit-stuck run got goal_achieved=True from
+            # a skipped verification). No checks → no verdict → unverified.
+            if _closure is not None and _closure.checks_run > 0:
                 try:
                     from runs import write_metadata as _wm_verdict
                     from runs import current_run_dir as _crd_verdict
