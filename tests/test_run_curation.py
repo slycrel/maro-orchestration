@@ -74,6 +74,36 @@ def test_classify_partial(workspace):
     assert card["success_class"] == "partial"
 
 
+def test_classify_incomplete_is_partial(workspace):
+    # closure-demoted runs (status "incomplete") were falling to "unknown"
+    _finish("h000000a", "g", "incomplete", achieved=False)
+    card = curate_run("h000000a")
+    assert card["success_class"] == "partial"
+
+
+def test_card_costs_from_loop_ids(workspace, monkeypatch):
+    import metrics
+    rd = create_run_dir("h000000b", prompt="g", lane="agenda", model="claude",
+                        extra_metadata={"loop_ids": ["loopAAAA", "loopBBBB"]})
+    finalize_run("h000000b", status="done")
+    seen = {}
+
+    def _fake_spend(lids):
+        seen["lids"] = lids
+        return 1.23
+
+    monkeypatch.setattr(metrics, "spend_for_loops", _fake_spend)
+    card = curate_run("h000000b")
+    assert card["total_cost_usd"] == pytest.approx(1.23)
+    assert seen["lids"] == ["loopAAAA", "loopBBBB"]
+
+
+def test_card_cost_none_without_loop_ids(workspace):
+    _finish("h000000c", "g", "done", achieved=True)
+    card = curate_run("h000000c")
+    assert card["total_cost_usd"] is None
+
+
 def test_inventory_counts_calls(workspace):
     rd = _finish("h0000006", "g", "done", achieved=True)
     set_current_run_dir(rd)

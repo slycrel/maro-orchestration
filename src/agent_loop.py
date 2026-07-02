@@ -831,6 +831,7 @@ def _process_blocked_step(ctx: LoopContext, blk: BlockedStepContext) -> tuple:
             model=getattr(ctx.adapter, "model_key", ""),
             elapsed_ms=step_elapsed,
             cache_read_tokens=outcome.get("cache_read_tokens", 0),
+            loop_id=getattr(ctx, "loop_id", "") or "",
         )
     except Exception as _exc:
         log.debug("metrics.record_step_cost failed for stuck step %d: %s", step_idx, _exc)
@@ -1642,6 +1643,7 @@ def _process_done_step(
             model=getattr(ctx.adapter, "model_key", ""),
             elapsed_ms=step_elapsed,
             cache_read_tokens=outcome.get("cache_read_tokens", 0),
+            loop_id=getattr(ctx, "loop_id", "") or "",
         )
     except Exception as _cost_exc:
         log.debug("record_step_cost failed (non-critical): %s", _cost_exc)

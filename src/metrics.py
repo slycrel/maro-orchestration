@@ -195,6 +195,36 @@ def spend_today() -> float:
         return 0.0
 
 
+def spend_for_loops(loop_ids) -> float:
+    """Total recorded USD spend for the given loop id(s) (cost-per-run).
+
+    Sums step-costs.jsonl entries whose `loop_id` matches. Entries recorded
+    before 2026-07-02 have no loop_id and can't be attributed. Never raises;
+    returns 0.0 on any failure or empty input.
+    """
+    try:
+        wanted = {str(l) for l in (loop_ids or []) if l}
+        if not wanted:
+            return 0.0
+        path = _step_costs_path()
+        if not path.exists():
+            return 0.0
+        total = 0.0
+        with path.open(encoding="utf-8") as fh:
+            for line in fh:
+                if not any(l in line for l in wanted):
+                    continue
+                try:
+                    e = json.loads(line)
+                except Exception:
+                    continue
+                if str(e.get("loop_id", "")) in wanted:
+                    total += float(e.get("cost_usd", 0.0) or 0.0)
+        return total
+    except Exception:
+        return 0.0
+
+
 def record_step_cost(
     step_text: str,
     tokens_in: int,
@@ -204,6 +234,7 @@ def record_step_cost(
     model: str = "",
     elapsed_ms: int = 0,
     cache_read_tokens: int = 0,
+    loop_id: str = "",
 ) -> dict:
     """Record per-step token cost to memory/step-costs.jsonl.
 
@@ -234,6 +265,9 @@ def record_step_cost(
         "goal_preview": goal[:80],
         "model": model,
         "elapsed_ms": elapsed_ms,
+        # Join key to the run that spent it — burn-in adjudication needs
+        # cost-per-goal and previews only join fuzzily (2026-07-02).
+        "loop_id": loop_id,
     }
     try:
         path = _step_costs_path()

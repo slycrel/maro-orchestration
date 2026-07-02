@@ -128,6 +128,15 @@ def classify_outcome(rd: Path, meta: dict, card: dict) -> None:
     card["status"] = status
     card["goal_achieved"] = achieved
     card["goal_verdict_summary"] = meta.get("goal_verdict_summary")
+    # Cost-per-run via the loop_ids join key (absent on pre-2026-07-02 runs).
+    try:
+        import metrics as _metrics
+        _lids = meta.get("loop_ids") or []
+        card["total_cost_usd"] = (
+            round(_metrics.spend_for_loops(_lids), 6) if _lids else None
+        )
+    except Exception:
+        card["total_cost_usd"] = None
 
 
 def inventory_assets(rd: Path, meta: dict, card: dict) -> None:

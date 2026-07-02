@@ -60,6 +60,42 @@ def test_spend_today_sees_record_step_cost(costs_path):
     assert spend_today() > 0.0
 
 
+# --- spend_for_loops (cost-per-run join) -------------------------------------
+
+def _loop_entry(cost, loop_id):
+    return json.dumps({"id": "x", "recorded_at": "2026-07-02T12:00:00+00:00",
+                       "cost_usd": cost, "loop_id": loop_id})
+
+
+def test_spend_for_loops_sums_only_matching(costs_path):
+    costs_path.write_text("\n".join([
+        _loop_entry(0.5, "aaaa1111"),
+        _loop_entry(0.25, "aaaa1111"),
+        _loop_entry(9.99, "bbbb2222"),   # different loop — excluded
+        json.dumps({"id": "y", "cost_usd": 3.0}),  # legacy, no loop_id
+    ]) + "\n")
+    assert metrics.spend_for_loops(["aaaa1111"]) == pytest.approx(0.75)
+
+
+def test_spend_for_loops_multiple_ids(costs_path):
+    costs_path.write_text("\n".join([
+        _loop_entry(0.5, "aaaa1111"),
+        _loop_entry(0.25, "bbbb2222"),
+    ]) + "\n")
+    assert metrics.spend_for_loops(["aaaa1111", "bbbb2222"]) == pytest.approx(0.75)
+
+
+def test_spend_for_loops_empty_input(costs_path):
+    assert metrics.spend_for_loops([]) == 0.0
+    assert metrics.spend_for_loops(None) == 0.0
+
+
+def test_record_step_cost_carries_loop_id(costs_path):
+    record_step_cost("do a thing", tokens_in=1000, tokens_out=500,
+                     status="done", loop_id="cccc3333")
+    assert metrics.spend_for_loops(["cccc3333"]) > 0.0
+
+
 # --- loop budget gates (agent_loop._budget_gate seam) ------------------------
 
 class _Ctx:

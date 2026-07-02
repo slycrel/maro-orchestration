@@ -1579,6 +1579,11 @@ def _handle_impl(
         loop_result = run_agent_loop(message, **_loop_kwargs)
         elapsed = int((time.monotonic() - started_at) * 1000)
 
+        # Every loop that ran for this handle (restarts add more) — the join
+        # key from a run to its step-costs entries. Written to metadata after
+        # the restart blocks settle.
+        _run_loop_ids = [loop_result.loop_id] if getattr(loop_result, "loop_id", "") else []
+
         # Director restart: loop broke with restart status — re-run with restart context.
         # continuation_depth increment prevents infinite restart loops.
         if (loop_result.status == "restart"
@@ -1603,6 +1608,8 @@ def _handle_impl(
                     channel.emit("restart", text=f"Director restart: {_restart_ctx[:200]}")
                 loop_result = run_agent_loop(message, **_restart_kwargs)
                 elapsed = int((time.monotonic() - started_at) * 1000)
+                if getattr(loop_result, "loop_id", ""):
+                    _run_loop_ids.append(loop_result.loop_id)
             except Exception as _rst_exc:
                 log.warning("handle: restart re-run failed: %s", _rst_exc)
 
@@ -1693,6 +1700,8 @@ def _handle_impl(
                 try:
                     loop_result = run_agent_loop(message, **_closure_kwargs)
                     elapsed = int((time.monotonic() - started_at) * 1000)
+                    if getattr(loop_result, "loop_id", ""):
+                        _run_loop_ids.append(loop_result.loop_id)
                     # Re-verify the restarted loop — its declared status is
                     # exactly as unverified as the first loop's was. Without
                     # this, a restart that re-declares done sticks regardless
@@ -1882,6 +1891,8 @@ def _handle_impl(
                             parent_loop_id=getattr(loop_result, "loop_id", None),
                         )
                         elapsed = int((time.monotonic() - started_at) * 1000)
+                        if getattr(loop_result, "loop_id", ""):
+                            _run_loop_ids.append(loop_result.loop_id)
                         _gate_note = f"\n\n✅ Quality gate escalated to {_next_tier} — re-run complete."
                         _contested_claims = []  # fresh run — don't append stale claims
 
@@ -1924,6 +1935,22 @@ def _handle_impl(
                                 log.debug("post-escalate closure failed: %s", _post_exc)
             except Exception:
                 pass  # gate never blocks delivery of results
+
+        # Loop ids into run metadata: the join key from a run to its
+        # step-costs entries (cost-per-run). Written once, after every path
+        # that can spawn another loop (director restart, closure restart,
+        # quality-gate escalate) has settled. Burn-in adjudication 2026-07-02:
+        # cost-per-goal was unrecoverable without this.
+        if _run_loop_ids:
+            try:
+                from runs import write_metadata as _wm_loops
+                from runs import current_run_dir as _crd_loops
+                _rd_loops = _crd_loops()
+                if _rd_loops is not None:
+                    _wm_loops(_rd_loops, handle_id=handle_id, prompt=_raw_input,
+                              extra={"loop_ids": list(_run_loop_ids)})
+            except Exception:
+                pass
 
         # Build extra annotations from quality gate / pre-flight
         _extra = ""
