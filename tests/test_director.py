@@ -1497,6 +1497,40 @@ class TestVerifyGoalCompletion:
         assert result.inconclusive_count == 1
         assert any("inconclusive" in gap.lower() for gap in result.gaps)
 
+    def test_inconclusive_probe_does_not_poison_passing_evidence(self, tmp_path):
+        """Burn-in batch-2 regression: one inconclusive probe (often the
+        verifier's own malformed command) must not flip a verdict backed by
+        passing checks — positive mechanical evidence wins over missing data."""
+        import subprocess
+        from unittest.mock import MagicMock, patch
+
+        adapter = MagicMock()
+        checks = [
+            {"description": "artifact exists", "command": "test -f out.md"},
+            {"description": "broken probe", "command": "frobnicate --check"},
+        ]
+        verdict_data = {"complete": True, "confidence": 0.95, "gaps": [],
+                        "summary": "Goal achieved."}
+
+        results = [
+            subprocess.CompletedProcess(args=checks[0]["command"], returncode=0,
+                                        stdout="ok", stderr=""),
+            subprocess.CompletedProcess(args=checks[1]["command"], returncode=127,
+                                        stdout="", stderr="frobnicate: command not found"),
+        ]
+
+        with patch("director.extract_json", side_effect=[{"checks": checks}, verdict_data]):
+            with patch("director.content_or_empty", return_value="{}"):
+                with patch("subprocess.run", side_effect=results):
+                    result = verify_goal_completion(
+                        "build X", [], adapter, workspace_path=str(tmp_path),
+                    )
+
+        assert result.complete is True
+        assert result.confidence == 0.95
+        assert result.checks_passed == 1
+        assert result.inconclusive_count == 1
+
     def test_check_results_include_modality_in_verdict_context(self, monkeypatch, tmp_path):
         """Verification results passed to the verdict step should include probe modality."""
         from unittest.mock import MagicMock, patch

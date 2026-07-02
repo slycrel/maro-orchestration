@@ -1194,7 +1194,11 @@ _CLOSURE_VERDICT_SYSTEM = textwrap.dedent("""\
 
     Be honest. If checks failed or were skipped, say so. If any probe was
     inconclusive (missing tool, command not found, timeout, probe could not run),
-    do not treat that as evidence the goal works.
+    do not treat that as evidence the goal works — but do not treat it as
+    evidence of failure either. An inconclusive probe is missing data: judge
+    completeness from the checks that did run. If the passing checks cover the
+    goal's deliverables and no check failed, complete=true is the honest
+    verdict even with an inconclusive probe in the mix.
 
     Respond with JSON only:
     {
@@ -1680,12 +1684,18 @@ def verify_goal_completion(
             gaps = list(gaps) + [
                 f"Loop diagnosis and closure disagree: {diagnosis_gap_reason}"
             ]
-        if complete and inconclusive_checks:
+        if complete and inconclusive_checks and checks_passed == 0:
+            # Positive-evidence rule: inconclusive probes can't prove
+            # completion, so a verdict resting ONLY on inconclusive evidence
+            # is flipped. But when other checks passed, those ARE mechanical
+            # proof — an inconclusive probe is missing data (often the
+            # verifier's own malformed command or a timeout), not
+            # contradiction. Burn-in batch 2 (2026-07-02): the unconditional
+            # flip turned two fully-delivered goals into false negatives on
+            # 4/5-passed verdicts ("Goal achieved", conf 0.95 → achieved
+            # False) because one probe-infra error poisoned the whole run.
             complete = False
-            if confidence > 0.6:
-                confidence = 0.6
-            elif confidence < 0.6:
-                confidence = 0.6
+            confidence = 0.6
             gaps = list(gaps) + [
                 f"{len(inconclusive_checks)} verification probe(s) were inconclusive and cannot be counted as proof of completion"
             ]
@@ -1733,6 +1743,9 @@ def verify_goal_completion(
                     "checks_run": checks_run,
                     "checks_passed": checks_passed,
                     "gap_count": len(gaps),
+                    # Gap text, not just count — burn-in batch 2 adjudication
+                    # needed the actual gaps to attribute a wrong verdict.
+                    "gaps": [str(g)[:200] for g in gaps[:5]],
                     "scope_supplied": scope is not None,
                     "modality_distribution": modality_dist,
                     "inconclusive_count": len(inconclusive_checks),
