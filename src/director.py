@@ -1390,6 +1390,20 @@ def verify_goal_completion(
     """
     import subprocess
 
+    # cwd contract (2026-07-02, burn-in batch 1): when the caller doesn't pass
+    # workspace_path (repo_path is empty for non-repo goals), checks must run
+    # where the executor actually wrote — the run-scoped subprocess cwd
+    # (project dir), same ContextVar quality_gate and claim_probe read.
+    # Falling back to Maro's launch cwd made every artifact check probe the
+    # wrong directory: 3/3 burn-in verdicts were false negatives on work that
+    # had fully succeeded.
+    if not workspace_path:
+        try:
+            from llm import get_default_subprocess_cwd
+            workspace_path = get_default_subprocess_cwd() or ""
+        except Exception:
+            pass
+
     _null = ClosureVerdict(
         complete=True, confidence=0.5, gaps=[],
         summary="Verification skipped.", checks_run=0, checks_passed=0,

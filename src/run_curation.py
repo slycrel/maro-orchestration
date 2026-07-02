@@ -31,7 +31,9 @@ from pathlib import Path
 from typing import List, Optional
 
 _SUCCESS_STATUSES = {"done", "complete", "completed"}
-_PARTIAL_STATUSES = {"partial", "restart"}
+# "incomplete" = closure demoted a finished run (work ended, goal not met) —
+# partial, not unknown (burn-in batch 1 surfaced it landing in "unknown").
+_PARTIAL_STATUSES = {"partial", "restart", "incomplete"}
 _FAIL_STATUSES = {"stuck", "error", "failed", "blocked"}
 
 # Asset extensions worth flagging as potentially-reusable scripts.

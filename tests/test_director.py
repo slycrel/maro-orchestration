@@ -765,6 +765,33 @@ class TestVerifyGoalCompletion:
         assert verdict.complete is True
         assert verdict.checks_run == 0
 
+    def test_empty_workspace_path_falls_back_to_run_scoped_cwd(self, monkeypatch, tmp_path):
+        """Burn-in batch-1 regression: with no workspace_path (repo_path empty
+        for non-repo goals), checks must run in the executor's run-scoped cwd
+        (project dir) — not Maro's launch cwd, which made every artifact
+        check a false negative."""
+        from unittest.mock import MagicMock, patch
+        import llm as llm_mod
+
+        (tmp_path / "artifacts").mkdir()
+        (tmp_path / "artifacts" / "thing.txt").write_text("built")
+        token = llm_mod._DEFAULT_SUBPROCESS_CWD.set(str(tmp_path))
+        try:
+            adapter = MagicMock()
+            adapter.complete.side_effect = [MagicMock(), MagicMock()]
+            checks = [{"description": "artifact exists",
+                       "command": "test -f artifacts/thing.txt"}]
+            verdict_data = {"complete": True, "confidence": 0.9, "gaps": [],
+                            "summary": "ok"}
+            with patch("director.extract_json",
+                       side_effect=[{"checks": checks}, verdict_data]):
+                with patch("director.content_or_empty", return_value="{}"):
+                    result = verify_goal_completion("build thing", [], adapter)
+            assert result.checks_run == 1
+            assert result.checks_passed == 1
+        finally:
+            llm_mod._DEFAULT_SUBPROCESS_CWD.reset(token)
+
     def test_all_checks_pass(self, monkeypatch, tmp_path):
         """All passing checks → director can declare complete."""
         from unittest.mock import MagicMock, patch, call
