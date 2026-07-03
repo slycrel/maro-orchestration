@@ -2284,9 +2284,10 @@ def test_run_agent_loop_recovers_if_compound_step_leaks_to_executor(monkeypatch,
     _setup_workspace(monkeypatch, tmp_path)
 
     import agent_loop as al
+    import loop_planning
 
-    monkeypatch.setattr(al, "_decompose", lambda *args, **kwargs: ["run pytest and analyze failures"])
-    monkeypatch.setattr(al, "_shape_steps", lambda steps, **kwargs: list(steps))
+    monkeypatch.setattr(loop_planning, "_decompose", lambda *args, **kwargs: ["run pytest and analyze failures"])
+    monkeypatch.setattr(loop_planning, "_shape_steps", lambda steps, **kwargs: list(steps))
 
     executed = []
 
@@ -2407,7 +2408,7 @@ def test_continuation_depth_in_ancestry_context(monkeypatch, tmp_path):
         captured_ancestry["ctx"] = ancestry_context
         return ["single step: do the work"]
 
-    with mock.patch("agent_loop._decompose", _fake_decompose):
+    with mock.patch("loop_planning._decompose", _fake_decompose):
         from agent_loop import run_agent_loop, _DryRunAdapter
         run_agent_loop(
             "review the auth module",
@@ -2471,7 +2472,7 @@ def test_inject_steps_inserted_into_plan(monkeypatch, tmp_path):
     from pre_flight import PlanReview as _PlanReview
     _no_milestones = _PlanReview(scope="narrow", scope_note="test — no milestone expansion")
 
-    with mock.patch("agent_loop._decompose",
+    with mock.patch("loop_planning._decompose",
                     return_value=["step 1: do first thing", "step 2: do second thing"]), \
          mock.patch("pre_flight.review_plan", return_value=_no_milestones):
         from agent_loop import run_agent_loop
