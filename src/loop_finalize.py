@@ -1,0 +1,507 @@
+"""Loop finalization for the agent loop (Tier 3 split of agent_loop.py).
+
+Extracted verbatim from agent_loop.py — building the final LoopResult and
+writing terminal artifacts (plan manifest, loop log, transcript, scratchpad),
+plus the post-loop side effects (introspection/diagnosis, Reflexion memory
+recording, skill crystallisation/synthesis, Telegram notification).
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import sys
+import time
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
+
+from loop_types import LoopContext, LoopResult, StepOutcome, _orch, _project_dir_root
+from loop_artifacts import _write_loop_log, _write_plan_manifest
+
+log = logging.getLogger("maro.loop")
+
+
+def _build_result_and_finalize(
+    ctx: LoopContext,
+    *,
+    step_outcomes: List[StepOutcome],
+    loop_status: str,
+    stuck_reason: Optional[str],
+    total_tokens_in: int,
+    total_tokens_out: int,
+    interrupts_applied: int,
+    march_of_nines_alert: bool,
+    pf_review,
+    manifest_steps: List[str],
+    replan_count: int,
+    start_ts: str,
+    milestone_expanded: set,
+    had_no_matching_skill: bool,
+    failure_chain: List[str],
+    recovery_step_count: int,
+    scratchpad: Dict[str, Any],
+    scratchpad_lock,
+) -> LoopResult:
+    """Phase G: Build final LoopResult, write artifacts, run finalize side-effects."""
+    elapsed_total = int((time.monotonic() - ctx.started_at) * 1000)
+    o = _orch()
+
+    # Write final plan manifest with terminal status and elapsed time
+    if ctx.project and manifest_steps:
+        try:
+            _write_plan_manifest(
+                project=ctx.project,
+                loop_id=ctx.loop_id,
+                goal=ctx.goal,
+                planned_steps=manifest_steps,
+                start_ts=start_ts,
+                step_outcomes=step_outcomes,
+                status=loop_status,
+                elapsed_ms=elapsed_total,
+                replan_count=replan_count,
+            )
+        except Exception as _mf_exc:
+            log.warning("plan manifest write failed (affects replay/debugging): %s", _mf_exc)
+
+    log_path = _write_loop_log(
+        project=ctx.project,
+        loop_id=ctx.loop_id,
+        goal=ctx.goal,
+        status=loop_status,
+        steps=step_outcomes,
+        start_ts=start_ts,
+        elapsed_ms=elapsed_total,
+        stuck_reason=stuck_reason,
+    )
+
+    o.append_decision(ctx.project, [
+        f"[loop:{ctx.loop_id}] finished status={loop_status} steps={len(step_outcomes)} tokens={total_tokens_in}+{total_tokens_out}",
+    ])
+    o.write_operator_status()
+
+    # Phase 58: Pre-flight calibration feedback
+    if pf_review is not None and not ctx.dry_run:
+        try:
+            from orch_items import memory_dir as _fb_memory_dir
+            _pf_predicted_wide = pf_review.scope in ("wide", "deep")
+            _actual_stuck = loop_status == "stuck"
+            _steps_done = sum(1 for s in step_outcomes if s.status == "done")
+            _fb_entry = {
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "loop_id": ctx.loop_id,
+                "scope_predicted": pf_review.scope,
+                "milestone_candidates": len(pf_review.milestone_step_indices),
+                "milestones_expanded": len(milestone_expanded),
+                "flag_count": len(pf_review.flags),
+                "actual_status": loop_status,
+                "steps_done": _steps_done,
+                "steps_total": len(step_outcomes),
+                "true_positive": _pf_predicted_wide and _actual_stuck,
+                "false_positive": _pf_predicted_wide and not _actual_stuck,
+                "false_negative": not _pf_predicted_wide and _actual_stuck,
+                "true_negative": not _pf_predicted_wide and not _actual_stuck,
+            }
+            _fb_path = _fb_memory_dir() / "preflight_calibration.jsonl"
+            with open(_fb_path, "a") as _fb_f:
+                _fb_f.write(json.dumps(_fb_entry) + "\n")
+            log.info("pre-flight calibration: scope=%s actual=%s tp=%s fp=%s fn=%s",
+                     pf_review.scope, loop_status,
+                     _fb_entry["true_positive"], _fb_entry["false_positive"],
+                     _fb_entry["false_negative"])
+        except Exception as _pf_exc:
+            log.debug("pre-flight calibration feedback write failed: %s", _pf_exc)
+
+    # Phase 36: emit loop_done event
+    try:
+        from observe import write_event as _write_event_done
+        _write_event_done(
+            "loop_done",
+            goal=ctx.goal,
+            project=ctx.project or "",
+            loop_id=ctx.loop_id,
+            status=loop_status,
+            tokens_in=total_tokens_in,
+            tokens_out=total_tokens_out,
+            elapsed_ms=elapsed_total,
+            detail=stuck_reason or "",
+        )
+    except Exception as _obs_exc:
+        log.debug("loop_done observe event failed: %s", _obs_exc)
+
+    result = LoopResult(
+        loop_id=ctx.loop_id,
+        project=ctx.project,
+        goal=ctx.goal,
+        status=loop_status,
+        steps=step_outcomes,
+        interrupts_applied=interrupts_applied,
+        stuck_reason=stuck_reason,
+        total_tokens_in=total_tokens_in,
+        total_tokens_out=total_tokens_out,
+        elapsed_ms=elapsed_total,
+        log_path=log_path,
+        march_of_nines_alert=march_of_nines_alert,
+        pre_flight_review=pf_review,
+    )
+
+    # Write the loop transcript artifact: RESULT.md for a completed loop,
+    # PARTIAL.md otherwise (the old unconditional -PARTIAL name made done
+    # runs open with "Partial result ... Status: done" — BACKLOG 2026-06-11).
+    _done_steps = [s for s in step_outcomes if s.status == "done"]
+    if _done_steps:
+        try:
+            _transcript_kind = "RESULT" if loop_status == "done" else "PARTIAL"
+            _partial_lines = [
+                f"# {'Result' if loop_status == 'done' else 'Partial result'}: "
+                f"{ctx.goal}\n"
+            ]
+            _partial_lines.append(f"Status: {loop_status} | "
+                                  f"{len(_done_steps)}/{len(step_outcomes)} steps done | "
+                                  f"tokens: {total_tokens_in+total_tokens_out} | "
+                                  f"elapsed: {elapsed_total}ms\n")
+            if stuck_reason:
+                _partial_lines.append(f"Stuck reason: {stuck_reason}\n")
+            _partial_lines.append("---\n")
+            for _pos, s in enumerate(step_outcomes, start=1):
+                _icon = "Done" if s.status == "done" else "BLOCKED"
+                # s.index is the NEXT.md ledger line, not plan position — it
+                # starts wherever the project ledger left off, so rendering it
+                # as the step number read as "Step 11 of a 4-step plan".
+                _partial_lines.append(f"\n## Step {_pos}/{len(step_outcomes)}"
+                                      f" (ledger #{s.index}): {s.text[:100]}")
+                _partial_lines.append(f"*[{_icon}]*\n")
+                if s.result:
+                    _partial_lines.append(s.result[:2000])
+                    if len(s.result) > 2000:
+                        _partial_lines.append(f"\n... (truncated, {len(s.result)} chars total)")
+                _partial_lines.append("")
+            try:
+                from runs import artifact_dir as _runs_artifact_dir
+                _art_dir = _runs_artifact_dir(ctx.project, project_root_fn=_project_dir_root)
+            except Exception:
+                _art_dir = _project_dir_root() / ctx.project / "artifacts"
+                _art_dir.mkdir(parents=True, exist_ok=True)
+            (_art_dir / f"loop-{ctx.loop_id}-{_transcript_kind}.md").write_text(
+                "\n".join(_partial_lines), encoding="utf-8")
+            log.info("wrote loop transcript: %s (%d steps)",
+                     f"loop-{ctx.loop_id}-{_transcript_kind}.md", len(_done_steps))
+            # Persist scratchpad
+            _scratch_dir = _art_dir / f"loop-{ctx.loop_id}-scratchpad"
+            _scratch_dir.mkdir(exist_ok=True)
+            with scratchpad_lock:
+                for _sk, _sv in scratchpad.items():
+                    (_scratch_dir / f"{_sk}.json").write_text(
+                        json.dumps(_sv, indent=2, default=str), encoding="utf-8")
+                (_scratch_dir / "index.json").write_text(
+                    json.dumps({"keys": list(scratchpad.keys())}, indent=2), encoding="utf-8")
+        except Exception as exc:
+            log.debug("partial result write failed: %s", exc)
+
+    if ctx.verbose:
+        print(f"[maro] {result.summary()}", file=sys.stderr, flush=True)
+
+    _finalize_loop(
+        loop_id=ctx.loop_id,
+        goal=ctx.goal,
+        project=ctx.project,
+        loop_status=loop_status,
+        step_outcomes=step_outcomes,
+        adapter=ctx.adapter,
+        dry_run=ctx.dry_run,
+        verbose=ctx.verbose,
+        total_tokens_in=total_tokens_in,
+        total_tokens_out=total_tokens_out,
+        elapsed_ms=elapsed_total,
+        had_no_matching_skill=had_no_matching_skill,
+        failure_chain=failure_chain,
+        recovery_steps=recovery_step_count,
+    )
+
+    # Delete checkpoint on successful completion
+    if result.status == "done":
+        try:
+            from checkpoint import delete_checkpoint as _del_ckpt
+            _del_ckpt(ctx.loop_id)
+        except Exception as _ckpt_exc:
+            log.debug("checkpoint delete failed: %s", _ckpt_exc)
+
+    # Artifact cleanup: per-step artifacts are temp by default.
+    # Only keep them if config `keep_artifacts: true` is set.
+    # Plan manifests, RESULT/PARTIAL.md, loop logs, and scratchpad are always kept.
+    if not ctx.dry_run and ctx.project:
+        try:
+            from config import get as _cfg_get
+            _keep = bool(_cfg_get("keep_artifacts", False))
+        except Exception:
+            _keep = False
+        if not _keep:
+            try:
+                try:
+                    from runs import artifact_dir as _runs_artifact_dir
+                    _art_dir = _runs_artifact_dir(ctx.project, project_root_fn=_project_dir_root)
+                except Exception:
+                    _art_dir = _project_dir_root() / ctx.project / "artifacts"
+                _deleted = 0
+                for _f in _art_dir.glob(f"loop-{ctx.loop_id}-step-*.md"):
+                    try:
+                        _f.unlink()
+                        _deleted += 1
+                    except OSError:
+                        pass
+                if _deleted:
+                    log.debug("artifact cleanup: deleted %d per-step artifact(s) "
+                              "(set keep_artifacts: true to retain)", _deleted)
+            except Exception as _art_exc:
+                log.debug("artifact cleanup failed: %s", _art_exc)
+
+    # Release loop lock
+    try:
+        from interrupt import clear_loop_running
+        clear_loop_running()
+    except Exception as _lock_exc:
+        log.debug("clear_loop_running failed: %s", _lock_exc)
+
+    # Signal heartbeat to wake immediately — pick up next queued task without
+    # waiting for the full interval tick.  Reduces task-to-task latency from
+    # up to interval seconds to near-zero.
+    try:
+        from heartbeat import post_heartbeat_event as _phb_event
+        _phb_event(event_type="loop_done", payload=(ctx.project or ""))
+    except Exception as _phb_exc:
+        log.debug("post_heartbeat_event(loop_done) failed: %s", _phb_exc)
+
+    return result
+
+
+def _finalize_loop(
+    loop_id: str,
+    goal: str,
+    project: str,
+    loop_status: str,
+    step_outcomes: List["StepOutcome"],
+    adapter,
+    *,
+    dry_run: bool,
+    verbose: bool,
+    total_tokens_in: int,
+    total_tokens_out: int,
+    elapsed_ms: int,
+    had_no_matching_skill: bool,
+    failure_chain: Optional[List[str]] = None,
+    recovery_steps: int = 0,
+) -> None:
+    """Run all post-loop side effects after the main execution loop ends.
+
+    Handles: Reflexion/memory recording, skill crystallisation, skill synthesis.
+    All failures are swallowed — post-loop side effects must never raise.
+    """
+    _done = sum(1 for s in step_outcomes if s.status == "done")
+    _blocked = sum(1 for s in step_outcomes if s.status == "blocked")
+    log.info("loop_end loop_id=%s status=%s steps=%d/%d(done/blocked) tokens=%d elapsed=%dms",
+             loop_id, loop_status, _done, _blocked,
+             total_tokens_in + total_tokens_out, elapsed_ms)
+
+    # Phase 44-45: Self-reflection — auto-diagnose + lenses + recovery plan
+    try:
+        from introspect import diagnose_loop as _diagnose, save_diagnosis as _save_diag
+        from introspect import run_lenses as _run_lenses, aggregate_lenses as _aggregate
+        from introspect import plan_recovery as _plan_recovery
+        from introspect import _build_step_profiles, _load_loop_events
+        # NOTE: `project` is the local param — a `ctx.project` here was a
+        # NameError that silently killed this whole block for six weeks
+        # (2026-04-26 → session 40); the outer except swallowed it every run.
+        _diag = _diagnose(loop_id, project=project or "")
+        _save_diag(_diag)
+        if _diag.failure_class != "healthy":
+            log.warning("introspect: %s", _diag.summary())
+            # Run heuristic lenses on non-healthy loops
+            _events = _load_loop_events(loop_id)
+            _profiles = _build_step_profiles(_events)
+            _lens_results = _run_lenses(_diag, _profiles)
+            for _lr in _lens_results:
+                if _lr.action:
+                    log.warning("lens[%s]: %s", _lr.lens_name, _lr.action)
+            # Aggregated synthesis
+            if _lens_results:
+                _agg = _aggregate(_diag, _lens_results)
+                log.info("synthesis: confidence=%.0f%% agreement=%d action=%s",
+                         _agg.confidence * 100, _agg.lens_agreement, _agg.primary_action)
+            # Recovery plan
+            _recovery = _plan_recovery(_diag, use_advisor=True)
+            if _recovery:
+                _tag = "AUTO-RECOVERABLE" if _recovery.auto_apply else "NEEDS-REVIEW"
+                log.warning("recovery[%s] risk=%s: %s", _tag, _recovery.risk, _recovery.action)
+                # M3 (session 40): the plan itself is a recovery insight —
+                # record it typed so the next similar run gets it injected at
+                # decompose time instead of re-deriving it from a fresh
+                # failure. Stable text (failure_class + table action) means
+                # recurring plans reinforce via near-duplicate dedup rather
+                # than duplicating, feeding the standing-rule pipeline.
+                if not dry_run:
+                    try:
+                        from memory import record_tiered_lesson as _record_lesson
+                        _record_lesson(
+                            lesson_text=f"[recovery-plan] {_diag.failure_class}: {_recovery.action}",
+                            task_type="agenda",
+                            outcome=loop_status,
+                            source_goal=goal[:120],
+                            confidence=0.5,  # suggested, not yet verified by a completed run
+                            lesson_type="recovery",
+                        )
+                    except Exception as _rp_exc:
+                        log.debug("recovery-plan lesson record failed: %s", _rp_exc)
+        # Inject diagnosis-derived lessons directly into memory
+        # so the planner sees them via inject_lessons_for_task on the next run
+        if _diag.failure_class != "healthy":
+            try:
+                from memory import _store_lesson
+                _diag_lesson = (
+                    f"[auto-diagnosis] {_diag.failure_class}: {_diag.recommendation}"
+                )
+                _store_lesson(
+                    task_type="agenda",
+                    outcome=_diag.failure_class,
+                    lesson=_diag_lesson,
+                    source_goal=goal[:120],
+                    confidence=0.8,
+                )
+                log.info("injected diagnosis lesson: %s", _diag.failure_class)
+            except Exception as _store_exc:
+                log.warning("failed to persist diagnosis lesson (learning data lost): %s", _store_exc)
+    except Exception as exc:
+        log.debug("introspect failed: %s", exc)
+
+    # M3 (session 40): a completed run that needed recovery actions is a
+    # *verified* recovery — the failure_chain says what went wrong and which
+    # metacognitive action fixed it. Record it typed ("recovery") at higher
+    # confidence than LLM-extracted lessons: the run finishing IS the
+    # verification. Recurring identical recoveries reinforce via dedup.
+    if not dry_run and loop_status == "done" and recovery_steps > 0 and failure_chain:
+        try:
+            from memory import record_tiered_lesson as _record_lesson
+            _kind_markers = (
+                ("re-decomposing", "re-decompose"),
+                ("split", "step-split"),
+                ("retry", "retry-with-hint"),
+            )
+            _kinds = sorted({k for e in failure_chain for m, k in _kind_markers if m in e})
+            _record_lesson(
+                lesson_text=(
+                    f"[recovery-verified] {', '.join(_kinds) or 'recovery'} unblocked a run: "
+                    f"{failure_chain[0][:100]}"
+                ),
+                task_type="agenda",
+                outcome="done",
+                source_goal=goal[:120],
+                confidence=0.7,  # verified — the run completed after the recovery
+                lesson_type="recovery",
+            )
+            log.info("recorded verified-recovery lesson (%d recovery steps)", recovery_steps)
+        except Exception as _vr_exc:
+            log.debug("verified-recovery lesson record failed: %s", _vr_exc)
+
+    # Phase 5: Reflexion — record outcome + extract lessons
+    try:
+        from memory import reflect_and_record, record_step_trace
+        done_steps = [s for s in step_outcomes if s.status == "done"]
+        summary = (
+            f"Completed {len(done_steps)}/{len(step_outcomes)} steps. "
+            + (step_outcomes[-1].result[:80] if step_outcomes and loop_status == "done" else "")
+        )
+        _outcome_rec = reflect_and_record(
+            goal=goal,
+            status=loop_status,
+            result_summary=summary,
+            task_type="agenda",
+            project=project,
+            tokens_in=total_tokens_in,
+            tokens_out=total_tokens_out,
+            elapsed_ms=elapsed_ms,
+            model=getattr(adapter, "model_key", ""),
+            adapter=adapter if not dry_run else None,
+            dry_run=dry_run,
+            failure_chain=failure_chain or [],
+            recovery_steps=recovery_steps,
+        )
+        # Meta-Harness steal: persist step-level traces so the evolver proposer
+        # sees full execution context, not just aggregate summaries.
+        if not dry_run and step_outcomes and _outcome_rec is not None:
+            try:
+                record_step_trace(
+                    _outcome_rec.outcome_id,
+                    goal,
+                    step_outcomes,
+                    task_type="agenda",
+                )
+            except Exception as _trace_exc:
+                log.debug("record_step_trace failed (non-critical): %s", _trace_exc)
+    except Exception as _reflect_exc:
+        log.warning("reflect_and_record failed — run %s produced no learning data: %s", loop_id, _reflect_exc)
+
+    # Auto-extract skills from successful loops (crystallise patterns)
+    if loop_status == "done" and not dry_run and step_outcomes:
+        try:
+            from skills import extract_skills, save_skill, load_skills
+            done_summaries = [s.result[:200] for s in step_outcomes if s.status == "done" and s.result]
+            outcome_for_extraction = {
+                "goal": goal,
+                "status": loop_status,
+                "task_type": "agenda",
+                "summary": ". ".join(done_summaries[:4]),
+                "steps": [
+                    {"step": s.text, "status": s.status, "result": s.result[:200]}
+                    for s in step_outcomes
+                ],
+                "project": project,
+            }
+            existing_skills = {s.name for s in load_skills()}
+            extracted = extract_skills([outcome_for_extraction], adapter if adapter else None)
+            for skill in extracted:
+                if skill.name not in existing_skills:
+                    save_skill(skill)
+                    if verbose:
+                        print(f"[maro] skill crystallised: {skill.name}", file=sys.stderr, flush=True)
+        except Exception as _skill_exc:
+            log.warning("skill extraction failed — loop %s may not contribute to skill library: %s", loop_id, _skill_exc)
+
+    # Phase 32: skill synthesis — when no skill matched at start, synthesize from this run
+    if loop_status == "done" and had_no_matching_skill and not dry_run and step_outcomes:
+        try:
+            from evolver import synthesize_skill
+            done_steps = [s for s in step_outcomes if s.status == "done" and s.result]
+            _synth_summary = ". ".join(s.result[:120] for s in done_steps[:3])
+            synthesize_skill(
+                goal=goal,
+                outcome_summary=_synth_summary or "completed successfully",
+                source_loop_id=loop_id,
+                adapter=adapter,
+                verbose=verbose,
+            )
+        except Exception as _synth_exc:
+            log.warning("skill synthesis failed — loop %s: %s", loop_id, _synth_exc)
+
+    # Phase 32: auto-promote skills that meet threshold (don't wait for evolver heartbeat)
+    if not dry_run:
+        try:
+            from evolver import run_skill_maintenance
+            run_skill_maintenance()
+        except ImportError:
+            pass
+        except Exception as _maint_exc:
+            log.debug("skill maintenance failed (non-critical): %s", _maint_exc)
+
+    # Post-mission Telegram notification
+    if not dry_run:
+        try:
+            from telegram_listener import telegram_notify
+            _done_count = sum(1 for s in step_outcomes if s.status == "done")
+            _total_tokens = total_tokens_in + total_tokens_out
+            _status_icon = "✅" if loop_status == "done" else ("⚠️" if loop_status == "partial" else "❌")
+            _msg = (
+                f"{_status_icon} *Mission complete* — `{project or goal[:40]}`\n"
+                f"Status: {loop_status} | Steps: {_done_count}/{len(step_outcomes)} done\n"
+                f"Tokens: {_total_tokens:,} | Time: {elapsed_ms // 1000}s"
+            )
+            telegram_notify(_msg)
+        except Exception as _tg_exc:
+            log.debug("post-mission Telegram notification failed (non-critical): %s", _tg_exc)
