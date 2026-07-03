@@ -8,6 +8,26 @@ Last split: 2026-04-16 (session 34).
 
 ---
 
+### Captain's-log event-type registry integrity — DONE (2026-07-03)
+
+Surfaced by the 2026-06-24 inventory that produced `docs/CAPTAINS_LOG_EVENTS.md`.
+Two drift classes, both cheap to fix:
+
+- [x] **3 emitted-but-unregistered events.** ~~`EVOLVER_REVERTED` (evolver.py:664),
+  `EVOLVER_VERIFY` (evolver.py:2072), `PLAYBOOK_UPDATED` (playbook.py:235) fire in
+  production via string literals not in `captains_log.EVENT_TYPES`.~~ **DONE
+  2026-06-24:** added the 3 constants + registered them in `EVENT_TYPES`, switched
+  emitters to the constants, bumped the count-guard test (49→52) + added a
+  membership test.
+- [x] **3 defined-but-unemitted events.** **DONE 2026-07-03:** `SKILL_REWRITE`
+  (the dead expectation — consumed by `recall.py`/`evolver.py`, never produced)
+  is now emitted from `skill_lifecycle.rewrite_skill`'s success path, with a
+  regression test pinning both emit-on-success and no-emit-on-failure.
+  `CANON_CANDIDATE` / `LESSON_RECOVERED` kept as **reserved** (annotated in
+  `captains_log.py`): they name the Stage 2→3 crystallization pathways that
+  don't exist yet and have no consumers — intentionally-pending, not dead.
+
+
 ### Legacy workspace-pin layout wart (split-brain beyond the dispatch script) — FIXED (2026-07-03)
 
 **Was BACKLOG #-1.** Any pinned workspace env var routed the memory tier into

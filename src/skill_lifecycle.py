@@ -181,6 +181,7 @@ Rules:
         new_triggers = skill.trigger_patterns
 
     # Apply rewrite — set to half_open (probationary) not closed
+    failures_before = int(skill.consecutive_failures)  # snapshot: target may be this same object
     skills = load_skills()
     target = next((s for s in skills if s.id == skill.id), None)
     if target is None:
@@ -196,6 +197,27 @@ Rules:
     target.failure_notes = target.failure_notes[-2:]  # keep last 2 for history
 
     _save_skills(skills)
+
+    # Captain's log — SKILL_REWRITE was registered + consumed (recall.py loop
+    # context, evolver.py learning-activity header) since 2026-06-24 but never
+    # emitted (BACKLOG #8 dead expectation; wired 2026-07-03).
+    try:
+        from captains_log import log_event, SKILL_REWRITE
+        log_event(
+            event_type=SKILL_REWRITE,
+            subject=target.name,
+            summary=f"Circuit-open skill '{target.name}' rewritten → half_open (probation).",
+            context={
+                "skill_id": target.id,
+                "failures_before": failures_before,
+                "utility_score": float(skill.utility_score),
+                "new_description": new_desc[:200],
+                "steps_count": len(new_steps),
+            },
+            related_ids=[f"skill:{target.id}"],
+        )
+    except Exception:
+        pass
 
     if verbose:
         print(

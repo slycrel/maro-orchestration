@@ -2640,3 +2640,73 @@ class TestRewriteSkillSignature:
     def test_none_adapter_returns_none(self):
         from evolver import rewrite_skill
         assert rewrite_skill(self._make_skill(), adapter=None, verbose=False) is None
+
+
+class TestRewriteSkillEmitsEvent:
+    """BACKLOG #8: SKILL_REWRITE was registered in EVENT_TYPES and consumed
+    (recall.py loop context, evolver.py learning-activity header) since the
+    2026-06-24 inventory, but no code path ever emitted it. Wired 2026-07-03:
+    the success path of rewrite_skill logs it."""
+
+    def _make_skill(self):
+        from skills import Skill
+        return Skill(
+            id="rw02", name="rewrite-me-live", description="A skill that fails",
+            trigger_patterns=["x"], steps_template=["do the thing"],
+            source_loop_ids=[], created_at="2026-01-01T00:00:00+00:00",
+            tier="provisional", utility_score=0.2, consecutive_failures=3,
+        )
+
+    def test_success_path_emits_skill_rewrite(self, monkeypatch):
+        import skills as skills_mod
+        import captains_log
+        from evolver import rewrite_skill
+
+        skill = self._make_skill()
+        monkeypatch.setattr(skills_mod, "load_skills", lambda: [skill])
+        monkeypatch.setattr(skills_mod, "_save_skills", lambda s: None)
+
+        events = []
+        monkeypatch.setattr(
+            captains_log, "log_event",
+            lambda event_type, subject, summary, **kw: events.append(
+                (event_type, subject, kw.get("context") or {})) or {},
+        )
+
+        class _GoodAdapter:
+            def complete(self, messages, **kw):
+                class _R:
+                    content = (
+                        '{"description": "Revised description.",'
+                        ' "steps_template": ["step one", "step two"],'
+                        ' "trigger_patterns": ["kw one", "kw two", "kw three"]}'
+                    )
+                return _R()
+
+        result = rewrite_skill(skill, adapter=_GoodAdapter(), verbose=False)
+        assert result is not None
+        assert result.circuit_state == "half_open"
+        rewrites = [e for e in events if e[0] == "SKILL_REWRITE"]
+        assert rewrites, f"expected SKILL_REWRITE, saw {[e[0] for e in events]}"
+        assert rewrites[0][1] == "rewrite-me-live"
+        assert rewrites[0][2].get("skill_id") == "rw02"
+        assert rewrites[0][2].get("failures_before") == 3
+
+    def test_failure_path_does_not_emit(self, monkeypatch):
+        import captains_log
+        from evolver import rewrite_skill
+
+        events = []
+        monkeypatch.setattr(
+            captains_log, "log_event",
+            lambda event_type, subject, summary, **kw: events.append(event_type) or {},
+        )
+
+        class _JunkAdapter:
+            def complete(self, messages, **kw):
+                class _R:
+                    content = "this is not json"
+                return _R()
+
+        assert rewrite_skill(self._make_skill(), adapter=_JunkAdapter(), verbose=False) is None
+        assert "SKILL_REWRITE" not in events
