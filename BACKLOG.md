@@ -702,44 +702,6 @@ These four are kept (not deleted) this triage pending verification against curre
   "registered for agent use" claim. Revisit later. Source: refactor-plan
   architecture review, 2026-07-02.
 
-### Polymarket cluster + quality_gate's debate pass are TradingAgents dogfood leftovers, not preserved test data
-
-- [ ] **Not archived research data — clutter to extract/delete.** Confirmed
-  via git history: `polymarket_backtest.py` + `polymarket_backtest_refined.py`
-  were created and abandoned the same day (2026-04-01), zero callers ever.
-  `backtester.py` + `backtest_metrics.py` are literally an agent-generated
-  one-off ("Agent-generated tools: backtester + metrics from Polymarket
-  runs", 2026-03-30), not hand-designed infrastructure — their only later
-  touches are mechanical repo-wide sweeps (M5 portability, poe→maro rename),
-  not feature work. `polymarket.py` (CLI wrapper, 2026-04-05, wired into
-  `doctor.py`) is the one deliberate piece but has the same "only touched by
-  mechanical sweeps since" profile. The separate "harvest orchestration
-  history into a reusable test corpus" effort (`e7c2e4a`, 2026-06-26,
-  "workspace data is preserved, not deleted") is **unrelated** — it harvests
-  `output/runs/`+`projects/` workspace data, not `src/` code, and
-  `tests/fixtures/orchestration_corpus/` has zero dependency on any
-  polymarket `.py` file. The actual research conclusions already live
-  properly archived at `research/POLYMARKET_BTC_LAG_VALIDATION.md` (verdict:
-  UNCONFIRMED/promotional fiction) plus `PREDICTION_MARKETS_RESEARCH.md` and
-  `TRADER_IMPLEMENTATION_GUIDE.md` — that box is already checked.
-  **`quality_gate.py`'s bull/bear/risk-manager debate pass** (added
-  2026-03-31, `7a0c415`, the day after the dated TradingAgents dogfood entry
-  in `STEAL_LIST.md`, same commit cluster as 3 other named TradingAgents
-  steal-items) is a verbatim architectural match to TradingAgents' actual
-  Bull Researcher / Bear Researcher / Risk Management design — generalized
-  into a domain-agnostic "should the user act on this output" gate but never
-  got a production caller (its only wirer, `passes.py`, is itself unused).
-  Confirms Jeremy's read: trading-domain-shaped code adapted rather than
-  designed for general orchestration, which is why it never found a real
-  caller.
-  **Action:** extract/delete the polymarket `src/` cluster and the debate
-  pass per the original Tier 1 recommendation — no further "make it clearer
-  this was archived" doc work needed, the research/ writeup already serves
-  that purpose. If the open "Polymarket behavioral test" idea (see below)
-  ever gets picked up, it only needs `polymarket-cli` (external dependency),
-  not this code surviving. Source: refactor-plan git-history investigation,
-  2026-07-02.
-
 ### Ancestry double-injection: two disagreeing lineage sources in the loop prompt
 
 - [ ] **`agent_loop.py` injects ancestry twice per loop from two independent,

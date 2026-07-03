@@ -83,13 +83,44 @@ surfaced while reading. Each is small and independent.
 13. **`eval.py:44-46`** — a builtin benchmark checks the model introduces
     itself "as Poe" — fails by construction for any non-Poe persona, post
     Poe→Maro rename.
+14. **`background.py`'s `start_background`** — `timeout_seconds` param is
+    silently a no-op (never stored on `BackgroundTask`, contradicting its own
+    docstring), yet `cli.py:1209` passes a real `--timeout` CLI flag value
+    into it. Found during Tier 1 deletion (2026-07-02) while deleting the
+    genuinely-dead `list_background_tasks` in the same file — this one is a
+    live bug, not dead code.
 
 ---
 
-## Tier 1 — Mechanical dead-code deletion (zero verified callers)
+## Tier 1 — Mechanical dead-code deletion (zero verified callers) — DONE 2026-07-02
 
-Safe to do first; each item independently reduces surface with no design
-decision required beyond "confirm truly unused, then delete."
+Executed via 8 parallel forks, one per cluster below, each re-verifying zero
+production callers before deleting. Commit `b04962b`: 66 files changed, net
+~9,575 lines removed (more than the ~4,500 estimate — several items ran
+larger than scoped, e.g. `inspector.py`'s dead pipeline was ~1,115 lines not
+~900, and `persona.py`/`skills.py` picked up extra confirmed-dead neighbors
+during investigation). Full suite green after the deletion pass.
+
+Deviations from the table below (all deliberate, confirmed live — not
+Tier 1 material):
+- `goal_map.py`'s "redundant `find_conflicts` pair" — **not redundant**, both
+  call paths are live (`GoalMap.find_conflicts()` from `conductor.py`,
+  module-level `find_conflicts()` from `GoalMap.summary()`). Left untouched.
+- `knowledge_lens.record_decision` — **not dead**, its read side
+  (`inject_decisions()`) is live in `recall.py` and the decision-journal
+  feature was actively developed as of 2026-06-11. Half-wired, not
+  abandoned. Left untouched.
+- `background.py`'s `timeout_seconds` param — **live bug, not dead code**
+  (see Tier 0 #14 above). Deleted the genuinely-dead `list_background_tasks`
+  in the same file but left this alone.
+- Follow-on cleanup beyond the original table: once `inspector.py`'s dead
+  pipeline was gone, `evolver.receive_inspector_tickets()` lost its only
+  caller (`generate_tickets`) and became orphaned — deleted alongside it,
+  plus its now-stale import in `inspector.py` and one test in
+  `test_phase61_integration.py` that referenced the deleted `check_alignment`.
+
+Original per-cluster plan (for reference — all items below were executed as
+scoped except where noted above):
 
 | Cluster | Item | ~Lines |
 |---|---|---|
@@ -119,6 +150,7 @@ decision required beyond "confirm truly unused, then delete."
 | Polymarket | `polymarket_backtest_refined.py` — also zero callers; one-shot research artifact (hardcoded `/tmp` output, `random.seed(42)`); `.coveragerc` already excludes both from coverage | 394 |
 
 **Subtotal: roughly 4,500 lines deletable with no open design question.**
+**Actual: ~9,575 net lines removed (commit `b04962b`) — see DONE note above.**
 
 ---
 

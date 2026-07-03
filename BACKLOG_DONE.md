@@ -8,6 +8,14 @@ Last split: 2026-04-16 (session 34).
 
 ---
 
+### Polymarket cluster + quality_gate's debate pass extracted/deleted — DONE (2026-07-02)
+
+**Source:** refactor-plan Tier 1 dead-code deletion, item confirmed via git-history investigation the same day (see BACKLOG.md history / `docs/REFACTOR_PLAN.md` "Open product decisions" #5/#9).
+
+**What it was:** Confirmed via git history to be TradingAgents-dogfood leftovers, not preserved test data or research artifacts. `polymarket_backtest.py`/`polymarket_backtest_refined.py` were created-and-abandoned same-day (2026-04-01), zero callers ever. `backtester.py`/`backtest_metrics.py` were a literal agent-generated one-off from a 2026-03-30 dogfood run. `polymarket.py` (CLI wrapper wired into `doctor.py`) had the same "only touched by mechanical sweeps since" profile. `quality_gate.py`'s bull/bear/risk-manager debate pass (added 2026-03-31, day after the dated TradingAgents entry in `STEAL_LIST.md`) was a verbatim architectural match to TradingAgents' Bull/Bear/Risk-Manager design, generalized but never given a production caller. The real research conclusions were already properly archived at `research/POLYMARKET_BTC_LAG_VALIDATION.md` et al. — unaffected by this deletion. The separate "harvest orchestration history into a reusable test corpus" effort (`e7c2e4a`) is unrelated (workspace data, not `src/` code).
+
+**What shipped:** Deleted `src/polymarket.py`, `src/polymarket_backtest.py`, `src/polymarket_backtest_refined.py`, `src/backtester.py`, `src/backtest_metrics.py`, `tests/test_polymarket.py`; removed the polymarket-cli health check from `doctor.py`; removed stale `.coveragerc` omit entries; deleted `quality_gate.py`'s entire debate pass (`DebatePosition`/`DebateVerdict` dataclasses, `run_debate()`, prompts, ~220 lines) and its tests. Part of the larger Tier 1 pass, commit `b04962b`.
+
 ### Captain's-log event contract doc — DONE (2026-06-24, was AFK chunk #8)
 
 **Source:** Actionable Stack #8. "We have 36+ event types emitted across 10+ modules. No single doc says here's every event, field schema, when it fires."
