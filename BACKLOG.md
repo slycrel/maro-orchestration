@@ -230,9 +230,6 @@ have" not "build a sandboxing subsystem."
 
 - [ ] **Spend-gated transparency mandate.** Define a threshold (e.g., $2 estimated spend) above which the full source/build/artifact bundle is mandatory and visible to the user without grep. Below that, current behavior is fine.
 
-### 12. M5 portability final sweep
-
-- [ ] **M5 portability final sweep** — codex-side payload check decision (deferred) + final sweep (per GOAL_BRAIN active thread).
 
 ### 13. Evolve the evolver — evaluate its own scanners for actual practical value
 

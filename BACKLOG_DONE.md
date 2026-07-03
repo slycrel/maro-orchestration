@@ -8,6 +8,19 @@ Last split: 2026-04-16 (session 34).
 
 ---
 
+### M5 portability final sweep — DONE (2026-07-03)
+
+- [x] **Final sweep run on the current tree (post BACKLOG #-1 layout unification):**
+  the only grep survivor for machine paths is the codex fallback-candidates
+  list in `_find_codex_bin` (env → PATH → common locations — the intended M5
+  pattern, not a hardcode); every `.openclaw` reference is `Path.home()`-derived.
+  Fresh-venv `pip install -e` verified; imports + layout resolution verified
+  under a foreign HOME (`config.workspace_root()` / `orch_items.memory_dir()`
+  correctly resolve to `<HOME>/.maro/workspace[/memory]`). The codex-side
+  payload check decision stays **deferred-pending-repro** (JSONL format
+  differs, still no observed repro) — that's a wait-state, not a work item;
+  re-open if a codex payload mismatch is ever observed live.
+
 ### `_is_complex_directive` threshold for NOW-lane misrouting — DONE (2026-07-03)
 
 - [x] **NOW-lane runs produce no learning data and no artifact discipline** —

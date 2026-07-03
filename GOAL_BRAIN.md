@@ -874,8 +874,10 @@ Active:
   `pip install -e` works, installable harness. Last of the session-40 arc.
   Status 2026-06-10: hardcoded paths removed (llm.py, backtester.py,
   backtest_metrics.py, doctor.py), fresh-venv install verified under a foreign
-  HOME, rc=1 payload-first fix shipped. Remaining: codex-side payload check
-  decision (deferred — JSONL format differs, no observed repro), final sweep.
+  HOME, rc=1 payload-first fix shipped. Remaining: none — final sweep run
+  2026-07-03 on the post-layout-unification tree (no hardcoded machine paths;
+  fresh-venv `pip install -e` + foreign-HOME layout resolution verified).
+  Codex-side payload check decision stays deferred-pending-repro. Thread closed.
 - **Goal-brain sequencing: COMPLETE** (steps 1–5, 2026-06-10/11): artifact →
   pressure test → recall() → navigator schema → navigator prompt + shadow
   replay. Successor thread below.
