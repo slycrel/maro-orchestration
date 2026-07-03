@@ -251,14 +251,50 @@ Two drift classes, both cheap to fix:
 
 ### 13. Evolve the evolver — evaluate its own scanners for actual practical value
 
-- [ ] **`evolver.py`'s six statistical scanners (~1,100 lines) are more theory than
-  practical payoff** (Jeremy's read, 2026-07-02, while scoping the Tier 3
-  `evolver.py` split in docs/REFACTOR_PLAN.md). Before or alongside splitting
-  it into `evolver_store.py`/`evolver_scans.py`/`skill_lifecycle.py`, this is
-  exactly the kind of thing the self-improvement loop should evaluate itself:
-  which scanners actually produce suggestions that survive `_verify_post_apply`
-  vs. which just generate noise. Sequence after the `evolver.py` split (keeping
-  it modular first makes "which scanner" measurement and pruning cleaner).
+- [x] **Investigated 2026-07-03** (after the `evolver.py` split landed). Original
+  question — "which scanners survive `_verify_post_apply` vs. generate noise"
+  — **can't be answered empirically yet**, and that's the actual finding.
+
+  **The evolver has essentially never run in production.** `run_evolver()` is
+  only wired into `heartbeat.py` (every `evolver_every=10` ticks) or manual
+  `cli.py` invocation — and `maro-heartbeat.service` (in `deploy/systemd/`)
+  was never installed (`systemctl list-unit-files` / `find` for it: nothing).
+  All historical evolver data in `~/.maro/workspace/memory/` —
+  `suggestions.jsonl` (117 rows), `change_log.jsonl` (406), `evolver-baselines.jsonl`
+  (638), `calibration.jsonl` (3,312) — is timestamped exclusively 2026-04-04
+  through 2026-04-12, in tight sub-second bursts. That's pytest contamination
+  from before the Apr-12 test-isolation overhaul (CLAUDE.md's own changelog
+  names that fix), not real usage — confirmed by `success_rate: 1.0` /
+  `avg_cost_usd: 0.0` on every baseline row. Zero of the 117 suggestions were
+  ever `applied` (and the 116 non-trivial ones are `category="inspection_finding"`
+  from `inspector.py`, not from any of the evolver's own scanners at all).
+  `suggestion_outcomes.jsonl` — the file `scan_suggestion_outcomes()` and
+  `_verify_post_apply()` both depend on — doesn't exist. There is no
+  apply→verify track record to mine, in either direction.
+
+  Real production data *does* exist and is current (`outcomes.jsonl`: 1,355
+  rows, through 2026-07-03) — the evolver just isn't being pointed at it.
+  Ran the five non-LLM statistical scanners directly (read-only, zero cost)
+  against that real corpus to get a first honest read:
+
+  | Scanner | Result on real data | Read |
+  |---|---|---|
+  | `scan_step_costs` | 1 finding: `research` steps avg 174K tokens/step across 20 steps, ~$0.56 total Haiku-routing savings | Fired immediately with a concrete, correct, actionable suggestion. Looks genuinely useful. |
+  | `scan_canon_candidates` | 3 findings: lessons applied 48–80x across 4–5 task types, promotion-to-AGENTS.md candidates | Same — fired immediately with well-evidenced output. Looks genuinely useful. |
+  | `scan_calibration_log` | 0 findings | Inconclusive — `calibration.jsonl`'s only data is the pre-fix contamination window, so there's no real escalation-decision data to score yet. |
+  | `scan_quality_drift` | 0 findings | Inconclusive — needs a warm rolling baseline (`evolver-baselines.jsonl`) that doesn't exist post-fix; can't judge on one cold cycle. |
+  | `scan_suggestion_outcomes` | 0 findings (expected) | Structurally can't produce anything until real apply→verify cycles happen — this is the chicken-and-egg scanner. |
+
+  **Recommendation**: don't prune anything on theory. 2 of 5 statistical
+  scanners already prove out on first real invocation; the other 3 are
+  untestable until the loop actually runs, not necessarily bad. The real
+  blocker is operational, not scanner quality: get `run_evolver()` actually
+  executing against production data on a schedule (install/enable
+  `maro-heartbeat.service`, or start with periodic manual `cli.py` invocations
+  if an always-on daemon isn't wanted yet) so `scan_evolver_impact()` and
+  `scan_suggestion_outcomes()` — both already built for exactly this — have
+  real data to compute over. Left this as a decision for Jeremy rather than
+  enabling a new unattended-LLM-call service autonomously.
 
 ---
 

@@ -373,6 +373,18 @@ context, at best it's a slight tweak and we fix forward."*
   status, especially claims about follow-on actions, independently verify
   against actual repo state every time. BACKLOG #13's scanner-usefulness
   evaluation is now unblocked and next up.
+- **BACKLOG #13 investigated 2026-07-03** — the actual finding: the evolver
+  has essentially never run in production (`maro-heartbeat.service` was
+  never installed; all historical suggestion/change_log/calibration/baseline
+  data is pre-Apr-12 pytest contamination), so "which scanners survive
+  verify" can't be answered from history yet. Ran the 5 non-LLM statistical
+  scanners directly against the real, current 1,355-row `outcomes.jsonl`
+  corpus instead: `scan_step_costs` and `scan_canon_candidates` both fired
+  immediately with concrete, well-evidenced findings; the other 3 are
+  untestable until real apply→verify cycles exist, not necessarily bad.
+  Recommendation (left for Jeremy, not acted on autonomously — new
+  unattended-LLM-call service): get `run_evolver()` actually scheduled
+  against production data. Full detail in BACKLOG.md #13.
   `security.py`/`injection_guard.py`'s two pattern corpora were reviewed
   and confirmed **intentionally separate** (different threat models —
   external-content scanning vs. persona/skill-ingestion scanning); no
@@ -729,8 +741,10 @@ Active:
   architecture-review pass. Tiers 0–3 fully done and mainlined, including
   both `agent_loop.py`'s 10-file split (`242c4db`) and `evolver.py`'s
   3-way split (`3eef28b`), both shipped 2026-07-03 — see Compiled truth.
-  Remaining: BACKLOG #13 (evaluate evolver's six scanners for practical
-  value, now unblocked), Tier 4 (subpackage reorganization — not yet
+  BACKLOG #13 (evaluate evolver's six scanners for practical value)
+  investigated 2026-07-03 — see Compiled truth; real finding was an
+  operational gap (evolver never runs in production), left as a decision
+  for Jeremy. Remaining: Tier 4 (subpackage reorganization — not yet
   scoped in detail). Each tier merges to `main` only after the full suite
   passes on the merged tree.
 - **Substrate trial (OpenClaw → Maro → Telegram)**: opened 2026-07-01, contract
