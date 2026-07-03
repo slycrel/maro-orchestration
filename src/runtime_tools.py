@@ -30,8 +30,8 @@ _NAME_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789_")
 
 def _runtime_tools_path() -> Path:
     try:
-        from orch_items import orch_root
-        return orch_root() / "memory" / "runtime_tools.json"
+        from orch_items import memory_dir
+        return memory_dir() / "runtime_tools.json"
     except Exception:
         return Path(__file__).parent.parent / "memory" / "runtime_tools.json"
 

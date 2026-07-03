@@ -19,7 +19,7 @@ import observe
 
 def _ws(tmp_path) -> Path:
     """Returns the memory dir that orch_root() will use under MARO_WORKSPACE."""
-    mem = tmp_path / "prototypes" / "maro-orchestration" / "memory"
+    mem = tmp_path / "memory"
     mem.mkdir(parents=True, exist_ok=True)
     return mem
 
@@ -408,8 +408,8 @@ def test_main_events_subcommand(monkeypatch, tmp_path, capsys):
 # ---------------------------------------------------------------------------
 
 def _ws_root(tmp_path) -> Path:
-    """Returns orch_root() path (parent of memory/)."""
-    root = tmp_path / "prototypes" / "maro-orchestration"
+    """Returns the workspace root (parent of memory/ and projects/)."""
+    root = tmp_path
     root.mkdir(parents=True, exist_ok=True)
     return root
 

@@ -250,3 +250,88 @@ def test_config_paths_returns_dict():
     assert "workspace" in result
     assert "user_exists" in result
     assert "workspace_exists" in result
+
+
+class TestWorkspacePinLayout:
+    """BACKLOG #-1 (2026-07-03): a pinned MARO_WORKSPACE means the workspace
+    IS that path — orch_items' memory/projects/output resolvers must agree
+    with config's (no prototype-layout split-brain). Legacy vars keep the
+    prototype layout."""
+
+    def _clear_ws_vars(self, monkeypatch):
+        for var in ("MARO_WORKSPACE", "OPENCLAW_WORKSPACE", "WORKSPACE_ROOT",
+                    "MARO_ORCH_ROOT", "MARO_MEMORY_DIR"):
+            monkeypatch.delenv(var, raising=False)
+
+    def test_maro_workspace_pin_uses_workspace_layout(self, monkeypatch, tmp_path):
+        self._clear_ws_vars(monkeypatch)
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+        import orch_items
+        assert orch_items.memory_dir() == tmp_path / "memory"
+        assert orch_items.projects_root() == tmp_path / "projects"
+        assert orch_items.output_root() == tmp_path / "output"
+
+    def test_maro_workspace_pin_agrees_with_config(self, monkeypatch, tmp_path):
+        self._clear_ws_vars(monkeypatch)
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+        import config as config_mod
+        import orch_items
+        assert orch_items.memory_dir() == config_mod.memory_dir()
+        assert orch_items.projects_root() == config_mod.projects_dir()
+        assert orch_items.output_root() == config_mod.output_dir()
+
+    def test_legacy_openclaw_pin_keeps_prototype_layout(self, monkeypatch, tmp_path):
+        self._clear_ws_vars(monkeypatch)
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        import orch_items
+        proto = tmp_path / "prototypes" / "maro-orchestration"
+        assert orch_items.memory_dir() == proto / "memory"
+        assert orch_items.projects_root() == proto / "projects"
+        assert orch_items.output_root() == proto / "output"
+
+    def test_maro_workspace_wins_over_legacy_var(self, monkeypatch, tmp_path):
+        self._clear_ws_vars(monkeypatch)
+        maro_ws = tmp_path / "maro-ws"
+        legacy_ws = tmp_path / "legacy-ws"
+        monkeypatch.setenv("MARO_WORKSPACE", str(maro_ws))
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(legacy_ws))
+        import orch_items
+        assert orch_items.memory_dir() == maro_ws / "memory"
+        assert orch_items.projects_root() == maro_ws / "projects"
+        assert orch_items.output_root() == maro_ws / "output"
+
+    def test_background_log_lands_in_canonical_memory(self, monkeypatch, tmp_path):
+        self._clear_ws_vars(monkeypatch)
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+        import background
+        assert background._bg_log_path() == tmp_path / "memory" / "background-tasks.jsonl"
+
+
+class TestResolveArtifactPath:
+    """resolve_artifact_path() is the inverse of relative_display_path() —
+    consumers must not re-anchor stored artifact paths on orch_root directly."""
+
+    def test_workspace_form(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+        import orch_items
+        resolved = orch_items.resolve_artifact_path("~workspace/output/runs/run-x")
+        assert resolved == tmp_path / "output" / "runs" / "run-x"
+
+    def test_orch_root_relative_form(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+        import orch_items
+        resolved = orch_items.resolve_artifact_path("output/runs/run-x")
+        assert resolved == orch_items.orch_root() / "output" / "runs" / "run-x"
+
+    def test_absolute_form(self, monkeypatch, tmp_path):
+        import orch_items
+        target = tmp_path / "somewhere" / "run-y"
+        assert orch_items.resolve_artifact_path(str(target)) == target
+
+    def test_round_trips_display_path(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+        import orch_items
+        real = orch_items.runs_root() / "run-z"
+        real.mkdir(parents=True, exist_ok=True)
+        display = orch_items.relative_display_path(real)
+        assert orch_items.resolve_artifact_path(display) == real

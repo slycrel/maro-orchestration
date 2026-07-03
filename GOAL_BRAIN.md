@@ -836,6 +836,21 @@ Sample: the 2026-05-13..17 window of `~/.maro/workspace/runs/` (478 dirs total;
   callers. NOW lane exempt by design, unchanged. Regression tests cover both
   layers; relative-write leak class closed, tier-a hard fence (absolute
   writes) still open in BACKLOG #1.
+- **2026-07-03** — Workspace-pin layout unified (BACKLOG #-1). `MARO_WORKSPACE=x`
+  now means the workspace IS x — orch_items memory/projects/output resolvers
+  delegate to config's (which already gave MARO_WORKSPACE top precedence);
+  the prototype `<ws>/prototypes/maro-orchestration/` layout survives only
+  under the legacy pins (OPENCLAW_WORKSPACE/WORKSPACE_ROOT/MARO_ORCH_ROOT).
+  The audit found the split-brain class much wider than the dispatch seam:
+  ~12 runtime files (heartbeat/sheriff/interrupt/mission/hooks/persona/
+  background/runtime_tools/handle/director) wrote state to `orch_root()/memory`
+  — repo/memory in production — while readers/config pointed at the canonical
+  workspace; handle_inputs.jsonl + calibration.jsonl were still being written
+  to repo/memory live the day of the fix (full history migrated to
+  `~/.maro/workspace/memory/`, byte-verified). Stored artifact_path values are
+  display forms; 9 consumers re-anchored them on orch_root — new inverse
+  `resolve_artifact_path()` is the only sanctioned way back to a Path.
+  Contract pinned by TestWorkspacePinLayout/TestResolveArtifactPath.
 
 ## Threads (system-maintained — nothing leaves this list silently)
 

@@ -2,7 +2,7 @@
 
 What to do next, in what order. Updated each session. Strategic phases live in ROADMAP.md; deferred ideas live in BACKLOG.md. This file is the bridge — the executable queue.
 
-Last updated: 2026-06-24 (full reorg — collapsed ~628 lines of Done-log into docs/ROADMAP_ARCHIVE.md; file is now header + Active Queue + Dormant pointer. Queue content current as of 2026-06-21/23.)
+Last updated: 2026-07-03 (blocked-step escalate cutover ENACTED + live re-proven; cwd fence hole closed + live-proven; MILESTONES #3 fully closed — dispatch rationale + compiled truth both shipped).
 
 Truth anchor: GOAL_BRAIN.md Threads. History: docs/ROADMAP_ARCHIVE.md.
 

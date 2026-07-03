@@ -5,17 +5,13 @@ Read this at the start of every session. Update it as items are completed or new
 
 **Completed items live in [BACKLOG_DONE.md](BACKLOG_DONE.md)** — move items there with their full context when they ship; that file is the archive of what we've already decided, tried, or superseded, and it's ingested by `dev-recall` for historical context.
 
-Last reviewed: 2026-06-24 (full triage + reorg; follow-up code-verified audit moved 2 silently-completed items — closure inconclusive-probe handling, handle.py prefix registry — to BACKLOG_DONE.md. Then shipped the persistence-install guardrail (was BLOCKER #3) and moved it to BACKLOG_DONE.md; stack renumbered 1–12).
+Last reviewed: 2026-07-03 (shipped #-1 workspace-pin layout unification → BACKLOG_DONE.md; the audit also closed the wider orch_root()/memory split-brain class across ~12 runtime files).
 
 ---
 
 ## Actionable Stack
 
 Ordered open work that matters. Top of the list is next.
-
-### -1. Legacy workspace-pin layout wart (split-brain risk beyond the dispatch script)
-
-- [ ] **Any pinned workspace env var routes the memory tier into `<ws>/prototypes/maro-orchestration/`** (orch_items.memory_dir "ws pinned → orch_root layout" branch, kept for test isolation). Found live 2026-07-02: runs dispatched from an OpenClaw-pinned environment wrote run dirs to `~/.maro/workspace/runs/` but events + step-costs (the budget-gate ledger) + lessons to `~/.openclaw/workspace/prototypes/poe-orchestration/memory/` — and regenerated `prototypes/maro-orchestration/{output,projects}/` dirs. Mitigated at the adapter seam (maro-dispatch.sh unsets all workspace vars; today's 19 cost entries merged into the canonical ledger), but **anything invoking Maro without the script and with a pinned env still splits**. Real fix: make a pinned `MARO_WORKSPACE=x` mean "memory at `x/memory`" (not `x/prototypes/…`), keeping the prototypes layout only for the legacy `OPENCLAW_WORKSPACE` var — needs a careful pass over conftest + the ~15 tests that pin workspace vars directly. Do it as its own chunk, not mid-feature.
 
 ### 0. Test corpus — capture the missing layers (forward record-mode + full archive)
 

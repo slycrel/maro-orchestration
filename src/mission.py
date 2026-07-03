@@ -686,9 +686,7 @@ def _mission_path(project: str) -> Path:
 
 def _mission_log_path() -> Path:
     o = _orch()
-    mem = o.orch_root() / "memory"
-    mem.mkdir(parents=True, exist_ok=True)
-    return mem / "mission-log.jsonl"
+    return o.memory_dir() / "mission-log.jsonl"
 
 
 def save_mission(mission: Mission, project: str) -> None:
@@ -1052,7 +1050,7 @@ _DRAIN_LOCK_FILE = "mission-drain.lock"  # relative to orch memory/
 
 def _drain_lock_path() -> Path:
     o = _orch()
-    return o.orch_root() / "memory" / _DRAIN_LOCK_FILE
+    return o.memory_dir() / _DRAIN_LOCK_FILE
 
 
 def is_drain_running() -> bool:

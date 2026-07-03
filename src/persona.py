@@ -811,8 +811,7 @@ def record_persona_outcome(
 
     try:
         import orch
-        out_path = orch.orch_root() / "memory" / "persona-outcomes.jsonl"
-        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path = orch.memory_dir() / "persona-outcomes.jsonl"
     except Exception:
         return False
 

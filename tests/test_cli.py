@@ -19,6 +19,13 @@ class _RunResult:
         self.stderr = stderr
 
 
+def _resolve_display(tmp_path, rel: str):
+    """Resolve a relative_display_path() value against the test workspace."""
+    if rel.startswith("~workspace/"):
+        return tmp_path / rel[len("~workspace/"):]
+    return tmp_path / "prototypes" / "maro-orchestration" / rel
+
+
 def _run(tmp_path, *args):
     """Run cli.main() in-process with OPENCLAW_WORKSPACE pointed at tmp_path."""
     prev = os.environ.get("OPENCLAW_WORKSPACE")
@@ -121,7 +128,7 @@ def test_cli_run_start_finish_status(tmp_path):
     assert "started run_id=" in r.stdout
     run_id = next(part.split("=", 1)[1] for part in r.stdout.split() if part.startswith("run_id="))
 
-    status_path = tmp_path / "prototypes" / "maro-orchestration" / "output" / "operator-status.json"
+    status_path = tmp_path / "output" / "operator-status.json"
     assert status_path.exists()
     status = json.loads(status_path.read_text(encoding="utf-8"))
     assert status["queue"]["doing"] == 1
@@ -131,7 +138,7 @@ def test_cli_run_start_finish_status(tmp_path):
     assert r.returncode == 0
     assert "finished run_id=" in r.stdout
 
-    run_artifact = tmp_path / "prototypes" / "maro-orchestration" / "output" / "runs" / f"{run_id}.json"
+    run_artifact = tmp_path / "output" / "runs" / f"{run_id}.json"
     payload = json.loads(run_artifact.read_text(encoding="utf-8"))
     assert payload["status"] == "done"
     assert payload["note"] == "verified"
@@ -210,7 +217,7 @@ def test_cli_tick_exec_cmd(tmp_path):
     assert r.returncode == 0
     assert "execution=done validation=done" in r.stdout
 
-    runs_dir = tmp_path / "prototypes" / "maro-orchestration" / "output" / "runs"
+    runs_dir = tmp_path / "output" / "runs"
     run_dirs = [p for p in runs_dir.iterdir() if p.is_dir()]
     assert len(run_dirs) == 1
     assert (run_dirs[0] / "project.txt").read_text(encoding="utf-8") == "demo"
@@ -234,7 +241,7 @@ def test_cli_tick_exec_cmd_x_capture(tmp_path):
 def test_cli_tick_max_retry_streak_blocks_repeated_retries(tmp_path):
     r = _run(tmp_path, "init", "demo", "Retry", "guard", "--priority", "1")
     assert r.returncode == 0
-    next_path = tmp_path / "prototypes" / "maro-orchestration" / "projects" / "demo" / "NEXT.md"
+    next_path = tmp_path / "projects" / "demo" / "NEXT.md"
     next_path.write_text("- [ ] first\n", encoding="utf-8")
 
     first = _run(
@@ -384,7 +391,7 @@ def test_cli_tick_worker_session_manifest_aliases(tmp_path):
 
     run_line = next(line for line in r.stdout.splitlines() if "run_id=" in line)
     run_id = run_line.split("run_id=", 1)[1].split()[0]
-    artifact_dir = tmp_path / "prototypes" / "maro-orchestration" / "output" / "runs" / run_id
+    artifact_dir = tmp_path / "output" / "runs" / run_id
     assert (artifact_dir / "token.txt").read_text(encoding="utf-8") == "alias-ok"
     assert (artifact_dir / "cwd.txt").read_text(encoding="utf-8") == str(workdir)
     assert (artifact_dir / "req" / "payload.json").exists()
@@ -427,7 +434,7 @@ def test_cli_tick_worker_session_manifest_args_arrays(tmp_path):
 
     run_line = next(line for line in r.stdout.splitlines() if "run_id=" in line)
     run_id = run_line.split("run_id=", 1)[1].split()[0]
-    artifact_dir = tmp_path / "prototypes" / "maro-orchestration" / "output" / "runs" / run_id
+    artifact_dir = tmp_path / "output" / "runs" / run_id
     assert (artifact_dir / "argv.txt").read_text(encoding="utf-8") == "worker.py --mode cli"
 
 
@@ -463,7 +470,7 @@ def test_cli_loop_worker_session_manifest_args_arrays(tmp_path):
     assert r.returncode == 0
     assert "runs=1" in r.stdout
 
-    runs_dir = tmp_path / "prototypes" / "maro-orchestration" / "output" / "runs"
+    runs_dir = tmp_path / "output" / "runs"
     run_dirs = sorted(p for p in runs_dir.iterdir() if p.is_dir())
     assert len(run_dirs) == 1
     assert (run_dirs[0] / "argv-loop.txt").read_text(encoding="utf-8") == "worker.py --mode loop"
@@ -490,7 +497,7 @@ def test_cli_build_loop_runs_worker_session(tmp_path):
     assert payload["status"] == "ok"
     assert payload["runs"] == 1
     assert payload["items"][0]["project"] == "demo"
-    heartbeat_run = tmp_path / "prototypes" / "maro-orchestration" / payload["heartbeat_run_path"]
+    heartbeat_run = _resolve_display(tmp_path, payload["heartbeat_run_path"])
     assert heartbeat_run.exists()
     record = json.loads(heartbeat_run.read_text(encoding="utf-8"))
     assert record["status"] == "ok"
@@ -511,7 +518,7 @@ def test_cli_build_loop_idle_writes_heartbeat_run(tmp_path):
     payload = json.loads(r.stdout)
     assert payload["status"] == "idle"
     assert payload["reason"] == "no_work"
-    heartbeat_run = tmp_path / "prototypes" / "maro-orchestration" / payload["heartbeat_run_path"]
+    heartbeat_run = _resolve_display(tmp_path, payload["heartbeat_run_path"])
     assert heartbeat_run.exists()
     record = json.loads(heartbeat_run.read_text(encoding="utf-8"))
     assert record["status"] == "idle"
@@ -631,7 +638,7 @@ def test_cli_tick_review_cmd(tmp_path):
     assert r.returncode == 0
     assert "execution=done validation=done" in r.stdout
 
-    runs_dir = tmp_path / "prototypes" / "maro-orchestration" / "output" / "runs"
+    runs_dir = tmp_path / "output" / "runs"
     run_dirs = [p for p in runs_dir.iterdir() if p.is_dir()]
     assert len(run_dirs) == 1
     assert (run_dirs[0] / "review" / "verdict.txt").read_text(encoding="utf-8") == "pass"

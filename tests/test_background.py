@@ -94,7 +94,7 @@ def test_start_background_persists(monkeypatch, tmp_path):
     """start_background writes to background-tasks.jsonl."""
     _setup_workspace(monkeypatch, tmp_path)
     task = start_background("echo persisted")
-    bg_log = orch.orch_root() / "memory" / "background-tasks.jsonl"
+    bg_log = orch.memory_dir() / "background-tasks.jsonl"
     assert bg_log.exists()
     content = bg_log.read_text()
     assert task.id in content

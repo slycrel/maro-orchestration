@@ -8,6 +8,52 @@ Last split: 2026-04-16 (session 34).
 
 ---
 
+### Legacy workspace-pin layout wart (split-brain beyond the dispatch script) — FIXED (2026-07-03)
+
+**Was BACKLOG #-1.** Any pinned workspace env var routed the memory tier into
+`<ws>/prototypes/maro-orchestration/` (orch_items "ws pinned → orch_root layout"
+branch) while config-resolved paths (run dirs, captains log) went to the
+workspace root — found live 2026-07-02 when OpenClaw-pinned dispatches split
+their ledger across two trees. Mitigated then at the adapter seam
+(maro-dispatch.sh unsets the vars); root fix shipped 2026-07-03:
+
+- **`MARO_WORKSPACE=x` now means "the workspace IS x"** — orch_items
+  memory_dir/projects_root/output_root delegate to config's resolvers
+  (`_legacy_ws_pinned()` gate). It also wins over legacy vars when both are
+  set, mirroring config precedence. Only the legacy pins
+  (OPENCLAW_WORKSPACE/WORKSPACE_ROOT/MARO_ORCH_ROOT) keep the prototype
+  layout — preserved for the old tests/CI shape.
+- **The audit found the same split-brain class all over src** — every one of
+  these wrote to `orch_root()/memory` (repo/memory in production!) instead of
+  the canonical memory dir, and all were converted to `memory_dir()`:
+  background-tasks.jsonl, heartbeat-log.jsonl, heartbeat-state.json (sheriff),
+  loop.lock + interrupts.jsonl (interrupt), mission-log.jsonl + drain lock
+  (mission), hook-notifications/hook-log (hooks), persona-outcomes.jsonl,
+  runtime_tools.json, handle_inputs.jsonl (handle, was repo-hardcoded),
+  calibration.jsonl (director, was repo-hardcoded — both were still being
+  written to repo/memory live on 2026-07-03). sprint_contract + director logs
+  had a double-nested `orch_root()/prototypes/maro-orchestration/projects/...`
+  path → now `projects_root()`.
+- **artifact_path re-anchoring fixed**: stored artifact paths are display
+  values (`relative_display_path`) but 9 consumer sites re-joined them on
+  `orch_root()` — silently broken whenever runs_root lives outside orch_root
+  (the production default). New inverse `orch_items.resolve_artifact_path()`
+  handles orch-root-relative / `~workspace/...` / absolute forms; all
+  consumers converted. `_coerce_artifact_path` (worker-reported paths) now
+  accepts workspace-contained paths and rejects `..` traversal outright.
+  Bridge subprocess cwd uses `_bridge_cwd()` (orch_root, mkdir'd — it used to
+  exist only as a side effect of the old layout).
+- **Data migrated**: repo/memory handle_inputs.jsonl (57k lines) +
+  calibration.jsonl (8k lines) were the live full history (canonical copies
+  were Apr-11 byte-prefixes) — copied to `~/.maro/workspace/memory/`,
+  verified identical, repo duplicates removed.
+- Tests: suite-wide layout flip (conftest pins MARO_WORKSPACE) — ~70
+  prototype-path assertions updated across 13 files; new
+  `TestWorkspacePinLayout` + `TestResolveArtifactPath` regression classes in
+  tests/test_config.py pin the contract (MARO pin → workspace layout, legacy
+  pin → prototype layout, MARO wins over legacy, background log in canonical
+  memory, resolver round-trips).
+
 ### Polymarket cluster + quality_gate's debate pass extracted/deleted — DONE (2026-07-02)
 
 **Source:** refactor-plan Tier 1 dead-code deletion, item confirmed via git-history investigation the same day (see BACKLOG.md history / `docs/REFACTOR_PLAN.md` "Open product decisions" #5/#9).

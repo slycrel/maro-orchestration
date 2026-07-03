@@ -571,8 +571,8 @@ def _handle_impl(
     # Writes to memory/handle_inputs.jsonl so every goal + its prefixes are recoverable.
     _raw_input = message
     try:
-        _inputs_path = Path(__file__).resolve().parent.parent / "memory" / "handle_inputs.jsonl"
-        _inputs_path.parent.mkdir(parents=True, exist_ok=True)
+        from orch_items import memory_dir as _mem_dir
+        _inputs_path = _mem_dir() / "handle_inputs.jsonl"
         with _inputs_path.open("a", encoding="utf-8") as _fh:
             _input_rec = {
                 "handle_id": handle_id,

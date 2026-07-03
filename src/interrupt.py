@@ -540,7 +540,7 @@ def apply_interrupt_to_steps(
 def _default_lock_path() -> Path:
     try:
         import orch
-        return orch.orch_root() / "memory" / "loop.lock"
+        return orch.memory_dir() / "loop.lock"
     except Exception:
         pass
     try:
@@ -659,6 +659,6 @@ def _default_queue_path() -> Path:
         import sys
         sys.path.insert(0, str(Path(__file__).parent))
         import orch
-        return orch.orch_root() / "memory" / "interrupts.jsonl"
+        return orch.memory_dir() / "interrupts.jsonl"
     except Exception:
         return Path.home() / ".openclaw" / "workspace" / "memory" / "interrupts.jsonl"

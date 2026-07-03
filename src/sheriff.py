@@ -429,9 +429,8 @@ def _read_env_file_key() -> Optional[str]:
 def write_heartbeat_state(health: SystemHealth, *, project_reports: Optional[List[SheriffReport]] = None):
     """Write heartbeat state to memory/heartbeat-state.json."""
     try:
-        from orch import orch_root
-        state_path = orch_root() / "memory" / "heartbeat-state.json"
-        state_path.parent.mkdir(parents=True, exist_ok=True)
+        from orch import memory_dir
+        state_path = memory_dir() / "heartbeat-state.json"
 
         stuck_projects = []
         if project_reports:
@@ -452,8 +451,8 @@ def write_heartbeat_state(health: SystemHealth, *, project_reports: Optional[Lis
 def read_heartbeat_state() -> Optional[Dict[str, Any]]:
     """Read last heartbeat state."""
     try:
-        from orch import orch_root
-        state_path = orch_root() / "memory" / "heartbeat-state.json"
+        from orch import memory_dir
+        state_path = memory_dir() / "heartbeat-state.json"
         if state_path.exists():
             return json.loads(state_path.read_text(encoding="utf-8"))
     except Exception:

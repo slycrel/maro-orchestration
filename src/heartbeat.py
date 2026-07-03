@@ -360,9 +360,8 @@ def _tier3_escalate(report: HeartbeatReport) -> bool:
 def _log_heartbeat(report: HeartbeatReport) -> Optional[str]:
     """Append heartbeat report to memory/heartbeat-log.jsonl."""
     try:
-        from orch import orch_root
-        log_path = orch_root() / "memory" / "heartbeat-log.jsonl"
-        log_path.parent.mkdir(parents=True, exist_ok=True)
+        from orch import memory_dir
+        log_path = memory_dir() / "heartbeat-log.jsonl"
         with log_path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(report.to_dict()) + "\n")
         return str(log_path)

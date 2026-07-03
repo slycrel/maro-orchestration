@@ -33,6 +33,7 @@ from orch_items import (
     output_root,
     runs_root,
     relative_display_path,
+    resolve_artifact_path,
     validation_summary_path,
     workers_root,
 )
@@ -324,6 +325,18 @@ def _load_worker_session_manifest(path: Path) -> WorkerSessionSpec:
 # Artifact path and result parsing helpers
 # ---------------------------------------------------------------------------
 
+def _bridge_cwd() -> Path:
+    """Stable cwd for bridge subprocesses — orch_root(), guaranteed to exist.
+
+    Before BACKLOG #-1 (2026-07-03) orch_root always existed as a side effect
+    of projects/output living under it; now it can be absent, and Popen/run
+    raise on a missing cwd.
+    """
+    root = orch_root()
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
 def _coerce_artifact_path(raw: Optional[str], *, default: Optional[str]) -> str:
     if raw is None:
         if default is None:
@@ -336,22 +349,49 @@ def _coerce_artifact_path(raw: Optional[str], *, default: Optional[str]) -> str:
             raise ExecutionBridgeError("session result must include a valid artifact_path")
         return default
 
+    from config import workspace_root
+
     root = orch_root().resolve()
+    ws = workspace_root().resolve()
     candidate = Path(artifact)
-    if candidate.is_absolute():
+    if artifact.startswith("~workspace/"):
+        candidate = (ws / artifact[len("~workspace/"):]).resolve()
+    elif candidate.is_absolute():
         candidate = candidate.resolve()
     else:
+        if any(part == ".." for part in candidate.parts):
+            # Path traversal in a worker-reported relative path — before
+            # BACKLOG #-1 the orch_root containment check caught these; now
+            # orch_root can nest inside the workspace root, so "../.." could
+            # resolve to a workspace-contained (but wrong) location.
+            raise ExecutionBridgeError(
+                f"session result artifact_path must not contain path traversal: {artifact}"
+            )
         candidate = (root / candidate).resolve()
+        if not candidate.exists():
+            # Legacy orch_root-relative form (e.g. "output/runs/<id>") for a
+            # run dir that actually lives under the canonical workspace —
+            # runs_root() moved out of orch_root with BACKLOG #-1 (2026-07-03).
+            ws_candidate = (ws / artifact).resolve()
+            if ws_candidate.exists():
+                candidate = ws_candidate
 
-    try:
-        relative = candidate.relative_to(root)
-    except ValueError as exc:
-        raise ExecutionBridgeError(f"session result artifact_path must be under orchestration root: {candidate}") from exc
+    contained = False
+    for base in (root, ws):
+        if candidate == base:
+            raise ExecutionBridgeError(
+                f"session result artifact_path must be under orchestration root, not root: {candidate}"
+            )
+        try:
+            candidate.relative_to(base)
+            contained = True
+            break
+        except ValueError:
+            continue
+    if not contained:
+        raise ExecutionBridgeError(f"session result artifact_path must be under orchestration root: {candidate}")
 
-    relative_str = str(relative)
-    if relative_str in {"", "."}:
-        raise ExecutionBridgeError(f"session result artifact_path must be under orchestration root, not root: {candidate}")
-    return relative_str
+    return relative_display_path(candidate)
 
 
 def _extract_session_result_from_text(raw: str) -> Optional[dict]:
@@ -471,7 +511,7 @@ def _resolve_review_artifact_root(run: RunRecord, artifact_path: Optional[str]) 
     if not artifact_path:
         return _run_artifact_root(run)
     relative = _coerce_artifact_path(artifact_path, default=relative_display_path(_run_artifact_root(run)))
-    return orch_root() / relative
+    return resolve_artifact_path(relative)
 
 
 def _validation_bridge_name(bridge: ValidationBridge, fallback_index: int) -> str:
@@ -488,7 +528,7 @@ def _validation_bridge_name(bridge: ValidationBridge, fallback_index: int) -> st
 def _salvage_match_kinds(run: RunRecord) -> List[str]:
     if not run.artifact_path:
         return []
-    salvage_path = orch_root() / run.artifact_path / "x-capture-salvage.json"
+    salvage_path = resolve_artifact_path(run.artifact_path) / "x-capture-salvage.json"
     if not salvage_path.exists() or not salvage_path.is_file():
         return []
     try:
@@ -639,7 +679,7 @@ def command_execution_bridge(command: str) -> ExecutionBridge:
         proc = subprocess.run(
             command,
             shell=True,
-            cwd=orch_root(),
+            cwd=_bridge_cwd(),
             env=env,
             capture_output=True,
             text=True,
@@ -896,7 +936,7 @@ def session_execution_bridge(
         if extra_env:
             env.update({str(k): str(v) for k, v in extra_env.items()})
 
-        cwd = resolved_source_directory or orch_root()
+        cwd = resolved_source_directory or _bridge_cwd()
         if working_directory:
             try:
                 resolved_working_directory = _resolve_working_directory(working_directory)
@@ -1171,7 +1211,7 @@ def x_capture_salvage_validation_bridge(*, max_auth_retries: int = 3) -> Validat
             "generated_at": now_utc_iso(),
         }
         if artifact_path:
-            salvage_path = (orch_root() / artifact_path) / "x-capture-salvage.json"
+            salvage_path = resolve_artifact_path(artifact_path) / "x-capture-salvage.json"
             salvage_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
             _append_jsonl_record(
                 _run_status_summary_record_path(),
@@ -1320,7 +1360,7 @@ def review_command_validation_bridge(command: str, *, timeout_seconds: Optional[
             proc = subprocess.run(
                 command,
                 shell=True,
-                cwd=orch_root(),
+                cwd=_bridge_cwd(),
                 env=env,
                 capture_output=True,
                 text=True,

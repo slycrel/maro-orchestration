@@ -53,7 +53,7 @@ def _plan_manifest_path(project: str, loop_id: str) -> Optional[Path]:
             from runs import artifact_dir as _runs_artifact_dir
             artifacts_dir = _runs_artifact_dir(project, project_root_fn=_project_dir_root)
         except Exception:
-            artifacts_dir = o.orch_root() / "projects" / project / "artifacts"
+            artifacts_dir = o.projects_root() / project / "artifacts"
             artifacts_dir.mkdir(parents=True, exist_ok=True)
         return artifacts_dir / f"loop-{loop_id}-plan.md"
     except Exception:

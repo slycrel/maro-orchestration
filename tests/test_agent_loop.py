@@ -273,7 +273,7 @@ def test_loop_writes_log_artifact(monkeypatch, tmp_path):
         dry_run=True,
     )
     assert result.log_path is not None
-    log_file = orch.orch_root() / result.log_path
+    log_file = orch.resolve_artifact_path(result.log_path)
     assert log_file.exists()
     data = json.loads(log_file.read_text())
     assert data["loop_id"] == result.loop_id

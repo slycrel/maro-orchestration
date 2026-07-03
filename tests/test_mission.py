@@ -308,7 +308,7 @@ def test_run_mission_writes_log(monkeypatch, tmp_path):
     """mission-log.jsonl entry is written."""
     _setup_workspace(monkeypatch, tmp_path)
     run_mission("log test mission", project="log-test", dry_run=True)
-    log_file = orch.orch_root() / "memory" / "mission-log.jsonl"
+    log_file = orch.memory_dir() / "mission-log.jsonl"
     assert log_file.exists()
     lines = [l for l in log_file.read_text().splitlines() if l.strip()]
     assert len(lines) >= 1
@@ -665,7 +665,7 @@ def test_run_mission_creates_feature_manifest(monkeypatch, tmp_path):
 
 def _missions_root(tmp_path: Path) -> Path:
     """Return the projects root that orch resolves under tmp_path."""
-    return tmp_path / "prototypes" / "maro-orchestration" / "projects"
+    return tmp_path / "projects"
 
 
 def _write_mission_json(project_name: str, tmp_path: Path, goal: str, status: str, milestones: list) -> None:

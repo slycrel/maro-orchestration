@@ -166,13 +166,35 @@ def orch_root() -> Path:
     return traditional
 
 
+def _legacy_ws_pinned() -> bool:
+    """True when a LEGACY workspace pin selects the prototype (orch_root) layout.
+
+    BACKLOG #-1 (fixed 2026-07-03): `MARO_WORKSPACE=x` — the canonical var —
+    means "the workspace IS x": memory/projects/output live directly under
+    it, exactly as config.workspace_root() resolves it. It therefore never
+    selects the prototype layout, and because config gives it top precedence,
+    it wins here too when set alongside a legacy var (before this fix, a
+    pinned env routed the memory tier into <ws>/prototypes/maro-orchestration/
+    while run dirs went to the config-resolved workspace — split-brain found
+    live 2026-07-02). Only the legacy vars (and the explicit container
+    override MARO_ORCH_ROOT) keep the historical prototype layout.
+    """
+    if os.environ.get("MARO_WORKSPACE"):
+        return False
+    return any(os.environ.get(v) for v in (
+        "OPENCLAW_WORKSPACE", "WORKSPACE_ROOT", "MARO_ORCH_ROOT",
+    ))
+
+
 def memory_dir() -> Path:
     """Canonical memory directory — used by memory.py, observe.py, gc_memory.py, router.py.
 
     Resolution order:
       1. $MARO_MEMORY_DIR     (explicit override — tests use this)
-      2. config.memory_dir() (aligns with captains_log.py — defaults to ~/.maro/workspace/memory)
-      3. orch_root()/memory  (fallback for containers/CI)
+      2. config.memory_dir() (aligns with captains_log.py — honors MARO_WORKSPACE,
+         defaults to ~/.maro/workspace/memory) — unless a LEGACY var is pinned
+      3. orch_root()/memory  (legacy pins: OPENCLAW_WORKSPACE/WORKSPACE_ROOT/
+         MARO_ORCH_ROOT — and fallback for containers/CI)
       4. cwd/memory          (last resort)
 
     IMPORTANT: This must resolve to the SAME directory as config.memory_dir()
@@ -189,17 +211,17 @@ def memory_dir() -> Path:
         p.mkdir(parents=True, exist_ok=True)
         return p
 
-    # Align with config.py — the canonical workspace path
-    _ws_pinned = any(os.environ.get(v) for v in (
-        "MARO_WORKSPACE", "OPENCLAW_WORKSPACE", "WORKSPACE_ROOT", "MARO_ORCH_ROOT",
-    ))
-    if not _ws_pinned:
-        # Default: ~/.maro/workspace/memory (matches config.memory_dir())
-        p = Path.home() / ".maro" / "workspace" / "memory"
-        p.mkdir(parents=True, exist_ok=True)
-        return p
+    # Align with config.py — the canonical workspace path. Honors a pinned
+    # MARO_WORKSPACE ($MARO_WORKSPACE/memory) and defaults to
+    # ~/.maro/workspace/memory, exactly like config.memory_dir().
+    if not _legacy_ws_pinned():
+        try:
+            from config import memory_dir as _cfg_memory_dir
+            return _cfg_memory_dir()
+        except Exception:
+            pass  # fall through to orch_root layout / cwd fallback
 
-    # Workspace env var is set (tests, CI) — use orch_root layout
+    # Legacy workspace var is set (tests, CI) — use orch_root layout
     p = orch_root() / "memory"
     try:
         p.mkdir(parents=True, exist_ok=True)
@@ -214,14 +236,11 @@ def projects_root() -> Path:
     """Canonical projects directory — aligns with config.projects_dir().
 
     Resolution order:
-      1. config.projects_dir() when no workspace env var is pinned
-         (defaults to ~/.maro/workspace/projects)
-      2. orch_root()/projects when a workspace env var IS set (tests, CI)
+      1. config.projects_dir() unless a LEGACY workspace var is pinned
+         (honors MARO_WORKSPACE; defaults to ~/.maro/workspace/projects)
+      2. orch_root()/projects when a legacy workspace var IS set (tests, CI)
     """
-    _ws_pinned = any(os.environ.get(v) for v in (
-        "MARO_WORKSPACE", "OPENCLAW_WORKSPACE", "WORKSPACE_ROOT", "MARO_ORCH_ROOT",
-    ))
-    if not _ws_pinned:
+    if not _legacy_ws_pinned():
         from config import projects_dir
         return projects_dir()
     p = orch_root() / "projects"
@@ -233,14 +252,11 @@ def output_root() -> Path:
     """Canonical output directory — aligns with config.output_dir().
 
     Resolution order:
-      1. config.output_dir() when no workspace env var is pinned
-         (defaults to ~/.maro/workspace/output)
-      2. orch_root()/output when a workspace env var IS set (tests, CI)
+      1. config.output_dir() unless a LEGACY workspace var is pinned
+         (honors MARO_WORKSPACE; defaults to ~/.maro/workspace/output)
+      2. orch_root()/output when a legacy workspace var IS set (tests, CI)
     """
-    _ws_pinned = any(os.environ.get(v) for v in (
-        "MARO_WORKSPACE", "OPENCLAW_WORKSPACE", "WORKSPACE_ROOT", "MARO_ORCH_ROOT",
-    ))
-    if not _ws_pinned:
+    if not _legacy_ws_pinned():
         from config import output_dir
         return output_dir()
     p = orch_root() / "output"
@@ -265,6 +281,25 @@ def relative_display_path(path: Path) -> str:
     except (ValueError, Exception):
         pass
     return str(p)
+
+
+def resolve_artifact_path(rel) -> Path:
+    """Resolve a stored artifact_path back to an absolute Path.
+
+    Inverse of relative_display_path(): handles the orch_root-relative form,
+    the "~workspace/..." form, and absolute paths. Before BACKLOG #-1
+    (2026-07-03) consumers joined orch_root()/artifact_path directly, which
+    silently broke whenever runs_root() lived outside orch_root — the
+    production default (~/.maro/workspace/output vs repo orch_root).
+    """
+    s = str(rel or "")
+    if s.startswith("~workspace/"):
+        from config import workspace_root
+        return workspace_root() / s[len("~workspace/"):]
+    p = Path(s)
+    if p.is_absolute():
+        return p
+    return orch_root() / p
 
 
 def runs_root() -> Path:
@@ -359,7 +394,7 @@ def load_run_record(run_id: str) -> RunRecord:
 def validation_summary_path(run: RunRecord) -> Optional[Path]:
     if not run.artifact_path:
         return None
-    path = orch_root() / run.artifact_path / "validation-summary.json"
+    path = resolve_artifact_path(run.artifact_path) / "validation-summary.json"
     return path if path.exists() else None
 
 
@@ -400,9 +435,8 @@ def _next_attempt(project: str, item_index: int) -> int:
 
 
 def _run_artifact_root(run: RunRecord) -> Path:
-    root = orch_root()
     if run.artifact_path:
-        path = root / run.artifact_path
+        path = resolve_artifact_path(run.artifact_path)
     else:
         path = runs_root() / run.run_id
     path.mkdir(parents=True, exist_ok=True)

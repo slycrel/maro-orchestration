@@ -80,6 +80,7 @@ from orch_items import (
     append_provenance,
     ensure_project,
     relative_display_path,
+    resolve_artifact_path,
 )
 
 
@@ -185,7 +186,7 @@ def _active_salvage_runs() -> List[dict]:
         artifact_path = record.artifact_path
         if not artifact_path:
             continue
-        salvage_path = orch_root() / artifact_path / "x-capture-salvage.json"
+        salvage_path = resolve_artifact_path(artifact_path) / "x-capture-salvage.json"
         if not salvage_path.exists():
             continue
         first_kind = None
@@ -338,7 +339,7 @@ def finalize_run(run_id: str, status: str, *, note: Optional[str] = None) -> Run
 
     provenance_lines = [f"Finalized `{run.text}` as {status} ({run.run_id}).", f"Artifact: `{run.artifact_path}`"]
     if run.artifact_path:
-        artifact_root = orch_root() / run.artifact_path
+        artifact_root = resolve_artifact_path(run.artifact_path)
         validation_summary = artifact_root / "validation-summary.json"
         if validation_summary.exists():
             provenance_lines.append(f"Validation: `{relative_display_path(validation_summary)}`")
@@ -397,7 +398,7 @@ def _write_validation_summary(
 ) -> Optional[str]:
     artifact_root = orch_root()
     if run.artifact_path:
-        artifact_root = orch_root() / run.artifact_path
+        artifact_root = resolve_artifact_path(run.artifact_path)
     if not artifact_root.exists() or not artifact_root.is_dir():
         return None
 

@@ -47,7 +47,7 @@ def _make_lesson(tmp_path, lesson_text, score, tier=MemoryTier.MEDIUM, acquired_
         acquired_for=acquired_for,
     )
     # orch_root() = MARO_WORKSPACE/prototypes/maro-orchestration
-    tier_file = tmp_path / "prototypes" / "maro-orchestration" / "memory" / tier / "lessons.jsonl"
+    tier_file = tmp_path / "memory" / tier / "lessons.jsonl"
     tier_file.parent.mkdir(parents=True, exist_ok=True)
     with open(tier_file, "a") as f:
         f.write(json.dumps(asdict(tl)) + "\n")

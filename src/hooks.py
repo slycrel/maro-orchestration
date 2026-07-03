@@ -469,8 +469,7 @@ def _run_reporter(
     if target in ("telegram", "both"):
         try:
             import orch as _orch
-            notif_path = _orch.orch_root() / "memory" / "hook-notifications.jsonl"
-            notif_path.parent.mkdir(parents=True, exist_ok=True)
+            notif_path = _orch.memory_dir() / "hook-notifications.jsonl"
             entry = json.dumps({"hook_id": hook.id, "scope": hook.scope, "message": message})
             with open(notif_path, "a", encoding="utf-8") as fh:
                 fh.write(entry + "\n")
@@ -480,8 +479,7 @@ def _run_reporter(
     if target in ("log", "both"):
         try:
             import orch as _orch
-            log_path = _orch.orch_root() / "memory" / "hook-log.jsonl"
-            log_path.parent.mkdir(parents=True, exist_ok=True)
+            log_path = _orch.memory_dir() / "hook-log.jsonl"
             entry = json.dumps({"hook_id": hook.id, "scope": hook.scope, "message": message})
             with open(log_path, "a", encoding="utf-8") as fh:
                 fh.write(entry + "\n")

@@ -53,11 +53,15 @@ def _orch():
 
 
 def _bg_log_path() -> Path:
-    """Path to background-tasks.jsonl."""
+    """Path to background-tasks.jsonl.
+
+    Uses the canonical memory dir (BACKLOG #-1, 2026-07-03) — the old
+    orch_root()/memory put this file in repo/memory in production and in the
+    prototype layout under pinned workspaces, split from the rest of the
+    learning data.
+    """
     o = _orch()
-    mem = o.orch_root() / "memory"
-    mem.mkdir(parents=True, exist_ok=True)
-    return mem / "background-tasks.jsonl"
+    return o.memory_dir() / "background-tasks.jsonl"
 
 
 def _task_to_dict(task: BackgroundTask) -> dict:

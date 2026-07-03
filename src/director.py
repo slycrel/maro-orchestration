@@ -777,15 +777,17 @@ def _write_director_log(
         try:
             import sys as _sys
             _sys.path.insert(0, str(Path(__file__).parent))
-            from orch import orch_root
-            base = orch_root()
+            from orch import orch_root, projects_root
+            if project:
+                log_dir = projects_root() / project / "artifacts"
+            else:
+                log_dir = orch_root() / "artifacts" / "director"
         except Exception:
             base = Path.cwd()
-
-        if project:
-            log_dir = base / "prototypes" / "maro-orchestration" / "projects" / project / "artifacts"
-        else:
-            log_dir = base / "prototypes" / "maro-orchestration" / "artifacts" / "director"
+            if project:
+                log_dir = base / "projects" / project / "artifacts"
+            else:
+                log_dir = base / "artifacts" / "director"
         log_dir.mkdir(parents=True, exist_ok=True)
 
         fname = f"director-{director_id}-log.json"
@@ -807,8 +809,9 @@ def _write_director_log(
         }
         path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         try:
-            return str(path.relative_to(base))
-        except ValueError:
+            from orch import relative_display_path
+            return relative_display_path(path)
+        except Exception:
             return str(path)
     except Exception:
         return None
@@ -1009,9 +1012,8 @@ def handle_escalation(
     try:
         import json as _json
         import time as _time
-        _cal_dir = Path(__file__).resolve().parent.parent / "memory"
-        _cal_dir.mkdir(parents=True, exist_ok=True)
-        _cal_path = _cal_dir / "calibration.jsonl"
+        from orch_items import memory_dir as _mem_dir
+        _cal_path = _mem_dir() / "calibration.jsonl"
         with open(_cal_path, "a", encoding="utf-8") as _f:
             _f.write(_json.dumps({
                 "ts": _time.time(),

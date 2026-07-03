@@ -69,8 +69,9 @@ def _print_run(prefix: str, run) -> None:
 def _load_salvage_summary(run):
     if not getattr(run, "artifact_path", None):
         return None
+    from orch_items import resolve_artifact_path as _resolve_ap
     path = Path(run.artifact_path) / "x-capture-salvage.json"
-    root_path = orch_root() / path
+    root_path = _resolve_ap(run.artifact_path) / "x-capture-salvage.json"
     if not root_path.exists():
         return None
     try:
