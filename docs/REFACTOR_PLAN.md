@@ -272,10 +272,53 @@ moves (`director.py`'s `closure_verify.py` extraction, `handle.py`'s
 each with an explicit working-directory self-check up front (after the
 Tier 2 incident where a fork wrote to the main checkout instead of this
 worktree). Both checked out clean on independent re-verification; full
-suite green. The larger structural rewrites below (`agent_loop.py` split,
-`evolver.py` split, `cli.py` command registry) are deliberately **not**
-started — held pending explicit go-ahead given their size and behavioral
-risk, unlike the pure moves.
+suite green.
+
+**Also DONE 2026-07-02 (round 2, after Jeremy's sign-off):** `cli.py`'s
+command-registry conversion, and the probe-modality classifier
+reconciliation flagged above. `agent_loop.py`'s split and `evolver.py`'s
+split are still deliberately **not** started — held pending explicit
+go-ahead given their size and behavioral risk. Jeremy has now approved
+`agent_loop.py`'s split to start once other in-flight work clears
+(sequenced as one staged, sequential extraction — not parallel forks
+racing on the same file, unlike the independent-cluster work above).
+`evolver.py`'s split is agreed but sequenced *after* `agent_loop.py`;
+see BACKLOG.md #13 ("evolve the evolver") for the related follow-up
+Jeremy wants — evaluating which of its 6 scanners are worth keeping,
+sequenced after the split so pruning is easier against modular code.
+
+- **`cli.py` → command registry**: 52 `if`/`elif` branches (53 handler
+  functions — two subcommands shared one) became `_cmd_<name>(args)`
+  functions plus a single `_COMMAND_HANDLERS = {cmd: handler}` dict;
+  `main()` is now a 6-line dict-lookup dispatch. Verified byte-for-byte
+  identical bodies for all 53 extracted handlers vs. the original
+  branches. One thing surfaced and *deliberately preserved* rather than
+  fixed: 6 branches (`outcomes`, `sheriff`, `contract`, `hooks`,
+  `gateway`, `router`) had no per-command "unknown subcommand" message —
+  they silently fell through the old if-chain to the shared
+  `E_INTERNAL` fallback. Each now ends with an explicit copy of that same
+  fallback to keep behavior identical; genuinely giving each its own
+  message (like `memory`/`persona`/`skills` already have) is a real
+  improvement but a behavior change, left for a follow-up, not bundled
+  into a "pure mechanical conversion."
+- **Probe-modality classifier reconciliation**: history check (git blame,
+  not the "local LLM verifier fallback" guess) found both classifiers
+  were added the same day (2026-04-17, ~8 hours apart) — `_classify_probe_modality`
+  first (with careful precedence rules, written to fix an
+  "everything-is-static bias" seen in a real run), then
+  `_check_modality_from_command` added later for a different call site,
+  apparently without noticing the first classifier already existed.
+  Same-day reinvention, not old-code-plus-new-fallback. Confirmed they
+  disagreed on real inputs (`npm test`, `pnpm test`, `go build ./cmd/foo`,
+  bare `websocket`, `nc`/`netcat`, etc.) Unified into one: retired
+  `_check_modality_from_command` entirely (its output wasn't consumed
+  anywhere besides being set-and-returned, and all its existing test
+  assertions produce identical results under `_classify_probe_modality`),
+  repointed its one call site, dropped the dead re-export from
+  `director.py`. Noted for later, not a regression: `_classify_probe_modality`'s
+  browser-detection pattern lacks `webkit`/`xdotool` that the retired
+  function had — worth a look if browser-driven closure checks ever use
+  `webkit`-only tooling.
 
 - **`director.py` → `closure_verify.py`**: shipped as scoped (801 lines:
   `verify_goal_completion` + its private helpers/constants). `director.py`

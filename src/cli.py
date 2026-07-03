@@ -141,1682 +141,1802 @@ def _build_execution(args):
     return None
 
 
+def _cmd_init(args: argparse.Namespace) -> int:
+    p = ensure_project(args.slug, " ".join(args.mission), priority=args.priority)
+    write_operator_status()
+    print(f"initialized={p}")
+    return 0
+
+
+def _cmd_next(args: argparse.Namespace) -> int:
+    if args.project:
+        p = project_dir(args.project)
+        if not p.exists():
+            return fail("E_PROJECT_NOT_FOUND", args.project)
+        item = select_next_item(args.project)
+        if item:
+            print(f"project={args.project} index={item.index} state=[{item.state}] text={item.text}")
+            return 0
+        print(f"project={args.project} next=(none)")
+        return 1
+
+    sel = select_global_next()
+    if not sel:
+        print("next=(none)")
+        return 1
+    slug, item = sel
+    print(f"project={slug} index={item.index} state=[{item.state}] text={item.text}")
+    return 0
+
+
+def _cmd_done(args: argparse.Namespace) -> int:
+    if not project_dir(args.project).exists():
+        return fail("E_PROJECT_NOT_FOUND", args.project)
+    if args.index is None:
+        item = mark_first_todo_done(args.project)
+        if not item:
+            print(f"project={args.project} updated=0")
+            return 1
+        write_operator_status()
+        print(f"project={args.project} updated=1 index={item.index} text={item.text}")
+        return 0
+    mark_item(args.project, args.index, "x")
+    write_operator_status()
+    print(f"project={args.project} updated=1 index={args.index}")
+    return 0
+
+
+def _cmd_log(args: argparse.Namespace) -> int:
+    if not project_dir(args.project).exists():
+        return fail("E_PROJECT_NOT_FOUND", args.project)
+    append_decision(args.project, [" ".join(args.message)])
+    print(f"project={args.project} logged=1")
+    return 0
+
+
+def _cmd_enqueue(args: argparse.Namespace) -> int:
+    if not project_dir(args.project).exists():
+        return fail("E_PROJECT_NOT_FOUND", args.project)
+    task_text = " ".join(args.task).strip()
+    if not task_text:
+        return fail("E_TASK_REQUIRED", "task text cannot be empty")
+    payload = f"project={args.project} :: {task_text}"
+    # Use explicit --reason if provided, otherwise use constructed payload
+    reason = args.reason if args.reason != "queued from orch" else payload
+    blocked = [b.strip() for b in (args.blocked_by or "").split(",") if b.strip()]
+    try:
+        from task_store import enqueue as _enqueue
+        task = _enqueue(
+            lane=args.lane,
+            source=args.source,
+            reason=reason,
+            parent_job_id=getattr(args, "parent_job_id", ""),
+            blocked_by=blocked,
+        )
+        print(f"project={args.project} type=project_task lane={args.lane} job_id={task['job_id']} payload={json.dumps(payload)}")
+    except Exception as exc:
+        return fail("E_QUEUE_ENQUEUE", str(exc))
+    return 0
+
+
+def _cmd_blocked(args: argparse.Namespace) -> int:
+    blocked = list_blocked_projects()
+    if not blocked:
+        print("blocked=(none)")
+        return 0
+    for b in blocked:
+        print(f"project={b.slug} priority={b.priority} blocked={b.blocked} todo={b.todo}")
+    return 0
+
+
+def _cmd_salvage(args: argparse.Namespace) -> int:
+    payload = write_operator_status()["salvage"]
+    if args.format == "json":
+        print(json.dumps(payload, indent=2))
+        return 0
+    print(f"active_count={payload['active_count']} pending_count={payload['pending_count']} index_path={payload['index_path']}")
+    if not payload["active_runs"]:
+        print("salvage=(none)")
+        return 0
+    for run in payload["active_runs"]:
+        print(
+            " ".join(
+                [
+                    f"run_id={run['run_id']}",
+                    f"project={run['project']}",
+                    f"item={run['item']}",
+                    f"attempt={run['attempt']}",
+                    *( [f"kind={run['first_kind']}"] if run.get("first_kind") else [] ),
+                    *( [f"detail={json.dumps(run['first_detail'])}"] if run.get("first_detail") else [] ),
+                    f"artifact={run['artifact_path']}",
+                ]
+            )
+        )
+    return 0
+
+
+def _cmd_report(args: argparse.Namespace) -> int:
+    content = status_report_markdown(args.project) if args.format == "md" else status_report_json(args.project)
+    if args.out:
+        out = Path(args.out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(content, encoding="utf-8")
+        print(f"written={out}")
+    else:
+        print(content, end="")
+    return 0
+
+
+def _cmd_start(args: argparse.Namespace) -> int:
+    project = args.project
+    if args.index is not None and not project:
+        return fail("E_PROJECT_REQUIRED", "--index requires --project")
+    try:
+        if project:
+            if not project_dir(project).exists():
+                return fail("E_PROJECT_NOT_FOUND", project)
+            run = start_item(project, args.index, source=args.source, worker=args.worker, note=args.note)
+        else:
+            run = run_once(worker=args.worker, source=args.source, note=args.note)
+            if not run:
+                print("run=(none)")
+                return 1
+    except ValueError as exc:
+        return fail("E_START_FAILED", str(exc))
+    _print_run("started", run)
+    return 0
+
+
+def _cmd_finish(args: argparse.Namespace) -> int:
+    try:
+        run = finalize_run(args.run_id, args.status, note=args.note)
+    except FileNotFoundError:
+        return fail("E_RUN_NOT_FOUND", args.run_id)
+    except ValueError as exc:
+        return fail("E_FINISH_FAILED", str(exc))
+    _print_run("finished", run)
+    return 0
+
+
+def _cmd_inspect_run(args: argparse.Namespace) -> int:
+    try:
+        run = load_run_record(args.run_id)
+        summary = load_validation_summary(args.run_id)
+    except FileNotFoundError:
+        return fail("E_RUN_NOT_FOUND", args.run_id)
+    salvage = _load_salvage_summary(run)
+    payload = {
+        "run": json.loads(json.dumps(run, default=lambda o: o.__dict__)),
+        "validation_summary": summary,
+        "salvage_summary": salvage,
+    }
+    if args.format == "json":
+        print(json.dumps(payload, indent=2))
+    else:
+        print(f"run_id={run.run_id}")
+        print(f"project={run.project}")
+        print(f"index={run.index}")
+        print(f"status={run.status}")
+        print(f"text={run.text}")
+        if run.artifact_path:
+            print(f"artifact={run.artifact_path}")
+        if run.note:
+            print(f"note={run.note}")
+        if summary:
+            print(f"validation_status={summary['validation']['status']}")
+            print(f"validation_passed={summary['validation']['passed']}")
+        if salvage:
+            print(f"salvage_path={salvage.get('path')}")
+            matches = salvage.get("matches") or []
+            first = next((item for item in matches if isinstance(item, dict)), None)
+            if first:
+                if first.get("kind"):
+                    print(f"salvage_kind={first['kind']}")
+                if first.get("detail"):
+                    print(f"salvage_detail={first['detail']}")
+    return 0
+
+
+def _cmd_cycle(args: argparse.Namespace) -> int:
+    try:
+        run = run_once(project=args.project, worker=args.worker, source=args.source, note=args.note)
+    except ValueError as exc:
+        return fail("E_RUN_FAILED", str(exc))
+    if not run:
+        print("run=(none)")
+        return 1
+    _print_run("started", run)
+    if args.finish:
+        try:
+            run = finalize_run(run.run_id, args.finish, note=args.finish_note)
+        except ValueError as exc:
+            return fail("E_RUN_FINISH_FAILED", str(exc))
+        _print_run("finished", run)
+    return 0
+
+
+def _cmd_outcomes(args: argparse.Namespace) -> int:
+    import memory as _mem
+    if args.memory_cmd == "context":
+        ctx = _mem.bootstrap_context()
+        print(ctx if ctx else "(no memory yet)")
+        return 0
+    if args.memory_cmd == "outcomes":
+        outcomes = _mem.load_outcomes(limit=args.limit)
+        if args.format == "json":
+            from dataclasses import asdict
+            print(json.dumps([asdict(o) for o in outcomes], indent=2))
+        else:
+            for o in outcomes:
+                print(f"[{o.recorded_at[:10]}] {o.status:6s} {o.task_type:8s} {o.goal[:60]}")
+        return 0
+    if args.memory_cmd == "lessons":
+        lessons = _mem.load_lessons(task_type=args.task_type, limit=args.limit)
+        if args.format == "json":
+            from dataclasses import asdict
+            print(json.dumps([asdict(l) for l in lessons], indent=2))
+        else:
+            for l in lessons:
+                print(f"[{l.task_type:8s}] conf={l.confidence:.1f} {l.lesson[:80]}")
+        return 0
+    return fail("E_INTERNAL", "unknown command")
+
+
+def _cmd_sheriff(args: argparse.Namespace) -> int:
+    import sheriff as _sheriff_mod
+    if args.sheriff_cmd == "check":
+        report = _sheriff_mod.check_project(args.project, window_minutes=args.window)
+        print(report.format(args.format))
+        return 0 if report.status == "healthy" else 1
+    if args.sheriff_cmd == "all":
+        reports = _sheriff_mod.check_all_projects(window_minutes=args.window)
+        if args.format == "json":
+            print(json.dumps([json.loads(r.format("json")) for r in reports], indent=2))
+        else:
+            for r in reports:
+                print(r.format("text"))
+                print()
+        stuck = [r for r in reports if r.status in ("stuck", "warning")]
+        return 1 if stuck else 0
+    if args.sheriff_cmd == "health":
+        health = _sheriff_mod.check_system_health()
+        if args.write_state:
+            project_reports = _sheriff_mod.check_all_projects()
+            _sheriff_mod.write_heartbeat_state(health, project_reports=project_reports)
+        print(health.format(args.format))
+        return 0 if health.status == "healthy" else 1
+    return fail("E_INTERNAL", "unknown command")
+
+
+def _cmd_director(args: argparse.Namespace) -> int:
+    import director as _director_mod
+    directive = " ".join(args.directive)
+    try:
+        result = _director_mod.run_director(
+            directive,
+            project=args.project,
+            dry_run=args.dry_run,
+            verbose=args.verbose,
+        )
+    except Exception as exc:
+        return fail("E_DIRECTOR", str(exc))
+    if args.format == "json":
+        print(json.dumps({
+            "director_id": result.director_id,
+            "status": result.status,
+            "plan_acceptance": result.plan_acceptance,
+            "tickets": len(result.tickets),
+            "report": result.report,
+            "tokens_in": result.tokens_in,
+            "tokens_out": result.tokens_out,
+            "elapsed_ms": result.elapsed_ms,
+            "log_path": result.log_path,
+        }, indent=2))
+    else:
+        print(result.summary())
+        if result.report:
+            print()
+            print("=== REPORT ===")
+            print(result.report)
+    return 0 if result.status == "done" else 1
+
+
+def _cmd_handle(args: argparse.Namespace) -> int:
+    import handle as _handle_mod
+    msg = " ".join(args.message)
+    try:
+        result = _handle_mod.handle(
+            msg,
+            project=args.project,
+            model=args.model,
+            force_lane=args.lane,
+            dry_run=args.dry_run,
+            verbose=args.verbose,
+        )
+    except Exception as exc:
+        return fail("E_HANDLE", str(exc))
+    print(result.format(mode=args.format))
+    return 0 if result.status == "done" else 1
+
+
+def _cmd_run(args: argparse.Namespace) -> int:
+    import agent_loop as _al
+    goal_str = " ".join(args.goal)
+    # Wire up ancestry if --parent was specified
+    if getattr(args, "parent", None):
+        from ancestry import create_child_ancestry, set_project_ancestry
+        import orch as _o
+        _target_slug = args.project or _al._goal_to_slug(goal_str)
+        _target_dir = _o.project_dir(_target_slug)
+        if not _target_dir.exists():
+            _o.ensure_project(_target_slug, goal_str[:80])
+        _parent_dir = _o.project_dir(args.parent)
+        _parent_title = getattr(args, "parent_title", None) or args.parent
+        _child_ancestry = create_child_ancestry(args.parent, _parent_title, _parent_dir)
+        set_project_ancestry(_target_dir, _child_ancestry)
+    try:
+        result = _al.run_agent_loop(
+            goal_str,
+            project=args.project,
+            model=args.model,
+            max_steps=args.max_steps,
+            max_iterations=args.max_iterations,
+            dry_run=args.dry_run,
+            verbose=args.verbose,
+        )
+    except Exception as exc:
+        return fail("E_RUN", str(exc))
+    if args.format == "json":
+        print(json.dumps({
+            "loop_id": result.loop_id,
+            "project": result.project,
+            "goal": result.goal,
+            "status": result.status,
+            "steps_done": sum(1 for s in result.steps if s.status == "done"),
+            "steps_total": len(result.steps),
+            "stuck_reason": result.stuck_reason,
+            "tokens_in": result.total_tokens_in,
+            "tokens_out": result.total_tokens_out,
+            "elapsed_ms": result.elapsed_ms,
+            "log_path": result.log_path,
+        }, indent=2))
+    else:
+        print(result.summary())
+    return 0 if result.status == "done" else 1
+
+
+def _cmd_evolver(args: argparse.Namespace) -> int:
+    from evolver import run_evolver, list_pending_suggestions, apply_suggestion
+
+    if getattr(args, "list_pending", False):
+        pending = list_pending_suggestions()
+        if args.format == "json":
+            print(json.dumps([s.to_dict() for s in pending], indent=2))
+        else:
+            if not pending:
+                print("(no pending suggestions)")
+            else:
+                for s in pending:
+                    print(f"  [{s.suggestion_id}] [{s.category}] {s.target}: {s.suggestion[:80]}")
+        return 0
+
+    if getattr(args, "apply_id", None):
+        ok = apply_suggestion(args.apply_id)
+        if ok:
+            print(f"applied={args.apply_id}")
+            return 0
+        else:
+            return fail("E_SUGGESTION_NOT_FOUND", args.apply_id)
+
+    if getattr(args, "revert_id", None):
+        from evolver import revert_suggestion
+        result = revert_suggestion(args.revert_id)
+        if result["reverted"]:
+            print(f"reverted={args.revert_id}: {result['detail']}")
+            return 0
+        else:
+            print(f"revert failed: {result['detail']}", file=sys.stderr)
+            return 1
+
+    report = run_evolver(
+        outcomes_window=args.window,
+        min_outcomes=args.min_outcomes,
+        dry_run=args.dry_run,
+        verbose=args.verbose,
+        notify=args.notify,
+    )
+    if args.format == "json":
+        print(json.dumps(report.to_dict(), indent=2))
+    else:
+        print(report.summary())
+    return 0
+
+
+def _cmd_heartbeat(args: argparse.Namespace) -> int:
+    from heartbeat import run_heartbeat, heartbeat_loop
+    if args.loop:
+        heartbeat_loop(
+            interval=args.interval,
+            dry_run=args.dry_run,
+            verbose=args.verbose,
+            escalate=not args.no_escalate,
+            autonomy=args.autonomy,
+            backlog_every=args.backlog_every,
+        )
+        return 0
+    report = run_heartbeat(
+        dry_run=args.dry_run,
+        verbose=args.verbose,
+        escalate=not args.no_escalate,
+    )
+    if args.format == "json":
+        print(json.dumps(report.to_dict(), indent=2))
+    else:
+        print(report.summary())
+    return 0
+
+
+def _cmd_telegram(args: argparse.Namespace) -> int:
+    from telegram_listener import poll_once, poll_loop
+    try:
+        if args.once:
+            n = poll_once(dry_run=args.dry_run, project=args.project, verbose=args.verbose)
+            print(f"processed={n}")
+            return 0
+        else:
+            poll_loop(dry_run=args.dry_run, project=args.project, verbose=args.verbose)
+            return 0
+    except RuntimeError as exc:
+        return fail("E_TELEGRAM", str(exc))
+
+
+def _cmd_interrupt(args: argparse.Namespace) -> int:
+    from interrupt import InterruptQueue, is_loop_running, get_running_loop
+    import json as _json
+
+    if args.status:
+        info = get_running_loop()
+        if args.format == "json":
+            print(_json.dumps(info or {}))
+        elif info:
+            print(f"loop_id={info['loop_id']} goal={info.get('goal','?')!r} pid={info.get('pid','?')}")
+        else:
+            print("No loop running.")
+        return 0
+
+    message = " ".join(args.message)
+    q = InterruptQueue()
+    intr = q.post(message, source=args.source, intent=args.intent)
+    if args.format == "json":
+        print(_json.dumps(intr.to_dict()))
+    else:
+        running = get_running_loop()
+        if running:
+            print(f"interrupt posted: id={intr.id} intent={intr.intent} loop={running.get('loop_id','?')}")
+        else:
+            print(f"interrupt queued (no loop running yet): id={intr.id} intent={intr.intent}")
+    return 0
+
+
+def _cmd_plan(args: argparse.Namespace) -> int:
+    try:
+        result = plan_project(args.project, " ".join(args.goal), max_steps=args.max_steps)
+    except ValueError as exc:
+        return fail("E_PLAN_FAILED", str(exc))
+    print(f"project={result.project} steps={len(result.steps)} added={len(result.item_indices)} first={result.item_indices[0] if result.item_indices else -1}")
+    return 0
+
+
+def _cmd_tick(args: argparse.Namespace) -> int:
+    try:
+        execution = _build_execution(args)
+    except ValueError as exc:
+        return fail("E_TICK_EXEC", str(exc))
+    validation = _build_validation(args)
+    try:
+        tick = run_tick(
+            project=args.project,
+            worker=args.worker,
+            source=args.source,
+            note=args.note,
+            max_retry_streak=args.max_retry_streak,
+            execution=execution,
+            validation=validation,
+        )
+    except ValueError as exc:
+        return fail("E_TICK_FAILED", str(exc))
+    except Exception as exc:
+        return fail("E_TICK_FAILED", str(exc))
+    if not tick:
+        print("tick=(none)")
+        return 1
+    _print_run("tick-start", tick.run)
+    print(f"execution={tick.execution.status} validation={tick.validation.status}")
+    return 0
+
+
+def _cmd_loop(args: argparse.Namespace) -> int:
+    if args.max_runs <= 0:
+        return fail("E_LOOP_BAD_LIMIT", "max-runs must be greater than zero")
+    try:
+        execution = _build_execution(args)
+    except ValueError as exc:
+        return fail("E_LOOP_EXEC", str(exc))
+    validation = _build_validation(args)
+    try:
+        ticks = run_loop(
+            project=args.project,
+            worker=args.worker,
+            source=args.source,
+            note=args.note,
+            max_runs=args.max_runs,
+            max_retry_streak=args.max_retry_streak,
+            execution=execution,
+            validation=validation,
+            continue_on_retry=args.continue_on_retry,
+            continue_on_blocked=args.continue_on_blocked,
+            max_attempts_per_item=args.max_attempts_per_item,
+        )
+    except ValueError as exc:
+        return fail("E_LOOP_FAILED", str(exc))
+    except Exception as exc:
+        return fail("E_LOOP_FAILED", str(exc))
+    if not ticks:
+        print("loop=(none)")
+        return 1
+    print(f"runs={len(ticks)}")
+    for idx, tick in enumerate(ticks, start=1):
+        print(
+            f"iteration={idx} project={tick.run.project} run_id={tick.run.run_id} status={tick.validation.status} item={tick.run.index}"
+        )
+    return 0
+
+
+def _cmd_build_loop(args: argparse.Namespace) -> int:
+    from build_loop_runner import build_loop_status_path, run_build_loop
+
+    if args.max_runs <= 0:
+        return fail("E_BUILD_LOOP_BAD_LIMIT", "max-runs must be greater than zero")
+    try:
+        summary = run_build_loop(
+            project=args.project,
+            worker=args.worker,
+            worker_session=args.worker_session,
+            max_runs=args.max_runs,
+            max_retry_streak=args.max_retry_streak,
+            max_attempts_per_item=args.max_attempts_per_item,
+            continue_on_retry=not args.no_continue_on_retry,
+            continue_on_blocked=args.continue_on_blocked,
+        )
+    except ValueError as exc:
+        return fail("E_BUILD_LOOP_FAILED", str(exc))
+    except Exception as exc:
+        return fail("E_BUILD_LOOP_FAILED", str(exc))
+    if args.format == "path":
+        print(build_loop_status_path())
+    else:
+        print(json.dumps(summary, indent=2))
+    return 0
+
+
+def _cmd_ancestry(args: argparse.Namespace) -> int:
+    from ancestry import (
+        get_project_ancestry, set_project_ancestry,
+        create_child_ancestry, orch_ancestry,
+    )
+    p = project_dir(args.project)
+    if not p.exists():
+        return fail("E_PROJECT_NOT_FOUND", args.project)
+
+    if args.set_parent:
+        parent_p = project_dir(args.set_parent)
+        parent_title = args.parent_title or args.set_parent
+        new_ancestry = create_child_ancestry(args.set_parent, parent_title, parent_p)
+        set_project_ancestry(p, new_ancestry)
+        print(f"project={args.project} parent={args.set_parent} ancestry_depth={new_ancestry.depth()}")
+        return 0
+
+    chain = orch_ancestry(args.project, p)
+    if args.format == "json":
+        ancestry = get_project_ancestry(p)
+        print(json.dumps(ancestry.to_dict() if ancestry else {}, indent=2))
+    else:
+        for line in chain:
+            print(line)
+    return 0
+
+
+def _cmd_impact(args: argparse.Namespace) -> int:
+    from ancestry import orch_impact
+    p = project_dir(args.project)
+    if not p.exists():
+        return fail("E_PROJECT_NOT_FOUND", args.project)
+    descendants = orch_impact(args.project, p.parent)
+    if args.format == "json":
+        print(json.dumps(descendants))
+    else:
+        if not descendants:
+            print(f"project={args.project} descendants=(none)")
+        else:
+            for d in descendants:
+                print(d)
+    return 0
+
+
+def _cmd_metrics(args: argparse.Namespace) -> int:
+    from metrics import get_metrics, format_metrics_report
+    # Phase 19: pass-k subcommand
+    if getattr(args, "metrics_cmd", None) == "pass-k":
+        from metrics import compute_pass_at_k, compute_pass_all_k, check_skill_promotion_eligibility
+        skill_id = args.skill_id
+        k = args.k
+        pass_at_k = compute_pass_at_k(skill_id, k=k)
+        pass_all_k = compute_pass_all_k(skill_id, k=k)
+        eligible = check_skill_promotion_eligibility(skill_id, k=k)
+        if getattr(args, "format", "text") == "json":
+            print(json.dumps({
+                "skill_id": skill_id,
+                "k": k,
+                "pass_at_k": pass_at_k,
+                "pass_all_k": pass_all_k,
+                "promotion_eligible": eligible,
+            }, indent=2))
+        else:
+            print(f"skill_id={skill_id} k={k}")
+            print(f"  pass@k  = {pass_at_k:.4f}  (P at least 1 success in {k} attempts)")
+            print(f"  pass^k  = {pass_all_k:.4f}  (P all {k} attempts succeed)")
+            print(f"  promotion_eligible = {eligible}")
+        return 0
+    metrics = get_metrics()
+    if args.format == "json":
+        from dataclasses import asdict
+        print(json.dumps(asdict(metrics), indent=2))
+    else:
+        print(format_metrics_report(metrics))
+    return 0
+
+# ---------------------------------------------------------------------------
+# Phase 19: Sprint contract, boot protocol, manifest CLI handlers
+# ---------------------------------------------------------------------------
+
+
+def _cmd_contract(args: argparse.Namespace) -> int:
+    from sprint_contract import negotiate_contract, grade_contract, load_contracts
+    from dataclasses import asdict
+
+    if args.contract_cmd == "negotiate":
+        feature_title = " ".join(args.feature_title)
+        contract = negotiate_contract(
+            feature_title=feature_title,
+            mission_goal=args.goal,
+            milestone_title=args.milestone,
+            adapter=None,  # heuristic when --dry-run; real adapter otherwise
+        )
+        if getattr(args, "format", "text") == "json":
+            print(json.dumps(contract.to_dict(), indent=2))
+        else:
+            print(f"contract_id={contract.contract_id} negotiated_by={contract.negotiated_by}")
+            print(f"feature={contract.feature_title!r}")
+            print("success_criteria:")
+            for c in contract.success_criteria:
+                print(f"  - {c}")
+            print(f"acceptance_keywords: {', '.join(contract.acceptance_keywords)}")
+        return 0
+
+    if args.contract_cmd == "grade":
+        project = args.project or ""
+        contract_id = args.contract_id
+        work_result = args.result
+
+        # Try to load the contract from project contracts
+        target_contract = None
+        if project:
+            contracts = load_contracts(project)
+            for c in contracts:
+                if c.contract_id == contract_id:
+                    target_contract = c
+                    break
+
+        if target_contract is None:
+            # Can't grade without the original contract; show error
+            return fail("E_CONTRACT_NOT_FOUND", f"No contract {contract_id!r} in project {project!r}")
+
+        grade = grade_contract(target_contract, work_result, adapter=None)
+        if getattr(args, "format", "text") == "json":
+            print(json.dumps(grade.to_dict(), indent=2))
+        else:
+            print(f"contract_id={grade.contract_id} passed={grade.passed} score={grade.score:.3f}")
+            print(f"feedback: {grade.feedback}")
+            for cr in grade.criteria_results:
+                status = "PASS" if cr["passed"] else "FAIL"
+                print(f"  [{status}] {cr['criterion']}: {cr['evidence'][:80]}")
+        return 0
+    return fail("E_INTERNAL", "unknown command")
+
+
+def _cmd_boot(args: argparse.Namespace) -> int:
+    from boot_protocol import run_boot_protocol, format_boot_context
+    state = run_boot_protocol(args.project, dry_run=args.dry_run)
+    if getattr(args, "format", "text") == "json":
+        print(json.dumps({
+            "project": state.project,
+            "loop_id": state.loop_id,
+            "completed_features": state.completed_features,
+            "git_head": state.git_head,
+            "existing_tests_pass": state.existing_tests_pass,
+            "dead_ends": state.dead_ends,
+            "boot_timestamp": state.boot_timestamp,
+            "boot_method": state.boot_method,
+        }, indent=2))
+    else:
+        print(format_boot_context(state))
+    return 0
+
+
+def _cmd_manifest(args: argparse.Namespace) -> int:
+    from mission import load_feature_manifest
+    manifest = load_feature_manifest(args.project)
+    if manifest is None:
+        print(f"project={args.project} manifest=(none)")
+        return 1
+    features = manifest.get("features", [])
+    if getattr(args, "format", "text") == "json":
+        print(json.dumps(manifest, indent=2))
+    else:
+        total = len(features)
+        passing = sum(1 for f in features if f.get("passes"))
+        print(f"project={args.project} features={total} passing={passing}/{total}")
+        for f in features:
+            passes = "PASS" if f.get("passes") else "pending"
+            score_str = f" score={f['grade_score']:.2f}" if f.get("grade_score") is not None else ""
+            print(f"  [{passes:7s}]{score_str} [{f['id']}] {f['title']}")
+    return 0
+
+
+def _cmd_memory(args: argparse.Namespace) -> int:
+    from memory import (
+        memory_status, run_decay_cycle, forget_lesson, promote_lesson,
+        load_tiered_lessons, record_tiered_lesson, MemoryTier,
+    )
+    memory_cmd = getattr(args, "memory_cmd", None) or "opstatus"
+    if memory_cmd == "opstatus":
+        status = memory_status()
+        print(json.dumps(status, indent=2))
+    elif memory_cmd == "decay":
+        tier = getattr(args, "tier", "medium")
+        dry_run = getattr(args, "dry_run", False)
+        result = run_decay_cycle(tier=tier, dry_run=dry_run)
+        label = "(dry-run) " if dry_run else ""
+        print(f"{label}tier={tier} decayed={result['decayed']} promoted={result['promoted']} gc={result['gc']}")
+    elif memory_cmd == "consolidate":
+        from memory import maybe_consolidate, consolidation_due
+        force = getattr(args, "force", False)
+        if not force and not consolidation_due():
+            print("Consolidation not due (marker within interval) — use --force to run anyway")
+            return 0
+        result = maybe_consolidate(force=force)
+        if result is None:
+            print("Consolidation skipped (disabled in config, not due, or failed — see logs)")
+        else:
+            cycle = result["medium"]
+            print(f"Consolidated: decayed={cycle['decayed']} promoted={cycle['promoted']} gc={cycle['gc']}")
+    elif memory_cmd == "forget":
+        tier = getattr(args, "tier", "medium")
+        removed = forget_lesson(args.lesson_id, tier=tier)
+        if removed:
+            print(f"Removed lesson_id={args.lesson_id} from tier={tier}")
+        else:
+            print(f"lesson_id={args.lesson_id} not found in tier={tier}")
+            return 1
+    elif memory_cmd == "promote":
+        ok = promote_lesson(args.lesson_id)
+        if ok:
+            print(f"Promoted lesson_id={args.lesson_id} to long-tier")
+        else:
+            print(f"lesson_id={args.lesson_id} not eligible for promotion (score<{0.9} or sessions<3)")
+            return 1
+    elif memory_cmd == "list":
+        tier = getattr(args, "tier", "medium")
+        task_type = getattr(args, "task_type", None)
+        lessons = load_tiered_lessons(tier=tier, task_type=task_type, min_score=0.0)
+        if getattr(args, "format", "text") == "json":
+            import dataclasses
+            print(json.dumps([dataclasses.asdict(l) for l in lessons], indent=2))
+        else:
+            print(f"tier={tier} count={len(lessons)}")
+            for l in lessons:
+                icon = "✓" if l.outcome == "done" else "✗"
+                print(f"  [{l.lesson_id}] score={l.score:.2f} sessions={l.sessions_validated} {icon} [{l.task_type}] {l.lesson[:80]}")
+    elif memory_cmd == "record":
+        tier = getattr(args, "tier", "medium")
+        task_type = getattr(args, "task_type", "general")
+        outcome = getattr(args, "outcome", "done")
+        tl = record_tiered_lesson(args.lesson, task_type, outcome, source_goal="manual", tier=tier)
+        print(f"Recorded lesson_id={tl.lesson_id} tier={tier} score={tl.score:.2f}")
+    elif memory_cmd == "canon-candidates":
+        from memory import get_canon_candidates
+        min_hits = getattr(args, "min_hits", 10)
+        min_task_types = getattr(args, "min_task_types", 3)
+        candidates = get_canon_candidates(min_hits=min_hits, min_task_types=min_task_types)
+        if getattr(args, "format", "text") == "json":
+            print(json.dumps(candidates, indent=2))
+        else:
+            if not candidates:
+                print(f"No canon candidates (min_hits={min_hits}, min_task_types={min_task_types})")
+            else:
+                print(f"Canon candidates ({len(candidates)}) — human review required before writing to AGENTS.md:")
+                for c in candidates:
+                    print(f"\n  [{c['lesson_id']}] applied={c['times_applied']}x across {len(c['task_types_seen'])} task types")
+                    print(f"  Task types: {', '.join(c['task_types_seen'])}")
+                    print(f"  Lesson: {c['lesson']}")
+                    print(f"  Score={c['score']} sessions={c['sessions_validated']} recorded={c['recorded_at']}")
+                    print(f"  → {c['recommendation']}")
+    elif memory_cmd == "migrate":
+        import hashlib
+        from pathlib import Path as _Path
+        from memory_backends import JSONLBackend, SQLiteBackend
+        from orch_items import memory_dir as _memory_dir_fn
+
+        src_dir = _Path(args.src_dir) if getattr(args, "src_dir", None) else _memory_dir_fn()
+        db_path = _Path(args.db_path) if getattr(args, "db_path", None) else src_dir / "memory.db"
+        dry_run = getattr(args, "dry_run", False)
+
+        jsonl_backend = JSONLBackend(src_dir)
+        sqlite_backend = SQLiteBackend(db_path)
+
+        # Discover all collections from .jsonl files on disk
+        collections: list[str] = []
+        for p in sorted(src_dir.rglob("*.jsonl")):
+            rel = p.relative_to(src_dir)
+            parts = rel.parts
+            if len(parts) == 1:
+                collections.append(parts[0].removesuffix(".jsonl"))
+            elif len(parts) == 3 and parts[2] == "lessons.jsonl":
+                # tiered/<tier>/lessons.jsonl → "tiered/<tier>"
+                collections.append(f"{parts[0]}/{parts[1]}")
+
+        total_skipped = 0
+        total_inserted = 0
+        for collection in collections:
+            records = jsonl_backend.read_all(collection)
+            if not records:
+                continue
+
+            # Build fingerprint set of existing SQLite rows for this collection
+            existing_fps: set[str] = set()
+            existing_rows = sqlite_backend.read_all(collection)
+            for row in existing_rows:
+                fp = hashlib.sha256(json.dumps(row, sort_keys=True).encode()).hexdigest()
+                existing_fps.add(fp)
+
+            inserted = 0
+            skipped = 0
+            for record in records:
+                fp = hashlib.sha256(json.dumps(record, sort_keys=True).encode()).hexdigest()
+                if fp in existing_fps:
+                    skipped += 1
+                else:
+                    if not dry_run:
+                        sqlite_backend.append(collection, record)
+                    existing_fps.add(fp)
+                    inserted += 1
+
+            label = "(dry-run) " if dry_run else ""
+            print(f"{label}collection={collection} inserted={inserted} skipped={skipped}")
+            total_inserted += inserted
+            total_skipped += skipped
+
+        label = "(dry-run) " if dry_run else ""
+        print(f"{label}total inserted={total_inserted} skipped={total_skipped} db={db_path}")
+    else:
+        print(f"Unknown maro-memory subcommand: {memory_cmd}")
+        return 1
+    return 0
+
+
+def _cmd_persona(args: argparse.Namespace) -> int:
+    from persona import PersonaRegistry, compose_persona, spawn_persona, persona_to_dict
+    registry = PersonaRegistry()
+    persona_cmd = getattr(args, "persona_cmd", None) or "list"
+    if persona_cmd == "list":
+        names = registry.list()
+        if not names:
+            print("No personas found in personas/")
+        else:
+            print(f"Available personas ({len(names)}):")
+            for n in names:
+                spec = registry.load(n)
+                if spec:
+                    print(f"  {spec.name:20s} [{spec.model_tier:5s}] {spec.role}")
+                else:
+                    print(f"  {n}")
+    elif persona_cmd == "show":
+        spec = registry.load(args.name)
+        if spec is None:
+            return fail("E_PERSONA_NOT_FOUND", f"Persona not found: {args.name!r}")
+        if getattr(args, "format", "text") == "json":
+            print(json.dumps(persona_to_dict(spec), indent=2))
+        else:
+            print(f"name:    {spec.name}")
+            print(f"role:    {spec.role}")
+            print(f"tier:    {spec.model_tier}")
+            print(f"scope:   {spec.memory_scope}")
+            print(f"style:   {spec.communication_style}")
+            print(f"composes: {spec.composes or '(none)'}")
+            print(f"hooks:   {spec.hooks or '(none)'}")
+            print(f"source:  {spec.source_file}")
+            print(f"\n--- System Prompt ---\n{spec.system_prompt[:500]}")
+    elif persona_cmd == "compose":
+        try:
+            spec = compose_persona(*args.names, registry=registry)
+        except ValueError as exc:
+            return fail("E_PERSONA_COMPOSE", str(exc))
+        if getattr(args, "format", "text") == "json":
+            print(json.dumps(persona_to_dict(spec), indent=2))
+        else:
+            print(f"Composed: {spec.name}")
+            print(f"role:     {spec.role}")
+            print(f"tier:     {spec.model_tier}")
+            print(f"scope:    {spec.memory_scope}")
+            print(f"style:    {spec.communication_style}")
+            print(f"hooks:    {spec.hooks or '(none)'}")
+            print(f"\n--- Composed System Prompt (preview) ---\n{spec.system_prompt[:600]}")
+    elif persona_cmd == "manifest":
+        from persona import generate_manifest, save_manifest
+        fmt = getattr(args, "format", "text")
+        if fmt == "json":
+            entries = generate_manifest(registry=registry)
+            print(json.dumps({"agents": entries}, indent=2))
+        elif fmt == "save":
+            path = save_manifest(registry=registry, fmt="json")
+            print(f"Manifest saved to: {path}")
+        else:
+            entries = generate_manifest(registry=registry)
+            print(f"Agent Capability Manifest ({len(entries)} agents)")
+            print("─" * 60)
+            for e in entries:
+                tier = e.get("model_tier", "?")
+                role = e.get("role", "?")
+                triggers = ", ".join(e.get("trigger_keywords", [])[:4])
+                print(f"  {e['name']:30s} [{tier:5s}] {role}")
+                if triggers:
+                    print(f"  {'':30s}  triggers: {triggers}")
+    elif persona_cmd == "spawn":
+        goal_str = " ".join(args.goal)
+        compose_with = getattr(args, "compose", None) or None
+        dry_run = getattr(args, "dry_run", False)
+        max_steps = getattr(args, "max_steps", 20)
+        result = spawn_persona(
+            args.name, goal_str,
+            registry=registry,
+            dry_run=dry_run,
+            max_steps=max_steps,
+            compose_with=compose_with,
+        )
+        if getattr(args, "format", "text") == "json":
+            import dataclasses
+            print(json.dumps(dataclasses.asdict(result), indent=2))
+        else:
+            icon = "✓" if result.status == "done" else ("~" if result.status == "dry_run" else "✗")
+            print(f"[{icon}] persona={result.persona_name} status={result.status} steps={result.steps_taken}")
+            print(f"    {result.summary[:200]}")
+        return 0 if result.status in ("done", "dry_run") else 1
+    else:
+        print(f"Unknown maro-persona subcommand: {persona_cmd}")
+        return 1
+    return 0
+
+
+def _cmd_knowledge(args: argparse.Namespace) -> int:
+    from knowledge import print_dashboard, print_promote_actions
+    knowledge_cmd = getattr(args, "knowledge_cmd", None)
+    if knowledge_cmd == "promote":
+        print_promote_actions()
+    else:
+        stage = getattr(args, "stage", None)
+        print_dashboard(stage_filter=stage)
+    return 0
+
+
+def _cmd_eval(args: argparse.Namespace) -> int:
+    from eval import run_eval
+    benchmark_ids = [args.benchmark_id] if getattr(args, "benchmark_id", None) else None
+    report = run_eval(benchmarks=benchmark_ids, dry_run=args.dry_run)
+    if args.format == "json":
+        print(json.dumps(report.to_dict(), indent=2))
+    else:
+        print(report.summary())
+    return 0
+
+
+def _cmd_opstatus(args: argparse.Namespace) -> int:
+    payload = write_operator_status()
+    if args.format == "path":
+        print(operator_status_path())
+    else:
+        print(json.dumps(payload, indent=2))
+    return 0
+
+
+def _cmd_mission(args: argparse.Namespace) -> int:
+    import mission as _mission_mod
+    goal_str = " ".join(args.goal)
+    try:
+        result = _mission_mod.run_mission(
+            goal_str,
+            project=args.project,
+            dry_run=args.dry_run,
+            verbose=args.verbose,
+        )
+    except Exception as exc:
+        return fail("E_MISSION", str(exc))
+    if args.format == "json":
+        print(json.dumps({
+            "mission_id": result.mission_id,
+            "project": result.project,
+            "goal": result.goal,
+            "status": result.status,
+            "milestones_done": result.milestones_done,
+            "milestones_total": result.milestones_total,
+            "features_done": result.features_done,
+            "features_total": result.features_total,
+            "elapsed_ms": result.elapsed_ms,
+        }, indent=2))
+    else:
+        print(result.summary())
+    return 0 if result.status == "done" else 1
+
+
+def _cmd_mission_status(args: argparse.Namespace) -> int:
+    import mission as _mission_mod
+    if args.project:
+        m = _mission_mod.load_mission(args.project)
+        if not m:
+            return fail("E_MISSION_NOT_FOUND", f"no mission.json for project={args.project}")
+        if args.format == "json":
+            summaries = [{
+                "project": m.project,
+                "mission_id": m.id,
+                "goal": m.goal,
+                "status": m.status,
+                "milestones": [
+                    {
+                        "id": ms.id,
+                        "title": ms.title,
+                        "status": ms.status,
+                        "features": [
+                            {"id": f.id, "title": f.title, "status": f.status}
+                            for f in ms.features
+                        ],
+                    }
+                    for ms in m.milestones
+                ],
+            }]
+            print(json.dumps(summaries, indent=2))
+        else:
+            print(f"mission_id={m.id} project={m.project} status={m.status}")
+            print(f"goal={m.goal!r}")
+            for ms in m.milestones:
+                done_count = sum(1 for f in ms.features if f.status == "done")
+                print(f"  milestone [{ms.status:10s}] {ms.title!r} features={done_count}/{len(ms.features)}")
+                for f in ms.features:
+                    print(f"    feature  [{f.status:8s}] {f.title!r}")
+    else:
+        summaries = _mission_mod.list_missions()
+        if args.format == "json":
+            print(json.dumps(summaries, indent=2))
+        else:
+            if not summaries:
+                print("missions=(none)")
+            else:
+                for s in summaries:
+                    print(
+                        f"project={s['project']} status={s['status']} "
+                        f"milestones={s['milestones_done']}/{s['milestones_total']} "
+                        f"features={s['features_done']}/{s['features_total']} "
+                        f"goal={s['goal'][:60]!r}"
+                    )
+    return 0
+
+
+def _cmd_background(args: argparse.Namespace) -> int:
+    import background as _bg_mod
+    command = " ".join(args.command)
+    try:
+        task = _bg_mod.start_background(command, timeout_seconds=args.timeout)
+        if args.wait:
+            task = _bg_mod.wait_background(task.id, timeout_seconds=args.timeout)
+    except Exception as exc:
+        return fail("E_BACKGROUND", str(exc))
+    if args.format == "json":
+        print(json.dumps({
+            "id": task.id,
+            "command": task.command,
+            "pid": task.pid,
+            "status": task.status,
+            "started_at": task.started_at,
+            "completed_at": task.completed_at,
+            "exit_code": task.exit_code,
+            "output_file": task.output_file,
+        }, indent=2))
+    else:
+        print(f"id={task.id} pid={task.pid} status={task.status} command={task.command!r}")
+        if task.completed_at:
+            print(f"completed_at={task.completed_at} exit_code={task.exit_code}")
+    return 0
+
+
+def _cmd_hooks(args: argparse.Namespace) -> int:
+    import hooks as _hooks_mod
+
+    registry = _hooks_mod.load_registry()
+
+    if args.hooks_cmd == "list":
+        hook_list = registry.list_hooks(scope=getattr(args, "scope", None))
+        if getattr(args, "format", "text") == "json":
+            from dataclasses import asdict
+            print(json.dumps([asdict(h) for h in hook_list], indent=2))
+        else:
+            if not hook_list:
+                print("hooks=(none)")
+            else:
+                for h in hook_list:
+                    status = "enabled" if h.enabled else "disabled"
+                    print(f"  [{h.id}] [{status:8s}] {h.name!r} type={h.hook_type} scope={h.scope} fire_on={h.fire_on}")
+        return 0
+
+    if args.hooks_cmd == "enable":
+        if registry.enable(args.id):
+            print(f"enabled={args.id}")
+            return 0
+        # Try to enable a builtin that isn't yet in registry
+        builtin = _hooks_mod._BUILTIN_BY_ID.get(args.id)
+        if builtin:
+            import copy
+            h = copy.copy(builtin)
+            h.enabled = True
+            registry.register(h)
+            print(f"enabled={args.id} (registered builtin)")
+            return 0
+        return fail("E_HOOK_NOT_FOUND", args.id)
+
+    if args.hooks_cmd == "disable":
+        if registry.disable(args.id):
+            print(f"disabled={args.id}")
+            return 0
+        return fail("E_HOOK_NOT_FOUND", args.id)
+
+    if args.hooks_cmd == "add-reporter":
+        import uuid as _uuid
+        hook = _hooks_mod.Hook(
+            id=str(_uuid.uuid4())[:8],
+            name=args.name,
+            scope=args.scope,
+            hook_type=_hooks_mod.TYPE_REPORTER,
+            enabled=True,
+            prompt_template=getattr(args, "template", ""),
+            report_target=args.target,
+            fire_on=args.fire_on,
+        )
+        registry.register(hook)
+        print(f"registered={hook.id} name={hook.name!r} scope={hook.scope} target={hook.report_target}")
+        return 0
+
+    if args.hooks_cmd == "run-builtin":
+        builtin = _hooks_mod._BUILTIN_BY_ID.get(args.id)
+        if not builtin:
+            return fail("E_HOOK_NOT_FOUND", args.id)
+        ctx = {
+            "goal": getattr(args, "goal", ""),
+            "step": getattr(args, "step", ""),
+            "step_result": getattr(args, "result", ""),
+            "project": "",
+            "milestone_title": "",
+            "feature_title": "",
+            "validation_criteria": "",
+            "features_summary": "",
+            "features_done": 0,
+            "features_total": 0,
+        }
+        dry_run = getattr(args, "dry_run", True)
+        result = _hooks_mod._run_single_hook(builtin, ctx, dry_run=dry_run)
+        if getattr(args, "format", "text") == "json":
+            from dataclasses import asdict
+            print(json.dumps(asdict(result), indent=2))
+        else:
+            print(f"hook_id={result.hook_id} status={result.status} should_block={result.should_block}")
+            if result.output:
+                print(f"output: {result.output}")
+            if result.injected_context:
+                print(f"injected_context: {result.injected_context[:200]}")
+        return 0
+    return fail("E_INTERNAL", "unknown command")
+
+
+def _cmd_skills(args: argparse.Namespace) -> int:
+    import skills as _skills_mod
+    if getattr(args, "status", False):
+        skill_list = _skills_mod.load_skills()
+        rewrite_candidates = _skills_mod.skills_needing_rewrite()
+        rewrite_ids = {s.id for s in rewrite_candidates}
+        provisional = [s for s in skill_list if s.tier == "provisional"]
+        established = [s for s in skill_list if s.tier == "established"]
+        open_circuit = [s for s in skill_list if s.circuit_state == "open"]
+        half_open = [s for s in skill_list if s.circuit_state == "half_open"]
+        if args.format == "json":
+            print(json.dumps({
+                "total": len(skill_list),
+                "provisional": len(provisional),
+                "established": len(established),
+                "circuit_open": len(open_circuit),
+                "circuit_half_open": len(half_open),
+                "rewrite_candidates": len(rewrite_candidates),
+                "skills": [_skills_mod._skill_to_dict(s) for s in skill_list],
+            }, indent=2))
+        else:
+            print(f"Skills: {len(skill_list)} total  |  {len(provisional)} provisional  {len(established)} established")
+            print(f"Circuit: {len(skill_list) - len(open_circuit) - len(half_open)} closed  {len(half_open)} half-open  {len(open_circuit)} open")
+            print(f"Rewrite candidates: {len(rewrite_candidates)}")
+            if skill_list:
+                print()
+                # Sort by utility descending
+                for s in sorted(skill_list, key=lambda x: x.utility_score, reverse=True):
+                    circuit_tag = "" if s.circuit_state == "closed" else f" [{s.circuit_state.upper()}]"
+                    rewrite_tag = " *REWRITE*" if s.id in rewrite_ids else ""
+                    print(f"  {s.tier[0].upper()} {circuit_tag}  [{s.id}] {s.name}")
+                    print(f"    utility={s.utility_score:.2f}  uses={s.use_count}  "
+                          f"cf={s.consecutive_failures}  cs={s.consecutive_successes}"
+                          f"{rewrite_tag}")
+        return 0
+
+    if args.list_skills:
+        skill_list = _skills_mod.load_skills()
+        if args.format == "json":
+            print(json.dumps([_skills_mod._skill_to_dict(s) for s in skill_list], indent=2))
+        else:
+            if not skill_list:
+                print("skills=(none)")
+            else:
+                for s in skill_list:
+                    print(f"  [{s.id}] {s.name} (uses={s.use_count} success_rate={s.success_rate:.2f})")
+                    print(f"    {s.description}")
+                    print(f"    triggers: {', '.join(s.trigger_patterns[:3])}")
+        return 0
+
+    if args.extract:
+        try:
+            from memory import load_outcomes
+            outcomes_raw = load_outcomes(limit=args.outcomes_window)
+            from dataclasses import asdict
+            outcomes_dicts = [asdict(o) for o in outcomes_raw]
+        except Exception as exc:
+            return fail("E_SKILLS_LOAD_OUTCOMES", str(exc))
+
+        if args.dry_run:
+            print(f"dry_run: would analyze {len(outcomes_dicts)} outcomes for skill extraction")
+            return 0
+
+        try:
+            from llm import build_adapter, MODEL_MID
+            skill_adapter = build_adapter(model=MODEL_MID)
+            extracted = _skills_mod.extract_skills(outcomes_dicts, skill_adapter)
+        except Exception as exc:
+            return fail("E_SKILLS_EXTRACT", str(exc))
+
+        if args.format == "json":
+            print(json.dumps([_skills_mod._skill_to_dict(s) for s in extracted], indent=2))
+        else:
+            if not extracted:
+                print("extracted=(none)")
+            else:
+                for s in extracted:
+                    print(f"extracted: [{s.id}] {s.name} — {s.description}")
+        return 0
+
+    if getattr(args, "rollback", None):
+        from skills import _skills_path as _sp
+        import shutil as _shutil
+        _src = _sp()
+        _bak = Path(str(_src) + ".bak")
+        if not _bak.exists():
+            print(f"No backup found at {_bak}. Nothing to restore.")
+            return 1
+        if args.dry_run:
+            print(f"dry_run: would restore {_bak} → {_src}")
+            return 0
+        _shutil.copy2(str(_bak), str(_src))
+        restored = _skills_mod.load_skills()
+        print(f"Restored skills.jsonl from .bak ({len(restored)} skills).")
+        return 0
+
+    # Default: show usage hint
+    print("Use --status for health dashboard, --list to list skills, --extract to extract from recent outcomes, or --rollback <name> to restore from backup.")
+    return 0
+
+
+def _cmd_inspector(args: argparse.Namespace) -> int:
+    from inspector import run_inspector, inspector_loop
+    if args.loop:
+        inspector_loop(interval_seconds=args.interval)
+        return 0
+    try:
+        from llm import build_adapter, MODEL_CHEAP
+        _insp_adapter = None if args.dry_run else build_adapter(model=MODEL_CHEAP)
+    except ImportError:
+        _insp_adapter = None
+    report = run_inspector(limit=args.limit, adapter=_insp_adapter, dry_run=args.dry_run)
+    if args.format == "json":
+        print(json.dumps(report.to_dict(), indent=2))
+    else:
+        print(report.summary())
+    return 0
+
+
+def _cmd_inspector_status(args: argparse.Namespace) -> int:
+    from inspector import get_latest_inspection, get_friction_summary
+    if getattr(args, "format", "text") == "json":
+        report = get_latest_inspection()
+        print(json.dumps(report.to_dict() if report else {}, indent=2))
+    else:
+        summary = get_friction_summary()
+        if summary:
+            print(summary)
+        else:
+            print("No inspection report available. Run maro-inspector first.")
+    return 0
+
+# Conductor — top-level orchestration role
+
+
+def _cmd_conductor(args: argparse.Namespace) -> int:
+    from conductor import conduct
+    msg = " ".join(args.message)
+    try:
+        response = conduct(msg, model=args.model, dry_run=args.dry_run)
+    except Exception as exc:
+        return fail("E_CONDUCTOR", str(exc))
+    if args.format == "json":
+        print(json.dumps({
+            "message": response.message,
+            "routed_to": response.routed_to,
+            "mission_id": response.mission_id,
+            "executive_summary": response.executive_summary,
+        }, indent=2))
+    else:
+        print(response.message)
+    return 0
+
+
+def _cmd_status(args: argparse.Namespace) -> int:
+    from conductor import _compile_executive_summary
+    dry_run = getattr(args, "dry_run", False)
+    if dry_run:
+        summary = "[dry-run] Executive summary: no active missions."
+    else:
+        try:
+            from llm import build_adapter, MODEL_CHEAP
+            _adapter = build_adapter(model=MODEL_CHEAP)
+        except Exception:
+            _adapter = None
+        summary = _compile_executive_summary(adapter=_adapter)
+    if args.format == "json":
+        print(json.dumps({"summary": summary}, indent=2))
+    else:
+        print(summary)
+    return 0
+
+
+def _cmd_map(args: argparse.Namespace) -> int:
+    from goal_map import build_goal_map
+    try:
+        gmap = build_goal_map()
+    except Exception as exc:
+        return fail("E_MAP", str(exc))
+    if args.format == "json":
+        nodes_list = [n.to_dict() for n in gmap.nodes.values()]
+        print(json.dumps(nodes_list, indent=2))
+    else:
+        print(gmap.summary())
+    return 0
+
+
+def _cmd_autonomy(args: argparse.Namespace) -> int:
+    from autonomy import (
+        load_config, set_default_tier, set_project_tier, set_action_tier,
+        TIER_MANUAL, TIER_SAFE, TIER_FULL,
+    )
+    tier = getattr(args, "tier", None)
+    project = getattr(args, "project", None)
+    action_type = getattr(args, "action_type", None)
+
+    if tier:
+        if project:
+            set_project_tier(project, tier)
+            print(f"set project={project} tier={tier}")
+        elif action_type:
+            set_action_tier(action_type, tier)
+            print(f"set action_type={action_type} tier={tier}")
+        else:
+            set_default_tier(tier)
+            print(f"set default_tier={tier}")
+        return 0
+
+    # Show current config
+    config = load_config()
+    if args.format == "json":
+        print(json.dumps(config.to_dict(), indent=2))
+    else:
+        print(f"default_tier={config.default_tier}")
+        if config.project_overrides:
+            print("project_overrides:")
+            for p, t in sorted(config.project_overrides.items()):
+                print(f"  {p}: {t}")
+        if config.action_overrides:
+            print("action_overrides:")
+            for a, t in sorted(config.action_overrides.items()):
+                print(f"  {a}: {t}")
+    return 0
+
+# ---------------------------------------------------------------------------
+# Phase 14: Failure attribution + skill stats + skill test CLI
+# ---------------------------------------------------------------------------
+
+
+def _cmd_attribution(args: argparse.Namespace) -> int:
+    from attribution import attribute_batch, load_attributions
+    from memory import load_outcomes as _load_outcomes
+    limit = getattr(args, "limit", 20)
+    try:
+        outcomes_raw = _load_outcomes(limit=limit * 2)
+        outcomes_dicts = []
+        for o in outcomes_raw:
+            try:
+                from dataclasses import asdict
+                outcomes_dicts.append(asdict(o))
+            except Exception:
+                outcomes_dicts.append(o.__dict__ if hasattr(o, "__dict__") else {})
+        report = attribute_batch(outcomes_dicts[:limit])
+    except Exception as exc:
+        return fail("E_ATTRIBUTION", str(exc))
+    if args.format == "json":
+        print(json.dumps(report.to_dict(), indent=2))
+    else:
+        print(report.summary())
+        if report.attributions:
+            print()
+            print("Recent attributions:")
+            for attr in report.attributions[:10]:
+                print(f"  [{attr.failure_mode}] conf={attr.confidence:.2f} | {attr.failed_step[:60]}")
+    return 0
+
+
+def _cmd_skill_stats(args: argparse.Namespace) -> int:
+    from skills import get_all_skill_stats, get_skills_needing_escalation, ESCALATION_THRESHOLD
+    escalated = getattr(args, "escalated", False)
+    try:
+        if escalated:
+            stats_list = get_skills_needing_escalation()
+        else:
+            stats_list = get_all_skill_stats()
+    except Exception as exc:
+        return fail("E_SKILL_STATS", str(exc))
+    if args.format == "json":
+        print(json.dumps([s.to_dict() for s in stats_list], indent=2))
+    else:
+        if not stats_list:
+            msg = "No skill stats recorded yet."
+            if escalated:
+                msg = f"No skills below escalation threshold ({ESCALATION_THRESHOLD})."
+            print(msg)
+        else:
+            if escalated:
+                print(f"Skills needing redesign (success_rate < {ESCALATION_THRESHOLD}):")
+            else:
+                print("Per-skill success rates:")
+            for s in stats_list:
+                escalation_marker = " [ESCALATE]" if s.needs_escalation else ""
+                print(
+                    f"  {s.skill_id} | {s.skill_name[:30]:30s} | "
+                    f"rate={s.success_rate:.2f} uses={s.total_uses} "
+                    f"ok={s.successes} fail={s.failures}{escalation_marker}"
+                )
+    return 0
+
+
+def _cmd_skill_test(args: argparse.Namespace) -> int:
+    from skills import load_skills, generate_skill_tests, run_skill_tests
+    skill_id = args.skill_id
+    generate = getattr(args, "generate", False)
+
+    # Find the skill
+    all_skills = load_skills()
+    target_skill = next((s for s in all_skills if s.id == skill_id or s.name == skill_id), None)
+    if target_skill is None:
+        return fail("E_SKILL_NOT_FOUND", f"No skill with id or name {skill_id!r}")
+
+    try:
+        if generate:
+            # Generate new tests from recent failure attributions
+            from attribution import load_attributions
+            attributions = load_attributions(limit=20)
+            failure_examples = [
+                a.raw_reason for a in attributions
+                if a.failed_skill == target_skill.name
+            ]
+            tests = generate_skill_tests(target_skill, failure_examples)
+            print(f"Generated {len(tests)} test case(s) for skill={target_skill.name!r}")
+        else:
+            # Load existing tests
+            from skills import _load_skill_tests
+            tests = _load_skill_tests(skill_id)
+            if not tests:
+                tests = _load_skill_tests(target_skill.id)
+
+        if not tests:
+            print(f"No tests found for skill={target_skill.name!r}. Use --generate to create them.")
+            return 0
+
+        passed, total = run_skill_tests(target_skill, tests, adapter=None, dry_run=True)
+        if args.format == "json":
+            print(json.dumps([t.to_dict() for t in tests], indent=2))
+        else:
+            print(f"Skill: {target_skill.name} (id={target_skill.id})")
+            print(f"Tests: {total} | Passed (dry_run): {passed}")
+            for t in tests:
+                print(f"  - [{t.input_description[:60]}] expect: {t.expected_keywords}")
+    except Exception as exc:
+        return fail("E_SKILL_TEST", str(exc))
+    return 0
+
+# ---------------------------------------------------------------------------
+# Phase 15: Gateway + Sandbox CLI handlers
+# ---------------------------------------------------------------------------
+
+
+def _cmd_gateway(args: argparse.Namespace) -> int:
+    from gateway import check_gateway_connection, send_to_gateway
+
+    if args.gateway_cmd == "opstatus":
+        connected = check_gateway_connection()
+        if connected:
+            print("gateway=reachable")
+            return 0
+        else:
+            print("gateway=unreachable")
+            return 1
+
+    if args.gateway_cmd == "send":
+        message = " ".join(args.message)
+        result = send_to_gateway(message, timeout_seconds=args.timeout)
+        if getattr(args, "format", "text") == "json":
+            print(json.dumps({
+                "connected": result.connected,
+                "sent": result.sent,
+                "response": result.response,
+                "error": result.error,
+                "elapsed_ms": result.elapsed_ms,
+            }, indent=2))
+        else:
+            print(f"connected={result.connected} sent={result.sent} elapsed_ms={result.elapsed_ms}")
+            if result.response:
+                print(f"response={result.response}")
+            if result.error:
+                print(f"error={result.error}")
+        return 0 if result.sent else 1
+    return fail("E_INTERNAL", "unknown command")
+
+
+def _cmd_sandbox(args: argparse.Namespace) -> int:
+    from sandbox import run_skill_tests_sandboxed, load_audit_log, SandboxConfig
+
+    sandbox_cmd = getattr(args, "sandbox_cmd", "test")
+
+    if sandbox_cmd == "audit":
+        entries = load_audit_log(limit=getattr(args, "limit", 20))
+        if getattr(args, "format", "text") == "json":
+            print(json.dumps(entries, indent=2))
+        else:
+            print(f"Sandbox audit log (last {len(entries)} entries):")
+            for e in entries:
+                safe_icon = "✓" if e.get("static_safe") else "✗"
+                net_icon = "N" if e.get("network_blocked") else " "
+                venv_icon = "V" if e.get("venv_isolated") else " "
+                res_icon = "R" if e.get("resource_limited") else " "
+                ok = "ok" if e.get("success") else ("t/o" if e.get("timed_out") else "fail")
+                print(f"  [{e.get('timestamp','')[:19]}] {ok:4s} [{safe_icon}{net_icon}{venv_icon}{res_icon}] "
+                      f"skill={e.get('skill_name','?')[:20]} exit={e.get('exit_code')} "
+                      f"{e.get('elapsed_ms')}ms  {e.get('output_preview','')[:50]}")
+        return 0
+
+    if sandbox_cmd == "config":
+        cfg = SandboxConfig()
+        print("Sandbox hardening defaults:")
+        print(f"  timeout_seconds:  {cfg.timeout_seconds}")
+        print(f"  max_cpu_seconds:  {cfg.max_cpu_seconds}  (RLIMIT_CPU)")
+        print(f"  max_file_size_mb: {cfg.max_file_size_mb}  (RLIMIT_FSIZE)")
+        print(f"  max_open_files:   {cfg.max_open_files}  (RLIMIT_NOFILE)")
+        print(f"  block_network:    {cfg.block_network}  (soft socket monkey-patch)")
+        print(f"  use_venv:         {cfg.use_venv}  (isolated venv, ~500ms overhead)")
+        print(f"  audit:            {cfg.audit}  (memory/sandbox-audit.jsonl)")
+        return 0
+
+    # sandbox_cmd == "test"
+    from skills import load_skills, generate_skill_tests, _load_skill_tests
+    skill_id = args.skill_id
+    generate = getattr(args, "generate", False)
+
+    all_skills = load_skills()
+    target_skill = next((s for s in all_skills if s.id == skill_id or s.name == skill_id), None)
+    if target_skill is None:
+        return fail("E_SKILL_NOT_FOUND", f"No skill with id or name {skill_id!r}")
+
+    sb_config = SandboxConfig(
+        block_network=not getattr(args, "no_network_block", False),
+        use_venv=getattr(args, "venv", False),
+    )
+
+    try:
+        if generate:
+            from attribution import load_attributions
+            attributions = load_attributions(limit=20)
+            failure_examples = [
+                a.raw_reason for a in attributions
+                if a.failed_skill == target_skill.name
+            ]
+            tests = generate_skill_tests(target_skill, failure_examples)
+            print(f"Generated {len(tests)} test case(s) for skill={target_skill.name!r}")
+        else:
+            tests = _load_skill_tests(skill_id)
+            if not tests:
+                tests = _load_skill_tests(target_skill.id)
+
+        if not tests:
+            print(f"No tests found for skill={target_skill.name!r}. Use --generate to create them.")
+            return 0
+
+        passed, total = run_skill_tests_sandboxed(target_skill, tests, config=sb_config)
+        net_label = " [network-blocked]" if sb_config.block_network else ""
+        venv_label = " [venv-isolated]" if sb_config.use_venv else ""
+        if getattr(args, "format", "text") == "json":
+            print(json.dumps({
+                "skill_id": target_skill.id,
+                "skill_name": target_skill.name,
+                "passed": passed,
+                "total": total,
+                "network_blocked": sb_config.block_network,
+                "venv_isolated": sb_config.use_venv,
+                "tests": [t.to_dict() for t in tests],
+            }, indent=2))
+        else:
+            print(f"Skill: {target_skill.name} (id={target_skill.id}) [sandboxed]{net_label}{venv_label}")
+            print(f"Tests: {total} | Passed: {passed}")
+            for t in tests:
+                print(f"  - [{t.input_description[:60]}] expect: {t.expected_keywords}")
+    except Exception as exc:
+        return fail("E_SANDBOX", str(exc))
+    return 0 if (not tests or passed == total) else 1
+
+# Phase 17: Behavior-aligned skill router CLI handlers
+# ---------------------------------------------------------------------------
+
+
+def _cmd_router(args: argparse.Namespace) -> int:
+    from router import get_router_stats, train_router, route_skills as _route_skills
+    from skills import load_skills as _load_skills_r
+
+    if args.router_cmd == "stats":
+        stats = get_router_stats()
+        fmt = getattr(args, "format", "text")
+        if fmt == "json":
+            print(json.dumps(stats.to_dict(), indent=2))
+        else:
+            print(f"training_samples={stats.training_samples}")
+            print(f"last_trained={stats.last_trained or '(never)'}")
+            print(f"holdout_accuracy={stats.holdout_accuracy:.3f}")
+            print(f"feature_method={stats.feature_method}")
+            print(f"min_samples_reached={stats.min_samples_reached}")
+            print(f"model_path={stats.model_path}")
+        return 0
+
+    if args.router_cmd == "retrain":
+        stats = train_router()
+        fmt = getattr(args, "format", "text")
+        if fmt == "json":
+            print(json.dumps(stats.to_dict(), indent=2))
+        else:
+            if stats.min_samples_reached:
+                print(f"retrained ok — samples={stats.training_samples} accuracy={stats.holdout_accuracy:.3f}")
+            else:
+                print(f"not enough data — samples={stats.training_samples} (need 50)")
+        return 0
+
+    if args.router_cmd == "route":
+        goal_text = " ".join(args.goal)
+        top_k = getattr(args, "top_k", 3)
+        fmt = getattr(args, "format", "text")
+        all_skills = _load_skills_r()
+        results = _route_skills(goal_text, all_skills, top_k=top_k)
+        if fmt == "json":
+            print(json.dumps([
+                {"skill_id": r.skill_id, "skill_name": r.skill_name, "score": r.score, "method": r.method}
+                for r in results
+            ], indent=2))
+        else:
+            if not results:
+                print("(no matching skills)")
+            else:
+                for r in results:
+                    print(f"  [{r.method}] score={r.score:.3f} {r.skill_name} (id={r.skill_id})")
+        return 0
+    return fail("E_INTERNAL", "unknown command")
+
+
+_COMMAND_HANDLERS = {
+    "init": _cmd_init,
+    "next": _cmd_next,
+    "done": _cmd_done,
+    "log": _cmd_log,
+    "enqueue": _cmd_enqueue,
+    "blocked": _cmd_blocked,
+    "salvage": _cmd_salvage,
+    "report": _cmd_report,
+    "start": _cmd_start,
+    "finish": _cmd_finish,
+    "inspect-run": _cmd_inspect_run,
+    "cycle": _cmd_cycle,
+    "outcomes": _cmd_outcomes,
+    "sheriff": _cmd_sheriff,
+    "director": _cmd_director,
+    "handle": _cmd_handle,
+    "run": _cmd_run,
+    "evolver": _cmd_evolver,
+    "heartbeat": _cmd_heartbeat,
+    "telegram": _cmd_telegram,
+    "interrupt": _cmd_interrupt,
+    "plan": _cmd_plan,
+    "tick": _cmd_tick,
+    "loop": _cmd_loop,
+    "build-loop": _cmd_build_loop,
+    "ancestry": _cmd_ancestry,
+    "impact": _cmd_impact,
+    "metrics": _cmd_metrics,
+    "contract": _cmd_contract,
+    "boot": _cmd_boot,
+    "manifest": _cmd_manifest,
+    "memory": _cmd_memory,
+    "persona": _cmd_persona,
+    "knowledge": _cmd_knowledge,
+    "eval": _cmd_eval,
+    "opstatus": _cmd_opstatus,
+    "mission": _cmd_mission,
+    "mission-status": _cmd_mission_status,
+    "background": _cmd_background,
+    "hooks": _cmd_hooks,
+    "skills": _cmd_skills,
+    "inspector": _cmd_inspector,
+    "inspector-status": _cmd_inspector_status,
+    "quality": _cmd_inspector_status,
+    "conductor": _cmd_conductor,
+    "status": _cmd_status,
+    "map": _cmd_map,
+    "autonomy": _cmd_autonomy,
+    "attribution": _cmd_attribution,
+    "skill-stats": _cmd_skill_stats,
+    "skill-test": _cmd_skill_test,
+    "gateway": _cmd_gateway,
+    "sandbox": _cmd_sandbox,
+    "router": _cmd_router,
+}
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
-    if args.cmd == "init":
-        p = ensure_project(args.slug, " ".join(args.mission), priority=args.priority)
-        write_operator_status()
-        print(f"initialized={p}")
-        return 0
-
-    if args.cmd == "next":
-        if args.project:
-            p = project_dir(args.project)
-            if not p.exists():
-                return fail("E_PROJECT_NOT_FOUND", args.project)
-            item = select_next_item(args.project)
-            if item:
-                print(f"project={args.project} index={item.index} state=[{item.state}] text={item.text}")
-                return 0
-            print(f"project={args.project} next=(none)")
-            return 1
-
-        sel = select_global_next()
-        if not sel:
-            print("next=(none)")
-            return 1
-        slug, item = sel
-        print(f"project={slug} index={item.index} state=[{item.state}] text={item.text}")
-        return 0
-
-    if args.cmd == "done":
-        if not project_dir(args.project).exists():
-            return fail("E_PROJECT_NOT_FOUND", args.project)
-        if args.index is None:
-            item = mark_first_todo_done(args.project)
-            if not item:
-                print(f"project={args.project} updated=0")
-                return 1
-            write_operator_status()
-            print(f"project={args.project} updated=1 index={item.index} text={item.text}")
-            return 0
-        mark_item(args.project, args.index, "x")
-        write_operator_status()
-        print(f"project={args.project} updated=1 index={args.index}")
-        return 0
-
-    if args.cmd == "log":
-        if not project_dir(args.project).exists():
-            return fail("E_PROJECT_NOT_FOUND", args.project)
-        append_decision(args.project, [" ".join(args.message)])
-        print(f"project={args.project} logged=1")
-        return 0
-
-    if args.cmd == "enqueue":
-        if not project_dir(args.project).exists():
-            return fail("E_PROJECT_NOT_FOUND", args.project)
-        task_text = " ".join(args.task).strip()
-        if not task_text:
-            return fail("E_TASK_REQUIRED", "task text cannot be empty")
-        payload = f"project={args.project} :: {task_text}"
-        # Use explicit --reason if provided, otherwise use constructed payload
-        reason = args.reason if args.reason != "queued from orch" else payload
-        blocked = [b.strip() for b in (args.blocked_by or "").split(",") if b.strip()]
-        try:
-            from task_store import enqueue as _enqueue
-            task = _enqueue(
-                lane=args.lane,
-                source=args.source,
-                reason=reason,
-                parent_job_id=getattr(args, "parent_job_id", ""),
-                blocked_by=blocked,
-            )
-            print(f"project={args.project} type=project_task lane={args.lane} job_id={task['job_id']} payload={json.dumps(payload)}")
-        except Exception as exc:
-            return fail("E_QUEUE_ENQUEUE", str(exc))
-        return 0
-
-    if args.cmd == "blocked":
-        blocked = list_blocked_projects()
-        if not blocked:
-            print("blocked=(none)")
-            return 0
-        for b in blocked:
-            print(f"project={b.slug} priority={b.priority} blocked={b.blocked} todo={b.todo}")
-        return 0
-
-    if args.cmd == "salvage":
-        payload = write_operator_status()["salvage"]
-        if args.format == "json":
-            print(json.dumps(payload, indent=2))
-            return 0
-        print(f"active_count={payload['active_count']} pending_count={payload['pending_count']} index_path={payload['index_path']}")
-        if not payload["active_runs"]:
-            print("salvage=(none)")
-            return 0
-        for run in payload["active_runs"]:
-            print(
-                " ".join(
-                    [
-                        f"run_id={run['run_id']}",
-                        f"project={run['project']}",
-                        f"item={run['item']}",
-                        f"attempt={run['attempt']}",
-                        *( [f"kind={run['first_kind']}"] if run.get("first_kind") else [] ),
-                        *( [f"detail={json.dumps(run['first_detail'])}"] if run.get("first_detail") else [] ),
-                        f"artifact={run['artifact_path']}",
-                    ]
-                )
-            )
-        return 0
-
-    if args.cmd == "report":
-        content = status_report_markdown(args.project) if args.format == "md" else status_report_json(args.project)
-        if args.out:
-            out = Path(args.out)
-            out.parent.mkdir(parents=True, exist_ok=True)
-            out.write_text(content, encoding="utf-8")
-            print(f"written={out}")
-        else:
-            print(content, end="")
-        return 0
-
-    if args.cmd == "start":
-        project = args.project
-        if args.index is not None and not project:
-            return fail("E_PROJECT_REQUIRED", "--index requires --project")
-        try:
-            if project:
-                if not project_dir(project).exists():
-                    return fail("E_PROJECT_NOT_FOUND", project)
-                run = start_item(project, args.index, source=args.source, worker=args.worker, note=args.note)
-            else:
-                run = run_once(worker=args.worker, source=args.source, note=args.note)
-                if not run:
-                    print("run=(none)")
-                    return 1
-        except ValueError as exc:
-            return fail("E_START_FAILED", str(exc))
-        _print_run("started", run)
-        return 0
-
-    if args.cmd == "finish":
-        try:
-            run = finalize_run(args.run_id, args.status, note=args.note)
-        except FileNotFoundError:
-            return fail("E_RUN_NOT_FOUND", args.run_id)
-        except ValueError as exc:
-            return fail("E_FINISH_FAILED", str(exc))
-        _print_run("finished", run)
-        return 0
-
-    if args.cmd == "inspect-run":
-        try:
-            run = load_run_record(args.run_id)
-            summary = load_validation_summary(args.run_id)
-        except FileNotFoundError:
-            return fail("E_RUN_NOT_FOUND", args.run_id)
-        salvage = _load_salvage_summary(run)
-        payload = {
-            "run": json.loads(json.dumps(run, default=lambda o: o.__dict__)),
-            "validation_summary": summary,
-            "salvage_summary": salvage,
-        }
-        if args.format == "json":
-            print(json.dumps(payload, indent=2))
-        else:
-            print(f"run_id={run.run_id}")
-            print(f"project={run.project}")
-            print(f"index={run.index}")
-            print(f"status={run.status}")
-            print(f"text={run.text}")
-            if run.artifact_path:
-                print(f"artifact={run.artifact_path}")
-            if run.note:
-                print(f"note={run.note}")
-            if summary:
-                print(f"validation_status={summary['validation']['status']}")
-                print(f"validation_passed={summary['validation']['passed']}")
-            if salvage:
-                print(f"salvage_path={salvage.get('path')}")
-                matches = salvage.get("matches") or []
-                first = next((item for item in matches if isinstance(item, dict)), None)
-                if first:
-                    if first.get("kind"):
-                        print(f"salvage_kind={first['kind']}")
-                    if first.get("detail"):
-                        print(f"salvage_detail={first['detail']}")
-        return 0
-
-    if args.cmd == "cycle":
-        try:
-            run = run_once(project=args.project, worker=args.worker, source=args.source, note=args.note)
-        except ValueError as exc:
-            return fail("E_RUN_FAILED", str(exc))
-        if not run:
-            print("run=(none)")
-            return 1
-        _print_run("started", run)
-        if args.finish:
-            try:
-                run = finalize_run(run.run_id, args.finish, note=args.finish_note)
-            except ValueError as exc:
-                return fail("E_RUN_FINISH_FAILED", str(exc))
-            _print_run("finished", run)
-        return 0
-
-    if args.cmd == "outcomes":
-        import memory as _mem
-        if args.memory_cmd == "context":
-            ctx = _mem.bootstrap_context()
-            print(ctx if ctx else "(no memory yet)")
-            return 0
-        if args.memory_cmd == "outcomes":
-            outcomes = _mem.load_outcomes(limit=args.limit)
-            if args.format == "json":
-                from dataclasses import asdict
-                print(json.dumps([asdict(o) for o in outcomes], indent=2))
-            else:
-                for o in outcomes:
-                    print(f"[{o.recorded_at[:10]}] {o.status:6s} {o.task_type:8s} {o.goal[:60]}")
-            return 0
-        if args.memory_cmd == "lessons":
-            lessons = _mem.load_lessons(task_type=args.task_type, limit=args.limit)
-            if args.format == "json":
-                from dataclasses import asdict
-                print(json.dumps([asdict(l) for l in lessons], indent=2))
-            else:
-                for l in lessons:
-                    print(f"[{l.task_type:8s}] conf={l.confidence:.1f} {l.lesson[:80]}")
-            return 0
-
-    if args.cmd == "sheriff":
-        import sheriff as _sheriff_mod
-        if args.sheriff_cmd == "check":
-            report = _sheriff_mod.check_project(args.project, window_minutes=args.window)
-            print(report.format(args.format))
-            return 0 if report.status == "healthy" else 1
-        if args.sheriff_cmd == "all":
-            reports = _sheriff_mod.check_all_projects(window_minutes=args.window)
-            if args.format == "json":
-                print(json.dumps([json.loads(r.format("json")) for r in reports], indent=2))
-            else:
-                for r in reports:
-                    print(r.format("text"))
-                    print()
-            stuck = [r for r in reports if r.status in ("stuck", "warning")]
-            return 1 if stuck else 0
-        if args.sheriff_cmd == "health":
-            health = _sheriff_mod.check_system_health()
-            if args.write_state:
-                project_reports = _sheriff_mod.check_all_projects()
-                _sheriff_mod.write_heartbeat_state(health, project_reports=project_reports)
-            print(health.format(args.format))
-            return 0 if health.status == "healthy" else 1
-
-    if args.cmd == "director":
-        import director as _director_mod
-        directive = " ".join(args.directive)
-        try:
-            result = _director_mod.run_director(
-                directive,
-                project=args.project,
-                dry_run=args.dry_run,
-                verbose=args.verbose,
-            )
-        except Exception as exc:
-            return fail("E_DIRECTOR", str(exc))
-        if args.format == "json":
-            print(json.dumps({
-                "director_id": result.director_id,
-                "status": result.status,
-                "plan_acceptance": result.plan_acceptance,
-                "tickets": len(result.tickets),
-                "report": result.report,
-                "tokens_in": result.tokens_in,
-                "tokens_out": result.tokens_out,
-                "elapsed_ms": result.elapsed_ms,
-                "log_path": result.log_path,
-            }, indent=2))
-        else:
-            print(result.summary())
-            if result.report:
-                print()
-                print("=== REPORT ===")
-                print(result.report)
-        return 0 if result.status == "done" else 1
-
-    if args.cmd == "handle":
-        import handle as _handle_mod
-        msg = " ".join(args.message)
-        try:
-            result = _handle_mod.handle(
-                msg,
-                project=args.project,
-                model=args.model,
-                force_lane=args.lane,
-                dry_run=args.dry_run,
-                verbose=args.verbose,
-            )
-        except Exception as exc:
-            return fail("E_HANDLE", str(exc))
-        print(result.format(mode=args.format))
-        return 0 if result.status == "done" else 1
-
-    if args.cmd == "run":
-        import agent_loop as _al
-        goal_str = " ".join(args.goal)
-        # Wire up ancestry if --parent was specified
-        if getattr(args, "parent", None):
-            from ancestry import create_child_ancestry, set_project_ancestry
-            import orch as _o
-            _target_slug = args.project or _al._goal_to_slug(goal_str)
-            _target_dir = _o.project_dir(_target_slug)
-            if not _target_dir.exists():
-                _o.ensure_project(_target_slug, goal_str[:80])
-            _parent_dir = _o.project_dir(args.parent)
-            _parent_title = getattr(args, "parent_title", None) or args.parent
-            _child_ancestry = create_child_ancestry(args.parent, _parent_title, _parent_dir)
-            set_project_ancestry(_target_dir, _child_ancestry)
-        try:
-            result = _al.run_agent_loop(
-                goal_str,
-                project=args.project,
-                model=args.model,
-                max_steps=args.max_steps,
-                max_iterations=args.max_iterations,
-                dry_run=args.dry_run,
-                verbose=args.verbose,
-            )
-        except Exception as exc:
-            return fail("E_RUN", str(exc))
-        if args.format == "json":
-            print(json.dumps({
-                "loop_id": result.loop_id,
-                "project": result.project,
-                "goal": result.goal,
-                "status": result.status,
-                "steps_done": sum(1 for s in result.steps if s.status == "done"),
-                "steps_total": len(result.steps),
-                "stuck_reason": result.stuck_reason,
-                "tokens_in": result.total_tokens_in,
-                "tokens_out": result.total_tokens_out,
-                "elapsed_ms": result.elapsed_ms,
-                "log_path": result.log_path,
-            }, indent=2))
-        else:
-            print(result.summary())
-        return 0 if result.status == "done" else 1
-
-    if args.cmd == "evolver":
-        from evolver import run_evolver, list_pending_suggestions, apply_suggestion
-
-        if getattr(args, "list_pending", False):
-            pending = list_pending_suggestions()
-            if args.format == "json":
-                print(json.dumps([s.to_dict() for s in pending], indent=2))
-            else:
-                if not pending:
-                    print("(no pending suggestions)")
-                else:
-                    for s in pending:
-                        print(f"  [{s.suggestion_id}] [{s.category}] {s.target}: {s.suggestion[:80]}")
-            return 0
-
-        if getattr(args, "apply_id", None):
-            ok = apply_suggestion(args.apply_id)
-            if ok:
-                print(f"applied={args.apply_id}")
-                return 0
-            else:
-                return fail("E_SUGGESTION_NOT_FOUND", args.apply_id)
-
-        if getattr(args, "revert_id", None):
-            from evolver import revert_suggestion
-            result = revert_suggestion(args.revert_id)
-            if result["reverted"]:
-                print(f"reverted={args.revert_id}: {result['detail']}")
-                return 0
-            else:
-                print(f"revert failed: {result['detail']}", file=sys.stderr)
-                return 1
-
-        report = run_evolver(
-            outcomes_window=args.window,
-            min_outcomes=args.min_outcomes,
-            dry_run=args.dry_run,
-            verbose=args.verbose,
-            notify=args.notify,
-        )
-        if args.format == "json":
-            print(json.dumps(report.to_dict(), indent=2))
-        else:
-            print(report.summary())
-        return 0
-
-    if args.cmd == "heartbeat":
-        from heartbeat import run_heartbeat, heartbeat_loop
-        if args.loop:
-            heartbeat_loop(
-                interval=args.interval,
-                dry_run=args.dry_run,
-                verbose=args.verbose,
-                escalate=not args.no_escalate,
-                autonomy=args.autonomy,
-                backlog_every=args.backlog_every,
-            )
-            return 0
-        report = run_heartbeat(
-            dry_run=args.dry_run,
-            verbose=args.verbose,
-            escalate=not args.no_escalate,
-        )
-        if args.format == "json":
-            print(json.dumps(report.to_dict(), indent=2))
-        else:
-            print(report.summary())
-        return 0
-
-    if args.cmd == "telegram":
-        from telegram_listener import poll_once, poll_loop
-        try:
-            if args.once:
-                n = poll_once(dry_run=args.dry_run, project=args.project, verbose=args.verbose)
-                print(f"processed={n}")
-                return 0
-            else:
-                poll_loop(dry_run=args.dry_run, project=args.project, verbose=args.verbose)
-                return 0
-        except RuntimeError as exc:
-            return fail("E_TELEGRAM", str(exc))
-
-    if args.cmd == "interrupt":
-        from interrupt import InterruptQueue, is_loop_running, get_running_loop
-        import json as _json
-
-        if args.status:
-            info = get_running_loop()
-            if args.format == "json":
-                print(_json.dumps(info or {}))
-            elif info:
-                print(f"loop_id={info['loop_id']} goal={info.get('goal','?')!r} pid={info.get('pid','?')}")
-            else:
-                print("No loop running.")
-            return 0
-
-        message = " ".join(args.message)
-        q = InterruptQueue()
-        intr = q.post(message, source=args.source, intent=args.intent)
-        if args.format == "json":
-            print(_json.dumps(intr.to_dict()))
-        else:
-            running = get_running_loop()
-            if running:
-                print(f"interrupt posted: id={intr.id} intent={intr.intent} loop={running.get('loop_id','?')}")
-            else:
-                print(f"interrupt queued (no loop running yet): id={intr.id} intent={intr.intent}")
-        return 0
-
-    if args.cmd == "plan":
-        try:
-            result = plan_project(args.project, " ".join(args.goal), max_steps=args.max_steps)
-        except ValueError as exc:
-            return fail("E_PLAN_FAILED", str(exc))
-        print(f"project={result.project} steps={len(result.steps)} added={len(result.item_indices)} first={result.item_indices[0] if result.item_indices else -1}")
-        return 0
-
-    if args.cmd == "tick":
-        try:
-            execution = _build_execution(args)
-        except ValueError as exc:
-            return fail("E_TICK_EXEC", str(exc))
-        validation = _build_validation(args)
-        try:
-            tick = run_tick(
-                project=args.project,
-                worker=args.worker,
-                source=args.source,
-                note=args.note,
-                max_retry_streak=args.max_retry_streak,
-                execution=execution,
-                validation=validation,
-            )
-        except ValueError as exc:
-            return fail("E_TICK_FAILED", str(exc))
-        except Exception as exc:
-            return fail("E_TICK_FAILED", str(exc))
-        if not tick:
-            print("tick=(none)")
-            return 1
-        _print_run("tick-start", tick.run)
-        print(f"execution={tick.execution.status} validation={tick.validation.status}")
-        return 0
-
-    if args.cmd == "loop":
-        if args.max_runs <= 0:
-            return fail("E_LOOP_BAD_LIMIT", "max-runs must be greater than zero")
-        try:
-            execution = _build_execution(args)
-        except ValueError as exc:
-            return fail("E_LOOP_EXEC", str(exc))
-        validation = _build_validation(args)
-        try:
-            ticks = run_loop(
-                project=args.project,
-                worker=args.worker,
-                source=args.source,
-                note=args.note,
-                max_runs=args.max_runs,
-                max_retry_streak=args.max_retry_streak,
-                execution=execution,
-                validation=validation,
-                continue_on_retry=args.continue_on_retry,
-                continue_on_blocked=args.continue_on_blocked,
-                max_attempts_per_item=args.max_attempts_per_item,
-            )
-        except ValueError as exc:
-            return fail("E_LOOP_FAILED", str(exc))
-        except Exception as exc:
-            return fail("E_LOOP_FAILED", str(exc))
-        if not ticks:
-            print("loop=(none)")
-            return 1
-        print(f"runs={len(ticks)}")
-        for idx, tick in enumerate(ticks, start=1):
-            print(
-                f"iteration={idx} project={tick.run.project} run_id={tick.run.run_id} status={tick.validation.status} item={tick.run.index}"
-            )
-        return 0
-
-    if args.cmd == "build-loop":
-        from build_loop_runner import build_loop_status_path, run_build_loop
-
-        if args.max_runs <= 0:
-            return fail("E_BUILD_LOOP_BAD_LIMIT", "max-runs must be greater than zero")
-        try:
-            summary = run_build_loop(
-                project=args.project,
-                worker=args.worker,
-                worker_session=args.worker_session,
-                max_runs=args.max_runs,
-                max_retry_streak=args.max_retry_streak,
-                max_attempts_per_item=args.max_attempts_per_item,
-                continue_on_retry=not args.no_continue_on_retry,
-                continue_on_blocked=args.continue_on_blocked,
-            )
-        except ValueError as exc:
-            return fail("E_BUILD_LOOP_FAILED", str(exc))
-        except Exception as exc:
-            return fail("E_BUILD_LOOP_FAILED", str(exc))
-        if args.format == "path":
-            print(build_loop_status_path())
-        else:
-            print(json.dumps(summary, indent=2))
-        return 0
-
-    if args.cmd == "ancestry":
-        from ancestry import (
-            get_project_ancestry, set_project_ancestry,
-            create_child_ancestry, orch_ancestry,
-        )
-        p = project_dir(args.project)
-        if not p.exists():
-            return fail("E_PROJECT_NOT_FOUND", args.project)
-
-        if args.set_parent:
-            parent_p = project_dir(args.set_parent)
-            parent_title = args.parent_title or args.set_parent
-            new_ancestry = create_child_ancestry(args.set_parent, parent_title, parent_p)
-            set_project_ancestry(p, new_ancestry)
-            print(f"project={args.project} parent={args.set_parent} ancestry_depth={new_ancestry.depth()}")
-            return 0
-
-        chain = orch_ancestry(args.project, p)
-        if args.format == "json":
-            ancestry = get_project_ancestry(p)
-            print(json.dumps(ancestry.to_dict() if ancestry else {}, indent=2))
-        else:
-            for line in chain:
-                print(line)
-        return 0
-
-    if args.cmd == "impact":
-        from ancestry import orch_impact
-        p = project_dir(args.project)
-        if not p.exists():
-            return fail("E_PROJECT_NOT_FOUND", args.project)
-        descendants = orch_impact(args.project, p.parent)
-        if args.format == "json":
-            print(json.dumps(descendants))
-        else:
-            if not descendants:
-                print(f"project={args.project} descendants=(none)")
-            else:
-                for d in descendants:
-                    print(d)
-        return 0
-
-    if args.cmd == "metrics":
-        from metrics import get_metrics, format_metrics_report
-        # Phase 19: pass-k subcommand
-        if getattr(args, "metrics_cmd", None) == "pass-k":
-            from metrics import compute_pass_at_k, compute_pass_all_k, check_skill_promotion_eligibility
-            skill_id = args.skill_id
-            k = args.k
-            pass_at_k = compute_pass_at_k(skill_id, k=k)
-            pass_all_k = compute_pass_all_k(skill_id, k=k)
-            eligible = check_skill_promotion_eligibility(skill_id, k=k)
-            if getattr(args, "format", "text") == "json":
-                print(json.dumps({
-                    "skill_id": skill_id,
-                    "k": k,
-                    "pass_at_k": pass_at_k,
-                    "pass_all_k": pass_all_k,
-                    "promotion_eligible": eligible,
-                }, indent=2))
-            else:
-                print(f"skill_id={skill_id} k={k}")
-                print(f"  pass@k  = {pass_at_k:.4f}  (P at least 1 success in {k} attempts)")
-                print(f"  pass^k  = {pass_all_k:.4f}  (P all {k} attempts succeed)")
-                print(f"  promotion_eligible = {eligible}")
-            return 0
-        metrics = get_metrics()
-        if args.format == "json":
-            from dataclasses import asdict
-            print(json.dumps(asdict(metrics), indent=2))
-        else:
-            print(format_metrics_report(metrics))
-        return 0
-
-    # ---------------------------------------------------------------------------
-    # Phase 19: Sprint contract, boot protocol, manifest CLI handlers
-    # ---------------------------------------------------------------------------
-
-    if args.cmd == "contract":
-        from sprint_contract import negotiate_contract, grade_contract, load_contracts
-        from dataclasses import asdict
-
-        if args.contract_cmd == "negotiate":
-            feature_title = " ".join(args.feature_title)
-            contract = negotiate_contract(
-                feature_title=feature_title,
-                mission_goal=args.goal,
-                milestone_title=args.milestone,
-                adapter=None,  # heuristic when --dry-run; real adapter otherwise
-            )
-            if getattr(args, "format", "text") == "json":
-                print(json.dumps(contract.to_dict(), indent=2))
-            else:
-                print(f"contract_id={contract.contract_id} negotiated_by={contract.negotiated_by}")
-                print(f"feature={contract.feature_title!r}")
-                print("success_criteria:")
-                for c in contract.success_criteria:
-                    print(f"  - {c}")
-                print(f"acceptance_keywords: {', '.join(contract.acceptance_keywords)}")
-            return 0
-
-        if args.contract_cmd == "grade":
-            project = args.project or ""
-            contract_id = args.contract_id
-            work_result = args.result
-
-            # Try to load the contract from project contracts
-            target_contract = None
-            if project:
-                contracts = load_contracts(project)
-                for c in contracts:
-                    if c.contract_id == contract_id:
-                        target_contract = c
-                        break
-
-            if target_contract is None:
-                # Can't grade without the original contract; show error
-                return fail("E_CONTRACT_NOT_FOUND", f"No contract {contract_id!r} in project {project!r}")
-
-            grade = grade_contract(target_contract, work_result, adapter=None)
-            if getattr(args, "format", "text") == "json":
-                print(json.dumps(grade.to_dict(), indent=2))
-            else:
-                print(f"contract_id={grade.contract_id} passed={grade.passed} score={grade.score:.3f}")
-                print(f"feedback: {grade.feedback}")
-                for cr in grade.criteria_results:
-                    status = "PASS" if cr["passed"] else "FAIL"
-                    print(f"  [{status}] {cr['criterion']}: {cr['evidence'][:80]}")
-            return 0
-
-    if args.cmd == "boot":
-        from boot_protocol import run_boot_protocol, format_boot_context
-        state = run_boot_protocol(args.project, dry_run=args.dry_run)
-        if getattr(args, "format", "text") == "json":
-            print(json.dumps({
-                "project": state.project,
-                "loop_id": state.loop_id,
-                "completed_features": state.completed_features,
-                "git_head": state.git_head,
-                "existing_tests_pass": state.existing_tests_pass,
-                "dead_ends": state.dead_ends,
-                "boot_timestamp": state.boot_timestamp,
-                "boot_method": state.boot_method,
-            }, indent=2))
-        else:
-            print(format_boot_context(state))
-        return 0
-
-    if args.cmd == "manifest":
-        from mission import load_feature_manifest
-        manifest = load_feature_manifest(args.project)
-        if manifest is None:
-            print(f"project={args.project} manifest=(none)")
-            return 1
-        features = manifest.get("features", [])
-        if getattr(args, "format", "text") == "json":
-            print(json.dumps(manifest, indent=2))
-        else:
-            total = len(features)
-            passing = sum(1 for f in features if f.get("passes"))
-            print(f"project={args.project} features={total} passing={passing}/{total}")
-            for f in features:
-                passes = "PASS" if f.get("passes") else "pending"
-                score_str = f" score={f['grade_score']:.2f}" if f.get("grade_score") is not None else ""
-                print(f"  [{passes:7s}]{score_str} [{f['id']}] {f['title']}")
-        return 0
-
-    if args.cmd == "memory":
-        from memory import (
-            memory_status, run_decay_cycle, forget_lesson, promote_lesson,
-            load_tiered_lessons, record_tiered_lesson, MemoryTier,
-        )
-        memory_cmd = getattr(args, "memory_cmd", None) or "opstatus"
-        if memory_cmd == "opstatus":
-            status = memory_status()
-            print(json.dumps(status, indent=2))
-        elif memory_cmd == "decay":
-            tier = getattr(args, "tier", "medium")
-            dry_run = getattr(args, "dry_run", False)
-            result = run_decay_cycle(tier=tier, dry_run=dry_run)
-            label = "(dry-run) " if dry_run else ""
-            print(f"{label}tier={tier} decayed={result['decayed']} promoted={result['promoted']} gc={result['gc']}")
-        elif memory_cmd == "consolidate":
-            from memory import maybe_consolidate, consolidation_due
-            force = getattr(args, "force", False)
-            if not force and not consolidation_due():
-                print("Consolidation not due (marker within interval) — use --force to run anyway")
-                return 0
-            result = maybe_consolidate(force=force)
-            if result is None:
-                print("Consolidation skipped (disabled in config, not due, or failed — see logs)")
-            else:
-                cycle = result["medium"]
-                print(f"Consolidated: decayed={cycle['decayed']} promoted={cycle['promoted']} gc={cycle['gc']}")
-        elif memory_cmd == "forget":
-            tier = getattr(args, "tier", "medium")
-            removed = forget_lesson(args.lesson_id, tier=tier)
-            if removed:
-                print(f"Removed lesson_id={args.lesson_id} from tier={tier}")
-            else:
-                print(f"lesson_id={args.lesson_id} not found in tier={tier}")
-                return 1
-        elif memory_cmd == "promote":
-            ok = promote_lesson(args.lesson_id)
-            if ok:
-                print(f"Promoted lesson_id={args.lesson_id} to long-tier")
-            else:
-                print(f"lesson_id={args.lesson_id} not eligible for promotion (score<{0.9} or sessions<3)")
-                return 1
-        elif memory_cmd == "list":
-            tier = getattr(args, "tier", "medium")
-            task_type = getattr(args, "task_type", None)
-            lessons = load_tiered_lessons(tier=tier, task_type=task_type, min_score=0.0)
-            if getattr(args, "format", "text") == "json":
-                import dataclasses
-                print(json.dumps([dataclasses.asdict(l) for l in lessons], indent=2))
-            else:
-                print(f"tier={tier} count={len(lessons)}")
-                for l in lessons:
-                    icon = "✓" if l.outcome == "done" else "✗"
-                    print(f"  [{l.lesson_id}] score={l.score:.2f} sessions={l.sessions_validated} {icon} [{l.task_type}] {l.lesson[:80]}")
-        elif memory_cmd == "record":
-            tier = getattr(args, "tier", "medium")
-            task_type = getattr(args, "task_type", "general")
-            outcome = getattr(args, "outcome", "done")
-            tl = record_tiered_lesson(args.lesson, task_type, outcome, source_goal="manual", tier=tier)
-            print(f"Recorded lesson_id={tl.lesson_id} tier={tier} score={tl.score:.2f}")
-        elif memory_cmd == "canon-candidates":
-            from memory import get_canon_candidates
-            min_hits = getattr(args, "min_hits", 10)
-            min_task_types = getattr(args, "min_task_types", 3)
-            candidates = get_canon_candidates(min_hits=min_hits, min_task_types=min_task_types)
-            if getattr(args, "format", "text") == "json":
-                print(json.dumps(candidates, indent=2))
-            else:
-                if not candidates:
-                    print(f"No canon candidates (min_hits={min_hits}, min_task_types={min_task_types})")
-                else:
-                    print(f"Canon candidates ({len(candidates)}) — human review required before writing to AGENTS.md:")
-                    for c in candidates:
-                        print(f"\n  [{c['lesson_id']}] applied={c['times_applied']}x across {len(c['task_types_seen'])} task types")
-                        print(f"  Task types: {', '.join(c['task_types_seen'])}")
-                        print(f"  Lesson: {c['lesson']}")
-                        print(f"  Score={c['score']} sessions={c['sessions_validated']} recorded={c['recorded_at']}")
-                        print(f"  → {c['recommendation']}")
-        elif memory_cmd == "migrate":
-            import hashlib
-            from pathlib import Path as _Path
-            from memory_backends import JSONLBackend, SQLiteBackend
-            from orch_items import memory_dir as _memory_dir_fn
-
-            src_dir = _Path(args.src_dir) if getattr(args, "src_dir", None) else _memory_dir_fn()
-            db_path = _Path(args.db_path) if getattr(args, "db_path", None) else src_dir / "memory.db"
-            dry_run = getattr(args, "dry_run", False)
-
-            jsonl_backend = JSONLBackend(src_dir)
-            sqlite_backend = SQLiteBackend(db_path)
-
-            # Discover all collections from .jsonl files on disk
-            collections: list[str] = []
-            for p in sorted(src_dir.rglob("*.jsonl")):
-                rel = p.relative_to(src_dir)
-                parts = rel.parts
-                if len(parts) == 1:
-                    collections.append(parts[0].removesuffix(".jsonl"))
-                elif len(parts) == 3 and parts[2] == "lessons.jsonl":
-                    # tiered/<tier>/lessons.jsonl → "tiered/<tier>"
-                    collections.append(f"{parts[0]}/{parts[1]}")
-
-            total_skipped = 0
-            total_inserted = 0
-            for collection in collections:
-                records = jsonl_backend.read_all(collection)
-                if not records:
-                    continue
-
-                # Build fingerprint set of existing SQLite rows for this collection
-                existing_fps: set[str] = set()
-                existing_rows = sqlite_backend.read_all(collection)
-                for row in existing_rows:
-                    fp = hashlib.sha256(json.dumps(row, sort_keys=True).encode()).hexdigest()
-                    existing_fps.add(fp)
-
-                inserted = 0
-                skipped = 0
-                for record in records:
-                    fp = hashlib.sha256(json.dumps(record, sort_keys=True).encode()).hexdigest()
-                    if fp in existing_fps:
-                        skipped += 1
-                    else:
-                        if not dry_run:
-                            sqlite_backend.append(collection, record)
-                        existing_fps.add(fp)
-                        inserted += 1
-
-                label = "(dry-run) " if dry_run else ""
-                print(f"{label}collection={collection} inserted={inserted} skipped={skipped}")
-                total_inserted += inserted
-                total_skipped += skipped
-
-            label = "(dry-run) " if dry_run else ""
-            print(f"{label}total inserted={total_inserted} skipped={total_skipped} db={db_path}")
-        else:
-            print(f"Unknown maro-memory subcommand: {memory_cmd}")
-            return 1
-        return 0
-
-    if args.cmd == "persona":
-        from persona import PersonaRegistry, compose_persona, spawn_persona, persona_to_dict
-        registry = PersonaRegistry()
-        persona_cmd = getattr(args, "persona_cmd", None) or "list"
-        if persona_cmd == "list":
-            names = registry.list()
-            if not names:
-                print("No personas found in personas/")
-            else:
-                print(f"Available personas ({len(names)}):")
-                for n in names:
-                    spec = registry.load(n)
-                    if spec:
-                        print(f"  {spec.name:20s} [{spec.model_tier:5s}] {spec.role}")
-                    else:
-                        print(f"  {n}")
-        elif persona_cmd == "show":
-            spec = registry.load(args.name)
-            if spec is None:
-                return fail("E_PERSONA_NOT_FOUND", f"Persona not found: {args.name!r}")
-            if getattr(args, "format", "text") == "json":
-                print(json.dumps(persona_to_dict(spec), indent=2))
-            else:
-                print(f"name:    {spec.name}")
-                print(f"role:    {spec.role}")
-                print(f"tier:    {spec.model_tier}")
-                print(f"scope:   {spec.memory_scope}")
-                print(f"style:   {spec.communication_style}")
-                print(f"composes: {spec.composes or '(none)'}")
-                print(f"hooks:   {spec.hooks or '(none)'}")
-                print(f"source:  {spec.source_file}")
-                print(f"\n--- System Prompt ---\n{spec.system_prompt[:500]}")
-        elif persona_cmd == "compose":
-            try:
-                spec = compose_persona(*args.names, registry=registry)
-            except ValueError as exc:
-                return fail("E_PERSONA_COMPOSE", str(exc))
-            if getattr(args, "format", "text") == "json":
-                print(json.dumps(persona_to_dict(spec), indent=2))
-            else:
-                print(f"Composed: {spec.name}")
-                print(f"role:     {spec.role}")
-                print(f"tier:     {spec.model_tier}")
-                print(f"scope:    {spec.memory_scope}")
-                print(f"style:    {spec.communication_style}")
-                print(f"hooks:    {spec.hooks or '(none)'}")
-                print(f"\n--- Composed System Prompt (preview) ---\n{spec.system_prompt[:600]}")
-        elif persona_cmd == "manifest":
-            from persona import generate_manifest, save_manifest
-            fmt = getattr(args, "format", "text")
-            if fmt == "json":
-                entries = generate_manifest(registry=registry)
-                print(json.dumps({"agents": entries}, indent=2))
-            elif fmt == "save":
-                path = save_manifest(registry=registry, fmt="json")
-                print(f"Manifest saved to: {path}")
-            else:
-                entries = generate_manifest(registry=registry)
-                print(f"Agent Capability Manifest ({len(entries)} agents)")
-                print("─" * 60)
-                for e in entries:
-                    tier = e.get("model_tier", "?")
-                    role = e.get("role", "?")
-                    triggers = ", ".join(e.get("trigger_keywords", [])[:4])
-                    print(f"  {e['name']:30s} [{tier:5s}] {role}")
-                    if triggers:
-                        print(f"  {'':30s}  triggers: {triggers}")
-        elif persona_cmd == "spawn":
-            goal_str = " ".join(args.goal)
-            compose_with = getattr(args, "compose", None) or None
-            dry_run = getattr(args, "dry_run", False)
-            max_steps = getattr(args, "max_steps", 20)
-            result = spawn_persona(
-                args.name, goal_str,
-                registry=registry,
-                dry_run=dry_run,
-                max_steps=max_steps,
-                compose_with=compose_with,
-            )
-            if getattr(args, "format", "text") == "json":
-                import dataclasses
-                print(json.dumps(dataclasses.asdict(result), indent=2))
-            else:
-                icon = "✓" if result.status == "done" else ("~" if result.status == "dry_run" else "✗")
-                print(f"[{icon}] persona={result.persona_name} status={result.status} steps={result.steps_taken}")
-                print(f"    {result.summary[:200]}")
-            return 0 if result.status in ("done", "dry_run") else 1
-        else:
-            print(f"Unknown maro-persona subcommand: {persona_cmd}")
-            return 1
-        return 0
-
-    if args.cmd == "knowledge":
-        from knowledge import print_dashboard, print_promote_actions
-        knowledge_cmd = getattr(args, "knowledge_cmd", None)
-        if knowledge_cmd == "promote":
-            print_promote_actions()
-        else:
-            stage = getattr(args, "stage", None)
-            print_dashboard(stage_filter=stage)
-        return 0
-
-    if args.cmd == "eval":
-        from eval import run_eval
-        benchmark_ids = [args.benchmark_id] if getattr(args, "benchmark_id", None) else None
-        report = run_eval(benchmarks=benchmark_ids, dry_run=args.dry_run)
-        if args.format == "json":
-            print(json.dumps(report.to_dict(), indent=2))
-        else:
-            print(report.summary())
-        return 0
-
-    if args.cmd == "opstatus":
-        payload = write_operator_status()
-        if args.format == "path":
-            print(operator_status_path())
-        else:
-            print(json.dumps(payload, indent=2))
-        return 0
-
-    if args.cmd == "mission":
-        import mission as _mission_mod
-        goal_str = " ".join(args.goal)
-        try:
-            result = _mission_mod.run_mission(
-                goal_str,
-                project=args.project,
-                dry_run=args.dry_run,
-                verbose=args.verbose,
-            )
-        except Exception as exc:
-            return fail("E_MISSION", str(exc))
-        if args.format == "json":
-            print(json.dumps({
-                "mission_id": result.mission_id,
-                "project": result.project,
-                "goal": result.goal,
-                "status": result.status,
-                "milestones_done": result.milestones_done,
-                "milestones_total": result.milestones_total,
-                "features_done": result.features_done,
-                "features_total": result.features_total,
-                "elapsed_ms": result.elapsed_ms,
-            }, indent=2))
-        else:
-            print(result.summary())
-        return 0 if result.status == "done" else 1
-
-    if args.cmd == "mission-status":
-        import mission as _mission_mod
-        if args.project:
-            m = _mission_mod.load_mission(args.project)
-            if not m:
-                return fail("E_MISSION_NOT_FOUND", f"no mission.json for project={args.project}")
-            if args.format == "json":
-                summaries = [{
-                    "project": m.project,
-                    "mission_id": m.id,
-                    "goal": m.goal,
-                    "status": m.status,
-                    "milestones": [
-                        {
-                            "id": ms.id,
-                            "title": ms.title,
-                            "status": ms.status,
-                            "features": [
-                                {"id": f.id, "title": f.title, "status": f.status}
-                                for f in ms.features
-                            ],
-                        }
-                        for ms in m.milestones
-                    ],
-                }]
-                print(json.dumps(summaries, indent=2))
-            else:
-                print(f"mission_id={m.id} project={m.project} status={m.status}")
-                print(f"goal={m.goal!r}")
-                for ms in m.milestones:
-                    done_count = sum(1 for f in ms.features if f.status == "done")
-                    print(f"  milestone [{ms.status:10s}] {ms.title!r} features={done_count}/{len(ms.features)}")
-                    for f in ms.features:
-                        print(f"    feature  [{f.status:8s}] {f.title!r}")
-        else:
-            summaries = _mission_mod.list_missions()
-            if args.format == "json":
-                print(json.dumps(summaries, indent=2))
-            else:
-                if not summaries:
-                    print("missions=(none)")
-                else:
-                    for s in summaries:
-                        print(
-                            f"project={s['project']} status={s['status']} "
-                            f"milestones={s['milestones_done']}/{s['milestones_total']} "
-                            f"features={s['features_done']}/{s['features_total']} "
-                            f"goal={s['goal'][:60]!r}"
-                        )
-        return 0
-
-    if args.cmd == "background":
-        import background as _bg_mod
-        command = " ".join(args.command)
-        try:
-            task = _bg_mod.start_background(command, timeout_seconds=args.timeout)
-            if args.wait:
-                task = _bg_mod.wait_background(task.id, timeout_seconds=args.timeout)
-        except Exception as exc:
-            return fail("E_BACKGROUND", str(exc))
-        if args.format == "json":
-            print(json.dumps({
-                "id": task.id,
-                "command": task.command,
-                "pid": task.pid,
-                "status": task.status,
-                "started_at": task.started_at,
-                "completed_at": task.completed_at,
-                "exit_code": task.exit_code,
-                "output_file": task.output_file,
-            }, indent=2))
-        else:
-            print(f"id={task.id} pid={task.pid} status={task.status} command={task.command!r}")
-            if task.completed_at:
-                print(f"completed_at={task.completed_at} exit_code={task.exit_code}")
-        return 0
-
-    if args.cmd == "hooks":
-        import hooks as _hooks_mod
-
-        registry = _hooks_mod.load_registry()
-
-        if args.hooks_cmd == "list":
-            hook_list = registry.list_hooks(scope=getattr(args, "scope", None))
-            if getattr(args, "format", "text") == "json":
-                from dataclasses import asdict
-                print(json.dumps([asdict(h) for h in hook_list], indent=2))
-            else:
-                if not hook_list:
-                    print("hooks=(none)")
-                else:
-                    for h in hook_list:
-                        status = "enabled" if h.enabled else "disabled"
-                        print(f"  [{h.id}] [{status:8s}] {h.name!r} type={h.hook_type} scope={h.scope} fire_on={h.fire_on}")
-            return 0
-
-        if args.hooks_cmd == "enable":
-            if registry.enable(args.id):
-                print(f"enabled={args.id}")
-                return 0
-            # Try to enable a builtin that isn't yet in registry
-            builtin = _hooks_mod._BUILTIN_BY_ID.get(args.id)
-            if builtin:
-                import copy
-                h = copy.copy(builtin)
-                h.enabled = True
-                registry.register(h)
-                print(f"enabled={args.id} (registered builtin)")
-                return 0
-            return fail("E_HOOK_NOT_FOUND", args.id)
-
-        if args.hooks_cmd == "disable":
-            if registry.disable(args.id):
-                print(f"disabled={args.id}")
-                return 0
-            return fail("E_HOOK_NOT_FOUND", args.id)
-
-        if args.hooks_cmd == "add-reporter":
-            import uuid as _uuid
-            hook = _hooks_mod.Hook(
-                id=str(_uuid.uuid4())[:8],
-                name=args.name,
-                scope=args.scope,
-                hook_type=_hooks_mod.TYPE_REPORTER,
-                enabled=True,
-                prompt_template=getattr(args, "template", ""),
-                report_target=args.target,
-                fire_on=args.fire_on,
-            )
-            registry.register(hook)
-            print(f"registered={hook.id} name={hook.name!r} scope={hook.scope} target={hook.report_target}")
-            return 0
-
-        if args.hooks_cmd == "run-builtin":
-            builtin = _hooks_mod._BUILTIN_BY_ID.get(args.id)
-            if not builtin:
-                return fail("E_HOOK_NOT_FOUND", args.id)
-            ctx = {
-                "goal": getattr(args, "goal", ""),
-                "step": getattr(args, "step", ""),
-                "step_result": getattr(args, "result", ""),
-                "project": "",
-                "milestone_title": "",
-                "feature_title": "",
-                "validation_criteria": "",
-                "features_summary": "",
-                "features_done": 0,
-                "features_total": 0,
-            }
-            dry_run = getattr(args, "dry_run", True)
-            result = _hooks_mod._run_single_hook(builtin, ctx, dry_run=dry_run)
-            if getattr(args, "format", "text") == "json":
-                from dataclasses import asdict
-                print(json.dumps(asdict(result), indent=2))
-            else:
-                print(f"hook_id={result.hook_id} status={result.status} should_block={result.should_block}")
-                if result.output:
-                    print(f"output: {result.output}")
-                if result.injected_context:
-                    print(f"injected_context: {result.injected_context[:200]}")
-            return 0
-
-    if args.cmd == "skills":
-        import skills as _skills_mod
-        if getattr(args, "status", False):
-            skill_list = _skills_mod.load_skills()
-            rewrite_candidates = _skills_mod.skills_needing_rewrite()
-            rewrite_ids = {s.id for s in rewrite_candidates}
-            provisional = [s for s in skill_list if s.tier == "provisional"]
-            established = [s for s in skill_list if s.tier == "established"]
-            open_circuit = [s for s in skill_list if s.circuit_state == "open"]
-            half_open = [s for s in skill_list if s.circuit_state == "half_open"]
-            if args.format == "json":
-                print(json.dumps({
-                    "total": len(skill_list),
-                    "provisional": len(provisional),
-                    "established": len(established),
-                    "circuit_open": len(open_circuit),
-                    "circuit_half_open": len(half_open),
-                    "rewrite_candidates": len(rewrite_candidates),
-                    "skills": [_skills_mod._skill_to_dict(s) for s in skill_list],
-                }, indent=2))
-            else:
-                print(f"Skills: {len(skill_list)} total  |  {len(provisional)} provisional  {len(established)} established")
-                print(f"Circuit: {len(skill_list) - len(open_circuit) - len(half_open)} closed  {len(half_open)} half-open  {len(open_circuit)} open")
-                print(f"Rewrite candidates: {len(rewrite_candidates)}")
-                if skill_list:
-                    print()
-                    # Sort by utility descending
-                    for s in sorted(skill_list, key=lambda x: x.utility_score, reverse=True):
-                        circuit_tag = "" if s.circuit_state == "closed" else f" [{s.circuit_state.upper()}]"
-                        rewrite_tag = " *REWRITE*" if s.id in rewrite_ids else ""
-                        print(f"  {s.tier[0].upper()} {circuit_tag}  [{s.id}] {s.name}")
-                        print(f"    utility={s.utility_score:.2f}  uses={s.use_count}  "
-                              f"cf={s.consecutive_failures}  cs={s.consecutive_successes}"
-                              f"{rewrite_tag}")
-            return 0
-
-        if args.list_skills:
-            skill_list = _skills_mod.load_skills()
-            if args.format == "json":
-                print(json.dumps([_skills_mod._skill_to_dict(s) for s in skill_list], indent=2))
-            else:
-                if not skill_list:
-                    print("skills=(none)")
-                else:
-                    for s in skill_list:
-                        print(f"  [{s.id}] {s.name} (uses={s.use_count} success_rate={s.success_rate:.2f})")
-                        print(f"    {s.description}")
-                        print(f"    triggers: {', '.join(s.trigger_patterns[:3])}")
-            return 0
-
-        if args.extract:
-            try:
-                from memory import load_outcomes
-                outcomes_raw = load_outcomes(limit=args.outcomes_window)
-                from dataclasses import asdict
-                outcomes_dicts = [asdict(o) for o in outcomes_raw]
-            except Exception as exc:
-                return fail("E_SKILLS_LOAD_OUTCOMES", str(exc))
-
-            if args.dry_run:
-                print(f"dry_run: would analyze {len(outcomes_dicts)} outcomes for skill extraction")
-                return 0
-
-            try:
-                from llm import build_adapter, MODEL_MID
-                skill_adapter = build_adapter(model=MODEL_MID)
-                extracted = _skills_mod.extract_skills(outcomes_dicts, skill_adapter)
-            except Exception as exc:
-                return fail("E_SKILLS_EXTRACT", str(exc))
-
-            if args.format == "json":
-                print(json.dumps([_skills_mod._skill_to_dict(s) for s in extracted], indent=2))
-            else:
-                if not extracted:
-                    print("extracted=(none)")
-                else:
-                    for s in extracted:
-                        print(f"extracted: [{s.id}] {s.name} — {s.description}")
-            return 0
-
-        if getattr(args, "rollback", None):
-            from skills import _skills_path as _sp
-            import shutil as _shutil
-            _src = _sp()
-            _bak = Path(str(_src) + ".bak")
-            if not _bak.exists():
-                print(f"No backup found at {_bak}. Nothing to restore.")
-                return 1
-            if args.dry_run:
-                print(f"dry_run: would restore {_bak} → {_src}")
-                return 0
-            _shutil.copy2(str(_bak), str(_src))
-            restored = _skills_mod.load_skills()
-            print(f"Restored skills.jsonl from .bak ({len(restored)} skills).")
-            return 0
-
-        # Default: show usage hint
-        print("Use --status for health dashboard, --list to list skills, --extract to extract from recent outcomes, or --rollback <name> to restore from backup.")
-        return 0
-
-    if args.cmd == "inspector":
-        from inspector import run_inspector, inspector_loop
-        if args.loop:
-            inspector_loop(interval_seconds=args.interval)
-            return 0
-        try:
-            from llm import build_adapter, MODEL_CHEAP
-            _insp_adapter = None if args.dry_run else build_adapter(model=MODEL_CHEAP)
-        except ImportError:
-            _insp_adapter = None
-        report = run_inspector(limit=args.limit, adapter=_insp_adapter, dry_run=args.dry_run)
-        if args.format == "json":
-            print(json.dumps(report.to_dict(), indent=2))
-        else:
-            print(report.summary())
-        return 0
-
-    if args.cmd in ("inspector-status", "quality"):
-        from inspector import get_latest_inspection, get_friction_summary
-        if getattr(args, "format", "text") == "json":
-            report = get_latest_inspection()
-            print(json.dumps(report.to_dict() if report else {}, indent=2))
-        else:
-            summary = get_friction_summary()
-            if summary:
-                print(summary)
-            else:
-                print("No inspection report available. Run maro-inspector first.")
-        return 0
-
-    # Conductor — top-level orchestration role
-
-    if args.cmd == "conductor":
-        from conductor import conduct
-        msg = " ".join(args.message)
-        try:
-            response = conduct(msg, model=args.model, dry_run=args.dry_run)
-        except Exception as exc:
-            return fail("E_CONDUCTOR", str(exc))
-        if args.format == "json":
-            print(json.dumps({
-                "message": response.message,
-                "routed_to": response.routed_to,
-                "mission_id": response.mission_id,
-                "executive_summary": response.executive_summary,
-            }, indent=2))
-        else:
-            print(response.message)
-        return 0
-
-    if args.cmd == "status":
-        from conductor import _compile_executive_summary
-        dry_run = getattr(args, "dry_run", False)
-        if dry_run:
-            summary = "[dry-run] Executive summary: no active missions."
-        else:
-            try:
-                from llm import build_adapter, MODEL_CHEAP
-                _adapter = build_adapter(model=MODEL_CHEAP)
-            except Exception:
-                _adapter = None
-            summary = _compile_executive_summary(adapter=_adapter)
-        if args.format == "json":
-            print(json.dumps({"summary": summary}, indent=2))
-        else:
-            print(summary)
-        return 0
-
-    if args.cmd == "map":
-        from goal_map import build_goal_map
-        try:
-            gmap = build_goal_map()
-        except Exception as exc:
-            return fail("E_MAP", str(exc))
-        if args.format == "json":
-            nodes_list = [n.to_dict() for n in gmap.nodes.values()]
-            print(json.dumps(nodes_list, indent=2))
-        else:
-            print(gmap.summary())
-        return 0
-
-    if args.cmd == "autonomy":
-        from autonomy import (
-            load_config, set_default_tier, set_project_tier, set_action_tier,
-            TIER_MANUAL, TIER_SAFE, TIER_FULL,
-        )
-        tier = getattr(args, "tier", None)
-        project = getattr(args, "project", None)
-        action_type = getattr(args, "action_type", None)
-
-        if tier:
-            if project:
-                set_project_tier(project, tier)
-                print(f"set project={project} tier={tier}")
-            elif action_type:
-                set_action_tier(action_type, tier)
-                print(f"set action_type={action_type} tier={tier}")
-            else:
-                set_default_tier(tier)
-                print(f"set default_tier={tier}")
-            return 0
-
-        # Show current config
-        config = load_config()
-        if args.format == "json":
-            print(json.dumps(config.to_dict(), indent=2))
-        else:
-            print(f"default_tier={config.default_tier}")
-            if config.project_overrides:
-                print("project_overrides:")
-                for p, t in sorted(config.project_overrides.items()):
-                    print(f"  {p}: {t}")
-            if config.action_overrides:
-                print("action_overrides:")
-                for a, t in sorted(config.action_overrides.items()):
-                    print(f"  {a}: {t}")
-        return 0
-
-    # ---------------------------------------------------------------------------
-    # Phase 14: Failure attribution + skill stats + skill test CLI
-    # ---------------------------------------------------------------------------
-
-    if args.cmd == "attribution":
-        from attribution import attribute_batch, load_attributions
-        from memory import load_outcomes as _load_outcomes
-        limit = getattr(args, "limit", 20)
-        try:
-            outcomes_raw = _load_outcomes(limit=limit * 2)
-            outcomes_dicts = []
-            for o in outcomes_raw:
-                try:
-                    from dataclasses import asdict
-                    outcomes_dicts.append(asdict(o))
-                except Exception:
-                    outcomes_dicts.append(o.__dict__ if hasattr(o, "__dict__") else {})
-            report = attribute_batch(outcomes_dicts[:limit])
-        except Exception as exc:
-            return fail("E_ATTRIBUTION", str(exc))
-        if args.format == "json":
-            print(json.dumps(report.to_dict(), indent=2))
-        else:
-            print(report.summary())
-            if report.attributions:
-                print()
-                print("Recent attributions:")
-                for attr in report.attributions[:10]:
-                    print(f"  [{attr.failure_mode}] conf={attr.confidence:.2f} | {attr.failed_step[:60]}")
-        return 0
-
-    if args.cmd == "skill-stats":
-        from skills import get_all_skill_stats, get_skills_needing_escalation, ESCALATION_THRESHOLD
-        escalated = getattr(args, "escalated", False)
-        try:
-            if escalated:
-                stats_list = get_skills_needing_escalation()
-            else:
-                stats_list = get_all_skill_stats()
-        except Exception as exc:
-            return fail("E_SKILL_STATS", str(exc))
-        if args.format == "json":
-            print(json.dumps([s.to_dict() for s in stats_list], indent=2))
-        else:
-            if not stats_list:
-                msg = "No skill stats recorded yet."
-                if escalated:
-                    msg = f"No skills below escalation threshold ({ESCALATION_THRESHOLD})."
-                print(msg)
-            else:
-                if escalated:
-                    print(f"Skills needing redesign (success_rate < {ESCALATION_THRESHOLD}):")
-                else:
-                    print("Per-skill success rates:")
-                for s in stats_list:
-                    escalation_marker = " [ESCALATE]" if s.needs_escalation else ""
-                    print(
-                        f"  {s.skill_id} | {s.skill_name[:30]:30s} | "
-                        f"rate={s.success_rate:.2f} uses={s.total_uses} "
-                        f"ok={s.successes} fail={s.failures}{escalation_marker}"
-                    )
-        return 0
-
-    if args.cmd == "skill-test":
-        from skills import load_skills, generate_skill_tests, run_skill_tests
-        skill_id = args.skill_id
-        generate = getattr(args, "generate", False)
-
-        # Find the skill
-        all_skills = load_skills()
-        target_skill = next((s for s in all_skills if s.id == skill_id or s.name == skill_id), None)
-        if target_skill is None:
-            return fail("E_SKILL_NOT_FOUND", f"No skill with id or name {skill_id!r}")
-
-        try:
-            if generate:
-                # Generate new tests from recent failure attributions
-                from attribution import load_attributions
-                attributions = load_attributions(limit=20)
-                failure_examples = [
-                    a.raw_reason for a in attributions
-                    if a.failed_skill == target_skill.name
-                ]
-                tests = generate_skill_tests(target_skill, failure_examples)
-                print(f"Generated {len(tests)} test case(s) for skill={target_skill.name!r}")
-            else:
-                # Load existing tests
-                from skills import _load_skill_tests
-                tests = _load_skill_tests(skill_id)
-                if not tests:
-                    tests = _load_skill_tests(target_skill.id)
-
-            if not tests:
-                print(f"No tests found for skill={target_skill.name!r}. Use --generate to create them.")
-                return 0
-
-            passed, total = run_skill_tests(target_skill, tests, adapter=None, dry_run=True)
-            if args.format == "json":
-                print(json.dumps([t.to_dict() for t in tests], indent=2))
-            else:
-                print(f"Skill: {target_skill.name} (id={target_skill.id})")
-                print(f"Tests: {total} | Passed (dry_run): {passed}")
-                for t in tests:
-                    print(f"  - [{t.input_description[:60]}] expect: {t.expected_keywords}")
-        except Exception as exc:
-            return fail("E_SKILL_TEST", str(exc))
-        return 0
-
-    # ---------------------------------------------------------------------------
-    # Phase 15: Gateway + Sandbox CLI handlers
-    # ---------------------------------------------------------------------------
-
-    if args.cmd == "gateway":
-        from gateway import check_gateway_connection, send_to_gateway
-
-        if args.gateway_cmd == "opstatus":
-            connected = check_gateway_connection()
-            if connected:
-                print("gateway=reachable")
-                return 0
-            else:
-                print("gateway=unreachable")
-                return 1
-
-        if args.gateway_cmd == "send":
-            message = " ".join(args.message)
-            result = send_to_gateway(message, timeout_seconds=args.timeout)
-            if getattr(args, "format", "text") == "json":
-                print(json.dumps({
-                    "connected": result.connected,
-                    "sent": result.sent,
-                    "response": result.response,
-                    "error": result.error,
-                    "elapsed_ms": result.elapsed_ms,
-                }, indent=2))
-            else:
-                print(f"connected={result.connected} sent={result.sent} elapsed_ms={result.elapsed_ms}")
-                if result.response:
-                    print(f"response={result.response}")
-                if result.error:
-                    print(f"error={result.error}")
-            return 0 if result.sent else 1
-
-    if args.cmd == "sandbox":
-        from sandbox import run_skill_tests_sandboxed, load_audit_log, SandboxConfig
-
-        sandbox_cmd = getattr(args, "sandbox_cmd", "test")
-
-        if sandbox_cmd == "audit":
-            entries = load_audit_log(limit=getattr(args, "limit", 20))
-            if getattr(args, "format", "text") == "json":
-                print(json.dumps(entries, indent=2))
-            else:
-                print(f"Sandbox audit log (last {len(entries)} entries):")
-                for e in entries:
-                    safe_icon = "✓" if e.get("static_safe") else "✗"
-                    net_icon = "N" if e.get("network_blocked") else " "
-                    venv_icon = "V" if e.get("venv_isolated") else " "
-                    res_icon = "R" if e.get("resource_limited") else " "
-                    ok = "ok" if e.get("success") else ("t/o" if e.get("timed_out") else "fail")
-                    print(f"  [{e.get('timestamp','')[:19]}] {ok:4s} [{safe_icon}{net_icon}{venv_icon}{res_icon}] "
-                          f"skill={e.get('skill_name','?')[:20]} exit={e.get('exit_code')} "
-                          f"{e.get('elapsed_ms')}ms  {e.get('output_preview','')[:50]}")
-            return 0
-
-        if sandbox_cmd == "config":
-            cfg = SandboxConfig()
-            print("Sandbox hardening defaults:")
-            print(f"  timeout_seconds:  {cfg.timeout_seconds}")
-            print(f"  max_cpu_seconds:  {cfg.max_cpu_seconds}  (RLIMIT_CPU)")
-            print(f"  max_file_size_mb: {cfg.max_file_size_mb}  (RLIMIT_FSIZE)")
-            print(f"  max_open_files:   {cfg.max_open_files}  (RLIMIT_NOFILE)")
-            print(f"  block_network:    {cfg.block_network}  (soft socket monkey-patch)")
-            print(f"  use_venv:         {cfg.use_venv}  (isolated venv, ~500ms overhead)")
-            print(f"  audit:            {cfg.audit}  (memory/sandbox-audit.jsonl)")
-            return 0
-
-        # sandbox_cmd == "test"
-        from skills import load_skills, generate_skill_tests, _load_skill_tests
-        skill_id = args.skill_id
-        generate = getattr(args, "generate", False)
-
-        all_skills = load_skills()
-        target_skill = next((s for s in all_skills if s.id == skill_id or s.name == skill_id), None)
-        if target_skill is None:
-            return fail("E_SKILL_NOT_FOUND", f"No skill with id or name {skill_id!r}")
-
-        sb_config = SandboxConfig(
-            block_network=not getattr(args, "no_network_block", False),
-            use_venv=getattr(args, "venv", False),
-        )
-
-        try:
-            if generate:
-                from attribution import load_attributions
-                attributions = load_attributions(limit=20)
-                failure_examples = [
-                    a.raw_reason for a in attributions
-                    if a.failed_skill == target_skill.name
-                ]
-                tests = generate_skill_tests(target_skill, failure_examples)
-                print(f"Generated {len(tests)} test case(s) for skill={target_skill.name!r}")
-            else:
-                tests = _load_skill_tests(skill_id)
-                if not tests:
-                    tests = _load_skill_tests(target_skill.id)
-
-            if not tests:
-                print(f"No tests found for skill={target_skill.name!r}. Use --generate to create them.")
-                return 0
-
-            passed, total = run_skill_tests_sandboxed(target_skill, tests, config=sb_config)
-            net_label = " [network-blocked]" if sb_config.block_network else ""
-            venv_label = " [venv-isolated]" if sb_config.use_venv else ""
-            if getattr(args, "format", "text") == "json":
-                print(json.dumps({
-                    "skill_id": target_skill.id,
-                    "skill_name": target_skill.name,
-                    "passed": passed,
-                    "total": total,
-                    "network_blocked": sb_config.block_network,
-                    "venv_isolated": sb_config.use_venv,
-                    "tests": [t.to_dict() for t in tests],
-                }, indent=2))
-            else:
-                print(f"Skill: {target_skill.name} (id={target_skill.id}) [sandboxed]{net_label}{venv_label}")
-                print(f"Tests: {total} | Passed: {passed}")
-                for t in tests:
-                    print(f"  - [{t.input_description[:60]}] expect: {t.expected_keywords}")
-        except Exception as exc:
-            return fail("E_SANDBOX", str(exc))
-        return 0 if (not tests or passed == total) else 1
-
-    # Phase 17: Behavior-aligned skill router CLI handlers
-    # ---------------------------------------------------------------------------
-
-    if args.cmd == "router":
-        from router import get_router_stats, train_router, route_skills as _route_skills
-        from skills import load_skills as _load_skills_r
-
-        if args.router_cmd == "stats":
-            stats = get_router_stats()
-            fmt = getattr(args, "format", "text")
-            if fmt == "json":
-                print(json.dumps(stats.to_dict(), indent=2))
-            else:
-                print(f"training_samples={stats.training_samples}")
-                print(f"last_trained={stats.last_trained or '(never)'}")
-                print(f"holdout_accuracy={stats.holdout_accuracy:.3f}")
-                print(f"feature_method={stats.feature_method}")
-                print(f"min_samples_reached={stats.min_samples_reached}")
-                print(f"model_path={stats.model_path}")
-            return 0
-
-        if args.router_cmd == "retrain":
-            stats = train_router()
-            fmt = getattr(args, "format", "text")
-            if fmt == "json":
-                print(json.dumps(stats.to_dict(), indent=2))
-            else:
-                if stats.min_samples_reached:
-                    print(f"retrained ok — samples={stats.training_samples} accuracy={stats.holdout_accuracy:.3f}")
-                else:
-                    print(f"not enough data — samples={stats.training_samples} (need 50)")
-            return 0
-
-        if args.router_cmd == "route":
-            goal_text = " ".join(args.goal)
-            top_k = getattr(args, "top_k", 3)
-            fmt = getattr(args, "format", "text")
-            all_skills = _load_skills_r()
-            results = _route_skills(goal_text, all_skills, top_k=top_k)
-            if fmt == "json":
-                print(json.dumps([
-                    {"skill_id": r.skill_id, "skill_name": r.skill_name, "score": r.score, "method": r.method}
-                    for r in results
-                ], indent=2))
-            else:
-                if not results:
-                    print("(no matching skills)")
-                else:
-                    for r in results:
-                        print(f"  [{r.method}] score={r.score:.3f} {r.skill_name} (id={r.skill_id})")
-            return 0
-
-    return fail("E_INTERNAL", "unknown command")
+    handler = _COMMAND_HANDLERS.get(args.cmd)
+    if handler is None:
+        return fail("E_INTERNAL", "unknown command")
+    return handler(args)
 
 
 if __name__ == "__main__":

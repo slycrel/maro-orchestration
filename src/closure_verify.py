@@ -220,20 +220,6 @@ def _run_precondition_preflight(
     return out
 
 
-def _check_modality_from_command(command: str) -> str:
-    """Best-effort classification of a closure check's probe modality."""
-    cmd = (command or "").lower()
-    if any(tok in cmd for tok in ("playwright", "chromium", "firefox", "webkit", "selenium", "xdotool")):
-        return "browser"
-    if any(tok in cmd for tok in ("websocket", "wss://", "ws://", "websocat", "wscat")):
-        return "ws"
-    if any(tok in cmd for tok in ("curl ", "wget ", "http://", "https://", "nc ", "netcat ")):
-        return "http"
-    if any(tok in cmd for tok in ("timeout ", "python -m http.server", "uvicorn", "gunicorn", "node ", "npm ", "pnpm ", "./", "bash ", "sh ")):
-        return "process"
-    return "static"
-
-
 def _check_outcome(*, exit_code: int, stderr: str = "") -> str:
     """Classify a closure probe outcome as pass, fail, or inconclusive."""
     if exit_code == 0:
@@ -433,7 +419,7 @@ def verify_goal_completion(
         for check in checks[:5]:
             desc = safe_str(check.get("description", ""))
             cmd = safe_str(check.get("command", ""))
-            modality = _check_modality_from_command(cmd)
+            modality = _classify_probe_modality(cmd)
             if not cmd:
                 continue
             try:
@@ -660,6 +646,18 @@ def verify_goal_completion(
 
 # ---------------------------------------------------------------------------
 # Probe modality classifier (Phase 65 closure observability)
+#
+# The sole classifier — used both for the per-check "modality" tag (in
+# verify_goal_completion's check loop) and the modality_distribution
+# aggregate below. A second, naive substring-matching classifier
+# (_check_modality_from_command) existed alongside this one for a while —
+# both were added the same day (2026-04-17), a few hours apart, without one
+# noticing the other. It disagreed on common cases (npm/pnpm/bash/sh test
+# runners, `go build ./x`, bare "websocket", nc/netcat) because it lacked
+# this one's static-hint-before-process precedence and tighter regexes.
+# Retired 2026-07-02 in favor of this one, which is the more carefully
+# tuned implementation (see the process-pattern comment below re: the
+# `go build ./...` false positive it was built to avoid).
 # ---------------------------------------------------------------------------
 
 # Order matters: first match wins. browser/ws/http/process before static so

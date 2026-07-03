@@ -1032,14 +1032,20 @@ class TestVerifyGoalCompletion:
         assert "grep -e" in text
 
     def test_check_modality_classification(self):
-        """Closure checks should expose a coarse probe modality for evals."""
-        from director import _check_modality_from_command
+        """Closure checks should expose a coarse probe modality for evals.
 
-        assert _check_modality_from_command("grep -q foo app.py") == "static"
-        assert _check_modality_from_command("curl -fsS http://localhost:8000/health") == "http"
-        assert _check_modality_from_command("wscat -c ws://localhost:8000/ws") == "ws"
-        assert _check_modality_from_command("timeout 5 python -m http.server 8000") == "process"
-        assert _check_modality_from_command("playwright test smoke.spec.ts") == "browser"
+        Was backed by a separate _check_modality_from_command classifier;
+        retired 2026-07-02 in favor of _classify_probe_modality (see
+        closure_verify.py) once the two were found to disagree on common
+        inputs. These assertions still hold under the unified classifier.
+        """
+        from director import _classify_probe_modality
+
+        assert _classify_probe_modality("grep -q foo app.py") == "static"
+        assert _classify_probe_modality("curl -fsS http://localhost:8000/health") == "http"
+        assert _classify_probe_modality("wscat -c ws://localhost:8000/ws") == "ws"
+        assert _classify_probe_modality("timeout 5 python -m http.server 8000") == "process"
+        assert _classify_probe_modality("playwright test smoke.spec.ts") == "browser"
 
     def test_scope_failure_modes_reach_plan_prompt(self, monkeypatch, tmp_path):
         """When scope is supplied, its failure modes appear in the plan-call user message."""

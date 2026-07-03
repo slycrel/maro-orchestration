@@ -249,6 +249,17 @@ Two drift classes, both cheap to fix:
 
 - [ ] **M5 portability final sweep** — codex-side payload check decision (deferred) + final sweep (per GOAL_BRAIN active thread).
 
+### 13. Evolve the evolver — evaluate its own scanners for actual practical value
+
+- [ ] **`evolver.py`'s six statistical scanners (~1,100 lines) are more theory than
+  practical payoff** (Jeremy's read, 2026-07-02, while scoping the Tier 3
+  `evolver.py` split in docs/REFACTOR_PLAN.md). Before or alongside splitting
+  it into `evolver_store.py`/`evolver_scans.py`/`skill_lifecycle.py`, this is
+  exactly the kind of thing the self-improvement loop should evaluate itself:
+  which scanners actually produce suggestions that survive `_verify_post_apply`
+  vs. which just generate noise. Sequence after the `evolver.py` split (keeping
+  it modular first makes "which scanner" measurement and pruning cleaner).
+
 ---
 
 ## Vision / Deferred
