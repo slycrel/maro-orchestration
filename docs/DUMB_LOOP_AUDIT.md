@@ -374,6 +374,16 @@ NAVIGATOR_ACTED blocked_step rows against run outcomes once real usage
 accrues — the enablement corpus is 24 rows with recoverable n=5. Revert =
 flip the flag. Tests: `tests/test_blocked_step_cutover.py`.
 
+**Live re-proof (2026-07-03, run `2ada97d0-wily-glen`):** dispatched one
+doomed-but-plausible goal (fetch from a dead localhost CI endpoint — the
+shape that pre-cutover ground ~50 min/$0.35). Blocked at step 1; heuristic
+chose **split**; navigator escalate 0.95 overrode → honest stop at
+**3.3 min / $0.024**. `NAVIGATOR_ACTED` row on disk (point=blocked_step,
+heuristic_action=split), escalation event emitted 15:06:00Z with the
+`NAVIGATOR_ESCALATE` detail (→ Telegram hook, burn-in-proven path), run card
+honest (`status=stuck`, `success_class=failed`, no fabricated artifacts).
+Mechanism proven end-to-end on the first organic-shaped trigger.
+
 ## Known gaps (carried to BACKLOG when actionable)
 
 - No calibration tracking for director escalation confidence (≥5 gate).

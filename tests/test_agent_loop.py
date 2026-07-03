@@ -3376,3 +3376,19 @@ def test_adaptive_adjust_source_pattern_absent():
         "must use [-1] * len(new_steps) — NEXT.md line numbers are not "
         "step counts."
     )
+
+
+def test_loop_projectless_run_still_fences_cwd(monkeypatch, tmp_path):
+    """BACKLOG #1 (3rd repro): a run with no project must not execute with the
+    inherited launch cwd — the ambient subprocess cwd falls back to the
+    goal-slug project dir, created on the spot (Popen raises on missing cwd)."""
+    _setup_workspace(monkeypatch, tmp_path)
+    from llm import get_default_subprocess_cwd
+    from agent_loop import _goal_to_slug
+
+    run_agent_loop("summarize the incident timeline", dry_run=True)
+
+    bound = get_default_subprocess_cwd()
+    assert bound, "ambient cwd must be bound even without a project"
+    assert _goal_to_slug("summarize the incident timeline") in bound
+    assert Path(bound).is_dir()

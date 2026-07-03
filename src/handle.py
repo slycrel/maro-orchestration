@@ -1004,8 +1004,16 @@ def _handle_impl(
             )
 
         _ralph_from_cfg = _cfg.get("ralph_verify", "").strip().lower() == "true"
+        # Dispatched goals arrive project-less; default the loop's project
+        # identity to the goal slug — the same derivation the scope pass uses
+        # below — so the cwd fence, per-step cwd binds, and prompt project_dir
+        # all engage instead of silently running unfenced from the launch cwd
+        # (BACKLOG #1, 3rd repro), and scope + execution stop pointing at two
+        # different project dirs. `project` itself stays as-given: routing
+        # checks above and HandleResult report what the caller asked for.
+        from agent_loop import _goal_to_slug as _slug_for_fence
         _loop_kwargs: dict = dict(
-            project=project,
+            project=project or _slug_for_fence(message),
             repo_path=repo_path,
             model=model,
             adapter=adapter,

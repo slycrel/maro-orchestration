@@ -136,6 +136,23 @@ data is preserved, not deleted.
   `scratchpad/cwd-leak-evidence/` (session dbbb5f5c) + repo `artifacts/`
   strays left in place (gitignored).
 
+  **Fence hole FIXED 2026-07-03** (correction to the 3rd-repro mechanism:
+  run metadata showed `project: None` for the whole run — dispatched goals
+  reach `run_agent_loop` with NO project ever, so the entire run was
+  unfenced, not just early iterations; the post-block retry only landed
+  correctly because the failure hint pushed the worker to absolute paths).
+  Two layers: (1) `handle.py` defaults the loop's `project` kwarg to
+  `_goal_to_slug(message)` — the same identity the scope pass derives, so
+  scope + execution stop pointing at two different project dirs and ALL
+  existing `if project:` fence sites engage (ambient cwd, `_proj_artifact_dir`,
+  per-step `Popen(cwd=)`, prompt project_dir); (2) `agent_loop` loop-entry
+  ambient bind is now unconditional — a project-less run (direct callers)
+  falls back to the goal-slug project dir, mkdir'd first (Popen raises on a
+  missing cwd). NOW lane untouched. Tests:
+  `TestProjectlessDispatchFence` (handle) +
+  `test_loop_projectless_run_still_fences_cwd` (loop). Tier-a hard fence
+  (absolute-path writes) still open — this closes the relative-write class.
+
 **Bounded workspace / sandboxing (discovered 2026-04-17)**
 
 Run 4 of slycrel-go blind test was contaminated by stale local clones. Four

@@ -817,7 +817,25 @@ Sample: the 2026-05-13..17 window of `~/.maro/workspace/runs/` (478 dirs total;
   organic `NAVIGATOR_ACTED` blocked_step rows against run outcomes
   (`python3 -m navigator_shadow --agreement`) once real usage accrues.
   Revert = flip `act_blocked_step` false. 10 new tests
-  (`tests/test_blocked_step_cutover.py`); suite green.
+  (`tests/test_blocked_step_cutover.py`); suite green. **Live re-proof same
+  day** (run `2ada97d0-wily-glen`): doomed dead-endpoint goal, heuristic
+  chose split, navigator escalate 0.95 overrode → honest stop in 3.3 min /
+  $0.024 (pre-cutover this shape ground ~50 min/$0.35); NAVIGATOR_ACTED +
+  escalation event + honest run card verified on disk.
+- **2026-07-03 (cwd fence hole closed — dispatched runs were fully
+  unfenced)** — BACKLOG #1's 3rd repro, mechanism corrected during the fix:
+  run metadata showed `project: None`, so dispatched goals reached
+  `run_agent_loop` with no project EVER and the *entire* run executed with
+  Maro's inherited launch cwd (every fence site was `if project:` guarded);
+  post-block retries only landed correctly because failure hints pushed
+  workers to absolute paths. Fix, two layers: (1) `handle.py` defaults the
+  loop's project kwarg to `_goal_to_slug(message)` — same identity the
+  scope pass derives (heals that split-brain too), engaging every existing
+  fence site; (2) loop-entry ambient cwd bind made unconditional with a
+  goal-slug fallback dir (mkdir'd — Popen raises on missing cwd) for direct
+  callers. NOW lane exempt by design, unchanged. Regression tests cover both
+  layers; relative-write leak class closed, tier-a hard fence (absolute
+  writes) still open in BACKLOG #1.
 
 ## Threads (system-maintained — nothing leaves this list silently)
 

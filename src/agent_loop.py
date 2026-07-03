@@ -217,10 +217,16 @@ def run_agent_loop(
     # this on their own entry. Not reset on exit by design — quality_gate runs
     # after the loop returns and should inherit the same project dir (handle.py
     # also scopes it explicitly). Tests reset it via an autouse fixture.
+    # A project-less run is NOT exempt (BACKLOG #1, 3rd repro: dispatched
+    # goals arrived with project=None and the whole run executed with the
+    # inherited launch cwd — relative writes leaked into the repo root).
+    # Fall back to the goal-slug project dir — the same identity the scope
+    # pass derives — and create it, since Popen raises on a missing cwd.
     try:
         from llm import set_default_subprocess_cwd
-        if project:
-            set_default_subprocess_cwd(str(_project_dir_root() / project))
+        _fence_dir = _project_dir_root() / (project or _goal_to_slug(ctx.goal))
+        _fence_dir.mkdir(parents=True, exist_ok=True)
+        set_default_subprocess_cwd(str(_fence_dir))
     except Exception:
         pass
 

@@ -2535,3 +2535,51 @@ class TestClosureStatusHonesty:
         assert meta["goal_achieved"] is True
         assert meta["goal_verdict_source"] == "closure"
         assert meta["goal_verdict_confidence"] == 0.95
+
+
+class TestProjectlessDispatchFence:
+    """BACKLOG #1, 3rd repro: dispatched (project-less) goals must reach the
+    loop with a real project identity — the goal slug, matching the scope
+    pass — so the cwd fence and per-step cwd binds engage instead of the run
+    executing from Maro's inherited launch cwd."""
+
+    # helpers borrowed, not inherited — subclassing a test class would
+    # re-collect its tests under this one
+    _setup = TestDirectorRestart._setup
+    _no_quality_gate = staticmethod(TestDirectorRestart._no_quality_gate)
+    _fake_loop_result = TestDirectorRestart._fake_loop_result
+
+    def test_agenda_loop_defaults_project_to_goal_slug(self, monkeypatch, tmp_path):
+        self._setup(monkeypatch, tmp_path)
+        from unittest.mock import patch
+        from agent_loop import _goal_to_slug
+
+        calls = []
+        def _fake_run(*args, **kwargs):
+            calls.append(kwargs.copy())
+            return self._fake_loop_result(status="done")
+
+        with patch("agent_loop.run_agent_loop", side_effect=_fake_run), \
+             patch("intent.check_goal_clarity", return_value={"clear": True}), \
+             self._no_quality_gate():
+            handle("summarize the incident timeline", force_lane="agenda", dry_run=False)
+
+        assert calls, "loop should have run"
+        assert calls[0].get("project") == _goal_to_slug("summarize the incident timeline")
+
+    def test_explicit_project_is_preserved(self, monkeypatch, tmp_path):
+        self._setup(monkeypatch, tmp_path)
+        from unittest.mock import patch
+
+        calls = []
+        def _fake_run(*args, **kwargs):
+            calls.append(kwargs.copy())
+            return self._fake_loop_result(status="done")
+
+        with patch("agent_loop.run_agent_loop", side_effect=_fake_run), \
+             patch("intent.check_goal_clarity", return_value={"clear": True}), \
+             self._no_quality_gate():
+            handle("summarize the incident timeline", project="my-proj",
+                   force_lane="agenda", dry_run=False)
+
+        assert calls and calls[0].get("project") == "my-proj"
