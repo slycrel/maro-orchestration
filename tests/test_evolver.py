@@ -85,7 +85,7 @@ def test_evolver_report_summary_with_suggestions():
 # ---------------------------------------------------------------------------
 
 def test_save_and_load_suggestions(tmp_path):
-    with patch("evolver._suggestions_path", return_value=tmp_path / "suggestions.jsonl"):
+    with patch("evolver_store._suggestions_path", return_value=tmp_path / "suggestions.jsonl"):
         suggestions = [
             Suggestion(
                 suggestion_id="t1-00",
@@ -106,7 +106,7 @@ def test_save_and_load_suggestions(tmp_path):
 
 
 def test_load_suggestions_empty(tmp_path):
-    with patch("evolver._suggestions_path", return_value=tmp_path / "nope.jsonl"):
+    with patch("evolver_store._suggestions_path", return_value=tmp_path / "nope.jsonl"):
         result = load_suggestions()
     assert result == []
 
@@ -121,7 +121,7 @@ def test_load_suggestions_newest_first(tmp_path):
         json.dumps(s1.to_dict()) + "\n" + json.dumps(s2.to_dict()) + "\n",
         encoding="utf-8",
     )
-    with patch("evolver._suggestions_path", return_value=path):
+    with patch("evolver_store._suggestions_path", return_value=path):
         loaded = load_suggestions()
     assert loaded[0].suggestion_id == "new"
 
@@ -270,7 +270,7 @@ def test_run_evolver_saves_suggestions(tmp_path):
     with patch("evolver.load_outcomes", return_value=outcomes), \
          patch("evolver._llm_analyze", return_value=([], raw_suggestions)), \
          patch("evolver.scan_outcomes_for_signals", return_value=[]), \
-         patch("evolver._suggestions_path", return_value=tmp_path / "suggestions.jsonl"):
+         patch("evolver_store._suggestions_path", return_value=tmp_path / "suggestions.jsonl"):
         report = run_evolver(dry_run=False, verbose=False, notify=False)
 
     saved = (tmp_path / "suggestions.jsonl").read_text()
@@ -314,7 +314,7 @@ def test_cli_poe_evolver_json(capsys):
 # ---------------------------------------------------------------------------
 
 def test_list_pending_suggestions_empty(tmp_path):
-    with patch("evolver._suggestions_path", return_value=tmp_path / "nope.jsonl"):
+    with patch("evolver_store._suggestions_path", return_value=tmp_path / "nope.jsonl"):
         result = list_pending_suggestions()
     assert result == []
 
@@ -334,7 +334,7 @@ def test_list_pending_suggestions_filters_applied(tmp_path):
         "\n".join(json.dumps(s.to_dict()) for s in [s1, s2, s3]) + "\n",
         encoding="utf-8",
     )
-    with patch("evolver._suggestions_path", return_value=path):
+    with patch("evolver_store._suggestions_path", return_value=path):
         result = list_pending_suggestions()
     assert len(result) == 2
     ids = {s.suggestion_id for s in result}
@@ -350,12 +350,12 @@ def test_apply_suggestion_marks_applied(tmp_path):
                     outcomes_analyzed=5, applied=False)
     path.write_text(json.dumps(s1.to_dict()) + "\n", encoding="utf-8")
 
-    with patch("evolver._suggestions_path", return_value=path):
+    with patch("evolver_store._suggestions_path", return_value=path):
         ok = apply_suggestion("s1")
     assert ok is True
 
     # Verify it's now applied
-    with patch("evolver._suggestions_path", return_value=path):
+    with patch("evolver_store._suggestions_path", return_value=path):
         pending = list_pending_suggestions()
     assert len(pending) == 0
 
@@ -371,7 +371,7 @@ def test_apply_suggestion_stamps_applied_at(tmp_path):
                     outcomes_analyzed=5, applied=False)
     path.write_text(json.dumps(s1.to_dict()) + "\n", encoding="utf-8")
 
-    with patch("evolver._suggestions_path", return_value=path):
+    with patch("evolver_store._suggestions_path", return_value=path):
         ok = apply_suggestion("s1")
     assert ok is True
 
@@ -388,13 +388,13 @@ def test_apply_suggestion_not_found(tmp_path):
                     outcomes_analyzed=5, applied=False)
     path.write_text(json.dumps(s1.to_dict()) + "\n", encoding="utf-8")
 
-    with patch("evolver._suggestions_path", return_value=path):
+    with patch("evolver_store._suggestions_path", return_value=path):
         ok = apply_suggestion("nonexistent")
     assert ok is False
 
 
 def test_apply_suggestion_no_file(tmp_path):
-    with patch("evolver._suggestions_path", return_value=tmp_path / "nope.jsonl"):
+    with patch("evolver_store._suggestions_path", return_value=tmp_path / "nope.jsonl"):
         ok = apply_suggestion("s1")
     assert ok is False
 
@@ -475,7 +475,7 @@ def test_apply_suggestion_cost_optimization_held_for_review(tmp_path):
                    confidence=0.9, outcomes_analyzed=5, applied=False)
     path.write_text(json.dumps(s.to_dict()) + "\n", encoding="utf-8")
 
-    with patch("evolver._suggestions_path", return_value=path):
+    with patch("evolver_store._suggestions_path", return_value=path):
         ok = apply_suggestion("c1")
     assert ok is True  # found + updated, but NOT executed
 
@@ -500,7 +500,7 @@ def test_apply_suggestion_crystallization_held_for_review(tmp_path):
     )
     path.write_text(json.dumps(s.to_dict()) + "\n", encoding="utf-8")
 
-    with patch("evolver._suggestions_path", return_value=path):
+    with patch("evolver_store._suggestions_path", return_value=path):
         ok = apply_suggestion("cr1")
     assert ok is True  # found + updated
 
@@ -599,8 +599,8 @@ def test_apply_suggestion_skill_pattern_gate_blocked(tmp_path):
     # Create a mock gate result that says blocked=True
     mock_gate_result = {"blocked": True, "block_reason": "Tests failed: 2/2 tests blocked"}
 
-    with _patch("evolver._suggestions_path", return_value=suggestions_path):
-        with _patch("evolver._run_skill_test_gate", return_value=mock_gate_result):
+    with _patch("evolver_store._suggestions_path", return_value=suggestions_path):
+        with _patch("evolver_store._run_skill_test_gate", return_value=mock_gate_result):
             found = apply_suggestion("gate-test-00")
 
     assert found is True
@@ -624,8 +624,8 @@ def test_apply_suggestion_skill_pattern_gate_passes(tmp_path):
     # Create a mock gate result that says not blocked
     mock_gate_result = {"blocked": False, "block_reason": ""}
 
-    with _patch("evolver._suggestions_path", return_value=suggestions_path):
-        with _patch("evolver._run_skill_test_gate", return_value=mock_gate_result):
+    with _patch("evolver_store._suggestions_path", return_value=suggestions_path):
+        with _patch("evolver_store._run_skill_test_gate", return_value=mock_gate_result):
             found = apply_suggestion("gate-pass-00")
 
     assert found is True
@@ -662,8 +662,8 @@ def test_apply_suggestion_non_skill_pattern_not_gated(tmp_path):
         gate_called.append(d)
         return {"blocked": True, "block_reason": "should not be called"}
 
-    with _patch("evolver._suggestions_path", return_value=suggestions_path):
-        with _patch("evolver._run_skill_test_gate", side_effect=fake_gate):
+    with _patch("evolver_store._suggestions_path", return_value=suggestions_path):
+        with _patch("evolver_store._run_skill_test_gate", side_effect=fake_gate):
             found = apply_suggestion("no-gate-00")
 
     # Gate should NOT have been called for prompt_tweak
@@ -1038,8 +1038,8 @@ def test_apply_action_prompt_tweak_writes_lesson(tmp_path, monkeypatch):
         captured["task_type"] = task_type
         captured["tier"] = tier
 
-    monkeypatch.setattr("evolver.record_tiered_lesson", fake_record)
-    monkeypatch.setattr("evolver.MemoryTier", type("MT", (), {"MEDIUM": "medium"})())
+    monkeypatch.setattr("evolver_store.record_tiered_lesson", fake_record)
+    monkeypatch.setattr("evolver_store.MemoryTier", type("MT", (), {"MEDIUM": "medium"})())
 
     _apply_suggestion_action({
         "category": "prompt_tweak",
@@ -1056,7 +1056,7 @@ def test_apply_action_prompt_tweak_writes_lesson(tmp_path, monkeypatch):
 
 def test_apply_action_new_guardrail_writes_dynamic_constraint(tmp_path, monkeypatch):
     """new_guardrail action appends to dynamic-constraints.jsonl."""
-    monkeypatch.setattr("evolver._dynamic_constraints_path", lambda: tmp_path / "dynamic-constraints.jsonl")
+    monkeypatch.setattr("evolver_store._dynamic_constraints_path", lambda: tmp_path / "dynamic-constraints.jsonl")
 
     _apply_suggestion_action({
         "category": "new_guardrail",
@@ -1091,7 +1091,7 @@ def test_apply_action_skill_pattern_creates_skill(tmp_path, monkeypatch):
 
 def test_apply_action_observation_is_noop(tmp_path, monkeypatch):
     """observation category has no side effects."""
-    monkeypatch.setattr("evolver._dynamic_constraints_path", lambda: tmp_path / "dc.jsonl")
+    monkeypatch.setattr("evolver_store._dynamic_constraints_path", lambda: tmp_path / "dc.jsonl")
     monkeypatch.setattr("skills._skills_path", lambda: tmp_path / "skills.jsonl")
 
     _apply_suggestion_action({
@@ -1108,7 +1108,7 @@ def test_apply_action_observation_is_noop(tmp_path, monkeypatch):
 
 def test_apply_action_writes_enriched_audit_trail(tmp_path, monkeypatch):
     """change_log.jsonl includes suggestion_text, confidence, and before_state."""
-    monkeypatch.setattr("evolver._dynamic_constraints_path", lambda: tmp_path / "dc.jsonl")
+    monkeypatch.setattr("evolver_store._dynamic_constraints_path", lambda: tmp_path / "dc.jsonl")
     monkeypatch.setattr("skills._skills_path", lambda: tmp_path / "skills.jsonl")
     monkeypatch.setattr("orch_items.memory_dir", lambda: tmp_path)
 
@@ -1914,7 +1914,7 @@ class TestRunSkillTestGate:
 
         with patch("evolver.build_adapter", return_value=mock_adapter):
             with patch("skills.load_skills", return_value=[skill]):
-                with patch("evolver.validate_skill_mutation", side_effect=capture_validate):
+                with patch("evolver_store.validate_skill_mutation", side_effect=capture_validate):
                     with patch("skills.generate_skill_tests", return_value=[{"input": "x", "expected": "y"}]):
                         with patch("skills.run_skill_tests", return_value=(1, 1)):
                             _run_skill_test_gate(self._make_suggestion())
@@ -2528,7 +2528,7 @@ class TestScanEvolverImpact:
         stale_event = self._make_apply_event(
             "2026-01-01T00:00:00+00:00", suggestion_id="dup-sid")
 
-        with patch("evolver._suggestions_path", return_value=path), \
+        with patch("evolver_store._suggestions_path", return_value=path), \
              patch("evolver.query_log", return_value=[stale_event]), \
              patch("evolver.load_outcomes", return_value=[]):
             records = scan_evolver_impact(min_outcomes=99)
@@ -2547,7 +2547,7 @@ class TestScanEvolverImpact:
         event = self._make_apply_event(
             "2026-04-14T10:00:00+00:00", suggestion_id="old-sid")
 
-        with patch("evolver._suggestions_path", return_value=path), \
+        with patch("evolver_store._suggestions_path", return_value=path), \
              patch("evolver.query_log", return_value=[event]), \
              patch("evolver.load_outcomes", return_value=[]):
             records = scan_evolver_impact(min_outcomes=99)

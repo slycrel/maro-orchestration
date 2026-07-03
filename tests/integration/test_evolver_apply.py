@@ -108,8 +108,8 @@ def _read_change_log() -> list[dict]:
 # 1. Skill mutation on disk
 # ---------------------------------------------------------------------------
 
-@patch("evolver.validate_skill_mutation", None)
-@patch("evolver.record_tiered_lesson", None)
+@patch("evolver_store.validate_skill_mutation", None)
+@patch("evolver_store.record_tiered_lesson", None)
 def test_apply_skill_pattern_mutates_file():
     """apply_suggestion with category=skill_pattern updates the skill on disk."""
     skill = _make_skill()
@@ -132,8 +132,8 @@ def test_apply_skill_pattern_mutates_file():
 # 2. change_log.jsonl written with before_state
 # ---------------------------------------------------------------------------
 
-@patch("evolver.validate_skill_mutation", None)
-@patch("evolver.record_tiered_lesson", None)
+@patch("evolver_store.validate_skill_mutation", None)
+@patch("evolver_store.record_tiered_lesson", None)
 def test_apply_skill_pattern_writes_change_log():
     """apply_suggestion writes an entry to change_log.jsonl with before_state."""
     skill = _make_skill(description="Old desc for audit")
@@ -161,8 +161,8 @@ def test_apply_skill_pattern_writes_change_log():
 # 3. Suggestion marked as applied
 # ---------------------------------------------------------------------------
 
-@patch("evolver.validate_skill_mutation", None)
-@patch("evolver.record_tiered_lesson", None)
+@patch("evolver_store.validate_skill_mutation", None)
+@patch("evolver_store.record_tiered_lesson", None)
 def test_apply_skill_pattern_marks_applied():
     """After apply_suggestion, the suggestion in suggestions.jsonl has applied=True."""
     skill = _make_skill()
@@ -183,8 +183,8 @@ def test_apply_skill_pattern_marks_applied():
 # 4. New skill creation when target doesn't exist
 # ---------------------------------------------------------------------------
 
-@patch("evolver.validate_skill_mutation", None)
-@patch("evolver.record_tiered_lesson", None)
+@patch("evolver_store.validate_skill_mutation", None)
+@patch("evolver_store.record_tiered_lesson", None)
 def test_apply_skill_pattern_creates_new_skill():
     """apply_suggestion creates a new skill when target doesn't match any existing skill."""
     sug = _make_suggestion(
@@ -225,7 +225,7 @@ def test_apply_prompt_tweak_records_lesson():
     )
     _seed_suggestion(sug)
 
-    with patch("evolver.record_tiered_lesson") as mock_rtl:
+    with patch("evolver_store.record_tiered_lesson") as mock_rtl:
         mock_rtl.return_value = None
         # Also need to patch the module-level reference
         import evolver
@@ -393,8 +393,8 @@ def test_apply_observation_is_noop():
 # 9. High-confidence auto-applied via run_evolver
 # ---------------------------------------------------------------------------
 
-@patch("evolver.validate_skill_mutation", None)
-@patch("evolver.record_tiered_lesson", None)
+@patch("evolver_store.validate_skill_mutation", None)
+@patch("evolver_store.record_tiered_lesson", None)
 @patch("evolver._verify_post_apply")
 def test_run_evolver_auto_applies_high_confidence(_mock_verify):
     """run_evolver auto-applies suggestions with confidence >= 0.8.
@@ -449,8 +449,8 @@ def test_run_evolver_auto_applies_high_confidence(_mock_verify):
 # 10. Low-confidence NOT auto-applied via run_evolver
 # ---------------------------------------------------------------------------
 
-@patch("evolver.validate_skill_mutation", None)
-@patch("evolver.record_tiered_lesson", None)
+@patch("evolver_store.validate_skill_mutation", None)
+@patch("evolver_store.record_tiered_lesson", None)
 def test_run_evolver_skips_low_confidence():
     """run_evolver does NOT auto-apply suggestions with confidence < 0.6."""
     from evolver import run_evolver
@@ -495,8 +495,8 @@ def test_run_evolver_skips_low_confidence():
 # 11. Skills backup (.bak) created before mutation
 # ---------------------------------------------------------------------------
 
-@patch("evolver.validate_skill_mutation", None)
-@patch("evolver.record_tiered_lesson", None)
+@patch("evolver_store.validate_skill_mutation", None)
+@patch("evolver_store.record_tiered_lesson", None)
 def test_apply_skill_creates_backup():
     """When updating an existing skill, a .bak copy of skills.jsonl is created."""
     skill = _make_skill(description="Backup test original")
@@ -519,8 +519,8 @@ def test_apply_skill_creates_backup():
 # 12. Multiple suggestions: only high-confidence ones auto-applied
 # ---------------------------------------------------------------------------
 
-@patch("evolver.validate_skill_mutation", None)
-@patch("evolver.record_tiered_lesson", None)
+@patch("evolver_store.validate_skill_mutation", None)
+@patch("evolver_store.record_tiered_lesson", None)
 @patch("evolver._verify_post_apply")
 def test_run_evolver_mixed_confidence(_mock_verify):
     """With multiple suggestions at different confidences, only >=0.8 auto-apply.
