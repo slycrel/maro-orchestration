@@ -23,7 +23,9 @@ run_agent_loop(goal, adapter, ...)
   → G: _build_result_and_finalize() — aggregate outcomes, record to memory, return LoopResult
 ```
 
-All 7 phases (A–G) are now extracted as module-level functions taking `LoopContext`; `run_agent_loop()` is the thin orchestrator that sets the phase and calls each in turn. `_execute_main_loop()` returns a dict of terminal loop state (outcomes, status, token totals, mutated manifest/replan/goal/max_iterations) consumed by Phase G and the auto-recovery re-run.
+All 7 phases (A–G) are module-level functions taking `LoopContext`; `run_agent_loop()` (in the `agent_loop.py` facade) is the thin orchestrator that sets the phase and calls each in turn. `_execute_main_loop()` returns a dict of terminal loop state (outcomes, status, token totals, mutated manifest/replan/goal/max_iterations) consumed by Phase G and the auto-recovery re-run.
+
+Since the 2026-07-02 physical split, the phases live in `loop_*.py` modules (see File Map); `agent_loop.py` re-exports the public names, so `from agent_loop import X` keeps working — import from the facade unless you're editing loop internals.
 
 ## Key Data Structures
 
@@ -55,7 +57,9 @@ Cheap plan criticism (one Haiku call). Returns PlanReview: scope (narrow/medium/
 
 ## Retry & Recovery
 
-- Blocked step → decide: retry (with hint), split (into sub-steps), or terminal
+- Blocked step → decide: retry (with hint), split (into sub-steps), or terminal (`loop_blocked._handle_blocked_step` → `_BlockDecision`)
+- MISSING_INPUT guard: a missing-external-input block on an input-consuming step short-circuits to an honest stuck (no fabricated-input recovery)
+- Navigator blocked-step act (2026-07-03 cutover): a high-confidence (≥0.9) navigator **escalate** overrides a forward recovery decision with an honest stop — escalate-only, config-gated `navigator.act_blocked_step`, logs `NAVIGATOR_ACTED` + Telegram escalation
 - Tier escalation: cheap → mid → power on consecutive failures (Phase 57)
 - Session-level floor: 3+ consecutive verify failures raises baseline model for all remaining steps
 - Ralph verify (optional): post-execution verifier on cheaper model
@@ -72,9 +76,21 @@ Pre-flight flags steps that are really sub-goals. At execution time, those steps
 
 ## File Map
 
+Physical split 2026-07-02 (docs/REFACTOR_PLAN.md): `agent_loop.py` is a
+facade; each phase group is its own module.
+
 | File | Lines | Role |
 |------|-------|------|
-| src/agent_loop.py | ~5400 | Core loop, all 7 phases |
+| src/agent_loop.py | ~550 | Facade: `run_agent_loop()` orchestrator, loop-entry cwd fence, re-exports |
+| src/loop_types.py | ~305 | LoopContext / LoopResult / StepOutcome / LoopPhase |
+| src/loop_init.py | ~340 | Phase A: budget gate, adapter build, project creation, ancestry |
+| src/loop_planning.py | ~650 | Phases B/C/E: `_build_loop_context`, `_decompose_goal`, `_preflight_checks`, `_prepare_execution` |
+| src/loop_parallel.py | ~515 | Phase D: independence check + ThreadPoolExecutor fan-out |
+| src/loop_execute.py | ~1250 | Phase F: `_execute_main_loop` step iteration |
+| src/loop_blocked.py | ~930 | Blocked-step recovery: `_handle_blocked_step`, `_BlockDecision`, MISSING_INPUT guard, navigator shadow tap + escalate act |
+| src/loop_post_step.py | ~830 | Post-step: budget ceiling, ralph verify, done-step processing, interrupts, march-of-nines, iteration artifacts, `_record_loop_decision` |
+| src/loop_finalize.py | ~525 | Phase G: result build, memory record, per-run statistical scans |
+| src/loop_artifacts.py | ~230 | Artifact/manifest/loop-log writers, `_goal_to_slug` |
 | src/step_exec.py | ~1340 | Single step execution |
 | src/planner.py | ~610 | Goal decomposition + scope estimation |
 | src/pre_flight.py | ~510 | Plan review + multi-lens |
