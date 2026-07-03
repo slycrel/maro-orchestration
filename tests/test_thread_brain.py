@@ -140,6 +140,31 @@ class TestRunDirWiring:
         assert "accreted state" in text
         assert "second" not in text
 
+    def test_dispatch_navigator_rationale_recorded(self, workspace):
+        """MILESTONES #3b: a dispatch-navigator decision riding in on origin
+        becomes the new thread's first real Decision."""
+        rd = create_run_dir(
+            "navrat01", prompt="do the thing",
+            extra_metadata={"origin": {
+                "source": "task_store",
+                "dispatch_navigator": {
+                    "move": "execute", "confidence": 0.92,
+                    "reasoning": "goal is concrete and low-risk"},
+            }},
+        )
+        text = thread_brain.load_thread_brain(rd)
+        decisions = text[text.index("## Decisions"):]
+        assert "dispatch navigator: execute(0.92)" in decisions
+        assert "goal is concrete and low-risk" in decisions
+
+    def test_no_dispatch_navigator_key_is_fine(self, workspace):
+        rd = create_run_dir(
+            "navrat02", prompt="plain goal",
+            extra_metadata={"origin": {"source": "task_store"}},
+        )
+        text = thread_brain.load_thread_brain(rd)
+        assert "dispatch navigator" not in text
+
     def test_child_registers_in_parent_threads(self, workspace):
         parent = create_run_dir("parent01", prompt="parent goal")
         create_run_dir(

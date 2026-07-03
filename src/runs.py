@@ -117,6 +117,21 @@ def create_run_dir(
         origin = (extra_metadata or {}).get("origin")
         origin = origin if isinstance(origin, dict) else None
         created = thread_brain.create_thread_brain(rd, goal=prompt, origin=origin)
+        # Dispatch rationale (MILESTONES #3b): the navigator's live dispatch
+        # decision rode in on origin because no run dir existed at decision
+        # time. Record it as this thread's first real Decision so the run
+        # knows why it was allowed to exist.
+        _nav = (origin or {}).get("dispatch_navigator")
+        if created is not None and isinstance(_nav, dict):
+            try:
+                _conf = float(_nav.get("confidence", 0.0) or 0.0)
+            except Exception:
+                _conf = 0.0
+            thread_brain.append_decision(
+                rd,
+                f"dispatch navigator: {_nav.get('move') or '?'}({_conf:.2f})"
+                f" — {str(_nav.get('reasoning') or '')[:300]}",
+            )
         # Fan-out defense: a new child registers in its parent's Threads
         # section so nothing leaves the parent's list silently.
         parent_id = str((origin or {}).get("parent_handle_id") or "")

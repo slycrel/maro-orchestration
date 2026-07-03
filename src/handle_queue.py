@@ -192,6 +192,22 @@ def handle_task(
             )
             if _nav_acted is not None:
                 return _nav_acted
+            # Thread the navigator's dispatch rationale into the run this
+            # dispatch is about to spawn (MILESTONES #3b): no run dir exists
+            # at decision time, so it rides the origin dict — create_run_dir
+            # appends it to the new thread's goal-brain Decisions section
+            # (and it lands in run metadata via extra_metadata for free).
+            if _nav_decision is not None:
+                try:
+                    _origin["dispatch_navigator"] = {
+                        "move": str(getattr(_nav_decision, "move", "")),
+                        "confidence": float(
+                            getattr(_nav_decision, "confidence", 0.0) or 0.0),
+                        "reasoning": str(
+                            getattr(_nav_decision, "reasoning", ""))[:300],
+                    }
+                except Exception:
+                    pass
         return _handle_mod.handle(reason, adapter=adapter, dry_run=dry_run, verbose=verbose, origin=_origin)
 
 

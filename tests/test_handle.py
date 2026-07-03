@@ -593,6 +593,60 @@ class TestOriginAncestry:
         assert captured["origin"]["source"] == "user_goal"
 
 
+    def test_handle_task_threads_navigator_rationale(self, monkeypatch, tmp_path):
+        """MILESTONES #3b: the live dispatch-navigator decision rides origin
+        into handle() so the spawned run's goal-brain can record why it was
+        allowed to exist."""
+        _setup(monkeypatch, tmp_path)
+        import handle as handle_mod
+        from types import SimpleNamespace
+
+        captured = {}
+
+        def _fake_handle(message, **kwargs):
+            captured["origin"] = kwargs.get("origin")
+            return HandleResult(
+                handle_id="x", lane="agenda", lane_confidence=1.0,
+                classification_reason="t", message=message, status="done", result="",
+            )
+
+        monkeypatch.setattr(handle_mod, "handle", _fake_handle)
+        monkeypatch.setattr("recall.recall", lambda *a, **kw: None)
+        monkeypatch.setattr(
+            "navigator_shadow.shadow_dispatch_live",
+            lambda *a, **kw: SimpleNamespace(
+                move="execute", confidence=0.92,
+                reasoning="concrete and low-risk"))
+        monkeypatch.setattr(handle_mod, "_navigator_act_dispatch",
+                            lambda *a, **kw: None)
+        task = {"job_id": "task-nav", "source": "user_goal", "reason": "do the thing"}
+        handle_mod.handle_task(task, dry_run=False)
+        nav = captured["origin"]["dispatch_navigator"]
+        assert nav == {"move": "execute", "confidence": 0.92,
+                       "reasoning": "concrete and low-risk"}
+
+    def test_handle_task_no_navigator_no_rationale_key(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        import handle as handle_mod
+
+        captured = {}
+
+        def _fake_handle(message, **kwargs):
+            captured["origin"] = kwargs.get("origin")
+            return HandleResult(
+                handle_id="x", lane="agenda", lane_confidence=1.0,
+                classification_reason="t", message=message, status="done", result="",
+            )
+
+        monkeypatch.setattr(handle_mod, "handle", _fake_handle)
+        monkeypatch.setattr("recall.recall", lambda *a, **kw: None)
+        monkeypatch.setattr("navigator_shadow.shadow_dispatch_live",
+                            lambda *a, **kw: None)
+        task = {"job_id": "task-nav2", "source": "user_goal", "reason": "do the thing"}
+        handle_mod.handle_task(task, dry_run=False)
+        assert "dispatch_navigator" not in captured["origin"]
+
+
 class TestRecallDispatchGuard:
     """handle_task refuses to re-run a goal whose recent attempts all failed
     (goal-brain step 3 dispatch guard, docs/RECALL_DESIGN.md). Basis: the same
