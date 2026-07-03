@@ -266,6 +266,48 @@ actually shipped and where it differed):
 
 ## Tier 3 — Structural extractions (seams already exist; moderate effort)
 
+**Partial — DONE 2026-07-02:** the two items explicitly flagged as pure
+moves (`director.py`'s `closure_verify.py` extraction, `handle.py`'s
+`provenance.py`/`handle_queue.py` extraction) shipped via 2 parallel forks,
+each with an explicit working-directory self-check up front (after the
+Tier 2 incident where a fork wrote to the main checkout instead of this
+worktree). Both checked out clean on independent re-verification; full
+suite green. The larger structural rewrites below (`agent_loop.py` split,
+`evolver.py` split, `cli.py` command registry) are deliberately **not**
+started — held pending explicit go-ahead given their size and behavioral
+risk, unlike the pure moves.
+
+- **`director.py` → `closure_verify.py`**: shipped as scoped (801 lines:
+  `verify_goal_completion` + its private helpers/constants). `director.py`
+  re-exports everything external callers/tests reference. Found and fixed
+  along the way: ~20 `mock.patch("director.extract_json"/"content_or_empty")`
+  calls in `tests/test_director.py::TestVerifyGoalCompletion` had to be
+  retargeted to `closure_verify.*` since that's where those names now
+  resolve from a call-time perspective — `TestDirectorEvaluate`'s patches
+  correctly stayed on `director.*`.
+  Probe-modality dedup (the two classifiers that can disagree — see
+  original bullet below) was explicitly **not** attempted; confirmed via
+  the extraction that `_check_modality_from_command` and
+  `_classify_probe_modality` really are two separately-behaving
+  classifiers over the same command string (e.g. differing on bare
+  `node `/`npm `/`./` prefixes) — reconciling them is a behavioral
+  decision, left for separate scoping.
+- **`handle.py` → `provenance.py` + `handle_queue.py`**: shipped, though
+  smaller than estimated (`handle_queue.py` is ~289 lines of moved code,
+  not ~440 — `main`/`enqueue_main` CLI entrypoints stayed in `handle.py`).
+  One deviation from "pure move, zero behavior change" worth noting:
+  `handle_task` isn't fully self-contained — it calls back into
+  `handle.py` for `handle()`/`HandleResult`/`_context_firewall`/
+  `_navigator_act_dispatch` (navigator-heuristic code confirmed untouched).
+  A top-level back-import would deadlock, so `handle_queue.py` uses a
+  deferred `import handle as _handle_mod` inside function bodies — the
+  same lazy-import convention already used elsewhere in this codebase, and
+  required (not just stylistic) because `tests/test_escalation.py` mocks
+  `"handle.handle_task"`/`"handle.handle"` at call time.
+
+Original per-cluster plan (for reference — see the DONE note above for
+what actually shipped):
+
 ### `agent_loop.py` → `src/loop_phases/` (highest-value single item)
 
 The prior "monolith decomposition" (commits `963c2c2`..`895f04a`) extracted

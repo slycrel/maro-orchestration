@@ -720,7 +720,7 @@ class TestVerifyGoalCompletion:
         from unittest.mock import MagicMock, patch
         adapter = MagicMock()
         adapter.complete.return_value = MagicMock()
-        with patch("director.extract_json", return_value={"checks": []}):
+        with patch("closure_verify.extract_json", return_value={"checks": []}):
             verdict = verify_goal_completion("summarize this article", [], adapter)
         assert verdict.complete is True
         assert verdict.checks_run == 0
@@ -743,9 +743,9 @@ class TestVerifyGoalCompletion:
                        "command": "test -f artifacts/thing.txt"}]
             verdict_data = {"complete": True, "confidence": 0.9, "gaps": [],
                             "summary": "ok"}
-            with patch("director.extract_json",
+            with patch("closure_verify.extract_json",
                        side_effect=[{"checks": checks}, verdict_data]):
-                with patch("director.content_or_empty", return_value="{}"):
+                with patch("closure_verify.content_or_empty", return_value="{}"):
                     result = verify_goal_completion("build thing", [], adapter)
             assert result.checks_run == 1
             assert result.checks_passed == 1
@@ -764,8 +764,8 @@ class TestVerifyGoalCompletion:
         checks = [{"description": "file exists", "command": f"test -f {tmp_path}"}]
         verdict_data = {"complete": True, "confidence": 0.9, "gaps": [], "summary": "All good."}
 
-        with patch("director.extract_json", side_effect=[{"checks": checks}, verdict_data]):
-            with patch("director.content_or_empty", return_value="{}"):
+        with patch("closure_verify.extract_json", side_effect=[{"checks": checks}, verdict_data]):
+            with patch("closure_verify.content_or_empty", return_value="{}"):
                 result = verify_goal_completion(
                     "create a directory", [], adapter, workspace_path=str(tmp_path)
                 )
@@ -787,8 +787,8 @@ class TestVerifyGoalCompletion:
             "gaps": ["Server does not compile"], "summary": "Build failed."
         }
 
-        with patch("director.extract_json", side_effect=[{"checks": checks}, verdict_data]):
-            with patch("director.content_or_empty", return_value="{}"):
+        with patch("closure_verify.extract_json", side_effect=[{"checks": checks}, verdict_data]):
+            with patch("closure_verify.content_or_empty", return_value="{}"):
                 result = verify_goal_completion(
                     "build a server", [], adapter,
                     workspace_path=str(tmp_path), channel=channel,
@@ -811,8 +811,8 @@ class TestVerifyGoalCompletion:
         checks = [{"description": "true", "command": "true"}]
         verdict_data = {"complete": True, "confidence": 0.95, "gaps": [], "summary": "Done."}
 
-        with patch("director.extract_json", side_effect=[{"checks": checks}, verdict_data]):
-            with patch("director.content_or_empty", return_value="{}"):
+        with patch("closure_verify.extract_json", side_effect=[{"checks": checks}, verdict_data]):
+            with patch("closure_verify.content_or_empty", return_value="{}"):
                 verify_goal_completion(
                     "do a thing", [], adapter,
                     workspace_path=str(tmp_path), channel=channel,
@@ -849,8 +849,8 @@ class TestVerifyGoalCompletion:
         def _spy(*args, **kwargs):
             captured.append(kwargs)
 
-        with patch("director.extract_json", return_value={"checks": []}):
-            with patch("director.content_or_empty", return_value="{}"):
+        with patch("closure_verify.extract_json", return_value={"checks": []}):
+            with patch("closure_verify.content_or_empty", return_value="{}"):
                 with patch("captains_log.log_event", side_effect=_spy):
                     verify_goal_completion(
                         "summarize docs", [], adapter,
@@ -874,8 +874,8 @@ class TestVerifyGoalCompletion:
             captured.append(kwargs)
 
         # Return a check with no command so check_results stays empty
-        with patch("director.extract_json", return_value={"checks": [{"description": "x", "command": ""}]}):
-            with patch("director.content_or_empty", return_value="{}"):
+        with patch("closure_verify.extract_json", return_value={"checks": [{"description": "x", "command": ""}]}):
+            with patch("closure_verify.content_or_empty", return_value="{}"):
                 with patch("captains_log.log_event", side_effect=_spy):
                     verify_goal_completion(
                         "do a thing", [], adapter,
@@ -941,8 +941,8 @@ class TestVerifyGoalCompletion:
             captured["kwargs"] = kwargs
             return {}
 
-        with patch("director.extract_json", side_effect=[{"checks": checks}, verdict_data]):
-            with patch("director.content_or_empty", return_value="{}"):
+        with patch("closure_verify.extract_json", side_effect=[{"checks": checks}, verdict_data]):
+            with patch("closure_verify.content_or_empty", return_value="{}"):
                 with patch("captains_log.log_event", side_effect=_spy_log_event):
                     verify_goal_completion(
                         "do a thing", [], adapter,
@@ -966,8 +966,8 @@ class TestVerifyGoalCompletion:
             captured["kwargs"] = kwargs
             return {}
 
-        with patch("director.extract_json", side_effect=[{"checks": checks}, verdict_data]):
-            with patch("director.content_or_empty", return_value="{}"):
+        with patch("closure_verify.extract_json", side_effect=[{"checks": checks}, verdict_data]):
+            with patch("closure_verify.content_or_empty", return_value="{}"):
                 with patch("captains_log.log_event", side_effect=_spy_log_event):
                     verify_goal_completion(
                         "do a thing", [], adapter,
@@ -1065,9 +1065,9 @@ class TestVerifyGoalCompletion:
             raw_text="",
         )
 
-        with patch("director.extract_json",
+        with patch("closure_verify.extract_json",
                    side_effect=[{"checks": []}, {"complete": True}]):
-            with patch("director.content_or_empty", return_value="{}"):
+            with patch("closure_verify.content_or_empty", return_value="{}"):
                 verify_goal_completion(
                     "build a websocket server", [], adapter,
                     workspace_path=str(tmp_path), scope=scope,
@@ -1093,9 +1093,9 @@ class TestVerifyGoalCompletion:
 
         adapter.complete.side_effect = _complete
 
-        with patch("director.extract_json",
+        with patch("closure_verify.extract_json",
                    side_effect=[{"checks": []}, {"complete": True}]):
-            with patch("director.content_or_empty", return_value="{}"):
+            with patch("closure_verify.content_or_empty", return_value="{}"):
                 verify_goal_completion(
                     "build X", [], adapter,
                     workspace_path=str(tmp_path), scope=None,
@@ -1135,9 +1135,9 @@ class TestVerifyGoalCompletion:
             raw_text="",
         )
 
-        with patch("director.extract_json",
+        with patch("closure_verify.extract_json",
                    side_effect=[{"checks": []}, {"complete": True}]):
-            with patch("director.content_or_empty", return_value="{}"):
+            with patch("closure_verify.content_or_empty", return_value="{}"):
                 verify_goal_completion(
                     "build the websocket app", [], adapter,
                     workspace_path=str(tmp_path), resolved_intent=ri,
@@ -1165,9 +1165,9 @@ class TestVerifyGoalCompletion:
 
         adapter.complete.side_effect = _complete
 
-        with patch("director.extract_json",
+        with patch("closure_verify.extract_json",
                    side_effect=[{"checks": []}, {"complete": True}]):
-            with patch("director.content_or_empty", return_value="{}"):
+            with patch("closure_verify.content_or_empty", return_value="{}"):
                 verify_goal_completion(
                     "build X", [], adapter,
                     workspace_path=str(tmp_path), resolved_intent=None,
@@ -1330,8 +1330,8 @@ class TestVerifyGoalCompletion:
             # Verdict call: capture the user message context for inspection
             return {"complete": True, "confidence": 0.9, "gaps": [], "summary": "ok"}
 
-        with patch("director.extract_json", side_effect=_extract_json_side_effect):
-            with patch("director.content_or_empty", return_value="{}"):
+        with patch("closure_verify.extract_json", side_effect=_extract_json_side_effect):
+            with patch("closure_verify.content_or_empty", return_value="{}"):
                 verdict = verify_goal_completion(
                     "build the thing", [], adapter,
                     workspace_path=str(tmp_path), resolved_intent=ri,
@@ -1364,8 +1364,8 @@ class TestVerifyGoalCompletion:
                 return {"checks": [{"description": "fake", "command": "true"}]}
             return {"complete": True, "confidence": 0.9, "gaps": [], "summary": "ok"}
 
-        with patch("director.extract_json", side_effect=_extract_json_side_effect):
-            with patch("director.content_or_empty", return_value="{}"):
+        with patch("closure_verify.extract_json", side_effect=_extract_json_side_effect):
+            with patch("closure_verify.content_or_empty", return_value="{}"):
                 verdict = verify_goal_completion(
                     "x", [], adapter,
                     workspace_path=str(tmp_path), resolved_intent=ri,
@@ -1394,9 +1394,9 @@ class TestVerifyGoalCompletion:
             raw_text="",
         )
 
-        with patch("director.extract_json",
+        with patch("closure_verify.extract_json",
                    side_effect=[{"checks": []}, {"complete": True}]):
-            with patch("director.content_or_empty", return_value="{}"):
+            with patch("closure_verify.content_or_empty", return_value="{}"):
                 verify_goal_completion(
                     "build X", [], adapter,
                     workspace_path=str(tmp_path), resolved_intent=ri,
@@ -1418,8 +1418,8 @@ class TestVerifyGoalCompletion:
         def _raise_timeout(*a, **kw):
             raise subprocess.TimeoutExpired("sleep", 1)
 
-        with patch("director.extract_json", side_effect=[{"checks": checks}, verdict_data]):
-            with patch("director.content_or_empty", return_value="{}"):
+        with patch("closure_verify.extract_json", side_effect=[{"checks": checks}, verdict_data]):
+            with patch("closure_verify.content_or_empty", return_value="{}"):
                 with patch("subprocess.run", side_effect=_raise_timeout):
                     result = verify_goal_completion(
                         "build X", [], adapter,
@@ -1442,8 +1442,8 @@ class TestVerifyGoalCompletion:
             args=checks[0]["command"], returncode=127, stdout="", stderr="go: command not found"
         )
 
-        with patch("director.extract_json", side_effect=[{"checks": checks}, verdict_data]):
-            with patch("director.content_or_empty", return_value="{}"):
+        with patch("closure_verify.extract_json", side_effect=[{"checks": checks}, verdict_data]):
+            with patch("closure_verify.content_or_empty", return_value="{}"):
                 with patch("subprocess.run", return_value=completed):
                     result = verify_goal_completion(
                         "build X", [], adapter,
@@ -1479,8 +1479,8 @@ class TestVerifyGoalCompletion:
                                         stdout="", stderr="frobnicate: command not found"),
         ]
 
-        with patch("director.extract_json", side_effect=[{"checks": checks}, verdict_data]):
-            with patch("director.content_or_empty", return_value="{}"):
+        with patch("closure_verify.extract_json", side_effect=[{"checks": checks}, verdict_data]):
+            with patch("closure_verify.content_or_empty", return_value="{}"):
                 with patch("subprocess.run", side_effect=results):
                     result = verify_goal_completion(
                         "build X", [], adapter, workspace_path=str(tmp_path),
@@ -1506,8 +1506,8 @@ class TestVerifyGoalCompletion:
 
         checks = [{"description": "health endpoint", "command": "curl -fsS http://localhost:9999/health"}]
 
-        with patch("director.extract_json", side_effect=[{"checks": checks}, {"complete": True, "confidence": 0.8, "gaps": [], "summary": "ok"}]):
-            with patch("director.content_or_empty", return_value="{}"):
+        with patch("closure_verify.extract_json", side_effect=[{"checks": checks}, {"complete": True, "confidence": 0.8, "gaps": [], "summary": "ok"}]):
+            with patch("closure_verify.content_or_empty", return_value="{}"):
                 with patch("subprocess.run") as run:
                     run.return_value = MagicMock(returncode=0, stdout="ok", stderr="")
                     verify_goal_completion("build health check", [], adapter, workspace_path=str(tmp_path))
@@ -1528,8 +1528,8 @@ class TestVerifyGoalCompletion:
         checks = [{"description": "repo grep", "command": "grep -q handler server.go"}]
         verdict_data = {"complete": True, "confidence": 0.9, "gaps": [], "summary": "All good."}
 
-        with patch("director.extract_json", side_effect=[{"checks": checks}, verdict_data]):
-            with patch("director.content_or_empty", return_value="{}"):
+        with patch("closure_verify.extract_json", side_effect=[{"checks": checks}, verdict_data]):
+            with patch("closure_verify.content_or_empty", return_value="{}"):
                 with patch("subprocess.run") as run:
                     run.return_value = MagicMock(returncode=0, stdout="ok", stderr="")
                     result = verify_goal_completion(
