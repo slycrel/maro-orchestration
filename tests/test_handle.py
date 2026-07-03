@@ -1597,6 +1597,30 @@ class TestClosureRestart:
 
         assert len(calls) == 2, f"expected restart, got {len(calls)} calls"
 
+    def test_all_checks_passed_skips_restart(self, monkeypatch, tmp_path):
+        """BACKLOG #5: incomplete verdict whose deterministic checks ALL
+        passed has narrative-only gaps — do not double the run."""
+        self._setup(monkeypatch, tmp_path)
+        from unittest.mock import patch
+
+        done_result = self._fake_loop_result(status="done")
+        calls = []
+        def _fake_run(*args, **kwargs):
+            calls.append(kwargs.copy())
+            return done_result
+
+        narrative_only = self._fake_closure(False, 0.85,
+                                            gaps=["could be more polished"])
+        narrative_only.checks_passed = narrative_only.checks_run  # all passed
+
+        with patch("agent_loop.run_agent_loop", side_effect=_fake_run), \
+             patch("intent.check_goal_clarity", return_value={"clear": True}), \
+             patch("director.verify_goal_completion", return_value=narrative_only), \
+             self._no_quality_gate():
+            handle("build a websocket server", force_lane="agenda", dry_run=False)
+
+        assert len(calls) == 1, f"narrative-only gaps must not restart, got {len(calls)} calls"
+
     def test_gaps_injected_as_ancestry_context(self, monkeypatch, tmp_path):
         """Restart re-run receives the gap list in ancestry_context_extra."""
         self._setup(monkeypatch, tmp_path)

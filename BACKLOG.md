@@ -190,19 +190,6 @@ not scavenge from elsewhere on the filesystem.
 Not ambitious; the goal is "constraint to a folder isn't a bad option to
 have" not "build a sandboxing subsystem."
 
-### 5. Closure restart short-circuit (artifact exists + verifier passed)
-
-- [ ] **Closure restart doubled a trivial run** — the standing-rule report goal
-  (049599c8-sturdy-ridge) finished done 4/4 in loop 1 (~300k tokens), then the
-  closure-restart heuristic (handle.py:1091–1180) ran a full second loop (6/6,
-  ~370k more) to chase "gaps" on a goal whose artifact already existed. The
-  navigator's close judgment is the structural replacement (DUMB_LOOP_AUDIT.md
-  priority list); until then consider a cheap "artifact exists + verifier passed"
-  short-circuit before restarting. One repro so far — the 2026-06-11 verification
-  run (c677fda8) also doubled, but that was the *quality gate* tier escalation
-  (ESCALATE 0.90) and it correctly caught loop 1 writing its summary to the
-  wrong location — gate working as intended, don't conflate the two.
-
 ### 6. NEXT.md ↔ git activity sync at closure
 
 - [ ] **NEXT.md ↔ git activity sync.** Control's NEXT.md showed steps 6–8 unchecked while the repo had matching commits. Either NEXT.md updates lag, or the agent didn't reflect the work back. Either way: closure should compare claimed-done against repo activity and surface the divergence.

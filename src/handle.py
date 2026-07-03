@@ -1397,12 +1397,29 @@ def _handle_impl(
                 _closure_restart = True
 
             _depth = _loop_kwargs.get("continuation_depth", 0)
+            # Positive-evidence gate (BACKLOG #5): a re-run costs a full loop, so
+            # narrative-only gaps don't justify it. If every deterministic check
+            # the verifier ran actually passed, the "gaps" have no ground-truth
+            # support — log and stand pat rather than double the run.
+            _checks_contradict = (
+                _closure is not None
+                and _closure.checks_run > 0
+                and _closure.checks_passed >= _closure.checks_run
+                and not _closure.complete
+            )
+            if _checks_contradict:
+                log.info(
+                    "handle: closure gaps unsupported by checks (%d/%d passed) — "
+                    "skipping restart on narrative-only gaps",
+                    _closure.checks_passed, _closure.checks_run,
+                )
             if (
                 _closure_restart
                 and _closure is not None
                 and not _closure.complete
                 and _closure.confidence >= 0.6
                 and _closure.checks_run > 0
+                and _closure.checks_passed < _closure.checks_run  # at least one check FAILED
                 and getattr(_closure, "inconclusive_count", 0) == 0
                 and _depth < 3
                 and loop_result.status == "done"  # only escalate from "done" — stuck/partial already know they're incomplete

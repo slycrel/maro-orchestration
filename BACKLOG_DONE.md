@@ -8,6 +8,22 @@ Last split: 2026-04-16 (session 34).
 
 ---
 
+### Closure restart short-circuit (artifact exists + verifier passed) — DONE (2026-07-03)
+
+- [x] **Closure restart doubled a trivial run** — **SHIPPED 2026-07-03** as a
+  positive-evidence gate: restart now additionally requires
+  `checks_passed < checks_run` — at least one deterministic check must have
+  actually FAILED. All-checks-passed + narrative "gaps" = no ground-truth
+  support = stand pat (logged). Forensics on the one repro (049599c8): its
+  verdict row shows checks 0/8 "passed" on a run whose artifact existed —
+  consistent with the pre-layout-fix path bug where closure probes re-anchored
+  display-form artifact paths on the wrong root (fixed 2026-07-03 by
+  `resolve_artifact_path`, BACKLOG #-1), so the likely root cause is closed
+  too. The navigator's close judgment remains the structural replacement.
+  (c677fda8 was the *quality gate* tier escalation working as intended —
+  still don't conflate the two.)
+
+
 ### M5 portability final sweep — DONE (2026-07-03)
 
 - [x] **Final sweep run on the current tree (post BACKLOG #-1 layout unification):**
