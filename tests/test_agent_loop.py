@@ -309,8 +309,6 @@ def test_loop_stuck_detection(monkeypatch, tmp_path):
     # Prevent _generate_refinement_hint from calling build_adapter (real subprocess).
     monkeypatch.setattr(_lb, "_generate_refinement_hint",
                         lambda *a, **kw: "try something different")
-    # Disable Phase 45 auto-recovery (retries with exhausted adapter).
-    monkeypatch.setattr(_al.run_agent_loop, "_recovery_in_progress", True, raising=False)
 
     class AlwaysStuckAdapter:
         model_key = "explicit-test"  # prevent tier-up from replacing this adapter
@@ -332,6 +330,8 @@ def test_loop_stuck_detection(monkeypatch, tmp_path):
         project="stuck-test",
         adapter=AlwaysStuckAdapter(),
         max_steps=3,
+        # Disable Phase 45 auto-recovery (retries with exhausted adapter).
+        _recovery_in_progress=True,
     )
     assert result.status == "stuck"
     assert result.stuck_reason is not None

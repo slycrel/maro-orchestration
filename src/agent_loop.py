@@ -141,6 +141,7 @@ def run_agent_loop(
     channel=None,  # Optional ConversationChannel for mid-loop escalation (Phase 64C)
     loop_reason: str = "initial",  # why this loop was spawned — for run-transparency captain's log
     parent_loop_id: Optional[str] = None,
+    _recovery_in_progress: bool = False,  # internal: set by the Phase 45 auto-recovery re-run to prevent recursion
 ) -> LoopResult:
     """Run the autonomous loop for a goal.
 
@@ -167,9 +168,6 @@ def run_agent_loop(
     Returns:
         LoopResult with full outcome.
     """
-    # Reset per-run state (cost-warn flag persists across calls otherwise)
-    run_agent_loop._cost_warned = False  # type: ignore[attr-defined]
-
     # Phase A: Initialize loop state
     ctx, _early_return = _initialize_loop(
         goal,
@@ -346,8 +344,7 @@ def run_agent_loop(
 
     # Phase 45: Auto-recovery — if loop stuck with a low-risk auto-apply recovery,
     # retry once with adjusted parameters. Only fires on first attempt (no recursion).
-    _auto_recovery_attempted = getattr(run_agent_loop, "_recovery_in_progress", False)
-    if (result.status == "stuck" and not dry_run and not _auto_recovery_attempted):
+    if (result.status == "stuck" and not dry_run and not _recovery_in_progress):
         try:
             from introspect import diagnose_loop as _diag_fn, plan_recovery as _plan_fn
             _diag = _diag_fn(loop_id)
@@ -369,28 +366,27 @@ def run_agent_loop(
                 _new_params = dict(_recovery.params)
                 _new_max_steps = _new_params.pop("max_steps", max_steps)
                 _new_max_iter = _new_params.pop("max_iterations", max_iterations)
-                # Guard against infinite recursion
-                run_agent_loop._recovery_in_progress = True  # type: ignore[attr-defined]
-                try:
-                    result = run_agent_loop(
-                        goal=goal,
-                        project=project,
-                        model=model,
-                        adapter=adapter,
-                        max_steps=_new_max_steps,
-                        max_iterations=_new_max_iter,
-                        dry_run=dry_run,
-                        verbose=verbose,
-                        interrupt_queue=interrupt_queue,
-                        hook_registry=hook_registry,
-                        ancestry_context_extra=ancestry_context_extra,
-                        step_callback=step_callback,
-                        parallel_fan_out=parallel_fan_out,
-                        token_budget=token_budget,
-                    )
-                    log.info("auto-recovery result: status=%s", result.status)
-                finally:
-                    run_agent_loop._recovery_in_progress = False  # type: ignore[attr-defined]
+                # _recovery_in_progress=True guards against infinite recursion —
+                # passed as a call-stack-local arg (not shared mutable state) so
+                # concurrent run_agent_loop calls (run_parallel_loops) can't race.
+                result = run_agent_loop(
+                    goal=goal,
+                    project=project,
+                    model=model,
+                    adapter=adapter,
+                    max_steps=_new_max_steps,
+                    max_iterations=_new_max_iter,
+                    dry_run=dry_run,
+                    verbose=verbose,
+                    interrupt_queue=interrupt_queue,
+                    hook_registry=hook_registry,
+                    ancestry_context_extra=ancestry_context_extra,
+                    step_callback=step_callback,
+                    parallel_fan_out=parallel_fan_out,
+                    token_budget=token_budget,
+                    _recovery_in_progress=True,
+                )
+                log.info("auto-recovery result: status=%s", result.status)
         except ImportError:
             pass
         except Exception as exc:

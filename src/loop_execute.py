@@ -151,9 +151,6 @@ def _execute_main_loop(
     """
     from llm import LLMTool, MODEL_CHEAP, MODEL_MID
     from interrupt import apply_interrupt_to_steps
-    # run_agent_loop stays in agent_loop.py as the public facade; deferred
-    # import avoids a load cycle (agent_loop imports this module at top level).
-    from agent_loop import run_agent_loop
 
     o = _orch()
 
@@ -626,10 +623,10 @@ def _execute_main_loop(
                 if verbose:
                     print(f"[maro] {stuck_reason}", file=sys.stderr, flush=True)
                 break
-            elif _cost_pct >= 80 and not getattr(run_agent_loop, "_cost_warned", False):
+            elif _cost_pct >= 80 and not ctx.cost_warned:
                 log.warning("cost approaching budget: $%.4f / $%.2f (%.0f%%)",
                             _total_cost, cost_budget, _cost_pct)
-                run_agent_loop._cost_warned = True  # type: ignore[attr-defined]
+                ctx.cost_warned = True
 
         step_status = outcome["status"]
         _raw_result = outcome.get("result", "")

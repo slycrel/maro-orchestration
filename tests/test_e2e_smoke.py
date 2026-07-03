@@ -362,9 +362,6 @@ class TestE2EAmbiguous:
         # Fires on prior_retries==1 (second failure of a step).
         monkeypatch.setattr(_lb, "_generate_refinement_hint",
                             lambda *a, **kw: "try a different approach")
-        # Disable Phase 45 auto-recovery: it re-calls run_agent_loop with an exhausted
-        # adapter, which produces 0 done steps and overwrites the result we want to check.
-        monkeypatch.setattr(_al.run_agent_loop, "_recovery_in_progress", True, raising=False)
         # Disable Phase 58 milestone-aware expansion: pre-flight may flag abstract goals as
         # wide-scope milestones, causing planner.decompose to consume adapter responses that
         # this test expects for step execution. Return [] to suppress expansion.
@@ -389,6 +386,10 @@ class TestE2EAmbiguous:
             "Gather and synthesize data from A and B",
             project="smoke-partial",
             adapter=adapter,
+            # Disable Phase 45 auto-recovery: it re-calls run_agent_loop with an
+            # exhausted adapter, which produces 0 done steps and overwrites the
+            # result we want to check.
+            _recovery_in_progress=True,
         )
         # 2 steps done, 1 stuck — loop should be stuck (last step blocked)
         assert sum(1 for s in result.steps if s.status == "done") >= 2
@@ -420,11 +421,10 @@ class TestE2EAmbiguous:
     def test_empty_result_step(self, monkeypatch, tmp_path):
         """Step returns empty result — should still count as done (not stuck)."""
         _setup(monkeypatch, tmp_path)
-        import agent_loop as _al
+        import loop_planning as _lp
         # Bypass multi-plan decompose and auto-recovery for deterministic response sequence.
-        monkeypatch.setattr(_al, "_decompose",
+        monkeypatch.setattr(_lp, "_decompose",
                             lambda *a, **kw: ["Check if file exists", "Report finding"])
-        monkeypatch.setattr(_al.run_agent_loop, "_recovery_in_progress", True, raising=False)
         from agent_loop import run_agent_loop
 
         adapter = ScriptedAdapter([
@@ -437,6 +437,7 @@ class TestE2EAmbiguous:
             "Check for the config file",
             project="smoke-empty",
             adapter=adapter,
+            _recovery_in_progress=True,
         )
         assert result.status == "done"
 

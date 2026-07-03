@@ -223,6 +223,7 @@ class LoopContext:
     # Budget
     cost_budget: Optional[float] = None
     token_budget: Optional[int] = None
+    cost_warned: bool = False  # per-run cost-approaching-budget warn-once flag
 
     # Retry state
     step_retries: Dict[str, int] = field(default_factory=dict)
