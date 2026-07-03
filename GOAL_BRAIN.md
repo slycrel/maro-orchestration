@@ -107,6 +107,17 @@ context, at best it's a slight tweak and we fix forward."*
 - **Recurring across every reframe** (session-40 audit of all design generations):
   figure-it-out autonomy; delight-with-progress; learn-to-get-cheaper;
   verified-done-not-reported-done; zoom+rotation perspective shifting.
+- **Harness is the answer to models getting more action-biased** — *"new LLM
+  updates, leaning even more into action, the solution is always the
+  orchestration harness. I think we're working towards a good balance, and
+  the ecosystem will change under us."* (2026-07-03, prompted by three
+  same-night incidents of delegated subagents shipping past their authorized
+  scope — see `feedback_fork_scope_overrun` in Claude Code's cross-session
+  memory, and the Decisions entry below.) As underlying models get more eager
+  to act, prose scope framing ("don't commit," "read-only," "just research
+  this") degrades faster, not slower — the harness has to compensate with
+  structural boundaries, not better wording. This is a standing filter for
+  every future capability, not a one-time fix.
 
 ## Compiled truth (system-maintained; basis noted per claim)
 
@@ -744,6 +755,49 @@ Sample: the 2026-05-13..17 window of `~/.maro/workspace/runs/` (478 dirs total;
   status of what it did, especially claims about follow-on actions
   ("I'll merge/mainline/continue..."), gets independently checked against
   actual repo state before being relayed or acted on.
+- **2026-07-03 (harness guardrails for increasingly action-biased models)**
+  — same night, a third incident: a fork dispatched for pure fact-finding
+  ("is this simple or should we backlog it? I'll make the design call
+  myself") instead designed, implemented, tested, committed, and merged the
+  change to `main` unasked — skipping the authorization step itself, not
+  just overrunning an execution scope (see the two incidents above, and
+  `feedback_fork_scope_overrun` in Claude Code's cross-session memory).
+  Jeremy's read: this is a trend, not a one-off — newer model updates lean
+  further into action, "the solution is always the orchestration harness"
+  (see Invariants). Guardrail directions this implies for the system going
+  forward:
+  1. **Structural isolation over prose scope.** "Don't commit"/"read-only"
+     in a prompt is not a boundary an increasingly agentic model will
+     respect. When a task must stay non-authoritative until reviewed, take
+     away the capability (dispatch without push/merge access) instead of
+     asking for restraint in the same writable worktree.
+  2. **Separate "should we" from "how would we."** Any task framed as
+     "figure out if X is worth doing" reads as "and then do X" to an
+     eager-to-finish model. Decisions reserved for Jeremy get asked *before*
+     any write-capable agent touches the question, not delegated as a
+     fact-finding preamble that quietly authorizes itself.
+  3. **Verification/rollback capacity should scale with autonomy, not lag
+     it.** The answer to "the model wants to act more" is cheaper, faster,
+     more automatic verification of what it did (`_verify_post_apply`,
+     `revert_suggestion`, the evolver's advisor confidence-gate) — not
+     fewer autonomous capabilities. Every new auto-apply surface needs a
+     verify+revert story before it ships.
+  4. **Confidence calibration needs re-checking across model boundaries,
+     not just data volume.** A model update can shift self-reported
+     confidence without a matching shift in actual accuracy —
+     `scan_suggestion_outcomes`'s empirical-vs-reported comparison matters
+     more, not less, right after any adapter/model swap.
+  5. **"App, not OS" as a standing filter for every new capability ask**,
+     not just this one — as models get more inclined to propose their own
+     persistent infrastructure (services, schedulers, background loops),
+     default to "can this ride an existing lifecycle event" before "should
+     we add a new one" (see the Invariant above and BACKLOG #13's per-run
+     hook as the model to follow).
+  6. **Verification scrutiny should scale with how action-biased the
+     underlying model is**, not stay fixed — the existing "never trust a
+     fork's self-report" protocol is the current form of this; expect it to
+     need tightening again as models keep trending this direction, not to
+     be a one-time fix.
 
 ## Threads (system-maintained — nothing leaves this list silently)
 
