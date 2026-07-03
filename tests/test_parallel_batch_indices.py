@@ -11,6 +11,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 import agent_loop
+import loop_parallel
 from agent_loop import _run_parallel_batch, step_from_decompose
 
 
@@ -35,13 +36,13 @@ class _OrchStub:
 @pytest.fixture
 def orch_stub(monkeypatch):
     stub = _OrchStub()
-    monkeypatch.setattr(agent_loop, "_orch", lambda: stub)
+    monkeypatch.setattr(loop_parallel, "_orch", lambda: stub)
     return stub
 
 
 def _run_batch(monkeypatch, outcomes, batch_item_indices):
     monkeypatch.setattr(
-        agent_loop, "_run_steps_parallel",
+        loop_parallel, "_run_steps_parallel",
         lambda **kw: outcomes,
     )
     step_outcomes = []

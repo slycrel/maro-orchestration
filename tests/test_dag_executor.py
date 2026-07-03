@@ -54,7 +54,7 @@ class TestRunStepsDag:
         steps = ["do the thing"]
         deps = {1: set()}
 
-        with patch("agent_loop._execute_step", return_value=_make_outcome("done", "result")):
+        with patch("loop_parallel._execute_step", return_value=_make_outcome("done", "result")):
             outcomes = _run_steps_dag(
                 goal="test",
                 steps=steps,
@@ -80,7 +80,7 @@ class TestRunStepsDag:
             call_order.append(kwargs["step_num"])
             return _make_outcome("done", f"result_{kwargs['step_num']}")
 
-        with patch("agent_loop._execute_step", side_effect=_fake_exec):
+        with patch("loop_parallel._execute_step", side_effect=_fake_exec):
             outcomes = _run_steps_dag(
                 goal="test",
                 steps=steps,
@@ -117,7 +117,7 @@ class TestRunStepsDag:
                 completion_log.append(step_num)
             return _make_outcome("done", result)
 
-        with patch("agent_loop._execute_step", side_effect=_fake_exec):
+        with patch("loop_parallel._execute_step", side_effect=_fake_exec):
             outcomes = _run_steps_dag(
                 goal="diamond",
                 steps=steps,
@@ -151,7 +151,7 @@ class TestRunStepsDag:
             result = "gathered_result" if step_num == 1 else "analysis_done"
             return _make_outcome("done", result)
 
-        with patch("agent_loop._execute_step", side_effect=_fake_exec):
+        with patch("loop_parallel._execute_step", side_effect=_fake_exec):
             outcomes = _run_steps_dag(
                 goal="pipeline",
                 steps=steps,
@@ -180,7 +180,7 @@ class TestRunStepsDag:
             captured_contexts[step_num] = list(kwargs.get("completed_context", []))
             return _make_outcome("done", f"result_{step_num}")
 
-        with patch("agent_loop._execute_step", side_effect=_fake_exec):
+        with patch("loop_parallel._execute_step", side_effect=_fake_exec):
             _run_steps_dag(
                 goal="parallel",
                 steps=steps,
@@ -206,7 +206,7 @@ class TestRunStepsDag:
                 return _make_outcome("blocked", "", "will_fail")
             return _make_outcome("done", "ran_anyway")
 
-        with patch("agent_loop._execute_step", side_effect=_fake_exec):
+        with patch("loop_parallel._execute_step", side_effect=_fake_exec):
             outcomes = _run_steps_dag(
                 goal="resilience",
                 steps=steps,
@@ -232,7 +232,7 @@ class TestRunStepsDag:
                 time.sleep(0.05)  # slow
             return _make_outcome("done", f"result_{step_num}")
 
-        with patch("agent_loop._execute_step", side_effect=_fake_exec):
+        with patch("loop_parallel._execute_step", side_effect=_fake_exec):
             outcomes = _run_steps_dag(
                 goal="ordering",
                 steps=steps,
@@ -256,7 +256,7 @@ class TestRunStepsDag:
         def _fake_exec(**kwargs):
             raise RuntimeError("boom")
 
-        with patch("agent_loop._execute_step", side_effect=_fake_exec):
+        with patch("loop_parallel._execute_step", side_effect=_fake_exec):
             outcomes = _run_steps_dag(
                 goal="crash",
                 steps=steps,
@@ -283,7 +283,7 @@ class TestRunStepsDag:
             captured["shared_ctx"] = kwargs.get("shared_ctx")
             return _make_outcome()
 
-        with patch("agent_loop._execute_step", side_effect=_fake_exec):
+        with patch("loop_parallel._execute_step", side_effect=_fake_exec):
             _run_steps_dag(
                 goal="shared_ctx_test",
                 steps=steps,
@@ -313,7 +313,7 @@ class TestRunStepsDag:
                 order.append(step_num)
             return _make_outcome("done", f"r{step_num}")
 
-        with patch("agent_loop._execute_step", side_effect=_fake_exec):
+        with patch("loop_parallel._execute_step", side_effect=_fake_exec):
             outcomes = _run_steps_dag(
                 goal="serial",
                 steps=steps,
@@ -355,7 +355,7 @@ class TestDagWithParsedDeps:
             call_order.append(kwargs["step_num"])
             return _make_outcome("done", f"r{kwargs['step_num']}")
 
-        with patch("agent_loop._execute_step", side_effect=_fake_exec):
+        with patch("loop_parallel._execute_step", side_effect=_fake_exec):
             outcomes = _run_steps_dag(
                 goal="pipeline",
                 steps=clean_steps,
@@ -400,7 +400,7 @@ class TestDagWithParsedDeps:
             time.sleep(0.03)
             return _make_outcome("done", f"r{step_num}")
 
-        with patch("agent_loop._execute_step", side_effect=_fake_exec):
+        with patch("loop_parallel._execute_step", side_effect=_fake_exec):
             outcomes = _run_steps_dag(
                 goal="parallel suites",
                 steps=clean_steps,
