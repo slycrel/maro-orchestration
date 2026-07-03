@@ -54,6 +54,8 @@ except ImportError:  # pragma: no cover
     is_loop_running = None  # type: ignore[assignment]
     get_running_loop = None  # type: ignore[assignment]
 
+from listener_core import parse_slash_command as _core_parse_slash_command, is_chat_allowed, intent_label
+
 
 # ---------------------------------------------------------------------------
 # Config helpers
@@ -185,6 +187,32 @@ class TelegramBot:
             pass
 
 
+def telegram_notify(text: str) -> bool:
+    """Send `text` to every allowed Telegram chat. Never raises.
+
+    Returns True if at least one chat received it, False if there's no
+    configured token/chats or every send failed.
+    """
+    try:
+        token = _resolve_token()
+        if not token:
+            return False
+        allowed = _resolve_allowed_chats()
+        if not allowed:
+            return False
+        bot = TelegramBot(token)
+        sent = False
+        for chat_id in allowed:
+            try:
+                bot.send_message(chat_id, text)
+                sent = True
+            except Exception:
+                continue
+        return sent
+    except Exception:
+        return False
+
+
 # ---------------------------------------------------------------------------
 # Offset persistence
 # ---------------------------------------------------------------------------
@@ -207,13 +235,7 @@ def _save_offset(offset: int) -> None:
 
 def _parse_slash_command(text: str):
     """Parse /command [args]. Returns (command, args_str) or (None, text)."""
-    text = text.strip()
-    if not text.startswith("/"):
-        return None, text
-    parts = text[1:].split(None, 1)
-    cmd = parts[0].lower().split("@")[0]  # strip @botname suffix
-    args = parts[1] if len(parts) > 1 else ""
-    return cmd, args
+    return _core_parse_slash_command(text, strip_at_suffix=True)
 
 
 def _dispatch_slash(
@@ -390,7 +412,7 @@ def _process_message(
     if not text or not chat_id:
         return
 
-    if allowed_chats and chat_id not in allowed_chats:
+    if not is_chat_allowed(chat_id, allowed_chats):
         if verbose:
             print(f"[telegram] ignoring message from unauthorized chat {chat_id}", file=sys.stderr)
         return
@@ -448,14 +470,8 @@ def _process_message(
             intr = q.post(text, source="telegram")
             loop_info = get_running_loop() if get_running_loop else {}
             loop_id = (loop_info or {}).get("loop_id", "?")
-            intent_label = {
-                "additive": "added to plan",
-                "corrective": "plan updated",
-                "priority": "prioritized",
-                "stop": "stop signal sent",
-            }.get(intr.intent, intr.intent)
             response = (
-                f"*Interrupt received* ({intent_label})\n"
+                f"*Interrupt received* ({intent_label(intr.intent)})\n"
                 f"Loop `{loop_id}` will pick this up after the current step.\n"
                 f"_{text[:80]}_"
             )

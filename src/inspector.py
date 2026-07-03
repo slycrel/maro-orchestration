@@ -386,21 +386,12 @@ def _save_inspection_suggestions(suggestions: List[str]) -> None:
 
 def get_latest_inspection() -> Optional[InspectionReport]:
     """Return the most recent InspectionReport from inspection-log.jsonl, or None."""
-    p = _inspection_log_path()
-    if not p.exists():
-        return None
-    last_line = None
-    try:
-        for line in p.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if line:
-                last_line = line
-    except Exception:
-        return None
-    if last_line is None:
+    from jsonl_utils import read_jsonl_tail
+    records = read_jsonl_tail(_inspection_log_path(), limit=1)
+    if not records:
         return None
     try:
-        return InspectionReport.from_dict(json.loads(last_line))
+        return InspectionReport.from_dict(records[0])
     except Exception:
         return None
 

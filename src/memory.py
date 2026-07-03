@@ -33,7 +33,6 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-import re
 import sys
 import textwrap
 import logging
@@ -192,15 +191,6 @@ _REFLECT_SYSTEM = textwrap.dedent("""\
     Example: [{"lesson": "Research tasks produce better output when the goal includes success criteria", "type": "planning"},
               {"lesson": "Stuck detection triggers prematurely on research tasks that need multiple iterations", "type": "recovery"}]
 """).strip()
-
-
-def _jaccard_similarity(a: str, b: str) -> float:
-    """Jaccard similarity between two lesson strings (word-level)."""
-    ta = set(re.sub(r"[^a-z0-9]+", " ", a.lower()).split())
-    tb = set(re.sub(r"[^a-z0-9]+", " ", b.lower()).split())
-    if not ta or not tb:
-        return 0.0
-    return len(ta & tb) / len(ta | tb)
 
 
 _LESSON_TYPES = frozenset({"execution", "planning", "recovery", "verification", "cost"})

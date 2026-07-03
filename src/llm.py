@@ -853,7 +853,75 @@ def _extract_success_result(text: str) -> Optional[dict]:
     return None
 
 
-class ClaudeSubprocessAdapter(LLMAdapter):
+class _JSONToolPromptMixin:
+    """Shared JSON-in-prompt tool-calling machinery for CLI subprocess adapters.
+
+    Tools are described in the system prompt as JSON schema, and the model
+    responds with a JSON object that `_parse_tool_call` parses back into a
+    `ToolCall`. Used by `ClaudeSubprocessAdapter` and `CodexCLIAdapter`, which
+    otherwise talk to unrelated CLIs — this mixin is the part that's identical.
+    """
+
+    def _build_prompt(self, messages: List[LLMMessage], tools: Optional[List[LLMTool]]) -> str:
+        """Flatten messages into a single prompt string for CLI stdin."""
+        parts = []
+
+        # Collect system messages
+        system_parts = [m.content for m in messages if m.role == "system"]
+        non_system = [m for m in messages if m.role != "system"]
+
+        if system_parts:
+            parts.append("[SYSTEM INSTRUCTIONS]\n" + "\n\n".join(system_parts))
+
+        # Inject tool instructions if tools are requested
+        if tools:
+            tool_list = "\n".join(
+                f'- "{t.name}": {t.description}\n  Arguments: {json.dumps(t.parameters.get("properties", {}), indent=2)}'
+                for t in tools
+            )
+            parts.append(_TOOL_INJECTION_TEMPLATE.format(tool_list=tool_list))
+
+        parts.append("[END SYSTEM INSTRUCTIONS]\n")
+
+        # Add conversation history
+        for m in non_system:
+            if m.role == "user":
+                parts.append(f"User: {m.content}")
+            elif m.role == "assistant":
+                parts.append(f"Assistant: {m.content}")
+
+        return "\n\n".join(parts)
+
+    def _parse_tool_call(self, text: str, tools: List[LLMTool]) -> Optional[ToolCall]:
+        """Extract a tool call from the model's JSON response."""
+        text = text.strip()
+
+        # Try to find JSON object in the response
+        start = text.find("{")
+        end = text.rfind("}") + 1
+        if start < 0 or end <= start:
+            return None
+
+        try:
+            data = json.loads(text[start:end])
+        except json.JSONDecodeError:
+            return None
+
+        tool_name = data.get("tool")
+        if not tool_name:
+            return None
+
+        # Verify it's a valid tool
+        valid_names = {t.name for t in tools}
+        if tool_name not in valid_names:
+            return None
+
+        # Extract arguments (everything except "tool" key)
+        args = {k: v for k, v in data.items() if k != "tool"}
+        return ToolCall(name=tool_name, arguments=args)
+
+
+class ClaudeSubprocessAdapter(_JSONToolPromptMixin, LLMAdapter):
     """Adapter using `claude -p` subprocess. Works anywhere Claude Code is installed.
 
     Tool calls are simulated via JSON-in-prompt: tools are described in the
@@ -1077,65 +1145,6 @@ class ClaudeSubprocessAdapter(LLMAdapter):
             backend=self.backend,
         )
 
-    def _build_prompt(self, messages: List[LLMMessage], tools: Optional[List[LLMTool]]) -> str:
-        """Flatten messages into a single prompt string for claude -p stdin."""
-        parts = []
-
-        # Collect system messages
-        system_parts = [m.content for m in messages if m.role == "system"]
-        non_system = [m for m in messages if m.role != "system"]
-
-        if system_parts:
-            parts.append("[SYSTEM INSTRUCTIONS]\n" + "\n\n".join(system_parts))
-
-        # Inject tool instructions if tools are requested
-        if tools:
-            tool_list = "\n".join(
-                f'- "{t.name}": {t.description}\n  Arguments: {json.dumps(t.parameters.get("properties", {}), indent=2)}'
-                for t in tools
-            )
-            parts.append(_TOOL_INJECTION_TEMPLATE.format(tool_list=tool_list))
-
-        parts.append("[END SYSTEM INSTRUCTIONS]\n")
-
-        # Add conversation history
-        for m in non_system:
-            if m.role == "user":
-                parts.append(f"User: {m.content}")
-            elif m.role == "assistant":
-                parts.append(f"Assistant: {m.content}")
-
-        return "\n\n".join(parts)
-
-    def _parse_tool_call(self, text: str, tools: List[LLMTool]) -> Optional[ToolCall]:
-        """Extract a tool call from the model's JSON response."""
-        text = text.strip()
-
-        # Try to find JSON object in the response
-        start = text.find("{")
-        end = text.rfind("}") + 1
-        if start < 0 or end <= start:
-            return None
-
-        try:
-            data = json.loads(text[start:end])
-        except json.JSONDecodeError:
-            return None
-
-        tool_name = data.get("tool")
-        if not tool_name:
-            return None
-
-        # Verify it's a valid tool
-        valid_names = {t.name for t in tools}
-        if tool_name not in valid_names:
-            return None
-
-        # Extract arguments (everything except "tool" key)
-        args = {k: v for k, v in data.items() if k != "tool"}
-        return ToolCall(name=tool_name, arguments=args)
-
-
 # ---------------------------------------------------------------------------
 # CodexCLIAdapter — uses `codex exec --json` (ChatGPT OAuth, prompt caching)
 # ---------------------------------------------------------------------------
@@ -1171,7 +1180,7 @@ def _codex_auth_available() -> bool:
     return os.path.isfile(auth_path)
 
 
-class CodexCLIAdapter(LLMAdapter):
+class CodexCLIAdapter(_JSONToolPromptMixin, LLMAdapter):
     """Adapter using `codex exec --json` subprocess.
 
     Uses ChatGPT OAuth credentials from ~/.codex/auth.json — no separate API
@@ -1312,26 +1321,6 @@ class CodexCLIAdapter(LLMAdapter):
             backend=self.backend,
         )
 
-    def _parse_tool_call(self, text: str, tools: List[LLMTool]) -> Optional[ToolCall]:
-        """Extract a tool call from the model's JSON response."""
-        text = text.strip()
-        start = text.find("{")
-        end = text.rfind("}") + 1
-        if start < 0 or end <= start:
-            return None
-        try:
-            data = json.loads(text[start:end])
-        except json.JSONDecodeError:
-            return None
-        tool_name = data.get("tool")
-        if not tool_name:
-            return None
-        valid_names = {t.name for t in tools}
-        if tool_name not in valid_names:
-            return None
-        args = {k: v for k, v in data.items() if k != "tool"}
-        return ToolCall(name=tool_name, arguments=args)
-
 
 # ---------------------------------------------------------------------------
 # AnthropicSDKAdapter — uses anthropic Python SDK
@@ -1448,98 +1437,25 @@ class AnthropicSDKAdapter(LLMAdapter):
 # OpenRouterAdapter — HTTP to openrouter.ai (OpenAI-compatible)
 # ---------------------------------------------------------------------------
 
-_OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
-
-class OpenRouterAdapter(LLMAdapter):
-    """HTTP adapter for OpenRouter. No SDK dependency — just requests."""
-
-    backend = "openrouter"
-
-    def __init__(self, api_key: str, model: str = MODEL_CHEAP, site_name: str = "maro-orch"):
-        self._api_key = api_key
-        self.model_key = model
-        self._site_name = site_name
-
-    def complete(
-        self,
-        messages: List[LLMMessage],
-        *,
-        tools: Optional[List[LLMTool]] = None,
-        tool_choice: str = "auto",
-        max_tokens: int = 4096,
-        temperature: float = 0.3,
-        **kwargs,
-    ) -> LLMResponse:
-        import requests
-
-        model_str = resolve_model("openrouter", self.model_key)
-        headers = {
-            "Authorization": f"Bearer {self._api_key}",
-            "Content-Type": "application/json",
-            "X-Title": self._site_name,
-        }
-        payload: Dict[str, Any] = {
-            "model": model_str,
-            "messages": [{"role": m.role, "content": m.content} for m in messages],
-            "max_tokens": max_tokens,
-            "temperature": temperature,
-        }
-        if tools:
-            payload["tools"] = [
-                {"type": "function", "function": {"name": t.name, "description": t.description, "parameters": t.parameters}}
-                for t in tools
-            ]
-            payload["tool_choice"] = tool_choice
-
-        def _do_request():
-            r = requests.post(_OPENROUTER_URL, headers=headers, json=payload, timeout=120)
-            r.raise_for_status()
-            return r
-        resp = _retry_complete(_do_request)
-        data = resp.json()
-
-        choice = data["choices"][0]
-        message = choice["message"]
-        content = message.get("content") or ""
-        stop_reason = choice.get("finish_reason", "end_turn")
-
-        tool_calls: List[ToolCall] = []
-        for tc in message.get("tool_calls") or []:
-            fn = tc.get("function", {})
-            raw_args = fn.get("arguments", "{}")
-            try:
-                args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
-            except json.JSONDecodeError:
-                args = {"_raw": raw_args}
-            tool_calls.append(ToolCall(name=fn.get("name", ""), arguments=args, call_id=tc.get("id", "")))
-
-        usage = data.get("usage", {})
-        return LLMResponse(
-            content=content,
-            tool_calls=tool_calls,
-            stop_reason=stop_reason,
-            model=data.get("model", model_str),
-            input_tokens=usage.get("prompt_tokens", 0),
-            output_tokens=usage.get("completion_tokens", 0),
-            backend=self.backend,
-        )
-
-
-# ---------------------------------------------------------------------------
-# OpenAIAdapter — direct OpenAI or compatible endpoint
-# ---------------------------------------------------------------------------
-
-class OpenAIAdapter(LLMAdapter):
-    """Adapter for OpenAI API (or any OpenAI-compatible endpoint)."""
+class OpenAICompatAdapter(LLMAdapter):
+    """Base for HTTP adapters targeting an OpenAI chat-completions-compatible
+    endpoint. No SDK dependency — just requests. Subclasses set `backend`,
+    `_resolve_backend_key` (the key passed to `resolve_model`), and may
+    override `_extra_headers()` for endpoint-specific auth/routing headers.
+    """
 
     backend = "openai"
+    _resolve_backend_key = "openai"
 
     def __init__(self, api_key: str, model: str = MODEL_CHEAP, base_url: str = "https://api.openai.com/v1"):
         self._api_key = api_key
         self.model_key = model
         self._base_url = base_url.rstrip("/")
 
+    def _extra_headers(self) -> Dict[str, str]:
+        return {}
+
     def complete(
         self,
         messages: List[LLMMessage],
@@ -1552,11 +1468,12 @@ class OpenAIAdapter(LLMAdapter):
     ) -> LLMResponse:
         import requests
 
-        model_str = resolve_model("openai", self.model_key)
+        model_str = resolve_model(self._resolve_backend_key, self.model_key)
         headers = {
             "Authorization": f"Bearer {self._api_key}",
             "Content-Type": "application/json",
         }
+        headers.update(self._extra_headers())
         payload: Dict[str, Any] = {
             "model": model_str,
             "messages": [{"role": m.role, "content": m.content} for m in messages],
@@ -1602,6 +1519,31 @@ class OpenAIAdapter(LLMAdapter):
             output_tokens=usage.get("completion_tokens", 0),
             backend=self.backend,
         )
+
+
+class OpenRouterAdapter(OpenAICompatAdapter):
+    """HTTP adapter for OpenRouter."""
+
+    backend = "openrouter"
+    _resolve_backend_key = "openrouter"
+
+    def __init__(self, api_key: str, model: str = MODEL_CHEAP, site_name: str = "maro-orch"):
+        super().__init__(api_key, model, base_url="https://openrouter.ai/api/v1")
+        self._site_name = site_name
+
+    def _extra_headers(self) -> Dict[str, str]:
+        return {"X-Title": self._site_name}
+
+
+# ---------------------------------------------------------------------------
+# OpenAIAdapter — direct OpenAI or compatible endpoint
+# ---------------------------------------------------------------------------
+
+class OpenAIAdapter(OpenAICompatAdapter):
+    """Adapter for OpenAI API (or any OpenAI-compatible endpoint)."""
+
+    backend = "openai"
+    _resolve_backend_key = "openai"
 
 
 # ---------------------------------------------------------------------------

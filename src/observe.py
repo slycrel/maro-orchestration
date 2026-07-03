@@ -92,69 +92,18 @@ def _read_heartbeat() -> Dict[str, Any]:
 
 
 def _read_recent_outcomes(limit: int = 10) -> List[Dict[str, Any]]:
-    path = _outcomes_path()
-    if not path.exists():
-        return []
-    try:
-        lines = path.read_text(encoding="utf-8").splitlines()
-        results = []
-        for line in reversed(lines):
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                results.append(json.loads(line))
-            except Exception:
-                continue
-            if len(results) >= limit:
-                break
-        return results
-    except Exception:
-        return []
+    from jsonl_utils import read_jsonl_tail
+    return list(reversed(read_jsonl_tail(_outcomes_path(), limit=limit)))
 
 
 def _read_audit_tail(limit: int = 5) -> List[Dict[str, Any]]:
-    path = _audit_path()
-    if not path.exists():
-        return []
-    try:
-        lines = path.read_text(encoding="utf-8").splitlines()
-        results = []
-        for line in reversed(lines):
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                results.append(json.loads(line))
-            except Exception:
-                continue
-            if len(results) >= limit:
-                break
-        return list(reversed(results))
-    except Exception:
-        return []
+    from jsonl_utils import read_jsonl_tail
+    return read_jsonl_tail(_audit_path(), limit=limit)
 
 
 def _read_recent_diagnoses(limit: int = 8) -> List[Dict[str, Any]]:
-    path = _diagnoses_path()
-    if not path.exists():
-        return []
-    try:
-        lines = path.read_text(encoding="utf-8").splitlines()
-        results = []
-        for line in reversed(lines):
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                results.append(json.loads(line))
-            except Exception:
-                continue
-            if len(results) >= limit:
-                break
-        return list(reversed(results))
-    except Exception:
-        return []
+    from jsonl_utils import read_jsonl_tail
+    return read_jsonl_tail(_diagnoses_path(), limit=limit)
 
 
 def _read_slow_scheduler() -> Dict[str, Any]:
@@ -279,47 +228,31 @@ def _read_captain_log_entries(limit: int = 20) -> List[Dict[str, Any]]:
     Returns the most recent `limit` entries (newest first), each normalized to:
       ts, event_type, loop_id, subject, summary.
     """
-    try:
-        path = _memory_dir() / "captains_log.jsonl"
-        if not path.exists():
-            return []
-        entries: List[Dict[str, Any]] = []
-        try:
-            lines = path.read_text(encoding="utf-8").splitlines()
-        except Exception:
-            return []
-        for line in reversed(lines):
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                e = json.loads(line)
-                ts = e.get("timestamp") or e.get("ts") or ""
-                event_type = e.get("event_type", "?")
-                loop_id = (e.get("loop_id") or "")[:12]
-                subject = e.get("subject") or e.get("name") or ""
-                # Best summary: use 'summary', fallback to 'note', fallback to 'suggestion'
-                summary = (
-                    e.get("summary")
-                    or e.get("note")
-                    or e.get("suggestion")
-                    or e.get("lesson")
-                    or ""
-                )
-                entries.append({
-                    "ts": ts,
-                    "event_type": event_type,
-                    "loop_id": loop_id,
-                    "subject": subject[:60],
-                    "summary": summary[:120],
-                })
-                if len(entries) >= limit:
-                    break
-            except Exception:
-                continue
-        return entries
-    except Exception:
-        return []
+    from jsonl_utils import read_jsonl_tail
+    path = _memory_dir() / "captains_log.jsonl"
+    raw = read_jsonl_tail(path, limit=limit)
+    entries: List[Dict[str, Any]] = []
+    for e in reversed(raw):
+        ts = e.get("timestamp") or e.get("ts") or ""
+        event_type = e.get("event_type", "?")
+        loop_id = (e.get("loop_id") or "")[:12]
+        subject = e.get("subject") or e.get("name") or ""
+        # Best summary: use 'summary', fallback to 'note', fallback to 'suggestion'
+        summary = (
+            e.get("summary")
+            or e.get("note")
+            or e.get("suggestion")
+            or e.get("lesson")
+            or ""
+        )
+        entries.append({
+            "ts": ts,
+            "event_type": event_type,
+            "loop_id": loop_id,
+            "subject": subject[:60],
+            "summary": summary[:120],
+        })
+    return entries
 
 
 # ---------------------------------------------------------------------------
@@ -334,23 +267,15 @@ def _read_suggestion_stats() -> Dict[str, Any]:
       pending: int (status unknown/pending_human_review), applied: int.
     """
     try:
+        from jsonl_utils import read_jsonl_tail
         path = _memory_dir() / "suggestions.jsonl"
-        if not path.exists():
-            return {"total": 0, "by_category": {}, "by_status": {}, "pending": 0, "applied": 0}
         by_cat: Dict[str, int] = {}
         by_status: Dict[str, int] = {}
-        for line in path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                d = json.loads(line)
-                cat = d.get("category", "unknown")
-                status = d.get("status", "unknown")
-                by_cat[cat] = by_cat.get(cat, 0) + 1
-                by_status[status] = by_status.get(status, 0) + 1
-            except Exception:
-                pass
+        for d in read_jsonl_tail(path):
+            cat = d.get("category", "unknown")
+            status = d.get("status", "unknown")
+            by_cat[cat] = by_cat.get(cat, 0) + 1
+            by_status[status] = by_status.get(status, 0) + 1
         total = sum(by_cat.values())
         pending = by_status.get("unknown", 0) + by_status.get("pending_human_review", 0)
         applied = by_status.get("applied", 0)
@@ -650,23 +575,13 @@ def write_event(
 
 def print_events_tail(limit: int = 20) -> None:
     """Print the most recent events from events.jsonl."""
+    from jsonl_utils import read_jsonl_tail
     path = _events_path()
     if not path.exists():
         print("No events recorded yet.")
         return
 
-    lines = path.read_text(encoding="utf-8").splitlines()
-    entries = []
-    for line in lines:
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            entries.append(json.loads(line))
-        except Exception:
-            continue
-
-    recent = entries[-limit:]
+    recent = read_jsonl_tail(path, limit=limit)
     print(f"Recent events (last {len(recent)}):")
     print("─" * 60)
     for e in recent:

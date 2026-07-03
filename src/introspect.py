@@ -178,47 +178,23 @@ def _diagnoses_path() -> Path:
 
 def _load_loop_events(loop_id: str) -> List[dict]:
     """Load all events for a specific loop_id from events.jsonl."""
-    path = _events_path()
-    if not path.exists():
-        return []
-    events = []
-    try:
-        for line in path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                e = json.loads(line)
-                if e.get("loop_id", "").startswith(loop_id):
-                    events.append(e)
-            except json.JSONDecodeError:
-                continue
-    except Exception:
-        pass
-    return events
+    from jsonl_utils import read_jsonl_tail
+    return [e for e in read_jsonl_tail(_events_path())
+            if e.get("loop_id", "").startswith(loop_id)]
 
 
 def _load_latest_loop_id() -> Optional[str]:
     """Find the most recent loop_id from events.jsonl."""
+    from jsonl_utils import read_jsonl_tail
     path = _events_path()
     if not path.exists():
         return None
     last_id = None
-    try:
-        for line in reversed(path.read_text(encoding="utf-8").splitlines()):
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                e = json.loads(line)
-                lid = e.get("loop_id", "")
-                if lid:
-                    last_id = lid
-                    break
-            except Exception:
-                continue
-    except Exception:
-        pass
+    for e in reversed(read_jsonl_tail(path)):
+        lid = e.get("loop_id", "")
+        if lid:
+            last_id = lid
+            break
     return last_id
 
 
@@ -498,18 +474,15 @@ def save_diagnosis(diag: LoopDiagnosis) -> None:
 
 
 def load_diagnoses(limit: int = 50) -> List[LoopDiagnosis]:
-    """Load recent diagnoses from memory/diagnoses.jsonl."""
-    path = _diagnoses_path()
-    if not path.exists():
-        return []
+    """Load recent diagnoses from memory/diagnoses.jsonl, newest first."""
+    from jsonl_utils import read_jsonl_tail
     results = []
     try:
-        for line in reversed(path.read_text(encoding="utf-8").splitlines()):
-            line = line.strip()
-            if not line:
-                continue
+        # Fetch all (not just `limit`) since a raw record can fail
+        # LoopDiagnosis construction — we need `limit` valid ones, not just
+        # `limit` raw JSON records.
+        for d in reversed(read_jsonl_tail(_diagnoses_path())):
             try:
-                d = json.loads(line)
                 results.append(LoopDiagnosis(**{
                     k: d[k] for k in LoopDiagnosis.__dataclass_fields__ if k in d
                 }))

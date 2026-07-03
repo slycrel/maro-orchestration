@@ -110,11 +110,9 @@ except ImportError:  # pragma: no cover
     parse_next = None  # type: ignore[assignment]
 
 try:
-    from telegram_listener import TelegramBot, _resolve_token, _resolve_allowed_chats
+    from telegram_listener import telegram_notify
 except ImportError:  # pragma: no cover
-    TelegramBot = None  # type: ignore[assignment]
-    _resolve_token = None  # type: ignore[assignment]
-    _resolve_allowed_chats = None  # type: ignore[assignment]
+    telegram_notify = None  # type: ignore[assignment]
 
 
 # ---------------------------------------------------------------------------
@@ -349,16 +347,7 @@ def _tier3_escalate(report: HeartbeatReport) -> bool:
     message = "\n".join(lines)
 
     try:
-        token = _resolve_token()
-        if not token:
-            return False
-        bot = TelegramBot(token)
-        allowed = _resolve_allowed_chats()
-        if not allowed:
-            return False
-        for chat_id in allowed:
-            bot.send_message(chat_id, message)
-        return True
+        return telegram_notify(message)
     except Exception as e:
         print(f"[heartbeat] telegram escalation failed: {e}", file=sys.stderr)
         return False

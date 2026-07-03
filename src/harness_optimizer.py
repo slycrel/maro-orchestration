@@ -158,24 +158,9 @@ def _record_candidate(target: str, text: str) -> None:
 
 def load_candidates_history(target: str) -> List[Dict[str, Any]]:
     """Load all known prompt versions for a target from harness_candidates.jsonl."""
-    path = _candidates_path()
-    if not path.exists():
-        return []
-    history: List[Dict[str, Any]] = []
-    try:
-        for line in path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                entry = json.loads(line)
-                if entry.get("target") == target:
-                    history.append(entry)
-            except json.JSONDecodeError:
-                pass
-    except OSError:
-        pass
-    return history
+    from jsonl_utils import read_jsonl_tail
+    return [entry for entry in read_jsonl_tail(_candidates_path())
+            if entry.get("target") == target]
 
 
 # ---------------------------------------------------------------------------
@@ -184,25 +169,9 @@ def load_candidates_history(target: str) -> List[Dict[str, Any]]:
 
 def _load_stuck_traces(limit: int = 10) -> List[Dict[str, Any]]:
     """Load recent traces that contain at least one stuck step."""
-    path = _step_traces_path()
-    if not path.exists():
-        return []
-
-    raw: List[Dict[str, Any]] = []
-    try:
-        for line in path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                trace = json.loads(line)
-                steps = trace.get("steps", [])
-                if any(s.get("status") == "stuck" for s in steps):
-                    raw.append(trace)
-            except json.JSONDecodeError:
-                pass
-    except OSError:
-        return []
+    from jsonl_utils import read_jsonl_tail
+    raw = [trace for trace in read_jsonl_tail(_step_traces_path())
+           if any(s.get("status") == "stuck" for s in trace.get("steps", []))]
 
     # Most recent first
     raw.sort(key=lambda t: t.get("recorded_at", ""), reverse=True)
@@ -480,21 +449,8 @@ class HarnessFrictionReport:
 
 def _load_all_traces(limit: int = 50) -> List[Dict[str, Any]]:
     """Load recent step traces (both stuck and successful)."""
-    path = _step_traces_path()
-    if not path.exists():
-        return []
-    raw = []
-    try:
-        for line in path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                raw.append(json.loads(line))
-            except json.JSONDecodeError:
-                pass
-    except OSError:
-        return []
+    from jsonl_utils import read_jsonl_tail
+    raw = read_jsonl_tail(_step_traces_path())
     raw.sort(key=lambda t: t.get("recorded_at", ""), reverse=True)
     return raw[:limit]
 

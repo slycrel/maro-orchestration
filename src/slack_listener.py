@@ -66,6 +66,8 @@ except ImportError:
     is_loop_running = None      # type: ignore[assignment]
     get_running_loop = None     # type: ignore[assignment]
 
+from listener_core import parse_slash_command as _core_parse_slash_command, is_chat_allowed
+
 
 # ---------------------------------------------------------------------------
 # Credential resolution
@@ -150,11 +152,8 @@ def _parse_slash_command(text: str) -> tuple[str, str]:
     Slack slash commands arrive as separate payloads but users can also type
     /cmd in a DM or channel — handle both.
     """
-    text = text.strip()
-    if text.startswith("/"):
-        parts = text[1:].split(None, 1)
-        return parts[0].lower(), parts[1] if len(parts) > 1 else ""
-    return "", text
+    cmd, args = _core_parse_slash_command(text)
+    return cmd or "", args
 
 
 def _dispatch_slash(
@@ -223,7 +222,8 @@ def _dispatch_slash(
 
     elif cmd == "stop":
         if is_loop_running and is_loop_running():
-            loop_id = get_running_loop() if get_running_loop else None
+            info = get_running_loop() if get_running_loop else None
+            loop_id = (info or {}).get("loop_id", "?")
             if InterruptQueue is not None:
                 q = InterruptQueue()
                 q.post("stop", source="slack", intent="stop")
@@ -375,7 +375,7 @@ def listen_socket_mode(
             if bot_id:
                 return  # ignore our own messages
 
-            if allowed and channel_id not in allowed:
+            if not is_chat_allowed(channel_id, allowed):
                 if verbose:
                     print(f"[slack] ignoring message from non-allowed channel {channel_id}", file=sys.stderr)
                 return

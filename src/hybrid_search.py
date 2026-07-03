@@ -133,6 +133,73 @@ def bm25_rank(
     return ranked[:top_k] if top_k is not None else ranked
 
 
+def tfidf_rank(
+    query: str,
+    docs: List[T],
+    *,
+    text_fn: Optional[Any] = None,
+    top_k: Optional[int] = None,
+) -> List[T]:
+    """Rank docs by TF-IDF cosine similarity to query.
+
+    Pure stdlib — no sklearn, no numpy. Shared implementation for callers
+    that need plain cosine TF-IDF rather than BM25 (e.g. no document-length
+    normalization desired). Uses the same `_tokenize`/`_STOP_WORDS` as
+    `bm25_rank`.
+
+    Args:
+        query: Query string.
+        docs: Documents to rank (TieredLesson-like objects or strings).
+        text_fn: Optional callable extracting text from a doc. Defaults to
+            `_doc_text` (handles strings and `.lesson`-bearing objects).
+        top_k: Return only top-K results. None = return all, ranked.
+
+    Returns:
+        Docs sorted by descending cosine similarity. Zero-similarity docs
+        are still included (sorted last).
+    """
+    extract = text_fn or _doc_text
+    if not docs:
+        return []
+
+    query_terms = _tokenize(query)
+    if not query_terms:
+        return docs  # no query signal — return as-is
+
+    doc_terms: List[List[str]] = [_tokenize(extract(d)) for d in docs]
+    all_docs = [query_terms] + doc_terms
+    n_docs = len(all_docs)
+
+    df: Counter = Counter()
+    for doc in all_docs:
+        for term in set(doc):
+            df[term] += 1
+
+    def _idf(term: str) -> float:
+        return math.log(n_docs / (df.get(term, 0) + 1)) + 1.0
+
+    def _tfidf_vec(terms: List[str]) -> Dict[str, float]:
+        tf = Counter(terms)
+        total = max(len(terms), 1)
+        return {t: (c / total) * _idf(t) for t, c in tf.items()}
+
+    def _cosine(v1: Dict[str, float], v2: Dict[str, float]) -> float:
+        dot = sum(v1.get(t, 0.0) * v2.get(t, 0.0) for t in v1)
+        norm1 = math.sqrt(sum(x * x for x in v1.values())) or 1.0
+        norm2 = math.sqrt(sum(x * x for x in v2.values())) or 1.0
+        return dot / (norm1 * norm2)
+
+    query_vec = _tfidf_vec(query_terms)
+    scored = []
+    for doc, terms in zip(docs, doc_terms):
+        sim = _cosine(query_vec, _tfidf_vec(terms))
+        scored.append((sim, doc))
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+    ranked = [doc for _, doc in scored]
+    return ranked[:top_k] if top_k is not None else ranked
+
+
 def rrf_rank(
     rankings: List[List[T]],
     *,

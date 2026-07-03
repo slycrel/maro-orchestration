@@ -14,16 +14,14 @@ Extracted from memory.py (lines 1469-2101). This is the "Lens" layer:
 from __future__ import annotations
 
 import json
-import math
-import re
 import textwrap
 import logging
-from collections import Counter
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from hybrid_search import tfidf_rank as _hybrid_tfidf_rank
 from memory_ledger import _memory_dir, _text_similarity
 
 log = logging.getLogger("maro.memory")
@@ -789,75 +787,18 @@ def record_decision(
 
 
 # ---------------------------------------------------------------------------
-# TF-IDF ranking (local, avoids circular imports)
+# TF-IDF ranking (shared implementation lives in hybrid_search.py — no
+# circular import: hybrid_search has zero local module dependencies)
 # ---------------------------------------------------------------------------
-
-_STOP_WORDS = frozenset({
-    "a", "an", "the", "and", "or", "but", "in", "on", "at", "to", "for",
-    "of", "with", "is", "was", "are", "were", "be", "been", "being", "it",
-    "its", "this", "that", "these", "those", "i", "we", "you", "he", "she",
-    "they", "what", "when", "where", "who", "which", "how", "if", "as", "by",
-    "from", "not", "can", "will", "do", "did", "does", "have", "had", "has",
-    "should", "would", "could", "may", "might", "step", "goal", "task",
-})
-
-
-def _tokenize(text: str) -> List[str]:
-    """Lowercase + split on non-alphanumeric, filter stop words + short tokens."""
-    return [
-        t for t in re.sub(r"[^a-z0-9]+", " ", text.lower()).split()
-        if t not in _STOP_WORDS and len(t) > 2
-    ]
-
 
 def _tfidf_rank(query: str, items: list, *, top_k: Optional[int] = None) -> list:
     """Rank items by TF-IDF cosine similarity to query.
 
     Each item must have a ``.lesson`` attribute containing the text to compare.
-    Pure stdlib — no sklearn, no numpy.
+    Thin wrapper around hybrid_search.tfidf_rank — kept for call-site
+    compatibility within this module.
     """
-    if not items:
-        return []
-
-    query_terms = _tokenize(query)
-    if not query_terms:
-        return items
-
-    docs: List[List[str]] = [query_terms]
-    for item in items:
-        docs.append(_tokenize(item.lesson))
-
-    n_docs = len(docs)
-
-    df: Counter = Counter()
-    for doc in docs:
-        for term in set(doc):
-            df[term] += 1
-
-    def idf(term: str) -> float:
-        return math.log(n_docs / (df.get(term, 0) + 1)) + 1.0
-
-    def tfidf_vec(doc_terms: List[str]) -> Dict[str, float]:
-        tf = Counter(doc_terms)
-        total = max(len(doc_terms), 1)
-        return {t: (c / total) * idf(t) for t, c in tf.items()}
-
-    def cosine(v1: Dict[str, float], v2: Dict[str, float]) -> float:
-        dot = sum(v1.get(t, 0.0) * v2.get(t, 0.0) for t in v1)
-        norm1 = math.sqrt(sum(x * x for x in v1.values())) or 1.0
-        norm2 = math.sqrt(sum(x * x for x in v2.values())) or 1.0
-        return dot / (norm1 * norm2)
-
-    query_vec = tfidf_vec(query_terms)
-    scores: List[tuple] = []
-    for item, doc_terms in zip(items, docs[1:]):
-        doc_vec = tfidf_vec(doc_terms)
-        sim = cosine(query_vec, doc_vec)
-        scores.append((sim, item))
-
-    scores.sort(key=lambda x: x[0], reverse=True)
-    ranked = [item for _, item in scores]
-    return ranked[:top_k] if top_k is not None else ranked
+    return _hybrid_tfidf_rank(query, items, text_fn=lambda item: item.lesson, top_k=top_k)
 
 
 # ---------------------------------------------------------------------------
