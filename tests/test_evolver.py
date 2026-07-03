@@ -1184,7 +1184,7 @@ def test_run_evolver_auto_applies_high_confidence(tmp_path, monkeypatch):
     """run_evolver auto-applies suggestions with confidence >= 0.8."""
     from unittest.mock import MagicMock
 
-    monkeypatch.setattr("evolver._suggestions_path", lambda: tmp_path / "suggestions.jsonl")
+    monkeypatch.setattr("evolver_store._suggestions_path", lambda: tmp_path / "suggestions.jsonl")
 
     applied_ids = []
 
@@ -1246,7 +1246,7 @@ class TestScanOutcomesForSignals:
 
     def test_no_done_outcomes_returns_empty(self):
         outcomes = [self._make_outcome(status="stuck")]
-        with patch("evolver.build_adapter") as mock_build:
+        with patch("evolver_scans.build_adapter") as mock_build:
             result = scan_outcomes_for_signals(outcomes)
         assert result == []
 
@@ -1265,7 +1265,7 @@ class TestScanOutcomesForSignals:
             content=signal_json, input_tokens=20, output_tokens=50
         )
         outcomes = [self._make_outcome()]
-        with patch("evolver.build_adapter", return_value=mock_adapter):
+        with patch("evolver_scans.build_adapter", return_value=mock_adapter):
             signals = scan_outcomes_for_signals(outcomes, min_confidence=0.7)
         assert len(signals) == 1
         assert signals[0].signal_type == "opportunity"
@@ -1284,7 +1284,7 @@ class TestScanOutcomesForSignals:
         mock_adapter = MagicMock()
         mock_adapter.complete.return_value = MagicMock(content=signal_json, input_tokens=10, output_tokens=20)
         outcomes = [self._make_outcome()]
-        with patch("evolver.build_adapter", return_value=mock_adapter):
+        with patch("evolver_scans.build_adapter", return_value=mock_adapter):
             signals = scan_outcomes_for_signals(outcomes, min_confidence=0.7)
         assert signals == []
 
@@ -1292,7 +1292,7 @@ class TestScanOutcomesForSignals:
         mock_adapter = MagicMock()
         mock_adapter.complete.side_effect = RuntimeError("network error")
         outcomes = [self._make_outcome()]
-        with patch("evolver.build_adapter", return_value=mock_adapter):
+        with patch("evolver_scans.build_adapter", return_value=mock_adapter):
             signals = scan_outcomes_for_signals(outcomes)
         assert signals == []
 
@@ -1309,7 +1309,7 @@ class TestScanOutcomesForSignals:
         mock_adapter = MagicMock()
         mock_adapter.complete.return_value = MagicMock(content=signal_json, input_tokens=10, output_tokens=20)
         outcomes = [self._make_outcome()]
-        with patch("evolver.build_adapter", return_value=mock_adapter):
+        with patch("evolver_scans.build_adapter", return_value=mock_adapter):
             signals = scan_outcomes_for_signals(outcomes)
         assert signals == []
 
@@ -1741,7 +1741,7 @@ class TestScanStepCosts:
         monkeypatch.setattr("evolver._llm_analyze", lambda outcomes, dry_run=False: ([], []))
         monkeypatch.setattr("evolver.scan_outcomes_for_signals", lambda *a, **kw: [])
         monkeypatch.setattr("evolver.scan_calibration_log", lambda *a, **kw: [])
-        monkeypatch.setattr("evolver._suggestions_path", lambda: tmp_path / "suggestions.jsonl")
+        monkeypatch.setattr("evolver_store._suggestions_path", lambda: tmp_path / "suggestions.jsonl")
 
         cost_sugg = [Suggestion(
             suggestion_id="cost-test", category="cost_optimization",
@@ -1945,18 +1945,18 @@ class TestQualityDrift:
     """Tests for scan_quality_drift and baselines."""
 
     def test_no_findings_with_empty_outcomes(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("evolver._baselines_path", lambda: tmp_path / "baselines.jsonl")
+        monkeypatch.setattr("evolver_scans._baselines_path", lambda: tmp_path / "baselines.jsonl")
         assert scan_quality_drift([]) == []
 
     def test_no_findings_without_enough_history(self, tmp_path, monkeypatch):
         """Need at least 3 prior baselines to detect drift."""
-        monkeypatch.setattr("evolver._baselines_path", lambda: tmp_path / "baselines.jsonl")
+        monkeypatch.setattr("evolver_scans._baselines_path", lambda: tmp_path / "baselines.jsonl")
         outcomes = [{"status": "done"}, {"status": "stuck"}]
         findings = scan_quality_drift(outcomes)
         assert findings == []
 
     def test_baseline_saved_on_each_call(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("evolver._baselines_path", lambda: tmp_path / "baselines.jsonl")
+        monkeypatch.setattr("evolver_scans._baselines_path", lambda: tmp_path / "baselines.jsonl")
         scan_quality_drift([{"status": "done"}])
         baselines = _load_baselines()
         assert len(baselines) == 1
@@ -1965,7 +1965,7 @@ class TestQualityDrift:
     def test_drift_detected_after_consecutive_drops(self, tmp_path, monkeypatch):
         """Sustained success_rate drop below threshold triggers finding."""
         bl_path = tmp_path / "baselines.jsonl"
-        monkeypatch.setattr("evolver._baselines_path", lambda: bl_path)
+        monkeypatch.setattr("evolver_scans._baselines_path", lambda: bl_path)
 
         # Seed 5 cycles of 80% success
         for i in range(5):
@@ -1986,7 +1986,7 @@ class TestQualityDrift:
     def test_no_drift_when_quality_stable(self, tmp_path, monkeypatch):
         """Stable success_rate produces no findings."""
         bl_path = tmp_path / "baselines.jsonl"
-        monkeypatch.setattr("evolver._baselines_path", lambda: bl_path)
+        monkeypatch.setattr("evolver_scans._baselines_path", lambda: bl_path)
 
         for i in range(5):
             _save_baseline({"ts": f"2026-01-0{i+1}", "success_rate": 0.75, "avg_cost_usd": 0.01, "outcomes_count": 10})
@@ -1999,7 +1999,7 @@ class TestQualityDrift:
     def test_cost_drift_detected(self, tmp_path, monkeypatch):
         """Rising avg cost triggers finding when sustained."""
         bl_path = tmp_path / "baselines.jsonl"
-        monkeypatch.setattr("evolver._baselines_path", lambda: bl_path)
+        monkeypatch.setattr("evolver_scans._baselines_path", lambda: bl_path)
 
         for i in range(5):
             _save_baseline({"ts": f"2026-01-0{i+1}", "success_rate": 0.8, "avg_cost_usd": 0.01, "outcomes_count": 10})
@@ -2015,7 +2015,7 @@ class TestQualityDrift:
         assert len(cost_findings) >= 1
 
     def test_load_baselines_roundtrip(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("evolver._baselines_path", lambda: tmp_path / "baselines.jsonl")
+        monkeypatch.setattr("evolver_scans._baselines_path", lambda: tmp_path / "baselines.jsonl")
         _save_baseline({"ts": "2026-01-01", "success_rate": 0.9, "avg_cost_usd": 0.01, "outcomes_count": 5})
         _save_baseline({"ts": "2026-01-02", "success_rate": 0.8, "avg_cost_usd": 0.02, "outcomes_count": 10})
         loaded = _load_baselines()
@@ -2152,7 +2152,7 @@ class TestScanCanonCandidates:
         monkeypatch.setattr("evolver.load_outcomes", lambda **kw: fake_outcomes)
         monkeypatch.setattr("evolver._llm_analyze", lambda *a, **kw: ([], []))
         monkeypatch.setattr("evolver._save_suggestions", lambda *a, **kw: None)
-        monkeypatch.setattr("evolver._save_baseline", lambda *a, **kw: None)
+        monkeypatch.setattr("evolver_scans._save_baseline", lambda *a, **kw: None)
 
         run_evolver(dry_run=True, scan_canon=True, scan_signals=False,
                     scan_calibration=False, scan_costs=False, scan_drift=False,
@@ -2178,7 +2178,7 @@ class TestScanCanonCandidates:
         monkeypatch.setattr("evolver.load_outcomes", lambda **kw: fake_outcomes)
         monkeypatch.setattr("evolver._llm_analyze", lambda *a, **kw: ([], []))
         monkeypatch.setattr("evolver._save_suggestions", lambda *a, **kw: None)
-        monkeypatch.setattr("evolver._save_baseline", lambda *a, **kw: None)
+        monkeypatch.setattr("evolver_scans._save_baseline", lambda *a, **kw: None)
 
         run_evolver(dry_run=True, scan_canon=False, scan_signals=False,
                     scan_calibration=False, scan_costs=False, scan_drift=False,
@@ -2295,7 +2295,7 @@ class TestScanSuggestionOutcomes:
         monkeypatch.setattr("evolver.load_outcomes", lambda **kw: fake_outcomes)
         monkeypatch.setattr("evolver._llm_analyze", lambda *a, **kw: ([], []))
         monkeypatch.setattr("evolver._save_suggestions", lambda *a, **kw: None)
-        monkeypatch.setattr("evolver._save_baseline", lambda *a, **kw: None)
+        monkeypatch.setattr("evolver_scans._save_baseline", lambda *a, **kw: None)
 
         run_evolver(dry_run=True, scan_suggestion_calibration=True, scan_signals=False,
                     scan_calibration=False, scan_costs=False, scan_drift=False,
@@ -2313,19 +2313,19 @@ from evolver import _load_user_signals
 class TestLoadUserSignals:
     def test_returns_empty_when_no_file(self, tmp_path, monkeypatch):
         """Missing user/SIGNALS.md returns empty string."""
-        import evolver as _evolver_mod
+        import evolver_scans as _evolver_mod
         monkeypatch.setattr(
             _evolver_mod, "__file__",
-            str(tmp_path / "src" / "evolver.py"),
+            str(tmp_path / "src" / "evolver_scans.py"),
         )
         result = _load_user_signals()
         assert result == ""
 
     def test_reads_and_caps_at_600_chars(self, tmp_path, monkeypatch):
         """Reads SIGNALS.md and caps at 600 chars."""
-        import evolver as _evolver_mod
+        import evolver_scans as _evolver_mod
 
-        # Create fake user/SIGNALS.md relative to a fake src/evolver.py
+        # Create fake user/SIGNALS.md relative to a fake src/evolver_scans.py
         src_dir = tmp_path / "src"
         src_dir.mkdir()
         user_dir = tmp_path / "user"
@@ -2334,7 +2334,7 @@ class TestLoadUserSignals:
 
         monkeypatch.setattr(
             _evolver_mod, "__file__",
-            str(src_dir / "evolver.py"),
+            str(src_dir / "evolver_scans.py"),
         )
         result = _load_user_signals()
         assert len(result) <= 600
@@ -2342,7 +2342,7 @@ class TestLoadUserSignals:
 
     def test_nocrash_on_permission_error(self, tmp_path, monkeypatch):
         """Permission error loading SIGNALS.md returns empty, never raises."""
-        import evolver as _evolver_mod
+        import evolver_scans as _evolver_mod
         src_dir = tmp_path / "src"
         src_dir.mkdir()
         user_dir = tmp_path / "user"
@@ -2352,7 +2352,7 @@ class TestLoadUserSignals:
         sig_file.chmod(0o000)
         monkeypatch.setattr(
             _evolver_mod, "__file__",
-            str(src_dir / "evolver.py"),
+            str(src_dir / "evolver_scans.py"),
         )
         try:
             result = _load_user_signals()
@@ -2373,7 +2373,7 @@ class TestScanOutcomesForSignalsWithUserSignals:
 
     def test_user_signals_included_in_llm_call(self, tmp_path, monkeypatch):
         """user/SIGNALS.md content is passed to the LLM when available."""
-        import evolver as _evolver_mod
+        import evolver_scans as _evolver_mod
 
         src_dir = tmp_path / "src"
         src_dir.mkdir()
@@ -2381,7 +2381,7 @@ class TestScanOutcomesForSignalsWithUserSignals:
         user_dir.mkdir()
         (user_dir / "SIGNALS.md").write_text("## Active research: Polymarket arbitrage strategies")
 
-        monkeypatch.setattr(_evolver_mod, "__file__", str(src_dir / "evolver.py"))
+        monkeypatch.setattr(_evolver_mod, "__file__", str(src_dir / "evolver_scans.py"))
 
         captured_user_msg = []
 
@@ -2410,7 +2410,7 @@ class TestScanOutcomesForSignalsWithUserSignals:
 
     def test_no_signals_file_still_works(self, monkeypatch):
         """Missing SIGNALS.md doesn't break signal scanning."""
-        import evolver as _evolver_mod
+        import evolver_scans as _evolver_mod
         monkeypatch.setattr(_evolver_mod, "_load_user_signals", lambda: "")
 
         signal_json = json.dumps({
@@ -2427,7 +2427,7 @@ class TestScanOutcomesForSignalsWithUserSignals:
             content=signal_json, input_tokens=10, output_tokens=30
         )
         outcomes = [self._make_outcome()]
-        with patch("evolver.build_adapter", return_value=mock_adapter):
+        with patch("evolver_scans.build_adapter", return_value=mock_adapter):
             signals = scan_outcomes_for_signals(outcomes)
         assert len(signals) == 1
 
@@ -2455,12 +2455,12 @@ class TestScanEvolverImpact:
         return FakeOutcome()
 
     def test_returns_empty_when_no_apply_events(self):
-        with patch("evolver.query_log", return_value=[]):
+        with patch("evolver_scans.query_log", return_value=[]):
             records = scan_evolver_impact()
         assert records == []
 
     def test_returns_empty_when_captains_log_unavailable(self):
-        with patch("evolver.query_log", side_effect=ImportError("no captains_log")):
+        with patch("evolver_scans.query_log", side_effect=ImportError("no captains_log")):
             records = scan_evolver_impact()
         assert records == []
 
@@ -2483,9 +2483,9 @@ class TestScanEvolverImpact:
         ]
         all_outcomes = before_outcomes + after_outcomes
 
-        with patch("evolver.query_log", return_value=events):
+        with patch("evolver_scans.query_log", return_value=events):
             try:
-                with patch("evolver.load_outcomes", return_value=all_outcomes):
+                with patch("evolver_scans.load_outcomes", return_value=all_outcomes):
                     records = scan_evolver_impact(lookback_hours=2, lookahead_hours=2)
             except Exception:
                 import evolver as _ev
@@ -2502,16 +2502,16 @@ class TestScanEvolverImpact:
             self._make_outcome("2026-04-14T09:30:00+00:00", "stuck"),
             self._make_outcome("2026-04-14T10:30:00+00:00", "done"),
         ]
-        with patch("evolver.query_log", return_value=events):
-            with patch("evolver.load_outcomes", return_value=sparse):
+        with patch("evolver_scans.query_log", return_value=events):
+            with patch("evolver_scans.load_outcomes", return_value=sparse):
                 records = scan_evolver_impact(lookback_hours=1, lookahead_hours=1, min_outcomes=3)
         if records:
             assert records[0].verdict == "insufficient_data"
 
     def test_event_with_unparseable_timestamp_skipped(self):
         events = [{"timestamp": "not-a-date", "subject": "sid1", "context": {}}]
-        with patch("evolver.query_log", return_value=events):
-            with patch("evolver.load_outcomes", return_value=[]):
+        with patch("evolver_scans.query_log", return_value=events):
+            with patch("evolver_scans.load_outcomes", return_value=[]):
                 records = scan_evolver_impact()
         assert records == []
 
@@ -2529,8 +2529,8 @@ class TestScanEvolverImpact:
             "2026-01-01T00:00:00+00:00", suggestion_id="dup-sid")
 
         with patch("evolver_store._suggestions_path", return_value=path), \
-             patch("evolver.query_log", return_value=[stale_event]), \
-             patch("evolver.load_outcomes", return_value=[]):
+             patch("evolver_scans.query_log", return_value=[stale_event]), \
+             patch("evolver_scans.load_outcomes", return_value=[]):
             records = scan_evolver_impact(min_outcomes=99)
 
         assert len(records) == 1
@@ -2548,8 +2548,8 @@ class TestScanEvolverImpact:
             "2026-04-14T10:00:00+00:00", suggestion_id="old-sid")
 
         with patch("evolver_store._suggestions_path", return_value=path), \
-             patch("evolver.query_log", return_value=[event]), \
-             patch("evolver.load_outcomes", return_value=[]):
+             patch("evolver_scans.query_log", return_value=[event]), \
+             patch("evolver_scans.load_outcomes", return_value=[]):
             records = scan_evolver_impact(min_outcomes=99)
 
         assert len(records) == 1
