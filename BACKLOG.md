@@ -190,9 +190,6 @@ not scavenge from elsewhere on the filesystem.
 Not ambitious; the goal is "constraint to a folder isn't a bad option to
 have" not "build a sandboxing subsystem."
 
-### 6. NEXT.md ↔ git activity sync at closure
-
-- [ ] **NEXT.md ↔ git activity sync.** Control's NEXT.md showed steps 6–8 unchecked while the repo had matching commits. Either NEXT.md updates lag, or the agent didn't reflect the work back. Either way: closure should compare claimed-done against repo activity and surface the divergence.
 
 
 ### 9. Local-validator measurement — token/cost delta report

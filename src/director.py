@@ -1134,6 +1134,7 @@ from closure_verify import (  # noqa: E402
     _classify_probe_modality,
     _detect_behavioral_gap,
     _detect_diagnosis_gap,
+    _detect_next_ledger_gap,
     _CLOSURE_PLAN_SYSTEM,
     _CLOSURE_VERDICT_SYSTEM,
 )

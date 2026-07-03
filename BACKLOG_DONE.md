@@ -8,6 +8,21 @@ Last split: 2026-04-16 (session 34).
 
 ---
 
+### NEXT.md ↔ git activity sync at closure — DONE (2026-07-03)
+
+- [x] **Shipped as `_detect_next_ledger_gap(project, workspace_path)`**
+  (closure_verify, re-exported via director): deterministic — when the
+  project's NEXT.md still has unchecked items AND the workspace repo's last
+  commit is NEWER than the ledger file's mtime, the ledger lags reality
+  (work done but not reflected back via `mark_item`, or genuinely not done).
+  The divergence is injected into the closure verdict LLM's input as a
+  "Ledger divergence note" and recorded on the CLOSURE_VERDICT event
+  (`next_ledger_divergence` context field). Advisory only — never flips the
+  verdict by itself. `verify_goal_completion` gained a `project` kwarg,
+  passed at all 3 handle.py call sites (initial, restart re-verify,
+  post-escalate). Original repro: control run's NEXT.md showed steps 6–8
+  unchecked while the repo had matching commits.
+
 ### Extend local-validator ladder to post-loop quality gate — DONE (2026-07-03)
 
 - [x] **Shipped as a tier-0 block in `run_quality_gate`** (mirrors

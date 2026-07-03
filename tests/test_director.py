@@ -1797,3 +1797,63 @@ class TestDirectorEvaluate:
 
         result = director_evaluate("build X", ctx, "verify_failure", adapter)
         assert result.action == "continue"
+
+
+class TestDetectNextLedgerGap:
+    """BACKLOG #6: NEXT.md ledger vs repo activity divergence at closure.
+    Deterministic and advisory — surfaced, never flips the verdict itself."""
+
+    def _mk_project(self, tmp_path, monkeypatch, next_lines):
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+        import orch_items as o
+        proj = o.project_dir("ledger-demo")
+        proj.mkdir(parents=True, exist_ok=True)
+        (proj / "NEXT.md").write_text("\n".join(next_lines) + "\n", encoding="utf-8")
+        return proj
+
+    def _mk_repo(self, tmp_path, commit=True):
+        import subprocess as sp
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        sp.run(["git", "init", "-q"], cwd=repo, check=True)
+        sp.run(["git", "-c", "user.email=t@t", "-c", "user.name=t",
+                "commit", "-q", "--allow-empty", "-m", "work landed"],
+               cwd=repo, check=(commit))
+        return repo
+
+    def test_unchecked_items_with_newer_commit_diverges(self, tmp_path, monkeypatch):
+        import os, time
+        from director import _detect_next_ledger_gap
+        proj = self._mk_project(tmp_path, monkeypatch,
+                                ["# NEXT", "- [x] step one", "- [ ] step six",
+                                 "- [ ] step seven"])
+        # Ledger updated in the past; commit is newer.
+        past = time.time() - 3600
+        os.utime(proj / "NEXT.md", (past, past))
+        repo = self._mk_repo(tmp_path)
+        gap = _detect_next_ledger_gap("ledger-demo", str(repo))
+        assert "2 unchecked item(s)" in gap
+        assert "step six" in gap
+
+    def test_all_checked_in_sync(self, tmp_path, monkeypatch):
+        from director import _detect_next_ledger_gap
+        self._mk_project(tmp_path, monkeypatch,
+                         ["# NEXT", "- [x] step one", "- [x] step two"])
+        repo = self._mk_repo(tmp_path)
+        assert _detect_next_ledger_gap("ledger-demo", str(repo)) == ""
+
+    def test_ledger_newer_than_commits_in_sync(self, tmp_path, monkeypatch):
+        """Unchecked items are fine when the ledger was touched AFTER the
+        last commit — the record postdates the activity."""
+        from director import _detect_next_ledger_gap
+        repo = self._mk_repo(tmp_path)
+        self._mk_project(tmp_path, monkeypatch,
+                         ["# NEXT", "- [ ] genuinely future step"])
+        assert _detect_next_ledger_gap("ledger-demo", str(repo)) == ""
+
+    def test_no_project_or_no_repo_empty(self, tmp_path, monkeypatch):
+        from director import _detect_next_ledger_gap
+        assert _detect_next_ledger_gap("", str(tmp_path)) == ""
+        self._mk_project(tmp_path, monkeypatch, ["# NEXT", "- [ ] item"])
+        assert _detect_next_ledger_gap("ledger-demo", str(tmp_path / "not-a-repo")) == ""
+        assert _detect_next_ledger_gap("no-such-project", str(tmp_path)) == ""

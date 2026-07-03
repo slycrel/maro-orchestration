@@ -1386,6 +1386,7 @@ def _handle_impl(
                     resolved_intent=_resolved_intent,
                     diagnosis=_closure_diag,
                     loop_id=getattr(loop_result, "loop_id", "") or "",
+                    project=project or getattr(loop_result, "project", "") or "",
                 )
             except Exception:
                 _closure = None
@@ -1475,6 +1476,7 @@ def _handle_impl(
                             resolved_intent=_resolved_intent,
                             diagnosis=None,
                             loop_id=getattr(loop_result, "loop_id", "") or "",
+                            project=project or getattr(loop_result, "project", "") or "",
                         )
                     except Exception:
                         _closure = None  # fail open: no re-verdict, no demotion
@@ -1714,6 +1716,7 @@ def _handle_impl(
                                     resolved_intent=_resolved_intent,
                                     diagnosis=_post_diag,
                                     loop_id=getattr(loop_result, "loop_id", "") or "",
+                                    project=project or getattr(loop_result, "project", "") or "",
                                 )
                                 if verbose and _post_closure is not None:
                                     print(

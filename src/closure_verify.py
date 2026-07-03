@@ -234,6 +234,55 @@ def _check_outcome(*, exit_code: int, stderr: str = "") -> str:
     return "fail"
 
 
+def _detect_next_ledger_gap(project: str, workspace_path: str) -> str:
+    """NEXT.md ledger vs repo activity divergence at closure (BACKLOG #6).
+
+    Deterministic: when the project's NEXT.md still has unchecked items while
+    the workspace repo has a commit NEWER than the ledger's last update, the
+    ledger lags reality — either the loop did the work and never reflected it
+    back (`mark_item`), or the items genuinely weren't done. Both readings
+    mean the run's own record can't be trusted at face value.
+
+    Returns a short description of the divergence, or "" when in sync or not
+    applicable (no project, no NEXT.md, no unchecked items, not a git repo).
+    Advisory only — surfaced to the verdict LLM and the CLOSURE_VERDICT
+    event; never flips the verdict by itself.
+    """
+    try:
+        import subprocess as _sp
+        import orch_items as o
+        if not project:
+            return ""
+        np = o.next_path(project)
+        if not np.is_file():
+            return ""
+        _, items = o.parse_next(project)
+        unchecked = [it for it in items if it.state != o.STATE_DONE]
+        if not unchecked:
+            return ""
+        if not workspace_path or not (Path(workspace_path) / ".git").exists():
+            return ""
+        ledger_mtime = np.stat().st_mtime
+        proc = _sp.run(
+            ["git", "log", "-1", "--format=%ct"],
+            cwd=workspace_path, capture_output=True, text=True, timeout=10,
+        )
+        if proc.returncode != 0 or not proc.stdout.strip():
+            return ""
+        last_commit = float(proc.stdout.strip().splitlines()[0])
+        if last_commit <= ledger_mtime:
+            return ""
+        preview = "; ".join(it.text[:60] for it in unchecked[:3])
+        return (
+            f"NEXT.md has {len(unchecked)} unchecked item(s) but the repo has "
+            f"commit activity newer than the ledger's last update — work may "
+            f"have been done without being reflected back, or genuinely not "
+            f"done. Unchecked: {preview}"
+        )
+    except Exception:
+        return ""
+
+
 def verify_goal_completion(
     goal: str,
     steps: list,
@@ -247,6 +296,7 @@ def verify_goal_completion(
     resolved_intent=None,
     diagnosis=None,
     loop_id: str = "",
+    project: str = "",
 ) -> ClosureVerdict:
     """Director closure check: verify the goal was actually achieved.
 
@@ -483,6 +533,13 @@ def verify_goal_completion(
             channel.emit("verification", text="\n".join(_lines),
                          checks_run=checks_run, checks_passed=checks_passed)
 
+        # NEXT.md ledger vs repo activity (BACKLOG #6) — deterministic
+        # divergence note the director sees when declaring completeness.
+        _ledger_gap = _detect_next_ledger_gap(project, workspace_path)
+        _ledger_block = f"\nLedger divergence note: {_ledger_gap}\n" if _ledger_gap else ""
+        if _ledger_gap:
+            log.info("closure: %s", _ledger_gap)
+
         # Phase 3: director interprets results
         results_text = json.dumps(check_results, indent=2)
         verdict_resp = adapter.complete(
@@ -490,7 +547,8 @@ def verify_goal_completion(
                 LLMMessage("system", _CLOSURE_VERDICT_SYSTEM),
                 LLMMessage("user",
                     f"Goal: {goal}\n\n"
-                    f"Work done:\n{work_summary}\n\n"
+                    f"Work done:\n{work_summary}\n"
+                    f"{_ledger_block}\n"
                     f"Verification results:\n{results_text}"
                 ),
             ],
@@ -628,6 +686,7 @@ def verify_goal_completion(
                     "behavioral_gap_downgrade": behavioral_gap_reason or "",
                     "diagnosis_failure_class": safe_str(getattr(diagnosis, "failure_class", "")),
                     "diagnosis_gap_downgrade": diagnosis_gap_reason or "",
+                    "next_ledger_divergence": _ledger_gap[:300],
                     "commands": [r.get("command", "")[:200] for r in check_results],
                     "summary": summary[:400],
                 },
