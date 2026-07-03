@@ -152,7 +152,7 @@ def _process_blocked_step(ctx: LoopContext, blk: BlockedStepContext) -> tuple:
         if not ctx.dry_run:
             import navigator_shadow as _ns
             from agent_loop import _current_run_dir_safe
-            _ns.shadow_blocked_step_live(
+            _nav_decision = _ns.shadow_blocked_step_live(
                 ctx.goal,
                 run_dir=_current_run_dir_safe(),
                 heuristic_action=_heuristic_action,
@@ -167,6 +167,19 @@ def _process_blocked_step(ctx: LoopContext, blk: BlockedStepContext) -> tuple:
                 },
                 turn_index=iteration,
             )
+            # Blocked-step escalate cutover (2026-07-03): the navigator may
+            # override a FORWARD recovery decision with an honest stop —
+            # escalate-only, confidence-floored, config-gated off in code.
+            # The shadow row above still logs either way (audit trail).
+            _act_override = _navigator_act_blocked_step(
+                _nav_decision, _decision,
+                goal=ctx.goal,
+                step_text=step_text,
+                step_idx=step_idx,
+                loop_id=getattr(ctx, "loop_id", "") or "",
+            )
+            if _act_override is not None:
+                _decision = _act_override
     except Exception as _nav_exc:
         log.debug("blocked-step navigator shadow skipped: %s", _nav_exc)
     _recovery_delta = 0
@@ -473,6 +486,115 @@ class _BlockDecision:
     split_into: List[str] = field(default_factory=list)  # non-empty → replace stuck step with these
     redecompose: bool = False  # True → re-decompose this step into sub-steps
     metacognitive_reason: str = ""  # why we chose this action (Phase 62 logging)
+
+
+def _navigator_act_blocked_step(
+    nav_decision, heuristic_decision, *, goal: str, step_text: str,
+    step_idx: int, loop_id: str = "",
+):
+    """Blocked-step cutover: turn a navigator escalate into an honest stop,
+    or None to keep the heuristic's recovery decision.
+
+    Mirror of `handle._navigator_act_dispatch`, scoped to this point's
+    evidence (dumb-loop audit rounds 2-4, 24 rows): escalate-ONLY — it
+    defers to a human, so it cannot assert a wrong resolution; the data
+    (18/19 doomed-block stops at 0.95, zero false escalates on recoverable
+    blocks) earned exactly that move and no other. close asserts resolution
+    without running anything and extend/fork are what the heuristic already
+    does with better mechanics — all fall through. Only overrides FORWARD
+    heuristic decisions (retry/split/redecompose): if the heuristic already
+    stopped, its reason stands and agreement needs no act. Acting requires
+    confidence >= navigator.act_confidence_floor (default 0.9 — would have
+    passed 13/14 correct stops in the corpus and blocked the one 0.85
+    wobble). Gated by `navigator.act_blocked_step` (default OFF). Enabled
+    per Jeremy 2026-07-03 with a standing note to re-verify against actual
+    usage (see GOAL_BRAIN.md decision record). Never raises.
+    """
+    if nav_decision is None or heuristic_decision is None:
+        return None
+    try:
+        try:
+            from config import get as _cfg_get
+            if not bool(_cfg_get("navigator.act_blocked_step", False)):
+                return None
+            _floor = float(_cfg_get("navigator.act_confidence_floor", 0.9))
+        except Exception:
+            return None
+        _forward = bool(
+            heuristic_decision.retry
+            or heuristic_decision.split_into
+            or heuristic_decision.redecompose
+        )
+        move = getattr(nav_decision, "move", "")
+        conf = float(getattr(nav_decision, "confidence", 0.0) or 0.0)
+        reasoning = str(getattr(nav_decision, "reasoning", ""))
+        if not _forward or move != "escalate" or conf < _floor:
+            return None
+
+        stuck_reason = (
+            f"NAVIGATOR_ESCALATE: recovery overridden at blocked step "
+            f"(conf {conf:.2f}) — {reasoning[:300]}"
+        )
+        log.warning("navigator escalate override at blocked step %s: %s",
+                    step_idx, stuck_reason[:200])
+        try:
+            from captains_log import log_event, NAVIGATOR_ACTED
+            log_event(
+                NAVIGATOR_ACTED,
+                subject="navigator",
+                summary=(
+                    f"blocked_step: escalate acted (conf {conf:.2f}) — "
+                    f"heuristic recovery overridden, honest stop"
+                ),
+                context={
+                    "point": "blocked_step",
+                    "move": move,
+                    "confidence": conf,
+                    "reasoning": reasoning[:500],
+                    "goal_preview": goal[:200],
+                    "step_preview": step_text[:200],
+                    "step_idx": step_idx,
+                    "loop_id": loop_id,
+                    "heuristic_action": (
+                        "retry" if heuristic_decision.retry
+                        else "split" if heuristic_decision.split_into
+                        else "redecompose"
+                    ),
+                },
+            )
+        except Exception:
+            pass
+        # Deferring to a human only works if a human finds out. The run dir
+        # exists here (unlike dispatch-escalate) so finalize will also emit
+        # run_completed — this is the escalation-class signal, sent now
+        # because the stop reason is a deferral, not a completion.
+        try:
+            from notify import emit as _notify_emit
+            _notify_emit("escalation", {
+                "handle_id": "",
+                "goal": goal,
+                "status": "stuck",
+                "summary": stuck_reason,
+                "reason": reasoning,
+                "loop_id": loop_id,
+                "point": "blocked_step",
+                "step": step_text[:200],
+            })
+        except Exception:
+            pass
+        return _BlockDecision(
+            retry=False,
+            hint="",
+            loop_status="stuck",
+            stuck_reason=stuck_reason,
+            metacognitive_reason=(
+                "navigator escalate override — doomed-block class, defer to "
+                "human instead of grinding recovery"
+            ),
+        )
+    except Exception as _act_exc:
+        log.debug("navigator act_blocked_step fell through: %s", _act_exc)
+        return None
 
 
 def _generate_timeout_split(step_text: str, adapter) -> List[str]:

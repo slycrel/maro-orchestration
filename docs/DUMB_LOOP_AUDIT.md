@@ -354,16 +354,25 @@ of timing out.
   another keyword taxonomy, and this data is the argument for handling the
   class by inference instead: the navigator already stops it at 0.95.
 
-**Cutover assessment (for Jeremy, not enacted):** blocked-step escalate now
-has evidence on both sides of the question round 2 posed — it stops doomed
-grinds (18/19 at 0.95) and does not stop healthy work (0 false escalates in
-5 recoverable rows, 1 exact agreement). Evidence profile mirrors the dispatch
-escalate cutover at its enablement (which shipped with escalate-only,
-confidence-floored, opt-in `act_moves`). If enacted, same shape: navigator
-may *escalate* a blocked step (defer to human) at ≥0.9, never fork/close.
-Recoverable-class coverage is still thin (n=5, two classes) — one more
-accrual batch focused on recoverable shapes would firm the false-escalate
-rate before flipping anything. Gate restored OFF per standing rationale.
+**Cutover assessment:** blocked-step escalate now has evidence on both sides
+of the question round 2 posed — it stops doomed grinds (18/19 at 0.95) and
+does not stop healthy work (0 false escalates in 5 recoverable rows, 1 exact
+agreement). Evidence profile mirrors the dispatch escalate cutover at its
+enablement (which shipped with escalate-only, confidence-floored, opt-in
+`act_moves`). Recoverable-class coverage is thin (n=5, two classes) — the
+false-escalate rate firms up from actual usage (see below).
+
+**ENACTED 2026-07-03 (Jeremy: "ok with flipping the escalation on (with
+maybe a note to re-verify in the future based on actual usage)"):**
+`loop_blocked._navigator_act_blocked_step` — escalate-only, ≥
+`navigator.act_confidence_floor` (0.9), overrides only FORWARD recovery
+decisions, config-gated `navigator.act_blocked_step` (default off in code,
+ON in box config). Acts log `NAVIGATOR_ACTED` (point=blocked_step) + Telegram
+escalation; shadow rows keep accruing (the act flag alone opens the
+navigator-call gate). **Standing re-verify note:** adjudicate organic
+NAVIGATOR_ACTED blocked_step rows against run outcomes once real usage
+accrues — the enablement corpus is 24 rows with recoverable n=5. Revert =
+flip the flag. Tests: `tests/test_blocked_step_cutover.py`.
 
 ## Known gaps (carried to BACKLOG when actionable)
 

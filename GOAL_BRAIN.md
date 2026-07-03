@@ -798,6 +798,26 @@ Sample: the 2026-05-13..17 window of `~/.maro/workspace/runs/` (478 dirs total;
      fork's self-report" protocol is the current form of this; expect it to
      need tightening again as models keep trending this direction, not to
      be a one-time fix.
+- **2026-07-03 (blocked-step escalate cutover ENABLED)** — Jeremy: *"I'm ok
+  waiting for more data if we need to, and ok with flipping the escalation
+  on (with maybe a note to re-verify in the future based on actual usage)."*
+  Enacted same day: `loop_blocked._navigator_act_blocked_step` (mirror of
+  the dispatch act path) — **escalate-only** (close/extend/fork fall
+  through), `navigator.act_confidence_floor` (0.9), only overrides FORWARD
+  recovery decisions (a heuristic that already stopped keeps its own honest
+  reason), gated `navigator.act_blocked_step` (default off in code; ON in
+  box config). Every act logs `NAVIGATOR_ACTED` (point=blocked_step) and
+  emits a Telegram escalation; the shadow row keeps logging either way, and
+  the act flag alone opens the navigator-call gate so evidence accrues from
+  actual usage. Evidence at enablement (audit rounds 2–4, 24 rows): doomed
+  blocks 18/19 navigator-stop at 0.95, waste measured live (~50 min/$0.35
+  grind to the verdict the navigator had at minute 3); recoverable blocks
+  5/5 navigator-forward, zero false escalates — but recoverable n=5 across
+  two classes, hence the **standing re-verify note**: adjudicate accumulated
+  organic `NAVIGATOR_ACTED` blocked_step rows against run outcomes
+  (`python3 -m navigator_shadow --agreement`) once real usage accrues.
+  Revert = flip `act_blocked_step` false. 10 new tests
+  (`tests/test_blocked_step_cutover.py`); suite green.
 
 ## Threads (system-maintained — nothing leaves this list silently)
 

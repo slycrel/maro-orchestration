@@ -377,12 +377,18 @@ def shadow_blocked_step_live(
 
     Config-gated by `navigator.shadow_blocked_step` (default OFF in code: a
     model call per blocked step is real spend and latency, so a deployment
-    opts in via workspace config). Never raises; never alters recovery.
+    opts in via workspace config). Also fires when `navigator.act_blocked_step`
+    is on — the escalate cutover (2026-07-03) needs the decision regardless of
+    the shadow flag, and the NAVIGATOR_DECIDED row it logs is the audit trail
+    that keeps accruing cutover evidence. This function itself never raises
+    and never alters recovery — acting on the returned decision is the
+    caller's job (`loop_blocked._navigator_act_blocked_step`).
     Returns the decision or None.
     """
     try:
         from config import get as cfg_get
-        if not bool(cfg_get("navigator.shadow_blocked_step", False)):
+        if not (bool(cfg_get("navigator.shadow_blocked_step", False))
+                or bool(cfg_get("navigator.act_blocked_step", False))):
             return None
         if tiers is None:
             tiers = list(cfg_get("navigator.shadow_tiers", ["cheap"]))
