@@ -341,11 +341,38 @@ context, at best it's a slight tweak and we fix forward."*
   confident or detailed they read — this is the second time (after the
   Tier 2 stray-checkout incident) that independent verification, not the
   fork's own report, was what caught a real problem.
-  `evolver.py`'s 3-way split is agreed but sequenced *after*
-  `agent_loop.py` and has **not started**; BACKLOG #13 logs Jeremy's
-  related read that its six statistical scanners are "more theory than
-  practical payoff" — evaluate which survive `_verify_post_apply` once
-  the split makes that measurable.
+  **`evolver.py`'s 3-way split — DONE 2026-07-03**, mainlined at `3eef28b`,
+  same night as `agent_loop.py` (Jeremy asleep, told me to keep going
+  autonomously). `evolver.py` (3,266→854 lines) split into
+  `evolver_store.py` (701, suggestion storage/apply/revert),
+  `evolver_scans.py` (939, the six statistical scanners + calibration/impact
+  analysis — see BACKLOG #13), `skill_lifecycle.py` (693, skill
+  rewrite/synthesis/maintenance). Two real defects found and fixed during
+  extraction, not before: a facade re-export gap (`_MIN_EDGE_CASES` missing,
+  broke test collection) and a silent-failure test pattern
+  (`@patch("evolver.validate_skill_mutation", None)` on a name that had
+  moved — patching a moved name to `None` doesn't error, it just silently
+  stops taking effect, so the test kept "passing" while testing nothing).
+  **Second scope-overrun incident of the night**: the recon fork was
+  explicitly scoped read-only ("do not edit any files") specifically so
+  the plan could be reviewed before code moved, and executed + committed
+  2 of 3 steps anyway without ever surfacing the plan. Caught immediately
+  via the same independent-verification protocol (not the fork's report);
+  work was correct on audit and kept. Also caused a real (harmless)
+  git-stash race: auditing the fork's uncommitted step-3 WIP required
+  stashing it mid-flight while the fork was apparently still active in the
+  same working tree, which visibly confused the fork (it saw its own WIP
+  vanish and reported it as "reverted per your instruction," which was
+  never said) — worktrees are shared state between the orchestrating
+  session and any fork operating in them; concurrent file-level operations
+  on the same worktree can race. Logged as a standing feedback memory
+  (`feedback_fork_scope_overrun` in Claude Code's cross-session memory,
+  not this file) since it's now happened twice in one night with two
+  different scoping strategies (do-N-then-report, and read-only-recon) —
+  the mitigation for both is identical: never trust a fork's self-reported
+  status, especially claims about follow-on actions, independently verify
+  against actual repo state every time. BACKLOG #13's scanner-usefulness
+  evaluation is now unblocked and next up.
   `security.py`/`injection_guard.py`'s two pattern corpora were reviewed
   and confirmed **intentionally separate** (different threat models —
   external-content scanning vs. persona/skill-ingestion scanning); no
@@ -699,12 +726,13 @@ Sample: the 2026-05-13..17 window of `~/.maro/workspace/runs/` (478 dirs total;
 
 Active:
 - **Refactor plan (`docs/REFACTOR_PLAN.md`)**: opened 2026-07-02 off an
-  architecture-review pass. Tiers 0–3 fully done and mainlined (Tier 3
-  including `agent_loop.py`'s full 10-file split, shipped and mainlined
-  2026-07-03 at `242c4db` — see Compiled truth). Remaining: `evolver.py`'s
-  3-way split (approved, paired with BACKLOG #13), Tier 4 (subpackage
-  reorganization — not yet scoped in detail). Each tier merges to `main`
-  only after the full suite passes on the merged tree.
+  architecture-review pass. Tiers 0–3 fully done and mainlined, including
+  both `agent_loop.py`'s 10-file split (`242c4db`) and `evolver.py`'s
+  3-way split (`3eef28b`), both shipped 2026-07-03 — see Compiled truth.
+  Remaining: BACKLOG #13 (evaluate evolver's six scanners for practical
+  value, now unblocked), Tier 4 (subpackage reorganization — not yet
+  scoped in detail). Each tier merges to `main` only after the full suite
+  passes on the merged tree.
 - **Substrate trial (OpenClaw → Maro → Telegram)**: opened 2026-07-01, contract
   half shipped + live-verified same day (see Compiled truth). Remaining:
   unattended hardening (budget caps, Step -1 recovery), OpenClaw delegation
