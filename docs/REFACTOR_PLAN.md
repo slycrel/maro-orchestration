@@ -276,16 +276,43 @@ suite green.
 
 **Also DONE 2026-07-02 (round 2, after Jeremy's sign-off):** `cli.py`'s
 command-registry conversion, and the probe-modality classifier
-reconciliation flagged above. `agent_loop.py`'s split and `evolver.py`'s
-split are still deliberately **not** started — held pending explicit
-go-ahead given their size and behavioral risk. Jeremy has now approved
-`agent_loop.py`'s split to start once other in-flight work clears
-(sequenced as one staged, sequential extraction — not parallel forks
-racing on the same file, unlike the independent-cluster work above).
-`evolver.py`'s split is agreed but sequenced *after* `agent_loop.py`;
-see BACKLOG.md #13 ("evolve the evolver") for the related follow-up
-Jeremy wants — evaluating which of its 6 scanners are worth keeping,
-sequenced after the split so pruning is easier against modular code.
+reconciliation flagged above.
+
+**DONE 2026-07-03: `agent_loop.py` → `loop_*.py` (10-step sequential
+split), mainlined at `242c4db`.** Shipped as 10 dependency-ordered
+extraction steps (each independently verified — pyflakes clean, imports
+resolve, targeted tests green — then committed before the next step
+started), matching the module layout below almost exactly (one deviation:
+`_build_loop_context`/`_decompose_goal`/`_preflight_checks`/`_prepare_execution`
+landed in `loop_planning.py` rather than a separate `loop_init.py`, since
+`_build_loop_context`'s only caller is `_decompose_goal`; `loop_init.py`
+ended up holding just `_budget_gate`/`_initialize_loop`/`_DryRunAdapter`).
+`agent_loop.py` is now a 546-line pure facade (`run_agent_loop`, `main`,
+`run_parallel_loops`, plus re-export imports for all 9 new modules).
+Both thread-unsafe function-attribute globals were fixed as part of step 10,
+per the plan below: `run_agent_loop._cost_warned` became `LoopContext.cost_warned`
+(an instance field, since `ctx` is a fresh `LoopStateMachine()` per call);
+`run_agent_loop._recovery_in_progress` became a plain call-stack-local
+keyword arg (not shared mutable state at all — simpler than a `LoopContext`
+field and equally race-proof, since `run_parallel_loops`' concurrent calls
+each get their own stack frame). Recurring test fallout across every step:
+tests that `monkeypatch.setattr`/`mock.patch` a function on `agent_loop`
+(or an alias) to intercept a call made *from inside* another function that
+moved to the same new module stop working, because Python resolves the
+unqualified call against the new module's own namespace — fixed by
+retargeting each patch to the new module (same pattern first seen in the
+`director.py` → `closure_verify.py` extraction). Hit in
+`tests/test_agent_loop.py`, `test_e2e_smoke.py`, `test_execution_modes.py`,
+`test_dag_executor.py`, `test_parallel_batch_indices.py` — none in
+`tests/test_llm.py` (its one reference is a `hasattr` check, which the
+facade re-export keeps satisfied). Full 133-item suite green after every
+step and after the final mainline merge.
+
+`evolver.py`'s split is agreed but was intentionally sequenced *after*
+`agent_loop.py` and has not started; see BACKLOG.md #13 ("evolve the
+evolver") for the related follow-up Jeremy wants — evaluating which of
+its 6 scanners are worth keeping, sequenced after the split so pruning is
+easier against modular code.
 
 - **`cli.py` → command registry**: 52 `if`/`elif` branches (53 handler
   functions — two subcommands shared one) became `_cmd_<name>(args)`
