@@ -851,6 +851,46 @@ Sample: the 2026-05-13..17 window of `~/.maro/workspace/runs/` (478 dirs total;
   display forms; 9 consumers re-anchored them on orch_root — new inverse
   `resolve_artifact_path()` is the only sanctioned way back to a Path.
   Contract pinned by TestWorkspacePinLayout/TestResolveArtifactPath.
+- **2026-07-03 (afternoon batch — six BACKLOG closes, all pushed)** —
+  (1) *Scavenging diagnostic shipped* (BACKLOG #1 sub-item, 5505f54):
+  `artifact_check.detect_out_of_fence_access` scans each step's REAL
+  stream-json tool transcript for absolute paths outside the fence (project
+  dir + workspace); emits `SCAVENGE_DETECTED` (gate `validate.scavenge_detect`,
+  default on), diagnostic-only. Live-proven same day: a dispatched goal
+  reading a repo doc produced the warning + event rows with exact paths while
+  the run completed normally. Out-of-fence *writes* in these rows are the
+  evidence stream for sizing the tier-a hard fence.
+  (2) *SKILL_REWRITE dead expectation wired* (#8, f8e9164): rewrite_skill
+  success path now emits it; CANON_CANDIDATE/LESSON_RECOVERED annotated
+  reserved (Stage 2→3 pathways don't exist yet).
+  (3) *#3 liveness + #2 cost-during-backoff closed by verification, no code*:
+  stream-json already streams to /tmp/maro-current-step.log mid-flight
+  (live-sampled 0→6894 bytes); run-06's "$41 during backoff" was the
+  (already-fixed) reprice-total-at-current-model bug — exact arithmetic match
+  (2.465M in + 59K out: mid $8.22, power $41.41); meter added $0.0000 during
+  the actual 61-min backoff.
+  (4) *NOW-lane compound imperatives* (#4): coordinated action-verb heads
+  (≥2 = pipeline) close the short-form hole ("write a script and run it and
+  save the outputs"); the original e1b9f95e goal text is now a regression
+  fixture (it was already caught — the paraphrase wasn't).
+  (5) *Closure restart requires a failed check* (#5): narrative-only gaps
+  (all checks passed) no longer double a run; 049599c8 forensics traced the
+  repro to the pre-#-1 path re-anchoring bug (0/8 "passed" on existing
+  artifacts), so root cause and heuristic both closed.
+  (6) *Closure surfaces NEXT.md↔repo divergence* (#6): deterministic
+  ledger-lag note (unchecked items + commits newer than ledger mtime) rides
+  into the verdict LLM input + CLOSURE_VERDICT event; advisory only.
+  (7) *Local-first quality gate* (#7): run_quality_gate now runs the free
+  local model first (decisive → paid call skipped; UNDECIDED → escalate),
+  mirroring verify_step's ladder; QUALITY_GATE_VERDICT gained a `source`
+  field. **Live on this box** (validate.local_models configured) — standing
+  re-verify: watch gate `source` rows + agreement once real runs accrue.
+  (8) *Spend-gated transparency* (#11): runs costing ≥ `budget.transparency_usd`
+  (default $2) carry the full build/artifact bundle (absolute paths + sizes,
+  cap 200 with truncated flag) on the run card = notify payload.
+  (9) *M5 portability sweep* (#12): re-verified on the unified-layout tree
+  (no hardcoded machine paths; fresh-venv `pip install -e` + foreign-HOME
+  resolution). Codex payload decision stays deferred-pending-repro. M5 closed.
 
 ## Threads (system-maintained — nothing leaves this list silently)
 
