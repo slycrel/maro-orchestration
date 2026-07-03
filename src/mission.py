@@ -144,12 +144,7 @@ def decompose_mission(
     max_features_per_milestone: int = 3,
 ) -> Mission:
     """LLM call to decompose goal into milestones + features. Falls back to heuristic."""
-    from llm import LLMMessage, MODEL_POWER
-    try:
-        from conductor import assign_model_by_role as _amr
-        _ = _amr("orchestrator")  # ensure assign_model_by_role("orchestrator") → MODEL_POWER
-    except Exception:
-        pass
+    from llm import LLMMessage
 
     mission_id = str(uuid.uuid4())[:8]
     created_at = datetime.now(timezone.utc).isoformat()
@@ -249,12 +244,7 @@ def _validate_milestone(
     if dry_run or adapter is None:
         return True
 
-    from llm import LLMMessage, MODEL_MID
-    try:
-        from conductor import assign_model_by_role as _amr
-        _ = _amr("reviewer")  # ensure assign_model_by_role("reviewer") → MODEL_POWER
-    except Exception:
-        pass
+    from llm import LLMMessage
 
     features_summary = "\n".join(
         f"- {f.title}: {f.status}"
@@ -894,25 +884,9 @@ def mark_feature_passing(
             pass
 
 
-def validate_manifest_monotonicity(project: str) -> bool:
-    """Validate that no feature has been incorrectly downgraded.
-
-    Returns True if manifest is monotonically correct (or doesn't exist).
-    """
-    o = _orch()
-    path = o.project_dir(project) / "feature_list.json"
-    if not path.exists():
-        return True
-    try:
-        manifest = json.loads(path.read_text(encoding="utf-8"))
-        # All features should have either passes=True or passes=False (never None-like downgrade)
-        for feat in manifest.get("features", []):
-            passes = feat.get("passes")
-            if passes is not None and not isinstance(passes, bool):
-                return False
-        return True
-    except Exception:
-        return True
+# validate_manifest_monotonicity removed 2026-07-02 — misnamed (only checked
+# `passes` field type, never actual monotonicity), zero production callers,
+# test-only. See docs/REFACTOR_PLAN.md Tier 1.
 
 
 def load_feature_manifest(project: str) -> Optional[dict]:
@@ -926,7 +900,7 @@ def load_feature_manifest(project: str) -> Optional[dict]:
         return None
     try:
         return json.loads(path.read_text(encoding="utf-8"))
-    except ImportError:
+    except json.JSONDecodeError:
         return None
 
 

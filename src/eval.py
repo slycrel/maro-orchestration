@@ -42,9 +42,13 @@ except ImportError:  # pragma: no cover
 BUILTIN_BENCHMARKS: List[Dict[str, Any]] = [
     {
         "id": "now-greeting",
-        "goal": "Say hello and introduce yourself as Poe",
+        # Persona-agnostic by design: Maro defaults to a neutral role and
+        # only optionally wears a persona (see personas/), so this can't
+        # assert a specific identity name without failing for every other
+        # persona/no-persona configuration.
+        "goal": "Say hello and introduce yourself",
         "lane": "now",
-        "expected_keywords": ["poe", "hello"],
+        "expected_keywords": ["hello"],
         "max_tokens": 500,
         "max_steps": 1,
     },
@@ -355,6 +359,7 @@ def run_nightly_eval(
         print("[eval] nightly eval starting...", file=_sys.stderr, flush=True)
 
     # Run the full flywheel (mine → generate → run → score → suggest)
+    flywheel_summary = None
     try:
         flywheel_summary = run_eval_flywheel(dry_run=dry_run, verbose=verbose)
         if verbose:
@@ -366,12 +371,17 @@ def run_nightly_eval(
         if verbose:
             print(f"[eval] flywheel failed (non-fatal): {exc}", file=_sys.stderr, flush=True)
 
-    try:
-        report = run_eval(dry_run=dry_run, verbose=verbose)
-    except Exception as exc:
-        if verbose:
-            print(f"[eval] nightly eval failed (non-fatal): {exc}", file=_sys.stderr, flush=True)
-        return 0
+    # The flywheel already ran the full builtin benchmark suite (step 4) —
+    # reuse that report instead of paying for it a second time. Only fall
+    # back to a fresh run_eval() if the flywheel didn't complete.
+    report = flywheel_summary.get("_builtin_report_obj") if flywheel_summary else None
+    if report is None:
+        try:
+            report = run_eval(dry_run=dry_run, verbose=verbose)
+        except Exception as exc:
+            if verbose:
+                print(f"[eval] nightly eval failed (non-fatal): {exc}", file=_sys.stderr, flush=True)
+            return 0
 
     failed = [r for r in report.results if r.status != "pass"]
     if not failed:
@@ -930,6 +940,9 @@ def run_eval_flywheel(
         print("[eval-flywheel] running builtin benchmarks...", file=_sys.stderr, flush=True)
     builtin_report = run_eval(dry_run=dry_run, verbose=verbose)
     summary["builtin_report"] = builtin_report.to_dict()
+    # Stashed so run_nightly_eval can reuse this run instead of paying for
+    # the full builtin benchmark suite a second time.
+    summary["_builtin_report_obj"] = builtin_report
 
     # Step 5: Run generated evals with failure-specific scoring
     generated_evals = load_generated_evals()

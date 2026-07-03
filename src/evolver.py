@@ -2101,56 +2101,6 @@ def _notify_telegram(report: EvolverReport) -> None:
         print(f"[evolver] telegram notify failed: {e}", file=sys.stderr)
 
 
-# ---------------------------------------------------------------------------
-# Friction-aware evolver (Phase 12)
-# ---------------------------------------------------------------------------
-
-def receive_inspector_tickets(tickets: List[dict]) -> int:
-    """Accept inspector-generated tickets and convert them to Suggestion objects.
-
-    Inspector tickets map:
-      title          → suggestion
-      pattern        → failure_pattern
-      suggested_fix  → suggestion (preferred over title)
-      priority       → confidence (high=0.9, medium=0.7, low=0.5)
-
-    Args:
-        tickets: List of ticket dicts from inspector.generate_tickets().
-
-    Returns:
-        Count of suggestions added.
-    """
-    import uuid as _uuid
-
-    _PRIORITY_CONFIDENCE = {"high": 0.9, "medium": 0.7, "low": 0.5}
-
-    suggestions: List[Suggestion] = []
-    for t in tickets:
-        if not isinstance(t, dict):
-            continue
-        priority = t.get("priority", "medium")
-        confidence = _PRIORITY_CONFIDENCE.get(priority, 0.7)
-        suggestion_text = t.get("suggested_fix") or t.get("title") or ""
-        if not suggestion_text.strip():
-            continue
-        suggestions.append(Suggestion(
-            suggestion_id=f"insp-{_uuid.uuid4().hex[:8]}",
-            category="inspection_finding",
-            target="all",
-            suggestion=suggestion_text,
-            failure_pattern=t.get("pattern", "inspector finding"),
-            confidence=confidence,
-            outcomes_analyzed=0,
-        ))
-
-    if suggestions:
-        try:
-            _save_suggestions(suggestions)
-        except Exception as e:
-            print(f"[evolver] receive_inspector_tickets: failed to save: {e}", file=sys.stderr)
-            return 0
-
-    return len(suggestions)
 
 
 def _compactness_adjusted_score(skill: "Skill") -> float:
@@ -2805,147 +2755,14 @@ def run_skill_maintenance(
 def get_friction_summary() -> str:
     """Return a brief human-readable friction summary from the latest inspector run.
 
-    Used by heartbeat tier-2 LLM diagnosis and run_evolver_with_friction().
-    Delegates to inspector.get_friction_summary() to avoid duplication.
+    Used by heartbeat tier-2 LLM diagnosis. Delegates to
+    inspector.get_friction_summary() to avoid duplication.
     """
     try:
         from inspector import get_friction_summary as _inspector_summary
         return _inspector_summary()
     except Exception:
         return ""
-
-
-def run_evolver_with_friction(
-    *,
-    outcomes_window: int = 50,
-    min_outcomes: int = 3,
-    dry_run: bool = False,
-    verbose: bool = True,
-    notify: bool = False,
-    adapter=None,
-) -> "EvolverReport":
-    """Run meta-evolution cycle enriched with inspection friction findings.
-
-    Same as run_evolver() but prepends friction summary from the latest
-    InspectionReport to the LLM prompt, giving the evolver richer context
-    for its improvement suggestions.
-    """
-    import uuid as _uuid
-
-    run_id = _uuid.uuid4().hex[:8]
-    started = time.monotonic()
-
-    if verbose:
-        print(f"[evolver-friction] run_id={run_id} starting...", file=sys.stderr)
-
-    # Load recent outcomes
-    try:
-        outcomes = load_outcomes(limit=outcomes_window)
-    except Exception as e:
-        return EvolverReport(run_id=run_id, outcomes_reviewed=0, skipped=True, skip_reason=str(e))
-
-    if len(outcomes) < min_outcomes:
-        return EvolverReport(
-            run_id=run_id,
-            outcomes_reviewed=len(outcomes),
-            skipped=True,
-            skip_reason=f"only {len(outcomes)} outcomes (need {min_outcomes})",
-        )
-
-    # Load friction summary from latest inspection
-    friction_summary = get_friction_summary()
-
-    # Build outcomes summary
-    outcomes_summary = _build_outcomes_summary(outcomes)
-
-    # Prepend friction context to the analysis prompt
-    if friction_summary and not dry_run:
-        enriched_summary = (
-            f"Recent quality inspection found these friction patterns:\n{friction_summary}\n\n"
-            f"---\n{outcomes_summary}"
-        )
-    else:
-        enriched_summary = outcomes_summary
-
-    # Run LLM analysis (using the enriched summary)
-    patterns: List[str] = []
-    raw_suggestions: List[dict] = []
-
-    if not dry_run and outcomes:
-        try:
-            _adapter = adapter
-            if _adapter is None:
-                _adapter = build_adapter(model=MODEL_MID)
-            resp = _adapter.complete(
-                [
-                    LLMMessage("system", _EVOLVER_SYSTEM),
-                    LLMMessage("user", f"Analyze these outcomes:\n\n{enriched_summary}"),
-                ],
-                max_tokens=2048,
-                temperature=0.2,
-            )
-            data = extract_json(content_or_empty(resp), dict, log_tag="evolver.run_friction")
-            if data:
-                patterns = safe_list(data.get("failure_patterns", []), element_type=str)
-                raw_suggestions = safe_list(data.get("suggestions", []), element_type=dict)
-        except Exception as e:
-            if verbose:
-                print(f"[evolver-friction] LLM analysis failed: {e}", file=sys.stderr)
-
-    # Build Suggestion objects
-    suggestions: List[Suggestion] = []
-    for i, raw in enumerate(raw_suggestions):
-        try:
-            suggestions.append(Suggestion(
-                suggestion_id=f"{run_id}-{i:02d}",
-                category=raw.get("category", "observation"),
-                target=raw.get("target", "all"),
-                suggestion=raw.get("suggestion", ""),
-                failure_pattern=raw.get("failure_pattern", ""),
-                confidence=safe_float(raw.get("confidence"), default=0.5, min_val=0.0, max_val=1.0),
-                outcomes_analyzed=len(outcomes),
-            ))
-        except Exception:
-            pass
-
-    report = EvolverReport(
-        run_id=run_id,
-        outcomes_reviewed=len(outcomes),
-        suggestions=suggestions,
-        failure_patterns=patterns,
-        elapsed_ms=int((time.monotonic() - started) * 1000),
-    )
-
-    if verbose:
-        print(
-            f"[evolver-friction] found {len(patterns)} patterns, {len(suggestions)} suggestions",
-            file=sys.stderr,
-        )
-
-    # Persist suggestions
-    if not dry_run and suggestions:
-        try:
-            _save_suggestions(suggestions)
-        except Exception as e:
-            if verbose:
-                print(f"[evolver-friction] failed to save suggestions: {e}", file=sys.stderr)
-
-    if notify and suggestions and not dry_run:
-        _notify_telegram(report)
-
-    # Phase 32: skill maintenance on every evolver run
-    try:
-        _skill_maint = run_skill_maintenance(
-            adapter=adapter, dry_run=dry_run, verbose=verbose
-        )
-        if any(_skill_maint.get(k) for k in ("promoted", "demoted", "rewritten")):
-            if verbose:
-                print(f"[evolver] skill maint: {_skill_maint}", file=sys.stderr)
-    except Exception:
-        pass
-
-    report.elapsed_ms = int((time.monotonic() - started) * 1000)
-    return report
 
 
 # ---------------------------------------------------------------------------

@@ -191,7 +191,7 @@ def _load_loop_events(loop_id: str) -> List[dict]:
                 e = json.loads(line)
                 if e.get("loop_id", "").startswith(loop_id):
                     events.append(e)
-            except ImportError:
+            except json.JSONDecodeError:
                 continue
     except Exception:
         pass
@@ -736,11 +736,11 @@ def _cost_lens(diag: LoopDiagnosis, profiles: List[StepProfile]) -> LensResult:
                 if action is None:
                     action = "Route simple classify/verify steps to cheap model tier"
 
-    # Average cost per done step
+    # Average tokens per done step
     done_profiles = [p for p in profiles if p.status == "done"]
     if done_profiles:
-        avg = total // len(done_profiles)
-        findings.append(f"Average tokens per done step: {avg:,}")
+        avg_tokens = sum(p.tokens for p in done_profiles) / len(done_profiles)
+        findings.append(f"Average tokens per done step: {avg_tokens:,.0f}")
 
     confidence = 0.8 if action else 0.3
     return LensResult(lens_name="cost", findings=findings, action=action, confidence=confidence)

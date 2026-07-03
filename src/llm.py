@@ -1608,17 +1608,15 @@ class OpenAIAdapter(LLMAdapter):
 # Credential discovery
 # ---------------------------------------------------------------------------
 
-def _load_env_file(path: Optional[str] = None) -> Dict[str, str]:
-    """Load key=value pairs from an env file."""
+def _load_env_file() -> Dict[str, str]:
+    """Load key=value pairs from the credentials env file."""
     try:
-        from config import load_credentials_env, credentials_env_file
-        if path is None:
-            return load_credentials_env()
-        return load_credentials_env()  # path arg kept for compat; use config resolution
+        from config import load_credentials_env
+        return load_credentials_env()
     except Exception:
         pass
     result: Dict[str, str] = {}
-    env_path = path or str(Path.home() / ".maro" / "workspace" / "secrets" / ".env")
+    env_path = str(Path.home() / ".maro" / "workspace" / "secrets" / ".env")
     if not os.path.exists(env_path):
         return result
     try:
@@ -1824,18 +1822,6 @@ def build_adapter(
     log.debug("build_adapter(auto): %d backends available, using FailoverAdapter: %s",
               len(available), [a.backend for a in available])
     return FailoverAdapter(available)
-
-
-def detect_available_backends() -> Dict[str, bool]:
-    """Return which backends are currently available."""
-    env = _load_env_file()
-    return {
-        "subprocess": _claude_bin_available(),
-        "codex":      _codex_auth_available(),  # available but not in auto-detect chain
-        "anthropic":  bool(_get_key("ANTHROPIC_API_KEY", env)),
-        "openrouter": bool(_get_key("OPENROUTER_API_KEY", env)),
-        "openai":     bool(_get_key("OPENAI_API_KEY", env)),
-    }
 
 
 # ---------------------------------------------------------------------------

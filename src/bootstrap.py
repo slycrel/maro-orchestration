@@ -312,5 +312,10 @@ def main(argv: list[str] | None = None) -> None:
         parser.print_help()
 
 
+def _smoke_main() -> None:
+    """Entry point for the `maro-test` console script — runs the smoke test directly."""
+    main(["smoke"])
+
+
 if __name__ == "__main__":
     main()

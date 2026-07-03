@@ -554,38 +554,6 @@ def test_skill_default_tier():
     assert s.tier == "provisional"
 
 
-def test_promote_skill_tier_insufficient_rate(monkeypatch, tmp_path):
-    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
-    from skills import promote_skill_tier, save_skill, Skill
-    import datetime, uuid
-    s = Skill(
-        id=str(uuid.uuid4())[:8], name="myskill", description="desc",
-        trigger_patterns=[], steps_template=[], source_loop_ids=[],
-        created_at=datetime.datetime.now().isoformat(),
-        success_rate=0.5,  # pass^3 = 0.125 < 0.7
-    )
-    save_skill(s)
-    assert promote_skill_tier("myskill") is False
-
-
-def test_promote_skill_tier_success(monkeypatch, tmp_path):
-    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
-    from skills import promote_skill_tier, save_skill, load_skills, Skill
-    import datetime, uuid
-    s = Skill(
-        id=str(uuid.uuid4())[:8], name="goodskill", description="desc",
-        trigger_patterns=[], steps_template=[], source_loop_ids=[],
-        created_at=datetime.datetime.now().isoformat(),
-        success_rate=0.92,  # pass^3 = 0.778 >= 0.7
-    )
-    save_skill(s)
-    result = promote_skill_tier("goodskill")
-    assert result is True
-    skills = load_skills()
-    promoted = next(sk for sk in skills if sk.name == "goodskill")
-    assert promoted.tier == "established"
-
-
 # ---------------------------------------------------------------------------
 # Canon tracking (times_applied + canon-candidates)
 # ---------------------------------------------------------------------------

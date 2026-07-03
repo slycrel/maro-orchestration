@@ -391,9 +391,6 @@ def run_thinkback(
     # Optionally save lessons back to memory
     if save_lessons and key_lessons:
         try:
-            from memory import record_outcome
-            # We don't re-record the outcome, but we do use the lesson mechanism
-            # Write directly to lessons.jsonl
             _save_thinkback_lessons(goal, key_lessons, run_id)
         except Exception as exc:
             log.warning("thinkback: could not save lessons: %s", exc)
@@ -447,35 +444,29 @@ def run_thinkback_from_outcome(
 
 
 def _save_thinkback_lessons(goal: str, lessons: List[str], run_id: str) -> None:
-    """Write thinkback-derived lessons to lessons.jsonl."""
-    try:
-        from orch_items import memory_dir
-        lessons_path = memory_dir() / "lessons.jsonl"
-    except Exception:
-        lessons_path = Path("memory/lessons.jsonl")
+    """Record thinkback-derived lessons via the shared lesson store.
 
-    now = datetime.now(timezone.utc).isoformat()
+    Goes through memory._store_lesson so thinkback lessons get the same
+    prompt-injection guard and exact/near-duplicate reinforce logic as every
+    other lesson write path, instead of hand-appending raw JSONL.
+    """
+    from memory import _store_lesson
+
     task_type = "general"  # thinkback lessons are cross-cutting
 
-    try:
-        with open(lessons_path, "a", encoding="utf-8") as f:
-            for lesson_text in lessons:
-                if not lesson_text.strip():
-                    continue
-                rec = {
-                    "lesson_id": str(uuid.uuid4())[:8],
-                    "task_type": task_type,
-                    "outcome": "done",
-                    "lesson": f"[thinkback:{run_id}] {lesson_text}",
-                    "source_goal": goal,
-                    "confidence": 0.65,
-                    "times_applied": 0,
-                    "times_reinforced": 0,
-                    "recorded_at": now,
-                }
-                f.write(json.dumps(rec) + "\n")
-    except OSError as exc:
-        log.warning("thinkback: could not write lessons: %s", exc)
+    for lesson_text in lessons:
+        if not lesson_text.strip():
+            continue
+        try:
+            _store_lesson(
+                task_type=task_type,
+                outcome="done",
+                lesson=f"[thinkback:{run_id}] {lesson_text}",
+                source_goal=goal,
+                confidence=0.65,
+            )
+        except Exception as exc:
+            log.warning("thinkback: could not save lesson: %s", exc)
 
 
 # ---------------------------------------------------------------------------

@@ -776,27 +776,6 @@ def execute_step(
     except Exception:
         pass  # constraint module optional
 
-    # Phase 41 step 5: PreStepExecution event — extensible blocking gate
-    try:
-        from step_events import step_event_bus as _bus
-        _pre_veto = _bus.fire_pre(
-            step_text=step_text,
-            goal=goal,
-            step_index=step_num - 1,  # 0-based index, step_num is 1-based
-        )
-        if _pre_veto is not None:
-            log.warning("step %d vetoed by event handler %r: %s",
-                        step_num, _pre_veto.handler_name, _pre_veto.reason)
-            return {
-                "status": "blocked",
-                "stuck_reason": f"pre-step veto ({_pre_veto.handler_name}): {_pre_veto.reason}",
-                "result": "",
-                "tokens_in": 0,
-                "tokens_out": 0,
-            }
-    except Exception:
-        pass  # step_events module optional
-
     # Pre-fetch URLs
     prefetch_block = ""
     try:
@@ -1210,21 +1189,6 @@ def execute_step(
             "tokens_out": resp.output_tokens,
             "cache_read_tokens": getattr(resp, "cache_read_tokens", 0),
         }
-
-    # Phase 41 step 5: PostStepExecution event (non-blocking)
-    try:
-        from step_events import step_event_bus as _bus
-        _step_elapsed_ms = int((time.monotonic() - _step_t0) * 1000)
-        _bus.fire_post(
-            step_text=step_text,
-            goal=goal,
-            step_index=step_num - 1,
-            result=_outcome.get("result"),
-            tool_name=_tool_name_used,
-            elapsed_ms=_step_elapsed_ms,
-        )
-    except Exception:
-        pass
 
     return _outcome
 

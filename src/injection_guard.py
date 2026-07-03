@@ -5,11 +5,10 @@ imported from external repos) is a potential instruction-injection vector.
 
 This module provides:
 1. Content scanning for known-bad injection patterns
-2. Source allowlisting for auto-apply decisions
-3. A clean is_safe_to_apply() API used by evolver and persona system
+2. Source allowlisting for auto-apply decisions (report.safe_to_auto_apply)
 
 Usage:
-    from injection_guard import scan_content, is_safe_to_apply
+    from injection_guard import scan_content
 
     report = scan_content(skill_yaml_text, source="workspace")
     if not report.is_clean:
@@ -190,35 +189,6 @@ def scan_content(
         risk_level=risk_level,
         blocked_patterns=blocked,
     )
-
-
-def is_safe_to_apply(
-    content: str,
-    *,
-    source: str = "",
-    require_allowlisted_source: bool = True,
-) -> bool:
-    """Convenience check: is this content safe to auto-apply?
-
-    Returns True only when:
-    1. No injection patterns detected
-    2. Source is allowlisted (if require_allowlisted_source=True)
-
-    Non-fatal — returns False on any error (fail-closed for security).
-    """
-    try:
-        report = scan_content(content, source=source)
-        if require_allowlisted_source:
-            return report.safe_to_auto_apply
-        return report.is_clean
-    except Exception as exc:
-        log.debug("injection_guard.is_safe_to_apply failed: %s", exc)
-        return False  # fail-closed
-
-
-def scan_skill_yaml(skill_yaml: str, *, source: str = "") -> InjectionScanReport:
-    """Convenience wrapper for skill YAML scanning."""
-    return scan_content(skill_yaml, source=source)
 
 
 def scan_persona_yaml(persona_yaml: str, *, source: str = "") -> InjectionScanReport:

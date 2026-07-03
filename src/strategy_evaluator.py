@@ -334,15 +334,6 @@ def evaluate_skill(skill: Any) -> StrategyFitnessReport:
     return evaluate_strategy(strategy_text)
 
 
-def evaluate_suggestion(suggestion: Any) -> StrategyFitnessReport:
-    """Convenience wrapper: evaluate an Evolver Suggestion object.
-
-    Uses suggestion.suggestion text as the strategy description.
-    """
-    text = getattr(suggestion, "suggestion", str(suggestion))
-    return evaluate_strategy(text)
-
-
 # ---------------------------------------------------------------------------
 # CLI — maro-replay
 # ---------------------------------------------------------------------------

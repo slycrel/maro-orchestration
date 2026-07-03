@@ -80,15 +80,6 @@ class TestRunDoctor:
         captured = capsys.readouterr()
         assert "skills" in captured.out.lower()
 
-    def test_step_event_bus_check_in_output(self, capsys, monkeypatch, tmp_path):
-        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
-        try:
-            run_doctor()
-        except Exception:
-            pass
-        captured = capsys.readouterr()
-        assert "event bus" in captured.out.lower() or "step" in captured.out.lower()
-
     def test_bughunter_check_in_output(self, capsys, monkeypatch, tmp_path):
         monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
         try:

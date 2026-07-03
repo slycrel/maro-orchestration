@@ -11,7 +11,6 @@ from workers import (
     WorkerResult,
     dispatch_worker,
     infer_worker_type,
-    infer_crew_size,
     WORKER_RESEARCH,
     WORKER_BUILD,
     WORKER_OPS,
@@ -54,31 +53,8 @@ class TestInferWorkerType:
         assert infer_worker_type("research and analyze the build") == WORKER_RESEARCH
 
 
-# ---------------------------------------------------------------------------
-# infer_crew_size
-# ---------------------------------------------------------------------------
-
-class TestInferCrewSize:
-    def test_short_directive_one_worker(self):
-        assert infer_crew_size("do it") == 1
-
-    def test_simple_keyword_one_worker(self):
-        assert infer_crew_size("give me a quick summary of the project") == 1
-
-    def test_medium_directive_two_workers(self):
-        directive = " ".join(["word"] * 15)
-        assert infer_crew_size(directive) == 2
-
-    def test_comprehensive_keyword_three_workers(self):
-        assert infer_crew_size("provide a comprehensive analysis of the system") == 3
-
-    def test_exhaustive_keyword_four_workers(self):
-        assert infer_crew_size("do a thorough audit of everything") == 4
-
-    def test_long_directive_four_workers(self):
-        directive = " ".join(["word"] * 55)
-        assert infer_crew_size(directive) == 4
-
+# infer_crew_size tests removed 2026-07-02 — function deleted (zero
+# production callers). See docs/REFACTOR_PLAN.md Tier 1.
 
 # ---------------------------------------------------------------------------
 # dispatch_worker — dry run

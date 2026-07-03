@@ -8,6 +8,14 @@ Last split: 2026-04-16 (session 34).
 
 ---
 
+### Polymarket cluster + quality_gate's debate pass extracted/deleted — DONE (2026-07-02)
+
+**Source:** refactor-plan Tier 1 dead-code deletion, item confirmed via git-history investigation the same day (see BACKLOG.md history / `docs/REFACTOR_PLAN.md` "Open product decisions" #5/#9).
+
+**What it was:** Confirmed via git history to be TradingAgents-dogfood leftovers, not preserved test data or research artifacts. `polymarket_backtest.py`/`polymarket_backtest_refined.py` were created-and-abandoned same-day (2026-04-01), zero callers ever. `backtester.py`/`backtest_metrics.py` were a literal agent-generated one-off from a 2026-03-30 dogfood run. `polymarket.py` (CLI wrapper wired into `doctor.py`) had the same "only touched by mechanical sweeps since" profile. `quality_gate.py`'s bull/bear/risk-manager debate pass (added 2026-03-31, day after the dated TradingAgents entry in `STEAL_LIST.md`) was a verbatim architectural match to TradingAgents' Bull/Bear/Risk-Manager design, generalized but never given a production caller. The real research conclusions were already properly archived at `research/POLYMARKET_BTC_LAG_VALIDATION.md` et al. — unaffected by this deletion. The separate "harvest orchestration history into a reusable test corpus" effort (`e7c2e4a`) is unrelated (workspace data, not `src/` code).
+
+**What shipped:** Deleted `src/polymarket.py`, `src/polymarket_backtest.py`, `src/polymarket_backtest_refined.py`, `src/backtester.py`, `src/backtest_metrics.py`, `tests/test_polymarket.py`; removed the polymarket-cli health check from `doctor.py`; removed stale `.coveragerc` omit entries; deleted `quality_gate.py`'s entire debate pass (`DebatePosition`/`DebateVerdict` dataclasses, `run_debate()`, prompts, ~220 lines) and its tests. Part of the larger Tier 1 pass, commit `b04962b`.
+
 ### Captain's-log event contract doc — DONE (2026-06-24, was AFK chunk #8)
 
 **Source:** Actionable Stack #8. "We have 36+ event types emitted across 10+ modules. No single doc says here's every event, field schema, when it fires."
@@ -231,7 +239,18 @@ See `docs/CONSTRAINT_ORCHESTRATION_DESIGN.md` + `docs/CONSTRAINT_ORCHESTRATION_R
 
 ### Observability
 - [x] **Dashboard as real tool** — Added: Cost panel (24h spend, per-model breakdown from step-costs.jsonl), Mission Ancestry Tree (scans all workspace projects, shows parent/child depth), Replay button (POST /api/replay re-runs last outcome's goal in background thread). 12 tests. (2026-03-31)
+  **STATUS UPDATE (2026-07-02): needs revisited.** Jeremy's read: "this was a
+  proof of concept that sort of failed." Archived to
+  `archive/observe_dashboard.py` (code + why + how to run it manually), not
+  deleted — see that module's docstring for the full original-intent writeup
+  (give an end user both a high-level view of orchestration work and
+  visibility into the detailed work being done on their behalf) and
+  `docs/ARCHITECTURE_OVERVIEW.md`'s "Goal Lineage" section for the surviving
+  ancestry-visibility surface (`maro ancestry` CLI). `maro-observe serve`
+  now prints a pointer to the archive instead of running it. Revisit the
+  underlying visibility goal later — not via this implementation.
 - [x] **Replay with "factory mode"** — evolver signal scan on recent outcomes → queues highest-confidence sub-missions as new goals. `/api/replay-factory` endpoint + "Factory Mode Replay" button in dashboard. 4 tests. (2026-04-05)
+  **STATUS UPDATE (2026-07-02): needs revisited** — same dashboard archival as above; this endpoint lives on in `archive/observe_dashboard.py`.
 
 ### Factory Mode Experiment (Mode 3 test)
 - [x] **"factory" branch** — created. Two variants: `factory_minimal` (single-call Haiku $0.04-0.06/60s) and `factory_thin` (loop+adversarial Haiku $0.38/375s). Bitter Lesson result: minimal surprisingly competitive; thin+adv matches Mode 2 quality at ~2x lower cost. Scaffolding that's load-bearing: adversarial verification. Scaffolding that's not: persona routing, lesson injection, multi-plan comparison. (2026-03-31)
@@ -370,6 +389,11 @@ Ran 4 live goals: Polymarket research, nootropic synthesis, recipe site build, s
 - [x] **Input classification tag** — DONE (session 23). `classify_input_type()` in captains_log.py (url/code/structured_data/plain_text). `INPUT_MISMATCH` + `METACOGNITIVE_DECISION` event constants. `update_skill_utility()` logs INPUT_MISMATCH when circuit opens on url-skill-vs-non-url-input domain mismatch. `attribute_failure_to_skills()` threads step_text through. 9 tests. EVENT_TYPES 28→30.
 - [x] **Director context hook** — (2026-04-11 session 16) Captain's log context + playbook + knowledge nodes now injected into `_build_loop_context()`. Director sees recent learning events, operational wisdom, and relevant knowledge at decompose time.
 - [x] **Dashboard captain's log panel** — DONE (session 27). `_read_captain_log_entries(limit=20)` in observe.py reads captains_log.jsonl newest-first. Wired into `_snapshot_json()` and `_DASHBOARD_HTML`. Badge color-coding by event type. 6 tests in TestCaptainLogDashboard.
+  **STATUS UPDATE (2026-07-02): needs revisited** — the dashboard panel itself
+  (`_snapshot_json`/`_DASHBOARD_HTML` wiring) was archived to
+  `archive/observe_dashboard.py`; see the "Dashboard as real tool" entry
+  above for the full context. `_read_captain_log_entries` itself is
+  unaffected and remains live in `observe.py`.
 
 ### From X research runs (2026-04-09)
 

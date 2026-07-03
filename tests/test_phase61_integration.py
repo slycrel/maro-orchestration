@@ -379,21 +379,13 @@ class TestAdversarialSampleIntegration:
 # ---------------------------------------------------------------------------
 
 class TestCalibrationInspectorWiring:
-    """calibrated_alignment_threshold() integrates with check_alignment()."""
+    """calibrated_alignment_threshold() integration.
 
-    def test_check_alignment_heuristic_unaffected_by_calibration(self, monkeypatch, tmp_path):
-        """Heuristic path (no adapter) always returns base scores regardless of calibration."""
-        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
-        from inspector import check_alignment
-
-        session_done = {"goal": "test", "summary": "work done", "status": "done", "loop_id": "x"}
-        result = check_alignment(session_done, adapter=None)
-        assert result.aligned is True
-        assert result.alignment_score == 0.8
-
-        session_stuck = {"goal": "test", "summary": "", "status": "stuck", "loop_id": "y"}
-        result = check_alignment(session_stuck, adapter=None)
-        assert result.aligned is False
+    NOTE: check_alignment() (the Phase 12 spec-pipeline heuristic this class
+    originally tested against) was deleted 2026-07-02 as dead code — see
+    docs/REFACTOR_PLAN.md Tier 1. Remaining tests here cover the calibration
+    machinery itself, independent of that deleted consumer.
+    """
 
     def test_calibration_threshold_base_with_no_history(self, monkeypatch, tmp_path):
         """calibrated_alignment_threshold returns base 0.60 when no history exists."""

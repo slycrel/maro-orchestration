@@ -1,4 +1,4 @@
-"""Tests for three execution modes: team:, pipeline:, and decompose_to_dag()."""
+"""Tests for two execution modes: team: and pipeline:."""
 
 from __future__ import annotations
 
@@ -11,77 +11,8 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 
-# ---------------------------------------------------------------------------
-# decompose_to_dag — structured DAG API
-# ---------------------------------------------------------------------------
-
-class TestDecomposeToDag:
-    def _make_adapter(self):
-        return MagicMock()
-
-    def test_returns_four_tuple(self):
-        """decompose_to_dag returns (clean_steps, deps, levels, parallel_levels)."""
-        from planner import decompose_to_dag
-
-        with patch("planner.decompose", return_value=["step A", "step B", "step C"]):
-            result = decompose_to_dag("do something", self._make_adapter())
-
-        assert len(result) == 4
-        clean_steps, deps, levels, parallel_levels = result
-        assert isinstance(clean_steps, list)
-        assert isinstance(deps, dict)
-        assert isinstance(levels, list)
-        assert isinstance(parallel_levels, list)
-
-    def test_strips_after_tags(self):
-        """[after:N] tags should be stripped from clean_steps."""
-        from planner import decompose_to_dag
-
-        raw = ["gather data", "analyze results [after:1]", "write report [after:2]"]
-        with patch("planner.decompose", return_value=raw):
-            clean, deps, levels, pl = decompose_to_dag("goal", self._make_adapter())
-
-        assert all("[after:" not in s for s in clean)
-        assert len(clean) == 3
-
-    def test_parallel_levels_detected(self):
-        """Steps with shared dep create a parallel level."""
-        from planner import decompose_to_dag
-
-        # Steps 2 and 3 both depend only on step 1 → should be in same level
-        raw = ["root", "branch A [after:1]", "branch B [after:1]", "merge [after:2,3]"]
-        with patch("planner.decompose", return_value=raw):
-            clean, deps, levels, pl = decompose_to_dag("goal", self._make_adapter())
-
-        # parallel_levels should include a level with both step 2 and step 3
-        assert any(2 in lvl and 3 in lvl for lvl in pl), f"Expected parallel level; got levels={levels}"
-
-    def test_sequential_plan_has_no_parallel_levels(self):
-        """A plan with all sequential deps produces no parallel levels."""
-        from planner import decompose_to_dag
-
-        raw = ["step A", "step B", "step C"]  # no [after:] tags → sequential default
-        with patch("planner.decompose", return_value=raw):
-            _, _, _, pl = decompose_to_dag("goal", self._make_adapter())
-
-        assert pl == []
-
-    def test_kwargs_forwarded_to_decompose(self):
-        """Extra kwargs are passed through to decompose()."""
-        from planner import decompose_to_dag
-
-        called_with = {}
-
-        def _fake_decompose(goal, adapter, max_steps, verbose=False, **kwargs):
-            called_with.update(kwargs)
-            return ["step A"]
-
-        with patch("planner.decompose", side_effect=_fake_decompose):
-            decompose_to_dag("goal", self._make_adapter(), lessons_context="hint")
-
-        assert "lessons_context" in called_with
-        assert called_with["lessons_context"] == "hint"
-
+# TestDecomposeToDag removed 2026-07-02 — decompose_to_dag() deleted (zero
+# production callers). See docs/REFACTOR_PLAN.md Tier 1.
 
 # ---------------------------------------------------------------------------
 # _apply_prefixes — team: and pipeline: prefix parsing

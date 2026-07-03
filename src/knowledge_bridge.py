@@ -125,8 +125,9 @@ def _extract_llm(outcome, adapter) -> List[Tuple[str, str, str, str]]:
             lessons_text=lessons_text,
         )
 
-        result = adapter.complete(prompt)
-        text = result.get("content", "") if isinstance(result, dict) else str(result)
+        from llm import LLMMessage
+        result = adapter.complete([LLMMessage(role="user", content=prompt)])
+        text = result.content or ""
 
         candidates = []
         for line in text.strip().splitlines():
@@ -453,73 +454,3 @@ def record_skill_evolution(
         )
     except Exception as e:
         log.debug("knowledge_bridge: record_skill_evolution failed (non-fatal): %s", e)
-
-
-# ---------------------------------------------------------------------------
-# Principle validation hook
-# ---------------------------------------------------------------------------
-
-def validate_principle(
-    node_id: str,
-    *,
-    validated: bool,
-    outcome_id: str = "",
-    notes: str = "",
-) -> bool:
-    """Mark a knowledge node as validated or contradicted by an outcome.
-
-    For validated=True: bumps confidence, sets validated_at.
-    For validated=False: decreases confidence; if confidence < 0.2, marks superseded.
-
-    Returns True if the node was found and updated.
-    """
-    try:
-        from knowledge_web import NODE_CANDIDATE, NODE_ACTIVE, NODE_SUPERSEDED
-        from file_lock import locked_write
-        from memory_ledger import _memory_dir
-
-        nodes_path = _memory_dir() / "knowledge_nodes.jsonl"
-        if not nodes_path.exists():
-            return False
-
-        now = datetime.now(timezone.utc).isoformat()
-        found = False
-
-        with locked_write(nodes_path):
-            lines = []
-            for line in nodes_path.read_text(encoding="utf-8").splitlines():
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    d = json.loads(line)
-                    if d.get("node_id") == node_id:
-                        found = True
-                        if validated:
-                            d["confidence"] = min(1.0, d.get("confidence", 0.5) + 0.1)
-                            d["validated_at"] = now
-                            if d.get("status") == NODE_CANDIDATE:
-                                d["status"] = NODE_ACTIVE
-                        else:
-                            d["confidence"] = max(0.0, d.get("confidence", 0.5) - 0.15)
-                            if d["confidence"] < 0.2:
-                                d["status"] = NODE_SUPERSEDED
-                        if outcome_id:
-                            srcs = d.get("sources", [])
-                            srcs.append(f"contradiction:outcome:{outcome_id}" if not validated
-                                        else f"validation:outcome:{outcome_id}")
-                            d["sources"] = list(set(srcs))
-                    lines.append(json.dumps(d, sort_keys=True))
-                except (json.JSONDecodeError, TypeError):
-                    lines.append(line)
-
-            nodes_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-
-        if found:
-            action = "validated" if validated else "contradicted"
-            log.info("knowledge_bridge: principle %s %s by outcome %s", node_id, action, outcome_id)
-        return found
-
-    except Exception as e:
-        log.warning("knowledge_bridge: validate_principle failed (non-fatal): %s", e)
-        return False

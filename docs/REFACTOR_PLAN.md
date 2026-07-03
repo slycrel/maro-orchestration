@@ -1,0 +1,436 @@
+# Maro Refactor Plan
+
+Produced in worktree `refactor-plan` (branch `worktree-refactor-plan`) via an
+architecture survey + 12 parallel subsystem reviews (fable model) covering all
+~120 files / ~76,600 lines of `src/`. Goal: simplify the architecture without
+sacrificing functionality or quality. Nothing in this plan has been executed —
+this is the plan, for review before any of it lands.
+
+Every finding below was verified by the reviewing agent by reading the actual
+code and grepping for callers, not inferred from names or docstrings.
+
+## Headline diagnosis
+
+The codebase grew by accretion — one module per "Phase N" feature, flat
+`src/` namespace, ~120 files where a 2026-06 backlog item ("Phase 38
+subpackage move") flagged the *same* problem at 49 files and deferred it
+"until it causes real problems." Independently, **9 of the 12 subsystem
+reviews concluded that threshold has now been crossed** for their area.
+
+The dominant failure mode is not "bad code" — most individual functions are
+fine — it's **unfinished migrations left running in parallel with their
+replacements**: old and new decomposition pipelines, old and new
+goal-tracking layers, old and new verification entry points, a "decomposed"
+5,581-line file whose decomposition never actually left the file. Simplifying
+here mostly means *finishing deletions that were already implied*, not
+inventing new abstractions.
+
+Rough scale: **~6,500–7,500 lines (≈9% of `src/`) are dead, duplicated, or
+one-shot artifacts**, verified by grep to have zero production callers. That
+number is before any subpackage reorganization.
+
+---
+
+## Tier 0 — Bugs found along the way — DONE 2026-07-02
+
+These aren't architecture findings — they're correctness bugs the reviews
+surfaced while reading. Each is small and independent. Fixed via 6 parallel
+forks, one per file cluster; full suite green after. Item 11 turned out moot
+(the buggy code was deleted in Tier 1) and item 12 also turned out moot for
+the same reason — see their entries below for detail. Item 6
+(`slack_listener.py`) turned up a 5th bug in the same defect class beyond
+the 4 originally documented, and had zero test coverage of the buggy paths
+— added regression tests.
+
+1. **`memory.py:440`** — `from metrics import record_cost` imports a function
+   that doesn't exist in `metrics.py`; the call is silently swallowed, so
+   lesson-extraction cost telemetry has never been recorded. Fix: call the
+   real `record_step_cost(...)`.
+2. **`introspect.py:740-743`** — `_cost_lens` computes `total // len(...)`
+   where `total` is dollars, then labels the result "average tokens per done
+   step." Floor-division on sub-$1 floats prints ~0 always. Fix: use
+   `p.tokens`, or relabel.
+3. **`introspect.py:194`** — `_load_loop_events` catches `ImportError` around
+   `json.loads`; a malformed line raises `JSONDecodeError` instead, which
+   escapes to a blanket handler and silently truncates the event stream
+   mid-file. Fix: catch `json.JSONDecodeError`.
+4. **`knowledge_bridge.py:128-129`** — `_extract_llm` calls
+   `adapter.complete(prompt)` with a raw string; every adapter expects
+   `List[LLMMessage]`. Every call raises and falls back to the heuristic path
+   — the LLM extraction path has never worked.
+5. **`thinkback.py:449-478`** — hand-writes `lessons.jsonl` directly, bypassing
+   `_store_lesson`'s prompt-injection guard and dedup/reinforce logic.
+6. **`slack_listener.py`** — the natural-language reply path has never
+   worked: returns a `ConductorResponse` object instead of `.message`
+   (:173, :304), returns a `HandleResult` object instead of a string (:309),
+   slices a bound method as if it were a string (`result.summary[:400]`,
+   :219), and calls `InterruptQueue.post()` with a dict where telegram passes
+   positional args (:214, :228).
+7. **CLI opstatus rename drift** — `cli_args.py` defines `gateway opstatus`
+   and `memory opstatus`, but `cli.py` still checks for `"status"` at both
+   call sites — `maro gateway opstatus` / `maro memory opstatus` are
+   unreachable, falling through to "unknown command."
+8. **`pyproject.toml:42`** — `maro-test = "bootstrap:_smoke_main"`;
+   `bootstrap.py` defines no such function. The installed script crashes on
+   invocation.
+9. **`mission.py:928-930`** — `load_feature_manifest` catches `ImportError`
+   around `json.loads`; a corrupt manifest raises instead of returning `None`.
+10. **`eval.py`** — `run_nightly_eval` calls `run_eval_flywheel` (which
+    already runs the full benchmark suite internally) and then calls
+    `run_eval` again — every nightly heartbeat pays for the builtin benchmark
+    suite twice.
+11. ~~**`quality_gate.py` / `passes.py`** — `_run_quality_gate_pass` never
+    forwards `run_adversarial`...~~ **MOOT as of Tier 1 (2026-07-02):**
+    `passes.py` (the buggy wrapper) and the debate pass were both deleted.
+    The sole surviving caller, `handle.py:1842`, doesn't pass `run_adversarial`
+    at all (uses the `True` default) — nothing left to fix.
+12. ~~**`gateway.py:306`** — catches `ImportError` where `TimeoutError` is
+    the realistic failure mode.~~ **MOOT as of Tier 1 (2026-07-02):** this
+    was inside `receive_from_gateway`, which was deleted as dead code —
+    verified via `git show` that the bug lived exactly there. The surviving
+    `send_to_gateway` already uses a broad `except Exception`.
+13. **`eval.py:44-46`** — a builtin benchmark checks the model introduces
+    itself "as Poe" — fails by construction for any non-Poe persona, post
+    Poe→Maro rename.
+14. **`background.py`'s `start_background`** — `timeout_seconds` param is
+    silently a no-op (never stored on `BackgroundTask`, contradicting its own
+    docstring), yet `cli.py:1209` passes a real `--timeout` CLI flag value
+    into it. Found during Tier 1 deletion (2026-07-02) while deleting the
+    genuinely-dead `list_background_tasks` in the same file — this one is a
+    live bug, not dead code.
+
+---
+
+## Tier 1 — Mechanical dead-code deletion (zero verified callers) — DONE 2026-07-02
+
+Executed via 8 parallel forks, one per cluster below, each re-verifying zero
+production callers before deleting. Commit `b04962b`: 66 files changed, net
+~9,575 lines removed (more than the ~4,500 estimate — several items ran
+larger than scoped, e.g. `inspector.py`'s dead pipeline was ~1,115 lines not
+~900, and `persona.py`/`skills.py` picked up extra confirmed-dead neighbors
+during investigation). Full suite green after the deletion pass.
+
+Deviations from the table below (all deliberate, confirmed live — not
+Tier 1 material):
+- `goal_map.py`'s "redundant `find_conflicts` pair" — **not redundant**, both
+  call paths are live (`GoalMap.find_conflicts()` from `conductor.py`,
+  module-level `find_conflicts()` from `GoalMap.summary()`). Left untouched.
+- `knowledge_lens.record_decision` — **not dead**, its read side
+  (`inject_decisions()`) is live in `recall.py` and the decision-journal
+  feature was actively developed as of 2026-06-11. Half-wired, not
+  abandoned. Left untouched.
+- `background.py`'s `timeout_seconds` param — **live bug, not dead code**
+  (see Tier 0 #14 above). Deleted the genuinely-dead `list_background_tasks`
+  in the same file but left this alone.
+- Follow-on cleanup beyond the original table: once `inspector.py`'s dead
+  pipeline was gone, `evolver.receive_inspector_tickets()` lost its only
+  caller (`generate_tickets`) and became orphaned — deleted alongside it,
+  plus its now-stale import in `inspector.py` and one test in
+  `test_phase61_integration.py` that referenced the deleted `check_alignment`.
+
+Original per-cluster plan (for reference — all items below were executed as
+scoped except where noted above):
+
+| Cluster | Item | ~Lines |
+|---|---|---|
+| Introspection | `inspector.py` dead "Phase 12 spec" pipeline (`run_full_inspector`, `InspectorReport`, friction/alignment/ticket generation) — legacy `run_inspector()` is the only path anything calls | ~900 |
+| Introspection | `verify_claim_tiered`/`TieredVerificationResult` (test-only; P2 tier is a hardcoded no-op anyway) | ~100 |
+| Evaluation | `verification_agent.adversarial_pass` + `quality_review` (drifted dead copies of quality_gate) | ~250 |
+| Evaluation | `passes.py` whole file (unused wrapper, two latent bugs — see Tier 0 #11) or shrink to a thin CLI | ~400 |
+| Evaluation | `constraint.py` dead `ViolationType`/`ViolationReport` taxonomy (Phase 59, no consumers) | ~130 |
+| Evaluation | `claim_verifier.py` `CompoundClaimReport`/`verify_all_claims` (agent_loop inlines its own copy instead) | ~60 |
+| Evaluation | `strategy_evaluator.evaluate_suggestion` (no callers) | small |
+| Planning | `workers.infer_crew_size`, `planner.decompose_to_dag`, `scope.py`'s two dead injection helpers | ~150 |
+| Planning | `mission.py` cargo-cult `assign_model_by_role` no-op calls, `validate_manifest_monotonicity` (doesn't validate monotonicity), `goal_map.py` dead block + redundant `find_conflicts` pair | ~150 |
+| Persona/Skills | `evolver.run_evolver_with_friction` (130-line uncalled near-copy of `run_evolver`) | ~135 |
+| Persona/Skills | `persona.py` dead `scan_personas_dir`/`_PERSONA_SPECS`/`_HARDCODED_FALLBACKS`, dead freeform-persona path, orphaned `load_manifest`/`load_persona_outcomes` | ~280 |
+| Persona/Skills | `skills.py` ~350 lines of test-only surface (`SkillConstraint`, `verify_skill_description`, section parsers, `promote_skill_tier`, etc.) | ~350 |
+| Memory | Dead backend abstraction (`memory._backend()`, zero callers — `MARO_MEMORY_BACKEND=sqlite` silently does nothing) | ~100 |
+| Memory | `knowledge_bridge.validate_principle` (dead + duplicates upsert's rewrite loop) | ~65 |
+| Memory | `knowledge_web.detect_goal_gaps`/`GoalGap`, `majority_vote_lessons`+`k_samples>1` machinery (prod only ever uses `k_samples=1`), `knowledge_lens.record_decision` (no writer) | ~200 |
+| Memory | Shadowed constant redefinitions + unused imports in `memory.py` | small |
+| Core loop | `pre_flight.multi_lens_review` (~105 lines, never wired in), broken `maro-test` entry (Tier 0 #8), `step_events.py` (298-line event bus, zero registered handlers) | ~400 |
+| Core loop | `bootstrap_task.py` (266 lines, no in-repo caller — confirm no deployed worker manifest references it first) | ~266 |
+| LLM/Tools | `llm._load_env_file` (half-dead), `router.extract_features` (test-only, reloads model per call), `llm.detect_available_backends` (test-only) | ~150 |
+| CLI | `gateway.send_to_gateway_async`/`receive_from_gateway` (zero callers; docstring claim is false) | ~120 |
+| Security | `injection_guard.is_safe_to_apply`/`scan_skill_yaml` (unreferenced), `sheriff.py` dead state-marker writers (confirm no manual operator writes them first) | ~105 |
+| Scheduling | `background.list_background_tasks` (zero callers) + dead `timeout_seconds` param | ~40 |
+| Polymarket | `polymarket_backtest.py` — entire file superseded by `_refined` version, zero callers | 363 |
+| Polymarket | `polymarket_backtest_refined.py` — also zero callers; one-shot research artifact (hardcoded `/tmp` output, `random.seed(42)`); `.coveragerc` already excludes both from coverage | 394 |
+
+**Subtotal: roughly 4,500 lines deletable with no open design question.**
+**Actual: ~9,575 net lines removed (commit `b04962b`) — see DONE note above.**
+
+---
+
+## Tier 2 — Mechanical consolidations (duplicated logic → one implementation)
+
+Still low-risk; each collapses N copies of the same logic into one.
+
+- **LLM adapters** (`llm.py`): `OpenRouterAdapter`/`OpenAIAdapter` are ~140
+  lines of near-verbatim duplication → one `OpenAICompatAdapter` base.
+  `ClaudeSubprocessAdapter`/`CodexCLIAdapter` duplicate `_build_prompt` and
+  `_parse_tool_call` verbatim → hoist to shared functions.
+- **Ranking/similarity utilities** (memory & knowledge cluster): four
+  near-identical TF-IDF rankers + four copies of `_STOP_WORDS`
+  (`knowledge_web`, `knowledge_lens`, `memory_ledger`, `lat_inject`), plus
+  three similarity functions that are really two algorithms
+  (`memory_ledger._text_similarity` ≡ `memory._jaccard_similarity`,
+  `knowledge_bridge._jaccard` is the odd one out). Consolidate into
+  `hybrid_search.py`, which already owns retrieval.
+- **JSONL-tail readers**: ~11 hand-rolled reversed-JSONL-tail implementations
+  across `observe.py`, `introspect.py`, `inspector.py`, `metrics.py`,
+  `harness_optimizer.py`, `tool_cost_report.py`, each with subtly different
+  error handling (Tier 0 #3 is a symptom of this). One shared
+  `read_jsonl_tail(path, limit)`.
+- **Telegram notify boilerplate**: copy-pasted token/chat-resolution +
+  send logic in `mission.py`, `heartbeat.py`, `agent_loop.py`, `evolver.py`,
+  `inspector.py` (6 sites). One `notify(text)` helper — this is the direction
+  the in-progress uncommitted `notify.py` work (on `main`, not this worktree)
+  is already heading.
+- **Listener duplication**: `telegram_listener.py` and `slack_listener.py`
+  each reimplement slash-parsing, dispatch, interrupt routing, and auth —
+  proven to have drifted (Tier 0 #6). Extract one transport-agnostic core.
+- **Scope-keyword classifiers**: `director.py`'s `_LARGE_SCOPE_KEYWORDS` is a
+  verbatim copy of `planner.py`'s `_WIDE_SCOPE_KEYWORDS` that has already
+  drifted. Director should import planner's `estimate_goal_scope`. (This is
+  about deduplication, not the navigator-cutover question — leave that
+  timeline alone.)
+- **`security.py`/`injection_guard.py` pattern corpora** — two independently
+  maintained "jailbreak/exfiltrate" regex lists for genuinely distinct
+  policies (runtime content scan vs. ingestion gate). Share one corpus,
+  **confirm with Jeremy before merging** — the divergence may be intentional
+  per-surface tuning.
+
+---
+
+## Tier 3 — Structural extractions (seams already exist; moderate effort)
+
+### `agent_loop.py` → `src/loop_phases/` (highest-value single item)
+
+The prior "monolith decomposition" (commits `963c2c2`..`895f04a`) extracted
+~40 named helper functions and a `LoopPhase`/`LoopContext`/`LoopStateMachine`
+state machine — but never moved them out of the file, which has kept growing
+since (now 5,581 lines). The external import surface is tiny (4 symbols used
+by `handle.py`/`mission.py`), so `agent_loop.py` can stay as a thin facade
+while the body moves. Proposed layout (from the dedicated review):
+
+| New module | Contents | ~LOC |
+|---|---|---|
+| `loop_types.py` | StepOutcome, LoopResult, LoopPhase, LoopContext, LoopStateMachine | 300 |
+| `loop_planning.py` | preflight, decompose, step-shaping | 480 |
+| `loop_init.py` | prepare/initialize/build-context | 430 |
+| `loop_parallel.py` | parallel batch/DAG execution | 490 |
+| `loop_blocked.py` | blocked-step tree + diagnosis | 780 |
+| `loop_post_step.py` | budget ceiling, march-of-nines, interrupts, ralph-verify, done-step processing | 830 |
+| `loop_execute.py` | `_execute_main_loop` | 1,130 |
+| `loop_finalize.py` | result-building + finalize | 500 |
+| `loop_artifacts.py` | artifact/manifest/log writers | 215 |
+| `agent_loop.py` (kept) | `run_agent_loop`, `main`, facade re-exports | ~650 |
+
+Two bugs to fix as part of this, not before: thread-unsafe function-attribute
+globals (`run_agent_loop._cost_warned`/`._recovery_in_progress`, cross-talk
+under `run_parallel_loops`) should become `LoopContext` fields; several
+"verbatim body" local-variable aliasing blocks duplicate state that already
+lives on `LoopContext` and should be retired **after** the split, one field
+at a time, not before (that part is genuinely risky — don't rush it).
+
+### Other extractions with clear seams
+
+- **`evolver.py`** (3,266 lines, second-largest file) is three programs in
+  one: suggestion store/apply engine, six independent statistical scanners
+  (~1,100 lines), and skill-lifecycle logic that's mutually, partly-privately
+  imported with `skills.py`. Split into `evolver_store.py` / `evolver_scans.py`
+  / `skill_lifecycle.py` (the last shared with skills.py) — resolves the
+  cross-module private-import coupling in one move.
+- **`director.py`**: extract `closure_verify.py` (the ~750-line
+  `verify_goal_completion` subsystem, self-contained, one caller). Also
+  de-duplicate two independent probe-modality classifiers that can disagree
+  with each other on the same command.
+- **`observe.py`**: split the 950-line HTTP dashboard (which directly
+  contradicts the module's own "no side effects" docstring) into its own
+  module, leaving `observe.py` as the read-only snapshot CLI + event writer
+  it claims to be. *(Confirm the dashboard is still used before deciding
+  split vs. delete — see Open Decisions.)*
+- **`handle.py`**: extract the self-contained 380-line provenance guard
+  (`provenance.py`) and the ~440-line task-store queue-consumer tail
+  (`handle_queue.py`) — both are pure moves with zero behavior change, and
+  neither touches the navigator-audit heuristic blocks.
+- **`cli.py`**: convert the 1,675-line sequential if-chain in `main()` into a
+  command registry (`{cmd: handler}` or per-command modules). This is the
+  mechanical fix that makes Tier 0 #7's rename-drift bug class structurally
+  impossible going forward.
+- **`memory.py` re-export shim**: currently ~90 symbols including private
+  helpers re-exported for backward compat, and it's load-bearing for
+  circular-import avoidance. Formalize as `src/memory/__init__.py` with an
+  explicit public API once the subpackage move (Tier 4) happens.
+
+---
+
+## Tier 4 — Subpackage reorganization (the deferred "Phase 38 move")
+
+BACKLOG.md deferred this at 49 modules "until it causes real problems." 9 of
+12 subsystem reviews independently concluded, from their own evidence, that
+it's time. Proposed shape (module lists are illustrative, not final):
+
+- **`src/core/`** — step_exec, checkpoint, interrupt (split, see below), team,
+  pre_flight, conductor, `runs.py`→`run_dir.py` (rename — collides with
+  `orch_items.runs_root()` today)
+- **`src/orchq/`** — orch, orch_items, orch_bridges, bootstrap_task,
+  build_loop_runner, with path utilities promoted to a shared `paths.py`
+  *(pending the "is this legacy?" decision below)*
+- **`src/planning/`** — planner, scope, intent
+- **`src/navigation/`** — navigator, navigator_prompt, navigator_shadow,
+  thread_brain
+- **`src/legacy_missions/`** — mission, goal_map, ancestry *(freeze, migrate
+  the 3 remaining call sites off it over time, don't delete outright — see
+  below)*
+- **`src/memory/`** — memory, memory_ledger, gc_memory, recall,
+  memory_backends (if kept), tiered-lesson half of knowledge_web
+- **`src/knowledge/`** — knowledge (rename `knowledge_cli.py` — it's a CLI,
+  not a library), knowledge_bridge, knowledge-node half of knowledge_web,
+  knowledge_lens, cross_ref, codebase_graph, repo_scan, hybrid_search (now
+  also home to consolidated ranking utilities), captains_log, convo_miner,
+  lat_inject, prereq
+- **`src/skills/`** — skill_types, skills, skill_loader, skill_lifecycle
+  (new, shared with evolver split), playbook
+- **`src/verification/`** — quality_gate, verification_agent, claim_probe,
+  claim_verifier, artifact_check, validation_shadow
+- **`src/eval/`** — eval, graduation, strategy_evaluator, attribution,
+  harness_optimizer
+- **`src/observability/`** — inspector, introspect, observe (post
+  dashboard-split), metrics
+- **`src/security/`** — sandbox, security, injection_guard, killswitch,
+  secret_scrub (kept tight and cohesive — sheriff and file_lock are not
+  security code, see below)
+- **`src/llm/`** — llm split into adapters_api / adapters_subprocess / parse
+  / local / factory, llm_parse
+- **`src/tools/`** — tool_registry, tool_search, runtime_tools, mcp_client
+- **`src/runtime/`** — heartbeat, scheduler, slow_update_scheduler (folded
+  into heartbeat per Tier 3), background, sheriff (moved here — it's
+  ops/health monitoring, not security), file_lock
+- **`src/interfaces/`** — telegram_listener, slack_listener, shared listener
+  core (new), notify, gateway
+- **`src/cli/`** — command registry + per-command modules, cli_args
+- **Out of `src/` entirely** — polymarket cluster (plugin/workspace-tools
+  location) and x-capture logic currently embedded in orch_bridges/orch_items
+  (extract to a plugin registered from `cli.py`, its only wirer)
+
+This is the largest, longest-lead item. Recommend treating it as a
+longer-term target that Tiers 0-3 naturally build toward (each subpackage
+above is easier to carve out once its cluster's dead code is already gone),
+not a single big-bang move.
+
+---
+
+## Open product decisions — resolved 2026-07-02
+
+All 9 items below were reviewed with Jeremy and investigated (git history +
+code archaeology). Resolutions and pointers to the resulting BACKLOG.md
+entries follow; none of this has been executed yet except item 7 (archived)
+and the doc/backlog updates for all nine.
+
+1. **`orch.py`/`orch_items.py`/`orch_bridges.py`** — **split confirmed.**
+   `orch.py` predates `agent_loop.py` by 18 days and its original docstring
+   describes exactly the heuristic-decomposition loop `agent_loop.py`'s first
+   commit says it replaces — `run_tick`/`run_loop` (and the `maro
+   tick`/`loop`/`plan` CLI commands) are legacy, with no found cron/heartbeat
+   caller today. But `orch_items.py`'s path/bookkeeping layer (`orch_root`,
+   `project_dir`, `parse_next`, NEXT.md) is live, load-bearing infrastructure
+   with 8+ current importers — that's the real `orchq`/paths subsystem, not a
+   competing main loop, and should be promoted (not deprecated) in the Tier 4
+   subpackage move. See BACKLOG.md "`orch.py`'s tick/loop engine is legacy;
+   its path/bookkeeping layer is not" — still needs Jeremy to confirm the
+   `maro tick`/`loop`/`plan` commands are actually unused before deprecating.
+2. **`sandbox.py`** — revisit later, no action now. See BACKLOG.md "Sandbox
+   hardening guards a stub, not real skill execution."
+3. **MCP tool dispatch** — logged as a bug to clean up later. See BACKLOG.md
+   "MCP tools registered/advertised but never dispatchable (bug)."
+4. **x-capture (Twitter) domain logic** — **not one bug, three uncoordinated
+   builds.** `web_fetch.py` (generic URL + X oEmbed fallback), `channels.py`
+   (GitHub/Reddit/YouTube, docstring falsely claims tool-registry
+   registration), and `orch_bridges.py`'s x-capture salvage bridge (which
+   doesn't fetch anything itself — it reads an artifact from an external,
+   out-of-repo X-capture pipeline that doesn't exist in this repo) are three
+   independent, non-duplicated implementations that were never unified.
+   Jeremy wants this collapsed into one general reusable fetch skill rather
+   than ad hoc per-feature fetch code. No formally tracked prior "standard
+   skills" initiative was found — this is new scoping. See BACKLOG.md "Unify
+   fragmented web/content-fetch capability into one skill" (covers this and
+   item 8 together).
+5. **Polymarket cluster** — **confirmed clutter, proceed with extract/delete.**
+   Git history rules out "preserved test data": `polymarket_backtest*.py`
+   were created-and-abandoned same-day (2026-04-01, zero callers);
+   `backtester.py`/`backtest_metrics.py` are a literal one-off
+   agent-generated artifact from a 2026-03-30 dogfood run; only later touches
+   are mechanical rename/portability sweeps, not feature work. The separate
+   "harvest orchestration history into a reusable test corpus" effort
+   (`e7c2e4a`) is unrelated — it covers `output/runs/`/`projects/` workspace
+   data, not `src/` code, and has zero dependency on any polymarket file. The
+   actual research conclusions are already properly archived in
+   `research/POLYMARKET_BTC_LAG_VALIDATION.md` et al. — original Tier 1
+   recommendation stands. See BACKLOG.md "Polymarket cluster +
+   quality_gate's debate pass are TradingAgents dogfood leftovers."
+6. **`mission.py`/`goal_map.py`/`ancestry.py`** — **not one legacy layer,
+   four distinct (and one duplicated) lineage mechanisms.** `ancestry.py`
+   (per-project multi-hop chain), `goal_map.py` (same data + conflict
+   detection), `thread_brain.py` (per-thread one-hop origin, in-progress
+   Thread Architecture), and `recall.py`'s `_resolve_thread` (an independent,
+   *disagreeing* second ancestry walk over run metadata) all coexist.
+   `agent_loop.py` currently injects ancestry twice from two sources that can
+   disagree — a real bug, not a design choice. Documented in full in the new
+   "Goal Lineage" section of `docs/ARCHITECTURE_OVERVIEW.md`, satisfying
+   Jeremy's ask for both visibility (the `maro ancestry` CLI survives as the
+   durable surface once the dashboard is archived) and downstream-reference
+   intent (currently only partial — `ancestry.json`'s chain is real but
+   manually wired; consolidation plan is in BACKLOG.md "Ancestry
+   double-injection: two disagreeing lineage sources in the loop prompt").
+   Also fixed the stale `§18` → `§12` spec-section reference in
+   `ancestry.py`'s docstring.
+7. **`observe.py`'s dashboard** — **archived, not deleted.** Jeremy: "proof
+   of concept that sort of failed." Moved to `archive/observe_dashboard.py`
+   (code + full original-intent writeup in its docstring) with tests split
+   to `archive/test_observe_dashboard.py`; `src/observe.py` no longer
+   contains `_DASHBOARD_HTML`/`_snapshot_json`/`serve_dashboard`, and
+   `maro-observe serve` now prints a pointer to the archive instead of
+   running it. BACKLOG_DONE.md's three dashboard entries ("Dashboard as real
+   tool," "Replay with factory mode," "Dashboard captain's log panel") are
+   annotated needs-revisited with the original high-level+detail visibility
+   intent restated. Forward item in BACKLOG.md: "Observability dashboard —
+   archived, revisit the visibility goal with a different implementation."
+8. **`channels.py`** — loose thread, not formally-tracked dropped scaffolding
+   (grepped BACKLOG + git log + `STEAL_LIST.md`, found nothing — this is new
+   scoping). Folded into item 4's fetch-skill consolidation entry in
+   BACKLOG.md rather than tracked separately, since it's one of the three
+   pieces that entry proposes unifying.
+9. **`quality_gate.py`'s debate pass** — **confirmed TradingAgents-origin,
+   domain-specific.** Added 2026-03-31, the day after `STEAL_LIST.md`'s dated
+   TradingAgents dogfood entry, same commit cluster as three other named
+   TradingAgents steal-items; architecture is a verbatim match to
+   TradingAgents' actual Bull/Bear/Risk-Manager design, generalized but never
+   given a production caller. Jeremy's read confirmed: trading-domain-shaped
+   code, not something to integrate into general Maro. Tracked alongside
+   item 5 in BACKLOG.md's polymarket-cluster entry — extract/delete both
+   together.
+
+## Explicitly out of scope (deliberate, in-flight, not mine to re-decide)
+
+- **Navigator cutover timing** (`docs/DUMB_LOOP_AUDIT.md`, `src/navigator.py`)
+  — a live, data-gated project already deciding, per decision point, when
+  hardcoded heuristics in `handle.py`/`agent_loop.py`/`planner.py`/
+  `director.py`/`scheduler.py` get replaced. Nothing in this plan touches
+  that timeline; several findings above note "independent of the navigator
+  question" specifically to keep that boundary clear.
+- **Weakening any security check** — where `security.py`/`injection_guard.py`/
+  `sandbox.py` findings look redundant, the plan flags them as maintainer
+  questions, not removals.
+
+## Docs hygiene (small, do anytime)
+
+`docs/ARCHITECTURE.md` is stale — predates the Poe→Maro rename, references a
+deleted `poe.py`, and its module table (48 files/~29K LOC) is roughly 2.5x out
+of date. `docs/ARCHITECTURE_OVERVIEW.md` is the better current reference
+(conceptual, hasn't rotted at the file level) but still uses "Poe" branding
+throughout. Recommend archiving `ARCHITECTURE.md` and rewriting
+`ARCHITECTURE_OVERVIEW.md` as the canonical doc once Tier 4 lands (so it
+describes the post-move structure, not the pre-move one).

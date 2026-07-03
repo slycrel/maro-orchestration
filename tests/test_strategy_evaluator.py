@@ -11,7 +11,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 from strategy_evaluator import (
     evaluate_strategy,
     evaluate_skill,
-    evaluate_suggestion,
     StrategyFitnessReport,
     SimilarOutcome,
     _tokenize,
@@ -360,54 +359,6 @@ class TestEvaluateSkill:
         assert "analyze portfolio" in called_strategy
         assert "portfolio analysis" in called_strategy
         assert "load data" in called_strategy
-
-
-# ---------------------------------------------------------------------------
-# evaluate_suggestion — wrapper
-# ---------------------------------------------------------------------------
-
-class TestEvaluateSuggestion:
-    def test_uses_suggestion_attribute(self):
-        suggestion = SimpleNamespace(suggestion="always verify web data before using in reports")
-
-        import unittest.mock as mock
-        from strategy_evaluator import evaluate_suggestion as _eval_sugg
-
-        with mock.patch("strategy_evaluator.evaluate_strategy") as mock_eval:
-            mock_eval.return_value = StrategyFitnessReport(
-                strategy="always verify web data before using in reports",
-                fitness_score=0.5,
-                confidence=0.0,
-                similar_outcomes=[],
-                outcomes_searched=0,
-                done_count=0,
-                stuck_count=0,
-                above_threshold=0,
-                verdict="UNCERTAIN",
-            )
-            _eval_sugg(suggestion)
-            assert mock_eval.call_args[0][0] == "always verify web data before using in reports"
-
-    def test_falls_back_to_str_when_no_attribute(self):
-        suggestion = "always verify web data before using in reports"
-
-        import unittest.mock as mock
-        from strategy_evaluator import evaluate_suggestion as _eval_sugg
-
-        with mock.patch("strategy_evaluator.evaluate_strategy") as mock_eval:
-            mock_eval.return_value = StrategyFitnessReport(
-                strategy=suggestion,
-                fitness_score=0.5,
-                confidence=0.0,
-                similar_outcomes=[],
-                outcomes_searched=0,
-                done_count=0,
-                stuck_count=0,
-                above_threshold=0,
-                verdict="UNCERTAIN",
-            )
-            _eval_sugg(suggestion)
-            assert mock_eval.call_args[0][0] == suggestion
 
 
 # ---------------------------------------------------------------------------

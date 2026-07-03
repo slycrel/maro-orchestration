@@ -627,6 +627,122 @@ These four are kept (not deleted) this triage pending verification against curre
   So #3 feeds #2. Keep global `min_certainty: 0.6`; revisit per-class only after the
   safe-class corpus is much larger. Full write-up: `docs/LOCAL_VALIDATOR.md`.
 
+### Sandbox hardening guards a stub, not real skill execution
+
+- [ ] **Sandbox executes a stub, not real skill code.** `src/sandbox.py`'s
+  536-line hardening stack (rlimits, venv isolation, network blocking, audit
+  log) runs a script that puts skill steps into *comments* and prints a
+  canned `"Executed skill: {name} on input: ..."` string — the hardening
+  protects a simulation, not live execution. `is_skill_safe`'s static-safety
+  verdict is recorded in the audit log but never gates anything. Decide:
+  build real skill execution to match the existing hardening, or shrink the
+  sandbox to match what it actually does. Revisit later — no immediate
+  action needed, hardening layers are well-built and may be intentional
+  groundwork for real execution. Source: refactor-plan architecture review
+  (docs/REFACTOR_PLAN.md), 2026-07-02.
+
+### MCP tools registered/advertised but never dispatchable (bug)
+
+- [ ] **MCP tool dispatch gap.** `heartbeat.py` loads configured MCP servers
+  and advertises their tools into prompts, but `step_exec.py`'s tool dispatch
+  has no `mcp__*` branch — falls through to "unrecognised tool: blocked."
+  The execution bridges that would actually run them
+  (`tool_registry.ToolRegistry.resolve_and_call`,
+  `mcp_client.dispatch_mcp_call`) have zero production callers; only tests
+  exercise them. An entire advertised capability is silently inert. Fix:
+  wire `resolve_and_call` into step_exec's unknown-tool branch, or stop
+  advertising MCP tools until it's wired. Source: refactor-plan architecture
+  review (docs/REFACTOR_PLAN.md), 2026-07-02.
+
+### `orch.py`'s tick/loop engine is legacy; its path/bookkeeping layer is not
+
+- [ ] **Split `orch.py`'s two concerns.** Git-history confirmed: `orch.py`
+  predates `agent_loop.py` by 18 days (2026-03-05 vs 2026-03-23), and its
+  original docstring — "durable project state and a loop-until-blocked
+  executor without arbitrary iteration limits" — is exactly the
+  heuristic-decomposition design `agent_loop.py`'s first commit explicitly
+  says it replaces ("LLM decomposes goal into steps, replaces dumb
+  heuristic"). `run_tick`/`run_loop` are still live via `maro tick`/`maro
+  loop`/`maro plan` CLI commands (`cli.py:610-660`), but no scripts/, cron,
+  or heartbeat call site invokes them today — only manual CLI use, if any.
+  **Action:** confirm with Jeremy whether `maro tick`/`loop`/`plan` are still
+  used in practice; if not, deprecate just `run_tick`/`run_loop` (and the
+  three CLI subcommands) as the superseded loop.
+  **Do NOT touch the rest of the file** — `orch_root`, `project_dir`,
+  `parse_next`, `projects_root`, and NEXT.md parsing (now in
+  `orch_items.py`) are live, load-bearing infrastructure with 8+ current
+  importers (`persona.py`, `heartbeat.py`, `telegram_listener.py`,
+  `autonomy.py`, `goal_map.py`, `director.py`, `sheriff.py`,
+  `build_loop_runner.py`) — this is the real `orchq`/paths subsystem, not a
+  competing main loop, and should be promoted/renamed as such in the Tier 4
+  subpackage move rather than deprecated. Source: refactor-plan git-history
+  investigation, 2026-07-02.
+
+### Unify fragmented web/content-fetch capability into one skill
+
+- [ ] **Three uncoordinated fetch implementations, never unified.**
+  `web_fetch.py` (generic URL fetch+strip via Jina/BS4, plus a built-in
+  X/Twitter fallback chain: direct fetch → oEmbed → t.co resolve; sole
+  production caller `step_exec.py:803`), `channels.py` (GitHub/Reddit/YouTube
+  structured queries via raw `urllib`; docstring falsely claims these are
+  "registered for agent use" — zero references in `tool_registry.py` or
+  `skills.py`, only `doctor.py` pings it as a health check), and
+  `orch_bridges.py`'s x-capture salvage bridge
+  (`x_capture_salvage_validation_bridge`, added 2026-03-20) — the last of
+  which doesn't fetch anything itself, it just reads an
+  `x-capture-salvage.json` artifact written by an **external, out-of-repo**
+  X-capture pipeline that doesn't exist anywhere in this repo. Not literal
+  duplicated code, but three disconnected one-off builds with different
+  failure modes depending on which path a goal happens to hit — this is
+  plausibly the "failing left and right with webfetch or wget type calls"
+  experience. No formally tracked "standard skills" initiative was found
+  (grepped BACKLOG + full git log + `STEAL_LIST.md`) — this is new scoping,
+  not a resumed thread.
+  **Action:** consolidate into one general fetch skill registered in
+  `tool_registry.py`/`skills.py` with sub-verbs — generic URL, X/Twitter
+  (preserving the oEmbed→salvage-retry escalation path), and channels.py's
+  platform queries — so callers stop hand-rolling fetch logic per feature.
+  Register channels.py's functions as real tools or delete the false
+  "registered for agent use" claim. Revisit later. Source: refactor-plan
+  architecture review, 2026-07-02.
+
+### Ancestry double-injection: two disagreeing lineage sources in the loop prompt
+
+- [ ] **`agent_loop.py` injects ancestry twice per loop from two independent,
+  potentially-disagreeing sources.** `ancestry.py`'s `build_ancestry_prompt()`
+  reads the per-project `ancestry.json` chain; `recall.py`'s
+  `_resolve_thread()` independently walks a *different* data source (run
+  metadata `origin`) to build its own ancestry string. `recall.py`'s own
+  docstring admits the gap: "goal-brain injection + correspondence walk are
+  still future work." No single source of truth exists today. See the new
+  "Goal Lineage" section in `docs/ARCHITECTURE_OVERVIEW.md` for the full
+  four-mechanism map (`ancestry.py`, `goal_map.py`, `thread_brain.py`,
+  `recall.py`). **Action:** have `recall.py`'s `_resolve_thread` call into
+  `ancestry.py`'s chain instead of independently re-deriving it; wire
+  `thread_brain.py`'s per-thread origin to also write/consult
+  `ancestry.json` at thread-fork time as Thread Architecture matures. Source:
+  refactor-plan architecture review, 2026-07-02.
+
+### Observability dashboard — archived, revisit the visibility goal with a different implementation
+
+- [ ] **Dashboard archived 2026-07-02, underlying goal still open.** The
+  stdlib-HTTP `maro-observe serve` dashboard (BACKLOG_DONE.md "Dashboard as
+  real tool" / "Replay with factory mode" / "Dashboard captain's log panel",
+  now flagged needs-revisited) was moved to `archive/observe_dashboard.py` —
+  Jeremy's call: "proof of concept that sort of failed." Original intent
+  (still valid, worth pursuing differently): give an end user both a
+  high-level view of what the orchestrator is doing and visibility into the
+  detailed work being done on their behalf. What made this implementation
+  fail: grew into an unauthenticated ~950-line stdlib http.server bound to
+  0.0.0.0 by default, mixing read-only observability with a live
+  goal-submission/replay control surface. `maro ancestry` CLI is the
+  surviving visibility primitive in the meantime (see "Goal Lineage" in
+  `docs/ARCHITECTURE_OVERVIEW.md`). Revisit with a fresh design — likely
+  needs auth, a narrower read-only default, and a decision about whether
+  the goal-submission/replay controls belong in the same surface at all.
+  No urgency; needs product discussion first. Source: refactor-plan review,
+  2026-07-02.
+
 ---
 
 ## Stale — dropped this triage

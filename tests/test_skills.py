@@ -33,12 +33,9 @@ from skills import (
     get_skills_needing_escalation,
     increment_use,
     load_skills,
-    parse_skill_sections,
     record_skill_outcome,
-    render_skill_markdown,
     run_skill_tests,
     save_skill,
-    update_skill_section,
     validate_skill_mutation,
 )
 from llm import LLMResponse
@@ -494,7 +491,7 @@ def test_cli_poe_skills_extract_dry_run(monkeypatch, tmp_path, capsys):
 
 
 # ===========================================================================
-# Phase 14 tests: SkillStats, parse_skill_sections, SkillTestCase,
+# Phase 14 tests: SkillStats, SkillTestCase,
 # validate_skill_mutation, compute_skill_hash, verify_skill_hash
 # ===========================================================================
 
@@ -627,100 +624,6 @@ def test_record_skill_outcome_needs_escalation_flag(monkeypatch, tmp_path):
         stats = get_skill_stats(skill.id)
         assert stats is not None
         assert stats.needs_escalation is True
-
-
-# ---------------------------------------------------------------------------
-# Phase 14: Structured three-section markdown format
-# ---------------------------------------------------------------------------
-
-def test_parse_skill_sections_all(monkeypatch, tmp_path):
-    """Parses all three sections correctly."""
-    _setup_workspace(monkeypatch, tmp_path)
-    markdown = """## Spec
-This skill does research.
-
-## Behavior
-- Step 1: gather data
-- Step 2: analyze
-
-## Guardrails
-- Do not exceed 10 requests per minute
-"""
-    sections = parse_skill_sections(markdown)
-    assert "This skill does research" in sections["spec"]
-    assert "Step 1" in sections["behavior"]
-    assert "10 requests" in sections["guardrails"]
-
-
-def test_parse_skill_sections_partial(monkeypatch, tmp_path):
-    """Tolerates missing Guardrails section — returns empty string."""
-    _setup_workspace(monkeypatch, tmp_path)
-    markdown = """## Spec
-Does something useful.
-
-## Behavior
-Execute the steps.
-"""
-    sections = parse_skill_sections(markdown)
-    assert "Does something useful" in sections["spec"]
-    assert "Execute" in sections["behavior"]
-    assert sections["guardrails"] == ""
-
-
-def test_parse_skill_sections_no_sections(monkeypatch, tmp_path):
-    """No section headers → whole content treated as spec."""
-    _setup_workspace(monkeypatch, tmp_path)
-    markdown = "This is just plain text with no section markers."
-    sections = parse_skill_sections(markdown)
-    assert "plain text" in sections["spec"]
-    assert sections["behavior"] == ""
-    assert sections["guardrails"] == ""
-
-
-def test_parse_skill_sections_empty(monkeypatch, tmp_path):
-    """Empty markdown → all empty strings."""
-    _setup_workspace(monkeypatch, tmp_path)
-    sections = parse_skill_sections("")
-    assert sections == {"spec": "", "behavior": "", "guardrails": ""}
-
-
-def test_render_skill_markdown(monkeypatch, tmp_path):
-    """render_skill_markdown output contains ## Spec and ## Behavior."""
-    _setup_workspace(monkeypatch, tmp_path)
-    skill = _make_skill("render test skill")
-    md = render_skill_markdown(skill)
-    assert "## Spec" in md
-    assert "## Behavior" in md
-    assert "## Guardrails" in md
-    assert "render test skill" in md
-
-
-def test_update_skill_section(monkeypatch, tmp_path):
-    """update_skill_section returns new Skill with updated section."""
-    _setup_workspace(monkeypatch, tmp_path)
-    skill = _make_skill("section update test")
-    new_skill = update_skill_section(skill, "spec", "New spec content here.")
-    # Should be a new object
-    assert new_skill is not skill
-    sections = parse_skill_sections(new_skill.description)
-    assert "New spec content here" in sections["spec"]
-
-
-def test_update_skill_section_guardrails(monkeypatch, tmp_path):
-    """update_skill_section works for guardrails section."""
-    _setup_workspace(monkeypatch, tmp_path)
-    skill = _make_skill("guardrails test")
-    new_skill = update_skill_section(skill, "guardrails", "Never exceed 5 retries.")
-    sections = parse_skill_sections(new_skill.description)
-    assert "Never exceed" in sections["guardrails"]
-
-
-def test_update_skill_section_invalid_raises(monkeypatch, tmp_path):
-    """update_skill_section raises ValueError for invalid section name."""
-    _setup_workspace(monkeypatch, tmp_path)
-    skill = _make_skill("invalid section test")
-    with pytest.raises(ValueError):
-        update_skill_section(skill, "invalid_section", "content")
 
 
 # ---------------------------------------------------------------------------
@@ -1876,163 +1779,6 @@ def test_write_provenance_extra_fields(monkeypatch, tmp_path):
     data = json.loads(path.read_text())
     assert data["utility_score"] == 0.25
     assert data["circuit_state"] == "open"
-
-
-# ---------------------------------------------------------------------------
-# Phase 59: Skill description verifier (Feynman Steal 11)
-# ---------------------------------------------------------------------------
-
-def _make_full_skill(name="test", description="", trigger_patterns=None, steps_template=None):
-    """Build a Skill with all required fields for verifier tests."""
-    from skills import Skill
-    return Skill(
-        id="sk1",
-        name=name,
-        description=description,
-        trigger_patterns=trigger_patterns or [],
-        steps_template=steps_template or [],
-        source_loop_ids=[],
-        created_at="2026-04-07T00:00:00Z",
-    )
-
-
-def test_verify_skill_clean_description():
-    """Clean skill description returns is_clean=True and high confidence."""
-    from skills import verify_skill_description
-    skill = _make_full_skill(
-        description="Search the web for information and return structured results",
-        steps_template=["identify key terms", "run search", "parse top 5 results"],
-    )
-    result = verify_skill_description(skill)
-    assert result.is_clean is True
-    assert result.confidence > 0.9
-
-
-def test_verify_skill_absolute_claim():
-    """Absolute claims ('always', '100%') are flagged as suspicious."""
-    from skills import verify_skill_description
-    skill = _make_full_skill(
-        description="This skill always succeeds and provides 100% accurate results."
-    )
-    result = verify_skill_description(skill)
-    assert result.is_clean is False
-    categories = [s["category"] for s in result.suspicious_claims]
-    assert "absolute_claim" in categories
-
-
-def test_verify_skill_unsourced_metric():
-    """Unsourced percentage metrics are flagged as suspicious."""
-    from skills import verify_skill_description
-    skill = _make_full_skill(
-        description="Achieves 40% improvement in query efficiency with no setup."
-    )
-    result = verify_skill_description(skill)
-    assert any(s["category"] == "unsourced_metric" for s in result.suspicious_claims)
-
-
-def test_verify_skill_confidence_decrements_per_finding():
-    """Confidence decrements by 0.2 per suspicious finding."""
-    from skills import verify_skill_description
-    # Two absolute claims
-    skill = _make_full_skill(
-        description="This always works and is guaranteed to be perfect."
-    )
-    result = verify_skill_description(skill)
-    assert result.confidence <= 0.6  # at least 2 suspicious findings
-
-
-def test_verify_skill_result_fields():
-    """SkillVerificationResult has expected fields."""
-    from skills import verify_skill_description, SkillVerificationResult
-    skill = _make_full_skill(name="my-skill", description="Clean description here")
-    result = verify_skill_description(skill)
-    assert isinstance(result, SkillVerificationResult)
-    assert result.skill_name == "my-skill"
-    assert isinstance(result.suspicious_claims, list)
-    assert isinstance(result.is_clean, bool)
-    assert 0.0 <= result.confidence <= 1.0
-
-
-# ---------------------------------------------------------------------------
-# Phase 59: Skill sampler constraints (NeMo Steal 7)
-# ---------------------------------------------------------------------------
-
-class TestSkillConstraints:
-    """Tests for SkillConstraint and apply_skill_constraints()."""
-
-    def _make_skill_with_id(self, sid, name="test"):
-        return Skill(
-            id=sid, name=name, description="a skill",
-            trigger_patterns=[], steps_template=[],
-            source_loop_ids=[], created_at="2026-04-07T00:00:00Z",
-        )
-
-    def test_no_constraints_returns_all_skills(self):
-        from skills import apply_skill_constraints
-        skills = [self._make_skill_with_id("s1"), self._make_skill_with_id("s2")]
-        result = apply_skill_constraints("some goal", skills, constraints=None)
-        assert result == skills
-
-    def test_constraint_matches_by_keyword(self):
-        """Constraint with matching keyword annotates the skill."""
-        from skills import apply_skill_constraints, SkillConstraint
-        skill = self._make_skill_with_id("s1", "research-skill")
-        constraint = SkillConstraint(
-            skill_id="s1",
-            condition_keywords=["research", "investigate"],
-            parameter_overrides={"approach": "analytical"},
-        )
-        result = apply_skill_constraints("research polymarket trends", [skill], [constraint])
-        assert len(result) == 1
-        assert "constraint_overrides" in result[0].optimization_objective
-        assert "analytical" in result[0].optimization_objective
-
-    def test_constraint_no_match_skill_unchanged(self):
-        """Constraint without matching keyword leaves skill unchanged."""
-        from skills import apply_skill_constraints, SkillConstraint
-        skill = self._make_skill_with_id("s1")
-        constraint = SkillConstraint(
-            skill_id="s1",
-            condition_keywords=["build", "compile"],
-            parameter_overrides={"mode": "strict"},
-        )
-        result = apply_skill_constraints("research AI papers", [skill], [constraint])
-        assert result[0].optimization_objective == ""  # untouched
-
-    def test_constraint_excluded_keyword_skips(self):
-        """Excluded keyword prevents constraint from applying."""
-        from skills import apply_skill_constraints, SkillConstraint
-        skill = self._make_skill_with_id("s1")
-        constraint = SkillConstraint(
-            skill_id="s1",
-            condition_keywords=["research"],
-            excluded_keywords=["polymarket"],  # excluded
-            parameter_overrides={"mode": "fast"},
-        )
-        result = apply_skill_constraints("research polymarket data", [skill], [constraint])
-        assert "constraint_overrides" not in result[0].optimization_objective
-
-    def test_multiple_constraints_merge_overrides(self):
-        """Multiple constraints for same skill merge their overrides."""
-        from skills import apply_skill_constraints, SkillConstraint
-        skill = self._make_skill_with_id("s1")
-        constraints = [
-            SkillConstraint("s1", ["research"], {"depth": "deep"}),
-            SkillConstraint("s1", ["urgent"], {"speed": "fast"}),
-        ]
-        result = apply_skill_constraints("urgent research needed", [skill], constraints)
-        obj = result[0].optimization_objective
-        assert "deep" in obj
-        assert "fast" in obj
-
-    def test_constraint_does_not_modify_original_skill(self):
-        """apply_skill_constraints returns a copy when modifying (original unchanged)."""
-        from skills import apply_skill_constraints, SkillConstraint
-        skill = self._make_skill_with_id("s1")
-        original_obj = skill.optimization_objective
-        constraint = SkillConstraint("s1", ["test"], {"key": "val"})
-        apply_skill_constraints("test goal", [skill], [constraint])
-        assert skill.optimization_objective == original_obj  # original unchanged
 
 
 # ---------------------------------------------------------------------------

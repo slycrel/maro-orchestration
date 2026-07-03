@@ -103,36 +103,14 @@ _FAILED_MARKER = ".maro-failed"
 _PAUSED_MARKER = ".maro-paused"
 
 
-def mark_project_failed(slug: str, reason: str = "") -> Path:
-    """Write a .maro-failed marker in the project directory.
-
-    Sheriff, backlog drain, and heartbeat diagnosis all skip failed projects.
-    The marker persists until manually removed. Returns the marker path.
-    """
-    import sys as _sys
-    _sys.path.insert(0, str(Path(__file__).parent))
-    from orch import project_dir
-    proj_dir = project_dir(slug)
-    marker = proj_dir / _FAILED_MARKER
-    content = f"failed: {reason}\n" if reason else "failed\n"
-    marker.write_text(content, encoding="utf-8")
-    return marker
-
-
-def mark_project_paused(slug: str, reason: str = "") -> Path:
-    """Write a .maro-paused marker — sheriff monitors but backlog drain skips."""
-    import sys as _sys
-    _sys.path.insert(0, str(Path(__file__).parent))
-    from orch import project_dir
-    proj_dir = project_dir(slug)
-    marker = proj_dir / _PAUSED_MARKER
-    content = f"paused: {reason}\n" if reason else "paused\n"
-    marker.write_text(content, encoding="utf-8")
-    return marker
-
-
 def project_lifecycle_state(slug: str) -> str:
-    """Return 'failed' | 'paused' | 'active' based on marker files."""
+    """Return 'failed' | 'paused' | 'active' based on marker files.
+
+    Markers (`.maro-failed` / `.maro-paused`, project-dir-relative) are
+    manual: no code path in this repo writes them automatically. An operator
+    creates one directly (`touch <project_dir>/.maro-failed`) to pull a
+    project out of sheriff/backlog-drain/heartbeat rotation.
+    """
     import sys as _sys
     _sys.path.insert(0, str(Path(__file__).parent))
     from orch import project_dir

@@ -203,20 +203,6 @@ def run_doctor() -> bool:
     except Exception as exc:
         results.append(_check("Curated skills (skills/)", False, str(exc)[:80]))
 
-    # Phase 41: step event bus
-    try:
-        from step_events import step_event_bus
-        _handlers = step_event_bus.list_handlers()
-        _pre_count = len(_handlers["pre"])
-        _post_count = len(_handlers["post"])
-        results.append(_check(
-            "Step event bus",
-            True,
-            f"loaded — {_pre_count} pre-step handler(s), {_post_count} post-step handler(s)",
-        ))
-    except Exception as exc:
-        results.append(_check("Step event bus", False, str(exc)[:80]))
-
     # Local validator (optional, zero-cost first-pass validation)
     try:
         import local_models as _lm
@@ -310,19 +296,6 @@ def run_doctor() -> bool:
         results.append(_check("channels (GitHub/Reddit/YouTube)", _ch_ok, _ch_detail))
     except Exception as _exc:
         results.append(_check("channels", False, str(_exc)[:80]))
-
-    # polymarket-cli availability
-    try:
-        from polymarket import polymarket_health_check
-        _pm = polymarket_health_check()
-        results.append(_check(
-            "polymarket-cli",
-            _pm["available"],
-            f"{len(_pm['functions'])} functions available" if _pm["available"]
-            else "not found — pip install polymarket-cli",
-        ))
-    except Exception as _exc:
-        results.append(_check("polymarket-cli", False, str(_exc)[:80]))
 
     # Summary
     passed = sum(1 for r in results if r["ok"])

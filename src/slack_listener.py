@@ -170,7 +170,8 @@ def _dispatch_slash(
     """Route a Slack slash command to the appropriate handler. Returns response text."""
     if cmd == "status":
         if conduct is not None:
-            return conduct("/status", dry_run=dry_run)
+            response = conduct("/status", dry_run=dry_run)
+            return response.message or "(no response)"
         return "[conduct not available]"
 
     elif cmd == "observe":
@@ -211,12 +212,12 @@ def _dispatch_slash(
             # Interrupt routing
             if InterruptQueue is not None:
                 q = InterruptQueue()
-                q.post({"type": "message", "text": args, "source": "slack", "channel_id": channel_id})
+                q.post(args, source="slack")
                 return "⏳ Loop is active — message queued as interrupt"
         from agent_loop import run_agent_loop
         try:
             result = run_agent_loop(args, project=project, dry_run=dry_run)
-            return f"✅ Done: {result.summary[:400]}" if hasattr(result, "summary") else f"✅ Done ({result.status})"
+            return f"✅ Done: {result.summary()[:400]}" if hasattr(result, "summary") else f"✅ Done ({result.status})"
         except Exception as e:
             return f"❌ Error: {e}"
 
@@ -225,7 +226,7 @@ def _dispatch_slash(
             loop_id = get_running_loop() if get_running_loop else None
             if InterruptQueue is not None:
                 q = InterruptQueue()
-                q.post({"type": "stop", "source": "slack"})
+                q.post("stop", source="slack", intent="stop")
                 return f"🛑 Stop signal posted (loop: {loop_id})"
         return "No loop is currently running."
 
@@ -281,7 +282,7 @@ def _process_message(
     if is_loop_running and is_loop_running() and not cmd:
         if InterruptQueue is not None:
             q = InterruptQueue()
-            q.post({"type": "message", "text": text, "source": "slack", "channel_id": channel_id})
+            q.post(text, source="slack")
             _send(client, channel_id, "⏳ Loop is running — message queued as interrupt")
             return
 
@@ -301,12 +302,14 @@ def _run_natural(text: str, *, dry_run: bool, project: str, verbose: bool) -> st
     """Run a natural language message through the agent loop."""
     if conduct is not None:
         try:
-            return conduct(text, dry_run=dry_run)
+            response = conduct(text, dry_run=dry_run)
+            return response.message or "(no response)"
         except Exception as e:
             return f"Error: {e}"
     elif handle is not None:
         try:
-            return handle(text)
+            result = handle(text, project=project, dry_run=dry_run, verbose=verbose)
+            return result.result or "(no response)"
         except Exception as e:
             return f"Error: {e}"
     return "conduct not available"

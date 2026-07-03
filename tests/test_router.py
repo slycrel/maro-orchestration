@@ -127,38 +127,6 @@ def test_router_stats_json_roundtrip(monkeypatch, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# extract_features
-# ---------------------------------------------------------------------------
-
-def test_extract_features_tfidf_fallback(monkeypatch):
-    """Returns non-empty list without sentence-transformers."""
-    import router
-    monkeypatch.setattr(router, "_ST_AVAILABLE", False)
-    features = router.extract_features("research polymarket strategies")
-    assert isinstance(features, list)
-    assert len(features) > 0
-
-
-def test_extract_features_consistent_length(monkeypatch):
-    """Same text always returns same-length vector."""
-    import router
-    monkeypatch.setattr(router, "_ST_AVAILABLE", False)
-    f1 = router.extract_features("hello world test", vectorizer=None)
-    f2 = router.extract_features("hello world test", vectorizer=None)
-    assert len(f1) == len(f2)
-
-
-def test_extract_features_no_sklearn_no_st(monkeypatch):
-    """Falls back to char-level features when no ML available."""
-    import router
-    monkeypatch.setattr(router, "_ST_AVAILABLE", False)
-    monkeypatch.setattr(router, "_SKLEARN_AVAILABLE", False)
-    features = router.extract_features("some text here")
-    assert isinstance(features, list)
-    assert len(features) > 0
-
-
-# ---------------------------------------------------------------------------
 # build_training_data
 # ---------------------------------------------------------------------------
 

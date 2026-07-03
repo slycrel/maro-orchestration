@@ -510,100 +510,10 @@ class TestReadAncestryTree:
         assert {"alpha", "beta", "gamma"}.issubset(slugs)
 
 
-class TestSnapshotJsonIncludes:
-    def test_cost_key_present(self, monkeypatch, tmp_path):
-        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
-        _ws(tmp_path)
-        snap = observe._snapshot_json()
-        assert "cost" in snap
-        assert "total_usd" in snap["cost"]
-
-    def test_ancestry_key_present(self, monkeypatch, tmp_path):
-        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
-        _ws(tmp_path)
-        snap = observe._snapshot_json()
-        assert "ancestry" in snap
-        assert isinstance(snap["ancestry"], list)
-
-
-class TestDashboardReplayEndpoint:
-    """Test the /api/replay POST handler via serve_dashboard's internal handler."""
-
-    def _make_handler(self, tmp_path):
-        """Build the _Handler class the same way serve_dashboard does."""
-        import http.server, io, threading
-        from pathlib import Path as _P
-
-        # We'll instantiate _Handler manually by subclassing and providing stubs
-        # Instead, test via an in-process HTTP server on a random port.
-        return None  # signal to use the functional test below
-
-    def test_replay_with_no_outcomes_returns_404(self, monkeypatch, tmp_path):
-        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
-        _ws(tmp_path)
-        monkeypatch.setattr(observe, "_read_recent_outcomes", lambda limit=1: [])
-        # Verify the logic path — can't easily test the HTTP layer without a live server
-        # so we test _read_recent_outcomes returns [] and the handler logic follows.
-        outcomes = observe._read_recent_outcomes(limit=1)
-        assert outcomes == []
-
-    def test_replay_with_outcomes_finds_goal(self, monkeypatch, tmp_path):
-        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
-        mem = _ws(tmp_path)
-        from datetime import datetime, timezone
-        ts = datetime.now(timezone.utc).isoformat()
-        (mem / "outcomes.jsonl").write_text(
-            json.dumps({"goal": "research Polymarket trends", "status": "done",
-                        "timestamp": ts}),
-            encoding="utf-8"
-        )
-        outcomes = observe._read_recent_outcomes(limit=1)
-        assert outcomes
-        assert outcomes[0]["goal"] == "research Polymarket trends"
-
-
-# ---------------------------------------------------------------------------
-# Factory mode replay (BACKLOG: Replay with "factory mode")
-# ---------------------------------------------------------------------------
-
-class TestFactoryReplay:
-    """Tests for /api/replay-factory logic: evolver signal scan → sub-mission queue."""
-
-    def test_factory_replay_returns_202_with_outcomes(self, monkeypatch, tmp_path):
-        """When outcomes exist and signals fire, endpoint returns 202."""
-        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
-        mem = _ws(tmp_path)
-        from datetime import datetime, timezone
-        ts = datetime.now(timezone.utc).isoformat()
-        (mem / "outcomes.jsonl").write_text(
-            json.dumps({"goal": "research Polymarket", "status": "done", "timestamp": ts}),
-            encoding="utf-8"
-        )
-        outcomes = observe._read_recent_outcomes(limit=10)
-        # Factory mode uses _read_recent_outcomes to check if outcomes exist
-        assert len(outcomes) >= 1
-
-    def test_factory_replay_no_outcomes_returns_404_equivalent(self, monkeypatch, tmp_path):
-        """When no outcomes, factory replay path should detect and abort."""
-        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
-        _ws(tmp_path)
-        monkeypatch.setattr(observe, "_read_recent_outcomes", lambda limit=10: [])
-        outcomes = observe._read_recent_outcomes(limit=10)
-        assert outcomes == []  # factory replay would return 404
-
-    def test_factory_replay_caps_signals_at_3(self, monkeypatch, tmp_path):
-        """Factory replay queues at most 3 signal-derived goals."""
-        # Verify the implementation caps at 3 via code inspection
-        import inspect, observe as obs_mod
-        src = inspect.getsource(obs_mod)
-        assert "signals[:3]" in src, "Factory replay should cap signals at 3"
-
-    def test_factory_replay_endpoint_exists_in_handler(self, monkeypatch, tmp_path):
-        """'/api/replay-factory' path is handled by the POST handler."""
-        import inspect, observe as obs_mod
-        src = inspect.getsource(obs_mod)
-        assert "/api/replay-factory" in src
-
+# NOTE: TestSnapshotJsonIncludes, TestDashboardReplayEndpoint, and
+# TestFactoryReplay tested the HTTP dashboard (_snapshot_json/serve_dashboard),
+# archived 2026-07-02 to archive/observe_dashboard.py — see
+# archive/test_observe_dashboard.py for their surviving coverage.
 
 # ---------------------------------------------------------------------------
 # Project status board (Phase 61 — maro-observe projects)
@@ -745,22 +655,9 @@ class TestEvalTrendDashboard:
         assert result[0]["run_id"] == "run2"
         assert result[1]["run_id"] == "run1"
 
-    def test_collect_dashboard_includes_eval_trend(self, monkeypatch, tmp_path):
-        """_collect_dashboard_data includes eval_trend key."""
-        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
-        import observe
-        from unittest.mock import patch
-        _trend = [{"timestamp": "2026-04-14T10:00:00Z", "builtin_score": 0.90, "run_id": "r1"}]
-        with patch("observe._read_eval_trend", return_value=_trend):
-            data = observe._snapshot_json()
-        assert "eval_trend" in data
-        assert data["eval_trend"] == _trend
-
-    def test_dashboard_html_contains_eval_panel(self):
-        """Dashboard HTML contains the eval pass rate panel element."""
-        import observe
-        assert "eval-trend-status" in observe._DASHBOARD_HTML
-        assert "Eval Pass Rate" in observe._DASHBOARD_HTML
+    # test_collect_dashboard_includes_eval_trend and test_dashboard_html_contains_eval_panel
+    # tested the archived HTTP dashboard — moved to archive/test_observe_dashboard.py
+    # (TestEvalTrendDashboardHTML), 2026-07-02.
 
 
 # ---------------------------------------------------------------------------
@@ -821,20 +718,9 @@ class TestCaptainLogDashboard:
         assert len(result) == 1
         assert result[0]["summary"] == "fallback note text"
 
-    def test_snapshot_includes_captain_log(self):
-        import observe
-        from unittest.mock import patch
-        _log = [{"ts": "2026-04-14T10:00:00Z", "event_type": "SKILL_PROMOTED",
-                 "loop_id": "abc", "subject": "s", "summary": "promoted"}]
-        with patch("observe._read_captain_log_entries", return_value=_log):
-            data = observe._snapshot_json()
-        assert "captain_log" in data
-        assert data["captain_log"] == _log
-
-    def test_dashboard_html_contains_captain_log_panel(self):
-        import observe
-        assert "captain-log-status" in observe._DASHBOARD_HTML
-        assert "Captain" in observe._DASHBOARD_HTML
+    # test_snapshot_includes_captain_log and test_dashboard_html_contains_captain_log_panel
+    # tested the archived HTTP dashboard — moved to archive/test_observe_dashboard.py
+    # (TestCaptainLogDashboardHTML), 2026-07-02.
 
 
 class TestSuggestionStats:
@@ -883,16 +769,6 @@ class TestSuggestionStats:
         assert stats["pending"] == 2
         assert stats["applied"] == 1
 
-    def test_snapshot_includes_suggestion_stats(self):
-        import observe
-        from unittest.mock import patch
-        _mock = {"total": 10, "by_category": {}, "by_status": {}, "pending": 8, "applied": 2}
-        with patch("observe._read_suggestion_stats", return_value=_mock):
-            data = observe._snapshot_json()
-        assert "suggestion_stats" in data
-        assert data["suggestion_stats"]["total"] == 10
-
-    def test_dashboard_html_contains_suggestion_panel(self):
-        import observe
-        assert "suggestion-stats" in observe._DASHBOARD_HTML
-        assert "Evolver Suggestions" in observe._DASHBOARD_HTML
+    # test_snapshot_includes_suggestion_stats and test_dashboard_html_contains_suggestion_panel
+    # tested the archived HTTP dashboard — moved to archive/test_observe_dashboard.py
+    # (TestSuggestionStatsDashboardHTML), 2026-07-02.
