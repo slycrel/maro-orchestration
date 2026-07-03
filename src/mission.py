@@ -1087,21 +1087,13 @@ def _release_drain_lock() -> None:
 def _send_milestone_notification(project: str, milestone_title: str, status: str) -> None:
     """Send a Telegram notification when a milestone completes."""
     try:
-        from telegram_listener import TelegramBot, _resolve_token, _resolve_allowed_chats
+        from telegram_listener import telegram_notify
     except ImportError:
         return
     try:
-        token = _resolve_token()
-        if not token:
-            return
-        bot = TelegramBot(token)
-        allowed = _resolve_allowed_chats()
-        if not allowed:
-            return
         icon = "✓" if status == "done" else "⚠"
         msg = f"{icon} [{project}] Milestone: {milestone_title} — {status}"
-        for chat_id in allowed:
-            bot.send_message(chat_id, msg)
+        telegram_notify(msg)
     except Exception as exc:
         print(f"[mission] milestone notification failed: {exc}", file=sys.stderr)
 
@@ -1211,18 +1203,13 @@ def drain_next_mission(
         # Send morning briefing if done
         if notify and not dry_run and all_milestones_done:
             try:
-                from telegram_listener import TelegramBot, _resolve_token, _resolve_allowed_chats
+                from telegram_listener import telegram_notify
             except ImportError:
                 pass
             else:
                 try:
-                    token = _resolve_token()
-                    if token:
-                        bot = TelegramBot(token)
-                        allowed = _resolve_allowed_chats()
-                        briefing = morning_briefing()
-                        for chat_id in (allowed or []):
-                            bot.send_message(chat_id, f"Mission complete!\n{briefing[:3000]}")
+                    briefing = morning_briefing()
+                    telegram_notify(f"Mission complete!\n{briefing[:3000]}")
                 except Exception as exc:
                     print(f"[mission] morning briefing notification failed: {exc}", file=sys.stderr)
 

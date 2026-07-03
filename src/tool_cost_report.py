@@ -51,21 +51,8 @@ def _display_path(path: Path) -> str:
 
 
 def load_jsonl(path: Path) -> List[Dict[str, Any]]:
-    if not path.exists():
-        return []
-    rows: List[Dict[str, Any]] = []
-    with path.open(encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                item = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(item, dict):
-                rows.append(item)
-    return rows
+    from jsonl_utils import read_jsonl_tail
+    return read_jsonl_tail(path)
 
 
 def percentile_nearest_rank(values: Sequence[int], pct: float) -> int:

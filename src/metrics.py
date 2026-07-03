@@ -282,22 +282,8 @@ def record_step_cost(
 def load_step_costs(limit: int = 100) -> List[dict]:
     """Load recent step cost entries, newest first."""
     try:
-        path = _step_costs_path()
-        if not path.exists():
-            return []
-        lines = path.read_text(encoding="utf-8").splitlines()
-        entries = []
-        for line in reversed(lines):
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                entries.append(json.loads(line))
-            except json.JSONDecodeError:
-                continue
-            if len(entries) >= limit:
-                break
-        return entries
+        from jsonl_utils import read_jsonl_tail
+        return list(reversed(read_jsonl_tail(_step_costs_path(), limit=limit)))
     except Exception:
         return []
 

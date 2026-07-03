@@ -46,6 +46,7 @@ log = logging.getLogger("maro.director")
 
 from workers import WorkerResult, dispatch_worker, infer_worker_type, WORKER_TYPES
 from llm_parse import extract_json, safe_float, safe_str, safe_list, content_or_empty
+from planner import _is_large_scope_review
 
 MAX_REVIEW_ROUNDS = 2  # Director reviews each worker output up to this many times
 
@@ -211,23 +212,8 @@ _DEFINITELY_COMPLEX = frozenset({
     "design system", "architecture", "refactor", "deploy", "release",
 })
 
-# Keywords that indicate a large-scope review requiring staged passes.
-_LARGE_SCOPE_KEYWORDS = frozenset({
-    "entire codebase", "whole codebase", "full codebase",
-    "entire repo", "whole repo", "full repo",
-    "adversarial review", "comprehensive review", "complete review",
-    "codebase review", "code review of", "full audit", "complete audit",
-    "review the codebase", "review the repo", "audit the codebase",
-    "audit the repo", "review all", "review every", "all modules",
-    "all files", "every module",
-})
-
-
-def _is_large_scope_review(directive: str) -> bool:
-    """Return True if the directive covers a scope too large for a single loop pass."""
-    low = directive.lower()
-    return any(kw in low for kw in _LARGE_SCOPE_KEYWORDS)
-
+# _is_large_scope_review is imported from planner.py — this used to be a
+# local copy of the keyword set that drifted out of sync with planner's.
 
 # Spec system prompt for large-scope reviews — raises ticket cap to 6 and
 # instructs domain-area splitting so each worker handles a bounded slice.

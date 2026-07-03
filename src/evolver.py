@@ -2081,22 +2081,14 @@ def _verify_post_apply(applied_ids, run_id: str, *, verbose: bool = False) -> No
 
 def _notify_telegram(report: EvolverReport) -> None:
     try:
-        from telegram_listener import TelegramBot, _resolve_token, _resolve_allowed_chats
-        token = _resolve_token()
-        if not token:
-            return
-        bot = TelegramBot(token)
-        allowed = _resolve_allowed_chats()
-        if not allowed:
-            return
+        from telegram_listener import telegram_notify
         lines = [f"🧠 *Maro Meta-Evolver* — {len(report.suggestions)} suggestions"]
         for fp in report.failure_patterns[:3]:
             lines.append(f"• Pattern: {fp}")
         for s in report.suggestions[:3]:
             lines.append(f"  [{s.category}] {s.suggestion[:100]}")
         msg = "\n".join(lines)
-        for chat_id in allowed:
-            bot.send_message(chat_id, msg)
+        telegram_notify(msg)
     except Exception as e:
         print(f"[evolver] telegram notify failed: {e}", file=sys.stderr)
 

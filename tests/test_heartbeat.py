@@ -173,16 +173,13 @@ def test_tier3_escalates_critical():
         health_status="critical",
         checks={"workspace_writable": "fail: permission denied"},
     )
-    with patch("heartbeat.TelegramBot") as mock_cls, \
-         patch("heartbeat._resolve_token", return_value="fake-token"), \
-         patch("heartbeat._resolve_allowed_chats", return_value={12345}):
-        mock_bot = MagicMock()
-        mock_cls.return_value = mock_bot
+    with patch("heartbeat.telegram_notify") as mock_notify:
+        mock_notify.return_value = True
         result = _tier3_escalate(report)
 
     assert result is True
-    mock_bot.send_message.assert_called_once()
-    msg = mock_bot.send_message.call_args[0][1]
+    mock_notify.assert_called_once()
+    msg = mock_notify.call_args[0][0]
     assert "CRITICAL" in msg
 
 
@@ -193,14 +190,11 @@ def test_tier3_escalates_stuck_projects():
         checks={},
         stuck_projects=["project-x"],
     )
-    with patch("heartbeat.TelegramBot") as mock_cls, \
-         patch("heartbeat._resolve_token", return_value="fake-token"), \
-         patch("heartbeat._resolve_allowed_chats", return_value={99}):
-        mock_bot = MagicMock()
-        mock_cls.return_value = mock_bot
+    with patch("heartbeat.telegram_notify") as mock_notify:
+        mock_notify.return_value = True
         _tier3_escalate(report)
 
-    msg = mock_bot.send_message.call_args[0][1]
+    msg = mock_notify.call_args[0][0]
     assert "project-x" in msg
 
 
@@ -209,7 +203,7 @@ def test_tier3_no_token_no_escalate():
         run_id="r1", checked_at="2026-01-01T00:00:00Z",
         health_status="critical", checks={},
     )
-    with patch("heartbeat._resolve_token", return_value=""):
+    with patch("heartbeat.telegram_notify", return_value=False):
         result = _tier3_escalate(report)
     assert result is False
 

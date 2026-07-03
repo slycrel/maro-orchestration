@@ -163,21 +163,81 @@ scoped except where noted above):
 
 ---
 
-## Tier 2 — Mechanical consolidations (duplicated logic → one implementation)
+## Tier 2 — Mechanical consolidations (duplicated logic → one implementation) — DONE 2026-07-02
 
-Still low-risk; each collapses N copies of the same logic into one.
+Executed via 6 parallel forks. Two of the six (ranking/similarity, scope-keyword
+dedup) initially reported detailed, specific success but their edits had not
+actually persisted to disk — caught by independently re-checking `git diff`
+against each fork's claimed changes before trusting the reports, then
+re-run with an explicit "prove it with `git diff --stat`" requirement. All
+six landed for real on the second pass; full suite green throughout.
 
-- **LLM adapters** (`llm.py`): `OpenRouterAdapter`/`OpenAIAdapter` are ~140
-  lines of near-verbatim duplication → one `OpenAICompatAdapter` base.
-  `ClaudeSubprocessAdapter`/`CodexCLIAdapter` duplicate `_build_prompt` and
-  `_parse_tool_call` verbatim → hoist to shared functions.
-- **Ranking/similarity utilities** (memory & knowledge cluster): four
-  near-identical TF-IDF rankers + four copies of `_STOP_WORDS`
-  (`knowledge_web`, `knowledge_lens`, `memory_ledger`, `lat_inject`), plus
-  three similarity functions that are really two algorithms
-  (`memory_ledger._text_similarity` ≡ `memory._jaccard_similarity`,
-  `knowledge_bridge._jaccard` is the odd one out). Consolidate into
-  `hybrid_search.py`, which already owns retrieval.
+Real findings differed from the plan's guesses in a few places — see each
+bullet below for what actually shipped vs. what was originally proposed:
+
+- **LLM adapters** (`llm.py`) — shipped as proposed: `OpenAICompatAdapter`
+  base class for `OpenRouterAdapter`/`OpenAIAdapter`, `_JSONToolPromptMixin`
+  for `ClaudeSubprocessAdapter`/`CodexCLIAdapter`'s `_build_prompt`/
+  `_parse_tool_call`. Both "duplicate" pairs were genuinely identical, no
+  drift found. Net 58 lines removed.
+- **Ranking/similarity utilities** — smaller scope than guessed once
+  investigated properly. Real duplicates merged into `hybrid_search.py`:
+  `knowledge_lens.py`'s `_STOP_WORDS`/`_tokenize`/`_tfidf_rank` → new
+  `hybrid_search.tfidf_rank()`; dead `memory._jaccard_similarity` (zero
+  callers anywhere) deleted outright. Everything else in the original
+  four-rankers/four-stopwords claim turned out to NOT be true duplication:
+  `knowledge_web.py`'s copy is a deliberate standalone fallback (used when
+  `hybrid_search` fails to import) plus has a real Phase-60 citation-penalty
+  step the shared version doesn't have — left alone. `memory_ledger.py`'s
+  ranker has a genuinely different stopword list — left alone.
+  `lat_inject.py`'s scorer is a materially different algorithm (non-cosine
+  raw dot-product, query-only IDF) — left alone, as the plan itself
+  suspected re: `lat_inject`. `knowledge_bridge._jaccard` is character-trigram,
+  not word-level — confirmed genuinely "the odd one out," left alone.
+  `memory_ledger._text_similarity` turned out **already consolidated** in an
+  earlier untracked phase (six modules already import the one copy) — no
+  action needed, the plan's premise there was stale.
+- **JSONL-tail readers** — 13 actual instances found (not ~11), consolidated
+  into a new `src/jsonl_utils.py` (not `observe.py` — avoids coupling core
+  modules like `metrics.py`/`inspector.py` to a CLI/snapshot tool).
+  Standardized on the safest behavior found (skip malformed lines, never
+  truncate the rest of the file), generalizing Tier 0 #3's fix to all 13
+  sites. Bonus fix: `inspector.get_latest_inspection` no longer returns
+  `None` when only the very last line is corrupt — it now falls back to the
+  last valid record. `metrics.py`'s `spend_today`/`spend_for_loops` were
+  deliberately left alone — different shape (streaming prefix-filtered scan
+  for an unbounded-growth file), not a tail read.
+- **Telegram notify boilerplate** — new `telegram_notify(text) -> bool`
+  helper added to `telegram_listener.py` (not a new top-level module — do
+  not confuse with the separate, newer `notify.py`/`notify_telegram.py`
+  substrate-hook mechanism, which does something different). Consolidated
+  5 remaining sites (2 in `mission.py`, 1 each in `heartbeat.py`,
+  `agent_loop.py`, `evolver.py` — `inspector.py`'s copy no longer existed,
+  deleted in Tier 1). The shared helper does per-chat send isolation, which
+  is a strict superset of every prior site's guarantee (a failing chat used
+  to potentially block sends to others at some call sites).
+- **Listener duplication** — new `src/listener_core.py` holds the genuinely
+  transport-agnostic pieces: slash-command parsing, chat-allowlist checks,
+  interrupt-intent labeling. Deliberately did NOT centralize
+  `InterruptQueue`/`is_loop_running` bindings (tests patch these at the
+  transport-module level for isolation; centralizing would break that) or
+  message wording (Telegram's fuller Markdown vs Slack's terser style is a
+  real design choice, not drift). Bonus bugfix found in the same code:
+  `slack_listener.py`'s `/stop` handler printed a raw dict instead of the
+  loop ID (`get_running_loop()` returns a dict, was never `.get()`'d).
+- **Scope-keyword classifiers** — `director.py` now imports
+  `planner._is_large_scope_review` directly instead of maintaining its own
+  `_LARGE_SCOPE_KEYWORDS`, which had drifted 8 keywords stale (pure
+  staleness, not intentional divergence — confirmed via git history).
+
+**Not executed — needs Jeremy's sign-off first, per the plan's own caveat:**
+the `security.py`/`injection_guard.py` pattern-corpora item. The divergence
+between the two corpora may be intentional per-surface tuning; merging them
+without confirming could weaken a security surface silently.
+
+Original per-cluster plan (for reference — see the DONE note above for what
+actually shipped and where it differed):
+
 - **JSONL-tail readers**: ~11 hand-rolled reversed-JSONL-tail implementations
   across `observe.py`, `introspect.py`, `inspector.py`, `metrics.py`,
   `harness_optimizer.py`, `tool_cost_report.py`, each with subtly different
