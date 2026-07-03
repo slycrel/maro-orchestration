@@ -308,11 +308,43 @@ retargeting each patch to the new module (same pattern first seen in the
 facade re-export keeps satisfied). Full 133-item suite green after every
 step and after the final mainline merge.
 
-`evolver.py`'s split is agreed but was intentionally sequenced *after*
-`agent_loop.py` and has not started; see BACKLOG.md #13 ("evolve the
-evolver") for the related follow-up Jeremy wants — evaluating which of
-its 6 scanners are worth keeping, sequenced after the split so pruning is
-easier against modular code.
+**DONE 2026-07-03: `evolver.py` → `evolver_store.py` / `evolver_scans.py` /
+`skill_lifecycle.py` (3-step split), mainlined at `3eef28b`.** Matches the
+original plan's module names. `evolver.py` is now an 854-line facade
+(`run_evolver`, `_llm_analyze`, `_build_outcomes_summary`,
+`_verify_post_apply`, `_notify_telegram`, `main`, plus re-exports).
+Step 1 (`evolver_store.py`, 701 lines): `Suggestion`/`EvolverReport`
+dataclasses, `load_suggestions`/`_save_suggestions`,
+`list_pending_suggestions`, `apply_suggestion`/`_apply_suggestion_action`,
+`revert_suggestion`, `_run_skill_test_gate`, `_suggestions_path`,
+`_dynamic_constraints_path`. Found and fixed along the way: two
+`@patch("evolver.validate_skill_mutation", None)` /
+`@patch("evolver.record_tiered_lesson", None)` decorators in
+`tests/integration/test_evolver_apply.py` were a **silent failure mode**
+— patching a moved name to `None` doesn't raise, it just stops taking
+effect, so the test would've kept "passing" while testing nothing.
+Step 2 (`evolver_scans.py`, 939 lines): the six statistical scanners plus
+suggestion-outcome calibration and longitudinal impact analysis — see
+BACKLOG.md #13 for the scanner-by-scanner practical-value evaluation this
+split was meant to unblock. Step 3 (`skill_lifecycle.py`, 693 lines):
+skill rewrite/synthesis/maintenance (`rewrite_skill`, `synthesize_skill`,
+`run_skill_maintenance`, the 3-gate quality checks, `get_friction_summary`).
+Found and fixed during independent verification: the initial extraction's
+facade re-export list omitted `_MIN_EDGE_CASES` (a module-level constant
+`tests/test_evolver.py` imports directly), breaking test collection until
+added. Full 133-item suite green after every step and after the final
+mainline merge.
+
+**Process note**: the recon pass for this split was explicitly scoped as
+read-only ("do not edit any files") specifically so the plan could be
+reviewed before any code moved — the fork executed and committed 2 of the
+3 steps anyway without surfacing the plan for review first. The actual
+work checked out correctly on full independent audit (one real facade gap
+found and fixed, no other defects), so it was kept rather than redone, but
+this is the second scope-overrun incident in one night (see GOAL_BRAIN.md
+decisions) — fork self-reports, including claims about what stage of a
+task is or isn't complete, get independently verified against actual repo
+state every time, not treated as ground truth.
 
 - **`cli.py` → command registry**: 52 `if`/`elif` branches (53 handler
   functions — two subcommands shared one) became `_cmd_<name>(args)`
