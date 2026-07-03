@@ -152,6 +152,12 @@ data is preserved, not deleted.
   `TestProjectlessDispatchFence` (handle) +
   `test_loop_projectless_run_still_fences_cwd` (loop). Tier-a hard fence
   (absolute-path writes) still open — this closes the relative-write class.
+  **Live-proven 2026-07-03** (run `07d14464-misty-finch`): dispatched
+  project-less goal "write a 4-line limerick to artifacts/limerick.txt" —
+  deliverable landed at `projects/write-a-4line-limerick-about/artifacts/`
+  (the goal-slug dir), zero new launch-cwd strays, run done/achieved
+  honestly. Run-dir metadata `project` stays None by design (HandleResult
+  reports the caller's ask; the loop runs with the slug).
 
 **Bounded workspace / sandboxing (discovered 2026-04-17)**
 
