@@ -49,3 +49,4 @@ src/memory/
 
 # Local orchestration test workspace (run artifacts)
 .run-workspace/
+.claude/worktrees/
