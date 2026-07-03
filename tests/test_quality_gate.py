@@ -500,3 +500,78 @@ class TestQualityGateCaptainsLogEmit:
         assert ev["context"]["decision"] == "PASS"
         assert ev["context"]["verdict"] == "PASS"
         assert ev["context"]["escalate"] is False
+
+
+class TestQualityGateLocalLadder:
+    """BACKLOG #7: local-first ladder on the post-loop gate — a free local
+    model judges first; decisive verdicts skip the paid call, UNDECIDED
+    escalates to the paid adapter (same stance as step_exec.verify_step)."""
+
+    def _resp(self, verdict="PASS", confidence=0.9, reason="fine"):
+        resp = MagicMock()
+        resp.tool_calls = []
+        resp.input_tokens = 10
+        resp.output_tokens = 5
+        resp.content = (
+            f'{{"verdict":"{verdict}","reason":"{reason}","confidence":{confidence}}}'
+        )
+        return resp
+
+    def _steps(self):
+        return [MagicMock(status="done", index=1, text="step", result="result text")]
+
+    def _wire_local(self, monkeypatch, local_adapter, min_cert=0.75):
+        import local_models as _lm
+        monkeypatch.setattr(_lm, "configured_models", lambda: ["qwen-test"])
+        monkeypatch.setattr(_lm, "ensure_validator_running", lambda **kw: True)
+        monkeypatch.setattr(_lm, "build_local_validator_adapter",
+                            lambda fallback=None: local_adapter)
+        monkeypatch.setattr(_lm, "min_certainty", lambda: min_cert)
+
+    def test_decisive_local_skips_paid(self, monkeypatch):
+        local = MagicMock()
+        local.model_key = "local-test"
+        local.complete = MagicMock(return_value=self._resp("PASS", 0.9, "local says fine"))
+        paid = MagicMock()
+        paid.complete = MagicMock(side_effect=AssertionError("paid must not be called"))
+        self._wire_local(monkeypatch, local)
+
+        v = run_quality_gate("goal", self._steps(), paid, run_adversarial=False)
+        assert v.verdict == "PASS"
+        assert "local says fine" in v.reason
+        assert paid.complete.call_count == 0
+        assert local.complete.call_count >= 1
+
+    def test_undecided_local_escalates_to_paid(self, monkeypatch):
+        local = MagicMock()
+        local.model_key = "local-test"
+        local.complete = MagicMock(return_value=self._resp("ESCALATE", 0.3, "local unsure"))
+        paid = MagicMock()
+        paid.complete = MagicMock(return_value=self._resp("PASS", 0.9, "paid verdict"))
+        self._wire_local(monkeypatch, local)
+
+        v = run_quality_gate("goal", self._steps(), paid, run_adversarial=False)
+        assert "paid verdict" in v.reason
+        assert paid.complete.call_count >= 1
+        assert local.complete.call_count >= 1
+
+    def test_local_failure_is_nonfatal(self, monkeypatch):
+        import local_models as _lm
+        monkeypatch.setattr(_lm, "configured_models",
+                            lambda: (_ for _ in ()).throw(RuntimeError("boom")))
+        paid = MagicMock()
+        paid.complete = MagicMock(return_value=self._resp("PASS", 0.9, "paid verdict"))
+
+        v = run_quality_gate("goal", self._steps(), paid, run_adversarial=False)
+        assert "paid verdict" in v.reason
+        assert paid.complete.call_count >= 1
+
+    def test_no_local_configured_uses_paid_directly(self, monkeypatch):
+        import local_models as _lm
+        monkeypatch.setattr(_lm, "configured_models", lambda: [])
+        paid = MagicMock()
+        paid.complete = MagicMock(return_value=self._resp("PASS", 0.9, "paid verdict"))
+
+        v = run_quality_gate("goal", self._steps(), paid, run_adversarial=False)
+        assert "paid verdict" in v.reason
+        assert paid.complete.call_count >= 1

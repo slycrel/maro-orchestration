@@ -8,6 +8,22 @@ Last split: 2026-04-16 (session 34).
 
 ---
 
+### Extend local-validator ladder to post-loop quality gate — DONE (2026-07-03)
+
+- [x] **Shipped as a tier-0 block in `run_quality_gate`** (mirrors
+  `step_exec.verify_step`): when `validate.local_models` is configured, the
+  local model runs the SAME gate first (recursive call, `_ladder=False`);
+  decisive (confidence >= `validate.min_certainty`) → its verdict is
+  production and the paid call is skipped; UNDECIDED → falls through to the
+  paid adapter (the WEAK_ESCALATE stance: a recommendation without confidence
+  escalates rather than acts). With no local models configured the path is
+  byte-identical to before. QUALITY_GATE_VERDICT events now carry a `source`
+  context field (adapter model_key) so a local→paid escalation's two rows are
+  distinguishable. 4 regression tests (decisive-skips-paid, undecided
+  escalates, local failure non-fatal, no-local passthrough). `run_llm_council`
+  inherits the ladder implicitly when invoked from a laddered gate run —
+  council critics use the gate's adapter.
+
 ### Closure restart short-circuit (artifact exists + verifier passed) — DONE (2026-07-03)
 
 - [x] **Closure restart doubled a trivial run** — **SHIPPED 2026-07-03** as a

@@ -253,6 +253,7 @@ def run_quality_gate(
     run_council: bool = False,
     run_cross_ref: bool = False,
     loop_id: Optional[str] = None,
+    _ladder: bool = True,
 ) -> QualityVerdict:
     """Review completed loop output and return a quality verdict.
 
@@ -285,6 +286,40 @@ def run_quality_gate(
     done_steps = [s for s in step_outcomes if getattr(s, "status", "") == "done"]
     if not done_steps:
         return QualityVerdict("PASS", "no completed steps to review", 0.5, False)
+
+    # --- Tier 0: free local gate (BACKLOG #7; mirrors step_exec.verify_step) ---
+    # Only when `validate.local_models` is configured. The local model runs the
+    # SAME gate (recursive call, ladder disabled); decisive (confidence >=
+    # validate.min_certainty) → its verdict IS production and the paid call is
+    # skipped. UNDECIDED → fall through to the paid adapter below, mirroring
+    # the WEAK_ESCALATE stance: a recommendation without confidence doesn't
+    # act, it escalates. With no local models this is byte-identical to the
+    # paid path.
+    if _ladder:
+        try:
+            import local_models as _lm
+            if _lm.configured_models():
+                _lm.ensure_validator_running()
+                _local = _lm.build_local_validator_adapter()
+                if _local is not None:
+                    lv = run_quality_gate(
+                        goal, step_outcomes, _local,
+                        confidence_threshold=confidence_threshold,
+                        run_adversarial=run_adversarial,
+                        run_council=run_council,
+                        run_cross_ref=run_cross_ref,
+                        loop_id=loop_id,
+                        _ladder=False,
+                    )
+                    if lv.confidence >= _lm.min_certainty():
+                        log.info("local quality gate decisive: verdict=%s conf=%.2f via %s",
+                                 lv.verdict, lv.confidence,
+                                 getattr(_local, "model_key", "local"))
+                        return lv
+                    log.info("local quality gate UNDECIDED (conf=%.2f < %.2f) — escalating to paid",
+                             lv.confidence, _lm.min_certainty())
+        except Exception as exc:
+            log.debug("local quality-gate path skipped (non-fatal): %s", exc)
 
     # Use the last 3 step results as the review payload — synthesis/summary steps
     # are most representative of final quality
@@ -367,6 +402,9 @@ def run_quality_gate(
                         "confidence": confidence,
                         "confidence_threshold": confidence_threshold,
                         "escalate": escalate,
+                        # Which adapter produced this verdict — on a local→paid
+                        # escalation the gate logs one row per tier.
+                        "source": getattr(adapter, "model_key", "") or "unknown",
                         "reason": reason[:400],
                         "step_count": len(done_steps),
                     },

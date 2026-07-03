@@ -194,11 +194,6 @@ have" not "build a sandboxing subsystem."
 
 - [ ] **NEXT.md ↔ git activity sync.** Control's NEXT.md showed steps 6–8 unchecked while the repo had matching commits. Either NEXT.md updates lag, or the agent didn't reflect the work back. Either way: closure should compare claimed-done against repo activity and surface the divergence.
 
-### 7. Extend local-validator ladder to post-loop quality gate
-
-- [ ] **Extend the ladder to the post-loop quality gate.** Same local-first pattern
-  for `quality_gate.run_quality_gate` / `run_llm_council` (3-persona trio) escalation,
-  reusing the `WEAK_ESCALATE` decision state. (verify_step done; quality_gate pending.)
 
 ### 9. Local-validator measurement — token/cost delta report
 

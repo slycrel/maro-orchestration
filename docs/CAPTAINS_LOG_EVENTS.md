@@ -116,7 +116,7 @@ Written by `captains_log.log_event(...)`. Every entry has the four required fiel
 | Event | Emitter(s) | `context` fields | When it fires |
 |-------|-----------|------------------|---------------|
 | `LOOP_CREATED` | agent_loop.py:2398 | reason, parent_loop_id, project, max_steps, continuation_depth, dry_run | Every loop spawn (root or continuation). |
-| `QUALITY_GATE_VERDICT` | quality_gate.py:364 | decision, verdict, confidence, confidence_threshold, escalate, reason, step_count | The post-loop quality gate decided PASS or ESCALATE — the most important escalation signal. |
+| `QUALITY_GATE_VERDICT` | quality_gate.py (run_quality_gate) | decision, verdict, confidence, confidence_threshold, escalate, source, reason, step_count | The post-loop quality gate decided PASS or ESCALATE — the most important escalation signal. |
 | `STEP_TOO_BROAD` | agent_loop.py:989 | step_index, elapsed_s, tokens, cap_elapsed_s, cap_tokens, project | A step exceeded the resource cap (≤120s / ≤200K tokens). Fires mid-loop so the warning is actionable before the loop finishes. |
 
 ### Done≠achieved ground truth (per-step guards)
