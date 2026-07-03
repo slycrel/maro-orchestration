@@ -208,6 +208,125 @@ def _llm_analyze(outcomes: List[Any], *, dry_run: bool = False) -> tuple[List[st
     return [], []
 
 
+def run_statistical_scans(
+    outcomes: "List[Any] | None" = None,
+    *,
+    outcomes_window: int = 50,
+    verbose: bool = False,
+    scan_calibration: bool = True,
+    scan_costs: bool = True,
+    scan_canon: bool = True,
+    scan_suggestion_calibration: bool = True,
+    scan_drift: bool = True,
+) -> List[Suggestion]:
+    """Run the 5 non-LLM statistical scanners and return wrapped Suggestions.
+
+    No LLM calls, so no cost/latency concern running this far more often than
+    the evolver heartbeat cadence (BACKLOG #13, 2026-07-03) — e.g. once per
+    goal run instead of once per N heartbeat ticks. Callers decide whether to
+    persist (``_save_suggestions``) and never auto-apply from here; these are
+    observational, same as ``scan_canon_candidates``'s own "not automatic"
+    contract.
+    """
+    if outcomes is None:
+        try:
+            outcomes = load_outcomes(limit=outcomes_window)
+        except Exception:
+            outcomes = []
+
+    suggestions: List[Suggestion] = []
+
+    # Calibration review — detect systematic over/under-confidence in escalation decisions
+    if scan_calibration:
+        try:
+            cal_findings = scan_calibration_log()
+            for cf in cal_findings:
+                import uuid as _cal_uuid
+                suggestions.append(Suggestion(
+                    suggestion_id=f"cal-{_cal_uuid.uuid4().hex[:8]}",
+                    category="prompt_tweak",
+                    target="escalation",
+                    suggestion=cf.suggestion,
+                    failure_pattern=(
+                        f"calibration: class={cf.decision_class!r} "
+                        f"override_rate={cf.override_rate:.0%} "
+                        f"mean_confidence={cf.mean_confidence:.1f}/10 "
+                        f"n={cf.entry_count}"
+                    ),
+                    confidence=0.75,
+                    outcomes_analyzed=cf.entry_count,
+                ))
+            if verbose and cal_findings:
+                print(f"[evolver] calibration_scan: {len(cal_findings)} finding(s)", file=sys.stderr)
+            log.info("evolver calibration_scan findings=%d", len(cal_findings))
+        except Exception as _cal_exc:
+            log.debug("calibration scan failed (non-fatal): %s", _cal_exc)
+
+    # Step cost scan — detect high-burn step patterns, propose Haiku routing
+    if scan_costs:
+        try:
+            cost_suggestions = scan_step_costs()
+            suggestions.extend(cost_suggestions)
+            if verbose and cost_suggestions:
+                print(f"[evolver] cost_scan: {len(cost_suggestions)} high-burn suggestion(s)", file=sys.stderr)
+            log.info("evolver cost_scan suggestions=%d", len(cost_suggestions))
+        except Exception as _cost_exc:
+            log.debug("cost scan failed (non-fatal): %s", _cost_exc)
+
+    # Canon candidate scan — Stage 2→3 promotion surface (human-gated, no auto-apply)
+    if scan_canon:
+        try:
+            canon_suggestions = scan_canon_candidates()
+            suggestions.extend(canon_suggestions)
+            if verbose and canon_suggestions:
+                print(
+                    f"[evolver] canon_scan: {len(canon_suggestions)} identity promotion candidate(s)",
+                    file=sys.stderr,
+                )
+            log.info("evolver canon_scan candidates=%d", len(canon_suggestions))
+        except Exception as _canon_exc:
+            log.debug("canon scan failed (non-fatal): %s", _canon_exc)
+
+    # Suggestion confidence calibration — empirical pass rate vs self-reported confidence
+    if scan_suggestion_calibration:
+        try:
+            calibration_suggestions = scan_suggestion_outcomes()
+            suggestions.extend(calibration_suggestions)
+            if verbose and calibration_suggestions:
+                print(
+                    f"[evolver] suggestion_calibration: {len(calibration_suggestions)} miscalibration finding(s)",
+                    file=sys.stderr,
+                )
+            log.info("evolver suggestion_calibration findings=%d", len(calibration_suggestions))
+        except Exception as _sco_exc:
+            log.debug("suggestion calibration scan failed (non-fatal): %s", _sco_exc)
+
+    # Quality drift detection — compare this cycle to rolling baseline
+    if scan_drift:
+        try:
+            # Convert outcomes to dicts for scan_quality_drift
+            _outcome_dicts = [o if isinstance(o, dict) else (o.__dict__ if hasattr(o, "__dict__") else {}) for o in outcomes]
+            drift_findings = scan_quality_drift(_outcome_dicts)
+            for df in drift_findings:
+                import uuid as _drift_uuid
+                suggestions.append(Suggestion(
+                    suggestion_id=f"drift-{_drift_uuid.uuid4().hex[:8]}",
+                    category="observation",
+                    target=df.metric,
+                    suggestion=df.suggestion,
+                    failure_pattern=f"quality_drift: {df.metric} delta={df.delta_pct:.1f}% consecutive={df.consecutive_drops}",
+                    confidence=min(0.9, 0.6 + df.consecutive_drops * 0.1),
+                    outcomes_analyzed=len(outcomes),
+                ))
+            if verbose and drift_findings:
+                print(f"[evolver] drift_scan: {len(drift_findings)} quality drift finding(s)", file=sys.stderr)
+            log.info("evolver drift_scan findings=%d", len(drift_findings))
+        except Exception as _drift_exc:
+            log.debug("quality drift scan failed (non-fatal): %s", _drift_exc)
+
+    return suggestions
+
+
 def run_evolver(
     *,
     outcomes_window: int = 50,
@@ -303,93 +422,18 @@ def run_evolver(
         except Exception as _sig_exc:
             log.debug("signal scan failed (non-fatal): %s", _sig_exc)
 
-    # Calibration review — detect systematic over/under-confidence in escalation decisions
-    if scan_calibration:
-        try:
-            cal_findings = scan_calibration_log()
-            for cf in cal_findings:
-                import uuid as _cal_uuid
-                suggestions.append(Suggestion(
-                    suggestion_id=f"cal-{_cal_uuid.uuid4().hex[:8]}",
-                    category="prompt_tweak",
-                    target="escalation",
-                    suggestion=cf.suggestion,
-                    failure_pattern=(
-                        f"calibration: class={cf.decision_class!r} "
-                        f"override_rate={cf.override_rate:.0%} "
-                        f"mean_confidence={cf.mean_confidence:.1f}/10 "
-                        f"n={cf.entry_count}"
-                    ),
-                    confidence=0.75,
-                    outcomes_analyzed=cf.entry_count,
-                ))
-            if verbose and cal_findings:
-                print(f"[evolver] calibration_scan: {len(cal_findings)} finding(s)", file=sys.stderr)
-            log.info("evolver calibration_scan findings=%d", len(cal_findings))
-        except Exception as _cal_exc:
-            log.debug("calibration scan failed (non-fatal): %s", _cal_exc)
-
-    # Step cost scan — detect high-burn step patterns, propose Haiku routing
-    if scan_costs:
-        try:
-            cost_suggestions = scan_step_costs()
-            suggestions.extend(cost_suggestions)
-            if verbose and cost_suggestions:
-                print(f"[evolver] cost_scan: {len(cost_suggestions)} high-burn suggestion(s)", file=sys.stderr)
-            log.info("evolver cost_scan suggestions=%d", len(cost_suggestions))
-        except Exception as _cost_exc:
-            log.debug("cost scan failed (non-fatal): %s", _cost_exc)
-
-    # Canon candidate scan — Stage 2→3 promotion surface (human-gated, no auto-apply)
-    if scan_canon:
-        try:
-            canon_suggestions = scan_canon_candidates()
-            suggestions.extend(canon_suggestions)
-            if verbose and canon_suggestions:
-                print(
-                    f"[evolver] canon_scan: {len(canon_suggestions)} identity promotion candidate(s)",
-                    file=sys.stderr,
-                )
-            log.info("evolver canon_scan candidates=%d", len(canon_suggestions))
-        except Exception as _canon_exc:
-            log.debug("canon scan failed (non-fatal): %s", _canon_exc)
-
-    # Suggestion confidence calibration — empirical pass rate vs self-reported confidence
-    if scan_suggestion_calibration:
-        try:
-            calibration_suggestions = scan_suggestion_outcomes()
-            suggestions.extend(calibration_suggestions)
-            if verbose and calibration_suggestions:
-                print(
-                    f"[evolver] suggestion_calibration: {len(calibration_suggestions)} miscalibration finding(s)",
-                    file=sys.stderr,
-                )
-            log.info("evolver suggestion_calibration findings=%d", len(calibration_suggestions))
-        except Exception as _sco_exc:
-            log.debug("suggestion calibration scan failed (non-fatal): %s", _sco_exc)
-
-    # Quality drift detection — compare this cycle to rolling baseline
-    if scan_drift:
-        try:
-            # Convert outcomes to dicts for scan_quality_drift
-            _outcome_dicts = [o if isinstance(o, dict) else (o.__dict__ if hasattr(o, "__dict__") else {}) for o in outcomes]
-            drift_findings = scan_quality_drift(_outcome_dicts)
-            for df in drift_findings:
-                import uuid as _drift_uuid
-                suggestions.append(Suggestion(
-                    suggestion_id=f"drift-{_drift_uuid.uuid4().hex[:8]}",
-                    category="observation",
-                    target=df.metric,
-                    suggestion=df.suggestion,
-                    failure_pattern=f"quality_drift: {df.metric} delta={df.delta_pct:.1f}% consecutive={df.consecutive_drops}",
-                    confidence=min(0.9, 0.6 + df.consecutive_drops * 0.1),
-                    outcomes_analyzed=len(outcomes),
-                ))
-            if verbose and drift_findings:
-                print(f"[evolver] drift_scan: {len(drift_findings)} quality drift finding(s)", file=sys.stderr)
-            log.info("evolver drift_scan findings=%d", len(drift_findings))
-        except Exception as _drift_exc:
-            log.debug("quality drift scan failed (non-fatal): %s", _drift_exc)
+    # 5 non-LLM statistical scanners (calibration, step-cost, canon, suggestion-
+    # calibration, quality-drift) — shared with the per-run hook in
+    # loop_finalize.py's _finalize_loop() (BACKLOG #13, 2026-07-03).
+    suggestions.extend(run_statistical_scans(
+        outcomes,
+        verbose=verbose,
+        scan_calibration=scan_calibration,
+        scan_costs=scan_costs,
+        scan_canon=scan_canon,
+        scan_suggestion_calibration=scan_suggestion_calibration,
+        scan_drift=scan_drift,
+    ))
 
     # Harness friction scan — "Harness Is the Problem" (@sebgoddijn / Ramp Glass)
     # Models are fine; friction in code paths = harness quality signal.

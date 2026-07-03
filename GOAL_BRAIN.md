@@ -385,6 +385,17 @@ context, at best it's a slight tweak and we fix forward."*
   Recommendation (left for Jeremy, not acted on autonomously — new
   unattended-LLM-call service): get `run_evolver()` actually scheduled
   against production data. Full detail in BACKLOG.md #13.
+- **BACKLOG #13 follow-up shipped 2026-07-03** — Jeremy's call: no systemd
+  daemon, "be an app rather than an OS." `run_skill_maintenance()` already
+  fired post-run/pre-cleanup pass-or-fail (`loop_finalize.py`'s
+  `_finalize_loop()`) — nothing to do there. Extracted the 5 free scanners
+  out of `run_evolver()`'s inline blocks into shared
+  `evolver.run_statistical_scans()` and call it from the same `_finalize_loop`
+  seam, right after skill maintenance, `not dry_run`-gated only. No LLM calls
+  → no per-run cost; saves findings via `_save_suggestions()` for visibility,
+  never auto-applies. `run_evolver()`'s LLM-backed cycle (pattern analysis +
+  business signals + auto-apply) untouched, still heartbeat-tick-scheduled —
+  no daemon installed. Full suite green (133/133). Detail in BACKLOG.md #13.
   `security.py`/`injection_guard.py`'s two pattern corpora were reviewed
   and confirmed **intentionally separate** (different threat models —
   external-content scanning vs. persona/skill-ingestion scanning); no

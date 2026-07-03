@@ -296,6 +296,27 @@ Two drift classes, both cheap to fix:
   real data to compute over. Left this as a decision for Jeremy rather than
   enabling a new unattended-LLM-call service autonomously.
 
+- [x] **Shipped 2026-07-03 (Jeremy's call): per-run hook instead of a systemd
+  daemon** — "I'm not a huge fan of taking over the system... let's try and
+  be an app rather than an OS." Investigation found `run_skill_maintenance()`
+  (promote/demote/rewrite) was *already* firing post-run/pre-cleanup,
+  pass-or-fail, at `loop_finalize.py`'s `_finalize_loop()` — that part needed
+  nothing. What was missing was the 5 free statistical scanners from the
+  finding above; they only ran on `heartbeat.py`'s tick schedule. Extracted
+  them out of `run_evolver()`'s inline blocks into a shared
+  `evolver.run_statistical_scans()` (no behavior change to `run_evolver()`
+  itself — same flags, same wrapping, just de-duplicated) and call it from
+  `_finalize_loop()` right after `run_skill_maintenance()`, gated only on
+  `not dry_run`. No LLM calls in these 5 scanners, so per-run cadence costs
+  nothing; findings are saved via `_save_suggestions()` for visibility only —
+  this hook never auto-applies (matches `scan_canon_candidates()`'s existing
+  "not automatic" contract). No daemon installed, no new service, no change
+  to heartbeat.py — `run_evolver()`'s full cycle (LLM pattern analysis +
+  business-signal scan + auto-apply) is untouched and still tick-scheduled.
+  This finally gives `scan_suggestion_outcomes()`/`scan_evolver_impact()`
+  real per-run data instead of the empty/contaminated history documented
+  above. Full suite green (133/133) after the change.
+
 ---
 
 ## Vision / Deferred

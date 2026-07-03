@@ -490,6 +490,24 @@ def _finalize_loop(
         except Exception as _maint_exc:
             log.debug("skill maintenance failed (non-critical): %s", _maint_exc)
 
+    # BACKLOG #13 (2026-07-03): evolver's 5 statistical scanners, per-run
+    # instead of per-heartbeat-tick — "app, not OS": no daemon, no LLM calls
+    # (safe at this cadence), observational only (never auto-applies). Gives
+    # scan_suggestion_outcomes()/scan_evolver_impact() real data to work with,
+    # which they've never had (see BACKLOG.md #13).
+    if not dry_run:
+        try:
+            from evolver import run_statistical_scans
+            from evolver_store import _save_suggestions
+            _stat_suggestions = run_statistical_scans(verbose=verbose)
+            if _stat_suggestions:
+                _save_suggestions(_stat_suggestions)
+                log.info("post-run statistical scan: %d suggestion(s) saved", len(_stat_suggestions))
+        except ImportError:
+            pass
+        except Exception as _scan_exc:
+            log.debug("post-run statistical scan failed (non-critical): %s", _scan_exc)
+
     # Post-mission Telegram notification
     if not dry_run:
         try:
