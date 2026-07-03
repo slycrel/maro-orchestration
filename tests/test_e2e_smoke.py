@@ -349,6 +349,7 @@ class TestE2EAmbiguous:
         _setup(monkeypatch, tmp_path)
         import agent_loop as _al
         import loop_planning as _lp
+        import loop_blocked as _lb
         # Bypass multi-plan decompose (3 LLM calls + compose) — this test focuses on
         # stuck-step behavior, not decompose. Patching avoids consuming execute responses.
         _STEPS = [
@@ -359,7 +360,7 @@ class TestE2EAmbiguous:
         monkeypatch.setattr(_lp, "_decompose", lambda *a, **kw: _STEPS)
         # Prevent _generate_refinement_hint from calling build_adapter (real subprocess).
         # Fires on prior_retries==1 (second failure of a step).
-        monkeypatch.setattr(_al, "_generate_refinement_hint",
+        monkeypatch.setattr(_lb, "_generate_refinement_hint",
                             lambda *a, **kw: "try a different approach")
         # Disable Phase 45 auto-recovery: it re-calls run_agent_loop with an exhausted
         # adapter, which produces 0 done steps and overwrites the result we want to check.

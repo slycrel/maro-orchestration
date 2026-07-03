@@ -88,7 +88,7 @@ class TestPresetSteps:
 
         with (
             patch("loop_planning._decompose", side_effect=_fake_decompose),
-            patch("agent_loop._execute_step", return_value={
+            patch("loop_execute._execute_step", return_value={
                 "status": "done", "result": "ok", "summary": "done",
                 "tokens_in": 5, "tokens_out": 5, "inject_steps": [],
             }),
@@ -124,7 +124,7 @@ class TestPresetSteps:
 
         with (
             patch("loop_planning._decompose"),
-            patch("agent_loop._execute_step", side_effect=_fake_execute),
+            patch("loop_execute._execute_step", side_effect=_fake_execute),
             patch("pre_flight.review_plan", return_value=_no_milestones),
         ):
             run_agent_loop(
@@ -148,7 +148,7 @@ class TestPresetSteps:
 
         with (
             patch("loop_planning._decompose", side_effect=_fake_decompose),
-            patch("agent_loop._execute_step", return_value={
+            patch("loop_execute._execute_step", return_value={
                 "status": "done", "result": "ok", "summary": "done",
                 "tokens_in": 5, "tokens_out": 5, "inject_steps": [],
             }),
@@ -173,7 +173,7 @@ class TestPresetSteps:
 
         with (
             patch("loop_planning._decompose"),
-            patch("agent_loop._execute_step", side_effect=_fake_execute),
+            patch("loop_execute._execute_step", side_effect=_fake_execute),
             patch("pre_flight.review_plan", return_value=self._no_milestones()),
         ):
             run_agent_loop(

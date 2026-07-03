@@ -301,11 +301,13 @@ def test_loop_stuck_detection(monkeypatch, tmp_path):
     """If the LLM always flags stuck, loop terminates with status=stuck."""
     _setup_workspace(monkeypatch, tmp_path)
     import agent_loop as _al
+    import loop_planning as _lp
+    import loop_blocked as _lb
     # Bypass multi-plan decompose (4 LLM calls) — this test focuses on stuck detection.
-    monkeypatch.setattr(_al, "_decompose",
+    monkeypatch.setattr(_lp, "_decompose",
                         lambda *a, **kw: ["step one", "step two", "step three"])
     # Prevent _generate_refinement_hint from calling build_adapter (real subprocess).
-    monkeypatch.setattr(_al, "_generate_refinement_hint",
+    monkeypatch.setattr(_lb, "_generate_refinement_hint",
                         lambda *a, **kw: "try something different")
     # Disable Phase 45 auto-recovery (retries with exhausted adapter).
     monkeypatch.setattr(_al.run_agent_loop, "_recovery_in_progress", True, raising=False)
@@ -1878,8 +1880,9 @@ def test_run_agent_loop_blocks_fabricated_write_claim(monkeypatch, tmp_path):
     """A step that claims a file write but produces no artifact is demoted to blocked."""
     monkeypatch.setenv("MARO_ORCH_ROOT", str(tmp_path))
     import agent_loop as al
+    import loop_execute
     # Keep the text-only verifier out of the way so we isolate the FS guard.
-    monkeypatch.setattr(al, "_local_auto_ralph_enabled", lambda: False)
+    monkeypatch.setattr(loop_execute, "_local_auto_ralph_enabled", lambda: False)
 
     class _FabAdapter:
         model_key = "test"
@@ -1911,7 +1914,8 @@ def test_run_agent_loop_allows_real_write(monkeypatch, tmp_path):
     """A step that actually creates the claimed file is NOT flagged as fabrication."""
     monkeypatch.setenv("MARO_ORCH_ROOT", str(tmp_path))
     import agent_loop as al
-    monkeypatch.setattr(al, "_local_auto_ralph_enabled", lambda: False)
+    import loop_execute
+    monkeypatch.setattr(loop_execute, "_local_auto_ralph_enabled", lambda: False)
 
     slug = al._goal_to_slug("build fizzbuzz for real")
     proj_dir = tmp_path / "projects" / slug
@@ -1952,7 +1956,8 @@ def test_run_agent_loop_blocks_inert_output_claim(monkeypatch, tmp_path):
     """
     monkeypatch.setenv("MARO_ORCH_ROOT", str(tmp_path))
     import agent_loop as al
-    monkeypatch.setattr(al, "_local_auto_ralph_enabled", lambda: False)
+    import loop_execute
+    monkeypatch.setattr(loop_execute, "_local_auto_ralph_enabled", lambda: False)
 
     slug = al._goal_to_slug("build fizzbuzz with output")
     proj_dir = tmp_path / "projects" / slug
@@ -1996,7 +2001,8 @@ def test_run_agent_loop_blocks_execution_contradiction(monkeypatch, tmp_path):
     tool transcript, is_error) is demoted to blocked."""
     monkeypatch.setenv("MARO_ORCH_ROOT", str(tmp_path))
     import agent_loop as al
-    monkeypatch.setattr(al, "_local_auto_ralph_enabled", lambda: False)
+    import loop_execute
+    monkeypatch.setattr(loop_execute, "_local_auto_ralph_enabled", lambda: False)
 
     class _ContradictAdapter:
         model_key = "test"
@@ -2031,7 +2037,8 @@ def test_run_agent_loop_allows_real_passing_run(monkeypatch, tmp_path):
     """A success claim backed by a real passing command is NOT flagged."""
     monkeypatch.setenv("MARO_ORCH_ROOT", str(tmp_path))
     import agent_loop as al
-    monkeypatch.setattr(al, "_local_auto_ralph_enabled", lambda: False)
+    import loop_execute
+    monkeypatch.setattr(loop_execute, "_local_auto_ralph_enabled", lambda: False)
 
     class _RealRunAdapter:
         model_key = "test"
@@ -2285,6 +2292,7 @@ def test_run_agent_loop_recovers_if_compound_step_leaks_to_executor(monkeypatch,
 
     import agent_loop as al
     import loop_planning
+    import loop_execute
 
     monkeypatch.setattr(loop_planning, "_decompose", lambda *args, **kwargs: ["run pytest and analyze failures"])
     monkeypatch.setattr(loop_planning, "_shape_steps", lambda steps, **kwargs: list(steps))
@@ -2303,7 +2311,7 @@ def test_run_agent_loop_recovers_if_compound_step_leaks_to_executor(monkeypatch,
             "inject_steps": [],
         }
 
-    monkeypatch.setattr(al, "_execute_step", _fake_execute_step)
+    monkeypatch.setattr(loop_execute, "_execute_step", _fake_execute_step)
 
     result = run_agent_loop("check repo", project="compound-leak", dry_run=False, max_steps=1)
 
