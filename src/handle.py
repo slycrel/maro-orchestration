@@ -1480,6 +1480,18 @@ def _handle_impl(
                                         f"claimed input/output(s) not found: {_prov_missing}",
                                 },
                             )
+                            # Compiled-truth half (MILESTONES #3a): the
+                            # provenance guard is deterministic — the most
+                            # trustworthy verified-claim source there is.
+                            try:
+                                from thread_brain import append_compiled_truth
+                                append_compiled_truth(
+                                    _rd_p,
+                                    "provenance: claimed input/output(s) not "
+                                    f"found: {str(_prov_missing)[:200]}",
+                                )
+                            except Exception:
+                                pass
                     except Exception:
                         pass
 
@@ -1533,6 +1545,21 @@ def _handle_impl(
                                 "goal_verdict_summary": str(_closure.summary)[:300],
                             },
                         )
+                        # Compiled-truth half (MILESTONES #3a): a closure
+                        # verdict with checks actually run is a verified
+                        # claim — one line per run in the thread brain.
+                        try:
+                            from thread_brain import append_compiled_truth
+                            append_compiled_truth(
+                                _rd_v,
+                                f"closure verdict: "
+                                f"{'achieved' if _closure.complete else 'NOT achieved'}"
+                                f" (conf {float(_closure.confidence):.2f}, "
+                                f"{int(_closure.checks_run)} checks) — "
+                                f"{str(_closure.summary)[:200]}",
+                            )
+                        except Exception:
+                            pass
                 except Exception:
                     pass
 

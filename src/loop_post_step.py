@@ -25,6 +25,11 @@ from step_exec import verify_step as _verify_step
 
 log = logging.getLogger("maro.loop")
 
+# Max ralph-verified lines per run in the thread brain's Compiled truth —
+# verified claims are valuable, but a 20-step run shouldn't drown the brain
+# (MILESTONES #3a volume filter).
+_RALPH_TRUTH_CAP = 8
+
 
 def _handle_budget_ceiling(
     ctx: LoopContext,
@@ -657,6 +662,28 @@ def _run_ralph_verify(
             step_result = outcome.get("result", "")
         else:
             session_verify_failures = 0
+            # Compiled-truth half (MILESTONES #3a): a ralph PASS is a
+            # verified claim — record it so mid-run consumers of the thread
+            # brain (the navigator at blocked steps) see what is actually
+            # done, not just claimed. Volume-conscious by construction: only
+            # fires when ralph verify is enabled, one line per step, capped
+            # per run.
+            try:
+                _rd = _current_run_dir_safe()
+                if _rd is not None:
+                    from thread_brain import append_compiled_truth, brain_path
+                    _brain = brain_path(_rd)
+                    _n_prior = (
+                        _brain.read_text(encoding="utf-8").count("ralph-verified:")
+                        if _brain.exists() else 0
+                    )
+                    if _n_prior < _RALPH_TRUTH_CAP:
+                        append_compiled_truth(
+                            _rd,
+                            f"step {step_idx} ralph-verified: {step_text[:80]}",
+                        )
+            except Exception:
+                pass
     except Exception:
         pass  # verify never blocks loop progress
 

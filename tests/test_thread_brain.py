@@ -125,6 +125,54 @@ class TestLoad:
         assert "middle elided" in text
 
 
+class TestCompiledTruthSources:
+    """MILESTONES #3a: verified claims (ralph passes) reach Compiled truth,
+    volume-capped."""
+
+    def _run_pass(self, tmp_path, step_idx=3, step_text="verify the config"):
+        from types import SimpleNamespace
+        import loop_post_step as _lps
+        return _lps._run_ralph_verify(
+            SimpleNamespace(verbose=False, adapter=None),
+            step_text, step_idx, "res", "done", {}, None,
+            step_tier_overrides={}, session_verify_failures=1,
+            session_tier_floor="", verify_fail_threshold=3)
+
+    def test_ralph_pass_appends_compiled_truth(self, tmp_path, monkeypatch):
+        import loop_post_step as _lps
+        thread_brain.create_thread_brain(tmp_path, goal="g")
+        monkeypatch.setattr(_lps, "_verify_step",
+                            lambda *a, **kw: {"passed": True, "reason": ""})
+        monkeypatch.setattr(_lps, "_current_run_dir_safe", lambda: tmp_path)
+        self._run_pass(tmp_path)
+        text = thread_brain.load_thread_brain(tmp_path)
+        truth = text[text.index("## Compiled truth"):text.index("## Decisions")]
+        assert "step 3 ralph-verified: verify the config" in truth
+
+    def test_ralph_truth_capped_per_run(self, tmp_path, monkeypatch):
+        import loop_post_step as _lps
+        thread_brain.create_thread_brain(tmp_path, goal="g")
+        for i in range(_lps._RALPH_TRUTH_CAP):
+            thread_brain.append_compiled_truth(
+                tmp_path, f"step {i} ralph-verified: earlier step")
+        monkeypatch.setattr(_lps, "_verify_step",
+                            lambda *a, **kw: {"passed": True, "reason": ""})
+        monkeypatch.setattr(_lps, "_current_run_dir_safe", lambda: tmp_path)
+        self._run_pass(tmp_path, step_idx=99)
+        text = thread_brain.load_thread_brain(tmp_path)
+        assert text.count("ralph-verified:") == _lps._RALPH_TRUTH_CAP
+        assert "step 99" not in text
+
+    def test_ralph_fail_appends_nothing(self, tmp_path, monkeypatch):
+        import loop_post_step as _lps
+        thread_brain.create_thread_brain(tmp_path, goal="g")
+        monkeypatch.setattr(_lps, "_verify_step",
+                            lambda *a, **kw: {"passed": False, "reason": "nope"})
+        monkeypatch.setattr(_lps, "_current_run_dir_safe", lambda: tmp_path)
+        self._run_pass(tmp_path)
+        assert "ralph-verified" not in thread_brain.load_thread_brain(tmp_path)
+
+
 class TestRunDirWiring:
     def test_create_run_dir_seeds_brain(self, workspace):
         rd = create_run_dir("abcd1234", prompt="ship it")

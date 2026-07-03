@@ -1529,6 +1529,25 @@ class TestClosureRestart:
         meta2 = _json.loads((runs_mod.run_dir(hr2.handle_id) / "metadata.json").read_text())
         assert meta2.get("goal_achieved") is True
 
+    def test_closure_verdict_recorded_in_thread_brain(self, monkeypatch, tmp_path):
+        """MILESTONES #3a compiled-truth: a closure verdict with checks run
+        lands as a verified claim in the run's goal-brain."""
+        self._setup(monkeypatch, tmp_path)
+        from unittest.mock import patch
+        import runs as runs_mod
+        import thread_brain
+
+        real_verdict = self._fake_closure(True, 0.9, checks_run=2)
+        with patch("agent_loop.run_agent_loop", return_value=self._fake_loop_result()), \
+             patch("intent.check_goal_clarity", return_value={"clear": True}), \
+             patch("director.verify_goal_completion", return_value=real_verdict), \
+             self._no_quality_gate():
+            hr = handle("build X", force_lane="agenda", dry_run=False)
+
+        brain = thread_brain.load_thread_brain(runs_mod.run_dir(hr.handle_id))
+        truth = brain[brain.index("## Compiled truth"):brain.index("## Decisions")]
+        assert "closure verdict: achieved (conf 0.90, 2 checks)" in truth
+
     def test_incomplete_verdict_triggers_restart(self, monkeypatch, tmp_path):
         """complete=False with confidence >= 0.6 re-runs the loop."""
         self._setup(monkeypatch, tmp_path)
