@@ -1128,7 +1128,6 @@ from closure_verify import (  # noqa: E402
     verify_goal_completion,
     _classify_precondition,
     _run_precondition_preflight,
-    _check_modality_from_command,
     _check_outcome,
     _classify_probe_modality,
     _detect_behavioral_gap,
