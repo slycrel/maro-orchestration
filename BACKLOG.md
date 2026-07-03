@@ -205,10 +205,6 @@ have" not "build a sandboxing subsystem."
   3/5 validated free at conf 1.00). Bumped default to 2048; deep-eval should find
   the floor that maximizes decisive-local rate without wasting generation latency.
 
-### 11. Spend-gated transparency mandate
-
-- [ ] **Spend-gated transparency mandate.** Define a threshold (e.g., $2 estimated spend) above which the full source/build/artifact bundle is mandatory and visible to the user without grep. Below that, current behavior is fine.
-
 
 ### 13. Evolve the evolver — evaluate its own scanners for actual practical value
 

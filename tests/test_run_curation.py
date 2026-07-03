@@ -164,3 +164,64 @@ def test_classify_outcome_is_pure(workspace):
     card = {}
     classify_outcome(Path("/nonexistent"), {"status": "done", "goal_achieved": True}, card)
     assert card["success_class"] == "success"
+
+
+class TestSpendTransparency:
+    """BACKLOG #11: above budget.transparency_usd the card carries the full
+    build/artifact bundle (absolute paths + sizes) — no grep required."""
+
+    def _expensive_run(self, workspace, monkeypatch, cost=5.0, threshold=None):
+        import metrics
+        rd = create_run_dir("h00000c1", prompt="big expensive goal",
+                            lane="agenda", model="claude",
+                            extra_metadata={"loop_ids": ["loopCCCC"]})
+        (rd / "artifact").mkdir(exist_ok=True)
+        (rd / "artifact" / "report.md").write_text("the deliverable")
+        (rd / "build").mkdir(exist_ok=True)
+        (rd / "build" / "helper.py").write_text("print('x')")
+        finalize_run("h00000c1", status="done")
+        monkeypatch.setattr(metrics, "spend_for_loops", lambda lids: cost)
+        if threshold is not None:
+            import config
+            _orig = config.get
+            monkeypatch.setattr(
+                config, "get",
+                lambda key, default=None: threshold if key == "budget.transparency_usd"
+                else _orig(key, default))
+        return rd
+
+    def test_above_threshold_bundle_present(self, workspace, monkeypatch):
+        rd = self._expensive_run(workspace, monkeypatch, cost=5.0)
+        card = curate_run("h00000c1")
+        st = card.get("spend_transparency")
+        assert st is not None
+        assert st["threshold_usd"] == pytest.approx(2.0)
+        bundle = st["bundle"]
+        assert bundle["run_dir"] == str(rd)
+        paths = [f["path"] for f in bundle["files"]]
+        assert str(rd / "artifact" / "report.md") in paths
+        assert str(rd / "build" / "helper.py") in paths
+        assert all("bytes" in f for f in bundle["files"])
+        assert bundle["truncated"] is False
+
+    def test_below_threshold_no_bundle(self, workspace, monkeypatch):
+        self._expensive_run(workspace, monkeypatch, cost=0.4)
+        card = curate_run("h00000c1")
+        assert "spend_transparency" not in card
+
+    def test_unknown_cost_no_bundle(self, workspace, monkeypatch):
+        rd = create_run_dir("h00000c2", prompt="g", lane="agenda", model="claude")
+        finalize_run("h00000c2", status="done")  # no loop_ids -> cost None
+        card = curate_run("h00000c2")
+        assert "spend_transparency" not in card
+
+    def test_configured_threshold_respected(self, workspace, monkeypatch):
+        self._expensive_run(workspace, monkeypatch, cost=0.5, threshold=0.25)
+        card = curate_run("h00000c1")
+        assert card.get("spend_transparency") is not None
+        assert card["spend_transparency"]["threshold_usd"] == pytest.approx(0.25)
+
+    def test_zero_threshold_disables(self, workspace, monkeypatch):
+        self._expensive_run(workspace, monkeypatch, cost=9.9, threshold=0)
+        card = curate_run("h00000c1")
+        assert "spend_transparency" not in card

@@ -188,8 +188,61 @@ def excerpt_result(rd: Path, meta: dict, card: dict) -> None:
     card["result_path"] = res.get("result_path")
 
 
+def spend_transparency(rd: Path, meta: dict, card: dict) -> None:
+    """Spend-gated transparency mandate (BACKLOG #11): above a configured
+    spend threshold (`budget.transparency_usd`, default $2), the run card
+    must carry the full build/artifact bundle — absolute paths + sizes, no
+    grep required. An expensive run that hides what it built is unauditable;
+    below the threshold the compact inventory is enough. The card IS the
+    notify payload, so the bundle lands in front of the user directly."""
+    _CAP = 200
+    try:
+        from config import get as _cfg_get
+        threshold = float(_cfg_get("budget.transparency_usd", 2.0))
+    except Exception:
+        threshold = 2.0
+    cost = card.get("total_cost_usd")
+    if cost is None or threshold <= 0 or cost < threshold:
+        return
+    bundle: dict = {"run_dir": str(rd)}
+    files = []
+    for sub in ("build", "artifact"):
+        d = rd / sub
+        if not d.is_dir():
+            continue
+        for f in sorted(d.rglob("*")):
+            if f.is_file():
+                try:
+                    files.append({"path": str(f), "bytes": f.stat().st_size})
+                except OSError:
+                    pass
+    bundle["files"] = files[:_CAP]
+    bundle["file_count"] = len(files)
+    bundle["truncated"] = len(files) > _CAP
+    # Project artifacts live outside the run dir — same no-grep mandate.
+    try:
+        from agent_loop import _goal_to_slug
+        import orch_items as o
+        _slug = _goal_to_slug(meta.get("prompt", "") or "")
+        pa = o.projects_root() / _slug / "artifacts"
+        if pa.is_dir():
+            pfiles = []
+            for f in sorted(pa.rglob("*")):
+                if f.is_file():
+                    try:
+                        pfiles.append({"path": str(f), "bytes": f.stat().st_size})
+                    except OSError:
+                        pass
+            bundle["project_artifacts"] = pfiles[:_CAP]
+            bundle["project_artifact_count"] = len(pfiles)
+    except Exception:
+        pass
+    card["spend_transparency"] = {"threshold_usd": threshold, "bundle": bundle}
+
+
 # Ordered registry. Append future miners here; the hook never changes.
-CURATORS = [classify_outcome, inventory_assets, excerpt_result]
+# spend_transparency reads total_cost_usd, so it runs after classify_outcome.
+CURATORS = [classify_outcome, inventory_assets, excerpt_result, spend_transparency]
 
 
 def curate_run(handle_id: str, status: Optional[str] = None,

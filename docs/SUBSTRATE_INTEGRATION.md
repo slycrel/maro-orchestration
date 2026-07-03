@@ -66,7 +66,7 @@ Files, if you'd rather read than shell out:
 | File | What |
 |---|---|
 | `<run-dir>/metadata.json` | status, lane, model, timestamps, `goal_achieved` verdict |
-| `<run-dir>/run_card.json` | post-goal curation: outcome class, result excerpt, mineable inventory |
+| `<run-dir>/run_card.json` | post-goal curation: outcome class, result excerpt, mineable inventory; runs costing over `budget.transparency_usd` (default $2) additionally carry `spend_transparency` — the full build/artifact bundle with absolute paths + sizes |
 | `memory/events.jsonl` | append-only live feed (`step_done`, `run_completed`, `escalation`, …) — tail this for progress |
 
 Note `goal_achieved` vs `status`: `status=done` means the process finished;

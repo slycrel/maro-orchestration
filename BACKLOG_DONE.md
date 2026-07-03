@@ -8,6 +8,18 @@ Last split: 2026-04-16 (session 34).
 
 ---
 
+### Spend-gated transparency mandate — DONE (2026-07-03)
+
+- [x] **Shipped as a `spend_transparency` curator** in run_curation's miner
+  registry (runs after `classify_outcome`, which computes `total_cost_usd`
+  from the loop_ids join). When a run's cost >= `budget.transparency_usd`
+  (config, default $2; 0 disables), the run card gains a
+  `spend_transparency.bundle`: run_dir + every build/artifact file with
+  absolute path + byte size (cap 200, `truncated` flag — no silent caps),
+  plus the project-artifacts dir resolved via the goal slug. The card IS the
+  notify payload, so the bundle lands in the user's Telegram/substrate feed
+  directly — no grep required for expensive runs. 5 tests.
+
 ### NEXT.md ↔ git activity sync at closure — DONE (2026-07-03)
 
 - [x] **Shipped as `_detect_next_ledger_gap(project, workspace_path)`**
