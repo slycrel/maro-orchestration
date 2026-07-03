@@ -262,143 +262,6 @@ class PersonaRegistry:
 
 
 # ---------------------------------------------------------------------------
-# Import-time persona scan + routing table
-# ---------------------------------------------------------------------------
-
-# Hard-coded fallback PersonaSpec stubs — used when personas/ dir is empty/missing.
-_HARDCODED_FALLBACKS: Dict[str, "PersonaSpec"] = {
-    "builder": PersonaSpec(
-        name="builder", role="Builder", model_tier="mid",
-        tool_access=[], memory_scope="project",
-        communication_style="direct, solution-focused",
-        system_prompt="You are a software builder. Implement, fix, and test code.",
-        hooks=[], composes=[],
-    ),
-    "research-assistant-deep-synth": PersonaSpec(
-        name="research-assistant-deep-synth", role="Research Assistant",
-        model_tier="power", tool_access=[], memory_scope="session",
-        communication_style="analytical, source-grounded, crisp",
-        system_prompt="You are a deep research assistant. Investigate, synthesize, and summarize.",
-        hooks=[], composes=[],
-    ),
-    "ops": PersonaSpec(
-        name="ops", role="Ops Engineer", model_tier="mid",
-        tool_access=[], memory_scope="session",
-        communication_style="terse, diagnostic",
-        system_prompt="You are an ops engineer. Monitor, diagnose, and fix infrastructure.",
-        hooks=[], composes=[],
-    ),
-    "critic": PersonaSpec(
-        name="critic", role="Critic", model_tier="mid",
-        tool_access=[], memory_scope="session",
-        communication_style="precise, adversarial-constructive",
-        system_prompt="You are a critic. Identify weaknesses, risks, and failure modes.",
-        hooks=[], composes=[],
-    ),
-    "reporter": PersonaSpec(
-        name="reporter", role="Reporter", model_tier="mid",
-        tool_access=[], memory_scope="session",
-        communication_style="structured, concise",
-        system_prompt="You synthesize sub-agent outputs into final deliverables.",
-        hooks=[], composes=[],
-    ),
-}
-
-
-def scan_personas_dir(
-    personas_dir: Optional[Path] = None,
-) -> Dict[str, "PersonaSpec"]:
-    """Scan the personas/ directory and return a routing table: name → PersonaSpec.
-
-    Supports .md files (YAML frontmatter + markdown body) and .yaml/.yml files
-    (pure YAML with optional system_prompt/body key). Falls back to
-    _HARDCODED_FALLBACKS if the directory is empty or missing.
-
-    Args:
-        personas_dir: Override the directory to scan. Auto-detected if None.
-
-    Returns:
-        Dict mapping persona name → PersonaSpec. Never empty (fallbacks ensure this).
-    """
-    if personas_dir is None:
-        try:
-            from orch import orch_root
-            candidate = orch_root() / "personas"
-            if candidate.exists():
-                personas_dir = candidate
-        except Exception:
-            pass
-        if personas_dir is None:
-            personas_dir = Path(__file__).resolve().parent.parent / "personas"
-            if not personas_dir.exists():
-                personas_dir = Path.cwd() / "personas"
-
-    specs: Dict[str, PersonaSpec] = {}
-
-    if personas_dir.exists():
-        # .md files — YAML frontmatter + markdown body
-        for p in sorted(personas_dir.glob("*.md")):
-            if p.name == "README.md":
-                continue
-            try:
-                spec = _parse_persona_file(p)
-                specs[spec.name] = spec
-            except Exception as exc:
-                log.warning("scan_personas_dir: skipping %s: %s", p.name, exc)
-
-        # .yaml / .yml files — pure YAML with optional system_prompt/body key
-        yaml_files = sorted(personas_dir.glob("*.yaml")) + sorted(personas_dir.glob("*.yml"))
-        for p in yaml_files:
-            try:
-                import yaml as _yaml
-                _raw_yaml = p.read_text(encoding="utf-8")
-                # Injection guard: scan persona YAML before loading into PersonaSpec
-                try:
-                    from injection_guard import scan_persona_yaml as _scan_py
-                    _ig = _scan_py(_raw_yaml, source=str(p))
-                    if not _ig.is_clean:
-                        log.warning(
-                            "scan_personas_dir: injection risk in %s (%s risk) — skipping",
-                            p.name, _ig.risk_level,
-                        )
-                        continue
-                except Exception:
-                    pass  # fail-open: load without injection check if guard unavailable
-                data = _yaml.safe_load(_raw_yaml) or {}
-                name = str(data.get("name") or p.stem)
-                spec = PersonaSpec(
-                    name=name,
-                    role=str(data.get("role", "General Assistant")),
-                    model_tier=str(data.get("model_tier", "mid")),
-                    tool_access=list(data.get("tool_access") or []),
-                    memory_scope=str(data.get("memory_scope", "session")),
-                    communication_style=str(data.get("communication_style", "direct and concise")),
-                    system_prompt=str(data.get("system_prompt") or data.get("body", "")),
-                    hooks=list(data.get("hooks") or []),
-                    composes=list(data.get("composes") or []),
-                    source_file=str(p),
-                )
-                specs[name] = spec
-            except Exception as exc:
-                log.warning("scan_personas_dir: skipping %s: %s", p.name, exc)
-
-    if not specs:
-        log.warning(
-            "scan_personas_dir: no personas found in %s — using hard-coded fallbacks",
-            personas_dir,
-        )
-        return dict(_HARDCODED_FALLBACKS)
-
-    log.debug("scan_personas_dir: loaded %d personas from %s", len(specs), personas_dir)
-    return specs
-
-
-# Module-level routing table — populated at import time.
-# Maps persona name → PersonaSpec. Access via _PERSONA_SPECS["builder"] etc.
-_PERSONA_SPECS: Dict[str, PersonaSpec] = scan_personas_dir()
-
-
-# ---------------------------------------------------------------------------
 # Composition engine (compose > inherit)
 # ---------------------------------------------------------------------------
 
@@ -809,7 +672,6 @@ def persona_for_goal(
     *,
     confidence_threshold: float = 0.70,
     allow_llm_fallback: bool = False,
-    allow_freeform: bool = False,
     adapter=None,
 ) -> tuple[str, float]:
     """Select the best persona for a goal. Returns (persona_name, confidence).
@@ -894,129 +756,7 @@ def persona_for_goal(
         except Exception:
             pass
 
-    # Free-form fallback: write a goal-specific persona to disk and re-route
-    if allow_freeform and best_conf < confidence_threshold:
-        spec = create_freeform_persona(goal)
-        # Register in module-level cache so subsequent registry.load() calls find it
-        _PERSONA_SPECS[spec.name] = spec
-        log.info(
-            "persona_for_goal: freeform persona created slug=%r for goal=%r",
-            spec.name, goal[:60],
-        )
-        return spec.name, 0.70
-
     return best_name or _DEFAULT_PERSONA, max(best_conf, 0.5)
-
-
-# ---------------------------------------------------------------------------
-# Free-form persona creation (Phase 31 extension)
-# ---------------------------------------------------------------------------
-
-def _default_personas_dir() -> Path:
-    """Return the canonical personas/ directory path (same logic as PersonaRegistry)."""
-    try:
-        from orch import orch_root
-        d = Path(orch_root()) / "personas"
-        if d.exists():
-            return d
-    except Exception:
-        pass
-    return Path(__file__).resolve().parent.parent / "personas"
-
-
-def _goal_to_slug(goal: str) -> str:
-    """Convert a goal string to a filesystem-safe persona slug.
-
-    Examples:
-        "Analyze competitor pricing strategies" → "analyze-competitor-pricing"
-        "Build a REST API in FastAPI"           → "build-a-rest-api-in"
-    """
-    import re as _re
-    words = _re.sub(r"[^a-z0-9\s]", "", goal.lower()).split()
-    return "-".join(words[:5]) or "freeform"
-
-
-def create_freeform_persona(
-    goal: str,
-    personas_dir: Optional[Path] = None,
-) -> PersonaSpec:
-    """Write a minimal persona spec to personas/<slug>.yaml and return it.
-
-    Called when keyword routing and LLM fallback both fail to find a confident
-    match.  Generates a goal-specific persona on-the-fly, persists it so future
-    runs can reuse or refine it, and returns a ready-to-use PersonaSpec.
-
-    Args:
-        goal:         Natural-language goal (used to derive the slug and prompt).
-        personas_dir: Override for the personas/ directory (default: auto-detect).
-
-    Returns:
-        PersonaSpec for the newly created persona.
-    """
-    # Injection guard: goal text becomes the persona's system_prompt — scan it first
-    try:
-        from injection_guard import scan_content as _scan_content
-        _ig_report = _scan_content(goal, source="user_goal")
-        if not _ig_report.is_clean:
-            log.warning(
-                "create_freeform_persona: injection risk in goal (%s findings, %s risk) — "
-                "using safe fallback goal",
-                len(_ig_report.findings),
-                _ig_report.risk_level,
-            )
-            goal = "[goal redacted — injection risk detected]"
-    except Exception as _ig_exc:
-        log.debug("injection_guard scan skipped in create_freeform_persona: %s", _ig_exc)
-
-    if personas_dir is None:
-        personas_dir = _default_personas_dir()
-
-    slug = _goal_to_slug(goal)
-    yaml_path = personas_dir / f"{slug}.yaml"
-
-    # Build a minimal but useful spec
-    role_words = goal.split()[:6]
-    role = " ".join(w.capitalize() for w in role_words)
-    system_prompt = (
-        f"You are a specialist agent focused on: {goal}.\n"
-        "Work methodically. Prefer concrete actions over vague plans. "
-        "Cite sources when reasoning about facts. Be direct."
-    )
-
-    spec_data = {
-        "name": slug,
-        "role": role,
-        "model_tier": "mid",
-        "tool_access": [],
-        "memory_scope": "session",
-        "communication_style": "direct and concise",
-        "system_prompt": system_prompt,
-        "hooks": [],
-        "composes": [],
-    }
-
-    try:
-        import yaml as _yaml
-        yaml_path.write_text(
-            _yaml.dump(spec_data, default_flow_style=False, allow_unicode=True),
-            encoding="utf-8",
-        )
-        log.info("create_freeform_persona: wrote %s", yaml_path)
-    except Exception as exc:
-        log.warning("create_freeform_persona: could not write %s: %s", yaml_path, exc)
-
-    return PersonaSpec(
-        name=slug,
-        role=role,
-        model_tier="mid",
-        tool_access=[],
-        memory_scope="session",
-        communication_style="direct and concise",
-        system_prompt=system_prompt,
-        hooks=[],
-        composes=[],
-        source_file=str(yaml_path),
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -1091,27 +831,6 @@ def record_persona_outcome(
     except Exception:
         return False
 
-
-def load_persona_outcomes(limit: int = 100) -> List[dict]:
-    """Load recent persona outcome records, newest first."""
-    try:
-        import orch
-        out_path = orch.orch_root() / "memory" / "persona-outcomes.jsonl"
-        if not out_path.exists():
-            return []
-        lines = out_path.read_text(encoding="utf-8").splitlines()
-        results = []
-        for line in lines:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                results.append(json.loads(line))
-            except Exception:
-                continue
-        return list(reversed(results))[:limit]
-    except Exception:
-        return []
 
 
 # ---------------------------------------------------------------------------
@@ -1194,37 +913,6 @@ def save_manifest(
 
     output_path.write_text(content + "\n", encoding="utf-8")
     return output_path
-
-
-def load_manifest(path: Optional[Path] = None) -> List[dict]:
-    """Load the agent capability manifest from disk. Returns [] if not found."""
-    if path is None:
-        try:
-            import orch
-            for ext in ("json", "yaml"):
-                candidate = orch.orch_root() / "agents" / f"manifest.{ext}"
-                if candidate.exists():
-                    path = candidate
-                    break
-        except Exception:
-            pass
-
-    if path is None or not path.exists():
-        return []
-
-    try:
-        content = path.read_text(encoding="utf-8")
-        if str(path).endswith(".yaml") or str(path).endswith(".yml"):
-            try:
-                import yaml
-                data = yaml.safe_load(content)
-            except Exception:
-                data = json.loads(content)
-        else:
-            data = json.loads(content)
-        return data.get("agents", [])
-    except Exception:
-        return []
 
 
 # Trigger keyword map for manifest generation (mirrors persona_for_goal routing table)

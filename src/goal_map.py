@@ -202,12 +202,6 @@ def build_goal_map() -> GoalMap:
                 parent_id = ancestry_data.get("parent_id")
                 if parent_id:
                     parent_ids = [parent_id]
-                ancestry_chain = ancestry_data.get("ancestry", [])
-                if ancestry_chain:
-                    # If ancestry has entries, use last entry as immediate parent title context
-                    last_ancestor = ancestry_chain[-1]
-                    if parent_id and parent_id == last_ancestor.get("id"):
-                        pass  # consistent
             except Exception:
                 pass
 

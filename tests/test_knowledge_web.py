@@ -26,14 +26,12 @@ from knowledge_web import (
     PROMOTE_MIN_SCORE,
     PROMOTE_MIN_SESSIONS,
     REINFORCE_BONUS,
-    GoalGap,
     KnowledgeEdge,
     KnowledgeNode,
     MemoryTier,
     TieredLesson,
     confidence_from_k_samples,
     decay_score,
-    detect_goal_gaps,
     extract_wiki_links,
     forget_lesson,
     inject_tiered_lessons,
@@ -965,33 +963,9 @@ class TestQueryLessons:
         assert "med1" not in ids
 
 
-# ===========================================================================
-# detect_goal_gaps
-# ===========================================================================
-
-class TestDetectGoalGaps:
-    def test_blocked_steps_produce_high_severity_gaps(self, tmp_path):
-        gaps = detect_goal_gaps(
-            "Build retry system",
-            outcomes=[],
-            blocked_steps=["Implement exponential backoff"],
-        )
-        assert len(gaps) >= 1
-        assert gaps[0].gap_type == "blocked_step"
-        assert gaps[0].severity == "high"
-
-    def test_no_gaps_when_everything_covered(self, tmp_path):
-        gaps = detect_goal_gaps("test", outcomes=[], blocked_steps=[])
-        assert isinstance(gaps, list)
-
-    def test_max_gaps_limits_output(self, tmp_path):
-        gaps = detect_goal_gaps(
-            "Build something complex",
-            outcomes=[],
-            blocked_steps=[f"Step {i}" for i in range(10)],
-            max_gaps=3,
-        )
-        assert len(gaps) <= 3
+# NOTE: TestDetectGoalGaps removed 2026-07-02 — detect_goal_gaps/GoalGap deleted
+# as dead code (zero production callers on write or read side). See BACKLOG.md
+# Tier 1 dead-code deletion.
 
 
 # ===========================================================================

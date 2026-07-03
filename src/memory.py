@@ -68,7 +68,7 @@ from memory_ledger import (  # noqa: F401, E402
     load_outcomes_with_context, _update_memory_index,
 )
 from knowledge_web import (  # noqa: F401, E402
-    MemoryTier, TieredLesson, GoalGap,
+    MemoryTier, TieredLesson,
     DECAY_FACTOR, REINFORCE_BONUS, PROMOTE_MIN_SCORE, PROMOTE_MIN_SESSIONS, GC_THRESHOLD,
     CANON_APPLY_THRESHOLD, CANON_TASK_TYPE_MIN,
     _STOP_WORDS, _CITATION_PENALTY, _CONFIDENCE_SINGLE_CALL, _CONFIDENCE_MAJORITY_VOTE,
@@ -80,7 +80,7 @@ from knowledge_web import (  # noqa: F401, E402
     load_tiered_lessons, _rewrite_tiered_lessons,
     reinforce_lesson, search_graveyard, forget_lesson, promote_lesson,
     run_decay_cycle, maybe_consolidate, consolidation_due,
-    inject_tiered_lessons, detect_goal_gaps, query_lessons,
+    inject_tiered_lessons, query_lessons,
     _increment_times_applied, _canon_stats_path, _record_canon_hit,
     _load_canon_stats, get_canon_candidates, memory_status,
 )
@@ -97,28 +97,6 @@ from knowledge_lens import (  # noqa: F401, E402
     record_verification, load_verification_outcomes,
     verification_accuracy, calibrated_alignment_threshold,
 )
-
-# ---------------------------------------------------------------------------
-# Backend accessor (Phase 40) — used by agent_loop._build_loop_context
-# ---------------------------------------------------------------------------
-
-_BACKEND: Optional[Any] = None
-_BACKEND_DIR: Optional[Any] = None
-
-
-def _backend() -> Any:
-    """Return the active memory backend, keyed by current memory_dir.
-
-    Re-initialises if _memory_dir() has changed (e.g. monkeypatched in tests).
-    """
-    global _BACKEND, _BACKEND_DIR
-    current_dir = _memory_dir()
-    if _BACKEND is None or _BACKEND_DIR != current_dir:
-        from memory_backends import get_backend
-        _BACKEND = get_backend(current_dir)
-        _BACKEND_DIR = current_dir
-    return _BACKEND
-
 
 # Hybrid retrieval (BM25 + RRF) — graceful fallback to TF-IDF if unavailable
 try:
@@ -225,60 +203,7 @@ def _jaccard_similarity(a: str, b: str) -> float:
     return len(ta & tb) / len(ta | tb)
 
 
-def majority_vote_lessons(
-    all_samples: List[List[str]],
-    *,
-    threshold: float = 0.4,
-) -> List[str]:
-    """Agent0 steal: return only lessons that appear in majority of k samples.
-
-    Two lessons are considered "the same" if their Jaccard similarity ≥ threshold.
-    For each candidate lesson, count how many samples contain a similar lesson.
-    Only return lessons with count > len(all_samples) / 2 (strict majority).
-
-    Args:
-        all_samples:  List of k lesson lists (one list per LLM sample call).
-        threshold:    Jaccard similarity threshold for "same lesson" matching.
-
-    Returns:
-        Deduplicated list of lessons that appear in majority of samples.
-        Falls back to all lessons from sample 0 if k == 1 (no filtering).
-    """
-    k = len(all_samples)
-    if k <= 1:
-        return all_samples[0] if all_samples else []
-
-    # Collect all unique candidates from all samples
-    all_candidates: List[str] = []
-    seen: set = set()
-    for sample in all_samples:
-        for lesson in sample:
-            lesson = lesson.strip()
-            if lesson and lesson not in seen:
-                seen.add(lesson)
-                all_candidates.append(lesson)
-
-    majority_threshold = k / 2.0  # strict majority: > 50%
-    accepted: List[str] = []
-    for candidate in all_candidates:
-        count = 0
-        for sample in all_samples:
-            # Count this sample as agreeing if any lesson in it is "similar enough"
-            for s_lesson in sample:
-                if _jaccard_similarity(candidate, s_lesson) >= threshold:
-                    count += 1
-                    break
-        if count > majority_threshold:
-            accepted.append(candidate)
-
-    return accepted[:3]  # cap at 3 (same as single-sample limit)
-
-
 _LESSON_TYPES = frozenset({"execution", "planning", "recovery", "verification", "cost"})
-
-# Phase 60: citation enforcement — uncited lessons are gently penalised in ranking.
-# A 10% discount means a clearly-better uncited lesson still wins; this is a tie-breaker.
-_CITATION_PENALTY = 0.90
 
 
 def extract_lessons_via_llm(
@@ -289,7 +214,6 @@ def extract_lessons_via_llm(
     *,
     adapter=None,
     dry_run: bool = False,
-    k_samples: int = 1,
     return_typed: bool = False,
 ) -> "List":
     """Use LLM to extract generalizable lessons from a completed run.
@@ -300,9 +224,6 @@ def extract_lessons_via_llm(
     - S3: ATIF feedback — passes times_reinforced + times_applied stats into prompt.
 
     Args:
-        k_samples:    Agent0 steal — number of LLM samples to draw. When k_samples ≥ 3,
-                      only lessons that appear in majority of samples are returned
-                      (majority-vote pseudo-labels). Default: 1 (original behaviour).
         return_typed: If True, return List[Tuple[str, str]] (lesson_text, lesson_type).
                       If False (default), return List[str] for backward compat.
 
@@ -401,24 +322,7 @@ def extract_lessons_via_llm(
         except Exception:
             return []
 
-    if k_samples <= 1:
-        typed = _one_sample()
-    else:
-        # Multi-sample majority vote (Agent0 pseudo-label pattern)
-        typed_samples = [_one_sample() for _ in range(k_samples)]
-        # Extract plain strings for majority vote, then reattach types
-        str_samples = [[t for t, _ in s] for s in typed_samples]
-        agreed_strs = set(majority_vote_lessons(str_samples))
-        # Collect typed tuples for agreed lessons (first occurrence wins)
-        seen: set = set()
-        typed = []
-        for sample in typed_samples:
-            for lesson_text, lesson_type in sample:
-                if lesson_text in agreed_strs and lesson_text not in seen:
-                    seen.add(lesson_text)
-                    typed.append((lesson_text, lesson_type))
-        log.debug("extract_lessons k=%d samples=%d agreed=%d typed=%d",
-                  k_samples, len(typed_samples), len(agreed_strs), len(typed))
+    typed = _one_sample()
 
     # S5: Cross-type cap — at most 1 lesson per lesson_type prevents any single
     # type crowding out others (e.g., 3 "execution" lessons drowning out "recovery").
@@ -433,8 +337,8 @@ def extract_lessons_via_llm(
     # F6: Token transparency — log extraction cost so expensive paths are visible
     if _total_tokens_in or _total_tokens_out:
         log.info(
-            "extract_lessons tokens: in=%d out=%d k_samples=%d lessons=%d",
-            _total_tokens_in, _total_tokens_out, max(k_samples, 1), len(typed),
+            "extract_lessons tokens: in=%d out=%d lessons=%d",
+            _total_tokens_in, _total_tokens_out, len(typed),
         )
         try:
             from metrics import record_cost

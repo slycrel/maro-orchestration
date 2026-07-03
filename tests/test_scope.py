@@ -18,8 +18,6 @@ from scope import (
     _parse_scope_markdown,
     generate_resolved_intent,
     generate_scope,
-    inject_resolved_intent_into_context,
-    inject_scope_into_context,
     resolve_ambiguity_via_proxy,
 )
 
@@ -233,34 +231,8 @@ def test_generate_scope_emits_deferred_markers(caplog):
     assert "[scope-deferred] memory" in messages
 
 
-# ---------------------------------------------------------------------------
-# inject_scope_into_context
-# ---------------------------------------------------------------------------
-
-def test_inject_scope_appends_to_existing_ancestry():
-    scope = ScopeSet(in_scope=["x"])
-    result = inject_scope_into_context(scope, "existing ancestry")
-    assert "existing ancestry" in result
-    assert "## Scope" in result
-    assert result.index("existing ancestry") < result.index("## Scope")
-
-
-def test_inject_scope_with_empty_ancestry_returns_just_scope():
-    scope = ScopeSet(in_scope=["x"])
-    result = inject_scope_into_context(scope, "")
-    assert "## Scope" in result
-    assert result.startswith("## Scope")
-
-
-def test_inject_scope_none_returns_ancestry_unchanged():
-    result = inject_scope_into_context(None, "existing ancestry")
-    assert result == "existing ancestry"
-
-
-def test_inject_scope_empty_returns_ancestry_unchanged():
-    result = inject_scope_into_context(ScopeSet(), "existing ancestry")
-    assert result == "existing ancestry"
-
+# inject_scope_into_context tests removed 2026-07-02 — function deleted (zero
+# production callers). See docs/REFACTOR_PLAN.md Tier 1.
 
 # ---------------------------------------------------------------------------
 # Director-proxy fallback (clarification-style response handling)
@@ -571,24 +543,8 @@ def test_generate_resolved_intent_empty_deliverables_scope_only():
     assert len(intent.scope.failure_modes) == 1
 
 
-def test_inject_resolved_intent_appends_to_ancestry():
-    intent = ResolvedIntent(
-        scope=ScopeSet(failure_modes=["a"], in_scope=["b"], out_of_scope=["c"]),
-        deliverables=[Deliverable(name="x.go", description="d")],
-    )
-    merged = inject_resolved_intent_into_context(intent, "prior ancestry")
-    assert merged.startswith("prior ancestry")
-    assert "Scope (goal bounds)" in merged
-    assert "## Deliverables" in merged
-    assert "x.go" in merged
-
-
-def test_inject_resolved_intent_none_returns_ancestry_unchanged():
-    assert inject_resolved_intent_into_context(None, "abc") == "abc"
-
-
-def test_inject_resolved_intent_empty_returns_ancestry_unchanged():
-    assert inject_resolved_intent_into_context(ResolvedIntent(), "abc") == "abc"
+# inject_resolved_intent_into_context tests removed 2026-07-02 — function
+# deleted (zero production callers). See docs/REFACTOR_PLAN.md Tier 1.
 
 
 def test_generate_resolved_intent_carries_proxy_resolution():

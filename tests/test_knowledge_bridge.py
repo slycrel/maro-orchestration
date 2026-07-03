@@ -290,60 +290,9 @@ class TestOutcomeToKnowledge:
         assert count == 0
 
 
-# ---------------------------------------------------------------------------
-# validate_principle
-# ---------------------------------------------------------------------------
-
-class TestValidatePrinciple:
-    def test_validation_bumps_confidence(self, tmp_workspace):
-        from knowledge_bridge import upsert_knowledge_from_candidate, validate_principle
-        from knowledge_web import load_knowledge_nodes
-
-        node, _ = upsert_knowledge_from_candidate(
-            title="Test principle for validation",
-            description="A principle that will be validated.",
-            node_type="principle",
-            domain="orchestration",
-            sources=[],
-            existing_nodes=[],
-        )
-        original_confidence = node.confidence
-
-        result = validate_principle(node.node_id, validated=True, outcome_id="test-run-1")
-        assert result is True
-
-        updated = next(n for n in load_knowledge_nodes(status=None)  # type: ignore[arg-type]
-                       if n.node_id == node.node_id)
-        assert updated.confidence > original_confidence
-
-    def test_contradiction_lowers_confidence(self, tmp_workspace):
-        from knowledge_bridge import upsert_knowledge_from_candidate, validate_principle
-        from knowledge_web import load_knowledge_nodes, NODE_CANDIDATE
-
-        node, _ = upsert_knowledge_from_candidate(
-            title="Principle to be contradicted",
-            description="This will be disproven.",
-            node_type="insight",
-            domain="orchestration",
-            sources=[],
-            existing_nodes=[],
-        )
-        # Start with higher confidence so we can lower it
-        # (default is 0.3 for auto-extracted nodes)
-        original_confidence = node.confidence
-
-        result = validate_principle(node.node_id, validated=False, outcome_id="failure-run")
-        assert result is True
-
-        updated = next(n for n in load_knowledge_nodes(status=None)  # type: ignore[arg-type]
-                       if n.node_id == node.node_id)
-        assert updated.confidence <= original_confidence
-
-    def test_returns_false_for_nonexistent_node(self, tmp_workspace):
-        from knowledge_bridge import validate_principle
-
-        result = validate_principle("nonexistent-node-id", validated=True)
-        assert result is False
+# NOTE: TestValidatePrinciple removed 2026-07-02 — validate_principle deleted
+# as dead code (zero production callers, duplicated upsert_knowledge_from_candidate's
+# confidence-rewrite logic). See BACKLOG.md Tier 1 dead-code deletion.
 
 
 # ---------------------------------------------------------------------------

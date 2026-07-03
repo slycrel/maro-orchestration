@@ -19,7 +19,6 @@ import orch
 from background import (
     BackgroundTask,
     _load_task,
-    list_background_tasks,
     poll_background,
     start_background,
     wait_background,
@@ -197,51 +196,6 @@ def test_wait_background_fast_command(monkeypatch, tmp_path):
     task = start_background("true")  # exits immediately with code 0
     result = wait_background(task.id, timeout_seconds=15)
     assert result.status in ("done", "failed")
-
-
-# ---------------------------------------------------------------------------
-# list_background_tasks
-# ---------------------------------------------------------------------------
-
-def test_list_background_tasks(monkeypatch, tmp_path):
-    """list_background_tasks loads from jsonl."""
-    _setup_workspace(monkeypatch, tmp_path)
-    task1 = start_background("echo task-one")
-    task2 = start_background("echo task-two")
-    tasks = list_background_tasks()
-    ids = [t.id for t in tasks]
-    assert task1.id in ids
-    assert task2.id in ids
-    try:
-        os.kill(task1.pid, 9)
-        os.kill(task2.pid, 9)
-    except Exception:
-        pass
-
-
-def test_list_background_tasks_empty(monkeypatch, tmp_path):
-    """list_background_tasks returns [] when no tasks exist."""
-    _setup_workspace(monkeypatch, tmp_path)
-    tasks = list_background_tasks()
-    assert tasks == []
-
-
-def test_list_background_tasks_deduplicates(monkeypatch, tmp_path):
-    """Each task id appears only once even if log has multiple entries."""
-    _setup_workspace(monkeypatch, tmp_path)
-    task = start_background("echo dedup")
-    # Poll to create a second entry for the same id
-    try:
-        poll_background(task.id)
-    except Exception:
-        pass
-    tasks = list_background_tasks()
-    ids = [t.id for t in tasks]
-    assert ids.count(task.id) == 1
-    try:
-        os.kill(task.pid, 9)
-    except Exception:
-        pass
 
 
 # ---------------------------------------------------------------------------

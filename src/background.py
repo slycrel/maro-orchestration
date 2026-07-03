@@ -249,44 +249,6 @@ def wait_background(task_id: str, timeout_seconds: int = 60) -> BackgroundTask:
     return poll_background(task_id)
 
 
-def list_background_tasks() -> List[BackgroundTask]:
-    """Load all background tasks from jsonl, checking live status of running ones.
-
-    Returns:
-        List of BackgroundTask, most recent first.
-    """
-    path = _bg_log_path()
-    if not path.exists():
-        return []
-
-    tasks: List[BackgroundTask] = []
-    seen_ids: set = set()
-    lines = path.read_text(encoding="utf-8").splitlines()
-    # Process in reverse to dedupe (keep most recent version of each id)
-    for line in reversed(lines):
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            d = json.loads(line)
-            tid = d.get("id", "")
-            if tid in seen_ids:
-                continue
-            seen_ids.add(tid)
-            task = _dict_to_task(d)
-            # Live check for running tasks
-            if task.status == "running":
-                try:
-                    task = poll_background(task.id)
-                except Exception:
-                    pass
-            tasks.append(task)
-        except Exception:
-            continue
-
-    return tasks
-
-
 def _load_task(task_id: str) -> Optional[BackgroundTask]:
     """Load a single task from the log by id."""
     path = _bg_log_path()

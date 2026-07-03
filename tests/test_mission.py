@@ -639,15 +639,9 @@ def test_mark_feature_monotonicity(monkeypatch, tmp_path):
         mark_feature_passing("monotone-test", feature.id, fail_grade)
 
 
-def test_validate_manifest_monotonicity_pass(monkeypatch, tmp_path):
-    """validate_manifest_monotonicity returns True for valid manifest."""
-    _setup_workspace(monkeypatch, tmp_path)
-    from mission import generate_feature_manifest, validate_manifest_monotonicity
-    mission = decompose_mission("Test", _DecomposeMockAdapter())
-    mission.project = "valid-monotone"
-    orch.ensure_project("valid-monotone", "test")
-    generate_feature_manifest(mission, "valid-monotone")
-    assert validate_manifest_monotonicity("valid-monotone") is True
+# test_validate_manifest_monotonicity_pass removed 2026-07-02 —
+# validate_manifest_monotonicity() deleted (misnamed, zero production
+# callers). See docs/REFACTOR_PLAN.md Tier 1.
 
 
 def test_run_mission_creates_feature_manifest(monkeypatch, tmp_path):

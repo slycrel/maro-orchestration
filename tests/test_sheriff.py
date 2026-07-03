@@ -20,8 +20,6 @@ from sheriff import (
     fingerprint_project_state,
     write_heartbeat_state,
     read_heartbeat_state,
-    mark_project_failed,
-    mark_project_paused,
     project_lifecycle_state,
 )
 
@@ -324,10 +322,12 @@ def test_cli_sheriff_all_json(monkeypatch, tmp_path, capsys):
 # ---------------------------------------------------------------------------
 
 class TestProjectLifecycleState:
-    """Tests for mark_project_failed, mark_project_paused, project_lifecycle_state.
+    """Tests for project_lifecycle_state, driven by manually-written marker files.
 
     These marker files are the primary mechanism for stopping zombie projects
     from consuming resources (heartbeat diagnosis, backlog drain, sheriff checks).
+    No code path writes them automatically (see sheriff.project_lifecycle_state
+    docstring) — an operator creates one directly.
     """
 
     def test_active_project_has_active_state(self, monkeypatch, tmp_path):
@@ -337,17 +337,17 @@ class TestProjectLifecycleState:
         assert project_lifecycle_state("live-proj") == "active"
 
     def test_failed_marker_returns_failed(self, monkeypatch, tmp_path):
-        """After mark_project_failed(), project_lifecycle_state returns 'failed'."""
+        """A .maro-failed marker makes project_lifecycle_state return 'failed'."""
         _setup(monkeypatch, tmp_path)
-        _mkproj(tmp_path, "dead-proj")
-        mark_project_failed("dead-proj", reason="zombie — no progress for 48h")
+        proj_dir = _mkproj(tmp_path, "dead-proj")
+        (proj_dir / ".maro-failed").write_text("failed: zombie — no progress for 48h\n", encoding="utf-8")
         assert project_lifecycle_state("dead-proj") == "failed"
 
     def test_paused_marker_returns_paused(self, monkeypatch, tmp_path):
-        """After mark_project_paused(), project_lifecycle_state returns 'paused'."""
+        """A .maro-paused marker makes project_lifecycle_state return 'paused'."""
         _setup(monkeypatch, tmp_path)
-        _mkproj(tmp_path, "paused-proj")
-        mark_project_paused("paused-proj", reason="waiting on external dependency")
+        proj_dir = _mkproj(tmp_path, "paused-proj")
+        (proj_dir / ".maro-paused").write_text("paused: waiting on external dependency\n", encoding="utf-8")
         assert project_lifecycle_state("paused-proj") == "paused"
 
     def test_failed_takes_precedence_over_paused(self, monkeypatch, tmp_path):
@@ -359,27 +359,11 @@ class TestProjectLifecycleState:
         (proj_dir / ".maro-paused").write_text("paused\n", encoding="utf-8")
         assert project_lifecycle_state("both-markers") == "failed"
 
-    def test_failed_marker_writes_reason(self, monkeypatch, tmp_path):
-        """mark_project_failed writes the reason into the marker file."""
-        _setup(monkeypatch, tmp_path)
-        _mkproj(tmp_path, "reason-proj")
-        marker = mark_project_failed("reason-proj", reason="too many retries")
-        content = marker.read_text(encoding="utf-8")
-        assert "too many retries" in content
-
-    def test_failed_marker_without_reason(self, monkeypatch, tmp_path):
-        """mark_project_failed with no reason writes minimal marker content."""
-        _setup(monkeypatch, tmp_path)
-        _mkproj(tmp_path, "no-reason-proj")
-        marker = mark_project_failed("no-reason-proj")
-        assert marker.exists()
-        assert "failed" in marker.read_text(encoding="utf-8")
-
     def test_check_project_short_circuits_on_failed(self, monkeypatch, tmp_path):
         """check_project returns status='failed' immediately for failed projects."""
         _setup(monkeypatch, tmp_path)
-        _mkproj(tmp_path, "marked-failed")
-        mark_project_failed("marked-failed", reason="stalled")
+        proj_dir = _mkproj(tmp_path, "marked-failed")
+        (proj_dir / ".maro-failed").write_text("failed: stalled\n", encoding="utf-8")
         report = check_project("marked-failed")
         assert report.status == "failed"
         assert "failed" in report.diagnosis.lower()

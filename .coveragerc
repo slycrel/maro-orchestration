@@ -4,10 +4,6 @@ omit =
     src/poe_orchestration.egg-info/*
     */test_*
     */tests/*
-    # Research-phase scripts, not production code paths. Keep them out of
-    # the coverage target so the overall number reflects what ships.
-    src/polymarket_backtest.py
-    src/polymarket_backtest_refined.py
 
 [report]
 # Session 20 adversarial review finding 3.7: coverage was unmeasured. Current

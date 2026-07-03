@@ -19,7 +19,6 @@ from persona import (
     persona_to_dict,
     persona_for_goal,
     record_persona_outcome,
-    load_persona_outcomes,
 )
 
 PERSONAS_DIR = Path(__file__).parent.parent / "personas"
@@ -569,39 +568,11 @@ def test_record_persona_outcome_goal_truncated(monkeypatch, tmp_path):
     assert len(entry["goal"]) <= 120
 
 
-def test_load_persona_outcomes_empty(monkeypatch, tmp_path):
-    """load_persona_outcomes returns [] when no file exists."""
-    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
-    result = load_persona_outcomes()
-    assert result == []
-
-
-def test_load_persona_outcomes_returns_newest_first(monkeypatch, tmp_path):
-    """load_persona_outcomes returns entries newest-first."""
-    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
-    for i, persona in enumerate(["builder", "researcher", "ops"]):
-        record_persona_outcome(persona, f"goal {i}", "done")
-    results = load_persona_outcomes()
-    assert len(results) == 3
-    # Newest first — last written is "ops"
-    assert results[0]["persona"] == "ops"
-    assert results[-1]["persona"] == "builder"
-
-
-def test_load_persona_outcomes_respects_limit(monkeypatch, tmp_path):
-    """load_persona_outcomes respects the limit parameter."""
-    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
-    for i in range(5):
-        record_persona_outcome("researcher", f"goal {i}", "done")
-    results = load_persona_outcomes(limit=2)
-    assert len(results) == 2
-
-
 # ===========================================================================
 # Phase 35 P2: Agent capability manifest tests
 # ===========================================================================
 
-from persona import generate_manifest, save_manifest, load_manifest
+from persona import generate_manifest, save_manifest
 
 
 def test_generate_manifest_returns_list():
@@ -627,25 +598,18 @@ def test_generate_manifest_sorted_by_name():
     assert names == sorted(names)
 
 
-def test_save_and_load_manifest(monkeypatch, tmp_path):
-    """save_manifest writes JSON; load_manifest reads it back."""
+def test_save_manifest_writes_valid_json(monkeypatch, tmp_path):
+    """save_manifest writes a JSON file matching generate_manifest's output."""
     monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
     path = tmp_path / "test-manifest.json"
     save_manifest(output_path=path, fmt="json")
     assert path.exists()
-    loaded = load_manifest(path=path)
+    loaded = json.loads(path.read_text(encoding="utf-8")).get("agents", [])
     assert isinstance(loaded, list)
     assert len(loaded) > 0
     # Verify round-trip fidelity
     original = generate_manifest()
     assert len(loaded) == len(original)
-
-
-def test_load_manifest_returns_empty_when_missing(monkeypatch, tmp_path):
-    """load_manifest returns [] when no manifest file exists."""
-    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
-    result = load_manifest(path=tmp_path / "no-such-file.json")
-    assert result == []
 
 
 def test_manifest_includes_trigger_keywords_for_known_personas():

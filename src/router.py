@@ -128,52 +128,6 @@ def _skills_path() -> Path:
 
 
 # ---------------------------------------------------------------------------
-# Feature extraction
-# ---------------------------------------------------------------------------
-
-def extract_features(text: str, vectorizer=None) -> List[float]:
-    """Extract feature vector from text.
-
-    Uses sentence-transformers (all-MiniLM-L6-v2) if available,
-    otherwise TF-IDF with unigrams + bigrams.
-
-    Args:
-        text:       Input text to embed.
-        vectorizer: Pre-fitted TfidfVectorizer for consistent transform.
-                    If None and sklearn available, fits on [text] alone
-                    (useful for single-item callers; prefer build_training_data
-                    path for proper fit).
-
-    Returns:
-        List of floats (embedding or tfidf vector). Never raises.
-    """
-    try:
-        if _ST_AVAILABLE:
-            _model = SentenceTransformer("all-MiniLM-L6-v2")
-            vec = _model.encode([text])[0]
-            return list(float(v) for v in vec)
-    except Exception:
-        pass
-
-    if _SKLEARN_AVAILABLE:
-        try:
-            if vectorizer is not None:
-                mat = vectorizer.transform([text])
-            else:
-                vect = TfidfVectorizer(ngram_range=(1, 2), max_features=512)
-                mat = vect.fit_transform([text])
-            arr = mat.toarray()[0]
-            return [float(v) for v in arr]
-        except Exception:
-            pass
-
-    # Last resort: character-level hash features
-    chars = text.lower()
-    features = [float(chars.count(c)) for c in "abcdefghijklmnopqrstuvwxyz "]
-    return features
-
-
-# ---------------------------------------------------------------------------
 # Training data assembly
 # ---------------------------------------------------------------------------
 

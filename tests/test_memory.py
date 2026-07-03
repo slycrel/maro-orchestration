@@ -706,79 +706,13 @@ class TestLoadOutcomesWithContext:
         assert result["compressed"][0].batch_id == "b1"
 
 
-# ---------------------------------------------------------------------------
-# Majority-vote pseudo-labels (Agent0 steal)
-# ---------------------------------------------------------------------------
+# NOTE: TestMajorityVoteLessons removed 2026-07-02 — majority_vote_lessons()
+# and extract_lessons_via_llm()'s k_samples>1 branch deleted as dead code
+# (production only ever calls with k_samples=1). See BACKLOG.md Tier 1
+# dead-code deletion. The single-sample path is covered below.
 
-class TestMajorityVoteLessons:
-    def test_k1_returns_all(self):
-        from memory import majority_vote_lessons
-        samples = [["lesson A", "lesson B"]]
-        result = majority_vote_lessons(samples)
-        assert result == ["lesson A", "lesson B"]
-
-    def test_empty_samples(self):
-        from memory import majority_vote_lessons
-        assert majority_vote_lessons([]) == []
-
-    def test_majority_agreement_accepted(self):
-        from memory import majority_vote_lessons
-        samples = [
-            ["use retry on rate limit errors"],
-            ["use retry on rate limit errors", "something else"],
-            ["retry on rate limit is important"],
-        ]
-        result = majority_vote_lessons(samples)
-        # "retry on rate limit" appears in all 3 samples — should be accepted
-        assert any("retry" in r.lower() for r in result)
-
-    def test_minority_lesson_rejected(self):
-        from memory import majority_vote_lessons
-        samples = [
-            ["always validate input"],
-            ["rate limit retry needed"],
-            ["rate limit retry needed"],
-        ]
-        result = majority_vote_lessons(samples)
-        # "always validate input" only in 1 of 3 — should be rejected
-        assert not any("validate" in r.lower() for r in result)
-
-    def test_caps_at_3_lessons(self):
-        from memory import majority_vote_lessons
-        samples = [
-            ["lesson A", "lesson B", "lesson C", "lesson D"],
-            ["lesson A", "lesson B", "lesson C", "lesson D"],
-            ["lesson A", "lesson B", "lesson C", "lesson D"],
-        ]
-        result = majority_vote_lessons(samples)
-        assert len(result) <= 3
-
-    def test_k_samples_multi_sample_path(self, monkeypatch):
-        from memory import extract_lessons_via_llm
-        import types
-
-        call_count = [0]
-        all_lessons = [
-            ["retry on failure is key"],
-            ["retry on failure is key"],
-            ["unrelated lesson about something else"],
-        ]
-
-        class FakeAdapter:
-            def complete(self, messages, **kw):
-                idx = call_count[0]
-                call_count[0] += 1
-                import json
-                return types.SimpleNamespace(content=json.dumps(all_lessons[idx]))
-
-        result = extract_lessons_via_llm(
-            "some goal", "done", "some summary", "research",
-            adapter=FakeAdapter(), k_samples=3
-        )
-        assert call_count[0] == 3
-        assert any("retry" in r.lower() for r in result)
-
-    def test_k1_path_unchanged(self, monkeypatch):
+class TestExtractLessonsViaLLMSingleSample:
+    def test_single_sample_path(self, monkeypatch):
         from memory import extract_lessons_via_llm
         import types, json
 
@@ -788,7 +722,7 @@ class TestMajorityVoteLessons:
 
         result = extract_lessons_via_llm(
             "goal", "done", "summary", "general",
-            adapter=FakeAdapter(), k_samples=1
+            adapter=FakeAdapter(),
         )
         assert result == ["single lesson"]
 
@@ -1106,134 +1040,9 @@ class TestTieredLessonEvidenceSources:
         assert loaded[0].evidence_sources == ["url1", "url2"]
 
 
-class TestDetectGoalGaps:
-    """Tests for detect_goal_gaps() — Feynman Steal 10."""
-
-    def test_blocked_steps_produce_high_severity_gaps(self, monkeypatch, tmp_path):
-        """Blocked steps become high-severity GoalGap entries."""
-        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
-        from memory import detect_goal_gaps, GoalGap
-
-        gaps = detect_goal_gaps(
-            "research polymarket predictions",
-            outcomes=[],
-            blocked_steps=["Fetch data from API"],
-        )
-        assert any(g.gap_type == "blocked_step" and g.severity == "high" for g in gaps)
-
-    def test_multiple_blocked_steps_all_recorded(self, monkeypatch, tmp_path):
-        """Each blocked step produces its own gap."""
-        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
-        from memory import detect_goal_gaps
-
-        gaps = detect_goal_gaps(
-            "analyze sentiment trends",
-            outcomes=[],
-            blocked_steps=["Step A failed", "Step B failed"],
-        )
-        blocked = [g for g in gaps if g.gap_type == "blocked_step"]
-        assert len(blocked) == 2
-
-    def test_no_coverage_gap_when_keywords_missing_from_outcomes(self, monkeypatch, tmp_path):
-        """Goal keywords absent from all outcomes produce a no_coverage gap."""
-        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
-        from memory import detect_goal_gaps, Outcome
-
-        outcomes = [
-            Outcome(
-                outcome_id="o1", goal="something else entirely",
-                status="done", summary="unrelated content here",
-                task_type="general", lessons=[],
-            )
-        ]
-        gaps = detect_goal_gaps(
-            "analyze sentiment trends bitcoin prices",
-            outcomes=outcomes,
-        )
-        no_cov = [g for g in gaps if g.gap_type == "no_coverage"]
-        assert len(no_cov) >= 1
-        assert no_cov[0].severity == "medium"
-
-    def test_no_gap_when_keywords_covered(self, monkeypatch, tmp_path):
-        """No no_coverage gap when goal keywords appear in outcomes."""
-        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
-        from memory import detect_goal_gaps, Outcome
-
-        outcomes = [
-            Outcome(
-                outcome_id="o1",
-                goal="analyze sentiment trends bitcoin prices",
-                status="done",
-                summary="sentiment analysis of bitcoin price trends completed successfully",
-                task_type="research", lessons=[],
-            )
-        ]
-        gaps = detect_goal_gaps(
-            "analyze sentiment trends bitcoin prices",
-            outcomes=outcomes,
-        )
-        no_cov = [g for g in gaps if g.gap_type == "no_coverage"]
-        assert len(no_cov) == 0
-
-    def test_max_gaps_limits_output(self, monkeypatch, tmp_path):
-        """max_gaps parameter caps the returned list."""
-        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
-        from memory import detect_goal_gaps
-
-        gaps = detect_goal_gaps(
-            "research polymarket sentiment bitcoin analysis trends",
-            outcomes=[],
-            blocked_steps=["Step A", "Step B", "Step C", "Step D"],
-            max_gaps=2,
-        )
-        assert len(gaps) <= 2
-
-    def test_gaps_sorted_high_before_medium(self, monkeypatch, tmp_path):
-        """High-severity gaps appear before medium-severity gaps."""
-        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
-        from memory import detect_goal_gaps, Outcome
-
-        outcomes = [
-            Outcome(
-                outcome_id="o1", goal="unrelated topic",
-                status="done", summary="nothing about the goal",
-                task_type="general", lessons=[],
-            )
-        ]
-        gaps = detect_goal_gaps(
-            "analyze bitcoin sentiment trends predictions",
-            outcomes=outcomes,
-            blocked_steps=["Some blocked step"],
-        )
-        severities = [g.severity for g in gaps]
-        assert "high" in severities
-        high_idx = severities.index("high")
-        for i, sev in enumerate(severities):
-            if sev == "medium":
-                assert i > high_idx
-
-    def test_empty_goal_returns_empty(self, monkeypatch, tmp_path):
-        """Empty goal string produces no keyword gaps."""
-        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
-        from memory import detect_goal_gaps
-
-        gaps = detect_goal_gaps("", outcomes=[])
-        # blocked_steps=None, no outcomes, no keywords → no gaps
-        assert gaps == []
-
-    def test_goalgap_dataclass_fields(self):
-        """GoalGap has expected fields."""
-        from memory import GoalGap
-
-        g = GoalGap(
-            gap_type="single_source",
-            description="Only one source found",
-            severity="medium",
-            suggested_step="Find corroborating sources",
-        )
-        assert g.gap_type == "single_source"
-        assert g.severity == "medium"
-        assert "source" in g.description
+# NOTE: TestDetectGoalGaps removed 2026-07-02 — detect_goal_gaps/GoalGap deleted
+# as dead code (zero production callers on write or read side). See BACKLOG.md
+# Tier 1 dead-code deletion.
 
 
 class TestTypedLessonTaxonomy:

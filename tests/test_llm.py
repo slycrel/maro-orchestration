@@ -5,7 +5,6 @@ Tests cover:
 - ClaudeSubprocessAdapter: prompt building, tool parsing
 - DryRunAdapter (from agent_loop): still works
 - build_adapter() auto-detection
-- detect_available_backends()
 - MODEL_* constants and resolve_model()
 
 Real API calls are NOT made in tests — subprocess tests mock the binary.
@@ -32,7 +31,6 @@ from llm import (
     AnthropicSDKAdapter,
     OpenAIAdapter,
     build_adapter,
-    detect_available_backends,
     resolve_model,
     MODEL_CHEAP, MODEL_MID, MODEL_POWER,
     _load_env_file,
@@ -877,32 +875,6 @@ def test_build_adapter_model_passed_through():
          patch.dict(os.environ, {}, clear=False):
         a = build_adapter("subprocess", MODEL_MID)
     assert a.model_key == MODEL_MID
-
-
-# ---------------------------------------------------------------------------
-# detect_available_backends
-# ---------------------------------------------------------------------------
-
-def test_detect_backends_returns_dict(monkeypatch):
-    monkeypatch.setattr("llm._claude_bin_available", lambda: True)
-    monkeypatch.setattr("llm._load_env_file", lambda *a, **kw: {"ANTHROPIC_API_KEY": "key"})
-    result = detect_available_backends()
-    assert isinstance(result, dict)
-    assert "subprocess" in result
-    assert "anthropic" in result
-    assert result["subprocess"] is True
-    assert result["anthropic"] is True
-
-
-def test_detect_backends_no_keys(monkeypatch):
-    monkeypatch.setattr("llm._claude_bin_available", lambda: False)
-    monkeypatch.setattr("llm._codex_auth_available", lambda: False)
-    monkeypatch.setattr("llm._load_env_file", lambda *a, **kw: {})
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    result = detect_available_backends()
-    assert all(not v for v in result.values())
 
 
 # ---------------------------------------------------------------------------

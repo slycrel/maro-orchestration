@@ -616,35 +616,6 @@ def generate_scope(
     return scope
 
 
-# ---------------------------------------------------------------------------
-# Injection helper
-# ---------------------------------------------------------------------------
-
-def inject_scope_into_context(scope: Optional[ScopeSet], ancestry_context_extra: str) -> str:
-    """Append scope markdown to an existing ancestry_context_extra string.
-
-    Returns the ancestry with scope appended. If scope is None or empty,
-    returns the ancestry unchanged.
-    """
-    if not scope or scope.is_empty():
-        return ancestry_context_extra
-
-    scope_block = scope.to_markdown()
-    if ancestry_context_extra:
-        return f"{ancestry_context_extra}\n\n{scope_block}"
-    return scope_block
-
-
-def inject_resolved_intent_into_context(
-    intent: Optional["ResolvedIntent"], ancestry_context_extra: str
-) -> str:
-    """Append resolved-intent markdown (scope + deliverables) to ancestry."""
-    if not intent or intent.is_empty():
-        return ancestry_context_extra
-
-    block = intent.to_markdown()
-    if not block:
-        return ancestry_context_extra
-    if ancestry_context_extra:
-        return f"{ancestry_context_extra}\n\n{block}"
-    return block
+# inject_scope_into_context / inject_resolved_intent_into_context removed
+# 2026-07-02 — zero production callers, test-only. See docs/REFACTOR_PLAN.md
+# Tier 1.

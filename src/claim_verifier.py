@@ -9,18 +9,18 @@ This module:
   1. Extracts file-path claims and checks them against the filesystem.
   2. Extracts symbol claims (function/class/method names) and checks them
      via a direct scan of Python source files in the project.
-  3. Returns ClaimReport (files) and SymbolReport (symbols) — combined
-     in a CompoundClaimReport.
+  3. Returns ClaimReport (files) and SymbolReport (symbols).
   4. Annotates result text with NOT_FOUND markers for hallucinated claims.
 
 No LLM call. Runs in <10ms. Designed for integration into agent_loop.py
 after synthesis steps to surface false claims before they propagate.
 
 Usage:
-    from claim_verifier import verify_file_claims, verify_all_claims, annotate_result
-    report = verify_all_claims(result_text, project_root=Path("."))
-    if report.has_hallucinations:
-        print("Not found:", report.not_found_files, report.not_found_symbols)
+    from claim_verifier import verify_file_claims, verify_symbol_claims, annotate_result
+    file_report = verify_file_claims(result_text, project_root=Path("."))
+    symbol_report = verify_symbol_claims(result_text, project_root=Path("."))
+    if file_report.has_hallucinations or symbol_report.has_hallucinations:
+        print("Not found:", file_report.not_found, symbol_report.not_found)
 """
 
 from __future__ import annotations
@@ -81,35 +81,6 @@ class SymbolReport:
         if self.not_found:
             parts.append(f"{len(self.not_found)} symbol(s) NOT FOUND: {', '.join(self.not_found[:3])}")
         return "; ".join(parts) if parts else "no symbol claims found"
-
-
-@dataclass
-class CompoundClaimReport:
-    """Combined file + symbol claim verification result."""
-    file_report: ClaimReport
-    symbol_report: SymbolReport
-
-    @property
-    def has_hallucinations(self) -> bool:
-        return self.file_report.has_hallucinations or self.symbol_report.has_hallucinations
-
-    @property
-    def not_found_files(self) -> List[str]:
-        return self.file_report.not_found
-
-    @property
-    def not_found_symbols(self) -> List[str]:
-        return self.symbol_report.not_found
-
-    def summary(self) -> str:
-        parts = []
-        f = self.file_report.summary()
-        s = self.symbol_report.summary()
-        if f and f != "no file claims found":
-            parts.append(f"files: {f}")
-        if s and s != "no symbol claims found":
-            parts.append(f"symbols: {s}")
-        return " | ".join(parts) if parts else "no claims found"
 
 
 # ---------------------------------------------------------------------------
@@ -282,19 +253,6 @@ def verify_symbol_claims(
     verified = [s for s in claims if s in index]
     not_found = [s for s in claims if s not in index]
     return SymbolReport(raw_claims=claims, verified=verified, not_found=not_found)
-
-
-def verify_all_claims(
-    text: str,
-    project_root: Optional[Path] = None,
-) -> CompoundClaimReport:
-    """Run both file-path and symbol verification on a text block.
-
-    Returns a CompoundClaimReport combining both report types.
-    """
-    file_report = verify_file_claims(text, project_root=project_root)
-    symbol_report = verify_symbol_claims(text, project_root=project_root)
-    return CompoundClaimReport(file_report=file_report, symbol_report=symbol_report)
 
 
 def verify_file_claims(

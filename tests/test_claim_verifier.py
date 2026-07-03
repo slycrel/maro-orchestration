@@ -15,9 +15,7 @@ from claim_verifier import (
     ClaimReport,
     extract_symbol_claims,
     verify_symbol_claims,
-    verify_all_claims,
     SymbolReport,
-    CompoundClaimReport,
 )
 
 
@@ -353,48 +351,6 @@ class TestVerifySymbolClaims:
             project_root=tmp_path,
         )
         assert "custom_function_xyz" in report.verified
-
-
-# ---------------------------------------------------------------------------
-# verify_all_claims / CompoundClaimReport
-# ---------------------------------------------------------------------------
-
-class TestVerifyAllClaims:
-    def test_returns_compound_report(self):
-        result = verify_all_claims("No claims here.", project_root=Path("."))
-        assert isinstance(result, CompoundClaimReport)
-        assert isinstance(result.file_report, ClaimReport)
-        assert isinstance(result.symbol_report, SymbolReport)
-
-    def test_no_hallucinations_when_all_clean(self, tmp_path):
-        src = tmp_path / "src"
-        src.mkdir()
-        (src / "util.py").write_text("def helper_function():\n    pass\n")
-        (tmp_path / "myfile.py").write_text("")
-        result = verify_all_claims(
-            "The `helper_function` was added to myfile.py.",
-            project_root=tmp_path,
-        )
-        assert result.file_report.verified  # myfile.py found
-        assert result.symbol_report.verified  # helper_function found
-        assert not result.has_hallucinations
-
-    def test_has_hallucinations_on_bad_file(self, tmp_path):
-        result = verify_all_claims(
-            "Updated ghostfile.py with new logic.",
-            project_root=tmp_path,
-        )
-        assert result.has_hallucinations
-        assert "ghostfile.py" in result.not_found_files
-
-    def test_has_hallucinations_on_bad_symbol(self, tmp_path):
-        (tmp_path / "src").mkdir()
-        result = verify_all_claims(
-            "The `nonexistent_banana_func` function was added.",
-            project_root=tmp_path,
-        )
-        assert result.has_hallucinations
-        assert "nonexistent_banana_func" in result.not_found_symbols
 
 
 # ---------------------------------------------------------------------------
