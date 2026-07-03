@@ -190,42 +190,6 @@ not scavenge from elsewhere on the filesystem.
 Not ambitious; the goal is "constraint to a folder isn't a bad option to
 have" not "build a sandboxing subsystem."
 
-### 2. Rate-limit recovery: no total-backoff cap + phantom Step -1
-
-- [ ] **Rate-limit recovery has no total-backoff cap; recovery path emits phantom `Step -1`.** Scope A/B run-06-control (2026-04-23, `~/.maro/experiments/scope-ab-2026-04-22/run-06-control/`) hit 6 rate-limit retries with exponential backoff (60→120→240→480→960→1800s = 61 min total wall-clock in backoff alone). Per-attempt cap is enforced; **total-backoff-wall-clock is not.** After step 20 finally completed, the recovery path fired with `recovery[NEEDS-REVIEW] risk=medium: Retry with smaller step scope or switch to API adapter` — and produced a `Step -1` marker that the main loop doesn't know how to handle. Run exited rc=1 with no closure verdict. Total runtime: 2h30m for 20 completed steps.
-
-  **Candidates:**
-  - ~~cap total backoff wall-clock at ~10 min; if exceeded, bail cleanly (soft-fail with "rate-limited, retry later" rather than another 30-min sleep)~~ **DONE 2026-06-24** — `llm.py` subprocess rate-limit loop now tracks cumulative sleep and bails before the next sleep would exceed `POE_CLAUDE_RATE_LIMIT_TOTAL_CAP` (default 600s). Soft-fails with a "bailed after Ns of backoff … retry later" RuntimeError. `=0` disables (falls back to retry-count). Tests in test_llm.py.
-  - ~~recovery path should trigger an actual replan (fewer steps, smaller scope) or adapter switch, not a phantom `Step -1` ordinal~~ **DONE 2026-07-01 (root cause was elsewhere)** — the phantom wasn't the recovery planner at all: `_run_parallel_batch` hardcoded `StepOutcome.index = -1` for every batch member (discarding the popped NEXT.md indices), and handle.py rendered `**Step {s.index}**`. Fixed: peer item indices threaded through the batch (`batch_item_indices`), done batch steps now `mark_item` in NEXT.md, and result assembly numbers by position (`**Step {pos}**`) since index -1 is legitimate for injected steps. Tests: test_parallel_batch_indices.py.
-  - while in rate-limit backoff, pause the cost meter or at least annotate "backoff-idle tokens=0" — run-06 showed $41 cost accumulating during 61 min of no real work (cost meter is probably accumulating during retries before the API call; worth auditing)
-
-  **Related:** `decomposition_too_broad` miscalibration (now archived). Both are recovery-layer bugs that only surface on long plans.
-
-### 3. Stream-json token visibility
-
-- [x] **Adapter switch + tool-call capture (shipped 2026-06-26).**
-  `ClaudeSubprocessAdapter` now invokes `claude -p --output-format stream-json
-  --verbose` and parses the NDJSON (`_parse_stream_json` in `llm.py`): the final
-  `{"type":"result"}` event carries the identical payload the old `json` format
-  produced (result handling unchanged), and the inner agent's REAL tool calls
-  are surfaced on `LLMResponse.tool_events` (name/input/output/is_error). This
-  closes the done≠achieved blind spot at the capture layer — the executor's
-  inner `claude -p` is genuinely agentic (runs Bash/Write/Read) and `json` mode
-  was discarding everything but its final narrated message. Verified live
-  against the real CLI (Bash call + real output captured). Also fixed a latent
-  regression: the old bare `"resets"` substring rate-limit match now
-  false-positives (every stream embeds `resetsAt`) → replaced with the
-  structured `rate_limit_event.status` signal. Per-step transcripts persist to
-  `{project_dir}/artifacts/step-N-transcript.json` and a compact handle rides
-  the Phase 62 artifacts seam so later steps discover real execution evidence
-  (per Jeremy 2026-06-26: "capture all the output and allow it to be
-  discoverable with the ancestry stuff").
-- [ ] **Remaining: live liveness signal.** Wire the per-line stream into
-  `/tmp/maro-current-step.log` so operators see live tokens instead of 0 bytes
-  until burst-at-end; each new line becomes the primary liveness signal, with
-  CPU-activity demoted to a fallback for non-streaming adapters. (The parsing is
-  now in place; this is the operator-visibility plumbing on top of it.)
-
 ### 4. `_is_complex_directive` threshold for NOW-lane misrouting
 
 - [ ] **NOW-lane runs produce no learning data and no artifact discipline** —
