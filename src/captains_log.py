@@ -48,14 +48,14 @@ ISLAND_CULLED = "ISLAND_CULLED"
 LESSON_RECORDED = "LESSON_RECORDED"
 LESSON_REINFORCED = "LESSON_REINFORCED"
 LESSON_DECAYED = "LESSON_DECAYED"
-LESSON_RECOVERED = "LESSON_RECOVERED"
+LESSON_RECOVERED = "LESSON_RECOVERED"  # reserved: Stage 2→3 lesson recovery, no emitter yet (BACKLOG #8)
 HYPOTHESIS_CREATED = "HYPOTHESIS_CREATED"
 HYPOTHESIS_PROMOTED = "HYPOTHESIS_PROMOTED"
 HYPOTHESIS_CONTRADICTED = "HYPOTHESIS_CONTRADICTED"
 STANDING_RULE_CONTRADICTED = "STANDING_RULE_CONTRADICTED"
 RULE_GRADUATED = "RULE_GRADUATED"
 RULE_DEMOTED = "RULE_DEMOTED"
-CANON_CANDIDATE = "CANON_CANDIDATE"
+CANON_CANDIDATE = "CANON_CANDIDATE"  # reserved: Stage 2→3 canon promotion, no emitter yet (BACKLOG #8)
 # Decay-by-invalidation v0 (2026-06-11): a contested standing rule was
 # re-derived against its contradiction evidence (knowledge_lens.refight_rule,
 # run from the evolver cycle). Context carries action (keep|revise|retire),
@@ -110,6 +110,7 @@ CLOSURE_VERDICT = "CLOSURE_VERDICT"  # per-check modality distribution + pass/ga
 CLAIM_PROBED = "CLAIM_PROBED"  # adversarial-review grounding: per-claim probe outcome
 CLAIM_VERIFIER_OUTCOME = "CLAIM_VERIFIER_OUTCOME"  # per-step: file/symbol claim verification outcome + downstream action
 FABRICATION_DETECTED = "FABRICATION_DETECTED"  # per-step: write-claim with zero filesystem evidence (done≠achieved ground-truth)
+SCAVENGE_DETECTED = "SCAVENGE_DETECTED"  # per-step: worker touched files outside the fence (project dir + workspace) — contamination visibility, diagnostic only
 
 # Run transparency: loop lifecycle + quality-gate decisions
 LOOP_CREATED = "LOOP_CREATED"  # every loop spawn — reason, parent_loop_id, slug, max_steps
@@ -164,7 +165,7 @@ EVENT_TYPES = {
     AUTO_RECOVERY, DIAGNOSIS, INPUT_MISMATCH,
     DECISION_RECORDED, METACOGNITIVE_DECISION,
     SCOPE_GENERATED, SCOPE_PARSE_FAILED, SCOPE_SKIPPED, CLOSURE_VERDICT, CLAIM_PROBED,
-    CLAIM_VERIFIER_OUTCOME, FABRICATION_DETECTED,
+    CLAIM_VERIFIER_OUTCOME, FABRICATION_DETECTED, SCAVENGE_DETECTED,
     LOOP_CREATED, QUALITY_GATE_VERDICT, STEP_TOO_BROAD,
     RECALL_PERFORMED, RECALL_GUARD_TRIPPED,
     NAVIGATOR_DECIDED, NAVIGATOR_ACTED,

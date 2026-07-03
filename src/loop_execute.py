@@ -574,6 +574,43 @@ def _execute_main_loop(
         )
         step_elapsed = int((time.monotonic() - step_start) * 1000)
 
+        # Scavenging diagnostic (BACKLOG #1): flag out-of-fence file access from
+        # the real tool transcript. Visibility only — never changes step status.
+        try:
+            from config import get as _sc_cfg_get
+            if bool(_sc_cfg_get("validate.scavenge_detect", True)) and outcome.get("tool_events"):
+                from artifact_check import detect_out_of_fence_access as _sc_detect
+                from config import workspace_root as _sc_ws_root
+                _sc_report = _sc_detect(
+                    outcome.get("tool_events"),
+                    [_proj_artifact_dir, str(_sc_ws_root())],
+                )
+                if _sc_report.flagged:
+                    log.warning(
+                        "SCAVENGE step=%d reads=%d writes=%d%s",
+                        step_idx, len(_sc_report.reads), len(_sc_report.writes),
+                        " (truncated)" if _sc_report.truncated else "",
+                    )
+                    from captains_log import log_event as _sc_log_event, SCAVENGE_DETECTED
+                    _sc_log_event(
+                        SCAVENGE_DETECTED,
+                        subject=f"step {step_idx}",
+                        summary=(
+                            f"worker touched {len(_sc_report.reads)} path(s) outside the fence"
+                            + (f", wrote {len(_sc_report.writes)}" if _sc_report.writes else "")
+                        ),
+                        context={
+                            "step_text": step_text[:200],
+                            "reads": _sc_report.reads,
+                            "writes": _sc_report.writes,
+                            "truncated": _sc_report.truncated,
+                            "fence_project_dir": _proj_artifact_dir,
+                        },
+                        loop_id=getattr(ctx, "loop_id", "") or None,
+                    )
+        except Exception:
+            pass
+
         total_tokens_in += outcome.get("tokens_in", 0)
         total_tokens_out += outcome.get("tokens_out", 0)
         total_cache_read += outcome.get("cache_read_tokens", 0)

@@ -176,9 +176,16 @@ not scavenge from elsewhere on the filesystem.
   (b) orchestrator workspace only (soft fence — honor convention, no
   enforcement), (c) full machine (current default). Short doc in
   `docs/` noting when to use which and what each protects against.
-- [ ] **Diagnostic: detect scavenging.** Captain's log event when a worker
-  reads a file outside the project workspace root. Cheap instrumentation,
-  makes contamination visible.
+- [x] **Diagnostic: detect scavenging.** ~~Captain's log event when a worker
+  reads a file outside the project workspace root.~~ **DONE 2026-07-03:**
+  `artifact_check.detect_out_of_fence_access` scans each step's REAL tool
+  transcript (stream-json tool_events) for absolute paths outside the fence
+  (project dir + workspace) — structured tools by path input, Bash by
+  command-string scan with system prefixes filtered, deduped + capped at 20.
+  Emits `SCAVENGE_DETECTED` (loop_execute, gate `validate.scavenge_detect`
+  default on, never blocks). Reads and writes flagged separately — an
+  out-of-fence *write* in the transcript is exactly the tier-a evidence the
+  hard fence needs; watch these rows to size that work.
 
 Not ambitious; the goal is "constraint to a folder isn't a bad option to
 have" not "build a sandboxing subsystem."
@@ -255,24 +262,6 @@ have" not "build a sandboxing subsystem."
 - [ ] **Extend the ladder to the post-loop quality gate.** Same local-first pattern
   for `quality_gate.run_quality_gate` / `run_llm_council` (3-persona trio) escalation,
   reusing the `WEAK_ESCALATE` decision state. (verify_step done; quality_gate pending.)
-
-### 8. Captain's-log event-type registry integrity
-
-Surfaced by the 2026-06-24 inventory that produced `docs/CAPTAINS_LOG_EVENTS.md`.
-Two drift classes, both cheap to fix:
-
-- [x] **3 emitted-but-unregistered events.** ~~`EVOLVER_REVERTED` (evolver.py:664),
-  `EVOLVER_VERIFY` (evolver.py:2072), `PLAYBOOK_UPDATED` (playbook.py:235) fire in
-  production via string literals not in `captains_log.EVENT_TYPES`.~~ **DONE
-  2026-06-24:** added the 3 constants + registered them in `EVENT_TYPES`, switched
-  emitters to the constants, bumped the count-guard test (49→52) + added a
-  membership test.
-- [ ] **3 defined-but-unemitted events.** `CANON_CANDIDATE`, `LESSON_RECOVERED`,
-  `SKILL_REWRITE` are in `EVENT_TYPES` but nothing emits them. `SKILL_REWRITE` is
-  worse — it's referenced by consumers (`recall.py:54`, `evolver.py:995`) yet never
-  produced (dead expectation). Either wire the emitter or remove the constant +
-  consumer references. (CANON_CANDIDATE / LESSON_RECOVERED map to the known Stage
-  2→3 crystallization gaps — may be intentionally-pending rather than dead.)
 
 ### 9. Local-validator measurement — token/cost delta report
 

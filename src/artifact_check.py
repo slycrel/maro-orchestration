@@ -456,3 +456,111 @@ def check_execution_claim(result_text: str, tool_events: Optional[List[dict]]) -
         return ArtifactVerdict(False, reason="execution claim consistent with transcript")
     except Exception:
         return ArtifactVerdict(False, reason="exec check error (fail-open)")
+
+
+# ---------------------------------------------------------------------------
+# Scavenging detector (BACKLOG #1 diagnostic) — out-of-fence file access from
+# the REAL tool transcript. Diagnostic only: nothing here changes step status.
+# The slycrel-go run-4 contamination (2026-04-17) came from a worker surveying
+# a stale clone elsewhere on disk instead of the workspace copy; this makes
+# that visible in the captain's log instead of silent.
+# ---------------------------------------------------------------------------
+
+_SCAVENGE_READ_TOOLS = frozenset({"Read", "Glob", "Grep", "NotebookRead"})
+_SCAVENGE_WRITE_TOOLS = frozenset({"Write", "Edit", "MultiEdit", "NotebookEdit"})
+# System prefixes a worker legitimately touches (interpreters, shells, libs) —
+# scanning Bash command strings would drown the signal without this filter.
+_SCAVENGE_SYSTEM_PREFIXES = (
+    "/usr/", "/bin/", "/sbin/", "/etc/", "/lib/", "/lib64/", "/opt/",
+    "/proc/", "/sys/", "/dev/", "/run/", "/var/", "/snap/", "/nix/",
+)
+_SCAVENGE_CAP = 20  # max flagged paths per step (dedup first)
+_ABS_PATH_RE = re.compile(r"(?<![\w.])/(?:[\w.@+-]+/)*[\w.@+-]+")
+
+
+@dataclass
+class ScavengeReport:
+    """Out-of-fence file access detected in one step's tool transcript."""
+    reads: List[dict] = field(default_factory=list)   # {"path", "tool"}
+    writes: List[dict] = field(default_factory=list)  # {"path", "tool"}
+    truncated: bool = False
+
+    @property
+    def flagged(self) -> bool:
+        return bool(self.reads or self.writes)
+
+
+def _in_fence(path: str, fence_roots: List[str]) -> bool:
+    try:
+        p = os.path.realpath(path)
+    except Exception:
+        return True  # unresolvable → don't flag
+    for root in fence_roots:
+        if not root:
+            continue
+        try:
+            r = os.path.realpath(root)
+        except Exception:
+            continue
+        if p == r or p.startswith(r + os.sep):
+            return True
+    return False
+
+
+def _is_system_path(path: str) -> bool:
+    return path.startswith(_SCAVENGE_SYSTEM_PREFIXES)
+
+
+def detect_out_of_fence_access(
+    tool_events: Optional[List[dict]],
+    fence_roots: List[str],
+) -> ScavengeReport:
+    """Scan a step's real tool transcript for absolute-path file access outside
+    the fence (project dir + canonical workspace).
+
+    Only ABSOLUTE paths are considered: since the cwd fence (2026-06-26 →
+    2026-07-03) every relative access lands inside the fence by construction.
+    Structured tools (Read/Write/Edit/Glob/Grep) are matched on their path
+    input; Bash commands get a best-effort regex scan of the command string
+    with system prefixes filtered (heuristic — recorded with tool="Bash" so
+    consumers can weigh it accordingly). Never raises; fails to an empty
+    report.
+    """
+    report = ScavengeReport()
+    try:
+        if not tool_events:
+            return report
+        seen: set = set()
+
+        def _flag(path: str, tool: str, bucket: List[dict]):
+            if len(seen) >= _SCAVENGE_CAP:
+                report.truncated = True
+                return
+            key = (path, tool)
+            if key in seen:
+                return
+            seen.add(key)
+            bucket.append({"path": path, "tool": tool})
+
+        for te in tool_events:
+            if not isinstance(te, dict):
+                continue
+            name = str(te.get("name", ""))
+            inp = te.get("input") or {}
+            if not isinstance(inp, dict):
+                continue
+            if name in _SCAVENGE_READ_TOOLS or name in _SCAVENGE_WRITE_TOOLS:
+                raw = str(inp.get("file_path") or inp.get("path") or inp.get("notebook_path") or "")
+                if raw and os.path.isabs(raw) and not _is_system_path(raw) \
+                        and not _in_fence(raw, fence_roots):
+                    bucket = report.writes if name in _SCAVENGE_WRITE_TOOLS else report.reads
+                    _flag(raw, name, bucket)
+            elif name == "Bash":
+                cmd = str(inp.get("command", ""))
+                for m in _ABS_PATH_RE.findall(cmd)[:50]:
+                    if _is_system_path(m) or _in_fence(m, fence_roots):
+                        continue
+                    _flag(m, "Bash", report.reads)
+        return report
+    except Exception:
+        return ScavengeReport()

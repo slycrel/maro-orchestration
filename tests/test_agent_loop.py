@@ -3392,3 +3392,98 @@ def test_loop_projectless_run_still_fences_cwd(monkeypatch, tmp_path):
     assert bound, "ambient cwd must be bound even without a project"
     assert _goal_to_slug("summarize the incident timeline") in bound
     assert Path(bound).is_dir()
+
+
+def test_run_agent_loop_emits_scavenge_event(monkeypatch, tmp_path):
+    """Out-of-fence file access in the real tool transcript emits
+    SCAVENGE_DETECTED (diagnostic only — the step is NOT blocked)."""
+    monkeypatch.setenv("MARO_ORCH_ROOT", str(tmp_path))
+    import agent_loop as al
+    import loop_execute
+    import captains_log
+    monkeypatch.setattr(loop_execute, "_local_auto_ralph_enabled", lambda: False)
+
+    # Must be outside BOTH the project dir and the conftest workspace
+    # (MARO_WORKSPACE=tmp_path), and not a filtered system prefix.
+    stray = "/home/nonexistent-stale-clone/main.go"
+    events_seen = []
+    _orig_log_event = captains_log.log_event
+
+    def _capture(event_type, subject, summary, **kw):
+        events_seen.append((event_type, subject, summary, kw))
+        return _orig_log_event(event_type, subject, summary, **kw)
+
+    monkeypatch.setattr(captains_log, "log_event", _capture)
+
+    class _ScavAdapter:
+        model_key = "test"
+
+        def complete(self, messages, **kwargs):
+            from llm import LLMResponse, ToolCall
+            return LLMResponse(
+                content="",
+                tool_calls=[ToolCall(name="complete_step", arguments={
+                    "result": "Surveyed the existing implementation.",
+                    "summary": "surveyed",
+                })],
+                input_tokens=1, output_tokens=1,
+                tool_events=[{"name": "Read", "input": {"file_path": stray},
+                              "output": "package main", "is_error": False}],
+            )
+
+    result = al.run_agent_loop(
+        "survey the project",
+        adapter=_ScavAdapter(),
+        preset_steps=["Survey the existing implementation"],
+        max_steps=1,
+        max_iterations=2,
+    )
+    scav = [e for e in events_seen if e[0] == "SCAVENGE_DETECTED"]
+    assert scav, f"expected SCAVENGE_DETECTED, saw {[e[0] for e in events_seen]}"
+    ctx = scav[0][3].get("context") or {}
+    assert any(r["path"] == stray for r in ctx.get("reads", []))
+    # Diagnostic only: the step must not be blocked by scavenging.
+    assert not any(s.status == "blocked" for s in result.steps)
+
+
+def test_run_agent_loop_no_scavenge_event_for_in_fence_access(monkeypatch, tmp_path):
+    """Reads inside the project dir / workspace do not emit SCAVENGE_DETECTED."""
+    monkeypatch.setenv("MARO_ORCH_ROOT", str(tmp_path))
+    import agent_loop as al
+    import loop_execute
+    import captains_log
+    monkeypatch.setattr(loop_execute, "_local_auto_ralph_enabled", lambda: False)
+
+    events_seen = []
+    monkeypatch.setattr(
+        captains_log, "log_event",
+        lambda event_type, subject, summary, **kw: events_seen.append(event_type) or {},
+    )
+
+    slug = al._goal_to_slug("survey in fence")
+    proj_file = str(tmp_path / "projects" / slug / "notes.md")
+
+    class _InFenceAdapter:
+        model_key = "test"
+
+        def complete(self, messages, **kwargs):
+            from llm import LLMResponse, ToolCall
+            return LLMResponse(
+                content="",
+                tool_calls=[ToolCall(name="complete_step", arguments={
+                    "result": "Read the project notes.",
+                    "summary": "read notes",
+                })],
+                input_tokens=1, output_tokens=1,
+                tool_events=[{"name": "Read", "input": {"file_path": proj_file},
+                              "output": "notes", "is_error": False}],
+            )
+
+    al.run_agent_loop(
+        "survey in fence",
+        adapter=_InFenceAdapter(),
+        preset_steps=["Read the project notes"],
+        max_steps=1,
+        max_iterations=2,
+    )
+    assert "SCAVENGE_DETECTED" not in events_seen

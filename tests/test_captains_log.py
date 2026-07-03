@@ -235,7 +235,9 @@ class TestEventTypes:
         # consumers validating against EVENT_TYPES silently dropped them.
         # +1 (2026-06-26): FABRICATION_DETECTED — AGENDA build-loop done≠achieved
         # ground-truth guard (artifact_check).
-        assert len(EVENT_TYPES) == 53
+        # +1 (2026-07-03): SCAVENGE_DETECTED — out-of-fence file access
+        # diagnostic (BACKLOG #1, artifact_check.detect_out_of_fence_access).
+        assert len(EVENT_TYPES) == 54
 
     def test_previously_unregistered_events_in_set(self):
         from captains_log import EVOLVER_REVERTED, EVOLVER_VERIFY, PLAYBOOK_UPDATED

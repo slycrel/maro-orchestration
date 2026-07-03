@@ -322,3 +322,107 @@ class TestExecutionClaim:
         # Acknowledged failure suppresses the success signal.
         assert _claims_clean_success("tests passed but one failed") is False
         assert _claims_clean_success("did the analysis") is False
+
+
+class TestScavengeDetector:
+    """detect_out_of_fence_access — BACKLOG #1 contamination-visibility diagnostic."""
+
+    def _fence(self, tmp_path):
+        proj = tmp_path / "ws" / "projects" / "demo"
+        proj.mkdir(parents=True)
+        ws = tmp_path / "ws"
+        return proj, ws
+
+    def test_empty_events_no_flag(self, tmp_path):
+        from artifact_check import detect_out_of_fence_access
+        proj, ws = self._fence(tmp_path)
+        report = detect_out_of_fence_access([], [str(proj), str(ws)])
+        assert not report.flagged
+
+    def test_in_fence_read_not_flagged(self, tmp_path):
+        from artifact_check import detect_out_of_fence_access
+        proj, ws = self._fence(tmp_path)
+        events = [{"name": "Read", "input": {"file_path": str(proj / "notes.md")}}]
+        report = detect_out_of_fence_access(events, [str(proj), str(ws)])
+        assert not report.flagged
+
+    def test_out_of_fence_read_flagged(self, tmp_path):
+        from artifact_check import detect_out_of_fence_access
+        proj, ws = self._fence(tmp_path)
+        stray = tmp_path / "elsewhere" / "stale-clone" / "main.go"
+        events = [{"name": "Read", "input": {"file_path": str(stray)}}]
+        report = detect_out_of_fence_access(events, [str(proj), str(ws)])
+        assert report.flagged
+        assert report.reads == [{"path": str(stray), "tool": "Read"}]
+        assert report.writes == []
+
+    def test_out_of_fence_write_flagged_separately(self, tmp_path):
+        from artifact_check import detect_out_of_fence_access
+        proj, ws = self._fence(tmp_path)
+        stray = tmp_path / "repo" / "leaked.md"
+        events = [{"name": "Write", "input": {"file_path": str(stray)}}]
+        report = detect_out_of_fence_access(events, [str(proj), str(ws)])
+        assert report.writes == [{"path": str(stray), "tool": "Write"}]
+        assert report.reads == []
+
+    def test_relative_paths_ignored(self, tmp_path):
+        from artifact_check import detect_out_of_fence_access
+        proj, ws = self._fence(tmp_path)
+        events = [{"name": "Read", "input": {"file_path": "notes.md"}}]
+        report = detect_out_of_fence_access(events, [str(proj), str(ws)])
+        assert not report.flagged
+
+    def test_system_paths_ignored(self, tmp_path):
+        from artifact_check import detect_out_of_fence_access
+        proj, ws = self._fence(tmp_path)
+        events = [
+            {"name": "Read", "input": {"file_path": "/etc/hosts"}},
+            {"name": "Bash", "input": {"command": "/usr/bin/python3 run.py"}},
+        ]
+        report = detect_out_of_fence_access(events, [str(proj), str(ws)])
+        assert not report.flagged
+
+    def test_bash_command_paths_scanned(self, tmp_path):
+        from artifact_check import detect_out_of_fence_access
+        proj, ws = self._fence(tmp_path)
+        stray = tmp_path / "other-project" / "config.yml"
+        events = [{"name": "Bash", "input": {"command": f"cat {stray}"}}]
+        report = detect_out_of_fence_access(events, [str(proj), str(ws)])
+        assert report.flagged
+        assert report.reads[0]["tool"] == "Bash"
+        assert report.reads[0]["path"] == str(stray)
+
+    def test_bash_in_fence_paths_not_flagged(self, tmp_path):
+        from artifact_check import detect_out_of_fence_access
+        proj, ws = self._fence(tmp_path)
+        events = [{"name": "Bash", "input": {"command": f"ls {proj}/artifacts"}}]
+        report = detect_out_of_fence_access(events, [str(proj), str(ws)])
+        assert not report.flagged
+
+    def test_dedup_and_cap(self, tmp_path):
+        from artifact_check import detect_out_of_fence_access, _SCAVENGE_CAP
+        proj, ws = self._fence(tmp_path)
+        dup = str(tmp_path / "x" / "same.txt")
+        events = [{"name": "Read", "input": {"file_path": dup}} for _ in range(5)]
+        events += [
+            {"name": "Read", "input": {"file_path": str(tmp_path / "x" / f"f{i}.txt")}}
+            for i in range(_SCAVENGE_CAP + 10)
+        ]
+        report = detect_out_of_fence_access(events, [str(proj), str(ws)])
+        assert len(report.reads) == _SCAVENGE_CAP
+        assert report.truncated
+        assert sum(1 for r in report.reads if r["path"] == dup) == 1
+
+    def test_never_raises_on_garbage(self, tmp_path):
+        from artifact_check import detect_out_of_fence_access
+        proj, ws = self._fence(tmp_path)
+        events = [None, {"name": "Read", "input": "not-a-dict"}, {"input": {}}, 42]
+        report = detect_out_of_fence_access(events, [str(proj), str(ws)])
+        assert not report.flagged
+
+    def test_empty_fence_roots_skipped(self, tmp_path):
+        from artifact_check import detect_out_of_fence_access
+        stray = str(tmp_path / "anywhere.txt")
+        events = [{"name": "Read", "input": {"file_path": stray}}]
+        report = detect_out_of_fence_access(events, ["", str(tmp_path / "ws")])
+        assert report.flagged

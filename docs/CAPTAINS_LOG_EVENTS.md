@@ -119,6 +119,13 @@ Written by `captains_log.log_event(...)`. Every entry has the four required fiel
 | `QUALITY_GATE_VERDICT` | quality_gate.py:364 | decision, verdict, confidence, confidence_threshold, escalate, reason, step_count | The post-loop quality gate decided PASS or ESCALATE — the most important escalation signal. |
 | `STEP_TOO_BROAD` | agent_loop.py:989 | step_index, elapsed_s, tokens, cap_elapsed_s, cap_tokens, project | A step exceeded the resource cap (≤120s / ≤200K tokens). Fires mid-loop so the warning is actionable before the loop finishes. |
 
+### Done≠achieved ground truth (per-step guards)
+
+| Event | Emitter(s) | `context` fields | When it fires |
+|-------|-----------|------------------|---------------|
+| `FABRICATION_DETECTED` | loop_execute.py (fabrication guard) | step_text, kind, claims, missing, changed_count | A done-claiming step contradicted filesystem/transcript ground truth (missing-artifact, inert-output, or execution-contradiction). The step is demoted to blocked. Added 2026-06-26. |
+| `SCAVENGE_DETECTED` | loop_execute.py (scavenge diagnostic) | step_text, reads, writes, truncated, fence_project_dir | The worker's real tool transcript touched absolute paths outside the fence (project dir + workspace). Diagnostic only — status unchanged. Structured tools matched on path input; Bash via command-string scan (system prefixes filtered), capped at 20 deduped paths. Gate: `validate.scavenge_detect` (default on). Added 2026-07-03 (BACKLOG #1). |
+
 ### Recall + dispatch guard (goal-brain)
 
 | Event | Emitter(s) | `context` fields | When it fires |
@@ -145,11 +152,14 @@ Written by `captains_log.log_event(...)`. Every entry has the four required fiel
 
 These are not bugs in running code, but contract drift worth tracking. They live in BACKLOG (#8 follow-up).
 
-### Defined in `EVENT_TYPES` but never emitted (3)
+### Defined in `EVENT_TYPES` but never emitted — RESOLVED 2026-07-03
 
-`CANON_CANDIDATE`, `LESSON_RECOVERED`, `SKILL_REWRITE`. These constants exist but no production code emits them. Either the feature was never wired (canon promotion / lesson recovery are known Stage 2→3 gaps per `docs/ARCHITECTURE_OVERVIEW.md` §3) or the emitter was removed. Don't assume these appear in real logs.
+Was: `CANON_CANDIDATE`, `LESSON_RECOVERED`, `SKILL_REWRITE`.
 
-Note `SKILL_REWRITE` is worse than merely unemitted: it is **referenced by consumers** (`recall.py:54` and `evolver.py:995` both list it in their event-of-interest sets) while nothing ever produces it — a dead expectation. The skill-rewrite path either never logs, or logs under a different event.
+- `SKILL_REWRITE` was a dead expectation — referenced by consumers (`recall.py` loop context, `evolver.py` learning-activity header) while nothing produced it. **Wired 2026-07-03:** `skill_lifecycle.rewrite_skill` success path now emits it (context: skill_id, failures_before, utility_score, new_description, steps_count). See the skill-lifecycle table above†.
+- `CANON_CANDIDATE` / `LESSON_RECOVERED` are **reserved, intentionally pending**: they name the Stage 2→3 crystallization pathways (canon promotion / lesson recovery) that have no automated implementation yet (`skills/arch-memory-knowledge.md` — “Stage 2→3 has no automated pathway”). No consumers reference them; annotated as reserved in `captains_log.py`. Don't assume these appear in real logs until that pathway ships.
+
+† `SKILL_REWRITE`: emitter `skill_lifecycle.py` (rewrite_skill), fires when a circuit-open skill is LLM-rewritten and placed on half_open probation.
 
 ### Emitted but NOT registered in `EVENT_TYPES` (3) — FIXED 2026-06-24
 
