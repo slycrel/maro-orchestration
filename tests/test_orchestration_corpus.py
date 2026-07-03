@@ -82,3 +82,131 @@ def test_claim_probe_outcomes_are_classified():
         if any(w in r.get("summary", "").lower() for w in ("validated", "dismissed", "unprobed", "unrunnable"))
     )
     assert classified >= len(recs) // 2, "expected most claim probes to carry an outcome word"
+
+
+# --- BACKLOG #0 "wire more slices into real tests" (2026-07-03) -------------
+# Each test below replays a deterministic decision formula against the real
+# recorded history — change the formula and the test goes red against every
+# run that ever exercised it (the quality-gate escalate test above is the
+# original worked example of this pattern).
+
+
+@pytest.mark.skipif(not CORPUS.exists(), reason="corpus not harvested")
+def test_step_too_broad_records_satisfy_breach_formula():
+    """loop_post_step._check_step_too_broad fires only when BOTH caps are
+    breached (elapsed AND tokens) on a done step. Every recorded event must
+    satisfy that conjunction against its own recorded caps.
+
+    Boundary note: the event stores elapsed_s = elapsed_ms // 1000, so a
+    breach at 120,001–120,999ms records as elapsed_s == cap_elapsed_s — the
+    seconds comparison must therefore be >= (3 real records sit exactly on
+    this floor-division boundary)."""
+    recs = _load("event_step_too_broad")
+    checked = 0
+    for r in recs:
+        c = r.get("context", {})
+        if not all(k in c for k in ("elapsed_s", "tokens", "cap_elapsed_s", "cap_tokens")):
+            continue
+        checked += 1
+        assert c["elapsed_s"] >= c["cap_elapsed_s"], f"elapsed under cap: {c}"
+        assert c["tokens"] > c["cap_tokens"], f"tokens under cap (formula is AND): {c}"
+    assert checked >= 50, "expected a substantial too-broad history"
+
+
+@pytest.mark.skipif(not CORPUS.exists(), reason="corpus not harvested")
+def test_metacognitive_heuristic_replays_recorded_decisions():
+    """The convergence-heuristic tail of loop_blocked._decide_blocked_step is
+    a pure function of (retries, converging, sibling_fail_rate, replan_count),
+    all four of which every heuristic-path decision records in its summary.
+    Replay the current rules (_RETRY_THRESHOLD=3, _SIBLING_THRESHOLD=0.5,
+    _REDECOMPOSE_THRESHOLD=2) against history; diagnosis-path decisions
+    ("diagnose_loop:") consult loop state the event doesn't carry, so they
+    are out of replay scope."""
+    import re
+    import loop_blocked as lb
+
+    recs = _load("event_metacognitive_decision")
+    pat = re.compile(
+        r"retries=(\d+), converging=(True|False), "
+        r"sibling_fail_rate=(\d+)%, replan_count=(\d+)")
+    checked = 0
+    for r in recs:
+        s = r.get("summary", "")
+        if "diagnose_loop" in s:
+            continue
+        m = pat.search(s)
+        if not m:
+            continue
+        retries, conv = int(m[1]), m[2] == "True"
+        sib, replan = int(m[3]) / 100, int(m[4])
+        if "sibling failure rate" in s:
+            ok = sib > lb._SIBLING_THRESHOLD and replan < lb._REDECOMPOSE_THRESHOLD
+        elif s.startswith("retry"):
+            ok = retries < lb._RETRY_THRESHOLD and conv
+        elif "re-decomposing step" in s:
+            ok = (not (retries < lb._RETRY_THRESHOLD and conv)
+                  and replan < lb._REDECOMPOSE_THRESHOLD)
+        else:
+            continue
+        checked += 1
+        assert ok, f"heuristic diverged from recorded decision: {s[:120]}"
+    assert checked >= 100, "expected a substantial heuristic-path history"
+
+
+@pytest.mark.skipif(not CORPUS.exists(), reason="corpus not harvested")
+def test_claim_verifier_outcome_action_pairing():
+    """CLAIM_VERIFIER_OUTCOME's outcome/action pairing is deterministic
+    (loop_post_step): hallucinations_annotated <=> some claim not found
+    <=> action annotated_and_continued; clean <=> action none."""
+    recs = _load("event_claim_verifier_outcome")
+    assert recs
+    for r in recs:
+        c = r.get("context", {})
+        if "outcome" not in c:
+            continue
+        halluc = bool(c.get("file_not_found") or c.get("symbol_not_found"))
+        expected_outcome = "hallucinations_annotated" if halluc else "clean"
+        expected_action = "annotated_and_continued" if halluc else "none"
+        assert c["outcome"] == expected_outcome, c
+        assert c.get("action") == expected_action, c
+
+
+@pytest.mark.skipif(not CORPUS.exists(), reason="corpus not harvested")
+def test_diagnosis_subjects_within_current_taxonomy():
+    """Every historic DIAGNOSIS subject must remain a valid class in
+    introspect.FAILURE_CLASSES — renaming or dropping a class that history
+    uses breaks downstream consumers (diagnosis consult in loop_blocked,
+    lesson mining) silently."""
+    import introspect
+
+    recs = _load("event_diagnosis")
+    assert recs
+    valid = set(introspect.FAILURE_CLASSES)
+    seen = {r.get("subject") for r in recs}
+    unknown = seen - valid
+    assert not unknown, f"historic diagnosis classes missing from taxonomy: {unknown}"
+    assert len(seen) >= 4, "expected diverse failure classes in history"
+
+
+@pytest.mark.skipif(not CORPUS.exists(), reason="corpus not harvested")
+def test_closure_verdicts_are_internally_consistent():
+    """CLOSURE_VERDICT sanity over history: checks_passed never exceeds
+    checks_run, and the check-contradiction predicate the restart gate
+    now keys on (checks_passed < checks_run, BACKLOG #5) is computable on
+    every record — history contains both contradicting and clean verdicts,
+    so the gate discriminates on real data."""
+    recs = _load("event_closure_verdict")
+    assert recs
+    contradicting = clean = 0
+    for r in recs:
+        c = r.get("context", {})
+        if "checks_run" not in c:
+            continue
+        assert 0 <= c["checks_passed"] <= c["checks_run"], c
+        assert isinstance(c.get("complete"), bool), c
+        if c["checks_passed"] < c["checks_run"]:
+            contradicting += 1
+        else:
+            clean += 1
+    assert contradicting and clean, (
+        "expected history to contain both contradicting and clean verdicts")

@@ -50,10 +50,14 @@ data is preserved, not deleted.
 - [ ] **Full raw archive (optional).** If/when `runs/`+`projects/` (~79M) get
   pruned, snapshot the full (non-thinned) slices somewhere durable first — they're
   only reproducible while the workspace exists.
-- [ ] **Wire more slices into real tests.** The corpus has rich unused signal:
-  `event_step_too_broad` (decompose quality), `event_diagnosis`/`event_metacognitive_decision`
-  (recovery), `event_closure_verdict`, `event_claim_verifier_outcome`. Each can
-  back a fixture-driven regression test the way quality_gate now does.
+- [x] **Wire more slices into real tests** — DONE 2026-07-03. Five replay
+  tests added to tests/test_orchestration_corpus.py: too-broad breach
+  conjunction (113 recs, floor-division boundary documented), metacognitive
+  convergence-heuristic tail replayed against 281 recorded decisions (0
+  mismatches; diagnosis-path out of scope — events don't carry loop state),
+  claim-verifier outcome/action pairing, diagnosis subjects pinned to the
+  current FAILURE_CLASSES taxonomy, closure-verdict internal consistency +
+  proof the BACKLOG #5 restart predicate discriminates on real history.
 
 ### 1. Bound worker writes to run-dir / workspace (artifacts leaking into repo root)
 
