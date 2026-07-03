@@ -252,6 +252,78 @@ context, at best it's a slight tweak and we fix forward."*
   hole: user tier `~/.maro/config.yml` was never isolated (session-17 overhaul
   covered only the workspace tier) — `MARO_USER_DIR` override + conftest.
 
+**Refactor plan arc, as of 2026-07-02 (`docs/REFACTOR_PLAN.md`, worktree
+`worktree-refactor-plan`, mainlined tier-by-tier):**
+- Arose from an architecture-review pass that found real bugs alongside dead
+  code and duplication; sequenced as tiers by risk (bugfixes → dead-code
+  deletion → mechanical consolidation → structural extraction → subpackage
+  reorg), each tier merged to `main` and pushed only after the full suite
+  passed on the merged tree.
+- **Tier 0 (bugfixes) — DONE**, commit `87de2e0`: fixed real defects surfaced
+  by the review (incl. `background.py`'s `timeout_seconds` being a silent
+  no-op despite `cli.py`'s real `--timeout` flag feeding it). Two flagged
+  items (quality_gate/passes.py adversarial-toggle bug, gateway.py's
+  ImportError/TimeoutError bug) turned out **moot** — Tier 1 deleted the
+  buggy code paths outright.
+- **Tier 1 (dead-code deletion) — DONE**, commit `b04962b`: ~9,575 lines
+  removed (vs. ~4,500 estimated) via 6 parallel forks per non-overlapping
+  cluster. Plan deviations found during execution, not before: `goal_map`'s
+  `find_conflicts` pair was live not redundant; `knowledge_lens.record_decision`
+  was half-wired not dead; `background.py`'s `timeout_seconds` was a live bug,
+  not dead code (became Tier 0 #14).
+- **Tier 2 (mechanical consolidations) — DONE**, commit `e0e33c0` → merged
+  `9c60ec0`: LLM-adapter base classes, TF-IDF ranking consolidation
+  (`hybrid_search.tfidf_rank`), a shared `jsonl_utils.read_jsonl_tail`
+  (13 call sites, standardizing on skip-malformed/never-truncate — generalizes
+  Tier 0 #3), a shared `telegram_notify()` helper (5 call sites), a shared
+  `listener_core.py` (slash-command parsing + allowlist checks for
+  telegram/slack listeners), and `director.py` importing `planner`'s
+  large-scope-review classifier instead of a locally drifted copy.
+  **Fork-reliability incident, now a standing protocol:** 2 of 6 parallel
+  forks reported detailed, specific, confident success (line numbers,
+  keyword diffs, test-pass counts) for edits that were never on disk in the
+  worktree — root cause found later (see Tier 3 note below): those forks
+  had written into the **main checkout** instead of the assigned worktree.
+  Caught only because every fork's claimed diff was independently
+  re-verified via `git diff --stat` against the pre-fork commit before
+  trusting it and building further on it. Standing protocol since: every
+  fork operating in a worktree must self-check `pwd`/`git rev-parse
+  --show-toplevel`/`git branch --show-current` before its first edit and
+  abort if it doesn't match the assigned worktree, and must include
+  verbatim `git diff --stat` proof of its own persisted changes in its
+  final report — the orchestrating session still independently re-verifies
+  every claim before merging.
+- **Tier 3 (structural extractions), partial — DONE**: pure-move
+  extractions shipped first (`director.py` → `closure_verify.py`, 801
+  lines, one caller; `handle.py` → `provenance.py` + `handle_queue.py`),
+  commit `a7910b9` → merged `0ee0b3f`. Then, after Jeremy's explicit
+  sign-off per item: `cli.py`'s 1,675-line if-chain converted to a
+  `{cmd: handler}` registry (structurally forecloses the Tier 0 #7
+  rename-drift bug class), and the two disagreeing `closure_verify.py`
+  probe-modality classifiers reconciled into one (`_classify_probe_modality`
+  survives; `_check_modality_from_command` retired — both were added the
+  same day, 2026-04-17, ~8h apart, independently, without the second
+  noticing the first existed) — commit `5592bac` → merged `ff71acb`.
+  **`agent_loop.py`'s proposed 10-file split (highest-value single item)
+  had NOT actually happened** despite Jeremy's memory of having done it —
+  verified against full git history (`git log --all`), no `loop_phases/`
+  dir or `loop_*.py` files have ever existed; the "monolith decomposition"
+  language (commits `963c2c2`..`895f04a`) was internal function-extraction
+  only, never a file split. Most likely conflated with the real
+  `memory.py` split (2026-04-10, 2,968→530 lines into `memory_ledger.py`/
+  `knowledge_web.py`/`knowledge_lens.py`) — same "decomposition" language,
+  different file, actually completed. **Approved 2026-07-02 to proceed**
+  as a staged, sequential extraction (not parallel forks racing the same
+  file), immediately following this GOAL_BRAIN update.
+  `evolver.py`'s 3-way split is agreed but sequenced *after*
+  `agent_loop.py`; BACKLOG #13 logs Jeremy's related read that its six
+  statistical scanners are "more theory than practical payoff" — evaluate
+  which survive `_verify_post_apply` once the split makes that measurable.
+  `security.py`/`injection_guard.py`'s two pattern corpora were reviewed
+  and confirmed **intentionally separate** (different threat models —
+  external-content scanning vs. persona/skill-ingestion scanning); no
+  merge planned unless the separation itself becomes irrelevant.
+
 **Execution quality, as of the session-40 audit (not yet re-measured post-fixes):**
 478 run dirs Apr 26–May 16; recent runs ~50% stuck / 30% error / 15% done. One
 stuck-class cause (non-convergent step auto-split) fixed in `3bd28cd`. Re-measure
@@ -555,10 +627,44 @@ Sample: the 2026-05-13..17 window of `~/.maro/workspace/runs/` (478 dirs total;
   (warn+proceed). Background/scheduled paths must never set the gate. This is the
   policy-layer guardrail the April-22 incident (revived stale goal installed cron
   + systemd) demanded. Reversible (env/config + the exemption). 23 tests.
+- **2026-07-02 (fork verification protocol)** — Any fork/subagent asked to
+  mutate files, when operating out of a git worktree, must self-check
+  `pwd`/`git rev-parse --show-toplevel`/`git branch --show-current` before
+  its first edit and abort on mismatch, and must include verbatim
+  `git diff --stat` proof of its own persisted changes in its final
+  report. Provoked by 2 of 6 Tier 2 refactor forks reporting detailed,
+  confident success for edits that were never on disk — they had written
+  into the main checkout instead of their assigned worktree. The
+  orchestrating session still independently re-verifies every fork's
+  claimed diff before trusting/merging it — the self-check doesn't replace
+  that, it just catches the failure mode earlier and cheaper.
+- **2026-07-02 (security pattern corpora — leave separate)** — Jeremy:
+  "agree, intentionally separate; only merge if it's irrelevant if they
+  are separated... but likely should stay the same." `security.py` (scans
+  external content before it hits an LLM prompt) and `injection_guard.py`
+  (scans persona/skill YAML before auto-apply) keep their own regex
+  corpora — different threat models, not drift.
+- **2026-07-02 (agent_loop.py split approved)** — Jeremy approved the
+  Tier 3 10-file split to proceed after confirming (via git-history
+  investigation) that it had never actually happened, despite his memory
+  of having done it — see Compiled truth. To run as a staged, sequential
+  extraction, not parallel forks on the same file, given the file's size
+  and centrality. `evolver.py`'s 3-way split is agreed but sequenced
+  after — "keeping that more modular would be good" — and paired with a
+  BACKLOG #13 follow-up to evaluate its scanners' real usefulness once
+  split makes that measurable.
 
 ## Threads (system-maintained — nothing leaves this list silently)
 
 Active:
+- **Refactor plan (`docs/REFACTOR_PLAN.md`)**: opened 2026-07-02 off an
+  architecture-review pass. Tiers 0–2 fully done and mainlined; Tier 3
+  partial (pure moves + the two Jeremy-approved items — see Compiled
+  truth). Remaining: `agent_loop.py`'s 10-file split (approved, about to
+  start, staged/sequential), `evolver.py`'s 3-way split (approved,
+  sequenced after `agent_loop.py`, paired with BACKLOG #13), Tier 4
+  (subpackage reorganization — not yet scoped in detail). Each tier
+  merges to `main` only after the full suite passes on the merged tree.
 - **Substrate trial (OpenClaw → Maro → Telegram)**: opened 2026-07-01, contract
   half shipped + live-verified same day (see Compiled truth). Remaining:
   unattended hardening (budget caps, Step -1 recovery), OpenClaw delegation
