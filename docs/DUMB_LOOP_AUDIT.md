@@ -1,11 +1,13 @@
 # Dumb-Loop Audit — pipeline decision-point inventory
 
-**Status: static half done 2026-06-11. Data half round 1 done 2026-06-21 —
-dispatch boundary only (the single live shadow point). Round 2 instrumentation
-wired 2026-06-23 — priority-1 point `_handle_blocked_step` now has a live
-navigator shadow tap (`navigator_shadow.shadow_blocked_step_live`), config-gated
-off; awaiting data. See "Data half — round 1" and "Round 2 — blocked-step
-instrumentation" below.**
+**Status: static half done 2026-06-11. Data half round 1 done 2026-06-21
+(dispatch boundary). Rounds 2–4 done 2026-06-23 → 2026-07-03 at the
+priority-1 blocked-step point (`navigator_shadow.shadow_blocked_step_live`,
+gate-windowed batches): 24 rows — doomed blocks 18/19 navigator-stop at 0.95,
+recoverable blocks 5/5 navigator-forward, zero false escalates. Cutover
+assessment written (Round 4 section); gate OFF between batches. Next data
+want: one recoverable-focused accrual batch to firm the false-escalate
+rate.**
 
 The navigator (`src/navigator.py`, shadow-only) defines six moves: extend /
 execute / fork / collate / close / escalate. The pipeline today makes the same
@@ -304,6 +306,64 @@ and consistent, but not a rate. The other recoverable classes (LLM-confusion
 retries, redecompose-recoveries) are unsampled. No blocked_step cutover yet —
 let organic data accrue across future deliberate batches; gate stays OFF
 between them (per-blocked-step model call = real spend).
+
+### Round 4 — mixed accrual batch (2026-07-03, 6 goals, 17 rows)
+
+Third gate window (overnight, post agent_loop split — the shadow tap verified
+intact in `loop_blocked.py:155` after the move). Batch designed to fix round
+3's yield problem: 2 doomed-but-dispatch-plausible goals (dead local HTTP
+endpoint; absent postgres) shaped to dodge both the MISSING_INPUT
+short-circuit (no file-not-found phrasings) and the live dispatch escalate
+gate, 3 block-prone recoverable (network cross-reference, malformed-JSON
+repair, ordering trap), 1 healthy control. **Yield: 17 blocked-step rows from
+4 of 6 goals** (~$1.33 total batch cost) — vs 2 rows from 12 goals in round 3.
+Doomed-but-plausible shapes are the yield fix: they block repeatedly instead
+of timing out.
+
+| goal | rows | navigator | heuristic | ground truth |
+|---|---|---|---|---|
+| dead endpoint :59999 | 12 | escalate(0.95) ×11, execute(0.85) ×1 early | extend ×8, fork ×4 | doomed; run ground ~50 min + closure-restart loop, $0.41, honest `done-not-achieved` |
+| absent postgres | 2 | escalate(0.95) ×2 | fork ×2 | doomed; honest `partial`, achieved=False, $0.23 |
+| news cross-ref | 2 | execute(0.78) ×1, **extend(0.85) ×1 — first exact-move agreement** | extend ×2 | recoverable transient; delivered, achieved=True |
+| JSON repair | 1 | execute(0.95) | extend | recoverable; delivered, `done-unverified` (closure checks didn't run — verdict correctly withheld) |
+| ordering trap, control | 0 | — | — | both clean `success`; no blocks |
+
+**Findings:**
+
+- **Waste, quantified per-incident:** on the dead-endpoint goal the navigator
+  reached escalate(0.95) on the *first* blocked-step decision, ~3 minutes in.
+  The heuristic ground retry/fork for ~50 more minutes across 12 recovery
+  decisions plus a closure-restart before landing at the same destination
+  (honest failure). Same verdict, ~$0.35 and ~50 minutes later. This is the
+  ~40-wasted-runs pressure-test prediction, now measured live end-to-end.
+- **No fabrication** — the recovery loop wrote an honest error-state
+  `metrics.json` (connection_refused, independently verified via `ss`) rather
+  than inventing metrics. The 06-23 fabrication class stays fixed; this run
+  is the positive control for it.
+- **False escalates: still zero.** All 3 recoverable-block rows drew forward
+  moves (execute/extend), including the first exact (extend, extend)
+  agreement. Cumulative across rounds 2–4: doomed blocks 18/19
+  navigator-stop (one early execute wobble at 0.85), recoverable blocks 5/5
+  navigator-forward. The asymmetry is exactly the shape a cutover wants.
+- **Calibration holds:** stop-moves fire at 0.95; forward moves at 0.78–0.95
+  with the wobble at 0.85. A 0.9 confidence floor (same as dispatch cutover)
+  would have passed 13/14 correct stops and blocked the one wobble.
+- **Second doomed class surfaced:** connection-refused/absent-service blocks
+  are invisible to the MISSING_INPUT guard (its signals are file-not-found
+  shaped). Deliberately **not** proposing a signal-list widening — that's
+  another keyword taxonomy, and this data is the argument for handling the
+  class by inference instead: the navigator already stops it at 0.95.
+
+**Cutover assessment (for Jeremy, not enacted):** blocked-step escalate now
+has evidence on both sides of the question round 2 posed — it stops doomed
+grinds (18/19 at 0.95) and does not stop healthy work (0 false escalates in
+5 recoverable rows, 1 exact agreement). Evidence profile mirrors the dispatch
+escalate cutover at its enablement (which shipped with escalate-only,
+confidence-floored, opt-in `act_moves`). If enacted, same shape: navigator
+may *escalate* a blocked step (defer to human) at ≥0.9, never fork/close.
+Recoverable-class coverage is still thin (n=5, two classes) — one more
+accrual batch focused on recoverable shapes would firm the false-escalate
+rate before flipping anything. Gate restored OFF per standing rationale.
 
 ## Known gaps (carried to BACKLOG when actionable)
 

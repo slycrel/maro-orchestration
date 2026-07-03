@@ -109,6 +109,33 @@ data is preserved, not deleted.
   verifier that can see ground truth stops fabricating it). Tier-a hard fence
   still open.
 
+  **3rd repro 2026-07-03 — fence hole: `if project:` guards leave
+  no-project-yet iterations fully unfenced.** Post-fence leaks confirmed by
+  mtime: repo-root `artifacts/` strays from 2026-07-02 burn-in goals
+  (`coding-notes-digest.md` 10:41, `substrate-explained.md` 10:10,
+  `comm-examples.md` 11:03 — the last is the NOW-misroute goal, which DID
+  write its file, to launch cwd; that's why closure found nothing) and from
+  the 2026-07-03 blocked-step batch (goal "Create artifacts/raw.json… repair
+  system": its **first, blocked iteration** wrote `raw.json` 03:46:07,
+  `repair.py` 03:46:13, `clean.json` 03:46:15 to launch-cwd relative paths;
+  the post-block retry landed everything correctly in
+  `projects/implement-a-json-repair-system/`). Mechanism: every fence site is
+  conditional on a truthy project — `agent_loop.py` sets the ambient cwd only
+  `if project:`, `loop_execute.py` leaves `_proj_artifact_dir=""` without one,
+  so `step_exec` gets `project_dir=""` and skips the `Popen(cwd=…)` bind. A
+  run that enters the loop before its project identity is established
+  executes unfenced; once blocked/retried (project by then assigned) it's
+  fenced — matching the strays-only-from-early-iterations pattern. Two
+  project dirs per goal (`create-artifactsrawjson-containing-exactly` empty
+  stub vs `implement-a-json-repair-system` real) point at the goal-slug vs
+  plan-derived-name split-brain (see #-1) as the reason project is empty at
+  entry. **Fix direction:** never run an AGENDA worker step with inherited
+  launch cwd — bind the ambient cwd unconditionally at loop entry (fall back
+  to goal-slug project dir, or the run dir, when project is unset); NOW lane
+  stays exempt by design. Evidence preserved:
+  `scratchpad/cwd-leak-evidence/` (session dbbb5f5c) + repo `artifacts/`
+  strays left in place (gitignored).
+
 **Bounded workspace / sandboxing (discovered 2026-04-17)**
 
 Run 4 of slycrel-go blind test was contaminated by stale local clones. Four
