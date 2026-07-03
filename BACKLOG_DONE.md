@@ -8,6 +8,27 @@ Last split: 2026-04-16 (session 34).
 
 ---
 
+### `_is_complex_directive` threshold for NOW-lane misrouting — DONE (2026-07-03)
+
+- [x] **NOW-lane runs produce no learning data and no artifact discipline** —
+  the run_health build goal (e1b9f95e-humble-lantern) was classified NOW, which
+  (a) skips `reflect_and_record` entirely — reflection only fires in the agenda
+  loop's finalize (agent_loop.py:3515), nothing on the NOW path calls it, so the
+  run finalized `done` with no outcome/lesson record — and (b) writes relative
+  to cwd (the workspace-boundary repro below is the same run). **(a) fixed
+  2026-06-11:** NOW path records a slim outcome (record_outcome, task_type
+  "now", no LLM lesson extraction — quick-answer lane must not pay a
+  reflection call per request). **(b) fixed 2026-07-01** (cwd fence, 5782af2).
+  **Thresholds fixed 2026-07-03:** re-testing showed the REAL e1b9f95e goal
+  text (36 words, 2 sentences) IS caught by today's heuristic — the residual
+  hole was short compound imperatives ("write a script and run it and save
+  the outputs", 10 words, 1 sentence). Added a coordinated-verb-heads signal:
+  an action verb at message start or right after and/then/also/plus counts as
+  a head; ≥2 heads = complex. Noun coordination ("compare apples and
+  oranges", "poem about cats and dogs") stays NOW — pinned in tests along
+  with the original goal text as a regression fixture.
+
+
 ### Rate-limit recovery: total-backoff cap + phantom Step -1 + cost-meter audit — DONE (2026-07-03)
 
 - [x] **Rate-limit recovery has no total-backoff cap; recovery path emits phantom `Step -1`.** (All three candidates below resolved; section closed 2026-07-03.) Scope A/B run-06-control (2026-04-23, `~/.maro/experiments/scope-ab-2026-04-22/run-06-control/`) hit 6 rate-limit retries with exponential backoff (60→120→240→480→960→1800s = 61 min total wall-clock in backoff alone). Per-attempt cap is enforced; **total-backoff-wall-clock is not.** After step 20 finally completed, the recovery path fired with `recovery[NEEDS-REVIEW] risk=medium: Retry with smaller step scope or switch to API adapter` — and produced a `Step -1` marker that the main loop doesn't know how to handle. Run exited rc=1 with no closure verdict. Total runtime: 2h30m for 20 completed steps.

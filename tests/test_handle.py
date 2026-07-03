@@ -1252,6 +1252,30 @@ class TestIsComplexDirective:
         assert not _is_complex_directive("write a haiku")
         assert not _is_complex_directive("summarize this")
 
+    def test_coordinated_verb_heads_are_complex(self):
+        """BACKLOG #4 residual: short compound imperatives are pipelines,
+        not NOW requests, even when each verb alone would stay NOW."""
+        from handle import _is_complex_directive
+        assert _is_complex_directive("write a script and run it and save the outputs")
+        assert _is_complex_directive("create the config and test it")
+        assert _is_complex_directive("run the suite and report failures")
+
+    def test_coordinated_nouns_not_complex(self):
+        """Coordination of NOUNS must not trip the verb-head signal."""
+        from handle import _is_complex_directive
+        assert not _is_complex_directive("compare apples and oranges")
+        assert not _is_complex_directive("write a poem about cats and dogs")
+        assert not _is_complex_directive("summarize the pros and cons")
+
+    def test_run_health_goal_regression(self):
+        """The e1b9f95e misrouted goal (2026-06-11) must classify complex."""
+        from handle import _is_complex_directive
+        real = ("Write a python script as an artifact file named run_health.py "
+                "that, when run, scans ~/.poe/workspace/runs/*/metadata.json and "
+                "prints counts of runs by status (done/stuck/error/none). Include "
+                "example output from actually running it once in a second artifact file.")
+        assert _is_complex_directive(real)
+
 
 class TestNowDirectorEscalation:
     """Tests for NOW→agenda escalation when now_lane.escalate_to_director is enabled."""

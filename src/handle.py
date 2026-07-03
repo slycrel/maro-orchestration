@@ -211,6 +211,8 @@ def _is_complex_directive(message: str) -> bool:
       - Multi-step sequencing language
       - Action verbs that imply building/researching/designing
       - Multiple sentences (compound task)
+      - Two or more coordinated action-verb heads ("write X and run it and
+        save Y" — a pipeline, even when each verb alone would stay NOW)
     """
     import re
     msg_lower = message.lower().strip()
@@ -241,6 +243,27 @@ def _is_complex_directive(message: str) -> bool:
     # Multiple sentences (compound task)
     sentences = [s.strip() for s in re.split(r'[.!?]', message) if s.strip() and len(s.strip()) > 10]
     if len(sentences) >= 2:
+        return True
+
+    # Coordinated action-verb heads: "write a script and run it and save the
+    # outputs" is a multi-step pipeline even though "write" alone stays NOW
+    # (short creative requests). A head is an action verb at the start of the
+    # message or immediately after a coordinator (and/then/also/plus). Two or
+    # more heads = compound directive. (BACKLOG #4 residual, 2026-07-03: the
+    # long form of the run_health goal was already caught by word count; the
+    # short compound-imperative form was the remaining hole.)
+    _ACTION_HEADS = _COMPLEX_VERBS | {
+        "write", "create", "run", "execute", "save", "generate", "test",
+        "check", "fix", "update", "add", "install", "verify", "measure",
+        "document", "commit", "push", "report", "summarize", "compare",
+    }
+    heads = 0
+    if words and words[0].strip(",.;:") in _ACTION_HEADS:
+        heads += 1
+    heads += len(re.findall(
+        r"\b(?:and|then|also|plus)\s+(?:" + "|".join(sorted(_ACTION_HEADS)) + r")\b",
+        msg_lower))
+    if heads >= 2:
         return True
 
     return False

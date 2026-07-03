@@ -190,20 +190,6 @@ not scavenge from elsewhere on the filesystem.
 Not ambitious; the goal is "constraint to a folder isn't a bad option to
 have" not "build a sandboxing subsystem."
 
-### 4. `_is_complex_directive` threshold for NOW-lane misrouting
-
-- [ ] **NOW-lane runs produce no learning data and no artifact discipline** —
-  the run_health build goal (e1b9f95e-humble-lantern) was classified NOW, which
-  (a) skips `reflect_and_record` entirely — reflection only fires in the agenda
-  loop's finalize (agent_loop.py:3515), nothing on the NOW path calls it, so the
-  run finalized `done` with no outcome/lesson record — and (b) writes relative
-  to cwd (the workspace-boundary repro below is the same run). **(a) fixed
-  2026-06-11:** NOW path records a slim outcome (record_outcome, task_type
-  "now", no LLM lesson extraction — quick-answer lane must not pay a
-  reflection call per request). Still open: `_is_complex_directive`
-  thresholds — a multi-step "write a script AND run it AND save outputs" goal
-  is not a NOW request (heuristic-tested: it does NOT catch that goal today).
-
 ### 5. Closure restart short-circuit (artifact exists + verifier passed)
 
 - [ ] **Closure restart doubled a trivial run** — the standing-rule report goal
