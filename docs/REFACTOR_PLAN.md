@@ -31,10 +31,16 @@ number is before any subpackage reorganization.
 
 ---
 
-## Tier 0 — Bugs found along the way (fix regardless of refactor decisions)
+## Tier 0 — Bugs found along the way — DONE 2026-07-02
 
 These aren't architecture findings — they're correctness bugs the reviews
-surfaced while reading. Each is small and independent.
+surfaced while reading. Each is small and independent. Fixed via 6 parallel
+forks, one per file cluster; full suite green after. Item 11 turned out moot
+(the buggy code was deleted in Tier 1) and item 12 also turned out moot for
+the same reason — see their entries below for detail. Item 6
+(`slack_listener.py`) turned up a 5th bug in the same defect class beyond
+the 4 originally documented, and had zero test coverage of the buggy paths
+— added regression tests.
 
 1. **`memory.py:440`** — `from metrics import record_cost` imports a function
    that doesn't exist in `metrics.py`; the call is silently swallowed, so
@@ -73,13 +79,16 @@ surfaced while reading. Each is small and independent.
     already runs the full benchmark suite internally) and then calls
     `run_eval` again — every nightly heartbeat pays for the builtin benchmark
     suite twice.
-11. **`quality_gate.py` / `passes.py`** — `_run_quality_gate_pass` never
-    forwards `run_adversarial` to `run_quality_gate`, so the adversarial
-    toggle is a no-op (adversarial always runs); separately, the `absorb`
-    logic zeroes config whenever `debate` is set, so `full`/`all` presets
-    silently never run the council pass.
-12. **`gateway.py:306`** — catches `ImportError` where `TimeoutError` is the
-    realistic failure mode.
+11. ~~**`quality_gate.py` / `passes.py`** — `_run_quality_gate_pass` never
+    forwards `run_adversarial`...~~ **MOOT as of Tier 1 (2026-07-02):**
+    `passes.py` (the buggy wrapper) and the debate pass were both deleted.
+    The sole surviving caller, `handle.py:1842`, doesn't pass `run_adversarial`
+    at all (uses the `True` default) — nothing left to fix.
+12. ~~**`gateway.py:306`** — catches `ImportError` where `TimeoutError` is
+    the realistic failure mode.~~ **MOOT as of Tier 1 (2026-07-02):** this
+    was inside `receive_from_gateway`, which was deleted as dead code —
+    verified via `git show` that the bug lived exactly there. The surviving
+    `send_to_gateway` already uses a broad `except Exception`.
 13. **`eval.py:44-46`** — a builtin benchmark checks the model introduces
     itself "as Poe" — fails by construction for any non-Poe persona, post
     Poe→Maro rename.

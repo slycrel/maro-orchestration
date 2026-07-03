@@ -341,8 +341,13 @@ def extract_lessons_via_llm(
             _total_tokens_in, _total_tokens_out, len(typed),
         )
         try:
-            from metrics import record_cost
-            record_cost("memory.extract_lessons", tokens_in=_total_tokens_in, tokens_out=_total_tokens_out)
+            from metrics import record_step_cost
+            record_step_cost(
+                "memory.extract_lessons",
+                tokens_in=_total_tokens_in,
+                tokens_out=_total_tokens_out,
+                status="done",
+            )
         except Exception:
             pass
 

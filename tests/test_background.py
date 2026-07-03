@@ -163,6 +163,50 @@ def test_poll_background_preserves_command(monkeypatch, tmp_path):
         pass
 
 
+def test_start_background_stores_timeout_seconds(monkeypatch, tmp_path):
+    """timeout_seconds passed to start_background is persisted on the task, not discarded."""
+    _setup_workspace(monkeypatch, tmp_path)
+    task = start_background("sleep 5", timeout_seconds=42)
+    assert task.timeout_seconds == 42
+    reloaded = _load_task(task.id)
+    assert reloaded.timeout_seconds == 42
+    try:
+        os.kill(task.pid, 9)
+    except Exception:
+        pass
+
+
+def test_poll_background_kills_task_past_its_own_timeout(monkeypatch, tmp_path):
+    """poll_background enforces start_background's timeout_seconds independent of wait_background.
+
+    Regression test for the Tier 0 bug where timeout_seconds was silently
+    discarded — a real --timeout CLI flag had no effect unless --wait was
+    also passed.
+    """
+    _setup_workspace(monkeypatch, tmp_path)
+    task = start_background("sleep 60", timeout_seconds=1)
+    # Backdate started_at so the task appears to have already exceeded its timeout.
+    from datetime import datetime, timedelta, timezone
+    from background import _append_task_log
+    stored = _load_task(task.id)
+    stored.started_at = (datetime.now(timezone.utc) - timedelta(seconds=5)).isoformat()
+    _append_task_log(stored)
+
+    polled = poll_background(task.id)
+    assert polled.status == "timeout"
+    assert polled.completed_at is not None
+    time.sleep(0.2)
+    assert _pid_terminated(task.pid)
+
+
+def _pid_terminated(pid: int) -> bool:
+    """True if pid is gone or a zombie (os.kill(pid, 0) alone can't tell zombies apart)."""
+    import subprocess as _sp
+    r = _sp.run(["ps", "-p", str(pid), "-o", "stat="], capture_output=True, text=True)
+    stat = r.stdout.strip()
+    return r.returncode != 0 or stat.startswith("Z")
+
+
 # ---------------------------------------------------------------------------
 # wait_background
 # ---------------------------------------------------------------------------

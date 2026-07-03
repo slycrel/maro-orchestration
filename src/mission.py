@@ -900,7 +900,7 @@ def load_feature_manifest(project: str) -> Optional[dict]:
         return None
     try:
         return json.loads(path.read_text(encoding="utf-8"))
-    except ImportError:
+    except json.JSONDecodeError:
         return None
 
 

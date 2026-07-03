@@ -100,6 +100,36 @@ def test_parse_slash_command_empty():
 # _dispatch_slash
 # ---------------------------------------------------------------------------
 
+def test_dispatch_slash_status_returns_string_not_conductor_response():
+    """Regression: status branch used to return the ConductorResponse object itself."""
+    mock_client = MagicMock()
+    fake_response = MagicMock()
+    fake_response.message = "all systems nominal"
+    with patch.object(slack_listener, "conduct", return_value=fake_response):
+        result = slack_listener._dispatch_slash("status", "", "C01", mock_client, dry_run=True)
+    assert result == "all systems nominal"
+
+
+def test_run_natural_via_conduct_returns_message_string():
+    """Regression: _run_natural used to return the ConductorResponse object itself."""
+    fake_response = MagicMock()
+    fake_response.message = "conduct says hi"
+    with patch.object(slack_listener, "conduct", return_value=fake_response):
+        result = slack_listener._run_natural("hello", dry_run=False, project="p", verbose=False)
+    assert result == "conduct says hi"
+
+
+def test_run_natural_via_handle_returns_result_string():
+    """Regression: _run_natural used to return the HandleResult object itself."""
+    fake_result = MagicMock()
+    fake_result.result = "handle says hi"
+    with patch.object(slack_listener, "conduct", None):
+        with patch.object(slack_listener, "handle", return_value=fake_result) as mock_handle:
+            result = slack_listener._run_natural("hello", dry_run=True, project="p", verbose=True)
+    assert result == "handle says hi"
+    mock_handle.assert_called_once_with("hello", project="p", dry_run=True, verbose=True)
+
+
 def test_dispatch_slash_help_returns_text():
     mock_client = MagicMock()
     result = slack_listener._dispatch_slash("help", "", "C01", mock_client, dry_run=True)
@@ -198,9 +228,9 @@ def test_process_message_routes_to_interrupt_when_loop_active():
                 dry_run=False, verbose=False,
             )
     mock_queue.post.assert_called_once()
-    posted = mock_queue.post.call_args[0][0]
-    assert posted["source"] == "slack"
-    assert "analysis" in posted["text"]
+    call = mock_queue.post.call_args
+    assert "analysis" in call[0][0]
+    assert call[1]["source"] == "slack"
 
 
 # ---------------------------------------------------------------------------

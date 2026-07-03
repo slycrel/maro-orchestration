@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import subprocess
 import tempfile
 import time
@@ -39,6 +40,7 @@ class BackgroundTask:
     completed_at: Optional[str] = None
     exit_code: Optional[int] = None
     output_file: str = ""  # path to captured stdout/stderr
+    timeout_seconds: Optional[int] = None  # kill + mark "timeout" if exceeded (checked on poll)
 
 
 # ---------------------------------------------------------------------------
@@ -68,6 +70,7 @@ def _task_to_dict(task: BackgroundTask) -> dict:
         "completed_at": task.completed_at,
         "exit_code": task.exit_code,
         "output_file": task.output_file,
+        "timeout_seconds": task.timeout_seconds,
     }
 
 
@@ -81,6 +84,7 @@ def _dict_to_task(d: dict) -> BackgroundTask:
         completed_at=d.get("completed_at"),
         exit_code=d.get("exit_code"),
         output_file=d.get("output_file", ""),
+        timeout_seconds=d.get("timeout_seconds"),
     )
 
 
@@ -128,7 +132,10 @@ def start_background(command: str, timeout_seconds: int = 300) -> BackgroundTask
 
     Args:
         command: Shell command to run.
-        timeout_seconds: Not enforced at start — used as metadata for wait_background.
+        timeout_seconds: Max seconds the task may run before poll_background kills
+            it and marks status="timeout". Enforced lazily — only checked when
+            poll_background (or wait_background, which polls) is called, not by
+            a background timer, so a task nobody ever polls will not self-kill.
 
     Returns:
         BackgroundTask with pid and status="running".
@@ -163,6 +170,7 @@ def start_background(command: str, timeout_seconds: int = 300) -> BackgroundTask
         status="running",
         started_at=started_at,
         output_file=output_file,
+        timeout_seconds=timeout_seconds,
     )
 
     _append_task_log(task)
@@ -185,6 +193,20 @@ def poll_background(task_id: str) -> BackgroundTask:
 
     if task.status != "running":
         return task
+
+    if task.timeout_seconds is not None:
+        started = datetime.fromisoformat(task.started_at)
+        elapsed = (datetime.now(timezone.utc) - started).total_seconds()
+        if elapsed > task.timeout_seconds:
+            if _is_pid_alive(task.pid):
+                try:
+                    os.kill(task.pid, signal.SIGTERM)
+                except (ProcessLookupError, PermissionError):
+                    pass
+            task.status = "timeout"
+            task.completed_at = datetime.now(timezone.utc).isoformat()
+            _append_task_log(task)
+            return task
 
     if _is_pid_alive(task.pid):
         # Still running — check if process has actually exited (zombie check)

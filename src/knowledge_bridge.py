@@ -125,8 +125,9 @@ def _extract_llm(outcome, adapter) -> List[Tuple[str, str, str, str]]:
             lessons_text=lessons_text,
         )
 
-        result = adapter.complete(prompt)
-        text = result.get("content", "") if isinstance(result, dict) else str(result)
+        from llm import LLMMessage
+        result = adapter.complete([LLMMessage(role="user", content=prompt)])
+        text = result.content or ""
 
         candidates = []
         for line in text.strip().splitlines():

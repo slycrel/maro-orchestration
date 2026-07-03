@@ -868,8 +868,8 @@ def main(argv: list[str] | None = None) -> int:
             memory_status, run_decay_cycle, forget_lesson, promote_lesson,
             load_tiered_lessons, record_tiered_lesson, MemoryTier,
         )
-        memory_cmd = getattr(args, "memory_cmd", None) or "status"
-        if memory_cmd == "status":
+        memory_cmd = getattr(args, "memory_cmd", None) or "opstatus"
+        if memory_cmd == "opstatus":
             status = memory_status()
             print(json.dumps(status, indent=2))
         elif memory_cmd == "decay":
@@ -1646,7 +1646,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "gateway":
         from gateway import check_gateway_connection, send_to_gateway
 
-        if args.gateway_cmd == "status":
+        if args.gateway_cmd == "opstatus":
             connected = check_gateway_connection()
             if connected:
                 print("gateway=reachable")
