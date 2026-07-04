@@ -1,4 +1,7 @@
-"""Correspondence retrieval — sqlite-vec over project docs, memory, and conversation logs.
+"""Correspondence retrieval — SQLite FTS5/BM25 over project docs, memory, and conversation logs.
+
+(Title corrected 2026-07-04: an earlier draft said "sqlite-vec"; there are no
+embeddings here — retrieval is pure FTS5/BM25 keyword search. See Design below.)
 
 SCOPE: this is DEV-FACING TOOLING. It helps *us* (the people building the
 orchestration system) recall our own design decisions, conversations, reviews,
@@ -94,6 +97,8 @@ def _default_sources() -> List[str]:
     return [
         str(repo_root / "docs"),
         str(repo_root / "lat.md"),
+        str(repo_root / "GOAL_BRAIN.md"),
+        str(repo_root / "VISION.md"),
         str(repo_root / "MILESTONES.md"),
         str(repo_root / "BACKLOG.md"),
         str(repo_root / "BACKLOG_DONE.md"),

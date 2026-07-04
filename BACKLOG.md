@@ -360,6 +360,13 @@ sub-agents lever cached static context instead of re-ingesting. See memory
 NOTE: this replaces the *caps*, not the token-explosion *leak* — justify it on its own merits
 (truncation is a band-aid), not on the 485K number. Ties to hybrid-retrieval priority
 (start BM25+embedding, SQLite adjacency, not Neo4j until thousands of nodes).
+Input from docs refactor (2026-07-04): dev-recall (`correspondence.py`) turned out to be
+pure FTS5/BM25 — no embeddings ever existed despite the old "sqlite-vec" docstring — and it
+had silently indexed a pre-rename ghost clone for 7 weeks (fixed: pruned + full re-ingest).
+Two lessons for this design: (a) the "hybrid" in hybrid retrieval is still 100% unbuilt,
+BM25 alone is what we run on today; (b) any index needs a staleness/provenance check
+(sources-on-disk assertion) or it rots invisibly. `lat.md/` + `lat_inject.py` fate also
+folds into this decision (see docs/INDEX.md note).
 
 ### Design constraint: decay trust, never data
 

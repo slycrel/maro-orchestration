@@ -14,7 +14,8 @@ The three ways execution can enter the core loop, depending on goal type and rou
 
 Python modules that implement the core loop and its supporting pipeline.
 
-- `src/agent_loop.py` — `run_agent_loop()`: main loop, step execution, interrupt handling, [[checkpointing]]
+- `src/agent_loop.py` — `run_agent_loop()`: main loop entry, interrupt handling, [[checkpointing]]
+- `src/loop_init.py`, `src/loop_planning.py`, `src/loop_parallel.py`, `src/loop_execute.py`, `src/loop_post_step.py`, `src/loop_blocked.py`, `src/loop_artifacts.py`, `src/loop_finalize.py`, `src/loop_types.py` — the physical phase split of the loop (2026-07): init → planning → parallel → execute → post-step / blocked-step handling → artifact checks → finalize; shared dataclasses in loop_types
 - `src/handle.py` — entry point; routes to NOW or AGENDA via [[intent-classification]]
 - `src/director.py` — mission planning; decomposes goals into milestones, delegates to workers
 - `src/planner.py` — `decompose()`: multi-plan generation (3 candidates → best composite); injects [[poe-identity]]

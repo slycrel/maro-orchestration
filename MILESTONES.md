@@ -1,6 +1,6 @@
 # Milestones — Prioritized Work Queue
 
-What to do next, in what order. Updated each session. Strategic phases live in ROADMAP.md; deferred ideas live in BACKLOG.md. This file is the bridge — the executable queue.
+What to do next, in what order. Updated each session. Deferred ideas live in BACKLOG.md; completed phase history in docs/history/ROADMAP_ARCHIVE.md (ROADMAP.md is a stub). This file is the executable queue.
 
 Last updated: 2026-07-04 (overnight: MCP dispatch fixed, tier-a write fence, ancestry read-side, rung-4 call-record link. Morning: write fence ENABLED + live-proven (Jeremy's flip); ancestry write-side CLOSED; BACKLOG #9 validator ROI (`python3 -m validator_roi`); fetch unification (`fetch` tool). Midday: fence NARROWED per Jeremy — /tmp allowed + goal-declared paths widen fence (`FENCE_EXTENDED`), intent trumps; workspace scratch `~/.maro/workspace/tmp/`. See GOAL_BRAIN Decisions 2026-07-04. BACKLOG remaining: #0 mining passes + raw archive, #1 residual Bash write shapes (evidence-driven), #10 local_max_tokens tuning).
 

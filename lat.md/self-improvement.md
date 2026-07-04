@@ -39,7 +39,7 @@ Rewrites with empty description/steps, >400-char description, or >10 steps are s
 
 ## Memory Improvement Systems
 
-### Failure-Chain Recording (`src/memory.py`, `src/agent_loop.py`)
+### Failure-Chain Recording (`src/memory.py`, `src/loop_finalize.py` — formerly agent_loop.py pre-split)
 `Outcome.failure_chain: List[str]` + `Outcome.recovery_steps: int`. Agent loop accumulates the full failure→diagnosis→recovery chain on retry/split/terminal. Every retry becomes a training signal.
 
 ### Majority-Vote Pseudo-Labels (`src/memory.py`)
