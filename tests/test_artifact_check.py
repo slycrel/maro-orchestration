@@ -577,3 +577,96 @@ class TestScavengeCwdDrift:
         events = [{"name": "Bash", "input": {"command": "cdrecord dev=1 && echo x > f.txt"}}]
         report = detect_out_of_fence_access(events, [str(proj), str(ws)])
         assert report.writes == []
+
+
+class TestGoalDeclaredRoots:
+    """Fence intent-widening (2026-07-04): paths the goal text names become
+    extra fence roots — intent trumps."""
+
+    def test_absolute_path_extracted(self):
+        from artifact_check import goal_declared_roots
+        roots = goal_declared_roots("Fix the flaky test in /home/clawd/claude/some-repo and rerun")
+        assert roots == ["/home/clawd/claude/some-repo"]
+
+    def test_tilde_path_expanded(self):
+        import os
+        from artifact_check import goal_declared_roots
+        roots = goal_declared_roots("update ~/claude/other-repo/README.md please")
+        assert roots == [os.path.expanduser("~/claude/other-repo/README.md")]
+
+    def test_trailing_punctuation_stripped(self):
+        from artifact_check import goal_declared_roots
+        assert goal_declared_roots("write it to /home/clawd/notes/report.md.") == \
+            ["/home/clawd/notes/report.md"]
+
+    def test_system_paths_never_widen(self):
+        from artifact_check import goal_declared_roots
+        assert goal_declared_roots("append my key to /etc/passwd and /usr/local/bin/x") == []
+
+    def test_bare_top_level_too_broad(self):
+        from artifact_check import goal_declared_roots
+        assert goal_declared_roots("clean up /data when done") == []
+
+    def test_urls_and_word_slashes_ignored(self):
+        from artifact_check import goal_declared_roots
+        assert goal_declared_roots(
+            "read https://owasp.org/www-project-top-ten/ and weigh read/write and/or tradeoffs"
+        ) == []
+
+    def test_dedup_and_cap(self):
+        from artifact_check import goal_declared_roots, _GOAL_ROOTS_CAP
+        goal = "sync /home/a/b with /home/a/b then " + " ".join(
+            f"/home/x/d{i}" for i in range(12))
+        roots = goal_declared_roots(goal)
+        assert roots[0] == "/home/a/b"
+        assert len(roots) == len(set(roots)) <= _GOAL_ROOTS_CAP
+
+    def test_empty_and_none_safe(self):
+        from artifact_check import goal_declared_roots
+        assert goal_declared_roots("") == []
+        assert goal_declared_roots(None) == []
+
+    def test_declared_root_admits_writes_in_detector(self, tmp_path):
+        """End-to-end at the detector: a write under a goal-declared root is
+        not flagged when that root rides in fence_roots."""
+        from artifact_check import detect_out_of_fence_access, goal_declared_roots
+        proj = tmp_path / "proj"
+        target = "/home/nonexistent-target-repo"
+        events = [{"name": "Write", "input": {"file_path": f"{target}/fix.py"}}]
+        base_roots = [str(proj), str(tmp_path / "ws")]
+        assert detect_out_of_fence_access(events, base_roots).writes  # sanity: flagged without
+        widened = base_roots + goal_declared_roots(f"fix the bug in {target}/fix.py")
+        assert detect_out_of_fence_access(events, widened).writes == []
+
+
+class TestFenceAllowRoots:
+    """/tmp carve-out (2026-07-04): scratch is not drift."""
+
+    def test_tmp_always_allowed(self):
+        from artifact_check import fence_allow_roots
+        assert "/tmp" in fence_allow_roots()
+
+    def test_config_allowlist_included(self, monkeypatch):
+        import config as config_mod
+        from artifact_check import fence_allow_roots
+        _orig = config_mod.get
+
+        def _fake(key, default=None):
+            if key == "validate.write_fence_allow":
+                return ["~/scratch-area", "/mnt/shared"]
+            return _orig(key, default)
+
+        monkeypatch.setattr(config_mod, "get", _fake)
+        import os
+        roots = fence_allow_roots()
+        assert os.path.expanduser("~/scratch-area") in roots
+        assert "/mnt/shared" in roots
+
+    def test_tmp_write_not_flagged_with_allow_roots(self, tmp_path):
+        from artifact_check import detect_out_of_fence_access, fence_allow_roots
+        events = [{"name": "Write", "input": {"file_path": "/tmp/maro-scratch/w.json"}}]
+        base = [str(tmp_path / "proj"), str(tmp_path / "ws")]
+        # Base fence alone would flag it — tmp_path lives under /tmp but the
+        # scratch dir here is a sibling, not a child of the fence roots.
+        report = detect_out_of_fence_access(events, base + fence_allow_roots())
+        assert report.writes == []

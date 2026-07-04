@@ -3595,3 +3595,129 @@ def test_run_agent_loop_write_fence_off_by_default(monkeypatch, tmp_path):
     assert "SCAVENGE_DETECTED" in events_seen
     assert "FENCE_WRITE_BLOCKED" not in events_seen
     assert not any(s.status == "blocked" for s in result.steps)
+
+
+def _fence_on_config(monkeypatch):
+    """Force validate.write_fence on, passthrough for everything else."""
+    import config as config_mod
+    _orig_get = config_mod.get
+
+    def _fake_get(key, default=None):
+        if key == "validate.write_fence":
+            return True
+        return _orig_get(key, default)
+
+    monkeypatch.setattr(config_mod, "get", _fake_get)
+
+
+def _write_adapter_for(path):
+    from llm import LLMResponse, ToolCall
+
+    class _Adapter:
+        model_key = "test"
+
+        def complete(self, messages, **kwargs):
+            return LLMResponse(
+                content="",
+                tool_calls=[ToolCall(name="complete_step", arguments={
+                    "result": f"Wrote {path}.", "summary": "wrote file",
+                })],
+                input_tokens=1, output_tokens=1,
+                tool_events=[{"name": "Write", "input": {"file_path": path},
+                              "output": "ok", "is_error": False}],
+            )
+
+    return _Adapter()
+
+
+def test_run_agent_loop_write_fence_allows_tmp_scratch(monkeypatch, tmp_path):
+    """/tmp carve-out (2026-07-04): a /tmp scratch write under fence-on stays
+    done — scratch is not drift, no demotion, no fence events."""
+    monkeypatch.setenv("MARO_ORCH_ROOT", str(tmp_path))
+    import agent_loop as al
+    import loop_execute
+    import captains_log
+    monkeypatch.setattr(loop_execute, "_local_auto_ralph_enabled", lambda: False)
+    _fence_on_config(monkeypatch)
+
+    events_seen = []
+    monkeypatch.setattr(
+        captains_log, "log_event",
+        lambda event_type, subject, summary, **kw: events_seen.append(event_type) or {},
+    )
+
+    result = al.run_agent_loop(
+        "stage the data transform",
+        adapter=_write_adapter_for("/tmp/maro-test-scratch/staging.json"),
+        preset_steps=["Stage the transform scratch file"],
+        max_steps=1,
+        max_iterations=2,
+    )
+    assert "FENCE_WRITE_BLOCKED" not in events_seen
+    assert "SCAVENGE_DETECTED" not in events_seen
+    assert not any(s.status == "blocked" for s in result.steps)
+
+
+def test_run_agent_loop_write_fence_widens_to_goal_declared_path(monkeypatch, tmp_path):
+    """Intent-widening (2026-07-04): the goal explicitly names an out-of-fence
+    path; the worker writes exactly there. Fence-on must let it through and
+    audit the widening via FENCE_EXTENDED — this is the probe-run failure mode
+    ('goal conflicts with fence') fixed. Intent trumps."""
+    monkeypatch.setenv("MARO_ORCH_ROOT", str(tmp_path))
+    import agent_loop as al
+    import loop_execute
+    import captains_log
+    monkeypatch.setattr(loop_execute, "_local_auto_ralph_enabled", lambda: False)
+    _fence_on_config(monkeypatch)
+
+    events_seen = []
+    _orig_log_event = captains_log.log_event
+
+    def _capture(event_type, subject, summary, **kw):
+        events_seen.append((event_type, kw))
+        return _orig_log_event(event_type, subject, summary, **kw)
+
+    monkeypatch.setattr(captains_log, "log_event", _capture)
+
+    target = "/home/nonexistent-target-repo/fix.py"
+    result = al.run_agent_loop(
+        f"apply the null-check fix to {target}",
+        adapter=_write_adapter_for(target),
+        preset_steps=["Apply the null-check fix"],
+        max_steps=1,
+        max_iterations=2,
+    )
+    kinds = [e[0] for e in events_seen]
+    assert "FENCE_WRITE_BLOCKED" not in kinds
+    assert not any(s.status == "blocked" for s in result.steps)
+    ext = [e for e in events_seen if e[0] == "FENCE_EXTENDED"]
+    assert ext, f"expected FENCE_EXTENDED, saw {kinds}"
+    _ctx = ext[0][1].get("context") or {}
+    assert "/home/nonexistent-target-repo/fix.py" in _ctx.get("roots", [])
+
+
+def test_run_agent_loop_write_fence_still_blocks_undeclared_path(monkeypatch, tmp_path):
+    """The widening must not swallow genuine drift: goal names one tree, the
+    worker writes into a DIFFERENT out-of-fence tree → still demoted."""
+    monkeypatch.setenv("MARO_ORCH_ROOT", str(tmp_path))
+    import agent_loop as al
+    import loop_execute
+    import captains_log
+    monkeypatch.setattr(loop_execute, "_local_auto_ralph_enabled", lambda: False)
+    _fence_on_config(monkeypatch)
+
+    events_seen = []
+    monkeypatch.setattr(
+        captains_log, "log_event",
+        lambda event_type, subject, summary, **kw: events_seen.append(event_type) or {},
+    )
+
+    result = al.run_agent_loop(
+        "apply the null-check fix to /home/nonexistent-target-repo/fix.py",
+        adapter=_write_adapter_for("/home/nonexistent-OTHER-repo/leaked.py"),
+        preset_steps=["Apply the null-check fix"],
+        max_steps=1,
+        max_iterations=2,
+    )
+    assert "FENCE_WRITE_BLOCKED" in events_seen
+    assert any(s.status == "blocked" for s in result.steps)

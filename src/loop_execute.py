@@ -158,6 +158,25 @@ def _execute_main_loop(
     # pre-extraction inline version.
     goal = ctx.goal
     max_iterations = ctx.max_iterations
+
+    # Fence intent-widening (2026-07-04): paths the goal text explicitly names
+    # join the write fence for this run, auditable via FENCE_EXTENDED. Computed
+    # once here; consumed by the per-step scavenge/write-fence blocks below.
+    _goal_fence_roots: list = []
+    try:
+        from artifact_check import goal_declared_roots as _gdr
+        _goal_fence_roots = _gdr(goal)
+        if _goal_fence_roots:
+            from captains_log import log_event as _fe_log, FENCE_EXTENDED
+            _fe_log(
+                FENCE_EXTENDED,
+                subject=goal[:80],
+                summary=f"fence widened to {len(_goal_fence_roots)} goal-declared root(s)",
+                context={"roots": _goal_fence_roots},
+                loop_id=getattr(ctx, "loop_id", "") or None,
+            )
+    except Exception:
+        _goal_fence_roots = []
     continuation_depth = ctx.continuation_depth
     token_budget = ctx.token_budget
     cost_budget = ctx.cost_budget
@@ -581,11 +600,15 @@ def _execute_main_loop(
         try:
             from config import get as _sc_cfg_get
             if bool(_sc_cfg_get("validate.scavenge_detect", True)) and outcome.get("tool_events"):
-                from artifact_check import detect_out_of_fence_access as _sc_detect
+                from artifact_check import (
+                    detect_out_of_fence_access as _sc_detect,
+                    fence_allow_roots as _sc_allow_roots,
+                )
                 from config import workspace_root as _sc_ws_root
                 _sc_report = _sc_detect(
                     outcome.get("tool_events"),
-                    [_proj_artifact_dir, str(_sc_ws_root())],
+                    [_proj_artifact_dir, str(_sc_ws_root())]
+                    + _sc_allow_roots() + _goal_fence_roots,
                 )
                 if _sc_report.flagged:
                     log.warning(
@@ -696,7 +719,8 @@ def _execute_main_loop(
                     step_result = (
                         f"{step_result}\n\n[write-fence] This step wrote outside the "
                         f"project workspace: {_wf_paths[:5]}. Marked blocked — re-run "
-                        f"and keep all writes inside the project directory."
+                        f"and keep deliverables inside the project directory "
+                        f"({_proj_artifact_dir}); /tmp is fine for scratch."
                     )
                     try:
                         from captains_log import log_event as _wf_log_event, FENCE_WRITE_BLOCKED

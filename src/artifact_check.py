@@ -42,6 +42,7 @@ from __future__ import annotations
 import ast
 import os
 import re
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Set
@@ -523,6 +524,57 @@ def _in_fence(path: str, fence_roots: List[str]) -> bool:
 
 def _is_system_path(path: str) -> bool:
     return path.startswith(_SCAVENGE_SYSTEM_PREFIXES)
+
+
+def fence_allow_roots() -> List[str]:
+    """Always-allowed write roots beyond the project fence (2026-07-04,
+    Jeremy: "lean into /tmp... this isn't a sandbox"). Temp scratch is a normal
+    worker move, not drift — the fence exists to catch a worker wandering into
+    OTHER projects' trees, not to police scratch space. Extend via config
+    `validate.write_fence_allow` (list of path prefixes)."""
+    roots = ["/tmp", tempfile.gettempdir()]
+    try:
+        from config import get as _cfg_get
+        for r in (_cfg_get("validate.write_fence_allow", []) or []):
+            if r:
+                roots.append(os.path.expanduser(str(r)))
+    except Exception:
+        pass
+    return roots
+
+
+# Goal-declared fence widening (2026-07-04, Jeremy: "intent should trump
+# correctness"): absolute (or ~-) paths named in the goal TEXT join the fence
+# for that run — the fence enforces "the worker stayed where the goal pointed
+# it", not "the goal is only allowed to want the workspace". Trust boundary:
+# goals are trusted (Jeremy / dispatch navigator authored), workers aren't.
+# Same lookbehind as _ABS_PATH_RE so URL fragments can't match.
+_GOAL_PATH_RE = re.compile(r"(?<![\w.:/])~?/[\w.@+-]+(?:/[\w.@+-]+)*")
+_GOAL_ROOTS_CAP = 8
+
+
+def goal_declared_roots(goal: str) -> List[str]:
+    """Extract absolute paths the goal text explicitly names, as extra fence
+    roots. Filters: system prefixes never widen (a goal naming /etc/passwd
+    does NOT authorize it), bare top-level dirs ("/data") are too broad, and
+    the list is capped. Never raises."""
+    roots: List[str] = []
+    try:
+        seen: Set[str] = set()
+        for m in _GOAL_PATH_RE.finditer(goal or ""):
+            p = os.path.expanduser(m.group(0).rstrip(".,;:"))
+            if not p.startswith("/") or _is_system_path(p):
+                continue
+            if p.count("/") < 2:  # "/data" — a whole top-level tree is not intent
+                continue
+            if p not in seen:
+                seen.add(p)
+                roots.append(p)
+            if len(roots) >= _GOAL_ROOTS_CAP:
+                break
+    except Exception:
+        return []
+    return roots
 
 
 def _resolve_cd_target(target: Optional[str], cur_cwd: Optional[str], base: str) -> Optional[str]:

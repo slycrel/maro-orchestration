@@ -87,6 +87,23 @@ can't see (`cp`/`mv`/`sed -i` targets, subshell/pushd cds) stay invisible —
 documented in `docs/BOUNDED_WORKSPACE.md` known holes; extend from real
 SCAVENGE evidence, not speculation.
 
+**NARROWED 2026-07-04 (same day, Jeremy: "intent should trump correctness"):**
+the flip surfaced two unintended false-positive classes — both handled
+structurally rather than by turning the fence back off. (1) **/tmp always
+allowed** (`fence_allow_roots`; extend via `validate.write_fence_allow`) —
+scratch is not drift; "failing an entire goal run just because we wrote a tmp
+file somewhere seems pretty extreme" (Jeremy). Worker prompt now points
+deliverables→project dir, scratch→/tmp; in-fence scratch also at
+`~/.maro/workspace/tmp/` (created at loop entry). (2) **Goal-declared paths
+widen the fence per-run** (`goal_declared_roots`, `FENCE_EXTENDED` event) —
+the probe's failure mode ("goal conflicts with fence") is now the fence
+*following* the goal's explicitly named target; system prefixes never widen,
+bare top-level dirs don't count, cap 8. Genuine drift (writing a tree the
+goal did NOT name) still demotes → hint-guided retry → navigator. Note the
+demotion was never run-fatal by itself: blocked steps retry with the fence
+hint + tier-up before anything terminal; the probe died because the navigator
+correctly judged retry futile for a goal that *demanded* the violation.
+
 **Tier-a SHIPPED 2026-07-04 (enforcement gated off at ship, detection on):**
 - **cwd-drift detection** closes the specimen above:
   `detect_out_of_fence_access` now tracks `cd` targets across a step's Bash

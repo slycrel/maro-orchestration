@@ -227,6 +227,12 @@ def run_agent_loop(
         _fence_dir = _project_dir_root() / (project or _goal_to_slug(ctx.goal))
         _fence_dir.mkdir(parents=True, exist_ok=True)
         set_default_subprocess_cwd(str(_fence_dir))
+        # In-fence scratch space (2026-07-04, Jeremy: "lean into /tmp... nice
+        # to add a tmp scratch folder under the workspace"). /tmp is also
+        # fence-allowed (artifact_check.fence_allow_roots); this one survives
+        # reboots and stays inspectable next to the run's other state.
+        from config import workspace_root as _ws_root
+        (_ws_root() / "tmp").mkdir(parents=True, exist_ok=True)
     except Exception:
         pass
 

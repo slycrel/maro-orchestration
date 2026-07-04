@@ -947,6 +947,22 @@ Sample: the 2026-05-13..17 window of `~/.maro/workspace/runs/` (478 dirs total;
   CLOSED, moved to BACKLOG_DONE) and BACKLOG #9 local-validator ROI
   (`VALIDATION_LADDER` event + `python3 -m validator_roi`; first corpus read:
   105 gate rows, 4 local-decisive, shadow false_pass=1).
+- **2026-07-04 (write fence NARROWED — Jeremy: "intent should trump
+  correctness"; "failing an entire goal run just because we wrote a tmp file
+  somewhere seems pretty extreme")** — post-flip talk-through surfaced two
+  unintended false-positive classes; both fixed structurally, fence stays on.
+  (1) /tmp always fence-allowed (`fence_allow_roots` + config
+  `validate.write_fence_allow`); worker prompt now sends deliverables→project
+  dir, scratch→/tmp; in-fence scratch dir `~/.maro/workspace/tmp/` created at
+  loop entry. (2) Goal-declared absolute/`~` paths widen the fence per-run
+  (`goal_declared_roots`, audited via new `FENCE_EXTENDED` event; system
+  prefixes never widen, bare top-level dirs excluded, cap 8) — trust boundary
+  pinned: goals are trusted, workers aren't; the fence enforces "worker
+  stayed where the goal pointed it". Explicitly NOT a sandbox (Jeremy: docker
+  isolation = "too much effort for what we're trying to accomplish", maybe
+  later). Also confirmed for the record: fence demotion was never run-fatal
+  by itself — blocked steps retry with hint + tier-up; the probe died because
+  the navigator correctly judged retry futile.
 
 ## Threads (system-maintained — nothing leaves this list silently)
 

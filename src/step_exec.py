@@ -790,8 +790,9 @@ def execute_step(
     workspace_block = ""
     if project_dir:
         workspace_block = (
-            f"\n\nWORKSPACE: Save all output files to {project_dir}/ (not /tmp)."
-            f" This directory exists and is where artifacts persist across steps."
+            f"\n\nWORKSPACE: Save deliverables to {project_dir}/ — this directory"
+            f" exists and persists across steps. Scratch/temp files belong in /tmp."
+            f" Do not write anywhere else."
         )
 
     # Classify step type — drives prompt injection and manifest annotation.

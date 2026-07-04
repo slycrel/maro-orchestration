@@ -5,9 +5,25 @@ and what's actually implemented. Written for BACKLOG #1 (artifacts leaking into
 the repo root / stale-clone scavenging).
 
 **The fence** = the run's project dir (`~/.maro/workspace/projects/<slug>/`)
-plus the canonical workspace (`~/.maro/workspace/`). NOW-lane interactive asks
-are exempt by design — an interactive ask legitimately runs where it was
-launched.
+plus the canonical workspace (`~/.maro/workspace/`), plus (2026-07-04, after
+the flip surfaced the trade-off):
+
+- **/tmp, always** (`artifact_check.fence_allow_roots`; extend via config
+  `validate.write_fence_allow`). Scratch is a normal worker move, not drift —
+  Jeremy: "lean into /tmp... this isn't a sandbox." An in-fence scratch dir
+  also exists at `~/.maro/workspace/tmp/` (created at loop entry) for scratch
+  that should survive and stay inspectable.
+- **Goal-declared paths** (`artifact_check.goal_declared_roots`): absolute or
+  `~`-paths the goal text explicitly names join the fence for that run,
+  audited via a `FENCE_EXTENDED` captain's-log row. Intent trumps — the fence
+  enforces "the worker stayed where the goal pointed it", not "the goal is
+  only allowed to want the workspace". Trust boundary: goals are trusted
+  (Jeremy / dispatch navigator authored), workers aren't. Guardrails: system
+  prefixes never widen (a goal naming `/etc/passwd` does not authorize it),
+  bare top-level dirs (`/data`) are too broad to count, cap 8 roots.
+
+NOW-lane interactive asks are exempt by design — an interactive ask
+legitimately runs where it was launched.
 
 ## The three tiers
 
@@ -23,12 +39,14 @@ launched.
   workers land in the right place; the scavenge detector makes dishonest or
   drifting ones visible (`SCAVENGE_DETECTED` captain's-log rows, reads and
   writes flagged separately).
-- **(a)-enforcement (`validate.write_fence: true`):** flip on once
-  `SCAVENGE_DETECTED` *write* rows have accumulated enough to trust the
-  false-positive rate. An out-of-fence write then demotes the step
-  done→blocked with the evidence in `FENCE_WRITE_BLOCKED`. Note legitimate
-  out-of-fence writes exist (goals that explicitly target another tree, /tmp
-  scratch) — that's why this is a config flip, not a hardcoded default.
+- **(a)-enforcement (`validate.write_fence: true`):** ENABLED on the box
+  2026-07-04 (Jeremy's flip) and live-proven both directions same day. An
+  out-of-fence write demotes the step done→blocked with the evidence in
+  `FENCE_WRITE_BLOCKED`; the blocked-step machinery then retries with a hint
+  (tier-up) unless the navigator is ≥0.9 confident retry is futile. The two
+  legitimate out-of-fence write classes are handled structurally, not by
+  keeping the fence off: /tmp is always allowed, and goal-declared target
+  paths widen the fence per-run (see above).
 - **(c):** interactive NOW-lane asks only.
 
 ## Detection mechanics (tier-a evidence layer)

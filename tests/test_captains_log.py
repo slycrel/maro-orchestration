@@ -241,7 +241,9 @@ class TestEventTypes:
         # (BACKLOG #1, validate.write_fence).
         # +1 (2026-07-04): VALIDATION_LADDER — per-verify_step ladder outcome
         # (BACKLOG #9 ROI measurement, validator_roi).
-        assert len(EVENT_TYPES) == 56
+        # +1 (2026-07-04): FENCE_EXTENDED — fence widened to goal-declared
+        # paths (intent trumps; Jeremy same-day after the flip).
+        assert len(EVENT_TYPES) == 57
 
     def test_previously_unregistered_events_in_set(self):
         from captains_log import EVOLVER_REVERTED, EVOLVER_VERIFY, PLAYBOOK_UPDATED
