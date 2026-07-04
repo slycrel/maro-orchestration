@@ -5,7 +5,7 @@ Read this at the start of every session. Update it as items are completed or new
 
 **Completed items live in [BACKLOG_DONE.md](BACKLOG_DONE.md)** — move items there with their full context when they ship; that file is the archive of what we've already decided, tried, or superseded, and it's ingested by `dev-recall` for historical context.
 
-Last reviewed: 2026-07-03 (shipped #-1 workspace-pin layout unification → BACKLOG_DONE.md; the audit also closed the wider orch_root()/memory split-brain class across ~12 runtime files).
+Last reviewed: 2026-07-04 (full triage, every prune claim re-verified against code: write-fence arc + #13 evolver + fabrication-guard [x]s + intent subs 2/3 + PM/dev test goals → BACKLOG_DONE.md; 2 duplicates reconciled against MILESTONES #2/#3; llm-adapter extraction promoted to the stack as #14).
 
 ---
 
@@ -43,7 +43,8 @@ data is preserved, not deleted.
 - [ ] **Mining passes on the parked data.** The curation registry is the hook;
   the actual miners are TODO — skill scraper, script scraper, decision-prior
   indexer (feed a similar/rephrased re-attempt), partial-run rescue. Append to
-  `run_curation.CURATORS`.
+  `run_curation.CURATORS` (now 4: classify, inventory, excerpt,
+  spend_transparency — the last two added since v0).
 - [x] **Unify rung-4 step I/O** — DONE 2026-07-04. `FailoverAdapter.complete`
   stamps the record path onto the response (`resp.call_record`) when
   `record_llm_call` captures; `execute_step` carries it on the outcome dict;
@@ -63,209 +64,23 @@ data is preserved, not deleted.
   current FAILURE_CLASSES taxonomy, closure-verdict internal consistency +
   proof the BACKLOG #5 restart predicate discriminates on real history.
 
-### 1. Bound worker writes to run-dir / workspace (artifacts leaking into repo root)
+### 1. Bound worker writes — residual: Bash write shapes the fence can't see
 
-**Evasion specimen (2026-07-04, first organic batch):** run 668e46d1's worker
-`cd`'d into the repo and wrote `scripts/count-lines.py` with a *relative* path
-— invisible to both the structured-tool scavenge check (no absolute path
-input) and the Bash regex (only the cd target surfaced, recorded as a read).
-The cwd fence binds per-step launch cwd, but a worker can cd elsewhere
-mid-command. Stray removed (project dir had its own in-fence copies). Any
-tier-a design must handle cwd drift inside a single Bash command, not just
-absolute-path writes.
+**Shipped arc archived 2026-07-04** — the full write-fence history (cwd
+root-cause + soft fence, projectless-run fence hole, scavenge detection,
+cwd-drift tracking, tier-a demotion, Jeremy's enable + same-day narrowing
+with `/tmp` + goal-declared roots) lives in BACKLOG_DONE.md ("BACKLOG #1:
+write fence — shipped arc") and `docs/BOUNDED_WORKSPACE.md`.
 
-**ENABLED + LIVE-PROVEN 2026-07-04 (Jeremy's flip, same day):**
-`validate.write_fence: true` on the box. Probe goal explicitly demanding a
-write to `/home/clawd/fence-probe-stray.txt` (run `a619449a-calm-crane`):
-SCAVENGE flagged the write → fence demoted done→blocked with the exact path
-→ `FENCE_WRITE_BLOCKED` emitted → blocked-step navigator escalated at conf
-0.95 with the *right* reasoning ("retrying will hit the same block;
-legitimate goal-vs-fence conflict") → honest stuck run card. Control goal
-(haiku to `artifacts/`) ran under the enabled fence: done, artifact
-in-fence, zero fence events. Residual watch: Bash write shapes the regex
-can't see (`cp`/`mv`/`sed -i` targets, subshell/pushd cds) stay invisible —
-documented in `docs/BOUNDED_WORKSPACE.md` known holes; extend from real
-SCAVENGE evidence, not speculation.
-
-**NARROWED 2026-07-04 (same day, Jeremy: "intent should trump correctness"):**
-the flip surfaced two unintended false-positive classes — both handled
-structurally rather than by turning the fence back off. (1) **/tmp always
-allowed** (`fence_allow_roots`; extend via `validate.write_fence_allow`) —
-scratch is not drift; "failing an entire goal run just because we wrote a tmp
-file somewhere seems pretty extreme" (Jeremy). Worker prompt now points
-deliverables→project dir, scratch→/tmp; in-fence scratch also at
-`~/.maro/workspace/tmp/` (created at loop entry). (2) **Goal-declared paths
-widen the fence per-run** (`goal_declared_roots`, `FENCE_EXTENDED` event) —
-the probe's failure mode ("goal conflicts with fence") is now the fence
-*following* the goal's explicitly named target; system prefixes never widen,
-bare top-level dirs don't count, cap 8. Genuine drift (writing a tree the
-goal did NOT name) still demotes → hint-guided retry → navigator. Note the
-demotion was never run-fatal by itself: blocked steps retry with the fence
-hint + tier-up before anything terminal; the probe died because the navigator
-correctly judged retry futile for a goal that *demanded* the violation.
-
-**Tier-a SHIPPED 2026-07-04 (enforcement gated off at ship, detection on):**
-- **cwd-drift detection** closes the specimen above:
-  `detect_out_of_fence_access` now tracks `cd` targets across a step's Bash
-  commands (worker subprocess cwd persists between Bash calls; within-command
-  drift handled by interleaving cds and write targets in position order) and
-  resolves relative write targets — shell redirections (`>`, `>>`), `tee`,
-  and relative-path structured Write/Edit — against the drifted cwd. Flags
-  land in `ScavengeReport.writes` as `<tool>(cwd-drift)`. Positive-evidence
-  discipline: unresolvable cds (`$VAR`, `cd -`) silence the tracker instead
-  of guessing. Always-on with the existing `validate.scavenge_detect` gate.
-  Tests: `TestScavengeCwdDrift` (10 cases incl. specimen replay).
-- **Write-fence demotion** (`loop_execute`, after the diagnostic, before the
-  fabrication guard): any `ScavengeReport.writes` entry on a done step
-  demotes done→blocked with the paths in the stuck_reason, emits
-  `FENCE_WRITE_BLOCKED` + guard note in the step result. Config
-  `validate.write_fence`, **default OFF** — per the recorded plan, watch
-  `SCAVENGE_DETECTED` write rows for false-positive rate first (legit
-  out-of-fence writes exist: /tmp scratch, goals that explicitly target
-  another tree). Flip on in `~/.maro/workspace/config.yml` when the rows look
-  clean — Jeremy's call, same pattern as the navigator cutovers. 2 loop
-  integration tests.
-- **Spectrum doc**: `docs/BOUNDED_WORKSPACE.md` (tiers a/b/c, what each
-  protects against, detection mechanics, known holes).
-
-- [ ] **Workspace boundary: build-goal artifacts landed in the repo root** —
-  run_health.py + example output were written to cwd (the repo) instead of the
-  run's artifact dir; goal even said "as an artifact file". Moved them into
-  `e1b9f95e-humble-lantern/artifact/` post-hoc. Existing bounded-workspace
-  BACKLOG item covers the general fix; this is a concrete repro.
-  **2nd organic repro 2026-06-12:** the BACKLOG-claim-audit goal wrote
-  `backlog_claim_audit.md` (a genuinely good 230-line audit, verdict ACCURATE
-  with file:line evidence) to the *repo root* — its run dir
-  `140d2a4f-warm-pebble/artifact/` was empty. Moved post-hoc. This keeps
-  happening to agenda build-goals: the agent's cwd is the repo, and nothing
-  constrains where it writes. The NOW-lane artifact path was fixed (writes to
-  the run dir now) but the agenda loop's worker writes are still cwd-relative.
-  The fix is the bounded-workspace item below; this is the strongest case yet
-  that it's not theoretical — good output is landing in version control.
-
-  **Root cause found + soft-fence shipped (2026-06-26):** the agentic
-  subprocess (`claude -p` / `codex exec`) was spawned with **no `cwd`** —
-  `_run_subprocess_safe` → `Popen` inherited the parent's cwd, so relative
-  writes landed wherever that happened to be (repro: a fizzbuzz build wrote
-  `fizzbuzz.py` to `/tmp/claude-1001/` instead of the workspace, while the
-  prompt's "save to {project_dir}/" was simply ignored). Fixed by threading
-  `cwd` through `complete()` → `_run_subprocess_safe(cwd=...)` → `Popen(cwd=)`,
-  and binding it to `project_dir` in `step_exec.execute_step` (makedirs first;
-  non-existent cwd is ignored, no regression). This is the **soft-fence (tier b)**
-  from the spectrum below — relative writes now land in-workspace by default,
-  but nothing stops an agent from writing an absolute path elsewhere. The
-  scavenging diagnostic + hard fence (tier a) are still open.
-
-  **Soft-fence extended to ALL agentic paths (2026-06-26):** the executor fix
-  above bound cwd *only* for `step_exec.execute_step`. The done≠achieved
-  verification runs caught the gap on camera: the non-executor agentic paths
-  (`verification_agent` verify/adversarial/quality, `quality_gate`
-  council/debate/adversarial, `pre_flight`, `step_exec` refinement, and
-  `claim_probe`'s `settled_by_command` runner) still inherited the launch cwd.
-  When a verifier couldn't find the cited artifact at the workspace path (wrong
-  cwd) it **re-created the script and re-ran it to "verify"** — leaking files
-  into the launch dir AND fabricating ground truth (then its own probe dismissed
-  the correct path-mismatch contestation). Confirmed by experiment: leak follows
-  the launch dir (repo root vs scratchpad). Fixed with a run-scoped ambient cwd:
-  `llm._DEFAULT_SUBPROCESS_CWD` (ContextVar) resolved in `complete()` as
-  `kwargs["cwd"] or get_default_subprocess_cwd()`; `run_agent_loop` sets it to
-  the project dir, `handle.py` scopes it around `run_quality_gate`, `claim_probe`
-  reads it for `subprocess.run(cwd=…)`. NOW lane leaves it unset → inherits
-  launch cwd (correct for an interactive ask). Tests reset it via an autouse
-  conftest fixture. This closes the leak *and* an anti-hallucination hole (a
-  verifier that can see ground truth stops fabricating it). Tier-a hard fence
-  still open.
-
-  **3rd repro 2026-07-03 — fence hole: `if project:` guards leave
-  no-project-yet iterations fully unfenced.** Post-fence leaks confirmed by
-  mtime: repo-root `artifacts/` strays from 2026-07-02 burn-in goals
-  (`coding-notes-digest.md` 10:41, `substrate-explained.md` 10:10,
-  `comm-examples.md` 11:03 — the last is the NOW-misroute goal, which DID
-  write its file, to launch cwd; that's why closure found nothing) and from
-  the 2026-07-03 blocked-step batch (goal "Create artifacts/raw.json… repair
-  system": its **first, blocked iteration** wrote `raw.json` 03:46:07,
-  `repair.py` 03:46:13, `clean.json` 03:46:15 to launch-cwd relative paths;
-  the post-block retry landed everything correctly in
-  `projects/implement-a-json-repair-system/`). Mechanism: every fence site is
-  conditional on a truthy project — `agent_loop.py` sets the ambient cwd only
-  `if project:`, `loop_execute.py` leaves `_proj_artifact_dir=""` without one,
-  so `step_exec` gets `project_dir=""` and skips the `Popen(cwd=…)` bind. A
-  run that enters the loop before its project identity is established
-  executes unfenced; once blocked/retried (project by then assigned) it's
-  fenced — matching the strays-only-from-early-iterations pattern. Two
-  project dirs per goal (`create-artifactsrawjson-containing-exactly` empty
-  stub vs `implement-a-json-repair-system` real) point at the goal-slug vs
-  plan-derived-name split-brain (see #-1) as the reason project is empty at
-  entry. **Fix direction:** never run an AGENDA worker step with inherited
-  launch cwd — bind the ambient cwd unconditionally at loop entry (fall back
-  to goal-slug project dir, or the run dir, when project is unset); NOW lane
-  stays exempt by design. Evidence preserved:
-  `scratchpad/cwd-leak-evidence/` (session dbbb5f5c) + repo `artifacts/`
-  strays left in place (gitignored).
-
-  **Fence hole FIXED 2026-07-03** (correction to the 3rd-repro mechanism:
-  run metadata showed `project: None` for the whole run — dispatched goals
-  reach `run_agent_loop` with NO project ever, so the entire run was
-  unfenced, not just early iterations; the post-block retry only landed
-  correctly because the failure hint pushed the worker to absolute paths).
-  Two layers: (1) `handle.py` defaults the loop's `project` kwarg to
-  `_goal_to_slug(message)` — the same identity the scope pass derives, so
-  scope + execution stop pointing at two different project dirs and ALL
-  existing `if project:` fence sites engage (ambient cwd, `_proj_artifact_dir`,
-  per-step `Popen(cwd=)`, prompt project_dir); (2) `agent_loop` loop-entry
-  ambient bind is now unconditional — a project-less run (direct callers)
-  falls back to the goal-slug project dir, mkdir'd first (Popen raises on a
-  missing cwd). NOW lane untouched. Tests:
-  `TestProjectlessDispatchFence` (handle) +
-  `test_loop_projectless_run_still_fences_cwd` (loop). Tier-a hard fence
-  (absolute-path writes) still open — this closes the relative-write class.
-  **Live-proven 2026-07-03** (run `07d14464-misty-finch`): dispatched
-  project-less goal "write a 4-line limerick to artifacts/limerick.txt" —
-  deliverable landed at `projects/write-a-4line-limerick-about/artifacts/`
-  (the goal-slug dir), zero new launch-cwd strays, run done/achieved
-  honestly. Run-dir metadata `project` stays None by design (HandleResult
-  reports the caller's ask; the loop runs with the slug).
-
-**Bounded workspace / sandboxing (discovered 2026-04-17)**
-
-Run 4 of slycrel-go blind test was contaminated by stale local clones. Four
-`slycrel-go` trees existed on disk (`~/slycrel-go`, `~/.openclaw/.../slycrel-go`,
-`~/.maro/workspace/projects/slycrel-go`, `/tmp/slycrel-go`) — the worker
-surveyed one of them instead of cloning fresh into the expected workspace
-`repo/` subdirectory. Result: step 1 asserted "project already has a
-complete headless server implementation" from the stale tree.
-
-Right behavior: orchestrator should clone the repo into its own workspace,
-not scavenge from elsewhere on the filesystem.
-
-- [x] **Low-effort: workspace-folder constraint option.** ~~A config flag /
-  per-goal setting that restricts file access (or at minimum, search paths)
-  to the project workspace `repo/` subdir.~~ **Write-half delivered by
-  `validate.write_fence` (2026-07-04, enabled on box):** the config flag that
-  makes "don't wander" enforceable for writes. Reads stay unrestricted by
-  design — out-of-fence reads are logged (`SCAVENGE_DETECTED`) but often
-  legitimate (context gathering); a read-restricting mode remains possible if
-  scavenge read rows ever show real contamination (the 2026-04-17 stale-clone
-  case is mitigated by fresh-clone-into-workspace behavior + read logging).
-- [x] **Medium-effort: document the bounded-workspace spectrum.** DONE
-  2026-07-04: `docs/BOUNDED_WORKSPACE.md` — tiers (a) hard fence /
-  (b) soft fence / (c) full machine, when to use which, what each protects
-  against, detection mechanics, known holes.
-- [x] **Diagnostic: detect scavenging.** ~~Captain's log event when a worker
-  reads a file outside the project workspace root.~~ **DONE 2026-07-03:**
-  `artifact_check.detect_out_of_fence_access` scans each step's REAL tool
-  transcript (stream-json tool_events) for absolute paths outside the fence
-  (project dir + workspace) — structured tools by path input, Bash by
-  command-string scan with system prefixes filtered, deduped + capped at 20.
-  Emits `SCAVENGE_DETECTED` (loop_execute, gate `validate.scavenge_detect`
-  default on, never blocks). Reads and writes flagged separately — an
-  out-of-fence *write* in the transcript is exactly the tier-a evidence the
-  hard fence needs; watch these rows to size that work.
-
-Not ambitious; the goal is "constraint to a folder isn't a bad option to
-have" not "build a sandboxing subsystem."
-
-
+- [ ] **Residual: Bash write shapes the regex can't see** — `cp`/`mv`/`sed -i`
+  targets, subshell/pushd cds stay invisible to `detect_out_of_fence_access`
+  (documented in `docs/BOUNDED_WORKSPACE.md` known holes). Extend from real
+  `SCAVENGE_DETECTED` evidence, not speculation. Current state: detection
+  always-on (`validate.scavenge_detect`), enforcement code-default OFF
+  (`loop_execute.py`), enabled on this box (`~/.maro/workspace/config.yml`
+  `validate.write_fence: true`). Reads stay unrestricted by design (logged,
+  not blocked); a read-restricting mode remains possible if scavenge read
+  rows ever show real contamination.
 
 ### 10. Local-validator measurement — tune `local_max_tokens` per model
 
@@ -276,73 +91,16 @@ have" not "build a sandboxing subsystem."
   the floor that maximizes decisive-local rate without wasting generation latency.
 
 
-### 13. Evolve the evolver — evaluate its own scanners for actual practical value
+### 14. llm.py adapter protocol extraction (promoted from Modular refactoring, 2026-07-04)
 
-- [x] **Investigated 2026-07-03** (after the `evolver.py` split landed). Original
-  question — "which scanners survive `_verify_post_apply` vs. generate noise"
-  — **can't be answered empirically yet**, and that's the actual finding.
-
-  **The evolver has essentially never run in production.** `run_evolver()` is
-  only wired into `heartbeat.py` (every `evolver_every=10` ticks) or manual
-  `cli.py` invocation — and `maro-heartbeat.service` (in `deploy/systemd/`)
-  was never installed (`systemctl list-unit-files` / `find` for it: nothing).
-  All historical evolver data in `~/.maro/workspace/memory/` —
-  `suggestions.jsonl` (117 rows), `change_log.jsonl` (406), `evolver-baselines.jsonl`
-  (638), `calibration.jsonl` (3,312) — is timestamped exclusively 2026-04-04
-  through 2026-04-12, in tight sub-second bursts. That's pytest contamination
-  from before the Apr-12 test-isolation overhaul (CLAUDE.md's own changelog
-  names that fix), not real usage — confirmed by `success_rate: 1.0` /
-  `avg_cost_usd: 0.0` on every baseline row. Zero of the 117 suggestions were
-  ever `applied` (and the 116 non-trivial ones are `category="inspection_finding"`
-  from `inspector.py`, not from any of the evolver's own scanners at all).
-  `suggestion_outcomes.jsonl` — the file `scan_suggestion_outcomes()` and
-  `_verify_post_apply()` both depend on — doesn't exist. There is no
-  apply→verify track record to mine, in either direction.
-
-  Real production data *does* exist and is current (`outcomes.jsonl`: 1,355
-  rows, through 2026-07-03) — the evolver just isn't being pointed at it.
-  Ran the five non-LLM statistical scanners directly (read-only, zero cost)
-  against that real corpus to get a first honest read:
-
-  | Scanner | Result on real data | Read |
-  |---|---|---|
-  | `scan_step_costs` | 1 finding: `research` steps avg 174K tokens/step across 20 steps, ~$0.56 total Haiku-routing savings | Fired immediately with a concrete, correct, actionable suggestion. Looks genuinely useful. |
-  | `scan_canon_candidates` | 3 findings: lessons applied 48–80x across 4–5 task types, promotion-to-AGENTS.md candidates | Same — fired immediately with well-evidenced output. Looks genuinely useful. |
-  | `scan_calibration_log` | 0 findings | Inconclusive — `calibration.jsonl`'s only data is the pre-fix contamination window, so there's no real escalation-decision data to score yet. |
-  | `scan_quality_drift` | 0 findings | Inconclusive — needs a warm rolling baseline (`evolver-baselines.jsonl`) that doesn't exist post-fix; can't judge on one cold cycle. |
-  | `scan_suggestion_outcomes` | 0 findings (expected) | Structurally can't produce anything until real apply→verify cycles happen — this is the chicken-and-egg scanner. |
-
-  **Recommendation**: don't prune anything on theory. 2 of 5 statistical
-  scanners already prove out on first real invocation; the other 3 are
-  untestable until the loop actually runs, not necessarily bad. The real
-  blocker is operational, not scanner quality: get `run_evolver()` actually
-  executing against production data on a schedule (install/enable
-  `maro-heartbeat.service`, or start with periodic manual `cli.py` invocations
-  if an always-on daemon isn't wanted yet) so `scan_evolver_impact()` and
-  `scan_suggestion_outcomes()` — both already built for exactly this — have
-  real data to compute over. Left this as a decision for Jeremy rather than
-  enabling a new unattended-LLM-call service autonomously.
-
-- [x] **Shipped 2026-07-03 (Jeremy's call): per-run hook instead of a systemd
-  daemon** — "I'm not a huge fan of taking over the system... let's try and
-  be an app rather than an OS." Investigation found `run_skill_maintenance()`
-  (promote/demote/rewrite) was *already* firing post-run/pre-cleanup,
-  pass-or-fail, at `loop_finalize.py`'s `_finalize_loop()` — that part needed
-  nothing. What was missing was the 5 free statistical scanners from the
-  finding above; they only ran on `heartbeat.py`'s tick schedule. Extracted
-  them out of `run_evolver()`'s inline blocks into a shared
-  `evolver.run_statistical_scans()` (no behavior change to `run_evolver()`
-  itself — same flags, same wrapping, just de-duplicated) and call it from
-  `_finalize_loop()` right after `run_skill_maintenance()`, gated only on
-  `not dry_run`. No LLM calls in these 5 scanners, so per-run cadence costs
-  nothing; findings are saved via `_save_suggestions()` for visibility only —
-  this hook never auto-applies (matches `scan_canon_candidates()`'s existing
-  "not automatic" contract). No daemon installed, no new service, no change
-  to heartbeat.py — `run_evolver()`'s full cycle (LLM pattern analysis +
-  business-signal scan + auto-apply) is untouched and still tick-scheduled.
-  This finally gives `scan_suggestion_outcomes()`/`scan_evolver_impact()`
-  real per-run data instead of the empty/contaminated history documented
-  above. Full suite green (133/133) after the change.
+- [ ] **Streaming-iterator `complete()` on the shared adapter base.** The four
+  adapters (Anthropic / OpenAI / OpenRouter / Subprocess) DO share an
+  `LLMAdapter` base class (`llm.py:300`) — the remaining work is the streaming
+  shape: `complete(messages) → iterator_of_events` so liveness/kill logic
+  lives in one wrapper instead of per-adapter. The old dependency is CLEARED:
+  stream-json parsing shipped (`_parse_stream_json`, `llm.py`; subprocess
+  transcripts ride `resp.tool_events`). Port subprocess adapter first, others
+  incrementally. Size: ~half day per adapter.
 
 ---
 
@@ -374,38 +132,19 @@ folds into this decision (see docs/INDEX.md note).
   evidence layer stays perfect (the computerization edge over human forgetting);
   only compiled-truth confidence decays. Crystallization Stages 4–5 must be
   demotable back to language form — world-change is the frequent trigger,
-  model upgrades the rare one.
+  model upgrades the rare one. Partially embodied: "Decay-by-invalidation v0"
+  (`knowledge_lens.py`, 2026-06-11) decays Stage-5 rule *trust* on recorded
+  contradictions without touching data — but `knowledge.py` demotion only goes
+  Stage 5→Stage 4 (rules→skills), NOT back to language form (Stage 2/3). The
+  language-form demotion path is the part still open. Input to the memory
+  architecture decision.
 
-### File-claim fabrication — FS-diff ground-truth guard SHIPPED (2026-06-26)
+### File-claim fabrication — residuals (v1 guards SHIPPED 2026-06-26, archived to BACKLOG_DONE)
 
-- [x] **Write-claim fabrication (v1 shipped 2026-06-26).** A step that claims to
-  write a file but produces no artifact is now demoted `done`→`blocked` by a
-  zero-LLM filesystem-diff guard (`src/artifact_check.py`, wired into the AGENDA
-  build loop in `agent_loop.py` before ralph verify; config gate
-  `validate.artifact_check`, default on, fail-open). Conservative v1 rule:
-  flag iff (≥1 file write-claim) AND (empty `project_dir` before/after diff) AND
-  (no claimed path exists on disk). Emits captain's-log `FABRICATION_DETECTED`.
-  This is the AGENDA-loop sibling of handle.py's NOW-lane `_provenance_missing`.
-  Enabled by the #1 cwd fix: writes are bounded to `project_dir`, so its diff is
-  reliable ground truth.
-  - Side fix: removed a leaked `fizzbuzz.py` test artifact accidentally committed
-    to repo root in 7ea4d7b (the #1 cwd-fix commit); its basename collision in
-    cwd actually surfaced the design flaw that `_exists_anywhere` must NOT consult
-    `Path.cwd()` (orchestrator cwd = repo root, full of unrelated files).
-
-- [x] **Inert-output fabrication (shipped 2026-06-26, same module).** New layer
-  in `artifact_check.py`, still zero-LLM and NO code execution. The actual
-  organic repro: a step writes `fizzbuzz.py` (so the missing-artifact layer
-  passes — the file exists) then narrates *"verified output: 1,2,Fizz,4,Buzz"*,
-  but the file has no `__main__`/top-level code and prints nothing when run.
-  Caught by **static AST analysis**: if the result asserts concrete stdout (a
-  runtime verb like prints/output/"when run" — NOT a function `returns` claim —
-  AND concrete content like digits/quotes) while every produced `.py` is provably
-  inert (`_python_is_inert`: body is purely defs/imports/assigns/docstring), it
-  cannot have produced that output. `ArtifactVerdict.kind` distinguishes
-  `missing-artifact|inert-output`. Tests: `tests/test_artifact_check.py` +
-  3 full-loop integration tests in `tests/test_agent_loop.py` (missing /
-  inert-output / real-write).
+The three shipped layers (FS-diff missing-artifact, inert-output AST,
+execution-contradiction) moved to BACKLOG_DONE 2026-07-04; the guard lives in
+`loop_execute.py` post-split (originally wired in agent_loop.py). Kept here:
+the rejected design (a documented trap) and the deliberately-deferred shapes.
 
 - **REJECTED: no-path-write layer.** Prototyped (write-ish words + empty diff +
   no path named) and reverted same day: it is **absence-based, not
@@ -416,16 +155,6 @@ folds into this decision (see docs/INDEX.md note).
   positive evidence (a named-but-absent file, or an inert file vs a concrete
   output claim).
 
-- [x] **No-path *execution* fabrication — v1 SHIPPED 2026-06-26
-  (`check_execution_claim`).** The residual hole: "ran the tests: 142 passed"
-  naming no file and producing none. Unblocked by item #3 (real tool transcript
-  on `resp.tool_events` / `outcome["tool_events"]`). v1 ships ONLY the
-  unimpeachable positive-evidence contradiction: the step claims the run
-  SUCCEEDED, yet every command it actually ran FAILED (non-zero exit / is_error)
-  and the result never acknowledges a failure. Wired into the agent_loop
-  fabrication guard as a fallback after the FS/AST layers (kind
-  `execution-contradiction`); blocks the step the same way. Execution-free
-  (reads the transcript, never re-runs).
 - [ ] **Remaining exec-fabrication shapes (deliberately deferred — false-positive
   risk).** Two cases the v1 contradiction check intentionally does NOT flag,
   because each can fire on legitimate runs (same lesson that killed the
@@ -436,23 +165,30 @@ folds into this decision (see docs/INDEX.md note).
   legitimate. Revisit only with a sharper signal (e.g. matching the claimed test
   count against the real `tool_result`), not a looser gate.
 
-### ACTIVE DESIGN SPACE — Thread Architecture (2026-04-26 → 2026-04-27, Jeremy + Claude)
+### DESIGN SPACE — Thread Architecture (2026-04-26 sketch; narrow navigator SHIPPED, full reframe unbuilt)
 
-**Branch:** `arch/thread-navigator`
 **Doc:** `docs/THREAD_ARCHITECTURE.md` (the sketch + decisions + open list)
 **Conversation log:** `docs/conversations/2026-04-26-thread-architecture.md` (literal transcript)
+(The `arch/thread-navigator` branch was merged to main via 131d629 and deleted — no separate branch anymore.)
 
 The 1-shot-first DISCUSS item (formerly here) expanded into a full architectural sketch over a 7-turn planning conversation. Rather than just inverting the planning default, the conversation reframed the unit of orchestration to **thread**, with a per-turn `navigator → work → navigator` loop, navigator-selected personas, sub-thread fork/collate, build-folder-as-thread-residence, and crystallization (Stages 1–5) as the navigator's improvement path.
 
-Don't implement yet — the architecture doc has 9 open decisions to work through first, starting with the navigator's prompt + decision schema (Open Decision #1). Backlog-style detail items will be added under this entry as the design firms up.
+**Status 2026-07-04 — distinguish shipped from unbuilt.** The *narrow* navigator
+is real and live: dispatch + blocked-step judge (`navigator_shadow.py`), per-thread
+goal brain (`thread_brain.py`), escalate cutovers enacted on this box (MILESTONES
+#1/#2), thread-brain maintenance closed (MILESTONES #3). The *full reframe* —
+per-turn navigator→work→navigator loop, sub-thread fork/collate (gated on
+MILESTONES #4 async fork join), navigator-selected personas per turn, thread as
+the unit of orchestration — is NOT built. The 9 open decisions in the doc need
+re-scoping against what shipped before any further implementation.
 
 **1-shot-first** is preserved as one move-shape the navigator picks per turn (not the default; navigator decides whether to plan or execute). Existing planning scaffolding (`decomposition_too_broad`, mid-loop redecompose, scope-as-armor) probably shrinks but does not delete — Jeremy pushed back on aggressive deletion (Tesla-vs-driver: confident-sounding LLM ideas without critical-thinking-edges drift, because people's context ≠ LLM context).
 
-**Adjacent items that should be re-evaluated under this frame** (most are below in this backlog):
+**Adjacent items that should be re-evaluated under this frame** (2026-07-04: two struck as shipped):
 - Intent resolution (next entry) — folds into "fork+collate" sub-thread mechanism
 - Captain's log infrastructure-vs-visibility (new) — should be demoted to data, not infrastructure
-- Persona auto-selection (existing drift in `architecture overview`) — becomes load-bearing, not optional
-- Recall() interface (new) — single seam over memory substrates the navigator queries
+- ~~Persona auto-selection~~ — SHIPPED (`persona_for_goal`, c964d3b; wired in conductor + handle)
+- ~~Recall() interface~~ — SHIPPED (`src/recall.py`, 9f1a43a)
 - Crystallization Stage 5 (existing gap in `KNOWLEDGE_CRYSTALLIZATION.md`) — the navigator's cheaper-over-time mechanism
 - Shared-learning portability (new) — self-learned artifacts should survive HDD loss / orchestrator switch
 
@@ -471,7 +207,17 @@ side-quests have settled the unknowns.** See
 `docs/INTENT_RESOLUTION_DESIGN.md` for the full sketch + the minimum
 experiment proposal.
 
-- [ ] **Minimum experiment (before building orchestration):** take one
+**Partially shipped (2026-04-23, ResolvedIntent v0):** the deliverable-map
+prompt + resolved-intent artifact schema subs moved to BACKLOG_DONE — shipped
+as `scope.py` ResolvedIntent/Deliverable + `generate_resolved_intent()`,
+persisting `resolved_intent.md`. Side-quest orchestration remains open.
+
+- [ ] **Minimum experiment — FLAG FOR JEREMY: shipped past the experiment.**
+  This sub said "before building orchestration," but ResolvedIntent v0 shipped
+  straight to prod and the formal before/after measurement never ran. Decide:
+  run the retroactive A/B (same goal with/without resolved-intent injection,
+  compare closure verdict + adversarial review), or accept the v0 on organic
+  evidence and drop this. Original design: take one
   blind-test goal. Manually produce a resolved-intent artifact
   (unknowns / probes / deliverable-map). Run side-quests by hand using
   the existing `handle.py` path, capture outputs. Run the main goal with
@@ -479,18 +225,13 @@ experiment proposal.
   Measure: does output quality + closure verdict + adversarial review
   improve measurably vs the same goal without? If yes, build
   orchestration. If no, the ceiling isn't here.
-- [ ] **Small-scope deliverable-map LLM prompt:** dedicated prompt that
-  asks "what artifacts does this goal *literally* imply?" separate from
-  scope generation. Cheap to try and might catch the slycrel-go "no
-  client exists" class of miss without any other structural changes.
-- [ ] **Resolved-intent artifact schema.** After the experiment, if we
-  want to build the orchestration, spec the artifact (fields,
-  persistence, merge rules on pivot).
-- [ ] **Pivot reuse / workspace persistence as first-class.** The
-  `polymarket-edges` pattern proves the value of persistent workspaces
-  (project_polymarket_edges.md memory). Generalize: every goal's
-  side-quest outputs live in `~/.maro/workspace/projects/<slug>/
-  artifacts/` and survive across reruns of the same goal family.
+- [ ] **Pivot reuse across goal-family reruns.** (Narrowed 2026-07-04: the
+  infrastructure half exists — per-project persistent dirs under
+  `~/.maro/workspace/projects/<slug>/` are live and goal-slug-bound. What's
+  missing is the *reuse* logic: a rerun/rephrase of the same goal family
+  neither detects nor feeds prior side-quest artifacts back as context. The
+  `polymarket-edges` ledger pattern (project_polymarket_edges.md memory) is
+  the proof of value; generalize that.)
 
 ### Modular refactoring (AFK-friendly chunks, queued 2026-04-18) — deferred chunks
 
@@ -500,15 +241,6 @@ to the next edit). These chunks are sized so one session can ship one of
 them cleanly without needing real-time direction. Pick any of them when
 looking for an AFK-friendly chore. Principles in `docs/CODING_NOTES.md`.
 
-- [ ] **llm.py adapter protocol extraction.** Four adapters
-  (Anthropic / OpenAI / OpenRouter / Subprocess) share patterns by
-  convention, not by interface. Extract an `Adapter` Protocol with
-  `complete(messages) → iterator_of_events` so streaming is first-class
-  and liveness/kill logic lives in one wrapper instead of per-adapter.
-  Port subprocess adapter first (we just touched it), others
-  incrementally. Dependency: stream-json parsing lands first (see
-  separate item) — the streaming shape is the point of the extraction.
-  Size: ~half day per adapter once protocol is spec'd.
 - [ ] **Test clutter trim.** Jeremy's outside-in-testing posture
   applied to the suite: tests that poke private functions with mocked
   collaborators and assert call-shape are performative. Sweep tests
@@ -520,7 +252,7 @@ looking for an AFK-friendly chore. Principles in `docs/CODING_NOTES.md`.
 
 ### Captain's log viewer (low-priority; partially covered by command center)
 
-- [ ] **Captain's log viewer (low-priority; partially covered by command center).** Render a slice as a sortable timeline (ts, event, loop_id, slug, key fields). Until cross-run queries become a pattern, this is a thin reader over JSONL — no storage migration warranted.
+- [ ] **Captain's log viewer (low-priority; partially covered by command center).** Render a slice as a sortable timeline (ts, event, loop_id, slug, key fields). Until cross-run queries become a pattern, this is a thin reader over JSONL — no storage migration warranted. (2026-07-04: `timeline()` + a `--timeline` CLI flag exist but are aggregate-only — event counts over time, not the per-event sortable slice this asks for. Still open, but smaller than it reads.)
 
 ### Storage decision — sqlite indexer (deferred)
 
@@ -544,15 +276,15 @@ looking for an AFK-friendly chore. Principles in `docs/CODING_NOTES.md`.
   wait for heartbeat signal to tell us *which* steps actually need this
   before building.
 
-### Phase 65 — Constraint/Premise Orchestration (proposed, not yet implemented)
+### Phase 65 — Constraint/Premise Orchestration (MVE implemented, dormant)
 
-See `docs/CONSTRAINT_ORCHESTRATION_DESIGN.md` + `docs/CONSTRAINT_ORCHESTRATION_REVIEW.md`. Items below are the review's sharp findings that must be resolved before code lands. (Persistence-install guardrail pulled out to the Actionable Stack as a standalone safety item.)
+See `docs/CONSTRAINT_ORCHESTRATION_DESIGN.md` + `docs/CONSTRAINT_ORCHESTRATION_REVIEW.md`. **Status 2026-07-04:** the MVE shipped — `scope.py` inversion behind `scope_generation` / `scope_ab_skip` config flags, both default OFF (handle.py), PAUSED by Jeremy 2026-04-23. Items below are the review's sharp findings; three of the original blockers are resolved by how the MVE shipped, the rest stay open for any expansion beyond the dormant MVE.
 
-- [ ] **BLOCKER: Autonomous-path behavior.** Design says "human gate (unless yolo)" as if binary. Heartbeat/cron path has no channel. Document the behavior: skip? auto-approve after N? block+fail? Default should probably be "log inversion output for post-hoc review, continue with it as planner context, no gate."
-- [ ] **BLOCKER: A/B mechanism.** Cannot evaluate "bounded planning produces measurably better outcomes than unbounded planning" without running goals both ways. Build the A/B capability before enabling anywhere. Probably a config flag or `inversion:` prefix.
-- [ ] **BLOCKER: Cost ceiling.** Given April 7-9 token burn, do not ship a feature adding per-goal LLM calls without a per-goal token budget + circuit breaker. Instrumentation first.
+- [x] ~~BLOCKER: Autonomous-path behavior.~~ Resolved as shipped: no gate — scope output is logged and used as planner context, exactly the "log for post-hoc review, continue, no gate" default this blocker recommended.
+- [x] ~~BLOCKER: A/B mechanism.~~ Resolved as shipped: `scope_ab_skip` flag is the A/B capability (run goals both ways). Note: capability exists; the actual A/B measurement has not been run.
+- [ ] **BLOCKER: Cost ceiling.** Largely covered since: per-run + daily budget gates shipped 2026-07-01 (`budget.per_run_usd` / `budget.daily_usd`). Residual question is only whether scope-generation calls need their own sub-budget; probably not — verify before expanding Phase 65.
 - [ ] **Gate heuristic.** Design's "AGENDA goals above N words" is wrong (short goals often benefit most, long ones often don't). Needs an actual judgment signal — possibly complexity classifier, or "use for goals with ≥3 deliverables."
-- [ ] **Triad vs. single persona.** Design calls for PM/engineer/architect triad. Review says start with one persona; only add triad if ablation shows the extra personas produce different constraint lines. Cost: 3x LLM calls for premise-setting. Signal: unvalidated.
+- [x] ~~Triad vs. single persona.~~ Resolved as shipped: single persona, per the review's recommendation. Triad remains unvalidated and should stay out unless ablation shows different constraint lines (next bullet).
 - [ ] **Persona content vs. costumes.** Design assumes personas produce genuinely different perspectives. Current `persona.py` is largely system-prompt overrides + skeptic modifier. Validate that PM/engineer/architect personas *actually* draw different inversion lines (not just prompt flavor) before investing in triad.
 - [ ] **Scope: verification sibling.** Design addresses the *planning* phase. Biggest defect in the system is in the *verification* phase — slycrel-go "passed" because nobody ran a browser. Constraint-setting alone won't close this gap. Needs sibling design for ground-truth verification (real browsers, real endpoints, real test execution — not LLM judgment).
 - [ ] **Completion-standard coexistence.** Design says "completion standard is subsumed." Migration plan needed: does completion-standard still run during rollout? If both, do they contradict?
@@ -588,7 +320,7 @@ See `docs/CONSTRAINT_ORCHESTRATION_DESIGN.md` + `docs/CONSTRAINT_ORCHESTRATION_R
 
   Related: BDD (Given/When/Then framing), TDD (red-green cycle), property-based testing (∀ operation, property holds), mutation testing (probe-of-probe bounded version). Sibling of Phase 65 "Scope: verification sibling" blocker above — this IS that sibling. **Cross-link:** also the sibling of the Actionable "Closure treats failed-to-run commands as checks-passed" item — runtime-probe bias is closure *choosing* static over behavioral probes; the closure-failed-to-run item is closure *mis-reading* the behavioral probes it does choose. Same root: the verdict is decoupled from whether the thing was verified.
 
-  **Replay raw numbers** (evidence for the bias finding above): `~/.maro/workspace/projects/slycrel-replay/artifacts/summary.json` — `complete=False, confidence=0.35, 3/5 checks passed`. The two failing probes: (i) overly-strict grep for `!RemoteAddr.*username` false-positived on a legit log line `log.Printf(... username, r.RemoteAddr)`; (ii) `grep -qi xterm web/*` correctly caught that the work summary hallucinated xterm.js integration. The `_CLOSURE_PLAN_SYSTEM` prompt at `director.py:1137` says "Commands must be fast (<15s), safe (read-only or self-cleaning), exit 0 on success. Wrap background processes with `timeout` and always clean up PIDs" — permits live probes but nudges toward grep via path-of-least-resistance.
+  **Replay raw numbers** (evidence for the bias finding above): `~/.maro/workspace/projects/slycrel-replay/artifacts/summary.json` — `complete=False, confidence=0.35, 3/5 checks passed`. The two failing probes: (i) overly-strict grep for `!RemoteAddr.*username` false-positived on a legit log line `log.Printf(... username, r.RemoteAddr)`; (ii) `grep -qi xterm web/*` correctly caught that the work summary hallucinated xterm.js integration. The `_CLOSURE_PLAN_SYSTEM` prompt (now at `closure_verify.py:29`, imported by director.py post-split) says "Commands must be fast (<15s), safe (read-only or self-cleaning), exit 0 on success. Wrap background processes with `timeout` and always clean up PIDs" — permits live probes but nudges toward grep via path-of-least-resistance. (2026-07-04 status: the "implementation direction" modality-logging bullet above is SHIPPED — closure logs probe modality, and `_detect_behavioral_gap` / `_detect_diagnosis_gap` exist in closure_verify.py. The scaffolding-examples + required-behavioral-probe bullets and open questions (a)–(d) remain open.)
 
   **Second full run (2026-04-17, after observability fixes) — modality chart is stark.** CLOSURE_VERDICT event recorded `modality_distribution={"static": 4, "process": 1}`, zero http/ws/browser — on a goal explicitly about "headless server with browser as a client." Closure's own summary admits: *"Gap: runtime validation (server startup + browser connection) was not performed."* Yet it still returned `complete=True confidence=0.92`. Manual post-hoc runtime probe (3 curl calls, ~5 seconds): `/health → 200`, `/ → 200`, `/ws → 101 upgrade`, server logs `player "test" connected/disconnected`. The thing works; closure lucked into being right via static checks. The cheap, mechanical proof would have been three curls — and the system *had time*: the loop ran 810s / 3M tokens / 39 steps. Budget was not the constraint; scaffolding was.
 
@@ -596,7 +328,7 @@ See `docs/CONSTRAINT_ORCHESTRATION_DESIGN.md` + `docs/CONSTRAINT_ORCHESTRATION_R
 
 ### Composable decision-point hooks (design exploration)
 
-- [ ] **Composable decision-point hooks** — The system currently has pre/post step hooks (step_events.py), inspector observation, quality gate, and prompt injection (standing rules/lessons/skills into decompose). But these aren't composable: you can't say "after decompose, before execution, run extra verification on steps 3 and 5." MTG-style stack where effects can be intercepted at targeted points. For now, prompt-stage injection is sufficient. Revisit when operational experience shows which decision points actually need interception. Key constraint: any self-extensibility must be human-gated (see evolver guardrail auto-apply fix).
+- [ ] **Composable decision-point hooks** — (2026-07-04 correction: `step_events.py` was built, accumulated zero real handlers, and was PRUNED in the repo-wide refactor — see REFACTOR_PLAN. The live interception surfaces are inspector observation, quality gate, and prompt injection of standing rules/lessons/skills into decompose.) These aren't composable: you can't say "after decompose, before execution, run extra verification on steps 3 and 5." MTG-style stack where effects can be intercepted at targeted points. For now, prompt-stage injection is sufficient. Revisit when operational experience shows which decision points actually need interception. Key constraint: any self-extensibility must be human-gated (see evolver guardrail auto-apply fix).
 
 ### Phase Transition Contracts (architecture — revisit after operational data)
 
@@ -604,19 +336,11 @@ See `docs/CONSTRAINT_ORCHESTRATION_DESIGN.md` + `docs/CONSTRAINT_ORCHESTRATION_R
 
 ### Phase 38 subpackage move
 
-- [ ] **Phase 38 subpackage move** — src/ is flat with 49 modules. Deferred (33+ imports per group), revisit when it causes real problems.
+- [ ] **Phase 38 subpackage move** — src/ is flat, now at ~130 modules (was 49 when this was written). Successor plan: `docs/REFACTOR_PLAN.md` Tier 4 is this same move, sized against current reality. Deferred (33+ imports per group), revisit when it causes real problems.
 
 ### Isolated worktree per sub-agent
 
 - [ ] **Isolated worktree per sub-agent** — from Alpha Batcher's breakdown of Claude Code's architecture (@alphabatcher). Each sub-agent gets its own git worktree so writes don't collide. Relevant to concurrent run safety (Phase 62 project isolation). Current `is_project_running()` + per-project lock file is a simpler version; worktree isolation is stronger. **Priority 6/10 — revisit when parallel missions are actually running.** Source: @alphabatcher.
-
-### Harness hill-climbing as autonomous loop
-
-- [ ] **Harness hill-climbing as autonomous loop** — @ashpreetbedi/@mr_r0b0t: use eval benchmark scores as autonomous hill-climbing signal for harness improvement (LangChain TerminalBench 2.0: 52.8→66.5% with no model change). Poe has `eval.py` + `evolver.py` but they're not wired as an autonomous feedback loop. Fix: `run_nightly_eval()` → failure trace analysis → harness proposal → evolver suggestion → `_verify_post_apply`. **Priority 6/10 — closes the verify→learn loop that's currently 80% done.** Source: @ashpreetbedi + @Vtrivedy10. (Collapsed in the eval-driven harness hill-climbing duplicates from the X-research sections.)
-
-### Dumb loop audit (scaffolding designed to be removed)
-
-- [ ] **Dumb loop audit (scaffolding designed to be removed)** — Alpha Batcher breakdown of Claude Code: Anthropic's deliberate "thin harness" philosophy. Each scaffold should pass the future-proof test: dropping in a more powerful model should improve performance WITHOUT requiring harness complexity changes. Run a scaffolding audit on agent_loop.py — label each check as load-bearing vs removable. Manus precedent: rebuilt agent 5× in 6 months, each rewrite removed complexity. **Priority 5/10 — strategic/architectural, no code cost.** Source: @alphabatcher/@akshay_pachaar.
 
 ### Agentic verifier for large artifacts
 
@@ -634,7 +358,10 @@ See `docs/CONSTRAINT_ORCHESTRATION_DESIGN.md` + `docs/CONSTRAINT_ORCHESTRATION_R
 - [ ] **Model bake-off.** Compare candidate local validators (VibeThinker-3B 8bit vs
   4bit vs 1.5B; a Qwen2.5-Coder tune; an Ollama option for the Linux box) on the same
   eval set. Confirm a 3B-class model is "good enough" on a generally modern machine
-  (≥16 GB RAM; 4-bit for 8 GB) before standardizing on one.
+  (≥16 GB RAM; 4-bit for 8 GB) before standardizing on one. (Partially done:
+  qwen2.5-coder:3b vs paid shadow-eval, n=42, in `docs/LOCAL_VALIDATOR.md` +
+  per-class-routing item below — that settled the box's *current* pick; the
+  formal multi-variant sweep is what remains.)
 
 ### Closure demotion doesn't reach the outcome store
 
@@ -667,8 +394,6 @@ See `docs/CONSTRAINT_ORCHESTRATION_DESIGN.md` + `docs/CONSTRAINT_ORCHESTRATION_R
 
 ### Standing test-goal menu (future ideas)
 
-- [ ] **Recipe site PM agent** — Recurring goal against slycrel/orchestrator-test-recipes: review code, open issues for missing features, review PRs, suggest architectural improvements. Tests GitHub integration + multi-step judgment.
-- [ ] **Recipe site dev agent** — Recurring goal: pick open issues, implement on branches, open PRs, maintain running Docker instance on this machine. Tests code generation + git workflow + deployment.
 - [ ] **Polymarket behavioral test** — "Analyze 400M+ Polymarket trades to find behavioral patterns among top wallets — what do winners do differently?" (from hrundel75 link)
 - [ ] **"Get Jeremy rich" prompt** — long-term, after trading patterns are validated and backtested. Baby steps.
 
@@ -692,6 +417,9 @@ These four are kept (not deleted) this triage pending verification against curre
   systematically harsh on build-artifact goals (false-negative achievement), or
   are these outputs genuinely thin? Needs a few more organic batches + spot
   audits before trusting the rate. Don't tune the threshold on n=5.
+  **Update 2026-07-04: the data now exists** — ~68 judged runs with verdict
+  metadata on disk (~26 achieved). The gate is analysis, not data: re-run the
+  done-vs-achieved rate check on the full corpus before touching thresholds.
 
 - [~] **`decomposition_too_broad` residual.** (verify before dropping) The cache-aware conversion (2026-06-22) removed the observed noise source; remaining open question is whether a step doing genuinely >200K *fresh* tokens on an otherwise-successful run should warn at all, or only when the loop also shows stress (blocked steps / budget exhaustion). Revisit only if a real fresh-heavy run flags spuriously. (Full block archived to BACKLOG_DONE; this is the residual watch-item.)
 
@@ -793,6 +521,8 @@ These four are kept (not deleted) this triage pending verification against curre
 
 Titles deleted as obsolete (auditable; full history in git):
 
+- Harness hill-climbing as autonomous loop (2026-07-04: stale duplicate — run_nightly_eval→evolver wiring shipped Phase 42, see BACKLOG_DONE; harness_optimizer covers the proposal half)
+- Dumb loop audit scaffolding item (2026-07-04: superseded at greater scope by MILESTONES #2 / docs/DUMB_LOOP_AUDIT.md; cutover ENACTED 2026-07-03)
 - Build-loop "Define the success condition operationally" + "Preserve health-only heartbeat semantics" notes
 - Per-class-routing "decided" sub-item (the decided routing paragraph; open children local_max_tokens / agentic-verifier kept)
 - done≠achieved finding (the closure-demotion-not-reaching-outcome-store-adjacent organic batch — retained as a conservative watch-item, not dropped)
