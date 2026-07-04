@@ -74,7 +74,20 @@ mid-command. Stray removed (project dir had its own in-fence copies). Any
 tier-a design must handle cwd drift inside a single Bash command, not just
 absolute-path writes.
 
-**Tier-a SHIPPED 2026-07-04 (enforcement gated off, detection on):**
+**ENABLED + LIVE-PROVEN 2026-07-04 (Jeremy's flip, same day):**
+`validate.write_fence: true` on the box. Probe goal explicitly demanding a
+write to `/home/clawd/fence-probe-stray.txt` (run `a619449a-calm-crane`):
+SCAVENGE flagged the write → fence demoted done→blocked with the exact path
+→ `FENCE_WRITE_BLOCKED` emitted → blocked-step navigator escalated at conf
+0.95 with the *right* reasoning ("retrying will hit the same block;
+legitimate goal-vs-fence conflict") → honest stuck run card. Control goal
+(haiku to `artifacts/`) ran under the enabled fence: done, artifact
+in-fence, zero fence events. Residual watch: Bash write shapes the regex
+can't see (`cp`/`mv`/`sed -i` targets, subshell/pushd cds) stay invisible —
+documented in `docs/BOUNDED_WORKSPACE.md` known holes; extend from real
+SCAVENGE evidence, not speculation.
+
+**Tier-a SHIPPED 2026-07-04 (enforcement gated off at ship, detection on):**
 - **cwd-drift detection** closes the specimen above:
   `detect_out_of_fence_access` now tracks `cd` targets across a step's Bash
   commands (worker subprocess cwd persists between Bash calls; within-command
@@ -208,10 +221,15 @@ complete headless server implementation" from the stale tree.
 Right behavior: orchestrator should clone the repo into its own workspace,
 not scavenge from elsewhere on the filesystem.
 
-- [ ] **Low-effort: workspace-folder constraint option.** A config flag /
+- [x] **Low-effort: workspace-folder constraint option.** ~~A config flag /
   per-goal setting that restricts file access (or at minimum, search paths)
-  to the project workspace `repo/` subdir. Not full sandboxing — just
-  "don't wander." Cheap win.
+  to the project workspace `repo/` subdir.~~ **Write-half delivered by
+  `validate.write_fence` (2026-07-04, enabled on box):** the config flag that
+  makes "don't wander" enforceable for writes. Reads stay unrestricted by
+  design — out-of-fence reads are logged (`SCAVENGE_DETECTED`) but often
+  legitimate (context gathering); a read-restricting mode remains possible if
+  scavenge read rows ever show real contamination (the 2026-04-17 stale-clone
+  case is mitigated by fresh-clone-into-workspace behavior + read logging).
 - [x] **Medium-effort: document the bounded-workspace spectrum.** DONE
   2026-07-04: `docs/BOUNDED_WORKSPACE.md` — tiers (a) hard fence /
   (b) soft fence / (c) full machine, when to use which, what each protects

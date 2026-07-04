@@ -936,6 +936,18 @@ Sample: the 2026-05-13..17 window of `~/.maro/workspace/runs/` (478 dirs total;
   to `<run-dir>/build/calls/call-NNNNN.json`. BACKLOG updated in place;
   MCP item moved to BACKLOG_DONE.
 
+- **2026-07-04 (write fence ENABLED — Jeremy: "Let's turn that write fence on
+  and keep going")** — `validate.write_fence: true` on box, live-proven both
+  directions same hour: probe goal demanding an out-of-fence write demoted →
+  `FENCE_WRITE_BLOCKED` → navigator escalate 0.95 (correct "goal conflicts
+  with fence" reasoning), honest stuck card (run `a619449a-calm-crane`);
+  in-fence control completed clean, artifact landed in `artifacts/`.
+  Reversible: `write_fence: false`. Same-session ships: ancestry write-side
+  (`record_fork_ancestry` from handle's dispatch path — double-injection item
+  CLOSED, moved to BACKLOG_DONE) and BACKLOG #9 local-validator ROI
+  (`VALIDATION_LADDER` event + `python3 -m validator_roi`; first corpus read:
+  105 gate rows, 4 local-decisive, shadow false_pass=1).
+
 ## Threads (system-maintained — nothing leaves this list silently)
 
 Active:
