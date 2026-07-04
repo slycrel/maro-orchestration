@@ -1,3 +1,7 @@
+---
+status: dormant-design
+---
+
 # Constraint Orchestration — Perspective-Driven Bounded Execution
 
 > **IMPORTANT — READ FIRST:** This document represents a decision point. It has been superseded in part by [`CONSTRAINT_ORCHESTRATION_REVIEW.md`](./CONSTRAINT_ORCHESTRATION_REVIEW.md), which identified a scope-narrowing issue (this design focuses on *planning*, but the originating conversation was about judgment + validation at *all levels* — the real defect is in verification, not planning), plus a name collision with `src/constraint.py`, an unreachable human gate in the autonomous path, and a substantially smaller minimum experiment. Both documents should be read together. This doc is preserved for decision-trail integrity.

@@ -1,3 +1,7 @@
+---
+status: record
+---
+
 # Adversarial Verification Brief — Productive Persistence & Zoom-Metacognition Claims
 
 > Research brief following `docs/research-brief-template.md`

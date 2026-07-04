@@ -1,3 +1,7 @@
+---
+status: living
+---
+
 # Local Validator — zero-cost first-pass validation
 
 Poe's highest-volume LLM call is **validation** ("did this step result satisfy

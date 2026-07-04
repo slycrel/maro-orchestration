@@ -1,3 +1,7 @@
+---
+status: record
+---
+
 # Mainline Plan
 
 ## Current baseline (v0.5.0)

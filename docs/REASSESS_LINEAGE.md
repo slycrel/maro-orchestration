@@ -1,3 +1,7 @@
+---
+status: dormant-design
+---
+
 # Re-assess Lineage — How We Got Here
 
 **Purpose:** Preserve the conceptual path that led to the current re-assess, so we do not accidentally re-fight the same battle under new names.

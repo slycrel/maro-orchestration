@@ -1,3 +1,7 @@
+---
+status: living
+---
+
 # Coding notes — shape for a heavily-iterating codebase
 
 **Audience:** any contributor (human or model) working in this repo during

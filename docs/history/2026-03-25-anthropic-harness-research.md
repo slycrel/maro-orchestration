@@ -1,3 +1,7 @@
+---
+status: record
+---
+
 # Anthropic Harness Design Research — Captured 2026-03-25
 
 Source: @codebypoonam tweet surfacing Anthropic Engineering Blog posts on long-running agent harnesses.

@@ -1,3 +1,7 @@
+---
+status: record
+---
+
 # Phase Audit — 2026-04-13 (Session 19)
 
 Automated audit of 8 high-risk phases marked "done" in ROADMAP, checking whether

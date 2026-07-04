@@ -1,3 +1,7 @@
+---
+status: record
+---
+
 # Research Brief: Constraint Orchestration, Intent Resolution & Adaptive Execution
 
 **Date:** 2026-05-12  

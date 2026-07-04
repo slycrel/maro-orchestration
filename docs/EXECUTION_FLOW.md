@@ -1,3 +1,7 @@
+---
+status: dormant-design
+---
+
 # Poe Execution Flow
 
 End-to-end diagram of how a goal moves through the system. Useful for spotting

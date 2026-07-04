@@ -1,3 +1,7 @@
+---
+status: record
+---
+
 # Changelog
 
 ## [1.21.0] - 2026-06-21

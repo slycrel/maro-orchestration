@@ -1,3 +1,7 @@
+---
+status: living
+---
+
 # Captain's Log — Event Contract
 
 *The single reference for every captain's-log event: what it is, who emits it, what fields it carries, and when it fires. A blind collaborator should be able to reason about observability from this doc alone, without reading every emitter.*

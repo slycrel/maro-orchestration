@@ -1,3 +1,7 @@
+---
+status: living
+---
+
 # Research Brief Template
 
 > Use this template for any “deep research” run. Output should be a single, readable artifact that a busy human can act on.

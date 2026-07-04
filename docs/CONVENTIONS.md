@@ -1,3 +1,7 @@
+---
+status: living
+---
+
 # Conventions (Maro Orchestration)
 
 ## Philosophy

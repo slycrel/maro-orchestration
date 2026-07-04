@@ -1,3 +1,7 @@
+---
+status: record
+---
+
 # Adversarial Verification Synthesis Report
 
 **Report Date:** 2026-07-02  

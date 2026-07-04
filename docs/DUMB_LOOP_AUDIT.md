@@ -1,3 +1,8 @@
+---
+status: living
+closes-to: history
+---
+
 # Dumb-Loop Audit — pipeline decision-point inventory
 
 **Status: static half done 2026-06-11. Data half round 1 done 2026-06-21

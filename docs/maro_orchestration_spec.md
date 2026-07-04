@@ -1,3 +1,7 @@
+---
+status: dormant-design
+---
+
 # Poe Orchestration — Design Spec
 ## Synthesized from 7 weeks of design conversations (Feb 5 – Mar 23, 2026)
 

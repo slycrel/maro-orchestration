@@ -1,3 +1,7 @@
+---
+status: living
+---
+
 # End-to-end verification
 
 ## Baseline verification

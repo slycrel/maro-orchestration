@@ -1,3 +1,7 @@
+---
+status: record
+---
+
 # Prediction Markets Research Compilation — Executive Summary
 
 **Status:** COMPLETE

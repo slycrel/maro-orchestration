@@ -1,3 +1,7 @@
+---
+status: living
+---
+
 # Security Model
 
 How poe-orchestration thinks about trust, isolation, and keeping secrets secret.

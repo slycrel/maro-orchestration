@@ -1,3 +1,7 @@
+---
+status: record
+---
+
 # Poe Next-Phase Plan
 _Updated: 2026-04-04 — corrected sequencing, 3-sprint grouping, full exit criteria_
 

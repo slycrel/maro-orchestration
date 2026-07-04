@@ -1,7 +1,11 @@
+---
+status: living
+---
+
 # Adversarial Verification — Verdict Quick Reference
 
 **Generated:** 2026-07-02 from 15-pass synthesis  
-**Full report:** `docs/ADVERSARIAL_VERIFICATION_SYNTHESIS.md`
+**Full report:** `docs/history/2026-07-02-adversarial-verification-synthesis.md`
 
 ---
 
@@ -157,4 +161,4 @@ CLAIM-04          CLAIM-03        NEW-P10-003
 
 ---
 
-*Synthesis date: 2026-07-02 | Source: 15 adversarial passes (2026-06-28 through 2026-06-29) | Full details: ADVERSARIAL_VERIFICATION_SYNTHESIS.md*
+*Synthesis date: 2026-07-02 | Source: 15 adversarial passes (2026-06-28 through 2026-06-29) | Full details: history/2026-07-02-adversarial-verification-synthesis.md*

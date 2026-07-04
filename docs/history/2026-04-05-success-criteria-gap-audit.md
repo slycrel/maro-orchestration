@@ -1,3 +1,7 @@
+---
+status: record
+---
+
 # Poe — Success Criteria
 
 *Version 2.1 | 2026-04-04 | Synthesized from BACKLOG.md, ROADMAP.md phases 40–56, inspector.py, evolver.py, POE_IDENTITY.md, lat.md, CHANGELOG.md*

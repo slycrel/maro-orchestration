@@ -1,3 +1,7 @@
+---
+status: dormant-design
+---
+
 # Constraint Orchestration — Codebase Audit
 
 **Status:** Independent audit (not a design or implementation doc)  

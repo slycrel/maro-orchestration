@@ -1,3 +1,7 @@
+---
+status: dormant-design
+---
+
 # Multi-Lens Introspection
 
 This document defines the intended split between **lenses** and **personas** for orchestration self-reflection.

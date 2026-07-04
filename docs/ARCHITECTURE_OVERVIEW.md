@@ -1,6 +1,10 @@
+---
+status: living
+---
+
 # Architecture Overview
 
-*High-level map of Poe's orchestration system. Read this to understand what exists, what's intended, and where they diverge.*
+*High-level map of Maro's orchestration system. Read this to understand what exists, what's intended, and where they diverge.*
 
 *For the vision: read `VISION.md`. For crystallization lifecycle: read `docs/KNOWLEDGE_CRYSTALLIZATION.md`. This doc bridges intent and implementation.*
 
@@ -16,6 +20,42 @@ Two capabilities, often conflated but distinct:
 2. **Maro-as-self-improving-system**: Detect its own friction, change its own behavior, verify the change worked, remember what it learned. *Infrastructure exists; the loop isn't closed.*
 
 **Maturity doctrine: Visibility → Reliability → Replayability.** A useful orchestration system matures in three layers that build on each other: *visibility* (see what it planned, did, spent, and why it failed — without it, debugging is séance), *reliability* (common paths complete consistently, fail legibly, recover sanely, stop repeating mistakes), *replayability* (rerun/replay runs well enough to diagnose decisions and test policy changes against prior traces). Structured logging, traces, and diagnoses are visibility; decomposition quality, recovery, and safer execution are reliability; checkpoints, record-mode capture, and trace replay are replayability. This ordering guides roadmap sequencing.
+
+### Visibility — definition of done (the ladder)
+
+"Visibility" is easy to vibe-claim. It is NOT done until every rung is durably
+recorded to the run trace. Established 2026-06-26 after the test-corpus harvest
+revealed the runtime record is lossier than we'd been saying — we'd casually
+called visibility "closed" while the line was really at ~3.5/6.
+
+| Rung | Visibility of… | Status | Where it lives |
+|------|----------------|--------|----------------|
+| 1 | Outcome (status, verdict, tokens, timing) | ✅ | loop-log.json, run metadata, captains log |
+| 2 | Decisions (scope, diagnosis, quality-gate, claim probes, navigator) | ✅ | captains-log event types |
+| 3 | Plan/structure (steps, deps, shared ctx) | ✅ | steps.json, shared.json |
+| 4 | Step I/O (full input context + full output) | ⚠️ partial | step text yes; loop-log result still a truncated excerpt; assembled prompt now captured at rung 6 |
+| 5 | Agent actions (inner Bash/Write/Read + results) | ✅ forward | tool_events persisted per call in `build/calls/` (record-mode); historical still absent |
+| 6 | LLM call (exact prompt + raw response) — the replay tier | ✅ forward | `build/calls/call-NNNNN.json` (record-mode, default ON) |
+
+**Forward record-mode shipped 2026-06-26** — the keystone. `FailoverAdapter`
+captures `{prompt, response, tool_events, tokens}` per call to
+`<run-dir>/build/calls/call-NNNNN.json` (secret-scrubbed, single seam over every
+backend). Default ON; off via `MARO_RECORD=0` or config `record.enabled: false`.
+This carries rungs 5–6 forward-only and unlocks the Replayability stage, which is
+otherwise unreachable: you cannot replay a call whose prompt you never kept.
+Remaining: unify rung-4 loop-log excerpts with the full captured output; no
+historical backfill (forward-only by nature).
+
+**Post-goal curation (adornment).** A run is paid for; we don't discard it.
+`run_curation.curate_run` runs at goal-end (hooked in handle.py's finalize
+`finally`), writes `<run-dir>/run_card.json` classifying the outcome
+(success / done-not-achieved / done-unverified / partial / failed, done≠achieved
+aware) and inventorying what's mineable (calls, scripts, artifacts, steps). It's
+a miner registry — v0 ships classify + inventory; future passes (skill scraper,
+script scraper, decision-prior indexer, rephrased re-attempt hinter, partial
+rescue) append without touching the hook. User-visible + prunable via
+`python3 -m run_curation list|show|curate|prune`. Off-switch is the same
+`record.enabled` (curation still runs but inventories nothing when capture is off).
 
 ---
 

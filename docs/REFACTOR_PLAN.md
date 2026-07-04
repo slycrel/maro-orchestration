@@ -1,3 +1,8 @@
+---
+status: living
+closes-to: history
+---
+
 # Maro Refactor Plan
 
 Produced in worktree `refactor-plan` (branch `worktree-refactor-plan`) via an
@@ -631,7 +636,7 @@ and the doc/backlog updates for all nine.
 
 ## Docs hygiene (small, do anytime)
 
-`docs/ARCHITECTURE.md` is stale — predates the Poe→Maro rename, references a
+`docs/history/2026-04-22-architecture.md` (formerly docs/ARCHITECTURE.md, now a dated record) is stale — predates the Poe→Maro rename, references a
 deleted `poe.py`, and its module table (48 files/~29K LOC) is roughly 2.5x out
 of date. `docs/ARCHITECTURE_OVERVIEW.md` is the better current reference
 (conceptual, hasn't rotted at the file level) but still uses "Poe" branding

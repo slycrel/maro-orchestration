@@ -1,3 +1,7 @@
+---
+status: living
+---
+
 # recall() — Shape Definition (goal-brain sequencing, step 3)
 
 **Status:** design pinned 2026-06-10; dispatch slice is the v0 implementation target.

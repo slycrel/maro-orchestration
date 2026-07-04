@@ -1,3 +1,7 @@
+---
+status: dormant-design
+---
+
 # Publish Checklist (Go / No-Go)
 
 ## Scope and messaging

@@ -1,3 +1,7 @@
+---
+status: record
+---
+
 # Steal List
 
 Patterns worth lifting from other projects, mapped to where they land in openclaw-orchestration.

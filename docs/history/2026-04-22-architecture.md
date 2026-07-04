@@ -1,3 +1,7 @@
+---
+status: record
+---
+
 # Architecture
 
 How the openclaw-orchestration system works, from a Telegram message to a completed goal.

@@ -1,3 +1,7 @@
+---
+status: dormant-design
+---
+
 # Adaptive Execution Design — Director as Persistent Supervisor
 
 **Status:** Implemented (Phase A/B/C shipped 2026-04-15)

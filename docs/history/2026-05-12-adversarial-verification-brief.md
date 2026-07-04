@@ -1,3 +1,7 @@
+---
+status: record
+---
+
 # Adversarial Verification — Final Synthesis Brief
 
 **Generated:** 2026-05-12 (Session 3, Step 8/8 — full synthesis across all passes)

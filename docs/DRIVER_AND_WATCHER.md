@@ -1,3 +1,7 @@
+---
+status: dormant-design
+---
+
 # Driver, Watcher, and the Layer Above Orchestration
 
 **Status:** findings from extended conversation 2026-04-18 → 2026-04-22,

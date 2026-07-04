@@ -1,3 +1,7 @@
+---
+status: record
+---
+
 # Memento-Skills Research — Captured 2026-03-25
 
 Deep dive into Memento-Skills: self-evolving agents with external skill memory. Source: Tom Doerr tweet, arXiv:2603.18743, GitHub repo, project site.

@@ -1,3 +1,7 @@
+---
+status: dormant-design
+---
+
 # Constraint Orchestration — Critical Review & Scope Correction
 
 **Status:** Review + addendum to `CONSTRAINT_ORCHESTRATION_DESIGN.md`

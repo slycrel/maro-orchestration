@@ -76,7 +76,7 @@ PY
 ## Pull request checklist
 
 - [ ] Behavior change is described clearly.
-- [ ] Docs updated (README/ROADMAP/CHANGELOG as needed).
+- [ ] Docs updated (README / MILESTONES / BACKLOG / GOAL_BRAIN as needed; CHANGELOG retired to docs/history/).
 - [ ] No secrets or machine-specific paths.
 - [ ] Smoke checks pass locally.
 

@@ -1,3 +1,7 @@
+---
+status: record
+---
+
 # Bitter Lesson Analysis — Applied to openclaw-orchestration
 
 Source: Grok feedback (grok-response-3.txt), Miessler's BLE blog, Zakin's Mode 1/2/3 taxonomy.

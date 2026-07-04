@@ -1,3 +1,7 @@
+---
+status: dormant-design
+---
+
 # Self-Reflection Layer — Embedded Self-Debugging + Policy Memory
 
 *"The orchestrator should not only act — it should continuously watch itself act, and become better at steering based on what it observes."*

@@ -14,7 +14,7 @@ DRY_RUN=""
 [[ "${1:-}" == "--dry-run" ]] && DRY_RUN="1"
 
 AUDIT_GOAL="Audit the completed phases in this orchestration codebase at $(pwd). \
-Read ROADMAP.md to find all phases marked DONE or COMPLETE. For each one, verify: \
+Read docs/history/ROADMAP_ARCHIVE.md to find all phases marked DONE or COMPLETE (ROADMAP.md is a stub). For each one, verify: \
 (1) the claimed feature actually exists in the code (check the specific files mentioned), \
 (2) there are tests that exercise the feature (not just dry_run tests), \
 (3) the feature is wired into the execution path (actually called, not dead code). \

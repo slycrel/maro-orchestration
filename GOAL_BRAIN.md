@@ -220,7 +220,7 @@ context, at best it's a slight tweak and we fix forward."*
   substrate had already spent a meta-run investigating the string —
   substrate-side behavior, no Maro fix.
 - Burn-in COMPLETE (2026-07-02, 14 goals / 4 batches; full adjudicated record
-  in `docs/BURNIN_2026-07-02.md`): **pipeline verdict WORKS** — 12/14
+  in `docs/history/2026-07-02-burnin.md`): **pipeline verdict WORKS** — 12/14
   delivered, controls behaved, ~$2.45/day, $0.10–0.60/goal (cost now joinable
   via metadata `loop_ids` → run_card `total_cost_usd`). Batches 2–4 caught
   three more verdict-integrity bugs, all fixed + re-proven live:

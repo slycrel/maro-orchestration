@@ -1,3 +1,7 @@
+---
+status: dormant-design
+---
+
 # Memory Architecture
 
 Captures the design rationale, graduation paths, and open questions for the tiered memory system. This is a living doc — update it as the design evolves.

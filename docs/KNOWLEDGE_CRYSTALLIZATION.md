@@ -1,3 +1,7 @@
+---
+status: dormant-design
+---
+
 # Knowledge Crystallization
 
 *Design note — Jeremy Stone, March 2026. Captures the "sapling to tree" concept for Poe's long-term learning architecture.*

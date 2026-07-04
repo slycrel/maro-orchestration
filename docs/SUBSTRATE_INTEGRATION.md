@@ -1,3 +1,7 @@
+---
+status: living
+---
+
 # Substrate Integration — driving Maro from an external system
 
 Maro is the orchestration engine; the *substrate* is whatever hosts it and

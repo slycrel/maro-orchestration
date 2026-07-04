@@ -1,3 +1,7 @@
+---
+status: record
+---
+
 # MD Claims Audit — Grounded vs Ungrounded
 
 **Generated:** 2026-05-12  

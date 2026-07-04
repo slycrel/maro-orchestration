@@ -1,3 +1,7 @@
+---
+status: dormant-design
+---
+
 # Miscommunication Patterns & Bad Assumptions
 ## What kept going wrong — and what to learn from it
 

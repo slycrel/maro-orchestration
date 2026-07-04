@@ -1,3 +1,7 @@
+---
+status: dormant-design
+---
+
 # Thread Architecture
 
 **Status:** Active design space. Sketched 2026-04-26 → 2026-04-27 in a planning-mode conversation between Jeremy and Claude. No implementation yet — this doc is the reference + decision log + open-question list. Branch: `arch/thread-navigator`.

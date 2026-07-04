@@ -1,3 +1,7 @@
+---
+status: dormant-design
+---
+
 # What I'm Building and Why
 ## Jeremy's Intent — Key Quotes
 

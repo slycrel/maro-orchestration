@@ -1,3 +1,7 @@
+---
+status: record
+---
+
 # Factory AI Research — Captured 2026-03-24
 
 Deep dive into Factory AI's orchestration architecture. Source: Factory blog, docs, Latent Space interview, academic papers. Tweet reference: `@factoryai/status/2036184745059688923`.

@@ -1,3 +1,7 @@
+---
+status: dormant-design
+---
+
 # Re-assess Drift Guard (Pseudo-Adversarial)
 
 **Purpose:** Guard the re-assess against a familiar failure mode: gradually drifting from **"make LLMs useful, automated, and able to stay on target over ordered time"** into either decorative agent theater or an implicit AGI project.

@@ -1,3 +1,7 @@
+---
+status: record
+---
+
 # Loop Scratchpad — Step-Level Data Sharing Architecture
 
 ## Problem

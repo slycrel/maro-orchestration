@@ -1,3 +1,7 @@
+---
+status: dormant-design
+---
+
 # Queue Adapter
 
 How work gets enqueued and consumed in Maro, and how to swap backends.

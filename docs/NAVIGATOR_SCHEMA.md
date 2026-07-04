@@ -1,3 +1,7 @@
+---
+status: living
+---
+
 # Navigator Decision Schema (goal-brain sequencing, step 4)
 
 **Status:** schema pinned 2026-06-11; **acting live on this box since 2026-07-03** —

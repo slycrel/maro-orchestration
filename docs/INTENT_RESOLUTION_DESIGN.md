@@ -1,3 +1,7 @@
+---
+status: dormant-design
+---
+
 # Intent Resolution — the shape we've been circling
 
 **Status:** exploratory sketch. Not a shipping design. Written 2026-04-18 after

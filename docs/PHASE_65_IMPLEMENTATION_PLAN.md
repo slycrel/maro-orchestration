@@ -1,3 +1,7 @@
+---
+status: dormant-design
+---
+
 # Phase 65 Implementation Plan — Scope (minimum viable experiment)
 
 **Date:** 2026-04-16

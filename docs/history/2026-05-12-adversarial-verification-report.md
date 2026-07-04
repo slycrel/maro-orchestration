@@ -1,3 +1,7 @@
+---
+status: record
+---
+
 # Adversarial Verification Report
 
 **Generated:** 2026-05-12 (full synthesis — steps 1-8)

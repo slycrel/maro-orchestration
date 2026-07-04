@@ -1,3 +1,7 @@
+---
+status: record
+---
+
 # Research Brief: Productive Persistence & Zoom-Out Metacognition — Findings and Design
 
 *Synthesized: 2026-05-12*

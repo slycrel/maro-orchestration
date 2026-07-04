@@ -1,3 +1,7 @@
+---
+status: living
+---
+
 # Poe Orchestrator — Architecture Non-Goals
 
 What Poe deliberately does NOT do, and why. Use this to say no cleanly.

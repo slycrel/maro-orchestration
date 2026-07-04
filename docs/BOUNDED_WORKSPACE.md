@@ -1,3 +1,7 @@
+---
+status: living
+---
+
 # Bounded Workspace — the containment spectrum
 
 Where worker file access is allowed to land, what each tier protects against,
