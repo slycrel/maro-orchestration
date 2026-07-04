@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import logging
 import textwrap
+import time
 from dataclasses import dataclass, field
 from typing import Any, List, Optional
 from llm_parse import extract_json, safe_float, safe_str, safe_list, content_or_empty
@@ -359,6 +360,7 @@ def run_quality_gate(
             f"Does this output meet the bar for the stated goal?"
         )
 
+        _t0 = time.monotonic()
         resp = adapter.complete(
             [
                 LLMMessage("system", _GATE_SYSTEM),
@@ -367,6 +369,7 @@ def run_quality_gate(
             max_tokens=256,
             temperature=0.1,
         )
+        _gate_elapsed_ms = int((time.monotonic() - _t0) * 1000)
 
         data = extract_json(content_or_empty(resp), dict, log_tag="quality_gate.pass1")
         if data:
@@ -407,6 +410,9 @@ def run_quality_gate(
                         "source": getattr(adapter, "model_key", "") or "unknown",
                         "reason": reason[:400],
                         "step_count": len(done_steps),
+                        # verdict-call latency (BACKLOG #9 ROI measurement)
+                        "elapsed_ms": _gate_elapsed_ms,
+                        "input_chars": len(user_msg),
                     },
                     loop_id=loop_id,
                 )

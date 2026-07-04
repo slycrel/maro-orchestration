@@ -232,11 +232,6 @@ have" not "build a sandboxing subsystem."
 
 
 
-### 9. Local-validator measurement — token/cost delta report
-
-- [ ] **Token/cost delta report.** Quantify tokens saved vs escalation rate vs added
-  latency, on Poe's own task corpus — the actual ROI of running this.
-
 ### 10. Local-validator measurement — tune `local_max_tokens` per model
 
 - [ ] **Tune `local_max_tokens` per model.** Live finding (2026-06-21 verify run):

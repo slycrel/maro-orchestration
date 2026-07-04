@@ -1267,6 +1267,43 @@ _VERIFY_SYSTEM = textwrap.dedent("""\
 """).strip()
 
 
+def _log_validation_ladder(
+    *,
+    tier: str,
+    source: str,
+    passed: bool,
+    confidence: float,
+    input_chars: int,
+    step_text: str,
+    local_elapsed_ms: int = 0,
+    paid_elapsed_ms: int = 0,
+) -> None:
+    """Record one VALIDATION_LADDER row per verify_step call (BACKLOG #9).
+
+    tier: local-decisive | escalated | paid. Diagnostic only — the ROI report
+    (`python3 -m validator_roi`) aggregates these; nothing reads them for
+    control flow. Never raises.
+    """
+    try:
+        from captains_log import log_event, VALIDATION_LADDER
+        log_event(
+            VALIDATION_LADDER,
+            subject=step_text[:120],
+            summary=f"tier={tier} source={source} passed={passed} conf={confidence:.2f}",
+            context={
+                "tier": tier,
+                "source": source,
+                "passed": bool(passed),
+                "confidence": float(confidence),
+                "local_elapsed_ms": int(local_elapsed_ms),
+                "paid_elapsed_ms": int(paid_elapsed_ms),
+                "input_chars": int(input_chars),
+            },
+        )
+    except Exception:
+        pass
+
+
 def verify_step(
     step_text: str,
     result: str,
@@ -1288,6 +1325,7 @@ def verify_step(
     # --- Tier 1: free local validator (gated; falls through to paid on anything) ---
     _escalated = False
     _local_lv = None   # (verdict, source) carried to Tier 2 for shadow-eval (no-op unless enabled)
+    _local_elapsed_ms = 0
     try:
         import local_models as _lm
         if _lm.configured_models():
@@ -1295,13 +1333,20 @@ def verify_step(
             local = _lm.build_local_validator_adapter()  # None if endpoint/model absent
             if local is not None:
                 from verification_agent import VerificationAgent
+                _t0 = time.monotonic()
                 lv = VerificationAgent(local, confidence_threshold=confidence_threshold,
                                        max_input_chars=_lm.input_char_budget()).verify_step(step_text, result)
+                _local_elapsed_ms = int((time.monotonic() - _t0) * 1000)
                 _local_source = getattr(local, "model_key", "local")
                 _local_lv = (lv, _local_source)
                 if lv.confidence >= _lm.min_certainty():
                     log.debug("local validator decisive: passed=%s conf=%.2f via %s",
                               lv.passed, lv.confidence, _local_source)
+                    _log_validation_ladder(
+                        tier="local-decisive", source=_local_source,
+                        passed=lv.passed, confidence=lv.confidence,
+                        local_elapsed_ms=_local_elapsed_ms,
+                        input_chars=len(result or ""), step_text=step_text)
                     # Decisive → production uses local and skips paid. Shadow-eval
                     # (opt-in) asks paid anyway to learn whether local was right —
                     # the only place that agreement signal exists. Decide-only.
@@ -1325,7 +1370,15 @@ def verify_step(
     try:
         from verification_agent import VerificationAgent
         va = VerificationAgent(adapter, confidence_threshold=confidence_threshold)
+        _t0 = time.monotonic()
         verdict = va.verify_step(step_text, result)
+        _paid_elapsed_ms = int((time.monotonic() - _t0) * 1000)
+        _log_validation_ladder(
+            tier="escalated" if _escalated else "paid",
+            source=getattr(adapter, "model_key", "") or "paid",
+            passed=verdict.passed, confidence=verdict.confidence,
+            local_elapsed_ms=_local_elapsed_ms, paid_elapsed_ms=_paid_elapsed_ms,
+            input_chars=len(result or ""), step_text=step_text)
         # Escalation path: local + paid verdicts both exist now — log the pair for
         # shadow-eval (free; no extra call). No-op unless validate.shadow_eval is on.
         if _local_lv is not None:

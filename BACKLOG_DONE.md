@@ -8,6 +8,29 @@ Last split: 2026-04-16 (session 34).
 
 ---
 
+### BACKLOG #9: Local-validator token/cost delta report — DONE (2026-07-04)
+
+- [x] **Token/cost delta report.** Quantify tokens saved vs escalation rate vs
+  added latency, on Poe's own task corpus — the actual ROI of running this.
+  **Shipped 2026-07-04 in two parts.** (1) *Instrumentation* — the step-level
+  ladder outcome was previously `log.debug` only (verification_outcomes.jsonl
+  is stale Apr-12 test contamination), so nothing could be measured. New
+  captain's-log event `VALIDATION_LADDER` (one per `verify_step` call): tier
+  (local-decisive / escalated / paid), source, confidence, per-tier latency
+  (`local_elapsed_ms`/`paid_elapsed_ms`), payload size (`input_chars`).
+  QUALITY_GATE_VERDICT rows additionally carry `elapsed_ms` + `input_chars`.
+  (2) *Report* — `python3 -m validator_roi [--json]` aggregates both families:
+  decisive-local rate (over local attempts), paid calls skipped, estimated USD
+  saved (payload-priced through `metrics.estimate_cost` — clearly labeled an
+  estimate, verdict calls aren't individually metered), local-vs-paid latency,
+  wasted local latency on escalations, and cites `validation_shadow`'s
+  false_pass count as the safety column. First run on the real corpus:
+  gate rows 105, local-decisive 4 (~$0.04 saved so far), step-ladder rows 0
+  (instrumentation just shipped — data accrues from future validated runs),
+  shadow false_pass = 1 (the known n=42 provenance case). Tests:
+  `tests/test_validator_roi.py` (11). Companion #10 (tune local_max_tokens)
+  stays open — needs the deep-eval corpus this instrumentation now grows.
+
 ### Ancestry double-injection: two disagreeing lineage sources — DONE (2026-07-04)
 
 - [x] **`agent_loop.py` injected ancestry twice per loop from two independent,

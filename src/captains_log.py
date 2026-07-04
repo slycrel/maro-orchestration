@@ -152,6 +152,13 @@ NAVIGATOR_ACTED = "NAVIGATOR_ACTED"
 # for per-class min_certainty / routing; nothing reads it for control flow.
 VALIDATOR_SHADOWED = "VALIDATOR_SHADOWED"
 
+# Local-validator ladder outcome (BACKLOG #9 measurement). One per verify_step
+# call recording which tier decided (local-decisive / escalated / paid-only),
+# per-tier latency, and payload size — the raw data for the token/cost delta
+# report (`python3 -m validator_roi`). Diagnostic only; nothing reads it for
+# control flow.
+VALIDATION_LADDER = "VALIDATION_LADDER"
+
 EVENT_TYPES = {
     SKILL_SYNTHESIZED, SKILL_SYNTHESIS_REJECTED, SKILL_PROMOTED, SKILL_DEMOTED, SKILL_REWRITE,
     SKILL_CIRCUIT_OPEN, SKILL_CIRCUIT_HALF_OPEN, SKILL_CIRCUIT_CLOSED,
@@ -170,7 +177,7 @@ EVENT_TYPES = {
     LOOP_CREATED, QUALITY_GATE_VERDICT, STEP_TOO_BROAD,
     RECALL_PERFORMED, RECALL_GUARD_TRIPPED,
     NAVIGATOR_DECIDED, NAVIGATOR_ACTED,
-    VALIDATOR_SHADOWED,
+    VALIDATOR_SHADOWED, VALIDATION_LADDER,
 }
 
 # ---------------------------------------------------------------------------
