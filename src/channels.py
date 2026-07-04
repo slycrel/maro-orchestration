@@ -9,10 +9,12 @@ Each channel has a standard interface:
 Unified dispatcher:
     result = fetch_channel(query_or_url)  # auto-detects platform
 
-Tools registered for agent use:
-    github_search(query, type="repositories")  -> ChannelResult
-    reddit_posts(subreddit, sort="hot", limit=5) -> ChannelResult
-    youtube_transcript(video_url_or_id) -> ChannelResult
+Agent access goes through the unified `fetch` tool (`fetch_tool.py`, registered
+in tool_registry) — these module-level wrappers are its platform backends:
+    github_search(query, type="repositories")  -> str
+    reddit_posts(subreddit, sort="hot", limit=5) -> str
+    reddit_search(query, ...) -> str
+    youtube_transcript(video_url_or_id) -> str
 """
 
 from __future__ import annotations

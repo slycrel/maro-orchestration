@@ -8,6 +8,35 @@ Last split: 2026-04-16 (session 34).
 
 ---
 
+### Unify fragmented web/content-fetch capability — DONE (2026-07-04)
+
+- [x] **Three uncoordinated fetch implementations, never unified.**
+  `web_fetch.py` (generic URL via Jina/BS4 + X/Twitter fallback chain: direct
+  → oEmbed → t.co resolve; sole production caller `step_exec.py`'s
+  enrich_step_with_urls), `channels.py` (GitHub/Reddit/YouTube structured
+  queries; docstring falsely claimed "registered for agent use" — zero
+  registry references), and `orch_bridges.py`'s x-capture salvage bridge
+  (reads an artifact from an external pipeline that doesn't exist in-repo).
+  Different failure modes depending on which path a goal hit — the "failing
+  left and right with webfetch" experience. **Shipped:** `src/fetch_tool.py`
+  — one `fetch(target, mode=auto|url|youtube|github_repos|github_code|
+  github_issues|reddit_posts|reddit_search, limit)` facade; auto routes URLs
+  by host (YouTube → transcript, everything else through
+  `fetch_url_content`, which keeps owning the X/oEmbed chain — the facade
+  deliberately does NOT re-route around it); never raises, failures are
+  `[bracketed]` messages. Registered as tool `fetch` in the default registry
+  (worker role only — verify/inspector roles shouldn't pull fresh web content
+  mid-verdict) with `_handler`, so it's advertised via get_tools_for_role
+  AND dispatchable through `resolve_and_call` (the step_exec registry branch
+  shipped earlier the same day, 7732e42, is what makes registry tools
+  actually executable). Live-verified: `registry.resolve_and_call('fetch',
+  {'target': 'https://example.com'})` returns Jina content in-process.
+  channels.py docstring corrected. x-capture salvage bridge left as-is
+  (reads an artifact, doesn't fetch). enrich_step_with_urls keeps calling
+  web_fetch directly (same backend the facade delegates to). Tests:
+  `tests/test_fetch_tool.py` (routing/handler/registry, 15). Source:
+  refactor-plan architecture review, 2026-07-02.
+
 ### BACKLOG #9: Local-validator token/cost delta report — DONE (2026-07-04)
 
 - [x] **Token/cost delta report.** Quantify tokens saved vs escalation rate vs

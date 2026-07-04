@@ -355,6 +355,25 @@ def _build_default_registry() -> ToolRegistry:
             input_schema=schema.get("parameters", {}),
             roles_allowed=_ROLE_MAP.get(name, list(_ALL_ROLES)),
         ))
+
+    # Unified fetch tool (BACKLOG fetch unification): one seam over
+    # web_fetch + channels, dispatched in-process via _handler through
+    # resolve_and_call (step_exec's registry branch). Worker-only — review/
+    # verify roles shouldn't be pulling fresh web content mid-verdict.
+    try:
+        from fetch_tool import (FETCH_TOOL_NAME, FETCH_TOOL_DESCRIPTION,
+                                FETCH_TOOL_SCHEMA, fetch_handler)
+        _fetch_td = ToolDefinition(
+            name=FETCH_TOOL_NAME,
+            description=FETCH_TOOL_DESCRIPTION,
+            input_schema=FETCH_TOOL_SCHEMA,
+            roles_allowed=[ROLE_WORKER],
+        )
+        _fetch_td._handler = fetch_handler  # type: ignore[attr-defined]
+        reg.register(_fetch_td)
+    except Exception as _fetch_exc:  # never block registry construction
+        log.debug("tool_registry: fetch tool unavailable: %s", _fetch_exc)
+
     return reg
 
 

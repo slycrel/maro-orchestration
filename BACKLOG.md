@@ -743,34 +743,6 @@ These four are kept (not deleted) this triage pending verification against curre
   subpackage move rather than deprecated. Source: refactor-plan git-history
   investigation, 2026-07-02.
 
-### Unify fragmented web/content-fetch capability into one skill
-
-- [ ] **Three uncoordinated fetch implementations, never unified.**
-  `web_fetch.py` (generic URL fetch+strip via Jina/BS4, plus a built-in
-  X/Twitter fallback chain: direct fetch → oEmbed → t.co resolve; sole
-  production caller `step_exec.py:803`), `channels.py` (GitHub/Reddit/YouTube
-  structured queries via raw `urllib`; docstring falsely claims these are
-  "registered for agent use" — zero references in `tool_registry.py` or
-  `skills.py`, only `doctor.py` pings it as a health check), and
-  `orch_bridges.py`'s x-capture salvage bridge
-  (`x_capture_salvage_validation_bridge`, added 2026-03-20) — the last of
-  which doesn't fetch anything itself, it just reads an
-  `x-capture-salvage.json` artifact written by an **external, out-of-repo**
-  X-capture pipeline that doesn't exist anywhere in this repo. Not literal
-  duplicated code, but three disconnected one-off builds with different
-  failure modes depending on which path a goal happens to hit — this is
-  plausibly the "failing left and right with webfetch or wget type calls"
-  experience. No formally tracked "standard skills" initiative was found
-  (grepped BACKLOG + full git log + `STEAL_LIST.md`) — this is new scoping,
-  not a resumed thread.
-  **Action:** consolidate into one general fetch skill registered in
-  `tool_registry.py`/`skills.py` with sub-verbs — generic URL, X/Twitter
-  (preserving the oEmbed→salvage-retry escalation path), and channels.py's
-  platform queries — so callers stop hand-rolling fetch logic per feature.
-  Register channels.py's functions as real tools or delete the false
-  "registered for agent use" claim. Revisit later. Source: refactor-plan
-  architecture review, 2026-07-02.
-
 ### Observability dashboard — archived, revisit the visibility goal with a different implementation
 
 - [ ] **Dashboard archived 2026-07-02, underlying goal still open.** The
