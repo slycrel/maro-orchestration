@@ -917,6 +917,25 @@ Sample: the 2026-05-13..17 window of `~/.maro/workspace/runs/` (478 dirs total;
   varied across identical goal text (extend 0.92/0.95 on two earlier
   dispatches) — logged as re-verify data.
 
+- **2026-07-04 (overnight backlog batch — four closes, all pushed)** —
+  (1) *MCP dispatch gap FIXED* (`7732e42`): step_exec's unknown-tool branch
+  now dispatches registry tools (`mcp__*` `_mcp_caller` / `_handler`) via
+  `resolve_and_call`; failed calls block with the real error; advertised
+  capability is no longer silently inert. (2) *Tier-a write fence SHIPPED,
+  gated off* (`b2ea9b9`): cwd-drift detection closes the run-668e46d1 evasion
+  (cd-out-of-fence + relative writes now resolved and flagged as writes,
+  `<tool>(cwd-drift)`); `validate.write_fence` (default OFF) demotes
+  done→blocked on out-of-fence writes + `FENCE_WRITE_BLOCKED` event — flip is
+  Jeremy's call after watching SCAVENGE write rows (same pattern as the
+  navigator cutovers); `docs/BOUNDED_WORKSPACE.md` documents the a/b/c
+  spectrum. (3) *Ancestry unification, read side* (`6fe8fcc`): recall's
+  thread falls back to ancestry.json's chain (source="ancestry") when the
+  origin walk yields nothing — loop prompt lineage now has one source;
+  write side (thread_brain → ancestry.json at fork) stays open. (4) *Rung-4
+  step I/O unified* (`3347877`): loop-log steps carry `call_record` linking
+  to `<run-dir>/build/calls/call-NNNNN.json`. BACKLOG updated in place;
+  MCP item moved to BACKLOG_DONE.
+
 ## Threads (system-maintained — nothing leaves this list silently)
 
 Active:
