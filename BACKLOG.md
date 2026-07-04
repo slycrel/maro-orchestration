@@ -758,30 +758,6 @@ These four are kept (not deleted) this triage pending verification against curre
   "registered for agent use" claim. Revisit later. Source: refactor-plan
   architecture review, 2026-07-02.
 
-### Ancestry double-injection: two disagreeing lineage sources in the loop prompt
-
-- [ ] **`agent_loop.py` injects ancestry twice per loop from two independent,
-  potentially-disagreeing sources.** `ancestry.py`'s `build_ancestry_prompt()`
-  reads the per-project `ancestry.json` chain; `recall.py`'s
-  `_resolve_thread()` independently walks a *different* data source (run
-  metadata `origin`) to build its own ancestry string. `recall.py`'s own
-  docstring admits the gap: "goal-brain injection + correspondence walk are
-  still future work." No single source of truth exists today. See the new
-  "Goal Lineage" section in `docs/ARCHITECTURE_OVERVIEW.md` for the full
-  four-mechanism map (`ancestry.py`, `goal_map.py`, `thread_brain.py`,
-  `recall.py`). **Read-side SHIPPED 2026-07-04:** recall's thread resolution
-  now falls back to `ancestry.py`'s chain (`_thread_from_project_ancestry`,
-  source="ancestry") when the run-metadata origin walk yields nothing — the
-  loop slice (called with project, no origin) now surfaces the same lineage
-  `build_ancestry_prompt` injects instead of staying silent, and
-  `sources["thread_source"]` records which source won. Origin walk still wins
-  when present (run-level truth for dispatched goals, which have no
-  ancestry.json). Tests: `TestAncestryUnification` (5). **Remaining action:**
-  wire `thread_brain.py`'s per-thread origin to also write/consult
-  `ancestry.json` at thread-fork time as Thread Architecture matures — that's
-  the write-side that makes ancestry.json the true single source. Source:
-  refactor-plan architecture review, 2026-07-02.
-
 ### Observability dashboard — archived, revisit the visibility goal with a different implementation
 
 - [ ] **Dashboard archived 2026-07-02, underlying goal still open.** The

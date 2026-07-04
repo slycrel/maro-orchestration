@@ -8,6 +8,32 @@ Last split: 2026-04-16 (session 34).
 
 ---
 
+### Ancestry double-injection: two disagreeing lineage sources — DONE (2026-07-04)
+
+- [x] **`agent_loop.py` injected ancestry twice per loop from two independent,
+  potentially-disagreeing sources.** `ancestry.py`'s `build_ancestry_prompt()`
+  reads the per-project `ancestry.json` chain; `recall.py`'s
+  `_resolve_thread()` independently walked a *different* data source (run
+  metadata `origin`). See "Goal Lineage" in `docs/ARCHITECTURE_OVERVIEW.md`
+  for the four-mechanism map (`ancestry.py`, `goal_map.py`, `thread_brain.py`,
+  `recall.py`). **Read-side SHIPPED 2026-07-04 (6fe8fcc):** recall's thread
+  resolution falls back to `ancestry.py`'s chain
+  (`_thread_from_project_ancestry`, source="ancestry") when the run-metadata
+  origin walk yields nothing; `sources["thread_source"]` records which source
+  won. Origin walk still wins when present (run-level truth for dispatched
+  goals). Tests: `TestAncestryUnification` (5). **Write-side SHIPPED
+  2026-07-04:** the dispatch path (`handle.py`, right where the loop's
+  project identity is resolved — not `thread_brain`, which is run-dir-scoped
+  and has no project knowledge) records the fork in the child project's
+  `ancestry.json` via `ancestry.record_fork_ancestry` — first fork wins,
+  parent identity derived from `origin.parent_goal` through the same
+  `_default_project_for` the parent's own loop used, chain inherited from the
+  parent project's ancestry.json when present, self-parenting (re-dispatch of
+  the same goal) skipped. ancestry.json is now written for dispatched goals,
+  so `build_ancestry_prompt`, recall's fallback, and the origin walk converge
+  on one lineage. Tests: `TestForkAncestryWriteSide` (5). Source:
+  refactor-plan architecture review, 2026-07-02.
+
 ### MCP tool dispatch gap — DONE (2026-07-04)
 
 - [x] **MCP tools registered/advertised but never dispatchable (bug).**

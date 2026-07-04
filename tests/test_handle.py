@@ -2781,3 +2781,106 @@ class TestNamedProjectBinding:
             handle("touch the polymarket-edges ledger", project="my-proj",
                    force_lane="agenda", dry_run=False)
         assert calls and calls[0].get("project") == "my-proj"
+
+
+class TestForkAncestryWriteSide:
+    """Ancestry unification, write side (BACKLOG "Ancestry double-injection"):
+    a dispatched fork writes the child project's ancestry.json from its
+    origin, so build_ancestry_prompt + recall's ancestry fallback see the
+    same lineage the origin walk would."""
+
+    _setup = TestDirectorRestart._setup
+    _no_quality_gate = staticmethod(TestDirectorRestart._no_quality_gate)
+    _fake_loop_result = TestDirectorRestart._fake_loop_result
+
+    def _dispatch(self, monkeypatch, tmp_path, goal, origin):
+        self._setup(monkeypatch, tmp_path)
+        from unittest.mock import patch
+
+        calls = []
+        def _fake_run(*args, **kwargs):
+            calls.append(kwargs.copy())
+            return self._fake_loop_result(status="done")
+
+        with patch("agent_loop.run_agent_loop", side_effect=_fake_run), \
+             patch("intent.check_goal_clarity", return_value={"clear": True}), \
+             self._no_quality_gate():
+            handle(goal, force_lane="agenda", dry_run=False, origin=origin)
+        return calls
+
+    def test_fork_writes_child_ancestry(self, monkeypatch, tmp_path):
+        from agent_loop import _goal_to_slug
+        from ancestry import get_project_ancestry
+        from orch_items import project_dir
+
+        goal = "audit the error handling in the ingest pipeline"
+        origin = {"parent_goal": "harden the whole ingest subsystem",
+                  "parent_handle_id": "hid-parent-1", "source": "dispatch"}
+        calls = self._dispatch(monkeypatch, tmp_path, goal, origin)
+        assert calls
+
+        pa = get_project_ancestry(project_dir(_goal_to_slug(goal)))
+        assert pa is not None
+        assert pa.parent_id == _goal_to_slug("harden the whole ingest subsystem")
+        assert pa.ancestry[-1].title == "harden the whole ingest subsystem"
+
+    def test_fork_inherits_parent_chain(self, monkeypatch, tmp_path):
+        from agent_loop import _goal_to_slug
+        from ancestry import (get_project_ancestry, set_project_ancestry,
+                              ProjectAncestry, AncestryNode)
+        from orch_items import project_dir
+
+        parent_goal = "harden the whole ingest subsystem"
+        parent_slug = _goal_to_slug(parent_goal)
+        # Parent project already carries its own lineage back to a mission.
+        pdir = project_dir(parent_slug)
+        pdir.mkdir(parents=True, exist_ok=True)
+        set_project_ancestry(pdir, ProjectAncestry(
+            parent_id="mission-root",
+            ancestry=[AncestryNode(id="mission-root", title="Top mission")]))
+
+        goal = "audit the error handling in the ingest pipeline"
+        self._dispatch(monkeypatch, tmp_path, goal,
+                       {"parent_goal": parent_goal, "parent_handle_id": "h2"})
+
+        pa = get_project_ancestry(project_dir(_goal_to_slug(goal)))
+        assert pa is not None
+        assert [n.id for n in pa.ancestry] == ["mission-root", parent_slug]
+
+    def test_no_origin_writes_nothing(self, monkeypatch, tmp_path):
+        from agent_loop import _goal_to_slug
+        from ancestry import get_project_ancestry
+        from orch_items import project_dir
+
+        goal = "audit the error handling in the ingest pipeline"
+        self._dispatch(monkeypatch, tmp_path, goal, None)
+        assert get_project_ancestry(project_dir(_goal_to_slug(goal))) is None
+
+    def test_first_fork_wins(self, monkeypatch, tmp_path):
+        from agent_loop import _goal_to_slug
+        from ancestry import get_project_ancestry
+        from orch_items import project_dir
+
+        goal = "audit the error handling in the ingest pipeline"
+        self._dispatch(monkeypatch, tmp_path, goal,
+                       {"parent_goal": "harden the whole ingest subsystem",
+                        "parent_handle_id": "h1"})
+        self._dispatch(monkeypatch, tmp_path, goal,
+                       {"parent_goal": "a totally different later parent",
+                        "parent_handle_id": "h9"})
+
+        pa = get_project_ancestry(project_dir(_goal_to_slug(goal)))
+        assert pa is not None
+        assert pa.ancestry[-1].title == "harden the whole ingest subsystem"
+
+    def test_self_parent_skipped(self, monkeypatch, tmp_path):
+        """Re-dispatch of the same goal (child slug == parent slug) must not
+        self-parent."""
+        from agent_loop import _goal_to_slug
+        from ancestry import get_project_ancestry
+        from orch_items import project_dir
+
+        goal = "audit the error handling in the ingest pipeline"
+        self._dispatch(monkeypatch, tmp_path, goal,
+                       {"parent_goal": goal, "parent_handle_id": "h1"})
+        assert get_project_ancestry(project_dir(_goal_to_slug(goal))) is None

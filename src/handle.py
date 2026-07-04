@@ -1093,6 +1093,30 @@ def _handle_impl(
         if _ultraplan_max_steps is not None:
             _loop_kwargs["max_steps"] = _ultraplan_max_steps
 
+        # Ancestry write-side (BACKLOG ancestry unification): a dispatched
+        # fork records its lineage in the child project's ancestry.json —
+        # the same chain build_ancestry_prompt injects and recall falls back
+        # to — so origin-walk and ancestry.json stop being two disagreeing
+        # sources. First fork wins; parent identity derives from parent_goal
+        # via the same _default_project_for the parent's own loop used.
+        if origin:
+            try:
+                from ancestry import record_fork_ancestry
+                from orch_items import project_dir as _anc_pdir
+                _par_goal = str(origin.get("parent_goal") or "").strip()
+                _par_hid = str(origin.get("parent_handle_id") or "").strip()
+                _child_slug = str(_loop_kwargs.get("project") or "")
+                _par_slug = _default_project_for(_par_goal) if _par_goal else ""
+                if (_par_goal or _par_hid) and _child_slug and _child_slug != _par_slug:
+                    record_fork_ancestry(
+                        _anc_pdir(_child_slug),
+                        parent_id=_par_slug or _par_hid,
+                        parent_title=_par_goal or f"thread {_par_hid}",
+                        parent_dir=_anc_pdir(_par_slug) if _par_slug else None,
+                    )
+            except Exception:
+                pass
+
         # Wire step_callback for channel live updates (main AGENDA path only)
         if channel is not None:
             def _step_cb(step_num: int, step_text: str, summary: Optional[str], status: str) -> None:

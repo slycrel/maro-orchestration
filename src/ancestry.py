@@ -111,6 +111,37 @@ def create_child_ancestry(
     return ProjectAncestry(parent_id=parent_project_id, ancestry=inherited)
 
 
+def record_fork_ancestry(
+    child_dir: Path,
+    *,
+    parent_id: str,
+    parent_title: str,
+    parent_dir: Optional[Path] = None,
+) -> bool:
+    """Write ancestry.json for a forked/dispatched child project.
+
+    First call wins — an existing ancestry.json is never clobbered (the
+    original fork's lineage is the truth; re-dispatches don't rewrite it).
+    When parent_dir is given and carries its own ancestry.json, the child
+    inherits the full chain; otherwise the parent becomes the chain root.
+
+    Returns True iff a new ancestry.json was written.
+    """
+    if not parent_id and not parent_title:
+        return False
+    if _ancestry_path(child_dir).exists():
+        return False
+    inherited: List[AncestryNode] = []
+    if parent_dir is not None:
+        parent_ancestry = get_project_ancestry(parent_dir)
+        if parent_ancestry:
+            inherited = list(parent_ancestry.ancestry)
+    inherited.append(AncestryNode(id=parent_id, title=parent_title))
+    child_dir.mkdir(parents=True, exist_ok=True)
+    set_project_ancestry(child_dir, ProjectAncestry(parent_id=parent_id, ancestry=inherited))
+    return True
+
+
 # ---------------------------------------------------------------------------
 # Prompt injection
 # ---------------------------------------------------------------------------
