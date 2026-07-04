@@ -8,6 +8,23 @@ Last split: 2026-04-16 (session 34).
 
 ---
 
+### MCP tool dispatch gap — DONE (2026-07-04)
+
+- [x] **MCP tools registered/advertised but never dispatchable (bug).**
+  `heartbeat.py` loads configured MCP servers and advertises their tools into
+  prompts, but `step_exec.py`'s tool dispatch had no `mcp__*` branch — fell
+  through to "unrecognised tool: blocked." The execution bridges
+  (`tool_registry.ToolRegistry.resolve_and_call`, `mcp_client.dispatch_mcp_call`)
+  had zero production callers. **Fixed:** step_exec's unknown-tool branch now
+  consults the registry first — any tool with an `_mcp_caller` or `_handler`
+  dispatches via `resolve_and_call` (MCP content blocks coerced to text via
+  `mcp_client._extract_text`); a *failed* call is an honest blocked step with
+  the real error ("tool X failed: ..."), distinct from unrecognised. Schema-only
+  registrations (builtins with no handler) still fall through to runtime tools
+  → unrecognised, so no behavior change for the existing tool set. Tests:
+  `TestRegistryToolDispatch` (5 cases: dispatch, failure, handler tool,
+  unknown, schema-only). Source: refactor-plan architecture review, 2026-07-02.
+
 ### Spend-gated transparency mandate — DONE (2026-07-03)
 
 - [x] **Shipped as a `spend_transparency` curator** in run_curation's miner

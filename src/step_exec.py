@@ -1137,14 +1137,61 @@ def execute_step(
                 "cache_read_tokens": getattr(resp, "cache_read_tokens", 0),
             }
         else:
+            # Registry-dispatchable tools (MCP mcp__server__* and any tool with a
+            # handler): advertised via tool_registry schemas, so they must also
+            # execute here or the advertisement is a lie.
+            _reg_td = None
+            try:
+                from tool_registry import registry as _dispatch_registry
+                _reg_td = _dispatch_registry.get(tc.name)
+            except ImportError:
+                _reg_td = None
+            _reg_outcome: Optional[dict] = None
+            if _reg_td is not None and (
+                getattr(_reg_td, "_mcp_caller", None) is not None
+                or getattr(_reg_td, "_handler", None) is not None
+            ):
+                try:
+                    _reg_raw = _dispatch_registry.resolve_and_call(tc.name, tc.arguments or {})
+                    try:
+                        from mcp_client import _extract_text as _reg_extract
+                        _reg_text = _reg_extract(_reg_raw)
+                    except ImportError:
+                        _reg_text = _reg_raw if isinstance(_reg_raw, str) else str(_reg_raw)
+                    log.info("step %d DONE (registry tool:%r) tokens=%d elapsed=%.1fs",
+                             step_num, tc.name, _tok, time.monotonic() - _step_t0)
+                    _reg_outcome = {
+                        "status": "done",
+                        "result": _reg_text,
+                        "summary": f"Tool {tc.name}: {_reg_text[:60]}",
+                        "tokens_in": resp.input_tokens,
+                        "tokens_out": resp.output_tokens,
+                        "cache_read_tokens": getattr(resp, "cache_read_tokens", 0),
+                    }
+                except Exception as _reg_exc:
+                    # The tool exists and is callable — a failed call is a real
+                    # blocked step, not an unrecognised tool.
+                    log.warning("step %d registry tool %r failed: %s",
+                                step_num, tc.name, _reg_exc)
+                    _reg_outcome = {
+                        "status": "blocked",
+                        "stuck_reason": f"tool {tc.name} failed: {_reg_exc}",
+                        "result": "",
+                        "tokens_in": resp.input_tokens,
+                        "tokens_out": resp.output_tokens,
+                        "cache_read_tokens": getattr(resp, "cache_read_tokens", 0),
+                    }
             # Check runtime tools before giving up — agent may have registered one earlier
             _rt_output: Optional[str] = None
-            try:
-                from runtime_tools import dispatch_runtime_tool
-                _rt_output = dispatch_runtime_tool(tc.name, tc.arguments)
-            except Exception:
-                pass
-            if _rt_output is not None:
+            if _reg_outcome is None:
+                try:
+                    from runtime_tools import dispatch_runtime_tool
+                    _rt_output = dispatch_runtime_tool(tc.name, tc.arguments)
+                except Exception:
+                    pass
+            if _reg_outcome is not None:
+                _outcome = _reg_outcome
+            elif _rt_output is not None:
                 log.info("step %d DONE (runtime_tool:%r) tokens=%d elapsed=%.1fs",
                          step_num, tc.name, _tok, time.monotonic() - _step_t0)
                 _outcome = {

@@ -679,19 +679,6 @@ These four are kept (not deleted) this triage pending verification against curre
   groundwork for real execution. Source: refactor-plan architecture review
   (docs/REFACTOR_PLAN.md), 2026-07-02.
 
-### MCP tools registered/advertised but never dispatchable (bug)
-
-- [ ] **MCP tool dispatch gap.** `heartbeat.py` loads configured MCP servers
-  and advertises their tools into prompts, but `step_exec.py`'s tool dispatch
-  has no `mcp__*` branch — falls through to "unrecognised tool: blocked."
-  The execution bridges that would actually run them
-  (`tool_registry.ToolRegistry.resolve_and_call`,
-  `mcp_client.dispatch_mcp_call`) have zero production callers; only tests
-  exercise them. An entire advertised capability is silently inert. Fix:
-  wire `resolve_and_call` into step_exec's unknown-tool branch, or stop
-  advertising MCP tools until it's wired. Source: refactor-plan architecture
-  review (docs/REFACTOR_PLAN.md), 2026-07-02.
-
 ### `orch.py`'s tick/loop engine is legacy; its path/bookkeeping layer is not
 
 - [ ] **Split `orch.py`'s two concerns.** Git-history confirmed: `orch.py`

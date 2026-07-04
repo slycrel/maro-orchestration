@@ -1076,3 +1076,113 @@ class TestCwdBinding:
             tools=EXECUTE_TOOLS,
         )
         assert "cwd" not in captured.get("kw", {})
+
+
+# ---------------------------------------------------------------------------
+# Registry tool dispatch (MCP bridge) — BACKLOG "MCP tool dispatch gap"
+# ---------------------------------------------------------------------------
+
+class _NamedToolCallAdapter:
+    """Minimal adapter that returns a tool call with an arbitrary name."""
+    model_key = "test"
+
+    def __init__(self, tool_name, arguments=None):
+        self._tool_name = tool_name
+        self._arguments = arguments or {}
+
+    def complete(self, messages, *, tools=None, tool_choice="auto",
+                 max_tokens=4096, temperature=0.3, **kwargs):
+        from llm import LLMResponse, ToolCall
+        return LLMResponse(
+            content="",
+            tool_calls=[ToolCall(name=self._tool_name, arguments=self._arguments)],
+            stop_reason="tool_use",
+            input_tokens=50,
+            output_tokens=20,
+        )
+
+
+class TestRegistryToolDispatch:
+    def _register_mcp_style_tool(self, monkeypatch, name, caller):
+        from tool_registry import registry, ToolDefinition
+        td = ToolDefinition(
+            name=name,
+            description="test MCP tool",
+            input_schema={"type": "object", "properties": {}},
+        )
+        td._mcp_caller = caller
+        monkeypatch.setitem(registry._tools, name, td)
+        return td
+
+    def _run_step(self, tmp_path, monkeypatch, tool_name, arguments=None):
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+        from step_exec import execute_step, EXECUTE_TOOLS
+        adapter = _NamedToolCallAdapter(tool_name, arguments)
+        return execute_step(
+            goal="use the external tool",
+            step_text=f"Call {tool_name}",
+            step_num=1,
+            total_steps=1,
+            completed_context=[],
+            adapter=adapter,
+            tools=EXECUTE_TOOLS,
+        )
+
+    def test_mcp_tool_dispatches_through_registry(self, tmp_path, monkeypatch):
+        seen = {}
+
+        def caller(arguments):
+            seen["args"] = arguments
+            return [{"type": "text", "text": "42 degrees"}]
+
+        self._register_mcp_style_tool(
+            monkeypatch, "mcp__weather__current", caller)
+        result = self._run_step(
+            tmp_path, monkeypatch, "mcp__weather__current", {"city": "SLC"})
+        assert result["status"] == "done"
+        assert result["result"] == "42 degrees"
+        assert seen["args"] == {"city": "SLC"}
+
+    def test_mcp_tool_failure_is_blocked_not_unrecognised(self, tmp_path, monkeypatch):
+        def caller(arguments):
+            raise RuntimeError("server went away")
+
+        self._register_mcp_style_tool(
+            monkeypatch, "mcp__weather__current", caller)
+        result = self._run_step(tmp_path, monkeypatch, "mcp__weather__current")
+        assert result["status"] == "blocked"
+        assert "server went away" in result["stuck_reason"]
+        assert "unrecognised" not in result["stuck_reason"]
+
+    def test_handler_tool_dispatches_through_registry(self, tmp_path, monkeypatch):
+        from tool_registry import registry, ToolDefinition
+        td = ToolDefinition(
+            name="my_handler_tool",
+            description="test handler tool",
+            input_schema={"type": "object", "properties": {}},
+        )
+        td._handler = lambda arguments: "handler ran"
+        monkeypatch.setitem(registry._tools, "my_handler_tool", td)
+        result = self._run_step(tmp_path, monkeypatch, "my_handler_tool")
+        assert result["status"] == "done"
+        assert result["result"] == "handler ran"
+
+    def test_unknown_tool_still_blocks_as_unrecognised(self, tmp_path, monkeypatch):
+        result = self._run_step(tmp_path, monkeypatch, "mcp__nowhere__nothing")
+        assert result["status"] == "blocked"
+        assert "unrecognised tool" in result["stuck_reason"]
+
+    def test_registered_tool_without_caller_still_unrecognised(self, tmp_path, monkeypatch):
+        # Builtin-style registration (schema only, no handler) must not be
+        # swallowed by the registry branch — resolve_and_call would TypeError.
+        from tool_registry import registry, ToolDefinition
+        td = ToolDefinition(
+            name="schema_only_tool",
+            description="no handler attached",
+            input_schema={"type": "object", "properties": {}},
+        )
+        monkeypatch.setitem(registry._tools, "schema_only_tool", td)
+        result = self._run_step(tmp_path, monkeypatch, "schema_only_tool")
+        assert result["status"] == "blocked"
+        assert "unrecognised tool" in result["stuck_reason"]
