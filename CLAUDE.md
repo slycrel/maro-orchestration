@@ -2,15 +2,17 @@
 
 **This is the mainline repo** (`maro`, formerly `openclaw-orchestration`). All orchestration work happens here unless explicitly directed elsewhere.
 
+**Currency rule:** narrative prose anywhere (including this file) loses to GOAL_BRAIN.md and MILESTONES.md. If a doc or skill states a fact you've just proven stale, fix it in the same commit — don't leave it for "later".
+
 **Start-of-session checklist:**
 1. Read this file (CLAUDE.md)
 2. Read GOAL_BRAIN.md — compiled truth: Jeremy's invariants (quoted), verified state, decisions, open threads. **When it disagrees with any other doc, GOAL_BRAIN.md wins** — all other docs are best-guess by decree. Update its system-maintained sections at end-of-chunk.
 3. Read MILESTONES.md — prioritized work queue. This is what to do next.
 4. Read BACKLOG.md — active deferred items, bugs, ideas. Update as you work. When an item ships, move it to BACKLOG_DONE.md with its context intact (the archive is ingested by `dev-recall` for historical "why/how/rejected" context).
-5. Check ROADMAP.md for phase status
+5. Looking for a specific doc? `docs/INDEX.md` maps questions → docs and carries the status legend (living / dormant-design / history).
 6. Check `~/claude/grok-response-*.txt` for unprocessed feedback
 
-**When you need to recall something from prior correspondence (design docs, conversation logs, rationale for a past decision), use `dev-recall` instead of blind grep.** It's vector retrieval over docs/, lat.md/, MILESTONES/BACKLOG/BACKLOG_DONE/ROADMAP/CLAUDE, and auto-memory:
+**When you need to recall something from prior correspondence (design docs, conversation logs, rationale for a past decision), use `dev-recall` instead of blind grep.** It's full-text (FTS5/BM25) retrieval over docs/, lat.md/, GOAL_BRAIN/VISION/MILESTONES/BACKLOG/BACKLOG_DONE/ROADMAP/CLAUDE, and auto-memory:
 
 ```bash
 PYTHONPATH=src python3 -m correspondence query "why did we rename constraint to scope"
@@ -41,11 +43,12 @@ exploration.
 
 **Open design spaces** — if your work touches these, read the doc first:
 
-| Space | Doc |
-|---|---|
-| Intent resolution / side-quests / "what does done mean" | `docs/INTENT_RESOLUTION_DESIGN.md` |
-| Scope + constraint orchestration (Phase 65) | `docs/CONSTRAINT_ORCHESTRATION_DESIGN.md` + review |
-| Adaptive execution | `docs/ADAPTIVE_EXECUTION_DESIGN.md` |
+| Space | Doc | Status |
+|---|---|---|
+| Intent resolution / side-quests / "what does done mean" | `docs/INTENT_RESOLUTION_DESIGN.md` | Partially shipped (ResolvedIntent/Deliverable live); side-quest handling open |
+| Scope + constraint orchestration (Phase 65) | `docs/CONSTRAINT_ORCHESTRATION_DESIGN.md` + review | PAUSED 2026-04-23 (Jeremy); MVE shipped dormant behind `scope_generation` flag |
+| Adaptive execution | `docs/ADAPTIVE_EXECUTION_DESIGN.md` | Dormant design — not started |
+| Memory / graph / filesystem-vs-real-memory | `docs/MEMORY_ARCHITECTURE.md`, `docs/KNOWLEDGE_CRYSTALLIZATION.md` | Decision brief in progress 2026-07-04 |
 
 - GitHub: https://github.com/slycrel/maro
 - Machine: Ubuntu headless, user `clawd`, `/home/clawd/claude/maro-orchestration/`
@@ -63,7 +66,7 @@ North star: self-improving, autonomous agent. Visible → Reliable → Replayabl
 
 ## Architecture (5 subsystems)
 
-See `docs/ARCHITECTURE_OVERVIEW.md` for the full map with intent-vs-implementation gaps.
+See `docs/ARCHITECTURE_OVERVIEW.md` for the full map with intent-vs-implementation gaps. (The older, longer `ARCHITECTURE.md` is a point-in-time record in `docs/history/` — pre-rename era, don't treat it as current.)
 
 | Subsystem | What | Key files | Skill |
 |-----------|------|-----------|-------|
@@ -82,8 +85,8 @@ See `docs/ARCHITECTURE_OVERVIEW.md` for the full map with intent-vs-implementati
 ## Repo layout
 
 ```
-src/                 All production Python (50+ modules)
-  agent_loop.py      Core autonomous execution loop (~74KB)
+src/                 All production Python (~130 flat modules; REFACTOR_PLAN Tier 4 = subpackage plan)
+  agent_loop.py      Core loop entry (physical phases split into loop_*.py modules)
   handle.py          Entry point — routes to NOW or AGENDA lane
   intent.py          Goal classifier (NOW vs AGENDA)
   director.py        Director: plans, delegates, reviews
@@ -100,7 +103,7 @@ src/                 All production Python (50+ modules)
   constraint.py      Pre-execution constraint enforcement
   ...
 
-tests/               109 test files, 4,278 tests
+tests/               pytest suite (run via bash scripts/test-safe.sh; counts change weekly)
 scripts/             smoke.sh, audit-phases.sh, enqueue.sh
 personas/            YAML persona specs
 docs/                Architecture, memory systems, self-reflection design
@@ -117,34 +120,9 @@ deploy/              systemd service files
 
 ## Current state
 
-**As of 2026-04-14.** Phases 0–61 complete. Tests: 4,278 passing (~100s sequential).
+**This file does not track current state — by design.** Current truth lives in GOAL_BRAIN.md (compiled truth + decisions), MILESTONES.md (queue), and BACKLOG.md. Phase history: `docs/history/` (ROADMAP_ARCHIVE for completed phases). A snapshot here rots — the 2026-04-14 snapshot that used to live in this section sat stale for months claiming to be current.
 
-| Status | Phases |
-|--------|--------|
-| DONE | 0–23, 26–27, 29–37, 39–48, 50–61 |
-| PARTIAL | 24 (Slack skeleton, Signal deferred), 25 (ops hardening — heartbeat-ctl.sh shipped), 28 (persona — blocked on personas/jeremy.md), 38 (subpackage) |
-
-**Recent (Apr 12, session 17):** Test isolation overhaul (conftest.py). Circular import skills↔evolver broken via skill_types.py. Verify→learn loop closed (_verify_post_apply). Constraint audit trail. Playbook validation. Evolver rollback API (revert_suggestion). Eval regression detection. knowledge_web + orch_bridges + workers tests. 3 adversarial review rounds. 3789 tests (+320).
-
-**Next:** See MILESTONES.md for prioritized queue. Top items: real-world regression tests, K2 links import, LoopStateMachine conversion, evolver confidence calibration.
-
-See `ROADMAP.md` for active phases (57+). See `docs/ROADMAP_ARCHIVE.md` for completed phases (0–56).
-
----
-
-## Queued steal-list items (from prototype research)
-
-These were identified from studying ClawTeam, MetaClaw, superpowers, oh-my-claudecode, Agent-Reach. Not all apply — these are the candidates worth considering:
-
-| Item | What | Priority |
-|------|------|----------|
-| `task_store.py` port | FileTaskStore: file-per-task JSON, fcntl locking, DAG dep resolution, stale claim recovery. Replaces bash task-queue.sh pattern. | DONE |
-| Ralph verify loop | `verify_step_id` on AGENDA steps — run verifier after step, retry if fails. Explicit quality gate complementing Inspector. | DONE |
-| Magic keyword triggers | `ralph:`, `pipeline:`, `verify:`, `strict:` prefixes in goal text mutate execution behavior. | DONE (2026-04-02) |
-| SlowUpdateScheduler | IDLE_WAIT → WINDOW_OPEN → UPDATING → PAUSING. Gates heavy background work to idle windows. Good for heartbeat consolidation. | DONE (2026-04-04) |
-| `doctor` command | Check which tools/channels work in current environment. Useful for validate-environment before runs. | DONE (extended with Phase 41 checks, 2026-04-02) |
-
-Reference implementation: `~/.openclaw/workspace/prototypes/poe-orchestrator/` — that's the prototype where these were prototyped. Use it for reference only; do not develop there.
+Prototype-era steal-list research (all items long since shipped) is recorded in `docs/history/` (steal-list + sources). The old prototype at `~/.openclaw/workspace/prototypes/poe-orchestrator/` is reference only; do not develop there.
 
 ---
 

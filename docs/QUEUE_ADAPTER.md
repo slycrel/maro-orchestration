@@ -1,6 +1,6 @@
 # Queue Adapter
 
-How work gets enqueued and consumed in poe-orchestration, and how to swap backends.
+How work gets enqueued and consumed in Maro, and how to swap backends.
 
 ---
 
@@ -17,7 +17,7 @@ The system's primary queue is `memory/interrupts.jsonl` — the `InterruptQueue`
 
 Messages arrive from:
 - Telegram (primary) — `telegram_listener.py` posts when a loop is running
-- CLI (`poe-interrupt`) — direct injection
+- CLI (`maro interrupt`) — direct injection
 - Background tasks — `background.py` posts completion signals
 
 The legacy shell queue (`enqueue.sh` → `project_task` payloads) is still supported for backward compat with OpenClaw scripts. Format: `type: project_task`, `payload: project=<slug> :: <task text>`.
@@ -26,21 +26,18 @@ The legacy shell queue (`enqueue.sh` → `project_task` payloads) is still suppo
 
 ## Adapter Contract
 
-Any queue backend must satisfy:
+Any queue backend must satisfy the interface `InterruptQueue` actually exposes (`src/interrupt.py`):
 
 ```python
 class QueueAdapter:
-    def enqueue(self, type: str, payload: str) -> None:
+    def post(self, type: str, payload: str, ...) -> Interrupt:
         """Append a work item. Raises on failure."""
 
     def poll(self) -> List[Interrupt]:
-        """Return pending interrupts (oldest first). Non-blocking."""
-
-    def ack(self, interrupt_id: str) -> None:
-        """Mark item processed. Idempotent."""
+        """Return pending interrupts (oldest first), marking them consumed. Non-blocking."""
 ```
 
-Current implementation: flat JSONL append (enqueue) + full-file read (poll). Sufficient for single-process, single-box operation.
+There is no separate `ack()` — consumption happens in `poll()` (drain semantics). Current implementation: flat JSONL append (post) + full-file read (poll). Sufficient for single-process, single-box operation.
 
 ---
 
@@ -83,4 +80,4 @@ Heartbeat (stale claim recovery):
 
 This is ~100 lines of Python and slots cleanly under the existing `InterruptQueue` interface. The interrupt queue becomes a view over the shared task table filtered to the current process.
 
-See Phase 22 in `ROADMAP.md` (Knowledge Crystallization + multi-box coordination).
+**Partially realized since this was written:** `src/task_store.py` (file-per-task JSON, fcntl advisory locking, atomic claims, stale-claim recovery, DAG deps) implements the single-box version of this primitive. Multi-box remains future work. Phase history: `docs/history/` (ROADMAP_ARCHIVE).

@@ -82,7 +82,7 @@ the server is also reaped after `idle_shutdown_secs` of inactivity (and on
 process exit). Run-scoped spin-ups suppress this — the run owns teardown — so it
 only applies to ad-hoc/lazy use.
 
-## Configuration (`~/.poe/workspace/config.yml`)
+## Configuration (`~/.maro/workspace/config.yml`)
 
 ```yaml
 validate:
@@ -153,7 +153,7 @@ and the model's training signal matters more than its size.
   *and* the paid validator on the same step result, decide-only, and logs both:
 
   ```bash
-  # gather data: enable in ~/.poe/workspace/config.yml, run real goals, then:
+  # gather data: enable in ~/.maro/workspace/config.yml, run real goals, then:
   #   validate: { shadow_eval: true }   # off by default — the decisive path
   #                                      # makes an EXTRA paid call (real spend)
   python3 -m validation_shadow --agreement
@@ -254,7 +254,7 @@ scripts/local-validator.sh status
 poe-doctor                       # "Local validator: mlx @ ... — active: ..."
 ```
 
-Then enable it in `~/.poe/workspace/config.yml`:
+Then enable it in `~/.maro/workspace/config.yml`:
 
 ```yaml
 validate:

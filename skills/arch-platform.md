@@ -54,8 +54,8 @@ Two-tier YAML mirroring git's ~/.gitconfig:
 
 | File | Scope | Examples |
 |------|-------|---------|
-| `~/.poe/config.yml` | User-level | API keys, model prefs, yolo mode |
-| `~/.poe/workspace/config.yml` | Workspace-level | Evolver, inspector thresholds, constraint settings |
+| `~/.maro/config.yml` | User-level | API keys, model prefs, yolo mode |
+| `~/.maro/workspace/config.yml` | Workspace-level | Evolver, inspector thresholds, constraint settings |
 
 Workspace inherits from user; workspace keys override. Nested dicts merge one level deep.
 
@@ -76,20 +76,20 @@ Periodic health check + tiered self-healing (runs every 60s in loop mode):
 
 **Autonomy switch:** `heartbeat_loop(..., autonomy=False)` is health-only by default. Scheduler drain, task-store drain, mission drain, backlog drain, evolver, inspector, and eval work only run when autonomy is explicitly enabled via CLI/config.
 
-**Backlog drain:** When autonomy is enabled, heartbeat picks up NEXT.md TODO items when idle. Interval: every 30 ticks (~30 min). Skips failed/paused projects (lifecycle markers `.poe-failed`/`.poe-paused`).
+**Backlog drain:** When autonomy is enabled, heartbeat picks up NEXT.md TODO items when idle. Interval: every 30 ticks (~30 min). Skips failed/paused projects (lifecycle markers `.maro-failed`/`.maro-paused`).
 
 ## Project & Item Management (orch_items.py)
 
 Workspace structure:
 ```
-~/.poe/workspace/
+~/.maro/workspace/
   projects/SLUG/
     NEXT.md          — Markdown todo list ([ ] / [x] / [~] / [!])
     DECISIONS.md     — What was chosen and why
     RISKS.md         — Known risks
     PROVENANCE.md    — Where data came from
-    .poe-failed      — Lifecycle marker: skip in all automation
-    .poe-paused      — Lifecycle marker: monitor but don't execute
+    .maro-failed     — Lifecycle marker: skip in all automation (sheriff.py)
+    .maro-paused     — Lifecycle marker: monitor but don't execute
   memory/            — All JSONL data stores
   output/            — Run artifacts, reports
 ```
@@ -118,14 +118,14 @@ Per-model, per-step-type cost tracking to `memory/step-costs.jsonl`:
 ## Test Isolation (session 17)
 
 `tests/conftest.py` provides an autouse fixture that isolates all tests from the real workspace and credentials:
-- `POE_WORKSPACE` → tmp directory
+- `MARO_WORKSPACE` → tmp directory
 - API keys stripped from environment
 - Credential file paths redirected to non-existent paths
-- 62 previously un-isolated test files now safe. No test can accidentally read/write `~/.poe/workspace/` or use live API keys.
+- 62 previously un-isolated test files now safe. No test can accidentally read/write `~/.maro/workspace/` or use live API keys.
 
-## Workspace Routing (known issue)
+## Workspace Routing (RESOLVED 2026-07-03)
 
-`~/.poe/workspace/` is the stable runtime workspace for memory and captain's log. But `output_root()` and `projects_root()` still resolve to the repo directory. This split needs consolidation.
+`~/.maro/workspace/` is the stable runtime workspace for everything — memory, captain's log, projects, and output. The historical split (`output_root()`/`projects_root()` resolving to the repo) was consolidated in the BACKLOG #-1 workspace-pin unification: `MARO_WORKSPACE=x` means the workspace IS x, all roots resolve through `config.workspace_root()`, and `resolve_artifact_path()` is the display-form inverse. Contract pinned in TestWorkspacePinLayout.
 
 ## File Map
 

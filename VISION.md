@@ -1,6 +1,8 @@
-# Poe: Vision & Intent Guide
+# Vision & Intent Guide
 
 *Read this first. Everything else in the repo serves this vision.*
+
+> **Naming note (2026-06-25 rename):** this document is written in the project's original voice, where the whole system was called **Poe**. Since the Maro rename: **Maro** is the framework, the **Conductor** is the neutral orchestrating role, and **Poe** (`personas/poe.md`) is an optional persona the Conductor can wear. When this doc says "Poe," read it as "Maro's conductor" — the vision itself (CEO contract, crystallization economics, always-on autonomy) is unchanged and still current. Text below is intentionally left in the original voice; it reads better than a mechanical rename and the anecdotes are historical facts.
 
 ---
 

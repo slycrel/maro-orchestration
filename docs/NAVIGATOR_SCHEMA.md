@@ -1,7 +1,11 @@
 # Navigator Decision Schema (goal-brain sequencing, step 4)
 
-**Status:** pinned 2026-06-11. Types live in `src/navigator.py` (schema + validation
-only — no decision logic, no callers; the prompt is step 5).
+**Status:** schema pinned 2026-06-11; **acting live on this box since 2026-07-03** —
+the navigator acts (not just shadows) at two points: dispatch
+(`navigator.act_dispatch`, `act_moves: [escalate]`, conf floor 0.9) and blocked-step
+(`navigator.act_blocked_step`). Both code-default OFF, enabled in workspace config.
+Types in `src/navigator.py`; prompt + shadow harness in `src/navigator_shadow.py`;
+act paths in `handle.py` / `loop_blocked.py`.
 **Upstream:** `GOAL_BRAIN.md` (step 1), pressure-test findings (step 2),
 `docs/RECALL_DESIGN.md` (step 3 — the navigator slice contract this consumes).
 Sequencing per `docs/conversations/2026-05-18-memory-and-goal-brain.md`:
@@ -336,7 +340,7 @@ guard remains the deterministic floor. Mechanics:
   navigator-vs-pipeline agreement datapoint.
 - **Config-gated, off in code** — `navigator.shadow_dispatch` defaults False
   (a model call per dispatch is real spend); this box opts in via
-  `~/.poe/workspace/config.yml`. `navigator.shadow_tiers` defaults
+  `~/.maro/workspace/config.yml`. `navigator.shadow_tiers` defaults
   `["cheap"]`: live shadow wants decision volume, not chain depth — a cheap
   idunno is recorded as the synthesized escalate (`escalated_via:
   "idunno_chain"`) and is distinguishable in analysis.

@@ -10,7 +10,7 @@ Source of truth for the event-type constants: `src/captains_log.py` (the `EVENT_
 
 An append-only, human-readable changelog of what the **learning system** decides about its own knowledge. Not raw data (that's `outcomes.jsonl`), not aggregated metrics (that's the dashboard) — a narrated record of skill/lesson/rule/scope/loop lifecycle transitions.
 
-- **File:** `~/.poe/workspace/memory/captains_log.jsonl` (one JSON object per line).
+- **File:** `~/.maro/workspace/memory/captains_log.jsonl` (one JSON object per line).
 - **Rotation:** size-gated, riding on `log_event` (no cron — the no-scheduler invariant). When the active file exceeds `captains_log.rotate_mb` (default 5), all but the most recent `captains_log.rotate_keep` (default 1000) entries move to a timestamped archive `captains_log.<stamp>.jsonl`. Data is never deleted. The rotation itself emits `LOG_ROTATED`.
 - **Readers:** the hot-path reader (`load_log`) reads the active file only; archaeology readers (`query_log`, `timeline`) span archives.
 

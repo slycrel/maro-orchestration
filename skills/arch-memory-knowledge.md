@@ -22,7 +22,7 @@ Stage 5: Rule      → Hardcoded path (zero inference cost)
 
 **Current reality:** Stage 1→2 works. Stage 2→3 has no automated pathway. Stage 3→4 is manual. Stage 4→5 is conceptual only. This is the biggest gap between vision and implementation.
 
-## Data Stores (all JSONL under `~/.poe/workspace/memory/`)
+## Data Stores (all JSONL under `~/.maro/workspace/memory/`)
 
 | File | What | Written by | Read by |
 |------|------|-----------|---------|

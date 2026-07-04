@@ -12,8 +12,10 @@ Give the system a goal. It plans, executes, reviews, learns, and gets better ove
 
 Two capabilities, often conflated but distinct:
 
-1. **Poe-as-tool**: Execute tasks autonomously (research, build, analyze). *This works today.*
-2. **Poe-as-self-improving-system**: Detect its own friction, change its own behavior, verify the change worked, remember what it learned. *Infrastructure exists; the loop isn't closed.*
+1. **Maro-as-tool**: Execute tasks autonomously (research, build, analyze). *This works today.*
+2. **Maro-as-self-improving-system**: Detect its own friction, change its own behavior, verify the change worked, remember what it learned. *Infrastructure exists; the loop isn't closed.*
+
+**Maturity doctrine: Visibility → Reliability → Replayability.** A useful orchestration system matures in three layers that build on each other: *visibility* (see what it planned, did, spent, and why it failed — without it, debugging is séance), *reliability* (common paths complete consistently, fail legibly, recover sanely, stop repeating mistakes), *replayability* (rerun/replay runs well enough to diagnose decisions and test policy changes against prior traces). Structured logging, traces, and diagnoses are visibility; decomposition quality, recovery, and safer execution are reliability; checkpoints, record-mode capture, and trace replay are replayability. This ordering guides roadmap sequencing.
 
 ---
 
@@ -64,7 +66,7 @@ Two capabilities, often conflated but distinct:
 
 **Where intent has drifted:**
 - Director is mostly bypassed (`skip_if_simple=True` for most goals). This is pragmatically correct but means the plan→delegate→review cycle doesn't get exercised.
-- Persona system exists but personas aren't auto-selected based on goal type — it's manual via prefixes.
+- ~~Personas aren't auto-selected~~ **Stale since 2026-03-27:** `persona_for_goal()` auto-selects (c964d3b), used from conductor.py and handle.py; prefixes remain as manual override.
 - The "never off" vision (VISION §9) is not the default operating mode: manual runs work without background services, and always-on behavior must be intentionally enabled.
 
 **Key files:** `handle.py` (~2526 lines), `intent.py`, `director.py`, `workers.py`, `persona.py`
@@ -111,7 +113,7 @@ Two capabilities, often conflated but distinct:
 - **Decay works but reinforcement is weak:** Lessons decay on schedule but only get reinforced when explicitly re-confirmed — the system doesn't proactively validate its own lessons.
 - **Captain's log writes but rarely reads:** 11K events accumulated. Read bridge shipped (K3 partial) but injection is coarse — dumps recent events into prompts rather than targeted retrieval.
 
-**Key data stores (all JSONL under `~/.poe/workspace/memory/`):**
+**Key data stores (all JSONL under `~/.maro/workspace/memory/`):**
 - `outcomes.jsonl`, `lessons.jsonl`, `medium/lessons.jsonl`, `long/lessons.jsonl`
 - `standing_rules.jsonl`, `hypotheses.jsonl`, `decisions.jsonl`
 - `captains_log.jsonl`, `task_ledger.jsonl`, `step_traces.jsonl`
@@ -148,7 +150,7 @@ Two capabilities, often conflated but distinct:
 
 **What exists:**
 - `llm.py`: Adapter hierarchy (Anthropic → OpenRouter → OpenAI → subprocess). Model abstraction (CHEAP/MID/POWER). Retry with exponential backoff. Advisor pattern (`advisor_call()`).
-- `config.py`: Two-tier YAML (user `~/.poe/config.yml` + workspace). Env var override.
+- `config.py`: Two-tier YAML (user `~/.maro/config.yml` + workspace). Env var override.
 - `heartbeat.py`: Optional health monitor + tiered recovery. Session guard. Diagnosis cooldown.
 - `orch_items.py`: Project/item management. NEXT.md parsing. RunRecords.
 - `task_store.py`: File-per-task JSON with fcntl locking. DAG deps. Stale claim recovery.
@@ -156,8 +158,8 @@ Two capabilities, often conflated but distinct:
 
 **Where intent has drifted:**
 - **Always-on mode is explicitly optional.** Manual orchestration is self-contained; service installation is a deployment choice rather than a baseline requirement.
-- **Cost awareness is after-the-fact.** `metrics.py` records costs. `tool_cost_report.py` summarizes them. But there's no real-time budget enforcement that says "stop, you've spent $5 on this goal."
-- **Workspace routing is split.** `output_root()` and `projects_root()` still point to repo, not `~/.poe/workspace/`. Captain's log and memory are in workspace, but projects and output aren't.
+- ~~Cost awareness is after-the-fact.~~ **RESOLVED 2026-07-01:** real-time budget gates exist — per-run `budget.per_run_usd` (loop hard-stops at budget+20% slush), cross-run `budget.daily_usd` via `metrics.spend_today()`, refusal emits an escalation notify.
+- ~~Workspace routing is split.~~ **RESOLVED 2026-07-03:** BACKLOG #-1 workspace-pin unification — all roots (`output_root()`, `projects_root()`, memory) resolve through `config.workspace_root()`; `MARO_WORKSPACE=x` means the workspace IS x.
 
 ---
 

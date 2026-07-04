@@ -11,10 +11,10 @@
 - [ ] `pytest` passes.
 - [ ] `scripts/smoke.sh` passes.
 - [ ] Core module (`src/orch.py`) imports without error.
-- [ ] `poe-bootstrap install` runs on a clean workspace.
+- [ ] `maro-bootstrap install` runs on a clean workspace.
 
 ## Release gate
 - [ ] CHANGELOG updated and version tag applied.
-- [ ] Rollback instruction present (git revert + `poe-bootstrap install`).
+- [ ] Rollback instruction present (git revert + `maro-bootstrap install`).
 
 **GO** if all critical boxes (security + functional + release gate) are checked.

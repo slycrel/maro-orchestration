@@ -32,7 +32,7 @@ Minimalism is a virtue, but Pi's 4-tool constraint fits a coding REPL. Poe's too
 **Why not:** Poe runs over hours and days. User-in-the-loop interrupts break the autonomous execution model. Safety is handled through:
 - Constraint enforcement at compose-time (constraint.py)
 - Inspector + quality gate for output quality
-- Pre-step event bus for programmatic veto (step_events.py)
+- ~~Pre-step event bus (step_events.py)~~ — built, gathered zero handlers, pruned as dead code (see REFACTOR_PLAN); veto-style safety now lives in the fence/validator layer (artifact_check.py) and navigator blocked-step judgment
 - Explicit `flag_stuck` when Poe genuinely needs human input
 
 The user configures guard rails upfront; they shouldn't be the guard rail.
