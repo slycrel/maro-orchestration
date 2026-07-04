@@ -2,7 +2,7 @@
 
 What to do next, in what order. Updated each session. Strategic phases live in ROADMAP.md; deferred ideas live in BACKLOG.md. This file is the bridge — the executable queue.
 
-Last updated: 2026-07-04 (overnight batch: MCP dispatch gap fixed; tier-a write fence shipped gated-off (`validate.write_fence` — Jeremy's flip) + cwd-drift detection + BOUNDED_WORKSPACE.md; ancestry unification read-side; rung-4 loop-log↔call-record link. See GOAL_BRAIN Decisions 2026-07-04. BACKLOG remaining: #0 mining passes + raw archive, #1 write-fence flip + residual Bash write shapes, #9/#10 local-validator measurements).
+Last updated: 2026-07-04 AM (overnight batch: MCP dispatch fixed, tier-a write fence, ancestry read-side, rung-4 call-record link. Morning batch: write fence ENABLED + live-proven both directions (Jeremy's flip); ancestry write-side → item CLOSED; BACKLOG #9 validator ROI shipped (`python3 -m validator_roi`); fetch unification → `fetch` tool registered + dispatchable. See GOAL_BRAIN Decisions 2026-07-04. BACKLOG remaining: #0 mining passes + raw archive, #1 residual Bash write shapes (evidence-driven), #10 local_max_tokens tuning).
 
 Truth anchor: GOAL_BRAIN.md Threads. History: docs/ROADMAP_ARCHIVE.md.
 
