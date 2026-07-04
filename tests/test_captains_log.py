@@ -237,7 +237,9 @@ class TestEventTypes:
         # ground-truth guard (artifact_check).
         # +1 (2026-07-03): SCAVENGE_DETECTED — out-of-fence file access
         # diagnostic (BACKLOG #1, artifact_check.detect_out_of_fence_access).
-        assert len(EVENT_TYPES) == 54
+        # +1 (2026-07-04): FENCE_WRITE_BLOCKED — tier-a write fence demotion
+        # (BACKLOG #1, validate.write_fence).
+        assert len(EVENT_TYPES) == 55
 
     def test_previously_unregistered_events_in_set(self):
         from captains_log import EVOLVER_REVERTED, EVOLVER_VERIFY, PLAYBOOK_UPDATED

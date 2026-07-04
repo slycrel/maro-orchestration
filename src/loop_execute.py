@@ -575,7 +575,9 @@ def _execute_main_loop(
         step_elapsed = int((time.monotonic() - step_start) * 1000)
 
         # Scavenging diagnostic (BACKLOG #1): flag out-of-fence file access from
-        # the real tool transcript. Visibility only — never changes step status.
+        # the real tool transcript. Detection never changes step status; the
+        # tier-a write fence below (config-gated) consumes the report's writes.
+        _sc_report = None
         try:
             from config import get as _sc_cfg_get
             if bool(_sc_cfg_get("validate.scavenge_detect", True)) and outcome.get("tool_events"):
@@ -672,6 +674,52 @@ def _execute_main_loop(
         step_result = _raw_result if isinstance(_raw_result, str) else str(_raw_result) if _raw_result else ""
         _raw_summary = outcome.get("summary", step_text)
         step_summary = _raw_summary if isinstance(_raw_summary, str) else step_text
+
+        # Tier-a write fence (BACKLOG #1): an out-of-fence WRITE in the real tool
+        # transcript demotes done→blocked. Positive evidence only (a Write/Edit
+        # with an absolute out-of-fence path, or a shell write resolved against a
+        # drifted cwd). Config-gated OFF until SCAVENGE_DETECTED write rows have
+        # been watched long enough to trust the false-positive rate — flip
+        # validate.write_fence to enable. Detection above stays always-on.
+        if _sc_report is not None and _sc_report.writes and step_status == "done":
+            try:
+                from config import get as _wf_cfg_get
+                if bool(_wf_cfg_get("validate.write_fence", False)):
+                    _wf_paths = [w.get("path", "?") for w in _sc_report.writes]
+                    log.warning("WRITE FENCE step=%d blocked: %s", step_idx, _wf_paths)
+                    step_status = "blocked"
+                    outcome["status"] = "blocked"
+                    outcome["stuck_reason"] = (
+                        f"write-fence: wrote {len(_wf_paths)} path(s) outside the "
+                        f"project fence: {_wf_paths[:5]}"
+                    )
+                    step_result = (
+                        f"{step_result}\n\n[write-fence] This step wrote outside the "
+                        f"project workspace: {_wf_paths[:5]}. Marked blocked — re-run "
+                        f"and keep all writes inside the project directory."
+                    )
+                    try:
+                        from captains_log import log_event as _wf_log_event, FENCE_WRITE_BLOCKED
+                        _wf_log_event(
+                            FENCE_WRITE_BLOCKED,
+                            subject=f"step {step_idx}",
+                            summary=f"write fence blocked {len(_wf_paths)} out-of-fence write(s)",
+                            context={
+                                "step_text": step_text[:200],
+                                "writes": _sc_report.writes,
+                                "fence_project_dir": _proj_artifact_dir,
+                            },
+                            loop_id=getattr(ctx, "loop_id", "") or None,
+                        )
+                    except Exception:
+                        pass
+                    if verbose:
+                        print(
+                            f"[maro] step {step_idx}: write fence blocked — {_wf_paths[:5]}",
+                            file=sys.stderr, flush=True,
+                        )
+            except Exception:
+                pass
 
         # Fabrication ground-truth check (done≠achieved). Runs before ralph verify
         # so a fabricated "done" is demoted to "blocked" and never reaches the

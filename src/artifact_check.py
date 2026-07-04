@@ -479,6 +479,17 @@ _SCAVENGE_CAP = 20  # max flagged paths per step (dedup first)
 # and colon-prefixed remote/PATH-style entries ("host:/inbox") can't start a
 # match — first organic rows (2026-07-03) flagged URL fragments as paths.
 _ABS_PATH_RE = re.compile(r"(?<![\w.:/])/(?:[\w.@+-]+/)*[\w.@+-]+")
+# cwd-drift tracking (evasion specimen, run 668e46d1 2026-07-04): a worker can
+# `cd` out of the fence mid-command and write with RELATIVE paths — invisible
+# to both the absolute-path scan and the structured-tool check. We track cd
+# targets across the step's Bash commands (worker subprocess cwd persists
+# between Bash calls) and resolve relative write targets against the drifted
+# cwd. Bare `cd` / `cd ~` goes to $HOME.
+_BASH_CD_RE = re.compile(r"(?:^|&&|\|\||;)\s*cd\b(?:[ \t]+([^\s;&|)]+))?", re.MULTILINE)
+# Relative targets of shell write operations: output redirection (incl. >>,
+# heredoc-feeding `cat > f`) and tee. Target must not start with / (absolute
+# paths are handled by the main scan), - (flags), $ (unresolvable) or & (fd dup).
+_BASH_REL_WRITE_RE = re.compile(r"(?:(?<![\w>=-])>>?|\btee(?:\s+-a)?)\s+([\w.][\w./+-]*)")
 
 
 @dataclass
@@ -514,6 +525,27 @@ def _is_system_path(path: str) -> bool:
     return path.startswith(_SCAVENGE_SYSTEM_PREFIXES)
 
 
+def _resolve_cd_target(target: Optional[str], cur_cwd: Optional[str], base: str) -> Optional[str]:
+    """Best-effort resolution of a `cd` target against the tracked cwd.
+
+    Returns the new tracked cwd, or None when it can't be resolved (unknown
+    state — drift tracking then stays silent rather than guessing).
+    """
+    if target is None or target in ("~", "$HOME"):
+        return os.path.expanduser("~")
+    target = target.strip("'\"")
+    if not target or target == "-" or target.startswith("$"):
+        return None  # cd -, unexpanded vars: unresolvable
+    if target.startswith("~"):
+        return os.path.normpath(os.path.expanduser(target))
+    if os.path.isabs(target):
+        return os.path.normpath(target)
+    start = cur_cwd or base
+    if not start:
+        return None
+    return os.path.normpath(os.path.join(start, target))
+
+
 def detect_out_of_fence_access(
     tool_events: Optional[List[dict]],
     fence_roots: List[str],
@@ -545,6 +577,20 @@ def detect_out_of_fence_access(
             seen.add(key)
             bucket.append({"path": path, "tool": tool})
 
+        # Drift-tracked cwd across the step's Bash calls. None = still the
+        # fenced launch cwd (or unresolvable — tracking goes silent, never
+        # guesses). The worker subprocess's cwd persists between Bash calls.
+        base = fence_roots[0] if fence_roots and fence_roots[0] else ""
+        drift_cwd: Optional[str] = None
+
+        def _flag_rel_write(rel: str, at_cwd: Optional[str], tool: str):
+            """Flag a relative write target resolved against a drifted cwd."""
+            if not at_cwd or _in_fence(at_cwd, fence_roots) or _is_system_path(at_cwd):
+                return  # in-fence (or unknown) cwd → relative writes are safe
+            resolved = os.path.normpath(os.path.join(at_cwd, rel))
+            if not _is_system_path(resolved) and not _in_fence(resolved, fence_roots):
+                _flag(resolved, f"{tool}(cwd-drift)", report.writes)
+
         for te in tool_events:
             if not isinstance(te, dict):
                 continue
@@ -558,12 +604,29 @@ def detect_out_of_fence_access(
                         and not _in_fence(raw, fence_roots):
                     bucket = report.writes if name in _SCAVENGE_WRITE_TOOLS else report.reads
                     _flag(raw, name, bucket)
+                elif raw and not os.path.isabs(raw) and name in _SCAVENGE_WRITE_TOOLS:
+                    # Relative structured write while cwd has drifted out of fence
+                    _flag_rel_write(raw, drift_cwd, name)
             elif name == "Bash":
                 cmd = str(inp.get("command", ""))
                 for m in _ABS_PATH_RE.findall(cmd)[:50]:
                     if _is_system_path(m) or _in_fence(m, fence_roots):
                         continue
                     _flag(m, "Bash", report.reads)
+                # cwd-drift walk: interleave cd's and relative write targets in
+                # command order so each write resolves against the cwd in effect
+                # at its position within this command.
+                marks = (
+                    [(m.start(), "cd", m.group(1)) for m in _BASH_CD_RE.finditer(cmd)]
+                    + [(m.start(), "w", m.group(1)) for m in _BASH_REL_WRITE_RE.finditer(cmd)]
+                )
+                local_cwd = drift_cwd
+                for _pos, kind, val in sorted(marks[:100]):
+                    if kind == "cd":
+                        local_cwd = _resolve_cd_target(val, local_cwd, base)
+                    else:
+                        _flag_rel_write(val, local_cwd, "Bash")
+                drift_cwd = local_cwd
         return report
     except Exception:
         return ScavengeReport()

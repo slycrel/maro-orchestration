@@ -468,3 +468,112 @@ class TestScavengeUrlFalsePositives:
         report = detect_out_of_fence_access(events, self._fence(tmp_path))
         assert report.flagged
         assert report.reads[0]["path"] == "/home/nonexistent-stale-clone/main.go"
+
+
+class TestScavengeCwdDrift:
+    """cwd-drift write detection — the run-668e46d1 evasion specimen (2026-07-04):
+    a worker cd's out of the fence mid-command and writes with relative paths,
+    invisible to both the absolute-path scan and the structured-tool check."""
+
+    def _fence(self, tmp_path):
+        proj = tmp_path / "ws" / "projects" / "demo"
+        proj.mkdir(parents=True)
+        ws = tmp_path / "ws"
+        return proj, ws
+
+    def test_specimen_cd_then_relative_redirect_same_command(self, tmp_path):
+        from artifact_check import detect_out_of_fence_access
+        proj, ws = self._fence(tmp_path)
+        repo = tmp_path / "repo"
+        events = [{"name": "Bash", "input": {
+            "command": f"cd {repo} && python3 -c 'print(1)' > scripts/count-lines.py"}}]
+        report = detect_out_of_fence_access(events, [str(proj), str(ws)])
+        assert {"path": str(repo / "scripts" / "count-lines.py"),
+                "tool": "Bash(cwd-drift)"} in report.writes
+
+    def test_drift_persists_across_bash_calls(self, tmp_path):
+        from artifact_check import detect_out_of_fence_access
+        proj, ws = self._fence(tmp_path)
+        repo = tmp_path / "repo"
+        events = [
+            {"name": "Bash", "input": {"command": f"cd {repo}"}},
+            {"name": "Bash", "input": {"command": "echo hi > stray.txt"}},
+        ]
+        report = detect_out_of_fence_access(events, [str(proj), str(ws)])
+        assert {"path": str(repo / "stray.txt"),
+                "tool": "Bash(cwd-drift)"} in report.writes
+
+    def test_relative_structured_write_after_drift(self, tmp_path):
+        from artifact_check import detect_out_of_fence_access
+        proj, ws = self._fence(tmp_path)
+        repo = tmp_path / "repo"
+        events = [
+            {"name": "Bash", "input": {"command": f"cd {repo}"}},
+            {"name": "Write", "input": {"file_path": "scripts/x.py"}},
+        ]
+        report = detect_out_of_fence_access(events, [str(proj), str(ws)])
+        assert {"path": str(repo / "scripts" / "x.py"),
+                "tool": "Write(cwd-drift)"} in report.writes
+
+    def test_cd_back_into_fence_stops_flagging(self, tmp_path):
+        from artifact_check import detect_out_of_fence_access
+        proj, ws = self._fence(tmp_path)
+        repo = tmp_path / "repo"
+        events = [
+            {"name": "Bash", "input": {"command": f"cd {repo}"}},
+            {"name": "Bash", "input": {"command": f"cd {proj} && echo hi > fine.txt"}},
+        ]
+        report = detect_out_of_fence_access(events, [str(proj), str(ws)])
+        assert report.writes == []
+
+    def test_relative_write_without_drift_not_flagged(self, tmp_path):
+        from artifact_check import detect_out_of_fence_access
+        proj, ws = self._fence(tmp_path)
+        events = [{"name": "Bash", "input": {"command": "echo hi > notes.txt"}}]
+        report = detect_out_of_fence_access(events, [str(proj), str(ws)])
+        assert report.writes == []
+
+    def test_unresolvable_cd_goes_silent_not_guessing(self, tmp_path):
+        from artifact_check import detect_out_of_fence_access
+        proj, ws = self._fence(tmp_path)
+        events = [{"name": "Bash", "input": {"command": "cd $BUILD_DIR && echo x > out.txt"}}]
+        report = detect_out_of_fence_access(events, [str(proj), str(ws)])
+        assert report.writes == []
+
+    def test_bare_cd_resolves_to_home(self, tmp_path, monkeypatch):
+        from artifact_check import detect_out_of_fence_access
+        proj, ws = self._fence(tmp_path)
+        fake_home = tmp_path / "home"
+        monkeypatch.setenv("HOME", str(fake_home))
+        events = [{"name": "Bash", "input": {"command": "cd && echo hi > stray.txt"}}]
+        report = detect_out_of_fence_access(events, [str(proj), str(ws)])
+        assert {"path": str(fake_home / "stray.txt"),
+                "tool": "Bash(cwd-drift)"} in report.writes
+
+    def test_relative_cd_resolves_against_fence_base(self, tmp_path):
+        from artifact_check import detect_out_of_fence_access
+        proj, ws = self._fence(tmp_path)
+        # cd ../../.. from the project dir walks out of the fence
+        events = [{"name": "Bash", "input": {
+            "command": "cd ../../.. && echo hi > stray.txt"}}]
+        report = detect_out_of_fence_access(events, [str(proj), str(ws)])
+        assert {"path": str(tmp_path / "stray.txt"),
+                "tool": "Bash(cwd-drift)"} in report.writes
+
+    def test_append_redirect_and_tee_flagged(self, tmp_path):
+        from artifact_check import detect_out_of_fence_access
+        proj, ws = self._fence(tmp_path)
+        repo = tmp_path / "repo"
+        events = [{"name": "Bash", "input": {
+            "command": f"cd {repo} && echo a >> log.txt; echo b | tee out.txt"}}]
+        report = detect_out_of_fence_access(events, [str(proj), str(ws)])
+        paths = {w["path"] for w in report.writes}
+        assert str(repo / "log.txt") in paths
+        assert str(repo / "out.txt") in paths
+
+    def test_cdrecord_is_not_cd(self, tmp_path):
+        from artifact_check import detect_out_of_fence_access
+        proj, ws = self._fence(tmp_path)
+        events = [{"name": "Bash", "input": {"command": "cdrecord dev=1 && echo x > f.txt"}}]
+        report = detect_out_of_fence_access(events, [str(proj), str(ws)])
+        assert report.writes == []

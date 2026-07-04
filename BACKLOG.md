@@ -70,6 +70,30 @@ mid-command. Stray removed (project dir had its own in-fence copies). Any
 tier-a design must handle cwd drift inside a single Bash command, not just
 absolute-path writes.
 
+**Tier-a SHIPPED 2026-07-04 (enforcement gated off, detection on):**
+- **cwd-drift detection** closes the specimen above:
+  `detect_out_of_fence_access` now tracks `cd` targets across a step's Bash
+  commands (worker subprocess cwd persists between Bash calls; within-command
+  drift handled by interleaving cds and write targets in position order) and
+  resolves relative write targets — shell redirections (`>`, `>>`), `tee`,
+  and relative-path structured Write/Edit — against the drifted cwd. Flags
+  land in `ScavengeReport.writes` as `<tool>(cwd-drift)`. Positive-evidence
+  discipline: unresolvable cds (`$VAR`, `cd -`) silence the tracker instead
+  of guessing. Always-on with the existing `validate.scavenge_detect` gate.
+  Tests: `TestScavengeCwdDrift` (10 cases incl. specimen replay).
+- **Write-fence demotion** (`loop_execute`, after the diagnostic, before the
+  fabrication guard): any `ScavengeReport.writes` entry on a done step
+  demotes done→blocked with the paths in the stuck_reason, emits
+  `FENCE_WRITE_BLOCKED` + guard note in the step result. Config
+  `validate.write_fence`, **default OFF** — per the recorded plan, watch
+  `SCAVENGE_DETECTED` write rows for false-positive rate first (legit
+  out-of-fence writes exist: /tmp scratch, goals that explicitly target
+  another tree). Flip on in `~/.maro/workspace/config.yml` when the rows look
+  clean — Jeremy's call, same pattern as the navigator cutovers. 2 loop
+  integration tests.
+- **Spectrum doc**: `docs/BOUNDED_WORKSPACE.md` (tiers a/b/c, what each
+  protects against, detection mechanics, known holes).
+
 - [ ] **Workspace boundary: build-goal artifacts landed in the repo root** —
   run_health.py + example output were written to cwd (the repo) instead of the
   run's artifact dir; goal even said "as an artifact file". Moved them into
@@ -184,11 +208,10 @@ not scavenge from elsewhere on the filesystem.
   per-goal setting that restricts file access (or at minimum, search paths)
   to the project workspace `repo/` subdir. Not full sandboxing — just
   "don't wander." Cheap win.
-- [ ] **Medium-effort: document the bounded-workspace spectrum.** Three
-  tiers worth naming: (a) docker/container (full isolation, heavy setup),
-  (b) orchestrator workspace only (soft fence — honor convention, no
-  enforcement), (c) full machine (current default). Short doc in
-  `docs/` noting when to use which and what each protects against.
+- [x] **Medium-effort: document the bounded-workspace spectrum.** DONE
+  2026-07-04: `docs/BOUNDED_WORKSPACE.md` — tiers (a) hard fence /
+  (b) soft fence / (c) full machine, when to use which, what each protects
+  against, detection mechanics, known holes.
 - [x] **Diagnostic: detect scavenging.** ~~Captain's log event when a worker
   reads a file outside the project workspace root.~~ **DONE 2026-07-03:**
   `artifact_check.detect_out_of_fence_access` scans each step's REAL tool

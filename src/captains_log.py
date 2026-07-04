@@ -111,6 +111,7 @@ CLAIM_PROBED = "CLAIM_PROBED"  # adversarial-review grounding: per-claim probe o
 CLAIM_VERIFIER_OUTCOME = "CLAIM_VERIFIER_OUTCOME"  # per-step: file/symbol claim verification outcome + downstream action
 FABRICATION_DETECTED = "FABRICATION_DETECTED"  # per-step: write-claim with zero filesystem evidence (done≠achieved ground-truth)
 SCAVENGE_DETECTED = "SCAVENGE_DETECTED"  # per-step: worker touched files outside the fence (project dir + workspace) — contamination visibility, diagnostic only
+FENCE_WRITE_BLOCKED = "FENCE_WRITE_BLOCKED"  # per-step: tier-a write fence demoted done→blocked on an out-of-fence write (validate.write_fence)
 
 # Run transparency: loop lifecycle + quality-gate decisions
 LOOP_CREATED = "LOOP_CREATED"  # every loop spawn — reason, parent_loop_id, slug, max_steps
@@ -165,7 +166,7 @@ EVENT_TYPES = {
     AUTO_RECOVERY, DIAGNOSIS, INPUT_MISMATCH,
     DECISION_RECORDED, METACOGNITIVE_DECISION,
     SCOPE_GENERATED, SCOPE_PARSE_FAILED, SCOPE_SKIPPED, CLOSURE_VERDICT, CLAIM_PROBED,
-    CLAIM_VERIFIER_OUTCOME, FABRICATION_DETECTED, SCAVENGE_DETECTED,
+    CLAIM_VERIFIER_OUTCOME, FABRICATION_DETECTED, SCAVENGE_DETECTED, FENCE_WRITE_BLOCKED,
     LOOP_CREATED, QUALITY_GATE_VERDICT, STEP_TOO_BROAD,
     RECALL_PERFORMED, RECALL_GUARD_TRIPPED,
     NAVIGATOR_DECIDED, NAVIGATOR_ACTED,

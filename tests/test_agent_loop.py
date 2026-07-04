@@ -3487,3 +3487,111 @@ def test_run_agent_loop_no_scavenge_event_for_in_fence_access(monkeypatch, tmp_p
         max_iterations=2,
     )
     assert "SCAVENGE_DETECTED" not in events_seen
+
+
+def test_run_agent_loop_write_fence_blocks_out_of_fence_write(monkeypatch, tmp_path):
+    """Tier-a write fence (validate.write_fence on): an out-of-fence WRITE in
+    the real tool transcript demotes the step done→blocked and emits
+    FENCE_WRITE_BLOCKED."""
+    monkeypatch.setenv("MARO_ORCH_ROOT", str(tmp_path))
+    import agent_loop as al
+    import loop_execute
+    import captains_log
+    import config as config_mod
+    monkeypatch.setattr(loop_execute, "_local_auto_ralph_enabled", lambda: False)
+
+    _orig_get = config_mod.get
+
+    def _fake_get(key, default=None):
+        if key == "validate.write_fence":
+            return True
+        return _orig_get(key, default)
+
+    monkeypatch.setattr(config_mod, "get", _fake_get)
+
+    events_seen = []
+    _orig_log_event = captains_log.log_event
+
+    def _capture(event_type, subject, summary, **kw):
+        events_seen.append((event_type, kw))
+        return _orig_log_event(event_type, subject, summary, **kw)
+
+    monkeypatch.setattr(captains_log, "log_event", _capture)
+
+    stray = "/home/nonexistent-other-repo/leaked.py"
+
+    class _WriteFenceAdapter:
+        model_key = "test"
+
+        def complete(self, messages, **kwargs):
+            from llm import LLMResponse, ToolCall
+            return LLMResponse(
+                content="",
+                tool_calls=[ToolCall(name="complete_step", arguments={
+                    "result": "Completed the refactor step.",
+                    "summary": "refactored",
+                })],
+                input_tokens=1, output_tokens=1,
+                tool_events=[{"name": "Write", "input": {"file_path": stray},
+                              "output": "ok", "is_error": False}],
+            )
+
+    result = al.run_agent_loop(
+        "refactor the helper",
+        adapter=_WriteFenceAdapter(),
+        preset_steps=["Refactor the helper module"],
+        max_steps=1,
+        max_iterations=2,
+    )
+    blocked = [s for s in result.steps if s.status == "blocked"]
+    assert blocked, f"expected a blocked step, got {[s.status for s in result.steps]}"
+    assert any("[write-fence]" in (s.result or "") for s in blocked)
+    fence_events = [e for e in events_seen if e[0] == "FENCE_WRITE_BLOCKED"]
+    assert fence_events, f"expected FENCE_WRITE_BLOCKED, saw {[e[0] for e in events_seen]}"
+    ctx = fence_events[0][1].get("context") or {}
+    assert any(w["path"] == stray for w in ctx.get("writes", []))
+
+
+def test_run_agent_loop_write_fence_off_by_default(monkeypatch, tmp_path):
+    """With validate.write_fence at its default (off), an out-of-fence write is
+    diagnostic only: SCAVENGE_DETECTED fires, the step stays done."""
+    monkeypatch.setenv("MARO_ORCH_ROOT", str(tmp_path))
+    import agent_loop as al
+    import loop_execute
+    import captains_log
+    monkeypatch.setattr(loop_execute, "_local_auto_ralph_enabled", lambda: False)
+
+    events_seen = []
+    monkeypatch.setattr(
+        captains_log, "log_event",
+        lambda event_type, subject, summary, **kw: events_seen.append(event_type) or {},
+    )
+
+    stray = "/home/nonexistent-other-repo/leaked.py"
+
+    class _WriteAdapter:
+        model_key = "test"
+
+        def complete(self, messages, **kwargs):
+            from llm import LLMResponse, ToolCall
+            return LLMResponse(
+                content="",
+                tool_calls=[ToolCall(name="complete_step", arguments={
+                    "result": "Completed the refactor step.",
+                    "summary": "refactored",
+                })],
+                input_tokens=1, output_tokens=1,
+                tool_events=[{"name": "Write", "input": {"file_path": stray},
+                              "output": "ok", "is_error": False}],
+            )
+
+    result = al.run_agent_loop(
+        "refactor the helper",
+        adapter=_WriteAdapter(),
+        preset_steps=["Refactor the helper module"],
+        max_steps=1,
+        max_iterations=2,
+    )
+    assert "SCAVENGE_DETECTED" in events_seen
+    assert "FENCE_WRITE_BLOCKED" not in events_seen
+    assert not any(s.status == "blocked" for s in result.steps)
