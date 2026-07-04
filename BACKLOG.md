@@ -61,6 +61,15 @@ data is preserved, not deleted.
 
 ### 1. Bound worker writes to run-dir / workspace (artifacts leaking into repo root)
 
+**Evasion specimen (2026-07-04, first organic batch):** run 668e46d1's worker
+`cd`'d into the repo and wrote `scripts/count-lines.py` with a *relative* path
+— invisible to both the structured-tool scavenge check (no absolute path
+input) and the Bash regex (only the cd target surfaced, recorded as a read).
+The cwd fence binds per-step launch cwd, but a worker can cd elsewhere
+mid-command. Stray removed (project dir had its own in-fence copies). Any
+tier-a design must handle cwd drift inside a single Bash command, not just
+absolute-path writes.
+
 - [ ] **Workspace boundary: build-goal artifacts landed in the repo root** —
   run_health.py + example output were written to cwd (the repo) instead of the
   run's artifact dir; goal even said "as an artifact file". Moved them into

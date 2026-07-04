@@ -36,7 +36,7 @@ skills/
 # Playwright CLI session artifacts
 .playwright-cli/
 **/.playwright-cli/
-src/poe_orchestration.egg-info/
+src/*.egg-info/
 .coverage
 step_data.json
 test_output.txt
