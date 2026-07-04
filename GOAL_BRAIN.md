@@ -964,6 +964,37 @@ Sample: the 2026-05-13..17 window of `~/.maro/workspace/runs/` (478 dirs total;
   by itself — blocked steps retry with hint + tier-up; the probe died because
   the navigator correctly judged retry futile.
 
+- **2026-07-04 (docs refactor + backlog triage + memory brief — Jeremy AFK:
+  "compact and clean those docs up... brain trust... might lead into the next
+  big chunk (memory/graph theory/filesystem vs 'real' memory decisions)")** —
+  Four chunks, all pushed (83f5d2b, faa72af, 472d503, 163e174, d33678e), full
+  suite green via test-safe.sh after. (1) Three-species docs taxonomy
+  (living / dormant-design / record) with YAML frontmatter, test-enforced
+  (`tests/test_docs_frontmatter.py`); 26 point-in-time docs → `docs/history/`
+  dated by last substantive commit; ROADMAP.md → inert stub (checkbox-free,
+  test-enforced — convo_miner treats MILESTONES/BACKLOG as the only queues);
+  `docs/INDEX.md` is the map. GOAL_BRAIN compaction REJECTED by the archivist
+  pass (only 3 pre-June entries, all load-bearing). (2) dev-recall was serving
+  a 7-week-dead ghost clone (additive-only ingest + repo rename): zero rows
+  from this repo. Backed up, pruned 2,576 ghost chunks, full re-ingest; also
+  corrected its docstring — retrieval is FTS5/BM25, sqlite-vec/embeddings
+  never existed. Lesson recorded: indexes need sources-on-disk staleness
+  checks or they rot invisibly. (3) BACKLOG full triage 810→~540 lines, every
+  prune claim re-verified against code (one vetter verdict itself overturned
+  by a child agent's dissent — decay-trust demote is 5→4, not language form);
+  shipped arcs → BACKLOG_DONE with context; llm-adapter extraction promoted
+  (#14, dependency cleared). Intent-resolution flag for Jeremy: ResolvedIntent
+  v0 shipped past its own minimum experiment — decide retroactive A/B or
+  accept. (4) **Memory decision brief delivered — `docs/MEMORY_DECISION_BRIEF.md`,
+  AWAITING JEREMY.** Reframe: data layer is fine, ACCESS layer is the gap.
+  Five verified gaps: workers get zero memory; knowledge_edges.jsonl 2,124
+  edges written / zero readers (graph memory half-exists, write-only); ~8MB
+  write-only graveyards; rule auto-demote unwired + no language-form demotion;
+  lat.md ~200-token flat injection with 2 fabricated nodes. Recommendation:
+  access-first (scoped recall + BM25 index-as-cache + graph read-side) +
+  summary/handle contract; storage migration deferred; experiment gate before
+  the worker slice ships. Decision points §8 of the brief.
+
 ## Threads (system-maintained — nothing leaves this list silently)
 
 Active:
