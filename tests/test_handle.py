@@ -2704,3 +2704,80 @@ class TestProjectlessDispatchFence:
                    force_lane="agenda", dry_run=False)
 
         assert calls and calls[0].get("project") == "my-proj"
+
+
+class TestNamedProjectBinding:
+    """A project-less goal that literally names an existing project directory
+    binds to it instead of minting a slug-project (first organic batch
+    2026-07-03: run 4a5dc90c updated polymarket-edges/EDGES.md but was fenced
+    + closure-verified in a fresh slug dir -> done-not-achieved false
+    negative)."""
+
+    _setup = TestDirectorRestart._setup
+    _no_quality_gate = staticmethod(TestDirectorRestart._no_quality_gate)
+    _fake_loop_result = TestDirectorRestart._fake_loop_result
+
+    def _run(self, monkeypatch, tmp_path, goal, existing=()):
+        self._setup(monkeypatch, tmp_path)
+        import orch_items
+        for name in existing:
+            (orch_items.projects_root() / name).mkdir(parents=True, exist_ok=True)
+        from unittest.mock import patch
+        calls = []
+        def _fake_run(*args, **kwargs):
+            calls.append(kwargs.copy())
+            return self._fake_loop_result(status="done")
+        with patch("agent_loop.run_agent_loop", side_effect=_fake_run), \
+             patch("intent.check_goal_clarity", return_value={"clear": True}), \
+             self._no_quality_gate():
+            handle(goal, force_lane="agenda", dry_run=False)
+        assert calls, "loop should have run"
+        return calls[0].get("project")
+
+    def test_goal_naming_existing_project_binds_to_it(self, monkeypatch, tmp_path):
+        got = self._run(
+            monkeypatch, tmp_path,
+            "Deepen one existing edge in the polymarket-edges project ledger.",
+            existing=["polymarket-edges"])
+        assert got == "polymarket-edges"
+
+    def test_no_match_falls_back_to_goal_slug(self, monkeypatch, tmp_path):
+        from agent_loop import _goal_to_slug
+        goal = "summarize the incident timeline"
+        got = self._run(monkeypatch, tmp_path, goal, existing=["polymarket-edges"])
+        assert got == _goal_to_slug(goal)
+
+    def test_short_generic_names_are_ignored(self, monkeypatch, tmp_path):
+        from agent_loop import _goal_to_slug
+        goal = "run a test of the notes pipeline"
+        got = self._run(monkeypatch, tmp_path, goal, existing=["test", "notes"])
+        assert got == _goal_to_slug(goal)
+
+    def test_longest_named_project_wins(self, monkeypatch, tmp_path):
+        got = self._run(
+            monkeypatch, tmp_path,
+            "extend the polymarket-edges-research notes",
+            existing=["polymarket-edges", "polymarket-edges-research"])
+        assert got == "polymarket-edges-research"
+
+    def test_substring_of_hyphen_run_does_not_match(self, monkeypatch, tmp_path):
+        from agent_loop import _goal_to_slug
+        goal = "review the polymarket-edges-2 rollout plan"
+        got = self._run(monkeypatch, tmp_path, goal, existing=["polymarket-edges"])
+        assert got == _goal_to_slug(goal)
+
+    def test_explicit_project_still_wins_over_match(self, monkeypatch, tmp_path):
+        self._setup(monkeypatch, tmp_path)
+        import orch_items
+        (orch_items.projects_root() / "polymarket-edges").mkdir(parents=True, exist_ok=True)
+        from unittest.mock import patch
+        calls = []
+        def _fake_run(*args, **kwargs):
+            calls.append(kwargs.copy())
+            return self._fake_loop_result(status="done")
+        with patch("agent_loop.run_agent_loop", side_effect=_fake_run), \
+             patch("intent.check_goal_clarity", return_value={"clear": True}), \
+             self._no_quality_gate():
+            handle("touch the polymarket-edges ledger", project="my-proj",
+                   force_lane="agenda", dry_run=False)
+        assert calls and calls[0].get("project") == "my-proj"

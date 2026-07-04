@@ -276,6 +276,52 @@ def _env_flag(name: str, default: bool = False) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
+_PROJECT_MATCH_MIN_LEN = 6
+
+
+def _match_existing_project(message: str) -> str:
+    """If the goal text literally names an existing project directory, return
+    that project name; else "".
+
+    A dispatched goal like "deepen one edge in the polymarket-edges ledger"
+    must bind to the existing `polymarket-edges` project — minting a fresh
+    slug-project fences the run (and closure verification) into an empty dir
+    while the real deliverable lands in the named one, producing a
+    done-not-achieved false negative (first organic batch, 2026-07-03,
+    run 4a5dc90c). Longest name wins; names shorter than
+    _PROJECT_MATCH_MIN_LEN chars are ignored as too generic to trust.
+    """
+    try:
+        import orch_items as _oi
+        root = _oi.projects_root()
+        if not root.is_dir():
+            return ""
+        msg = message.lower()
+        best = ""
+        for d in root.iterdir():
+            name = d.name
+            if not d.is_dir() or len(name) < _PROJECT_MATCH_MIN_LEN:
+                continue
+            if len(name) <= len(best):
+                continue
+            if re.search(r"(?<![a-z0-9-])" + re.escape(name.lower()) + r"(?![a-z0-9-])", msg):
+                best = name
+        return best
+    except Exception:
+        return ""
+
+
+def _default_project_for(message: str) -> str:
+    """Project identity for a project-less goal: an existing project named in
+    the goal text, else the minted goal slug. Both the loop fence and the
+    scope pass must resolve through here so they can't diverge."""
+    matched = _match_existing_project(message)
+    if matched:
+        return matched
+    from agent_loop import _goal_to_slug
+    return _goal_to_slug(message)
+
+
 def _run_now(
     message: str,
     handle_id: str,
@@ -1028,15 +1074,15 @@ def _handle_impl(
 
         _ralph_from_cfg = _cfg.get("ralph_verify", "").strip().lower() == "true"
         # Dispatched goals arrive project-less; default the loop's project
-        # identity to the goal slug — the same derivation the scope pass uses
-        # below — so the cwd fence, per-step cwd binds, and prompt project_dir
+        # identity via _default_project_for — an existing project named in the
+        # goal, else the minted goal slug (same derivation the scope pass uses
+        # below) — so the cwd fence, per-step cwd binds, and prompt project_dir
         # all engage instead of silently running unfenced from the launch cwd
         # (BACKLOG #1, 3rd repro), and scope + execution stop pointing at two
         # different project dirs. `project` itself stays as-given: routing
         # checks above and HandleResult report what the caller asked for.
-        from agent_loop import _goal_to_slug as _slug_for_fence
         _loop_kwargs: dict = dict(
-            project=project or _slug_for_fence(message),
+            project=project or _default_project_for(message),
             repo_path=repo_path,
             model=model,
             adapter=adapter,
@@ -1155,9 +1201,9 @@ def _handle_impl(
                 # Resolve the project artifacts dir once; used for both
                 # successful scope.md persistence and raw-dump on parse failure.
                 try:
-                    from agent_loop import _goal_to_slug
-                    _scope_project = project or _goal_to_slug(message)
-                    _proj_dir = Path.home() / ".maro" / "workspace" / "projects" / _scope_project / "artifacts"
+                    import orch_items as _oi
+                    _scope_project = project or _default_project_for(message)
+                    _proj_dir = _oi.projects_root() / _scope_project / "artifacts"
                     _proj_dir.mkdir(parents=True, exist_ok=True)
                 except Exception:
                     _proj_dir = None
