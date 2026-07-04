@@ -475,7 +475,10 @@ _SCAVENGE_SYSTEM_PREFIXES = (
     "/proc/", "/sys/", "/dev/", "/run/", "/var/", "/snap/", "/nix/",
 )
 _SCAVENGE_CAP = 20  # max flagged paths per step (dedup first)
-_ABS_PATH_RE = re.compile(r"(?<![\w.])/(?:[\w.@+-]+/)*[\w.@+-]+")
+# Lookbehind also excludes ':' and '/' so URL paths ("https://owasp.org/...")
+# and colon-prefixed remote/PATH-style entries ("host:/inbox") can't start a
+# match — first organic rows (2026-07-03) flagged URL fragments as paths.
+_ABS_PATH_RE = re.compile(r"(?<![\w.:/])/(?:[\w.@+-]+/)*[\w.@+-]+")
 
 
 @dataclass

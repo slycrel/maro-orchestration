@@ -426,3 +426,45 @@ class TestScavengeDetector:
         events = [{"name": "Read", "input": {"file_path": stray}}]
         report = detect_out_of_fence_access(events, ["", str(tmp_path / "ws")])
         assert report.flagged
+
+
+class TestScavengeUrlFalsePositives:
+    """First organic scavenge rows (2026-07-03, run 15f2e3d4) flagged
+    '/owasp.org/www-community/...' and '/docs.python.org/...' — URL paths in
+    Bash commands matched as absolute filesystem paths (the regex could start
+    a match at the second slash of 'https://'). URLs and colon-prefixed
+    remote/PATH-style entries must not pollute the fence evidence stream."""
+
+    def _fence(self, tmp_path):
+        proj = tmp_path / "proj"
+        proj.mkdir()
+        return [str(proj)]
+
+    def test_https_url_in_bash_not_flagged(self, tmp_path):
+        from artifact_check import detect_out_of_fence_access
+        events = [{"name": "Bash", "input": {
+            "command": "curl -s https://owasp.org/www-community/attacks/Path_Traversal"}}]
+        report = detect_out_of_fence_access(events, self._fence(tmp_path))
+        assert not report.flagged, report
+
+    def test_http_url_not_flagged(self, tmp_path):
+        from artifact_check import detect_out_of_fence_access
+        events = [{"name": "Bash", "input": {
+            "command": "wget http://docs.python.org/3/library/pathlib.html -O out.html"}}]
+        report = detect_out_of_fence_access(events, self._fence(tmp_path))
+        assert not report.flagged, report
+
+    def test_colon_prefixed_remote_path_not_flagged(self, tmp_path):
+        from artifact_check import detect_out_of_fence_access
+        events = [{"name": "Bash", "input": {
+            "command": "scp report.txt host.example.com:/home/remote/inbox/"}}]
+        report = detect_out_of_fence_access(events, self._fence(tmp_path))
+        assert not report.flagged, report
+
+    def test_plain_absolute_path_still_flagged(self, tmp_path):
+        from artifact_check import detect_out_of_fence_access
+        events = [{"name": "Bash", "input": {
+            "command": "cat /home/nonexistent-stale-clone/main.go"}}]
+        report = detect_out_of_fence_access(events, self._fence(tmp_path))
+        assert report.flagged
+        assert report.reads[0]["path"] == "/home/nonexistent-stale-clone/main.go"
