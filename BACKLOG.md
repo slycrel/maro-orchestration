@@ -765,10 +765,17 @@ These four are kept (not deleted) this triage pending verification against curre
   still future work." No single source of truth exists today. See the new
   "Goal Lineage" section in `docs/ARCHITECTURE_OVERVIEW.md` for the full
   four-mechanism map (`ancestry.py`, `goal_map.py`, `thread_brain.py`,
-  `recall.py`). **Action:** have `recall.py`'s `_resolve_thread` call into
-  `ancestry.py`'s chain instead of independently re-deriving it; wire
-  `thread_brain.py`'s per-thread origin to also write/consult
-  `ancestry.json` at thread-fork time as Thread Architecture matures. Source:
+  `recall.py`). **Read-side SHIPPED 2026-07-04:** recall's thread resolution
+  now falls back to `ancestry.py`'s chain (`_thread_from_project_ancestry`,
+  source="ancestry") when the run-metadata origin walk yields nothing — the
+  loop slice (called with project, no origin) now surfaces the same lineage
+  `build_ancestry_prompt` injects instead of staying silent, and
+  `sources["thread_source"]` records which source won. Origin walk still wins
+  when present (run-level truth for dispatched goals, which have no
+  ancestry.json). Tests: `TestAncestryUnification` (5). **Remaining action:**
+  wire `thread_brain.py`'s per-thread origin to also write/consult
+  `ancestry.json` at thread-fork time as Thread Architecture matures — that's
+  the write-side that makes ancestry.json the true single source. Source:
   refactor-plan architecture review, 2026-07-02.
 
 ### Observability dashboard — archived, revisit the visibility goal with a different implementation

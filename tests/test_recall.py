@@ -298,3 +298,73 @@ class TestRecentLearningActivity:
         monkeypatch.setattr(cl, "load_log", lambda limit=30: [])
         from recall import recent_learning_activity
         assert recent_learning_activity() == ""
+
+
+class TestAncestryUnification:
+    """BACKLOG ancestry-double-injection: when run-metadata origin gives
+    nothing, thread identity comes from the project's ancestry.json — the
+    same chain loop_init's build_ancestry_prompt injects."""
+
+    def _write_ancestry(self, slug, nodes):
+        from orch_items import project_dir
+        pd = project_dir(slug)
+        pd.mkdir(parents=True, exist_ok=True)
+        (pd / "ancestry.json").write_text(
+            json.dumps({
+                "parent_id": nodes[-1]["id"],
+                "ancestry": nodes,
+            }),
+            encoding="utf-8",
+        )
+
+    def test_ancestry_fallback_when_no_origin(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        self._write_ancestry("child-proj", [
+            {"id": "top-mission", "title": "Ship the orchestrator"},
+            {"id": "parent-proj", "title": "Build the memory layer"},
+        ])
+        r = recall("implement recall cache", slice="dispatch", project="child-proj")
+        assert r.thread is not None
+        assert r.thread.source == "ancestry"
+        assert r.thread.parent_goal == "Build the memory layer"
+        # immediate parent first
+        assert r.thread.chain == ["parent-proj", "top-mission"]
+        assert r.sources["thread_source"] == "ancestry"
+
+    def test_origin_walk_wins_over_ancestry(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        self._write_ancestry("child-proj", [
+            {"id": "top-mission", "title": "Ship the orchestrator"},
+        ])
+        parent = _make_run("the parent goal", status="done")
+        r = recall(
+            "implement recall cache", slice="dispatch", project="child-proj",
+            origin={"parent_handle_id": parent, "parent_goal": "the parent goal",
+                    "source": "task_store"},
+        )
+        assert r.thread is not None
+        assert r.thread.source == "task_store"
+        assert r.thread.parent_goal == "the parent goal"
+
+    def test_no_ancestry_file_stays_none(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        r = recall("implement recall cache", slice="dispatch", project="no-such-proj")
+        assert r.thread is None
+
+    def test_malformed_ancestry_fails_open(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        from orch_items import project_dir
+        pd = project_dir("bad-proj")
+        pd.mkdir(parents=True, exist_ok=True)
+        (pd / "ancestry.json").write_text("{not json", encoding="utf-8")
+        r = recall("implement recall cache", slice="dispatch", project="bad-proj")
+        assert r.thread is None
+
+    def test_loop_slice_gets_ancestry_thread(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        self._write_ancestry("child-proj", [
+            {"id": "top-mission", "title": "Ship the orchestrator"},
+        ])
+        r = recall("implement recall cache", slice="loop", project="child-proj")
+        assert r.thread is not None
+        assert r.thread.source == "ancestry"

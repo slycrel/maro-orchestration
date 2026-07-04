@@ -99,11 +99,18 @@ class PriorAttempt:
 
 @dataclass
 class ThreadIdentity:
-    """Where this goal came from, walked via origin ancestry (runs metadata)."""
+    """Where this goal came from.
+
+    Resolved from run-metadata origin (handle_id chain) when the caller has
+    one; otherwise from the project's ancestry.json via ancestry.py — the same
+    source loop_init's prompt injection reads, so the two lineage strings in
+    the loop prompt can't disagree (BACKLOG: ancestry double-injection).
+    """
     parent_goal: str
     parent_handle_id: str
-    chain: List[str]     # handle_id chain, immediate parent first
-    source: str          # task_store | agent_loop | director | direct | ...
+    chain: List[str]     # immediate parent first; handle_ids (origin walk) or
+                         # project slugs (ancestry.json fallback, source="ancestry")
+    source: str          # task_store | agent_loop | director | direct | ancestry | ...
 
 
 @dataclass
@@ -231,6 +238,30 @@ def _resolve_thread(origin: Optional[dict]) -> Optional[ThreadIdentity]:
     )
 
 
+def _thread_from_project_ancestry(project: str) -> Optional[ThreadIdentity]:
+    """Lineage from the project's ancestry.json (ancestry.py).
+
+    The unification half of the BACKLOG ancestry-double-injection item: when
+    run-metadata origin gives recall nothing, consult the same chain
+    loop_init's `build_ancestry_prompt` injects instead of staying silent —
+    one source of truth for both lineage strings in the loop prompt.
+    """
+    if not project:
+        return None
+    from orch_items import project_dir
+    from ancestry import get_project_ancestry
+    pa = get_project_ancestry(project_dir(project))
+    if not pa or not pa.ancestry:
+        return None
+    nodes = pa.ancestry  # top-level mission first, immediate parent last
+    return ThreadIdentity(
+        parent_goal=nodes[-1].title,
+        parent_handle_id="",
+        chain=[n.id for n in reversed(nodes)],  # immediate parent first
+        source="ancestry",
+    )
+
+
 def _normalize(text: str) -> str:
     return " ".join((text or "").lower().split())
 
@@ -302,10 +333,13 @@ def recall(
 
     try:
         thread = _resolve_thread(origin)
+        if thread is None:
+            thread = _thread_from_project_ancestry(project)
     except Exception as exc:
         log.debug("recall: thread resolution failed: %s", exc)
         thread = None
     sources["thread_chain_len"] = len(thread.chain) if thread else 0
+    sources["thread_source"] = thread.source if thread else ""
 
     try:
         prior = _find_prior_attempts(goal, window_hours=window_hours)
