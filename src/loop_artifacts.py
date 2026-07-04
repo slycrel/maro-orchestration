@@ -199,6 +199,9 @@ def _write_loop_log(
                     "tokens_in": s.tokens_in,
                     "tokens_out": s.tokens_out,
                     "elapsed_ms": s.elapsed_ms,
+                    # rung-4 unification (BACKLOG #0): link the truncated view
+                    # to the full byte-level capture when record-mode had one
+                    "call_record": getattr(s, "call_record", ""),
                 }
                 for s in steps
             ],

@@ -1237,6 +1237,13 @@ def execute_step(
             "cache_read_tokens": getattr(resp, "cache_read_tokens", 0),
         }
 
+    # Byte-level record cross-reference (BACKLOG #0 rung-4 unification): when
+    # record-mode captured this call, carry the record path on the outcome so
+    # the loop log can link the truncated excerpt to the full capture.
+    _call_record = getattr(resp, "call_record", "")
+    if _call_record and isinstance(_outcome, dict):
+        _outcome.setdefault("call_record", _call_record)
+
     return _outcome
 
 

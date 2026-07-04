@@ -115,3 +115,94 @@ def test_record_tool_events_persisted(workspace):
     out = record_llm_call("p", "r", tool_events=events)
     rec = json.loads(out.read_text())
     assert rec["tool_events"] == events
+
+
+# ---------------------------------------------------------------------------
+# Rung-4 unification (BACKLOG #0): loop-log links to the byte-level record
+# ---------------------------------------------------------------------------
+
+def test_failover_adapter_stamps_call_record(workspace):
+    """When record-mode captures a call, the response carries the record path."""
+    from llm import FailoverAdapter, LLMResponse
+
+    rd = create_run_dir("hid00042", prompt="stamped goal")
+    set_current_run_dir(rd)
+
+    class _Fake:
+        backend = "fake"
+        model_key = "test"
+
+        def complete(self, messages, **kwargs):
+            return LLMResponse(content="hello", input_tokens=1, output_tokens=1)
+
+    fa = FailoverAdapter([_Fake()])
+    resp = fa.complete([{"role": "user", "content": "hi"}])
+    rec = getattr(resp, "call_record", "")
+    assert rec, "response should carry the call-record path"
+    assert Path(rec).is_file()
+    assert Path(rec).parent == _calls_dir(rd)
+
+
+def test_failover_adapter_no_stamp_when_recording_off(workspace, monkeypatch):
+    from llm import FailoverAdapter, LLMResponse
+    monkeypatch.setenv("MARO_RECORD", "0")
+
+    rd = create_run_dir("hid00043", prompt="unstamped goal")
+    set_current_run_dir(rd)
+
+    class _Fake:
+        backend = "fake"
+        model_key = "test"
+
+        def complete(self, messages, **kwargs):
+            return LLMResponse(content="hello", input_tokens=1, output_tokens=1)
+
+    fa = FailoverAdapter([_Fake()])
+    resp = fa.complete([{"role": "user", "content": "hi"}])
+    assert getattr(resp, "call_record", "") == ""
+
+
+def test_execute_step_outcome_carries_call_record(workspace, monkeypatch):
+    """execute_step propagates resp.call_record onto the outcome dict."""
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(workspace))
+    from llm import LLMResponse, ToolCall
+    from step_exec import execute_step, EXECUTE_TOOLS
+
+    class _Adapter:
+        model_key = "test"
+
+        def complete(self, messages, **kwargs):
+            resp = LLMResponse(
+                content="",
+                tool_calls=[ToolCall(name="complete_step", arguments={
+                    "result": "did the thing", "summary": "done"})],
+                input_tokens=1, output_tokens=1,
+            )
+            resp.call_record = "/some/run/build/calls/call-00007.json"
+            return resp
+
+    outcome = execute_step(
+        goal="g", step_text="do the thing", step_num=1, total_steps=1,
+        completed_context=[], adapter=_Adapter(), tools=EXECUTE_TOOLS,
+    )
+    assert outcome["call_record"] == "/some/run/build/calls/call-00007.json"
+
+
+def test_loop_log_includes_call_record(workspace, monkeypatch):
+    """_write_loop_log emits the per-step call_record cross-reference."""
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(workspace))
+    from loop_types import step_from_decompose
+    from loop_artifacts import _write_loop_log
+    import orch_items
+
+    proj = "record-link-proj"
+    (orch_items.project_dir(proj) / "artifacts").mkdir(parents=True, exist_ok=True)
+    steps = [step_from_decompose(
+        "step one", 0, status="done", result="full result text",
+        call_record="/rd/build/calls/call-00001.json",
+    )]
+    _write_loop_log(proj, "loop123", "the goal", "done", steps,
+                    "2026-07-04T00:00:00Z", 100, None)
+    log_path = orch_items.project_dir(proj) / "artifacts" / "loop-loop123-log.json"
+    payload = json.loads(log_path.read_text(encoding="utf-8"))
+    assert payload["steps"][0]["call_record"] == "/rd/build/calls/call-00001.json"

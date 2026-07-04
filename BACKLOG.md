@@ -44,9 +44,13 @@ data is preserved, not deleted.
   the actual miners are TODO — skill scraper, script scraper, decision-prior
   indexer (feed a similar/rephrased re-attempt), partial-run rescue. Append to
   `run_curation.CURATORS`.
-- [ ] **Unify rung-4 step I/O.** loop-log still stores a truncated result excerpt;
-  cross-reference the full captured call so the loop view links to the byte-level
-  record.
+- [x] **Unify rung-4 step I/O** — DONE 2026-07-04. `FailoverAdapter.complete`
+  stamps the record path onto the response (`resp.call_record`) when
+  `record_llm_call` captures; `execute_step` carries it on the outcome dict;
+  `StepOutcome.call_record` threads it through all construction sites (main
+  loop, stuck-repeat, parallel batch + fan-out); `_write_loop_log` emits it
+  per step. The loop view's truncated excerpt now links straight to
+  `<run-dir>/build/calls/call-NNNNN.json`. 4 tests in test_record_mode.py.
 - [ ] **Full raw archive (optional).** If/when `runs/`+`projects/` (~79M) get
   pruned, snapshot the full (non-thinned) slices somewhere durable first — they're
   only reproducible while the workspace exists.

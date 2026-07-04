@@ -87,6 +87,7 @@ def _run_parallel_batch(
             elapsed_ms=_b_elapsed,
             confidence=_batch_oc.get("confidence", "unverified"),
             injected_steps=_batch_oc.get("inject_steps", []),
+            call_record=_batch_oc.get("call_record", ""),
         ))
 
         if _b_status == "done":
@@ -208,6 +209,7 @@ def _run_parallel_path(
             tokens_out=_oc.get("tokens_out", 0),
             confidence=_oc.get("confidence", "unverified"),
             injected_steps=_oc.get("inject_steps", []),
+            call_record=_oc.get("call_record", ""),
         ))
         _fanout_tokens_in += _oc.get("tokens_in", 0)
         _fanout_tokens_out += _oc.get("tokens_out", 0)

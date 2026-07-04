@@ -988,6 +988,7 @@ def _execute_main_loop(
                 tokens_out=outcome.get("tokens_out", 0),
                 cache_read_tokens=outcome.get("cache_read_tokens", 0),
                 elapsed_ms=step_elapsed,
+                call_record=outcome.get("call_record", ""),
             ))
             if item_index >= 0:
                 o.mark_item(project, item_index, o.STATE_BLOCKED)
@@ -1102,6 +1103,7 @@ def _execute_main_loop(
             elapsed_ms=step_elapsed,
             confidence=outcome.get("confidence", ""),
             injected_steps=outcome.get("inject_steps", []),
+            call_record=outcome.get("call_record", ""),
         ))
 
         # End-of-iteration artifacts: checkpoint, manifest, dead ends, march of nines

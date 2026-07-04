@@ -90,6 +90,8 @@ class StepOutcome:
     elapsed_ms: int = 0
     confidence: str = ""         # "strong" | "weak" | "inferred" | "unverified" | ""
     injected_steps: List[str] = field(default_factory=list)  # steps added mid-plan by this step
+    call_record: str = ""        # path to the byte-level record of this step's LLM call
+                                 # (<run-dir>/build/calls/call-NNNNN.json) when record-mode captured it
 
 
 def step_from_decompose(
@@ -105,6 +107,7 @@ def step_from_decompose(
     elapsed_ms: int = 0,
     confidence: str = "unverified",
     injected_steps: Optional[List[str]] = None,
+    call_record: str = "",
 ) -> StepOutcome:
     """Factory for StepOutcome — centralises defaults so inline construction sites stay DRY."""
     return StepOutcome(
@@ -119,6 +122,7 @@ def step_from_decompose(
         elapsed_ms=elapsed_ms,
         confidence=confidence,
         injected_steps=injected_steps if injected_steps is not None else [],
+        call_record=call_record,
     )
 
 

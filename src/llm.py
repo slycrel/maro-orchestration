@@ -408,7 +408,7 @@ class FailoverAdapter(LLMAdapter):
                 # never affects the outcome (record_llm_call swallows errors).
                 try:
                     from runs import record_llm_call
-                    record_llm_call(
+                    _rec_path = record_llm_call(
                         self._render_for_record(messages),
                         getattr(result, "content", "") or "",
                         backend=getattr(result, "backend", "") or getattr(adapter, "backend", ""),
@@ -417,6 +417,10 @@ class FailoverAdapter(LLMAdapter):
                         tokens_in=getattr(result, "input_tokens", None),
                         tokens_out=getattr(result, "output_tokens", None),
                     )
+                    if _rec_path is not None:
+                        # Cross-reference for rung-4 step I/O unification: the
+                        # loop log links each step to its byte-level record.
+                        result.call_record = str(_rec_path)
                 except Exception:
                     pass
                 return result
