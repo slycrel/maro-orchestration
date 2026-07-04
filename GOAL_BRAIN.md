@@ -891,6 +891,31 @@ Sample: the 2026-05-13..17 window of `~/.maro/workspace/runs/` (478 dirs total;
   (9) *M5 portability sweep* (#12): re-verified on the unified-layout tree
   (no hardcoded machine paths; fresh-venv `pip install -e` + foreign-HOME
   resolution). Codex payload decision stays deferred-pending-repro. M5 closed.
+- **2026-07-03 (evening — first organic batch: 3 real goals, 2 bugs found+fixed
+  live, several ships proven in production)** — Parallel dispatch (3 workers +
+  the dev session) self-defeated on subscription rate-limits; degradation was
+  exactly as designed — honest failed cards at ~$0.04 each and the FIRST
+  ORGANIC blocked-step `NAVIGATOR_ACTED` escalates (conf 1.0). Sequential
+  re-run: all 3 delivered (~$0.91 total). Production proofs: quality-gate
+  local ladder live (3 `QUALITY_GATE_VERDICT` rows `source=qwen2.5-coder:3b`,
+  all decisive local PASS conf 1.0, paid calls skipped — BACKLOG #9 should
+  watch for rubber-stamping); organic scavenge rows (reads-only, zero
+  out-of-fence writes so far — tier-a fence evidence). *Bug 1 — named-project
+  binding*: a goal targeting "the polymarket-edges project ledger" was fenced
+  into a minted slug-project; the worker updated the real EDGES.md but closure
+  verified the empty slug dir → done-not-achieved false negative. Fixed:
+  `_match_existing_project` (word-boundary, longest-wins, ≥6 chars) inside
+  `_default_project_for`; loop fence + scope pass both resolve through it;
+  6 tests; LIVE-RE-PROVEN (run d83a1c0a bound to polymarket-edges, Edge 10 +
+  runs/2026-07-03.md landed in the real project, closure verified real files
+  and returned a substantive content critique instead of "file does not
+  exist"). *Bug 2 — scavenge URL false positives*: Bash-command path regex
+  matched URL fragments (`/owasp.org/...` from `https://`); lookbehind now
+  excludes `:` and `/`; 4 tests. Also observed: dispatch navigator DECLINED an
+  under-specified re-dispatch (idunno 0.05 → escalate 1.0 → run prevented
+  pre-spend, Telegram ping) — clarification-seeking works live, but verdicts
+  varied across identical goal text (extend 0.92/0.95 on two earlier
+  dispatches) — logged as re-verify data.
 
 ## Threads (system-maintained — nothing leaves this list silently)
 
