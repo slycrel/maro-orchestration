@@ -90,9 +90,17 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+_STOPWORDS = frozenset(
+    "the a an and or of to in for on with is are was were be this that it as "
+    "at by from not do does did done".split()
+)  # mirrors memory_jsonl — measured 2026-07-08: stopwords in the MATCH
+# query diluted BM25 ranking vs adapter-0, which strips them
+
+
 def _fts_query(text: str) -> str:
     """Sanitize free text into an OR-of-quoted-terms FTS5 MATCH query."""
-    toks = _TOKEN_RE.findall(text or "")
+    toks = [t for t in _TOKEN_RE.findall((text or "").lower())
+            if t not in _STOPWORDS]
     return " OR ".join(f'"{t}"' for t in toks[:32])
 
 
@@ -240,7 +248,18 @@ class SqliteMemoryStore:
                        "FROM items_fts JOIN items i ON i.id = items_fts.id "
                        f"WHERE items_fts MATCH ? AND {' AND '.join(where)} "
                        "ORDER BY score DESC, i.created_at DESC LIMIT ?")
-                rows = self._db.execute(sql, [fq, *args, max(k, 0)]).fetchall()
+                # AND-first: items matching every query term outrank any
+                # partial match (measured 2026-07-08: pure OR let items
+                # sharing 2-3 common terms crowd out the exact match); OR
+                # pass fills remaining slots.
+                fq_and = fq.replace(" OR ", " AND ")
+                rows = self._db.execute(
+                    sql, [fq_and, *args, max(k, 0)]).fetchall()
+                if len(rows) < k and fq_and != fq:
+                    have = {r[0] for r in rows}
+                    rows += [r for r in self._db.execute(
+                        sql, [fq, *args, max(k, 0)]).fetchall()
+                        if r[0] not in have][:k - len(rows)]
             else:
                 sql = (f"SELECT i.*, 0 FROM items i WHERE {' AND '.join(where)} "
                        "ORDER BY i.created_at DESC LIMIT ?")

@@ -29,6 +29,7 @@ BACKLOG, VISION, CLAUDE, README…) are living by definition and carry no frontm
 | Dumb-loop audit evidence? | `DUMB_LOOP_AUDIT.md` (closes to history when done) |
 | Adversarial-review verdicts on repo claims? | `VERDICT_INDEX.md` (full report in history) |
 | The memory decision (filesystem vs "real" memory)? | `history/2026-07-04-memory-decision-brief.md` (direction DECIDED 2026-07-07: module + bake-off — see GOAL_BRAIN Decisions; port = `src/memory_port.py`) |
+| The memory module (port/adapters/bridge/instrument)? | module docstrings are canonical: `src/memory_port.py` (contract), `src/memory_sqlite.py` (production store), `src/memory_jsonl.py` (reference adapter), `src/memory_bridge.py` (lessons ingest + worker slice), `src/memory_quality.py` (retrieval instrument); verdict pedigree in `history/2026-07-07-memory-bakeoff.md`; A/B records in `../output/experiments/` |
 | Memory/knowledge design (input to the memory decision) | `MEMORY_ARCHITECTURE.md`, `KNOWLEDGE_CRYSTALLIZATION.md` (both dormant-design; several of their "missing" items have since shipped — see the brief §2) |
 | Intent resolution / "what does done mean"? | `INTENT_RESOLUTION_DESIGN.md` (partially shipped) |
 | Scope/constraint orchestration (Phase 65, PAUSED)? | `CONSTRAINT_ORCHESTRATION_DESIGN.md` + `_REVIEW` + `_AUDIT` |

@@ -34,6 +34,10 @@ MISSIONS = [
      "Review common failure patterns in autonomous agent runs (timeouts, "
      "fabricated results, scope drift) and propose the top 3 operational "
      "guardrails, each with a concrete detection signal."),
+    ("m3-host-monitoring",
+     "Design a monitoring checklist for an always-on autonomous agent host: "
+     "disk, token spend, orphaned processes, stale heartbeats. Give a "
+     "concrete detection command for each item."),
 ]
 
 
@@ -82,19 +86,22 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true",
                     help="plumbing check only, no LLM calls")
+    ap.add_argument("--reps", type=int, default=1,
+                    help="repetitions per (mission, arm) pair")
     opts = ap.parse_args()
 
     OUT.parent.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(timezone.utc).isoformat()
 
-    for mission_id, directive in MISSIONS:
+    for rep in range(opts.reps):
+      for mission_id, directive in MISSIONS:
         for arm, slice_on in (("A-off", False), ("B-on", True)):
-            print(f"=== {mission_id} arm {arm} ===", flush=True)
+            print(f"=== {mission_id} arm {arm} rep {rep + 1} ===", flush=True)
             try:
                 row = run_arm(directive, slice_on, opts.dry_run)
             except Exception as exc:
                 row = {"status": f"error: {exc}"}
-            row.update({"mission": mission_id, "arm": arm,
+            row.update({"mission": mission_id, "arm": arm, "rep": rep + 1,
                         "dry_run": opts.dry_run, "batch": stamp})
             with open(OUT, "a", encoding="utf-8") as fh:
                 fh.write(json.dumps(row, ensure_ascii=False) + "\n")
