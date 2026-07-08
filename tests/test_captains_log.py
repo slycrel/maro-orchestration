@@ -243,7 +243,10 @@ class TestEventTypes:
         # (BACKLOG #9 ROI measurement, validator_roi).
         # +1 (2026-07-04): FENCE_EXTENDED — fence widened to goal-declared
         # paths (intent trumps; Jeremy same-day after the flip).
-        assert len(EVENT_TYPES) == 57
+        # +1 (2026-07-07): WORKER_SLICE_INJECTED — memory.worker_slice A/B
+        # observability: capped recall block prepended to a worker's context
+        # (memory brief Phase 1 / §7 experiment gate; director.py).
+        assert len(EVENT_TYPES) == 58
 
     def test_previously_unregistered_events_in_set(self):
         from captains_log import EVOLVER_REVERTED, EVOLVER_VERIFY, PLAYBOOK_UPDATED
