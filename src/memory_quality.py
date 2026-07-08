@@ -30,10 +30,16 @@ logging.basicConfig(level=logging.INFO, format="%(name)s: %(message)s")
 
 @dataclass
 class EvalQuery:
-    """A retrieval evaluation query."""
+    """A retrieval evaluation query.
+
+    Kinds: "self" (item's own salient words — biased toward lexical-overlap
+    rankers, treat comparative deltas with suspicion), "paraphrase"
+    (LLM-reworded, cached via scripts/gen_paraphrase_queries.py — the fair
+    lane), "probe" (hand-written smoke queries).
+    """
     text: str
     expected_item_id: Optional[str] = None  # For leave-one-out: the correct answer
-    kind: str = "self"  # "self" (from item salient words) or "probe" (hand-written)
+    kind: str = "self"
 
 
 @dataclass
@@ -46,6 +52,7 @@ class EvalResult:
     mrr: float  # Reciprocal rank, 0 if not in top-k
     latency_ms: float
     rank: int  # Position in results, or 0 if not found
+    kind: str = "self"
 
 
 def _extract_salient_words(text: str, n: int = 5) -> List[str]:
@@ -185,6 +192,46 @@ def _generate_self_retrieval_queries(items: List[Dict[str, Any]]) -> List[EvalQu
     return queries
 
 
+def _content_sha1(content: str) -> str:
+    import hashlib
+    return hashlib.sha1(content.encode("utf-8")).hexdigest()[:12]
+
+
+def _load_paraphrase_queries(path: Path,
+                             items: List[Dict[str, Any]]) -> List[EvalQuery]:
+    """Load cached paraphrase queries (JSONL: {content_sha1, query}).
+
+    Queries are matched to corpus items by content sha1 so the cache
+    survives re-loads (item ids are per-load). Queries whose item is no
+    longer in the corpus are skipped and counted.
+    """
+    if not path.exists():
+        return []
+    sha_to_idx = {_content_sha1(it.get('content', '')): i
+                  for i, it in enumerate(items)}
+    queries: List[EvalQuery] = []
+    skipped = 0
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+            idx = sha_to_idx.get(row["content_sha1"])
+            if idx is None:
+                skipped += 1
+                continue
+            q = EvalQuery(text=row["query"], kind="paraphrase")
+            q._expected_index = idx  # type: ignore
+            queries.append(q)
+        except (ValueError, KeyError, TypeError):
+            skipped += 1
+    if skipped:
+        log.warning("paraphrase cache: %d entries skipped (stale/malformed)",
+                    skipped)
+    return queries
+
+
 def _generate_hand_written_queries() -> List[EvalQuery]:
     """Hand-written probe queries with known good answers (expect to find something)."""
     return [
@@ -273,9 +320,9 @@ def _evaluate_adapter(
         recalled_ids = {item.id for item in recalled}
         recalled_contents = {item.content for item in recalled}
 
-        # For self-retrieval queries, find the matching item
+        # For self-retrieval and paraphrase queries, find the matching item
         rank = 0
-        if query.kind == 'self' and hasattr(query, '_expected_index'):
+        if query.kind in ('self', 'paraphrase') and hasattr(query, '_expected_index'):
             expected_idx = query._expected_index  # type: ignore
             expected_content = items[expected_idx].get('content', '')
 
@@ -300,6 +347,7 @@ def _evaluate_adapter(
             mrr=mrr,
             latency_ms=elapsed_ms,
             rank=rank,
+            kind=query.kind,
         ))
 
     return results, total_latency
@@ -343,13 +391,13 @@ def _print_comparison_table(
     adapters = sorted(metrics_by_adapter.keys())
 
     # Header
-    print(f"{'Adapter':<20} | {'hit@1':<8} | {'hit@5':<8} | {'MRR':<8} | {'Latency (ms)':<12}")
+    print(f"{'Adapter':<26} | {'hit@1':<8} | {'hit@5':<8} | {'MRR':<8} | {'Latency (ms)':<12}")
     print("-" * 80)
 
     # Rows
     for adapter in adapters:
         m = metrics_by_adapter[adapter]
-        print(f"{adapter:<20} | {m['hit_at_1']:>7.1%} | {m['hit_at_5']:>7.1%} | "
+        print(f"{adapter:<26} | {m['hit_at_1']:>7.1%} | {m['hit_at_5']:>7.1%} | "
               f"{m['mrr']:>7.4f} | {m['median_latency_ms']:>11.2f}")
 
     print("=" * 80)
@@ -443,6 +491,11 @@ def main():
     ap = argparse.ArgumentParser(prog="memory_quality")
     ap.add_argument("--limit", type=int, default=None,
                     help="cap corpus size (default: full workspace corpus)")
+    ap.add_argument("--queries", type=Path,
+                    default=Path("/home/clawd/claude/maro-orchestration/"
+                                 "output/memory_quality/paraphrase_queries.jsonl"),
+                    help="paraphrase-query cache (JSONL {content_sha1, query}; "
+                         "build with scripts/gen_paraphrase_queries.py)")
     opts = ap.parse_args()
 
     # Load corpus from workspace (read-only)
@@ -461,11 +514,17 @@ def main():
     # Generate queries
     log.info("Generating evaluation queries...")
     self_queries = _generate_self_retrieval_queries(corpus)
+    paraphrase_queries = _load_paraphrase_queries(opts.queries, corpus)
     probe_queries = _generate_hand_written_queries()
-    all_queries = self_queries + probe_queries
+    all_queries = self_queries + paraphrase_queries + probe_queries
 
-    log.info("Generated %d self-retrieval + %d probe queries = %d total",
-             len(self_queries), len(probe_queries), len(all_queries))
+    log.info("Generated %d self-retrieval + %d paraphrase + %d probe = %d total",
+             len(self_queries), len(paraphrase_queries), len(probe_queries),
+             len(all_queries))
+    if not paraphrase_queries:
+        log.warning("no paraphrase queries (%s missing/stale) — self-retrieval "
+                    "favors lexical-overlap rankers; comparative deltas are "
+                    "suspect without the paraphrase lane", opts.queries)
 
     # Load into adapters
     import tempfile
@@ -482,11 +541,15 @@ def main():
         sqlite_results, _ = _evaluate_adapter(
             sqlite_store, 'sqlite-fts5', all_queries, corpus, item_ids)
 
-        # Compute metrics
-        metrics_by_adapter = {
-            'jsonl': _compute_metrics(jsonl_results),
-            'sqlite-fts5': _compute_metrics(sqlite_results),
-        }
+        # Compute metrics: overall + one row per query kind so the
+        # self-retrieval bias stays visible next to the fair lane.
+        metrics_by_adapter = {}
+        for name, res in (('jsonl', jsonl_results),
+                          ('sqlite-fts5', sqlite_results)):
+            metrics_by_adapter[name] = _compute_metrics(res)
+            for kind in sorted({r.kind for r in res}):
+                metrics_by_adapter[f"{name} [{kind}]"] = _compute_metrics(
+                    [r for r in res if r.kind == kind])
 
         results_by_adapter = {
             'jsonl': jsonl_results,

@@ -81,12 +81,10 @@ def _derive_scope_from_lesson(lesson: dict) -> str:
     if meta.get("thread_id"):
         return f"thread/{meta['thread_id']}"
 
-    # Fall back to acquired_for (goal_id) if present
-    acquired_for = lesson.get("acquired_for")
-    if acquired_for:
-        return f"goal/{acquired_for}"
-
-    # Global scope
+    # NOTE: no goal/<id> scope family. The port taxonomy is thread/run —
+    # items scoped outside it would be invisible to every worker (siblings
+    # never leak, by contract). acquired_for stays in meta as provenance;
+    # lessons without thread metadata are global.
     return ""
 
 
@@ -118,7 +116,8 @@ def _lesson_to_memory_item(lesson: dict, kind: str = "lesson") -> MemoryItem:
         kind=kind,
         content=content,
         scope=scope,
-        trust=max(trust, 0.0),  # clamp to [0, 1)
+        trust=min(max(trust, 0.0), 1.0),  # clamp to [0, 1] — reinforced
+        # lesson scores can exceed 1.0 and would skew bm25*trust ranking
         provenance={
             "lesson_id": lesson.get("lesson_id", ""),
             "source_goal": lesson.get("source_goal", ""),

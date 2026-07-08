@@ -100,9 +100,11 @@ def test_derive_scope_from_lesson_with_thread_id():
 
 
 def test_derive_scope_from_lesson_with_acquired_for():
-    """Scope from acquired_for (goal_id)."""
+    """acquired_for does NOT mint a scope — goal/<id> is outside the port's
+    thread/run taxonomy, so items there would be invisible to every worker
+    (siblings never leak). It stays global; acquired_for lives in meta."""
     lesson = {"acquired_for": "goal_abc", "meta": {}}
-    assert _derive_scope_from_lesson(lesson) == "goal/goal_abc"
+    assert _derive_scope_from_lesson(lesson) == ""
 
 
 def test_derive_scope_from_lesson_global():
@@ -133,7 +135,7 @@ def test_lesson_to_memory_item_basic(sample_lessons):
     assert isinstance(item, MemoryItem)
     assert item.kind == "lesson"
     assert item.content == "Use multiple sources for fact-checking"
-    assert item.scope == "goal/goal_abc"
+    assert item.scope == ""  # acquired_for is provenance, not scope
     assert item.trust == 0.9
 
 
