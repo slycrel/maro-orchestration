@@ -18,6 +18,9 @@ Contract, in English:
   7. Retrieval degrades to empty, it never raises.
 """
 
+import importlib
+import os
+
 import pytest
 
 from memory_jsonl import JsonlMemoryStore
@@ -31,6 +34,15 @@ def _jsonl_factory(tmp_path):
 ADAPTERS = [
     ("jsonl", _jsonl_factory),
 ]
+
+# External bake-off adapters run this exact suite without copying it:
+#   MEMORY_BAKEOFF_ADAPTER=bakeoff.mem0_adapter:contract_factory pytest tests/test_memory_port.py
+# The named callable has the same shape as _jsonl_factory: (tmp_path) -> zero-arg
+# store factory. Absent the env var (normal suite runs), nothing changes.
+_ext = os.environ.get("MEMORY_BAKEOFF_ADAPTER")
+if _ext:
+    _mod, _fn = _ext.rsplit(":", 1)
+    ADAPTERS.append((_mod, getattr(importlib.import_module(_mod), _fn)))
 
 
 @pytest.fixture(params=ADAPTERS, ids=[name for name, _ in ADAPTERS])
