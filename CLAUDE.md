@@ -48,7 +48,7 @@ exploration.
 | Intent resolution / side-quests / "what does done mean" | `docs/INTENT_RESOLUTION_DESIGN.md` | Partially shipped (ResolvedIntent/Deliverable live); side-quest handling open |
 | Scope + constraint orchestration (Phase 65) | `docs/CONSTRAINT_ORCHESTRATION_DESIGN.md` + review | PAUSED 2026-04-23 (Jeremy); MVE shipped dormant behind `scope_generation` flag |
 | Adaptive execution | `docs/ADAPTIVE_EXECUTION_DESIGN.md` | Dormant design — not started |
-| Memory / graph / filesystem-vs-real-memory | `docs/MEMORY_DECISION_BRIEF.md` (inputs: `docs/MEMORY_ARCHITECTURE.md`, `docs/KNOWLEDGE_CRYSTALLIZATION.md`) | Direction decided 2026-07-07: memory-as-module, 3rd-party bake-off behind `src/memory_port.py`; MILESTONES arc -1 |
+| Memory / graph / filesystem-vs-real-memory | `docs/history/2026-07-04-memory-decision-brief.md` (inputs: `docs/MEMORY_ARCHITECTURE.md`, `docs/KNOWLEDGE_CRYSTALLIZATION.md`) | Direction decided 2026-07-07: memory-as-module, 3rd-party bake-off behind `src/memory_port.py`; MILESTONES arc -1 |
 
 - GitHub: https://github.com/slycrel/maro
 - Machine: Ubuntu headless, user `clawd`, `/home/clawd/claude/maro-orchestration/`

@@ -108,7 +108,7 @@ write fence — shipped arc") and `docs/BOUNDED_WORKSPACE.md`.
 
 ### Graph memory + recursive-orchestration scoped memory (2026-06-21, vision)
 
-**2026-07-04: decision brief delivered — `docs/MEMORY_DECISION_BRIEF.md`**
+**2026-07-04: decision brief delivered — `docs/history/2026-07-04-memory-decision-brief.md`**
 (full substrate inventory, 5 verified gaps, options, phased recommendation:
 access-layer B+C over storage-first A). Awaiting Jeremy's call; this item
 stays as the vision record until he decides.

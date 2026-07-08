@@ -985,7 +985,7 @@ Sample: the 2026-05-13..17 window of `~/.maro/workspace/runs/` (478 dirs total;
   shipped arcs → BACKLOG_DONE with context; llm-adapter extraction promoted
   (#14, dependency cleared). Intent-resolution flag for Jeremy: ResolvedIntent
   v0 shipped past its own minimum experiment — decide retroactive A/B or
-  accept. (4) **Memory decision brief delivered — `docs/MEMORY_DECISION_BRIEF.md`,
+  accept. (4) **Memory decision brief delivered — `docs/history/2026-07-04-memory-decision-brief.md`,
   AWAITING JEREMY.** Reframe: data layer is fine, ACCESS layer is the gap.
   Five verified gaps: workers get zero memory; knowledge_edges.jsonl 2,124
   edges written / zero readers (graph memory half-exists, write-only); ~8MB
@@ -1023,6 +1023,30 @@ Sample: the 2026-05-13..17 window of `~/.maro/workspace/runs/` (478 dirs total;
   "run this prompt with this persona" pattern (the docs brain-trust shape,
   generalized). Consumer-first rule adopted for the whole arc: no memory
   piece lands without its consumer in the same chunk.
+
+- **2026-07-07 (memory bake-off VERDICT — Jeremy: "ok, I'm convinced; steal
+  sounds good when we take the strengths we're looking for from all 3 and
+  put them together")** — Bake-off ran same day as the direction decision:
+  round 1 paper screen (3 source-level dossiers, 4 decisive claims
+  hand-verified) eliminated TencentDB Agent Memory (invalidate structurally
+  impossible; postinstall patches host OpenClaw — standing caution); round
+  2 live trials: Mem0 and Graphiti adapters both passed the 24-test
+  contract AND both lost — ~230/~330 lines of OUR shims did the port's real
+  semantics; live disqualifiers: Mem0 embedded-qdrant single-client lock
+  (no concurrent processes — fatal for a forking orchestrator), falkordblite
+  detached-daemon leak (~150 orphaned redis-servers reaped; box verified
+  clean). **DECIDED: adapter-1 is self-built — stdlib sqlite3+FTS5 (FTS5
+  verified present, sqlite 3.51.2) behind the unchanged port, stealing
+  Graphiti's bi-temporal schema, Mem0's history table, TencentDB's
+  rebuildable-index insurance; fastembed+sqlite-vec semantic lane only if
+  BM25 measures insufficient.** Module question resolved: EMBED in this
+  repo, not a separate git repo — the port is the module boundary;
+  discipline: `memory_*` modules import only stdlib + each other, so
+  extraction stays a copy, not a surgery; revisit a separate repo only
+  when a second consumer outside Maro exists. Full pedigree (decision
+  chain 2026-06-10 → today) recorded in
+  `docs/history/2026-07-07-memory-bakeoff.md`; brief archived to
+  `docs/history/2026-07-04-memory-decision-brief.md`.
 
 ## Threads (system-maintained — nothing leaves this list silently)
 

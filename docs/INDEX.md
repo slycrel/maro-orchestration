@@ -28,7 +28,7 @@ BACKLOG, VISION, CLAUDE, README…) are living by definition and carry no frontm
 | Active refactor plan? | `REFACTOR_PLAN.md` (closes to history when done) |
 | Dumb-loop audit evidence? | `DUMB_LOOP_AUDIT.md` (closes to history when done) |
 | Adversarial-review verdicts on repo claims? | `VERDICT_INDEX.md` (full report in history) |
-| The memory decision (filesystem vs "real" memory)? | `MEMORY_DECISION_BRIEF.md` (direction DECIDED 2026-07-07: module + bake-off — see GOAL_BRAIN Decisions; port = `src/memory_port.py`) |
+| The memory decision (filesystem vs "real" memory)? | `history/2026-07-04-memory-decision-brief.md` (direction DECIDED 2026-07-07: module + bake-off — see GOAL_BRAIN Decisions; port = `src/memory_port.py`) |
 | Memory/knowledge design (input to the memory decision) | `MEMORY_ARCHITECTURE.md`, `KNOWLEDGE_CRYSTALLIZATION.md` (both dormant-design; several of their "missing" items have since shipped — see the brief §2) |
 | Intent resolution / "what does done mean"? | `INTENT_RESOLUTION_DESIGN.md` (partially shipped) |
 | Scope/constraint orchestration (Phase 65, PAUSED)? | `CONSTRAINT_ORCHESTRATION_DESIGN.md` + `_REVIEW` + `_AUDIT` |
@@ -41,4 +41,4 @@ Subdirectories: `history/` = dated records; `conversations/`, `research/`,
 `../lat.md/` is a hand-written knowledge graph, mostly stale (content era
 2026-05-12; two nodes cite modules that don't exist; still injected as ~200
 tokens of flat text by `src/lat_inject.py` on meta-work) — its fate is
-decision point #3 in `MEMORY_DECISION_BRIEF.md`.
+decision point #3 in `history/2026-07-04-memory-decision-brief.md`.

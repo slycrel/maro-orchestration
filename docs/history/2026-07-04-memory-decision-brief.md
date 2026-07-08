@@ -1,5 +1,5 @@
 ---
-status: dormant-design
+status: record
 ---
 
 # Memory Architecture — Decision Brief (2026-07-04)

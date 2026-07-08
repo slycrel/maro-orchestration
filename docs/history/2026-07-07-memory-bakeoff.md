@@ -1,16 +1,58 @@
 ---
-status: living
+status: record
 ---
 
-# Memory Backend Bake-off
+# Memory Backend Bake-off — VERDICT: steal-and-build (Jeremy, 2026-07-07)
 
-Working doc for the memory-module arc (MILESTONES arc -1; decree in
-GOAL_BRAIN Decisions 2026-07-07; framing in `MEMORY_DECISION_BRIEF.md`).
-Candidates are evaluated as swappable backends behind `src/memory_port.py`
+## Pedigree — how this decision was reached
+
+The full chain, so nobody re-litigates it from memory:
+
+1. **2026-06-10 decree** (GOAL_BRAIN): "a real, working memory is the key."
+   2026-06-21: memory must be scoped/hierarchical — "orchestration all the
+   way down."
+2. **2026-07-04 — `MEMORY_DECISION_BRIEF`** (now in docs/history/): two
+   sub-agent inventories + hand verification reframed the problem — the
+   data layer was fine, the ACCESS layer was the gap (workers had zero
+   memory; a 2,124-edge graph was written but never read).
+3. **2026-07-07 — direction decided** (Jeremy, GOAL_BRAIN Decisions):
+   memory becomes a module; consider pre-existing systems before building;
+   crystallization engine primary / backend secondary; "maintainability
+   over cleverness."
+4. **Port before candidates**: `src/memory_port.py` + 24-test contract
+   suite shipped first (f27632c) so every candidate — including ours —
+   would be judged by a spec that predates them all. It never changed.
+5. **Round 1 paper screen** (82b1331): three source-level dossiers
+   (appendix below), four decisive claims re-verified by hand. TencentDB
+   Agent Memory eliminated — invalidation structurally impossible.
+   "Steal, don't adopt" noted as a *hypothesis* only, because paper
+   screens carry static-probe bias.
+6. **Round 2 live trials** (92211a5): real adapters (`bakeoff/`), same
+   suite. Both passed 24/24; both lost on the shim-ratio evidence plus
+   live disqualifiers (Mem0: single-client lock, no concurrent processes;
+   Graphiti: falkordblite daemon leak, ~150 orphans reaped). Independent
+   trial-agent verdicts: "swipe the model, skip Mem0" / "adopt the graph
+   ideas; skip the stack."
+7. **2026-07-07 — Jeremy's call**: "I'm convinced; steal sounds good when
+   we take the strengths we're looking for from all 3 and put them
+   together." Adapter-1 = self-built stdlib sqlite3+FTS5 behind the
+   unchanged port, carrying the consolidated steal-notes below. Embedded
+   in this repo (not a separate git module); `memory_*` modules import
+   only stdlib + each other so extraction stays a copy, not a surgery.
+
+On his "why is nothing mature enough to drop in": the market optimizes
+for chat-assistant persona memory and hosted platforms. Our four hard
+requirements — hierarchical scope, invalidate-never-delete, no daemons,
+no LLM in the storage path — are individually uncommon and jointly absent
+from every candidate examined. That's not ambition mismatch so much as a
+different product: embedded orchestrator memory vs. chatbot memory SaaS.
+
+---
+
+Candidates were evaluated as swappable backends behind `src/memory_port.py`
 (5 verbs, hierarchical scopes, invalidate-never-delete). The contract suite
 `tests/test_memory_port.py` is the entry bar: a candidate joins by adding
-one factory to `ADAPTERS` and passing all 24 tests. Becomes a `record` doc
-when the verdict lands with Jeremy.
+one factory to `ADAPTERS` and passing all 24 tests.
 
 House constraints scoring is done against: local/no-external-API, no
 daemons, swipe-over-deps, "decay trust never data", scope hierarchy
