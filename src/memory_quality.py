@@ -439,9 +439,18 @@ def _write_markdown_report(
 
 def main():
     """Main entry point: run evaluation and print results."""
+    import argparse
+    ap = argparse.ArgumentParser(prog="memory_quality")
+    ap.add_argument("--limit", type=int, default=None,
+                    help="cap corpus size (default: full workspace corpus)")
+    opts = ap.parse_args()
+
     # Load corpus from workspace (read-only)
     log.info("Loading corpus from workspace memory...")
-    corpus, total_read = _load_corpus_from_workspace(limit=50)
+    corpus, total_read = _load_corpus_from_workspace(limit=opts.limit)
+    if opts.limit and total_read > len(corpus):
+        log.warning("corpus CAPPED at %d of %d readable items (--limit)",
+                    len(corpus), total_read)
 
     if not corpus:
         log.error("No corpus loaded. Check ~/.maro/workspace/memory/ exists.")
