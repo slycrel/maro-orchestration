@@ -28,7 +28,7 @@ BACKLOG, VISION, CLAUDE, README…) are living by definition and carry no frontm
 | Active refactor plan? | `REFACTOR_PLAN.md` (closes to history when done) |
 | Dumb-loop audit evidence? | `DUMB_LOOP_AUDIT.md` (closes to history when done) |
 | Adversarial-review verdicts on repo claims? | `VERDICT_INDEX.md` (full report in history) |
-| The memory decision (filesystem vs "real" memory)? | `MEMORY_DECISION_BRIEF.md` (2026-07-04, awaiting Jeremy) |
+| The memory decision (filesystem vs "real" memory)? | `MEMORY_DECISION_BRIEF.md` (direction DECIDED 2026-07-07: module + bake-off — see GOAL_BRAIN Decisions; port = `src/memory_port.py`) |
 | Memory/knowledge design (input to the memory decision) | `MEMORY_ARCHITECTURE.md`, `KNOWLEDGE_CRYSTALLIZATION.md` (both dormant-design; several of their "missing" items have since shipped — see the brief §2) |
 | Intent resolution / "what does done mean"? | `INTENT_RESOLUTION_DESIGN.md` (partially shipped) |
 | Scope/constraint orchestration (Phase 65, PAUSED)? | `CONSTRAINT_ORCHESTRATION_DESIGN.md` + `_REVIEW` + `_AUDIT` |

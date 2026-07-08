@@ -995,6 +995,35 @@ Sample: the 2026-05-13..17 window of `~/.maro/workspace/runs/` (478 dirs total;
   summary/handle contract; storage migration deferred; experiment gate before
   the worker slice ships. Decision points §8 of the brief.
 
+- **2026-07-07 (memory direction DECIDED — Jeremy, back from AFK, on the
+  brief)** — Direction: **memory becomes a module; consider pre-existing
+  offerings before building our own.** His words, decree-level for this arc:
+  "I'd almost rather adjust our interface over time to leverage unused parts
+  of a 3rd party (and potentially more capable) system than have to revisit
+  this over and over again"; two brains acceptable "if we've got a more
+  primary/secondary system; we can have some unused functionality and ignore
+  easier than continuously rewriting over time"; "**maintainability over
+  cleverness or code efficiency to start**, while keeping things usable and
+  good enough performance-wise"; vision context: "this project hopefully will
+  be good enough to evolve on its own at some point; and if not, have its
+  sub-systems (ideally including 3rd party pluggable sub-systems) evolve
+  independently as well." Agreed semantics: our crystallization engine stays
+  PRIMARY for compiled truth/trust; 3rd party is SECONDARY (storage +
+  retrieval); unused vendor features get ignored, not wrapped. Plan: (1)
+  MemoryStore port on our side + reference JSONL adapter + contract tests
+  (the tests double as "what we'd ideally architect" — Jeremy's stub-and-test
+  option); (2) sandboxed bake-off of TencentDB Agent Memory / Mem0 /
+  Zep-Graphiti behind the same port, scored on the brief's §7 gate + local
+  performance on this box, with steal-notes per candidate feeding a
+  build-our-own sketch; our-own enters as design candidate, not built code.
+  Qdrant is an *engine* not a memory system — belongs behind whichever
+  system wins, never in our interface; Obsidian is a render surface, not a
+  backend. Production recall() callers do NOT rewire until the bake-off
+  verdict returns to Jeremy. He also wants the bake-off run as a reusable
+  "run this prompt with this persona" pattern (the docs brain-trust shape,
+  generalized). Consumer-first rule adopted for the whole arc: no memory
+  piece lands without its consumer in the same chunk.
+
 ## Threads (system-maintained — nothing leaves this list silently)
 
 Active:

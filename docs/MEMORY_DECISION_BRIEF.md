@@ -4,12 +4,19 @@ status: dormant-design
 
 # Memory Architecture — Decision Brief (2026-07-04)
 
-**For:** Jeremy. **Decision status: OPEN — nothing below is built or scheduled
-until you call it.** This is the "filesystem vs 'real' memory / graph theory"
-chunk you said you'd been avoiding. Two sub-agents inventoried every runtime
-substrate and both dormant design docs against current code; every claim here
-carries a file:line and was spot-verified. When you decide, this doc gets a
-decision header and moves to `docs/history/`.
+**For:** Jeremy. **Decision status: DIRECTION DECIDED 2026-07-07** — memory
+becomes a module behind a MemoryStore port on our side; pre-existing systems
+(TencentDB Agent Memory, Mem0, Zep/Graphiti) get a sandboxed bake-off behind
+that port before we build our own; our crystallization engine stays primary,
+3rd party secondary (storage + retrieval); "maintainability over cleverness
+or code efficiency to start." Full record: GOAL_BRAIN Decisions 2026-07-07.
+Decision points #2–#6 in §8 remain open and ride into the bake-off arc; this
+doc moves to `docs/history/` when the bake-off verdict lands.
+
+Original framing (2026-07-04): This is the "filesystem vs 'real' memory /
+graph theory" chunk you said you'd been avoiding. Two sub-agents inventoried
+every runtime substrate and both dormant design docs against current code;
+every claim here carries a file:line and was spot-verified.
 
 ---
 
