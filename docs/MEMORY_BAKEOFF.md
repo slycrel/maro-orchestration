@@ -85,27 +85,58 @@ Its steal-notes survive (below); the codebase doesn't come with us.
   as a hypothesis for round 2, not a verdict: paper screens have known
   static-probe bias, so the surviving candidates still get live trials.
 
-## Round 2 — live trials (roster)
+## Round 2 — live trials (RUN 2026-07-07)
 
-Each trial: sandboxed venv in scratchpad, telemetry disabled, adapter
-implementing `MemoryStore`, entry added to `ADAPTERS`, full contract suite,
-then a retrieval-quality corpus (real goals/lessons from run history; per
-query, candidates' top-k judged blind by a persona panel — the reusable
-"run this prompt with this persona" recipe), plus append/recall latency on
-this box and install footprint.
+Method: one agent per candidate built a real adapter in `bakeoff/`
+(sandboxed venvs, telemetry off, zero LLM/API calls enforced) and ran the
+identical 24-test contract suite via the `MEMORY_BAKEOFF_ADAPTER` hook,
+plus an on-box micro-bench and an honest shim inventory.
 
-1. **Mem0** — embedded qdrant (`path=`, in-process) + local embedder
-   (fastembed ONNX preferred over torch), `infer=False`, `MEM0_TELEMETRY=False`.
-   Known owed shims: scope path in metadata, expiration-based invalidate,
-   sidecar edges for link/neighbors.
-2. **Graphiti** — conditional on falkordblite wheels installing clean on
-   py3.14; BM25-only search config (zero model calls), `add_triplet` with
-   pre-set timestamps, `GRAPHITI_TELEMETRY_ENABLED=false`. If the backend
-   install fights back, eliminate on environment and record it here.
-3. **Adapter-0-grown ("ours")** — `src/memory_jsonl.py` upgraded with the
-   stolen ideas below (bi-temporal fields, FTS5 index-as-cache with
-   staleness check, RRF fusion). This is the build-our-own candidate,
-   competing under the identical suite — it wins on evidence or not at all.
+**Both candidates PASSED the contract 24/24 — and both lost anyway.**
+The deciding evidence is the shim inventory: in each trial, the port's
+actual semantics were implemented in *our adapter lines*, with the
+framework reduced to a storage/search pass-through.
+
+| | Mem0 (`bakeoff/mem0_adapter.py`) | Graphiti (`bakeoff/graphiti_adapter.py`) |
+|---|---|---|
+| Contract | 24/24 | 24/24 |
+| Our shim lines | ~230 of 288 (scope, edges sidecar, validity model, guards, lock workaround) | ~330 (sync bridge, scope filtering, get/neighbors/stats in raw Cypher, invalidate resave, daemon reaper) |
+| Framework actually used | pass-through to qdrant-local + fastembed; `infer=False` turns its differentiators off | ~5% of library (node/edge save + one BM25 primitive); all LLM paths routed around |
+| append 500 / recall 50×k8 | 30.4 s / 3.4 s (embeds on CPU; fine) | 0.4–1.0 s / 1.1–1.2 s |
+| Footprint | 316 MB venv, 55 pkgs, 65 MB model | 3-layer stack (graphiti → falkordblite fork → bundled redis binary) |
+| Disqualifier found live | embedded qdrant = single-client lock: **no concurrent processes on one store** — a forking orchestrator can't live with that; `get()` disagrees with `search()` about expiration | **falkordblite 0.10.0 leaks a detached ~27 MB redis-server per store** — shutdown is unreachable from its async API (`_async_managed` early-return bug); one afternoon of tests orphaned ~150 daemons (~3.5 GB RSS) until our atexit reaper; RDB durability only on clean shutdown |
+
+Box verified clean post-trial: 0 redis-server processes.
+
+Trial agents' verdicts, independently: Mem0 — "the valuable part is the
+embedding model, not the memory framework; swipe the model, skip Mem0."
+Graphiti — "adopt the graph ideas; skip the stack."
+
+**Skipped, explicitly:** the blind persona-panel retrieval-quality round.
+Both external candidates fell on structural grounds (process model,
+concurrency, shim ratio) that retrieval quality cannot cure, so the panel
+would not change the verdict. If the recommendation is contested, that
+round is the right tiebreaker to run.
+
+## Recommendation (2026-07-07 — awaiting Jeremy)
+
+**Build adapter-1 ourselves: ~500 lines on stdlib `sqlite3` + FTS5 behind
+the existing port, stealing the verified ideas** — Graphiti's bi-temporal
+schema and query-time invalidation filter, Mem0's history-table and
+explainable score fusion, TencentDB's JSONL-source-of-truth +
+rebuildable-index + `embedding_meta` insurance. Optional semantic lane
+later: fastembed ONNX + sqlite-vec (~150 lines) *if* BM25 proves
+insufficient on real recall traffic — measured, not assumed.
+
+Why this isn't the almost-but-not-quite loop: the port + 24-test contract
+is the fixed spec (built before any candidate, unchanged through both
+trials — no goalpost drift); two live trials provide the baseline any
+self-built store must beat under the identical suite; and the failure
+pattern that produced past churn (build-without-consumer) is structurally
+blocked by the arc rule that adapter-1 lands only with its first consumer
+(the worker recall slice, experiment-gated per MEMORY_DECISION_BRIEF §7).
+The swappability Jeremy asked for is already banked: the port stays, and
+any future backend enters by adding one factory line to the contract suite.
 
 ## Consolidated steal-notes (apply to ours regardless of verdict)
 
@@ -245,3 +276,31 @@ MIT (Tencent-header variant; GitHub shows NOASSERTION). 7,220 stars / 680 forks 
 
 ## 6. Adapter cost: L — "a fork, not an adapter"
 Three of five verbs need schema/engine changes. Biggest risk: invalidate contract cannot be honored — its own background pipeline destructively rewrites content behind the port's back. Net: don't adapt; swipe items 1–5 into a ~500-line Python MemoryStore on stdlib sqlite3 (+optional sqlite-vec loadable extension — no daemon, no Node).
+
+# Round-2 trial reports (agent-run, condensed; adapters in bakeoff/)
+
+# Mem0 trial report (2026-07-07, agent-run, adapter in bakeoff/mem0_adapter.py 288 lines)
+Stack: mem0ai 2.0.11 → qdrant embedded-local → fastembed ONNX bge-small-en-v1.5 (384d CPU); infer=False; dummy LLM key never called; telemetry off.
+
+## Contract: 24/24 PASS (45 collected = 21 store-param ×2 adapters +3 unparam; "45 passed in 16.31s")
+Five traps designed around (each would've been a red test):
+1. Qdrant local dir lock → module-level {path: Memory} cache for reopen semantics.
+2. Memory.get() IGNORES expiration (their expiration_date+show_expired hides only search/get_all) → rejected their mechanism; valid/invalid_reason/trust=0 metadata + adapter-side gate in get().
+3. Empty/whitespace query raises ValueError → degrade to filtered get_all.
+4. k=-1 raises → clamp to [].
+5. Eager LLM client construction in __init__ (conftest strips OPENAI_API_KEY) → dummy api_key.
+Genuine backend limits: no graph on OSS/qdrant path (sidecar edges.jsonl 100% ours); no scope hierarchy (visible_at reimplemented as in-filter over ancestors); NO CONCURRENT PROCESSES on one store in embedded mode (fresh-process reopen verified OK; simultaneous handles impossible) — real constraint for a forking orchestrator; stats() via private internals.
+
+## Bench (this box): append 500 = 30.42s (60.8ms/item: ONNX embed + BM25 sparse + qdrant upsert + history row); 50 scoped recalls k=8 = 3.37s (67.3ms/q, avg 8.0 hits); store 2.5MB/500 items; model download 65MB one-time; import 1.8s + open 0.9s; venv 316MB / 55 packages.
+
+## Shim inventory (~230 substantive lines ours): scope hierarchy 25; graph sidecar 55; validity model 30; item translation 45; sandbox/lock/config plumbing 55; stats 15; degradation guards 20. Every verb except append→add and recall→search needed logic beyond translation. With infer=False, Mem0's differentiators (LLM extraction, dedup, entity boost) are switched off or inert.
+
+## Verdict (agent): LOSES to ~500-line self-built store, not close. Adopting 316MB/55 pkgs to use Mem0 as pass-through to qdrant-local+fastembed; inherits sharp edges (single-client lock, get/search expiration disagreement, private-API stats) for one genuine capability — semantic embedding retrieval — which is fastembed's, not Mem0's (bolt fastembed+sqlite-vec onto self-built store, ~150 lines, zero framework, real multi-process concurrency via SQLite). Finding: THE VALUABLE PART IS THE EMBEDDING MODEL, NOT THE MEMORY FRAMEWORK — swipe the model, skip Mem0.
+
+# Graphiti trial report (2026-07-07, agent-run, adapter in bakeoff/graphiti_adapter.py 398 lines)
+Stack: graphiti-core 0.29.2 + falkordblite 0.10.0 embedded; zero model calls (no embedder constructed); telemetry off.
+Contract: 24/24 ("45 passed in 4.18s" incl. jsonl params). Mapping: MemoryItem → EntityNode(:MemoryItem:Entity), content in `name` (covered by Entity fulltext index), kind/scope/trust/valid/provenance in attributes; link → EntityEdge [:RELATES_TO {name: rel}]; recall → node_fulltext_search (BM25/RediSearch) with over-fetch + adapter-side scope/kind/trust/validity filter (group_id can't hold slash paths — constant group, scope in attributes); invalidate = set-and-resave (valid=False, trust 0.05, expired_at/invalid_at + reason). RediSearch stemming gave "escalates"→"escalate" for free.
+Bench: append 500 = 0.38–1.0s (0.8–2.0ms/item); 50 recalls k=8 = 1.1–1.2s (~22–24ms); store 8K live / 188K after clean shutdown; redis child ~27.5MB RSS.
+Shims (~330 lines): sync/async bridge 20, client caches 25, ATEXIT DAEMON REAPER 55, item mapping 60, recall filtering 45, raw-Cypher get/neighbors/stats + invalidate 110. Bypassed (= most of Graphiti): add_episode, all resolve/dedupe, embedder/cross-encoder/hybrid recipes, episodes, communities, temporal invalidation logic — used ~5% of the library as a Cypher/BM25 convenience layer.
+Bugs found (verified live, not guesses): (1) falkordblite leaks a detached redis-server per instance — AsyncRedis.close() sets _async_managed=True then _cleanup() early-returns on that same flag; shutdown unreachable from async API; ~150 orphans (~3.5GB RSS) accumulated during testing, killed; box verified clean (0 remaining); adapter carries SHUTDOWN SAVE + SIGKILL reaper. "Dies with the process" is FALSE without the reaper. (2) RDB not written during operation — crash loses everything since last save. (3) build_fulltext_query("") yields RediSearch syntax error — empty-query raises; adapter pre-guards.
+Verdict (agent): NO — ~500-line SQLite/FTS5 store wins, not close. Won with ~5% of the library wrapped in 330 shim lines ≈ the size of the self-built store; inherits disqualifying process-model liability + 3-layer dep stack where the in-process backend is a 0.10.0 fork with an unreachable-shutdown bug. Graphiti's genuine value (temporal KG extraction) lives entirely in the LLM paths this port forbids. Adopt the graph ideas; skip the stack.
