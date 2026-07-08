@@ -519,6 +519,40 @@ These four are kept (not deleted) this triage pending verification against curre
   the goal-submission/replay controls belong in the same surface at all.
   No urgency; needs product discussion first. Source: refactor-plan review,
   2026-07-02.
+  **UPDATE 2026-07-08: design settled and in progress**, deliberately
+  narrower than the archived attempt — static per-run HTML report (Gantt-
+  style step timeline + lazy-loaded prompt/response detail) plus a static
+  cross-run index, both regenerated inline via the existing plan-manifest
+  lifecycle hooks, no server, no control surface. Full design:
+  `docs/RUN_VISIBILITY_DESIGN.md`. The "needs auth" question this entry
+  raised is sidestepped rather than solved — static files reviewed however
+  the box is already accessed, not a new network surface. See next entry for
+  the deferred general-purpose server this build intentionally does not
+  include.
+
+### General-purpose visualization server (deferred — after run-visibility report ships)
+
+- [ ] **A start/stop-able HTTP server, owned by the orchestration, for
+  serving generated visualization pages in general** — not scoped to any one
+  feature. Surfaced 2026-07-08 while designing `docs/RUN_VISIBILITY_DESIGN.md`:
+  the per-run report's lazy detail-fetch (prompt/response on click) needs
+  `http://`, not `file://` — browsers block `fetch()` against sibling files
+  under a `file://` origin (opaque-origin rule), so viewed directly off disk
+  the detail tier degrades to opening raw JSON in a new tab instead of an
+  inline panel. That gap doesn't justify building a server for this one
+  feature, but the run-visibility report is very unlikely to be the last
+  thing worth serving this way — Jeremy: "this probably won't be the last
+  thing we want to surface." Rather than each future visualization inventing
+  its own ad hoc server (the exact organic-growth path that produced the
+  archived dashboard's scope creep), do this once, generically: a
+  process the orchestration can start/stop on demand, serving whatever
+  static pages exist under the workspace (runs index, per-run reports,
+  future surfaces), narrowly read-only, no goal-submission/control-surface
+  scope creep repeated. Deliberately sequenced **after** the run-visibility
+  report ships (build order item 6 in `docs/RUN_VISIBILITY_DESIGN.md`) —
+  build the static pages first, decide the serving layer once there's more
+  than one consumer to design it against. No priority assigned yet; revisit
+  once the report/index are live.
 
 ---
 
