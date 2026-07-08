@@ -1047,6 +1047,12 @@ Sample: the 2026-05-13..17 window of `~/.maro/workspace/runs/` (478 dirs total;
   chain 2026-06-10 → today) recorded in
   `docs/history/2026-07-07-memory-bakeoff.md`; brief archived to
   `docs/history/2026-07-04-memory-decision-brief.md`.
+  **Adapter-1 SHIPPED same day** (`src/memory_sqlite.py` + multi-process
+  contract test + `tests/test_memory_sqlite.py`): JSONL log = truth,
+  SQLite FTS5 = rebuildable ghost-proof index, adapters interchangeable
+  on disk; 1.0ms/append, 1.3ms/recall. Production wiring still gated on
+  the worker-recall-slice experiment (brief §7) — no runtime callsite
+  rewired yet, per the consumer-first rule.
 
 ## Threads (system-maintained — nothing leaves this list silently)
 

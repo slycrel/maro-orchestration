@@ -20,6 +20,7 @@ Contract, in English:
 
 import importlib
 import os
+from pathlib import Path
 
 import pytest
 
@@ -30,10 +31,22 @@ from memory_port import MemoryItem, MemoryStore, format_block, visible_at
 def _jsonl_factory(tmp_path):
     return lambda: JsonlMemoryStore(tmp_path / "mem")
 
+
+def _sqlite_factory(tmp_path):
+    from memory_sqlite import SqliteMemoryStore
+    return lambda: SqliteMemoryStore(tmp_path / "mem")
+
 # Bake-off hook: candidate adapters append (name, factory-builder) here.
 ADAPTERS = [
     ("jsonl", _jsonl_factory),
+    ("sqlite", _sqlite_factory),
 ]
+
+# For the multi-process contract test: how a subprocess opens each store.
+CLASS_PATHS = {
+    "jsonl": "memory_jsonl:JsonlMemoryStore",
+    "sqlite": "memory_sqlite:SqliteMemoryStore",
+}
 
 # External bake-off adapters run this exact suite without copying it:
 #   MEMORY_BAKEOFF_ADAPTER=bakeoff.mem0_adapter:contract_factory pytest tests/test_memory_port.py
@@ -204,6 +217,48 @@ class TestDegradation:
 
     def test_protocol_conformance(self, store):
         assert isinstance(store, MemoryStore)
+
+
+class TestMultiProcess:
+    """Two processes, one store — the bar Mem0's embedded qdrant failed.
+
+    Contract: while one process holds an open handle, another process can
+    open the same store, append, and exit; a FRESH handle in the first
+    process then sees the new item. (A live handle is not required to see
+    cross-process writes without reopening.)
+    """
+
+    @pytest.fixture(params=list(CLASS_PATHS.items()), ids=list(CLASS_PATHS))
+    def cls_path_and_root(self, request, tmp_path):
+        return request.param[1], tmp_path / "mp"
+
+    def test_second_process_can_write_while_first_holds_handle(
+            self, cls_path_and_root):
+        import subprocess
+        import sys
+        cls_path, root = cls_path_and_root
+        mod, cls = cls_path.split(":")
+        src = str(Path(__file__).resolve().parent.parent / "src")
+
+        holder = getattr(importlib.import_module(mod), cls)(root)
+        holder.append(MemoryItem(kind="note", content="fence policy bounded"))
+
+        script = (
+            f"import sys; sys.path.insert(0, {src!r})\n"
+            f"from pathlib import Path\n"
+            f"from {mod} import {cls}\n"
+            f"from memory_port import MemoryItem\n"
+            f"s = {cls}(Path({str(root)!r}))\n"
+            f"s.append(MemoryItem(kind='note', content='concurrent writers wal'))\n"
+            f"assert len(s.recall('fence policy bounded')) == 1\n"
+        )
+        proc = subprocess.run([sys.executable, "-c", script],
+                              capture_output=True, text=True, timeout=60)
+        assert proc.returncode == 0, proc.stderr
+
+        fresh = getattr(importlib.import_module(mod), cls)(root)
+        assert len(fresh.recall("concurrent writers wal")) == 1
+        assert fresh.stats()["items"] == 2
 
 
 class TestFormatBlock:
