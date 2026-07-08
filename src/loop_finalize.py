@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Optional
 
 from loop_types import LoopContext, LoopResult, StepOutcome, _orch, _project_dir_root
 from loop_artifacts import _write_loop_log, _write_plan_manifest
+from loop_report import write_run_report as _write_run_report, write_runs_index as _write_runs_index
 
 log = logging.getLogger("maro.loop")
 
@@ -62,6 +63,26 @@ def _build_result_and_finalize(
             )
         except Exception as _mf_exc:
             log.warning("plan manifest write failed (affects replay/debugging): %s", _mf_exc)
+
+        try:
+            _write_run_report(
+                project=ctx.project,
+                loop_id=ctx.loop_id,
+                goal=ctx.goal,
+                planned_steps=manifest_steps,
+                start_ts=start_ts,
+                step_outcomes=step_outcomes,
+                status=loop_status,
+                elapsed_ms=elapsed_total,
+                replan_count=replan_count,
+            )
+        except Exception as _rep_exc:
+            log.warning("run report final write failed: %s", _rep_exc)
+
+    try:
+        _write_runs_index(force=True)
+    except Exception as _idx_exc:
+        log.warning("runs index write failed: %s", _idx_exc)
 
     log_path = _write_loop_log(
         project=ctx.project,

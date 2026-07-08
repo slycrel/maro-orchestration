@@ -14,6 +14,7 @@ import logging
 import os
 import sys
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any, Callable, ClassVar, Dict, List, Optional
 
 log = logging.getLogger("maro.loop")
@@ -92,6 +93,11 @@ class StepOutcome:
     injected_steps: List[str] = field(default_factory=list)  # steps added mid-plan by this step
     call_record: str = ""        # path to the byte-level record of this step's LLM call
                                  # (<run-dir>/build/calls/call-NNNNN.json) when record-mode captured it
+    ended_ts: str = ""           # ISO UTC timestamp when this step finished — lets the run
+                                 # report position steps on a timeline as [ended_ts - elapsed_ms,
+                                 # ended_ts] instead of a cumulative-sum approximation that
+                                 # silently absorbs inter-step overhead (ralph verify, hooks,
+                                 # replans) into the wrong step's segment.
 
 
 def step_from_decompose(
@@ -108,8 +114,14 @@ def step_from_decompose(
     confidence: str = "unverified",
     injected_steps: Optional[List[str]] = None,
     call_record: str = "",
+    ended_ts: str = "",
 ) -> StepOutcome:
-    """Factory for StepOutcome — centralises defaults so inline construction sites stay DRY."""
+    """Factory for StepOutcome — centralises defaults so inline construction sites stay DRY.
+
+    ended_ts defaults to "now" (UTC) when not passed — every call site constructs
+    the outcome immediately after the step actually finishes, so the call-time
+    default is the correct timestamp without threading it through each caller.
+    """
     return StepOutcome(
         index=index,
         text=text,
@@ -123,6 +135,7 @@ def step_from_decompose(
         confidence=confidence,
         injected_steps=injected_steps if injected_steps is not None else [],
         call_record=call_record,
+        ended_ts=ended_ts or datetime.now(timezone.utc).isoformat(),
     )
 
 

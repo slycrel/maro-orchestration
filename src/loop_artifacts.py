@@ -202,6 +202,9 @@ def _write_loop_log(
                     # rung-4 unification (BACKLOG #0): link the truncated view
                     # to the full byte-level capture when record-mode had one
                     "call_record": getattr(s, "call_record", ""),
+                    # run-visibility report: when this step finished, for
+                    # timeline positioning (loop_report.py)
+                    "ended_ts": getattr(s, "ended_ts", ""),
                 }
                 for s in steps
             ],

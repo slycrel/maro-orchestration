@@ -21,6 +21,7 @@ from typing import Any, Dict, List, Optional
 from loop_types import LoopContext, StepOutcome, _orch
 from loop_artifacts import _write_plan_manifest
 from loop_planning import _shape_steps
+from loop_report import write_run_report as _write_run_report, write_runs_index as _write_runs_index
 from step_exec import verify_step as _verify_step
 
 log = logging.getLogger("maro.loop")
@@ -238,6 +239,20 @@ def _write_iteration_artifacts(
             )
         except Exception as _exc:
             log.warning("plan manifest update failed for loop %s: %s", ctx.loop_id, _exc)
+
+        try:
+            _write_run_report(
+                project=ctx.project,
+                loop_id=ctx.loop_id,
+                goal=ctx.goal,
+                planned_steps=manifest_steps,
+                start_ts=start_ts,
+                step_outcomes=step_outcomes,
+                replan_count=replan_count,
+            )
+            _write_runs_index()
+        except Exception as _exc:
+            log.warning("run report update failed for loop %s: %s", ctx.loop_id, _exc)
 
     # Dead ends
     if step_status == "blocked" and dead_ends_available:

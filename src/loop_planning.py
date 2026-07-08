@@ -23,6 +23,7 @@ from loop_types import (
     step_from_decompose,
 )
 from loop_artifacts import _write_plan_manifest
+from loop_report import write_run_report as _write_run_report
 from planner import decompose as _decompose_impl
 
 log = logging.getLogger("maro.loop")
@@ -238,6 +239,18 @@ def _preflight_checks(
                 print(f"[maro] plan manifest: {manifest_path_str}", file=sys.stderr, flush=True)
         except Exception as _mf_exc:
             log.warning("initial plan manifest write failed: %s", _mf_exc)
+
+        try:
+            _write_run_report(
+                project=ctx.project,
+                loop_id=ctx.loop_id,
+                goal=ctx.goal,
+                planned_steps=manifest_steps,
+                start_ts=ctx.start_ts,
+                step_outcomes=[],
+            )
+        except Exception as _rep_exc:
+            log.warning("initial run report write failed: %s", _rep_exc)
 
     # Shared state for team workers
     loop_shared_ctx: Dict[str, Any] = {}
