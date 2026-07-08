@@ -168,10 +168,9 @@ def test_get_ingest_offset_resumes_from_saved(tmp_memory_dir):
     source = tmp_memory_dir / "lessons.jsonl"
     source.write_text("line 1\nline 2\n")
 
-    # Save an offset
-    _save_ingest_offset(source, 6)  # After "line 1\n"
-
     store = SqliteMemoryStore(tmp_memory_dir / "store")
+    _save_ingest_offset(store, source, 6)  # After "line 1\n"
+
     offset = _get_ingest_offset(store, source)
     assert offset == 6
 
@@ -181,15 +180,46 @@ def test_get_ingest_offset_corruption_detection(tmp_memory_dir):
     source = tmp_memory_dir / "lessons.jsonl"
     source.write_text("line 1\nline 2\nline 3\n")
 
-    # Save an offset beyond current size
-    _save_ingest_offset(source, 100)
+    store = SqliteMemoryStore(tmp_memory_dir / "store")
+    _save_ingest_offset(store, source, 100)  # beyond current size
 
     # Shrink file
     source.write_text("line 1\n")
 
-    store = SqliteMemoryStore(tmp_memory_dir / "store")
     offset = _get_ingest_offset(store, source)
     assert offset == 0
+
+
+def test_offset_state_never_touches_source_dir(tmp_memory_dir):
+    """Bridge state lives in the store — the crystallization engine's
+    directory gets NO sidecar files."""
+    source = tmp_memory_dir / "lessons.jsonl"
+    source.write_text("line 1\n")
+    before = sorted(p.name for p in tmp_memory_dir.iterdir())
+
+    store = SqliteMemoryStore(tmp_memory_dir / "store")
+    _save_ingest_offset(store, source, 7)
+    assert _get_ingest_offset(store, source) == 7
+
+    after = sorted(p.name for p in tmp_memory_dir.iterdir()
+                   if p.name != "store")
+    assert after == [n for n in before if n != "store"]
+
+
+def test_reingest_after_offset_loss_does_not_duplicate(tmp_memory_dir,
+                                                       lessons_jsonl_file):
+    """Deterministic item ids: wiping offset state and re-ingesting the
+    same source must not create duplicate items."""
+    with mock.patch("memory_bridge._lessons_source_paths") as mock_paths:
+        mock_paths.return_value = [lessons_jsonl_file]
+        store = SqliteMemoryStore(tmp_memory_dir / "store")
+        first = ingest_lessons_to_store(store)
+        store.state_set(f"ingest_offset:{lessons_jsonl_file.resolve()}", "0")
+        second = ingest_lessons_to_store(store)
+
+    assert first["ingested"] == 2
+    assert second["ingested"] == 0
+    assert store.stats()["items"] == 2
 
 
 # ---------------------------------------------------------------------------
@@ -401,3 +431,37 @@ def test_format_worker_memory_block_preserves_order():
     first_idx = block.find("First")
     second_idx = block.find("Second")
     assert first_idx < second_idx
+
+
+def test_format_worker_memory_block_includes_goal_brain():
+    """goal_brain summary is included alongside lessons, goal_brain first."""
+    items = [MemoryItem(kind="lesson", content="Test lesson", scope="", trust=0.9)]
+    block = format_worker_memory_block(items, goal_brain="Intent: ship the recall slice.")
+
+    assert "Intent: ship the recall slice." in block
+    assert "Test lesson" in block
+    assert block.find("Intent: ship the recall slice.") < block.find("Test lesson")
+
+
+def test_format_worker_memory_block_goal_brain_only():
+    """goal_brain alone (no items) still renders a block."""
+    block = format_worker_memory_block([], goal_brain="Parent decision: use sqlite adapter.")
+    assert "Parent decision: use sqlite adapter." in block
+
+
+def test_format_worker_memory_block_blank_goal_brain_ignored():
+    """Whitespace-only goal_brain is treated as absent."""
+    items = [MemoryItem(kind="lesson", content="Test lesson", scope="", trust=0.9)]
+    block = format_worker_memory_block(items, goal_brain="   \n  ")
+    assert "Parent goal context" not in block
+    assert "Test lesson" in block
+
+
+def test_format_worker_memory_block_caps_total_with_goal_brain():
+    """goal_brain + lessons combined never exceed max_chars, even when each half fits alone."""
+    items = [MemoryItem(kind="lesson", content="z" * 500, scope="", trust=0.9)]
+    goal_brain = "Line one.\nLine two.\n" + ("y" * 500)
+
+    block = format_worker_memory_block(items, goal_brain=goal_brain, max_chars=700)
+
+    assert len(block) <= 700

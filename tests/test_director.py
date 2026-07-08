@@ -31,6 +31,7 @@ from director import (
     _is_simple_directive,
     _is_large_scope_review,
     _LARGE_SCOPE_SPEC_SYSTEM,
+    _write_director_log,
 )
 
 
@@ -207,6 +208,176 @@ class TestRunDirector:
         result = run_director("count tokens", dry_run=True)
         assert result.tokens_in >= 0
         assert result.tokens_out >= 0
+
+
+# ---------------------------------------------------------------------------
+# A/B experiment: memory.worker_slice (Phase 1 experiment gate)
+# ---------------------------------------------------------------------------
+
+class TestWorkerSliceExperiment:
+    def test_flag_off_is_byte_identical(self, monkeypatch, tmp_path):
+        """Default config (flag unset/False): no injection, no worker_slice metadata."""
+        _setup(monkeypatch, tmp_path)
+        import director as _director_mod
+
+        baseline = run_director("investigate the recall slice", dry_run=True)
+        flagged_off_explicitly = run_director("investigate the recall slice", dry_run=True)
+
+        for result in (baseline, flagged_off_explicitly):
+            assert result.worker_slice is False
+            assert all(not r.memory_slice_injected for r in result.worker_results)
+
+        # Same directive + dry_run produces byte-identical worker output/report
+        # regardless of how many times it's run — proves the flag-off path has
+        # no hidden state leaking between runs.
+        assert baseline.report == flagged_off_explicitly.report
+        assert [r.result for r in baseline.worker_results] == [r.result for r in flagged_off_explicitly.worker_results]
+
+    def test_flag_on_injects_capped_block(self, monkeypatch, tmp_path):
+        """Flag on + a matching lesson: block is injected and capped at 1200 chars."""
+        _setup(monkeypatch, tmp_path)
+        import config as _cfg_mod
+        import director as _director_mod
+
+        _orig_get = _cfg_mod.get
+
+        def _patched(key, default=None):
+            if key == "memory.worker_slice":
+                return True
+            return _orig_get(key, default)
+
+        monkeypatch.setattr(_director_mod, "config_get", _patched)
+
+        mem_dir = _cfg_mod.memory_dir()
+        (mem_dir / "lessons.jsonl").write_text(
+            json.dumps({
+                "lesson_id": "l1",
+                "task_type": "research",
+                "outcome": "success",
+                "lesson": "Always widget the recall gadget " + ("thoroughly " * 100) + "before shipping.",
+                "source_goal": "g1",
+                "confidence": 0.9,
+                "times_applied": 1,
+                "times_reinforced": 0,
+                "recorded_at": "2026-07-01T00:00:00Z",
+            }) + "\n",
+            encoding="utf-8",
+        )
+
+        captured = {}
+        orig_dispatch = _director_mod.dispatch_worker
+
+        def _spy_dispatch(worker_type, task, *, context="", **kw):
+            captured["context"] = context
+            return orig_dispatch(worker_type, task, context=context, **kw)
+
+        monkeypatch.setattr(_director_mod, "dispatch_worker", _spy_dispatch)
+
+        # Spy on the captains_log event so we prove A/B observability fires.
+        events = []
+        orig_log_event = _director_mod.log_event
+
+        def _spy_log_event(event_type, *a, **kw):
+            events.append((event_type, kw.get("context") or (a[2] if len(a) > 2 else None)))
+            return orig_log_event(event_type, *a, **kw)
+
+        monkeypatch.setattr(_director_mod, "log_event", _spy_log_event)
+
+        result = run_director("widget the recall gadget", dry_run=True)
+
+        assert result.worker_slice is True
+        assert any(r.memory_slice_injected for r in result.worker_results)
+        # A/B observability: a WORKER_SLICE_INJECTED captains_log event was recorded.
+        assert any(e[0] == "WORKER_SLICE_INJECTED" for e in events)
+        assert "Prior lessons from memory:" in captured["context"]
+        # The injected memory block itself must respect the 1200-char cap —
+        # find its span at the head of context (it's prepended).
+        block_end = captured["context"].find("\n\n") if "\n\n" in captured["context"] else len(captured["context"])
+        assert block_end <= 1200 or len(captured["context"]) <= 1200
+
+    def test_flag_on_uses_thread_scope_and_goal_brain(self, monkeypatch, tmp_path):
+        """Flag on + run_dir/thread_id: worker context gets the parent goal_brain
+        summary plus lessons recalled at the worker's thread scope."""
+        _setup(monkeypatch, tmp_path)
+        import config as _cfg_mod
+        import director as _director_mod
+
+        _orig_get = _cfg_mod.get
+
+        def _patched(key, default=None):
+            if key == "memory.worker_slice":
+                return True
+            return _orig_get(key, default)
+
+        monkeypatch.setattr(_director_mod, "config_get", _patched)
+
+        mem_dir = _cfg_mod.memory_dir()
+        (mem_dir / "lessons.jsonl").write_text(
+            json.dumps({
+                "lesson_id": "l1",
+                "lesson": "Scope the widget recall carefully.",
+                "meta": {"thread_id": "tid1"},
+                "source_goal": "g1",
+                "confidence": 0.9,
+                "recorded_at": "2026-07-01T00:00:00Z",
+            }) + "\n",
+            encoding="utf-8",
+        )
+
+        run_dir = tmp_path / "run1"
+        (run_dir / "source").mkdir(parents=True)
+        (run_dir / "source" / "goal_brain.md").write_text(
+            "# Intent\nShip the worker recall slice.\n", encoding="utf-8",
+        )
+
+        captured = {}
+        orig_dispatch = _director_mod.dispatch_worker
+
+        def _spy_dispatch(worker_type, task, *, context="", **kw):
+            captured["context"] = context
+            return orig_dispatch(worker_type, task, context=context, **kw)
+
+        monkeypatch.setattr(_director_mod, "dispatch_worker", _spy_dispatch)
+
+        result = run_director(
+            "widget scope test", dry_run=True, run_dir=run_dir, thread_id="tid1",
+        )
+
+        assert result.worker_slice is True
+        assert "Ship the worker recall slice." in captured["context"]
+        assert "Scope the widget recall carefully." in captured["context"]
+
+    def test_run_metadata_records_worker_slice(self, monkeypatch, tmp_path):
+        """_write_director_log payload carries worker_slice + per-worker injection/token fields."""
+        _setup(monkeypatch, tmp_path)
+        from orch_items import orch_root
+
+        worker_results = [
+            WorkerResult(
+                worker_type="general", ticket="t1", status="done", result="ok",
+                tokens_in=12, tokens_out=34, memory_slice_injected=True,
+            ),
+        ]
+        tickets = [Ticket(ticket_id="t1", worker_type="general", task="do the thing")]
+        path_str = _write_director_log(
+            project=None,
+            director_id="test123",
+            directive="do the thing",
+            spec="[spec]",
+            tickets=tickets,
+            worker_results=worker_results,
+            status="done",
+            elapsed_ms=10,
+            worker_slice=True,
+        )
+        assert path_str is not None
+        full_path = Path(path_str) if Path(path_str).is_absolute() else orch_root() / path_str
+        payload = json.loads(full_path.read_text(encoding="utf-8"))
+        assert payload["worker_slice"] is True
+        wr = payload["worker_results"][0]
+        assert wr["memory_slice_injected"] is True
+        assert wr["tokens_in"] == 12
+        assert wr["tokens_out"] == 34
 
 
 # ---------------------------------------------------------------------------

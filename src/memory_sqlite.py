@@ -297,6 +297,18 @@ class SqliteMemoryStore:
         self._write({"op": "invalidate", "id": item_id, "reason": reason,
                      "trust": 0.0, "expired_at": now, "invalid_at": now})
 
+    def state_get(self, key: str) -> str:
+        """Adapter-state KV (e.g. memory_bridge ingest offsets). Lives in
+        schema_meta so bridge state never litters source directories;
+        deliberately survives index rebuilds (source-consumption state is
+        independent of index state)."""
+        self._catch_up()
+        return self._meta("state:" + key)
+
+    def state_set(self, key: str, value: str) -> None:
+        self._set_meta("state:" + key, value)
+        self._db.commit()
+
     def stats(self) -> Dict[str, Any]:
         self._catch_up()
         items = self._db.execute("SELECT COUNT(*) FROM items").fetchone()[0]

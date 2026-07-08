@@ -1054,6 +1054,24 @@ Sample: the 2026-05-13..17 window of `~/.maro/workspace/runs/` (478 dirs total;
   the worker-recall-slice experiment (brief §7) — no runtime callsite
   rewired yet, per the consumer-first rule.
 
+- **2026-07-07/08 (Jeremy: "Let's implement this as a /goal run")** —
+  the instrument + worker-slice chunks were built BY Maro via
+  `maro-dispatch.sh`, Claude Code verifying each diff before push (the
+  fork-scope lesson: never trust delegated self-reports). Goal 1
+  delivered `src/memory_quality.py` clean (Haiku worker lane, scope
+  exact); verification caught its silent 50-item corpus cap. Full-corpus
+  verdict (1,652 items): sqlite-fts5 wins hit@1 + 5× latency, loses
+  hit@5/MRR to token-overlap — BM25 tuning lead in BACKLOG; this is the
+  evidence base for the fastembed gate. Goal 2 delivered
+  `src/memory_bridge.py` + director wiring behind `memory.worker_slice`
+  (default OFF, off-path byte-identical) but hit an adapter timeout at
+  step 7/10; verification completed the dangling half and fixed three
+  defects (offset sidecars in the crystallization dir → store
+  schema_meta; random ids → deterministic sha1, ingest idempotent;
+  offset keyed by basename → resolved path). Live module store rebuilt
+  clean: 414 lessons, re-ingest 0. **OPEN: the §7 A/B run itself** —
+  flag stays OFF until it happens.
+
 ## Threads (system-maintained — nothing leaves this list silently)
 
 Active:

@@ -23,6 +23,7 @@ Usage:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 from pathlib import Path
@@ -105,9 +106,17 @@ def _lesson_to_memory_item(lesson: dict, kind: str = "lesson") -> MemoryItem:
     # TieredLesson carries score (decayed); use it as trust.
     trust = float(lesson.get("score", 1.0))
 
+    content = lesson.get("lesson", "")
+    # Deterministic id: re-ingesting the same lesson (offset lost, source
+    # rebuilt) hits the same row instead of duplicating.
+    item_id = hashlib.sha1(
+        f"{lesson.get('lesson_id', '')}|{content}".encode("utf-8")
+    ).hexdigest()[:12]
+
     return MemoryItem(
+        id=item_id,
         kind=kind,
-        content=lesson.get("lesson", ""),
+        content=content,
         scope=scope,
         trust=max(trust, 0.0),  # clamp to [0, 1)
         provenance={
@@ -132,18 +141,16 @@ def _lesson_to_memory_item(lesson: dict, kind: str = "lesson") -> MemoryItem:
 def _get_ingest_offset(store: SqliteMemoryStore, source_path: Path) -> int:
     """Get the byte offset to resume from.
 
-    Checks an offset file next to each source for incremental tracking.
-    If the source has shrunk, returns 0 (corruption detection).
+    Offset state lives INSIDE the store (schema_meta) — the source
+    directory belongs to the crystallization engine and the bridge never
+    writes anything there, not even sidecars. If the source has shrunk,
+    returns 0 (corruption detection; deterministic item ids make the
+    resulting re-ingest idempotent).
     """
-    offset_path = source_path.parent / f"{source_path.name}.offset"
-
-    # Read stored offset
-    stored = 0
-    if offset_path.exists():
-        try:
-            stored = int(offset_path.read_text().strip())
-        except (ValueError, OSError):
-            stored = 0
+    try:
+        stored = int(store.state_get(f"ingest_offset:{source_path.resolve()}") or 0)
+    except ValueError:
+        stored = 0
 
     # Corruption check: source shrunk
     current_size = source_path.stat().st_size if source_path.exists() else 0
@@ -155,10 +162,11 @@ def _get_ingest_offset(store: SqliteMemoryStore, source_path: Path) -> int:
     return stored
 
 
-def _save_ingest_offset(source_path: Path, offset: int) -> None:
-    """Save the byte offset for incremental resume."""
-    offset_path = source_path.parent / f"{source_path.name}.offset"
-    offset_path.write_text(str(offset), encoding="utf-8")
+def _save_ingest_offset(store: SqliteMemoryStore, source_path: Path,
+                        offset: int) -> None:
+    """Save the byte offset for incremental resume (in the store, never
+    beside the source)."""
+    store.state_set(f"ingest_offset:{source_path.resolve()}", str(offset))
 
 
 def ingest_lessons_to_store(
@@ -204,6 +212,8 @@ def ingest_lessons_to_store(
                     try:
                         lesson = json.loads(line)
                         item = _lesson_to_memory_item(lesson)
+                        if store.get(item.id, include_invalid=True) is not None:
+                            continue  # already ingested (offset lost/reset)
                         item_id = store.append(item)
                         ingested_count += 1
 
@@ -222,7 +232,7 @@ def ingest_lessons_to_store(
             new_offset = offset
 
         # Save progress for next ingest
-        _save_ingest_offset(source_path, new_offset)
+        _save_ingest_offset(store, source_path, new_offset)
 
         stats["ingested"] += ingested_count
         stats["sources"][source_path.name] = ingested_count
@@ -267,17 +277,37 @@ def recall_for_worker(
 def format_worker_memory_block(
     items: List[MemoryItem],
     *,
+    goal_brain: str = "",
     max_chars: int = 1200,
 ) -> str:
-    """Format recalled items as an injectable prompt block for workers.
+    """Format recalled items + optional parent goal_brain summary as an
+    injectable prompt block for workers, capped at max_chars total.
 
-    Uses memory_port.format_block with a worker-specific header.
+    Uses memory_port.format_block for the lessons portion, then prepends the
+    goal_brain summary (if any) and re-truncates the combined block so the
+    total never exceeds max_chars — same truncate-on-newline behavior as
+    format_block itself.
     """
-    if not items:
+    parts = []
+    if goal_brain and goal_brain.strip():
+        parts.append("Parent goal context:\n" + goal_brain.strip())
+
+    if items:
+        lessons_block = format_block(
+            items,
+            header="Prior lessons from memory:",
+            max_chars=max_chars,
+        )
+        if lessons_block:
+            parts.append(lessons_block)
+
+    if not parts:
         return ""
 
-    return format_block(
-        items,
-        header="Prior lessons from memory:",
-        max_chars=max_chars,
-    )
+    combined = "\n\n".join(parts)
+    if len(combined) <= max_chars:
+        return combined
+    truncated = combined[:max_chars]
+    if "\n" in truncated:
+        truncated = truncated.rsplit("\n", 1)[0]
+    return truncated

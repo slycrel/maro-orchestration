@@ -105,6 +105,7 @@ class DirectorResult:
     tokens_out: int = 0
     elapsed_ms: int = 0
     log_path: Optional[str] = None
+    worker_slice: bool = False  # A/B experiment: was memory.worker_slice active for this run?
 
     def summary(self) -> str:
         done = sum(1 for r in self.worker_results if r.status == "done")
@@ -301,6 +302,8 @@ def run_director(
     dry_run: bool = False,
     verbose: bool = False,
     skip_if_simple: bool = False,
+    run_dir: Optional[Path] = None,
+    thread_id: Optional[str] = None,
 ) -> DirectorResult:
     """Run the Director on a directive.
 
@@ -310,6 +313,11 @@ def run_director(
         adapter: LLMAdapter instance.
         dry_run: Simulate without API calls.
         verbose: Print progress to stderr.
+        run_dir: Optional run directory for this thread — source of the parent
+            goal_brain summary for the worker_slice experiment (memory.worker_slice).
+            Unused when the flag is off.
+        thread_id: Optional thread handle id — scopes worker_slice memory recall
+            to "thread/<id>" instead of global. Unused when the flag is off.
 
     Returns:
         DirectorResult with plan, worker outputs, and final report.
@@ -409,6 +417,8 @@ def run_director(
     # A/B experiment: worker memory slice (Phase 1 / experiment gate, GOAL_BRAIN 2026-07-07)
     worker_slice_enabled = config_get("memory.worker_slice", False)
     worker_slice_store = None
+    worker_thread_scope = f"thread/{thread_id}" if thread_id else ""
+    parent_goal_brain = ""
     if worker_slice_enabled:
         try:
             from memory_bridge import ingest_lessons_to_store, recall_for_worker, format_worker_memory_block
@@ -423,6 +433,13 @@ def run_director(
             worker_slice_enabled = False
             worker_slice_store = None
 
+        if run_dir is not None:
+            try:
+                import thread_brain as _tb
+                parent_goal_brain = _tb.load_thread_brain(run_dir)
+            except Exception:
+                parent_goal_brain = ""
+
     for ticket in tickets:
         _log(f"dispatching worker={ticket.worker_type} task={ticket.task[:50]!r}")
 
@@ -434,9 +451,9 @@ def run_director(
         worker_slice_injected = False
         if worker_slice_enabled and worker_slice_store is not None:
             try:
-                items = recall_for_worker(ticket.task, thread_scope="", k=5, store=worker_slice_store)
-                if items:
-                    memory_block = format_worker_memory_block(items, max_chars=1200)
+                items = recall_for_worker(ticket.task, thread_scope=worker_thread_scope, k=5, store=worker_slice_store)
+                if items or parent_goal_brain:
+                    memory_block = format_worker_memory_block(items, goal_brain=parent_goal_brain, max_chars=1200)
                     if memory_block:
                         # Prepend memory block to context (highest priority)
                         context = memory_block + ("\n\n" + context if context else "")
@@ -449,6 +466,8 @@ def run_director(
                                 "ticket_id": ticket.ticket_id,
                                 "worker_type": ticket.worker_type,
                                 "items_count": len(items),
+                                "thread_scope": worker_thread_scope,
+                                "goal_brain_included": bool(parent_goal_brain),
                                 "memory_block_len": len(memory_block),
                             },
                         )
@@ -558,6 +577,7 @@ def run_director(
         worker_results=worker_results,
         status=status,
         elapsed_ms=elapsed,
+        worker_slice=worker_slice_enabled,
     )
 
     result = DirectorResult(
@@ -575,6 +595,7 @@ def run_director(
         tokens_out=total_tokens_out,
         elapsed_ms=elapsed,
         log_path=log_path,
+        worker_slice=worker_slice_enabled,
     )
 
     log.info("director_done id=%s status=%s tickets=%d tokens=%d elapsed=%dms",
@@ -818,6 +839,7 @@ def _write_director_log(
     worker_results: List[WorkerResult],
     status: str,
     elapsed_ms: int,
+    worker_slice: bool = False,
 ) -> Optional[str]:
     try:
         try:
@@ -844,12 +866,20 @@ def _write_director_log(
             "spec": spec,
             "status": status,
             "elapsed_ms": elapsed_ms,
+            "worker_slice": worker_slice,  # A/B experiment: memory.worker_slice active for this run?
             "tickets": [
                 {"ticket_id": t.ticket_id, "worker_type": t.worker_type, "task": t.task}
                 for t in tickets
             ],
             "worker_results": [
-                {"worker_type": r.worker_type, "status": r.status, "result_length": len(r.result)}
+                {
+                    "worker_type": r.worker_type,
+                    "status": r.status,
+                    "result_length": len(r.result),
+                    "memory_slice_injected": r.memory_slice_injected,
+                    "tokens_in": r.tokens_in,
+                    "tokens_out": r.tokens_out,
+                }
                 for r in worker_results
             ],
         }
