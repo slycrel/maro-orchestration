@@ -46,6 +46,8 @@ log = logging.getLogger("maro.director")
 from workers import WorkerResult, dispatch_worker, infer_worker_type, WORKER_TYPES
 from llm_parse import extract_json, safe_float, safe_str, safe_list, content_or_empty
 from planner import _is_large_scope_review
+from config import get as config_get
+from captains_log import log_event
 
 MAX_REVIEW_ROUNDS = 2  # Director reviews each worker output up to this many times
 
@@ -404,12 +406,54 @@ def run_director(
     review_decisions: List[ReviewDecision] = []
     completed_context = ""
 
+    # A/B experiment: worker memory slice (Phase 1 / experiment gate, GOAL_BRAIN 2026-07-07)
+    worker_slice_enabled = config_get("memory.worker_slice", False)
+    worker_slice_store = None
+    if worker_slice_enabled:
+        try:
+            from memory_bridge import ingest_lessons_to_store, recall_for_worker, format_worker_memory_block
+            from memory_sqlite import SqliteMemoryStore
+            from memory_bridge import _memory_store_path
+
+            worker_slice_store = SqliteMemoryStore(_memory_store_path())
+            ingest_stats = ingest_lessons_to_store(worker_slice_store, verbose=verbose)
+            _log(f"memory: ingested {ingest_stats['ingested']} items from {len(ingest_stats['sources'])} sources")
+        except Exception as exc:
+            log.warning("director: worker_slice ingest failed: %s; continuing without memory", exc)
+            worker_slice_enabled = False
+            worker_slice_store = None
+
     for ticket in tickets:
         _log(f"dispatching worker={ticket.worker_type} task={ticket.task[:50]!r}")
 
         context = completed_context.strip()
         if ticket.context:
             context = ticket.context + ("\n" + context if context else "")
+
+        # A/B: Inject worker memory slice if enabled
+        worker_slice_injected = False
+        if worker_slice_enabled and worker_slice_store is not None:
+            try:
+                items = recall_for_worker(ticket.task, thread_scope="", k=5, store=worker_slice_store)
+                if items:
+                    memory_block = format_worker_memory_block(items, max_chars=1200)
+                    if memory_block:
+                        # Prepend memory block to context (highest priority)
+                        context = memory_block + ("\n\n" + context if context else "")
+                        worker_slice_injected = True
+                        log_event(
+                            "WORKER_SLICE_INJECTED",
+                            subject=f"worker:{ticket.worker_type}",
+                            summary=f"Injected {len(items)} recalled items",
+                            context={
+                                "ticket_id": ticket.ticket_id,
+                                "worker_type": ticket.worker_type,
+                                "items_count": len(items),
+                                "memory_block_len": len(memory_block),
+                            },
+                        )
+            except Exception as exc:
+                log.warning("director: worker_slice recall failed for ticket %s: %s", ticket.ticket_id, exc)
 
         result = dispatch_worker(
             ticket.worker_type,
@@ -419,6 +463,7 @@ def run_director(
             dry_run=dry_run,
             verbose=verbose,
         )
+        result.memory_slice_injected = worker_slice_injected
         total_tokens_in += result.tokens_in
         total_tokens_out += result.tokens_out
 
@@ -465,6 +510,7 @@ def run_director(
                     dry_run=dry_run,
                     verbose=verbose,
                 )
+                result.memory_slice_injected = worker_slice_injected
                 total_tokens_in += result.tokens_in
                 total_tokens_out += result.tokens_out
                 review, rev_tokens = _review_worker_output(

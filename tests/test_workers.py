@@ -176,3 +176,26 @@ class TestLoadPersona:
     def test_unknown_type_gets_general_persona(self):
         persona = _load_persona("nonexistent")
         assert "General Worker" in persona
+
+
+# ---------------------------------------------------------------------------
+# A/B experiment: worker memory slice
+# ---------------------------------------------------------------------------
+
+class TestWorkerMemorySlice:
+    def test_worker_result_has_memory_slice_injected_field(self):
+        """WorkerResult includes memory_slice_injected field."""
+        result = dispatch_worker(WORKER_RESEARCH, "test ticket", dry_run=True)
+        assert hasattr(result, "memory_slice_injected")
+        assert isinstance(result.memory_slice_injected, bool)
+
+    def test_memory_slice_injected_defaults_to_false(self):
+        """Field defaults to False when not explicitly set."""
+        result = dispatch_worker(WORKER_BUILD, "build something", dry_run=True)
+        assert result.memory_slice_injected is False
+
+    def test_memory_slice_injected_can_be_set(self):
+        """Field can be set after dispatch."""
+        result = dispatch_worker(WORKER_OPS, "check status", dry_run=True)
+        result.memory_slice_injected = True
+        assert result.memory_slice_injected is True

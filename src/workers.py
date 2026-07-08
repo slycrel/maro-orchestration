@@ -49,6 +49,7 @@ class WorkerResult:
     stuck_reason: Optional[str] = None
     tokens_in: int = 0
     tokens_out: int = 0
+    memory_slice_injected: bool = False  # A/B experiment: was memory slice injected?
 
 
 # ---------------------------------------------------------------------------
