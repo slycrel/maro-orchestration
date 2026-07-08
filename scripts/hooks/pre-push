@@ -13,9 +13,9 @@
 while read -r _local_ref _local_sha remote_ref _remote_sha; do
   case "$remote_ref" in
     refs/heads/main|refs/heads/master)
-      echo "poe: worker pushes to the default branch are blocked." >&2
-      echo "poe: push a work branch instead (git push origin HEAD:work/<topic>)," >&2
-      echo "poe: or run with MARO_ALLOW_MAIN_PUSH=1 under goal-level authorization." >&2
+      echo "maro: worker pushes to the default branch are blocked." >&2
+      echo "maro: push a work branch instead (git push origin HEAD:work/<topic>)," >&2
+      echo "maro: or run with MARO_ALLOW_MAIN_PUSH=1 under goal-level authorization." >&2
       exit 1
       ;;
   esac
