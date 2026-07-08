@@ -62,6 +62,21 @@ def _debug_snapshots_enabled() -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Atomic write (2026-07-08 adversarial review, findings #4 / Reality Checker
+# claim 1/3): a bare path.write_text() lets a concurrent reader observe a
+# partially-written file, and lets a crash mid-write leave a truncated one
+# that a later frozen-check would misread. Write to a sibling temp file and
+# os.replace() it into place — POSIX guarantees the rename is atomic, so
+# readers only ever see the old complete file or the new complete file.
+# ---------------------------------------------------------------------------
+
+def _atomic_write_text(path: Path, content: str) -> None:
+    tmp = path.parent / f".{path.name}.tmp-{os.getpid()}"
+    tmp.write_text(content, encoding="utf-8")
+    os.replace(tmp, path)
+
+
+# ---------------------------------------------------------------------------
 # Path resolution — mirrors loop_artifacts._plan_manifest_path exactly, so
 # the report always lands next to the plan manifest / loop log / call records.
 # ---------------------------------------------------------------------------
@@ -166,9 +181,19 @@ def _parse_iso(ts: str) -> Optional[datetime]:
     if not ts:
         return None
     try:
-        return datetime.fromisoformat(ts)
+        dt = datetime.fromisoformat(ts)
     except Exception:
         return None
+    # 2026-07-08 adversarial review (finding #10): every live ended_ts today
+    # is tz-aware (datetime.now(timezone.utc).isoformat()), but nothing
+    # structurally prevents a future/legacy caller from passing a naive
+    # timestamp — comparing naive vs. aware datetimes raises TypeError, which
+    # would otherwise bubble up and fail the whole report write. Normalizing
+    # here (assume UTC for a naive value) makes that class of input safe
+    # rather than merely unreachable-by-convention.
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
 
 
 def _step_windows(step_outcomes: List[StepOutcome], loop_start_ts: str) -> Tuple[List[Dict[str, Any]], bool]:
@@ -224,7 +249,10 @@ def _gather_log_markers(loop_id: str, start_ts: str) -> Tuple[List[dict], List[d
         return [], []
     since_date = (start_ts or "")[:10] or None
     try:
-        entries = load_log(since=since_date, limit=500)
+        # 2026-07-08 adversarial review (finding #8): this cap was stricter
+        # than the accepted-risk note above actually promises (500 vs. the
+        # ~1000-entry rotation tail) — 1000 matches what was documented.
+        entries = load_log(since=since_date, limit=1000)
     except Exception:
         return [], []
     attributed = [e for e in entries if e.get("loop_id") == loop_id]
@@ -368,9 +396,22 @@ document.querySelectorAll('.detail-toggle').forEach(function(btn){
       .then(function(data){ panel.innerHTML = renderCallRecord(data); panel.dataset.loaded = '1'; })
       .catch(function(){
         // Browsers block fetch() of sibling files under a file:// origin —
-        // this is the documented fallback, not an error state.
-        panel.innerHTML = '<div class="detail-error">Inline preview needs http:// (browsers block '
-          + 'fetch() under file://). <a href="' + rec + '" target="_blank">Open the raw record &#8599;</a></div>';
+        // this is the documented fallback, not an error state. Built via
+        // DOM APIs, not innerHTML string-concat (2026-07-08 adversarial
+        // review, finding #7): `rec` is always an internally-generated
+        // calls/call-NNNNN.json path today, but the server-side render
+        // already escapes it once — the client-side fallback shouldn't be
+        // the one place that trusts an attribute value verbatim into markup.
+        panel.textContent = '';
+        var div = document.createElement('div');
+        div.className = 'detail-error';
+        div.appendChild(document.createTextNode('Inline preview needs http:// (browsers block fetch() under file://). '));
+        var a = document.createElement('a');
+        a.href = rec;
+        a.target = '_blank';
+        a.textContent = 'Open the raw record ↗';
+        div.appendChild(a);
+        panel.appendChild(div);
         panel.dataset.loaded = '1';
       });
   });
@@ -620,60 +661,77 @@ def write_run_report(
     site can pass what it already has. Never raises. No-op (returns the
     existing path) once the report has been frozen by a terminal write.
     """
-    if not _reports_enabled():
-        return None
     if not project:
         return None
     path = _report_path(project, loop_id)
     if path is None:
         return None
 
-    o = _orch()
-    if path.exists() and _is_frozen(path):
-        if not _debug_snapshots_enabled():
-            _clear_debug_snapshots(project, loop_id)
-        try:
-            return o.relative_display_path(path)
-        except Exception:
-            return str(path)
+    # Debug-snapshot hygiene runs regardless of report.enabled — cheap
+    # (an existence check) and this is the only place that does it, so
+    # disabling reports shouldn't strand a leftover snapshot dir
+    # (2026-07-08 adversarial review, finding #9; the narrower remaining
+    # case — a loop whose report is never written again — is documented in
+    # docs/RUN_VISIBILITY_DESIGN.md rather than solved with a standalone
+    # sweep, which would be more machinery than this developer-only aid
+    # warrants).
+    if not _debug_snapshots_enabled():
+        _clear_debug_snapshots(project, loop_id)
 
-    step_outcomes = step_outcomes or []
-    try:
-        from runs import runs_root as _runs_root, current_run_dir as _current_run_dir
-        rd = _current_run_dir()
-        index_link = None
-        if rd is not None:
-            try:
-                index_path = _runs_root() / "index.html"
-                index_link = _relpath(index_path, path.parent)
-            except Exception:
-                index_link = None
-    except Exception:
-        index_link = None
-
-    try:
-        content = _render_report_html(
-            project=project,
-            loop_id=loop_id,
-            goal=goal,
-            planned_steps=planned_steps,
-            start_ts=start_ts,
-            step_outcomes=step_outcomes,
-            status=status,
-            elapsed_ms=elapsed_ms,
-            replan_count=replan_count,
-            report_dir=path.parent,
-            index_link=index_link,
-        )
-        path.write_text(content, encoding="utf-8")
-    except Exception:
-        log.warning("run report write failed for loop %s", loop_id, exc_info=True)
+    if not _reports_enabled():
         return None
 
-    if _debug_snapshots_enabled():
-        _maybe_snapshot(content, project, loop_id)
-    else:
-        _clear_debug_snapshots(project, loop_id)
+    o = _orch()
+    # Hold the report's own lock across the frozen-check AND the write
+    # (2026-07-08 adversarial review, Reality Checker claim 1): checking
+    # _is_frozen() and then writing were two unsynchronized steps, so a
+    # post-step writer and a finalize writer could interleave and the
+    # finalize (frozen) write could be clobbered by a late post-step write
+    # that started its check before finalize's write landed. One lock held
+    # across both steps makes the two writers see each other's outcome.
+    from file_lock import locked_write
+    with locked_write(path):
+        if path.exists() and _is_frozen(path):
+            try:
+                return o.relative_display_path(path)
+            except Exception:
+                return str(path)
+
+        step_outcomes = step_outcomes or []
+        try:
+            from runs import runs_root as _runs_root, current_run_dir as _current_run_dir
+            rd = _current_run_dir()
+            index_link = None
+            if rd is not None:
+                try:
+                    index_path = _runs_root() / "index.html"
+                    index_link = _relpath(index_path, path.parent)
+                except Exception:
+                    index_link = None
+        except Exception:
+            index_link = None
+
+        try:
+            content = _render_report_html(
+                project=project,
+                loop_id=loop_id,
+                goal=goal,
+                planned_steps=planned_steps,
+                start_ts=start_ts,
+                step_outcomes=step_outcomes,
+                status=status,
+                elapsed_ms=elapsed_ms,
+                replan_count=replan_count,
+                report_dir=path.parent,
+                index_link=index_link,
+            )
+            _atomic_write_text(path, content)
+        except Exception:
+            log.warning("run report write failed for loop %s", loop_id, exc_info=True)
+            return None
+
+        if _debug_snapshots_enabled():
+            _maybe_snapshot(content, project, loop_id)
 
     try:
         return o.relative_display_path(path)
@@ -811,7 +869,14 @@ def write_runs_index(*, force: bool = False) -> Optional[str]:
     seconds. Pass force=True where an authoritative write matters more than
     the debounce (loop finalize — a run's terminal state should always be
     reflected immediately).
+
+    Respects report.enabled (2026-07-08 adversarial review, finding #6):
+    previously this ran unconditionally even with the run-visibility feature
+    turned off via config, so disabling it only stopped per-run reports, not
+    the index scan/write.
     """
+    if not _reports_enabled():
+        return None
     try:
         from runs import runs_root
         root = runs_root()
@@ -823,10 +888,18 @@ def write_runs_index(*, force: bool = False) -> Optional[str]:
                 if now - last < _INDEX_DEBOUNCE_SECONDS:
                     return str(root / "index.html")
         root.mkdir(parents=True, exist_ok=True)
-        summaries = _gather_run_summaries()
-        content = _render_index_html(summaries)
         out = root / "index.html"
-        out.write_text(content, encoding="utf-8")
+        # Lock + atomic replace (2026-07-08 review, findings #4 / Reality
+        # Checker claim 1): this is the first artifact this feature writes
+        # that's shared across every concurrently-running process, not just
+        # within one run's own directory — a bare write_text() here is the
+        # one write in this module where two different orchestrator
+        # processes racing is a realistic, not hypothetical, scenario.
+        from file_lock import locked_write
+        with locked_write(out):
+            summaries = _gather_run_summaries()
+            content = _render_index_html(summaries)
+            _atomic_write_text(out, content)
         # Record the timestamp on every real write, forced or not — otherwise
         # a forced write (e.g. loop finalize) wouldn't suppress an immediate
         # follow-up debounced call, defeating the point of debouncing.

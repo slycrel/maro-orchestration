@@ -137,6 +137,13 @@ def _preflight_checks(
                         elapsed_ms=_cs.elapsed_ms,
                         confidence=getattr(_cs, "confidence", ""),
                         injected_steps=list(getattr(_cs, "injected_steps", [])),
+                        # 2026-07-08 adversarial review (finding #5): checkpoints
+                        # don't persist ended_ts, so this reconstruction happens
+                        # long after the step actually ran — ended_ts="" opts out
+                        # of the "now" default so the report's timeline correctly
+                        # falls back to its approximate mode instead of showing
+                        # a resumed step as if it just finished.
+                        ended_ts="",
                     ))
                 steps = _remaining
                 if ctx.verbose:

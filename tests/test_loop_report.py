@@ -8,6 +8,7 @@ runs.set_current_run_dir for the run-dir-active path).
 
 import json
 import sys
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -22,8 +23,11 @@ from loop_types import StepOutcome, step_from_decompose
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _outcome(text, status="done", elapsed_ms=100, ended_ts="", tokens_in=10,
+def _outcome(text, status="done", elapsed_ms=100, ended_ts=None, tokens_in=10,
              tokens_out=10, call_record="", confidence="strong"):
+    # ended_ts=None (default) -> step_from_decompose defaults to "now" (real
+    # timing, matches most tests' intent). Pass ended_ts="" explicitly to
+    # test the approximate-mode fallback (2026-07-08 review, findings #2/#5).
     return step_from_decompose(
         text, 1,
         status=status, result="result text", iteration=1,
@@ -408,3 +412,179 @@ def test_write_runs_index_handles_no_runs(monkeypatch, tmp_path):
     out = lr.write_runs_index(force=True)
     assert out is not None
     assert "No runs yet" in Path(out).read_text()
+
+
+# ---------------------------------------------------------------------------
+# 2026-07-08 adversarial review fixes
+# ---------------------------------------------------------------------------
+
+def test_ended_ts_empty_string_forces_approximate_mode():
+    """Finding #2/#5: ended_ts="" (not omitted) must NOT default to "now" —
+    it's the explicit signal parallel/checkpoint-resume call sites use to
+    opt out of fabricated precision."""
+    s = step_from_decompose("do a thing", 1, elapsed_ms=50, ended_ts="")
+    assert s.ended_ts == ""
+
+
+def test_approximate_mode_renders_badge_and_no_crash(monkeypatch, tmp_path):
+    monkeypatch.setenv("MARO_ORCH_ROOT", str(tmp_path))
+    outcomes = [
+        _outcome("Step one", status="done", elapsed_ms=100, ended_ts=""),
+        _outcome("Step two", status="done", elapsed_ms=200, ended_ts=""),
+    ]
+    lr.write_run_report(
+        project="p", loop_id="approxtest", goal="goal",
+        planned_steps=["Step one", "Step two"], start_ts="2026-04-04T00:00:00+00:00",
+        step_outcomes=outcomes,
+    )
+    content = (tmp_path / "projects" / "p" / "artifacts" / "loop-approxtest-report.html").read_text()
+    assert "approximate timing" in content
+    assert "st-done" in content
+
+
+def test_naive_ended_ts_does_not_crash_report_generation(monkeypatch, tmp_path):
+    """Finding #10: a naive (non-tz-aware) ended_ts used to raise TypeError
+    when compared against captain's-log's tz-aware timestamps, silently
+    failing the whole report write (caught by the outer except)."""
+    monkeypatch.setenv("MARO_ORCH_ROOT", str(tmp_path))
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+    import captains_log
+    captains_log.log_event("STEP_TOO_BROAD", "step 1", "a marker", loop_id="naiveloop")
+
+    naive_outcome = _outcome("Step one", status="done", elapsed_ms=100,
+                              ended_ts="2020-01-01T00:00:01")  # no offset — naive
+    result = lr.write_run_report(
+        project="p", loop_id="naiveloop", goal="goal",
+        planned_steps=["Step one"], start_ts="2020-01-01T00:00:00+00:00",
+        step_outcomes=[naive_outcome],
+    )
+    assert result is not None
+    content = (tmp_path / "projects" / "p" / "artifacts" / "loop-naiveloop-report.html").read_text()
+    assert "st-done" in content
+
+
+def test_write_run_report_atomic_write_leaves_no_tmp_file(monkeypatch, tmp_path):
+    monkeypatch.setenv("MARO_ORCH_ROOT", str(tmp_path))
+    lr.write_run_report(
+        project="p", loop_id="atomictest", goal="goal",
+        planned_steps=["Step one"], start_ts="2026-04-04T00:00:00+00:00",
+        step_outcomes=[],
+    )
+    artifacts = tmp_path / "projects" / "p" / "artifacts"
+    tmp_leftovers = list(artifacts.glob(".*.tmp-*"))
+    assert tmp_leftovers == [], f"leftover temp file(s): {tmp_leftovers}"
+
+
+def test_write_run_report_uses_file_lock(monkeypatch, tmp_path):
+    """Finding #4: the frozen-check-then-write sequence must be serialized
+    via file_lock, not a bare unlocked write — spy on locked_write to confirm
+    it's actually invoked with the report path, not silently bypassed."""
+    monkeypatch.setenv("MARO_ORCH_ROOT", str(tmp_path))
+    import file_lock
+    calls = []
+    _real_locked_write = file_lock.locked_write
+
+    @contextmanager
+    def _spy(path):
+        calls.append(path)
+        with _real_locked_write(path):
+            yield
+
+    monkeypatch.setattr(file_lock, "locked_write", _spy)
+    lr.write_run_report(
+        project="p", loop_id="locktest", goal="goal",
+        planned_steps=["Step one"], start_ts="2026-04-04T00:00:00+00:00",
+        step_outcomes=[],
+    )
+    assert len(calls) == 1
+    assert calls[0].name == "loop-locktest-report.html"
+
+
+def test_write_runs_index_atomic_and_locked(monkeypatch, tmp_path):
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+    import file_lock
+    calls = []
+    _real_locked_write = file_lock.locked_write
+
+    @contextmanager
+    def _spy(path):
+        calls.append(path)
+        with _real_locked_write(path):
+            yield
+
+    monkeypatch.setattr(file_lock, "locked_write", _spy)
+    lr.write_runs_index(force=True)
+    assert len(calls) == 1
+    assert calls[0].name == "index.html"
+
+    tmp_leftovers = list((tmp_path / "runs").glob(".*.tmp-*"))
+    assert tmp_leftovers == [], f"leftover temp file(s): {tmp_leftovers}"
+
+
+def test_write_runs_index_respects_report_enabled(monkeypatch, tmp_path):
+    """Finding #6: report.enabled=false previously stopped per-run reports
+    but NOT the index — the index kept scanning/rewriting regardless."""
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+    import runs
+    runs.create_run_dir("h7", prompt="Should not be indexed")
+    monkeypatch.setattr(lr, "_reports_enabled", lambda: False)
+
+    result = lr.write_runs_index(force=True)
+    assert result is None
+    assert not (Path(runs.runs_root()) / "index.html").exists()
+
+
+def test_captains_log_marker_cap_matches_documented_1000(monkeypatch, tmp_path):
+    """Finding #8: the design doc's own accepted-risk note says ~1000-entry
+    rotation tail; the implementation was stricter (500) than what it
+    documented as acceptable loss."""
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+    import captains_log
+    calls = {}
+    _real_load_log = captains_log.load_log
+
+    def _spy(**kwargs):
+        calls.update(kwargs)
+        return _real_load_log(**kwargs)
+
+    monkeypatch.setattr(captains_log, "load_log", _spy)
+    lr._gather_log_markers("someloop", "2020-01-01T00:00:00+00:00")
+    assert calls.get("limit") == 1000
+
+
+def test_debug_snapshot_cleanup_runs_even_when_reports_disabled(monkeypatch, tmp_path):
+    """Finding #9 (partial fix): previously, if report.enabled was false,
+    write_run_report returned before ever checking whether a leftover debug
+    snapshot dir needed cleaning up."""
+    monkeypatch.setenv("MARO_ORCH_ROOT", str(tmp_path))
+    monkeypatch.setattr(lr, "_debug_snapshots_enabled", lambda: True)
+    lr.write_run_report(
+        project="p", loop_id="dbgoff", goal="goal",
+        planned_steps=["Step one"], start_ts="2026-04-04T00:00:00+00:00",
+        step_outcomes=[],
+    )
+    debug_dir = tmp_path / "projects" / "p" / "artifacts" / "loop-dbgoff-report-debug"
+    assert debug_dir.exists()
+
+    monkeypatch.setattr(lr, "_debug_snapshots_enabled", lambda: False)
+    monkeypatch.setattr(lr, "_reports_enabled", lambda: False)
+    result = lr.write_run_report(
+        project="p", loop_id="dbgoff", goal="goal",
+        planned_steps=["Step one"], start_ts="2026-04-04T00:00:00+00:00",
+        step_outcomes=[],
+    )
+    assert result is None  # reports disabled — no report written
+    assert not debug_dir.exists()  # but the leftover snapshot dir is still cleaned up
+
+
+def test_js_fallback_uses_dom_apis_not_string_concat(monkeypatch, tmp_path):
+    """Finding #7: the fetch-failure fallback used to build innerHTML via
+    string concatenation with the raw call_record attribute value — cheap to
+    fix with DOM APIs even though not exploitable with today's internally-
+    generated call_record paths."""
+    assert "createElement" in lr._DETAIL_JS
+    assert "createTextNode" in lr._DETAIL_JS
+    # The old vulnerable pattern built the error div via string concat
+    # ending in "+ rec + '</a></div>'" — assert that's gone.
+    assert "+ rec + '</a>" not in lr._DETAIL_JS
+    assert "panel.innerHTML = '<div class=\"detail-error\"" not in lr._DETAIL_JS

@@ -88,6 +88,13 @@ def _run_parallel_batch(
             confidence=_batch_oc.get("confidence", "unverified"),
             injected_steps=_batch_oc.get("inject_steps", []),
             call_record=_batch_oc.get("call_record", ""),
+            # 2026-07-08 adversarial review (finding #2): _b_elapsed is time
+            # since the whole batch started, assigned near-identically to
+            # every step in it — not this step's real individual duration.
+            # ended_ts="" opts out of step_from_decompose's "now" default so
+            # the run-visibility report's timeline falls back to its existing
+            # approximate mode instead of rendering fabricated precision.
+            ended_ts="",
         ))
 
         if _b_status == "done":
@@ -210,6 +217,11 @@ def _run_parallel_path(
             confidence=_oc.get("confidence", "unverified"),
             injected_steps=_oc.get("inject_steps", []),
             call_record=_oc.get("call_record", ""),
+            # 2026-07-08 adversarial review (finding #2): no elapsed_ms is
+            # tracked per fan-out worker at all here (defaults to 0) — ended_ts=""
+            # keeps the run-visibility report's timeline in its approximate
+            # fallback rather than rendering these as false zero-duration steps.
+            ended_ts="",
         ))
         _fanout_tokens_in += _oc.get("tokens_in", 0)
         _fanout_tokens_out += _oc.get("tokens_out", 0)

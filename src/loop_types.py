@@ -114,13 +114,22 @@ def step_from_decompose(
     confidence: str = "unverified",
     injected_steps: Optional[List[str]] = None,
     call_record: str = "",
-    ended_ts: str = "",
+    ended_ts: Optional[str] = None,
 ) -> StepOutcome:
     """Factory for StepOutcome — centralises defaults so inline construction sites stay DRY.
 
-    ended_ts defaults to "now" (UTC) when not passed — every call site constructs
-    the outcome immediately after the step actually finishes, so the call-time
-    default is the correct timestamp without threading it through each caller.
+    ended_ts sentinel (2026-07-08 adversarial review, findings #2/#5): omitted
+    (None) defaults to "now" (UTC) — correct at every call site that constructs
+    the outcome immediately after the step actually finished (the sequential
+    main loop, blocked-step retries). Passing ended_ts="" explicitly instead
+    opts OUT of that default and leaves it genuinely empty, for the two classes
+    of call site where "now" would be a fabricated timestamp: bulk
+    reconstruction well after the fact (checkpoint resume) and parallel/fan-out
+    batch processing (where per-step elapsed_ms/ended_ts aren't real individual
+    timings — see loop_parallel.py). loop_report.py's _step_windows() already
+    falls back to an explicitly-flagged approximate timeline when ended_ts is
+    empty; this sentinel is what lets a caller deliberately request that
+    fallback instead of it only ever firing for pre-field-existing data.
     """
     return StepOutcome(
         index=index,
@@ -135,7 +144,7 @@ def step_from_decompose(
         confidence=confidence,
         injected_steps=injected_steps if injected_steps is not None else [],
         call_record=call_record,
-        ended_ts=ended_ts or datetime.now(timezone.utc).isoformat(),
+        ended_ts=ended_ts if ended_ts is not None else datetime.now(timezone.utc).isoformat(),
     )
 
 

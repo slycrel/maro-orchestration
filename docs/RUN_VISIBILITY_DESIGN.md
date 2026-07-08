@@ -295,7 +295,35 @@ same-directory relative links.
    run). Fine at current scale; cheap future guard (mtime-based skip) is
    listed in build order as deferred.
 4. **Captain's-log rotation** can drop a very long run's earliest markers
-   from `load_log()`'s tail-limited read. Acceptable v1 tradeoff.
+   from `load_log()`'s tail-limited read. Acceptable v1 tradeoff — the
+   implementation's own cap was corrected 2026-07-08 to actually match this
+   stated ~1000-entry limit (see review below; it had been a stricter 500).
+5. **Index write ordering relative to `handle.py`'s later finalize steps**
+   (2026-07-08 review, finding #3, second half): `metadata.json`'s terminal
+   status and `run_card.json` (cost, success class) are written in
+   `handle.py`'s `finally` block *after* `run_agent_loop()` returns —
+   outside `loop_finalize.py`'s control entirely. The forced index write at
+   loop-finalize time is correctly ordered relative to this run's own
+   `loop-*-log.json` now (fixed — see review below), but it still can't see
+   `run_card.json`/final `metadata.json` yet, since those don't exist until
+   later in `handle.py`. The index entry for a just-finished run can show
+   stale cost/status until the *next* run anywhere triggers a rescan (or a
+   subsequent forced write). Properly closing this needs a hook in
+   `handle.py` itself, after curation — a bigger, separate-module change,
+   intentionally not bundled into this pass.
+6. **Debug-snapshot cleanup on disable is per-loop-revisit, not a standalone
+   sweep** (2026-07-08 review, finding #9): turning `report.debug_snapshots`
+   off now reliably cleans up a loop's leftover snapshot dir the *next* time
+   `write_run_report()` is called for that loop — including while
+   `report.enabled` is also off (fixed 2026-07-08; previously the
+   `report.enabled` check short-circuited before the cleanup ran at all).
+   What's still true: if a loop's report is never written again after
+   debug mode is turned off (the loop already finished, or reports are
+   disabled going forward), its snapshot dir has no independent trigger to
+   get cleaned. A standalone periodic sweep would close this fully but is
+   more machinery than this developer-only debugging aid warrants —
+   revisit only if debug-snapshot disk usage is ever actually a problem in
+   practice.
 
 ## Explicitly out of scope for this build
 
@@ -305,3 +333,126 @@ same-directory relative links.
   the old dashboard).
 - A timeline/visualization aggregating multiple runs of the same project
   over time ("meta-of-meta" view) — discussed, deliberately deferred.
+- Extending real per-step wall-clock timing into `_run_steps_parallel()`
+  itself (parallel/fan-out workers don't currently report individual
+  start/end times to the caller at all) — the 2026-07-08 review fix makes
+  the timeline correctly flag these steps as approximate rather than
+  fabricating false precision, but doesn't add the underlying
+  instrumentation. That's a larger change to the parallel executor, not
+  this report.
+- Fixing the rest of `_build_result_and_finalize`'s side effects (telegram
+  notify, introspection/diagnosis, Reflexion memory recording, skill
+  crystallization) for parallel/DAG runs — `_run_parallel_path`'s early
+  return skips *all* of these, not just the run-visibility report/index.
+  The 2026-07-08 fix only wires the report/index back in, scoped to this
+  feature; the broader gap (parallel runs get none of the rest of finalize)
+  is a separate, pre-existing issue this build didn't introduce and isn't
+  positioned to fix.
+
+## Adversarial review (2026-07-08)
+
+Ran `/adversarial-review` against the full implementation (all 6 build-order
+stages) before merge, per Jeremy's request. 5 reviewers on the opposite model
+(Codex `gpt-5.5`), each reading the actual repo files, not just the diff: the
+3 default lenses (Skeptic, Architect, Minimalist) plus 2 project personas
+added because this change touches shared runtime state in a system with other
+agents actively working in it — **Plan Critic** (`personas/plan-critic.md`,
+adapted post-hoc to check the implementation against this settled design
+doc rather than its usual pre-flight role) and **Reality Checker**
+(`personas/reality-checker-evidence-gate.md`, evidence-gating the specific
+claims made about test results and guarantees — it independently ran the
+test suite and tried to falsify the freeze/self-clean/no-server claims).
+
+**Verdict: REJECT** (of the pre-fix state) — one high-severity finding had
+unanimous consensus across every reviewer that read the execution-flow code.
+
+**Findings and resolutions:**
+
+1. **[high, unanimous — Skeptic/Architect/Minimalist] Parallel/DAG-mode runs
+   never got a finalized report or forced index write.** `run_agent_loop()`
+   returns directly from `_run_parallel_path()` (`agent_loop.py`), bypassing
+   `_build_result_and_finalize()` entirely — where the terminal report/index
+   hooks live. **Fixed**: `agent_loop.py` now writes the report (frozen,
+   terminal status) and forces the index write right at the parallel-path
+   early-return point, scoped narrowly to this feature (see "out of scope"
+   above for what's deliberately not fixed alongside it). Regression-tested
+   in `tests/test_agent_loop.py::test_parallel_path_still_writes_frozen_report_and_index`
+   — verified to actually fail without the fix before confirming it passes
+   with it.
+2. **[high, Plan Critic + Reality Checker] Even with #1 fixed, parallel-path
+   step timing was fabricated, not real.** DAG-batch outcomes assigned every
+   step in a batch the same `elapsed_ms` (measured from batch start, not
+   that step's own duration); fan-out outcomes passed no `elapsed_ms` at
+   all. Combined with `ended_ts` defaulting to "now" at construction time,
+   steps rendered as near-identical or near-zero-width segments — false
+   precision, not the promised "real time window." **Fixed**: `ended_ts` on
+   `StepOutcome`/`step_from_decompose()` is now a real optional sentinel —
+   omitted (`None`) still defaults to "now" (correct at every call site that
+   constructs the outcome immediately after the step finishes); passing
+   `ended_ts=""` explicitly opts OUT of that default. Both parallel
+   construction sites in `loop_parallel.py` and the checkpoint-resume
+   reconstruction in `loop_planning.py` (see finding #5) now pass
+   `ended_ts=""`, so `_step_windows()`'s existing approximate-mode fallback
+   correctly covers them instead of fabricating precision. No attempt made
+   to add real per-worker timing to the parallel executor itself — see
+   "out of scope" above.
+3. **[medium, Skeptic + Architect] The forced index write happened before
+   the data it summarizes existed.** `loop_finalize.py` called
+   `_write_runs_index(force=True)` *before* `_write_loop_log()` wrote that
+   run's own totals. **Fixed** (the in-module half): reordered so the index
+   write happens after the loop log write. **Not fixed** (the
+   cross-module half): `metadata.json`/`run_card.json` finalize even later,
+   in `handle.py`, outside this module's reach — documented as known gap #5
+   above rather than rushed into a `handle.py` change in this pass.
+4. **[medium, 4 of 5 reviewers] Shared static-file writes weren't safe
+   across concurrent processes.** Plain `write_text()`, only an in-process
+   lock/debounce dict — no cross-process serialization, no atomic replace.
+   **Fixed**: both `write_run_report()` and `write_runs_index()` now hold
+   `file_lock.locked_write()` (this codebase's existing tool for exactly
+   this class of problem) across their entire check-then-write sequence,
+   and write via a temp-file-then-`os.replace()` pattern for atomicity —
+   closing both the concurrent-process race and the crash-mid-write /
+   partial-read failure modes Reality Checker and Architect both raised.
+5. **[medium, Architect + Minimalist] Checkpoint-resumed steps got a
+   fabricated "real" timestamp instead of falling back to approximate.**
+   Checkpoints don't persist `ended_ts`; resume reconstructed steps via
+   `step_from_decompose()` long after they actually ran, but the factory's
+   old unconditional "now" default made them look precisely timed. **Fixed**
+   as part of finding #2's sentinel change — the checkpoint-resume call site
+   now explicitly passes `ended_ts=""`.
+6. **[medium, 3 of 5 reviewers] `report.enabled=false` didn't gate
+   `write_runs_index()`.** Turning off the documented kill-switch stopped
+   per-run reports but the index kept scanning/writing regardless. **Fixed**
+   — `write_runs_index()` now checks `_reports_enabled()` too.
+7. **[low-medium, Minimalist + Plan Critic] Client-side fetch-failure
+   fallback built `innerHTML` from an unescaped `call_record` attribute
+   value.** Not exploitable today (`call_record` is always an internally-
+   generated `calls/call-NNNNN.json` path), but a boundary-hygiene gap given
+   the server-side render escapes the same value correctly. **Fixed** — the
+   fallback now builds its DOM via `createElement`/`createTextNode`/
+   `setAttribute` instead of string-concatenated `innerHTML`.
+8. **[low, Skeptic + Plan Critic] Captain's-log marker cap (500) was
+   stricter than this doc's own accepted-risk framing (~1000-entry rotation
+   tail).** **Fixed** — bumped `load_log(limit=...)` from 500 to 1000 to
+   actually match what was documented.
+9. **[low, Reality Checker] Debug-snapshot "self-cleans when toggled off"
+   was narrower than documented** — see known gap #6 above for the fix
+   applied and what remains true.
+10. **[low, Skeptic] A naive (non-tz-aware) `ended_ts` would raise
+    `TypeError` when compared against captain's-log's tz-aware timestamps**,
+    silently failing the whole report write. Currently latent (every live
+    call site produces tz-aware timestamps) but cheap to close structurally.
+    **Fixed** — `_parse_iso()` now normalizes a naive datetime to UTC rather
+    than leaving it to fail a comparison later.
+
+**What reviewers found no issue with**: no new server/listener/control
+surface was introduced (Reality Checker specifically tried to falsify this
+and couldn't); the `file://` lazy-detail fallback works as designed; test
+coverage for the sequential (non-parallel) path was solid going in.
+
+All fixes covered by new tests in `tests/test_loop_report.py` and
+`tests/test_agent_loop.py` (2026-07-08); full suite green except the same 8
+pre-existing macOS/fcntl-timing failures noted in the original build (verified
+unrelated, reproduce identically on pristine `main`). A second adversarial
+review pass was run after these fixes — see BACKLOG.md / commit history for
+that verdict.
