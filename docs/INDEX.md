@@ -24,12 +24,13 @@ BACKLOG, VISION, CLAUDE, README…) are living by definition and carry no frontm
 | How does an external substrate (OpenClaw/Hermes) call us? | `SUBSTRATE_INTEGRATION.md` |
 | Local validator model setup/results? | `LOCAL_VALIDATOR.md` |
 | Security / sandbox posture? | `SECURITY_MODEL.md` |
+| How do I monitor the host (disk/spend/orphans/heartbeat)? | `HOST_MONITORING.md` (runs `../scripts/host-check.sh`) |
 | End-to-end smoke commands? | `END_TO_END.md` |
 | Active refactor plan? | `REFACTOR_PLAN.md` (closes to history when done) |
 | Dumb-loop audit evidence? | `DUMB_LOOP_AUDIT.md` (closes to history when done) |
 | Adversarial-review verdicts on repo claims? | `VERDICT_INDEX.md` (full report in history) |
 | The memory decision (filesystem vs "real" memory)? | `history/2026-07-04-memory-decision-brief.md` (direction DECIDED 2026-07-07: module + bake-off — see GOAL_BRAIN Decisions; port = `src/memory_port.py`) |
-| The memory module (port/adapters/bridge/instrument)? | module docstrings are canonical: `src/memory_port.py` (contract), `src/memory_sqlite.py` (production store), `src/memory_jsonl.py` (reference adapter), `src/memory_bridge.py` (lessons ingest + worker slice), `src/memory_quality.py` (retrieval instrument); verdict pedigree in `history/2026-07-07-memory-bakeoff.md`; A/B records in `../output/experiments/` |
+| The memory module (port/adapters/bridge/instrument)? | module docstrings are canonical: `src/memory_port.py` (contract), `src/memory_sqlite.py` (production store), `src/memory_jsonl.py` (reference adapter), `src/memory_bridge.py` (lessons ingest + worker slice), `src/memory_quality.py` (retrieval instrument); verdict pedigree in `history/2026-07-07-memory-bakeoff.md`; §7 A/B verdict in `history/2026-07-08-worker-slice-ab.md` (raw rows/logs in `../output/experiments/`) |
 | Memory/knowledge design (input to the memory decision) | `MEMORY_ARCHITECTURE.md`, `KNOWLEDGE_CRYSTALLIZATION.md` (both dormant-design; several of their "missing" items have since shipped — see the brief §2) |
 | Intent resolution / "what does done mean"? | `INTENT_RESOLUTION_DESIGN.md` (partially shipped) |
 | Scope/constraint orchestration (Phase 65, PAUSED)? | `CONSTRAINT_ORCHESTRATION_DESIGN.md` + `_REVIEW` + `_AUDIT` |

@@ -61,6 +61,7 @@ TRIPPED=0
 # healthy cron run produces no output at all; FAIL lines always print.
 pass() { TRIPPED=$TRIPPED; [ "$QUIET" -eq 1 ] || printf 'PASS  %-10s %s\n' "$1" "$2"; }
 fail() { TRIPPED=1;        printf 'FAIL  %-10s %s\n' "$1" "$2"; }
+skip() { TRIPPED=$TRIPPED; [ "$QUIET" -eq 1 ] || printf 'SKIP  %-10s %s\n' "$1" "$2"; }
 
 # --- (1) disk + inodes -------------------------------------------------------
 # df the workspace fs itself (follows whichever fs the workspace lives on; on
@@ -162,7 +163,13 @@ check_heartbeat() {
     fi
     now=$(date +%s)
     age=$(( now - ts ))
-    if [ "$age" -gt "$HB_MAX_SEC" ]; then
+    # A beat >30 days old is a design state, not an incident — the heartbeat
+    # loop was deliberately removed on this host (2026-04, "off switches stay
+    # off"). A live loop that dies is caught in the 15min–30day window. Set
+    # MARO_HEARTBEAT_EXPECTED=1 to enforce staleness regardless.
+    if [ "$age" -gt 2592000 ] && [ "${MARO_HEARTBEAT_EXPECTED:-0}" != "1" ]; then
+        skip heartbeat "no active loop (last beat $((age / 86400))d ago; intentionally off — MARO_HEARTBEAT_EXPECTED=1 to enforce)"
+    elif [ "$age" -gt "$HB_MAX_SEC" ]; then
         fail heartbeat "last beat ${age}s ago (> ${HB_MAX_SEC}s); checked_at=${checked_at:-<none>}"
     else
         pass heartbeat "last beat ${age}s ago (< ${HB_MAX_SEC}s)"

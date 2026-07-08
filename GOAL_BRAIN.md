@@ -1069,8 +1069,20 @@ Sample: the 2026-05-13..17 window of `~/.maro/workspace/runs/` (478 dirs total;
   defects (offset sidecars in the crystallization dir → store
   schema_meta; random ids → deterministic sha1, ingest idempotent;
   offset keyed by basename → resolved path). Live module store rebuilt
-  clean: 414 lessons, re-ingest 0. **OPEN: the §7 A/B run itself** —
-  flag stays OFF until it happens.
+  clean: 414 lessons, re-ingest 0. **§7 A/B COMPLETE 2026-07-08** (16
+  clean runs pooled across 2 batches + patch-up; record:
+  `docs/history/2026-07-08-worker-slice-ab.md`): every measure
+  favors the slice or ties — closure 8/8 vs 7/8, blocked workers 0 vs 1,
+  median tokens-in −29% with review-loop exhaustions balanced 10v10.
+  **Recommendation: flip `memory.worker_slice` ON — flag stays OFF
+  awaiting Jeremy's call.** Same run exposed that ALL git hooks (incl.
+  the worker push guard) had been silently dead since the 2026-06-25
+  rename — stale absolute `core.hooksPath` pointed at the old
+  openclaw-orchestration path and git treats a missing hooks dir as "no
+  hooks" (an m3 benchmark worker pushed c8fe130 to main straight through
+  it). Fixed (hooksPath unset, source hook de-Poe'd, reinstalled) and
+  tripwired: `tests/test_git_guard.py` asserts installed+executable, no
+  stale hooksPath shadowing, source parity, and block/allow behavior.
 
 ## Threads (system-maintained — nothing leaves this list silently)
 
