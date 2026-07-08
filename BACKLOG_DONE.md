@@ -1535,3 +1535,29 @@ needs 10+ minutes is a goal the decomposer miscategorized).
 ### Semantic memory deduplication (2026-04-12)
 
 - [~] **Semantic memory deduplication** — SUBSTANTIALLY ADDRESSED. `record_lesson()` already does at-write-time near-dedup: exact-text match + word-overlap Jaccard ≥ 0.8 within most-recent 100 lessons. Unbounded growth prevented. Embedding-based similarity (true semantic) remains aspirational P3 — requires API call at every write, cost not justified given current lesson volume.
+
+## Memory retrieval tuning (evidence-driven, 2026-07-07)
+Full-corpus memory_quality run (1,652 items): sqlite-fts5 wins hit@1 (63.6% vs
+60.0%) and latency (3.2ms vs 15.6ms, jsonl scan is linear), but LOSES hit@5 to
+naive token-overlap (77.9% vs 86.7%) and MRR (0.68 vs 0.70). Suspects: FTS5
+query includes stopwords (_fts_query has no stopword filter, jsonl does),
+32-token query cap, OR-semantics dilution. Instrument to reproduce:
+`PYTHONPATH=src python3 -m memory_quality`. This is the BM25-sufficiency
+evidence base for the fastembed+sqlite-vec gate — tune BM25 first, re-measure.
+UPDATE 2026-07-08 (paraphrase lane added — self-retrieval queries were the
+lexical ranker's own scoring function, rigged): on 51 LLM-paraphrased queries
+sqlite-fts5 beats jsonl on EVERY metric (hit@1 9.8% vs 7.8%, hit@5 17.6% vs
+13.7%, MRR 0.128 vs 0.095) — the self-lane hit@5 "loss" was the artifact.
+Real finding: BOTH collapse on paraphrase (~15% hit@5). Caveat before
+reaching for embeddings: paraphrase queries deliberately avoid the item's
+wording (adversarial for lexical by construction); worker ticket text is
+milder. Let the worker-slice A/B decide whether ticket-text recall is good
+enough before opening the fastembed+sqlite-vec lane.
+SHIPPED 2026-07-08 (b51219d): AND-first retrieval in memory_sqlite.recall —
+exact-conjunction pass ranks above OR-fill. Self-lane hit@1 63.6%→72.5%,
+MRR 0.686→0.758, latency 3.2→0.97ms; paraphrase unchanged (falls back to
+OR). Stopword hypothesis REFUTED by measurement (~neutral; kept only for
+tokenizer parity with adapter-0). sqlite-fts5 now leads jsonl everywhere
+except self-lane hit@5 (81.0 vs 86.6). Embedding lane still gated: decision
+input is the worker-slice A/B on ticket-text queries, not the adversarial
+paraphrase floor.

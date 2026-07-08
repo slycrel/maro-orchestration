@@ -542,21 +542,3 @@ Titles deleted as obsolete (auditable; full history in git):
 ---
 
 Full history in [BACKLOG_DONE.md](BACKLOG_DONE.md).
-
-## Memory retrieval tuning (evidence-driven, 2026-07-07)
-Full-corpus memory_quality run (1,652 items): sqlite-fts5 wins hit@1 (63.6% vs
-60.0%) and latency (3.2ms vs 15.6ms, jsonl scan is linear), but LOSES hit@5 to
-naive token-overlap (77.9% vs 86.7%) and MRR (0.68 vs 0.70). Suspects: FTS5
-query includes stopwords (_fts_query has no stopword filter, jsonl does),
-32-token query cap, OR-semantics dilution. Instrument to reproduce:
-`PYTHONPATH=src python3 -m memory_quality`. This is the BM25-sufficiency
-evidence base for the fastembed+sqlite-vec gate — tune BM25 first, re-measure.
-UPDATE 2026-07-08 (paraphrase lane added — self-retrieval queries were the
-lexical ranker's own scoring function, rigged): on 51 LLM-paraphrased queries
-sqlite-fts5 beats jsonl on EVERY metric (hit@1 9.8% vs 7.8%, hit@5 17.6% vs
-13.7%, MRR 0.128 vs 0.095) — the self-lane hit@5 "loss" was the artifact.
-Real finding: BOTH collapse on paraphrase (~15% hit@5). Caveat before
-reaching for embeddings: paraphrase queries deliberately avoid the item's
-wording (adversarial for lexical by construction); worker ticket text is
-milder. Let the worker-slice A/B decide whether ticket-text recall is good
-enough before opening the fastembed+sqlite-vec lane.
