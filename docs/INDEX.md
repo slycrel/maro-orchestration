@@ -18,6 +18,7 @@ BACKLOG, VISION, CLAUDE, README…) are living by definition and carry no frontm
 | What are we deliberately NOT building? | `ARCHITECTURE_NON_GOALS.md` |
 | How do subsystems X work in detail? | `../skills/arch-*.md` (mandatory pre-reads per CLAUDE.md) |
 | Coding style / seam principles for this repo? | `CODING_NOTES.md`; project artifacts: `CONVENTIONS.md` |
+| What config flags exist, their defaults, why, and flip effects? | `DEFAULTS.md` (census-enforced by `tests/test_defaults_doc.py`) |
 | Where may workers write? (write fence) | `BOUNDED_WORKSPACE.md` |
 | What events go to the captain's log? | `CAPTAINS_LOG_EVENTS.md` |
 | How does the navigator decide? | `NAVIGATOR_SCHEMA.md`; memory slice: `RECALL_DESIGN.md` |

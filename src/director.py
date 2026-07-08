@@ -105,7 +105,7 @@ class DirectorResult:
     tokens_out: int = 0
     elapsed_ms: int = 0
     log_path: Optional[str] = None
-    worker_slice: bool = False  # A/B experiment: was memory.worker_slice active for this run?
+    worker_slice: bool = False  # was memory.worker_slice active for this run? (default-on since 2026-07-08)
 
     def summary(self) -> str:
         done = sum(1 for r in self.worker_results if r.status == "done")
@@ -414,8 +414,11 @@ def run_director(
     review_decisions: List[ReviewDecision] = []
     completed_context = ""
 
-    # A/B experiment: worker memory slice (Phase 1 / experiment gate, GOAL_BRAIN 2026-07-07)
-    worker_slice_enabled = config_get("memory.worker_slice", False)
+    # Worker memory slice — DEFAULT ON since 2026-07-08 (§7 A/B verdict, Jeremy's
+    # flip: 16 runs, every measure favored the slice or tied; record in
+    # docs/history/2026-07-08-worker-slice-ab.md). Set memory.worker_slice: false
+    # to disable; the off path stays byte-identical to pre-slice prompts.
+    worker_slice_enabled = config_get("memory.worker_slice", True)
     worker_slice_store = None
     worker_thread_scope = f"thread/{thread_id}" if thread_id else ""
     parent_goal_brain = ""

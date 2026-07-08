@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Memory bridge: ingest substrate into SqliteMemoryStore (Phase 1 experiment gate).
+"""Memory bridge: ingest substrate into SqliteMemoryStore (worker recall slice).
+
+Graduated from experiment to default-on 2026-07-08 (§7 A/B, 16 runs pooled:
+docs/history/2026-07-08-worker-slice-ab.md). memory.worker_slice: false disables.
 
 This module mirrors the lessons substrate (~/.maro/workspace/memory/lessons.jsonl)
 into a SqliteMemoryStore behind the memory_port protocol. The ingest is incremental

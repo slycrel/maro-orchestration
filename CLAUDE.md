@@ -50,7 +50,7 @@ exploration.
 | Adaptive execution | `docs/ADAPTIVE_EXECUTION_DESIGN.md` | Dormant design — not started |
 | Memory / graph / filesystem-vs-real-memory | `docs/history/2026-07-04-memory-decision-brief.md` (inputs: `docs/MEMORY_ARCHITECTURE.md`, `docs/KNOWLEDGE_CRYSTALLIZATION.md`) | Direction decided 2026-07-07: memory-as-module, 3rd-party bake-off behind `src/memory_port.py`; MILESTONES arc -1 |
 
-- GitHub: https://github.com/slycrel/maro
+- GitHub: https://github.com/slycrel/maro-orchestration (repo not renamed on GitHub; the framework is Maro)
 - Machine: Ubuntu headless, user `clawd`, `/home/clawd/claude/maro-orchestration/`
 - Owner: Jeremy Stone (`slycrel`) — 25+ years engineering, AI orchestration
 

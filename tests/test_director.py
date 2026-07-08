@@ -215,10 +215,27 @@ class TestRunDirector:
 # ---------------------------------------------------------------------------
 
 class TestWorkerSliceExperiment:
-    def test_flag_off_is_byte_identical(self, monkeypatch, tmp_path):
-        """Default config (flag unset/False): no injection, no worker_slice metadata."""
+    def test_default_is_on(self, monkeypatch, tmp_path):
+        """Unset config resolves the flag ON (Jeremy's flip, 2026-07-08 A/B verdict)."""
         _setup(monkeypatch, tmp_path)
+
+        result = run_director("investigate the recall slice", dry_run=True)
+        assert result.worker_slice is True
+
+    def test_flag_off_is_byte_identical(self, monkeypatch, tmp_path):
+        """Flag explicitly off: no injection, no worker_slice metadata."""
+        _setup(monkeypatch, tmp_path)
+        import config as _cfg_mod
         import director as _director_mod
+
+        _orig_get = _cfg_mod.get
+
+        def _patched_off(key, default=None):
+            if key == "memory.worker_slice":
+                return False
+            return _orig_get(key, default)
+
+        monkeypatch.setattr(_director_mod, "config_get", _patched_off)
 
         baseline = run_director("investigate the recall slice", dry_run=True)
         flagged_off_explicitly = run_director("investigate the recall slice", dry_run=True)

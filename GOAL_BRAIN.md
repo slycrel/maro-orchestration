@@ -1074,8 +1074,13 @@ Sample: the 2026-05-13..17 window of `~/.maro/workspace/runs/` (478 dirs total;
   `docs/history/2026-07-08-worker-slice-ab.md`): every measure
   favors the slice or ties — closure 8/8 vs 7/8, blocked workers 0 vs 1,
   median tokens-in −29% with review-loop exhaustions balanced 10v10.
-  **Recommendation: flip `memory.worker_slice` ON — flag stays OFF
-  awaiting Jeremy's call.** Same run exposed that ALL git hooks (incl.
+  **FLIPPED ON by Jeremy 2026-07-08 ("looks like we have a winner") —
+  now the hardcoded default (`director.py`: `config_get("memory.
+  worker_slice", True)`), so new installs get it too; off path stays
+  byte-identical via `memory.worker_slice: false`. Same session Jeremy
+  decreed a defaults registry: `docs/DEFAULTS.md` documents every config
+  key's default + reasoning + flip effect for clean-room discovery,
+  census-enforced by `tests/test_defaults_doc.py`.** Same run exposed that ALL git hooks (incl.
   the worker push guard) had been silently dead since the 2026-06-25
   rename — stale absolute `core.hooksPath` pointed at the old
   openclaw-orchestration path and git treats a missing hooks dir as "no

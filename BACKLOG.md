@@ -397,6 +397,20 @@ See `docs/CONSTRAINT_ORCHESTRATION_DESIGN.md` + `docs/CONSTRAINT_ORCHESTRATION_R
   survived: 22), but a gentler policy for long-gap catch-up (cap effective
   decay-days? amnesty pass?) is worth considering before the store matters.
 
+### Benchmark/eval missions need a read-only or scratch-dir fence
+
+- [ ] **A/B benchmark runs mutated the repo and each other (2026-07-08):**
+  the m3-host-monitoring §7 mission ("design a monitoring checklist") was
+  interpreted by workers as *write repo files* — later runs found earlier
+  runs' artifacts ("already scaffolded"), contaminating 4 of 16 cells with
+  cross-run carryover, and one worker committed+pushed to main (which is
+  how the dead-hooks bug surfaced — silver lining, but not a pattern).
+  Benchmark harnesses should either phrase missions read-only, point
+  goal-declared paths at per-run scratch dirs, or set the write fence to
+  reject repo writes for eval-tagged runs. Decide the seam when the next
+  eval batch is designed; record in the A/B record's m3 caveat
+  (`docs/history/2026-07-08-worker-slice-ab.md`).
+
 ### Standing test-goal menu (future ideas)
 
 - [ ] **Polymarket behavioral test** — "Analyze 400M+ Polymarket trades to find behavioral patterns among top wallets — what do winners do differently?" (from hrundel75 link)
