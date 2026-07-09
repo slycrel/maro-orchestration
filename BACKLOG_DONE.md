@@ -1609,3 +1609,22 @@ tokenizer parity with adapter-0). sqlite-fts5 now leads jsonl everywhere
 except self-lane hit@5 (81.0 vs 86.6). Embedding lane still gated: decision
 input is the worker-slice A/B on ticket-text queries, not the adversarial
 paraphrase floor.
+
+## Isolated worktree per sub-agent (SHIPPED 2026-07-09, concurrency phase 3b)
+
+- [x] **Isolated worktree per sub-agent** — from Alpha Batcher's breakdown of
+Claude Code's architecture (@alphabatcher). Each sub-agent gets its own git
+worktree so writes don't collide. Was priority 6/10 "revisit when parallel
+missions are actually running"; pulled forward by Jeremy's decree during the
+concurrency-hardening arc ("fully fix this issue, not just defer and half
+fix"). Shipped as `src/worktree.py` (provision / merge_back / cleanup /
+prune): parallel fan-out steps (thread-pool + DAG executors) each run in a
+private worktree on branch `maro/<loop_id>/<name>` when the fence dir is a
+git repo; merge-back serialized per-repo under file_lock; conflict never
+drops work (branch preserved + named in the blocked outcome). Cross-run:
+`loop.busy_policy: worktree` (opt-in, default `refuse`) runs a whole loop in
+a worktree of the busy project and merges at finalize; conflict → run
+`partial`. Non-git dirs unchanged (provision returns None). The rejected
+alternative — locking only (admission gate solo) — was a half fix: it
+serialized runs but left intra-run parallel steps sharing one checkout,
+which was the actual incident class. Commit 31f2844.

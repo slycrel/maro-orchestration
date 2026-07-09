@@ -566,6 +566,10 @@ def write_event(
             "elapsed_ms": elapsed_ms,
             "detail": detail[:200],
         }
+        # Deliberately UNLOCKED: every field is length-capped so the line is
+        # well under PIPE_BUF (single O_APPEND write, atomic on Linux), and
+        # file_lock._report_timeout calls this — locking here would recurse
+        # into the lock machinery while it's reporting a timeout.
         with path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(entry) + "\n")
         return True

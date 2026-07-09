@@ -322,28 +322,36 @@ class InterruptQueue:
         """Read and remove all pending (unapplied) interrupts.
 
         Returns list in arrival order. Marks them applied in the file.
-        Thread/process-safe via lock + rewrite.
+        Thread-safe via _LOCK; process-safe via the file lock — the old
+        threading-lock-only rewrite raced cross-process appends (an
+        interrupt landing between read and write_text was lost).
         """
         with _LOCK:
-            lines = self._read_lines()
-            if not lines:
+            if not self.peek():
                 return []
+            pending: List[Interrupt] = []
 
-            pending = []
-            updated = []
-            for line in lines:
-                try:
-                    d = json.loads(line)
-                    if not d.get("applied", False):
-                        d["applied"] = True
-                        pending.append(Interrupt.from_dict(d))
-                    updated.append(json.dumps(d))
-                except (json.JSONDecodeError, TypeError):
-                    updated.append(line)
+            def _mark_applied(old: str) -> str:
+                pending.clear()
+                updated = []
+                for line in old.splitlines():
+                    if not line.strip():
+                        continue
+                    try:
+                        d = json.loads(line)
+                        if not d.get("applied", False):
+                            d["applied"] = True
+                            pending.append(Interrupt.from_dict(d))
+                        updated.append(json.dumps(d))
+                    except (json.JSONDecodeError, TypeError):
+                        updated.append(line)
+                return ("\n".join(updated) + "\n") if updated else ""
 
-            if pending:
-                self.path.write_text("\n".join(updated) + "\n", encoding="utf-8")
-
+            try:
+                from file_lock import locked_rmw
+                locked_rmw(self.path, _mark_applied)
+            except OSError:
+                return []
             return pending
 
     def peek(self) -> List[Interrupt]:
@@ -362,21 +370,32 @@ class InterruptQueue:
     def clear(self) -> int:
         """Clear all pending interrupts. Returns count cleared."""
         with _LOCK:
-            lines = self._read_lines()
-            count = 0
-            updated = []
-            for line in lines:
-                try:
-                    d = json.loads(line)
-                    if not d.get("applied", False):
-                        d["applied"] = True
-                        count += 1
-                    updated.append(json.dumps(d))
-                except (json.JSONDecodeError, TypeError):
-                    updated.append(line)
-            if count:
-                self.path.write_text("\n".join(updated) + "\n", encoding="utf-8")
-            return count
+            if not self.peek():
+                return 0
+            counted = {"n": 0}
+
+            def _mark_applied(old: str) -> str:
+                counted["n"] = 0
+                updated = []
+                for line in old.splitlines():
+                    if not line.strip():
+                        continue
+                    try:
+                        d = json.loads(line)
+                        if not d.get("applied", False):
+                            d["applied"] = True
+                            counted["n"] += 1
+                        updated.append(json.dumps(d))
+                    except (json.JSONDecodeError, TypeError):
+                        updated.append(line)
+                return ("\n".join(updated) + "\n") if updated else ""
+
+            try:
+                from file_lock import locked_rmw
+                locked_rmw(self.path, _mark_applied)
+            except OSError:
+                return 0
+            return counted["n"]
 
     def is_empty(self) -> bool:
         """Return True if no pending interrupts."""
@@ -388,8 +407,8 @@ class InterruptQueue:
 
     def _append(self, intr: Interrupt) -> None:
         with _LOCK:
-            with self.path.open("a", encoding="utf-8") as f:
-                f.write(json.dumps(intr.to_dict()) + "\n")
+            from file_lock import locked_append
+            locked_append(self.path, json.dumps(intr.to_dict()))
 
     def _read_lines(self) -> List[str]:
         if not self.path.exists():

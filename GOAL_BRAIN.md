@@ -1113,6 +1113,30 @@ Sample: the 2026-05-13..17 window of `~/.maro/workspace/runs/` (478 dirs total;
   tests that caught it.
   Also filed: host-check.sh alert-channel wiring as a BACKLOG todo (cron
   without an alert channel notifies nobody — needs the notify decision first).
+- **2026-07-08/09** — Concurrency-hardening arc (Jeremy: "make things more
+  concurrent friendly"; plan approved with one binding edit: worktree
+  isolation ships **in this arc** — "not just defer and half fix this issue").
+  Three decisions with teeth, all shipped and suite-green:
+  (1) **file_lock reversed fail-open → fail-closed** (`FileLockTimeout` after a
+  bounded 30s wait; `MARO_FILELOCK_FAIL_OPEN=1` escape hatch) — corrupting a
+  learning ledger is permanent and silent, a loud bounded stall is neither;
+  safe because flock is kernel-released on holder death and no locked section
+  spans an LLM call (audited).
+  (2) **Same-project concurrent run is refused, not queued** (`refused_busy`
+  naming the holder; `--wait`/`loop.admission_wait_s` opt-in) — on an
+  unattended box a queued run invisibly pins memory and the model lane;
+  NEXT.md is already the queue. In-process sibling loops SHARE the slot
+  (mission fan-out is one cooperating run, not a collision). Never unlink
+  lockfiles (unlink/reacquire admits two holders).
+  (3) **Worktree isolation is unconditional for intra-run parallel steps**
+  (private worktree per fan-out step, serialized merge-back, conflict
+  preserves the branch and blocks the step — never silent loss) and **opt-in
+  for cross-run** (`loop.busy_policy: worktree`, default `refuse` until
+  burn-in shows autonomous merge-back behaves; conflict → run `partial`).
+  Explicit non-goals: model-lane contention (accepted 2026-07-02),
+  cross-worker constraint semantics (BACKLOG follow-up note added).
+  Commits: 97f2235 (P2), b923a98 (P3), 31f2844 (P3b); design compiled into
+  `skills/arch-platform.md` § Concurrency Model + `docs/CODING_NOTES.md`.
 
 ## Threads (system-maintained — nothing leaves this list silently)
 

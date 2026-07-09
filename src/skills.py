@@ -1529,10 +1529,12 @@ def _skill_tests_path() -> Path:
 
 def _save_skill_tests(tests: List[SkillTestCase]) -> None:
     """Append test cases to memory/skill-tests.jsonl."""
+    from file_lock import locked_write
     path = _skill_tests_path()
-    with path.open("a", encoding="utf-8") as f:
-        for t in tests:
-            f.write(json.dumps(t.to_dict()) + "\n")
+    with locked_write(path):
+        with path.open("a", encoding="utf-8") as f:
+            for t in tests:
+                f.write(json.dumps(t.to_dict()) + "\n")
 
 
 def _load_skill_tests(skill_id: str) -> List[SkillTestCase]:

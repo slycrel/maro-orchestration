@@ -352,10 +352,8 @@ def _suggestions_path() -> Path:
 
 def _save_inspection_report(report: InspectionReport) -> None:
     """Append inspection report to inspection-log.jsonl."""
-    p = _inspection_log_path()
-    p.parent.mkdir(parents=True, exist_ok=True)
-    with p.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(report.to_dict()) + "\n")
+    from file_lock import locked_append
+    locked_append(_inspection_log_path(), json.dumps(report.to_dict()))
 
 
 def _save_inspection_suggestions(suggestions: List[str]) -> None:
@@ -366,22 +364,28 @@ def _save_inspection_suggestions(suggestions: List[str]) -> None:
     if not suggestions:
         return
     p = _suggestions_path()
-    p.parent.mkdir(parents=True, exist_ok=True)
     now = datetime.now(timezone.utc).isoformat()
-    with p.open("a", encoding="utf-8") as f:
-        for i, suggestion_text in enumerate(suggestions):
-            entry = {
-                "suggestion_id": f"insp-{uuid.uuid4().hex[:6]}-{i:02d}",
-                "category": "inspection_finding",
-                "target": "all",
-                "suggestion": suggestion_text,
-                "failure_pattern": "inspector cross-session analysis",
-                "confidence": 0.7,
-                "outcomes_analyzed": 0,
-                "generated_at": now,
-                "applied": False,
-            }
-            f.write(json.dumps(entry) + "\n")
+    entries = []
+    for i, suggestion_text in enumerate(suggestions):
+        entries.append({
+            "suggestion_id": f"insp-{uuid.uuid4().hex[:6]}-{i:02d}",
+            "category": "inspection_finding",
+            "target": "all",
+            "suggestion": suggestion_text,
+            "failure_pattern": "inspector cross-session analysis",
+            "confidence": 0.7,
+            "outcomes_analyzed": 0,
+            "generated_at": now,
+            "applied": False,
+        })
+    # One locked append for the whole batch — suggestions.jsonl is shared
+    # with the evolver, and interleaving with its writes tore lines.
+    from file_lock import locked_write
+    with locked_write(p):
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with p.open("a", encoding="utf-8") as f:
+            for entry in entries:
+                f.write(json.dumps(entry) + "\n")
 
 
 def get_latest_inspection() -> Optional[InspectionReport]:

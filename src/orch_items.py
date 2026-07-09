@@ -647,13 +647,17 @@ def list_blocked_projects() -> List[ProjectStatus]:
 
 
 def append_section_lines(path: Path, heading: str, lines: Iterable[str]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if not path.exists():
-        path.write_text(heading + "\n\n", encoding="utf-8")
+    # Multi-line block append > PIPE_BUF can interleave with concurrent
+    # loops on the same project — hold the file lock for seed + append.
+    from file_lock import locked_write
     stamp = now_utc_iso()
     payload = ["", f"## {stamp}", *[f"- {ln}" for ln in lines]]
-    with path.open("a", encoding="utf-8") as f:
-        f.write("\n".join(payload) + "\n")
+    with locked_write(path):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if not path.exists():
+            path.write_text(heading + "\n\n", encoding="utf-8")
+        with path.open("a", encoding="utf-8") as f:
+            f.write("\n".join(payload) + "\n")
 
 
 def append_decision(slug: str, lines: Iterable[str]) -> None:

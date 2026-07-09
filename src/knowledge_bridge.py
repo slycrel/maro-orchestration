@@ -222,7 +222,8 @@ def upsert_knowledge_from_candidate(
                         lines.append(json.dumps(d, sort_keys=True))
                     except (json.JSONDecodeError, TypeError):
                         lines.append(line)
-            nodes_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            from file_lock import atomic_write
+            atomic_write(nodes_path, "\n".join(lines) + "\n")
 
         # Update the existing object for return
         existing.confidence = new_confidence

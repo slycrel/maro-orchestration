@@ -105,9 +105,12 @@ def load_rules(active_only: bool = True) -> List[Rule]:
 def save_rule(rule: Rule) -> None:
     """Append or update a rule in rules.jsonl."""
     path = _rules_path()
-    lines: List[dict] = []
-    if path.exists():
-        for line in path.read_text(encoding="utf-8").splitlines():
+
+    def _upsert(old: str) -> str:
+        # Read + replace INSIDE the lock — the old shape read before
+        # acquiring, so concurrent saves lost each other's rules.
+        lines: List[dict] = []
+        for line in old.splitlines():
             line = line.strip()
             if not line:
                 continue
@@ -118,19 +121,15 @@ def save_rule(rule: Rule) -> None:
                 lines.append(d)
             except Exception:
                 continue
-    lines.append(rule.__dict__)
+        lines.append(rule.__dict__)
+        return "\n".join(json.dumps(e) for e in lines) + "\n"
+
     try:
-        from file_lock import locked_write
-        with locked_write(path):
-            path.write_text(
-                "\n".join(json.dumps(e) for e in lines) + "\n",
-                encoding="utf-8",
-            )
+        from file_lock import locked_rmw
+        locked_rmw(path, _upsert)
     except ImportError:
-        path.write_text(
-            "\n".join(json.dumps(e) for e in lines) + "\n",
-            encoding="utf-8",
-        )
+        path.write_text(_upsert(path.read_text(encoding="utf-8") if path.exists() else ""),
+                        encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------

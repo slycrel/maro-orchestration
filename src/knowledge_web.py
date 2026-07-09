@@ -277,9 +277,8 @@ def record_tiered_lesson(
 
 
 def _append_tiered_lesson(tl: TieredLesson, *, tier: str) -> None:
-    path = _tiered_lessons_path(tier)
-    with open(path, "a", encoding="utf-8") as f:
-        f.write(json.dumps(asdict(tl)) + "\n")
+    from file_lock import locked_append
+    locked_append(_tiered_lessons_path(tier), json.dumps(asdict(tl)))
 
 
 def _reinforce_tiered_lesson(tl: TieredLesson, *, tier: str) -> TieredLesson:
@@ -298,12 +297,12 @@ def _reinforce_tiered_lesson(tl: TieredLesson, *, tier: str) -> TieredLesson:
     # F5: multi-session confidence promotion
     if tl.sessions_validated >= 3:
         tl.confidence = max(tl.confidence, _CONFIDENCE_MULTI_SESSION)
-    # Reload all lessons RAW (stored scores, no limit) and replace the mutated
-    # one. A non-raw load here would persist decay-derived scores for every
-    # bystander lesson — compounding decay on each write.
-    all_lessons = load_tiered_lessons(tier=tier, min_score=0.0, limit=None, raw=True)
-    updated = [tl if l.lesson_id == tl.lesson_id else l for l in all_lessons]
-    _rewrite_tiered_lessons(tier, lessons=updated)
+    # Replace the mutated lesson under the lock (raw stored scores for all
+    # bystanders — a non-raw load would persist decay, compounding on each
+    # write; an unlocked load would drop concurrent updates).
+    _mutate_tiered_lessons(
+        tier, lambda all_lessons: [tl if l.lesson_id == tl.lesson_id else l for l in all_lessons],
+    )
     return _post_reinforce_hooks(tl, tier=tier)
 
 
@@ -408,6 +407,10 @@ def _rewrite_tiered_lessons(tier: str, lessons: Optional[List[TieredLesson]] = N
 
     When no lesson list is supplied, reloads RAW and unlimited — persisting
     decay-derived scores or a truncated load would corrupt the store.
+
+    Passing an explicit ``lessons`` list is only safe if that list was built
+    INSIDE this file's lock — a list from an unlocked read silently drops
+    concurrent writers' updates. Mutations should use _mutate_tiered_lessons.
     """
     path = _tiered_lessons_path(tier)
     from file_lock import locked_write, atomic_write
@@ -417,6 +420,21 @@ def _rewrite_tiered_lessons(tier: str, lessons: Optional[List[TieredLesson]] = N
         # and were silently dropped).
         if lessons is None:
             lessons = load_tiered_lessons(tier=tier, min_score=0.0, limit=None, raw=True)
+        atomic_write(path, "".join(json.dumps(asdict(tl)) + "\n" for tl in lessons))
+
+
+def _mutate_tiered_lessons(tier: str, mutate) -> None:
+    """Read-modify-write the tier's store safely: reload RAW + unlimited
+    INSIDE the lock, apply ``mutate(lessons) -> lessons``, write while still
+    holding it. This is the only safe shape for lesson mutations — callers
+    that loaded a list unlocked and passed it to _rewrite_tiered_lessons
+    were losing concurrent reinforcements/promotions.
+    """
+    path = _tiered_lessons_path(tier)
+    from file_lock import locked_write, atomic_write
+    with locked_write(path):
+        lessons = load_tiered_lessons(tier=tier, min_score=0.0, limit=None, raw=True)
+        lessons = mutate(lessons)
         atomic_write(path, "".join(json.dumps(asdict(tl)) + "\n" for tl in lessons))
 
 
@@ -517,13 +535,15 @@ def search_graveyard(
 
 def forget_lesson(lesson_id: str, tier: str = MemoryTier.MEDIUM) -> bool:
     """Permanently remove a lesson from a tier. Returns True if found and removed."""
-    lessons = load_tiered_lessons(tier=tier, min_score=0.0, limit=None, raw=True)
-    before = len(lessons)
-    lessons = [l for l in lessons if l.lesson_id != lesson_id]
-    if len(lessons) == before:
-        return False
-    _rewrite_tiered_lessons(tier=tier, lessons=lessons)
-    return True
+    removed = {"hit": False}
+
+    def _drop(lessons: List[TieredLesson]) -> List[TieredLesson]:
+        kept = [l for l in lessons if l.lesson_id != lesson_id]
+        removed["hit"] = len(kept) != len(lessons)
+        return kept
+
+    _mutate_tiered_lessons(tier, _drop)
+    return removed["hit"]
 
 
 def promote_lesson(lesson_id: str) -> bool:
@@ -540,13 +560,21 @@ def promote_lesson(lesson_id: str) -> bool:
         return False
     if target.score < PROMOTE_MIN_SCORE or target.sessions_validated < PROMOTE_MIN_SESSIONS:
         return False
-    # ...but the record that moves tiers is the stored (raw) one.
-    raw_lessons = load_tiered_lessons(tier=MemoryTier.MEDIUM, min_score=0.0, limit=None, raw=True)
-    target = next((l for l in raw_lessons if l.lesson_id == lesson_id), None)
-    if not target:
+    # ...but the record that moves tiers is the stored (raw) one — popped
+    # from MEDIUM under the lock so concurrent updates aren't dropped.
+    popped: Dict[str, TieredLesson] = {}
+
+    def _pop(lessons: List[TieredLesson]) -> List[TieredLesson]:
+        t = next((l for l in lessons if l.lesson_id == lesson_id), None)
+        if t is None:
+            return lessons
+        popped["t"] = t
+        return [l for l in lessons if l.lesson_id != lesson_id]
+
+    _mutate_tiered_lessons(MemoryTier.MEDIUM, _pop)
+    target = popped.get("t")
+    if target is None:
         return False
-    remaining = [l for l in raw_lessons if l.lesson_id != lesson_id]
-    _rewrite_tiered_lessons(tier=MemoryTier.MEDIUM, lessons=remaining)
     target.tier = MemoryTier.LONG
     _append_tiered_lesson(target, tier=MemoryTier.LONG)
 
@@ -625,13 +653,14 @@ def run_decay_cycle(
         for lid in promoted_ids:
             promote_lesson(lid)
 
-        # GC: reload raw AFTER promotions so the rewrite reflects them,
-        # then drop the GC'd ids. Stored scores stay untouched.
+        # GC: drop the GC'd ids under the lock (reload happens inside, so
+        # the rewrite reflects the promotions above and any concurrent
+        # writers). Stored scores stay untouched.
         if gc_ids:
             gc_set = set(gc_ids)
-            raw_lessons = load_tiered_lessons(tier=tier, min_score=0.0, limit=None, raw=True)
-            remaining = [l for l in raw_lessons if l.lesson_id not in gc_set]
-            _rewrite_tiered_lessons(tier=tier, lessons=remaining)
+            _mutate_tiered_lessons(
+                tier, lambda lessons: [l for l in lessons if l.lesson_id not in gc_set],
+            )
 
     return {"decayed": decayed, "promoted": len(promoted_ids), "gc": len(gc_ids)}
 
@@ -951,15 +980,24 @@ def _increment_times_applied(
     the canon-candidate check (task_type diversity gate).
     """
     for lid, tier in lesson_ids:
-        lessons = load_tiered_lessons(tier=tier, min_score=0.0)
-        target = next((l for l in lessons if l.lesson_id == lid), None)
-        if not target:
+        # Mutate under the lock, raw + unlimited — the old shape here loaded
+        # non-raw with the default limit=50, so each rewrite persisted
+        # decay-derived scores AND truncated the store to 50 lessons.
+        hit = {"found": False}
+
+        def _bump(lessons: List[TieredLesson]) -> List[TieredLesson]:
+            target = next((l for l in lessons if l.lesson_id == lid), None)
+            if target is not None:
+                target.times_applied += 1
+                hit["found"] = True
+            return lessons
+
+        _mutate_tiered_lessons(tier, _bump)
+        if not hit["found"]:
             continue
-        target.times_applied += 1
         # Track task_type diversity in short-term store (session-level aggregator)
         # Persisted canon-tracking uses a separate canon_stats.jsonl
         _record_canon_hit(lid, tier=tier, task_type=task_type)
-        _rewrite_tiered_lessons(tier=tier, lessons=lessons)
 
 
 # ---------------------------------------------------------------------------

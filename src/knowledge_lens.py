@@ -158,26 +158,29 @@ def load_hypotheses(domain: Optional[str] = None) -> List[Hypothesis]:
 
 
 def _rewrite_rules(rules: List[StandingRule]) -> None:
+    # Callers must have built ``rules`` under locked_write(_rules_path()) —
+    # observe/contradict/refight all hold it across their read→rewrite.
     try:
-        from file_lock import locked_write
+        from file_lock import locked_write, atomic_write
         path = _rules_path()
         with locked_write(path):
-            path.write_text(
+            atomic_write(
+                path,
                 "\n".join(json.dumps(r.to_dict()) for r in rules) + ("\n" if rules else ""),
-                encoding="utf-8",
             )
     except Exception:
         pass
 
 
 def _rewrite_hypotheses(hyps: List[Hypothesis]) -> None:
+    # Same contract as _rewrite_rules: the list must come from an in-lock read.
     try:
-        from file_lock import locked_write
+        from file_lock import locked_write, atomic_write
         path = _hypotheses_path()
         with locked_write(path):
-            path.write_text(
+            atomic_write(
+                path,
                 "\n".join(json.dumps(h.to_dict()) for h in hyps) + ("\n" if hyps else ""),
-                encoding="utf-8",
             )
     except Exception:
         pass
@@ -204,6 +207,17 @@ def observe_pattern(lesson: str, domain: str, *, source_lesson_id: str = "") -> 
 
     Returns the new StandingRule if promotion occurred, else None.
     """
+    # Hold both stores' locks across the whole read→decide→rewrite section:
+    # the loads at the top feed the rewrites below, and an unlocked read
+    # loses concurrent confirmations (locking only the write was a lost-
+    # update bug). Lock order (rules, then hypotheses) is shared with
+    # contradict_pattern — keep it consistent. No LLM calls inside.
+    from file_lock import locked_write
+    with locked_write(_rules_path()), locked_write(_hypotheses_path()):
+        return _observe_pattern_locked(lesson, domain, source_lesson_id=source_lesson_id)
+
+
+def _observe_pattern_locked(lesson: str, domain: str, *, source_lesson_id: str = "") -> Optional[StandingRule]:
     now = _current_date()
     lesson_lower = lesson.lower().strip()
 
@@ -321,8 +335,8 @@ def observe_pattern(lesson: str, domain: str, *, source_lesson_id: str = "") -> 
             promoted_at=now,
             last_verified=now,
         )
-        with open(_rules_path(), "a", encoding="utf-8") as f:
-            f.write(json.dumps(rule.to_dict()) + "\n")
+        from file_lock import locked_append
+        locked_append(_rules_path(), json.dumps(rule.to_dict()))
         # Remove from hypotheses
         hyps = [h for h in hyps if h.hyp_id != target_hyp.hyp_id]
         _rewrite_hypotheses(hyps)
@@ -352,6 +366,13 @@ def contradict_pattern(lesson: str, domain: str) -> bool:
     A standing rule with contradictions >= 1 should be flagged for review.
     Returns True if something was found and updated.
     """
+    # Same lock discipline (and lock order) as observe_pattern — see there.
+    from file_lock import locked_write
+    with locked_write(_rules_path()), locked_write(_hypotheses_path()):
+        return _contradict_pattern_locked(lesson, domain)
+
+
+def _contradict_pattern_locked(lesson: str, domain: str) -> bool:
     lesson_lower = lesson.lower().strip()
 
     # Check standing rules first
@@ -627,39 +648,44 @@ Output ONLY valid JSON:
     if action == "revise" and not new_text:
         return None
 
-    rules = load_standing_rules()
-    target = next((r for r in rules if r.rule_id == rule.rule_id), None)
-    if target is None:
-        return None
+    # LLM decision happened above (outside any lock); apply it under both
+    # stores' locks with a fresh in-lock reload — same discipline and lock
+    # order as observe_pattern.
+    from file_lock import locked_write
+    with locked_write(_rules_path()), locked_write(_hypotheses_path()):
+        rules = load_standing_rules()
+        target = next((r for r in rules if r.rule_id == rule.rule_id), None)
+        if target is None:
+            return None
 
-    if action == "keep":
-        target.contradictions = 0  # battle re-fought, rule won; trust restored
-        target.last_verified = _current_date()
-        _rewrite_rules(rules)
-    elif action == "revise":
-        target.rule = new_text
-        target.confirmations = 0   # revised text must re-earn its record
-        target.contradictions = 0
-        target.last_verified = _current_date()  # derived against latest evidence
-        _rewrite_rules(rules)
-    else:  # retire → demote to hypothesis: data preserved, trust reset
-        rules = [r for r in rules if r.rule_id != target.rule_id]
-        _rewrite_rules(rules)
-        hyps = load_hypotheses()
-        now = datetime.now(timezone.utc).isoformat()
-        hyps.append(Hypothesis(
-            hyp_id=f"hyp-{target.rule_id}",
-            lesson=target.rule,
-            domain=target.domain,
-            confirmations=0,
-            contradictions=0,
-            source_lesson_ids=(
-                [target.source_lesson_id] if target.source_lesson_id else []
-            ),
-            first_seen=now,
-            last_seen=now,
-        ))
-        _rewrite_hypotheses(hyps)
+        if action == "keep":
+            target.contradictions = 0  # battle re-fought, rule won; trust restored
+            target.last_verified = _current_date()
+            _rewrite_rules(rules)
+        elif action == "revise":
+            target.rule = new_text
+            target.confirmations = 0   # revised text must re-earn its record
+            target.contradictions = 0
+            target.last_verified = _current_date()  # derived against latest evidence
+            _rewrite_rules(rules)
+        else:  # retire → demote to hypothesis: data preserved, trust reset
+            rules = [r for r in rules if r.rule_id != target.rule_id]
+            _rewrite_rules(rules)
+            hyps = load_hypotheses()
+            now = datetime.now(timezone.utc).isoformat()
+            hyps.append(Hypothesis(
+                hyp_id=f"hyp-{target.rule_id}",
+                lesson=target.rule,
+                domain=target.domain,
+                confirmations=0,
+                contradictions=0,
+                source_lesson_ids=(
+                    [target.source_lesson_id] if target.source_lesson_id else []
+                ),
+                first_seen=now,
+                last_seen=now,
+            ))
+            _rewrite_hypotheses(hyps)
 
     log.info("standing rule re-fought: %s -> %s", rule.rule_id, action)
     if verbose:
@@ -920,9 +946,8 @@ def record_verification(
         outcome_id=outcome_id,
         notes=notes[:200] if notes else "",
     )
-    path = _verification_outcomes_path()
-    with open(path, "a", encoding="utf-8") as f:
-        f.write(json.dumps(asdict(vo)) + "\n")
+    from file_lock import locked_append
+    locked_append(_verification_outcomes_path(), json.dumps(asdict(vo)))
     return vo
 
 

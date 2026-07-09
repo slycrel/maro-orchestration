@@ -102,6 +102,25 @@ write fence — shipped arc") and `docs/BOUNDED_WORKSPACE.md`.
   transcripts ride `resp.tool_events`). Port subprocess adapter first, others
   incrementally. Size: ~half day per adapter.
 
+### 15. Low-risk file_lock consistency conversions (2026-07-09, concurrency-arc audit leftovers)
+
+The concurrency-hardening arc converted every HIGH/MEDIUM unsafe writer to
+`file_lock` helpers. The audit's LOW tier remains — sites that are unlocked
+but where lines are small (single O_APPEND write is atomic on Linux) or the
+writer is effectively single-threaded today. Convert opportunistically when
+touching the module; each is a one-line `locked_append`/`atomic_write` swap:
+
+- [ ] Small single-line appends: `skills.py` increment_use log,
+  `skill_loader.py` export, `attribution.py`, `constraint.py`, `director.py`,
+  `sprint_contract.py`, `graduation.py`, `knowledge_web.py:619` + `:987`,
+  `persona.py`, `boot_protocol.py`, `mission.py`, `heartbeat.py` small appends
+- [ ] Seed-once `write_text` initializers (first-write-wins races are benign
+  but `atomic_write` is free)
+
+Not urgent: none of these have a demonstrated corruption class; the arc's
+e2e stress suite (`tests/test_concurrency_e2e.py`) covers the helpers they'd
+convert to.
+
 ---
 
 ## Vision / Deferred
@@ -294,7 +313,7 @@ See `docs/CONSTRAINT_ORCHESTRATION_DESIGN.md` + `docs/CONSTRAINT_ORCHESTRATION_R
 - [ ] **Scope: verification sibling.** Design addresses the *planning* phase. Biggest defect in the system is in the *verification* phase — slycrel-go "passed" because nobody ran a browser. Constraint-setting alone won't close this gap. Needs sibling design for ground-truth verification (real browsers, real endpoints, real test execution — not LLM judgment).
 - [ ] **Completion-standard coexistence.** Design says "completion standard is subsumed." Migration plan needed: does completion-standard still run during rollout? If both, do they contradict?
 - [ ] **continuation_depth interaction.** Phase 64 restart carries ancestry context across boundaries. Constraints/premises must also be preserved (or explicitly refreshed) across restart. Design is silent.
-- [ ] **Concurrent-loop interaction.** `team:` and DAG executor run parallel workers. Do they share the constraint set? Who catches cross-worker conflicts that individually-satisfy-but-together-violate? Unspecified.
+- [ ] **Concurrent-loop interaction.** `team:` and DAG executor run parallel workers. Do they share the constraint set? Who catches cross-worker conflicts that individually-satisfy-but-together-violate? Unspecified. *2026-07-09 note: the concurrency-hardening arc (fail-closed file_lock, admission gate, worktree isolation) made parallel workers **file/git-safe** — this item is the remaining **semantic** layer (shared constraint set, cross-worker conflict detection) and is explicitly a follow-up, not covered by that arc.*
 
 ### Verifier synthesis as a deliverable (scope's other half)
 
@@ -342,10 +361,6 @@ See `docs/CONSTRAINT_ORCHESTRATION_DESIGN.md` + `docs/CONSTRAINT_ORCHESTRATION_R
 ### Phase 38 subpackage move
 
 - [ ] **Phase 38 subpackage move** — src/ is flat, now at ~130 modules (was 49 when this was written). Successor plan: `docs/REFACTOR_PLAN.md` Tier 4 is this same move, sized against current reality. Deferred (33+ imports per group), revisit when it causes real problems.
-
-### Isolated worktree per sub-agent
-
-- [ ] **Isolated worktree per sub-agent** — from Alpha Batcher's breakdown of Claude Code's architecture (@alphabatcher). Each sub-agent gets its own git worktree so writes don't collide. Relevant to concurrent run safety (Phase 62 project isolation). Current `is_project_running()` + per-project lock file is a simpler version; worktree isolation is stronger. **Priority 6/10 — revisit when parallel missions are actually running.** Source: @alphabatcher.
 
 ### Agentic verifier for large artifacts
 

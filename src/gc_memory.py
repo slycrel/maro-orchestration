@@ -103,6 +103,7 @@ def _gc_outcomes(
 
     cutoff = datetime.now(timezone.utc) - timedelta(days=retain_days)
     keep = []
+    dropped = []
     total = 0
 
     try:
@@ -118,7 +119,8 @@ def _gc_outcomes(
                     ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
                     if ts >= cutoff:
                         keep.append(line)
-                    # else: drop (too old)
+                    else:
+                        dropped.append(line)  # too old
                 else:
                     keep.append(line)  # no timestamp → keep conservatively
             except Exception:
@@ -130,8 +132,21 @@ def _gc_outcomes(
     freed = 0
 
     if removed > 0 and not dry_run:
+        # Merge under the lock: drop exactly the lines we judged too old.
+        # Appends landing during the scan aren't in drop_set → they survive
+        # (record_outcome runs concurrently via locked_append).
+        from file_lock import locked_rmw
+        drop_set = set(dropped)
         original_size = path.stat().st_size
-        path.write_text("\n".join(keep) + ("\n" if keep else ""), encoding="utf-8")
+
+        def _trim(old: str) -> str:
+            kept = [l for l in old.splitlines() if l.strip() and l.strip() not in drop_set]
+            return "\n".join(kept) + ("\n" if kept else "")
+
+        try:
+            locked_rmw(path, _trim)
+        except OSError:
+            return total, 0, 0
         freed = original_size - path.stat().st_size
 
     return total, removed, freed
@@ -161,8 +176,19 @@ def _gc_audit(
     freed = 0
 
     if not dry_run:
+        # Recompute the tail-trim under the lock so appends landing during
+        # the scan are counted, not clobbered.
+        from file_lock import locked_rmw
         original_size = path.stat().st_size
-        path.write_text("\n".join(keep) + "\n", encoding="utf-8")
+
+        def _trim(old: str) -> str:
+            cur = [l.strip() for l in old.splitlines() if l.strip()]
+            return "\n".join(cur[-retain_entries:]) + ("\n" if cur else "")
+
+        try:
+            locked_rmw(path, _trim)
+        except OSError:
+            return total, 0, 0
         freed = original_size - path.stat().st_size
 
     return total, removed, freed
@@ -171,7 +197,8 @@ def _gc_audit(
 def _gc_tiered_lessons(*, dry_run: bool = True) -> int:
     """Remove tiered lessons below GC_THRESHOLD. Returns count removed."""
     try:
-        from memory import GC_THRESHOLD, MemoryTier, load_tiered_lessons, _rewrite_tiered_lessons
+        from memory import GC_THRESHOLD, MemoryTier, load_tiered_lessons
+        from knowledge_web import _mutate_tiered_lessons
     except ImportError:
         return 0
 
@@ -181,11 +208,16 @@ def _gc_tiered_lessons(*, dry_run: bool = True) -> int:
         path = _tiered_lessons_path(tier)
         if not path.exists():
             continue
-        all_lessons = load_tiered_lessons(tier, min_score=0.0)
-        above_threshold = [l for l in all_lessons if l.score >= GC_THRESHOLD]
-        removed = len(all_lessons) - len(above_threshold)
+        # Judge on effective (decay-derived) scores, unlimited — the old
+        # shape used the default limit=50 and passed the effective-score
+        # list to the rewrite, truncating the store AND persisting decay.
+        all_lessons = load_tiered_lessons(tier, min_score=0.0, limit=None)
+        gc_ids = {l.lesson_id for l in all_lessons if l.score < GC_THRESHOLD}
+        removed = len(gc_ids)
         if removed > 0 and not dry_run:
-            _rewrite_tiered_lessons(tier, above_threshold)
+            _mutate_tiered_lessons(
+                tier, lambda lessons: [l for l in lessons if l.lesson_id not in gc_ids],
+            )
             # Captain's log: lesson decay
             try:
                 from captains_log import log_event, LESSON_DECAYED
@@ -193,7 +225,7 @@ def _gc_tiered_lessons(*, dry_run: bool = True) -> int:
                     event_type=LESSON_DECAYED,
                     subject=f"{tier} tier",
                     summary=f"GC removed {removed} lessons below threshold from {tier} tier.",
-                    context={"tier": tier, "removed": removed, "remaining": len(above_threshold)},
+                    context={"tier": tier, "removed": removed, "remaining": len(all_lessons) - removed},
                 )
             except Exception:
                 pass

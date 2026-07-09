@@ -119,8 +119,8 @@ class JSONLBackend(MemoryBackend):
     def append(self, collection: str, record: Dict[str, Any]) -> None:
         path = self._path(collection)
         try:
-            with open(path, "a", encoding="utf-8") as f:
-                f.write(json.dumps(record) + "\n")
+            from file_lock import locked_append
+            locked_append(path, json.dumps(record))
         except OSError as exc:
             log.warning("JSONLBackend.append(%s): %s", collection, exc)
 
@@ -143,22 +143,25 @@ class JSONLBackend(MemoryBackend):
         return records
 
     def rewrite(self, collection: str, records: List[Dict[str, Any]]) -> None:
+        # Lock + atomic replace: the bare tmp+replace was atomic for readers
+        # but still lost concurrent appends landing between the caller's
+        # read_all and this replace. Callers doing read→transform→rewrite
+        # should hold locked_write(path) across both (reentrant here).
         path = self._path(collection)
-        tmp = path.with_suffix(".jsonl.tmp")
         try:
-            with open(tmp, "w", encoding="utf-8") as f:
-                for r in records:
-                    f.write(json.dumps(r) + "\n")
-            tmp.replace(path)
+            from file_lock import locked_write, atomic_write
+            with locked_write(path):
+                atomic_write(path, "".join(json.dumps(r) + "\n" for r in records))
         except OSError as exc:
             log.warning("JSONLBackend.rewrite(%s): %s", collection, exc)
-            tmp.unlink(missing_ok=True)
 
     def append_text(self, collection: str, text: str) -> None:
         path = self._text_path(collection)
         try:
-            with open(path, "a", encoding="utf-8") as f:
-                f.write(text)
+            from file_lock import locked_write
+            with locked_write(path):
+                with open(path, "a", encoding="utf-8") as f:
+                    f.write(text)
         except OSError as exc:
             log.warning("JSONLBackend.append_text(%s): %s", collection, exc)
 

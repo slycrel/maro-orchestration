@@ -84,6 +84,27 @@ it must be in the code itself or in one short doc you pointed at.
 - **A TODO with no owner or date** — will outlive its author's memory.
   Either fix it now or turn it into a backlog entry.
 
+## Concurrency rules (2026-07-09 hardening arc)
+
+Multiple processes and threads write this workspace concurrently. Three
+rules keep that safe — see `skills/arch-platform.md` § Concurrency Model
+for the full design:
+
+1. **Shared workspace files are written only through `file_lock` helpers**
+   (`locked_write` / `locked_append` / `locked_rmw` / `atomic_write`).
+   Never bare `write_text` or read-then-rewrite on anything under
+   `workspace_root()`. Compute slow decisions (LLM/subprocess) *outside*
+   the lock; merge the result under it.
+2. **Run-scoped state is a ContextVar, and thread fan-out propagates it**:
+   every `pool.submit` / `Thread(...)` under an active run goes through
+   `contextvars.copy_context().run`. A plain module global under
+   concurrency is a bug you haven't hit yet.
+3. **Long-lived daemons hold a pidfile** (`proc_lock.hold_pidfile`) and
+   exclusive per-project work claims the admission slot
+   (`interrupt.acquire_project_slot`) — never check-then-write liveness
+   files (TOCTOU); the flock IS the mutex, and never `unlink` a lockfile
+   (unlink/reacquire lets two holders in).
+
 ## What NOT to do under these principles
 
 - **Don't pre-extract abstractions for hypothetical future uses.** Three

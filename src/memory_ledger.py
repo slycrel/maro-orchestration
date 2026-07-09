@@ -807,7 +807,6 @@ def compress_old_outcomes(
         return None
 
     to_compress_lines = raw_lines[:compress_count]
-    surviving_lines = raw_lines[compress_count:]
 
     # Parse outcomes for metadata
     parsed: List[Dict[str, Any]] = []
@@ -871,11 +870,21 @@ def compress_old_outcomes(
         newest_at=newest_at,
     )
 
-    # Persist: save compressed batch, rewrite outcomes.jsonl without old entries
+    # Persist: save compressed batch, rewrite outcomes.jsonl without old
+    # entries. The LLM call above ran on an unlocked snapshot — merge under
+    # the lock by dropping exactly the lines we compressed, so appends that
+    # landed mid-compression survive (keyed-merge pattern).
     _save_compressed_batch(batch)
+    from file_lock import locked_rmw
+    _compressed_set = set(to_compress_lines)
+
+    def _drop_compressed(old: str) -> str:
+        kept = [l for l in old.splitlines() if l.strip() and l not in _compressed_set]
+        return "\n".join(kept) + ("\n" if kept else "")
+
     try:
-        path.write_text("\n".join(surviving_lines) + ("\n" if surviving_lines else ""), encoding="utf-8")
-    except Exception as exc:
+        locked_rmw(path, _drop_compressed)
+    except OSError as exc:
         log.warning("compress_old_outcomes: failed to rewrite outcomes.jsonl: %s", exc)
 
     log.info("compress_old_outcomes: compressed %d outcomes -> batch %s", len(parsed), batch.batch_id)
@@ -1038,6 +1047,7 @@ def _update_memory_index():
         else:
             lines.append("- 0 lessons stored")
 
-        _memory_index_path().write_text("\n".join(lines) + "\n", encoding="utf-8")
+        from file_lock import atomic_write
+        atomic_write(_memory_index_path(), "\n".join(lines) + "\n")
     except Exception:
         pass

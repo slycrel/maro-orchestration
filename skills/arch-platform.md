@@ -127,6 +127,52 @@ Per-model, per-step-type cost tracking to `memory/step-costs.jsonl`:
 
 `~/.maro/workspace/` is the stable runtime workspace for everything — memory, captain's log, projects, and output. The historical split (`output_root()`/`projects_root()` resolving to the repo) was consolidated in the BACKLOG #-1 workspace-pin unification: `MARO_WORKSPACE=x` means the workspace IS x, all roots resolve through `config.workspace_root()`, and `resolve_artifact_path()` is the display-form inverse. Contract pinned in TestWorkspacePinLayout.
 
+## Concurrency Model (2026-07-08/09 hardening arc)
+
+The box runs concurrent writers by design: heartbeat drain + manual runs +
+regression batches (cross-process), and mission fan-out + DAG steps
+(in-process threads). Four layers make that safe by construction:
+
+**1. File locking (`src/file_lock.py`) — fail-closed.** `locked_write(path)`
+(reentrant flock CM), `locked_append(path, line)`, `locked_rmw(path, fn)`
+(read under lock → `atomic_write` while holding — the only safe
+read-modify-write), `atomic_write(path, content)` (mkstemp + fsync +
+`os.replace`; readers can never see a partial file, even across SIGKILL).
+Contention waits with backoff up to `file_lock.timeout_s` (30s) then raises
+`FileLockTimeout(OSError)` — corrupting a learning ledger is permanent and
+silent, a loud bounded stall is neither. This *reversed* the pre-2026-07-08
+fail-open tradeoff. Escape hatch: `MARO_FILELOCK_FAIL_OPEN=1`. Rule: any
+write to a shared workspace file goes through these helpers; compute slow
+decisions (LLM calls) *outside* the lock, merge one line under it
+(evolver_store keyed-merge pattern).
+
+**2. Admission gate (`interrupt.acquire_project_slot`).** One run per project
+per *process*: flock on `memory/loop-<project>.lock` held for the run's
+lifetime, kernel-released on any death (no stale-lock rituals; never unlink
+the lockfile — unlink/reacquire allows two holders). Busy → `refused_busy`
+LoopResult naming the holder; heartbeat reverts the drained item to TODO.
+Opt-in polling via `maro-handle --wait N` / `loop.admission_wait_s`.
+In-process sibling loops (mission fan-out) *share* the slot via a weakref
+registry — one cooperating run, not a collision. NOW lane is ungated.
+
+**3. Worktree isolation (`src/worktree.py`).** Parallel fan-out steps in a
+git-repo fence dir each run in their own `git worktree` (branch
+`maro/<loop_id>/<name>`); merge-back is serialized per-repo and a conflict
+never drops work — branch preserved, step blocked naming it. Cross-run:
+`loop.busy_policy: worktree` (opt-in; default `refuse`) runs the whole loop
+in a worktree and merges at finalize (conflict → run `partial`). Non-git
+dirs: provision returns None, everything runs in place.
+
+**4. Daemon singletons (`src/proc_lock.py`).** `hold_pidfile(name)` — flock
+on `<workspace>/run/<name>.pid`. One heartbeat (exit 1 if held), one
+scheduler run-due drain (skip, exit 0) per workspace.
+
+Run-scoped state (run dir, default subprocess cwd) lives in ContextVars;
+thread fan-out must go through `contextvars.copy_context().run` at submit.
+Stress/crash proofs: `tests/test_file_lock_stress.py`,
+`tests/test_admission_gate.py`, `tests/test_worktree.py`,
+`tests/test_concurrency_e2e.py`.
+
 ## File Map
 
 | File | Lines | Role |
@@ -144,4 +190,7 @@ Per-model, per-step-type cost tracking to `memory/step-costs.jsonl`:
 | src/notify_telegram.py | ~120 | Telegram notify target (maro-notify-telegram) |
 | deploy/openclaw/ | | OpenClaw adapter: maro-dispatch.sh + setup README |
 | src/secret_scrub.py | ~40 | Single-source secret scrubber (recorder + harvester share it) |
+| src/file_lock.py | ~330 | Fail-closed flock helpers: locked_write/append/rmw, atomic_write |
+| src/proc_lock.py | ~130 | Daemon pidfile singleton (heartbeat, scheduler run-due) |
+| src/worktree.py | ~220 | Git worktree isolation: provision/merge_back/cleanup/prune |
 | scripts/heartbeat-ctl.sh | | Lifecycle management (start/stop/status) |

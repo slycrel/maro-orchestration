@@ -267,7 +267,10 @@ def write_operator_status() -> dict:
     }
     payload["salvage"]["active_count"] = len(active_salvage_runs)
     payload["salvage"]["pending_count"] = _pending_salvage_count(active_salvage_runs)
-    operator_status_path().write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    # atomic_write: the dashboard/TUI reads this live — a bare write_text
+    # window shows it a torn JSON document.
+    from file_lock import atomic_write
+    atomic_write(operator_status_path(), json.dumps(payload, indent=2) + "\n")
     return payload
 
 
