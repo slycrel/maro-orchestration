@@ -1,0 +1,1 @@
+../../../personas/critic.md

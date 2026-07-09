@@ -609,9 +609,15 @@ def spawn_persona(
 # Each entry: (keywords_any_of, persona_name, confidence)
 # Evaluated in order; first confident match wins.
 _PERSONA_ROUTING: List[tuple] = [
-    # GStack / garrytan / founder-engineer mode → garrytan
-    (["garrytan", "gstack", "founder review", "phase-gated", "think plan build",
-      "founder taste", "gstack review"], "garrytan", 0.95),
+    # Personal ops / chief-of-staff / daily brief → assistant
+    (["inbox", "calendar", "schedule", "daily brief", "morning brief",
+      "triage", "to-do", "todo list", "task list", "what's on my plate",
+      "appointments", "reminders", "follow up", "follow-up"], "assistant", 0.85),
+    # Data / documents / spreadsheets / tabular analysis → data-analyst
+    (["csv", "spreadsheet", "xlsx", "dataset", "dataframe", "sql",
+      "pdf table", "extract tables", "data analysis", "analyze data",
+      "statistics", "statistical", "chart", "plot", "correlation",
+      "aggregate", "pivot"], "data-analyst", 0.85),
     # Psychology / cognition / neuroscience / philosophy → psyche-researcher
     (["psychology", "neuroscience", "cognition", "cognitive", "philosophy",
       "enneagram", "mbti", "personality", "memory model", "spaced repetition",
@@ -727,6 +733,10 @@ def persona_for_goal(
             fallbacks = {
                 "psyche-researcher": ["research-assistant-deep-synth"],
                 "finance-analyst": ["research-assistant-deep-synth"],
+                "health-researcher": ["research-assistant-deep-synth"],
+                "legal-researcher": ["research-assistant-deep-synth"],
+                "assistant": ["reporter"],
+                "data-analyst": ["research-assistant-deep-synth"],
             }
             alternatives = fallbacks.get(best_name, [_DEFAULT_PERSONA])
             for alt in alternatives:

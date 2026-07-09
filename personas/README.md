@@ -1,6 +1,6 @@
 # Persona Collection
 
-These are reusable, focused sub-agent personas used by Poe Orchestration.
+These are reusable, focused sub-agent personas used by Maro.
 
 ## How to use
 

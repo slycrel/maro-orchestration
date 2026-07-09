@@ -74,37 +74,58 @@ def test_declared_packages_have_init():
         assert init.exists(), f"declared package {pkg} missing {init}"
 
 
-def test_assets_package_mirrors_repo_dirs():
-    """maro_assets ships skills/ + personas/ as package data via symlinks
-    to the top-level dirs (build follows them — proven on wheel AND sdist,
-    2026-07-09). This census fails if the symlinks break, or if those dirs
-    grow a file shape the package-data globs (*.md) would silently drop.
+# Box-specific specs that must NEVER ship in the wheel (2026-07-09 survey,
+# docs/audit-2026-07/persona-skill-survey.md §3): personal/user-model personas
+# and test fixtures. They stay in the repo; the workspace override layer is
+# where box-specific specs live at runtime.
+_NEVER_SHIP = {
+    "personas": {"jeremy", "poe", "companion", "garrytan", "psyche-researcher"},
+    "skills": {"test_skill", "test_skill_p32skill", "updatable_skill"},
+}
+
+
+def test_assets_package_matches_ship_manifest():
+    """maro_assets ships the curated skill/persona catalog as package data
+    via per-file symlinks to the top-level files (build follows symlinks —
+    proven on wheel AND sdist, 2026-07-09). SHIPPED in maro_assets/__init__.py
+    is the manifest; this census fails if the symlink dirs drift from it,
+    a symlink dangles, or a never-ship spec sneaks into the wheel.
     """
+    from maro_assets import SHIPPED
+
     for kind in ("skills", "personas"):
-        link = REPO_ROOT / "src" / "maro_assets" / kind
-        top = REPO_ROOT / kind
-        assert link.is_dir(), f"{link} missing/broken — packaged defaults ship empty"
-        assert link.resolve() == top.resolve(), (
-            f"{link} no longer points at {top} — packaged defaults diverge from repo"
+        d = REPO_ROOT / "src" / "maro_assets" / kind
+        assert d.is_dir(), f"{d} missing — packaged defaults ship empty"
+        linked = {p.stem for p in d.glob("*.md")}
+        assert linked == set(SHIPPED[kind]), (
+            f"{kind} symlinks drifted from SHIPPED manifest — "
+            f"unlinked (add symlink): {sorted(set(SHIPPED[kind]) - linked)}; "
+            f"unmanifested (add to SHIPPED or rm): {sorted(linked - set(SHIPPED[kind]))}"
         )
+        for p in d.glob("*.md"):
+            assert p.resolve().is_file(), f"dangling symlink: {p} -> {p.resolve()}"
+            assert p.resolve() == (REPO_ROOT / kind / p.name).resolve(), (
+                f"{p} points outside top-level {kind}/"
+            )
+        leaked = set(SHIPPED[kind]) & _NEVER_SHIP[kind]
+        assert not leaked, f"box-specific {kind} in the ship manifest: {sorted(leaked)}"
+        # non-.md files in the package dir would be dropped by the *.md glob
         undroppable = sorted(
-            p.name for p in top.iterdir() if p.is_file() and p.suffix != ".md"
+            p.name for p in d.iterdir() if not p.name.endswith(".md")
         )
         assert not undroppable, (
-            f"{kind}/ grew non-.md files the package-data glob won't ship: "
-            f"{undroppable} — widen [tool.setuptools.package-data] in pyproject"
+            f"maro_assets/{kind}/ grew non-.md entries the package-data glob "
+            f"won't ship: {undroppable}"
         )
 
 
 def test_assets_dir_resolves():
-    from maro_assets import assets_dir
+    from maro_assets import SHIPPED, assets_dir
 
     for kind in ("skills", "personas"):
         d = assets_dir(kind)
         assert d is not None and d.is_dir()
-        assert {p.name for p in d.glob("*.md")} == {
-            p.name for p in (REPO_ROOT / kind).glob("*.md")
-        }
+        assert {p.stem for p in d.glob("*.md")} == set(SHIPPED[kind])
 
 
 def test_entry_points_reference_real_modules():
