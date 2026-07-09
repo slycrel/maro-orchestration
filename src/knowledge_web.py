@@ -409,19 +409,15 @@ def _rewrite_tiered_lessons(tier: str, lessons: Optional[List[TieredLesson]] = N
     When no lesson list is supplied, reloads RAW and unlimited — persisting
     decay-derived scores or a truncated load would corrupt the store.
     """
-    if lessons is None:
-        lessons = load_tiered_lessons(tier=tier, min_score=0.0, limit=None, raw=True)
     path = _tiered_lessons_path(tier)
-    try:
-        from file_lock import locked_write
-        with locked_write(path):
-            with open(path, "w", encoding="utf-8") as f:
-                for tl in lessons:
-                    f.write(json.dumps(asdict(tl)) + "\n")
-    except ImportError:
-        with open(path, "w", encoding="utf-8") as f:
-            for tl in lessons:
-                f.write(json.dumps(asdict(tl)) + "\n")
+    from file_lock import locked_write, atomic_write
+    with locked_write(path):
+        # Reload INSIDE the lock — reloading before acquisition raced a
+        # concurrent writer (its lessons landed between our read and write
+        # and were silently dropped).
+        if lessons is None:
+            lessons = load_tiered_lessons(tier=tier, min_score=0.0, limit=None, raw=True)
+        atomic_write(path, "".join(json.dumps(asdict(tl)) + "\n" for tl in lessons))
 
 
 # ---------------------------------------------------------------------------

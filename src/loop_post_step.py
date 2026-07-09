@@ -730,7 +730,10 @@ def _process_done_step(
     """
     o = _orch()
     if item_index >= 0:
-        o.mark_item(ctx.project, item_index, o.STATE_DONE)
+        try:
+            o.mark_item(ctx.project, item_index, o.STATE_DONE)
+        except OSError as _mark_exc:  # FileLockTimeout: ledger contended — the run result matters more than the checkbox
+            log.warning("mark_item(DONE) failed for %s#%d: %s", ctx.project, item_index, _mark_exc)
 
     # Write to scratchpad
     if not isinstance(step_result, str):

@@ -264,3 +264,69 @@ def test_cli_poe_background_wait(monkeypatch, tmp_path, capsys):
     assert rc == 0
     out = capsys.readouterr().out
     assert "id=" in out
+
+
+# ---------------------------------------------------------------------------
+# Concurrency phase 2: locked task log + process-group kill
+# ---------------------------------------------------------------------------
+
+def test_concurrent_append_task_log_no_lost_entries(monkeypatch, tmp_path):
+    """Threaded _append_task_log on distinct ids → every entry survives.
+    The bare read→write this replaced dropped entries under interleaving."""
+    _setup_workspace(monkeypatch, tmp_path)
+    import threading
+    from background import _append_task_log
+
+    def _write(n: int) -> None:
+        for i in range(10):
+            _append_task_log(BackgroundTask(
+                id=f"t{n}-{i}", command="true", pid=1,
+                status="done", started_at="2026-01-01T00:00:00+00:00",
+            ))
+
+    threads = [threading.Thread(target=_write, args=(n,)) for n in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    ids = set()
+    from background import _bg_log_path
+    for line in _bg_log_path().read_text(encoding="utf-8").splitlines():
+        if line.strip():
+            ids.add(json.loads(line)["id"])
+    assert ids == {f"t{n}-{i}" for n in range(4) for i in range(10)}
+
+
+def test_timeout_kill_reaps_process_group(monkeypatch, tmp_path):
+    """Timeout kill uses killpg — the shell's *child* (grandchild of us)
+    dies too instead of leaking past the single-pid SIGTERM."""
+    _setup_workspace(monkeypatch, tmp_path)
+    task = start_background("sleep 60 & wait", timeout_seconds=1)
+    time.sleep(1.2)
+
+    # find the grandchild sleep in the task's process group before the kill
+    import subprocess as sp
+    pgid_procs = sp.run(
+        ["pgrep", "-g", str(task.pid)], capture_output=True, text=True
+    ).stdout.split()
+
+    result = poll_background(task.id)
+    assert result.status == "timeout"
+
+    def _truly_alive(pid: int) -> bool:
+        # kill-0 succeeds on zombies; a zombie is dead for leak purposes
+        # (the timeout path never waitpid()s the shell, so it lingers as Z).
+        try:
+            state = open(f"/proc/{pid}/stat").read().rsplit(")", 1)[1].split()[0]
+        except (FileNotFoundError, ProcessLookupError, IndexError):
+            return False
+        return state not in ("Z", "X")
+
+    deadline = time.monotonic() + 5
+    leaked = [int(p) for p in pgid_procs]
+    while leaked and time.monotonic() < deadline:
+        leaked = [p for p in leaked if _truly_alive(p)]
+        if leaked:
+            time.sleep(0.2)
+    assert not leaked, f"pids {leaked} from task pgroup survived killpg"

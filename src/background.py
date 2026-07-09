@@ -104,12 +104,17 @@ def _is_pid_alive(pid: int) -> bool:
 
 
 def _append_task_log(task: BackgroundTask) -> None:
-    """Append or update a task in background-tasks.jsonl."""
-    path = _bg_log_path()
-    # Load existing, replace if id matches, append if new
-    lines: List[dict] = []
-    if path.exists():
-        for line in path.read_text(encoding="utf-8").splitlines():
+    """Append or update a task in background-tasks.jsonl.
+
+    Read-filter-rewrite under the file's lock — concurrent
+    start_background/poll_background calls were corrupting or dropping
+    entries when this was a bare read_text→write_text.
+    """
+    from file_lock import locked_rmw
+
+    def _merge(old: str) -> str:
+        lines: List[dict] = []
+        for line in old.splitlines():
             line = line.strip()
             if not line:
                 continue
@@ -120,11 +125,10 @@ def _append_task_log(task: BackgroundTask) -> None:
                 lines.append(entry)
             except Exception:
                 continue
-    lines.append(_task_to_dict(task))
-    path.write_text(
-        "\n".join(json.dumps(e) for e in lines) + "\n",
-        encoding="utf-8",
-    )
+        lines.append(_task_to_dict(task))
+        return "\n".join(json.dumps(e) for e in lines) + "\n"
+
+    locked_rmw(_bg_log_path(), _merge)
 
 
 # ---------------------------------------------------------------------------
@@ -203,10 +207,16 @@ def poll_background(task_id: str) -> BackgroundTask:
         elapsed = (datetime.now(timezone.utc) - started).total_seconds()
         if elapsed > task.timeout_seconds:
             if _is_pid_alive(task.pid):
+                # start_new_session=True made the task its own process group
+                # (pgid == pid) — kill the whole group so grandchildren
+                # don't leak; single-pid kill left shell children orphaned.
                 try:
-                    os.kill(task.pid, signal.SIGTERM)
-                except (ProcessLookupError, PermissionError):
-                    pass
+                    os.killpg(task.pid, signal.SIGTERM)
+                except (ProcessLookupError, PermissionError, OSError):
+                    try:
+                        os.kill(task.pid, signal.SIGTERM)
+                    except (ProcessLookupError, PermissionError):
+                        pass
             task.status = "timeout"
             task.completed_at = datetime.now(timezone.utc).isoformat()
             _append_task_log(task)

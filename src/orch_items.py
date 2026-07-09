@@ -473,35 +473,43 @@ def parse_next(slug: str) -> Tuple[List[str], List[NextItem]]:
 
 
 def write_next_lines(slug: str, lines: List[str]) -> None:
-    p = next_path(slug)
-    p.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+    from file_lock import atomic_write
+    atomic_write(next_path(slug), "\n".join(lines).rstrip() + "\n")
 
 
 def mark_item(slug: str, item_index: int, new_state: str) -> None:
     if new_state not in VALID_STATES:
         raise ValueError(f"invalid new state: {new_state}")
-    lines, items = parse_next(slug)
-    item = next((it for it in items if it.index == item_index), None)
-    if item is None:
-        raise ValueError(f"item_index {item_index} not found in NEXT.md for {slug}")
-    lines[item.index] = re.sub(r"\[(.)\]", f"[{new_state}]", lines[item.index], count=1)
-    write_next_lines(slug, lines)
+    # Parse + rewrite under NEXT.md's lock: two concurrent markers (e.g.
+    # heartbeat backlog-drain flipping DOING while a finishing run flips
+    # DONE) were a lost-update race. locked_write is reentrant, so
+    # write_next_lines nesting inside is safe.
+    from file_lock import locked_write
+    with locked_write(next_path(slug)):
+        lines, items = parse_next(slug)
+        item = next((it for it in items if it.index == item_index), None)
+        if item is None:
+            raise ValueError(f"item_index {item_index} not found in NEXT.md for {slug}")
+        lines[item.index] = re.sub(r"\[(.)\]", f"[{new_state}]", lines[item.index], count=1)
+        write_next_lines(slug, lines)
 
 
 def append_next_items(slug: str, items: List[str]) -> List[int]:
     if not items:
         return []
     p = next_path(slug)
-    if not p.exists():
-        # Defensive: create minimal NEXT.md rather than crashing on FileNotFoundError.
-        # Normally ensure_project() handles this; this guard covers partial-init cases.
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(f"# NEXT — {slug}\n\n", encoding="utf-8")
-    lines = p.read_text(encoding="utf-8").splitlines()
-    start = len(lines)
-    next_lines = [f"- [ ] {i}" for i in items]
-    lines.extend(next_lines)
-    write_next_lines(slug, lines)
+    from file_lock import locked_write
+    with locked_write(p):
+        if not p.exists():
+            # Defensive: create minimal NEXT.md rather than crashing on FileNotFoundError.
+            # Normally ensure_project() handles this; this guard covers partial-init cases.
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(f"# NEXT — {slug}\n\n", encoding="utf-8")
+        lines = p.read_text(encoding="utf-8").splitlines()
+        start = len(lines)
+        next_lines = [f"- [ ] {i}" for i in items]
+        lines.extend(next_lines)
+        write_next_lines(slug, lines)
     return list(range(start, start + len(next_lines)))
 
 

@@ -360,7 +360,10 @@ def _process_blocked_step(ctx: LoopContext, blk: BlockedStepContext) -> tuple:
     _stuck_reason = _decision.stuck_reason or outcome.get("stuck_reason", "blocked")
     failure_chain.append(f"step {step_idx} terminal: {_stuck_reason[:80]}")
     if item_index >= 0:
-        o.mark_item(ctx.project, item_index, o.STATE_BLOCKED)
+        try:
+            o.mark_item(ctx.project, item_index, o.STATE_BLOCKED)
+        except OSError as _mark_exc:  # FileLockTimeout: ledger contended — the run result matters more than the checkbox
+            log.warning("mark_item(BLOCKED) failed for %s#%d: %s", ctx.project, item_index, _mark_exc)
     if ctx.verbose:
         print(f"[maro] step {step_idx} stuck after retry: {_stuck_reason}", file=sys.stderr, flush=True)
     try:

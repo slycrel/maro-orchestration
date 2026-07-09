@@ -393,8 +393,12 @@ def _append_daily_log(outcome: Outcome):
     if outcome.project:
         entry += f"- **Project**: {outcome.project}\n"
 
-    with open(path, "a", encoding="utf-8") as f:
-        f.write(entry)
+    # Multi-line block append can exceed PIPE_BUF (4096B) — bare open('a')
+    # interleaves/tears under concurrent writers, so take the file's lock.
+    from file_lock import locked_write
+    with locked_write(path):
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(entry)
 
 
 # ---------------------------------------------------------------------------
@@ -467,40 +471,38 @@ def _store_lesson(
 
 
 def _rewrite_lessons_file(task_type: str, updated_lessons: List[Lesson]) -> None:
-    """Rewrite the lessons file, replacing entries for the given task_type with updated versions."""
+    """Rewrite the lessons file, replacing entries for the given task_type with updated versions.
+
+    Goes through locked_rmw so the read happens under the lock — reading
+    first and locking only the write was a lost-update race: a lesson
+    appended by a concurrent run between our read and write vanished.
+    """
     path = _lessons_path()
     if not path.exists():
         return
-    try:
-        from file_lock import locked_write
-    except ImportError:
-        locked_write = None
+    from file_lock import locked_rmw
 
-    # Read all lines, replace matching task_type entries, keep others
-    all_lines = []
     updated_ids = {l.lesson_id for l in updated_lessons}
     updated_by_id = {l.lesson_id: l for l in updated_lessons}
 
-    for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            d = json.loads(line)
-            lid = d.get("lesson_id", "")
-            if lid in updated_ids:
-                all_lines.append(json.dumps(asdict(updated_by_id[lid])))
-            else:
-                all_lines.append(line)
-        except Exception:
-            all_lines.append(line)  # preserve unparseable lines
+    def _merge(old: str) -> str:
+        all_lines = []
+        for line in old.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                d = json.loads(line)
+                lid = d.get("lesson_id", "")
+                if lid in updated_ids:
+                    all_lines.append(json.dumps(asdict(updated_by_id[lid])))
+                else:
+                    all_lines.append(line)
+            except Exception:
+                all_lines.append(line)  # preserve unparseable lines
+        return "\n".join(all_lines) + ("\n" if all_lines else "")
 
-    content = "\n".join(all_lines) + ("\n" if all_lines else "")
-    if locked_write:
-        with locked_write(path):
-            path.write_text(content, encoding="utf-8")
-    else:
-        path.write_text(content, encoding="utf-8")
+    locked_rmw(path, _merge)
 
 
 def load_lessons(
@@ -622,9 +624,11 @@ def deduplicate_lessons(*, dry_run: bool = False) -> dict:
     if not path.exists():
         return {"before": 0, "after": 0, "removed_exact": 0, "removed_near": 0}
 
-    all_lessons: List[Lesson] = []
-    try:
-        for line in path.read_text(encoding="utf-8").splitlines():
+    stats = {"before": 0, "after": 0, "removed_exact": 0, "removed_near": 0}
+
+    def _dedup(old: str) -> str:
+        all_lessons: List[Lesson] = []
+        for line in old.splitlines():
             line = line.strip()
             if not line:
                 continue
@@ -634,44 +638,51 @@ def deduplicate_lessons(*, dry_run: bool = False) -> dict:
                 all_lessons.append(l)
             except Exception:
                 pass
-    except Exception:
-        return {"before": 0, "after": 0, "removed_exact": 0, "removed_near": 0}
 
-    before = len(all_lessons)
-    kept: List[Lesson] = []
-    removed_exact = 0
-    removed_near = 0
+        stats["before"] = len(all_lessons)
+        kept: List[Lesson] = []
 
-    for l in all_lessons:
-        # Exact match check
-        exact_match = next((k for k in kept if k.lesson == l.lesson), None)
-        if exact_match is not None:
-            exact_match.times_reinforced += 1
-            removed_exact += 1
-            continue
+        for l in all_lessons:
+            # Exact match check
+            exact_match = next((k for k in kept if k.lesson == l.lesson), None)
+            if exact_match is not None:
+                exact_match.times_reinforced += 1
+                stats["removed_exact"] += 1
+                continue
 
-        # Near-duplicate check
-        near_match = next(
-            (k for k in kept if _text_similarity(k.lesson, l.lesson) > 0.8),
-            None,
-        )
-        if near_match is not None:
-            near_match.times_reinforced += 1
-            near_match.confidence = min(1.0, near_match.confidence + 0.05)
-            removed_near += 1
-            continue
+            # Near-duplicate check
+            near_match = next(
+                (k for k in kept if _text_similarity(k.lesson, l.lesson) > 0.8),
+                None,
+            )
+            if near_match is not None:
+                near_match.times_reinforced += 1
+                near_match.confidence = min(1.0, near_match.confidence + 0.05)
+                stats["removed_near"] += 1
+                continue
 
-        kept.append(l)
+            kept.append(l)
 
-    after = len(kept)
-    if not dry_run and after < before:
-        content = "\n".join(json.dumps(asdict(l)) for l in kept) + "\n"
-        try:
-            from file_lock import locked_write
-            with locked_write(path):
-                path.write_text(content, encoding="utf-8")
-        except Exception as exc:
-            log.warning("deduplicate_lessons: write failed: %s", exc)
+        stats["after"] = len(kept)
+        if not dry_run and stats["after"] < stats["before"]:
+            return "\n".join(json.dumps(asdict(l)) for l in kept) + "\n"
+        return old  # dry-run or nothing removed — leave the file as-is
+
+    # Parse + dedup + rewrite all under the file's lock (locked_rmw) so a
+    # lesson appended mid-dedup isn't dropped. Pure compute inside the
+    # critical section — no LLM/subprocess work.
+    try:
+        from file_lock import locked_rmw
+        locked_rmw(path, _dedup)
+    except Exception as exc:
+        log.warning("deduplicate_lessons: write failed: %s", exc)
+        if stats["before"] == 0:
+            return {"before": 0, "after": 0, "removed_exact": 0, "removed_near": 0}
+
+    before = stats["before"]
+    after = stats["after"]
+    removed_exact = stats["removed_exact"]
+    removed_near = stats["removed_near"]
 
     log.info(
         "deduplicate_lessons: before=%d after=%d removed_exact=%d removed_near=%d dry_run=%s",

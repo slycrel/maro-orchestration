@@ -1015,7 +1015,10 @@ def _execute_main_loop(
                 call_record=outcome.get("call_record", ""),
             ))
             if item_index >= 0:
-                o.mark_item(project, item_index, o.STATE_BLOCKED)
+                try:
+                    o.mark_item(project, item_index, o.STATE_BLOCKED)
+                except OSError as _mark_exc:  # FileLockTimeout: ledger contended — the run result matters more than the checkbox
+                    log.warning("mark_item(BLOCKED) failed for %s#%d: %s", project, item_index, _mark_exc)
             o.append_decision(project, [f"[loop:{loop_id}] stuck on step {step_idx}: {stuck_reason}"])
             break
 

@@ -361,141 +361,170 @@ def apply_suggestion(suggestion_id: str) -> bool:
     if not p.exists():
         return False
 
-    lines = p.read_text(encoding="utf-8").splitlines()
-    found = False
-    new_lines: List[str] = []
-
-    for line in lines:
+    # Snapshot read (no lock) to find the target. The decision work below —
+    # injection scan, skill test gate — can spawn subprocesses and take
+    # seconds, so it runs OUTSIDE the critical section. The file update at
+    # the end is a keyed merge under the lock, so suggestions appended or
+    # updated by concurrent processes in between are preserved.
+    d = None
+    for line in p.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line:
             continue
         try:
-            d = json.loads(line)
-            if d.get("suggestion_id") == suggestion_id:
-                found = True
-                # Injection guard: scan suggestion text before applying (fail-closed)
-                try:
-                    from injection_guard import scan_content
-                    _suggestion_text_for_scan = d.get("suggestion", "")
-                    _scan = scan_content(_suggestion_text_for_scan, source="internal")
-                    if not _scan.safe_to_auto_apply:
-                        d["applied"] = False
-                        d["status"] = "injection_risk_blocked"
-                        d["block_reason"] = f"injection_guard: {_scan.findings[0][:120]}"
-                        log.warning(
-                            "apply_suggestion: injection risk blocked id=%s risk=%s finding=%s",
-                            suggestion_id, _scan.risk_level, _scan.findings[0][:80] if _scan.findings else "?",
-                        )
-                        new_lines.append(json.dumps(d))
-                        continue
-                except Exception as _ig_exc:
-                    # Fail-closed: if the guard itself throws, skip this apply rather
-                    # than silently applying potentially malicious content.
-                    log.warning(
-                        "apply_suggestion: injection_guard scan FAILED — skipping apply "
-                        "for id=%s to avoid silent pass-through: %s",
-                        suggestion_id, _ig_exc,
-                    )
-                    d["applied"] = False
-                    d["status"] = "injection_guard_scan_failed"
-                    new_lines.append(json.dumps(d))
-                    continue
-
-                # Phase 14: skill_pattern suggestions go through test gate
-                category = d.get("category", "observation")
-
-                if category == "skill_pattern" and validate_skill_mutation is not None:
-                    gate_result = _run_skill_test_gate(d)
-                    if gate_result is not None and gate_result.get("blocked"):
-                        d["applied"] = False
-                        d["status"] = "gate_blocked"
-                        d["block_reason"] = gate_result.get("block_reason", "test gate blocked mutation")
-                    else:
-                        d["applied"] = True
-                        d.pop("status", None)
-                        _apply_suggestion_action(d)
-                elif category == "new_guardrail":
-                    # Guardrails can permanently block execution paths. Gate on
-                    # environment + explicit override:
-                    #   MARO_AUTO_APPLY_GUARDRAILS=0 → always hold for review (prod-safe override)
-                    #   MARO_AUTO_APPLY_GUARDRAILS=1 → always auto-apply (dev override)
-                    #   unset → auto-apply in non-prod, hold in prod
-                    #
-                    # Session 20 adversarial review finding 3.13: the previous
-                    # default (hold unless env=1) silently disabled the
-                    # guardrail self-improvement path everywhere. Most runs are
-                    # dev/experiment — guardrails should evolve there by default.
-                    _env_override = os.environ.get("MARO_AUTO_APPLY_GUARDRAILS")
-                    if _env_override == "1":
-                        _should_apply = True
-                    elif _env_override == "0":
-                        _should_apply = False
-                    else:
-                        try:
-                            from config import get as _cfg_get
-                            _env = str(_cfg_get("environment", "dev")).lower()
-                        except Exception:
-                            _env = "dev"
-                        _should_apply = _env != "production"
-
-                    if _should_apply:
-                        d["applied"] = True
-                        _apply_suggestion_action(d)
-                        log.info("evolver: auto-applied new_guardrail (env=%s): %s",
-                                 _env_override or "config", d.get("suggestion", "")[:100])
-                    else:
-                        d["applied"] = False
-                        d["status"] = "held_for_review"
-                        d["block_reason"] = (
-                            "new_guardrail held: production environment (set "
-                            "MARO_AUTO_APPLY_GUARDRAILS=1 to override, or change "
-                            "config 'environment' from 'production')"
-                        )
-                        log.info("evolver: guardrail held for review (production env): %s",
-                                 d.get("suggestion", "")[:100])
-                elif category == "prompt_tweak":
-                    # Prompt tweaks are lower risk (just a lesson) but log prominently
-                    d["applied"] = True
-                    _apply_suggestion_action(d)
-                    log.info("evolver: auto-applied prompt_tweak: %s", d.get("suggestion", "")[:100])
-                elif category == "cost_optimization":
-                    # No executor exists yet — surface for human review instead of
-                    # silently marking applied. Previously fell through to else and
-                    # looked "applied" in logs without any real-world effect.
-                    d["applied"] = False
-                    d["status"] = "pending_human_review"
-                    d["block_reason"] = "cost_optimization has no auto-apply handler; review manually"
-                    log.info("evolver: cost_optimization held for human review: %s", d.get("suggestion", "")[:100])
-                elif category == "crystallization":
-                    # Stage 2→3 promotion is human-gated by design (KNOWLEDGE_CRYSTALLIZATION.md).
-                    # Never auto-write to AGENTS.md — surface for Jeremy's review only.
-                    d["applied"] = False
-                    d["status"] = "pending_human_review"
-                    d["block_reason"] = (
-                        "crystallization requires human review: run `maro-memory canon-candidates` "
-                        "to inspect and manually promote to AGENTS.md"
-                    )
-                    log.info("evolver: crystallization held for human review: %s", d.get("suggestion", "")[:100])
-                else:
-                    # observation, sub_mission, etc. — safe to apply
-                    d["applied"] = True
-                    _apply_suggestion_action(d)
-                if d.get("applied"):
-                    # Apply timestamp lives HERE, not (only) in the captain's
-                    # log. scan_evolver_impact previously had to read
-                    # EVOLVER_APPLIED log events to learn when a change
-                    # landed — making the log the source of truth for a
-                    # system function, which it must not be (captain's log =
-                    # visibility/data, THREAD_ARCHITECTURE.md).
-                    d["applied_at"] = datetime.now(timezone.utc).isoformat()
-            new_lines.append(json.dumps(d))
+            entry = json.loads(line)
         except Exception:
-            new_lines.append(line)
+            continue
+        if entry.get("suggestion_id") == suggestion_id:
+            d = entry
+            break
+    if d is None:
+        return False
 
-    if found:
-        p.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+    guard_blocked = False
+    # Injection guard: scan suggestion text before applying (fail-closed)
+    try:
+        from injection_guard import scan_content
+        _suggestion_text_for_scan = d.get("suggestion", "")
+        _scan = scan_content(_suggestion_text_for_scan, source="internal")
+        if not _scan.safe_to_auto_apply:
+            d["applied"] = False
+            d["status"] = "injection_risk_blocked"
+            d["block_reason"] = f"injection_guard: {_scan.findings[0][:120]}"
+            log.warning(
+                "apply_suggestion: injection risk blocked id=%s risk=%s finding=%s",
+                suggestion_id, _scan.risk_level, _scan.findings[0][:80] if _scan.findings else "?",
+            )
+            guard_blocked = True
+    except Exception as _ig_exc:
+        # Fail-closed: if the guard itself throws, skip this apply rather
+        # than silently applying potentially malicious content.
+        log.warning(
+            "apply_suggestion: injection_guard scan FAILED — skipping apply "
+            "for id=%s to avoid silent pass-through: %s",
+            suggestion_id, _ig_exc,
+        )
+        d["applied"] = False
+        d["status"] = "injection_guard_scan_failed"
+        guard_blocked = True
 
-    return found
+    if not guard_blocked:
+        # Phase 14: skill_pattern suggestions go through test gate
+        category = d.get("category", "observation")
+
+        if category == "skill_pattern" and validate_skill_mutation is not None:
+            gate_result = _run_skill_test_gate(d)
+            if gate_result is not None and gate_result.get("blocked"):
+                d["applied"] = False
+                d["status"] = "gate_blocked"
+                d["block_reason"] = gate_result.get("block_reason", "test gate blocked mutation")
+            else:
+                d["applied"] = True
+                d.pop("status", None)
+                _apply_suggestion_action(d)
+        elif category == "new_guardrail":
+            # Guardrails can permanently block execution paths. Gate on
+            # environment + explicit override:
+            #   MARO_AUTO_APPLY_GUARDRAILS=0 → always hold for review (prod-safe override)
+            #   MARO_AUTO_APPLY_GUARDRAILS=1 → always auto-apply (dev override)
+            #   unset → auto-apply in non-prod, hold in prod
+            #
+            # Session 20 adversarial review finding 3.13: the previous
+            # default (hold unless env=1) silently disabled the
+            # guardrail self-improvement path everywhere. Most runs are
+            # dev/experiment — guardrails should evolve there by default.
+            _env_override = os.environ.get("MARO_AUTO_APPLY_GUARDRAILS")
+            if _env_override == "1":
+                _should_apply = True
+            elif _env_override == "0":
+                _should_apply = False
+            else:
+                try:
+                    from config import get as _cfg_get
+                    _env = str(_cfg_get("environment", "dev")).lower()
+                except Exception:
+                    _env = "dev"
+                _should_apply = _env != "production"
+
+            if _should_apply:
+                d["applied"] = True
+                _apply_suggestion_action(d)
+                log.info("evolver: auto-applied new_guardrail (env=%s): %s",
+                         _env_override or "config", d.get("suggestion", "")[:100])
+            else:
+                d["applied"] = False
+                d["status"] = "held_for_review"
+                d["block_reason"] = (
+                    "new_guardrail held: production environment (set "
+                    "MARO_AUTO_APPLY_GUARDRAILS=1 to override, or change "
+                    "config 'environment' from 'production')"
+                )
+                log.info("evolver: guardrail held for review (production env): %s",
+                         d.get("suggestion", "")[:100])
+        elif category == "prompt_tweak":
+            # Prompt tweaks are lower risk (just a lesson) but log prominently
+            d["applied"] = True
+            _apply_suggestion_action(d)
+            log.info("evolver: auto-applied prompt_tweak: %s", d.get("suggestion", "")[:100])
+        elif category == "cost_optimization":
+            # No executor exists yet — surface for human review instead of
+            # silently marking applied. Previously fell through to else and
+            # looked "applied" in logs without any real-world effect.
+            d["applied"] = False
+            d["status"] = "pending_human_review"
+            d["block_reason"] = "cost_optimization has no auto-apply handler; review manually"
+            log.info("evolver: cost_optimization held for human review: %s", d.get("suggestion", "")[:100])
+        elif category == "crystallization":
+            # Stage 2→3 promotion is human-gated by design (KNOWLEDGE_CRYSTALLIZATION.md).
+            # Never auto-write to AGENTS.md — surface for Jeremy's review only.
+            d["applied"] = False
+            d["status"] = "pending_human_review"
+            d["block_reason"] = (
+                "crystallization requires human review: run `maro-memory canon-candidates` "
+                "to inspect and manually promote to AGENTS.md"
+            )
+            log.info("evolver: crystallization held for human review: %s", d.get("suggestion", "")[:100])
+        else:
+            # observation, sub_mission, etc. — safe to apply
+            d["applied"] = True
+            _apply_suggestion_action(d)
+        if d.get("applied"):
+            # Apply timestamp lives HERE, not (only) in the captain's
+            # log. scan_evolver_impact previously had to read
+            # EVOLVER_APPLIED log events to learn when a change
+            # landed — making the log the source of truth for a
+            # system function, which it must not be (captain's log =
+            # visibility/data, THREAD_ARCHITECTURE.md).
+            d["applied_at"] = datetime.now(timezone.utc).isoformat()
+
+    # Keyed merge under the lock: replace only this suggestion's line.
+    # Suggestions appended/updated by concurrent processes between the
+    # snapshot read and now are preserved (the old full-snapshot rewrite
+    # silently dropped them).
+    from file_lock import locked_rmw
+    updated_line = json.dumps(d)
+
+    def _merge(old: str) -> str:
+        out = []
+        replaced = False
+        for line in old.splitlines():
+            s = line.strip()
+            if not s:
+                continue
+            try:
+                if json.loads(s).get("suggestion_id") == suggestion_id:
+                    out.append(updated_line)
+                    replaced = True
+                    continue
+            except Exception:
+                pass
+            out.append(s)
+        if not replaced:  # line vanished between snapshot and merge — re-add
+            out.append(updated_line)
+        return "\n".join(out) + "\n" if out else ""
+
+    locked_rmw(p, _merge)
+    return True
 
 
 def revert_suggestion(suggestion_id: str) -> dict:
@@ -575,23 +604,28 @@ def revert_suggestion(suggestion_id: str) -> dict:
 
         elif category == "new_guardrail":
             # Remove matching pattern from dynamic-constraints.jsonl
+            # (read + filter under the lock — lost-update safe)
             dc_path = _dynamic_constraints_path()
             if dc_path.exists():
                 suggestion_text = match.get("suggestion_text", "")
-                lines = dc_path.read_text(encoding="utf-8").splitlines()
-                new_lines = []
-                removed = False
-                for line in lines:
-                    try:
-                        d = json.loads(line)
-                        if d.get("source") == f"evolver:{suggestion_id}" or d.get("pattern", "") == suggestion_text[:200]:
-                            removed = True
-                            continue
-                    except Exception:
-                        pass
-                    new_lines.append(line)
-                if removed:
-                    dc_path.write_text("\n".join(new_lines) + "\n" if new_lines else "", encoding="utf-8")
+                removed_flag = {"removed": False}
+
+                def _drop_constraint(old: str) -> str:
+                    new_lines = []
+                    for line in old.splitlines():
+                        try:
+                            d = json.loads(line)
+                            if d.get("source") == f"evolver:{suggestion_id}" or d.get("pattern", "") == suggestion_text[:200]:
+                                removed_flag["removed"] = True
+                                continue
+                        except Exception:
+                            pass
+                        new_lines.append(line)
+                    return "\n".join(new_lines) + "\n" if new_lines else ""
+
+                from file_lock import locked_rmw
+                locked_rmw(dc_path, _drop_constraint)
+                if removed_flag["removed"]:
                     detail = "removed dynamic constraint"
                 else:
                     detail = "dynamic constraint not found (may have expired)"
@@ -605,22 +639,25 @@ def revert_suggestion(suggestion_id: str) -> dict:
     except Exception as exc:
         return {"reverted": False, "category": category, "detail": f"revert failed: {exc}"}
 
-    # Mark suggestion as not applied
+    # Mark suggestion as not applied (read + rewrite under the lock)
     try:
         p = _suggestions_path()
         if p.exists():
-            lines = p.read_text(encoding="utf-8").splitlines()
-            new_lines = []
-            for line in lines:
-                try:
-                    d = json.loads(line.strip())
-                    if d.get("suggestion_id") == suggestion_id:
-                        d["applied"] = False
-                        d["status"] = "reverted"
-                    new_lines.append(json.dumps(d))
-                except Exception:
-                    new_lines.append(line)
-            p.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+            def _mark_reverted(old: str) -> str:
+                new_lines = []
+                for line in old.splitlines():
+                    try:
+                        d = json.loads(line.strip())
+                        if d.get("suggestion_id") == suggestion_id:
+                            d["applied"] = False
+                            d["status"] = "reverted"
+                        new_lines.append(json.dumps(d))
+                    except Exception:
+                        new_lines.append(line)
+                return "\n".join(new_lines) + "\n"
+
+            from file_lock import locked_rmw
+            locked_rmw(p, _mark_reverted)
     except Exception:
         pass
 

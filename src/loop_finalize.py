@@ -130,8 +130,8 @@ def _build_result_and_finalize(
                 "true_negative": not _pf_predicted_wide and not _actual_stuck,
             }
             _fb_path = _fb_memory_dir() / "preflight_calibration.jsonl"
-            with open(_fb_path, "a") as _fb_f:
-                _fb_f.write(json.dumps(_fb_entry) + "\n")
+            from file_lock import locked_append
+            locked_append(_fb_path, json.dumps(_fb_entry))
             log.info("pre-flight calibration: scope=%s actual=%s tp=%s fp=%s fn=%s",
                      pf_review.scope, loop_status,
                      _fb_entry["true_positive"], _fb_entry["false_positive"],
