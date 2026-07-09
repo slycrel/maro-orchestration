@@ -5,7 +5,7 @@ Read this at the start of every session. Update it as items are completed or new
 
 **Completed items live in [BACKLOG_DONE.md](BACKLOG_DONE.md)** — move items there with their full context when they ship; that file is the archive of what we've already decided, tried, or superseded, and it's ingested by `dev-recall` for historical context.
 
-Last reviewed: 2026-07-04 (full triage, every prune claim re-verified against code: write-fence arc + #13 evolver + fabrication-guard [x]s + intent subs 2/3 + PM/dev test goals → BACKLOG_DONE.md; 2 duplicates reconciled against MILESTONES #2/#3; llm-adapter extraction promoted to the stack as #14).
+Last reviewed: 2026-07-09 (decision-cleanup session with Jeremy: #19 thread-arch decisions all resolved + recursion decree recorded, intent-resolution A/B dropped, orch.py trio deprecated, host-check wired+scheduled — four entries → BACKLOG_DONE; fastembed lane confirmed stays-gated). Previous full triage: 2026-07-04.
 
 ---
 
@@ -142,22 +142,15 @@ Outcome row: outcomes.jsonl 20aae85f (workspace of the hermes trial container,
 importable via `maro-import` from
 `~/claude/hermes-maro-trial/data/home/.maro/workspace`).
 
-### 19. Thread Architecture — resolve the 5 remaining open decisions
+### 19. Thread Architecture open decisions — RESOLVED 2026-07-09 → BACKLOG_DONE
 
-**2026-07-09: decision brief delivered — `docs/history/2026-07-09-thread-architecture-decisions-brief.md`.**
-Re-scoped the doc's original "9 open decisions" against what's actually shipped
-(narrow navigator, per-thread goal brain, persona auto-selection, recall()
-interface, captain's-log audit — 4 resolved/half-resolved already). 5 remain
-genuinely open: persona-library shape (#4), upfront-planning-vs-"Tesla mode"
-heuristics (#5), how the navigator improves over time (#6, ties to the
-still-broken verify→learn loop), Stage 5 rule portability (#8), `/loop`/streaming
-interaction (#9, likely resolvable by tracing one real session rather than a
-judgment call). **Pick this up in a session on the runtime box, not the Mac dev
-checkout** — that box holds the fuller session history behind this design
-(captain's log, prior conversations) that this brief was drafted without. Have
-that session re-verify the brief's "what shipped since" claims against its own
-context before taking the 5 open items to Jeremy. See `docs/THREAD_ARCHITECTURE.md`
-for the full design + original decision list.
+All 5 dispositioned by Jeremy on the runtime box (brief claims re-verified
+first). Decrees in GOAL_BRAIN Decisions 2026-07-09 (incl. the **recursion
+rider**: goals must be able to recurse sub-goals — a standing design
+constraint on all scoping/slicing work, doors named there). Annotations
+inline in `docs/THREAD_ARCHITECTURE.md`. Live follow-ups: #5 planning-depth
+shadow (MILESTONES), #9 /loop trace (MILESTONES), #6 verify→learn = next
+arc after 1.0. Full context in BACKLOG_DONE.
 
 ## Vision / Deferred
 
@@ -176,7 +169,10 @@ yet decided:** the fastembed+sqlite-vec semantic lane is still gated behind
 "only if BM25 measures insufficient" — full-corpus verdict (1,652 items, see
 GOAL_BRAIN.md 2026-07-07/08 entries) showed sqlite-fts5 wins hit@1 + 5×
 latency but loses hit@5/MRR to token-overlap; whether that's "insufficient"
-enough to build the semantic lane is unmeasured/undecided.
+enough to build the semantic lane is unmeasured/undecided. (2026-07-09
+review: confirmed stays-gated, nothing blocked on it — revisit only when
+organic worker-slice retrieval misses surface, with the paraphrase-lane
+numbers as the evidence file.)
 
 Durable replacement for the fixed-size inter-step truncation caps (the 800/500/200 band-aids
 above — lossy fixed-array-vs-string, the kind of thing that's bitten us). Jeremy's framing:
@@ -282,19 +278,10 @@ prompt + resolved-intent artifact schema subs moved to BACKLOG_DONE — shipped
 as `scope.py` ResolvedIntent/Deliverable + `generate_resolved_intent()`,
 persisting `resolved_intent.md`. Side-quest orchestration remains open.
 
-- [ ] **Minimum experiment — FLAG FOR JEREMY: shipped past the experiment.**
-  This sub said "before building orchestration," but ResolvedIntent v0 shipped
-  straight to prod and the formal before/after measurement never ran. Decide:
-  run the retroactive A/B (same goal with/without resolved-intent injection,
-  compare closure verdict + adversarial review), or accept the v0 on organic
-  evidence and drop this. Original design: take one
-  blind-test goal. Manually produce a resolved-intent artifact
-  (unknowns / probes / deliverable-map). Run side-quests by hand using
-  the existing `handle.py` path, capture outputs. Run the main goal with
-  resolved-intent + side-quest artifacts injected as ancestry context.
-  Measure: does output quality + closure verdict + adversarial review
-  improve measurably vs the same goal without? If yes, build
-  orchestration. If no, the ceiling isn't here.
+- [x] **Minimum experiment — RESOLVED 2026-07-09 (Jeremy): accept v0 on
+  organic evidence, retroactive A/B dropped.** The done-vs-achieved corpus
+  analysis (1.0 arc) is the cheaper honest check on the closure ceiling.
+  Full context in BACKLOG_DONE.
 - [ ] **Pivot reuse across goal-family reruns.** (Narrowed 2026-07-04: the
   infrastructure half exists — per-project persistent dirs under
   `~/.maro/workspace/projects/<slug>/` are live and goal-slug-bound. What's
@@ -472,17 +459,11 @@ See `docs/CONSTRAINT_ORCHESTRATION_DESIGN.md` + `docs/CONSTRAINT_ORCHESTRATION_R
   eval batch is designed; record in the A/B record's m3 caveat
   (`docs/history/2026-07-08-worker-slice-ab.md`).
 
-### host-check.sh alerting + scheduling (Jeremy, 2026-07-08 session close)
+### host-check.sh alerting — DONE 2026-07-09 → BACKLOG_DONE
 
-- [ ] **Wire `scripts/host-check.sh` to an alert channel, then schedule it.**
-  The check itself works (disk/mem/swap/load/orphans/git-guard; heartbeat
-  SKIPs >30d unless `MARO_HEARTBEAT_EXPECTED=1`) but exit-nonzero on a cron
-  notifies nobody. Natural wire-up: pipe failures through the existing
-  `notify.command` Telegram lane (`~/.maro/config.yml` — same channel as
-  run_completed/escalation events), then enable the commented cron/systemd
-  stanza at the bottom of the script. Decide alert channel + frequency
-  together; don't schedule without the channel (silent red is worse than
-  no cron — it reads as green).
+Telegram (notify.command lane) + daily cron 08:05, via new
+`scripts/host-check-notify.sh`; failure path live-proven before scheduling.
+Full context in BACKLOG_DONE.
 
 ### Standing test-goal menu (future ideas)
 
@@ -563,29 +544,13 @@ These four are kept (not deleted) this triage pending verification against curre
   groundwork for real execution. Source: refactor-plan architecture review
   (docs/REFACTOR_PLAN.md), 2026-07-02.
 
-### `orch.py`'s tick/loop engine is legacy; its path/bookkeeping layer is not
+### `orch.py` legacy loop — DEPRECATED 2026-07-09 → BACKLOG_DONE
 
-- [ ] **Split `orch.py`'s two concerns.** Git-history confirmed: `orch.py`
-  predates `agent_loop.py` by 18 days (2026-03-05 vs 2026-03-23), and its
-  original docstring — "durable project state and a loop-until-blocked
-  executor without arbitrary iteration limits" — is exactly the
-  heuristic-decomposition design `agent_loop.py`'s first commit explicitly
-  says it replaces ("LLM decomposes goal into steps, replaces dumb
-  heuristic"). `run_tick`/`run_loop` are still live via `maro tick`/`maro
-  loop`/`maro plan` CLI commands (`cli.py:610-660`), but no scripts/, cron,
-  or heartbeat call site invokes them today — only manual CLI use, if any.
-  **Action:** confirm with Jeremy whether `maro tick`/`loop`/`plan` are still
-  used in practice; if not, deprecate just `run_tick`/`run_loop` (and the
-  three CLI subcommands) as the superseded loop.
-  **Do NOT touch the rest of the file** — `orch_root`, `project_dir`,
-  `parse_next`, `projects_root`, and NEXT.md parsing (now in
-  `orch_items.py`) are live, load-bearing infrastructure with 8+ current
-  importers (`persona.py`, `heartbeat.py`, `telegram_listener.py`,
-  `autonomy.py`, `goal_map.py`, `director.py`, `sheriff.py`,
-  `build_loop_runner.py`) — this is the real `orchq`/paths subsystem, not a
-  competing main loop, and should be promoted/renamed as such in the Tier 4
-  subpackage move rather than deprecated. Source: refactor-plan git-history
-  investigation, 2026-07-02.
+Jeremy confirmed `maro tick`/`loop`/`plan` unused → stderr deprecation
+warnings + docstrings + tripwire test shipped. Residual (rides the Tier-4
+subpackage move, not a standalone item): remove the trio + promote/rename
+the path/NEXT.md layer as the real `orchq`/paths subsystem. Full context in
+BACKLOG_DONE.
 
 ### Run visibility residual — general-purpose server question (main entry → BACKLOG_DONE 2026-07-09)
 

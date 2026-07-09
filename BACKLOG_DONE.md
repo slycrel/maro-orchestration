@@ -8,6 +8,74 @@ Last split: 2026-04-16 (session 34).
 
 ---
 
+### BACKLOG #19: Thread Architecture — 5 remaining open decisions RESOLVED (2026-07-09)
+
+Decision brief (`docs/history/2026-07-09-thread-architecture-decisions-brief.md`,
+drafted on the Mac checkout) re-scoped the doc's original 9 open decisions:
+#1/#2 half-resolved, #3/#7 resolved earlier; #4/#5/#6/#8/#9 open. Per the
+brief's own instruction, a runtime-box session re-verified its shipped-claims
+(all held: `navigator_shadow.py`, `thread_brain.py`, `recall.py`,
+`persona_for_goal`, `NAVIGATOR_SCHEMA.md`, the #7 annotation) and surfaced
+what the Mac checkout couldn't see — the memory-module arc + thread-brain
+compiled-truth half materially moved #6's ground. Jeremy dispositioned all
+five same session; full decrees with quotes in **GOAL_BRAIN Decisions
+2026-07-09**, inline annotations in `docs/THREAD_ARCHITECTURE.md`:
+
+- **#4 personas**: keep curated set; evolution machinery only on operational
+  pressure.
+- **#5 planning-vs-Tesla**: decided NOW, not deferred (Jeremy rejected the
+  brief's deferral; the fork-rejoin worked-examples analogy failed — this
+  decision point is live on every handle.py goal, so examples accrue by
+  shipping a shadow). Design: navigator judges planning depth at dispatch on
+  the existing act_dispatch call; default=plan; positive-signal-only lighter
+  shapes; shadow-first → agreement table → per-move cutover. Queued in
+  MILESTONES.
+- **#6 navigator improvement**: = verify→learn closure; next design arc
+  after 1.0.
+- **#8 Stage-5 portability**: compiled cache, portable via regeneration from
+  language-form artifacts; 5→language demotion path stays open in BACKLOG.
+- **#9 /loop interaction**: not a decision — trace a real /loop session,
+  close or escalate (queued).
+
+**Rider decree, same session (recursion):** goals must be able to recurse
+sub-goals — "otherwise we're just setting ourselves up for a fancier
+failure." Not implemented now; the door stays open in every scoping/slicing
+decision. Named doors: navigator `fork`, step-to-goal elevation,
+intent-resolution side-quests, `origin` ancestry, memory-port `visible_at()`
+scopes. Full decree in GOAL_BRAIN Decisions 2026-07-09.
+
+### Intent-resolution minimum experiment: accepted v0, A/B dropped (2026-07-09)
+
+The BACKLOG flag ("shipped past the experiment") resolved by Jeremy:
+ResolvedIntent v0 is accepted on organic evidence; the retroactive
+with/without-injection A/B will not run. Rationale: the done-vs-achieved
+corpus analysis (~68 judged runs, queued in the 1.0 arc) is the cheaper
+honest check on where the closure ceiling actually is. The sibling sub-item
+(pivot reuse across goal-family reruns) stays open in BACKLOG.
+
+### orch.py legacy loop: `maro tick`/`loop`/`plan` deprecated (2026-07-09)
+
+Jeremy confirmed the three CLI subcommands are unused (no scripts/cron/
+heartbeat call sites existed; git history showed `run_tick`/`run_loop`
+predate and were superseded by agent_loop). Shipped: stderr deprecation
+warning on all three (`cli._warn_legacy_loop`), DEPRECATED docstrings on
+`orch.run_tick`/`run_loop`, tripwire test
+(`test_legacy_loop_commands_warn_deprecated`). The path/bookkeeping layer
+(`orch_root`, `project_dir`, NEXT.md plumbing — 8+ importers) is explicitly
+NOT deprecated and gets promoted/renamed in the Tier-4 subpackage move,
+which is also the natural removal point for the deprecated trio.
+
+### host-check.sh alerting + scheduling: wired and scheduled (2026-07-09)
+
+Channel decision: Telegram via the existing `notify.command` lane (as the
+item predicted); frequency: daily. `scripts/host-check-notify.sh` runs the
+check `--quiet`, silent-green, and on red pipes an escalation-shaped JSON
+payload into `notify_telegram` (same formatting/credential path as
+run_completed/escalation events) plus echoes FAIL lines for cron logs.
+Crontab installed on this box: `5 8 * * *` → `~/claude/logs/host-check.log`.
+Failure path live-proven before scheduling (forced `MARO_DISK_WARN_PCT=1` →
+real Telegram delivery, notify rc 0) — no silent-red cron.
+
 ### BACKLOG #17: Run-visibility residuals, all 4 (shipped 2026-07-09, two concurrent sessions)
 
 Real-data review of the run-visibility report/index surfaced four mechanical

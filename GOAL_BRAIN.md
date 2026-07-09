@@ -1189,6 +1189,78 @@ Sample: the 2026-05-13..17 window of `~/.maro/workspace/runs/` (478 dirs total;
   commented starter `~/.maro/config.yml`. Escalation-channel default stays
   OPEN (Jeremy: LLM-as-orchestrator was the interface idea, "we likely need
   something in addition") — needs a design conversation before code.
+- **2026-07-09 (Thread Architecture open decisions RESOLVED — decision-brief
+  session on the runtime box, per BACKLOG #19's instruction; brief:
+  `docs/history/2026-07-09-thread-architecture-decisions-brief.md`, claims
+  re-verified against this box's code + GOAL_BRAIN before deciding)** —
+  All five remaining open decisions dispositioned by Jeremy:
+  **#4 persona library**: keep the curated set; build persona-evolution
+  machinery only on operational pressure (repeated no-good-persona-fit
+  evidence), not speculatively.
+  **#5 planning-vs-Tesla-mode**: DECIDED NOW rather than deferred — Jeremy
+  pushed back on the brief's deferral ("is it right to defer, or just make
+  those decisions so we can move that work forward?") and the deferral logic
+  didn't hold: unlike fork-rejoin, this decision point is live on every goal
+  entering handle.py, so worked examples accrue by shipping a shadow, not by
+  waiting. Design (approved "Yeah, let's do that"): (1) the navigator judges
+  planning depth **at dispatch**, riding the existing act_dispatch decide
+  call (no new LLM call — one new field in the envelope); (2) **default =
+  plan** (the Tesla pushback stands as the prior); lighter shapes only on
+  positive signals — concrete deliverables/paths named in the goal, recall
+  showing prior successful same-family runs, NOW-shaped scope; signals are
+  judgment inputs in the prompt, not a rule table
+  (inference-not-taxonomy); (3) ship **shadow-first** per the 2026-05-18
+  decree — NAVIGATOR_DECIDED records planning-depth beside pipeline-actual,
+  adjudicate like the dumb-loop-audit rounds, per-move cutover when the
+  agreement table earns it. Queued in MILESTONES. This un-gates #5 from the
+  dormant full per-turn reframe entirely.
+  **#6 how-the-navigator-improves**: = closing the verify→learn loop; becomes
+  **the next design arc after 1.0** (not folded into 1.0, not parked). The
+  memory-module arc + thread-brain compiled-truth half (both 07-03/07-08)
+  supplied the substrate the 04-26 sketch lacked.
+  **#8 Stage-5 portability**: Stage 5 rules are a **compiled cache** —
+  portability comes via regeneration from language-form artifacts
+  (skills/lessons/evidence), never from the .py itself. Consistent with the
+  2026-06-11 decay-by-invalidation decree ("Stages 4–5 demotable to language
+  form") and the capability-form open question (re-fight at model upgrades).
+  The 5→language demotion path stays the open BACKLOG item; no new code now.
+  **#9 /loop-streaming interaction**: not a Jeremy decision — Claude traces
+  one real /loop session against the per-turn model and closes or escalates
+  on actual friction (queued).
+- **2026-07-09 (recursion decree — Jeremy, same session, decree-level design
+  constraint on all scoping/slicing decisions)** — "our goals need to be able
+  to recurse sub-goals, otherwise we're just setting ourselves up for a
+  fancier failure … we don't need to actually directly implement that now,
+  but leaving that door open for the future would be great." Framing: "boil
+  the ocean … learn a language so you can draw kanji appropriately"; "a
+  higher order maze traversal type idea where you have to go in a totally
+  different direction for quite some time before you can get through to the
+  other side you know is the goal." Worked example: a "make me rich" goal may
+  require a dummy-corp setup + tax-jurisdiction research *before* signing up
+  for a financial platform — a sub-goal pointing away from the parent's
+  apparent direction. **Implications:** scoping/slicing decisions must never
+  assume a flat goal→steps model; "spawn a sub-goal" is a legal shape
+  wherever depth/scope is judged (the #5 planning-depth field must not be an
+  enum that forecloses it). Existing doors to keep open, named so future work
+  doesn't wall them off: navigator `fork` move (schema shipped; join gated on
+  MILESTONES #4), step-to-goal elevation (BACKLOG), intent-resolution
+  side-quests, the `origin` ancestry dict (run↔thread linkage), memory-port
+  hierarchical scopes (`visible_at()` — sub-goal reads own + parent scope).
+- **2026-07-09 (BACKLOG decision-cleanup, same session)** — (1)
+  Intent-resolution minimum experiment: **accept ResolvedIntent v0 on organic
+  evidence, drop the retroactive A/B** — the done-vs-achieved corpus analysis
+  (queued in the 1.0 arc) is the cheaper honest check on where the closure
+  ceiling is. (2) `maro tick`/`loop`/`plan` confirmed unused by Jeremy →
+  **deprecated** (stderr warning + docstrings; orch.py's path/NEXT.md layer
+  explicitly NOT deprecated; removal after a window — the Tier-4 subpackage
+  move is the natural point). (3) host-check alerting: **channel = Telegram
+  via the existing notify.command lane, frequency = daily** —
+  `scripts/host-check-notify.sh` pipes FAIL output as an escalation payload
+  to `notify_telegram`, crontab entry 08:05 daily installed, failure path
+  live-proven (forced disk threshold → real Telegram delivery, rc 0). (4)
+  fastembed semantic lane: stays gated, no decision needed — nothing is
+  blocked on it; paraphrase-lane numbers are the evidence file when organic
+  worker-slice retrieval misses surface.
 
 ## Threads (system-maintained — nothing leaves this list silently)
 

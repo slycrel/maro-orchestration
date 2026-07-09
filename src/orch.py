@@ -431,6 +431,10 @@ def run_tick(
     execution: Optional[ExecutionBridge] = None,
     validation: Optional[ValidationBridge] = None,
 ) -> Optional[TickResult]:
+    """DEPRECATED (2026-07-09, Jeremy-confirmed unused): the pre-agent_loop
+    heuristic executor, superseded by handle.py/agent_loop. CLI callers get a
+    stderr warning; removal after a deprecation window. The rest of this
+    module (paths, NEXT.md plumbing) is live infrastructure — not deprecated."""
     if max_retry_streak is not None and max_retry_streak <= 0:
         raise ValueError("max_retry_streak must be greater than zero")
 
@@ -508,6 +512,7 @@ def run_loop(
     continue_on_retry: bool = False,
     continue_on_blocked: bool = False,
 ) -> List[TickResult]:
+    """DEPRECATED (2026-07-09): see run_tick — same superseded loop."""
     if max_runs <= 0:
         raise ValueError("max_runs must be greater than zero")
     if max_retry_streak is not None and max_retry_streak <= 0:

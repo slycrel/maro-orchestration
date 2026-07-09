@@ -253,17 +253,22 @@ These are the questions we deferred. Ordered roughly by load-bearing-ness.
    *Resolved 2026-06-10 → `docs/RECALL_DESIGN.md` + `src/recall.py` (goal-brain sequencing step 3).*
 
 4. **Persona library shape.** Fixed curated set vs. navigator-evolved. Today YAML + prefix selection. If navigator picks per-turn, what's the registry? Skill+persona creation as part of self-improvement is a real concern (Jeremy: 5–10 core, evolving).
+   *Resolved 2026-07-09 (GOAL_BRAIN Decisions): keep the curated set; build evolution machinery only on operational pressure (repeated no-good-persona-fit evidence).*
 
 5. **When upfront planning is appropriate vs. skipped.** The Tesla edge case. Heuristics that distinguish "user has thought about this" (drive ourselves) from "user wants to be driven there" (Tesla mode). Not a binary; probably a navigator-judged scale.
+   *Resolved 2026-07-09 (GOAL_BRAIN Decisions): navigator judges planning depth at dispatch (rides the existing act_dispatch decide call); default = plan; lighter shapes on positive signals only (judgment inputs, not a rule table); ships shadow-first, cutover when the agreement table earns it. Constraint from the same-day recursion decree: "spawn a sub-goal" is a legal shape — the depth judgment must not foreclose it. Un-gated from the full per-turn reframe.*
 
 6. **How the navigator improves.** Tied to verify→learn loop closure (currently broken). Crystallization Stages 1→5 is the *what*; the *how* (data flow, attribution, when patterns harden) needs design.
+   *Sequenced 2026-07-09 (GOAL_BRAIN Decisions): the next design arc after 1.0. Substrate since the sketch: memory module (sqlite+FTS5, worker-slice default-ON) + thread-brain compiled-truth half.*
 
 7. **Captain's-log demotion audit.** What's currently relying on captain's log as infrastructure that needs another path? Probably touches inspector, evolver, structured event listeners.
    *Done 2026-06-11 (GOAL_BRAIN.md Compiled truth has the findings): one load-bearing use found and fixed (`scan_evolver_impact` apply timestamps → now stamped in suggestions.jsonl); two prompt-injection read bridges to be absorbed by recall()'s loop slice; everything else is visibility.*
 
 8. **Stage 5 portability.** If rules are Python code, how do they survive HDD loss / orchestrator switch? Declarative form? Always-regenerable from skill artifacts?
+   *Resolved 2026-07-09 (GOAL_BRAIN Decisions): Stage 5 = compiled cache; portability via regeneration from language-form artifacts, never via the .py. The 5→language demotion path remains the open BACKLOG item.*
 
 9. **`/loop` and similar streaming primitives.** How "always-on" + "long-running" + "user-paced" (Telegram threads, chat, async) interact with the per-turn navigator model. Probably fine; worth a worked example.
+   *Dispositioned 2026-07-09: not a decision — trace one real /loop session against the per-turn model, close or escalate on actual friction (queued in MILESTONES).*
 
 ---
 

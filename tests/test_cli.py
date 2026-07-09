@@ -768,3 +768,17 @@ def test_cli_empty_paths(tmp_path):
     loop_r = _run(tmp_path, "loop", "--project", "demo", "--max-runs", "2")
     assert loop_r.returncode == 1
     assert "loop=(none)" in loop_r.stdout
+
+
+def test_legacy_loop_commands_warn_deprecated(tmp_path):
+    """plan/tick/loop are the superseded pre-agent_loop executor (BACKLOG
+    orch.py-split item, Jeremy-confirmed unused 2026-07-09) — each must warn
+    on stderr while still functioning during the deprecation window."""
+    _run(tmp_path, "init", "demo")
+    for cmd, args in (
+        ("plan", ("plan", "no-such-project", "some", "goal")),
+        ("tick", ("tick", "--project", "demo")),
+        ("loop", ("loop", "--project", "demo", "--max-runs", "1")),
+    ):
+        r = _run(tmp_path, *args)
+        assert f"`maro {cmd}` is deprecated" in r.stderr, cmd

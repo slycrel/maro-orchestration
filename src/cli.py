@@ -619,7 +619,23 @@ def _cmd_interrupt(args: argparse.Namespace) -> int:
     return 0
 
 
+def _warn_legacy_loop(cmd: str) -> None:
+    """Deprecation notice for the pre-agent_loop heuristic executor.
+
+    Jeremy confirmed 2026-07-09 these are unused (no scripts/cron/heartbeat
+    call sites); superseded by `maro-handle` / `maro run`. Kept working for
+    one deprecation window; the orch.py path/NEXT.md layer is NOT deprecated.
+    """
+    print(
+        f"warning: `maro {cmd}` is deprecated (superseded by `maro-handle` / "
+        f"`maro run`; see BACKLOG_DONE 2026-07-09) and will be removed in a "
+        f"future release.",
+        file=sys.stderr,
+    )
+
+
 def _cmd_plan(args: argparse.Namespace) -> int:
+    _warn_legacy_loop("plan")
     try:
         result = plan_project(args.project, " ".join(args.goal), max_steps=args.max_steps)
     except ValueError as exc:
@@ -629,6 +645,7 @@ def _cmd_plan(args: argparse.Namespace) -> int:
 
 
 def _cmd_tick(args: argparse.Namespace) -> int:
+    _warn_legacy_loop("tick")
     try:
         execution = _build_execution(args)
     except ValueError as exc:
@@ -657,6 +674,7 @@ def _cmd_tick(args: argparse.Namespace) -> int:
 
 
 def _cmd_loop(args: argparse.Namespace) -> int:
+    _warn_legacy_loop("loop")
     if args.max_runs <= 0:
         return fail("E_LOOP_BAD_LIMIT", "max-runs must be greater than zero")
     try:
