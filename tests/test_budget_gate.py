@@ -30,12 +30,16 @@ def _entry(cost, when):
 # --- spend_today ------------------------------------------------------------
 
 def test_spend_today_sums_todays_entries(costs_path):
+    # Real writes are chronological (record_step_cost appends under
+    # locked_append) — spend_today scans backward from EOF and stops at the
+    # first pre-midnight row, so this fixture orders entries the way the
+    # system actually produces them: oldest first, today's entries last.
     now = datetime.now(timezone.utc)
     yesterday = now - timedelta(days=1)
     costs_path.write_text("\n".join([
+        _entry(9.99, yesterday),   # excluded
         _entry(0.5, now),
         _entry(0.25, now),
-        _entry(9.99, yesterday),   # excluded
     ]) + "\n")
     assert spend_today() == pytest.approx(0.75)
 
@@ -58,6 +62,29 @@ def test_spend_today_skips_malformed_lines(costs_path):
 def test_spend_today_sees_record_step_cost(costs_path):
     record_step_cost("do a thing", tokens_in=1000, tokens_out=500, status="done")
     assert spend_today() > 0.0
+
+
+def test_spend_today_stops_scanning_at_first_old_entry(costs_path, monkeypatch):
+    """Proves the O(lifetime) file-scan fix: a large run of old entries ahead
+    of today's suffix must not all be pulled through the reverse-line
+    generator — only today's tail plus the one entry that ends the scan."""
+    now = datetime.now(timezone.utc)
+    yesterday = now - timedelta(days=1)
+    lines = [_entry(1.0, yesterday) for _ in range(5000)]
+    lines += [_entry(0.5, now), _entry(0.25, now)]
+    costs_path.write_text("\n".join(lines) + "\n")
+
+    pulled = {"n": 0}
+    real_reverse = metrics._reverse_readline
+
+    def _counting_reverse(path, **kw):
+        for line in real_reverse(path, **kw):
+            pulled["n"] += 1
+            yield line
+
+    monkeypatch.setattr(metrics, "_reverse_readline", _counting_reverse)
+    assert spend_today() == pytest.approx(0.75)
+    assert pulled["n"] < 50  # today's 2 entries + the one that ends the scan, not 5002
 
 
 # --- spend_for_loops (cost-per-run join) -------------------------------------

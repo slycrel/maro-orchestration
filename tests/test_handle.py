@@ -238,6 +238,26 @@ def test_cli_poe_handle_json(monkeypatch, tmp_path, capsys):
     assert data["lane"] == "now"
 
 
+def test_cli_no_backend_prints_clean_error_not_traceback(monkeypatch, tmp_path, capsys):
+    """A missing-backend RuntimeError from build_adapter() must surface as a
+    clean one-line message on maro-handle's first run, not a raw traceback."""
+    _setup(monkeypatch, tmp_path)
+    import handle as handle_mod
+
+    def _raise(*a, **kw):
+        raise RuntimeError(
+            "No LLM backend available. Set ANTHROPIC_API_KEY, OPENROUTER_API_KEY, "
+            "OPENAI_API_KEY, or install Claude Code (claude -p) / Codex CLI (codex). "
+            "Tried backend_order=['anthropic']."
+        )
+
+    monkeypatch.setattr(handle_mod, "handle", _raise)
+    rc = handle_mod.main(["hello", "--lane", "now"])
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "Error: No LLM backend available" in err
+
+
 # ---------------------------------------------------------------------------
 # effort: prefix modifier
 # ---------------------------------------------------------------------------

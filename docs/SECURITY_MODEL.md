@@ -71,7 +71,7 @@ Everything else: act first, forgiveness over permission.
 - Review `DECISIONS.md` / `PROVENANCE.md` before sharing a project directory
 - `memory/sandbox-audit.jsonl` may contain skill output snippets — don't share without review
 - Run `pytest` before deploying any skill mutation
-- `deploy/systemd/*.service` and `deploy/launchd/*.plist` embed `POE_WORKSPACE` path — regenerate via `poe-bootstrap services` if workspace moves
+- `~/.maro/workspace/deploy/systemd/*.service` and `~/.maro/workspace/deploy/launchd/*.plist` embed the workspace path — regenerate via `maro-bootstrap services` if workspace moves
 
 ---
 

@@ -118,23 +118,34 @@ def _load_yaml(path: Path) -> dict:
         return {}
 
 
-# Cached merged config — loaded once per process *per config path pair*.
+# Cached merged config — loaded once per process *per config path pair*,
+# invalidated automatically if either file's mtime changes.
 # Tests and worker subprocesses routinely swap MARO_WORKSPACE/OPENCLAW_WORKSPACE
 # at runtime; a path-blind cache leaks the prior workspace's merged config into
 # the new one.
 _config_cache: Optional[dict] = None
-_config_cache_key: Optional[tuple[str, str]] = None
+_config_cache_key: Optional[tuple] = None
+
+
+def _mtime(path: Path) -> float:
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return 0.0
 
 
 def load_config(*, reload: bool = False) -> dict:
     """Load merged config: user-level + workspace-level (workspace wins).
 
-    Cached after first call. Pass reload=True to re-read from disk.
+    Cached after first call, invalidated automatically if either config
+    file's mtime changes (a long-running heartbeat/daemon process must see
+    an operator's config edit without needing a restart). Pass reload=True
+    to force a re-read regardless.
     """
     global _config_cache, _config_cache_key
     user_path = _user_config_path()
     workspace_path = _workspace_config_path()
-    cache_key = (str(user_path), str(workspace_path))
+    cache_key = (str(user_path), str(workspace_path), _mtime(user_path), _mtime(workspace_path))
 
     if _config_cache is not None and not reload and _config_cache_key == cache_key:
         return _config_cache
@@ -256,5 +267,11 @@ def load_openclaw_cfg() -> dict:
 # ---------------------------------------------------------------------------
 
 def deploy_dir() -> Path:
-    """Return the deploy/ directory next to src/."""
-    return Path(__file__).resolve().parent.parent / "deploy"
+    """Return the directory service-file templates are written to.
+
+    Workspace-relative, not package-relative: a pip install puts config.py
+    in site-packages, so `Path(__file__).parent.parent` used to resolve into
+    the venv (often root-unwritable, and a strange place to look for a
+    systemd/launchd file anyway).
+    """
+    return workspace_root() / "deploy"

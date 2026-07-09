@@ -146,9 +146,36 @@ class TestConfigMerge:
         monkeypatch.setattr(config, "_workspace_config_path", lambda: ws_cfg)
 
         cfg1 = load_config(reload=True)
-        user_cfg.write_text(yaml.dump({"val": 2}))
-        cfg2 = load_config()  # cached — should NOT re-read
+        cfg2 = load_config()  # cached, file unchanged — should NOT re-read
         assert cfg2["val"] == 1
+        assert cfg2 is cfg1  # same object — proves it came from cache, not a re-read
+
+    def test_cache_auto_invalidates_on_file_mtime_change(self, tmp_path, monkeypatch):
+        """A long-running process (heartbeat/daemon) must see an operator's
+        config edit without needing a restart — this is what used to require
+        reload=True everywhere; see BACKLOG.md 1.0 install trial residuals."""
+        import os
+        import config
+        config._config_cache = None
+        config._config_cache_key = None
+
+        user_cfg = tmp_path / "user.yml"
+        ws_cfg = tmp_path / "ws.yml"
+        user_cfg.write_text(yaml.dump({"val": 1}))
+        ws_cfg.write_text("")
+
+        monkeypatch.setattr(config, "_user_config_path", lambda: user_cfg)
+        monkeypatch.setattr(config, "_workspace_config_path", lambda: ws_cfg)
+
+        load_config(reload=True)
+        user_cfg.write_text(yaml.dump({"val": 2}))
+        # Force a distinct mtime — some filesystems have 1s+ mtime
+        # granularity, and this test must not depend on wall-clock timing.
+        new_mtime = user_cfg.stat().st_mtime + 5
+        os.utime(user_cfg, (new_mtime, new_mtime))
+
+        cfg = load_config()  # no reload= — must still see the edit
+        assert cfg["val"] == 2
 
     def test_reload_clears_cache(self, tmp_path, monkeypatch):
         import config

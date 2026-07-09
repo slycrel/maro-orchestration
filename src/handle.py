@@ -2162,15 +2162,22 @@ def main(argv=None):
         # a parameter through handle's layers.
         os.environ["MARO_ADMISSION_WAIT_S"] = str(max(0.0, args.wait))
 
-    result = handle(
-        msg,
-        project=args.project,
-        repo_path=args.repo or "",
-        model=args.model,
-        force_lane=args.lane,
-        dry_run=args.dry_run,
-        verbose=args.verbose,
-    )
+    try:
+        result = handle(
+            msg,
+            project=args.project,
+            repo_path=args.repo or "",
+            model=args.model,
+            force_lane=args.lane,
+            dry_run=args.dry_run,
+            verbose=args.verbose,
+        )
+    except RuntimeError as e:
+        # build_adapter() raises RuntimeError with an actionable, human-facing
+        # message (missing API key / backend) — a raw traceback on a new
+        # user's first command reads as "broken," not "needs config."
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
 
     # Per-run finalize (metadata status, log slice, repo bundle) happens in
     # handle() itself for every caller as of 2026-06-11. The CLI only clears

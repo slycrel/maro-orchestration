@@ -579,31 +579,43 @@ none blocking:
   no skills dir; doctor honestly flags it. Ship as package data (needs a
   data-files approach for the flat layout) or auto-seed
   `~/.maro/workspace/skills/` from a bundled resource at bootstrap.
-- [ ] **Service templates written into the venv** (`<venv>/lib/python3.11/deploy/...`)
-  — `deploy_dir()` resolves package-relative. Works, but ugly and
-  root-unwritable guidance. Point service-file output at
-  `~/.maro/workspace/deploy/` instead.
-- [ ] **`maro-handle` with no backend dies with a raw traceback** — the
-  RuntimeError message is right ("set X or install Y") but it should print
-  clean, not stack-trace, on the very first command a new user runs.
-- [ ] **`run_smoke_test` docstring says dry-run; it makes a real NOW-lane
-  LLM call.** Either make it honest (rename) or actually dry-run.
+- [x] **Service templates written into the venv** — DONE 2026-07-09.
+  `config.deploy_dir()` was package-relative (`Path(__file__).parent.parent`),
+  which lands in `<venv>/lib/.../site-packages/..` under a pip install —
+  root-unwritable, and a strange place to look for a systemd/launchd file.
+  Now `workspace_root() / "deploy"`. README/SECURITY_MODEL.md service-copy
+  paths corrected to match. Test: `test_deploy_dir_is_workspace_relative_not_package_relative`
+  (`tests/test_phase21.py`).
+- [x] **`maro-handle` with no backend dies with a raw traceback** — DONE
+  2026-07-09. `handle.main()` now catches the `RuntimeError` `build_adapter()`
+  raises (already an actionable "set X or install Y" message) and prints it
+  as `Error: ...` to stderr with exit 1, instead of a full traceback on a new
+  user's first command. Test: `test_cli_no_backend_prints_clean_error_not_traceback`
+  (`tests/test_handle.py`).
+- [x] **`run_smoke_test` docstring says dry-run; it makes a real NOW-lane
+  LLM call.** DONE 2026-07-09 — made honest, not behavior-changed: a real
+  live call is the right smoke test (proves the configured backend actually
+  works, which a canned dry-run response can't), so the docstring/CLI-help/
+  module-docstring were corrected instead of adding `--dry-run`. Tests:
+  `tests/test_bootstrap_smoke.py`.
 - [ ] **E2E run left a second haiku.txt at `$HOME`** alongside the in-project
   one — an out-of-fence relative write that the (now default-ON) write fence
   either allowed via the goal-declared-path widening ("a file named
   haiku.txt") or missed. Pull the run's captain's log / FENCE rows next time
   the trial runs and classify: legit widening vs detection hole.
-- [ ] **`metrics.spend_today()` line-scans all of step-costs.jsonl** and now
-  runs on every non-dry loop entry (daily cap default ON). The file "grows
-  unbounded" per its own comment — fine for months, but eventually every run
-  start pays an O(lifetime) read for a question about today. Cheap fix when
-  it matters: scan backwards from EOF and stop at the first pre-midnight
-  row, or keep a per-day rollup beside the appender.
-- [ ] **`config.load_config` caches with no mtime check**, so a long-running
-  heartbeat never sees a config edit. Newly consequential with default caps:
-  an operator raising `budget.daily_usd` mid-refusal sees no effect until
-  the daemon restarts (looks like an outage). Either mtime-invalidate the
-  cache or have the budget gate read with `reload=True`.
+- [x] **`metrics.spend_today()` line-scans all of step-costs.jsonl** — DONE
+  2026-07-09. New `_reverse_readline()` scans backward from EOF in chunks
+  (no full-file load) and stops at the first pre-midnight row —
+  `record_step_cost` already appends under `locked_append`, so entries are
+  chronological and today's are always the tail. Test proving the early
+  stop: `test_spend_today_stops_scanning_at_first_old_entry`
+  (`tests/test_budget_gate.py`, 5000-entry fixture, asserts <50 lines pulled).
+- [x] **`config.load_config` caches with no mtime check** — DONE 2026-07-09.
+  Cache key now includes both config files' mtimes, so a long-running
+  heartbeat/daemon picks up an operator's edit (e.g. raising
+  `budget.daily_usd` mid-refusal) on the next `config.get()` call, no
+  restart or explicit `reload=True` needed anywhere. Test:
+  `test_cache_auto_invalidates_on_file_mtime_change` (`tests/test_config.py`).
 
 ---
 

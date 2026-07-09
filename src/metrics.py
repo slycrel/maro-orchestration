@@ -14,6 +14,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import os
 import re
 import time
 import uuid
@@ -165,6 +166,30 @@ def _step_costs_path() -> Path:
     return memory_dir() / "step-costs.jsonl"
 
 
+def _reverse_readline(path: Path, buf_size: int = 65536):
+    """Yield lines of `path` from EOF backward, reading in chunks — never
+    loads the whole file into memory. Lets a tail-scan (e.g. "today's"
+    entries in an append-only, chronologically-ordered log) stop after the
+    relevant suffix instead of paying for the file's full lifetime size.
+    """
+    with path.open("rb") as fh:
+        fh.seek(0, os.SEEK_END)
+        remaining = fh.tell()
+        leftover = b""
+        while remaining > 0:
+            read_size = min(buf_size, remaining)
+            remaining -= read_size
+            fh.seek(remaining)
+            chunk = fh.read(read_size) + leftover
+            lines = chunk.split(b"\n")
+            leftover = lines[0]
+            for line in reversed(lines[1:]):
+                if line:
+                    yield line.decode("utf-8", errors="replace")
+        if leftover:
+            yield leftover.decode("utf-8", errors="replace")
+
+
 def spend_today() -> float:
     """Total recorded USD spend since UTC midnight (sums step-costs.jsonl).
 
@@ -172,6 +197,14 @@ def spend_today() -> float:
     (ctx.cost_budget); this feeds the `budget.daily_usd` gate that stops an
     unattended substrate from burning through runs one under-cap loop at a
     time. Never raises; returns 0.0 on any failure.
+
+    Scans backward from EOF (record_step_cost appends under `locked_append`,
+    so entries are chronological) and stops at the first pre-midnight row —
+    the file "grows unbounded" (see record_step_cost), so a forward full-file
+    scan pays an O(lifetime) read for a question about today. Tradeoff: this
+    assumes append order tracks wall-clock order, which a rare concurrent-
+    writer race could violate by a line or two — acceptable for a budget
+    gate that already treats its inputs as advisory-cheap, not exact.
     """
     try:
         path = _step_costs_path()
@@ -179,17 +212,17 @@ def spend_today() -> float:
             return 0.0
         today = datetime.now(timezone.utc).date().isoformat()
         total = 0.0
-        with path.open(encoding="utf-8") as fh:
-            for line in fh:
-                # cheap prefix check before parsing — the file grows unbounded
-                if today not in line[:60]:
-                    continue
-                try:
-                    e = json.loads(line)
-                except Exception:
-                    continue
-                if str(e.get("recorded_at", "")).startswith(today):
-                    total += float(e.get("cost_usd", 0.0) or 0.0)
+        for line in _reverse_readline(path):
+            # cheap prefix check before parsing; chronological + reverse
+            # order means the first miss marks the end of today's suffix
+            if today not in line[:60]:
+                break
+            try:
+                e = json.loads(line)
+            except Exception:
+                continue
+            if str(e.get("recorded_at", "")).startswith(today):
+                total += float(e.get("cost_usd", 0.0) or 0.0)
         return total
     except Exception:
         return 0.0

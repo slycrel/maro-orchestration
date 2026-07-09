@@ -70,6 +70,21 @@ def test_workspace_root_default_no_env(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# config.py — deploy_dir (workspace-relative, not package-relative — a pip
+# install's config.py lives in site-packages, so package-relative used to
+# resolve into the venv, often root-unwritable)
+# ---------------------------------------------------------------------------
+
+def test_deploy_dir_is_workspace_relative_not_package_relative(monkeypatch, tmp_path):
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+    result = config.deploy_dir()
+    assert result == tmp_path.resolve() / "deploy"
+    assert "site-packages" not in str(result)
+    src_dir = Path(config.__file__).resolve().parent
+    assert not str(result).startswith(str(src_dir.parent))
+
+
+# ---------------------------------------------------------------------------
 # config.py — credentials_env_file
 # ---------------------------------------------------------------------------
 

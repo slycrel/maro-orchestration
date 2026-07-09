@@ -10,7 +10,7 @@ Entry points:
   maro-bootstrap dirs       -- create workspace dirs only
   maro-bootstrap services   -- write optional service files only
   maro-bootstrap status     -- show current workspace and service status
-  maro-bootstrap smoke      -- run a dry-run NOW-lane task and verify output
+  maro-bootstrap smoke      -- run a live NOW-lane request and verify output
 """
 
 from __future__ import annotations
@@ -247,7 +247,10 @@ def write_service_files(workspace: Optional[Path] = None) -> list[Path]:
 # ---------------------------------------------------------------------------
 
 def run_smoke_test() -> bool:
-    """Dry-run a NOW-lane task. Returns True if it exits 0."""
+    """Run a real NOW-lane task through a live LLM backend. Returns True if it
+    exits 0. Deliberately not a --dry-run: the point is to prove a fresh
+    install's configured backend (API key / CLI) actually works, which a
+    dry run (canned response, no API call) can't verify."""
     script = _SRC_DIR / "handle.py"
     if not script.exists():
         print("  [smoke] handle.py not found — skipping", file=sys.stderr)
@@ -373,7 +376,7 @@ def main(argv: list[str] | None = None) -> None:
     sub.add_parser("dirs", help="Create workspace directories only")
     sub.add_parser("services", help="Write optional service files only")
     sub.add_parser("status", help="Show workspace and service status")
-    p_smoke = sub.add_parser("smoke", help="Run smoke test (dry-run NOW-lane task)")
+    p_smoke = sub.add_parser("smoke", help="Run smoke test (live NOW-lane request; needs a working LLM backend)")
     p_smoke  # noqa: B018
 
     args = parser.parse_args(argv)
