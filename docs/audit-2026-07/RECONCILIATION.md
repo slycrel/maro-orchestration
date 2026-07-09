@@ -175,7 +175,9 @@ to recur), and README's benchmarking examples actually read that stale
 copy (docs-11); assorted dead pidfiles, a decorative tmux-claude unit,
 and the hermes trial containers set to auto-resurrect
 (`unless-stopped`) — the latter must be `docker rm`'d when the trial
-chunk ends per the good-system-citizen rule.
+chunk ends per the good-system-citizen rule. **Done 2026-07-09:**
+both containers removed after verifying all state was on host bind
+mounts; recreate anytime via `~/claude/hermes-maro-trial/docker-compose.yml`.
 
 ### SF-8 — The knowledge "web" is write-only and injects known fabrications
 **Members:** data-05, arch-07, arch-08, arch-09. **Severity:
