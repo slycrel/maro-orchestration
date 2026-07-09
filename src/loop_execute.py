@@ -578,6 +578,17 @@ def _execute_main_loop(
             except Exception:
                 _artifact_check_on = False
 
+        # In-flight marker, written BEFORE the step: a mid-step crash leaves
+        # {index, started_at, pid} in the checkpoint so resume knows this step
+        # may have partial side effects (vs. never started — the hermes goal-2
+        # wound). The post-step checkpoint write clears it.
+        try:
+            from checkpoint import write_checkpoint as _inflight_ckpt
+            _inflight_ckpt(ctx.loop_id, ctx.goal, ctx.project or "",
+                           steps, step_outcomes, in_flight_index=step_idx)
+        except Exception as _if_exc:
+            log.debug("in-flight checkpoint write failed (non-fatal): %s", _if_exc)
+
         outcome = _execute_step(
             goal=goal,
             step_text=step_text,

@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
@@ -43,7 +44,11 @@ _CHECKPOINT_DIR_NAME = "checkpoints"
 
 
 def _checkpoint_dir() -> Path:
-    """Resolve checkpoint storage directory."""
+    """Legacy checkpoint storage directory (pre-run-dir era).
+
+    Kept as the write-fallback when no run is active and as a read-fallback
+    for one release (checkpoints written before the 2026-07-09 move).
+    """
     try:
         from orch_items import orch_root
         d = orch_root() / _CHECKPOINT_DIR_NAME
@@ -55,6 +60,42 @@ def _checkpoint_dir() -> Path:
 
 def _checkpoint_path(loop_id: str) -> Path:
     return _checkpoint_dir() / f"ckpt_{loop_id}.json"
+
+
+def _rundir_checkpoint_path() -> Optional[Path]:
+    """Run-dir checkpoint location (`<run-dir>/build/checkpoint.json`).
+
+    None when no run is active (tests, direct agent_loop invocations) —
+    callers fall back to the legacy directory. The run dir is the durable,
+    env-independent home: the legacy `orch_root()/checkpoints` resolved
+    differently per environment, which is how 52 stale checkpoints ended up
+    in the repo and 0 in the live workspace.
+    """
+    try:
+        from runs import current_run_dir
+        rd = current_run_dir()
+        if rd is not None:
+            return Path(rd) / "build" / "checkpoint.json"
+    except Exception:
+        pass
+    return None
+
+
+def _run_handle_id(build_ckpt_path: Path) -> str:
+    """handle_id from the run dir's metadata.json, best-effort."""
+    try:
+        meta = build_ckpt_path.parent.parent / "metadata.json"
+        return str(json.loads(meta.read_text(encoding="utf-8")).get("handle_id", ""))
+    except Exception:
+        return ""
+
+
+def _runs_root() -> Optional[Path]:
+    try:
+        from runs import runs_root
+        return runs_root()
+    except Exception:
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -82,6 +123,12 @@ class Checkpoint:
     completed: List[CompletedStep]
     timestamp: str = ""
     parent_loop_id: str = ""  # Set when this checkpoint is a branch of another
+    handle_id: str = ""  # run-dir linkage (2026-07-09 substrate fix)
+    # Written BEFORE a step executes: {"index": int, "started_at": iso, "pid": int}.
+    # Present on load ⇒ that step may have partial side effects (crashed
+    # mid-step); absent ⇒ the next step never started. Cleared by the
+    # post-step checkpoint write.
+    in_flight: Optional[Dict[str, Any]] = None
 
     def __post_init__(self):
         if not self.timestamp:
@@ -115,6 +162,10 @@ class Checkpoint:
         }
         if self.parent_loop_id:
             d["parent_loop_id"] = self.parent_loop_id
+        if self.handle_id:
+            d["handle_id"] = self.handle_id
+        if self.in_flight:
+            d["in_flight"] = self.in_flight
         return d
 
     @classmethod
@@ -131,6 +182,8 @@ class Checkpoint:
             completed=completed,
             timestamp=d.get("timestamp", ""),
             parent_loop_id=d.get("parent_loop_id", ""),
+            handle_id=d.get("handle_id", ""),
+            in_flight=d.get("in_flight") or None,
         )
 
 
@@ -145,6 +198,8 @@ def write_checkpoint(
     project: str,
     steps: List[str],
     step_outcomes: List[Any],  # List[StepOutcome] — avoid circular import
+    *,
+    in_flight_index: Optional[int] = None,
 ) -> None:
     """Write current loop progress to disk.
 
@@ -152,12 +207,20 @@ def write_checkpoint(
     same loop_id. Swallows all errors: a failed checkpoint write must never
     abort a running loop.
 
+    Lands in `<run-dir>/build/checkpoint.json` when a run is active (durable,
+    linked to handle_id, survives crashes in the place the operator already
+    looks); falls back to the legacy checkpoints dir otherwise.
+
     Args:
         loop_id: Unique ID for this loop run.
         goal: Original goal text.
         project: Project slug.
         steps: Full list of planned steps (all, including future ones).
         step_outcomes: List of StepOutcome objects completed so far.
+        in_flight_index: When set, stamps the step about to execute (call
+            BEFORE execution) so a mid-step crash is distinguishable from
+            "next step never started". Post-step writes omit it, which
+            clears the marker.
     """
     try:
         completed = [
@@ -172,36 +235,95 @@ def write_checkpoint(
             )
             for i, s in enumerate(step_outcomes)
         ]
+        in_flight = None
+        if in_flight_index is not None:
+            in_flight = {
+                "index": in_flight_index,
+                "started_at": datetime.now(timezone.utc).isoformat(),
+                "pid": os.getpid(),
+            }
+        rd_path = _rundir_checkpoint_path()
         ckpt = Checkpoint(
             loop_id=loop_id,
             goal=goal,
             project=project,
             steps=steps,
             completed=completed,
+            handle_id=_run_handle_id(rd_path) if rd_path else "",
+            in_flight=in_flight,
         )
-        path = _checkpoint_path(loop_id)
+        if rd_path is not None:
+            rd_path.parent.mkdir(parents=True, exist_ok=True)
+            path = rd_path
+        else:
+            path = _checkpoint_path(loop_id)
         path.write_text(json.dumps(ckpt.to_dict(), indent=2), encoding="utf-8")
         log.debug("checkpoint written: %s (%d/%d steps)", loop_id, len(completed), len(steps))
     except Exception as exc:
         log.debug("checkpoint write failed (non-fatal): %s", exc)
 
 
-def load_checkpoint(loop_id: str) -> Optional[Checkpoint]:
-    """Load a checkpoint by loop_id. Returns None if not found or corrupt."""
+def _load_from(path: Path, loop_id: Optional[str] = None) -> Optional[Checkpoint]:
+    """Parse one checkpoint file; None on missing/corrupt/loop_id mismatch."""
     try:
-        path = _checkpoint_path(loop_id)
         data = json.loads(path.read_text(encoding="utf-8"))
-        return Checkpoint.from_dict(data)
+        ckpt = Checkpoint.from_dict(data)
+        if loop_id is not None and ckpt.loop_id != loop_id:
+            return None
+        return ckpt
     except FileNotFoundError:
         return None
     except Exception as exc:
-        log.warning("checkpoint load failed for %s: %s", loop_id, exc)
+        log.warning("checkpoint load failed for %s: %s", path, exc)
         return None
 
 
+def load_checkpoint(loop_id: str) -> Optional[Checkpoint]:
+    """Load a checkpoint by loop_id. Returns None if not found or corrupt.
+
+    Search order: the active run dir (if any), then the legacy checkpoints
+    dir, then a newest-first scan of all run dirs (resume usually happens in
+    a fresh process where no run-dir contextvar is set).
+    """
+    rd_path = _rundir_checkpoint_path()
+    if rd_path is not None:
+        ckpt = _load_from(rd_path, loop_id)
+        if ckpt is not None:
+            return ckpt
+
+    legacy = _checkpoint_path(loop_id)
+    if legacy.exists():
+        ckpt = _load_from(legacy)
+        if ckpt is not None:
+            return ckpt
+
+    root = _runs_root()
+    if root is not None and root.is_dir():
+        try:
+            candidates = sorted(
+                root.glob("*/build/checkpoint.json"),
+                key=lambda p: p.stat().st_mtime, reverse=True,
+            )
+        except Exception:
+            candidates = []
+        for p in candidates:
+            ckpt = _load_from(p, loop_id)
+            if ckpt is not None:
+                return ckpt
+    return None
+
+
 def delete_checkpoint(loop_id: str) -> None:
-    """Delete a checkpoint file after a loop completes successfully."""
+    """Delete a checkpoint file after a loop completes successfully.
+
+    Only loop_finalize's `done` path calls this — a crashed or stuck loop
+    keeps its checkpoint by design (that's the resume substrate).
+    """
     try:
+        rd_path = _rundir_checkpoint_path()
+        if rd_path is not None and rd_path.exists():
+            if _load_from(rd_path, loop_id) is not None:
+                rd_path.unlink(missing_ok=True)
         _checkpoint_path(loop_id).unlink(missing_ok=True)
         log.debug("checkpoint deleted: %s", loop_id)
     except Exception:
@@ -209,17 +331,24 @@ def delete_checkpoint(loop_id: str) -> None:
 
 
 def list_checkpoints() -> List[Checkpoint]:
-    """List all saved checkpoints, newest first."""
-    ckpts = []
+    """List all saved checkpoints (legacy dir + run dirs), newest first."""
+    entries: List[tuple] = []
     try:
-        for p in sorted(_checkpoint_dir().glob("ckpt_*.json"), key=lambda x: x.stat().st_mtime, reverse=True):
-            try:
-                data = json.loads(p.read_text(encoding="utf-8"))
-                ckpts.append(Checkpoint.from_dict(data))
-            except Exception:
-                pass
+        for p in _checkpoint_dir().glob("ckpt_*.json"):
+            entries.append(p)
     except Exception:
         pass
+    root = _runs_root()
+    if root is not None and root.is_dir():
+        try:
+            entries.extend(root.glob("*/build/checkpoint.json"))
+        except Exception:
+            pass
+    ckpts = []
+    for p in sorted(entries, key=lambda x: x.stat().st_mtime, reverse=True):
+        ckpt = _load_from(p)
+        if ckpt is not None:
+            ckpts.append(ckpt)
     return ckpts
 
 

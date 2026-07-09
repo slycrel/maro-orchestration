@@ -373,7 +373,20 @@ def recording_enabled() -> bool:
 def _next_call_seq(rd: Path) -> int:
     key = str(rd)
     with _CALL_LOCK:
-        n = _CALL_COUNTERS.get(key, 0) + 1
+        if key not in _CALL_COUNTERS:
+            # Rebuild from disk: after a crash+resume the in-memory counter
+            # is gone, and starting at 1 would overwrite call-00001.json.
+            highest = 0
+            try:
+                for p in (rd / "build" / "calls").glob("call-*.json"):
+                    try:
+                        highest = max(highest, int(p.stem.split("-")[1]))
+                    except (IndexError, ValueError):
+                        continue
+            except OSError:
+                pass
+            _CALL_COUNTERS[key] = highest
+        n = _CALL_COUNTERS[key] + 1
         _CALL_COUNTERS[key] = n
         return n
 
