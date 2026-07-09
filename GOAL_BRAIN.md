@@ -1088,6 +1088,31 @@ Sample: the 2026-05-13..17 window of `~/.maro/workspace/runs/` (478 dirs total;
   it). Fixed (hooksPath unset, source hook de-Poe'd, reinstalled) and
   tripwired: `tests/test_git_guard.py` asserts installed+executable, no
   stale hooksPath shadowing, source parity, and block/allow behavior.
+- **2026-07-08 (session close — Jeremy: "let's flip the navigator.act_dispatch,
+  no need to wait on me there")** — `navigator.act_dispatch` hardcoded default
+  False → True (escalate-only via the `act_moves` default), so new installs get
+  the dispatch cutover the way this box has run it live since 2026-06-21
+  (14/14 execute agreement, zero bad escalates; escalate defers to a human so
+  it can't assert a wrong resolution). Known cost of default-ON: one cheap-tier
+  decide call per autonomous dispatch (the act gate implies the model call even
+  with shadowing off — noted in `navigator_shadow.py` and DEFAULTS.md).
+  `navigator.act_blocked_step` stays default-OFF (thinner evidence, mid-run
+  blast radius; this box opted in 2026-07-03 via workspace config). Tests:
+  `test_default_is_on_escalate_acts` tripwires the default;
+  `test_act_off_explicitly_escalate_is_shadow_only` pins the opt-out.
+  **Latent bug found by the flip's suite run and fixed:** the idunno-chain's
+  synthesized escalate (conf 1.0, `escalated_via: idunno_chain`) could ACT —
+  and the chain exhausts on adapter outages too, so a rate-limited/unreachable
+  navigator would have turned every autonomous dispatch into stuck (live on
+  this box since 2026-06-21, same exposure at blocked steps since 2026-07-03).
+  Fix: the marker now rides in `decision.payload` and both act paths
+  (`handle._navigator_act_dispatch`, `loop_blocked._navigator_act_blocked_step`)
+  never act on it — navigator infrastructure fails open to the pipeline;
+  shadow rows still log the synthesized escalate. Regression-pinned by
+  `test_synthesized_idunno_chain_escalate_never_acts` plus the two recall-guard
+  tests that caught it.
+  Also filed: host-check.sh alert-channel wiring as a BACKLOG todo (cron
+  without an alert channel notifies nobody — needs the notify decision first).
 
 ## Threads (system-maintained — nothing leaves this list silently)
 

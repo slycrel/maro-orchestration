@@ -559,6 +559,12 @@ def _navigator_act_blocked_step(
         reasoning = str(getattr(nav_decision, "reasoning", ""))
         if not _forward or move != "escalate" or conf < _floor:
             return None
+        # Synthesized idunno-chain escalates never act (mirror of
+        # handle._navigator_act_dispatch): the chain exhausts on adapter
+        # outages too, and a dead navigator must not abort recovery mid-run.
+        _payload = dict(getattr(nav_decision, "payload", {}) or {})
+        if _payload.get("escalated_via") == "idunno_chain":
+            return None
 
         stuck_reason = (
             f"NAVIGATOR_ESCALATE: recovery overridden at blocked step "

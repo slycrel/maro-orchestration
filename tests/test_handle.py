@@ -839,8 +839,10 @@ class TestNavigatorDispatchShadow:
 
 class TestNavigatorDispatchCutover:
     """Dispatch-class cutover (navigator.act_dispatch): the navigator's
-    escalate/close decisions act instead of being shadow-only. Default OFF;
-    confidence floor; guard keeps the first word; everything else executes."""
+    escalate/close decisions act instead of being shadow-only. Default ON
+    since 2026-07-08 (escalate-only via act_moves); explicit false returns
+    to shadow-only; confidence floor; guard keeps the first word; everything
+    else executes."""
 
     GOAL = "verify the polymarket rate limit handling end to end"
 
@@ -890,7 +892,9 @@ class TestNavigatorDispatchCutover:
 
         monkeypatch.setattr(config, "get", _cfg)
 
-    def test_act_off_by_default_escalate_is_shadow_only(self, monkeypatch, tmp_path):
+    def test_default_is_on_escalate_acts(self, monkeypatch, tmp_path):
+        """No config at all → act_dispatch defaults ON (2026-07-08 flip) and
+        a confident escalate acts. Tripwire: fails if the default regresses."""
         _setup(monkeypatch, tmp_path)
         import handle as handle_mod
         calls = []
@@ -899,7 +903,43 @@ class TestNavigatorDispatchCutover:
 
         result = handle_mod.handle_task(self._task(), dry_run=False)
 
-        assert calls == [self.GOAL], "default off: decision must not act"
+        assert calls == [], "default on: confident escalate must act"
+        assert result.status == "stuck"
+        assert result.classification_reason == "navigator_escalate"
+
+    def test_synthesized_idunno_chain_escalate_never_acts(self, monkeypatch, tmp_path):
+        """Chain-exhausted escalates (escalated_via=idunno_chain, synthetic
+        conf 1.0) must fall through to execute even with act on: the chain
+        exhausts on adapter outages too, and an unreachable navigator must
+        fail open to the pipeline. Regression: with act_dispatch default-on,
+        blocked adapters turned every dispatch into stuck/navigator_escalate."""
+        _setup(monkeypatch, tmp_path)
+        import handle as handle_mod
+        calls = []
+        self._patch_shadow_returning(
+            monkeypatch,
+            self._decision("escalate", 1.0,
+                           payload={"escalated_via": "idunno_chain"}))
+        self._patch_handle(monkeypatch, calls)
+        self._patch_act_config(monkeypatch)
+
+        result = handle_mod.handle_task(self._task(), dry_run=False)
+
+        assert calls == [self.GOAL], "synthesized escalate must not act"
+        assert result.status == "done"
+
+    def test_act_off_explicitly_escalate_is_shadow_only(self, monkeypatch, tmp_path):
+        """navigator.act_dispatch: false must return to shadow-only exactly."""
+        _setup(monkeypatch, tmp_path)
+        import handle as handle_mod
+        calls = []
+        self._patch_shadow_returning(monkeypatch, self._decision("escalate", 0.95))
+        self._patch_handle(monkeypatch, calls)
+        self._patch_act_config(monkeypatch, enabled=False)
+
+        result = handle_mod.handle_task(self._task(), dry_run=False)
+
+        assert calls == [self.GOAL], "explicit off: decision must not act"
         assert result.status == "done"
 
     def test_default_act_moves_is_escalate_only_close_stays_shadow(self, monkeypatch, tmp_path):

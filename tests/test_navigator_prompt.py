@@ -262,11 +262,29 @@ class TestShadowDispatchLive:
             return overrides.get(name, default)
         return get
 
-    def test_off_by_default_in_code(self):
+    def test_gate_open_by_default_via_act_dispatch(self):
+        """navigator.act_dispatch defaults ON (2026-07-08) and implies the
+        decide call, so a clean config gets a decision — a deployment that
+        acts on dispatch needs the decision even with shadowing off."""
         from unittest.mock import patch
         from navigator_shadow import shadow_dispatch_live
         built = []
         with patch("config.get", side_effect=self._cfg({})):
+            result = shadow_dispatch_live(
+                self.GOAL,
+                adapter_factory=lambda t: built.append(t) or _FakeAdapter(
+                    [_resp("execute", instruction="go")]),
+            )
+        assert result is not None and result.move == "execute"
+        assert built, "default-on act_dispatch must imply the decide call"
+
+    def test_gate_closed_when_both_flags_off(self):
+        from unittest.mock import patch
+        from navigator_shadow import shadow_dispatch_live
+        built = []
+        with patch("config.get", side_effect=self._cfg(
+                {"navigator.shadow_dispatch": False,
+                 "navigator.act_dispatch": False})):
             result = shadow_dispatch_live(
                 self.GOAL,
                 adapter_factory=lambda t: built.append(t) or _FakeAdapter(

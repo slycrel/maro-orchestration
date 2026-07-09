@@ -411,6 +411,18 @@ See `docs/CONSTRAINT_ORCHESTRATION_DESIGN.md` + `docs/CONSTRAINT_ORCHESTRATION_R
   eval batch is designed; record in the A/B record's m3 caveat
   (`docs/history/2026-07-08-worker-slice-ab.md`).
 
+### host-check.sh alerting + scheduling (Jeremy, 2026-07-08 session close)
+
+- [ ] **Wire `scripts/host-check.sh` to an alert channel, then schedule it.**
+  The check itself works (disk/mem/swap/load/orphans/git-guard; heartbeat
+  SKIPs >30d unless `MARO_HEARTBEAT_EXPECTED=1`) but exit-nonzero on a cron
+  notifies nobody. Natural wire-up: pipe failures through the existing
+  `notify.command` Telegram lane (`~/.maro/config.yml` — same channel as
+  run_completed/escalation events), then enable the commented cron/systemd
+  stanza at the bottom of the script. Decide alert channel + frequency
+  together; don't schedule without the channel (silent red is worse than
+  no cron — it reads as green).
+
 ### Standing test-goal menu (future ideas)
 
 - [ ] **Polymarket behavioral test** — "Analyze 400M+ Polymarket trades to find behavioral patterns among top wallets — what do winners do differently?" (from hrundel75 link)

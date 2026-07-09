@@ -270,8 +270,10 @@ def shadow_dispatch_live(
         from config import get as cfg_get
         # act_dispatch implies the decide call: a deployment that turned the
         # dispatch class live needs the decision even with shadowing off.
+        # act_dispatch defaults ON (2026-07-08) — so a clean install pays one
+        # cheap-tier call per autonomous dispatch unless it opts out.
         if not (bool(cfg_get("navigator.shadow_dispatch", False))
-                or bool(cfg_get("navigator.act_dispatch", False))):
+                or bool(cfg_get("navigator.act_dispatch", True))):
             return None
         if tiers is None:
             # Default cheap-only: live shadow wants volume of dispatch-class

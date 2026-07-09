@@ -2030,13 +2030,19 @@ def _navigator_act_dispatch(
     extend/fork/collate have no dispatch machinery and fall through to
     execute. Acting requires confidence >= navigator.act_confidence_floor
     (default 0.9); below the floor the pipeline keeps the wheel. Never raises.
+
+    DEFAULT ON since 2026-07-08 (Jeremy's flip; this box ran it live since
+    2026-06-21 — 14/14 execute agreement, zero bad escalates). Escalate-only
+    by default via act_moves; note the decide call this implies costs one
+    cheap-tier model call per autonomous dispatch (see navigator_shadow).
+    Set navigator.act_dispatch: false to return to shadow-only.
     """
     if decision is None:
         return None
     try:
         try:
             from config import get as _cfg_get
-            if not bool(_cfg_get("navigator.act_dispatch", False)):
+            if not bool(_cfg_get("navigator.act_dispatch", True)):
                 return None
             _floor = float(_cfg_get("navigator.act_confidence_floor", 0.9))
             _act_moves = set(_cfg_get("navigator.act_moves", ["escalate"]) or [])
@@ -2047,6 +2053,11 @@ def _navigator_act_dispatch(
         reasoning = str(getattr(decision, "reasoning", ""))
         payload = dict(getattr(decision, "payload", {}) or {})
         if move not in _act_moves or move not in ("escalate", "close") or conf < _floor:
+            return None
+        # Synthesized idunno-chain escalates never act: conf 1.0 is synthetic
+        # and the chain exhausts on adapter outages too — an unreachable
+        # navigator must fail open to the pipeline, not stop the line.
+        if payload.get("escalated_via") == "idunno_chain":
             return None
 
         if move == "escalate":

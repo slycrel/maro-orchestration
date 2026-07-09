@@ -15,11 +15,15 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 DOC = REPO_ROOT / "docs" / "DEFAULTS.md"
 
 # Function names that read config (config.get + its import aliases in src/).
-_GETTERS = {"get", "config_get", "_cfg_get", "cfg_get", "_config_get", "cfg"}
+# "_get" added 2026-07-08: run-visibility shipped `from config import get as
+# _get` and the census missed all three of its keys — keep this set in sync
+# with whatever alias spellings src/ actually uses.
+_GETTERS = {"get", "_get", "config_get", "_cfg_get", "cfg_get", "_config_get", "cfg"}
 
 # Dotless keys are indistinguishable from dict lookups by name alone, so only
-# the explicit config aliases count for them; bare get() needs a dotted key.
-_DOTLESS_GETTERS = _GETTERS - {"get"}
+# the explicit config aliases count for them; bare get()/_get() (common dict
+# helper names too) need a dotted key.
+_DOTLESS_GETTERS = _GETTERS - {"get", "_get"}
 
 
 def _keys_read_by_code() -> set:

@@ -319,6 +319,11 @@ def decide(
             "why": "; ".join(confusions) or "no tier produced a decision",
             "options": ["clarify the goal", "abandon the thread",
                         "take over manually"],
+            # Marks this escalate as synthesized (chain exhausted), not a
+            # model decision. Act paths must never act on it: the conf 1.0
+            # is synthetic, and "no tier decided" includes adapter outages —
+            # navigator infrastructure failing may not block the pipeline.
+            "escalated_via": "idunno_chain",
         },
     )
     meta["tier"] = top

@@ -178,7 +178,8 @@ def handle_task(
                     status="error",
                     result=_msg,
                 )
-            # Dispatch-class cutover (navigator.act_dispatch, default OFF):
+            # Dispatch-class cutover (navigator.act_dispatch, default ON
+            # since 2026-07-08, escalate-only via act_moves):
             # the navigator's dispatch decision acts instead of being
             # shadow-only. Earned by shadow agreement data (NAVIGATOR_SCHEMA
             # cutover rule); the recall guard above stays as the deterministic
