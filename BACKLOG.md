@@ -669,6 +669,23 @@ after the current 1.0 remainders (a)–(d); (g) needs design before release.
   lessons/rules vs raw runs), trust+provenance on import, privacy
   scrubbing guarantees, format versioning. Vision anchor: Maro is "a
   communication platform … in addition to an action generator."
+- [ ] **(h) Backend-error resilience + auto-resume (Jeremy, 2026-07-09
+  late addition).** Research + design pass on the errors an end user will
+  actually hit: token/rate limits, auth expiry (`/login`-class issues, key
+  invalidation), context-window overruns, network blips — and
+  **auto-resuming interrupted work**. "That seems like a sharp edge that
+  will kill an end user's enthusiasm." Known evidence already on file:
+  project_bugs_found memory ("no rate-limit recovery", Polymarket sprint);
+  the hermes-trial adapter timeout that left goal-2 work half-committed at
+  step 7/10; model-lane contention was *accepted* for this box (2026-07-02,
+  Jeremy's own subscription) but is a UX cliff for strangers. Doors:
+  `FailoverAdapter` backend order, director restart/continuation_depth,
+  navigator fail-open-to-pipeline (the idunno-chain fix), run dirs +
+  record-mode capture (the state needed to resume exists on disk). Design
+  should decide: detect-and-classify (which errors are retryable vs
+  auth-actionable vs fatal), user messaging (actionable, not tracebacks —
+  the no-backend fix is the pattern), and resume semantics (what "pick up
+  where it died" means per lane).
 
 ---
 

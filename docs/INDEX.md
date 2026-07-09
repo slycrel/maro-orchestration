@@ -28,6 +28,7 @@ BACKLOG, VISION, CLAUDE, README…) are living by definition and carry no frontm
 | How do I monitor the host (disk/spend/orphans/heartbeat)? | `HOST_MONITORING.md` (runs `../scripts/host-check.sh`) |
 | End-to-end smoke commands? | `END_TO_END.md` |
 | Active refactor plan? | `REFACTOR_PLAN.md` (closes to history when done) |
+| Pre-1.0 retrospective audit (the seven eyes)? | `PURGATORIO_AUDIT.md` (gates 1.0 completeness; findings → `audit-2026-07/`) |
 | Dumb-loop audit evidence? | `DUMB_LOOP_AUDIT.md` (closes to history when done) |
 | Adversarial-review verdicts on repo claims? | `VERDICT_INDEX.md` (full report in history) |
 | The memory decision (filesystem vs "real" memory)? | `history/2026-07-04-memory-decision-brief.md` (direction DECIDED 2026-07-07: module + bake-off — see GOAL_BRAIN Decisions; port = `src/memory_port.py`) |

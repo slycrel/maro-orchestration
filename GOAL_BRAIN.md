@@ -1284,6 +1284,27 @@ Sample: the 2026-05-13..17 window of `~/.maro/workspace/runs/` (478 dirs total;
   sort of a communication platform after all, in addition to an action
   generator." Items recorded in BACKLOG "1.0 launch content +
   learning/sharing" + MILESTONES -3 remaining list (e)/(f)/(g).
+- **2026-07-09 (Purgatorio pass decreed — Jeremy, same session):** a
+  multi-eye pre-1.0 retrospective audit **gates declaring the 1.0 list
+  complete**. His framing: "we need a pass (or more) that looks at what we
+  are doing now, what our goals have been in the past, and what might be
+  missing or neglected that is assumed to be working"; "a ton of work
+  littered behind us, some of which my gut says should not be left behind."
+  Seven eyes (ops census, data health, backward archaeologist, docs
+  coherence, code-vs-spec + security + standardization, external landscape
+  re-verification, forward historian), shared findings format, rolling
+  reconciliation, dogfood split (bounded eyes run through Maro, serving 1.0
+  item (f)), queue NOT frozen. Full design: `docs/PURGATORIO_AUDIT.md`
+  ("Purgatorio — love it"). Rider: the adversarial-review pattern ("I
+  really like that pattern") is a named candidate for the 1.0 default skill
+  set — the audit itself doubles as its worked example.
+- **2026-07-09 (1.0 item (h) — Jeremy, same session):** backend-error
+  resilience + auto-resume added to the 1.0 arc: token/rate limits,
+  `/login`-class auth expiry, auto-resuming interrupted work — "a sharp
+  edge that will kill an end user's enthusiasm." (BACKLOG (h); note
+  model-lane contention was accepted 2026-07-02 *for this box* — that
+  acceptance does not extend to end users.) "I'm sure it won't be the last
+  late addition."
 
 ## Threads (system-maintained — nothing leaves this list silently)
 
