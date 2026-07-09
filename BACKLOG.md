@@ -118,6 +118,30 @@ surfaced by the NOW-lane work:
 
 ---
 
+### 18. Project-loop lane escapes the done≠achieved machinery (2026-07-09 hermes trial, live specimen)
+
+Found driving Maro through Hermes-in-docker. Third-party harness invoked the
+project loop (`maro run` path, project `hermes-haiku`, loop 315ebffb) instead
+of `maro-handle`. Result: `status=done 3/3`, artifact written — but content was
+semantically off-target ("fresh hermes install" → a haiku about *Ruby gems /
+bundle install*), and:
+
+- **No goal_achieved verdict was produced** on this lane (no `_verdict_*`
+  metadata; `maro inspect-run 315ebffb` → E_RUN_NOT_FOUND).
+- **No `runs/<id>/` dir** — per-run attribution capture never engaged.
+- **Artifact cleanup deleted the 3 per-step artifacts**, destroying the
+  evidence needed to audit the miss after the fact.
+- Verification that did run was structural-only (line count — the extracted
+  lesson literally says "verify against stated structural constraints"), so
+  the semantic miss sailed through. Static-probe bias on an unguarded path.
+
+Two asks: (a) every execution lane that can mark `done` must run the same
+closure/verdict path as `maro-handle` (or be demoted to `done_unverified`);
+(b) cleanup must never delete step artifacts before the verdict is recorded.
+Outcome row: outcomes.jsonl 20aae85f (workspace of the hermes trial container,
+importable via `maro-import` from
+`~/claude/hermes-maro-trial/data/home/.maro/workspace`).
+
 ## Vision / Deferred
 
 ### Graph memory + recursive-orchestration scoped memory (2026-06-21, vision)
