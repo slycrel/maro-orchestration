@@ -1,0 +1,1 @@
+../../../skills/monitor_diagnose.md

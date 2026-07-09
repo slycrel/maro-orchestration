@@ -46,6 +46,7 @@ SHIPPED = {
         "debug_investigate",
         "deep_research",
         "document_process",
+        "monitor_diagnose",
         "resolve_ambiguity",
         "web_extract",
         "web_research",

@@ -1,0 +1,1 @@
+../../../skills/compact_notation.md

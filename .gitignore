@@ -30,8 +30,10 @@ checkpoints/
 prototypes/
 artifacts/
 
-# Runtime skill library (auto-generated, not source-controlled)
-skills/
+# NOTE: repo skills/ are shipped defaults (tracked); the runtime skill
+# library lives in ~/.maro/workspace/skills/ (outside the repo). An old
+# blanket `skills/` ignore here silently kept the 1.0 ship-set skills and
+# src/maro_assets/skills/ symlinks out of e0811c7 — don't reintroduce it.
 
 # Playwright CLI session artifacts
 .playwright-cli/
