@@ -37,6 +37,20 @@ _FREEZE_SENTINEL_PREFIX = "<!-- maro-report: final status="
 _STATUS_ICON = {"done": "✅", "blocked": "❌", "skipped": "⏭", "pending": "⬜"}
 _STATUS_CLASS = {"done": "st-done", "blocked": "st-blocked", "skipped": "st-skipped", "pending": "st-pending"}
 
+# run_curation.classify_outcome's success_class vocabulary — "done" alone is
+# ambiguous (steps finished vs. goal actually achieved vs. verified at all),
+# so the index prefers this richer classification when run_card.json has it.
+# (label, badge css class, tooltip/legend text)
+_SUCCESS_CLASS_INFO = {
+    "success": ("success", "badge-done", "Steps completed and the goal was verified achieved."),
+    "done-not-achieved": ("done, not achieved", "badge-retry", "Steps completed, but verification says the goal wasn't met."),
+    "done-unverified": ("done, unverified", "badge-pending", "Steps completed; no achievement verification ran."),
+    "partial": ("partial", "badge-retry", "Stopped early — incomplete."),
+    "failed": ("failed", "badge-blocked", "Stuck or errored."),
+    "unknown": ("unknown", "badge-pending", "Outcome not classified."),
+}
+_LANE_HELP = "NOW = trivial, answered in a single LLM call. AGENDA = multi-step, planned and executed as a loop."
+
 
 # ---------------------------------------------------------------------------
 # Config
@@ -311,6 +325,48 @@ def _relpath(target: Path, start: Path) -> str:
         return str(target)
 
 
+def _esc_truncated(text: Optional[str], limit: int) -> str:
+    """Escaped display text, truncated at `limit` chars with an ellipsis —
+    the full text always rides along in a `title=` tooltip so nothing is
+    silently unreachable (2026-07-09, Jeremy: "no way to see the original
+    ask"). No-op (plain `_esc`) when the text already fits.
+    """
+    text = text or ""
+    if len(text) <= limit:
+        return _esc(text)
+    short = text[: limit - 1].rstrip() + "…"
+    return f'<span title="{_esc(text)}">{_esc(short)}</span>'
+
+
+def _fmt_tokens_compact(n: int) -> str:
+    """Compact token count for display (4929692 -> '4.93M')."""
+    n = n or 0
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.2f}M"
+    if n >= 1_000:
+        return f"{n / 1_000:.1f}k"
+    return str(n)
+
+
+def _fmt_tokens_split(tokens_in: int, tokens_out: int) -> str:
+    """Compact in/out token display with the exact counts in a tooltip."""
+    tokens_in, tokens_out = tokens_in or 0, tokens_out or 0
+    if not tokens_in and not tokens_out:
+        return "-"
+    exact = f"{tokens_in:,} in / {tokens_out:,} out"
+    compact = f"{_fmt_tokens_compact(tokens_in)} in / {_fmt_tokens_compact(tokens_out)} out"
+    return f'<span title="{_esc(exact)}">{_esc(compact)}</span>'
+
+
+def _fmt_tokens_total(tokens_in: int, tokens_out: int) -> str:
+    """Compact single-number token display (per-step table) with an exact
+    in/out breakdown in a tooltip."""
+    tokens_in, tokens_out = tokens_in or 0, tokens_out or 0
+    total = tokens_in + tokens_out
+    exact = f"{total:,} ({tokens_in:,} in / {tokens_out:,} out)"
+    return f'<span title="{_esc(exact)}">{_esc(_fmt_tokens_compact(total))}</span>'
+
+
 _CSS = """
 :root {
   --bg: #0d0d14; --panel: #15151f; --border: #2a2a38; --text: #d8d8e0;
@@ -375,8 +431,13 @@ details.global-ctx summary { cursor: pointer; color: var(--dim); font-size: 15px
 .idx-table th { text-align: left; color: var(--dim); font-weight: normal; padding: 6px 8px; border-bottom: 1px solid var(--border); }
 .idx-table td { padding: 6px 8px; border-bottom: 1px solid #1c1c28; }
 .idx-table tr:hover td { background: #171722; }
+.idx-table tr[data-href] { cursor: pointer; }
+.idx-table th[title] { text-decoration: underline dotted var(--dim); text-underline-offset: 3px; }
 .goal-cell { max-width: 520px; }
 .footer-nav { margin-top: 16px; font-size: 13px; color: var(--dim); }
+details.legend { margin-top: 12px; }
+details.legend summary { cursor: pointer; color: var(--dim); font-size: 15px; }
+details.legend .meta { margin-top: 8px; line-height: 1.9; }
 """
 
 _DETAIL_JS = """
@@ -515,7 +576,6 @@ def _render_step_table(
             cost_str = "-"
         tag = _step_type_badge(s.text)
         tag_html = f' <span class="meta">[{_esc(tag)}]</span>' if tag else ""
-        total_tok = s.tokens_in + s.tokens_out
 
         data_attr = ""
         detail_html = ""
@@ -535,9 +595,9 @@ def _render_step_table(
             f'<tr class="{_STATUS_CLASS.get(status, "")}"{data_attr}>'
             f'<td>{pos}</td>'
             f'<td>{icon}</td>'
-            f'<td class="step-text">{_esc(s.text[:200])}{tag_html}</td>'
+            f'<td class="step-text">{_esc_truncated(s.text, 200)}{tag_html}</td>'
             f'<td>{s.elapsed_ms}ms</td>'
-            f'<td>{total_tok}</td>'
+            f'<td>{_fmt_tokens_total(s.tokens_in, s.tokens_out)}</td>'
             f'<td>{cost_str}</td>'
             f'<td>{_esc(s.confidence)}</td>'
             f'<td>{detail_html}</td>'
@@ -635,9 +695,9 @@ def _render_report_html(
 <style>{_CSS}</style></head>
 <body>
 <h1>Run <code>{_esc(loop_id)}</code></h1>
-<div class="meta"><b>Project:</b> {_esc(project or "(none)")} &middot; <b>Goal:</b> {_esc(goal[:160])}</div>
-<div class="meta"><b>Status:</b> {_esc(status)} &middot; <b>Progress:</b> {done}/{total_planned} done, {blocked} blocked{replan_html}</div>
-<div class="meta"><b>Started:</b> {_esc(_fmt_ts(start_ts))} &middot; <b>Elapsed:</b> {elapsed_ms}ms &middot; <b>Tokens:</b> {total_tokens_in}in/{total_tokens_out}out &middot; <b>Cost:</b> {cost_str}</div>
+<div class="meta"><b>Project:</b> {_esc(project or "(none)")} &middot; <b>Goal:</b> {_esc_truncated(goal, 160)}</div>
+<div class="meta"><b><span title="Process status only — steps finished/blocked, not whether the goal was verified achieved. See the cross-run index for that once curation runs.">Status:</span></b> {_esc(status)} &middot; <b>Progress:</b> {done}/{total_planned} done, {blocked} blocked{replan_html}</div>
+<div class="meta"><b>Started:</b> {_esc(_fmt_ts(start_ts))} &middot; <b>Elapsed:</b> {elapsed_ms}ms &middot; <b>Tokens:</b> {_fmt_tokens_split(total_tokens_in, total_tokens_out)} &middot; <b><span title="Estimated from this report's step token counts — may differ from the run's recorded actual spend shown in the cross-run index.">Cost (est.):</span></b> {cost_str}</div>
 
 <h2>Timeline</h2>
 <div class="panel">{_render_timeline(planned_steps, step_outcomes, windows, approx, marker_slots, status)}</div>
@@ -817,6 +877,7 @@ def _gather_run_summaries() -> List[dict]:
             "goal": meta.get("prompt", ""),
             "lane": meta.get("lane"),
             "status": card.get("status") or meta.get("status") or "unknown",
+            "success_class": card.get("success_class"),
             "started_at": started_at,
             "ended_at": ended_at,
             "elapsed_str": elapsed_str,
@@ -828,33 +889,68 @@ def _gather_run_summaries() -> List[dict]:
     return summaries
 
 
+def _render_status_badge(status: str, success_class: Optional[str]) -> str:
+    if success_class:
+        label, badge_cls, help_text = _SUCCESS_CLASS_INFO.get(
+            success_class, (success_class, "badge-pending", "")
+        )
+        return f'<span class="badge {badge_cls}" title="{_esc(help_text)}">{_esc(label)}</span>'
+    return (
+        '<span class="badge badge-pending" '
+        'title="Process status only — verified outcome not yet available (curation runs after the process finishes).">'
+        f'{_esc(status)}</span>'
+    )
+
+
+_INDEX_ROW_JS = """
+document.querySelectorAll('.idx-table tr[data-href]').forEach(function(row){
+  row.addEventListener('click', function(e){
+    if (window.getSelection().toString()) return;  // preserve text selection/copy
+    if (e.target.closest('a')) return;              // let the real link behave normally
+    window.location.href = row.getAttribute('data-href');
+  });
+});
+"""
+
+
 def _render_index_html(summaries: List[dict]) -> str:
     rows = []
     for s in summaries:
         cost = s.get("cost_usd")
         cost_str = f"${cost:.4f}" if isinstance(cost, (int, float)) else "-"
         t = s["totals"]
-        tok_str = f'{t["tokens_in"]}in/{t["tokens_out"]}out' if (t["tokens_in"] or t["tokens_out"]) else "-"
+        tok_str = _fmt_tokens_split(t["tokens_in"], t["tokens_out"])
+        primary_href = None
         if s["reports"]:
-            links = " ".join(
-                f'<a href="{_esc(s["dir_name"])}/{_esc(r)}">{_esc(Path(r).stem.replace("loop-", "").replace("-report", ""))}</a>'
-                for r in s["reports"]
-            )
+            links = []
+            for r in s["reports"]:
+                href = f'{s["dir_name"]}/{r}'
+                if primary_href is None:
+                    primary_href = href
+                links.append(
+                    f'<a href="{_esc(href)}">{_esc(Path(r).stem.replace("loop-", "").replace("-report", ""))}</a>'
+                )
+            links_html = " ".join(links)
         else:
-            links = '<span class="meta">no report</span>'
+            links_html = '<span class="meta">no report</span>'
+        row_attr = f' data-href="{_esc(primary_href)}"' if primary_href else ""
         rows.append(
-            '<tr>'
+            f'<tr{row_attr}>'
             f'<td class="meta">{_esc(_fmt_ts(s["started_at"]))}</td>'
-            f'<td>{_esc(s["status"])}</td>'
-            f'<td class="goal-cell">{_esc((s["goal"] or "")[:160])}</td>'
+            f'<td>{_render_status_badge(s["status"], s.get("success_class"))}</td>'
+            f'<td class="goal-cell">{_esc_truncated(s["goal"], 220)}</td>'
             f'<td class="meta">{_esc(s.get("lane") or "-")}</td>'
             f'<td>{_esc(s["elapsed_str"])}</td>'
-            f'<td class="meta">{_esc(tok_str)}</td>'
-            f'<td>{_esc(cost_str)}</td>'
-            f'<td>{links}</td>'
+            f'<td class="meta">{tok_str}</td>'
+            f'<td title="Recorded spend for this run (run_card.json) — independent of the per-step token estimate shown on the report page.">{_esc(cost_str)}</td>'
+            f'<td>{links_html}</td>'
             '</tr>'
         )
     body_rows = "".join(rows) if rows else '<tr><td colspan="8" class="meta">No runs yet.</td></tr>'
+    legend_rows = "".join(
+        f'<span class="badge {badge_cls}">{_esc(label)}</span> {_esc(help_text)}<br>'
+        for label, badge_cls, help_text in _SUCCESS_CLASS_INFO.values()
+    )
     return f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>Maro runs</title>
 <style>{_CSS}</style></head>
@@ -862,9 +958,13 @@ def _render_index_html(summaries: List[dict]) -> str:
 <h1>Runs</h1>
 <div class="meta">{len(summaries)} run(s)</div>
 <table class="idx-table">
-<tr><th>Started</th><th>Status</th><th>Goal</th><th>Lane</th><th>Elapsed</th><th>Tokens</th><th>Cost</th><th>Report</th></tr>
+<tr><th>Started</th><th>Status</th><th>Goal</th><th title="{_esc(_LANE_HELP)}">Lane</th><th>Elapsed</th><th>Tokens</th><th>Cost</th><th>Report</th></tr>
 {body_rows}
 </table>
+<details class="legend"><summary>What do Status / Lane mean?</summary>
+<div class="meta">{legend_rows}<br><b>Lane:</b> {_esc(_LANE_HELP)}</div>
+</details>
+<script>{_INDEX_ROW_JS}</script>
 </body></html>
 """
 
