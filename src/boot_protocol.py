@@ -162,9 +162,10 @@ def _load_dead_ends(project_path: Path) -> List[str]:
         # Create an empty DEAD_ENDS.md
         try:
             project_path.mkdir(parents=True, exist_ok=True)
-            dead_ends_file.write_text(
+            from file_lock import atomic_write
+            atomic_write(
+                dead_ends_file,
                 "# Dead Ends\n\nApproaches tried and failed. Do not repeat these.\n\n",
-                encoding="utf-8",
             )
         except Exception:
             pass
@@ -286,13 +287,15 @@ def update_dead_ends(project: str, new_dead_ends: List[str]) -> None:
     timestamp = datetime.now(timezone.utc).isoformat()[:19] + "Z"
 
     try:
+        from file_lock import atomic_write, locked_write
         if not dead_ends_file.exists():
-            dead_ends_file.write_text(
+            atomic_write(
+                dead_ends_file,
                 "# Dead Ends\n\nApproaches tried and failed. Do not repeat these.\n\n",
-                encoding="utf-8",
             )
-        with open(dead_ends_file, "a", encoding="utf-8") as fh:
-            for de in new_dead_ends:
-                fh.write(f"\n## [{timestamp}] {de}\n")
+        with locked_write(dead_ends_file):
+            with open(dead_ends_file, "a", encoding="utf-8") as fh:
+                for de in new_dead_ends:
+                    fh.write(f"\n## [{timestamp}] {de}\n")
     except Exception:
         pass  # Never fatal

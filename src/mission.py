@@ -730,7 +730,8 @@ def save_mission(mission: Mission, project: str) -> None:
         "completed_at": mission.completed_at,
         "ancestry_context": mission.ancestry_context,
     }
-    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    from file_lock import atomic_write
+    atomic_write(path, json.dumps(payload, indent=2))
 
 
 def load_mission(project: str) -> Optional[Mission]:
@@ -846,11 +847,6 @@ def mark_feature_passing(
     if not path.exists():
         return  # Manifest not created yet — silent no-op
 
-    try:
-        manifest = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return
-
     # Get grade info
     if hasattr(contract_grade, "passed"):
         passed = bool(contract_grade.passed)
@@ -865,27 +861,39 @@ def mark_feature_passing(
         score = 0.0
         contract_id = None
 
-    updated = False
-    for feat in manifest.get("features", []):
-        if feat.get("id") == feature_id:
-            # Monotonicity: once passes=True, cannot be set to False
-            if feat.get("passes") is True and not passed:
-                raise ValueError(
-                    f"Monotonicity violation: feature {feature_id!r} already passes=True; "
-                    "cannot downgrade to passes=False."
-                )
-            feat["passes"] = passed
-            feat["grade_score"] = score
-            if contract_id:
-                feat["contract_id"] = contract_id
-            updated = True
-            break
-
-    if updated:
+    def _mutate(old_text: str) -> str:
         try:
-            path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+            manifest = json.loads(old_text)
         except Exception:
-            pass
+            return old_text  # unparseable — no-op rewrite
+
+        for feat in manifest.get("features", []):
+            if feat.get("id") == feature_id:
+                # Monotonicity: once passes=True, cannot be set to False
+                if feat.get("passes") is True and not passed:
+                    raise ValueError(
+                        f"Monotonicity violation: feature {feature_id!r} already passes=True; "
+                        "cannot downgrade to passes=False."
+                    )
+                feat["passes"] = passed
+                feat["grade_score"] = score
+                if contract_id:
+                    feat["contract_id"] = contract_id
+                return json.dumps(manifest, indent=2)
+        return old_text  # feature not found — no-op rewrite
+
+    # Read-modify-write under one lock (was: unlocked read, then unlocked
+    # write — two concurrent grade-completions could race and lose an
+    # update). ValueError (monotonicity) must still propagate to the
+    # caller; any other failure (lock timeout, disk error) stays silent,
+    # matching the previous write's `except Exception: pass`.
+    from file_lock import locked_rmw
+    try:
+        locked_rmw(path, _mutate, default="")
+    except ValueError:
+        raise
+    except Exception:
+        pass
 
 
 # validate_manifest_monotonicity removed 2026-07-02 — misnamed (only checked
@@ -960,8 +968,8 @@ def _write_mission_log(result: MissionResult, mission: Mission) -> None:
         "created_at": mission.created_at,
         "completed_at": mission.completed_at,
     }
-    with open(path, "a", encoding="utf-8") as fh:
-        fh.write(json.dumps(entry) + "\n")
+    from file_lock import locked_append
+    locked_append(path, json.dumps(entry))
 
 
 # ---------------------------------------------------------------------------

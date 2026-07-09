@@ -361,9 +361,9 @@ def _log_heartbeat(report: HeartbeatReport) -> Optional[str]:
     """Append heartbeat report to memory/heartbeat-log.jsonl."""
     try:
         from orch import memory_dir
+        from file_lock import locked_append
         log_path = memory_dir() / "heartbeat-log.jsonl"
-        with log_path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(report.to_dict()) + "\n")
+        locked_append(log_path, json.dumps(report.to_dict()))
         return str(log_path)
     except Exception:
         return None

@@ -639,6 +639,47 @@ def test_mark_feature_monotonicity(monkeypatch, tmp_path):
         mark_feature_passing("monotone-test", feature.id, fail_grade)
 
 
+def test_mark_feature_passing_missing_manifest_is_silent_noop(monkeypatch, tmp_path):
+    """No feature_list.json yet — must not raise (BACKLOG #15 locked_rmw refactor)."""
+    _setup_workspace(monkeypatch, tmp_path)
+    from mission import mark_feature_passing
+    from sprint_contract import ContractGrade
+    from datetime import datetime, timezone
+
+    orch.ensure_project("no-manifest-test", "test")
+    grade = ContractGrade(
+        contract_id="x", feature_id="does-not-exist", passed=True,
+        criteria_results=[], score=1.0, feedback="",
+        graded_at=datetime.now(timezone.utc).isoformat(),
+    )
+    mark_feature_passing("no-manifest-test", "does-not-exist", grade)  # must not raise
+    assert not (orch.project_dir("no-manifest-test") / "feature_list.json").exists()
+
+
+def test_mark_feature_passing_unknown_feature_id_is_silent_noop(monkeypatch, tmp_path):
+    """Unknown feature_id — manifest exists but is left unchanged, no error."""
+    _setup_workspace(monkeypatch, tmp_path)
+    from mission import generate_feature_manifest, mark_feature_passing
+    from sprint_contract import ContractGrade
+    from datetime import datetime, timezone
+
+    mission = decompose_mission("Build something", _DecomposeMockAdapter())
+    mission.project = "unknown-feature-test"
+    orch.ensure_project("unknown-feature-test", "test")
+    generate_feature_manifest(mission, "unknown-feature-test")
+
+    path = orch.project_dir("unknown-feature-test") / "feature_list.json"
+    before = path.read_text()
+
+    grade = ContractGrade(
+        contract_id="x", feature_id="nonexistent-id", passed=True,
+        criteria_results=[], score=1.0, feedback="",
+        graded_at=datetime.now(timezone.utc).isoformat(),
+    )
+    mark_feature_passing("unknown-feature-test", "nonexistent-id", grade)  # must not raise
+    assert json.loads(path.read_text()) == json.loads(before)
+
+
 # test_validate_manifest_monotonicity_pass removed 2026-07-02 —
 # validate_manifest_monotonicity() deleted (misnamed, zero production
 # callers). See docs/REFACTOR_PLAN.md Tier 1.

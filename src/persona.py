@@ -824,8 +824,8 @@ def record_persona_outcome(
         "recorded_at": datetime.now(timezone.utc).isoformat(),
     }
     try:
-        with out_path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(entry) + "\n")
+        from file_lock import locked_append
+        locked_append(out_path, json.dumps(entry))
         return True
     except Exception:
         return False
@@ -910,7 +910,8 @@ def save_manifest(
     else:
         content = json.dumps({"agents": manifest}, indent=2, ensure_ascii=False)
 
-    output_path.write_text(content + "\n", encoding="utf-8")
+    from file_lock import atomic_write
+    atomic_write(output_path, content + "\n")
     return output_path
 
 

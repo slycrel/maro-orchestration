@@ -103,25 +103,6 @@ write fence — shipped arc") and `docs/BOUNDED_WORKSPACE.md`.
   transcripts ride `resp.tool_events`). Port subprocess adapter first, others
   incrementally. Size: ~half day per adapter.
 
-### 15. Low-risk file_lock consistency conversions (2026-07-09, concurrency-arc audit leftovers)
-
-The concurrency-hardening arc converted every HIGH/MEDIUM unsafe writer to
-`file_lock` helpers. The audit's LOW tier remains — sites that are unlocked
-but where lines are small (single O_APPEND write is atomic on Linux) or the
-writer is effectively single-threaded today. Convert opportunistically when
-touching the module; each is a one-line `locked_append`/`atomic_write` swap:
-
-- [ ] Small single-line appends: `skills.py` increment_use log,
-  `skill_loader.py` export, `attribution.py`, `constraint.py`, `director.py`,
-  `sprint_contract.py`, `graduation.py`, `knowledge_web.py:619` + `:987`,
-  `persona.py`, `boot_protocol.py`, `mission.py`, `heartbeat.py` small appends
-- [ ] Seed-once `write_text` initializers (first-write-wins races are benign
-  but `atomic_write` is free)
-
-Not urgent: none of these have a demonstrated corruption class; the arc's
-e2e stress suite (`tests/test_concurrency_e2e.py`) covers the helpers they'd
-convert to.
-
 ---
 
 ## Vision / Deferred

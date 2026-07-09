@@ -8,6 +8,57 @@ Last split: 2026-04-16 (session 34).
 
 ---
 
+### BACKLOG #15: Low-risk file_lock consistency conversions (shipped 2026-07-09)
+
+The concurrency-hardening arc had converted every HIGH/MEDIUM unsafe writer
+to `file_lock` helpers; this closed the audit's remaining LOW tier — sites
+that were unlocked but low-risk (small O_APPEND writes, effectively
+single-threaded writers, or seed-once initializers).
+
+**Converted (14 files, ~24 call sites)**: `skills.py` (`write_skill_provenance`),
+`skill_loader.py` (`export_skill_as_markdown`), `attribution.py`
+(`save_attribution`), `constraint.py` (`_log_constraint_event`),
+`director.py` (`_write_director_log`, calibration log, escalation summary),
+`sprint_contract.py` (`save_contract`, `save_grade`), `graduation.py`
+(suggestions batch-append), `knowledge_web.py` (decay-cycle change log,
+`_record_canon_hit`), `persona.py` (`record_persona_outcome`,
+`save_manifest`), `boot_protocol.py` (DEAD_ENDS.md seed + append, both call
+sites), `mission.py` (`save_mission`, `_write_mission_log`,
+`mark_feature_passing`), `heartbeat.py` (`_log_heartbeat`), `orch_items.py`
+(`ensure_project`'s five seed writes), `runs.py` (`prompt.txt` seed write).
+Every single-line JSONL append became `locked_append`; every write-once/seed
+`write_text` became `atomic_write` (crash-safe, no lock needed — no
+concurrent writer exists for a create-once file); `graduation.py`'s
+multi-line batch append and `boot_protocol.py`'s dead-ends append both hold
+one `locked_write` for the whole batch instead of re-acquiring per line.
+
+**One genuine (not purely mechanical) fix**: `mission.py`'s
+`mark_feature_passing()` was an unlocked read-modify-write of
+`feature_list.json` — two concurrent contract-grade completions could race
+and lose an update (a real MEDIUM-risk bug the original LOW-risk audit
+under-classified, since single-line-append reasoning doesn't apply to a
+read-then-mutate-then-write). Restructured onto `locked_rmw()`, preserving
+the exact external contract: file-missing and unknown-feature-id stay
+silent no-ops (though unknown-feature-id now does a same-content atomic
+rewrite instead of no write at all — harmless, flagged as a minor accepted
+delta), unparseable JSON stays a silent no-op, and the monotonicity
+`ValueError` (can't downgrade `passes=True`→`False`) still propagates to
+the caller (verified: `locked_write`'s try/finally only releases the lock,
+never swallows an exception raised inside the held block). New tests:
+`test_mark_feature_passing_missing_manifest_is_silent_noop`,
+`test_mark_feature_passing_unknown_feature_id_is_silent_noop`
+(`tests/test_mission.py`) — the existing `test_mark_feature_passing` and
+`test_mark_feature_monotonicity` already covered the update/raise paths and
+passed unchanged against the refactor.
+
+Full suite green throughout (targeted per-batch runs + one full-suite pass
+at the end). `docs/CODING_NOTES.md`-consistent: matched each file's existing
+import convention (inline `from file_lock import X` inside the function
+body — the dominant pattern already used at other call sites in these same
+files, rather than introducing module-top imports).
+
+---
+
 ### General-purpose visualization server (shipped 2026-07-08)
 
 Surfaced while designing `docs/RUN_VISIBILITY_DESIGN.md`: the per-run

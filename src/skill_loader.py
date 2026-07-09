@@ -364,7 +364,8 @@ def export_skill_as_markdown(
     content = "\n".join(lines)
     try:
         target_dir.mkdir(parents=True, exist_ok=True)
-        dest.write_text(content, encoding="utf-8")
+        from file_lock import atomic_write
+        atomic_write(dest, content)
         log.info("export_skill_as_markdown: wrote %s", dest)
         # Invalidate the module-level singleton's cache
         skill_loader.invalidate()

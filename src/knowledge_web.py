@@ -644,8 +644,8 @@ def run_decay_cycle(
                 "promoted_ids": promoted_ids,
                 "gc_ids": gc_ids,
             }
-            with open(_cl_path, "a", encoding="utf-8") as _clf:
-                _clf.write(json.dumps(_cl_entry) + "\n")
+            from file_lock import locked_append
+            locked_append(_cl_path, json.dumps(_cl_entry))
         except Exception:
             pass  # audit trail must never block execution
 
@@ -1022,8 +1022,8 @@ def _record_canon_hit(lesson_id: str, *, tier: str, task_type: str) -> None:
         "task_type": task_type,
         "at": _current_date(),
     }
-    with open(path, "a", encoding="utf-8") as f:
-        f.write(json.dumps(entry) + "\n")
+    from file_lock import locked_append
+    locked_append(path, json.dumps(entry))
 
 
 def _load_canon_stats() -> Dict[str, Dict[str, Any]]:

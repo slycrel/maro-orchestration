@@ -673,10 +673,12 @@ def append_provenance(slug: str, lines: Iterable[str]) -> None:
 
 
 def ensure_project(slug: str, mission: str, priority: int = 0) -> Path:
+    from file_lock import atomic_write
     pdir = project_dir(slug)
     pdir.mkdir(parents=True, exist_ok=True)
     if not next_path(slug).exists():
-        next_path(slug).write_text(
+        atomic_write(
+            next_path(slug),
             (
                 f"# NEXT — {slug}\n\n"
                 "Mission:\n\n"
@@ -686,14 +688,13 @@ def ensure_project(slug: str, mission: str, priority: int = 0) -> Path:
                 "- [ ] Create first-pass plan\n"
                 "- [ ] Execute next leaf task\n"
             ),
-            encoding="utf-8",
         )
     if not risks_path(slug).exists():
-        risks_path(slug).write_text("# RISKS\n\n## Risks / Unknowns\n\n- (fill in)\n", encoding="utf-8")
+        atomic_write(risks_path(slug), "# RISKS\n\n## Risks / Unknowns\n\n- (fill in)\n")
     if not decisions_path(slug).exists():
-        decisions_path(slug).write_text("# DECISIONS\n\n", encoding="utf-8")
+        atomic_write(decisions_path(slug), "# DECISIONS\n\n")
         append_decision(slug, ["Project created.", f"Mission: {mission}"])
     if not provenance_path(slug).exists():
-        provenance_path(slug).write_text("# PROVENANCE\n\n- (links to key artifacts, datasets, runs)\n", encoding="utf-8")
-    priority_path(slug).write_text(f"{priority}\n", encoding="utf-8")
+        atomic_write(provenance_path(slug), "# PROVENANCE\n\n- (links to key artifacts, datasets, runs)\n")
+    atomic_write(priority_path(slug), f"{priority}\n")
     return pdir

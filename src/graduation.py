@@ -342,9 +342,11 @@ def run_graduation(
     path = _suggestions_path()
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("a", encoding="utf-8") as f:
-            for s in new_suggestions:
-                f.write(json.dumps(s) + "\n")
+        from file_lock import locked_write
+        with locked_write(path):
+            with path.open("a", encoding="utf-8") as f:
+                for s in new_suggestions:
+                    f.write(json.dumps(s) + "\n")
         log.info("graduation: wrote %d suggestions to %s", len(new_suggestions), path)
         # Captain's log
         try:

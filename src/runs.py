@@ -111,7 +111,8 @@ def create_run_dir(
     # no-ops on this file).
     prompt_path = rd / "source" / "prompt.txt"
     if not prompt_path.exists():
-        prompt_path.write_text(prompt, encoding="utf-8")
+        from file_lock import atomic_write
+        atomic_write(prompt_path, prompt)
 
     # Per-thread goal-brain — first call wins, same rule as prompt.txt.
     try:

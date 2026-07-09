@@ -114,8 +114,8 @@ def _attributions_path() -> Path:
 def save_attribution(attr: Attribution) -> None:
     """Append an Attribution record to memory/attributions.jsonl."""
     path = _attributions_path()
-    with path.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(attr.to_dict()) + "\n")
+    from file_lock import locked_append
+    locked_append(path, json.dumps(attr.to_dict()))
 
 
 def load_attributions(limit: int = 50) -> List[Attribution]:

@@ -459,8 +459,8 @@ def _log_constraint_event(step_text: str, goal: str, result: ConstraintResult) -
         ],
     }
     try:
-        with open(path, "a", encoding="utf-8") as fh:
-            fh.write(json.dumps(event) + "\n")
+        from file_lock import locked_append
+        locked_append(path, json.dumps(event))
     except Exception:
         pass  # audit trail must never block execution
 

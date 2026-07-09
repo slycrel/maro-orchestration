@@ -724,7 +724,8 @@ def write_skill_provenance(
     }
     path = prov_dir / filename
     try:
-        path.write_text(json.dumps(record, indent=2), encoding="utf-8")
+        from file_lock import atomic_write
+        atomic_write(path, json.dumps(record, indent=2))
     except Exception as exc:
         logger.debug("write_skill_provenance: write failed for %s: %s", skill_name, exc)
     return path

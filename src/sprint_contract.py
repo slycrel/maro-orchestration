@@ -391,8 +391,8 @@ def save_contract(contract: SprintContract, project: str) -> None:
     """Append a SprintContract to memory/contracts.jsonl for a project."""
     path = _contracts_path(project)
     try:
-        with open(path, "a", encoding="utf-8") as fh:
-            fh.write(json.dumps(contract.to_dict()) + "\n")
+        from file_lock import locked_append
+        locked_append(path, json.dumps(contract.to_dict()))
     except Exception:
         pass  # Persistence failures are non-fatal
 
@@ -428,7 +428,7 @@ def save_grade(grade: ContractGrade, project: str) -> None:
     base.mkdir(parents=True, exist_ok=True)
     path = base / "contract-grades.jsonl"
     try:
-        with open(path, "a", encoding="utf-8") as fh:
-            fh.write(json.dumps(grade.to_dict()) + "\n")
+        from file_lock import locked_append
+        locked_append(path, json.dumps(grade.to_dict()))
     except Exception:
         pass

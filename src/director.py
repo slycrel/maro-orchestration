@@ -886,7 +886,8 @@ def _write_director_log(
                 for r in worker_results
             ],
         }
-        path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        from file_lock import atomic_write
+        atomic_write(path, json.dumps(payload, indent=2))
         try:
             from orch import relative_display_path
             return relative_display_path(path)
@@ -1092,17 +1093,17 @@ def handle_escalation(
         import json as _json
         import time as _time
         from orch_items import memory_dir as _mem_dir
+        from file_lock import locked_append
         _cal_path = _mem_dir() / "calibration.jsonl"
-        with open(_cal_path, "a", encoding="utf-8") as _f:
-            _f.write(_json.dumps({
-                "ts": _time.time(),
-                "event": "escalation_decision",
-                "job_id": job_id,
-                "depth": depth,
-                "action": action,
-                "decision_class": decision_class,
-                "confidence": confidence,
-            }) + "\n")
+        locked_append(_cal_path, _json.dumps({
+            "ts": _time.time(),
+            "event": "escalation_decision",
+            "job_id": job_id,
+            "depth": depth,
+            "action": action,
+            "decision_class": decision_class,
+            "confidence": confidence,
+        }))
     except Exception as _exc:
         log.debug("calibration log failed (non-fatal): %s", _exc)
 
@@ -1158,14 +1159,15 @@ def handle_escalation(
             _art_dir = _proj_dir(f"escalation-{job_id[:8]}") / "artifacts"
             _art_dir.mkdir(parents=True, exist_ok=True)
             _summary_path = _art_dir / f"escalation-{job_id[:8]}-{action}.md"
-            _summary_path.write_text(
+            from file_lock import atomic_write
+            atomic_write(
+                _summary_path,
                 f"# Escalation {action.title()} — {job_id}\n\n"
                 f"**Depth:** {depth}\n"
                 f"**Action:** {action}\n"
                 f"**Reasoning:** {reasoning}\n\n"
                 f"## Summary for operator\n{summary_for_user}\n\n"
                 f"## Full escalation context\n{reason}\n",
-                encoding="utf-8",
             )
             log.info("escalation_%s: wrote summary to %s", action, _summary_path)
         except Exception as exc:
