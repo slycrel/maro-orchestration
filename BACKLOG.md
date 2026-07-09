@@ -493,6 +493,20 @@ These four are kept (not deleted) this triage pending verification against curre
   **Update 2026-07-04: the data now exists** — ~68 judged runs with verdict
   metadata on disk (~26 achieved). The gate is analysis, not data: re-run the
   done-vs-achieved rate check on the full corpus before touching thresholds.
+  **ANALYSIS RUN 2026-07-09** (`docs/history/2026-07-09-done-vs-achieved.md`,
+  1.0 item (b)): 72 verdict runs, era-segmented at 90b4d1b (55 poisoned
+  excluded). Clean era n=17: done 65%, achieved 53%; organic slice n=10:
+  raw achieved 40%, corrected ~60-70% after spot-audit (2 of 4
+  done-but-not-achieved were verifier false negatives: verbatim-grep on
+  paraphrase tasks, wrong-section grep on append-only ledgers; +1
+  false-on-its-evidence at conf 0.95 via probe-env mismatch). Closure IS
+  systematically harsh on build-artifact goals, but errs safe: zero false
+  blessings post-fix, all false negatives below the 0.7 demotion threshold.
+  **Verdict: keep 0.7; 1.0's gap is packaging, not closure quality.** Fix
+  lever = probe-env hardening (cd to goal-named repo, cap confidence on
+  environment-error signatures), not threshold tuning. Standing caveat: raw
+  goal_achieved understates organic success ~20-30 points — don't feed it
+  unadjusted into verify→learn; re-run at organic n≈30.
 
 - [~] **`decomposition_too_broad` residual.** (verify before dropping) The cache-aware conversion (2026-06-22) removed the observed noise source; remaining open question is whether a step doing genuinely >200K *fresh* tokens on an otherwise-successful run should warn at all, or only when the loop also shows stress (blocked steps / budget exhaustion). Revisit only if a real fresh-heavy run flags spuriously. (Full block archived to BACKLOG_DONE; this is the residual watch-item.)
 
@@ -678,8 +692,18 @@ after the current 1.0 remainders (a)–(d); (g) needs design before release.
   lessons/rules vs raw runs), trust+provenance on import, privacy
   scrubbing guarantees, format versioning. Vision anchor: Maro is "a
   communication platform … in addition to an action generator."
-- [ ] **(h) Backend-error resilience + auto-resume (Jeremy, 2026-07-09
-  late addition).** Research + design pass on the errors an end user will
+- [~] **(h) Backend-error resilience + auto-resume — DESIGN DONE
+  2026-07-09** (`docs/BACKEND_RESILIENCE_DESIGN.md`, proposed-design): 6
+  error classes replacing the two substring predicates (two live traps
+  found: Anthropic credit-exhaustion is a 400 that matches neither
+  predicate and dies raw; OpenAI insufficient_quota is a 429 that retries
+  futilely), messaging on all four channels, resume unit = step
+  (at-least-once + guards), recommended minimum 1.0 slice = classify+message,
+  checkpoint-into-run-dir, stranded-state sweep + manual `maro resume`.
+  9 provisional decisions greppable as "DECISION (provisional)" — Jeremy
+  review wanted on: billing-failover default, 1-auto-resume cap,
+  resume-surface (CLI vs notify), depth-cap inconsistency (4 / <3 / 2).
+  Implementation slices NOT started. Original ask: Research + design pass on the errors an end user will
   actually hit: token/rate limits, auth expiry (`/login`-class issues, key
   invalidation), context-window overruns, network blips — and
   **auto-resuming interrupted work**. "That seems like a sharp edge that
