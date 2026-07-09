@@ -36,6 +36,7 @@ BACKLOG, VISION, CLAUDE, README…) are living by definition and carry no frontm
 | Intent resolution / "what does done mean"? | `INTENT_RESOLUTION_DESIGN.md` (partially shipped) |
 | Scope/constraint orchestration (Phase 65, PAUSED)? | `CONSTRAINT_ORCHESTRATION_DESIGN.md` + `_REVIEW` + `_AUDIT` |
 | Thread architecture reframe? | `THREAD_ARCHITECTURE.md` (dormant; navigator subset shipped) |
+| Thread architecture — what's actually still pending (vs. what shipped)? | `history/2026-07-09-thread-architecture-decisions-brief.md` (triage brief, not yet decided — see BACKLOG #19) |
 | Completed phase history (0–62)? | `history/ROADMAP_ARCHIVE.md` |
 | Everything dated/pre-rename/superseded? | `history/` (see its README) |
 

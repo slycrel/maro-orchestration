@@ -142,14 +142,41 @@ Outcome row: outcomes.jsonl 20aae85f (workspace of the hermes trial container,
 importable via `maro-import` from
 `~/claude/hermes-maro-trial/data/home/.maro/workspace`).
 
+### 19. Thread Architecture — resolve the 5 remaining open decisions
+
+**2026-07-09: decision brief delivered — `docs/history/2026-07-09-thread-architecture-decisions-brief.md`.**
+Re-scoped the doc's original "9 open decisions" against what's actually shipped
+(narrow navigator, per-thread goal brain, persona auto-selection, recall()
+interface, captain's-log audit — 4 resolved/half-resolved already). 5 remain
+genuinely open: persona-library shape (#4), upfront-planning-vs-"Tesla mode"
+heuristics (#5), how the navigator improves over time (#6, ties to the
+still-broken verify→learn loop), Stage 5 rule portability (#8), `/loop`/streaming
+interaction (#9, likely resolvable by tracing one real session rather than a
+judgment call). **Pick this up in a session on the runtime box, not the Mac dev
+checkout** — that box holds the fuller session history behind this design
+(captain's log, prior conversations) that this brief was drafted without. Have
+that session re-verify the brief's "what shipped since" claims against its own
+context before taking the 5 open items to Jeremy. See `docs/THREAD_ARCHITECTURE.md`
+for the full design + original decision list.
+
 ## Vision / Deferred
 
 ### Graph memory + recursive-orchestration scoped memory (2026-06-21, vision)
 
-**2026-07-04: decision brief delivered — `docs/history/2026-07-04-memory-decision-brief.md`**
-(full substrate inventory, 5 verified gaps, options, phased recommendation:
-access-layer B+C over storage-first A). Awaiting Jeremy's call; this item
-stays as the vision record until he decides.
+**RESOLVED 2026-07-07/08 — this entry was stale until 2026-07-09.** Direction
+decided 2026-07-07 (memory becomes a module; see GOAL_BRAIN.md Decisions),
+bake-off same day picked a self-built sqlite3+FTS5 adapter over TencentDB
+Agent Memory / Mem0 / Zep-Graphiti (`docs/history/2026-07-07-memory-bakeoff.md`),
+shipped same day (`src/memory_sqlite.py`). Worker-recall-slice §7 A/B completed
+2026-07-08 (16 clean runs, every measure favors the slice or ties) and Jeremy
+flipped it on as the hardcoded default (`memory.worker_slice`, see
+`docs/DEFAULTS.md` and `docs/history/2026-07-08-worker-slice-ab.md`). Original
+brief: `docs/history/2026-07-04-memory-decision-brief.md`. **One residual not
+yet decided:** the fastembed+sqlite-vec semantic lane is still gated behind
+"only if BM25 measures insufficient" — full-corpus verdict (1,652 items, see
+GOAL_BRAIN.md 2026-07-07/08 entries) showed sqlite-fts5 wins hit@1 + 5×
+latency but loses hit@5/MRR to token-overlap; whether that's "insufficient"
+enough to build the semantic lane is unmeasured/undecided.
 
 Durable replacement for the fixed-size inter-step truncation caps (the 800/500/200 band-aids
 above — lossy fixed-array-vs-string, the kind of thing that's bitten us). Jeremy's framing:
