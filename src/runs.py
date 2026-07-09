@@ -202,6 +202,34 @@ def write_metadata(
     return meta_path
 
 
+def stamp_run_metadata(fields: dict) -> Optional[Path]:
+    """Merge `fields` into the active run's metadata.json.
+
+    For mid-run annotations (persona selection, experiment arms) where the
+    caller doesn't hold the full write_metadata argument set. Existing keys
+    win only when the new value is None. Best-effort, never raises.
+    """
+    try:
+        rd = current_run_dir()
+        if rd is None or not fields:
+            return None
+        meta_path = rd / "metadata.json"
+        existing: dict = {}
+        if meta_path.exists():
+            try:
+                existing = json.loads(meta_path.read_text(encoding="utf-8"))
+            except Exception:
+                existing = {}
+        for k, v in fields.items():
+            if v is not None:
+                existing[k] = v
+        meta_path.write_text(json.dumps(existing, indent=2, default=str),
+                             encoding="utf-8")
+        return meta_path
+    except Exception:
+        return None
+
+
 def finalize_run(
     handle_id: str,
     *,
@@ -391,6 +419,118 @@ def source_dir() -> Optional[Path]:
     out = rd / "source"
     out.mkdir(parents=True, exist_ok=True)
     return out
+
+
+# ---------------------------------------------------------------------------
+# Environment snapshot + skills manifest — per-run attribution inputs.
+# A run's outcome is a function of goal AND environment: which config era,
+# which skill variants, which persona. None of that was run-keyed, so skill
+# or config changes couldn't be attributed to outcome shifts (the
+# verify->learn gap) and the verdict corpus straddles config eras invisibly.
+# source/ is the natural home — it already holds the run's other compile
+# inputs (prompt.txt, goal_brain.md).
+# ---------------------------------------------------------------------------
+
+def write_environment_snapshot(run_dir_override: Optional[Path] = None) -> Optional[Path]:
+    """Write `<run-dir>/source/environment.json` — the run's config era.
+
+    Captured at run start: scrubbed effective config, MARO_*/OPENCLAW_* env
+    overrides (env beats config, so config alone lies), framework git sha,
+    host platform, and today's spend so far. Best-effort, never raises —
+    history can't be backfilled, but a run must never fail over its own
+    bookkeeping.
+    """
+    try:
+        rd = run_dir_override or current_run_dir()
+        if rd is None:
+            return None
+        from secret_scrub import scrub
+
+        snap: dict = {"captured_at": datetime.now(timezone.utc).isoformat()}
+        try:
+            import platform as _platform
+            import sys as _sys
+            snap["host"] = {
+                "hostname": _platform.node(),
+                "platform": _platform.platform(),
+                "python": _sys.version.split()[0],
+            }
+        except Exception:
+            pass
+        try:
+            import subprocess as _sp
+            repo_root = Path(__file__).resolve().parent.parent
+            r = _sp.run(
+                ["git", "-C", str(repo_root), "rev-parse", "--short", "HEAD"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if r.returncode == 0:
+                snap["maro_git_sha"] = r.stdout.strip()
+        except Exception:
+            pass
+        try:
+            snap["env_overrides"] = scrub({
+                k: v for k, v in os.environ.items()
+                if k.startswith(("MARO_", "OPENCLAW_"))
+            })
+        except Exception:
+            pass
+        try:
+            from config import load_config
+            snap["config"] = scrub(load_config())
+        except Exception:
+            pass
+        try:
+            from metrics import spend_today
+            snap["spend_today_usd_at_start"] = round(spend_today(), 4)
+        except Exception:
+            pass
+        try:
+            # Same predicates a run's build_adapter walk uses — records which
+            # backends were actually available, in failover order (key values
+            # never included, only set/not-set).
+            from llm import detect_backends
+            snap["backends"] = [
+                {"name": n, "usable": u, "detail": det}
+                for (n, u, det) in detect_backends()
+            ]
+        except Exception:
+            pass
+
+        out = rd / "source" / "environment.json"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(snap, indent=2, default=str), encoding="utf-8")
+        return out
+    except Exception:
+        return None
+
+
+def append_skills_manifest(entries: list, *, stage: str) -> Optional[Path]:
+    """Append one skill-injection event to `<run-dir>/source/skills_manifest.jsonl`.
+
+    Called at each injection site with the skills that actually entered a
+    prompt (post A/B variant routing — the routed variant is the point of
+    recording this). `entries` is a list of dicts shaped by the caller
+    ({name, id, content_hash, variant_of, tier, ...}) so this stays a dumb
+    appender. JSONL because injection can happen more than once per run
+    (decompose, curated summaries, replans). Best-effort, never raises.
+    """
+    try:
+        rd = current_run_dir()
+        if rd is None or not entries:
+            return None
+        out = rd / "source" / "skills_manifest.jsonl"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        record = {
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "stage": stage,
+            "skills": entries,
+        }
+        from file_lock import locked_append
+        locked_append(out, json.dumps(record, default=str))
+        return out
+    except Exception:
+        return None
 
 
 # ---------------------------------------------------------------------------

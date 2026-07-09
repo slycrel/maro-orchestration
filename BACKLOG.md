@@ -115,12 +115,15 @@ write fence — shipped arc") and `docs/BOUNDED_WORKSPACE.md`.
   rewording; the durable fix is `record_llm_call(purpose="...")` stamped by
   the caller at the recording seam. Add the field, keep the sniffer as
   fallback for historical records.
-- [ ] **Live reports freeze before run_card.json exists** (design known-gap
-  #5) — `viz backfill --force` re-renders with the verdict; the clean fix
-  is still a post-curation hook in handle.py.
-- [ ] **NOW-lane runs (258 of 665 dirs) have no loop, hence no report** —
-  index lists them link-less. If NOW-lane visibility matters, a single-call
-  mini-report from metadata + calls/ is cheap.
+- [x] **Live reports freeze before run_card.json exists** (design known-gap
+  #5) — SHIPPED 2026-07-09: `loop_report.write_reports_for_run_dir` called
+  from handle.py finalize after curation re-renders with the verdict.
+- [x] **NOW-lane runs have no report** — SHIPPED 2026-07-09: NOW mini-report
+  (request/result/verdict/calls/activity/environment), metadata-only
+  fallback for pre-artifact runs, backfill + index coverage (189/189).
+- [ ] **Index rebuild is O(all runs) at every finalize** (~277ms at 668
+  dirs, via the post-curation hook). Fine now; revisit around ~10k run dirs
+  (incremental index, or rebuild only on viz/backfill).
 
 ---
 

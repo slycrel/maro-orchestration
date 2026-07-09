@@ -568,6 +568,16 @@ def handle(
                     _card = _curate_run(_hid, status=_status)
                 except Exception:
                     pass
+                # Post-curation report refresh: the live report froze before
+                # run_card.json existed (design known-gap #5), so re-render
+                # this run's reports now that the verdict is on disk. Also
+                # writes the NOW-lane mini-report. Best-effort.
+                try:
+                    from loop_report import write_reports_for_run_dir as _rerender
+                    from runs import run_dir as _run_dir_report
+                    _rerender(_run_dir_report(_hid))
+                except Exception:
+                    pass
                 # Substrate notification: the run_card IS the completion payload
                 # (status, done!=achieved class, result excerpt + path).
                 try:
@@ -674,6 +684,8 @@ def _handle_impl(
         _record_log_offset(handle_id)
         if repo_path:
             _record_repo_base(handle_id, repo_path)
+        from runs import write_environment_snapshot as _write_env_snapshot
+        _write_env_snapshot(_rd)
     except Exception as _run_dir_exc:
         log.debug("runs: create_run_dir failed: %s", _run_dir_exc)
 
@@ -1145,6 +1157,15 @@ def _handle_impl(
                     _pconf < 0.75 or _pname == _DEFAULT_PERSONA
                 )
                 record_persona_dispatch(message, _pname, _pconf, is_fallback=_is_fallback)
+                # Run-keyed copy: the global dispatch log can't answer
+                # "which persona did THIS run use" — metadata.json can.
+                from runs import stamp_run_metadata as _stamp_run_metadata
+                _stamp_run_metadata({
+                    "persona": _pname,
+                    "persona_confidence": round(_pconf, 3),
+                    "persona_fallback": _is_fallback,
+                    "persona_forced": bool(_pfx.forced_persona),
+                })
             except Exception:
                 pass
             _pspec = _preg.load(_pname)

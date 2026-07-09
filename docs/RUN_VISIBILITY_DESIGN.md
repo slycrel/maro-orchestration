@@ -625,3 +625,61 @@ is a routing/classification prompt whose response is the whole goal's
 text, executed the task instead of classifying it, and the loop then did
 the work again. Tracked in BACKLOG ("subprocess utility calls can execute
 the goal"), out of scope for this feature.
+
+## Per-run attribution capture + NOW-lane reports (2026-07-09, second pass)
+
+Jeremy: "Yeah, let's do both" — per-run environment/skills/persona capture
+AND the NOW-lane mini-report + backfill.
+
+### Why capture (not just render)
+
+The verify->learn loop can't close without attribution: a run's outcome is a
+function of goal AND environment (config era, skill variants injected,
+persona worn), and none of that was run-keyed. The memory-slice A/B worked
+*only* because the experiment arm was stamped into run metadata — this makes
+that stamping systemic. History can't be backfilled, which is the argument
+for starting capture now.
+
+### What's captured, where
+
+- **`source/environment.json`** (runs.write_environment_snapshot, called at
+  run start in handle.py next to record_log_offset): scrubbed effective
+  config, MARO_*/OPENCLAW_* env overrides (env beats config, so config alone
+  lies), maro git sha, hostname/platform/python, spend-today-at-start.
+  Best-effort, never raises.
+- **`source/skills_manifest.jsonl`** (runs.append_skills_manifest, called
+  from loop_planning at both injection sites): what actually entered the
+  prompt POST A/B variant routing — {id, name, content_hash, variant_of,
+  tier, routing_key} at stage=decompose, plus stage=curated_summaries names.
+  JSONL because injection can recur (replans).
+- **`metadata.json` persona fields** (runs.stamp_run_metadata, called next
+  to record_persona_dispatch in handle.py): persona, persona_confidence,
+  persona_fallback, persona_forced. The global dispatch log can't answer
+  "which persona did THIS run use"; metadata can.
+- Report gains an **Environment panel** (persona line, skills-injected
+  table with variant lineage, config era summary, full scrubbed config
+  behind <details>). Absent entirely for runs that predate capture.
+
+### NOW-lane mini-report
+
+Pure rendering gap — capture was already complete (artifact/now-*.json,
+calls/, slice, run_card). `_write_now_report` renders
+`build/now-<handle_id>-report.html`: request, result, verdict panel, LLM
+calls, activity slice, environment panel. Always frozen (NOW reports are
+only written after the run ends). Runs predating the NOW artifact writer
+(metadata lane=now, empty artifact/) get a metadata-only report that says
+"result not captured" rather than pretending — 175 of the 189 historical
+NOW runs on this box are in that class; all 189 now have reports.
+
+### Post-curation re-render hook (closes known gap #5)
+
+`loop_report.write_reports_for_run_dir(run_dir)` force re-renders every
+report in one run dir (loop + NOW) and rebuilds the index. handle.py's
+finalize calls it AFTER run_curation writes run_card.json, so the frozen
+report picks up the verdict it couldn't have had at freeze time. Live-run
+measurement: ~220ms per finalize at 668 run dirs. The index rebuild is
+O(all runs) at every finalize — fine at this scale, revisit around ~10k
+run dirs (residual noted in BACKLOG #17).
+
+`viz backfill` now also covers NOW runs (artifact-bearing and
+metadata-only), with the same skip-unless-`--force` semantics.
