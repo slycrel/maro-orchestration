@@ -163,6 +163,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_heartbeat.add_argument("--verbose", "-v", action="store_true", default=True)
     p_heartbeat.add_argument("--format", choices=["text", "json"], default="text")
 
+    p_viz = sub.add_parser("viz", help="Read-only HTTP server for run-visibility reports/index")
+    viz_sub = p_viz.add_subparsers(dest="viz_cmd", required=True)
+    p_viz_serve = viz_sub.add_parser("serve", help="Serve runs_root() over http:// (foreground, blocking)")
+    p_viz_serve.add_argument("--host", default=None, help="Bind host (default: config viz.host, then 127.0.0.1)")
+    p_viz_serve.add_argument("--port", type=int, default=None, help="Bind port (default: config viz.port, then 8787)")
+
     p_telegram = sub.add_parser("telegram", help="Start Telegram listener (routes messages through handle)")
     p_telegram.add_argument("--once", action="store_true", help="Process pending updates once and exit")
     p_telegram.add_argument("--dry-run", action="store_true", help="Process but don't send responses")

@@ -283,8 +283,10 @@ same-directory relative links.
 
 1. **`fetch()` under `file://`** — see "Detail tier" above. Degrades to a
    raw-JSON link when viewed directly off disk; full inline experience needs
-   `http://` (either an ad hoc `python -m http.server` you start yourself, or
-   the eventual general-purpose viz server in BACKLOG.md).
+   `http://`. **Closed 2026-07-08**: `src/viz_server.py` (`scripts/viz-ctl.sh
+   start`, or `python3 src/cli.py viz serve`) serves `runs_root()` read-only
+   over `http://127.0.0.1:8787/` by default — see BACKLOG_DONE.md
+   "General-purpose visualization server" for the shipped design.
 2. **loop_id vs. run dir is not strictly 1:1** — a run dir can contain
    sibling loop reports (fan-out/parallel-loop children, director replans
    producing a new loop_id in the same handle). The index's
@@ -327,8 +329,9 @@ same-directory relative links.
 
 ## Explicitly out of scope for this build
 
-- A live HTTP server for either surface (see BACKLOG.md "General-purpose
-  visualization server" — separate, deferred decision).
+- A live HTTP server for either surface — shipped separately afterward as
+  `src/viz_server.py` (see BACKLOG_DONE.md "General-purpose visualization
+  server"), not bundled into this build.
 - Any goal-submission or replay control surface (the exact thing that sank
   the old dashboard).
 - A timeline/visualization aggregating multiple runs of the same project

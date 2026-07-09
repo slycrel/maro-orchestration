@@ -8,6 +8,54 @@ Last split: 2026-04-16 (session 34).
 
 ---
 
+### General-purpose visualization server (shipped 2026-07-08)
+
+Surfaced while designing `docs/RUN_VISIBILITY_DESIGN.md`: the per-run
+report's lazy detail-fetch (prompt/response on click) needs `http://`, not
+`file://` — browsers block `fetch()` against sibling files under a `file://`
+origin. Deliberately sequenced after the run-visibility report shipped;
+built generically per Jeremy: "this probably won't be the last thing we
+want to surface" — rather than each future visualization inventing its own
+ad hoc server (the archived `observe_dashboard.py`'s organic-growth path),
+one process the orchestration can start/stop on demand.
+
+**Shipped**: `src/viz_server.py` — stdlib-only (`http.server.ThreadingHTTPServer`),
+serves `runs_root()` (`~/.maro/workspace/runs/`) read-only, loopback-only by
+default (`viz.host`/`viz.port` config keys, see `docs/DEFAULTS.md`).
+`python3 src/cli.py viz serve` is the foreground entrypoint (`_cmd_viz` in
+`src/cli.py`, subparser in `src/cli_args.py`); `scripts/viz-ctl.sh
+start|stop|status|restart` daemonizes it via a `/tmp/maro-viz-server.pid`
+PID file, mirroring `scripts/heartbeat-ctl.sh`'s split (foreground Python
+entrypoint + bash daemonization layer) — no max-runtime timeout, since
+unlike the heartbeat this is meant to stay up.
+
+**Safety design — path allowlist, not a naive static-file mount**: research
+before building found that `<run-dir>/build/calls/*.json` (call records) are
+secret-scrubbed via `src/secret_scrub.py` before write, but
+`<run-dir>/metadata.json` and `<run-dir>/artifact/{repo.bundle,git_log.txt,
+branch_diff.patch}` (raw `git bundle`/`git log`/`git diff` output) are not.
+The report/index HTML never links to those paths, but naively serving all of
+`runs_root()` would have left them reachable by a guessed URL. Instead
+`_resolve_allowed_path()` allowlists exactly `index.html` at the document
+root and `<run-dir-name>/build/**` (default-deny everything else,
+GET/HEAD-only, no directory listing) — `source/`, `artifact/`, and
+`metadata.json` are structurally unreachable regardless of any future
+handler bug. Root scoped to `runs_root()` specifically (not the whole
+workspace) so `secrets/`/`memory/` (siblings under workspace root) can never
+be exposed even if the allowlist were misconfigured. Read-only, no
+goal-submission/control surface — the exact thing that got the archived
+`observe_dashboard.py` (991-line stdlib dashboard, unauthenticated, default
+`0.0.0.0`) killed. `viz.host` defaults to `127.0.0.1` but `0.0.0.0`/a LAN IP
+remains a deliberate opt-in (headless runtime box, same-LAN access) —
+config key, not code change.
+
+Tests: `tests/test_viz_server.py` — allowlist unit tests (accepts
+index.html/build/**, rejects source/artifact/metadata.json/traversal/bare
+directory) plus a live-server integration test (real HTTP GET/POST against
+an ephemeral-port `ThreadingHTTPServer`, asserts 200/403/405).
+
+---
+
 ### BACKLOG #1: write fence — shipped arc (2026-06-26 → 2026-07-04)
 
 Moved from BACKLOG.md 2026-07-04 triage; the open residual (Bash write

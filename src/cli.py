@@ -1727,6 +1727,14 @@ def _cmd_gateway(args: argparse.Namespace) -> int:
     return fail("E_INTERNAL", "unknown command")
 
 
+def _cmd_viz(args: argparse.Namespace) -> int:
+    if args.viz_cmd == "serve":
+        from viz_server import serve
+        serve(host=args.host, port=args.port)
+        return 0
+    return fail("E_INTERNAL", "unknown command")
+
+
 def _cmd_sandbox(args: argparse.Namespace) -> int:
     from sandbox import run_skill_tests_sandboxed, load_audit_log, SandboxConfig
 
@@ -1927,6 +1935,7 @@ _COMMAND_HANDLERS = {
     "gateway": _cmd_gateway,
     "sandbox": _cmd_sandbox,
     "router": _cmd_router,
+    "viz": _cmd_viz,
 }
 
 
