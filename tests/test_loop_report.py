@@ -325,7 +325,7 @@ def test_write_run_report_includes_decision_points_and_global_context(monkeypatc
     content = (tmp_path / "projects" / "p" / "artifacts" / "loop-markloop-report.html").read_text()
     assert "Decision points" in content
     assert "gate flagged this run" in content
-    assert "Global context" in content
+    assert "Run activity" in content
     assert "cross-run note" in content
 
 
@@ -636,3 +636,230 @@ def test_js_fallback_uses_dom_apis_not_string_concat(monkeypatch, tmp_path):
     # ending in "+ rec + '</a></div>'" — assert that's gone.
     assert "+ rec + '</a>" not in lr._DETAIL_JS
     assert "panel.innerHTML = '<div class=\"detail-error\"" not in lr._DETAIL_JS
+
+
+# ---------------------------------------------------------------------------
+# Captain's-log slice preference (2026-07-09, Jeremy: "the captain's log is
+# somehow not surfaced" — 85% of real entries carry no loop_id, and the
+# global load_log tail rotates away; the run's own slice is the durable,
+# already-scoped source)
+# ---------------------------------------------------------------------------
+
+def _write_slice(build_dir, entries):
+    build_dir.mkdir(parents=True, exist_ok=True)
+    with (build_dir / "captains_log_slice.jsonl").open("w") as f:
+        for e in entries:
+            f.write(json.dumps(e) + "\n")
+
+
+def test_gather_log_markers_prefers_run_slice(monkeypatch, tmp_path):
+    build = tmp_path / "build"
+    _write_slice(build, [
+        {"timestamp": "2026-07-01T00:00:10+00:00", "event_type": "QUALITY_GATE_VERDICT",
+         "subject": "gate", "summary": "attributed", "loop_id": "sliceloop"},
+        {"timestamp": "2026-07-01T00:00:20+00:00", "event_type": "SKILL_PROMOTED",
+         "subject": "skillX", "summary": "no loop id"},
+        {"timestamp": "2026-07-01T00:00:30+00:00", "event_type": "DIAGNOSIS",
+         "subject": "sibling", "summary": "other loop", "loop_id": "otherloop"},
+    ])
+    # Poison the global-log path: if the slice is preferred, load_log is never called.
+    import captains_log
+    monkeypatch.setattr(captains_log, "load_log",
+                        lambda **kw: (_ for _ in ()).throw(AssertionError("load_log used despite slice")))
+
+    attributed, activity = lr._gather_log_markers("sliceloop", "2026-07-01T00:00:00+00:00", build)
+    assert [e["subject"] for e in attributed] == ["gate"]
+    subjects = [e["subject"] for e in activity]
+    assert "skillX" in subjects        # unattributed meta stays visible
+    assert "sibling" in subjects       # sibling-loop entries are run context, not dropped
+
+
+def test_gather_log_markers_falls_back_to_load_log_without_slice(monkeypatch, tmp_path):
+    import captains_log
+    monkeypatch.setattr(captains_log, "load_log", lambda **kw: [
+        {"timestamp": "2026-07-01T00:00:10+00:00", "event_type": "LOOP_CREATED",
+         "subject": "from-global", "summary": "", "loop_id": "noslice"},
+    ])
+    attributed, _ = lr._gather_log_markers("noslice", "2026-07-01T00:00:00+00:00", tmp_path / "build")
+    assert [e["subject"] for e in attributed] == ["from-global"]
+
+
+def test_run_activity_section_shows_family_counts(monkeypatch, tmp_path):
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+    import runs
+    rd = tmp_path / "runs" / "hact-nick"
+    (rd / "build").mkdir(parents=True)
+    _write_slice(rd / "build", [
+        {"timestamp": "2026-07-01T00:00:10+00:00", "event_type": "SKILL_PROMOTED",
+         "subject": "skillA", "summary": "learned a thing"},
+        {"timestamp": "2026-07-01T00:00:11+00:00", "event_type": "SKILL_VARIANT_CREATED",
+         "subject": "skillB", "summary": ""},
+        {"timestamp": "2026-07-01T00:00:12+00:00", "event_type": "EVOLVER_APPLIED",
+         "subject": "evo", "summary": ""},
+    ])
+    runs.set_current_run_dir(rd)
+    lr.write_run_report(
+        project="p", loop_id="actloop", goal="goal",
+        planned_steps=["Step one"], start_ts="2026-07-01T00:00:00+00:00",
+        step_outcomes=[_outcome("Step one")],
+    )
+    content = (rd / "build" / "loop-actloop-report.html").read_text()
+    assert "Run activity" in content
+    assert "SKILL 2" in content
+    assert "EVOLVER 1" in content
+    assert "skillA" in content
+
+
+# ---------------------------------------------------------------------------
+# LLM-calls section + per-step model column (call-record meta)
+# ---------------------------------------------------------------------------
+
+def _write_call(calls_dir, seq, *, prompt, model="claude-sonnet-5", backend="anthropic",
+                tokens_in=100, tokens_out=10):
+    calls_dir.mkdir(parents=True, exist_ok=True)
+    p = calls_dir / f"call-{seq:05d}.json"
+    p.write_text(json.dumps({
+        "seq": seq, "backend": backend, "model": model, "prompt": prompt,
+        "response": "ok", "tool_events": [], "tokens_in": tokens_in,
+        "tokens_out": tokens_out, "ts": "2026-07-01T00:00:05+00:00",
+    }))
+    return p
+
+
+def test_report_lists_all_llm_calls_not_just_step_calls(monkeypatch, tmp_path):
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+    import runs
+    rd = tmp_path / "runs" / "hcalls-nick"
+    build = rd / "build"
+    _write_call(build / "calls", 1, prompt="[system]\nYou are a routing agent. Classify...",
+                model="claude-haiku-4-5-20251001")
+    step_rec = _write_call(build / "calls", 2,
+                           prompt="[system]\nYou are an autonomous execution agent.\nComplete the given step")
+    runs.set_current_run_dir(rd)
+    lr.write_run_report(
+        project="p", loop_id="callloop", goal="goal",
+        planned_steps=["Step one"], start_ts="2026-07-01T00:00:00+00:00",
+        step_outcomes=[_outcome("Step one", call_record=str(step_rec))],
+    )
+    content = (build / "loop-callloop-report.html").read_text()
+    assert "LLM calls (2)" in content
+    assert "routing" in content            # purpose sniffed from prompt head
+    assert "step execution" in content
+    assert "(step 1)" in content           # step attribution marked
+    assert "haiku-4-5" in content          # model surfaced (shortened)
+    # per-step model column in the step table too
+    assert content.index("<th>Model</th>") < content.index("LLM calls (2)")
+
+
+def test_call_purpose_sniffer_extracts_persona():
+    purpose, persona = lr._sniff_call_head("# Persona: Director Proxy\n\nYou are operating as...")
+    assert persona == "Director Proxy"
+
+
+# ---------------------------------------------------------------------------
+# Outcome verdict panel (run_card.json)
+# ---------------------------------------------------------------------------
+
+def test_report_shows_run_card_verdict_when_present(monkeypatch, tmp_path):
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+    import runs
+    rd = tmp_path / "runs" / "hcard-nick"
+    (rd / "build").mkdir(parents=True)
+    (rd / "run_card.json").write_text(json.dumps({
+        "status": "incomplete", "success_class": "partial",
+        "goal_achieved": False, "total_cost_usd": 0.21,
+        "goal_verdict_summary": "Two of four delivery criteria fail.",
+    }))
+    runs.set_current_run_dir(rd)
+    lr.write_run_report(
+        project="p", loop_id="cardloop", goal="goal",
+        planned_steps=["Step one"], start_ts="2026-07-01T00:00:00+00:00",
+        step_outcomes=[_outcome("Step one")],
+    )
+    content = (rd / "build" / "loop-cardloop-report.html").read_text()
+    assert "Outcome" in content
+    assert "Goal achieved:</b> no" in content
+    assert "$0.2100" in content
+    assert "Two of four delivery criteria fail." in content
+
+
+# ---------------------------------------------------------------------------
+# Backfill (2026-07-09: 665 pre-feature runs on this box had loop logs but
+# no reports; the index listed them link-less forever)
+# ---------------------------------------------------------------------------
+
+def _make_historical_run(ws, handle, loop_id, *, status="done", with_report=False):
+    rd = ws / "runs" / handle
+    build = rd / "build"
+    build.mkdir(parents=True)
+    (rd / "metadata.json").write_text(json.dumps({
+        "handle_id": handle.split("-")[0], "prompt": f"goal for {handle}",
+        "lane": "agenda", "status": status,
+        "started_at": "2026-06-01T00:00:00+00:00", "ended_at": "2026-06-01T00:10:00+00:00",
+    }))
+    (build / f"loop-{loop_id}-log.json").write_text(json.dumps({
+        "loop_id": loop_id, "project": "p", "goal": f"goal for {handle}",
+        "status": status, "started_at": "2026-06-01T00:00:00+00:00",
+        "elapsed_ms": 600000, "stuck_reason": None,
+        "steps": [
+            {"index": 1, "text": "First step", "status": "done", "result_length": 10,
+             "iteration": 1, "tokens_in": 1000, "tokens_out": 50, "elapsed_ms": 30000,
+             "call_record": ""},
+            {"index": 2, "text": "Second step", "status": "blocked", "result_length": 0,
+             "iteration": 1, "tokens_in": 500, "tokens_out": 20, "elapsed_ms": 15000,
+             "call_record": ""},
+        ],
+        "totals": {"steps_done": 1, "steps_blocked": 1, "tokens_in": 1500, "tokens_out": 70},
+    }))
+    if with_report:
+        (build / f"loop-{loop_id}-report.html").write_text(
+            "<!-- maro-report: final status=done -->\n<html>old</html>")
+    return rd
+
+
+def test_backfill_writes_frozen_reports_and_index(monkeypatch, tmp_path):
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+    import runs
+    _make_historical_run(tmp_path, "aaaa1111-old-run", "oldloop1")
+    _make_historical_run(tmp_path, "bbbb2222-older-run", "oldloop2", status="stuck")
+
+    counts = lr.backfill_run_reports()
+    assert counts["written"] == 2
+    assert counts["failed"] == 0
+
+    report = tmp_path / "runs" / "aaaa1111-old-run" / "build" / "loop-oldloop1-report.html"
+    content = report.read_text()
+    assert content.startswith("<!-- maro-report: final status=done -->")  # frozen
+    assert "First step" in content
+    assert "approximate timing" in content  # no ended_ts on old logs -> approx mode
+    index = (tmp_path / "runs" / "index.html").read_text()
+    assert "loop-oldloop1-report.html" in index
+    assert "loop-oldloop2-report.html" in index
+
+
+def test_backfill_skips_existing_reports_unless_forced(monkeypatch, tmp_path):
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+    _make_historical_run(tmp_path, "cccc3333-has-report", "hasrep", with_report=True)
+
+    counts = lr.backfill_run_reports()
+    assert counts["written"] == 0
+    assert counts["skipped"] == 1
+    report = tmp_path / "runs" / "cccc3333-has-report" / "build" / "loop-hasrep-report.html"
+    assert report.read_text().endswith("<html>old</html>")  # untouched
+
+    counts = lr.backfill_run_reports(force=True)
+    assert counts["written"] == 1
+    assert "First step" in report.read_text()  # regenerated over the frozen file
+
+
+def test_backfill_coerces_running_status_to_interrupted(monkeypatch, tmp_path):
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+    _make_historical_run(tmp_path, "dddd4444-crashed", "crashloop", status="running")
+
+    counts = lr.backfill_run_reports()
+    assert counts["written"] == 1
+    content = (tmp_path / "runs" / "dddd4444-crashed" / "build"
+               / "loop-crashloop-report.html").read_text()
+    # A crashed run must not be rendered as live: frozen sentinel, no auto-refresh.
+    assert content.startswith("<!-- maro-report: final status=interrupted -->")
+    assert 'http-equiv="refresh"' not in content

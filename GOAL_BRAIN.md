@@ -172,6 +172,15 @@ context, at best it's a slight tweak and we fix forward."*
   fabricating ground truth). Fixed via run-scoped `_DEFAULT_SUBPROCESS_CWD` ContextVar
   in llm.py (commits `2d0acef`/`a886b46`). Basis: live repro, leak gone, verifier
   escalated honestly.
+- Run-visibility real-data pass, 2026-07-09 (Jeremy: captain's log unsurfaced, meta
+  missing, feature only ever mock-tested): report now reads the run's own
+  captains_log_slice.jsonl (85% of real entries have no loop_id — the loop_id filter
+  was structurally starving the report), surfaces per-step model, ALL recorded LLM
+  calls with purpose/persona labels (21 vs 8 step-linked on a real run), run_card
+  verdict panel, grouped "Run activity" meta section. `maro viz backfill` reconstructs
+  reports from loop logs: 445 historical loops rendered, 0 failures, 1.5s. Day-one
+  payoff: the report exposed BACKLOG #16 (subprocess routing call executed the whole
+  goal — 1.79M tokens, duplicate work). Residuals: BACKLOG #17.
 
 **Substrate integration, as of 2026-07-01:**
 - New arc opened (Jeremy, 2026-07-01): *"get the project where we can trial it for

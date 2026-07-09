@@ -1732,6 +1732,13 @@ def _cmd_viz(args: argparse.Namespace) -> int:
         from viz_server import serve
         serve(host=args.host, port=args.port)
         return 0
+    if args.viz_cmd == "backfill":
+        from loop_report import backfill_run_reports
+        counts = backfill_run_reports(force=args.force, limit=args.limit)
+        print(f"scanned {counts['runs_scanned']} run dir(s): "
+              f"{counts['written']} report(s) written, {counts['skipped']} skipped, "
+              f"{counts['failed']} failed; index rebuilt")
+        return 0 if counts["failed"] == 0 else 1
     return fail("E_INTERNAL", "unknown command")
 
 

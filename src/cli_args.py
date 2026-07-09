@@ -168,6 +168,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_viz_serve = viz_sub.add_parser("serve", help="Serve runs_root() over http:// (foreground, blocking)")
     p_viz_serve.add_argument("--host", default=None, help="Bind host (default: config viz.host, then 127.0.0.1)")
     p_viz_serve.add_argument("--port", type=int, default=None, help="Bind port (default: config viz.port, then 8787)")
+    p_viz_backfill = viz_sub.add_parser(
+        "backfill",
+        help="Generate reports for historical runs that predate the run-visibility feature, then rebuild the index",
+    )
+    p_viz_backfill.add_argument("--force", action="store_true",
+                                help="Also regenerate existing (frozen) reports — picks up data written after finalize, e.g. run_card.json verdicts")
+    p_viz_backfill.add_argument("--limit", type=int, default=None, help="Stop after writing N reports")
 
     p_telegram = sub.add_parser("telegram", help="Start Telegram listener (routes messages through handle)")
     p_telegram.add_argument("--once", action="store_true", help="Process pending updates once and exit")

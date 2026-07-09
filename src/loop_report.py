@@ -241,22 +241,68 @@ def _step_windows(step_outcomes: List[StepOutcome], loop_start_ts: str) -> Tuple
 # Captain's log markers
 # ---------------------------------------------------------------------------
 
-def _gather_log_markers(loop_id: str, start_ts: str) -> Tuple[List[dict], List[dict]]:
-    """Return (attributed, global) captain's-log entries for this run.
+def _read_log_slice(report_dir: Optional[Path]) -> Optional[List[dict]]:
+    """Read the run's own captain's-log slice, if one exists.
+
+    runs.slice_log_for_run() writes <run-dir>/build/captains_log_slice.jsonl
+    at finalize — a byte-offset copy of everything logged during the run's
+    lifetime, regardless of loop_id. It's the durable per-run record: it
+    survives rotation of the global log, and it's already scoped to this
+    run's time window. When present (the report lives in the same build/
+    dir), it beats re-filtering the global log's ~1000-entry tail.
+    Returns None (not []) when the slice doesn't exist, so the caller can
+    distinguish "no slice yet" from "slice exists but is empty".
+    """
+    if report_dir is None:
+        return None
+    slice_path = report_dir / "captains_log_slice.jsonl"
+    if not slice_path.exists():
+        return None
+    entries: List[dict] = []
+    try:
+        with slice_path.open("r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entries.append(json.loads(line))
+                except Exception:
+                    continue
+    except Exception:
+        return None
+    return entries
+
+
+def _gather_log_markers(
+    loop_id: str, start_ts: str, report_dir: Optional[Path] = None
+) -> Tuple[List[dict], List[dict]]:
+    """Return (attributed, run_activity) captain's-log entries for this run.
 
     attributed: entries whose loop_id matches this loop, chronological.
-    global: entries with no loop_id at all, timestamped since this run
-    started — cross-run reflections that aren't part of this run but
-    shouldn't be silently dropped from the report either (rendered in a
-    collapsed section instead).
+    run_activity: everything else logged during this run's window — skills
+    learned/refined, evolver actions, knowledge extraction, diagnoses.
+    Only ~11 of ~48 log_event() call sites pass a loop_id (85% of real
+    entries on this box have none), so the unattributed set is where most
+    of the run's meta actually lives — it gets a visible grouped section,
+    not silent dropping.
 
-    Known limitation (accepted for v1, see docs/RUN_VISIBILITY_DESIGN.md):
-    load_log() reads only the active captain's-log file; rotation keeps
-    roughly a 1000-entry tail, so an extremely long/busy run could lose its
-    earliest markers.
+    Source preference: the run's own captains_log_slice.jsonl when it
+    exists (rotation-proof, already run-scoped — see _read_log_slice),
+    else the global active log filtered to this run's window (in-flight
+    runs; the slice is only written at finalize). The global path keeps
+    the v1 limitation: load_log() reads the ~1000-entry rotation tail, so
+    a very long/busy run could lose its earliest markers.
     """
     if not loop_id:
         return [], []
+
+    slice_entries = _read_log_slice(report_dir)
+    if slice_entries is not None:
+        attributed = [e for e in slice_entries if e.get("loop_id") == loop_id]
+        activity = [e for e in slice_entries if e.get("loop_id") != loop_id]
+        return attributed, activity
+
     try:
         from captains_log import load_log
     except Exception:
@@ -304,6 +350,96 @@ def _slot_markers(markers: List[dict], windows: List[Dict[str, Any]], approx: bo
                 slots.setdefault(pos, []).append(mi)
                 break
     return slots
+
+
+# ---------------------------------------------------------------------------
+# Call-record metadata — model/backend/purpose per LLM call
+#
+# Every call record (runs.record_llm_call) already carries backend, model,
+# tokens, and the full prompt — the report just never read them (2026-07-09,
+# Jeremy: the report "doesn't surface any of the meta about the system
+# itself"). Records are write-once, so a process-local cache keeps the
+# per-step regeneration from reparsing the same files after every step.
+# ---------------------------------------------------------------------------
+
+# Distinctive openers of the system prompts each subsystem sends — matched
+# against the first few hundred chars of a recorded prompt to label what a
+# call was *for* (map built from the actual distribution across this box's
+# 761 historical call records, 2026-07-09). Unmatched calls fall back to "".
+_PURPOSE_PATTERNS: List[Tuple[str, str]] = [
+    ("autonomous execution agent", "step execution"),
+    ("autonomous planning agent", "decompose"),
+    ("bound the solution space", "scope"),
+    ("routing agent", "routing"),
+    ("goal clarity assessor", "clarity check"),
+    ("director reviewing verification", "verify review"),
+    ("director evaluating mid-execution", "director eval"),
+    ("director performing a closure check", "closure check"),
+    ("meta-learning agent", "lesson extraction"),
+    ("plan reviewer", "plan review"),
+    ("skill extraction agent", "skill extraction"),
+    ("navigator", "navigator"),
+    ("generalizable knowledge", "knowledge extraction"),
+    ("verification agent", "step verify"),
+    ("adversarial reviewer", "adversarial review"),
+    ("quality reviewer", "quality review"),
+    ("bitter lesson goal rewriter", "goal rewrite"),
+    ("strategic advisor", "strategic advisor"),
+]
+
+_PERSONA_RE = None  # compiled lazily; regex import kept local to first use
+
+_call_meta_cache: Dict[str, Optional[dict]] = {}
+_call_meta_lock = threading.Lock()
+
+
+def _sniff_call_head(prompt: str) -> Tuple[str, str]:
+    """(purpose, persona) sniffed from a recorded prompt's opening text."""
+    head = (prompt or "")[:400]
+    low = head.lower()
+    purpose = ""
+    for needle, label in _PURPOSE_PATTERNS:
+        if needle in low:
+            purpose = label
+            break
+    persona = ""
+    global _PERSONA_RE
+    if _PERSONA_RE is None:
+        import re
+        _PERSONA_RE = re.compile(r"#\s*Persona:\s*([^\n(]+)")
+    m = _PERSONA_RE.search(head)
+    if m:
+        persona = m.group(1).strip()
+    return purpose, persona
+
+
+def _call_meta(path_str: str) -> Optional[dict]:
+    """Small-field summary of one call record; None if unreadable."""
+    if not path_str:
+        return None
+    with _call_meta_lock:
+        if path_str in _call_meta_cache:
+            return _call_meta_cache[path_str]
+    meta: Optional[dict] = None
+    try:
+        rec = json.loads(Path(path_str).read_text(encoding="utf-8"))
+        purpose, persona = _sniff_call_head(rec.get("prompt", ""))
+        meta = {
+            "seq": rec.get("seq"),
+            "model": rec.get("model") or "",
+            "backend": rec.get("backend") or "",
+            "tokens_in": rec.get("tokens_in") or 0,
+            "tokens_out": rec.get("tokens_out") or 0,
+            "ts": rec.get("ts") or "",
+            "purpose": purpose,
+            "persona": persona,
+            "n_tool_events": len(rec.get("tool_events") or []),
+        }
+    except Exception:
+        meta = None
+    with _call_meta_lock:
+        _call_meta_cache[path_str] = meta
+    return meta
 
 
 # ---------------------------------------------------------------------------
@@ -446,8 +582,22 @@ _DETAIL_JS = """
 function escHtml(s){ const d=document.createElement('div'); d.innerText=s==null?'':String(s); return d.innerHTML; }
 function renderCallRecord(data){
   var out = '';
+  var meta = [];
+  if (data.model) meta.push(data.model);
+  if (data.backend) meta.push(data.backend);
+  if (data.tokens_in || data.tokens_out) meta.push((data.tokens_in||0) + ' in / ' + (data.tokens_out||0) + ' out');
+  if (meta.length) out += '<div class="meta">' + escHtml(meta.join(' · ')) + '</div>';
   out += '<h4>Prompt</h4><pre>' + escHtml(data.prompt || '') + '</pre>';
-  out += '<h4>Response</h4><pre>' + escHtml(data.response || '') + '</pre>';
+  if (data.response) {
+    out += '<h4>Response</h4><pre>' + escHtml(data.response) + '</pre>';
+  } else if (data.tool_events && data.tool_events.length) {
+    // Tool-call-driven steps legitimately record an empty response text —
+    // the actual result travels in the tool events below. Say so instead
+    // of rendering a blank panel that reads like lost data.
+    out += '<h4>Response</h4><div class="meta">(empty — response was delivered via tool call; see tool events)</div>';
+  } else {
+    out += '<h4>Response</h4><pre></pre>';
+  }
   if (data.tool_events && data.tool_events.length) {
     out += '<h4>Tool events (' + data.tool_events.length + ')</h4><pre>' + escHtml(JSON.stringify(data.tool_events, null, 2)) + '</pre>';
   }
@@ -581,6 +731,7 @@ def _render_step_table(
 
         data_attr = ""
         detail_html = ""
+        model_html = '<span class="meta">-</span>'
         if s.call_record:
             rec_path = Path(s.call_record)
             rel = _relpath(rec_path, report_dir) if rec_path.is_absolute() else s.call_record
@@ -590,6 +741,9 @@ def _render_step_table(
                 f'<a class="raw-link" href="{_esc(rel)}" target="_blank">raw &#8599;</a>'
                 f'<div class="detail-panel"></div>'
             )
+            cm = _call_meta(str(rec_path if rec_path.is_absolute() else report_dir / rec_path))
+            if cm and cm["model"]:
+                model_html = f'<span title="{_esc(cm["backend"])}">{_esc(_short_model(cm["model"]))}</span>'
         else:
             detail_html = '<span class="meta">no call record</span>'
 
@@ -598,6 +752,7 @@ def _render_step_table(
             f'<td>{pos}</td>'
             f'<td>{icon}</td>'
             f'<td class="step-text">{_esc_truncated(s.text, 200)}{tag_html}</td>'
+            f'<td>{model_html}</td>'
             f'<td>{s.elapsed_ms}ms</td>'
             f'<td>{_fmt_tokens_total(s.tokens_in, s.tokens_out)}</td>'
             f'<td>{cost_str}</td>'
@@ -607,8 +762,165 @@ def _render_step_table(
         )
     return (
         '<table class="steps"><thead><tr>'
-        '<th>#</th><th></th><th>Step</th><th>Elapsed</th><th>Tokens</th><th>Cost</th><th>Confidence</th><th>Detail</th>'
+        '<th>#</th><th></th><th>Step</th><th>Model</th><th>Elapsed</th><th>Tokens</th><th>Cost</th><th>Confidence</th><th>Detail</th>'
         '</tr></thead><tbody>' + "".join(rows) + '</tbody></table>'
+    )
+
+
+def _short_model(model: str) -> str:
+    """claude-haiku-4-5-20251001 -> haiku-4-5; keeps unknown names as-is."""
+    m = model or ""
+    if m.startswith("claude-"):
+        m = m[len("claude-"):]
+    # strip a trailing -YYYYMMDD date stamp
+    parts = m.rsplit("-", 1)
+    if len(parts) == 2 and parts[1].isdigit() and len(parts[1]) == 8:
+        m = parts[0]
+    return m
+
+
+def _render_llm_calls(report_dir: Path, step_outcomes: List[StepOutcome]) -> str:
+    """Every LLM call recorded for this run directory — not just the one call
+    each executed step links. On a real 8-step run this box captured 21
+    records: routing, clarity, scope, decompose, navigator, verify, lesson/
+    skill extraction all live only here (2026-07-09, Jeremy: sub-agent
+    prompts and "thinking" data weren't surfaced). Reuses the step table's
+    detail-toggle machinery, so each call's full prompt/response is one
+    click away without inlining anything.
+    """
+    calls_dir = report_dir / "calls"
+    if not calls_dir.is_dir():
+        return ""
+    try:
+        call_files = sorted(calls_dir.glob("call-*.json"))
+    except Exception:
+        return ""
+    if not call_files:
+        return ""
+
+    # Which call file belongs to which executed step (by basename).
+    step_by_rec: Dict[str, int] = {}
+    for pos, s in enumerate(step_outcomes, start=1):
+        if s.call_record:
+            step_by_rec[Path(s.call_record).name] = pos
+
+    rows = []
+    personas_seen: List[str] = []
+    for cf in call_files:
+        cm = _call_meta(str(cf))
+        rel = _relpath(cf, report_dir)
+        if cm is None:
+            rows.append(
+                f'<tr><td class="meta">?</td><td class="meta" colspan="6">unreadable record</td>'
+                f'<td><a class="raw-link" href="{_esc(rel)}" target="_blank">raw &#8599;</a></td></tr>'
+            )
+            continue
+        if cm["persona"] and cm["persona"] not in personas_seen:
+            personas_seen.append(cm["persona"])
+        step_pos = step_by_rec.get(cf.name)
+        purpose = cm["purpose"] or ""
+        purpose_html = _esc(purpose) if purpose else '<span class="meta">?</span>'
+        if step_pos:
+            purpose_html += f' <span class="meta">(step {step_pos})</span>'
+        persona_html = f' <span class="badge badge-approx">{_esc(cm["persona"])}</span>' if cm["persona"] else ""
+        rows.append(
+            f'<tr data-call-record="{_esc(rel)}">'
+            f'<td class="meta">{_esc(cm["seq"])}</td>'
+            f'<td class="meta">{_esc(_fmt_ts(cm["ts"]))}</td>'
+            f'<td>{purpose_html}{persona_html}</td>'
+            f'<td>{_esc(_short_model(cm["model"]))}</td>'
+            f'<td class="meta">{_esc(cm["backend"])}</td>'
+            f'<td>{_fmt_tokens_split(cm["tokens_in"], cm["tokens_out"])}</td>'
+            f'<td class="meta">{cm["n_tool_events"] or "-"}</td>'
+            f'<td><button class="detail-toggle" type="button">detail</button>'
+            f'<a class="raw-link" href="{_esc(rel)}" target="_blank">raw &#8599;</a>'
+            f'<div class="detail-panel"></div></td>'
+            f'</tr>'
+        )
+    persona_note = (
+        f' &middot; personas: {_esc(", ".join(personas_seen))}' if personas_seen else ""
+    )
+    return (
+        f'<h2>LLM calls ({len(call_files)})</h2>'
+        f'<div class="meta">Every recorded call in this run directory — routing, planning, '
+        f'navigation, verification, learning — not just the per-step execution calls'
+        f'{persona_note}</div>'
+        '<div class="panel"><table class="steps"><thead><tr>'
+        '<th>#</th><th>Time</th><th>Purpose</th><th>Model</th><th>Backend</th>'
+        '<th>Tokens</th><th title="tool events">Tools</th><th>Detail</th>'
+        '</tr></thead><tbody>' + "".join(rows) + '</tbody></table></div>'
+    )
+
+
+def _render_verdict(report_dir: Path) -> str:
+    """Outcome verdict from run_card.json when it exists next to this run's
+    build/ dir — goal_achieved, the verdict summary, recorded cost. Written
+    by handle.py's curation after the loop finalizes, so a live run's frozen
+    report usually predates it (known gap #5 in the design doc); backfilled
+    reports get it because the card already exists by then.
+    """
+    try:
+        card_path = report_dir.parent / "run_card.json"
+        if not card_path.exists():
+            return ""
+        card = json.loads(card_path.read_text(encoding="utf-8"))
+    except Exception:
+        return ""
+    badge = _render_status_badge(card.get("status") or "", card.get("success_class"))
+    achieved = card.get("goal_achieved")
+    achieved_str = "yes" if achieved is True else ("no" if achieved is False else "not verified")
+    cost = card.get("total_cost_usd")
+    cost_str = f"${cost:.4f}" if isinstance(cost, (int, float)) else "-"
+    verdict = (card.get("goal_verdict_summary") or "").strip()
+    verdict_html = f'<div class="meta" style="margin-top:6px">{_esc_truncated(verdict, 600)}</div>' if verdict else ""
+    result_html = ""
+    rp = card.get("result_path")
+    if rp and Path(rp).exists():
+        result_html = f' &middot; <a href="{_esc(_relpath(Path(rp), report_dir))}">result &#8599;</a>'
+    return (
+        '<h2>Outcome</h2><div class="panel">'
+        f'<div class="meta"><b>Verdict:</b> {badge} &middot; <b>Goal achieved:</b> {_esc(achieved_str)} '
+        f'&middot; <b><span title="Recorded spend from run_card.json — the authoritative number, unlike the header\'s per-step estimate.">Cost (recorded):</span></b> {_esc(cost_str)}{result_html}</div>'
+        f'{verdict_html}</div>'
+    )
+
+
+def _event_family(event_type: str) -> str:
+    return (event_type or "?").split("_", 1)[0]
+
+
+def _render_run_activity(entries: List[dict]) -> str:
+    """Unattributed captain's-log entries from this run's window — the
+    system's own meta-activity (SKILL_*, EVOLVER_*, HYPOTHESIS_*, DIAGNOSIS,
+    knowledge extraction...). 85% of real entries carry no loop_id, so this
+    is where most of what the system *learned or changed* during a run is
+    visible; the family counts stay readable even with the table collapsed.
+    """
+    if not entries:
+        return ""
+    families: Dict[str, int] = {}
+    for e in entries:
+        fam = _event_family(e.get("event_type", ""))
+        families[fam] = families.get(fam, 0) + 1
+    fam_summary = " &middot; ".join(
+        f"{_esc(k)} {v}" for k, v in sorted(families.items(), key=lambda kv: -kv[1])
+    )
+    rows = []
+    for e in entries:
+        rows.append(
+            f'<tr><td class="meta">{_esc(_fmt_ts(e.get("timestamp", "")))}</td>'
+            f'<td>{_esc(e.get("event_type", ""))}</td>'
+            f'<td>{_esc(e.get("subject", ""))}</td>'
+            f'<td class="meta">{_esc_truncated(e.get("summary", "") or "", 200)}</td></tr>'
+        )
+    return (
+        '<h2>Run activity</h2>'
+        f'<div class="meta">System meta-events logged during this run without a loop attribution '
+        f'&mdash; {fam_summary}</div>'
+        f'<details class="global-ctx"><summary>Show all {len(entries)} events</summary>'
+        '<table class="idx-table">'
+        '<tr><th>Time</th><th>Type</th><th>Subject</th><th>Summary</th></tr>'
+        + "".join(rows) + '</table></details>'
     )
 
 
@@ -627,25 +939,6 @@ def _render_decision_points(markers: List[dict]) -> str:
     return '<h2>Decision points (' + str(len(markers)) + ')</h2><ul class="decision-list">' + "".join(items) + '</ul>'
 
 
-def _render_global_context(entries: List[dict]) -> str:
-    if not entries:
-        return ""
-    rows = []
-    for e in entries:
-        rows.append(
-            f'<tr><td class="meta">{_esc(_fmt_ts(e.get("timestamp", "")))}</td>'
-            f'<td>{_esc(e.get("event_type", ""))}</td>'
-            f'<td>{_esc(e.get("subject", ""))}</td>'
-            f'<td class="meta">{_esc((e.get("summary", "") or "")[:160])}</td></tr>'
-        )
-    return (
-        '<details class="global-ctx"><summary>Global context — not attributed to this run '
-        f'({len(entries)})</summary><table class="idx-table">'
-        '<tr><th>Time</th><th>Type</th><th>Subject</th><th>Summary</th></tr>'
-        + "".join(rows) + '</table></details>'
-    )
-
-
 def _render_report_html(
     *,
     project: str,
@@ -661,7 +954,7 @@ def _render_report_html(
     index_link: Optional[str],
 ) -> str:
     windows, approx = _step_windows(step_outcomes, start_ts)
-    attributed_markers, global_entries = _gather_log_markers(loop_id, start_ts)
+    attributed_markers, activity_entries = _gather_log_markers(loop_id, start_ts, report_dir)
     marker_slots = _slot_markers(attributed_markers, windows, approx)
 
     done = sum(1 for s in step_outcomes if s.status == "done")
@@ -701,14 +994,16 @@ def _render_report_html(
 <div class="meta"><b><span title="Process status only — steps finished/blocked, not whether the goal was verified achieved. See the cross-run index for that once curation runs.">Status:</span></b> {_esc(status)} &middot; <b>Progress:</b> {done}/{total_planned} done, {blocked} blocked{replan_html}</div>
 <div class="meta"><b>Started:</b> {_esc(_fmt_ts(start_ts))} &middot; <b>Elapsed:</b> {elapsed_ms}ms &middot; <b>Tokens:</b> {_fmt_tokens_split(total_tokens_in, total_tokens_out)} &middot; <b><span title="Estimated from this report's step token counts — may differ from the run's recorded actual spend shown in the cross-run index.">Cost (est.):</span></b> {cost_str}</div>
 
+{_render_verdict(report_dir)}
 <h2>Timeline</h2>
 <div class="panel">{_render_timeline(planned_steps, step_outcomes, windows, approx, marker_slots, status)}</div>
 
 <h2>Steps</h2>
 <div class="panel">{_render_step_table(project, step_outcomes, report_dir)}</div>
 
+{_render_llm_calls(report_dir, step_outcomes)}
 {_render_decision_points(attributed_markers)}
-{_render_global_context(global_entries)}
+{_render_run_activity(activity_entries)}
 {nav_html}
 <script>{_DETAIL_JS}</script>
 </body></html>
@@ -1027,3 +1322,104 @@ def write_runs_index(*, force: bool = False) -> Optional[str]:
     except Exception:
         log.warning("runs index write failed", exc_info=True)
         return None
+
+
+# ---------------------------------------------------------------------------
+# Backfill — reports for runs that predate this feature
+#
+# The feature shipped 2026-07-08; every run before that (665 on this box)
+# has the raw data on disk (build/loop-*-log.json, calls/, the captain's-log
+# slice, run_card.json) but no report, and the index only listed such runs
+# link-less. Backfill reconstructs each loop's StepOutcomes from its loop
+# log and writes the same frozen report the live path would have, then one
+# forced index write. It's also the real-data shakeout the feature never
+# had: until now the generator had only ever seen synthetic test fixtures.
+# ---------------------------------------------------------------------------
+
+def _outcomes_from_loop_log(lj: dict) -> List[StepOutcome]:
+    outcomes: List[StepOutcome] = []
+    for st in lj.get("steps", []) or []:
+        outcomes.append(StepOutcome(
+            index=st.get("index", 0),
+            text=st.get("text", ""),
+            status=st.get("status", "done"),
+            result="",  # loop logs persist result_length only; full text lives in the call record
+            iteration=st.get("iteration", 0),
+            tokens_in=st.get("tokens_in", 0) or 0,
+            tokens_out=st.get("tokens_out", 0) or 0,
+            elapsed_ms=st.get("elapsed_ms", 0) or 0,
+            call_record=st.get("call_record", "") or "",
+            # Missing on pre-feature logs -> "" -> the timeline's designed
+            # approximate-mode fallback, flagged as such in the report.
+            ended_ts=st.get("ended_ts", "") or "",
+        ))
+    return outcomes
+
+
+def backfill_run_reports(*, force: bool = False, limit: Optional[int] = None) -> Dict[str, int]:
+    """Generate frozen reports for historical runs, then rebuild the index.
+
+    Skips loops that already have a report unless force=True (force also
+    overwrites frozen reports — that's the point: re-render an old report
+    with data that didn't exist at finalize time, e.g. run_card.json).
+    Returns counts: {"written", "skipped", "failed", "runs_scanned"}.
+    """
+    counts = {"written": 0, "skipped": 0, "failed": 0, "runs_scanned": 0}
+    try:
+        from runs import runs_root
+        root = runs_root()
+    except Exception:
+        return counts
+    if not root.is_dir():
+        return counts
+
+    for d in sorted(root.iterdir()):
+        if not d.is_dir():
+            continue
+        build = d / "build"
+        if not build.is_dir():
+            continue
+        counts["runs_scanned"] += 1
+        for log_path in sorted(build.glob("loop-*-log.json")):
+            loop_id = log_path.name[len("loop-"):-len("-log.json")]
+            report_path = build / f"loop-{loop_id}-report.html"
+            if report_path.exists() and not force:
+                counts["skipped"] += 1
+                continue
+            try:
+                lj = json.loads(log_path.read_text(encoding="utf-8"))
+                outcomes = _outcomes_from_loop_log(lj)
+                status = lj.get("status") or "done"
+                # A loop log still claiming "running" is a crashed/killed run
+                # — rendering it as running would emit the auto-refresh tag
+                # and no freeze sentinel, forever. The run demonstrably isn't
+                # running anymore; "interrupted" is the honest terminal state.
+                if status == "running":
+                    status = "interrupted"
+                index_link = _relpath(root / "index.html", build)
+                content = _render_report_html(
+                    project=lj.get("project", "") or "",
+                    loop_id=loop_id,
+                    goal=lj.get("goal", "") or "",
+                    planned_steps=[s.text for s in outcomes],
+                    start_ts=lj.get("started_at", "") or "",
+                    step_outcomes=outcomes,
+                    status=status,
+                    elapsed_ms=lj.get("elapsed_ms", 0) or 0,
+                    replan_count=0,
+                    report_dir=build,
+                    index_link=index_link,
+                )
+                from file_lock import locked_write
+                with locked_write(report_path):
+                    _atomic_write_text(report_path, content)
+                counts["written"] += 1
+            except Exception:
+                log.warning("backfill failed for %s", log_path, exc_info=True)
+                counts["failed"] += 1
+            if limit is not None and counts["written"] >= limit:
+                write_runs_index(force=True)
+                return counts
+
+    write_runs_index(force=True)
+    return counts

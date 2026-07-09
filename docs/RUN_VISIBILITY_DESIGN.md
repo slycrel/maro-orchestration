@@ -567,3 +567,61 @@ documented, not fixed); NEEDS_MORE_EVIDENCE on running the test suite
 directly (its sandbox lacked `pytest`, same limitation as round 1 — verified
 independently outside that sandbox instead, see test run history in commit
 messages).
+
+## Real-data review + meta surfacing + backfill (2026-07-09)
+
+Jeremy's post-merge review ask: the captain's log seemed unsurfaced, the
+report had only ever run against synthetic test fixtures (built on the M1,
+never against this box's runs), and none of the system's own meta (skills
+learned, personas, sub-agent prompts, per-step "thinking") was visible.
+All three confirmed against real data and fixed in the same pass:
+
+1. **Captain's-log surfacing was structurally thin, not broken.** Only
+   ~11 of ~48 `log_event()` call sites pass a `loop_id`; on this box's
+   20,851 real entries, 85% carry none. So the loop_id-filtered "Decision
+   points" list was nearly empty on real runs, and everything interesting
+   (SKILL_*, EVOLVER_*, HYPOTHESIS_*, DIAGNOSIS, knowledge extraction)
+   landed at best in the collapsed global-context dump. **Fixed at the
+   source-selection level**: `_gather_log_markers()` now prefers the run's
+   own `build/captains_log_slice.jsonl` (written by `runs.slice_log_for_run`
+   at finalize — byte-offset copy of everything logged during the run,
+   rotation-proof, already run-scoped) over re-filtering the global log's
+   ~1000-entry tail; the global path remains the in-flight fallback. The
+   unattributed set renders as a first-class "Run activity" section with
+   event-family counts visible even when collapsed.
+2. **Meta the data already had but the report never read**: per-step
+   **model** column (from the step's call record; process-local
+   `_call_meta` cache so per-step regeneration doesn't reparse); an
+   **LLM calls (N)** section listing *every* recorded call in the run dir
+   — a real 8-step run here had 21 records; routing, clarity, scope,
+   decompose, director eval, verify, lesson/skill extraction were all
+   invisible before — each with a purpose label (sniffed from the system
+   prompt's opening against the actual distribution of 761 historical
+   records), persona (from `# Persona:` prompt headers), model, backend,
+   tokens, and the same lazy detail toggle as steps; an **Outcome** panel
+   from `run_card.json` (success_class badge, goal_achieved, verdict
+   summary, recorded cost, result link) — for backfilled runs the card
+   already exists, which pragmatically closes known gap #5 for historical
+   reports (live reports still freeze before curation writes the card;
+   `viz backfill --force` re-renders them with it after the fact).
+3. **Backfill**: `maro viz backfill` (`loop_report.backfill_run_reports`)
+   reconstructs StepOutcomes from each run dir's `build/loop-*-log.json`
+   (missing `ended_ts` → the designed approximate-timing fallback), writes
+   the same frozen report the live path would have, and force-rebuilds the
+   index. Loop logs still claiming `running` are coerced to `interrupted`
+   (a crashed run must not render with the auto-refresh tag and no freeze
+   sentinel forever). `--force` regenerates existing/frozen reports;
+   `--limit N` bounds a trial. First real execution: 445 loop logs across
+   665 run dirs → 440 written + 5 from the trial, 0 failures, 1.5s total.
+4. **Detail-panel honesty**: tool-call-driven steps record an empty
+   `response` (the result travels in tool events) — the panel now says so
+   instead of rendering a blank; panel header shows model/backend/tokens.
+
+Side-finding surfaced *by* the report (the "handy way to surface bugs"
+theory validated on day one): run `19cc17d6-azure-harbor`'s `call-00001`
+is a routing/classification prompt whose response is the whole goal's
+"## Done" report, with tool events and 1.79M input tokens over ~3 minutes
+— the agentic subprocess CLI, handed a routing prompt embedding the goal
+text, executed the task instead of classifying it, and the loop then did
+the work again. Tracked in BACKLOG ("subprocess utility calls can execute
+the goal"), out of scope for this feature.

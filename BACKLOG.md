@@ -103,6 +103,40 @@ write fence — shipped arc") and `docs/BOUNDED_WORKSPACE.md`.
   transcripts ride `resp.tool_events`). Port subprocess adapter first, others
   incrementally. Size: ~half day per adapter.
 
+### 16. Subprocess utility calls can execute the goal instead of answering (found 2026-07-09 via run report)
+
+Evidence: run `19cc17d6-azure-harbor`, `build/calls/call-00001.json` — a
+routing/classification prompt ("You are a routing agent. Classify…") whose
+recorded response is the goal's full "## Done" completion report, with tool
+events, 1.79M input tokens, ~3 minutes elapsed. The agentic `claude` CLI on
+the subprocess lane, handed a utility prompt that embeds the goal text, did
+the task instead of classifying it — then the agenda loop executed the goal
+again (duplicate spend, and the "first" execution happened with no fence/
+step structure around it). Likely applies to every cheap utility call
+(routing, clarity, scope) routed through the subprocess adapter. Candidate
+fixes: tool-less/`--no-tools` mode for utility calls on the subprocess lane,
+or pinning utility calls to API adapters when available. Check other runs'
+call-00001 records for the same signature to size it.
+
+### 17. Run-visibility residuals (2026-07-09 real-data review)
+
+- [ ] **loop_id coverage at log_event call sites**: only ~11 of ~48 pass
+  `loop_id` (85% of real entries have none). The slice-first report makes
+  the missing attribution visible instead of dropped, but timeline
+  slotting/decision-points only work for attributed entries. Thread a
+  loop_id (or contextvar) through the loop-adjacent sites opportunistically.
+- [ ] **Purpose sniffer is prompt-opener matching** (`loop_report._PURPOSE_PATTERNS`,
+  built from the real distribution of 761 records). Fragile to prompt
+  rewording; the durable fix is `record_llm_call(purpose="...")` stamped by
+  the caller at the recording seam. Add the field, keep the sniffer as
+  fallback for historical records.
+- [ ] **Live reports freeze before run_card.json exists** (design known-gap
+  #5) — `viz backfill --force` re-renders with the verdict; the clean fix
+  is still a post-curation hook in handle.py.
+- [ ] **NOW-lane runs (258 of 665 dirs) have no loop, hence no report** —
+  index lists them link-less. If NOW-lane visibility matters, a single-call
+  mini-report from metadata + calls/ is cheap.
+
 ---
 
 ## Vision / Deferred
