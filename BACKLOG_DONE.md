@@ -8,11 +8,22 @@ Last split: 2026-04-16 (session 34).
 
 ---
 
-### BACKLOG #17: Run-visibility residuals, 3 of 4 (shipped 2026-07-09)
+### BACKLOG #17: Run-visibility residuals, all 4 (shipped 2026-07-09, two concurrent sessions)
 
-Real-data review of the run-visibility report/index surfaced three
-mechanical gaps, all closed same-day. (Sub-item 4, NOW-lane visibility, is
-left open in BACKLOG.md — a product call, not a mechanical fix.)
+Real-data review of the run-visibility report/index surfaced four mechanical
+gaps. Sub-items 1 & 2 below shipped from this session. Sub-items 3 & 4
+were independently built the same day by a concurrent session (Jeremy +
+Claude Fable 5, commit `3c44cef` "Per-run attribution capture + NOW-lane
+reports + post-curation re-render") — that session's `loop_report.
+write_reports_for_run_dir()` / `_write_now_report()` do strictly more than
+this session's first attempt at sub-item 3 (a narrower `refresh_run_report()`
+that only handled loop reports, not NOW-lane), so on merge the concurrent
+session's implementation was kept as canonical and this session's redundant
+version was dropped. See that commit for sub-items 3 & 4's actual shipped
+detail (environment/persona/skills-manifest capture, NOW-lane mini-reports,
+the post-curation `write_reports_for_run_dir` hook). BACKLOG.md's residual
+"index rebuild is O(all runs) at every finalize" note comes from that
+session's implementation, not this one.
 
 **1. loop_id coverage at `log_event` call sites.** Only ~10 of ~57 real call
 sites passed `loop_id` explicitly, so `loop_report._gather_log_markers`'s
@@ -63,23 +74,8 @@ Tests: `test_record_writes_purpose_field` / `_defaults_to_empty_string`
 `test_purpose_kwarg_not_forwarded_to_underlying_adapter` /
 `_reaches_record_llm_call` (`tests/test_llm.py`).
 
-**3. Live reports freeze before run_card.json exists (design known-gap #5).**
-`write_run_report()` (loop-finalize time) always ran before `handle()`'s
-`finally` block wrote `run_card.json` a few lines later via `curate_run()`,
-so `_render_verdict()` always found nothing on first render — previously
-only fixable via a full `viz backfill --force` rescan. Added
-`loop_report.refresh_run_report(run_dir)`: re-renders only that run's
-existing report(s), does NOT rescan `runs_root()` or rebuild `index.html`
-(O(1) per goal completion, not O(run count) — the index doesn't surface the
-verdict, only the report page does, so there's nothing there to refresh).
-Extracted the shared per-log render body (`_render_and_write_one_report`)
-so `backfill_run_reports()`'s loop and the new targeted function share one
-implementation. Wired into `handle.py`'s `finally` block right after
-`curate_run()`, gated on `_card is not None`. No-ops cleanly for NOW-lane
-runs (no loop log, nothing to refresh) and any run with no report ever
-written. Tests: `test_refresh_run_report_rerenders_existing_report`,
-`_does_not_touch_index`, `_noop_when_no_existing_report`,
-`_noop_for_missing_build_dir` (`tests/test_loop_report.py`).
+**3 & 4.** See commit `3c44cef` (concurrent session) — not re-described here
+to avoid a stale duplicate of that session's own account.
 
 ### BACKLOG #16: Subprocess utility calls can execute the goal instead of answering (shipped 2026-07-09)
 

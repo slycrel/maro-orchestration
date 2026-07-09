@@ -890,6 +890,112 @@ def _render_verdict(report_dir: Path) -> str:
     )
 
 
+def _render_environment(report_dir: Path) -> str:
+    """The run's compile inputs beyond the goal: persona (metadata.json),
+    injected skills post-A/B-routing (source/skills_manifest.jsonl), and the
+    config era (source/environment.json). All three are optional — runs that
+    predate this capture render nothing here. Full config sits behind a
+    <details> so the panel stays scannable.
+    """
+    run_dir = report_dir.parent
+    lines: List[str] = []
+
+    # Persona (stamped into metadata.json at selection time)
+    try:
+        meta = json.loads((run_dir / "metadata.json").read_text(encoding="utf-8"))
+        pname = meta.get("persona")
+        if pname:
+            conf = meta.get("persona_confidence")
+            conf_str = f" (conf {conf:.2f})" if isinstance(conf, (int, float)) else ""
+            flags = []
+            if meta.get("persona_forced"):
+                flags.append("forced")
+            if meta.get("persona_fallback"):
+                flags.append("fallback")
+            flag_str = f' <span class="meta">[{", ".join(flags)}]</span>' if flags else ""
+            lines.append(f'<div class="meta"><b>Persona:</b> {_esc(str(pname))}{_esc(conf_str)}{flag_str}</div>')
+    except Exception:
+        pass
+
+    # Skills manifest — what actually entered prompts, post variant routing
+    try:
+        manifest_path = run_dir / "source" / "skills_manifest.jsonl"
+        if manifest_path.exists():
+            rows = []
+            for raw in manifest_path.read_text(encoding="utf-8").splitlines():
+                if not raw.strip():
+                    continue
+                try:
+                    rec = json.loads(raw)
+                except Exception:
+                    continue
+                for s in rec.get("skills", []):
+                    variant = s.get("variant_of")
+                    variant_str = f'variant of {variant}' if variant else ""
+                    rows.append(
+                        f'<tr><td>{_esc(rec.get("stage", ""))}</td>'
+                        f'<td>{_esc(s.get("name", "") or s.get("id", ""))}</td>'
+                        f'<td class="meta">{_esc((s.get("content_hash") or "")[:10])}</td>'
+                        f'<td class="meta">{_esc(variant_str)}</td></tr>'
+                    )
+            if rows:
+                lines.append(
+                    f'<details><summary>Skills injected ({len(rows)})</summary>'
+                    '<table class="idx-table">'
+                    '<tr><th>Stage</th><th>Skill</th><th>Hash</th><th>Variant</th></tr>'
+                    + "".join(rows) + '</table></details>'
+                )
+    except Exception:
+        pass
+
+    # Environment snapshot — the config era
+    try:
+        env_path = run_dir / "source" / "environment.json"
+        if env_path.exists():
+            env = json.loads(env_path.read_text(encoding="utf-8"))
+            bits = []
+            sha = env.get("maro_git_sha")
+            if sha:
+                bits.append(f"<b>maro</b> {_esc(str(sha))}")
+            host = env.get("host") or {}
+            if host.get("hostname"):
+                bits.append(f'<b>host</b> {_esc(str(host.get("hostname")))} (py {_esc(str(host.get("python", "?")))})')
+            spend = env.get("spend_today_usd_at_start")
+            if isinstance(spend, (int, float)):
+                bits.append(f'<b><span title="Recorded spend for the day at the moment this run started.">spend today at start</span></b> ${spend:.4f}')
+            overrides = env.get("env_overrides") or {}
+            if overrides:
+                bits.append(f'<b>env overrides</b> {len(overrides)}')
+            backends = env.get("backends") or []
+            if backends:
+                order = " &rarr; ".join(
+                    _esc(str(b.get("name", "?"))) + ("" if b.get("usable") else " (unavailable)")
+                    for b in backends
+                )
+                bits.append(f'<b>backends</b> {order}')
+            if bits:
+                lines.append('<div class="meta">' + " &middot; ".join(bits) + '</div>')
+            cfg = env.get("config")
+            if cfg:
+                cfg_json = json.dumps(cfg, indent=2, default=str)
+                lines.append(
+                    '<details><summary>Effective config (scrubbed, captured at run start)</summary>'
+                    f'<pre>{_esc_truncated(cfg_json, 8000)}</pre></details>'
+                )
+            if overrides:
+                ov_json = json.dumps(overrides, indent=2, default=str)
+                lines.append(
+                    f'<details><summary>Env overrides ({len(overrides)})</summary>'
+                    f'<pre>{_esc_truncated(ov_json, 4000)}</pre></details>'
+                )
+    except Exception:
+        pass
+
+    if not lines:
+        return ""
+    return '<h2>Environment</h2><div class="panel">' + "".join(lines) + '</div>'
+
+
 def _event_family(event_type: str) -> str:
     return (event_type or "?").split("_", 1)[0]
 
@@ -1009,6 +1115,7 @@ def _render_report_html(
 {_render_llm_calls(report_dir, step_outcomes)}
 {_render_decision_points(attributed_markers)}
 {_render_run_activity(activity_entries)}
+{_render_environment(report_dir)}
 {nav_html}
 <script>{_DETAIL_JS}</script>
 </body></html>
@@ -1152,6 +1259,7 @@ def _gather_run_summaries() -> List[dict]:
         totals = {"tokens_in": 0, "tokens_out": 0, "steps_done": 0, "steps_blocked": 0}
         if build_dir.is_dir():
             reports = sorted(str(p.relative_to(d)) for p in build_dir.glob("loop-*-report.html"))
+            reports += sorted(str(p.relative_to(d)) for p in build_dir.glob("now-*-report.html"))
             for log_path in sorted(build_dir.glob("loop-*-log.json")):
                 try:
                     lj = json.loads(log_path.read_text(encoding="utf-8"))
@@ -1229,9 +1337,11 @@ def _render_index_html(summaries: List[dict]) -> str:
                 href = f'{s["dir_name"]}/{r}'
                 if primary_href is None:
                     primary_href = href
-                links.append(
-                    f'<a href="{_esc(href)}">{_esc(Path(r).stem.replace("loop-", "").replace("-report", ""))}</a>'
-                )
+                stem = Path(r).stem.replace("-report", "")
+                # NOW reports embed the (long) handle_id; the row already
+                # names the run, so a lane label reads better than a UUID.
+                label = "now" if stem.startswith("now-") else stem.replace("loop-", "")
+                links.append(f'<a href="{_esc(href)}">{_esc(label)}</a>')
             links_html = " ".join(links)
         else:
             links_html = '<span class="meta">no report</span>'
@@ -1361,22 +1471,22 @@ def _outcomes_from_loop_log(lj: dict) -> List[StepOutcome]:
     return outcomes
 
 
-def _render_and_write_one_report(log_path: Path, build: Path, root: Path) -> Path:
-    """Render `log_path`'s loop log to its report.html and write it (locked).
+def _write_loop_report_from_log(build: Path, log_path: Path, root: Path) -> None:
+    """Render one loop's report directly from its build/loop-*-log.json.
 
-    Shared by backfill_run_reports() (rescans everything) and
-    refresh_run_report() (single run, called from handle.py post-curation —
-    BACKLOG #17 sub-item 3). Raises on failure; callers decide how to log it.
+    Bypasses write_run_report's current_run_dir pinning and frozen check —
+    callers (backfill, post-curation re-render) have already decided this
+    report should be (re)written. Raises on failure; callers count.
     """
     loop_id = log_path.name[len("loop-"):-len("-log.json")]
     report_path = build / f"loop-{loop_id}-report.html"
     lj = json.loads(log_path.read_text(encoding="utf-8"))
     outcomes = _outcomes_from_loop_log(lj)
     status = lj.get("status") or "done"
-    # A loop log still claiming "running" is a crashed/killed run — rendering
-    # it as running would emit the auto-refresh tag and no freeze sentinel,
-    # forever. The run demonstrably isn't running anymore; "interrupted" is
-    # the honest terminal state.
+    # A loop log still claiming "running" is a crashed/killed run
+    # — rendering it as running would emit the auto-refresh tag
+    # and no freeze sentinel, forever. The run demonstrably isn't
+    # running anymore; "interrupted" is the honest terminal state.
     if status == "running":
         status = "interrupted"
     index_link = _relpath(root / "index.html", build)
@@ -1396,52 +1506,160 @@ def _render_and_write_one_report(log_path: Path, build: Path, root: Path) -> Pat
     from file_lock import locked_write
     with locked_write(report_path):
         _atomic_write_text(report_path, content)
+
+
+def _render_now_report_html(run_dir: Path, artifact: dict, meta: dict,
+                            index_link: Optional[str]) -> str:
+    """Mini-report for a NOW-lane run: no steps or timeline, just the
+    question, the answer, the calls that produced it, and the run's meta
+    panels (verdict, activity, environment) — all data that already exists
+    in the run dir; this is purely a rendering layer.
+    """
+    build = run_dir / "build"
+    handle_id = artifact.get("handle_id") or meta.get("handle_id") or run_dir.name
+    status = meta.get("status") or "done"
+    if status == "running":
+        status = "interrupted"
+    message = artifact.get("message") or meta.get("prompt") or ""
+    result = artifact.get("result") or ""
+    created_at = artifact.get("created_at") or meta.get("started_at") or ""
+    elapsed_ms = artifact.get("elapsed_ms", 0) or 0
+    achieved = meta.get("goal_achieved")
+    achieved_html = ""
+    if achieved is not None:
+        achieved_html = f' &middot; <b>Goal achieved:</b> {"yes" if achieved else "no"}'
+
+    attributed_markers, activity_entries = _gather_log_markers(
+        handle_id, meta.get("started_at", "") or "", build if build.is_dir() else None
+    )
+    nav_html = ""
+    if index_link:
+        nav_html = f'<div class="footer-nav"><a href="{_esc(index_link)}">&larr; all runs</a></div>'
+    nickname = meta.get("nickname", "")
+
+    return f"""<!-- maro-report: final status={_esc(status)} -->
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>NOW {_esc(nickname or handle_id)}</title>
+<style>{_CSS}</style></head>
+<body>
+<h1>NOW run <code>{_esc(nickname or handle_id)}</code></h1>
+<div class="meta"><b>Lane:</b> now &middot; <b>Status:</b> {_esc(status)}{achieved_html}</div>
+<div class="meta"><b>Started:</b> {_esc(_fmt_ts(created_at))} &middot; <b>Elapsed:</b> {elapsed_ms}ms</div>
+
+{_render_verdict(build)}
+<h2>Request</h2>
+<div class="panel"><pre>{_esc_truncated(message, 4000)}</pre></div>
+
+<h2>Result</h2>
+<div class="panel"><pre>{_esc_truncated(result, 20000)}</pre></div>
+
+{_render_llm_calls(build, [])}
+{_render_decision_points(attributed_markers)}
+{_render_run_activity(activity_entries)}
+{_render_environment(build)}
+{nav_html}
+<script>{_DETAIL_JS}</script>
+</body></html>
+"""
+
+
+def _write_now_report(run_dir: Path, root: Path) -> Optional[Path]:
+    """Render build/now-<handle_id>-report.html for a NOW-lane run dir.
+
+    Returns the report path, or None when the dir is not a NOW run.
+    Raises on render/write failure; callers count. Always overwrites — NOW
+    reports are only ever written after the run finished, so there is no
+    live-vs-frozen distinction to protect.
+
+    Runs that predate the NOW artifact writer (metadata says lane=now but
+    artifact/ is empty) still get a report from metadata alone — request,
+    status, and the activity slice are all real; only the result text was
+    never captured, and the report says so rather than pretending.
+    """
+    meta: dict = {}
+    meta_path = run_dir / "metadata.json"
+    if meta_path.exists():
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except Exception:
+            meta = {}
+    artifacts = sorted((run_dir / "artifact").glob("now-*.json")) if (run_dir / "artifact").is_dir() else []
+    if artifacts:
+        artifact = json.loads(artifacts[0].read_text(encoding="utf-8"))
+    elif meta.get("lane") == "now":
+        elapsed_ms = 0
+        s = _parse_iso(meta.get("started_at") or "")
+        e = _parse_iso(meta.get("ended_at") or "")
+        if s and e:
+            elapsed_ms = int((e - s).total_seconds() * 1000)
+        artifact = {
+            "handle_id": meta.get("handle_id"),
+            "message": meta.get("prompt", ""),
+            "result": "(result not captured — this run predates the NOW artifact writer)",
+            "created_at": meta.get("started_at", ""),
+            "elapsed_ms": elapsed_ms,
+        }
+    else:
+        return None
+    build = run_dir / "build"
+    build.mkdir(parents=True, exist_ok=True)
+    handle_id = artifact.get("handle_id") or meta.get("handle_id") or run_dir.name
+    report_path = build / f"now-{handle_id}-report.html"
+    index_link = _relpath(root / "index.html", build)
+    content = _render_now_report_html(run_dir, artifact, meta, index_link)
+    from file_lock import locked_write
+    with locked_write(report_path):
+        _atomic_write_text(report_path, content)
     return report_path
 
 
-def refresh_run_report(run_dir) -> bool:
-    """Re-render one run's report(s) now that run_card.json exists.
+def write_reports_for_run_dir(run_dir: Path) -> Dict[str, int]:
+    """Force re-render every report in one run dir, then rebuild the index.
 
-    Targeted counterpart to backfill_run_reports() for the post-curation hot
-    path (BACKLOG #17 sub-item 3 / design known-gap #5): the live report
-    freezes at loop-finalize time, before handle()'s finally block writes
-    run_card.json a few lines later, so the verdict panel is empty on first
-    render. Call this right after curate_run() with the finished run's dir.
-
-    Unlike backfill_run_reports(), this does NOT rescan runs_root() or
-    rebuild the cross-run index — O(1) per goal completion, not O(run count).
-    The index doesn't surface the verdict (only the report page does), so
-    there's nothing there to refresh. Silently no-ops (returns False) for
-    NOW-lane runs and anything else with no existing report to refresh.
+    The post-curation hook: called from handle.py's finalize AFTER
+    run_curation writes run_card.json, so the frozen report gets re-rendered
+    with the verdict it couldn't have had at freeze time (design known-gap
+    #5). Also writes the NOW mini-report when the dir has a NOW artifact.
+    Never raises. Returns {"written", "failed"}.
     """
-    build = Path(run_dir) / "build"
-    if not build.is_dir():
-        return False
+    counts = {"written": 0, "failed": 0}
     try:
         from runs import runs_root
         root = runs_root()
     except Exception:
-        return False
-    wrote_any = False
-    for log_path in sorted(build.glob("loop-*-log.json")):
-        loop_id = log_path.name[len("loop-"):-len("-log.json")]
-        report_path = build / f"loop-{loop_id}-report.html"
-        if not report_path.exists():
-            continue  # live report was never written for this loop — nothing to refresh
-        try:
-            _render_and_write_one_report(log_path, build, root)
-            wrote_any = True
-        except Exception:
-            log.warning("refresh_run_report failed for %s", log_path, exc_info=True)
-    return wrote_any
+        return counts
+    if not _reports_enabled():
+        return counts
+    build = run_dir / "build"
+    if build.is_dir():
+        for log_path in sorted(build.glob("loop-*-log.json")):
+            try:
+                _write_loop_report_from_log(build, log_path, root)
+                counts["written"] += 1
+            except Exception:
+                log.warning("report re-render failed for %s", log_path, exc_info=True)
+                counts["failed"] += 1
+    try:
+        if _write_now_report(run_dir, root) is not None:
+            counts["written"] += 1
+    except Exception:
+        log.warning("NOW report write failed for %s", run_dir, exc_info=True)
+        counts["failed"] += 1
+    try:
+        write_runs_index(force=True)
+    except Exception:
+        pass
+    return counts
 
 
 def backfill_run_reports(*, force: bool = False, limit: Optional[int] = None) -> Dict[str, int]:
     """Generate frozen reports for historical runs, then rebuild the index.
 
-    Skips loops that already have a report unless force=True (force also
-    overwrites frozen reports — that's the point: re-render an old report
-    with data that didn't exist at finalize time, e.g. run_card.json).
+    Covers both loop reports (from build/loop-*-log.json) and NOW-lane
+    mini-reports (from artifact/now-*.json). Skips runs that already have a
+    report unless force=True (force also overwrites frozen reports — that's
+    the point: re-render an old report with data that didn't exist at
+    finalize time, e.g. run_card.json).
     Returns counts: {"written", "skipped", "failed", "runs_scanned"}.
     """
     counts = {"written": 0, "skipped": 0, "failed": 0, "runs_scanned": 0}
@@ -1457,24 +1675,49 @@ def backfill_run_reports(*, force: bool = False, limit: Optional[int] = None) ->
         if not d.is_dir():
             continue
         build = d / "build"
-        if not build.is_dir():
+        artifact_dir = d / "artifact"
+        has_loop_logs = build.is_dir() and any(build.glob("loop-*-log.json"))
+        has_now = artifact_dir.is_dir() and any(artifact_dir.glob("now-*.json"))
+        if not has_now:
+            # Pre-artifact-writer NOW runs: metadata is the only marker.
+            try:
+                _m = json.loads((d / "metadata.json").read_text(encoding="utf-8"))
+                has_now = _m.get("lane") == "now"
+            except Exception:
+                pass
+        if not has_loop_logs and not has_now:
             continue
         counts["runs_scanned"] += 1
-        for log_path in sorted(build.glob("loop-*-log.json")):
-            loop_id = log_path.name[len("loop-"):-len("-log.json")]
-            report_path = build / f"loop-{loop_id}-report.html"
-            if report_path.exists() and not force:
+        if has_loop_logs:
+            for log_path in sorted(build.glob("loop-*-log.json")):
+                loop_id = log_path.name[len("loop-"):-len("-log.json")]
+                report_path = build / f"loop-{loop_id}-report.html"
+                if report_path.exists() and not force:
+                    counts["skipped"] += 1
+                    continue
+                try:
+                    _write_loop_report_from_log(build, log_path, root)
+                    counts["written"] += 1
+                except Exception:
+                    log.warning("backfill failed for %s", log_path, exc_info=True)
+                    counts["failed"] += 1
+                if limit is not None and counts["written"] >= limit:
+                    write_runs_index(force=True)
+                    return counts
+        if has_now:
+            existing_now = build.is_dir() and any(build.glob("now-*-report.html"))
+            if existing_now and not force:
                 counts["skipped"] += 1
-                continue
-            try:
-                _render_and_write_one_report(log_path, build, root)
-                counts["written"] += 1
-            except Exception:
-                log.warning("backfill failed for %s", log_path, exc_info=True)
-                counts["failed"] += 1
-            if limit is not None and counts["written"] >= limit:
-                write_runs_index(force=True)
-                return counts
+            else:
+                try:
+                    if _write_now_report(d, root) is not None:
+                        counts["written"] += 1
+                except Exception:
+                    log.warning("NOW backfill failed for %s", d, exc_info=True)
+                    counts["failed"] += 1
+                if limit is not None and counts["written"] >= limit:
+                    write_runs_index(force=True)
+                    return counts
 
     write_runs_index(force=True)
     return counts

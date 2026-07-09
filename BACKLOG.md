@@ -105,16 +105,16 @@ write fence — shipped arc") and `docs/BOUNDED_WORKSPACE.md`.
 
 ### 17. Run-visibility residuals (2026-07-09 real-data review)
 
-Three of four sub-items shipped 2026-07-09 (contextvar loop_id threading,
-purpose stamping, post-curation report refresh — see BACKLOG_DONE). One
-remains, deliberately left open pending a product call:
+All four sub-items shipped 2026-07-09 (two concurrent sessions — see
+BACKLOG_DONE for both): contextvar loop_id threading + purpose stamping
+(this session), live-report post-curation refresh + NOW-lane mini-reports
+(concurrent session, superseding this session's own narrower post-curation
+refresh attempt — see BACKLOG_DONE for the reconciliation note). One residual
+surfaced by the NOW-lane work:
 
-- [ ] **NOW-lane runs (258 of 665 dirs) have no loop, hence no report** —
-  index lists them link-less. If NOW-lane visibility matters, a single-call
-  mini-report from metadata + calls/ is cheap. **FLAG FOR JEREMY:** whether
-  1-shot NOW-lane runs (often trivial single-call Q&A) deserve a report at
-  all is a product/UX call, not derivable from the code — the mechanics are
-  cheap once that's answered.
+- [ ] **Index rebuild is O(all runs) at every finalize** (~277ms at 668
+  dirs, via the post-curation hook). Fine now; revisit around ~10k run dirs
+  (incremental index, or rebuild only on viz/backfill).
 
 ---
 

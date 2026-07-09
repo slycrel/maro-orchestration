@@ -181,6 +181,16 @@ context, at best it's a slight tweak and we fix forward."*
   reports from loop logs: 445 historical loops rendered, 0 failures, 1.5s. Day-one
   payoff: the report exposed BACKLOG #16 (subprocess routing call executed the whole
   goal — 1.79M tokens, duplicate work). Residuals: BACKLOG #17.
+- Per-run attribution capture + NOW reports, 2026-07-09 (Jeremy: "let's do both"):
+  every run now snapshots its environment (`source/environment.json`: scrubbed
+  config, env overrides, maro sha, spend-at-start), records injected skills
+  post-A/B-routing (`source/skills_manifest.jsonl` with variant lineage +
+  routing_key), and stamps persona into metadata.json — the verify→learn
+  prerequisite (outcome = f(goal, environment); the memory A/B only worked because
+  its arm was run-stamped). NOW lane got its mini-report (189/189 historical runs
+  backfilled; 175 pre-artifact ones honestly say "result not captured"), and
+  known-gap #5 closed: handle.py finalize re-renders reports post-curation so
+  frozen reports pick up the run_card verdict (~220ms at 668 dirs).
 
 **Substrate integration, as of 2026-07-01:**
 - New arc opened (Jeremy, 2026-07-01): *"get the project where we can trial it for

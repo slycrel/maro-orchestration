@@ -339,3 +339,113 @@ def test_record_repo_base_handles_non_git_dir(workspace, tmp_path):
     create_run_dir("abcd1234", prompt="p")
     # rev-parse fails → no entry recorded → snapshot returns None.
     assert snapshot_repo_bundle("abcd1234") is None
+
+
+# ---------------------------------------------------------------------------
+# Environment snapshot + skills manifest + metadata stamp (2026-07-09,
+# per-run attribution inputs — the verify->learn prerequisite)
+# ---------------------------------------------------------------------------
+
+def test_environment_snapshot_writes_config_era(workspace):
+    from runs import create_run_dir, set_current_run_dir, write_environment_snapshot
+    rd = create_run_dir("envtest1", prompt="p")
+    set_current_run_dir(rd)
+    try:
+        out = write_environment_snapshot()
+        assert out is not None and out.exists()
+        snap = json.loads(out.read_text())
+        assert "captured_at" in snap
+        assert "config" in snap                     # scrubbed effective config
+        assert "host" in snap and snap["host"].get("python")
+        # this repo is a git checkout, so the sha should resolve
+        assert snap.get("maro_git_sha")
+        # MARO_WORKSPACE is set by the fixture -> must appear as an override
+        assert "MARO_WORKSPACE" in snap.get("env_overrides", {})
+    finally:
+        set_current_run_dir(None)
+
+
+def test_environment_snapshot_scrubs_secret_env_values(workspace, monkeypatch):
+    from runs import create_run_dir, set_current_run_dir, write_environment_snapshot
+    secret = "sk-ant-api03-verysecretvalue1234567890abcdef"
+    monkeypatch.setenv("MARO_FAKE_KEY", secret)
+    rd = create_run_dir("envtest2", prompt="p")
+    set_current_run_dir(rd)
+    try:
+        out = write_environment_snapshot()
+        assert secret not in out.read_text()
+    finally:
+        set_current_run_dir(None)
+
+
+def test_environment_snapshot_none_without_run_dir():
+    from runs import set_current_run_dir, write_environment_snapshot
+    set_current_run_dir(None)
+    assert write_environment_snapshot() is None
+
+
+def test_skills_manifest_appends_per_stage(workspace):
+    from runs import create_run_dir, set_current_run_dir, append_skills_manifest
+    rd = create_run_dir("skmtest1", prompt="p")
+    set_current_run_dir(rd)
+    try:
+        append_skills_manifest(
+            [{"id": "s1", "name": "deploy-check", "content_hash": "abc123",
+              "variant_of": None, "tier": 2, "routing_key": "deadbeef"}],
+            stage="decompose",
+        )
+        append_skills_manifest(
+            [{"name": "curated-one", "file_path": "/x/curated-one.md"}],
+            stage="curated_summaries",
+        )
+        lines = (rd / "source" / "skills_manifest.jsonl").read_text().strip().splitlines()
+        assert len(lines) == 2
+        first, second = json.loads(lines[0]), json.loads(lines[1])
+        assert first["stage"] == "decompose"
+        assert first["skills"][0]["name"] == "deploy-check"
+        assert first["skills"][0]["routing_key"] == "deadbeef"
+        assert second["stage"] == "curated_summaries"
+    finally:
+        set_current_run_dir(None)
+
+
+def test_skills_manifest_noop_on_empty_or_no_run_dir(workspace):
+    from runs import create_run_dir, set_current_run_dir, append_skills_manifest
+    set_current_run_dir(None)
+    assert append_skills_manifest([{"name": "x"}], stage="decompose") is None
+    rd = create_run_dir("skmtest2", prompt="p")
+    set_current_run_dir(rd)
+    try:
+        assert append_skills_manifest([], stage="decompose") is None
+        assert not (rd / "source" / "skills_manifest.jsonl").exists()
+    finally:
+        set_current_run_dir(None)
+
+
+def test_stamp_run_metadata_merges_without_clobbering(workspace):
+    from runs import create_run_dir, set_current_run_dir, stamp_run_metadata
+    rd = create_run_dir("stamptest", prompt="the goal")
+    set_current_run_dir(rd)
+    try:
+        stamp_run_metadata({"persona": "poe", "persona_confidence": 0.91,
+                            "persona_fallback": False, "skip_me": None})
+        meta = json.loads((rd / "metadata.json").read_text())
+        assert meta["persona"] == "poe"
+        assert meta["persona_confidence"] == 0.91
+        assert "skip_me" not in meta            # None values don't stamp
+        assert meta["prompt"] == "the goal"     # core fields untouched
+    finally:
+        set_current_run_dir(None)
+
+
+def test_environment_snapshot_records_backend_order(workspace):
+    from runs import create_run_dir, set_current_run_dir, write_environment_snapshot
+    rd = create_run_dir("envtest3", prompt="p")
+    set_current_run_dir(rd)
+    try:
+        snap = json.loads(write_environment_snapshot().read_text())
+        assert isinstance(snap.get("backends"), list) and snap["backends"]
+        b = snap["backends"][0]
+        assert set(b) == {"name", "usable", "detail"}
+    finally:
+        set_current_run_dir(None)

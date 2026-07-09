@@ -893,43 +893,157 @@ def test_backfill_coerces_running_status_to_interrupted(monkeypatch, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# refresh_run_report — targeted single-run re-render (BACKLOG #17 sub-item 3
-# / design known-gap #5: the live report freezes before run_card.json exists)
+# Environment panel (persona / skills manifest / config era)
 # ---------------------------------------------------------------------------
 
-def test_refresh_run_report_rerenders_existing_report(monkeypatch, tmp_path):
+def test_report_renders_environment_panel(monkeypatch, tmp_path):
     monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
-    rd = _make_historical_run(tmp_path, "eeee5555-live-run", "liveloop", with_report=True)
+    import runs
+    rd = tmp_path / "runs" / "henv-nick"
+    (rd / "build").mkdir(parents=True)
+    (rd / "source").mkdir()
+    (rd / "metadata.json").write_text(json.dumps({
+        "handle_id": "henv", "prompt": "goal", "persona": "poe",
+        "persona_confidence": 0.91, "persona_fallback": False,
+    }))
+    (rd / "source" / "environment.json").write_text(json.dumps({
+        "captured_at": "2026-07-01T00:00:00+00:00",
+        "maro_git_sha": "abc1234",
+        "host": {"hostname": "macmini", "python": "3.14.0"},
+        "spend_today_usd_at_start": 1.25,
+        "env_overrides": {"MARO_WORKSPACE": "/x"},
+        "config": {"inspector": {"breach_threshold": 0.3}},
+    }))
+    (rd / "source" / "skills_manifest.jsonl").write_text(json.dumps({
+        "ts": "2026-07-01T00:00:01+00:00", "stage": "decompose",
+        "skills": [{"id": "s1", "name": "deploy-check", "content_hash": "cafebabe99",
+                    "variant_of": "deploy-check-parent", "tier": 2}],
+    }) + "\n")
+    runs.set_current_run_dir(rd)
+    lr.write_run_report(
+        project="p", loop_id="envloop", goal="goal",
+        planned_steps=["Step one"], start_ts="2026-07-01T00:00:00+00:00",
+        step_outcomes=[_outcome("Step one")],
+    )
+    content = (rd / "build" / "loop-envloop-report.html").read_text()
+    assert "Environment" in content
+    assert "Persona:</b> poe" in content
+    assert "(conf 0.91)" in content
+    assert "deploy-check" in content
+    assert "variant of deploy-check-parent" in content
+    assert "abc1234" in content
+    assert "macmini" in content
+    assert "$1.2500" in content
+    assert "breach_threshold" in content
 
-    changed = lr.refresh_run_report(rd)
-    assert changed is True
 
-    content = (rd / "build" / "loop-liveloop-report.html").read_text()
-    assert "First step" in content  # regenerated, not the stale "<html>old</html>" stub
-
-
-def test_refresh_run_report_does_not_touch_index(monkeypatch, tmp_path):
-    """Unlike backfill_run_reports(), this must not rescan/rebuild index.html —
-    it's called on every goal completion and must stay O(1), not O(run count)."""
+def test_environment_panel_absent_without_capture(monkeypatch, tmp_path):
     monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
-    rd = _make_historical_run(tmp_path, "ffff6666-live-run", "liveloop2", with_report=True)
-    index_path = tmp_path / "runs" / "index.html"
-    assert not index_path.exists()
+    import runs
+    rd = tmp_path / "runs" / "hnoenv-nick"
+    (rd / "build").mkdir(parents=True)
+    runs.set_current_run_dir(rd)
+    lr.write_run_report(
+        project="p", loop_id="noenvloop", goal="goal",
+        planned_steps=["Step one"], start_ts="2026-07-01T00:00:00+00:00",
+        step_outcomes=[_outcome("Step one")],
+    )
+    content = (rd / "build" / "loop-noenvloop-report.html").read_text()
+    assert "<h2>Environment</h2>" not in content
 
-    lr.refresh_run_report(rd)
-    assert not index_path.exists()
+
+# ---------------------------------------------------------------------------
+# NOW-lane mini-report (2026-07-09: 258 NOW dirs on this box had full capture
+# but no report — a rendering gap, not a capture gap)
+# ---------------------------------------------------------------------------
+
+def _make_now_run(ws, handle_id, *, status="done", with_card=False):
+    rd = ws / "runs" / f"{handle_id}-now-run"
+    (rd / "artifact").mkdir(parents=True)
+    (rd / "metadata.json").write_text(json.dumps({
+        "handle_id": handle_id, "nickname": "quiet-otter", "prompt": "what is 2+2?",
+        "lane": "now", "status": status, "goal_achieved": True,
+        "started_at": "2026-06-15T00:00:00+00:00", "ended_at": "2026-06-15T00:00:03+00:00",
+    }))
+    (rd / "artifact" / f"now-{handle_id}.json").write_text(json.dumps({
+        "handle_id": handle_id, "lane": "now", "message": "what is 2+2?",
+        "result": "4 — arithmetic, no tools needed.", "elapsed_ms": 3200,
+        "created_at": "2026-06-15T00:00:00+00:00",
+    }))
+    if with_card:
+        (rd / "run_card.json").write_text(json.dumps({
+            "status": status, "success_class": "achieved",
+            "goal_achieved": True, "total_cost_usd": 0.003,
+        }))
+    return rd
 
 
-def test_refresh_run_report_noop_when_no_existing_report(monkeypatch, tmp_path):
-    """A NOW-lane run (or any run with a loop log but no live report yet) is
-    left alone — refresh only re-renders reports that already exist."""
+def test_now_report_renders_request_result_and_freezes(monkeypatch, tmp_path):
     monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
-    rd = _make_historical_run(tmp_path, "gggg7777-no-report", "noreploop", with_report=False)
+    rd = _make_now_run(tmp_path, "eeee5555", with_card=True)
+    counts = lr.write_reports_for_run_dir(rd)
+    assert counts["written"] == 1 and counts["failed"] == 0
+    report = rd / "build" / "now-eeee5555-report.html"
+    content = report.read_text()
+    assert content.startswith("<!-- maro-report: final status=done -->")
+    assert "what is 2+2?" in content
+    assert "4 &#x2014; arithmetic" in content or "4 — arithmetic" in content
+    assert "Goal achieved:</b> yes" in content   # run_card verdict panel
+    assert 'http-equiv="refresh"' not in content
+    # index links it with a lane label, not the raw UUID stem
+    index = (tmp_path / "runs" / "index.html").read_text()
+    assert "now-eeee5555-report.html" in index
+    assert ">now</a>" in index
 
-    changed = lr.refresh_run_report(rd)
-    assert changed is False
-    assert not (rd / "build" / "loop-noreploop-report.html").exists()
+
+def test_write_reports_for_run_dir_rerenders_frozen_loop_report(monkeypatch, tmp_path):
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+    rd = _make_historical_run(tmp_path, "ffff6666-postcure", "cureloop", with_report=True)
+    # run_card lands AFTER the report froze — the post-curation hook's reason to exist
+    (rd / "run_card.json").write_text(json.dumps({
+        "status": "done", "success_class": "achieved",
+        "goal_achieved": True, "total_cost_usd": 0.42,
+    }))
+    counts = lr.write_reports_for_run_dir(rd)
+    assert counts["written"] == 1
+    content = (rd / "build" / "loop-cureloop-report.html").read_text()
+    assert "Goal achieved:</b> yes" in content   # verdict now present
+    assert "$0.4200" in content
+    assert "old" not in content.split("</html>")[0].split("<html>")[-1] or "First step" in content
 
 
-def test_refresh_run_report_noop_for_missing_build_dir(tmp_path):
-    assert lr.refresh_run_report(tmp_path / "does-not-exist") is False
+def test_backfill_covers_now_runs_and_skips_unless_forced(monkeypatch, tmp_path):
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+    _make_now_run(tmp_path, "aaaa7777")
+    _make_historical_run(tmp_path, "bbbb8888-loop-run", "mixloop")
+
+    counts = lr.backfill_run_reports()
+    assert counts["written"] == 2          # one NOW report + one loop report
+    assert counts["runs_scanned"] == 2
+
+    counts = lr.backfill_run_reports()
+    assert counts["written"] == 0
+    assert counts["skipped"] == 2
+
+    counts = lr.backfill_run_reports(force=True)
+    assert counts["written"] == 2
+
+
+def test_now_report_metadata_only_fallback(monkeypatch, tmp_path):
+    # Pre-artifact-writer NOW runs: metadata is the only marker; the report
+    # must exist, be honest about the missing result, and compute elapsed.
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+    rd = tmp_path / "runs" / "gggg9999-old-now"
+    rd.mkdir(parents=True)
+    (rd / "metadata.json").write_text(json.dumps({
+        "handle_id": "gggg9999", "nickname": "old-otter", "prompt": "quick question",
+        "lane": "now", "status": "error",
+        "started_at": "2026-05-12T16:14:46+00:00", "ended_at": "2026-05-12T16:14:54+00:00",
+    }))
+    counts = lr.backfill_run_reports()
+    assert counts["written"] == 1
+    content = (rd / "build" / "now-gggg9999-report.html").read_text()
+    assert content.startswith("<!-- maro-report: final status=error -->")
+    assert "quick question" in content
+    assert "result not captured" in content
+    assert "8000ms" in content

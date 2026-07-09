@@ -439,6 +439,28 @@ def _build_loop_context(
         _routing_key = _hashlib.sha1(goal.encode()).hexdigest()[:8]
         _matched_and_routed = [select_variant_for_task(s, _routing_key) for s in _matching_skills]
         skills_context = format_skills_for_prompt(_matched_and_routed)
+        # Run-keyed record of what actually entered the prompt, post-routing.
+        # Without this, A/B variant selection is invisible in the run record
+        # and skill changes can't be attributed to outcome shifts.
+        if _matched_and_routed:
+            try:
+                from runs import append_skills_manifest as _append_skills_manifest
+                _append_skills_manifest(
+                    [
+                        {
+                            "id": getattr(s, "id", ""),
+                            "name": getattr(s, "name", ""),
+                            "content_hash": getattr(s, "content_hash", ""),
+                            "variant_of": getattr(s, "variant_of", None),
+                            "tier": getattr(s, "tier", None),
+                            "routing_key": _routing_key,
+                        }
+                        for s in _matched_and_routed
+                    ],
+                    stage="decompose",
+                )
+            except Exception:
+                pass
         if _matched_and_routed and verbose:
             print(
                 f"[maro] injecting {len(_matched_and_routed)} skill(s) into decompose",
@@ -458,10 +480,24 @@ def _build_loop_context(
         _curated_block = _skill_loader.get_summaries_block(role=_role, goal=goal)
         if _curated_block:
             curated_skills_context = _curated_block
+            _curated_matches = _skill_loader.find_matching(goal, role=_role)
+            try:
+                from runs import append_skills_manifest as _append_skills_manifest
+                _append_skills_manifest(
+                    [
+                        {
+                            "name": getattr(s, "name", ""),
+                            "file_path": str(getattr(s, "file_path", "")),
+                        }
+                        for s in _curated_matches
+                    ],
+                    stage="curated_summaries",
+                )
+            except Exception:
+                pass
             if verbose:
-                _curated_count = len(_skill_loader.find_matching(goal, role=_role))
                 print(
-                    f"[maro] injecting {_curated_count} curated skill(s) into decompose",
+                    f"[maro] injecting {len(_curated_matches)} curated skill(s) into decompose",
                     file=sys.stderr, flush=True,
                 )
             if had_no_matching_skill:
