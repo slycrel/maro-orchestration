@@ -115,6 +115,7 @@ def _llm_classify(message: str, adapter) -> Tuple[Lane, float, str]:
         ],
         max_tokens=128,
         temperature=0.1,
+        no_tools=True,
     )
     data = extract_json(content_or_empty(resp), dict, log_tag="intent.classify")
     if data:
@@ -257,6 +258,7 @@ def check_goal_clarity(
             ],
             max_tokens=128,
             temperature=0.1,
+            no_tools=True,
         )
         data = extract_json(content_or_empty(resp), dict, log_tag="intent.check_clarity")
         if data:
@@ -334,6 +336,7 @@ def rewrite_imperative_goal(
             ],
             max_tokens=256,
             temperature=0.1,
+            no_tools=True,
         )
         data = extract_json(content_or_empty(resp), dict, log_tag="intent.ble_rewrite")
         if data and data.get("changed"):

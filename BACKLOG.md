@@ -103,21 +103,6 @@ write fence — shipped arc") and `docs/BOUNDED_WORKSPACE.md`.
   transcripts ride `resp.tool_events`). Port subprocess adapter first, others
   incrementally. Size: ~half day per adapter.
 
-### 16. Subprocess utility calls can execute the goal instead of answering (found 2026-07-09 via run report)
-
-Evidence: run `19cc17d6-azure-harbor`, `build/calls/call-00001.json` — a
-routing/classification prompt ("You are a routing agent. Classify…") whose
-recorded response is the goal's full "## Done" completion report, with tool
-events, 1.79M input tokens, ~3 minutes elapsed. The agentic `claude` CLI on
-the subprocess lane, handed a utility prompt that embeds the goal text, did
-the task instead of classifying it — then the agenda loop executed the goal
-again (duplicate spend, and the "first" execution happened with no fence/
-step structure around it). Likely applies to every cheap utility call
-(routing, clarity, scope) routed through the subprocess adapter. Candidate
-fixes: tool-less/`--no-tools` mode for utility calls on the subprocess lane,
-or pinning utility calls to API adapters when available. Check other runs'
-call-00001 records for the same signature to size it.
-
 ### 17. Run-visibility residuals (2026-07-09 real-data review)
 
 - [ ] **loop_id coverage at log_event call sites**: only ~11 of ~48 pass

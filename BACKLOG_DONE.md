@@ -8,6 +8,51 @@ Last split: 2026-04-16 (session 34).
 
 ---
 
+### BACKLOG #16: Subprocess utility calls can execute the goal instead of answering (shipped 2026-07-09)
+
+Evidence: run `19cc17d6-azure-harbor`, `build/calls/call-00001.json` — a
+routing/classification prompt ("You are a routing agent. Classify…") whose
+recorded response was the goal's full "## Done" completion report, with tool
+events, 1.79M input tokens, ~3 minutes elapsed. Root cause:
+`ClaudeSubprocessAdapter.complete()` always shelled out to the full agentic
+`claude -p` CLI with `--dangerously-skip-permissions`, denying only
+`WebFetch,WebSearch` — every other real tool (Bash, Edit, Write, Read, ...)
+stayed live for every call, including "just classify this" routing prompts
+with no `tools=` kwarg at all. `CodexCLIAdapter` had the analogous exposure
+via `approval_policy="never"` with no sandbox restriction.
+
+**Fix:** added a `no_tools: bool = False` kwarg to both subprocess adapters'
+`complete()` (`src/llm.py`). `ClaudeSubprocessAdapter` passes `--tools ""`
+(discovered via `claude --help` — disables the built-in tool set entirely,
+stronger than a per-name disallow list) instead of
+`--disallowedTools WebFetch,WebSearch` when set. `CodexCLIAdapter` has no
+blanket tool-disable flag, so `no_tools=True` adds `-s read-only` (the
+closest available constraint — codex has no per-call "no tools" mode, only
+sandbox policies). Every adapter's `complete()` already accepts `**kwargs`,
+so `no_tools=True` flows harmlessly through `FailoverAdapter` and the API
+adapters (which don't grant real tool execution on a bare `tools=None` call
+anyway) with no signature changes needed there.
+
+**Wired at every utility call site** that classifies/routes/scopes rather
+than executes: `intent.py` (`_llm_classify`, `check_goal_clarity`,
+`rewrite_imperative_goal`), `scope.py` (`generate_scope`, the
+clarification-proxy resolver), and `llm.py`'s `advisor_call` (strategic
+advisory, not execution). Agentic execution calls (director/workers/step
+execution) are untouched — they still get real tools, which they need.
+
+Tests: `tests/test_llm.py` — `test_subprocess_complete_no_tools_disables_all_tools`,
+`test_subprocess_complete_default_disallows_web_only` (regression guard on
+the unchanged default path), `test_codex_complete_no_tools_uses_readonly_sandbox`,
+`test_codex_complete_default_no_sandbox_flag`. Full suite green after the change.
+
+Not fixed by this change: the *symptom* half — a run whose first
+(unfenced) execution happened inside a mis-scoped utility call still leaves
+that spend on record even after this fix closes the mechanism going
+forward; no backfill/cleanup was done for `19cc17d6-azure-harbor` itself.
+Also not done: checking other historical runs' `call-00001.json` for the
+same signature to size how often this fired before the fix (deferred —
+low value now that the mechanism is closed).
+
 ### BACKLOG #15: Low-risk file_lock consistency conversions (shipped 2026-07-09)
 
 The concurrency-hardening arc had converted every HIGH/MEDIUM unsafe writer

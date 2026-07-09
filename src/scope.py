@@ -411,6 +411,7 @@ def resolve_ambiguity_via_proxy(
             [LLMMessage("system", system_prompt), LLMMessage("user", user_msg)],
             max_tokens=300,
             temperature=0.2,
+            no_tools=True,
         )
     except Exception as exc:
         log.warning("scope.proxy: adapter.complete failed: %s", exc)
@@ -543,6 +544,7 @@ def generate_scope(
             ],
             max_tokens=max_tokens,
             temperature=temperature,
+            no_tools=True,
         )
     except Exception as exc:
         log.warning("scope: adapter.complete failed: %s", exc)

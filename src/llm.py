@@ -981,6 +981,7 @@ class ClaudeSubprocessAdapter(_JSONToolPromptMixin, LLMAdapter):
         max_tokens: int = 4096,
         temperature: float = 0.3,
         timeout: Optional[int] = None,
+        no_tools: bool = False,
         **kwargs,  # absorb unsupported kwargs (e.g. thinking_budget) gracefully
     ) -> LLMResponse:
         # Build the prompt text
@@ -994,7 +995,17 @@ class ClaudeSubprocessAdapter(_JSONToolPromptMixin, LLMAdapter):
         # identical payload the old --output-format json produced, so result
         # handling below is unchanged; tool_events are parsed additively.
         cmd = [self.claude_bin, "-p", "--output-format", "stream-json", "--verbose",
-               "--dangerously-skip-permissions", "--disallowedTools", "WebFetch,WebSearch"]
+               "--dangerously-skip-permissions"]
+        if no_tools:
+            # Utility calls (routing/classification/scope) have no business
+            # holding real tool access — the "-p" agentic CLI can otherwise
+            # act on the goal text it's asked to merely classify (BACKLOG
+            # #16: a routing prompt executed the goal and produced a "##
+            # Done" report instead of a lane verdict). "" disables the
+            # built-in tool set entirely, stronger than denying two names.
+            cmd += ["--tools", ""]
+        else:
+            cmd += ["--disallowedTools", "WebFetch,WebSearch"]
         if model_str not in (MODEL_CHEAP, MODEL_MID, MODEL_POWER, "cheap", "mid", "power"):
             # Only add --model if it's a real model name, not our constants
             cmd += ["--model", model_str]
@@ -1248,6 +1259,7 @@ class CodexCLIAdapter(_JSONToolPromptMixin, LLMAdapter):
         max_tokens: int = 4096,
         temperature: float = 0.3,
         timeout: Optional[int] = None,
+        no_tools: bool = False,
         **kwargs,
     ) -> LLMResponse:
         prompt = self._build_prompt(messages, tools)
@@ -1260,8 +1272,16 @@ class CodexCLIAdapter(_JSONToolPromptMixin, LLMAdapter):
             "--json",
             "--model", model_str,
             "-c", "approval_policy=\"never\"",
-            "-",  # read prompt from stdin
         ]
+        if no_tools:
+            # Same rationale as ClaudeSubprocessAdapter.no_tools (BACKLOG
+            # #16): a utility call (routing/classification) has no business
+            # writing files or running shell commands. codex has no blanket
+            # tool-disable flag; read-only sandbox is the closest available
+            # constraint — it still lets the model answer, but strips the
+            # ability to act on the goal text it was only asked to classify.
+            cmd += ["-s", "read-only"]
+        cmd += ["-"]  # read prompt from stdin
 
         # Explicit cwd= wins; else fall back to the run-scoped ambient default
         # (parity with ClaudeSubprocessAdapter) so codex-backed non-executor
@@ -1898,7 +1918,7 @@ def advisor_call(
     ]
 
     try:
-        _adv_kwargs: Dict[str, Any] = {"max_tokens": 1024, "temperature": 0.2}
+        _adv_kwargs: Dict[str, Any] = {"max_tokens": 1024, "temperature": 0.2, "no_tools": True}
         # Enable mid-level thinking for advisory calls (strategic decisions)
         if getattr(adapter, "backend", "") == "anthropic":
             _adv_kwargs["thinking_budget"] = THINKING_MID

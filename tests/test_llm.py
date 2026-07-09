@@ -27,6 +27,7 @@ from llm import (
     ToolCall,
     LLMAdapter,
     ClaudeSubprocessAdapter,
+    CodexCLIAdapter,
     OpenRouterAdapter,
     AnthropicSDKAdapter,
     OpenAIAdapter,
@@ -259,6 +260,78 @@ def test_subprocess_complete_plain(monkeypatch):
     assert resp.backend == "subprocess"
     assert resp.input_tokens == 100
     assert resp.output_tokens == 50
+
+
+def test_subprocess_complete_default_disallows_web_only(monkeypatch):
+    """Default call (no_tools unset): only WebFetch/WebSearch denied, real tools stay live."""
+    a = ClaudeSubprocessAdapter()
+    mock_result = MagicMock()
+    mock_result.returncode = 0
+    mock_result.stdout = _make_subprocess_output("ok")
+    mock_result.stderr = ""
+
+    with patch("llm._run_subprocess_safe", return_value=mock_result) as mock_run:
+        a.complete([LLMMessage("user", "x")])
+
+    cmd = mock_run.call_args.args[0]
+    assert "--disallowedTools" in cmd
+    assert cmd[cmd.index("--disallowedTools") + 1] == "WebFetch,WebSearch"
+    assert "--tools" not in cmd
+
+
+def test_subprocess_complete_no_tools_disables_all_tools(monkeypatch):
+    """no_tools=True (utility calls, BACKLOG #16) strips all real tool access.
+
+    A routing/classification prompt has no business holding an agentic CLI's
+    real Bash/Edit/Write access — that's what let a routing call execute the
+    goal instead of classifying it (evidence: run 19cc17d6-azure-harbor).
+    """
+    a = ClaudeSubprocessAdapter()
+    mock_result = MagicMock()
+    mock_result.returncode = 0
+    mock_result.stdout = _make_subprocess_output("ok")
+    mock_result.stderr = ""
+
+    with patch("llm._run_subprocess_safe", return_value=mock_result) as mock_run:
+        a.complete([LLMMessage("user", "classify this")], no_tools=True)
+
+    cmd = mock_run.call_args.args[0]
+    assert "--tools" in cmd
+    assert cmd[cmd.index("--tools") + 1] == ""
+    assert "--disallowedTools" not in cmd
+
+
+def test_codex_complete_no_tools_uses_readonly_sandbox(monkeypatch):
+    """no_tools=True on the codex adapter (BACKLOG #16): codex has no blanket
+    tool-disable flag, so read-only sandbox is the closest available
+    constraint — a utility call still gets an answer but can't act on it."""
+    a = CodexCLIAdapter()
+    mock_result = MagicMock()
+    mock_result.returncode = 0
+    mock_result.stdout = ""
+    mock_result.stderr = ""
+
+    with patch("llm._run_subprocess_safe", return_value=mock_result) as mock_run:
+        a.complete([LLMMessage("user", "classify this")], no_tools=True)
+
+    cmd = mock_run.call_args.args[0]
+    assert "-s" in cmd
+    assert cmd[cmd.index("-s") + 1] == "read-only"
+
+
+def test_codex_complete_default_no_sandbox_flag(monkeypatch):
+    """Default call (no_tools unset): no sandbox restriction added."""
+    a = CodexCLIAdapter()
+    mock_result = MagicMock()
+    mock_result.returncode = 0
+    mock_result.stdout = ""
+    mock_result.stderr = ""
+
+    with patch("llm._run_subprocess_safe", return_value=mock_result) as mock_run:
+        a.complete([LLMMessage("user", "x")])
+
+    cmd = mock_run.call_args.args[0]
+    assert "-s" not in cmd
 
 
 def test_subprocess_complete_threads_cwd(monkeypatch):
