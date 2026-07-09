@@ -1905,8 +1905,81 @@ def _cmd_router(args: argparse.Namespace) -> int:
     return fail("E_INTERNAL", "unknown command")
 
 
+def _cmd_resume(args: argparse.Namespace) -> int:
+    """Resume a crashed run from its checkpoint ((h) slice 3).
+
+    Accepts a handle_id (resolves the run dir's checkpoint) or a loop_id.
+    Refuses runs that finalized or whose owner PID is still alive.
+    """
+    from checkpoint import load_checkpoint
+
+    ref = args.run_id
+    ckpt = load_checkpoint(ref)
+    if ckpt is None:
+        # maybe a handle_id — look in that run dir directly
+        try:
+            import json as _json
+            from runs import run_dir
+            path = run_dir(ref) / "build" / "checkpoint.json"
+            ckpt_data = _json.loads(path.read_text(encoding="utf-8"))
+            from checkpoint import Checkpoint
+            ckpt = Checkpoint.from_dict(ckpt_data)
+        except Exception:
+            return fail("E_RESUME", f"no checkpoint found for {ref!r}")
+
+    if ckpt.is_complete():
+        return fail("E_RESUME",
+                    f"loop {ckpt.loop_id} completed all its steps — nothing to resume")
+
+    pid = int((ckpt.in_flight or {}).get("pid", 0) or 0)
+    if pid:
+        try:
+            os.kill(pid, 0)
+            return fail("E_RESUME",
+                        f"loop {ckpt.loop_id} appears to still be running (pid {pid})")
+        except (ProcessLookupError, PermissionError, ValueError):
+            pass
+
+    if ckpt.handle_id:
+        try:
+            import json as _json
+            from runs import run_dir
+            meta = _json.loads((run_dir(ckpt.handle_id) / "metadata.json")
+                               .read_text(encoding="utf-8"))
+            if meta.get("status") == "done":
+                return fail("E_RESUME",
+                            f"run {ckpt.handle_id} already finalized done")
+        except FileNotFoundError:
+            pass
+        except Exception:
+            pass
+
+    print(f"[maro] resuming loop {ckpt.loop_id}: "
+          f"{len(ckpt.completed)}/{len(ckpt.steps)} steps done"
+          + (f", step {ckpt.in_flight['index']} was in flight"
+             if ckpt.in_flight else ""))
+
+    import agent_loop as _al
+    try:
+        result = _al.run_agent_loop(
+            ckpt.goal,
+            project=ckpt.project or None,
+            resume_from_loop_id=ckpt.loop_id,
+            verbose=args.verbose,
+        )
+    except Exception as exc:
+        return fail("E_RESUME", str(exc))
+    if args.format == "json":
+        print(json.dumps({"loop_id": result.loop_id, "status": result.status,
+                          "resumed_from": ckpt.loop_id}))
+    else:
+        print(f"[maro] resume finished: {result.status}")
+    return 0 if result.status == "done" else 1
+
+
 _COMMAND_HANDLERS = {
     "init": _cmd_init,
+    "resume": _cmd_resume,
     "next": _cmd_next,
     "done": _cmd_done,
     "log": _cmd_log,

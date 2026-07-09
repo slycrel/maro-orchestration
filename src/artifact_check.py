@@ -130,6 +130,25 @@ def extract_write_claims(text: str) -> List[str]:
     return out
 
 
+def files_modified_since(root: Optional[str | os.PathLike], since_iso: str,
+                         *, limit: int = 20) -> List[str]:
+    """Relpaths under `root` modified at/after `since_iso` (UTC ISO string).
+
+    The resume-side half of the fabrication-guard diff: when a step crashed
+    mid-flight, this lists what it managed to touch so the re-executed step
+    can complete idempotently instead of blindly redoing. Never raises;
+    [] on any parse/walk problem.
+    """
+    try:
+        from datetime import datetime
+        ts = datetime.fromisoformat(since_iso).timestamp()
+    except (ValueError, TypeError):
+        return []
+    snap = snapshot_dir(root)
+    changed = sorted(rel for rel, mtime in snap.items() if mtime >= ts)
+    return changed[:limit]
+
+
 def snapshot_dir(root: Optional[str | os.PathLike]) -> Dict[str, float]:
     """Map relpath -> mtime for every file under `root`. {} if root is missing.
 

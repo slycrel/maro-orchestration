@@ -36,7 +36,8 @@ log = logging.getLogger("notify")
 # backend_actionable: auth/billing/context failures with a fix the user must
 # apply (BACKEND_RESILIENCE_DESIGN §2) — default-on because a headless box's
 # notify channel is the only surface an away-from-keyboard user actually sees.
-DEFAULT_EVENTS = ["run_completed", "escalation", "backend_actionable"]
+DEFAULT_EVENTS = ["run_completed", "escalation", "backend_actionable",
+                  "stranded_run"]
 
 
 def _config_get(key: str, default):

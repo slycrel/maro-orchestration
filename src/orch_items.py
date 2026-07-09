@@ -477,6 +477,24 @@ def write_next_lines(slug: str, lines: List[str]) -> None:
     atomic_write(next_path(slug), "\n".join(lines).rstrip() + "\n")
 
 
+def _doing_pids_path(slug: str) -> Path:
+    """Sidecar recording which PID set each [~] DOING item (crash forensics).
+
+    Lives next to NEXT.md rather than inside it — the [state] line format has
+    many parsers; a sidecar changes none of them. Entries are written when an
+    item flips to DOING and dropped on any other transition, so a surviving
+    entry with a dead PID marks a stranded item.
+    """
+    return next_path(slug).parent / ".doing_pids.json"
+
+
+def _read_doing_pids(slug: str) -> dict:
+    try:
+        return json.loads(_doing_pids_path(slug).read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
 def mark_item(slug: str, item_index: int, new_state: str) -> None:
     if new_state not in VALID_STATES:
         raise ValueError(f"invalid new state: {new_state}")
@@ -492,6 +510,52 @@ def mark_item(slug: str, item_index: int, new_state: str) -> None:
             raise ValueError(f"item_index {item_index} not found in NEXT.md for {slug}")
         lines[item.index] = re.sub(r"\[(.)\]", f"[{new_state}]", lines[item.index], count=1)
         write_next_lines(slug, lines)
+        # PID stamp for DOING (same lock — the stamp and the state flip are
+        # one transition). Best-effort: a failed stamp must not fail the mark.
+        try:
+            pids = _read_doing_pids(slug)
+            key = str(item_index)
+            if new_state == STATE_DOING:
+                pids[key] = {"pid": os.getpid(),
+                             "at": time.strftime("%Y-%m-%dT%H:%M:%S%z")}
+            else:
+                pids.pop(key, None)
+            from file_lock import atomic_write
+            atomic_write(_doing_pids_path(slug), json.dumps(pids, indent=2))
+        except Exception:
+            pass
+
+
+def stranded_doing_items(slug: str) -> List[NextItem]:
+    """DOING items whose recorded PID is dead — or that predate PID stamping.
+
+    Both shapes are leaked locks: after 2026-07-09 every DOING flip stamps a
+    PID under the same lock, so a missing entry means the stamp era hadn't
+    started (or the sidecar was lost) and the item has no live owner either
+    way. Callers revert these to TODO (mirroring the deliberate refused_busy
+    revert in heartbeat's backlog drain).
+    """
+    _lines, items = parse_next(slug)
+    doing = [it for it in items if it.state == STATE_DOING]
+    if not doing:
+        return []
+    pids = _read_doing_pids(slug)
+
+    def _alive(pid: int) -> bool:
+        try:
+            os.kill(pid, 0)
+            return True
+        except (ProcessLookupError, ValueError):
+            return False
+        except PermissionError:
+            return True
+
+    stranded = []
+    for it in doing:
+        rec = pids.get(str(it.index))
+        if rec is None or not _alive(int(rec.get("pid", 0) or 0)):
+            stranded.append(it)
+    return stranded
 
 
 def append_next_items(slug: str, items: List[str]) -> List[int]:

@@ -1735,6 +1735,40 @@ def detect_backends() -> List[Tuple[str, bool, str]]:
     return out
 
 
+def probe_backends() -> List[Tuple[str, bool, str]]:
+    """LIVE liveness probe: one tiny completion per usable backend.
+
+    Where detect_backends() checks presence (key set, binary on PATH), this
+    catches the "installed but not logged in" / "key set but account dry"
+    class by actually calling each backend and classifying the failure.
+    Spends a few real tokens per backend — opt-in only (maro-doctor --live),
+    never called from automated paths (no silent spend).
+    """
+    out: List[Tuple[str, bool, str]] = []
+    for name, usable, detail in detect_backends():
+        if not usable:
+            out.append((name, False, f"skipped: {detail}"))
+            continue
+        try:
+            adapter = build_adapter(backend=name)
+            resp = adapter.complete(
+                [LLMMessage("user", "Reply with the single word: ok")],
+                max_tokens=8,
+            )
+            ok = bool((resp.content or "").strip())
+            out.append((name, ok, "live" if ok else "empty response"))
+        except Exception as exc:
+            try:
+                from llm_errors import classify_error
+                info = classify_error(exc, backend=name)
+                msg = info.error_class + (f": {info.user_action}"
+                                          if info.user_action else "")
+            except Exception:
+                msg = str(exc)[:120]
+            out.append((name, False, msg))
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Factory — auto-detect or explicit backend
 # ---------------------------------------------------------------------------

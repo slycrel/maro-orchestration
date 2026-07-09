@@ -146,6 +146,29 @@ def _preflight_checks(
                         ended_ts="",
                     ))
                 steps = _remaining
+                # In-flight FS-diff injection ((h) slice 3): if the prior
+                # process died mid-step, tell the re-executed step what the
+                # crashed attempt already touched so it completes idempotently
+                # instead of blindly redoing (at-least-once contract).
+                _in_flight = getattr(_ckpt, "in_flight", None)
+                if _in_flight and steps:
+                    _note = (f"[resume note: this step previously started at "
+                             f"{_in_flight.get('started_at', '?')} and crashed "
+                             f"mid-execution — it may have partial side effects.")
+                    try:
+                        from artifact_check import files_modified_since
+                        _changed = files_modified_since(
+                            str(_project_dir_root() / ctx.project) if ctx.project else "",
+                            _in_flight.get("started_at", ""),
+                        )
+                        if _changed:
+                            _note += (" Files changed since then: "
+                                      + ", ".join(_changed) + ".")
+                    except Exception as _fd_exc:
+                        log.debug("resume FS-diff failed: %s", _fd_exc)
+                    _note += (" Check what already landed before redoing "
+                              "work; do not duplicate completed effects.] ")
+                    steps[0] = _note + steps[0]
                 if ctx.verbose:
                     print(
                         f"[maro] resuming from checkpoint {resume_from_loop_id}: "

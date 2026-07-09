@@ -490,9 +490,22 @@ def main():
     parser.add_argument("--cleanup-skills", action="store_true", help="Remove duplicate skills from workspace")
     parser.add_argument("--cleanup-lessons", action="store_true", help="Deduplicate lessons from workspace")
     parser.add_argument("--dry-run", action="store_true", help="Show what cleanup would do without writing")
+    parser.add_argument("--live", action="store_true",
+                        help="Probe each backend with a real 1-call completion "
+                             "(catches 'installed but not logged in'; spends a "
+                             "few tokens per backend)")
     args = parser.parse_args()
 
-    if args.cleanup_skills:
+    if args.live:
+        print("maro-doctor — live backend probe (spends a few tokens)\n")
+        from llm import probe_backends
+        all_ok, any_ok = True, False
+        for name, ok, detail in probe_backends():
+            _check(f"backend:{name}", ok, detail)
+            all_ok = all_ok and ok
+            any_ok = any_ok or ok
+        sys.exit(0 if any_ok else 1)
+    elif args.cleanup_skills:
         cleanup_workspace_skills()
     elif args.cleanup_lessons:
         from memory_ledger import deduplicate_lessons

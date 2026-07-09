@@ -126,6 +126,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument("--verbose", "-v", action="store_true", help="Print progress")
     p_run.add_argument("--format", choices=["text", "json"], default="text", help="Output format")
 
+    p_resume = sub.add_parser(
+        "resume",
+        help="Resume a crashed run from its checkpoint (skips completed steps)")
+    p_resume.add_argument(
+        "run_id",
+        help="handle_id (run dir) or loop_id of the crashed run")
+    p_resume.add_argument("--verbose", "-v", action="store_true", default=True)
+    p_resume.add_argument("--format", choices=["text", "json"], default="text")
+
     p_evolver = sub.add_parser("evolver", help="Run meta-evolver — analyze outcomes + propose improvements (§19)")
     p_evolver.add_argument("--dry-run", action="store_true", help="Analyze without writing suggestions")
     p_evolver.add_argument("--min-outcomes", type=int, default=3, help="Minimum outcomes needed to run (default: 3)")

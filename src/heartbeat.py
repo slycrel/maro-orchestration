@@ -373,6 +373,116 @@ def _log_heartbeat(report: HeartbeatReport) -> Optional[str]:
 # Core heartbeat run
 # ---------------------------------------------------------------------------
 
+def stranded_state_sweep(*, verbose: bool = False) -> dict:
+    """Reclaim state leaked by crashed processes (BACKEND_RESILIENCE §3).
+
+    (1) claimed queue tasks with dead PIDs → queued (task_store's existing
+        recovery, which had no scheduled caller until this sweep);
+    (2) [~] DOING items with dead/absent recorded PIDs → [ ] TODO;
+    (3) orphaned checkpoints (in-flight or incomplete, no live PID, run not
+        finalized) → surfaced via the `stranded_run` notify event with the
+        resume command. Surfacing only — auto-resume is deliberately post-1.0
+        (this box has crash-loop history; manual `maro resume` proves the
+        path first).
+    """
+    result = {"recovered_tasks": [], "reverted_doing": [], "resumable_runs": []}
+
+    try:
+        from task_store import recover_stale_claims
+        result["recovered_tasks"] = recover_stale_claims()
+    except Exception as exc:
+        log.debug("sweep: stale-claim recovery failed: %s", exc)
+
+    try:
+        from orch_items import (STATE_TODO, list_projects, mark_item,
+                                stranded_doing_items)
+        for slug in list_projects():
+            for item in stranded_doing_items(slug):
+                try:
+                    mark_item(slug, item.index, STATE_TODO)
+                    result["reverted_doing"].append(f"{slug}#{item.index}")
+                    if verbose:
+                        print(f"[heartbeat] sweep: [{slug}] item {item.index} "
+                              f"DOING owner dead — reverted to TODO",
+                              file=sys.stderr)
+                except Exception as exc:
+                    log.debug("sweep: revert failed for %s#%s: %s",
+                              slug, item.index, exc)
+    except Exception as exc:
+        log.debug("sweep: DOING scan failed: %s", exc)
+
+    try:
+        result["resumable_runs"] = _find_resumable_runs()
+        for entry in result["resumable_runs"]:
+            try:
+                from notify import emit as _notify_emit
+                _in_flight_note = (f"; step {entry['in_flight']} was in flight"
+                                   if entry["in_flight"] else "")
+                _notify_emit("stranded_run", {
+                    "handle_id": entry["handle_id"],
+                    "loop_id": entry["loop_id"],
+                    "message": (
+                        f"Run {entry['handle_id'] or entry['loop_id']} died "
+                        f"mid-loop ({entry['done']}/{entry['total']} steps done"
+                        f"{_in_flight_note}). "
+                        f"Resume with: maro resume {entry['loop_id']}"
+                    ),
+                })
+            except Exception as exc:
+                log.debug("sweep: stranded_run notify failed: %s", exc)
+    except Exception as exc:
+        log.debug("sweep: orphaned-checkpoint scan failed: %s", exc)
+
+    return result
+
+
+def _find_resumable_runs() -> list:
+    """Checkpoints whose owner is dead and whose run never finalized."""
+    import json as _json
+
+    def _alive(pid: int) -> bool:
+        try:
+            os.kill(pid, 0)
+            return True
+        except (ProcessLookupError, ValueError):
+            return False
+        except PermissionError:
+            return True
+
+    out = []
+    try:
+        from checkpoint import list_checkpoints
+        ckpts = list_checkpoints()
+    except Exception:
+        return out
+    for ckpt in ckpts:
+        if ckpt.is_complete():
+            continue
+        pid = int((ckpt.in_flight or {}).get("pid", 0) or 0)
+        if pid and _alive(pid):
+            continue  # still running
+        # run finalized? (legacy-dir checkpoints have no handle_id — treat
+        # unlinked checkpoints as stale history, not resumable)
+        if not ckpt.handle_id:
+            continue
+        try:
+            from runs import run_dir
+            meta = _json.loads((run_dir(ckpt.handle_id) / "metadata.json")
+                               .read_text(encoding="utf-8"))
+            if meta.get("status"):
+                continue  # finalized (done/stuck/error) — not stranded
+        except Exception:
+            continue
+        out.append({
+            "loop_id": ckpt.loop_id,
+            "handle_id": ckpt.handle_id,
+            "done": len(ckpt.completed),
+            "total": len(ckpt.steps),
+            "in_flight": (ckpt.in_flight or {}).get("index"),
+        })
+    return out
+
+
 def run_heartbeat(
     *,
     dry_run: bool = False,
@@ -416,6 +526,22 @@ def run_heartbeat(
 
     if verbose:
         print(f"[heartbeat] health={health.status} stuck={stuck_projects}", file=sys.stderr)
+
+    # --- Stranded-state sweep ((h) slice 3) ---
+    # Crashed processes leak three kinds of state: claimed queue tasks,
+    # [~] DOING items, and orphaned checkpoints. The sweep reclaims the
+    # first two and surfaces the third as resumable — it never auto-resumes.
+    if not dry_run:
+        try:
+            _sw = stranded_state_sweep(verbose=verbose)
+            if any(_sw.values()):
+                report.checks["stranded_sweep"] = (
+                    f"recovered: tasks={len(_sw['recovered_tasks'])} "
+                    f"doing={len(_sw['reverted_doing'])} "
+                    f"resumable={len(_sw['resumable_runs'])}"
+                )
+        except Exception as _sw_exc:
+            log.warning("stranded-state sweep failed: %s", _sw_exc)
 
     # --- Tier 1: Scripted recovery ---
     tier1 = _tier1_scripted(health.checks)
