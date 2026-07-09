@@ -435,9 +435,11 @@ details.global-ctx summary { cursor: pointer; color: var(--dim); font-size: 15px
 .idx-table th[title] { text-decoration: underline dotted var(--dim); text-underline-offset: 3px; }
 .goal-cell { max-width: 520px; }
 .footer-nav { margin-top: 16px; font-size: 13px; color: var(--dim); }
-details.legend { margin-top: 12px; }
+.idx-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; }
+.idx-header h1 { margin: 0 0 4px; }
+details.legend { flex-shrink: 0; max-width: 420px; text-align: right; }
 details.legend summary { cursor: pointer; color: var(--dim); font-size: 15px; }
-details.legend .meta { margin-top: 8px; line-height: 1.9; }
+details.legend .meta { margin-top: 8px; line-height: 1.9; text-align: left; }
 """
 
 _DETAIL_JS = """
@@ -955,15 +957,16 @@ def _render_index_html(summaries: List[dict]) -> str:
 <html><head><meta charset="utf-8"><title>Maro runs</title>
 <style>{_CSS}</style></head>
 <body>
-<h1>Runs</h1>
-<div class="meta">{len(summaries)} run(s)</div>
+<div class="idx-header">
+<div><h1>Runs</h1><div class="meta">{len(summaries)} run(s), newest first</div></div>
+<details class="legend"><summary>What do Status / Lane mean?</summary>
+<div class="meta">{legend_rows}<br><b>Lane:</b> {_esc(_LANE_HELP)}</div>
+</details>
+</div>
 <table class="idx-table">
 <tr><th>Started</th><th>Status</th><th>Goal</th><th title="{_esc(_LANE_HELP)}">Lane</th><th>Elapsed</th><th>Tokens</th><th>Cost</th><th>Report</th></tr>
 {body_rows}
 </table>
-<details class="legend"><summary>What do Status / Lane mean?</summary>
-<div class="meta">{legend_rows}<br><b>Lane:</b> {_esc(_LANE_HELP)}</div>
-</details>
 <script>{_INDEX_ROW_JS}</script>
 </body></html>
 """
