@@ -10,16 +10,6 @@ Five verification layers applied in sequence from pre-execution constraint check
 2. **Inspector** (`src/inspector.py`) — friction detection after each step; detects stuck loops, cost overruns, drift
 3. **Quality gate** (`src/quality_gate.py`) — post-loop review: 5 passes (initial assessment, cross-ref, adversarial, council, summary)
 4. **Cross-reference** (`src/cross_ref.py`) — two-stage fact verification; extract claims → verify each in fresh LLM context (no source answer visible; prevents confirmation bias)
-5. **Passes pipeline** (`src/passes.py`) — unified chaining: quality_gate → adversarial → council → debate → thinkback
-
-## Passes Pipeline
-
-Presets: `quick` / `standard` / `thorough` / `full` / `all`
-
-```bash
-poe-passes --goal "..." --passes council,debate
-poe-passes --goal "..." --preset thorough
-```
 
 ## Self-Tightening Gates (Phase 56 — DONE)
 

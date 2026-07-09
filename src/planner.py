@@ -1,4 +1,4 @@
-# @lat: [[core-loop#Key Source Files]]  [[poe-identity#Injection Point]]
+# @lat: [[core-loop#Key Source Files]]
 """Goal decomposition — multi-plan comparison + heuristic fallback.
 
 Extracted from agent_loop.py for readability and targeted file reads.

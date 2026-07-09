@@ -18,7 +18,7 @@ Python modules that implement the core loop and its supporting pipeline.
 - `src/loop_init.py`, `src/loop_planning.py`, `src/loop_parallel.py`, `src/loop_execute.py`, `src/loop_post_step.py`, `src/loop_blocked.py`, `src/loop_artifacts.py`, `src/loop_finalize.py`, `src/loop_types.py` — the physical phase split of the loop (2026-07): init → planning → parallel → execute → post-step / blocked-step handling → artifact checks → finalize; shared dataclasses in loop_types
 - `src/handle.py` — entry point; routes to NOW or AGENDA via [[intent-classification]]
 - `src/director.py` — mission planning; decomposes goals into milestones, delegates to workers
-- `src/planner.py` — `decompose()`: multi-plan generation (3 candidates → best composite); injects [[poe-identity]]
+- `src/planner.py` — `decompose()`: multi-plan generation (3 candidates → best composite)
 - `src/step_exec.py` — individual step execution; tool dispatch, [[constraint-system]] enforcement
 
 ## Execution Flow
@@ -34,7 +34,6 @@ agent_loop: decompose → [step_1, step_2, ...] → execute each → checkpoint 
 
 Mechanisms that preserve state and context across steps and between sessions.
 
-- [[poe-identity]] — injected at decompose; every plan starts with stable self-model
 - [[checkpointing]] — written after each step; loop resumable on stuck/partial
 - [[memory-system]] — outcomes + lessons recorded after every loop
 

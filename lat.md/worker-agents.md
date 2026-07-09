@@ -31,7 +31,6 @@ Workers see different tool subsets than directors. Defined in `src/step_exec.py`
 
 Systems that provide context, constraints, or memory to worker agents.
 
-- [[poe-identity]] — global constant injected into every plan; persona is the per-agent equivalent
 - [[core-loop]] — orchestrates worker execution
 - [[constraint-system]] — guards tool calls before execution
 - [[memory-system]] — workers share lesson/outcome memory

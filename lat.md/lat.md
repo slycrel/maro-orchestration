@@ -9,7 +9,6 @@ Top-level map of all concept documents in this wiki. Each entry links to a dedic
 - [[self-improvement]] — Evolver, thinkback, bughunter, nightly eval — systems that improve Poe over time
 - [[worker-agents]] — Director, workers, team workers, verification agent, persona system
 - [[quality-gates]] — Constraint enforcement, inspector, adversarial pass, council, cross-reference
-- [[poe-identity]] — Stable self-model injected into every planning call (GAP 1 fix)
 - [[checkpointing]] — Per-step checkpoint writes for loop resume (GAP 3 fix)
 - [[intent-classification]] — Lane routing (NOW vs AGENDA) and prefix handling
 - [[constraint-system]] — Pre-execution safety layer; tier/risk enforcement
