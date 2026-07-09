@@ -42,7 +42,10 @@ data is preserved, not deleted.
 **Remaining ("later"):**
 - [ ] **Mining passes on the parked data.** The curation registry is the hook;
   the actual miners are TODO — skill scraper, script scraper, decision-prior
-  indexer (feed a similar/rephrased re-attempt), partial-run rescue. Append to
+  indexer (feed a similar/rephrased re-attempt — this half is an OWNER ASK:
+  Jeremy 2026-07-04, "task failures being retried, with the old task context
+  available... I'm a little surprised the failure is so brittle"; Purgatorio
+  hist-09 — prioritize accordingly), partial-run rescue. Append to
   `run_curation.CURATORS` (now 4: classify, inventory, excerpt,
   spend_transparency — the last two added since v0).
 - [x] **Unify rung-4 step I/O** — DONE 2026-07-04. `FailoverAdapter.complete`
@@ -684,6 +687,15 @@ after the current 1.0 remainders (a)–(d); (g) needs design before release.
   `skills/` gitignore had silently kept the entire skills half of the
   ship set out of e0811c7 — a fresh clone would have shipped 0 skills;
   recovered in c2609da with a don't-reintroduce note in .gitignore.
+  Ship set later grew to 11 skills: report_synthesize BUILT BY MARO in
+  dogfood run 59a9fdd7, hand-graduated same day.
+- [ ] **(e) remainder: adversarial-review ship skill** (Purgatorio
+  hist-06 — reopened so Jeremy's decree doesn't fall through the closed
+  checkbox above). Jeremy 2026-07-09: the adversarial-review pattern
+  "or a flavor of it, should probably be one of our skills we ship
+  with." Vehicle: dogfood run 4's code_review skill (0baac0ab) —
+  graduate it if it passes review, else hand-build. Not satisfied by
+  any currently shipped skill.
 - [~] **(f) Self-learning involved in the launch build-out — RUNS IN
   FLIGHT 2026-07-09.** 5 orchestrator-builds-it goals via `maro-handle`,
   learning ON (pre-req: data-01 fixture purge executed first so learning

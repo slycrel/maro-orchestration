@@ -1,17 +1,17 @@
-# Purgatorio reconciliation — INTERIM (eyes 1–6)
+# Purgatorio reconciliation — FINAL (all seven eyes)
 
-**Status:** interim, written 2026-07-09 after eyes 1 (ops census), 2
-(data/learning-store), 3 (backward archaeology), 4 (docs coherence),
-5 (code-vs-spec + security), 6 (external landscape). Eye 7 (forward
-historian) is running. Final re-triage of the 1.0 list happens after all
-seven. Per docs/PURGATORIO_AUDIT.md: overlap is a feature — a gap found
-independently by multiple eyes is almost certainly real.
+**Status:** FINAL, 2026-07-09. All seven eyes complete: 1 (ops census),
+2 (data/learning-store), 3 (backward archaeology), 4 (docs coherence),
+5 (code-vs-spec + security), 6 (external landscape), 7 (forward
+historian). Per docs/PURGATORIO_AUDIT.md: overlap is a feature — a gap
+found independently by multiple eyes is almost certainly real.
 
 Raw findings: findings-ops.md (15), findings-data.md (13),
 findings-archaeology.md (11), findings-docs.md (11),
-findings-code-security.md (7), findings-landscape.md (15) — 72
-findings, plus 42 explicit clean checks and a 9-entry link-farm
-re-audit.
+findings-code-security.md (7), findings-landscape.md (15),
+findings-historian.md (10) — **82 findings**, plus 52 explicit clean
+checks, a 9-entry link-farm re-audit, and a promises ledger (open
+commitments recovered from raw history).
 
 ---
 
@@ -44,7 +44,12 @@ documents is the local proof — and delete the losing unit definition;
 before any 1.0 self-learning claim; (4) reword README's two ambient
 passages to "when the heartbeat loop is enabled (opt-in)"; (5)
 GOAL_BRAIN corrections for arch-05/06. Enabling the heartbeat/evolver on
-this box is **Jeremy's call** (off switches stay off).
+this box is **Jeremy's call** (off switches stay off). Eye 7 adds a
+required input to that call: the 2026-06-21 heartbeat-gate design
+conversation (hist-07 — free local model answers "is there work?",
+escalate to paid only on yes; the real work is the context assembler)
+is Jeremy's stated preference for what a heartbeat should be, and it
+must be on the table when the supervision story is picked.
 *Partial movement this session:* the (f) dogfood runs are the first
 deliberate learning-ON production hours the system has ever had.
 
@@ -196,6 +201,22 @@ recording didn't. Investigate the May-era wiring break enough to trust
 that the *current* recording path doesn't share it, and document the
 hole so no analysis treats May as "no activity".
 
+**Mechanism named by eye 7 (hist-04), partially verified:** commit
+9496f11 (2026-05-06) exports `POE_ORCH_ROOT="$REPO_ROOT"` for every
+build-loop invocation, and May's 25 commits are dominated by the
+build-loop/cron cluster — May's cron-driven activity wrote state under
+repo-local roots, not the canonical workspace. Verification 2026-07-09:
+the pin is real in the diff, but **this checkout's repo-local
+`memory/` holds only April dry-run rows (688 outcomes, all 2026-04,
+zero May)** — so the May rows, if they were written at all, went to
+whichever checkout the May cron actually ran from (since cleaned or
+elsewhere), or the pinned path still failed to record. Either way the
+suspect stands, the current recording path post-dates the no-cron
+invariant (2026-06-10) and the workspace unification (2026-07-03,
+BACKLOG #-1), and the hole should be documented as unrecoverable
+rather than investigated further. Same split-brain class the
+unification fixed, one era earlier.
+
 ### SF-10 — The lesson-promotion funnel has never promoted
 **Members:** data-04 (mechanism), data-09 (skills twin — also in SF-1).
 **Severity: real-but-deferrable.**
@@ -235,6 +256,67 @@ README despite a working client (land-06), local-model lane
 undocumented (land-07); watch: streaming, OTel exporter; ignore:
 Windows (one WSL2 line).
 
+### SF-13 — Decree-class statements reach auto-memory but not the repo record
+**Members:** hist-01, hist-05, hist-07, hist-08, hist-09 + four
+promises-ledger OPEN-unrecorded rows. **Severity: real-but-deferrable
+(systemic; one structural fix).**
+
+Eye 7's diff of raw session transcripts against the compiled record
+found the same failure five times: Jeremy makes a decision or ask in
+conversation, it lands in Claude Code auto-memory, and the repo record
+never hears about it. The Hermes-swap decision + iMessage interface
+preference (hist-01) live only in auto-memory while GOAL_BRAIN still
+says "steal-from-don't-migrate, stance unchanged"; the heartbeat-gate
+design direction (hist-07 — free local model answers "is there work?",
+the owner's stated preference for what a heartbeat should even be) is
+absent from SF-1's supervision conversation; the budget-posture decree
+(hist-08) has no GOAL_BRAIN Decisions entry, so a future session
+honoring "GOAL_BRAIN wins" could legitimately re-pitch an API key; the
+"run this prompt with this persona" pattern ask (hist-05) was captured
+as prose and dropped as work — re-improvised by hand three times since
+(docs brain trust, bake-off, Purgatorio itself); the cross-run
+retry-with-prior-context ask (hist-09) is unlinked to the re-attempt
+hinter TODO it maps to.
+
+The mechanism: end-of-chunk discipline updates GOAL_BRAIN for *work*,
+but conversations that end without a work chunk (the Hermes wrap-up,
+the budget aside) leave no repo trace. **Structural fix (one rule):
+any Jeremy statement worth an auto-memory write is also worth a
+GOAL_BRAIN Decisions line — apply at session close.** The factual
+back-fills (hist-01, hist-08 Decisions entries; hist-09 provenance
+stamp) are safe to do autonomously; done this session.
+
+### SF-14 — Release amnesia: the repo has shipped before and the 1.0 arc doesn't know it
+**Members:** hist-03; feeds SF-12. **Severity: real-but-deferrable
+(but resolve before tagging).**
+
+Git tags v0.1.0 and v0.2.0 exist (March, April — the latter shipped
+"portable installs", which later regressed into the pip-never-worked
+finding), and docs/PUBLISH_CHECKLIST.md (2026-03-10, dormant) already
+gates release on exactly the classes this audit re-derived from
+scratch: no personal data (= SF-5), clean-workspace bootstrap (= the
+install residuals), CHANGELOG + version tag. Versioning is incoherent:
+git tags say v0.2.0, docs/history/CHANGELOG.md says 1.19.0, pyproject
+says 0.5.0. **Resolution:** adopt-or-retire PUBLISH_CHECKLIST as the
+1.0 gate scaffold (it's a ready-made checklist for SF-5/SF-12), and
+pick ONE version scheme before any 1.0 tag.
+
+### Eye-7 singles
+- hist-02 — Jeremy's standing ToS worry about the `claude -p` lane ("I
+  think that's against the license; I'm probably pushing it a little
+  with -p usage") is recorded nowhere, while README recommends that
+  lane to strangers as the no-key-needed default. Recommending a lane
+  to strangers is a different posture than using it yourself.
+  **Jeremy decision** on 1.0 framing; goes to the item (a)
+  conversation alongside hist-01.
+- hist-06 — the adversarial-review ship-skill decree ("That, or a
+  flavor of it, should probably be one of our skills we ship with") is
+  at risk behind the closed (e) checkbox; only vehicle is dogfood run
+  4's code_review skill. **Reopened as an explicit (e) remainder** —
+  gated on run-4 graduation or hand-built.
+- hist-10 — CLAUDE.md "repo not renamed on GitHub" contradicted the
+  remote URL beside it. **Fixed inline 2026-07-09.**
+
 ### SF-11 — Verified good (record these, they're signal too)
 ops-10 (no silent token burner; ≤$2.79/day; $229.38 all-time), ops-11
 (git hooks healthy post-fix, tripwired), ops-15 (openclaw-gateway is
@@ -243,7 +325,12 @@ sqlite==JSONL exact; dev-recall docs lane fresh; medium tier clean
 post-Jun-23), 24 docs clean checks (quickstart commands, backend order,
 budget defaults, DEFAULTS spot-checks all hold), 13 archaeology clean
 checks (checkpoint wiring real, no-daemons consolidation holds, merged
-branches really merged).
+branches really merged), 10 historian clean checks (the 2026-07-02
+nine-item disposition list fully honored; GOAL_BRAIN's four quoted
+decrees verified word-for-word against session transcripts — the
+record's quotes are accurate, not paraphrase-drifted; director-
+clarification, cache-aware meter, harvest-corpus asks all shipped and
+recorded).
 
 ### Unmerged singles
 - ops-09 — 63% of step-cost rows have empty `model`; blinds the next
@@ -272,7 +359,7 @@ branches really merged).
 
 ---
 
-## Interim 1.0-blocker list (re-triage pending eyes 5–7)
+## FINAL 1.0-blocker list (all seven eyes)
 
 | # | blocker | members | state |
 |---|---|---|---|
@@ -286,15 +373,26 @@ branches really merged).
 | 8 | CI is an empty directory on a public repo | SF-12 (land-02) | open; standard pytest workflow + badge |
 | 9 | README self-improvement headline untenable vs landscape + idle evolver | SF-12 (land-10) ↔ SF-1 (docs-06) | open; cheap messaging fix, reposition on accountability layer |
 
-Adjudicate-before-1.0 (not blockers, but flag-default-shaping): SF-4
-(scope posture), SF-7's slack-bridge credential decision, SF-8's
-docs-descope-or-wire choice.
+Adjudicate-before-1.0 (not blockers, but shape decisions Jeremy is
+about to make): SF-4 (scope posture), SF-7's slack-bridge credential
+decision, SF-8's docs-descope-or-wire choice, hist-02 (ToS posture on
+the recommended `claude -p` lane — pairs with the item (a)
+conversation), hist-06 (adversarial-review (e) remainder — decree at
+risk, vehicle in flight), SF-14 (PUBLISH_CHECKLIST adopt-or-retire +
+version scheme before tagging).
+
+Eye 7 changed no blocker's status: its findings are record-integrity
+(SF-13), release-history (SF-14 — sharpens blocker #7's "pick a
+version"), and inputs to decisions already queued (hist-01/02/07 → item
+(a) and SF-1; hist-04 → SF-9 closed-as-documented). The blocker list
+above stands as the final Purgatorio output.
 
 ---
 
-## Eye 7 (to be appended)
+## Disposition
 
-- Eye 7 (forward historian): running. Precondition met — dev-recall
-  session lane re-ingested 2026-07-09 (772 fresh chunks, 12 sessions).
-- Final pass: re-triage the blocker list, fold in eye 5/6/7 findings,
-  produce the consolidated decisions-for-Jeremy list.
+Consolidated decision brief for Jeremy:
+`docs/history/2026-07-09-decisions-for-jeremy.md` (buckets A–D +
+Section E for eye 7). Factual record back-fills (GOAL_BRAIN Decisions
+entries for hist-01/hist-08, hist-09 provenance stamp, hist-10 CLAUDE.md
+reword) applied 2026-07-09. Everything else waits on the brief.

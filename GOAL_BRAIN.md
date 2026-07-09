@@ -1310,6 +1310,25 @@ Sample: the 2026-05-13..17 window of `~/.maro/workspace/runs/` (478 dirs total;
   model-lane contention was accepted 2026-07-02 *for this box* — that
   acceptance does not extend to end users.) "I'm sure it won't be the last
   late addition."
+- **2026-07-09 (Hermes substrate decision — Jeremy; back-filled from session
+  382a0d38 by the Purgatorio historian, hist-01):** Jeremy DECIDED to swap
+  the OpenClaw substrate to Hermes "when I get a new, more modern machine"
+  ("I've been thinking for a few months I should swap over"). This
+  supersedes the standing "steal-from-don't-migrate" stance for the
+  *substrate* lane (the steal-from posture still governs Maro feature work).
+  Riders: he'd "love to be able to tie into iMessage instead of telegram"
+  (needs a Mac — pairs with the new-machine plan; every current notify lane
+  is Telegram-hardwired; iMessage goes on the 1.0 item (a)
+  escalation-channel candidate list), and Poe's yahoo/X accounts have
+  "never successfully used those outside of direct commands" — don't build
+  on those lanes. Reusable setup preserved at `~/claude/hermes-maro-trial/`.
+- **2026-07-08 (budget posture — Jeremy; back-filled from session 006a52c3
+  by the Purgatorio historian, hist-08):** $200/mo Anthropic + $20/mo Codex
+  is the spend ceiling — "more spend honestly than I want at the moment, so
+  not looking to add to that path." The API-key/OpenRouter lane is DECLINED
+  until "we start looking at budget models and such for orchestration."
+  Extends (does not reverse) the 2026-07-02 model-lane accept-contention
+  decision. Don't re-pitch the API key before the budget-models phase.
 
 ## Threads (system-maintained — nothing leaves this list silently)
 

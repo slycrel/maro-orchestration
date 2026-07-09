@@ -157,5 +157,60 @@ re-reading first — each entry is self-contained enough to decide on.
    the three lessons.jsonl paths collide in the stats dict (counts
    still correct in aggregate).
 
-*(Section E for eye 7 / remaining dogfood runs will be appended before
-session wrap if they land anything decision-shaped.)*
+## E. Eye 7 (forward historian) — decision-shaped output
+
+Full findings: `docs/audit-2026-07/findings-historian.md` (10 findings,
+promises ledger, 10 clean checks). The clean checks matter: GOAL_BRAIN's
+four quoted decrees verified word-for-word against session transcripts,
+and the 2026-07-02 nine-item disposition list was fully honored. The
+record is accurate where it exists; the failures are omissions.
+
+1. **ToS posture on the `claude -p` lane (hist-02).** You've voiced the
+   worry twice ("I think that's against the license; I'm probably
+   pushing it a little with -p usage") and it's recorded nowhere, while
+   README recommends that lane to strangers as the no-key-needed
+   default. Recommending it to strangers is a different posture than
+   using it yourself. Decide the 1.0 framing: keep recommending,
+   caveat it, or demote it behind the API-key lane in docs. (No code
+   change either way; this is a documentation-stance decision.)
+2. **iMessage + Hermes-swap record (hist-01) → item (a) input.** Your
+   Hermes-swap-on-new-hardware decision and iMessage preference lived
+   only in auto-memory; I've back-filled GOAL_BRAIN Decisions entries
+   (factual record maintenance, no new decisions made). The real ask:
+   when we have the item (a) escalation-channel conversation, iMessage
+   belongs on the candidate list (needs a Mac — pairs with the
+   new-machine plan), and every current notify lane is
+   Telegram-hardwired.
+3. **Adversarial-review ship skill (hist-06) — decree at risk.** Your
+   "should probably be one of our skills we ship with" is not satisfied
+   by the shipped (e) set, and (e)'s checkbox is closed. I've reopened
+   an explicit (e) remainder in BACKLOG gated on dogfood run 4's
+   code_review skill graduating (in flight, 5/6 steps). If run 4's
+   skill doesn't pass review, the remainder stays open for a hand-built
+   version — it does not silently close.
+4. **PUBLISH_CHECKLIST adopt-or-retire + version scheme (hist-03).**
+   The repo shipped v0.1.0/v0.2.0 before, and the March
+   PUBLISH_CHECKLIST already gates on the exact classes Purgatorio
+   re-derived (no personal data, clean-workspace install, version tag).
+   Versioning is currently three-way incoherent (tags v0.2.0, CHANGELOG
+   1.19.0, pyproject 0.5.0). My recommendation: adopt the checklist as
+   the 1.0 gate scaffold, version 1.0.0 at tag time, retire the
+   CHANGELOG's internal 1.x numbering to a build/era number. Your call
+   on the scheme.
+5. **Systemic fix adopted (SF-13):** decree-class statements reach
+   auto-memory but not GOAL_BRAIN when a conversation ends without a
+   work chunk (5 specimens). New session-close rule: any Jeremy
+   statement worth an auto-memory write is also worth a GOAL_BRAIN
+   Decisions line. Flagging so you know why GOAL_BRAIN grows a few
+   dated entries that aren't attached to shipped work.
+6. **Closure-verdict noise — two more graded specimens (runs 2, 5).**
+   Run 2's closure claimed output files were never created (they exist;
+   verifier resolved `output/` from the wrong cwd). Run 5's closure
+   claimed the top-ranked triage item lacked urgency language (rank 1
+   IS the planted urgent escrow wire, deadline text intact) — while the
+   same run's adversarial review caught a REAL phantom-conflict wart.
+   Pattern across all five dogfood runs: the adversarial layer is
+   precise, the closure verifier's environment (cwd, privileges) is the
+   dominant false-verdict source. This is SF-2/item-(b)'s
+   verifier-environment half; it should shape which verdicts learning
+   trusts.
