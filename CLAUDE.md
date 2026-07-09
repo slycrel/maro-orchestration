@@ -201,9 +201,6 @@ PYTHONPATH=src python3 -m handle "your goal here"
 # Introspection (Phase 44)
 maro-introspect --latest
 maro-introspect --latest --lenses
-
-# Observe dashboard (Phase 36)
-maro-observe serve
 ```
 
 ---

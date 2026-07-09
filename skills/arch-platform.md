@@ -16,9 +16,9 @@ Unified `.complete(messages, tools, ...)` interface across backends:
 
 ```
 build_adapter(backend="auto", model=MODEL_MID)
-  → Try in order: AnthropicSDK → OpenRouter → OpenAI → ClaudeSubprocess
-  → First one with valid API key wins
-  → ClaudeSubprocess always available (spawns `claude -p`)
+  → Try in order: AnthropicSDK → ClaudeSubprocess → OpenRouter → OpenAI
+    (DEFAULT_BACKEND_ORDER in llm.py — subprocess is SECOND, not last)
+  → First usable backend wins (valid key, or claude CLI on PATH)
 ```
 
 Model tiers (callers use constants, backends map to native IDs):
