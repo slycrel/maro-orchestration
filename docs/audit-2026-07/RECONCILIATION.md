@@ -1,17 +1,17 @@
-# Purgatorio reconciliation — INTERIM (eyes 1–5)
+# Purgatorio reconciliation — INTERIM (eyes 1–6)
 
 **Status:** interim, written 2026-07-09 after eyes 1 (ops census), 2
 (data/learning-store), 3 (backward archaeology), 4 (docs coherence),
-5 (code-vs-spec + security). Eye 6 (external landscape) is running; eye
-7 (forward historian) not yet launched. Final re-triage of the 1.0 list
-happens after all seven. Per docs/PURGATORIO_AUDIT.md: overlap is a
-feature — a gap found independently by multiple eyes is almost certainly
-real.
+5 (code-vs-spec + security), 6 (external landscape). Eye 7 (forward
+historian) is running. Final re-triage of the 1.0 list happens after all
+seven. Per docs/PURGATORIO_AUDIT.md: overlap is a feature — a gap found
+independently by multiple eyes is almost certainly real.
 
 Raw findings: findings-ops.md (15), findings-data.md (13),
 findings-archaeology.md (11), findings-docs.md (11),
-findings-code-security.md (7) — 57 findings, plus 42 explicit clean
-checks.
+findings-code-security.md (7), findings-landscape.md (15) — 72
+findings, plus 42 explicit clean checks and a 9-entry link-farm
+re-audit.
 
 ---
 
@@ -207,6 +207,34 @@ days. Measure the desired funnel rate before tuning — and note the (f)
 dogfood crystallization audit is the first data point on what the
 funnel does under deliberate use.
 
+### SF-12 — Release table stakes are missing; the differentiation story is inverted
+**Members:** land-01, land-02, land-10 (+ land-11..15 positioning,
+land-03..09 gaps). **Severity: blocker-for-1.0** (land-01/02/10).
+
+The release act itself isn't on the (a)–(h) list: `pip install
+maro-orchestration` 404s on PyPI and pyproject still says 0.5.0
+(land-01); `.github/workflows/` is an **empty directory** on a public
+repo — no CI, no badge, nothing enforcing PUBLISH_CHECKLIST's "pytest
+passes" gate (land-02). And the README's headline claim
+("meta-evolver reviews failure patterns every 10 minutes") is exactly
+the tagline Hermes Agent (212k stars) owns with a *shipped* loop, while
+Maro's evolver has zero production hours — SF-1's docs face, sharpened
+into a credibility hole by the landscape (land-10).
+
+The inversion (land-11..15): orchestration mechanics are commoditized;
+what NO fetched peer advertises is Maro's shipped accountability layer
+— done≠achieved verdicts + claim verification (zero README presence,
+land-12), local free replay capture (LangGraph's equivalent is
+commercial, land-13), no-telemetry + default-on fail-closed spend caps
+(land-14), portable learning with provenance (land-15). **Positioning
+verdict:** reposition 1.0 as "the autonomous agent framework that
+verifies its own work and can't silently spend your money"; stage the
+self-improvement claim to what verifiably fires. Deferrable gaps:
+examples/ gallery, user-docs subset + help pointer, MCP invisible in
+README despite a working client (land-06), local-model lane
+undocumented (land-07); watch: streaming, OTel exporter; ignore:
+Windows (one WSL2 line).
+
 ### SF-11 — Verified good (record these, they're signal too)
 ops-10 (no silent token burner; ≤$2.79/day; $229.38 all-time), ops-11
 (git hooks healthy post-fix, tripwired), ops-15 (openclaw-gateway is
@@ -254,6 +282,9 @@ branches really merged).
 | 4 | Security: no-sandbox live path + SECURITY_MODEL.md misrepresentation | SF-6 (cs-04, docs-01) | open; doc rewrite now writable; isolation story = Jeremy |
 | 5 | Test junk live in learning paths | SF-3 | **resolved 2026-07-09** (purge + rebuild); ingest guard residual |
 | 6 | Heartbeat unit from bootstrap crash-loops on clean install | in SF-1 | open; fixed-inline candidate |
+| 7 | Not installable by name (no PyPI, version 0.5.0) — the release act itself | SF-12 (land-01) | open; name-availability check then publish at tag |
+| 8 | CI is an empty directory on a public repo | SF-12 (land-02) | open; standard pytest workflow + badge |
+| 9 | README self-improvement headline untenable vs landscape + idle evolver | SF-12 (land-10) ↔ SF-1 (docs-06) | open; cheap messaging fix, reposition on accountability layer |
 
 Adjudicate-before-1.0 (not blockers, but flag-default-shaping): SF-4
 (scope posture), SF-7's slack-bridge credential decision, SF-8's
@@ -261,11 +292,9 @@ docs-descope-or-wire choice.
 
 ---
 
-## Eyes 6–7 (to be appended)
+## Eye 7 (to be appended)
 
-- Eye 6 (external landscape): running. Positions 1.0 scope against the
-  mid-2026 framework field.
-- Eye 7 (forward historian): **precondition — run dev-recall session
-  ingest first (data-11).**
+- Eye 7 (forward historian): running. Precondition met — dev-recall
+  session lane re-ingested 2026-07-09 (772 fresh chunks, 12 sessions).
 - Final pass: re-triage the blocker list, fold in eye 5/6/7 findings,
   produce the consolidated decisions-for-Jeremy list.
