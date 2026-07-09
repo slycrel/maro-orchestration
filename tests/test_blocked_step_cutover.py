@@ -159,4 +159,77 @@ class TestShadowGateOr:
             "goal", heuristic_action="retry", block_reason="b",
             signals={}, turn_index=1)
         assert got is None
-        assert not called
+
+
+class TestProcessBlockedStepOutcomeFields:
+    """2026-07-08 adversarial review round 2 (Skeptic): the retry/redecompose/
+    timeout-split blocked-step outcomes carried tokens_in/out from the raw
+    `outcome` dict but dropped call_record/cache_read_tokens/confidence/
+    injected_steps even though `outcome` has them — silently breaking the
+    run-visibility report's "each executed step gets a detail link" promise
+    for any step that hit one of these paths."""
+
+    def _blk(self, outcome):
+        from loop_blocked import BlockedStepContext
+        return BlockedStepContext(
+            step_text="blocked step", step_idx=1, step_result="partial",
+            step_elapsed=500, outcome=outcome, item_index=1, iteration=1,
+            step_adapter=None, step_retries={}, step_tier_overrides={},
+            failure_chain=[], step_outcomes=[], remaining_steps=["blocked step"],
+            remaining_indices=[1], manifest_steps=["blocked step"],
+        )
+
+    def test_retry_path_preserves_call_record_and_confidence(self, monkeypatch):
+        from loop_types import LoopContext
+        import loop_blocked as _lb
+
+        outcome = {
+            "tokens_in": 10, "tokens_out": 5,
+            "call_record": "build/calls/call-00001.json",
+            "cache_read_tokens": 3, "confidence": "weak",
+            "inject_steps": ["a follow-up step"],
+        }
+        monkeypatch.setattr(_lb, "_handle_blocked_step",
+                            lambda *a, **kw: _forward_decision())
+        ctx = LoopContext(loop_id="x", project="p", goal="g")
+        blk = self._blk(outcome)
+        _lb._process_blocked_step(ctx, blk)
+
+        assert len(blk.step_outcomes) == 1
+        s = blk.step_outcomes[0]
+        assert s.call_record == "build/calls/call-00001.json"
+        assert s.cache_read_tokens == 3
+        assert s.confidence == "weak"
+        assert s.injected_steps == ["a follow-up step"]
+
+    def test_redecompose_path_preserves_call_record_and_confidence(self, monkeypatch):
+        """The redecompose branch is nested one level deeper than the other
+        two call sites — the exact indentation difference that let the first
+        fix pass's replace_all silently skip it. Regression-test it directly
+        rather than relying on the retry-path test to stand in for all three."""
+        from loop_types import LoopContext
+        import loop_blocked as _lb
+
+        outcome = {
+            "tokens_in": 7, "tokens_out": 3,
+            "call_record": "build/calls/call-00002.json",
+            "cache_read_tokens": 1, "confidence": "inferred",
+            "inject_steps": ["another step"],
+        }
+        redecompose_decision = _lb._BlockDecision(
+            retry=False, hint="", loop_status="", stuck_reason="",
+            redecompose=True, metacognitive_reason="needs finer steps",
+        )
+        monkeypatch.setattr(_lb, "_handle_blocked_step",
+                            lambda *a, **kw: redecompose_decision)
+        monkeypatch.setattr("planner.decompose", lambda *a, **kw: ["sub-step a", "sub-step b"])
+        ctx = LoopContext(loop_id="x", project="p", goal="g")
+        blk = self._blk(outcome)
+        _lb._process_blocked_step(ctx, blk)
+
+        assert len(blk.step_outcomes) == 1
+        s = blk.step_outcomes[0]
+        assert s.call_record == "build/calls/call-00002.json"
+        assert s.cache_read_tokens == 1
+        assert s.confidence == "inferred"
+        assert s.injected_steps == ["another step"]

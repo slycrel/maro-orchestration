@@ -891,6 +891,73 @@ def test_run_agent_loop_fan_out_dependency_falls_back_sequential():
     assert result.status in ("done", "dry_run", "stuck")
 
 
+def test_parallel_path_still_writes_frozen_report_and_index(monkeypatch, tmp_path):
+    """2026-07-08 adversarial review finding #1: _run_parallel_path's early
+    return in run_agent_loop bypassed _build_result_and_finalize entirely, so
+    parallel/DAG runs never got a final run-visibility report or a forced
+    index write — the report stayed at "running, zero steps" forever. The
+    _DryRunAdapter's decompose stub always returns dependency-flagged step
+    text (see loop_init.py), so dry_run alone never actually reaches
+    _run_parallel_path; force the gate directly via loop_planning's
+    independence check instead of fighting the stub's wording.
+    """
+    monkeypatch.setenv("MARO_ORCH_ROOT", str(tmp_path))
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+    import importlib
+    import agent_loop as al
+    import loop_planning
+    importlib.reload(al)
+    monkeypatch.setattr(loop_planning, "_steps_are_independent", lambda steps: True)
+
+    fake_result = LoopResult(
+        loop_id="fanout-fake",
+        project="fanout-proj",
+        goal="fetch two things independently",
+        status="done",
+        steps=[
+            StepOutcome(index=1, text="fetch A", status="done", result="ok",
+                        iteration=1, tokens_in=5, tokens_out=5, elapsed_ms=100),
+            StepOutcome(index=2, text="fetch B", status="done", result="ok",
+                        iteration=1, tokens_in=5, tokens_out=5, elapsed_ms=120),
+        ],
+        elapsed_ms=250,
+    )
+    monkeypatch.setattr(al, "_run_parallel_path", lambda *a, **kw: fake_result)
+
+    result = al.run_agent_loop(
+        "fetch two things independently",
+        project="fanout-proj",
+        dry_run=True,
+        parallel_fan_out=2,
+    )
+    assert result is fake_result
+
+    artifacts = tmp_path / "projects" / "fanout-proj" / "artifacts"
+    reports = list(artifacts.glob("loop-*-report.html"))
+    assert len(reports) == 1, f"expected exactly one report, found {reports}"
+    content = reports[0].read_text()
+    assert "maro-report: final status=done" in content
+    assert "fetch A" in content and "fetch B" in content
+
+    # 2026-07-08 round 2 (all 5 reviewers, unanimous): the round-1 fix froze
+    # the report and forced the index, but never wrote build/loop-*-log.json
+    # — the ONLY source write_runs_index() reads token/step totals from.
+    # Without this, the index shows "-" tokens/status forever for a
+    # completed parallel run.
+    logs = list(artifacts.glob("loop-*-log.json"))
+    assert len(logs) == 1, f"expected exactly one loop log, found {logs}"
+    log_data = json.loads(logs[0].read_text())
+    assert log_data["status"] == "done"
+    assert log_data["totals"]["tokens_in"] == 10  # 5 + 5, from the two fake steps
+    assert log_data["totals"]["steps_done"] == 2
+
+    # No run-dir is pinned in this test (fallback project path), so the
+    # index write still runs but has nothing under runs_root() to list —
+    # what matters here is that write_runs_index(force=True) was actually
+    # invoked (didn't raise) for the parallel path, not its content.
+    assert (tmp_path / "runs" / "index.html").exists()
+
+
 # ---------------------------------------------------------------------------
 # Phase 33: token_budget
 # ---------------------------------------------------------------------------

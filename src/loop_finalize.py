@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Optional
 
 from loop_types import LoopContext, LoopResult, StepOutcome, _orch, _project_dir_root
 from loop_artifacts import _write_loop_log, _write_plan_manifest
+from loop_report import write_run_report as _write_run_report, write_runs_index as _write_runs_index
 
 log = logging.getLogger("maro.loop")
 
@@ -63,6 +64,21 @@ def _build_result_and_finalize(
         except Exception as _mf_exc:
             log.warning("plan manifest write failed (affects replay/debugging): %s", _mf_exc)
 
+        try:
+            _write_run_report(
+                project=ctx.project,
+                loop_id=ctx.loop_id,
+                goal=ctx.goal,
+                planned_steps=manifest_steps,
+                start_ts=start_ts,
+                step_outcomes=step_outcomes,
+                status=loop_status,
+                elapsed_ms=elapsed_total,
+                replan_count=replan_count,
+            )
+        except Exception as _rep_exc:
+            log.warning("run report final write failed: %s", _rep_exc)
+
     log_path = _write_loop_log(
         project=ctx.project,
         loop_id=ctx.loop_id,
@@ -73,6 +89,18 @@ def _build_result_and_finalize(
         elapsed_ms=elapsed_total,
         stuck_reason=stuck_reason,
     )
+
+    # 2026-07-08 adversarial review (finding #3): the index reads totals from
+    # this run's build/loop-*-log.json, so the forced write has to happen
+    # AFTER _write_loop_log() above, not before it — otherwise the just-
+    # finished run's own totals are missing from its own index entry. (A
+    # separate, still-open half of this finding: metadata.json/run_card.json
+    # finalize even later, in handle.py's finally block outside
+    # agent_loop.py's control — see docs/RUN_VISIBILITY_DESIGN.md.)
+    try:
+        _write_runs_index(force=True)
+    except Exception as _idx_exc:
+        log.warning("runs index write failed: %s", _idx_exc)
 
     o.append_decision(ctx.project, [
         f"[loop:{ctx.loop_id}] finished status={loop_status} steps={len(step_outcomes)} tokens={total_tokens_in}+{total_tokens_out}",

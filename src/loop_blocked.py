@@ -226,6 +226,16 @@ def _process_blocked_step(ctx: LoopContext, blk: BlockedStepContext) -> tuple:
             tokens_in=outcome.get("tokens_in", 0),
             tokens_out=outcome.get("tokens_out", 0),
             elapsed_ms=step_elapsed,
+            # 2026-07-08 adversarial review round 2 (Skeptic): these blocked-
+            # retry/redecompose/timeout-split outcomes carried the raw
+            # `outcome` dict's tokens but dropped call_record/cache_read_tokens/
+            # confidence/injected_steps even though outcome has them — the
+            # report's "each executed step gets a detail link" promise was
+            # silently broken for any step that hit one of these paths.
+            cache_read_tokens=outcome.get("cache_read_tokens", 0),
+            confidence=outcome.get("confidence", ""),
+            injected_steps=list(outcome.get("inject_steps", [])),
+            call_record=outcome.get("call_record", ""),
         ))
         return ("continue", step_idx, "", None, next_step_injected_context,
                 consecutive_max_timeouts, _recovery_delta, replan_count)
@@ -265,6 +275,15 @@ def _process_blocked_step(ctx: LoopContext, blk: BlockedStepContext) -> tuple:
                     tokens_in=outcome.get("tokens_in", 0),
                     tokens_out=outcome.get("tokens_out", 0),
                     elapsed_ms=step_elapsed,
+                    # 2026-07-08 adversarial review round 2 (Skeptic): see the
+                    # other two step_from_decompose call sites in this file —
+                    # same fix, this one was missed by the first pass's
+                    # replace_all because its extra indentation (nested one
+                    # level deeper) didn't match the other two sites' text.
+                    cache_read_tokens=outcome.get("cache_read_tokens", 0),
+                    confidence=outcome.get("confidence", ""),
+                    injected_steps=list(outcome.get("inject_steps", [])),
+                    call_record=outcome.get("call_record", ""),
                 ))
                 return ("continue", step_idx, "", None, next_step_injected_context,
                         consecutive_max_timeouts, _recovery_delta, replan_count)
@@ -321,6 +340,16 @@ def _process_blocked_step(ctx: LoopContext, blk: BlockedStepContext) -> tuple:
             tokens_in=outcome.get("tokens_in", 0),
             tokens_out=outcome.get("tokens_out", 0),
             elapsed_ms=step_elapsed,
+            # 2026-07-08 adversarial review round 2 (Skeptic): these blocked-
+            # retry/redecompose/timeout-split outcomes carried the raw
+            # `outcome` dict's tokens but dropped call_record/cache_read_tokens/
+            # confidence/injected_steps even though outcome has them — the
+            # report's "each executed step gets a detail link" promise was
+            # silently broken for any step that hit one of these paths.
+            cache_read_tokens=outcome.get("cache_read_tokens", 0),
+            confidence=outcome.get("confidence", ""),
+            injected_steps=list(outcome.get("inject_steps", [])),
+            call_record=outcome.get("call_record", ""),
         ))
         return ("continue", step_idx, "", None, next_step_injected_context,
                 consecutive_max_timeouts, _recovery_delta, replan_count)

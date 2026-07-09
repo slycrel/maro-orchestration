@@ -293,6 +293,48 @@ def run_agent_loop(
             resolve_tools_fn=_resolve_tools,
         )
         if _parallel_result is not None:
+            # 2026-07-08 adversarial review (finding #1): this early return
+            # bypasses _build_result_and_finalize() entirely — true for every
+            # finalize side effect (telegram notify, introspection, Reflexion
+            # memory), not just the run-visibility report; fixing that whole
+            # gap is a separate, larger effort out of scope here. This
+            # narrowly ensures the report/index still reach a terminal state
+            # for parallel/DAG runs instead of being silently stuck "running".
+            try:
+                from loop_report import write_run_report as _write_run_report, write_runs_index as _write_runs_index
+                # 2026-07-08 review, round 2 (unanimous, all 5 reviewers):
+                # the round-1 fix froze the report and forced the index but
+                # never wrote build/loop-*-log.json — the ONLY source
+                # write_runs_index() reads token/step totals from. Without
+                # it, a parallel run's index row shows a report link but "-"
+                # tokens/status forever. _write_loop_log is the same writer
+                # the sequential finalize path already calls; parallel just
+                # never had it, independent of this feature.
+                _write_loop_log(
+                    project=ctx.project,
+                    loop_id=ctx.loop_id,
+                    goal=ctx.goal,
+                    status=_parallel_result.status,
+                    steps=_parallel_result.steps,
+                    start_ts=ctx.start_ts,
+                    elapsed_ms=_parallel_result.elapsed_ms,
+                    stuck_reason=_parallel_result.stuck_reason,
+                )
+                if ctx.project and _manifest_steps:
+                    _write_run_report(
+                        project=ctx.project,
+                        loop_id=ctx.loop_id,
+                        goal=ctx.goal,
+                        planned_steps=_manifest_steps,
+                        start_ts=ctx.start_ts,
+                        step_outcomes=_parallel_result.steps,
+                        status=_parallel_result.status,
+                        elapsed_ms=_parallel_result.elapsed_ms,
+                        replan_count=_replan_count,
+                    )
+                _write_runs_index(force=True)
+            except Exception as _rep_exc:
+                log.warning("run report write failed for parallel loop %s: %s", ctx.loop_id, _rep_exc)
             return _parallel_result
 
     # Phase E: Shape steps and write to NEXT.md

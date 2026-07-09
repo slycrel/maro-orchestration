@@ -23,6 +23,7 @@ from loop_types import (
     step_from_decompose,
 )
 from loop_artifacts import _write_plan_manifest
+from loop_report import write_run_report as _write_run_report
 from planner import decompose as _decompose_impl
 
 log = logging.getLogger("maro.loop")
@@ -136,6 +137,13 @@ def _preflight_checks(
                         elapsed_ms=_cs.elapsed_ms,
                         confidence=getattr(_cs, "confidence", ""),
                         injected_steps=list(getattr(_cs, "injected_steps", [])),
+                        # 2026-07-08 adversarial review (finding #5): checkpoints
+                        # don't persist ended_ts, so this reconstruction happens
+                        # long after the step actually ran — ended_ts="" opts out
+                        # of the "now" default so the report's timeline correctly
+                        # falls back to its approximate mode instead of showing
+                        # a resumed step as if it just finished.
+                        ended_ts="",
                     ))
                 steps = _remaining
                 if ctx.verbose:
@@ -238,6 +246,18 @@ def _preflight_checks(
                 print(f"[maro] plan manifest: {manifest_path_str}", file=sys.stderr, flush=True)
         except Exception as _mf_exc:
             log.warning("initial plan manifest write failed: %s", _mf_exc)
+
+        try:
+            _write_run_report(
+                project=ctx.project,
+                loop_id=ctx.loop_id,
+                goal=ctx.goal,
+                planned_steps=manifest_steps,
+                start_ts=ctx.start_ts,
+                step_outcomes=[],
+            )
+        except Exception as _rep_exc:
+            log.warning("initial run report write failed: %s", _rep_exc)
 
     # Shared state for team workers
     loop_shared_ctx: Dict[str, Any] = {}
