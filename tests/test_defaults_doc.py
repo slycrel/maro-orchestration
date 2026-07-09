@@ -16,14 +16,28 @@ DOC = REPO_ROOT / "docs" / "DEFAULTS.md"
 
 # Function names that read config (config.get + its import aliases in src/).
 # "_get" added 2026-07-08: run-visibility shipped `from config import get as
-# _get` and the census missed all three of its keys — keep this set in sync
-# with whatever alias spellings src/ actually uses.
+# _get` and the census missed all three of its keys. 2026-07-09: the fixed
+# name set itself proved leaky (`_wf_cfg_get`, `_budget_get` — the write-fence
+# and budget-cap keys shipped undocumented) — the census now ALSO resolves
+# `from config import get as X` aliases per file via the AST, so any alias
+# spelling is caught automatically. This set remains as the floor.
 _GETTERS = {"get", "_get", "config_get", "_cfg_get", "cfg_get", "_config_get", "cfg"}
 
 # Dotless keys are indistinguishable from dict lookups by name alone, so only
 # the explicit config aliases count for them; bare get()/_get() (common dict
 # helper names too) need a dotted key.
 _DOTLESS_GETTERS = _GETTERS - {"get", "_get"}
+
+
+def _config_get_aliases(tree: ast.AST) -> set:
+    """Names bound to config.get in this module via `from config import get as X`."""
+    aliases = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module == "config":
+            for alias in node.names:
+                if alias.name == "get":
+                    aliases.add(alias.asname or alias.name)
+    return aliases
 
 
 def _keys_read_by_code() -> set:
@@ -33,10 +47,11 @@ def _keys_read_by_code() -> set:
             tree = ast.parse(path.read_text())
         except SyntaxError:
             continue
+        file_getters = _GETTERS | _config_get_aliases(tree)
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
                 continue
-            if node.func.id not in _GETTERS:
+            if node.func.id not in file_getters:
                 continue
             if not node.args or not isinstance(node.args[0], ast.Constant):
                 continue

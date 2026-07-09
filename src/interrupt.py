@@ -878,4 +878,10 @@ def _default_queue_path() -> Path:
         import orch
         return orch.memory_dir() / "interrupts.jsonl"
     except Exception:
-        return Path.home() / ".openclaw" / "workspace" / "memory" / "interrupts.jsonl"
+        try:
+            # config.memory_dir honors the workspace-root env overrides
+            # (tests, non-default installs); only hardcode as a last resort.
+            from config import memory_dir as _memory_dir
+            return _memory_dir() / "interrupts.jsonl"
+        except Exception:
+            return Path.home() / ".maro" / "workspace" / "memory" / "interrupts.jsonl"

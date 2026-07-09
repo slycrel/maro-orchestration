@@ -55,7 +55,7 @@ import subprocess
 import textwrap
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 log = logging.getLogger("maro.llm")
 
@@ -1674,6 +1674,36 @@ def _get_backend_order() -> List[str]:
         seen.add(name)
 
     return cleaned or list(DEFAULT_BACKEND_ORDER)
+
+
+def detect_backends() -> List[Tuple[str, bool, str]]:
+    """Availability of each backend in the configured order, without building adapters.
+
+    Single source of truth shared with build_adapter's auto-detect walk — uses the
+    same predicates (_get_key over env + env file, _claude_bin_available,
+    _codex_auth_available) so diagnostics (maro-doctor) can never disagree with
+    what a run would actually do. Returns [(name, usable, detail), ...].
+    """
+    env = _load_env_file()
+    out: List[Tuple[str, bool, str]] = []
+    for name in _get_backend_order():
+        if name in ("anthropic", "openrouter", "openai"):
+            env_var = {"anthropic": "ANTHROPIC_API_KEY",
+                       "openrouter": "OPENROUTER_API_KEY",
+                       "openai": "OPENAI_API_KEY"}[name]
+            usable = bool(_get_key(env_var, env))
+            detail = f"{env_var} {'set' if usable else 'not set (env or credentials .env)'}"
+        elif name == "subprocess":
+            usable = _claude_bin_available()
+            bin_path = os.environ.get("CLAUDE_BIN", _CLAUDE_BIN)
+            detail = f"claude binary {'ok' if usable else 'missing/not executable'} at {bin_path}"
+        elif name == "codex":
+            usable = _codex_auth_available()
+            detail = "codex CLI + ~/.codex/auth.json" + ("" if usable else " missing")
+        else:  # unreachable while _get_backend_order filters to _KNOWN_BACKENDS
+            usable, detail = False, "unknown backend"
+        out.append((name, usable, detail))
+    return out
 
 
 # ---------------------------------------------------------------------------

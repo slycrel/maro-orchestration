@@ -1628,3 +1628,56 @@ a worktree of the busy project and merges at finalize; conflict → run
 alternative — locking only (admission gate solo) — was a half fix: it
 serialized runs but left intra-run parallel steps sharing one checkout,
 which was the actual incident class. Commit 31f2844.
+
+## Run visibility: static per-run report + cross-run index (MERGED to main 2026-07-09; branch worktree-run-visibility, commits 91977da/d7ece69)
+
+- [x] **Dashboard archived 2026-07-02, underlying goal still open.** The
+  stdlib-HTTP `maro-observe serve` dashboard (BACKLOG_DONE.md "Dashboard as
+  real tool" / "Replay with factory mode" / "Dashboard captain's log panel",
+  now flagged needs-revisited) was moved to `archive/observe_dashboard.py` —
+  Jeremy's call: "proof of concept that sort of failed." Original intent
+  (still valid, worth pursuing differently): give an end user both a
+  high-level view of what the orchestrator is doing and visibility into the
+  detailed work being done on their behalf. What made this implementation
+  fail: grew into an unauthenticated ~950-line stdlib http.server bound to
+  0.0.0.0 by default, mixing read-only observability with a live
+  goal-submission/replay control surface. `maro ancestry` CLI is the
+  surviving visibility primitive in the meantime (see "Goal Lineage" in
+  `docs/ARCHITECTURE_OVERVIEW.md`). Revisit with a fresh design — likely
+  needs auth, a narrower read-only default, and a decision about whether
+  the goal-submission/replay controls belong in the same surface at all.
+  No urgency; needs product discussion first. Source: refactor-plan review,
+  2026-07-02.
+  **UPDATE 2026-07-08: implemented + 2 rounds of adversarial review + fixes,
+  pushed, pending merge** — deliberately narrower than the archived
+  attempt — static per-run HTML report (Gantt-style step timeline +
+  lazy-loaded prompt/response detail) plus a static cross-run index, both
+  regenerated inline via the existing plan-manifest lifecycle hooks, no
+  server, no control surface. Full design + both review rounds' findings and
+  resolutions: `docs/RUN_VISIBILITY_DESIGN.md`. The "needs auth" question
+  this entry raised is sidestepped rather than solved — static files
+  reviewed however the box is already accessed, not a new network surface.
+  Shipped as `src/loop_report.py` (write_run_report / write_runs_index) +
+  hooks in loop_planning.py/loop_post_step.py/loop_finalize.py/agent_loop.py
+  (parallel-path early return) + additive `StepOutcome.ended_ts` in
+  loop_types.py. Round 1 review (5 lenses: Skeptic/Architect/Minimalist +
+  Plan Critic/Reality Checker personas) returned REJECT on a unanimous
+  parallel-path-bypasses-finalize gap plus 9 others — all accepted findings
+  fixed. Round 2 re-verified every fix and found the parallel-path fix was
+  incomplete (index totals still missing, since the loop log was never
+  written) plus lower-severity residuals — fixed those too. Two findings
+  deliberately left as documented gaps rather than fixed: `file_lock`'s
+  inherited ~5s-timeout-then-unlocked fallback (existing codebase-wide
+  primitive tradeoff, not introduced here), and `runs.current_run_dir()`
+  being a process-global rather than thread-local (real hazard, but
+  currently dead code — zero live callers of the one function that could
+  trigger it — cross-referenced with "Isolated worktree per sub-agent"
+  below rather than fixed here). 37 new tests: 34 in
+  `tests/test_loop_report.py` (all net-new), 1 new integration test in
+  `tests/test_agent_loop.py`, 2 new in `tests/test_blocked_step_cutover.py`
+  (its other 10 pre-existing tests untouched). Branch `worktree-run-visibility`,
+  not yet merged to main — move this entry to BACKLOG_DONE.md once merged
+  and running. See next entry for the deferred general-purpose server this
+  build intentionally does not include.
+
+*(Moved from BACKLOG.md 2026-07-09 — merged and running; the residual general-purpose-server question stays in BACKLOG under "Run visibility residual".)*

@@ -25,6 +25,11 @@ except ImportError:
 
 log = logging.getLogger("maro.loop")
 
+# Safe-by-default spend caps (2026-07-09, 1.0 posture). A fresh install must
+# never run uncapped; config overrides, 0/null disables. See docs/DEFAULTS.md.
+DEFAULT_PER_RUN_USD = 5.0
+DEFAULT_DAILY_USD = 25.0
+
 
 def _budget_gate(ctx, *, goal: str, project: Optional[str], dry_run: bool):
     """Budget gates (substrate-trial hardening, 2026-07-01). Two layers:
@@ -37,26 +42,48 @@ def _budget_gate(ctx, *, goal: str, project: Optional[str], dry_run: bool):
       under-cap loop at a time — ``budget.daily_usd`` gates on the cross-run
       spend ledger (metrics.spend_today) before any tokens are spent.
 
-    Both unset by default = old behavior. dry_run skips (burns nothing).
-    Returns a stuck LoopResult to refuse the run, or None to proceed.
-    Never raises.
+    Capped by default since 2026-07-09 (1.0 posture: a fresh install must
+    never be uncapped spend) — $5/run, $25/day. Opt out explicitly with
+    ``budget.per_run_usd: 0`` / ``budget.daily_usd: 0`` (or null). dry_run
+    skips (burns nothing). Returns a stuck LoopResult to refuse the run, or
+    None to proceed. Never raises.
     """
     if dry_run:
         return None
-    try:
+
+    def _coerce_cap(key: str, default: float) -> float:
+        """Config value → float cap. 0/null = explicit uncapped opt-out (0.0).
+
+        A malformed value fails CLOSED to the default cap (with a warning) —
+        a typo in budget config must never silently disable the caps.
+        """
         from config import get as _budget_get
+        raw = _budget_get(key, default)
+        if raw is None:
+            return 0.0
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            log.warning("budget gate: %s=%r is not a number — using default $%.2f",
+                        key, raw, default)
+            return default
+
+    try:
         if ctx.cost_budget is None:
-            _per_run = _budget_get("budget.per_run_usd", None)
-            if _per_run is not None:
-                ctx.cost_budget = float(_per_run)
+            _per_run = _coerce_cap("budget.per_run_usd", DEFAULT_PER_RUN_USD)
+            if _per_run > 0:
+                ctx.cost_budget = _per_run
                 log.info("cost_budget defaulted from config: $%.2f", ctx.cost_budget)
-        _daily_cap = _budget_get("budget.daily_usd", None)
-        if _daily_cap is not None:
+    except Exception as _budget_exc:
+        log.warning("budget gate: per-run cap check failed: %s", _budget_exc)
+    try:
+        _daily_cap = _coerce_cap("budget.daily_usd", DEFAULT_DAILY_USD)
+        if _daily_cap > 0:
             import metrics as _metrics
             _spent = _metrics.spend_today()
-            if _spent >= float(_daily_cap):
+            if _spent >= _daily_cap:
                 _msg = (f"daily budget exhausted: ${_spent:.2f} spent today >= "
-                        f"budget.daily_usd ${float(_daily_cap):.2f} — refusing to start; "
+                        f"budget.daily_usd ${_daily_cap:.2f} — refusing to start; "
                         f"resets at UTC midnight")
                 log.warning("loop refused to start — %s", _msg)
                 try:
@@ -81,7 +108,7 @@ def _budget_gate(ctx, *, goal: str, project: Optional[str], dry_run: bool):
                     log_path=None,
                 )
     except Exception as _budget_exc:
-        log.debug("budget gate check failed (non-blocking): %s", _budget_exc)
+        log.warning("budget gate: daily cap check failed (non-blocking): %s", _budget_exc)
     return None
 
 

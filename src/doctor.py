@@ -40,53 +40,118 @@ def run_doctor() -> bool:
         f"{major}.{minor} (need 3.10+)",
     ))
 
-    # Key dependencies
-    for dep in ("requests", "anthropic"):
-        try:
-            __import__(dep)
-            results.append(_check(f"Package: {dep}", True))
-        except ImportError:
-            results.append(_check(f"Package: {dep}", False, "pip install " + dep))
+    src_dir = Path(__file__).resolve().parent
+    if str(src_dir) not in sys.path:
+        sys.path.insert(0, str(src_dir))
 
-    # Config file
-    cfg_path = Path.home() / ".openclaw" / "openclaw.json"
-    cfg = None
-    if cfg_path.exists():
+    # Config files — Maro's own two-tier config is the canonical source.
+    try:
+        from config import config_paths as _config_paths
+        _paths = _config_paths()
+        user_cfg = Path(_paths["user"])
+        ws_cfg = Path(_paths["workspace"])
+    except Exception:
+        user_cfg = Path.home() / ".maro" / "config.yml"
+        ws_cfg = Path.home() / ".maro" / "workspace" / "config.yml"
+    _cfg_found = [str(p) for p in (user_cfg, ws_cfg) if p.exists()]
+    results.append(_check(
+        "Config (~/.maro)",
+        bool(_cfg_found),
+        ", ".join(_cfg_found) if _cfg_found
+        else f"none found — run `maro-bootstrap install` (creates {user_cfg})",
+    ))
+
+    # config.yml is parsed with pyyaml; without it settings are SILENTLY
+    # ignored. Unconditional (mandatory dep since 2026-07-09): a broken
+    # install missing pyyaml is exactly when doctor must be loudest.
+    try:
+        import yaml  # noqa: F401
+        results.append(_check("Config parseable (pyyaml)", True))
+    except ImportError:
+        results.append(_check(
+            "Config parseable (pyyaml)",
+            False,
+            "pyyaml is not installed — every config.yml setting is "
+            "silently ignored; pip install pyyaml",
+        ))
+
+    # Legacy OpenClaw config — optional fallback for telegram/gateway wiring.
+    # Only reported when present; its absence is normal on a fresh install.
+    _oc_path = Path.home() / ".openclaw" / "openclaw.json"
+    if _oc_path.exists():
         try:
-            cfg = json.loads(cfg_path.read_text())
-            results.append(_check("openclaw.json", True, str(cfg_path)))
+            json.loads(_oc_path.read_text())
+            results.append(_check("Legacy openclaw.json", True, f"{_oc_path} (fallback only)"))
         except Exception as exc:
-            results.append(_check("openclaw.json", False, f"parse error: {exc}"))
+            results.append(_check("Legacy openclaw.json", False, f"parse error: {exc}"))
+
+    # LLM backends — llm.detect_backends() is the single source of truth: it
+    # walks the same configured order and availability predicates
+    # build_adapter uses (keys from env OR credentials .env, CLAUDE_BIN,
+    # codex auth), so doctor can't disagree with what a run would do.
+    _usable: list[str] = []
+    _degraded: list[str] = []
+    try:
+        from llm import detect_backends as _detect_backends
+        _pkg_needs = {"anthropic": "anthropic", "openrouter": "requests", "openai": "requests"}
+        for _name, _avail, _ in _detect_backends():
+            if not _avail:
+                continue
+            _pkg = _pkg_needs.get(_name)
+            if _pkg:
+                try:
+                    __import__(_pkg)
+                except ImportError:
+                    _degraded.append(f"{_name} key set but {_pkg} missing (pip install {_pkg})")
+                    continue
+            _usable.append("subprocess (claude CLI)" if _name == "subprocess" else _name)
+        _backend_detail = ", ".join(_usable + _degraded) if (_usable or _degraded) else (
+            "none — set ANTHROPIC_API_KEY / OPENROUTER_API_KEY / OPENAI_API_KEY "
+            "(env or credentials .env), or install the claude CLI"
+        )
+        results.append(_check("LLM backend available", bool(_usable), _backend_detail))
+    except Exception as exc:
+        results.append(_check("LLM backend available", False, f"detection failed: {str(exc)[:60]}"))
+
+    # Notification channel — how escalations reach a human. Not fatal (the CLI
+    # lane works without one), but an unattended install with no channel means
+    # escalations only land in events.jsonl where nobody looks.
+    # "None configured" is advisory (ok=True); the check machinery itself
+    # breaking is a real failure (ok=False) — doctor can't tell either way.
+    _notify_cmd = ""
+    _notify_err = ""
+    try:
+        from config import get as _cfg_get
+        _notify_cmd = str(_cfg_get("notify.command", "") or "")
+    except Exception as exc:
+        _notify_err = f"config read failed: {str(exc)[:50]}"
+    _tg_ok = False
+    if not _notify_err:
+        try:
+            from telegram_listener import is_configured as _tg_configured
+            _tg_ok = _tg_configured()
+        except Exception as exc:
+            _notify_err = f"telegram probe failed: {str(exc)[:50]}"
+    if _tg_ok:
+        try:
+            __import__("requests")
+        except ImportError:
+            _notify_err = "Telegram configured but requests missing (pip install requests)"
+    if _notify_err:
+        results.append(_check("Notification channel", False, _notify_err))
+    elif _notify_cmd:
+        results.append(_check("Notification channel", True, f"notify.command = {_notify_cmd[:60]}"))
+    elif _tg_ok:
+        results.append(_check("Notification channel", True, "Telegram configured (listener/notify lane)"))
     else:
-        results.append(_check("openclaw.json", False, f"not found at {cfg_path}"))
-
-    # Telegram bot token
-    tg_token = ""
-    if cfg:
-        tg_token = cfg.get("channels", {}).get("telegram", {}).get("botToken", "")
-    tg_token = tg_token or os.environ.get("TELEGRAM_BOT_TOKEN", "")
-    results.append(_check(
-        "Telegram bot token",
-        bool(tg_token),
-        f"token length={len(tg_token)}" if tg_token else "missing (set in openclaw.json or TELEGRAM_BOT_TOKEN)",
-    ))
-
-    # Telegram chat ID
-    tg_chat = ""
-    if cfg:
-        tg_chat = str(cfg.get("channels", {}).get("telegram", {}).get("chatId", ""))
-    tg_chat = tg_chat or os.environ.get("TELEGRAM_CHAT_ID", "")
-    results.append(_check(
-        "Telegram chat ID",
-        bool(tg_chat),
-        f"chat_id={tg_chat}" if tg_chat else "missing (set in openclaw.json or TELEGRAM_CHAT_ID)",
-    ))
+        results.append(_check(
+            "Notification channel", True,
+            "NONE configured — escalations land only in events.jsonl / "
+            "`maro-runs status`; set notify.command for unattended use",
+        ))
 
     # LLM connectivity (quick API probe)
     try:
-        src_dir = Path(__file__).resolve().parent
-        if str(src_dir) not in sys.path:
-            sys.path.insert(0, str(src_dir))
         from llm import build_adapter, LLMMessage
         adapter = build_adapter()
         resp = adapter.complete(
@@ -157,19 +222,22 @@ def run_doctor() -> bool:
     except Exception as exc:
         results.append(_check("Workspace skills (duplicates)", True, f"skipped: {exc}"))
 
-    # Output directory
-    output_dir = Path(__file__).resolve().parent.parent / "output"
+    # Output directory (workspace, not repo-relative). Deliberately NOT via
+    # config.output_dir() — that helper mkdirs as a side effect, which would
+    # make this check a vacuous pass and doctor a filesystem mutator.
+    try:
+        from config import workspace_root as _workspace_root
+        output_dir = _workspace_root() / "output"
+    except Exception:
+        output_dir = Path(__file__).resolve().parent.parent / "output"
     results.append(_check(
         "Output directory",
         output_dir.exists(),
-        str(output_dir),
+        f"{output_dir} ({'exists' if output_dir.exists() else 'missing — run maro-bootstrap install'})",
     ))
 
     # Phase 41: tool registry
     try:
-        src_dir = Path(__file__).resolve().parent
-        if str(src_dir) not in sys.path:
-            sys.path.insert(0, str(src_dir))
         from tool_registry import registry as _reg
         _names = _reg.names()
         _required_tools = {"complete_step", "flag_stuck"}
@@ -285,17 +353,19 @@ def run_doctor() -> bool:
     except Exception as exc:
         results.append(_check("SlowUpdateScheduler", False, str(exc)[:80]))
 
-    # channels (GitHub / Reddit / YouTube)
+    # channels (GitHub / Reddit / YouTube) — optional integrations, never fatal
     try:
         from channels import channels_health_check
         _ch = channels_health_check()
-        _ch_ok = _ch.get("any_available", False)
         _ch_detail = ", ".join(
             f"{k}={'✓' if v else '✗'}" for k, v in _ch.get("channels", {}).items()
         )
-        results.append(_check("channels (GitHub/Reddit/YouTube)", _ch_ok, _ch_detail))
+        if not _ch.get("any_available", False):
+            _ch_detail = (_ch_detail + " — optional, none configured").lstrip(" —")
+        results.append(_check("channels (GitHub/Reddit/YouTube)", True, _ch_detail))
     except Exception as _exc:
-        results.append(_check("channels", False, str(_exc)[:80]))
+        # "none configured" above is soft; the health check CRASHING is not.
+        results.append(_check("channels (GitHub/Reddit/YouTube)", False, str(_exc)[:80]))
 
     # Summary
     passed = sum(1 for r in results if r["ok"])

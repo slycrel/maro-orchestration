@@ -671,8 +671,10 @@ def _execute_main_loop(
                 print(f"[maro] {stuck_reason}", file=sys.stderr, flush=True)
             break
 
-        # Cost budget — warn at 80%, hard stop at budget + 20% slush
-        if cost_budget is not None and _total_cost > 0:
+        # Cost budget — warn at 80%, hard stop at budget + 20% slush.
+        # Truthiness (not `is not None`): 0 means uncapped, same as the
+        # budget.per_run_usd convention — and 0.0 must never reach the division.
+        if cost_budget and _total_cost > 0:
             _cost_pct = _total_cost / cost_budget * 100
             _slush = cost_budget * 0.2
             if _total_cost >= cost_budget + _slush:
@@ -701,13 +703,14 @@ def _execute_main_loop(
         # Tier-a write fence (BACKLOG #1): an out-of-fence WRITE in the real tool
         # transcript demotes done→blocked. Positive evidence only (a Write/Edit
         # with an absolute out-of-fence path, or a shell write resolved against a
-        # drifted cwd). Config-gated OFF until SCAVENGE_DETECTED write rows have
-        # been watched long enough to trust the false-positive rate — flip
-        # validate.write_fence to enable. Detection above stays always-on.
+        # drifted cwd). Default ON since 2026-07-09 (1.0 posture: enforce on
+        # fresh installs; this box ran it enabled since 2026-07-04 with /tmp +
+        # goal-declared-path widening in place). Opt out via
+        # validate.write_fence: false. Detection above stays always-on.
         if _sc_report is not None and _sc_report.writes and step_status == "done":
             try:
                 from config import get as _wf_cfg_get
-                if bool(_wf_cfg_get("validate.write_fence", False)):
+                if bool(_wf_cfg_get("validate.write_fence", True)):
                     _wf_paths = [w.get("path", "?") for w in _sc_report.writes]
                     log.warning("WRITE FENCE step=%d blocked: %s", step_idx, _wf_paths)
                     step_status = "blocked"

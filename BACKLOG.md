@@ -76,11 +76,12 @@ write fence — shipped arc") and `docs/BOUNDED_WORKSPACE.md`.
   targets, subshell/pushd cds stay invisible to `detect_out_of_fence_access`
   (documented in `docs/BOUNDED_WORKSPACE.md` known holes). Extend from real
   `SCAVENGE_DETECTED` evidence, not speculation. Current state: detection
-  always-on (`validate.scavenge_detect`), enforcement code-default OFF
-  (`loop_execute.py`), enabled on this box (`~/.maro/workspace/config.yml`
-  `validate.write_fence: true`). Reads stay unrestricted by design (logged,
-  not blocked); a read-restricting mode remains possible if scavenge read
-  rows ever show real contamination.
+  always-on (`validate.scavenge_detect`), enforcement **code-default ON
+  since 2026-07-09** (1.0 posture flip; this box had run it enabled since
+  2026-07-04 with no false positives — opt out via
+  `validate.write_fence: false`, see docs/DEFAULTS.md). Reads stay
+  unrestricted by design (logged, not blocked); a read-restricting mode
+  remains possible if scavenge read rows ever show real contamination.
 
 ### 10. Local-validator measurement — tune `local_max_tokens` per model
 
@@ -541,56 +542,68 @@ These four are kept (not deleted) this triage pending verification against curre
   subpackage move rather than deprecated. Source: refactor-plan git-history
   investigation, 2026-07-02.
 
-### Observability dashboard — archived, revisit the visibility goal with a different implementation
+### Run visibility residual — general-purpose server question (main entry → BACKLOG_DONE 2026-07-09)
 
-- [ ] **Dashboard archived 2026-07-02, underlying goal still open.** The
-  stdlib-HTTP `maro-observe serve` dashboard (BACKLOG_DONE.md "Dashboard as
-  real tool" / "Replay with factory mode" / "Dashboard captain's log panel",
-  now flagged needs-revisited) was moved to `archive/observe_dashboard.py` —
-  Jeremy's call: "proof of concept that sort of failed." Original intent
-  (still valid, worth pursuing differently): give an end user both a
-  high-level view of what the orchestrator is doing and visibility into the
-  detailed work being done on their behalf. What made this implementation
-  fail: grew into an unauthenticated ~950-line stdlib http.server bound to
-  0.0.0.0 by default, mixing read-only observability with a live
-  goal-submission/replay control surface. `maro ancestry` CLI is the
-  surviving visibility primitive in the meantime (see "Goal Lineage" in
-  `docs/ARCHITECTURE_OVERVIEW.md`). Revisit with a fresh design — likely
-  needs auth, a narrower read-only default, and a decision about whether
-  the goal-submission/replay controls belong in the same surface at all.
-  No urgency; needs product discussion first. Source: refactor-plan review,
-  2026-07-02.
-  **UPDATE 2026-07-08: implemented + 2 rounds of adversarial review + fixes,
-  pushed, pending merge** — deliberately narrower than the archived
-  attempt — static per-run HTML report (Gantt-style step timeline +
-  lazy-loaded prompt/response detail) plus a static cross-run index, both
-  regenerated inline via the existing plan-manifest lifecycle hooks, no
-  server, no control surface. Full design + both review rounds' findings and
-  resolutions: `docs/RUN_VISIBILITY_DESIGN.md`. The "needs auth" question
-  this entry raised is sidestepped rather than solved — static files
-  reviewed however the box is already accessed, not a new network surface.
-  Shipped as `src/loop_report.py` (write_run_report / write_runs_index) +
-  hooks in loop_planning.py/loop_post_step.py/loop_finalize.py/agent_loop.py
-  (parallel-path early return) + additive `StepOutcome.ended_ts` in
-  loop_types.py. Round 1 review (5 lenses: Skeptic/Architect/Minimalist +
-  Plan Critic/Reality Checker personas) returned REJECT on a unanimous
-  parallel-path-bypasses-finalize gap plus 9 others — all accepted findings
-  fixed. Round 2 re-verified every fix and found the parallel-path fix was
-  incomplete (index totals still missing, since the loop log was never
-  written) plus lower-severity residuals — fixed those too. Two findings
-  deliberately left as documented gaps rather than fixed: `file_lock`'s
-  inherited ~5s-timeout-then-unlocked fallback (existing codebase-wide
-  primitive tradeoff, not introduced here), and `runs.current_run_dir()`
-  being a process-global rather than thread-local (real hazard, but
-  currently dead code — zero live callers of the one function that could
-  trigger it — cross-referenced with "Isolated worktree per sub-agent"
-  below rather than fixed here). 37 new tests: 34 in
-  `tests/test_loop_report.py` (all net-new), 1 new integration test in
-  `tests/test_agent_loop.py`, 2 new in `tests/test_blocked_step_cutover.py`
-  (its other 10 pre-existing tests untouched). Branch `worktree-run-visibility`,
-  not yet merged to main — move this entry to BACKLOG_DONE.md once merged
-  and running. See next entry for the deferred general-purpose server this
-  build intentionally does not include.
+- [ ] **Deferred: does a live server surface belong at all?** The static
+  per-run report + cross-run index (`src/loop_report.py`) shipped and merged
+  2026-07-09 — full history in BACKLOG_DONE.md "Run visibility: static
+  per-run report + cross-run index". What that build deliberately excludes,
+  and what the 2026-07-02 dashboard archive left open: a live (auth'd,
+  read-only-by-default) server view, and whether goal-submission/replay
+  controls ever belong in the same surface. Needs product discussion first;
+  static files are the answer until cross-run browsing becomes a real habit.
+
+### 1.0 install trial residuals (2026-07-09 docker clean-machine trial)
+
+First-ever install on a non-dev machine (debian-slim container, non-root, no
+keys). The blocker it found — pip installed ZERO modules (`packages.find`
+can't see a flat module layout; every console script crashed
+ModuleNotFoundError, masked on this box by PYTHONPATH=src) — is FIXED
+(explicit `py-modules` list + `tests/test_packaging.py` census tripwire).
+Working after the fix: pip install (pyyaml now a mandatory dep — without it
+config.yml was *silently ignored*), `maro-bootstrap install` (dirs + starter
+config template + honest smoke-fail), `maro-doctor` cold-machine truth
+(15/19, the 4 fails all real), graceful no-backend refusal with an
+actionable message.
+
+**E2E goal run (same day, mounted claude CLI as subprocess backend): PASSED.**
+Cold container, real goal ("write a 3-line haiku about fresh installs to
+haiku.txt") through `maro-handle` → agenda lane, 2 steps, `status=done`,
+`goal_achieved=True` (verdict confidence 1.0), artifact on disk with correct
+5-7-5 content, run metadata + per-run report written. ~5.6 min wall clock on
+the subprocess lane; the llm.py backend-order warning ("Opus via subprocess
+is unreliable for long multi-step work") printed as designed. Residuals,
+none blocking:
+
+- [ ] **Curated skills (`skills/*.md`) aren't packaged** — pip installs ship
+  no skills dir; doctor honestly flags it. Ship as package data (needs a
+  data-files approach for the flat layout) or auto-seed
+  `~/.maro/workspace/skills/` from a bundled resource at bootstrap.
+- [ ] **Service templates written into the venv** (`<venv>/lib/python3.11/deploy/...`)
+  — `deploy_dir()` resolves package-relative. Works, but ugly and
+  root-unwritable guidance. Point service-file output at
+  `~/.maro/workspace/deploy/` instead.
+- [ ] **`maro-handle` with no backend dies with a raw traceback** — the
+  RuntimeError message is right ("set X or install Y") but it should print
+  clean, not stack-trace, on the very first command a new user runs.
+- [ ] **`run_smoke_test` docstring says dry-run; it makes a real NOW-lane
+  LLM call.** Either make it honest (rename) or actually dry-run.
+- [ ] **E2E run left a second haiku.txt at `$HOME`** alongside the in-project
+  one — an out-of-fence relative write that the (now default-ON) write fence
+  either allowed via the goal-declared-path widening ("a file named
+  haiku.txt") or missed. Pull the run's captain's log / FENCE rows next time
+  the trial runs and classify: legit widening vs detection hole.
+- [ ] **`metrics.spend_today()` line-scans all of step-costs.jsonl** and now
+  runs on every non-dry loop entry (daily cap default ON). The file "grows
+  unbounded" per its own comment — fine for months, but eventually every run
+  start pays an O(lifetime) read for a question about today. Cheap fix when
+  it matters: scan backwards from EOF and stop at the first pre-midnight
+  row, or keep a per-day rollup beside the appender.
+- [ ] **`config.load_config` caches with no mtime check**, so a long-running
+  heartbeat never sees a config edit. Newly consequential with default caps:
+  an operator raising `budget.daily_usd` mid-refusal sees no effect until
+  the daemon restarts (looks like an outage). Either mtime-invalidate the
+  cache or have the budget gate read with `reload=True`.
 
 ---
 

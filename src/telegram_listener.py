@@ -132,6 +132,15 @@ def _resolve_allowed_chats() -> set[int]:
     return set()
 
 
+def is_configured() -> bool:
+    """Public probe: bot token AND at least one chat id resolvable.
+
+    The stable contract for external callers (maro-doctor) — the underscore
+    resolvers above may be renamed/refactored freely.
+    """
+    return bool(_resolve_token()) and bool(_resolve_allowed_chats())
+
+
 # ---------------------------------------------------------------------------
 # Telegram API helpers
 # ---------------------------------------------------------------------------

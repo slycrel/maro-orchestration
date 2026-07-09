@@ -3619,13 +3619,21 @@ def test_run_agent_loop_write_fence_blocks_out_of_fence_write(monkeypatch, tmp_p
     assert any(w["path"] == stray for w in ctx.get("writes", []))
 
 
-def test_run_agent_loop_write_fence_off_by_default(monkeypatch, tmp_path):
-    """With validate.write_fence at its default (off), an out-of-fence write is
-    diagnostic only: SCAVENGE_DETECTED fires, the step stays done."""
+def test_run_agent_loop_write_fence_explicit_off(monkeypatch, tmp_path):
+    """With validate.write_fence explicitly disabled (default flipped ON
+    2026-07-09), an out-of-fence write is diagnostic only: SCAVENGE_DETECTED
+    fires, the step stays done."""
     monkeypatch.setenv("MARO_ORCH_ROOT", str(tmp_path))
     import agent_loop as al
     import loop_execute
     import captains_log
+    import config as config_mod
+    _orig_get = config_mod.get
+    monkeypatch.setattr(
+        config_mod, "get",
+        lambda key, default=None: False if key == "validate.write_fence"
+        else _orig_get(key, default),
+    )
     monkeypatch.setattr(loop_execute, "_local_auto_ralph_enabled", lambda: False)
 
     events_seen = []

@@ -1137,6 +1137,39 @@ Sample: the 2026-05-13..17 window of `~/.maro/workspace/runs/` (478 dirs total;
   cross-worker constraint semantics (BACKLOG follow-up note added).
   Commits: 97f2235 (P2), b923a98 (P3), 31f2844 (P3b); design compiled into
   `skills/arch-platform.md` § Concurrency Model + `docs/CODING_NOTES.md`.
+- **2026-07-09 (1.0 installability arc opened — Jeremy: "I'd like to work us
+  towards a real 1.0, then we can refine some of these additional
+  capabilities.")** — Gap analysis against the installable-harness invariant;
+  Jeremy greenlit items 2/4/5 immediately + docker trial of #1 on this box.
+  Decisions with teeth, all shipped same day:
+  (1) **Safe-by-default flips** — `budget.per_run_usd` 5.0 / `budget.daily_usd`
+  25.0 hardcoded (a fresh install was *uncapped spend*; the real-money
+  invariant applies more to strangers than to this box; 0/null = explicit
+  opt-out) and `validate.write_fence` default ON (box-proven since 07-04).
+  (2) **pyyaml promoted to mandatory dep** — without it `config._load_yaml`
+  silently returns {} and every user setting is ignored; config parsing is
+  core, the zero-dep stance now reads "no *optional-feature* deps".
+  (3) **First clean-machine install ever attempted (docker, non-root, no
+  keys) found pip packaging had NEVER worked**: `packages.find` can't see the
+  flat src/ module layout, so pip "succeeded" while installing zero modules
+  and every console script died ModuleNotFoundError. Masked two ways on this
+  box: everything runs PYTHONPATH=src, and M5's verification used `pip
+  install -e` (editable = path-injection, immune to the hole). Fixed:
+  explicit 139-entry `py-modules` list + `tests/test_packaging.py` census
+  tripwire (the DEFAULTS.md pattern applied to packaging). Standing lesson:
+  **"verified" claims about install behavior must name the exact install
+  mode** — editable and regular pip installs are different products.
+  (4) **DEFAULTS census tripwire was alias-blind** — `from config import get
+  as _budget_get`-style aliases evaded the fixed getter-name set; the census
+  now resolves config.get aliases via AST per file. 6 undocumented keys
+  surfaced and documented, including both budget caps and the write fence —
+  i.e. the two keys this arc flipped had been invisible to the registry.
+  (5) De-OpenClaw'd the first-run surface (doctor checks Maro's own config
+  tiers; openclaw.json = optional legacy row; telegram non-fatal;
+  interrupt.py fallback path). `maro-bootstrap install` now writes a
+  commented starter `~/.maro/config.yml`. Escalation-channel default stays
+  OPEN (Jeremy: LLM-as-orchestrator was the interface idea, "we likely need
+  something in addition") — needs a design conversation before code.
 
 ## Threads (system-maintained — nothing leaves this list silently)
 
@@ -1164,6 +1197,24 @@ Active:
   2026-07-03 on the post-layout-unification tree (no hardcoded machine paths;
   fresh-venv `pip install -e` + foreign-HOME layout resolution verified).
   Codex-side payload check decision stays deferred-pending-repro. Thread closed.
+  **Post-closure correction 2026-07-09:** M5's "pip install works" held only
+  for *editable* installs — regular `pip install` shipped zero modules until
+  the 1.0-arc py-modules fix (see Decisions 2026-07-09). The thread's checks
+  were real but the claim generalized past what was tested.
+- **1.0 installability arc**: opened 2026-07-09 (MILESTONES -3). Shipped:
+  safe-default flips (budget caps, write fence), starter config, de-OpenClaw'd
+  first-run surface, pip packaging actually-works fix + census, docker
+  clean-machine trial (first install off this box) INCLUDING a passing E2E
+  goal on the subprocess claude lane (status=done, goal_achieved=True,
+  artifact verified). Pre-commit adversarial review hardened the surface:
+  budget gate fails CLOSED on malformed values, coerces before truthiness
+  (quoted "0" honored as opt-out), `llm.detect_backends()` is the single
+  source of truth for doctor (was a hand-mirror that missed credentials-.env
+  keys/CLAUDE_BIN/codex/backend_order), doctor no longer mkdirs what it
+  checks, packaging census also trips on src/ subpackages. Remaining:
+  escalation channel default (design conversation), done-vs-achieved corpus
+  analysis (~68 judged runs — the honest success number), install-trial
+  residuals (BACKLOG), README/quickstart pass.
 - **Goal-brain sequencing: COMPLETE** (steps 1–5, 2026-06-10/11): artifact →
   pressure test → recall() → navigator schema → navigator prompt + shadow
   replay. Successor thread below.

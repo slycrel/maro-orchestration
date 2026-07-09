@@ -174,7 +174,8 @@ tail -f $MARO_WORKSPACE/memory/events.jsonl       # live feed
 ## Budget caps (unattended safety)
 
 Dispatching a goal is consent to spend tokens — but not unbounded. Two
-config knobs (`~/.maro/config.yml`, both off by default):
+config knobs (`~/.maro/config.yml`; since 2026-07-09 they default ON at
+$5/run and $25/day — set `0` to explicitly opt out of a cap):
 
 ```yaml
 budget:

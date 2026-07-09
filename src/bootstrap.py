@@ -49,6 +49,76 @@ def create_workspace_dirs(root: Optional[Path] = None) -> Path:
 
 
 # ---------------------------------------------------------------------------
+# Starter config
+# ---------------------------------------------------------------------------
+
+_STARTER_CONFIG = """\
+# Maro user-level config (~/.maro/config.yml)
+# Workspace-level overrides live in ~/.maro/workspace/config.yml (same keys,
+# workspace wins). Every key, its default, and what flipping it does:
+# docs/DEFAULTS.md in the repo. Everything below is OPTIONAL — sensible
+# defaults apply while it stays commented out.
+
+# --- LLM backend ------------------------------------------------------------
+# Auto-detect order: anthropic (ANTHROPIC_API_KEY) -> subprocess (claude CLI)
+# -> openrouter (OPENROUTER_API_KEY) -> openai (OPENAI_API_KEY). API keys are
+# read from the environment, never from this file.
+#model:
+#  backend_order: [%(backend_order)s]
+
+# --- Spend caps (defaults: $%(per_run).0f/run, $%(daily).0f/day; 0 = uncapped) ---------------------
+#budget:
+#  per_run_usd: %(per_run).1f
+#  daily_usd: %(daily).1f
+
+# --- Notifications / escalations ----------------------------------------------
+# How Maro reaches you when a run finishes or needs a human. Without this,
+# escalations land only in events.jsonl (inspect via `maro-runs status`).
+# The command receives the run_card JSON on stdin.
+#notify:
+#  command: "maro-notify-telegram"   # or any shell command
+#  events: [run_completed, escalation]
+
+# --- Telegram (used by maro-notify-telegram and the listener) -----------------
+# TELEGRAM_BOT_TOKEN comes from the environment; chat_id doubles as the
+# allowlist of chats the listener may answer — never wildcard it.
+#telegram:
+#  chat_id: "123456789"
+"""
+
+
+def render_starter_config() -> str:
+    """Starter config text with the REAL defaults interpolated.
+
+    The values come from the code constants (loop_init caps, llm backend
+    order) so the template a fresh install reads can never drift from what
+    the code actually does.
+    """
+    from llm import DEFAULT_BACKEND_ORDER
+    from loop_init import DEFAULT_PER_RUN_USD, DEFAULT_DAILY_USD
+    return _STARTER_CONFIG % {
+        "backend_order": ", ".join(DEFAULT_BACKEND_ORDER),
+        "per_run": DEFAULT_PER_RUN_USD,
+        "daily": DEFAULT_DAILY_USD,
+    }
+
+
+def write_starter_config() -> Optional[Path]:
+    """Write a commented starter config to the user tier if none exists.
+
+    Never overwrites: an existing ~/.maro/config.yml wins, even if empty.
+    Returns the path written, or None if one already existed.
+    """
+    from config import config_paths
+    cfg_path = Path(config_paths()["user"])
+    if cfg_path.exists():
+        return None
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    cfg_path.write_text(render_starter_config(), encoding="utf-8")
+    return cfg_path
+
+
+# ---------------------------------------------------------------------------
 # Service file templates
 # ---------------------------------------------------------------------------
 
@@ -242,6 +312,20 @@ def install(run_smoke: bool = True) -> None:
 
     print("  Creating workspace directories...")
     create_workspace_dirs(ws)
+    print("  Done.")
+
+    print("  Writing starter config...")
+    try:
+        cfg_written = write_starter_config()
+        if cfg_written:
+            print(f"    {cfg_written} (commented template — edit to taste)")
+        else:
+            print("    existing config found — left untouched")
+    except OSError as exc:
+        # User tier lives under HOME, which can be read-only where the
+        # workspace isn't (systemd ProtectHome, odd container HOMEs). The
+        # config is optional — keep installing.
+        print(f"    could not write user config ({exc}) — continuing without it")
     print("  Done.")
 
     print("  Writing service files...")

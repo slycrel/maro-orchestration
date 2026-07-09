@@ -151,10 +151,55 @@ def test_explicit_cost_budget_wins_over_config(monkeypatch):
     assert ctx.cost_budget == 9.0
 
 
-def test_no_budget_config_means_uncapped(monkeypatch):
+def test_no_budget_config_gets_safe_default_caps(monkeypatch):
+    """1.0 posture (2026-07-09): a fresh install with no budget config is
+    capped at the hardcoded defaults, never uncapped."""
+    import loop_init
     ctx, refusal = _run_gate(monkeypatch, {})
     assert refusal is None
+    assert ctx.cost_budget == loop_init.DEFAULT_PER_RUN_USD
+
+
+def test_default_daily_cap_refuses_when_exhausted(monkeypatch):
+    import loop_init
+    ctx, refusal = _run_gate(monkeypatch, {},
+                             spent=loop_init.DEFAULT_DAILY_USD + 1.0)
+    assert refusal is not None
+    assert "daily budget exhausted" in refusal.stuck_reason
+
+
+def test_explicit_zero_disables_caps(monkeypatch):
+    """budget.per_run_usd: 0 / budget.daily_usd: 0 is the uncapped opt-out."""
+    ctx, refusal = _run_gate(monkeypatch,
+                             {"budget.per_run_usd": 0, "budget.daily_usd": 0},
+                             spent=1000.0)
+    assert refusal is None
     assert ctx.cost_budget is None
+
+
+def test_quoted_string_zero_also_disables_caps(monkeypatch):
+    """YAML `per_run_usd: "0"` (quoted) must behave like numeric 0 — coerce
+    BEFORE the truthiness test, or "0" becomes a $0 cap that divides by zero
+    downstream."""
+    ctx, refusal = _run_gate(monkeypatch,
+                             {"budget.per_run_usd": "0", "budget.daily_usd": "0"},
+                             spent=1000.0)
+    assert refusal is None
+    assert ctx.cost_budget is None
+
+
+def test_malformed_value_fails_closed_to_default(monkeypatch):
+    """A typo in budget config must never silently disable the caps —
+    fall back to the safe defaults, and a bad per-run value must not
+    knock out the daily gate."""
+    import loop_init
+    ctx, refusal = _run_gate(monkeypatch,
+                             {"budget.per_run_usd": "2 dollars",
+                              "budget.daily_usd": "lots"},
+                             spent=1_000_000.0)
+    assert ctx.cost_budget == loop_init.DEFAULT_PER_RUN_USD
+    assert refusal is not None  # daily default still gates despite both typos
+    assert "daily budget exhausted" in refusal.stuck_reason
 
 
 def test_dry_run_skips_gates(monkeypatch):
