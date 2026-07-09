@@ -302,6 +302,24 @@ def run_agent_loop(
             # for parallel/DAG runs instead of being silently stuck "running".
             try:
                 from loop_report import write_run_report as _write_run_report, write_runs_index as _write_runs_index
+                # 2026-07-08 review, round 2 (unanimous, all 5 reviewers):
+                # the round-1 fix froze the report and forced the index but
+                # never wrote build/loop-*-log.json — the ONLY source
+                # write_runs_index() reads token/step totals from. Without
+                # it, a parallel run's index row shows a report link but "-"
+                # tokens/status forever. _write_loop_log is the same writer
+                # the sequential finalize path already calls; parallel just
+                # never had it, independent of this feature.
+                _write_loop_log(
+                    project=ctx.project,
+                    loop_id=ctx.loop_id,
+                    goal=ctx.goal,
+                    status=_parallel_result.status,
+                    steps=_parallel_result.steps,
+                    start_ts=ctx.start_ts,
+                    elapsed_ms=_parallel_result.elapsed_ms,
+                    stuck_reason=_parallel_result.stuck_reason,
+                )
                 if ctx.project and _manifest_steps:
                     _write_run_report(
                         project=ctx.project,

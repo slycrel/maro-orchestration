@@ -256,9 +256,17 @@ def _gather_log_markers(loop_id: str, start_ts: str) -> Tuple[List[dict], List[d
     except Exception:
         return [], []
     attributed = [e for e in entries if e.get("loop_id") == loop_id]
+    # 2026-07-08 adversarial review round 2 (Plan Critic): raw string
+    # comparison on ISO timestamps only orders correctly when every producer
+    # uses the exact same format; _parse_iso() (already normalizing naive
+    # datetimes to UTC, finding #10) is the same parser used for real
+    # datetime comparisons elsewhere in this module — reuse it here too
+    # instead of a second, weaker comparison method for the same kind of data.
+    _run_start_dt = _parse_iso(start_ts) or datetime.min.replace(tzinfo=timezone.utc)
     global_entries = [
         e for e in entries
-        if not e.get("loop_id") and e.get("timestamp", "") >= (start_ts or "")
+        if not e.get("loop_id")
+        and (_parse_iso(e.get("timestamp", "")) or datetime.min.replace(tzinfo=timezone.utc)) >= _run_start_dt
     ]
     attributed.reverse()       # load_log is most-recent-first; report reads chronologically
     global_entries.reverse()
@@ -444,7 +452,14 @@ def _render_timeline(
 
     for pos, (s, w) in enumerate(zip(step_outcomes, windows), start=1):
         seen_counts[s.text] = seen_counts.get(s.text, 0) + 1
-        weight = max(s.elapsed_ms, 1)
+        # 2026-07-08 adversarial review round 2 (Minimalist): in approximate
+        # mode, elapsed_ms itself can be the fabricated value (a parallel
+        # batch assigns every step in it ~the same elapsed_ms, measured from
+        # batch start) — sizing chips by it renders a duration shape the
+        # system already knows is wrong, badge or no badge. Equal width is
+        # honest about what's actually known here: execution order, not
+        # relative duration.
+        weight = 1 if approx else max(s.elapsed_ms, 1)
         status = s.status if s.status in _STATUS_CLASS else "blocked"
         cls = _STATUS_CLASS[status]
         icon = _STATUS_ICON.get(status, "?")

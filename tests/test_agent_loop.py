@@ -939,6 +939,18 @@ def test_parallel_path_still_writes_frozen_report_and_index(monkeypatch, tmp_pat
     assert "maro-report: final status=done" in content
     assert "fetch A" in content and "fetch B" in content
 
+    # 2026-07-08 round 2 (all 5 reviewers, unanimous): the round-1 fix froze
+    # the report and forced the index, but never wrote build/loop-*-log.json
+    # — the ONLY source write_runs_index() reads token/step totals from.
+    # Without this, the index shows "-" tokens/status forever for a
+    # completed parallel run.
+    logs = list(artifacts.glob("loop-*-log.json"))
+    assert len(logs) == 1, f"expected exactly one loop log, found {logs}"
+    log_data = json.loads(logs[0].read_text())
+    assert log_data["status"] == "done"
+    assert log_data["totals"]["tokens_in"] == 10  # 5 + 5, from the two fake steps
+    assert log_data["totals"]["steps_done"] == 2
+
     # No run-dir is pinned in this test (fallback project path), so the
     # index write still runs but has nothing under runs_root() to list —
     # what matters here is that write_runs_index(force=True) was actually

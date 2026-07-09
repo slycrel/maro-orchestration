@@ -453,6 +453,114 @@ coverage for the sequential (non-parallel) path was solid going in.
 All fixes covered by new tests in `tests/test_loop_report.py` and
 `tests/test_agent_loop.py` (2026-07-08); full suite green except the same 8
 pre-existing macOS/fcntl-timing failures noted in the original build (verified
-unrelated, reproduce identically on pristine `main`). A second adversarial
-review pass was run after these fixes — see BACKLOG.md / commit history for
-that verdict.
+unrelated, reproduce identically on pristine `main`).
+
+## Adversarial review, round 2 (2026-07-08)
+
+Re-ran the same 5-reviewer setup against the round-1 fixes, explicitly tasked
+with verifying each claimed fix rather than trusting the design doc, plus
+looking for anything new the fix round introduced. **Verdict on round 2:
+Reality Checker returned FAIL** (2 of 6 evidence-gate claims), all other
+reviewers found no new high-severity issues but converged strongly on one
+real gap the round-1 fix left behind, plus lower-severity residuals.
+
+**Findings and resolutions:**
+
+1. **[medium, unanimous — all 5 reviewers] The round-1 parallel-path fix
+   froze the report and forced the index, but never wrote
+   `build/loop-*-log.json`** — the only source `write_runs_index()` reads
+   token/step totals from. A completed parallel run showed a report link in
+   the index but `-`/zero totals forever. **Fixed**: `agent_loop.py`'s
+   parallel early-return now also calls `_write_loop_log()` (the same
+   writer the sequential finalize path already uses) before writing the
+   report/index. Regression test in `test_agent_loop.py` extended to assert
+   the loop log exists with correct totals, not just that the report froze.
+2. **[medium, 1 reviewer — Skeptic] `loop_blocked.py`'s three
+   retry/redecompose/timeout-split `StepOutcome` construction sites carried
+   `tokens_in`/`tokens_out` from the raw `outcome` dict but dropped
+   `call_record`/`cache_read_tokens`/`confidence`/`injected_steps` even
+   though `outcome` has them** — pre-existing (not introduced by this
+   feature), but it silently broke the report's "each executed step gets a
+   detail link" promise for any step that hit a blocked/retry path.
+   **Fixed** — all three sites now pass the same four fields. Caught in the
+   process: the redecompose call site is nested one level deeper than the
+   other two, and its different indentation meant the FIRST fix attempt's
+   `replace_all` silently skipped it entirely — found by writing a
+   regression test targeting that specific branch rather than assuming the
+   retry-path test covered all three call sites, and confirmed by re-running
+   the round-1 verify-it-actually-fails discipline against this second fix
+   too.
+3. **[low-medium, Minimalist] Even in approximate mode, the timeline sized
+   chips by `elapsed_ms` directly** — which can itself be the fabricated
+   value (a parallel batch assigns ~the same `elapsed_ms`, measured from
+   batch start, to every step in it). A 4-step batch that took 60s could
+   render as if it took 240s. **Fixed** — chips render at equal width in
+   approximate mode instead of proportional to a value already known to be
+   unreliable.
+4. **[low, Plan Critic] The global-context captain's-log filter compared
+   timestamps as raw strings**, which misorders entries using a different
+   (but valid) UTC offset than `start_ts` even when they're chronologically
+   at-or-after it. **Fixed** — reuses `_parse_iso()` (the same normalized
+   parser already used for real datetime comparisons elsewhere in this
+   module) instead of a second, weaker string-based comparison.
+5. **[medium-high, 4 of 5 reviewers] `file_lock.locked_write()`'s own
+   documented behavior — proceed unlocked with a warning after ~5s of lock
+   contention — reopens the exact race the round-1 fix closed, under
+   contention.** This is not a defect introduced by this feature: it's the
+   existing, codebase-wide primitive's own accepted tradeoff, used
+   identically by `memory_ledger.py`, `metrics.py`, `captains_log.py`, and
+   every other caller of `file_lock.py`. Changing that primitive's fallback
+   behavior (e.g. blocking indefinitely instead of degrading) is a
+   cross-cutting change to shared infrastructure well outside a
+   run-visibility feature's scope — **not fixed here, documented as an
+   inherited, accepted residual.** At current scale (a handful of concurrent
+   runs, not thousands), a 5-second index scan/write is very unlikely in
+   practice; revisit only if this primitive's behavior changes for other
+   reasons, not specifically for this feature.
+6. **[high, Skeptic — NEW, not a round-1 revisit] `runs.py`'s
+   `current_run_dir()` is a plain module-level global, not thread-local or
+   contextvar-scoped.** If two `handle()` calls pinned different run
+   directories and ran concurrently as THREADS in the same process (not
+   separate OS processes — module globals don't cross process boundaries),
+   one could resolve `artifact_dir()` against the other's pinned directory,
+   writing a report into the wrong run's folder. **Verified but not fixed**:
+   traced every caller of `run_parallel_loops()` (the one function that
+   could actually trigger this — it runs multiple goals concurrently via
+   `ThreadPoolExecutor`) and found it has zero callers anywhere in the
+   codebase today — dead code, not a live path. `set_current_run_dir()` is
+   only ever called from `handle.py`, which each CLI/dispatch invocation
+   runs as its own process. This is a genuine structural landmine, correctly
+   identified, but affects the entire run-dir system (every artifact
+   writer, not just this report) and is exactly the concern already tracked
+   in `BACKLOG.md`'s "Isolated worktree per sub-agent" item — not something
+   to fix inside this feature's review cycle. Flagging here so it isn't
+   lost: if `run_parallel_loops()` (or anything like it) ever gets a real
+   caller, `current_run_dir` needs to become thread-local/contextvar-scoped
+   before that happens, not after.
+7. **[low-medium, Architect] Captain's-log markers falling in an inter-step
+   gap (replans, verification, escalation between two steps) get no
+   timeline footnote badge** — `_slot_markers()` only checks step windows,
+   not gap windows, even though gap windows are already computed for
+   rendering. Nothing is silently lost (these markers still appear in the
+   Decision Points list), just the visual cross-reference on the timeline
+   itself is incomplete for this case. **Not fixed** — would need new
+   gap-badge rendering support that doesn't exist yet; deferred as a
+   UX refinement, not a correctness bug.
+8. **[low, Plan Critic] Debug-snapshot filenames use second-precision
+   timestamps plus a per-process counter** — two different processes
+   regenerating the same loop's debug snapshot within the same second could
+   both compute counter=1 and collide on the same filename, silently
+   overwriting one snapshot with another. **Not fixed** — this is a
+   developer-only debugging aid (see known gap on debug snapshots above);
+   the narrow collision window plus the feature's own low stakes don't
+   justify adding per-process-ID filename disambiguation on top of the
+   existing scope, though that would be the fix if it ever mattered.
+
+**Reality Checker's evidence-gate verdicts this round**: PASS on the
+`ended_ts` sentinel semantics, `report.enabled` gating the index, and debug
+cleanup ordering; FAIL on the parallel-path index-totals gap (finding #1
+above, since fixed) and the lock-timeout residual (finding #5, inherited and
+documented, not fixed); NEEDS_MORE_EVIDENCE on running the test suite
+directly (its sandbox lacked `pytest`, same limitation as round 1 — verified
+independently outside that sandbox instead, see test run history in commit
+messages).

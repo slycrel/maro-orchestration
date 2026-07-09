@@ -286,6 +286,30 @@ def test_gather_log_markers_splits_attributed_and_global(monkeypatch, tmp_path):
     assert "other loop" not in subjects  # attributed to a different loop, not global
 
 
+def test_gather_log_markers_global_filter_handles_mixed_utc_offsets(monkeypatch, tmp_path):
+    """2026-07-08 review round 2 (Plan Critic): the global-context filter
+    used raw string comparison on ISO timestamps, which misorders entries
+    that use a different (but valid) UTC offset than start_ts even when
+    they're chronologically at-or-after it. "2019-12-31T23:00:00-01:00" is
+    the exact same instant as "2020-01-01T00:00:00+00:00" — lexicographic
+    string comparison wrongly excludes it (starts with "2019"); datetime
+    comparison correctly includes it."""
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+    import captains_log
+
+    same_instant_different_offset = {
+        "timestamp": "2019-12-31T23:00:00-01:00",
+        "event_type": "METACOGNITIVE_DECISION",
+        "subject": "cross-offset entry",
+        "summary": "",
+    }
+    monkeypatch.setattr(captains_log, "load_log", lambda **kw: [same_instant_different_offset])
+
+    attributed, global_entries = lr._gather_log_markers("someloop", "2020-01-01T00:00:00+00:00")
+    subjects = [e["subject"] for e in global_entries]
+    assert "cross-offset entry" in subjects
+
+
 def test_write_run_report_includes_decision_points_and_global_context(monkeypatch, tmp_path):
     monkeypatch.setenv("MARO_ORCH_ROOT", str(tmp_path))
     monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
@@ -440,6 +464,30 @@ def test_approximate_mode_renders_badge_and_no_crash(monkeypatch, tmp_path):
     content = (tmp_path / "projects" / "p" / "artifacts" / "loop-approxtest-report.html").read_text()
     assert "approximate timing" in content
     assert "st-done" in content
+
+
+def test_approximate_mode_uses_equal_width_chips_not_fabricated_elapsed(monkeypatch, tmp_path):
+    """2026-07-08 review round 2 (Minimalist): even flagged 'approximate', the
+    timeline used to size chips by elapsed_ms directly — which can itself be
+    the fabricated value (a parallel batch assigns ~the same elapsed_ms to
+    every step in it, measured from batch start). Two wildly different
+    elapsed_ms values should render the SAME chip width in approximate mode."""
+    monkeypatch.setenv("MARO_ORCH_ROOT", str(tmp_path))
+    outcomes = [
+        _outcome("Step one", status="done", elapsed_ms=60000, ended_ts=""),
+        _outcome("Step two", status="done", elapsed_ms=100, ended_ts=""),
+    ]
+    lr.write_run_report(
+        project="p", loop_id="approxwidth", goal="goal",
+        planned_steps=["Step one", "Step two"], start_ts="2026-04-04T00:00:00+00:00",
+        step_outcomes=outcomes, status="done",
+    )
+    content = (tmp_path / "projects" / "p" / "artifacts" / "loop-approxwidth-report.html").read_text()
+    # Both st-done chips (60000ms and 100ms elapsed) must render with the
+    # SAME equal flex-grow weight in approximate mode — not proportional to
+    # their (unreliable) elapsed_ms.
+    assert content.count('class="tl-chip st-done" style="flex-grow:1"') == 2
+    assert "flex-grow:60000" not in content
 
 
 def test_naive_ended_ts_does_not_crash_report_generation(monkeypatch, tmp_path):
