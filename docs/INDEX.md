@@ -35,6 +35,7 @@ BACKLOG, VISION, CLAUDE, README…) are living by definition and carry no frontm
 | The memory module (port/adapters/bridge/instrument)? | module docstrings are canonical: `src/memory_port.py` (contract), `src/memory_sqlite.py` (production store), `src/memory_jsonl.py` (reference adapter), `src/memory_bridge.py` (lessons ingest + worker slice), `src/memory_quality.py` (retrieval instrument); verdict pedigree in `history/2026-07-07-memory-bakeoff.md`; §7 A/B verdict in `history/2026-07-08-worker-slice-ab.md` (raw rows/logs in `../output/experiments/`) |
 | Memory/knowledge design (input to the memory decision) | `MEMORY_ARCHITECTURE.md`, `KNOWLEDGE_CRYSTALLIZATION.md` (both dormant-design; several of their "missing" items have since shipped — see the brief §2) |
 | Intent resolution / "what does done mean"? | `INTENT_RESOLUTION_DESIGN.md` (partially shipped) |
+| Portable/shareable learning — migration + learning packs (1.0 item (g))? | `PORTABLE_LEARNING_DESIGN.md` (dormant-design; provisional decisions awaiting Jeremy) |
 | Scope/constraint orchestration (Phase 65, PAUSED)? | `CONSTRAINT_ORCHESTRATION_DESIGN.md` + `_REVIEW` + `_AUDIT` |
 | Thread architecture reframe? | `THREAD_ARCHITECTURE.md` (dormant; navigator subset shipped) |
 | Thread architecture — what's actually still pending (vs. what shipped)? | `history/2026-07-09-thread-architecture-decisions-brief.md` (triage brief, not yet decided — see BACKLOG #19) |

@@ -631,11 +631,22 @@ none blocking:
   works, which a canned dry-run response can't), so the docstring/CLI-help/
   module-docstring were corrected instead of adding `--dry-run`. Tests:
   `tests/test_bootstrap_smoke.py`.
-- [ ] **E2E run left a second haiku.txt at `$HOME`** alongside the in-project
-  one — an out-of-fence relative write that the (now default-ON) write fence
-  either allowed via the goal-declared-path widening ("a file named
-  haiku.txt") or missed. Pull the run's captain's log / FENCE rows next time
-  the trial runs and classify: legit widening vs detection hole.
+- [~] **E2E run left a second haiku.txt at `$HOME`** — INVESTIGATED
+  2026-07-09, unreproduced; demoted to watch-item. The trial container's
+  evidence (captain's log FENCE rows) was ephemeral and is gone. Facts
+  established: (1) it was NOT legit widening — `goal_declared_roots`
+  (artifact_check.py) only widens on absolute/`~` paths; "haiku.txt" is
+  relative, so no FENCE_EXTENDED could have fired; (2) if real, it was a
+  detection hole by design — `detect_out_of_fence_access` scans only
+  absolute paths, assuming cwd-binding fences all relative writes; any
+  LLM call lane with cwd=$HOME breaks that assumption. Prime suspect was
+  a utility call (decompose/closure) with inherited cwd + real tools —
+  BACKLOG #16 (1416a07, same day) stripped tools from exactly those call
+  sites, likely mooting it. Local reproduction post-#16 (isolated
+  workspace, cwd=fake-home, same goal via installed wheel, subprocess
+  lane): haiku.txt landed ONLY in the project dir, status=done. Watch:
+  next docker/clean-machine trial must persist the workspace and grep
+  FENCE/SCAVENGE rows before teardown.
 - [x] **`metrics.spend_today()` line-scans all of step-costs.jsonl** — DONE
   2026-07-09. New `_reverse_readline()` scans backward from EOF in chunks
   (no full-file load) and stops at the first pre-midnight row —
@@ -678,6 +689,12 @@ after the current 1.0 remainders (a)–(d); (g) needs design before release.
   audit what crystallizes — the audit doubles as the honest "does
   self-learning ship anything usable" number for 1.0 messaging.
 - [ ] **(g) Portable/shareable learning — design + migration path.**
+  **DESIGN SHIPPED 2026-07-09 → `docs/PORTABLE_LEARNING_DESIGN.md`** (8
+  provisional decisions collected in its §8, awaiting Jeremy; recommended
+  1.0 slice = its §7 chunks 1–4: migration runbook + doctor checks,
+  provenance fields + `scrub_identifiers`, `maro-pack export/seal`,
+  `maro-pack import/adopt`). Item stays open until reviewed + sliced.
+  Original scope:
   Machine migration and bootstrap-sharing for new users; internet
   hive-mind explicitly out of scope (opt-in someday, "could be cool").
   Doors already built, name-checked so design starts from them:
