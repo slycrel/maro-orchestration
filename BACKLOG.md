@@ -627,6 +627,49 @@ none blocking:
   restart or explicit `reload=True` needed anywhere. Test:
   `test_cache_auto_invalidates_on_file_mtime_change` (`tests/test_config.py`).
 
+### 1.0 launch content + learning/sharing (Jeremy, 2026-07-09 — scope decree)
+
+Decree: "learning and sharing needs to be part of the official first
+release" (full quotes in GOAL_BRAIN Decisions 2026-07-09). Three items,
+also listed as MILESTONES -3 remaining (e)/(f)/(g). Sequencing: (e) runs
+after the current 1.0 remainders (a)–(d); (g) needs design before release.
+
+- [ ] **(e) Default personas + skills — research orchestration run.** Survey
+  the common jobs people actually want from an autonomous agent (link-farm
+  FIRST per standing rule, then web research; run through Maro itself where
+  practical — dogfood + self-learning involvement per (f)); curate the ship
+  set: 5–10 default personas (fits the #4 thread-arch decision — curated
+  set, evolution on pressure) + default skill capabilities. Where a
+  capability exists in OSS/ideas: swipe code, not deps (standing feedback).
+  Where it doesn't: have the orchestrator build it — each gap is itself a
+  test goal. Ships through the existing workspace→repo resolution order
+  (repo = shipped defaults, workspace = evolved overrides). Depends on the
+  skills-packaging residual above (how defaults physically ship: package
+  data vs bootstrap seeding).
+- [ ] **(f) Self-learning involved in the launch build-out.** Use the
+  learning machinery while building (e) — lessons/skills/rules earned
+  during the persona/skill build-out become product content, and the
+  friction found becomes verify→learn arc input (that arc is already
+  sequenced next-after-1.0; this item is its first real consumer). Concrete
+  minimum: run (e)'s build goals through `maro-handle` with learning ON and
+  audit what crystallizes — the audit doubles as the honest "does
+  self-learning ship anything usable" number for 1.0 messaging.
+- [ ] **(g) Portable/shareable learning — design + migration path.**
+  Machine migration and bootstrap-sharing for new users; internet
+  hive-mind explicitly out of scope (opt-in someday, "could be cool").
+  Doors already built, name-checked so design starts from them:
+  `maro-import` (cross-workspace merge of runs + memory ledgers, proven in
+  the hermes trial), JSONL event log as source of truth (stores
+  interchangeable on disk by test), Stage-5 = regenerable-from-language
+  decision (2026-07-09), workspace resolution order, `secret_scrub`
+  (single-source scrubber — sharing MUST pass through it), bi-temporal
+  columns + decay-trust-never-data (imported artifacts should likely
+  arrive contested/hypothesis-trust, not full trust — same shape as rule
+  contestation). Design must settle: the shareable unit (skills/personas/
+  lessons/rules vs raw runs), trust+provenance on import, privacy
+  scrubbing guarantees, format versioning. Vision anchor: Maro is "a
+  communication platform … in addition to an action generator."
+
 ---
 
 ## Stale — dropped this triage

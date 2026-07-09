@@ -1261,6 +1261,29 @@ Sample: the 2026-05-13..17 window of `~/.maro/workspace/runs/` (478 dirs total;
   fastembed semantic lane: stays gated, no decision needed — nothing is
   blocked on it; paraphrase-lane numbers are the evidence file when organic
   worker-slice retrieval misses surface.
+- **2026-07-09 (1.0 scope expansion — Jeremy, same session, decree-level):**
+  **"I think learning and sharing needs to be part of the official first
+  release."** Three additions to the 1.0 arc, in his words:
+  (1) **Default launch content via research orchestration** — "Once 'done'
+  we will want to run the research orchestration to gather our default
+  personas we want to ship, along with our default skill capabilities.
+  There are common things that are out there that people want to be able
+  to do that we can likely facilitate with existing code/skills/ideas out
+  there or have the orchestrator build out things when not available."
+  Sequencing: runs after the current 1.0 remainders, before release.
+  (2) **Self-learning directly involved in that build-out** — "we might
+  want the self-learning more directly involved to help both ourselves
+  level up as well as the product overall." (Consumer relationship with
+  the verify→learn arc already sequenced as next-after-1.0.)
+  (3) **Portable/shareable learning** — "allowing for machine migrations
+  or data sharing to help bootstrap new users seems like a no brainer down
+  the road"; internet hive-mind explicitly NOT required ("could be cool as
+  an opt-in"). He flags this as not fully thought through — 1.0 needs the
+  *design + migration path*, not the hive mind.
+  Framing worth keeping (vision-level): "At the end of the day this is
+  sort of a communication platform after all, in addition to an action
+  generator." Items recorded in BACKLOG "1.0 launch content +
+  learning/sharing" + MILESTONES -3 remaining list (e)/(f)/(g).
 
 ## Threads (system-maintained — nothing leaves this list silently)
 
