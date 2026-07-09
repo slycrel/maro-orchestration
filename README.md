@@ -4,8 +4,6 @@
 
 Autonomous agent framework. Give it a goal; it decomposes, executes, learns, and reports. No hand-holding required.
 
-A dedicated build-loop runner now lives in `src/build_loop_runner.py` so cron can wake a real bounded automation loop instead of nudging a generic reminder session and hoping for initiative.
-
 Works standalone or alongside OpenClaw, Telegram, Slack, or any other interface you wire in.
 
 > **Status: personal infrastructure / active development.** This is a working system, not a polished library. APIs change, features are added fast, and some things are still sharp edges. It runs continuously on a headless Ubuntu box and gets iterated on daily. If you're reading this and it seems useful, it probably is — just go in eyes open.
@@ -14,8 +12,9 @@ Works standalone or alongside OpenClaw, Telegram, Slack, or any other interface 
 
 - **Python 3.10+** (tested on 3.12–3.14)
 - **Linux or macOS** (Linux preferred for always-on deployments)
-- At least one LLM API key: `ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`, or `OPENAI_API_KEY`
-- Optional: `claude` CLI (Claude Code), `gh` CLI (GitHub), Telegram bot token
+- One LLM lane: an API key (`ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`, or
+  `OPENAI_API_KEY`) **or** the `claude` CLI (Claude Code OAuth — no key needed)
+- Optional: `gh` CLI (GitHub), Telegram bot token
 
 ---
 
@@ -80,7 +79,11 @@ All share one interface: `LLMAdapter.complete(messages, tools) → LLMResponse`
 | `OpenAIAdapter` | `OPENAI_API_KEY` set |
 | `CodexCLIAdapter` | `codex` binary available (ChatGPT OAuth) |
 
-`build_adapter("auto")` selects the best available backend. `MODEL_CHEAP/MID/POWER` abstract model names across backends.
+`build_adapter("auto")` walks `model.backend_order` from config (default:
+anthropic → subprocess → openrouter → openai) and fails over across the
+available backends at runtime. `maro-doctor` reports exactly which backends a
+run would find, using the same detection. `MODEL_CHEAP/MID/POWER` abstract
+model names across backends.
 
 ---
 
@@ -90,25 +93,37 @@ All share one interface: `LLMAdapter.complete(messages, tools) → LLMResponse`
 # 1. Clone and install
 git clone https://github.com/slycrel/maro-orchestration.git
 cd maro-orchestration
-pip install -e ".[dev]"
+pip install .          # or `pip install -e ".[dev]"` for development
 
-# 2. Set your API key (at minimum, one of these)
+# 2. Give it an LLM lane — an API key, or nothing if you have Claude Code
 export ANTHROPIC_API_KEY=sk-ant-...
-# or: export OPENROUTER_API_KEY=...
-# or: export OPENAI_API_KEY=...
+# or: export OPENROUTER_API_KEY=... / export OPENAI_API_KEY=...
+# or: skip this — an installed `claude` CLI works as the backend on its own
 
-# 3. Bootstrap workspace (creates ~/.maro/workspace/ and optional service templates)
+# 3. Bootstrap: workspace dirs, a commented starter ~/.maro/config.yml,
+#    service templates, and a smoke test
 maro-bootstrap install
 
-# 4. Run your first goal
-PYTHONPATH=src python3 -m handle "what time is it in Tokyo?"          # quick answer (NOW lane)
-PYTHONPATH=src python3 -m handle "research the top 3 LLM frameworks"  # multi-step (AGENDA lane)
+# 4. Check the install — every row tells you what to fix if it fails
+maro-doctor
+
+# 5. Run your first goal
+maro-handle "what time is it in Tokyo?"          # quick answer (NOW lane)
+maro-handle "research the top 3 LLM frameworks"  # multi-step (AGENDA lane)
 
 # Or use the autonomous loop directly
-python3 src/agent_loop.py "research winning polymarket strategies"
+maro-run "research winning polymarket strategies"
 ```
 
-No OpenClaw installation required. Set `MARO_WORKSPACE` to any directory to use a custom workspace root.
+No OpenClaw installation required. Set `MARO_WORKSPACE` to any directory to
+use a custom workspace root.
+
+**Safe by default:** fresh installs are spend-capped at **$5/run and $25/day**
+(`budget.per_run_usd` / `budget.daily_usd` — raise them in `~/.maro/config.yml`,
+or set `0` to explicitly uncap), and workers are write-fenced to the run's
+project directory plus paths the goal names (`validate.write_fence`). The
+seeded config documents every knob; the full registry is
+[docs/DEFAULTS.md](docs/DEFAULTS.md).
 
 ### More commands
 
@@ -126,7 +141,7 @@ python3 src/cli.py build-loop --worker-session handle --format json
 ./scripts/build-loop.sh --worker-session handle --format json
 
 # Example cron target (every 5 minutes)
-*/5 * * * * cd /path/to/maro-orchestration && OPENCLAW_WORKSPACE=/path/to/workspace ./scripts/build-loop.sh --worker-session handle --format json >> /tmp/maro-build-loop.log 2>&1
+*/5 * * * * cd /path/to/maro-orchestration && MARO_WORKSPACE=/path/to/workspace ./scripts/build-loop.sh --worker-session handle --format json >> /tmp/maro-build-loop.log 2>&1
 
 # Memory status
 python3 src/cli.py outcomes context
@@ -320,8 +335,13 @@ Two-tier YAML config (like git's `~/.gitconfig` vs `.git/config`):
 
 | File | Scope | What goes here |
 |------|-------|---------------|
-| `~/.maro/config.yml` | User-level | API keys, model prefs, yolo mode, notifications |
+| `~/.maro/config.yml` | User-level | Model prefs, spend caps, notifications (API keys stay in the environment or `secrets/.env`, never here) |
 | `~/.maro/workspace/config.yml` | Workspace-level | Evolver, inspector thresholds, constraint settings |
+
+`maro-bootstrap install` seeds the user file with a fully-commented template
+stating the real defaults — uncomment to override. Never overwritten once it
+exists. Every key's default and effect: [docs/DEFAULTS.md](docs/DEFAULTS.md)
+(census-enforced against the code).
 
 Workspace inherits from user; workspace keys override. Access in code: `from config import get; get("inspector.breach_threshold", 0.30)`
 
@@ -398,6 +418,17 @@ Next run with similar task:
 
 ## Safety and reliability
 
+**Spend caps** (`loop_init.py`) — on by default since day one of an install:
+- `budget.per_run_usd` ($5 default) feeds the loop's cost hard-stop
+- `budget.daily_usd` ($25 default) gates new runs on the cross-run spend ledger before any tokens burn
+- Malformed config values fail **closed** to the defaults — a typo can't silently uncap
+- `0` (or null) is the explicit opt-out for either cap
+
+**Write fence** (`artifact_check.py`) — on by default: workers write inside
+the run's project dir, the workspace, `/tmp`, and paths the goal explicitly
+names (audited widening). Out-of-fence writes demote the step done→blocked
+with the evidence logged; scavenge *detection* (reads and writes) is always on.
+
 **Constraint harness** (`constraint.py`) — fires before every step execution, no LLM round-trip required:
 - Blocks destructive patterns (`rm -rf`, `DROP TABLE`, `format /`)
 - Blocks secret exposure (`/etc/passwd`, `~/.ssh/`, env dumps)
@@ -431,8 +462,9 @@ Use this when a worker needs nested artifact paths, injected environment variabl
 ## Development
 
 ```bash
-# Run tests (4278 passing, all LLM calls mocked)
+# Run tests (all LLM calls mocked)
 python3 -m pytest tests/ -q
+bash scripts/test-safe.sh    # full suite, CPU-throttled for shared boxes
 
 # Dry-run (no LLM calls)
 python3 src/agent_loop.py "test goal" --dry-run --verbose
