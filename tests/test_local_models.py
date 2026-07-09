@@ -436,7 +436,21 @@ def test_ensure_returns_false_if_server_exits_during_startup(monkeypatch):
     assert lm._MANAGED["proc"] is None
 
 
-def test_shutdown_terminates_managed_proc():
+def test_shutdown_terminates_managed_proc(monkeypatch):
+    """_terminate_group() prefers os.killpg(pgid, ...) over proc.terminate()
+    whenever the process's group can be resolved, and only falls back to
+    proc.terminate() when os.getpgid() raises (see src/local_models.py's
+    _terminate_group). A hardcoded p.pid=999 doesn't reliably trigger that
+    raise: PID allocation is OS/machine-specific, and 999 happens to be a
+    live process group on some machines (observed on macOS — this test used
+    to send a real SIGTERM to whatever occupies that group). Mock
+    os.getpgid to always raise ProcessLookupError so this test deterministically
+    exercises the proc.terminate() fallback path regardless of what's
+    actually running on the host, on any OS."""
+    monkeypatch.setattr(
+        lm.os, "getpgid",
+        lambda pid: (_ for _ in ()).throw(ProcessLookupError(pid)),
+    )
     p = MagicMock(); p.poll.return_value = None; p.pid = 999
     lm._MANAGED["proc"] = p
     lm.shutdown_validator()

@@ -480,8 +480,21 @@ Tools:
 """)
 
 
+def _parse_ps_cpu_time(s: str) -> float:
+    """Parse ps's cumulative CPU time format ``[[dd-]hh:]mm:ss[.ss]`` to seconds."""
+    days = 0
+    if "-" in s:
+        d, s = s.split("-", 1)
+        days = int(d)
+    parts = [float(p) for p in s.split(":")]
+    while len(parts) < 3:
+        parts.insert(0, 0.0)
+    hh, mm, ss = parts[-3:]
+    return days * 86400 + hh * 3600 + mm * 60 + ss
+
+
 def _session_cpu_ticks(leader_pid: int) -> int:
-    """Sum utime+stime (clock ticks) for all procs whose session == leader_pid.
+    """Sum CPU time (~centiseconds) for every process in leader_pid's session.
 
     Secondary liveness signal: a silent-but-computing subprocess (e.g. a
     local LLM mid-inference) won't advance its output file's mtime but
@@ -489,39 +502,41 @@ def _session_cpu_ticks(leader_pid: int) -> int:
     pipelines (e.g. claude CLI → node worker) since `start_new_session=True`
     makes the Popen'd process the session leader.
 
-    Best-effort: any per-proc read failure is skipped silently. Returns 0
-    on total failure (Linux /proc unavailable), which disables the signal.
+    2026-07-08: previously read Linux's /proc, which macOS doesn't have at
+    all — /proc/{pid} was always missing there, so this signal was silently
+    a permanent no-op on every macOS run (a CPU-busy-but-silent subprocess
+    would hit the liveness timeout instead of being spared). Now portable:
+    `ps` enumerates processes and cumulative CPU time identically on both
+    platforms, and session membership is checked via `os.getsid()` — a real
+    POSIX syscall — rather than trusting ps's own "sess" column, which on
+    macOS's BSD ps turns out to mean something else and does NOT equal the
+    session leader's own pid the way it does on Linux.
+
+    Best-effort: any per-proc read/parse failure is skipped silently.
+    Returns 0 on total failure (`ps` unavailable), which disables the
+    signal — same degradation contract as before.
     """
-    total = 0
     try:
-        entries = os.listdir("/proc")
-    except OSError:
+        out = subprocess.run(
+            ["ps", "-eo", "pid=,time="],
+            capture_output=True, text=True, timeout=5,
+        )
+    except Exception:
         return 0
-    for entry in entries:
-        if not entry.isdigit():
+    total = 0.0
+    for line in out.stdout.splitlines():
+        parts = line.split(None, 1)
+        if len(parts) != 2:
             continue
+        pid_str, time_str = parts
         try:
-            with open(f"/proc/{entry}/stat", "rb") as f:
-                data = f.read().decode("ascii", errors="replace")
-        except (FileNotFoundError, ProcessLookupError, OSError):
+            pid = int(pid_str)
+            if os.getsid(pid) != leader_pid:
+                continue
+            total += _parse_ps_cpu_time(time_str.strip())
+        except (ValueError, OSError):
             continue
-        # Format: pid (comm) state ppid pgrp session tty_nr ...
-        # `comm` may contain spaces/parens; split fields after the final ')'.
-        rparen = data.rfind(")")
-        if rparen == -1:
-            continue
-        rest = data[rparen + 2:].split()
-        # rest indices (0-based, starting after the `comm` field):
-        #   0=state, 1=ppid, 2=pgrp, 3=session, ..., 11=utime, 12=stime
-        try:
-            session = int(rest[3])
-            utime = int(rest[11])
-            stime = int(rest[12])
-        except (IndexError, ValueError):
-            continue
-        if session == leader_pid:
-            total += utime + stime
-    return total
+    return int(total * 100)
 
 
 def _run_subprocess_safe(cmd, *, input=None, timeout=600,
@@ -652,7 +667,14 @@ def _run_subprocess_safe(cmd, *, input=None, timeout=600,
     start = time.monotonic()
     last_seen = start          # monotonic time of most recent activity
     last_mtime = 0.0           # file mtime we've already credited
-    last_cpu = _session_cpu_ticks(proc.pid)  # initial CPU baseline
+    # Skip the CPU baseline if the process has already exited — the loop
+    # below breaks on its first poll without ever using last_cpu for a
+    # comparison, so computing it here is wasted work (and, since 2026-07-08,
+    # spawns a nested `ps` subprocess — see _session_cpu_ticks — that tests
+    # globally monkeypatching subprocess.Popen to fake a fast-completing
+    # process would otherwise intercept, clobbering their captured kwargs
+    # from the real Popen call above).
+    last_cpu = 0 if proc.poll() is not None else _session_cpu_ticks(proc.pid)
     kill_reason = None
     try:
         while True:

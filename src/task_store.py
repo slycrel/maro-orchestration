@@ -129,10 +129,24 @@ def _read_task(path: pathlib.Path) -> Optional[Dict[str, Any]]:
 
 
 def _pid_alive(pid: int) -> bool:
-    """Check if a process is alive via /proc."""
+    """Check if a process is alive.
+
+    2026-07-08: previously checked Linux's /proc, which macOS doesn't have
+    at all — /proc/{pid} was always missing there, so this returned False
+    unconditionally on macOS, even for the CURRENT process's own pid. Every
+    claim looked stale immediately, and claiming an already-claimed job
+    never raised. os.kill(pid, 0) is the POSIX-portable existence check:
+    it sends no signal, just tests permission/existence.
+    """
     if pid is None or pid <= 0:
         return False
-    return os.path.isdir(f"/proc/{pid}")
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True  # exists, just owned by another user (e.g. EPERM)
+    return True
 
 
 # --- Core operations ---

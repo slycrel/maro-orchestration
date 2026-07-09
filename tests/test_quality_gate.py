@@ -288,10 +288,14 @@ class TestProbeContestedClaims:
 
     def test_probe_exits_zero_dismisses_claim(self):
         # "exit 0 means claim-as-stated-by-reviewer-is-wrong" convention.
+        # sys.executable is guaranteed to exist and is portable — /etc/hostname
+        # (used here previously) is a Linux-only convention; macOS has no such
+        # file at all, so this test always failed on macOS regardless of what
+        # the code under test actually did.
         claim = {
-            "claim": "the file /etc/hostname does not exist",
+            "claim": f"the file {sys.executable} does not exist",
             "verdict": "CONTESTED",
-            "settled_by_command": "test -f /etc/hostname",
+            "settled_by_command": f"test -f {sys.executable}",
         }
         [out] = _probe_contested_claims([claim])
         assert out["probe_status"] == "dismissed"
@@ -359,8 +363,10 @@ class TestProbeContestedClaims:
         # Dismissed + validated + unprobed together in one batch — each slot
         # is independent, per-claim captain's log emission too.
         claims = [
-            {"claim": "file /etc/hostname does not exist", "verdict": "CONTESTED",
-             "settled_by_command": "test -f /etc/hostname"},
+            # sys.executable: portable "known to exist" file (see
+            # test_probe_exits_zero_dismisses_claim for why not /etc/hostname).
+            {"claim": f"file {sys.executable} does not exist", "verdict": "CONTESTED",
+             "settled_by_command": f"test -f {sys.executable}"},
             {"claim": "file /nowhere/never does not exist", "verdict": "CONTESTED",
              "settled_by_command": "test -f /nowhere/never"},
             {"claim": "subjective claim about tone", "verdict": "CONTESTED"},
@@ -371,7 +377,7 @@ class TestProbeContestedClaims:
 
     def test_caller_dict_is_not_mutated(self):
         claim = {"claim": "x", "verdict": "CONTESTED",
-                 "settled_by_command": "test -f /etc/hostname"}
+                 "settled_by_command": f"test -f {sys.executable}"}
         _probe_contested_claims([claim])
         # Caller's dict must be untouched — function returns a new list of
         # shallow copies so callers can diff before/after safely.
