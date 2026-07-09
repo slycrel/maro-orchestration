@@ -21,6 +21,8 @@ run-dir is incremental and lives at each call site.
 """
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import hashlib
 import json
 import os
@@ -218,7 +220,8 @@ def finalize_run(
         meta = {}
     meta["status"] = status
     meta["ended_at"] = ended_at or datetime.now(timezone.utc).isoformat()
-    meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+    from file_lock import atomic_write
+    atomic_write(meta_path, json.dumps(meta, indent=2))
     try:
         import thread_brain
         thread_brain.record_close(rd, status=status)
@@ -231,23 +234,40 @@ def finalize_run(
 # Current-run context: lets agent_loop / scope writers land in the run-dir
 # without threading run_dir through every signature.
 #
-# A handle() invocation runs in one process; one run-dir at a time. Setting
-# this is opt-in: when unset, callers fall back to the legacy project-dir
-# artifact path. Tests that don't set it see no behavior change.
+# Setting this is opt-in: when unset, callers fall back to the legacy
+# project-dir artifact path. Tests that don't set it see no behavior change.
+#
+# ContextVar, not a module global: concurrent loops in one process
+# (run_parallel_loops, DAG step fan-out) each see their own run-dir instead
+# of sharing a last-writer-wins global. Same pattern as
+# llm._DEFAULT_SUBPROCESS_CWD. ThreadPoolExecutor workers do NOT inherit
+# the submitting thread's context — fan-out sites must submit via
+# contextvars.copy_context().run (see loop_parallel).
 # ---------------------------------------------------------------------------
 
-_current_run_dir: Optional[Path] = None
+_current_run_dir: contextvars.ContextVar[Optional[Path]] = contextvars.ContextVar(
+    "maro_current_run_dir", default=None
+)
 
 
 def set_current_run_dir(path: Optional[Path]) -> None:
     """Set (or clear) the run-dir for the current handle. Accepts None to clear."""
-    global _current_run_dir
-    _current_run_dir = Path(path) if path is not None else None
+    _current_run_dir.set(Path(path) if path is not None else None)
 
 
 def current_run_dir() -> Optional[Path]:
     """Return the run-dir for the current handle, or None if unset."""
-    return _current_run_dir
+    return _current_run_dir.get()
+
+
+@contextlib.contextmanager
+def scoped_run_dir(path: Optional[Path]):
+    """Scope the current run-dir to a block, restoring the prior value after."""
+    token = _current_run_dir.set(Path(path) if path is not None else None)
+    try:
+        yield
+    finally:
+        _current_run_dir.reset(token)
 
 
 def current_handle_id() -> Optional[str]:
@@ -379,6 +399,7 @@ def source_dir() -> Optional[Path]:
 # ---------------------------------------------------------------------------
 
 _run_log_offsets: dict = {}
+_run_log_offsets_lock = _threading.Lock()
 
 
 def _captains_log_path() -> Optional[Path]:
@@ -403,7 +424,8 @@ def record_log_offset(handle_id: str) -> None:
         offset = log_path.stat().st_size if log_path.exists() else 0
     except Exception:
         offset = 0
-    _run_log_offsets[handle_id] = offset
+    with _run_log_offsets_lock:
+        _run_log_offsets[handle_id] = offset
 
 
 def slice_log_for_run(handle_id: str) -> Optional[Path]:
@@ -419,7 +441,8 @@ def slice_log_for_run(handle_id: str) -> Optional[Path]:
     rd = run_dir(handle_id)
     if not rd.exists():
         return None
-    offset = _run_log_offsets.get(handle_id, 0)
+    with _run_log_offsets_lock:
+        offset = _run_log_offsets.get(handle_id, 0)
     out = rd / "build" / "captains_log_slice.jsonl"
     out.parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -442,6 +465,7 @@ def slice_log_for_run(handle_id: str) -> Optional[Path]:
 
 import subprocess
 _run_repo_bases: dict = {}
+_run_repo_bases_lock = _threading.Lock()
 
 
 def record_repo_base(handle_id: str, repo_path: str) -> None:
@@ -458,7 +482,8 @@ def record_repo_base(handle_id: str, repo_path: str) -> None:
             cwd=repo_path, capture_output=True, text=True, timeout=10,
         )
         if result.returncode == 0:
-            _run_repo_bases[handle_id] = (repo_path, result.stdout.strip())
+            with _run_repo_bases_lock:
+                _run_repo_bases[handle_id] = (repo_path, result.stdout.strip())
     except Exception:
         pass
 
@@ -470,7 +495,8 @@ def snapshot_repo_bundle(handle_id: str) -> Optional[Path]:
     of the repo paired in `record_repo_base()`. Returns the bundle path
     on success, None if no repo was paired or the snapshot failed.
     """
-    pair = _run_repo_bases.get(handle_id)
+    with _run_repo_bases_lock:
+        pair = _run_repo_bases.get(handle_id)
     if not pair:
         return None
     repo_path, base_sha = pair

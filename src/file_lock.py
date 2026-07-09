@@ -31,6 +31,8 @@ from __future__ import annotations
 
 import fcntl
 import logging
+import os
+import tempfile
 import threading
 import time
 from contextlib import contextmanager
@@ -118,6 +120,30 @@ def locked_write(path: Path) -> Generator[None, None, None]:
                 pass
         if acquired:
             held.discard(lock_key)
+
+
+def atomic_write(path: Path, content: str, *, encoding: str = "utf-8") -> None:
+    """Crash-safe full rewrite: mkstemp in path's dir, write, fsync, os.replace.
+
+    A reader (or a crash mid-write) sees either the old complete file or the
+    new complete file — never a partial. Does NOT take the .lock file; pair
+    with locked_write()/locked_rmw() when concurrent writers are possible.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=path.name + ".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding=encoding) as fh:
+            fh.write(content)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp_name, path)
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
 
 
 def locked_append(path: Path, line: str) -> None:

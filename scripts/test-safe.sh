@@ -36,7 +36,7 @@ done
 # Clean up any stale pytest processes from prior interrupted runs.
 # This is a common cause of load spikes — each abandoned pytest holds
 # its own subprocess tree.
-STALE="$(pgrep -f "pytest.*openclaw-orchestration" 2>/dev/null || true)"
+STALE="$(pgrep -f "pytest.*(openclaw|maro)-orchestration" 2>/dev/null || true)"
 if [[ -n "$STALE" ]]; then
     echo "[test-safe] killing stale pytest processes: $STALE" >&2
     echo "$STALE" | xargs -r kill -TERM 2>/dev/null || true

@@ -585,6 +585,10 @@ def run_parallel_loops(
 
     effective_workers = min(max_workers, len(goals))
 
+    # No copy_context() wrap here, deliberately: each pool thread gets its own
+    # root context, and run_agent_loop sets its own run-scoped ContextVars
+    # (subprocess cwd; run-dir stays with the spawning handle). Wrapping would
+    # leak the *caller's* run context into every goal.
     with concurrent.futures.ThreadPoolExecutor(max_workers=effective_workers) as executor:
         futures = [
             executor.submit(run_agent_loop, goal, **kwargs)

@@ -13,6 +13,8 @@ import build_loop_runner as blr
 
 
 def test_run_build_loop_sets_poe_yolo_for_autonomous_worker(monkeypatch, tmp_path):
+    """YOLO reaches the worker via the bridge's subprocess env, not by
+    mutating the process-global os.environ (which races concurrent runs)."""
     monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
     monkeypatch.delenv("MARO_YOLO", raising=False)
 
@@ -23,10 +25,15 @@ def test_run_build_loop_sets_poe_yolo_for_autonomous_worker(monkeypatch, tmp_pat
     observed = {}
 
     monkeypatch.setattr(blr, "select_next_item", lambda project: next_item)
-    monkeypatch.setattr(blr, "worker_session_bridge", lambda worker_session, timeout_seconds=None: object())
+
+    def _fake_worker_session_bridge(worker_session, timeout_seconds=None, extra_env=None):
+        observed["extra_env"] = extra_env
+        return object()
+
+    monkeypatch.setattr(blr, "worker_session_bridge", _fake_worker_session_bridge)
 
     def _fake_run_loop(**kwargs):
-        observed["poe_yolo"] = os.environ.get("MARO_YOLO")
+        observed["poe_yolo_in_process"] = os.environ.get("MARO_YOLO")
         return []
 
     monkeypatch.setattr(blr, "run_loop", _fake_run_loop)
@@ -34,7 +41,9 @@ def test_run_build_loop_sets_poe_yolo_for_autonomous_worker(monkeypatch, tmp_pat
     summary = blr.run_build_loop(project="demo", worker_session="handle", max_runs=1)
 
     assert summary["status"] == "idle"
-    assert observed["poe_yolo"] == "true"
+    assert observed["extra_env"] == {"MARO_YOLO": "true"}
+    # process-global env is never touched
+    assert observed["poe_yolo_in_process"] is None
     assert os.environ.get("MARO_YOLO") is None
 
 
@@ -50,7 +59,7 @@ def test_run_build_loop_passes_bounded_session_timeout(monkeypatch, tmp_path):
 
     monkeypatch.setattr(blr, "select_next_item", lambda project: next_item)
 
-    def _fake_worker_session_bridge(worker_session, timeout_seconds=None):
+    def _fake_worker_session_bridge(worker_session, timeout_seconds=None, extra_env=None):
         observed["worker_session"] = worker_session
         observed["timeout_seconds"] = timeout_seconds
         return object()
@@ -74,7 +83,7 @@ def test_run_build_loop_writes_running_status_before_work(monkeypatch, tmp_path)
     next_item = SimpleNamespace(index=1, text="active task")
 
     monkeypatch.setattr(blr, "select_next_item", lambda project: next_item)
-    monkeypatch.setattr(blr, "worker_session_bridge", lambda worker_session, timeout_seconds=None: object())
+    monkeypatch.setattr(blr, "worker_session_bridge", lambda worker_session, timeout_seconds=None, extra_env=None: object())
 
     def _fake_run_loop(**kwargs):
         status = json.loads(blr.build_loop_status_path().read_text(encoding="utf-8"))
@@ -160,7 +169,7 @@ def test_run_build_loop_interrupt_cleans_up_running_items(monkeypatch, tmp_path)
     cleaned = []
 
     monkeypatch.setattr(blr, "select_next_item", lambda project: next_item)
-    monkeypatch.setattr(blr, "worker_session_bridge", lambda worker_session, timeout_seconds=None: object())
+    monkeypatch.setattr(blr, "worker_session_bridge", lambda worker_session, timeout_seconds=None, extra_env=None: object())
     monkeypatch.setattr(
         blr,
         "_load_run_records",

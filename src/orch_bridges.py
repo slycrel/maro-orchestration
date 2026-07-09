@@ -709,6 +709,7 @@ def worker_session_bridge(
     timeout_seconds: Optional[float] = None,
     payload_name: str = "worker-payload.json",
     result_name: str = "worker-result.json",
+    extra_env: Optional[dict] = None,
 ) -> ExecutionBridge:
     if not worker or not worker.strip():
         raise ValueError("worker cannot be empty")
@@ -725,6 +726,9 @@ def worker_session_bridge(
         resolved_result_name = spec.result_name
     resolved_timeout_seconds = timeout_seconds if timeout_seconds is not None else spec.timeout_seconds
 
+    merged_env = dict(spec.environment or {})
+    if extra_env:
+        merged_env.update(extra_env)
     return session_execution_bridge(
         spec.command,
         timeout_seconds=resolved_timeout_seconds,
@@ -732,7 +736,7 @@ def worker_session_bridge(
         result_name=resolved_result_name,
         working_directory=spec.working_directory,
         source_directory=spec.source_directory,
-        extra_env=spec.environment,
+        extra_env=merged_env or None,
     )
 
 

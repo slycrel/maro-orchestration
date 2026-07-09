@@ -6,6 +6,7 @@ import logging
 import os
 import sys
 import time
+import contextvars
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional
 
@@ -332,8 +333,11 @@ def _run_steps_parallel(
     _fanout_timeout = int(os.environ.get("MARO_STEP_TIMEOUT", "600"))  # 10 min default
 
     with ThreadPoolExecutor(max_workers=n_workers) as pool:
+        # copy_context: pool threads don't inherit ContextVars (run-dir,
+        # default subprocess cwd) — a bare submit would strand run-scoped
+        # writes in the legacy fallback paths. Fresh copy per submit.
         futures = {
-            pool.submit(_run_one, i + 1, s): i
+            pool.submit(contextvars.copy_context().run, _run_one, i + 1, s): i
             for i, s in enumerate(steps)
         }
         try:
@@ -471,7 +475,8 @@ def _run_steps_dag(
             if step_idx in active.values():
                 continue  # already in-flight
             if not remaining_deps.get(step_idx):  # no remaining deps
-                f = pool.submit(_run_one, step_idx)
+                # copy_context: carry run-dir/cwd ContextVars into pool threads
+                f = pool.submit(contextvars.copy_context().run, _run_one, step_idx)
                 active[f] = step_idx
 
     with ThreadPoolExecutor(max_workers=max_workers) as pool:

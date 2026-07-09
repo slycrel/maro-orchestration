@@ -18,6 +18,7 @@ CLI:
 
 from __future__ import annotations
 
+import contextvars
 import json
 import logging
 import sys
@@ -539,7 +540,12 @@ def run_mission(
                     _log(f"  feature done: {feature.title!r} status={feature.status}")
             else:
                 with ThreadPoolExecutor(max_workers=2) as executor:
-                    futures = {executor.submit(_run_feature, f): f for f in milestone.features}
+                    # copy_context: carry any active run-scoped ContextVars
+                    # (run-dir, subprocess cwd) into the feature threads
+                    futures = {
+                        executor.submit(contextvars.copy_context().run, _run_feature, f): f
+                        for f in milestone.features
+                    }
                     for future in as_completed(futures):
                         feat = futures[future]
                         try:

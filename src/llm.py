@@ -595,18 +595,28 @@ def _run_subprocess_safe(cmd, *, input=None, timeout=600,
     # Operator-visibility symlink: `tail -f /tmp/maro-current-step.log` from
     # anywhere shows the in-flight subprocess's merged output. Updated
     # atomically on each new subprocess; dangles between steps (by
-    # design — means "no step running"). Disable with
-    # MARO_CURRENT_STEP_SYMLINK=0.
+    # design — means "no step running"). Under concurrent runs the global
+    # link is last-writer-wins, so a per-run link
+    # `/tmp/maro-current-step-<handle_id>.log` is also written when a
+    # run-dir is active. Disable with MARO_CURRENT_STEP_SYMLINK=0.
     if os.environ.get("MARO_CURRENT_STEP_SYMLINK", "1") != "0":
+        link_targets = ["/tmp/maro-current-step.log"]
         try:
-            link_target = "/tmp/maro-current-step.log"
-            tmp_link = f"{link_target}.{os.getpid()}.tmp"
-            try: os.unlink(tmp_link)
-            except OSError: pass
-            os.symlink(combined_path, tmp_link)
-            os.rename(tmp_link, link_target)  # atomic replace
-        except OSError:
-            pass  # best-effort; never block on symlink failures
+            from runs import current_handle_id
+            hid = current_handle_id()
+            if hid:
+                link_targets.append(f"/tmp/maro-current-step-{hid}.log")
+        except Exception:
+            pass
+        for link_target in link_targets:
+            try:
+                tmp_link = f"{link_target}.{os.getpid()}.tmp"
+                try: os.unlink(tmp_link)
+                except OSError: pass
+                os.symlink(combined_path, tmp_link)
+                os.rename(tmp_link, link_target)  # atomic replace
+            except OSError:
+                pass  # best-effort; never block on symlink failures
 
     def _read_captured():
         combined_f.flush()
