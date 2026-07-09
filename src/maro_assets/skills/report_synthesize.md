@@ -1,0 +1,1 @@
+../../../skills/report_synthesize.md

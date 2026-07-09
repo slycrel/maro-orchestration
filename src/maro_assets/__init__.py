@@ -47,6 +47,7 @@ SHIPPED = {
         "deep_research",
         "document_process",
         "monitor_diagnose",
+        "report_synthesize",
         "resolve_ambiguity",
         "web_extract",
         "web_research",
