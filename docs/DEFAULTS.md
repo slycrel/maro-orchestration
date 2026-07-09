@@ -87,7 +87,7 @@ missing here fails the suite, so this table can't silently rot.
 |---|---|---|
 | `model.backend_order` | `None` | `None` = built-in resolution order (on this box that lands MODEL_POWER on subprocess `claude -p`, which shares Jeremy's plan quota — accepted trade per budget posture 2026-07-08; API lane deferred to the budget-models phase). Set an ordered list to re-route. |
 | `notify.command` | `""` | Empty = external notifications OFF. Notifications run an arbitrary shell command — outward side effect, so opt-in. Events always land in `events.jsonl` regardless. |
-| `notify.events` | `DEFAULT_EVENTS` (notify.py) | Which captain's-log event types trigger the command once one is configured. |
+| `notify.events` | `DEFAULT_EVENTS` (notify.py) | Which captain's-log event types trigger the command once one is configured. `backend_actionable` (auth/billing/context death with the fix command) is in the default set since 2026-07-09 — the notify channel is the only surface an away-from-keyboard user sees; opt out by setting an explicit list without it. |
 | `notify.timeout_seconds` | `30` | Kill a hung notify command rather than wedge the loop. |
 | `telegram.chat_id` / `telegram.chat_ids` | `None` | Unset = Telegram listener refuses to engage; doubles as the allowlist of chats it may answer. Never wildcard this — it's the auth boundary. |
 | `captains_log.rotate_mb` / `captains_log.rotate_keep` | `5` / `1000` | Log rotation: size trigger + retained-event floor. |

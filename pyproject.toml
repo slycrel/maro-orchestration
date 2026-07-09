@@ -137,6 +137,7 @@ py-modules = [
     "lat_inject",
     "listener_core",
     "llm",
+    "llm_errors",
     "llm_parse",
     "local_models",
     "loop_artifacts",

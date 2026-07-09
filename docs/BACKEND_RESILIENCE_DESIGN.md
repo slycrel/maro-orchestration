@@ -1,5 +1,5 @@
 ---
-status: proposed-design
+status: dormant-design
 ---
 
 # Backend-Error Resilience & Auto-Resume

@@ -235,8 +235,13 @@ def finalize_run(
     *,
     status: str,
     ended_at: Optional[str] = None,
+    extra: Optional[dict] = None,
 ) -> Optional[Path]:
-    """Mark a run as ended in metadata.json. Returns run-dir or None if absent."""
+    """Mark a run as ended in metadata.json. Returns run-dir or None if absent.
+
+    `extra` merges additional top-level keys into metadata (e.g.
+    `backend_error` — the actionable why/what-to-do for error-status runs,
+    BACKEND_RESILIENCE_DESIGN §2)."""
     rd = run_dir(handle_id)
     if not rd.exists():
         return None
@@ -249,6 +254,8 @@ def finalize_run(
         meta = {}
     meta["status"] = status
     meta["ended_at"] = ended_at or datetime.now(timezone.utc).isoformat()
+    if extra:
+        meta.update(extra)
     from file_lock import atomic_write
     atomic_write(meta_path, json.dumps(meta, indent=2))
     try:

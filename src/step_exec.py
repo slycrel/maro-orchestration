@@ -910,13 +910,34 @@ def execute_step(
             )
         else:
             log.warning("step %d adapter_error: %s elapsed=%.1fs", step_num, exc, _elapsed)
-        return {
-            "status": "blocked",
-            "stuck_reason": f"LLM call failed: {exc}",
-            "result": "",
-            "tokens_in": 0,
-            "tokens_out": 0,
-        }
+        # Carry the structured error class instead of stringifying it away —
+        # diagnoses/notify/stuck_reason consumers can render the fix directly
+        # (BACKEND_RESILIENCE_DESIGN §2; the old corpus had to re-infer
+        # adapter_timeout from "0 tokens after 600491ms").
+        try:
+            from llm_errors import classify_error, is_actionable
+            _einfo = classify_error(exc)
+            _stuck = (
+                f"LLM call failed ({_einfo.error_class}): {_einfo.user_action}"
+                if is_actionable(_einfo) else f"LLM call failed: {exc}"
+            )
+            return {
+                "status": "blocked",
+                "stuck_reason": _stuck,
+                "error_class": _einfo.error_class,
+                "user_action": _einfo.user_action,
+                "result": "",
+                "tokens_in": 0,
+                "tokens_out": 0,
+            }
+        except Exception:
+            return {
+                "status": "blocked",
+                "stuck_reason": f"LLM call failed: {exc}",
+                "result": "",
+                "tokens_in": 0,
+                "tokens_out": 0,
+            }
 
     _llm_elapsed = time.monotonic() - _llm_t0
     _tok = resp.input_tokens + resp.output_tokens

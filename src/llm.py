@@ -201,49 +201,27 @@ class LLMTool:
 # ---------------------------------------------------------------------------
 
 def _is_retryable(exc: Exception) -> bool:
-    """Return True if the exception is a transient error worth retrying."""
-    msg = str(exc).lower()
-    # HTTP 429, 5xx, rate limit, overloaded, timeout
-    for pattern in ("429", "rate limit", "rate_limit", "overloaded", "502", "503", "529",
-                    "timeout", "timed out", "connection", "temporarily unavailable"):
-        if pattern in msg:
-            return True
-    # Anthropic SDK specific
-    exc_type = type(exc).__name__
-    if exc_type in ("RateLimitError", "APIStatusError", "APIConnectionError",
-                     "InternalServerError", "OverloadedError"):
-        return True
-    return False
+    """Return True if the exception is a transient error worth retrying.
+
+    View over llm_errors.classify_error (BACKEND_RESILIENCE_DESIGN §1) —
+    notably, billing failures that *look* transient (OpenAI's
+    insufficient_quota 429) are no longer retried.
+    """
+    from llm_errors import classify_error
+    return classify_error(exc).retryable
 
 
 def _is_failover_error(exc: Exception) -> bool:
     """Return True if the exception warrants trying the next backend.
 
-    Failover triggers on errors that indicate a *backend is unavailable*,
-    not errors that indicate the *request is bad* (400, bad schema, etc.).
-
-    - 402/payment required: quota or billing issue on this backend
-    - 401/403: auth failure (bad or expired key for this backend)
-    - 5xx after retry exhaustion: server-side instability
-    - Subprocess failures: binary missing or timed out unrecoverably
+    View over llm_errors.classify_error. Failover triggers on errors that
+    indicate a *backend is unavailable* (auth/billing/5xx-after-retry/
+    subprocess death), not errors that indicate the *request is bad* —
+    except the known trap: Anthropic credit exhaustion is a 400 that IS a
+    backend-unavailable condition and now fails over.
     """
-    msg = str(exc).lower()
-    # Backend payment/quota/auth errors
-    for pattern in ("402", "payment required", "quota exceeded", "billing",
-                    "401", "unauthorized", "403", "forbidden"):
-        if pattern in msg:
-            return True
-    # Server errors (after retry exhaustion in _retry_complete)
-    for pattern in ("500", "502", "503", "529",
-                    "service unavailable", "internal server error"):
-        if pattern in msg:
-            return True
-    # Subprocess-specific failures (binary not found or subprocess crashed)
-    if "subprocess" in msg and any(s in msg for s in ("failed", "not found", "unavailable")):
-        return True
-    if "claude binary" in msg or "claude -p" in msg:
-        return True
-    return False
+    from llm_errors import classify_error
+    return classify_error(exc).failover
 
 
 def _env_int(name: str, default: int) -> int:
@@ -432,13 +410,39 @@ class FailoverAdapter(LLMAdapter):
             except Exception as exc:
                 last_exc = exc
                 if not _is_failover_error(exc) or idx >= len(self._adapters) - 1:
-                    # Non-failover error or last adapter — propagate
+                    # Non-failover error or last adapter — propagate. When the
+                    # user can DO something about it (auth/billing/context),
+                    # wrap in BackendError so every surface downstream (CLI
+                    # stderr, run metadata, notify) renders the fix instead of
+                    # a traceback (BACKEND_RESILIENCE_DESIGN §2).
+                    from llm_errors import BackendError, classify_error, is_actionable
+                    if not isinstance(exc, BackendError):
+                        _info = classify_error(exc, backend=getattr(adapter, "backend", ""))
+                        if is_actionable(_info):
+                            raise BackendError(_info) from exc
                     raise
                 next_backend = getattr(self._adapters[idx + 1], "backend", "?")
                 log.warning(
                     "FailoverAdapter: %s failed with %s (%s), trying %s",
                     adapter.backend, type(exc).__name__, str(exc)[:80], next_backend,
                 )
+                # Actionable-class failovers must not be silently absorbed by a
+                # successful failover (design decision: the run should succeed
+                # AND the user should learn their credential/billing is dead).
+                try:
+                    from llm_errors import classify_error as _cls, is_actionable as _act
+                    _finfo = _cls(exc, backend=getattr(adapter, "backend", ""))
+                    if _act(_finfo):
+                        from notify import emit as _notify_emit
+                        _notify_emit("backend_actionable", {
+                            "status": "degraded",
+                            "error_class": _finfo.error_class,
+                            "backend": _finfo.backend,
+                            "user_action": _finfo.user_action,
+                            "summary": f"failed over to {next_backend}: {_finfo.user_action}",
+                        })
+                except Exception:
+                    pass
         # Should never reach here, but satisfy type checker
         if last_exc is not None:
             raise last_exc

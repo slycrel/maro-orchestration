@@ -510,6 +510,7 @@ def handle(
     on dry_run so dry runs stay side-effect free.
     """
     result: Optional[HandleResult] = None
+    _backend_err = None
     try:
         from runs import current_handle_id as _pre_hid_fn
         _pre_hid = _pre_hid_fn()
@@ -530,6 +531,21 @@ def handle(
             origin=origin,
         )
         return result
+    except Exception as _handle_exc:
+        # Classify backend deaths so the finalize block below can stamp the
+        # actionable context into run metadata and ping the notify channel —
+        # a headless user's only view of "your auth/credits died" (design §2).
+        try:
+            from llm_errors import BackendError, classify_error, is_actionable
+            if isinstance(_handle_exc, BackendError):
+                _backend_err = _handle_exc.info
+            else:
+                _backend_err = classify_error(_handle_exc)
+                if not is_actionable(_backend_err):
+                    _backend_err = None
+        except Exception:
+            _backend_err = None
+        raise
     finally:
         # Finalize the per-run metadata for EVERY caller, not just the CLI.
         # Before 2026-06-11 only cli main() finalized, so task-path runs
@@ -557,7 +573,31 @@ def handle(
                 _slice_log(_hid)
                 _snapshot_repo(_hid)
                 _status = result.status if result is not None else "error"
-                _finalize_run(_hid, status=_status)
+                _finalize_run(
+                    _hid,
+                    status=_status,
+                    extra={"backend_error": {
+                        "error_class": _backend_err.error_class,
+                        "backend": _backend_err.backend,
+                        "user_action": _backend_err.user_action,
+                    }} if _backend_err is not None else None,
+                )
+                # Actionable backend death: ping the notify channel with the
+                # fix (auth/billing/context) — distinct from run_completed so
+                # substrates can render it as "act now", not "run finished".
+                if _backend_err is not None:
+                    try:
+                        from notify import emit as _notify_emit_be
+                        _notify_emit_be("backend_actionable", {
+                            "handle_id": _hid,
+                            "status": _status,
+                            "error_class": _backend_err.error_class,
+                            "backend": _backend_err.backend,
+                            "user_action": _backend_err.user_action,
+                            "summary": _backend_err.user_action,
+                        })
+                    except Exception:
+                        pass
                 # Post-goal curation: classify the now-finalized run and park
                 # the paid-for capture for later mining (skills/scripts/decision
                 # priors/re-attempts). Reads the metadata finalize just wrote, so
