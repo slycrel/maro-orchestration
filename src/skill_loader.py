@@ -36,6 +36,14 @@ log = logging.getLogger("maro.skill_loader")
 
 _REPO_ROOT = Path(__file__).parent.parent
 SKILLS_DIR = _REPO_ROOT / "skills"   # Repo skills (architecture docs, checked in)
+if not SKILLS_DIR.exists():
+    # Installed environment (no repo layout): fall back to the packaged
+    # defaults shipped as maro_assets package data.
+    try:
+        from maro_assets import assets_dir as _assets_dir
+        SKILLS_DIR = _assets_dir("skills") or SKILLS_DIR
+    except Exception:
+        pass
 
 
 def _workspace_skills_dir() -> Optional[Path]:

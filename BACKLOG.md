@@ -585,10 +585,19 @@ the subprocess lane; the llm.py backend-order warning ("Opus via subprocess
 is unreliable for long multi-step work") printed as designed. Residuals,
 none blocking:
 
-- [ ] **Curated skills (`skills/*.md`) aren't packaged** — pip installs ship
-  no skills dir; doctor honestly flags it. Ship as package data (needs a
-  data-files approach for the flat layout) or auto-seed
-  `~/.maro/workspace/skills/` from a bundled resource at bootstrap.
+- [x] **Curated skills (`skills/*.md`) aren't packaged** — DONE 2026-07-09.
+  Shipped as package data, not bootstrap seeding (seeding would blur the
+  workspace-tier semantics — shipped defaults must stay "repo" tier so
+  evolved workspace overrides win and upgrades refresh defaults). New
+  `src/maro_assets/` real package whose `skills/` + `personas/` are
+  symlinks to the top-level dirs; setuptools follows them at build time
+  (proven on wheel AND sdist — real files land in both). Loaders fall back
+  when the repo layout is absent: `skill_loader.SKILLS_DIR` and
+  `PersonaRegistry` resolve to `maro_assets.assets_dir(...)`. Live-proven
+  in a clean venv: 14 skills + 24 personas load from site-packages;
+  doctor's curated-skills row goes green. Census tripwires extended
+  (`tests/test_packaging.py`): declared-packages exemption in the flat
+  census, symlink-integrity + glob-coverage checks, assets-vs-repo parity.
 - [x] **Service templates written into the venv** — DONE 2026-07-09.
   `config.deploy_dir()` was package-relative (`Path(__file__).parent.parent`),
   which lands in `<venv>/lib/.../site-packages/..` under a pip install —

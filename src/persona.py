@@ -193,7 +193,13 @@ class PersonaRegistry:
             if self._repo_dir is None:
                 self._repo_dir = Path(__file__).resolve().parent.parent / "personas"
                 if not self._repo_dir.exists():
-                    self._repo_dir = Path.cwd() / "personas"
+                    # Installed environment (no repo layout): packaged defaults
+                    try:
+                        from maro_assets import assets_dir
+                        packaged = assets_dir("personas")
+                    except Exception:
+                        packaged = None
+                    self._repo_dir = packaged or Path.cwd() / "personas"
 
         self._cache: Dict[str, PersonaSpec] = {}
 

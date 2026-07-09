@@ -71,6 +71,9 @@ maro-harness-optimizer = "harness_optimizer:main"
 # docker clean-install trial: entry points crashed ModuleNotFoundError).
 # Census tripwire: tests/test_packaging.py fails if src/*.py and this list drift.
 package-dir = {"" = "src"}
+# maro_assets is the ONE real package: shipped default skills/personas as
+# package data (symlinks to the top-level dirs; the build copies real files).
+packages = ["maro_assets"]
 py-modules = [
     "agent_loop",
     "ancestry",
@@ -213,6 +216,9 @@ py-modules = [
     "workers",
     "worktree",
 ]
+
+[tool.setuptools.package-data]
+maro_assets = ["skills/*.md", "personas/*.md"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
