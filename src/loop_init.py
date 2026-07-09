@@ -251,21 +251,53 @@ def _initialize_loop(
             )
         except LoopBusy as _busy:
             _holder = _busy.holder
-            log.warning("loop refused: %s", _busy)
-            if verbose:
-                print(f"[maro] {_busy}", file=sys.stderr, flush=True)
-            return ctx, LoopResult(
-                loop_id=ctx.loop_id,
-                goal=goal,
-                project=ctx.project,
-                steps=[],
-                status="refused_busy",
-                stuck_reason=str(_busy),
-                total_tokens_in=0,
-                total_tokens_out=0,
-                elapsed_ms=0,
-                log_path=None,
-            )
+            # busy_policy=worktree (opt-in, phase 3b): instead of refusing,
+            # run in an isolated worktree of the project dir and merge at
+            # finalize. Only possible for git-repo projects — non-git falls
+            # through to refuse (mutual exclusion is the complete fix there).
+            _policy = ""
+            try:
+                from config import get as _cfg_get
+                _policy = str(_cfg_get("loop.busy_policy", "refuse")).strip().lower()
+            except Exception:
+                _policy = "refuse"
+            if _policy == "worktree":
+                try:
+                    import worktree as _wtmod
+                    from orch_items import project_dir as _proj_dir
+                    _wt = _wtmod.provision(
+                        _proj_dir(ctx.project), "run", loop_id=ctx.loop_id,
+                    )
+                except Exception as _wt_exc:
+                    log.warning("busy_policy=worktree provision error: %s", _wt_exc)
+                    _wt = None
+                if _wt is not None:
+                    ctx.run_worktree = _wt
+                    log.info(
+                        "project '%s' busy — proceeding in worktree %s (branch %s)",
+                        ctx.project, _wt.path, _wt.branch,
+                    )
+                    if verbose:
+                        print(
+                            f"[maro] project busy — isolated worktree on {_wt.branch}",
+                            file=sys.stderr, flush=True,
+                        )
+            if ctx.run_worktree is None:
+                log.warning("loop refused: %s", _busy)
+                if verbose:
+                    print(f"[maro] {_busy}", file=sys.stderr, flush=True)
+                return ctx, LoopResult(
+                    loop_id=ctx.loop_id,
+                    goal=goal,
+                    project=ctx.project,
+                    steps=[],
+                    status="refused_busy",
+                    stuck_reason=str(_busy),
+                    total_tokens_in=0,
+                    total_tokens_out=0,
+                    elapsed_ms=0,
+                    log_path=None,
+                )
     except ImportError as _gate_exc:
         log.debug("admission gate unavailable: %s", _gate_exc)
 

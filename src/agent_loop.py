@@ -226,7 +226,12 @@ def run_agent_loop(
     # pass derives — and create it, since Popen raises on a missing cwd.
     try:
         from llm import set_default_subprocess_cwd
-        _fence_dir = _project_dir_root() / (project or _goal_to_slug(ctx.goal))
+        if getattr(ctx, "run_worktree", None) is not None:
+            # busy_policy=worktree: the whole run works in its isolated
+            # worktree; loop_finalize merges back into the project dir.
+            _fence_dir = ctx.run_worktree.path
+        else:
+            _fence_dir = _project_dir_root() / (project or _goal_to_slug(ctx.goal))
         _fence_dir.mkdir(parents=True, exist_ok=True)
         set_default_subprocess_cwd(str(_fence_dir))
         # In-fence scratch space (2026-07-04, Jeremy: "lean into /tmp... nice

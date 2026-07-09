@@ -282,6 +282,29 @@ def _build_result_and_finalize(
             except Exception as _art_exc:
                 log.debug("artifact cleanup failed: %s", _art_exc)
 
+    # busy_policy=worktree: merge the run's isolated worktree back into the
+    # project checkout before releasing the slot. Conflict never drops work —
+    # the branch is preserved and the run downgrades to "partial" naming it.
+    if getattr(ctx, "run_worktree", None) is not None:
+        _wt = ctx.run_worktree
+        try:
+            import worktree as _wtmod
+            _merge = _wtmod.merge_back(_wt, message=f"wt: run {ctx.loop_id}")
+            _wtmod.cleanup(_wt, keep_on_failure=not _merge.ok)
+            _wtmod.prune(_wt.repo_dir)
+            if not _merge.ok:
+                log.warning("run worktree merge failed: %s", _merge.detail)
+                if result.status == "done":
+                    result.status = "partial"
+                result.stuck_reason = (
+                    (result.stuck_reason + "; " if result.stuck_reason else "")
+                    + f"worktree merge failed — work preserved on {_merge.branch}: "
+                    + _merge.detail
+                )
+        except Exception as _wt_exc:
+            log.warning("run worktree finalize error: %s", _wt_exc)
+        ctx.run_worktree = None
+
     # Release loop lock — the admission slot first (per-project flock),
     # then the global informational lockfile.
     try:

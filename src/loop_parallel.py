@@ -17,6 +17,62 @@ from step_exec import execute_step as _execute_step
 log = logging.getLogger("maro.loop")
 
 
+def _run_in_step_worktree(step_label: str, run_fn):
+    """Isolate one parallel step in its own git worktree (phase 3b).
+
+    Parallel steps sharing the fence checkout was the production incident
+    class: forks writing over each other's working tree, git-stash races.
+    If the fence dir (run-scoped subprocess cwd) is a git repo, the step
+    runs in a fresh worktree on branch maro/<loop_id>/<label>; merge-back
+    into the base branch is serialized per-repo as steps complete. Merge
+    conflict → step blocked with the branch named, work preserved.
+
+    Non-git fence dirs run in place — byte-identical to pre-3b behavior.
+    """
+    from llm import get_default_subprocess_cwd, default_subprocess_cwd
+
+    base = get_default_subprocess_cwd()
+    wt = None
+    wtmod = None
+    if base:
+        try:
+            import worktree as wtmod
+            try:
+                from runs import current_handle_id
+                lid = current_handle_id()
+            except Exception:
+                lid = None
+            if not lid:
+                import uuid as _uuid
+                lid = _uuid.uuid4().hex[:8]
+            wt = wtmod.provision(base, step_label, loop_id=lid)
+        except Exception as _wt_exc:
+            log.debug("step worktree provision skipped for %s: %s", step_label, _wt_exc)
+            wt = None
+    if wt is None:
+        return run_fn()
+
+    try:
+        with default_subprocess_cwd(str(wt.path)):
+            outcome = run_fn()
+    except BaseException:
+        wtmod.cleanup(wt, keep_on_failure=True)
+        raise
+    merge = wtmod.merge_back(wt, message=f"wt: {step_label}")
+    wtmod.cleanup(wt, keep_on_failure=not merge.ok)
+    if not merge.ok:
+        outcome = dict(outcome)
+        outcome["status"] = "blocked"
+        outcome["worktree_branch"] = merge.branch
+        outcome["stuck_reason"] = f"worktree merge failed: {merge.detail}"
+        outcome["summary"] = (
+            (outcome.get("summary", "") or "")
+            + f" [worktree merge failed — work preserved on {merge.branch}]"
+        ).strip()
+        log.warning("parallel step %s: %s", step_label, merge.detail)
+    return outcome
+
+
 def _run_parallel_batch(
     ctx: LoopContext,
     step_text: str,
@@ -280,7 +336,7 @@ def _run_steps_parallel(
             step_adapter = adapter
 
         # _execute_step handles prefetch internally
-        outcome = _execute_step(
+        outcome = _run_in_step_worktree(f"step{step_idx}", lambda: _execute_step(
             goal=goal,
             step_text=step_text,
             step_num=step_idx,
@@ -292,7 +348,7 @@ def _run_steps_parallel(
             ancestry_context=ancestry_context,
             project_dir=project_dir,
             shared_ctx=shared_ctx,
-        )
+        ))
 
         # Post-step security scan — parallel fan-out skips the main loop's
         # _post_step_checks, so we do a lightweight scan here.  Ralph verify
@@ -444,7 +500,7 @@ def _run_steps_dag(
             log.debug("classify_step_model failed for DAG step %d, using default: %s", step_idx, _cla_exc)
             step_adapter = adapter
 
-        outcome = _execute_step(
+        outcome = _run_in_step_worktree(f"dagstep{step_idx}", lambda: _execute_step(
             goal=goal,
             step_text=step_text,
             step_num=step_idx,
@@ -456,7 +512,7 @@ def _run_steps_dag(
             ancestry_context=ancestry_context,
             project_dir=project_dir,
             shared_ctx=shared_ctx,
-        )
+        ))
         if verbose:
             status_label = outcome.get("status", "?")
             summary = outcome.get("summary", "")[:80]
