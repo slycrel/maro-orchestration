@@ -568,6 +568,20 @@ def handle(
                     _card = _curate_run(_hid, status=_status)
                 except Exception:
                     pass
+                # Refresh the live report now that run_card.json exists (BACKLOG
+                # #17 sub-item 3 / design known-gap #5): write_run_report() froze
+                # the report at loop-finalize time, before curation wrote the
+                # verdict a few lines above — so the first render's verdict panel
+                # is always empty. Targeted single-run re-render, not a full
+                # backfill/index rebuild (O(1), not O(run count)). No-op for
+                # NOW-lane runs (no loop, no report to refresh).
+                if _card is not None:
+                    try:
+                        from loop_report import refresh_run_report as _refresh_report
+                        from runs import run_dir as _run_dir_report
+                        _refresh_report(_run_dir_report(_hid))
+                    except Exception:
+                        pass
                 # Substrate notification: the run_card IS the completion payload
                 # (status, done!=achieved class, result excerpt + path).
                 try:

@@ -105,22 +105,16 @@ write fence — shipped arc") and `docs/BOUNDED_WORKSPACE.md`.
 
 ### 17. Run-visibility residuals (2026-07-09 real-data review)
 
-- [ ] **loop_id coverage at log_event call sites**: only ~11 of ~48 pass
-  `loop_id` (85% of real entries have none). The slice-first report makes
-  the missing attribution visible instead of dropped, but timeline
-  slotting/decision-points only work for attributed entries. Thread a
-  loop_id (or contextvar) through the loop-adjacent sites opportunistically.
-- [ ] **Purpose sniffer is prompt-opener matching** (`loop_report._PURPOSE_PATTERNS`,
-  built from the real distribution of 761 records). Fragile to prompt
-  rewording; the durable fix is `record_llm_call(purpose="...")` stamped by
-  the caller at the recording seam. Add the field, keep the sniffer as
-  fallback for historical records.
-- [ ] **Live reports freeze before run_card.json exists** (design known-gap
-  #5) — `viz backfill --force` re-renders with the verdict; the clean fix
-  is still a post-curation hook in handle.py.
+Three of four sub-items shipped 2026-07-09 (contextvar loop_id threading,
+purpose stamping, post-curation report refresh — see BACKLOG_DONE). One
+remains, deliberately left open pending a product call:
+
 - [ ] **NOW-lane runs (258 of 665 dirs) have no loop, hence no report** —
   index lists them link-less. If NOW-lane visibility matters, a single-call
-  mini-report from metadata + calls/ is cheap.
+  mini-report from metadata + calls/ is cheap. **FLAG FOR JEREMY:** whether
+  1-shot NOW-lane runs (often trivial single-call Q&A) deserve a report at
+  all is a product/UX call, not derivable from the code — the mechanics are
+  cheap once that's answered.
 
 ---
 

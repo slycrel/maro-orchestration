@@ -715,14 +715,17 @@ def test_run_activity_section_shows_family_counts(monkeypatch, tmp_path):
 # ---------------------------------------------------------------------------
 
 def _write_call(calls_dir, seq, *, prompt, model="claude-sonnet-5", backend="anthropic",
-                tokens_in=100, tokens_out=10):
+                tokens_in=100, tokens_out=10, purpose=None):
     calls_dir.mkdir(parents=True, exist_ok=True)
     p = calls_dir / f"call-{seq:05d}.json"
-    p.write_text(json.dumps({
+    rec = {
         "seq": seq, "backend": backend, "model": model, "prompt": prompt,
         "response": "ok", "tool_events": [], "tokens_in": tokens_in,
         "tokens_out": tokens_out, "ts": "2026-07-01T00:00:05+00:00",
-    }))
+    }
+    if purpose is not None:
+        rec["purpose"] = purpose
+    p.write_text(json.dumps(rec))
     return p
 
 
@@ -754,6 +757,30 @@ def test_report_lists_all_llm_calls_not_just_step_calls(monkeypatch, tmp_path):
 def test_call_purpose_sniffer_extracts_persona():
     purpose, persona = lr._sniff_call_head("# Persona: Director Proxy\n\nYou are operating as...")
     assert persona == "Director Proxy"
+
+
+def test_call_meta_prefers_stamped_purpose_over_sniffer(tmp_path):
+    """BACKLOG #17 sub-item 2: a caller-stamped purpose= wins over the
+    prompt-opener sniffer, even when the prompt text would sniff to a
+    different label."""
+    p = _write_call(
+        tmp_path / "calls", 1,
+        prompt="[system]\nYou are a routing agent. Classify...",
+        purpose="custom label",
+    )
+    meta = lr._call_meta(str(p))
+    assert meta["purpose"] == "custom label"
+
+
+def test_call_meta_falls_back_to_sniffer_when_no_purpose_stamped(tmp_path):
+    """A record written before purpose= existed (or by a caller that hasn't
+    been stamped yet) still gets a label via the sniffer fallback."""
+    p = _write_call(
+        tmp_path / "calls", 1,
+        prompt="[system]\nYou are a routing agent. Classify...",
+    )
+    meta = lr._call_meta(str(p))
+    assert meta["purpose"] == "routing"
 
 
 # ---------------------------------------------------------------------------
@@ -863,3 +890,46 @@ def test_backfill_coerces_running_status_to_interrupted(monkeypatch, tmp_path):
     # A crashed run must not be rendered as live: frozen sentinel, no auto-refresh.
     assert content.startswith("<!-- maro-report: final status=interrupted -->")
     assert 'http-equiv="refresh"' not in content
+
+
+# ---------------------------------------------------------------------------
+# refresh_run_report — targeted single-run re-render (BACKLOG #17 sub-item 3
+# / design known-gap #5: the live report freezes before run_card.json exists)
+# ---------------------------------------------------------------------------
+
+def test_refresh_run_report_rerenders_existing_report(monkeypatch, tmp_path):
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+    rd = _make_historical_run(tmp_path, "eeee5555-live-run", "liveloop", with_report=True)
+
+    changed = lr.refresh_run_report(rd)
+    assert changed is True
+
+    content = (rd / "build" / "loop-liveloop-report.html").read_text()
+    assert "First step" in content  # regenerated, not the stale "<html>old</html>" stub
+
+
+def test_refresh_run_report_does_not_touch_index(monkeypatch, tmp_path):
+    """Unlike backfill_run_reports(), this must not rescan/rebuild index.html —
+    it's called on every goal completion and must stay O(1), not O(run count)."""
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+    rd = _make_historical_run(tmp_path, "ffff6666-live-run", "liveloop2", with_report=True)
+    index_path = tmp_path / "runs" / "index.html"
+    assert not index_path.exists()
+
+    lr.refresh_run_report(rd)
+    assert not index_path.exists()
+
+
+def test_refresh_run_report_noop_when_no_existing_report(monkeypatch, tmp_path):
+    """A NOW-lane run (or any run with a loop log but no live report yet) is
+    left alone — refresh only re-renders reports that already exist."""
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+    rd = _make_historical_run(tmp_path, "gggg7777-no-report", "noreploop", with_report=False)
+
+    changed = lr.refresh_run_report(rd)
+    assert changed is False
+    assert not (rd / "build" / "loop-noreploop-report.html").exists()
+
+
+def test_refresh_run_report_noop_for_missing_build_dir(tmp_path):
+    assert lr.refresh_run_report(tmp_path / "does-not-exist") is False

@@ -197,263 +197,269 @@ def run_agent_loop(
     if _early_return is not None:
         return _early_return
 
-    ctx.channel = channel  # Phase 64C: mid-loop escalation channel
+    # BACKLOG #17 sub-item 1: scope the ambient loop_id for the duration
+    # of this run so log_event() calls deep in the execution call stack
+    # (skills.py, evolver.py, knowledge_lens.py, ...) get attributed
+    # without threading loop_id through every signature.
+    from captains_log import loop_id_scope
+    with loop_id_scope(ctx.loop_id):
+        ctx.channel = channel  # Phase 64C: mid-loop escalation channel
 
-    # Model constants for the session-level tier floor ordering (Phase 57).
-    from llm import MODEL_CHEAP, MODEL_MID, MODEL_POWER
-    _TIER_ORDER = {MODEL_CHEAP: 0, MODEL_MID: 1, MODEL_POWER: 2}
+        # Model constants for the session-level tier floor ordering (Phase 57).
+        from llm import MODEL_CHEAP, MODEL_MID, MODEL_POWER
+        _TIER_ORDER = {MODEL_CHEAP: 0, MODEL_MID: 1, MODEL_POWER: 2}
 
-    # Unpack ctx into the locals the orchestrator still threads into phase
-    # calls and the auto-recovery re-run.
-    loop_id = ctx.loop_id
-    start_ts = ctx.start_ts
-    project = ctx.project
-    adapter = ctx.adapter
-    interrupt_queue = ctx.interrupt_queue
-    _perm_ctx = ctx.perm_ctx
+        # Unpack ctx into the locals the orchestrator still threads into phase
+        # calls and the auto-recovery re-run.
+        loop_id = ctx.loop_id
+        start_ts = ctx.start_ts
+        project = ctx.project
+        adapter = ctx.adapter
+        interrupt_queue = ctx.interrupt_queue
+        _perm_ctx = ctx.perm_ctx
 
-    # Bind the run-scoped default cwd to this loop's project dir so EVERY
-    # agentic subprocess (verify/quality_gate/pre_flight/refinement/claim_probe)
-    # writes in-workspace instead of inheriting Maro's launch cwd. The executor
-    # still binds cwd per-call (same value); recursive/fan-out sub-loops re-set
-    # this on their own entry. Not reset on exit by design — quality_gate runs
-    # after the loop returns and should inherit the same project dir (handle.py
-    # also scopes it explicitly). Tests reset it via an autouse fixture.
-    # A project-less run is NOT exempt (BACKLOG #1, 3rd repro: dispatched
-    # goals arrived with project=None and the whole run executed with the
-    # inherited launch cwd — relative writes leaked into the repo root).
-    # Fall back to the goal-slug project dir — the same identity the scope
-    # pass derives — and create it, since Popen raises on a missing cwd.
-    try:
-        from llm import set_default_subprocess_cwd
-        if getattr(ctx, "run_worktree", None) is not None:
-            # busy_policy=worktree: the whole run works in its isolated
-            # worktree; loop_finalize merges back into the project dir.
-            _fence_dir = ctx.run_worktree.path
-        else:
-            _fence_dir = _project_dir_root() / (project or _goal_to_slug(ctx.goal))
-        _fence_dir.mkdir(parents=True, exist_ok=True)
-        set_default_subprocess_cwd(str(_fence_dir))
-        # In-fence scratch space (2026-07-04, Jeremy: "lean into /tmp... nice
-        # to add a tmp scratch folder under the workspace"). /tmp is also
-        # fence-allowed (artifact_check.fence_allow_roots); this one survives
-        # reboots and stays inspectable next to the run's other state.
-        from config import workspace_root as _ws_root
-        (_ws_root() / "tmp").mkdir(parents=True, exist_ok=True)
-    except Exception:
-        pass
+        # Bind the run-scoped default cwd to this loop's project dir so EVERY
+        # agentic subprocess (verify/quality_gate/pre_flight/refinement/claim_probe)
+        # writes in-workspace instead of inheriting Maro's launch cwd. The executor
+        # still binds cwd per-call (same value); recursive/fan-out sub-loops re-set
+        # this on their own entry. Not reset on exit by design — quality_gate runs
+        # after the loop returns and should inherit the same project dir (handle.py
+        # also scopes it explicitly). Tests reset it via an autouse fixture.
+        # A project-less run is NOT exempt (BACKLOG #1, 3rd repro: dispatched
+        # goals arrived with project=None and the whole run executed with the
+        # inherited launch cwd — relative writes leaked into the repo root).
+        # Fall back to the goal-slug project dir — the same identity the scope
+        # pass derives — and create it, since Popen raises on a missing cwd.
+        try:
+            from llm import set_default_subprocess_cwd
+            if getattr(ctx, "run_worktree", None) is not None:
+                # busy_policy=worktree: the whole run works in its isolated
+                # worktree; loop_finalize merges back into the project dir.
+                _fence_dir = ctx.run_worktree.path
+            else:
+                _fence_dir = _project_dir_root() / (project or _goal_to_slug(ctx.goal))
+            _fence_dir.mkdir(parents=True, exist_ok=True)
+            set_default_subprocess_cwd(str(_fence_dir))
+            # In-fence scratch space (2026-07-04, Jeremy: "lean into /tmp... nice
+            # to add a tmp scratch folder under the workspace"). /tmp is also
+            # fence-allowed (artifact_check.fence_allow_roots); this one survives
+            # reboots and stays inspectable next to the run's other state.
+            from config import workspace_root as _ws_root
+            (_ws_root() / "tmp").mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
 
-    def _resolve_tools() -> list:
-        """Re-query tool registry on each call to pick up runtime-registered tools."""
-        return (
-            _get_tools_for_role(_perm_ctx.role, _perm_ctx.deny_patterns)
-            if _perm_ctx is not None else list(_EXECUTE_TOOLS)
+        def _resolve_tools() -> list:
+            """Re-query tool registry on each call to pick up runtime-registered tools."""
+            return (
+                _get_tools_for_role(_perm_ctx.role, _perm_ctx.deny_patterns)
+                if _perm_ctx is not None else list(_EXECUTE_TOOLS)
+            )
+
+        # Phase B: Decompose goal into steps
+        ctx.set_phase(LoopPhase.DECOMPOSE)
+        steps, _prereq_context, _lessons_context, _skills_context, _cost_context, _had_no_matching_skill = _decompose_goal(
+            ctx,
+            preset_steps=preset_steps,
+            max_steps=max_steps,
+            knowledge_sub_goals=knowledge_sub_goals,
+            permission_context=permission_context,
         )
 
-    # Phase B: Decompose goal into steps
-    ctx.set_phase(LoopPhase.DECOMPOSE)
-    steps, _prereq_context, _lessons_context, _skills_context, _cost_context, _had_no_matching_skill = _decompose_goal(
-        ctx,
-        preset_steps=preset_steps,
-        max_steps=max_steps,
-        knowledge_sub_goals=knowledge_sub_goals,
-        permission_context=permission_context,
-    )
-
-    # Phase C: Pre-flight checks
-    ctx.set_phase(LoopPhase.PRE_FLIGHT)
-    steps, _pf, _pf_early_return = _preflight_checks(
-        ctx, steps,
-        resume_from_loop_id=resume_from_loop_id,
-        parallel_fan_out=parallel_fan_out,
-    )
-    if _pf_early_return is not None:
-        return _pf_early_return
-
-    # Unpack pre-flight results into locals used by subsequent phases
-    _resume_completed = _pf["resume_completed"]
-    _pf_review = _pf["pf_review"]
-    _clean_steps = _pf["clean_steps"]
-    _deps = _pf["deps"]
-    _levels = _pf["levels"]
-    _parallel_levels = _pf["parallel_levels"]
-    _manifest_steps = _pf["manifest_steps"]
-    _replan_count = _pf["replan_count"]
-    _loop_shared_ctx = _pf["loop_shared_ctx"]
-    _proj_fanout_dir = _pf["proj_fanout_dir"]
-    _use_dag = _pf["use_dag"]
-    _use_fanout = _pf["use_fanout"]
-
-    # Phase D: Parallel fan-out (early return if applicable)
-    if _use_dag or _use_fanout:
-        ctx.set_phase(LoopPhase.PARALLEL)
-        _parallel_result = _run_parallel_path(
+        # Phase C: Pre-flight checks
+        ctx.set_phase(LoopPhase.PRE_FLIGHT)
+        steps, _pf, _pf_early_return = _preflight_checks(
             ctx, steps,
-            clean_steps=_clean_steps,
-            deps=_deps,
-            levels=_levels,
-            parallel_levels=_parallel_levels,
+            resume_from_loop_id=resume_from_loop_id,
             parallel_fan_out=parallel_fan_out,
-            proj_fanout_dir=_proj_fanout_dir,
-            loop_shared_ctx=_loop_shared_ctx,
-            use_dag=_use_dag,
-            resolve_tools_fn=_resolve_tools,
         )
-        if _parallel_result is not None:
-            # 2026-07-08 adversarial review (finding #1): this early return
-            # bypasses _build_result_and_finalize() entirely — true for every
-            # finalize side effect (telegram notify, introspection, Reflexion
-            # memory), not just the run-visibility report; fixing that whole
-            # gap is a separate, larger effort out of scope here. This
-            # narrowly ensures the report/index still reach a terminal state
-            # for parallel/DAG runs instead of being silently stuck "running".
-            try:
-                from loop_report import write_run_report as _write_run_report, write_runs_index as _write_runs_index
-                # 2026-07-08 review, round 2 (unanimous, all 5 reviewers):
-                # the round-1 fix froze the report and forced the index but
-                # never wrote build/loop-*-log.json — the ONLY source
-                # write_runs_index() reads token/step totals from. Without
-                # it, a parallel run's index row shows a report link but "-"
-                # tokens/status forever. _write_loop_log is the same writer
-                # the sequential finalize path already calls; parallel just
-                # never had it, independent of this feature.
-                _write_loop_log(
-                    project=ctx.project,
-                    loop_id=ctx.loop_id,
-                    goal=ctx.goal,
-                    status=_parallel_result.status,
-                    steps=_parallel_result.steps,
-                    start_ts=ctx.start_ts,
-                    elapsed_ms=_parallel_result.elapsed_ms,
-                    stuck_reason=_parallel_result.stuck_reason,
-                )
-                if ctx.project and _manifest_steps:
-                    _write_run_report(
+        if _pf_early_return is not None:
+            return _pf_early_return
+
+        # Unpack pre-flight results into locals used by subsequent phases
+        _resume_completed = _pf["resume_completed"]
+        _pf_review = _pf["pf_review"]
+        _clean_steps = _pf["clean_steps"]
+        _deps = _pf["deps"]
+        _levels = _pf["levels"]
+        _parallel_levels = _pf["parallel_levels"]
+        _manifest_steps = _pf["manifest_steps"]
+        _replan_count = _pf["replan_count"]
+        _loop_shared_ctx = _pf["loop_shared_ctx"]
+        _proj_fanout_dir = _pf["proj_fanout_dir"]
+        _use_dag = _pf["use_dag"]
+        _use_fanout = _pf["use_fanout"]
+
+        # Phase D: Parallel fan-out (early return if applicable)
+        if _use_dag or _use_fanout:
+            ctx.set_phase(LoopPhase.PARALLEL)
+            _parallel_result = _run_parallel_path(
+                ctx, steps,
+                clean_steps=_clean_steps,
+                deps=_deps,
+                levels=_levels,
+                parallel_levels=_parallel_levels,
+                parallel_fan_out=parallel_fan_out,
+                proj_fanout_dir=_proj_fanout_dir,
+                loop_shared_ctx=_loop_shared_ctx,
+                use_dag=_use_dag,
+                resolve_tools_fn=_resolve_tools,
+            )
+            if _parallel_result is not None:
+                # 2026-07-08 adversarial review (finding #1): this early return
+                # bypasses _build_result_and_finalize() entirely — true for every
+                # finalize side effect (telegram notify, introspection, Reflexion
+                # memory), not just the run-visibility report; fixing that whole
+                # gap is a separate, larger effort out of scope here. This
+                # narrowly ensures the report/index still reach a terminal state
+                # for parallel/DAG runs instead of being silently stuck "running".
+                try:
+                    from loop_report import write_run_report as _write_run_report, write_runs_index as _write_runs_index
+                    # 2026-07-08 review, round 2 (unanimous, all 5 reviewers):
+                    # the round-1 fix froze the report and forced the index but
+                    # never wrote build/loop-*-log.json — the ONLY source
+                    # write_runs_index() reads token/step totals from. Without
+                    # it, a parallel run's index row shows a report link but "-"
+                    # tokens/status forever. _write_loop_log is the same writer
+                    # the sequential finalize path already calls; parallel just
+                    # never had it, independent of this feature.
+                    _write_loop_log(
                         project=ctx.project,
                         loop_id=ctx.loop_id,
                         goal=ctx.goal,
-                        planned_steps=_manifest_steps,
-                        start_ts=ctx.start_ts,
-                        step_outcomes=_parallel_result.steps,
                         status=_parallel_result.status,
+                        steps=_parallel_result.steps,
+                        start_ts=ctx.start_ts,
                         elapsed_ms=_parallel_result.elapsed_ms,
-                        replan_count=_replan_count,
+                        stuck_reason=_parallel_result.stuck_reason,
                     )
-                _write_runs_index(force=True)
-            except Exception as _rep_exc:
-                log.warning("run report write failed for parallel loop %s: %s", ctx.loop_id, _rep_exc)
-            return _parallel_result
+                    if ctx.project and _manifest_steps:
+                        _write_run_report(
+                            project=ctx.project,
+                            loop_id=ctx.loop_id,
+                            goal=ctx.goal,
+                            planned_steps=_manifest_steps,
+                            start_ts=ctx.start_ts,
+                            step_outcomes=_parallel_result.steps,
+                            status=_parallel_result.status,
+                            elapsed_ms=_parallel_result.elapsed_ms,
+                            replan_count=_replan_count,
+                        )
+                    _write_runs_index(force=True)
+                except Exception as _rep_exc:
+                    log.warning("run report write failed for parallel loop %s: %s", ctx.loop_id, _rep_exc)
+                return _parallel_result
 
-    # Phase E: Shape steps and write to NEXT.md
-    ctx.set_phase(LoopPhase.PREPARE)
-    steps, step_indices, _manifest_steps = _prepare_execution(ctx, steps, _manifest_steps)
+        # Phase E: Shape steps and write to NEXT.md
+        ctx.set_phase(LoopPhase.PREPARE)
+        steps, step_indices, _manifest_steps = _prepare_execution(ctx, steps, _manifest_steps)
 
-    # Phase F: Main execute loop
-    ctx.set_phase(LoopPhase.EXECUTE)
-    _ex = _execute_main_loop(
-        ctx, steps, step_indices,
-        resume_completed=_resume_completed,
-        prereq_context=_prereq_context,
-        pf_review=_pf_review,
-        levels=_levels,
-        manifest_steps=_manifest_steps,
-        replan_count=_replan_count,
-        loop_shared_ctx=_loop_shared_ctx,
-        resolve_tools_fn=_resolve_tools,
-        tier_order=_TIER_ORDER,
-        parallel_fan_out=parallel_fan_out,
-    )
-    step_outcomes = _ex["step_outcomes"]
-    loop_status = _ex["loop_status"]
-    stuck_reason = _ex["stuck_reason"]
-    total_tokens_in = _ex["total_tokens_in"]
-    total_tokens_out = _ex["total_tokens_out"]
-    interrupts_applied = _ex["interrupts_applied"]
-    _march_of_nines_alert = _ex["march_of_nines_alert"]
-    _manifest_steps = _ex["manifest_steps"]
-    _replan_count = _ex["replan_count"]
-    _milestone_expanded = _ex["milestone_expanded"]
-    _failure_chain = _ex["failure_chain"]
-    _recovery_step_count = _ex["recovery_step_count"]
-    _scratchpad = _ex["scratchpad"]
-    _scratchpad_lock = _ex["scratchpad_lock"]
-    goal = _ex["goal"]
-    max_iterations = _ex["max_iterations"]
+        # Phase F: Main execute loop
+        ctx.set_phase(LoopPhase.EXECUTE)
+        _ex = _execute_main_loop(
+            ctx, steps, step_indices,
+            resume_completed=_resume_completed,
+            prereq_context=_prereq_context,
+            pf_review=_pf_review,
+            levels=_levels,
+            manifest_steps=_manifest_steps,
+            replan_count=_replan_count,
+            loop_shared_ctx=_loop_shared_ctx,
+            resolve_tools_fn=_resolve_tools,
+            tier_order=_TIER_ORDER,
+            parallel_fan_out=parallel_fan_out,
+        )
+        step_outcomes = _ex["step_outcomes"]
+        loop_status = _ex["loop_status"]
+        stuck_reason = _ex["stuck_reason"]
+        total_tokens_in = _ex["total_tokens_in"]
+        total_tokens_out = _ex["total_tokens_out"]
+        interrupts_applied = _ex["interrupts_applied"]
+        _march_of_nines_alert = _ex["march_of_nines_alert"]
+        _manifest_steps = _ex["manifest_steps"]
+        _replan_count = _ex["replan_count"]
+        _milestone_expanded = _ex["milestone_expanded"]
+        _failure_chain = _ex["failure_chain"]
+        _recovery_step_count = _ex["recovery_step_count"]
+        _scratchpad = _ex["scratchpad"]
+        _scratchpad_lock = _ex["scratchpad_lock"]
+        goal = _ex["goal"]
+        max_iterations = _ex["max_iterations"]
 
-    # Phase G: Build result, write artifacts, run finalize side-effects
-    ctx.set_phase(LoopPhase.FINALIZE)
-    result = _build_result_and_finalize(
-        ctx,
-        step_outcomes=step_outcomes,
-        loop_status=loop_status,
-        stuck_reason=stuck_reason,
-        total_tokens_in=total_tokens_in,
-        total_tokens_out=total_tokens_out,
-        interrupts_applied=interrupts_applied,
-        march_of_nines_alert=_march_of_nines_alert,
-        pf_review=_pf_review,
-        manifest_steps=_manifest_steps,
-        replan_count=_replan_count,
-        start_ts=start_ts,
-        milestone_expanded=_milestone_expanded,
-        had_no_matching_skill=_had_no_matching_skill,
-        failure_chain=_failure_chain,
-        recovery_step_count=_recovery_step_count,
-        scratchpad=_scratchpad,
-        scratchpad_lock=_scratchpad_lock,
-    )
+        # Phase G: Build result, write artifacts, run finalize side-effects
+        ctx.set_phase(LoopPhase.FINALIZE)
+        result = _build_result_and_finalize(
+            ctx,
+            step_outcomes=step_outcomes,
+            loop_status=loop_status,
+            stuck_reason=stuck_reason,
+            total_tokens_in=total_tokens_in,
+            total_tokens_out=total_tokens_out,
+            interrupts_applied=interrupts_applied,
+            march_of_nines_alert=_march_of_nines_alert,
+            pf_review=_pf_review,
+            manifest_steps=_manifest_steps,
+            replan_count=_replan_count,
+            start_ts=start_ts,
+            milestone_expanded=_milestone_expanded,
+            had_no_matching_skill=_had_no_matching_skill,
+            failure_chain=_failure_chain,
+            recovery_step_count=_recovery_step_count,
+            scratchpad=_scratchpad,
+            scratchpad_lock=_scratchpad_lock,
+        )
 
-    # Phase 45: Auto-recovery — if loop stuck with a low-risk auto-apply recovery,
-    # retry once with adjusted parameters. Only fires on first attempt (no recursion).
-    if (result.status == "stuck" and not dry_run and not _recovery_in_progress):
-        try:
-            from introspect import diagnose_loop as _diag_fn, plan_recovery as _plan_fn
-            _diag = _diag_fn(loop_id)
-            _recovery = _plan_fn(_diag)
-            if _recovery and _recovery.auto_apply and _recovery.risk == "low":
-                log.info("auto-recovery: %s (class=%s)", _recovery.action, _diag.failure_class)
-                # Captain's log
-                try:
-                    from captains_log import log_event, AUTO_RECOVERY
-                    log_event(
-                        event_type=AUTO_RECOVERY,
-                        subject=_diag.failure_class,
-                        summary=f"Auto-recovery triggered: {_recovery.action}. Class: {_diag.failure_class}.",
-                        context={"action": _recovery.action, "risk": _recovery.risk, "params": dict(_recovery.params)},
-                        loop_id=loop_id,
+        # Phase 45: Auto-recovery — if loop stuck with a low-risk auto-apply recovery,
+        # retry once with adjusted parameters. Only fires on first attempt (no recursion).
+        if (result.status == "stuck" and not dry_run and not _recovery_in_progress):
+            try:
+                from introspect import diagnose_loop as _diag_fn, plan_recovery as _plan_fn
+                _diag = _diag_fn(loop_id)
+                _recovery = _plan_fn(_diag)
+                if _recovery and _recovery.auto_apply and _recovery.risk == "low":
+                    log.info("auto-recovery: %s (class=%s)", _recovery.action, _diag.failure_class)
+                    # Captain's log
+                    try:
+                        from captains_log import log_event, AUTO_RECOVERY
+                        log_event(
+                            event_type=AUTO_RECOVERY,
+                            subject=_diag.failure_class,
+                            summary=f"Auto-recovery triggered: {_recovery.action}. Class: {_diag.failure_class}.",
+                            context={"action": _recovery.action, "risk": _recovery.risk, "params": dict(_recovery.params)},
+                            loop_id=loop_id,
+                        )
+                    except Exception as _clog_exc:
+                        log.debug("auto-recovery captain's log write failed: %s", _clog_exc)
+                    _new_params = dict(_recovery.params)
+                    _new_max_steps = _new_params.pop("max_steps", max_steps)
+                    _new_max_iter = _new_params.pop("max_iterations", max_iterations)
+                    # _recovery_in_progress=True guards against infinite recursion —
+                    # passed as a call-stack-local arg (not shared mutable state) so
+                    # concurrent run_agent_loop calls (run_parallel_loops) can't race.
+                    result = run_agent_loop(
+                        goal=goal,
+                        project=project,
+                        model=model,
+                        adapter=adapter,
+                        max_steps=_new_max_steps,
+                        max_iterations=_new_max_iter,
+                        dry_run=dry_run,
+                        verbose=verbose,
+                        interrupt_queue=interrupt_queue,
+                        hook_registry=hook_registry,
+                        ancestry_context_extra=ancestry_context_extra,
+                        step_callback=step_callback,
+                        parallel_fan_out=parallel_fan_out,
+                        token_budget=token_budget,
+                        _recovery_in_progress=True,
                     )
-                except Exception as _clog_exc:
-                    log.debug("auto-recovery captain's log write failed: %s", _clog_exc)
-                _new_params = dict(_recovery.params)
-                _new_max_steps = _new_params.pop("max_steps", max_steps)
-                _new_max_iter = _new_params.pop("max_iterations", max_iterations)
-                # _recovery_in_progress=True guards against infinite recursion —
-                # passed as a call-stack-local arg (not shared mutable state) so
-                # concurrent run_agent_loop calls (run_parallel_loops) can't race.
-                result = run_agent_loop(
-                    goal=goal,
-                    project=project,
-                    model=model,
-                    adapter=adapter,
-                    max_steps=_new_max_steps,
-                    max_iterations=_new_max_iter,
-                    dry_run=dry_run,
-                    verbose=verbose,
-                    interrupt_queue=interrupt_queue,
-                    hook_registry=hook_registry,
-                    ancestry_context_extra=ancestry_context_extra,
-                    step_callback=step_callback,
-                    parallel_fan_out=parallel_fan_out,
-                    token_budget=token_budget,
-                    _recovery_in_progress=True,
-                )
-                log.info("auto-recovery result: status=%s", result.status)
-        except ImportError:
-            pass
-        except Exception as exc:
-            log.debug("auto-recovery failed: %s", exc)
+                    log.info("auto-recovery result: status=%s", result.status)
+            except ImportError:
+                pass
+            except Exception as exc:
+                log.debug("auto-recovery failed: %s", exc)
 
-    return result
+        return result
 
 
 # ---------------------------------------------------------------------------

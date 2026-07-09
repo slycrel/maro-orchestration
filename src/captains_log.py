@@ -19,6 +19,8 @@ Usage:
 
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import json
 import logging
 from datetime import datetime, timezone
@@ -266,6 +268,38 @@ def classify_input_type(text: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# loop_id ambient context (BACKLOG #17 sub-item 1) — mirrors runs._current_run_dir /
+# llm._DEFAULT_SUBPROCESS_CWD: a ContextVar, not a module global, so concurrent
+# loops in one process (run_parallel_loops, DAG step fan-out) each get their
+# own loop_id instead of a last-writer-wins global. ThreadPoolExecutor workers
+# do NOT inherit the submitting thread's context unless the submit site
+# explicitly uses contextvars.copy_context().run — loop_parallel.py already
+# does this for other ContextVars, so it picks this one up for free.
+# ---------------------------------------------------------------------------
+
+_current_loop_id: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "maro_current_loop_id", default=None
+)
+
+
+@contextlib.contextmanager
+def loop_id_scope(loop_id: str):
+    """Scope the ambient loop_id to a block, restoring the prior value after.
+
+    log_event() falls back to this when no explicit loop_id= is passed, so
+    call sites deep in the loop-execution call stack (skills.py, evolver.py,
+    knowledge_lens.py, etc.) get attributed to the active loop without
+    threading loop_id through every signature. An explicit loop_id= kwarg on
+    a given call still wins (see log_event below).
+    """
+    token = _current_loop_id.set(loop_id)
+    try:
+        yield
+    finally:
+        _current_loop_id.reset(token)
+
+
+# ---------------------------------------------------------------------------
 # Core: log_event
 # ---------------------------------------------------------------------------
 
@@ -279,6 +313,8 @@ def log_event(
     related_ids: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """Append a captain's log entry. Never raises on I/O failure."""
+    if loop_id is None:
+        loop_id = _current_loop_id.get()
     entry: Dict[str, Any] = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "event_type": event_type,

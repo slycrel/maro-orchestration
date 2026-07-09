@@ -23,6 +23,7 @@ from captains_log import (
     render_log,
     render_correlated_entry,
     set_log_path,
+    loop_id_scope,
     EVENT_TYPES,
     SKILL_CIRCUIT_OPEN,
     SKILL_PROMOTED,
@@ -119,6 +120,39 @@ class TestLogEvent:
         # Should not raise — creates dirs as needed
         entry = log_event(event_type=SKILL_PROMOTED, subject="test", summary="ok")
         assert entry["event_type"] == SKILL_PROMOTED
+
+
+# ---------------------------------------------------------------------------
+# loop_id_scope — ambient loop_id contextvar (BACKLOG #17 sub-item 1)
+# ---------------------------------------------------------------------------
+
+class TestLoopIdScope:
+    def test_inside_scope_no_explicit_loop_id(self, _tmp_log):
+        with loop_id_scope("abc123"):
+            entry = log_event(event_type=DECISION_RECORDED, subject="s", summary="m")
+        assert entry.get("loop_id") == "abc123"
+
+    def test_outside_scope_no_loop_id(self, _tmp_log):
+        entry = log_event(event_type=DECISION_RECORDED, subject="s", summary="m")
+        assert entry.get("loop_id") is None
+
+    def test_explicit_loop_id_wins_over_scope(self, _tmp_log):
+        with loop_id_scope("outer-scope-id"):
+            entry = log_event(event_type=DECISION_RECORDED, subject="s", summary="m",
+                               loop_id="explicit-id")
+        assert entry.get("loop_id") == "explicit-id"
+
+    def test_nested_scopes_restore_outer(self, _tmp_log):
+        with loop_id_scope("outer"):
+            e1 = log_event(event_type=DECISION_RECORDED, subject="s", summary="m")
+            with loop_id_scope("inner"):
+                e2 = log_event(event_type=DECISION_RECORDED, subject="s", summary="m")
+            e3 = log_event(event_type=DECISION_RECORDED, subject="s", summary="m")
+        e4 = log_event(event_type=DECISION_RECORDED, subject="s", summary="m")
+        assert e1.get("loop_id") == "outer"
+        assert e2.get("loop_id") == "inner"
+        assert e3.get("loop_id") == "outer"
+        assert e4.get("loop_id") is None
 
 
 # ---------------------------------------------------------------------------

@@ -584,6 +584,7 @@ def _navigator_act_blocked_step(
                     f"blocked_step: escalate acted (conf {conf:.2f}) — "
                     f"heuristic recovery overridden, honest stop"
                 ),
+                loop_id=loop_id,
                 context={
                     "point": "blocked_step",
                     "move": move,

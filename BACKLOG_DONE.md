@@ -8,6 +8,79 @@ Last split: 2026-04-16 (session 34).
 
 ---
 
+### BACKLOG #17: Run-visibility residuals, 3 of 4 (shipped 2026-07-09)
+
+Real-data review of the run-visibility report/index surfaced three
+mechanical gaps, all closed same-day. (Sub-item 4, NOW-lane visibility, is
+left open in BACKLOG.md — a product call, not a mechanical fix.)
+
+**1. loop_id coverage at `log_event` call sites.** Only ~10 of ~57 real call
+sites passed `loop_id` explicitly, so `loop_report._gather_log_markers`'s
+`attributed` vs `run_activity` split dropped most real activity into the
+generic bucket. Rather than threading `loop_id=` through all ~47 missing
+sites individually (high-risk, low-leverage across 27 files), added a
+`contextvars.ContextVar` (`captains_log._current_loop_id`) + `loop_id_scope()`
+context manager, mirroring the existing `runs._current_run_dir` /
+`llm._DEFAULT_SUBPROCESS_CWD` precedent. `log_event()` now falls back to the
+ambient scope when no explicit `loop_id=` is passed (an explicit value still
+always wins). `agent_loop.py::run_agent_loop()` wraps its full lifecycle
+(init → decompose → execute incl. stuck-repeat and parallel/DAG fan-out →
+finalize, including the Phase 45 auto-recovery recursive re-run) in one
+`with loop_id_scope(ctx.loop_id):` — confirmed to be the single entry point
+all execution paths funnel through, and `loop_parallel.py`'s existing
+`contextvars.copy_context().run(...)` fan-out submission carries the new
+var into pool threads for free. Two explicit one-line fixes made alongside
+(now redundant under the contextvar but kept for readability): `loop_execute.py`'s
+`_ac_log_event(FABRICATION_DETECTED, ...)` call was missing `loop_id=` that
+its two siblings in the same function already had; `loop_blocked.py`'s
+`NAVIGATOR_ACTED` log already nested `loop_id` inside its `context` dict but
+never promoted it to the top-level kwarg. Sites that fire genuinely outside
+any loop (heartbeat-triggered evolver runs, GC passes) correctly still log
+`loop_id=None` — not a gap, unchanged. Tests: `TestLoopIdScope` in
+`tests/test_captains_log.py` (scope on/off, explicit-wins, nesting restores
+outer). Full suite green after the `agent_loop.py` reindent (~250 lines,
+done via a small transform script + `ast.parse` sanity check, not a giant
+literal Edit).
+
+**2. Purpose sniffer → caller-stamped field.** `loop_report._PURPOSE_PATTERNS`
+(18 hardcoded prompt-opener substrings) stays as a fallback for historical
+records, but `record_llm_call()` (`runs.py`) now takes a `purpose: str = ""`
+kwarg persisted on the call record; `loop_report._call_meta()` prefers
+`rec.get("purpose")` over the sniffer when present. Threaded through the
+single recording seam (`FailoverAdapter.complete()` in `llm.py` — popped out
+of `**kwargs` before forwarding to the real adapter, which has no use for
+it) and stamped at the same utility call sites touched by BACKLOG #16:
+`intent.py` (routing/clarity check/goal rewrite), `scope.py` (scope
+generation + proxy resolver), `llm.py`'s `advisor_call`. Not yet stamped:
+the ~13 other `_PURPOSE_PATTERNS` labels (step execution, decompose, verify
+review, director eval, closure check, etc.) — deliberately left to the
+sniffer fallback; those call sites live in files (`loop_execute.py`,
+`director.py`, `step_exec.py`, `workers.py`, `closure_verify.py`,
+`quality_gate.py`) not touched this session, opportunistic follow-up.
+Tests: `test_record_writes_purpose_field` / `_defaults_to_empty_string`
+(`tests/test_record_mode.py`), `test_call_meta_prefers_stamped_purpose_over_sniffer`
+/ `_falls_back_to_sniffer_when_no_purpose_stamped` (`tests/test_loop_report.py`),
+`test_purpose_kwarg_not_forwarded_to_underlying_adapter` /
+`_reaches_record_llm_call` (`tests/test_llm.py`).
+
+**3. Live reports freeze before run_card.json exists (design known-gap #5).**
+`write_run_report()` (loop-finalize time) always ran before `handle()`'s
+`finally` block wrote `run_card.json` a few lines later via `curate_run()`,
+so `_render_verdict()` always found nothing on first render — previously
+only fixable via a full `viz backfill --force` rescan. Added
+`loop_report.refresh_run_report(run_dir)`: re-renders only that run's
+existing report(s), does NOT rescan `runs_root()` or rebuild `index.html`
+(O(1) per goal completion, not O(run count) — the index doesn't surface the
+verdict, only the report page does, so there's nothing there to refresh).
+Extracted the shared per-log render body (`_render_and_write_one_report`)
+so `backfill_run_reports()`'s loop and the new targeted function share one
+implementation. Wired into `handle.py`'s `finally` block right after
+`curate_run()`, gated on `_card is not None`. No-ops cleanly for NOW-lane
+runs (no loop log, nothing to refresh) and any run with no report ever
+written. Tests: `test_refresh_run_report_rerenders_existing_report`,
+`_does_not_touch_index`, `_noop_when_no_existing_report`,
+`_noop_for_missing_build_dir` (`tests/test_loop_report.py`).
+
 ### BACKLOG #16: Subprocess utility calls can execute the goal instead of answering (shipped 2026-07-09)
 
 Evidence: run `19cc17d6-azure-harbor`, `build/calls/call-00001.json` — a

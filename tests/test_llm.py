@@ -1456,6 +1456,49 @@ class TestFailoverAdapter:
         with pytest.raises(ValueError, match="at least one"):
             FailoverAdapter([])
 
+    def test_purpose_kwarg_not_forwarded_to_underlying_adapter(self):
+        """purpose= is a record-mode label (BACKLOG #17 sub-item 2) consumed by
+        FailoverAdapter itself — it must not leak into the real adapter's kwargs."""
+        from llm import FailoverAdapter, LLMAdapter, LLMResponse, LLMMessage
+
+        seen_kwargs = {}
+
+        class RecordingAdapter(LLMAdapter):
+            backend = "recording"
+
+            def complete(self, messages, **kwargs):
+                seen_kwargs.update(kwargs)
+                return LLMResponse(content="ok", stop_reason="end_turn")
+
+        fa = FailoverAdapter([RecordingAdapter()])
+        fa.complete([LLMMessage("user", "hi")], purpose="routing")
+        assert "purpose" not in seen_kwargs
+
+    def test_purpose_kwarg_reaches_record_llm_call(self, monkeypatch):
+        """purpose= is threaded through to record_llm_call's purpose= param."""
+        from llm import FailoverAdapter, LLMAdapter, LLMResponse, LLMMessage
+        import sys
+
+        class FakeAdapter(LLMAdapter):
+            backend = "fake"
+
+            def complete(self, messages, **kwargs):
+                return LLMResponse(content="ok", stop_reason="end_turn")
+
+        captured = {}
+
+        def fake_record_llm_call(*args, **kwargs):
+            captured.update(kwargs)
+            return None
+
+        fake_runs_module = type(sys)("runs")
+        fake_runs_module.record_llm_call = fake_record_llm_call
+        monkeypatch.setitem(sys.modules, "runs", fake_runs_module)
+
+        fa = FailoverAdapter([FakeAdapter()])
+        fa.complete([LLMMessage("user", "hi")], purpose="strategic advisor")
+        assert captured.get("purpose") == "strategic advisor"
+
     def test_model_key_forwarded_from_active_adapter(self):
         from llm import FailoverAdapter, LLMAdapter
 

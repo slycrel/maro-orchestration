@@ -386,6 +386,10 @@ class FailoverAdapter(LLMAdapter):
         **kwargs,
     ) -> "LLMResponse":
         last_exc: Optional[Exception] = None
+        # purpose is a record-mode-only label (BACKLOG #17 sub-item 2) — pop it
+        # out before forwarding kwargs to the real adapter, which has no use
+        # for it and would otherwise just absorb it silently via **kwargs.
+        _purpose = kwargs.pop("purpose", "")
         for idx, adapter in enumerate(self._adapters):
             self._current_idx = idx
             try:
@@ -416,6 +420,7 @@ class FailoverAdapter(LLMAdapter):
                         tool_events=getattr(result, "tool_events", None),
                         tokens_in=getattr(result, "input_tokens", None),
                         tokens_out=getattr(result, "output_tokens", None),
+                        purpose=_purpose,
                     )
                     if _rec_path is not None:
                         # Cross-reference for rung-4 step I/O unification: the
@@ -1918,7 +1923,10 @@ def advisor_call(
     ]
 
     try:
-        _adv_kwargs: Dict[str, Any] = {"max_tokens": 1024, "temperature": 0.2, "no_tools": True}
+        _adv_kwargs: Dict[str, Any] = {
+            "max_tokens": 1024, "temperature": 0.2, "no_tools": True,
+            "purpose": "strategic advisor",
+        }
         # Enable mid-level thinking for advisory calls (strategic decisions)
         if getattr(adapter, "backend", "") == "anthropic":
             _adv_kwargs["thinking_budget"] = THINKING_MID

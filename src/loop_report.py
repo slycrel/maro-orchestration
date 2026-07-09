@@ -423,7 +423,12 @@ def _call_meta(path_str: str) -> Optional[dict]:
     meta: Optional[dict] = None
     try:
         rec = json.loads(Path(path_str).read_text(encoding="utf-8"))
-        purpose, persona = _sniff_call_head(rec.get("prompt", ""))
+        # Caller-stamped purpose (BACKLOG #17 sub-item 2) wins when present;
+        # the prompt-opener sniffer is a fallback for records written before
+        # record_llm_call() gained the purpose= field.
+        stamped_purpose = rec.get("purpose") or ""
+        sniffed_purpose, persona = _sniff_call_head(rec.get("prompt", ""))
+        purpose = stamped_purpose or sniffed_purpose
         meta = {
             "seq": rec.get("seq"),
             "model": rec.get("model") or "",
@@ -1356,6 +1361,81 @@ def _outcomes_from_loop_log(lj: dict) -> List[StepOutcome]:
     return outcomes
 
 
+def _render_and_write_one_report(log_path: Path, build: Path, root: Path) -> Path:
+    """Render `log_path`'s loop log to its report.html and write it (locked).
+
+    Shared by backfill_run_reports() (rescans everything) and
+    refresh_run_report() (single run, called from handle.py post-curation —
+    BACKLOG #17 sub-item 3). Raises on failure; callers decide how to log it.
+    """
+    loop_id = log_path.name[len("loop-"):-len("-log.json")]
+    report_path = build / f"loop-{loop_id}-report.html"
+    lj = json.loads(log_path.read_text(encoding="utf-8"))
+    outcomes = _outcomes_from_loop_log(lj)
+    status = lj.get("status") or "done"
+    # A loop log still claiming "running" is a crashed/killed run — rendering
+    # it as running would emit the auto-refresh tag and no freeze sentinel,
+    # forever. The run demonstrably isn't running anymore; "interrupted" is
+    # the honest terminal state.
+    if status == "running":
+        status = "interrupted"
+    index_link = _relpath(root / "index.html", build)
+    content = _render_report_html(
+        project=lj.get("project", "") or "",
+        loop_id=loop_id,
+        goal=lj.get("goal", "") or "",
+        planned_steps=[s.text for s in outcomes],
+        start_ts=lj.get("started_at", "") or "",
+        step_outcomes=outcomes,
+        status=status,
+        elapsed_ms=lj.get("elapsed_ms", 0) or 0,
+        replan_count=0,
+        report_dir=build,
+        index_link=index_link,
+    )
+    from file_lock import locked_write
+    with locked_write(report_path):
+        _atomic_write_text(report_path, content)
+    return report_path
+
+
+def refresh_run_report(run_dir) -> bool:
+    """Re-render one run's report(s) now that run_card.json exists.
+
+    Targeted counterpart to backfill_run_reports() for the post-curation hot
+    path (BACKLOG #17 sub-item 3 / design known-gap #5): the live report
+    freezes at loop-finalize time, before handle()'s finally block writes
+    run_card.json a few lines later, so the verdict panel is empty on first
+    render. Call this right after curate_run() with the finished run's dir.
+
+    Unlike backfill_run_reports(), this does NOT rescan runs_root() or
+    rebuild the cross-run index — O(1) per goal completion, not O(run count).
+    The index doesn't surface the verdict (only the report page does), so
+    there's nothing there to refresh. Silently no-ops (returns False) for
+    NOW-lane runs and anything else with no existing report to refresh.
+    """
+    build = Path(run_dir) / "build"
+    if not build.is_dir():
+        return False
+    try:
+        from runs import runs_root
+        root = runs_root()
+    except Exception:
+        return False
+    wrote_any = False
+    for log_path in sorted(build.glob("loop-*-log.json")):
+        loop_id = log_path.name[len("loop-"):-len("-log.json")]
+        report_path = build / f"loop-{loop_id}-report.html"
+        if not report_path.exists():
+            continue  # live report was never written for this loop — nothing to refresh
+        try:
+            _render_and_write_one_report(log_path, build, root)
+            wrote_any = True
+        except Exception:
+            log.warning("refresh_run_report failed for %s", log_path, exc_info=True)
+    return wrote_any
+
+
 def backfill_run_reports(*, force: bool = False, limit: Optional[int] = None) -> Dict[str, int]:
     """Generate frozen reports for historical runs, then rebuild the index.
 
@@ -1387,32 +1467,7 @@ def backfill_run_reports(*, force: bool = False, limit: Optional[int] = None) ->
                 counts["skipped"] += 1
                 continue
             try:
-                lj = json.loads(log_path.read_text(encoding="utf-8"))
-                outcomes = _outcomes_from_loop_log(lj)
-                status = lj.get("status") or "done"
-                # A loop log still claiming "running" is a crashed/killed run
-                # — rendering it as running would emit the auto-refresh tag
-                # and no freeze sentinel, forever. The run demonstrably isn't
-                # running anymore; "interrupted" is the honest terminal state.
-                if status == "running":
-                    status = "interrupted"
-                index_link = _relpath(root / "index.html", build)
-                content = _render_report_html(
-                    project=lj.get("project", "") or "",
-                    loop_id=loop_id,
-                    goal=lj.get("goal", "") or "",
-                    planned_steps=[s.text for s in outcomes],
-                    start_ts=lj.get("started_at", "") or "",
-                    step_outcomes=outcomes,
-                    status=status,
-                    elapsed_ms=lj.get("elapsed_ms", 0) or 0,
-                    replan_count=0,
-                    report_dir=build,
-                    index_link=index_link,
-                )
-                from file_lock import locked_write
-                with locked_write(report_path):
-                    _atomic_write_text(report_path, content)
+                _render_and_write_one_report(log_path, build, root)
                 counts["written"] += 1
             except Exception:
                 log.warning("backfill failed for %s", log_path, exc_info=True)

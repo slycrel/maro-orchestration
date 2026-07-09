@@ -794,6 +794,7 @@ def _execute_main_loop(
                                 "missing": _ac_verdict.missing,
                                 "changed_count": _ac_verdict.changed_count,
                             },
+                            loop_id=getattr(ctx, "loop_id", "") or None,
                         )
                     except Exception:
                         pass

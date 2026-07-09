@@ -66,6 +66,23 @@ def test_record_writes_call_file(workspace):
     assert rec["tokens_in"] == 10 and rec["tokens_out"] == 20
 
 
+def test_record_writes_purpose_field(workspace):
+    """BACKLOG #17 sub-item 2: caller-stamped purpose persists on the record."""
+    rd = create_run_dir("hid00002", prompt="do a thing")
+    set_current_run_dir(rd)
+    out = record_llm_call("p", "r", purpose="routing")
+    rec = json.loads(out.read_text())
+    assert rec["purpose"] == "routing"
+
+
+def test_record_purpose_defaults_to_empty_string(workspace):
+    rd = create_run_dir("hid00003", prompt="do a thing")
+    set_current_run_dir(rd)
+    out = record_llm_call("p", "r")
+    rec = json.loads(out.read_text())
+    assert rec["purpose"] == ""
+
+
 def test_record_sequence_increments(workspace):
     rd = create_run_dir("hid00002", prompt="g")
     set_current_run_dir(rd)

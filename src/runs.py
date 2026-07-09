@@ -345,11 +345,17 @@ def _next_call_seq(rd: Path) -> int:
 
 def record_llm_call(prompt, response_text, *, backend="", model="",
                     tool_events=None, tokens_in=None, tokens_out=None,
+                    purpose: str = "",
                     run_dir: Optional[Path] = None) -> Optional[Path]:
     """Persist one LLM call to `<run-dir>/build/calls/call-NNNNN.json` (scrubbed).
 
     No-op (returns None) when record-mode is off or no run-dir is active —
     capture must never affect the request outcome, so all errors are swallowed.
+
+    `purpose` is an optional caller-stamped label ("classify", "advisor",
+    "director_plan", ...) — the durable replacement for loop_report.py's
+    prompt-opener sniffer (BACKLOG #17 sub-item 2), which stays as a fallback
+    for historical records recorded before this field existed.
     """
     try:
         if not recording_enabled():
@@ -370,6 +376,7 @@ def record_llm_call(prompt, response_text, *, backend="", model="",
             "tool_events": tool_events or [],
             "tokens_in": tokens_in,
             "tokens_out": tokens_out,
+            "purpose": purpose or "",
             "ts": datetime.now(timezone.utc).isoformat(),
         })
         out = calls / f"call-{seq:05d}.json"
