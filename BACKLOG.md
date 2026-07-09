@@ -689,30 +689,54 @@ after the current 1.0 remainders (a)–(d); (g) needs design before release.
   recovered in c2609da with a don't-reintroduce note in .gitignore.
   Ship set later grew to 11 skills: report_synthesize BUILT BY MARO in
   dogfood run 59a9fdd7, hand-graduated same day.
-- [ ] **(e) remainder: adversarial-review ship skill** (Purgatorio
-  hist-06 — reopened so Jeremy's decree doesn't fall through the closed
-  checkbox above). Jeremy 2026-07-09: the adversarial-review pattern
-  "or a flavor of it, should probably be one of our skills we ship
-  with." Vehicle: dogfood run 4's code_review skill (0baac0ab) —
-  graduate it if it passes review, else hand-build. Not satisfied by
-  any currently shipped skill.
-- [~] **(f) Self-learning involved in the launch build-out — RUNS IN
-  FLIGHT 2026-07-09.** 5 orchestrator-builds-it goals via `maro-handle`,
+- [x] **(e) remainder: adversarial-review ship skill — CLOSED
+  2026-07-09, same day** (Purgatorio hist-06 — reopened so Jeremy's
+  decree "or a flavor of it, should probably be one of our skills we
+  ship with" didn't fall through the closed checkbox above; satisfied
+  hours later). Dogfood run 4's code_review skill (0baac0ab) graduated:
+  attack-your-own-candidates pass + evidence-gated confirmed/speculative
+  split + red-herring failure mode — the decreed pattern, Maro-built.
+  Verified by hand: 3/3 planted bugs confirmed with reproductions
+  (re-run independently), red herring correctly refuted. Ship set now
+  12 skills. Closure verdict false-negative @0.35 ("fixture.diff
+  missing" — it exists; wrong-cwd verifier class, 4th specimen).
+- [x] **(f) Self-learning involved in the launch build-out — COMPLETE
+  2026-07-09.** 5 orchestrator-builds-it goals via `maro-handle`,
   learning ON (pre-req: data-01 fixture purge executed first so learning
-  doesn't crystallize April test junk). Run 1 (monitor_diagnose) DONE —
-  correct root-cause diagnosis + good skill file, graduated by hand;
-  closure judged it goal_achieved=false @0.25 (verifier couldn't re-run
-  privileged journalctl) = live specimen of closure-harsh-on-build-goals.
-  Run 4 first attempt stuck CORRECTLY (repo-relative path in goal text
-  unreachable from worker cwd → ralph-verify refused to fabricate →
-  MISSING_INPUT escalation; relaunched with self-contained format spec).
-  Also caught: persona router sent a skill-build meta-goal to
-  health-researcher @0.892 on goal-text keywords ("diagnosis") — no
-  meta-goal awareness. Remaining: runs 2 (daily_brief), 3
-  (report_synthesize), 4 (code_review), 5 (assistant shakedown) complete
-  → verify artifacts → graduate good skills → **crystallization audit**
-  (what lessons/skills/playbook entries learning produced = the honest
-  self-learning number for 1.0 messaging).
+  doesn't crystallize April test junk). **Scorecard (every claim
+  verified against artifacts by hand, not worker self-reports):**
+  - **5/5 runs produced correct deliverables.** Run 1 monitor_diagnose
+    (correct root-cause diagnosis, quoted evidence); run 2 daily_brief
+    (working skill + helper script, 2 real briefs, 20-entry state);
+    run 3 report_synthesize (planted-contradiction fixture set,
+    Conflicts section correct); run 4 code_review (3/3 planted bugs
+    confirmed with reproductions — re-run independently — red herring
+    correctly REFUTED, not reported); run 5 assistant shakedown
+    (planted urgent escrow item ranked #1; adversarial review caught a
+    real phantom-conflict wart).
+  - **3 skills graduated into the ship set** (monitor_diagnose,
+    report_synthesize, code_review) — 3 of 12 shipped skills are now
+    Maro-built. Run 2's daily_brief is correct but not shippable in
+    pure-markdown skill format (needs its sibling helper script) —
+    bundled-assets is an open design gap, noted for (g)/post-1.0.
+  - **28 substantive lessons crystallized** (lessons.jsonl 188→207 net
+    of consolidation; all 28 verifiably dogfood-born — fixture-planting
+    methodology, trigger-collision diffing, format-compliance
+    discipline). skills.jsonl +25 events; medium tier 5, long tier 3.
+  - **Closure-verdict noise, the honest number: 4/5 false negatives**
+    (@0.25/@0.15/@0.3/@0.35), all the same class — closure's verifier
+    resolves paths/privileges from the wrong environment (wrong cwd,
+    unprivileged journalctl) and fails the goal on its own tooling
+    error. 1/5 agreed (@0.95). The adversarial layer, by contrast, was
+    2/2 precise. Feeds SF-2 / item (b): learning must not trust raw
+    closure verdicts until the verifier-environment bug is fixed.
+  - Also caught en route: persona router has no meta-goal awareness
+    (run 1 → health-researcher @0.892 on goal-text keywords);
+    ralph-verify + MISSING_INPUT escalation behaved exactly right on
+    run 4 attempt 1 (refused to fabricate an unreachable input); the
+    harness claim-probe itself false-flagged run 4's existing files
+    ("cart.py not found" — they're under output/repro/), the same
+    wrong-cwd class as closure.
 - [ ] **(g) Portable/shareable learning — design + migration path.**
   **DESIGN SHIPPED 2026-07-09 → `docs/PORTABLE_LEARNING_DESIGN.md`** (8
   provisional decisions collected in its §8, awaiting Jeremy; recommended

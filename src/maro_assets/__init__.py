@@ -41,6 +41,7 @@ SHIPPED = {
     ],
     "skills": [
         "code_implement",
+        "code_review",
         "compact_notation",
         "data_analysis",
         "debug_investigate",

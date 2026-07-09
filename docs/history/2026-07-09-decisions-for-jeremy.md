@@ -181,13 +181,18 @@ record is accurate where it exists; the failures are omissions.
    belongs on the candidate list (needs a Mac — pairs with the
    new-machine plan), and every current notify lane is
    Telegram-hardwired.
-3. **Adversarial-review ship skill (hist-06) — decree at risk.** Your
-   "should probably be one of our skills we ship with" is not satisfied
-   by the shipped (e) set, and (e)'s checkbox is closed. I've reopened
-   an explicit (e) remainder in BACKLOG gated on dogfood run 4's
-   code_review skill graduating (in flight, 5/6 steps). If run 4's
-   skill doesn't pass review, the remainder stays open for a hand-built
-   version — it does not silently close.
+3. **Adversarial-review ship skill (hist-06) — decree at risk →
+   RESOLVED same day.** Your "should probably be one of our skills we
+   ship with" was not satisfied by the shipped (e) set behind a closed
+   checkbox. Reopened as an explicit (e) remainder; hours later dogfood
+   run 4 completed and its code_review skill graduated after hand
+   verification (3/3 planted bugs confirmed with reproductions I re-ran
+   myself; red herring correctly refuted, not reported). The skill IS
+   the decreed pattern — mandatory attack-your-own-candidates pass,
+   evidence-gated confirmed/speculative split. Ship set is now 12
+   skills, 3 of them Maro-built. Nothing left to decide here; recorded
+   because the near-miss (decree almost lost behind a closed checkbox)
+   is the SF-13 pattern in action.
 4. **PUBLISH_CHECKLIST adopt-or-retire + version scheme (hist-03).**
    The repo shipped v0.1.0/v0.2.0 before, and the March
    PUBLISH_CHECKLIST already gates on the exact classes Purgatorio
