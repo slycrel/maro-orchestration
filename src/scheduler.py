@@ -441,11 +441,19 @@ def main() -> None:
             sys.exit(1)
 
     elif cmd == "run-due":
-        n = drain_due_jobs(verbose=True)
-        print(f"Submitted {n} job(s)")
-        if n > 0:
-            import time
-            time.sleep(2)  # give threads a moment to start
+        # Singleton: overlapping run-due invocations (cron firing while a
+        # slow drain is still going) would double-submit due jobs.
+        from proc_lock import hold_pidfile, read_holder
+        with hold_pidfile("scheduler-run-due") as acquired:
+            if not acquired:
+                holder = read_holder("scheduler-run-due") or {}
+                print(f"run-due already active (pid {holder.get('pid', '?')}) — skipping")
+                sys.exit(0)
+            n = drain_due_jobs(verbose=True)
+            print(f"Submitted {n} job(s)")
+            if n > 0:
+                import time
+                time.sleep(2)  # give threads a moment to start
 
 
 if __name__ == "__main__":

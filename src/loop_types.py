@@ -293,6 +293,7 @@ class LoopContext:
     start_ts: str = ""
     loop_timeout_secs: Optional[float] = None
     repo_path: str = ""  # optional target repo path for stack context injection
+    project_slot: Optional[Any] = None  # held admission slot (interrupt.ProjectSlot); released at finalize
 
 
 @dataclass

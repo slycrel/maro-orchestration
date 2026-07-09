@@ -27,9 +27,11 @@ from __future__ import annotations
 import json
 import logging
 import os
+import fcntl
 import threading
 import time
 import uuid
+import weakref
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -646,6 +648,202 @@ def get_running_project_loop(project: str) -> Optional[dict]:
 def is_project_running(project: str) -> bool:
     """Return True if an agent loop is currently active for the given project."""
     return get_running_project_loop(project) is not None
+
+
+# ---------------------------------------------------------------------------
+# Admission gate — atomic per-project slot (concurrency phase 3)
+#
+# set_loop_running() *advertises* a loop but never gated anything: two runs
+# checking then writing was a TOCTOU hole, and nothing even checked. The
+# slot below is the gate: flock on the same loop-<project>.lock file, held
+# for the process's lifetime, kernel-released on any death. The JSON payload
+# keeps the exact schema existing readers parse (observe, cli status,
+# killswitch, telegram listener); the flock is the actual mutex.
+# ---------------------------------------------------------------------------
+
+class LoopBusy(RuntimeError):
+    """Another live loop holds this project's slot."""
+
+    def __init__(self, project: str, holder: Optional[dict] = None):
+        self.project = project
+        self.holder = holder or {}
+        hid = self.holder.get("loop_id", "?")
+        pid = self.holder.get("pid", "?")
+        super().__init__(
+            f"project {project!r} busy: loop {hid} (pid {pid}) is running"
+        )
+
+
+class _SlotCore:
+    """The actual held flock. Shared by every ProjectSlot handle this
+    process holds for the project; the flock releases when the last
+    handle drops (or explicitly releases) — refcounting via GC."""
+
+    def __init__(self, project: str, path: Path, fh) -> None:
+        self.project = project
+        self.path = path
+        self._fh = fh
+
+    def close(self) -> None:
+        fh, self._fh = self._fh, None
+        if fh is None:
+            return
+        try:
+            # Clear the payload so readers see idle, but NEVER unlink: a
+            # waiter polling the path could lock the orphaned inode while
+            # a third process locks a fresh file — two holders. An empty
+            # file with no live flock is unambiguously idle.
+            fh.seek(0)
+            fh.truncate()
+            fh.flush()
+            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+            fh.close()
+        except OSError:
+            pass
+
+    def __del__(self) -> None:
+        self.close()
+
+
+# In-process sibling loops (mission feature fan-out, run_parallel_loops)
+# are one cooperating run: they SHARE the project slot instead of refusing
+# each other. The gate excludes *other processes* — file_lock protects the
+# ledgers between threads, and worktree isolation (phase 3b) covers git
+# state. Weakrefs so the registry never pins a leaked slot alive.
+_process_slot_cores: Dict[str, "weakref.ref"] = {}
+_process_slots_lock = threading.Lock()
+
+
+class ProjectSlot:
+    """Held admission slot handle. Keep a reference for the run's lifetime;
+    call release() at finalize. Dropping the last handle in this process
+    (crash paths included) releases the flock via GC; process death
+    releases it via the kernel either way."""
+
+    def __init__(self, project: str, path: Path, core: _SlotCore) -> None:
+        self.project = project
+        self.path = path
+        self._core = core
+
+    def __del__(self) -> None:
+        self.release()
+
+    def release(self) -> None:
+        # Drop our reference; CPython refcounting closes the core (via its
+        # __del__) the moment the LAST handle in this process lets go —
+        # deterministic for the common single-holder case, correct for
+        # shared siblings. The registry holds only a weakref, so it never
+        # keeps the flock alive.
+        self._core = None
+
+
+def _admission_wait_s() -> float:
+    env = os.environ.get("MARO_ADMISSION_WAIT_S")
+    if env:
+        try:
+            return max(0.0, float(env))
+        except ValueError:
+            pass
+    try:
+        from config import get as _get
+        return max(0.0, float(_get("loop.admission_wait_s", 0.0)))
+    except Exception:
+        return 0.0
+
+
+def acquire_project_slot(
+    project: str,
+    *,
+    loop_id: str,
+    goal: str = "",
+    wait_s: Optional[float] = None,
+) -> Optional[ProjectSlot]:
+    """Atomically claim the per-project run slot, or raise LoopBusy.
+
+    Default policy is refuse-immediately (`loop.admission_wait_s: 0`):
+    on an unattended box a queued run invisibly pins memory and the model
+    lane — NEXT.md is already the queue and the heartbeat retries next
+    tick. Pass wait_s (or set the config / MARO_ADMISSION_WAIT_S) to poll
+    up to that many seconds before giving up (interactive `--wait`).
+
+    Returns None for empty projects (nothing to gate). Environment errors
+    (unwritable lock dir) degrade to ungated with a warning — an fs
+    problem shouldn't refuse work the old code would have run.
+    """
+    if not project:
+        return None
+    if wait_s is None:
+        wait_s = _admission_wait_s()
+
+    path = _default_lock_path().parent / f"loop-{project}.lock"
+    deadline = time.monotonic() + wait_s
+    sleep_s = 0.05
+    while True:
+        # Sibling loop in this process already holds the slot? Share it —
+        # in-process fan-out (mission features, parallel goals) is one
+        # cooperating run, not a collision.
+        with _process_slots_lock:
+            ref = _process_slot_cores.get(str(path))
+            core = ref() if ref is not None else None
+            if core is not None and core._fh is not None:
+                return ProjectSlot(project, path, core)
+
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            fh = open(path, "a+", encoding="utf-8")
+        except OSError as exc:
+            log.warning(
+                "admission gate unavailable for %s (%s) — proceeding UNGATED",
+                project, exc,
+            )
+            return None
+        try:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            fh.close()
+            # The busy holder may be a sibling thread that acquired between
+            # our registry check and the flock — loop back and re-check
+            # before deciding it's another process.
+            with _process_slots_lock:
+                ref = _process_slot_cores.get(str(path))
+                if ref is not None and ref() is not None:
+                    continue
+            holder = None
+            try:
+                holder = json.loads(path.read_text(encoding="utf-8") or "{}")
+            except Exception:
+                pass
+            if time.monotonic() >= deadline:
+                raise LoopBusy(project, holder)
+            time.sleep(sleep_s)
+            sleep_s = min(sleep_s * 2, 0.5)
+            continue
+
+        # Guard the unlink/reacquire race: if the path no longer points at
+        # the inode we locked (a legacy clear_loop_running unlinked it),
+        # this flock is on an orphaned file — retry on the fresh one.
+        try:
+            if os.fstat(fh.fileno()).st_ino != os.stat(path).st_ino:
+                fh.close()
+                continue
+        except OSError:
+            fh.close()
+            continue
+
+        fh.seek(0)
+        fh.truncate()
+        fh.write(json.dumps({
+            "loop_id": loop_id,
+            "goal": goal[:120],
+            "pid": os.getpid(),
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "project": project,
+        }))
+        fh.flush()
+        core = _SlotCore(project, path, fh)
+        with _process_slots_lock:
+            _process_slot_cores[str(path)] = weakref.ref(core)
+        return ProjectSlot(project, path, core)
 
 
 # ---------------------------------------------------------------------------

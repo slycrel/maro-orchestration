@@ -953,3 +953,34 @@ class TestSessionGuard:
 
         # Tier-2 LLM diagnosis should not have been called at all
         assert not mock_t2.called
+
+
+def test_run_backlog_step_refused_busy_reverts_to_todo(tmp_path, monkeypatch):
+    """When the admission gate refuses (another run holds the project slot),
+    the drain puts the item back to TODO for the next tick — DOING would
+    strand it and BLOCKED would falsely close it."""
+    monkeypatch.setenv("MARO_ORCH_ROOT", str(tmp_path))
+
+    import importlib
+    import orch_items as oi
+    importlib.reload(oi)
+
+    oi.ensure_project("proj-busy", "mission busy")
+    oi.append_next_items("proj-busy", ["Contended work"])
+    _lines, items = oi.parse_next("proj-busy")
+    todo = next(i for i in items if i.state == oi.STATE_TODO)
+
+    import heartbeat
+    heartbeat._backlog_drain_active = True
+
+    mock_loop_result = MagicMock()
+    mock_loop_result.status = "refused_busy"
+
+    with patch("orch_items.select_global_next", return_value=("proj-busy", todo)), \
+         patch("agent_loop.run_agent_loop", return_value=mock_loop_result):
+        _run_backlog_step(dry_run=False, verbose=False)
+
+    _lines2, items2 = oi.parse_next("proj-busy")
+    updated = next(i for i in items2 if i.index == todo.index)
+    assert updated.state == oi.STATE_TODO
+    assert heartbeat._backlog_drain_active is False

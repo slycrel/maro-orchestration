@@ -2149,9 +2149,18 @@ def main(argv=None):
     parser.add_argument("--dry-run", action="store_true", help="Simulate without API calls")
     parser.add_argument("--verbose", "-v", action="store_true", help="Print progress")
     parser.add_argument("--format", choices=["text", "json"], default="text")
+    parser.add_argument(
+        "--wait", type=float, default=None, metavar="SECONDS",
+        help="If the project is busy, poll for the slot up to this many "
+             "seconds instead of refusing immediately (interactive use)",
+    )
 
     args = parser.parse_args(argv)
     msg = " ".join(args.message)
+    if args.wait is not None:
+        # Env override reaches every nested run_agent_loop without threading
+        # a parameter through handle's layers.
+        os.environ["MARO_ADMISSION_WAIT_S"] = str(max(0.0, args.wait))
 
     result = handle(
         msg,

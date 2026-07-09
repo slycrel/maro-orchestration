@@ -282,7 +282,14 @@ def _build_result_and_finalize(
             except Exception as _art_exc:
                 log.debug("artifact cleanup failed: %s", _art_exc)
 
-    # Release loop lock
+    # Release loop lock — the admission slot first (per-project flock),
+    # then the global informational lockfile.
+    try:
+        if getattr(ctx, "project_slot", None) is not None:
+            ctx.project_slot.release()
+            ctx.project_slot = None
+    except Exception as _slot_exc:
+        log.debug("project slot release failed: %s", _slot_exc)
     try:
         from interrupt import clear_loop_running
         clear_loop_running()

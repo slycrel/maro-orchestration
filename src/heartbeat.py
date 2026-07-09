@@ -511,6 +511,9 @@ _task_store_drain_lock = threading.Lock()
 _evolver_active = False
 _evolver_lock = threading.Lock()
 
+# Daemon-singleton pidfile handle — held (referenced) for process lifetime.
+_pidfile_hold = None
+
 _inspector_active = False
 _inspector_lock = threading.Lock()
 
@@ -659,6 +662,7 @@ def _run_backlog_step(*, dry_run: bool = False, verbose: bool = False, max_items
         from orch_items import (
             select_global_next,
             mark_item,
+            STATE_TODO,
             STATE_DOING,
             STATE_DONE,
             STATE_BLOCKED,
@@ -702,6 +706,16 @@ def _run_backlog_step(*, dry_run: bool = False, verbose: bool = False, max_items
                 )
                 if loop_result.status == "done":
                     mark_item(slug, item.index, STATE_DONE)
+                elif loop_result.status == "refused_busy":
+                    # Another run holds the project slot — put the item back
+                    # so the next tick retries it; DOING would strand it.
+                    mark_item(slug, item.index, STATE_TODO)
+                    if verbose:
+                        print(
+                            f"[heartbeat] backlog drain: [{slug}] busy — item "
+                            f"{item.index} reverted to TODO for next tick",
+                            file=sys.stderr,
+                        )
                 else:
                     mark_item(slug, item.index, STATE_BLOCKED)
                     if verbose:
@@ -789,6 +803,26 @@ def heartbeat_loop(
         )
     global _evolver_active, _inspector_active, _backlog_drain_active
     global _task_store_drain_active, _eval_active, _harness_optimizer_active
+    global _pidfile_hold
+
+    # Daemon singleton: one heartbeat per workspace. The flock is held for
+    # the process's lifetime (kernel-released on any death) — a stale
+    # pidfile can never block a restart, only a live instance can.
+    try:
+        from proc_lock import try_hold_pidfile, read_holder
+        _pidfile_hold = try_hold_pidfile("heartbeat")  # module global keeps the fd alive
+        if _pidfile_hold is None:
+            _holder = read_holder("heartbeat") or {}
+            print(
+                f"[heartbeat] another heartbeat is already running "
+                f"(pid {_holder.get('pid', '?')}) — exiting",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
+    except SystemExit:
+        raise
+    except Exception as _pid_exc:
+        log.warning("heartbeat pidfile acquisition failed (running unlocked): %s", _pid_exc)
 
     if autonomy is None:
         try:

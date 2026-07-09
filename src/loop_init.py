@@ -108,6 +108,7 @@ def _initialize_loop(
     step_callback,
     loop_reason: str = "initial",
     parent_loop_id: Optional[str] = None,
+    admission_wait_s: Optional[float] = None,
 ) -> tuple:
     """Phase A: Initialize loop — setup adapter, project, ancestry, hooks.
 
@@ -237,10 +238,42 @@ def _initialize_loop(
             print(f"[maro] created project={project}", file=sys.stderr, flush=True)
     ctx.project = project
 
-    # Advertise this loop as running so other interfaces can route interrupts
-    # Must be after ctx.project is set so the per-project lockfile is written correctly
+    # Admission gate: atomically claim the per-project slot (flock, held for
+    # the process's lifetime). Two runs on one project stomp each other's
+    # NEXT.md flow and git state — refuse by default; the heartbeat retries
+    # next tick and `--wait N` / loop.admission_wait_s opts into polling.
     try:
-        set_loop_running(ctx.loop_id, goal, project=ctx.project)
+        from interrupt import acquire_project_slot, LoopBusy
+        try:
+            ctx.project_slot = acquire_project_slot(
+                ctx.project, loop_id=ctx.loop_id, goal=goal,
+                wait_s=admission_wait_s,
+            )
+        except LoopBusy as _busy:
+            _holder = _busy.holder
+            log.warning("loop refused: %s", _busy)
+            if verbose:
+                print(f"[maro] {_busy}", file=sys.stderr, flush=True)
+            return ctx, LoopResult(
+                loop_id=ctx.loop_id,
+                goal=goal,
+                project=ctx.project,
+                steps=[],
+                status="refused_busy",
+                stuck_reason=str(_busy),
+                total_tokens_in=0,
+                total_tokens_out=0,
+                elapsed_ms=0,
+                log_path=None,
+            )
+    except ImportError as _gate_exc:
+        log.debug("admission gate unavailable: %s", _gate_exc)
+
+    # Advertise this loop as running so other interfaces can route interrupts.
+    # The slot above owns the per-project lockfile; this writes only the
+    # global informational one (project="" keeps set_loop_running off it).
+    try:
+        set_loop_running(ctx.loop_id, goal, project="" if ctx.project_slot else ctx.project)
     except Exception as _slr_exc:
         log.debug("set_loop_running failed: %s", _slr_exc)
 

@@ -141,6 +141,7 @@ def run_agent_loop(
     channel=None,  # Optional ConversationChannel for mid-loop escalation (Phase 64C)
     loop_reason: str = "initial",  # why this loop was spawned — for run-transparency captain's log
     parent_loop_id: Optional[str] = None,
+    admission_wait_s: Optional[float] = None,  # seconds to poll a busy project slot; None = config (default: refuse immediately)
     _recovery_in_progress: bool = False,  # internal: set by the Phase 45 auto-recovery re-run to prevent recursion
 ) -> LoopResult:
     """Run the autonomous loop for a goal.
@@ -191,6 +192,7 @@ def run_agent_loop(
         step_callback=step_callback,
         loop_reason=loop_reason,
         parent_loop_id=parent_loop_id,
+        admission_wait_s=admission_wait_s,
     )
     if _early_return is not None:
         return _early_return

@@ -72,6 +72,7 @@ missing here fails the suite, so this table can't silently rot.
 | `keep_artifacts` | `False` | Run artifacts are cleaned unless a run opts in. Flip ON for debugging; watch disk (this box: 156G shared with everything). |
 | `planner.persona` | `None` | The framework orchestrates as the neutral Conductor; personas (e.g. Poe) are opt-in per the Maro rename decree — persona is presentation, not authority. |
 | `environment` | `"dev"` | Environment tag stamped into runs/logs. |
+| `loop.admission_wait_s` | `0.0` | How long a new run polls a busy project's admission slot before refusing (`refused_busy`). `0` = refuse immediately — on an unattended box a queued run invisibly pins memory and the model lane; NEXT.md is already the queue and the heartbeat retries next tick. Env `MARO_ADMISSION_WAIT_S` wins; `maro-handle --wait N` sets it for interactive use. The slot itself is a per-project flock held for the run's lifetime — kernel-released on any death, so only a *live* run can make another wait. In-process sibling loops (mission feature fan-out, parallel goals) share the slot rather than refuse — the gate excludes other *processes*. |
 
 ## Platform & I/O
 
