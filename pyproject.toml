@@ -48,6 +48,7 @@ maro-test = "bootstrap:_smoke_main"
 maro-bughunter = "bughunter:main"
 maro-schedule = "scheduler:main"
 maro-verify = "verification_agent:main"
+maro-import = "workspace_import:main"
 maro-thinkback = "thinkback:_cli_main"
 maro-cross-ref = "cross_ref:_cli_main"
 maro-checkpoint = "checkpoint:_cli_main"
@@ -208,6 +209,7 @@ py-modules = [
     "verification_agent",
     "viz_server",
     "web_fetch",
+    "workspace_import",
     "workers",
     "worktree",
 ]
