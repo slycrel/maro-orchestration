@@ -668,26 +668,39 @@ release" (full quotes in GOAL_BRAIN Decisions 2026-07-09). Three items,
 also listed as MILESTONES -3 remaining (e)/(f)/(g). Sequencing: (e) runs
 after the current 1.0 remainders (a)–(d); (g) needs design before release.
 
-- [ ] **(e) Default personas + skills — research orchestration run.** Survey
-  the common jobs people actually want from an autonomous agent (link-farm
-  FIRST per standing rule, then web research; run through Maro itself where
-  practical — dogfood + self-learning involvement per (f)); curate the ship
-  set: 5–10 default personas (fits the #4 thread-arch decision — curated
-  set, evolution on pressure) + default skill capabilities. Where a
-  capability exists in OSS/ideas: swipe code, not deps (standing feedback).
-  Where it doesn't: have the orchestrator build it — each gap is itself a
-  test goal. Ships through the existing workspace→repo resolution order
-  (repo = shipped defaults, workspace = evolved overrides). Depends on the
-  skills-packaging residual above (how defaults physically ship: package
-  data vs bootstrap seeding).
-- [ ] **(f) Self-learning involved in the launch build-out.** Use the
-  learning machinery while building (e) — lessons/skills/rules earned
-  during the persona/skill build-out become product content, and the
-  friction found becomes verify→learn arc input (that arc is already
-  sequenced next-after-1.0; this item is its first real consumer). Concrete
-  minimum: run (e)'s build goals through `maro-handle` with learning ON and
-  audit what crystallizes — the audit doubles as the honest "does
-  self-learning ship anything usable" number for 1.0 messaging.
+- [x] **(e) Default personas + skills — SHIPPED 2026-07-09** (survey:
+  `docs/audit-2026-07/persona-skill-survey.md`; ship set: e0811c7 +
+  gitignore-recovery c2609da). Curated catalog = 13 personas (9 catalog
+  incl. NEW assistant + data-analyst, 4 infrastructure) + 10 skills (6
+  existing + deep_research/web_extract/document_process swiped per
+  license review + monitor_diagnose BUILT BY MARO in dogfood run
+  6dfaec5d, hand-graduated). Ships as `maro_assets` per-file-symlink
+  package data; SHIPPED manifest canonical, census tripwire
+  (tests/test_packaging.py) enforces manifest↔symlink↔never-ship
+  (jeremy/poe/companion/garrytan/psyche-researcher + test fixtures stay
+  out of the wheel). garrytan routing entry removed (named-person
+  likeness + Opus cost footgun); review pattern de-personified into the
+  code_review dogfood goal. **Landmine fixed en route:** a blanket
+  `skills/` gitignore had silently kept the entire skills half of the
+  ship set out of e0811c7 — a fresh clone would have shipped 0 skills;
+  recovered in c2609da with a don't-reintroduce note in .gitignore.
+- [~] **(f) Self-learning involved in the launch build-out — RUNS IN
+  FLIGHT 2026-07-09.** 5 orchestrator-builds-it goals via `maro-handle`,
+  learning ON (pre-req: data-01 fixture purge executed first so learning
+  doesn't crystallize April test junk). Run 1 (monitor_diagnose) DONE —
+  correct root-cause diagnosis + good skill file, graduated by hand;
+  closure judged it goal_achieved=false @0.25 (verifier couldn't re-run
+  privileged journalctl) = live specimen of closure-harsh-on-build-goals.
+  Run 4 first attempt stuck CORRECTLY (repo-relative path in goal text
+  unreachable from worker cwd → ralph-verify refused to fabricate →
+  MISSING_INPUT escalation; relaunched with self-contained format spec).
+  Also caught: persona router sent a skill-build meta-goal to
+  health-researcher @0.892 on goal-text keywords ("diagnosis") — no
+  meta-goal awareness. Remaining: runs 2 (daily_brief), 3
+  (report_synthesize), 4 (code_review), 5 (assistant shakedown) complete
+  → verify artifacts → graduate good skills → **crystallization audit**
+  (what lessons/skills/playbook entries learning produced = the honest
+  self-learning number for 1.0 messaging).
 - [ ] **(g) Portable/shareable learning — design + migration path.**
   **DESIGN SHIPPED 2026-07-09 → `docs/PORTABLE_LEARNING_DESIGN.md`** (8
   provisional decisions collected in its §8, awaiting Jeremy; recommended
@@ -720,7 +733,20 @@ after the current 1.0 remainders (a)–(d); (g) needs design before release.
   9 provisional decisions greppable as "DECISION (provisional)" — Jeremy
   review wanted on: billing-failover default, 1-auto-resume cap,
   resume-surface (CLI vs notify), depth-cap inconsistency (4 / <3 / 2).
-  Implementation slices NOT started. Original ask: Research + design pass on the errors an end user will
+  **Minimum 1.0 slice SHIPPED 2026-07-09 (slices 1+2+3):** slice 1 =
+  `llm_errors` classifier (6 classes, actionable messages, wired through
+  FailoverAdapter + doctor; 2daa1b5); slice 2 = checkpoint-into-run-dir
+  (contextvar run-dir placement + legacy fallback + newest-first scan,
+  `in_flight` {index, started_at, pid} marker written pre-step/cleared
+  post-step, call-seq rebuild from disk; dc74e19); slice 3 =
+  stranded-state sweep on heartbeat tick (dead-PID DOING revert via
+  `.doing_pids.json` sidecar, resumable-run detection → `stranded_run`
+  notify event, default-on) + manual `maro resume <loop_id>` (refuses
+  complete/live/finalized; FS-diff since-crash context injected into the
+  resumed step) + `maro-doctor --live` opt-in backend probes (fa8fe40).
+  21 new tests (test_checkpoint_rundir, test_stranded_sweep).
+  **Auto-resume deliberately post-1.0** (box crash-loop history; manual
+  resume proves the path first). Original ask: Research + design pass on the errors an end user will
   actually hit: token/rate limits, auth expiry (`/login`-class issues, key
   invalidation), context-window overruns, network blips — and
   **auto-resuming interrupted work**. "That seems like a sharp edge that
