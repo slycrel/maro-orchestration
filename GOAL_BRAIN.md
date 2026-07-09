@@ -459,8 +459,13 @@ marker) — no other control flow hangs off the log.
 - Phase 65 (constraint orchestration) is **paused**; its minimum experiment shipped
   2026-04-23 as `src/scope.py` + ResolvedIntent. Basis: session-38 delta audit.
 - Heartbeat systemd service exists but is not enabled/running (session-40 audit).
-  This is consistent with the no-daemons invariant; heartbeat runs in-process when
-  the app runs.
+  CORRECTION 2026-07-09 (Purgatorio arch-06): the "heartbeat runs in-process when
+  the app runs" claim that used to live here was FALSE — no heartbeat invocation
+  exists in handle.py or agent_loop.py; `run_heartbeat`/`heartbeat_loop` are
+  reachable only via the CLI command. There is no in-process fallback; the
+  heartbeat has never beaten in production under the Maro name (ops-01). The
+  in-process pieces that ARE real: knowledge consolidation (`maybe_consolidate`
+  in handle.py) and per-run skill maintenance (loop_finalize).
 - 10 known pre-existing test failures, all triaged and recorded in BACKLOG.md
   (plan-manifest order-dependence ×4, orch_core bridge ×5, scheduler lease ×1).
 
@@ -1407,9 +1412,11 @@ Dormant (deliberately parked, not dropped):
   (watch RECALL_GUARD_TRIPPED). ~~Per-thread goal-brain creation~~ answered
   2026-06-11: `src/thread_brain.py` seeds `source/goal_brain.md` in every run-dir
   (this file's section grammar scaled down). Per-turn maintenance: the navigator
-  went live 2026-06-21 and the **decision-half shipped**; remaining pieces are
+  went live 2026-06-21 and the **decision-half shipped**. CORRECTION 2026-07-09
+  (Purgatorio arch-11): the two "remaining pieces" formerly listed here —
   (a) the compiled-truth half and (b) feeding the dispatch-navigator's rationale
-  into the spawned run's brain.
+  into the spawned run's brain — BOTH SHIPPED 2026-07-03 with tests (MILESTONES
+  #3 "both halves now closed"); this doc lagged the queue doc it outranks.
 - **Fan-out recoverability mechanism** — *visibility half answered 2026-06-11 at the
   schema layer*: `open_children` rides in every NavigatorInput and close is invalid
   while any child is undispositioned (`docs/NAVIGATOR_SCHEMA.md`). Still open:
