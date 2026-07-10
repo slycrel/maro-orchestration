@@ -130,6 +130,25 @@ by the never-scheduled heartbeat.
   around this; official scheduler/timer (decision batch, post-1.0) is the
   generalization for hosts without OpenClaw.
 
+### 21. Heartbeat burn-in findings (2026-07-09, first real ticks)
+
+First-ever production heartbeat ticks (one dry, one real) after the
+supervision-shim ship. The tick machinery works — health check, tier-2
+diagnosis fired correctly (the monotonic-sentinel fix is why it fired on the
+first tick at all). Two findings before any recurring hook goes live:
+
+- [ ] **BLOCKER for recurring hook: diagnosis spends on zombie projects.**
+  Tier-2 diagnosed `test`, `test-goal`, `vis-test` — dead test projects among
+  ~230 accumulated in `projects/` from months of regression work. A recurring
+  hook would re-diagnose corpses every interval — the June-21 cron-tokenburn
+  class. Need an active-project filter (recent activity / not-archived) in
+  `_diagnosis_due` targets, and probably a `projects/` archiving sweep.
+  Until then: one-shot ticks only, no OpenClaw hook installed.
+- [ ] **Sheriff health check isn't lane-aware.** `pkg_anthropic: warn` marks
+  the box degraded, but this box intentionally runs the claude-CLI subprocess
+  lane — the SDK is not required. Health should warn only when NO viable
+  backend lane exists (mirror llm.py's backend_order detection).
+
 ### 10. Local-validator measurement — tune `local_max_tokens` per model
 
 - [ ] **Tune `local_max_tokens` per model.** Live finding (2026-06-21 verify run):
