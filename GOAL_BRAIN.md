@@ -121,6 +121,31 @@ context, at best it's a slight tweak and we fix forward."*
 
 ## Compiled truth (system-maintained; basis noted per claim)
 
+**Purgatorio r2 re-run, 2026-07-10 (Jeremy /goal: "run the purgatorio suite
+again and compare the results to the previous run"):**
+- Same 7 eyes, delta-scoped to the fix wave (4e6dc1b..97aa5ef, 21 commits);
+  all 82 r1 findings re-verified by live probe + 23 new findings, each new
+  finding and each claimed blocker resolution independently adversarially
+  verified (41/42 confirmed, 1 refuted). **No regressions found.**
+- r1's 9-blocker list → **6-item r2 list** (see
+  docs/audit-2026-07-r2/RECONCILIATION.md): 4 cleared outright (test-junk
+  purge holding, bootstrap crash-loop unit deleted, README headline
+  repositioned, security-doc honesty verified + user/ tip privacy), 3
+  narrowed, 2 new — arch-r2-01 (containerized-executor design pass has NO
+  vehicle in any queue: the decision-without-vehicle class, minted the same
+  night its siblings were fixed) and docs-r2-01 (README Optional Services
+  instructs copying unit files nothing creates; 2 of 3 don't exist).
+- Best catch (from the one refuted finding): **ops-r2-05, live-reproduced**
+  — test_heartbeat.py's sys.modules["config"] stub breaks
+  proc_lock._run_dir's import → home fallback bypasses MARO_WORKSPACE
+  isolation, so every full-suite run stamps the REAL workspace
+  heartbeat.pid. SF-3's class, post-isolation.
+- Standing residue themes: supervision story decided but three
+  contradictory tellings ship (one cheap convergence chunk); learning
+  engine wired but ~zero verified production behavior (needs a deliberate
+  ~10-finalization live batch, with cs-r2-01 — skills-lite skips
+  injection_guard — fixed first).
+
 **Backlog-clearing session, 2026-07-10 (autonomous, /goal "finish the
 outstanding items that don't need my approval"):**
 - BACKLOG #21 both halves fixed and live-proven on this box: dormancy
@@ -238,8 +263,11 @@ outstanding items that don't need my approval"):**
   `telegram.chat_id` → legacy openclaw.json), `deploy/openclaw/maro-dispatch.sh`.
   Basis: E2E through the OpenClaw-installed symlink — real goal, run_card
   success-class, Telegram API accepted the DM (exit 0). Contract doc:
-  `docs/SUBSTRATE_INTEGRATION.md`. Hermes stance unchanged: steal-from-don't-migrate;
-  adapter deferred until after the OpenClaw trial.
+  `docs/SUBSTRATE_INTEGRATION.md`. Hermes stance for *this box*: steal-from-
+  don't-migrate; adapter deferred until after the OpenClaw trial. (Superseded
+  in part by the 2026-07-09 Decisions entry: Jeremy decided to swap
+  OpenClaw→Hermes as substrate when a new machine arrives — see Decisions;
+  correction per Purgatorio r2 hist-r2-01.)
 - Organic traffic started 2026-07-02 BEFORE the burn-in: a claims-verification
   pipeline (Poe-authored commits, Haiku co-author, e528c36 pushed to main) ran
   Maro from an OpenClaw-pinned environment. Two findings: (1) **workspace

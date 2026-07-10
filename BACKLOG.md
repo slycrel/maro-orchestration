@@ -13,6 +13,59 @@ Last reviewed: 2026-07-09 (decision-cleanup session with Jeremy: #19 thread-arch
 
 Ordered open work that matters. Top of the list is next.
 
+### -1. Purgatorio r2 graduates (2026-07-10 re-run; docs/audit-2026-07-r2/RECONCILIATION.md)
+
+All adversarially verified (41/42 confirmed). The two 1.0-blockers first:
+
+- [ ] **arch-r2-01 (blocker):** containerized-executor design pass has no
+  vehicle — batch #3 decision recorded in GOAL_BRAIN + SECURITY_MODEL.md §2
+  but absent from MILESTONES/BACKLOG/threads. This entry IS the minimum fix;
+  scope the actual design pass into MILESTONES.
+- [ ] **docs-r2-01 (blocker, cheap):** README "Optional Services" tells
+  strangers to `sudo cp` unit files from `~/.maro/workspace/deploy/systemd/`
+  — a dir nothing creates (config.deploy_dir() has zero callers); 2 of 3
+  units exist nowhere. Rewrite to the printed hook-instructions posture.
+  Fold in the supervision-convergence chunk: delete/rewrite deploy/systemd/
+  + heartbeat-ctl.sh (ops-r2-04, docs-r2-04), reset left-on
+  `heartbeat.autonomy: true` on this box (ops-r2-02), align host-check
+  900s threshold with the one-shot-ticks decree (ops-r2-01 — else daily-red
+  is structural).
+- [ ] **cs-r2-01:** skills-lite promoter (run_curation.py:355-362) skips
+  injection_guard.scan_content that both sibling self-mod lanes run
+  (evolver_store.py:431-452, skill_lifecycle.py:463-478); only gate is
+  sandbox._DANGEROUS_PATTERNS (Python-code substrings — wrong threat for a
+  prompt-injected .md). Default ON. Fix before the learning live batch.
+- [ ] **ops-r2-05 (live-reproduced):** test-isolation leak — 
+  test_heartbeat.py::test_heartbeat_loop_none_autonomy_uses_config stubs
+  sys.modules["config"], proc_lock._run_dir import fails → Path.home()
+  fallback bypasses MARO_WORKSPACE, every full-suite run stamps the REAL
+  workspace run/heartbeat.pid. Fix: monkeypatch real config.get instead of
+  module replacement, and/or _run_dir reads MARO_WORKSPACE env before home
+  fallback (tests/test_heartbeat.py ~:352-367, src/proc_lock.py:32-37).
+- [ ] **data-r2-01 (SF-2 residual, r2 blocker #2):** agenda-lane lesson
+  extraction + skill crystallization run at finalize BEFORE closure judges;
+  retro-stamp reaches only outcomes.jsonl — lessons/skills still extracted
+  verdict-blind. Move post-closure or re-stamp.
+- [ ] **data-r2-02:** promotion funnel still zero on every channel;
+  skills-lite has zero live firings. Run a deliberate ~10-finalization live
+  batch (also exercises evolver-at-cadence + verdict-aware extraction) —
+  after cs-r2-01.
+- [ ] **hist-r2-02:** hist-05 owner ask ("run this prompt with this
+  persona" as a first-class pattern) dropped for the third time — in
+  neither the decision brief nor any backlog. This entry ends that.
+- [ ] **docs-r2-02:** user/CONFIG.md lane docs over-claim 4 dead keys
+  (research_step_model, max_steps, always_skeptic, notify_on_complete) —
+  wire or de-document.
+- [ ] Cosmetic sweep rides the above chunks: docs-r2-03 (CONFIG.md template
+  self-contradiction), docs-r2-05 ("alert Jeremy" in stranger README),
+  docs-r2-06/hist-r2-04 (PUBLISH_CHECKLIST missing from INDEX.md),
+  land-r2-01 (state trusted-operator boundary in README safety section),
+  land-r2-02 (pymaro disambiguation line), hist-r2-03 (SF-13 standing rule
+  → put in a living doc, likely CLAUDE.md close-out), hist-r2-05 (bucket D4
+  lessons.jsonl name collision), data-r2-03 (atomic_write 0600 perms),
+  arch-r2-02 (GOAL_BRAIN 1.0-arc Remaining list stale), ops-r2-03-replaced
+  pidfile litter.
+
 ### 0. Test corpus — capture the missing layers (forward record-mode + full archive)
 
 **Shipped 2026-06-26 (the "now" half):** `scripts/harvest_corpus.py` distills the
