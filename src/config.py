@@ -81,6 +81,40 @@ def playbook_path() -> Path:
 
 
 # ---------------------------------------------------------------------------
+# user/ docs lane (GOALS.md, CONTEXT.md, SIGNALS.md, CONFIG.md, ...)
+# ---------------------------------------------------------------------------
+
+def repo_user_dir() -> Path:
+    """The repo/install copy of user/ — ships neutral, commented templates.
+
+    On a pip install this resolves inside site-packages next to the package;
+    real operator data never belongs here (it would be world-readable in a
+    public repo — audit finding SF-5/docs-02).
+    """
+    return Path(__file__).resolve().parent.parent / "user"
+
+
+def user_file(name: str) -> Optional[Path]:
+    """Resolve a user/ doc by name. Workspace overlay wins over the repo copy.
+
+    Resolution order (same overlay convention as skills/ and personas/):
+      1. <workspace_root>/user/<name>   — the operator's real file
+      2. <repo or install dir>/user/<name> — shipped neutral template
+      3. None if neither exists
+
+    Put your real GOALS.md / CONTEXT.md / SIGNALS.md / CONFIG.md in
+    ~/.maro/workspace/user/ — the repo copies are placeholders.
+    """
+    overlay = workspace_root() / "user" / name
+    if overlay.exists():
+        return overlay
+    shipped = repo_user_dir() / name
+    if shipped.exists():
+        return shipped
+    return None
+
+
+# ---------------------------------------------------------------------------
 # YAML config — two-tier (user + workspace)
 # ---------------------------------------------------------------------------
 

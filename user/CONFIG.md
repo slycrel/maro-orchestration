@@ -1,19 +1,32 @@
 # User Configuration Defaults
+#
+# WHAT THIS FILE IS
+# A flat `key: value` config lane, separate from the YAML config
+# (~/.maro/config.yml + <workspace>/config.yml). Settings here apply to
+# every run unless overridden by CLI flags. Parsed by a hand parser
+# (src/handle.py:_load_user_config): one `key: value` per line, `#`
+# comments, inline comments stripped. Readers today:
+#   - src/handle.py    — yolo, default_model_tier, research_step_model
+#   - src/heartbeat.py — mcp_servers
+# NOTE: unlike GOALS/CONTEXT/SIGNALS (workspace overlay wins), CONFIG.md is
+# currently read from the repo/install copy only. Overlay migration for this
+# file is queued — see user/README.md for the lane's full documentation.
+#
+# Edit this file to change system-wide behavior without touching code.
+# All values below are the shipped defaults.
 
-Settings here apply to every run unless overridden by CLI flags.
-Edit this file to change system-wide behavior without touching code.
-
----
-
-## Autonomy
+# ---------------------------------------------------------------------------
+# Autonomy
+# ---------------------------------------------------------------------------
 
 # YOLO mode: skip clarification prompts and just run.
 # "true" = always proceed without asking. "false" = ask when ambiguous.
+# (Also settable per-invocation with the MARO_YOLO env var.)
 yolo: false
 
----
-
-## Model Defaults
+# ---------------------------------------------------------------------------
+# Model Defaults
+# ---------------------------------------------------------------------------
 
 # Default model tier for all runs.
 # Options: cheap (Haiku), mid (Sonnet), power (Opus)
@@ -24,9 +37,9 @@ default_model_tier: cheap
 # "auto" = let classify_step_model decide. "mid" or "cheap" to force.
 research_step_model: auto
 
----
-
-## Run Behavior
+# ---------------------------------------------------------------------------
+# Run Behavior
+# ---------------------------------------------------------------------------
 
 # Maximum steps per run (default: 8).
 max_steps: 8
@@ -39,9 +52,9 @@ max_steps: 8
 # "true" = always add skeptic framing. "false" = only when "skeptic:" prefix used.
 always_skeptic: false
 
----
-
-## Verification
+# ---------------------------------------------------------------------------
+# Verification
+# ---------------------------------------------------------------------------
 
 # Enable Ralph verify loop: per-step quality check with retry when the result
 # doesn't address the step goal. Adds ~30% wall time. Best for high-stakes runs.
@@ -49,9 +62,9 @@ always_skeptic: false
 # "true" = enable for all runs. "false" = only when ralph: prefix is used.
 ralph_verify: false
 
----
-
-## Quality Gate
+# ---------------------------------------------------------------------------
+# Quality Gate
+# ---------------------------------------------------------------------------
 
 # Run a skeptic quality check after every loop. If output is below par,
 # escalate to a better model and re-run automatically.
@@ -63,15 +76,17 @@ quality_gate: true
 # "warn"     = log a warning but keep the result.
 quality_gate_action: escalate
 
-## Notifications
+# ---------------------------------------------------------------------------
+# Notifications
+# ---------------------------------------------------------------------------
 
 # Send Telegram notification when a mission finishes.
-# Requires Telegram bot token + chat ID in openclaw.json.
+# Requires a Telegram bot token + chat ID (no-op when not configured).
 notify_on_complete: true
 
----
-
-## MCP Servers
+# ---------------------------------------------------------------------------
+# MCP Servers
+# ---------------------------------------------------------------------------
 
 # Comma-separated list of MCP servers to load at heartbeat startup.
 # Each entry is either:

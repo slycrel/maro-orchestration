@@ -2311,49 +2311,47 @@ from evolver import _load_user_signals
 
 
 class TestLoadUserSignals:
+    # Resolution goes through config.user_file(): workspace overlay
+    # (<MARO_WORKSPACE>/user/SIGNALS.md — conftest points MARO_WORKSPACE at
+    # tmp_path) wins over the repo template (config.repo_user_dir()).
+
     def test_returns_empty_when_no_file(self, tmp_path, monkeypatch):
-        """Missing user/SIGNALS.md returns empty string."""
-        import evolver_scans as _evolver_mod
+        """No workspace overlay and no repo template returns empty string."""
+        import config as _config_mod
         monkeypatch.setattr(
-            _evolver_mod, "__file__",
-            str(tmp_path / "src" / "evolver_scans.py"),
+            _config_mod, "repo_user_dir", lambda: tmp_path / "no-such-user-dir"
         )
         result = _load_user_signals()
         assert result == ""
 
-    def test_reads_and_caps_at_600_chars(self, tmp_path, monkeypatch):
-        """Reads SIGNALS.md and caps at 600 chars."""
-        import evolver_scans as _evolver_mod
-
-        # Create fake user/SIGNALS.md relative to a fake src/evolver_scans.py
-        src_dir = tmp_path / "src"
-        src_dir.mkdir()
+    def test_reads_and_caps_at_600_chars(self, tmp_path):
+        """Reads the workspace-overlay SIGNALS.md (beats the repo template) and caps at 600 chars."""
         user_dir = tmp_path / "user"
         user_dir.mkdir()
         (user_dir / "SIGNALS.md").write_text("A" * 700)
 
-        monkeypatch.setattr(
-            _evolver_mod, "__file__",
-            str(src_dir / "evolver_scans.py"),
-        )
         result = _load_user_signals()
         assert len(result) <= 600
         assert result == "A" * 600
 
-    def test_nocrash_on_permission_error(self, tmp_path, monkeypatch):
+    def test_repo_template_used_when_no_overlay(self, tmp_path, monkeypatch):
+        """Without a workspace overlay, the repo/install template is the fallback."""
+        import config as _config_mod
+        repo_user = tmp_path / "repo-user"
+        repo_user.mkdir()
+        (repo_user / "SIGNALS.md").write_text("shipped template content")
+        monkeypatch.setattr(_config_mod, "repo_user_dir", lambda: repo_user)
+
+        result = _load_user_signals()
+        assert result == "shipped template content"
+
+    def test_nocrash_on_permission_error(self, tmp_path):
         """Permission error loading SIGNALS.md returns empty, never raises."""
-        import evolver_scans as _evolver_mod
-        src_dir = tmp_path / "src"
-        src_dir.mkdir()
         user_dir = tmp_path / "user"
         user_dir.mkdir()
         sig_file = user_dir / "SIGNALS.md"
         sig_file.write_text("test")
         sig_file.chmod(0o000)
-        monkeypatch.setattr(
-            _evolver_mod, "__file__",
-            str(src_dir / "evolver_scans.py"),
-        )
         try:
             result = _load_user_signals()
             # Either empty (permission denied) or the content — no crash
@@ -2372,16 +2370,12 @@ class TestScanOutcomesForSignalsWithUserSignals:
         return o
 
     def test_user_signals_included_in_llm_call(self, tmp_path, monkeypatch):
-        """user/SIGNALS.md content is passed to the LLM when available."""
+        """Workspace-overlay SIGNALS.md content is passed to the LLM when available."""
         import evolver_scans as _evolver_mod
 
-        src_dir = tmp_path / "src"
-        src_dir.mkdir()
         user_dir = tmp_path / "user"
         user_dir.mkdir()
         (user_dir / "SIGNALS.md").write_text("## Active research: Polymarket arbitrage strategies")
-
-        monkeypatch.setattr(_evolver_mod, "__file__", str(src_dir / "evolver_scans.py"))
 
         captured_user_msg = []
 

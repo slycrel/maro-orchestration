@@ -357,12 +357,15 @@ def decompose(
     extras = [x for x in [skills_context, ancestry_context, lessons_context, cost_context] if x]
 
     # Auto-inject user context if available (capped at 500 chars per file
-    # to avoid inflating decomposition token cost)
+    # to avoid inflating decomposition token cost). Resolution: workspace
+    # overlay (~/.maro/workspace/user/) wins over the repo/install templates —
+    # a fresh install gets the neutral shipped copies, never someone else's
+    # personal context (SF-5/docs-02).
     try:
-        _user_dir = Path(__file__).resolve().parent.parent / "user"
+        from config import user_file as _user_file
         for _ctx_file in ("GOALS.md", "CONTEXT.md", "SIGNALS.md"):
-            _ctx_path = _user_dir / _ctx_file
-            if _ctx_path.exists():
+            _ctx_path = _user_file(_ctx_file)
+            if _ctx_path is not None:
                 _ctx = _ctx_path.read_text(encoding="utf-8").strip()[:500]
                 if _ctx:
                     extras.append(f"USER CONTEXT ({_ctx_file}):\n{_ctx}")

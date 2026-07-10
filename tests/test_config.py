@@ -362,3 +362,59 @@ class TestResolveArtifactPath:
         real.mkdir(parents=True, exist_ok=True)
         display = orch_items.relative_display_path(real)
         assert orch_items.resolve_artifact_path(display) == real
+
+
+# ---------------------------------------------------------------------------
+# user/ docs lane — user_file() resolution (workspace overlay > repo template)
+# ---------------------------------------------------------------------------
+
+class TestUserFileResolution:
+    """config.user_file(): <workspace>/user/<name> wins over <repo>/user/<name>.
+
+    conftest's autouse fixture points MARO_WORKSPACE at tmp_path, so the
+    workspace overlay for these tests is tmp_path/user/.
+    """
+
+    def test_workspace_overlay_wins(self, tmp_path, monkeypatch):
+        import config as config_mod
+        repo_user = tmp_path / "repo" / "user"
+        repo_user.mkdir(parents=True)
+        (repo_user / "GOALS.md").write_text("shipped template")
+        monkeypatch.setattr(config_mod, "repo_user_dir", lambda: repo_user)
+
+        overlay = tmp_path / "user"
+        overlay.mkdir()
+        (overlay / "GOALS.md").write_text("operator goals")
+
+        resolved = config_mod.user_file("GOALS.md")
+        assert resolved == overlay / "GOALS.md"
+        assert resolved.read_text() == "operator goals"
+
+    def test_falls_back_to_repo_template(self, tmp_path, monkeypatch):
+        import config as config_mod
+        repo_user = tmp_path / "repo" / "user"
+        repo_user.mkdir(parents=True)
+        (repo_user / "CONTEXT.md").write_text("shipped template")
+        monkeypatch.setattr(config_mod, "repo_user_dir", lambda: repo_user)
+
+        resolved = config_mod.user_file("CONTEXT.md")
+        assert resolved == repo_user / "CONTEXT.md"
+
+    def test_none_when_neither_exists(self, tmp_path, monkeypatch):
+        import config as config_mod
+        monkeypatch.setattr(
+            config_mod, "repo_user_dir", lambda: tmp_path / "no-such-dir"
+        )
+        assert config_mod.user_file("SIGNALS.md") is None
+
+    def test_repo_templates_ship_no_personal_data(self):
+        """The shipped user/ templates must stay neutral (SF-5/docs-02):
+        no operator identity or personal details in the repo copies."""
+        import config as config_mod
+        for name in ("GOALS.md", "CONTEXT.md", "SIGNALS.md", "CONFIG.md"):
+            path = config_mod.repo_user_dir() / name
+            assert path.exists(), f"shipped template missing: {name}"
+            text = path.read_text(encoding="utf-8").lower()
+            for marker in ("jeremy", "slycrel", "retatrutide", "tirzepatide",
+                           "bpc-157", "epitalon", "edgar_allen_bot"):
+                assert marker not in text, f"personal data marker '{marker}' in user/{name}"

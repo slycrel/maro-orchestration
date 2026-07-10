@@ -46,7 +46,7 @@ exploration.
 | Space | Doc | Status |
 |---|---|---|
 | Intent resolution / side-quests / "what does done mean" | `docs/INTENT_RESOLUTION_DESIGN.md` | Partially shipped (ResolvedIntent/Deliverable live); side-quest handling open |
-| Scope + constraint orchestration (Phase 65) | `docs/CONSTRAINT_ORCHESTRATION_DESIGN.md` + review | PAUSED 2026-04-23 (Jeremy); MVE shipped dormant behind `scope_generation` flag |
+| Scope + constraint orchestration (Phase 65) | `docs/CONSTRAINT_ORCHESTRATION_DESIGN.md` + review | Scope+ResolvedIntent injection LIVE on this box since 2026-07-09 (SF-4 resolution; 2026-04-22 A/B: inject wins). Fresh installs: `scope_generation` OFF by default (no silent LLM spend). Deeper constraint-orchestration discussion deferred |
 | Adaptive execution | `docs/ADAPTIVE_EXECUTION_DESIGN.md` | Dormant design — not started |
 | Memory / graph / filesystem-vs-real-memory | `docs/history/2026-07-04-memory-decision-brief.md` (inputs: `docs/MEMORY_ARCHITECTURE.md`, `docs/KNOWLEDGE_CRYSTALLIZATION.md`) | Direction decided 2026-07-07: memory-as-module, 3rd-party bake-off behind `src/memory_port.py`; MILESTONES arc -1 |
 
@@ -111,7 +111,8 @@ lat.md/              Knowledge graph: 9 cross-linked concept nodes + index
 memory/              Repo-local: stale copies (tests write here via OPENCLAW_WORKSPACE). Real data is in ~/.maro/workspace/memory/
 output/              Repo-local output (real output in ~/.maro/workspace/output/)
 research/            Research outputs: X link synthesis, Polymarket validation, Phase 41 design
-user/                Operator docs: GOALS, CONFIG, CONTEXT, SIGNALS, COMPLETION_STANDARD
+user/                Neutral operator-doc templates (GOALS, CONFIG, CONTEXT, SIGNALS, COMPLETION_STANDARD);
+                     real files live in ~/.maro/workspace/user/ (overlay wins) — see user/README.md
 personas/poe.md      Optional Poe persona (the framework defaults to a neutral role)
 deploy/              systemd service files
 ```
@@ -159,7 +160,7 @@ Two-tier YAML config (like git's `~/.gitconfig` vs `.git/config`):
 
 | File | Scope | What goes here |
 |------|-------|---------------|
-| `~/.maro/config.yml` | User-level | API keys, model prefs, yolo mode, notifications |
+| `~/.maro/config.yml` | User-level | Model prefs, notifications (API keys stay in env or `secrets/.env`; `yolo` lives in `user/CONFIG.md` / `MARO_YOLO`) |
 | `~/.maro/workspace/config.yml` | Workspace-level | Evolver, inspector thresholds, constraint settings, quality gate |
 
 Workspace inherits from user; workspace keys override. Nested dicts merge one level deep.

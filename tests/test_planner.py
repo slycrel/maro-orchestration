@@ -240,3 +240,55 @@ class TestEstimateGoalScope:
     def test_is_large_scope_review_deep(self):
         from planner import _is_large_scope_review
         assert _is_large_scope_review("build a complete production-ready agent from scratch") is True
+
+
+# ---------------------------------------------------------------------------
+# decompose — user-context injection resolves via the workspace overlay
+# ---------------------------------------------------------------------------
+
+class _CapturingAdapter:
+    """Fake adapter: records every system prompt, returns a fixed plan."""
+
+    def __init__(self):
+        self.system_prompts = []
+
+    def complete(self, messages, **kwargs):
+        for m in messages:
+            if getattr(m, "role", "") == "system":
+                self.system_prompts.append(getattr(m, "content", ""))
+
+        class _Resp:
+            content = '["step one", "step two"]'
+            input_tokens = 10
+            output_tokens = 5
+        return _Resp()
+
+
+class TestDecomposeUserContextInjection:
+    def test_workspace_overlay_feeds_decompose_prompt(self, tmp_path):
+        """USER CONTEXT comes from <workspace>/user/ when the overlay exists
+        (conftest points MARO_WORKSPACE at tmp_path)."""
+        from planner import decompose
+
+        user_dir = tmp_path / "user"
+        user_dir.mkdir()
+        (user_dir / "GOALS.md").write_text("OVERLAY-GOALS-MARKER content")
+
+        adapter = _CapturingAdapter()
+        decompose("check the config", adapter, max_steps=4)
+
+        combined = "\n".join(adapter.system_prompts)
+        assert "USER CONTEXT (GOALS.md)" in combined
+        assert "OVERLAY-GOALS-MARKER" in combined
+
+    def test_fresh_install_gets_no_personal_data(self, tmp_path, monkeypatch):
+        """With no overlay (empty workspace), decompose falls back to the
+        shipped neutral templates — never someone else's personal context."""
+        from planner import decompose
+
+        adapter = _CapturingAdapter()
+        decompose("check the config", adapter, max_steps=4)
+
+        combined = "\n".join(adapter.system_prompts).lower()
+        for marker in ("jeremy", "slycrel", "retatrutide", "edgar_allen_bot"):
+            assert marker not in combined

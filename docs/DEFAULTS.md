@@ -14,6 +14,19 @@ Resolution order everywhere: **env var > `~/.maro/workspace/config.yml` >
 `~/.maro/config.yml` > the hardcoded default listed here** (see
 `src/config.py`). The hardcoded default is what a brand-new install runs.
 
+**A second, separate lane** (SF-5/docs-04): `user/CONFIG.md` — flat
+`key: value`, hand-parsed by `src/handle.py:_load_user_config`, *not* YAML
+and *not* covered by the resolution order above (currently read from the
+repo/install copy; workspace-overlay migration queued). It carries run
+defaults: `yolo` (also `MARO_YOLO` env), `default_model_tier`,
+`research_step_model`, `max_steps`, `always_skeptic`, `ralph_verify`,
+`quality_gate`, `quality_gate_action`, `notify_on_complete`, `mcp_servers`
+(heartbeat). The census below structurally cannot see this lane (it ASTs
+`config.get` aliases only). Full key table + defaults:
+[user/README.md](../user/README.md). The prompt-injected user docs
+(GOALS/CONTEXT/SIGNALS) resolve workspace-overlay-first via
+`config.user_file()` — see the same README.
+
 **The pattern behind the defaults** (worth internalizing before flipping
 anything): *capability defaults ON when it only adds internal evidence or
 quality; OFF when it self-modifies, acts outward, spends money, or persists
@@ -72,8 +85,8 @@ missing here fails the suite, so this table can't silently rot.
 |---|---|---|
 | `now_lane.escalate_to_director` | `True` | NOW-lane goals that outgrow a single response escalate to the director instead of silently under-delivering. Flip OFF → NOW stays cheap but complex asks get shallow answers. |
 | `closure_restart` | `True` | Status-integrity arc: demoted/failed closures restart rather than lingering "done". Flip OFF → done≠achieved drift returns. |
-| `scope_generation` | `False` | Phase 65 constraint-orchestration MVE, **PAUSED by Jeremy 2026-04-23** — shipped dormant behind this flag. Flip ON = resume a paused design decision; read `CONSTRAINT_ORCHESTRATION_DESIGN.md` + review first. |
-| `scope_ab_skip` | `False` | Companion A/B bypass for the above; only meaningful with `scope_generation` on. |
+| `scope_generation` | `False` | Phase 65 scope/ResolvedIntent generation (inversion → scope → deliverables, injected into planning + plumbed to closure). OFF for fresh installs: it costs one extra LLM call per AGENDA run — no silent spend for strangers. **This box opts in via `~/.maro/config.yml` with injection LIVE since 2026-07-09** (Purgatorio SF-4 / Jeremy decision 7): the 2026-04-22 A/B adjudicated inject as the winner (plan compression 8 vs 15–40 steps). History: previously mis-documented here as "PAUSED/dormant" while the box ran generation-without-injection since ~April. Deeper Phase 65 design discussion (constraints, enforcement, human gate) still deferred — `CONSTRAINT_ORCHESTRATION_DESIGN.md`. |
+| `scope_ab_skip` | `False` | A/B **control-arm** bypass: scope is generated and recorded but NOT injected. The A/B concluded 2026-04-22 (inject won); the flag survives only because `scripts/scope_ab_runner.py` flips it per arm for any future re-run. Leave unset in real configs — setting it silently pays the scope call while discarding the benefit (the exact SF-4 bug). |
 | `adaptive_execution` | `False` | Dormant design (`ADAPTIVE_EXECUTION_DESIGN.md`) — not started. The flag exists so the seam is visible. |
 | `keep_artifacts` | `False` | Run artifacts are cleaned unless a run opts in. Flip ON for debugging; watch disk (this box: 156G shared with everything). |
 | `planner.persona` | `None` | The framework orchestrates as the neutral Conductor; personas (e.g. Poe) are opt-in per the Maro rename decree — persona is presentation, not authority. |

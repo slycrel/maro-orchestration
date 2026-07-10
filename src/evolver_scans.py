@@ -97,11 +97,15 @@ class BusinessSignal:
 
 
 def _load_user_signals() -> str:
-    """Load user/SIGNALS.md as context for signal scanning. Non-fatal — returns '' on error."""
+    """Load SIGNALS.md as context for signal scanning. Non-fatal — returns '' on error.
+
+    Resolution: workspace overlay (~/.maro/workspace/user/SIGNALS.md) wins over
+    the repo/install template (see config.user_file — SF-5/docs-02).
+    """
     try:
-        from pathlib import Path as _Path
-        _signals_path = _Path(__file__).resolve().parent.parent / "user" / "SIGNALS.md"
-        if _signals_path.exists():
+        from config import user_file as _user_file
+        _signals_path = _user_file("SIGNALS.md")
+        if _signals_path is not None:
             return _signals_path.read_text(encoding="utf-8").strip()[:600]
     except Exception:
         pass

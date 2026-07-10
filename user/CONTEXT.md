@@ -1,26 +1,38 @@
-# User Context — Jeremy Stone
+# User Context — operator template
 
-Auto-injected into every mission for personalization without baking execution logic.
+<!--
+  WHAT THIS FILE IS
+  Who the operator is and how they like to work. The planner injects the
+  first ~500 characters into every goal-decomposition prompt
+  (src/planner.py) for personalization without baking execution logic
+  into code.
+
+  WHERE YOUR REAL FILE GOES
+  Do NOT put personal details in this repo copy — it ships with the code.
+  Put your real file at:  ~/.maro/workspace/user/CONTEXT.md
+  (more precisely: <workspace_root>/user/CONTEXT.md). The workspace overlay
+  always wins over this shipped template. See user/README.md.
+
+  Keep it short: only the first ~500 chars reach the prompt.
+-->
 
 ## Who
-- 25+ years software engineering (C/systems background)
-- Building AI orchestration systems (Poe)
-- Runs on headless Ubuntu Mac Mini (`clawd`)
+<!-- Example:
+     - Backend engineer, 10 years, mostly Python/Go
+     - Running Maro on a home server for research automation -->
 
 ## Current interests
-- Prediction markets (Polymarket — active research, no live trading yet)
-- GLP-1 agonists (currently on retatrutide, previously tirzepatide)
-- AI agent autonomy and self-improvement
-- Minimal scaffolding / Bitter Lesson Engineering principles
+<!-- Domains the system should weight when proposing or shaping work.
+     Example:
+     - Open-source LLM tooling
+     - Time-series forecasting -->
 
 ## Preferences
-- Concise over verbose. Data over opinion.
-- Ship it, iterate later. Progress over perfection.
-- Skeptical of hype — wants evidence before adoption.
-- Values: honest failure reports over polished summaries.
+<!-- Example:
+     - Concise over verbose. Data over opinion.
+     - Ship it, iterate later.
+     - Honest failure reports over polished summaries. -->
 
 ## Communication
-- Direct. Says what he means once.
-- "Sounds good" = execute now.
-- Don't re-ask for permission already granted.
-- Humor welcome, sycophancy not.
+<!-- Example:
+     - Direct. Don't re-ask for permission already granted. -->

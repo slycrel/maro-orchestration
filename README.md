@@ -329,12 +329,15 @@ The workspace (`~/.maro/workspace/` by default) holds all runtime state, learnin
 ├── playbook.md       # Director's operational wisdom (auto-maintained by evolver)
 ├── output/           # Run artifacts, operator status, research outputs
 ├── projects/         # Per-project NEXT.md, decisions, risks
+├── user/             # YOUR GOALS.md / CONTEXT.md / SIGNALS.md (override the repo's neutral templates)
 ├── config.yml        # Workspace-level config overrides
 └── secrets/
     └── .env          # API keys (auto-discovered by config.py)
 ```
 
-**Resolution order** for skills and personas: workspace → repo. When the system evolves a better version of a shipped skill or persona, the workspace version wins. Repo versions are the shipped defaults.
+**Resolution order** for skills, personas, and `user/` docs: workspace → repo. When the system evolves a better version of a shipped skill or persona, the workspace version wins. Repo versions are the shipped defaults.
+
+**Personal context (`user/` lane):** the planner injects `user/GOALS.md`, `CONTEXT.md`, and `SIGNALS.md` into every goal-decomposition prompt, and the evolver reads `SIGNALS.md` when proposing sub-missions. The repo ships neutral commented templates — put your real files in `~/.maro/workspace/user/` (the overlay wins; whatever you write there is sent to your model provider). `user/CONFIG.md` is a separate flat `key: value` run-defaults lane (`yolo`, model tiers, MCP servers). Full documentation: [user/README.md](user/README.md).
 
 Two-tier YAML config (like git's `~/.gitconfig` vs `.git/config`):
 
