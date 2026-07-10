@@ -197,6 +197,13 @@ surfaced by the NOW-lane work:
 - [ ] **Index rebuild is O(all runs) at every finalize** (~277ms at 668
   dirs, via the post-curation hook). Fine now; revisit around ~10k run dirs
   (incremental index, or rebuild only on viz/backfill).
+- [ ] **Goal search in the run visualization** (Jeremy, 2026-07-10, rider
+  on the retention decree): with run data now kept forever, old runs must
+  be *findable* to be worth keeping — "easier to ignore the old data than
+  wish it weren't deleted (assuming we surface it in a meaningful way)."
+  Search runs by goal text (and probably project/status/date) in the viz
+  surface. Pairs with the surface-all-details principle: users trust what
+  they can poke around in — the path, not just the outcome.
 
 ---
 
@@ -227,14 +234,18 @@ Two asks — **both SHIPPED 2026-07-10**:
   classifies as done-unverified — never verified done. Verdict surfaces in
   the command output (`goal_achieved` + summary). 8 tests
   (tests/test_cli.py TestClosureVerdictPass).
-- [x] **(b) evidence-safe cleanup:** finalize-time per-step artifact
-  deletion replaced by a deferred sweep (`loop_finalize.
-  cleanup_step_artifacts`): each finalize sweeps *other* loops'
-  `loop-*-step-*.md` older than a 24h grace window and never touches the
-  just-finished loop's files — verdict + audit window survive on every
-  lane (all ~15 run_agent_loop callers), no per-lane flag threading.
-  `keep_artifacts: true` still retains everything (DEFAULTS.md updated).
-  3 tests rewritten against the real function.
+- [x] **(b) evidence-safe cleanup — superseded same day by the retention
+  decree (Jeremy, 2026-07-10):** the first fix deferred deletion past a 24h
+  grace window; Jeremy then ruled auto-deletion itself the bug — "I'd
+  prefer to have the users choose to archive/delete old runs, rather than
+  have the system decide it's clutter... the result isn't always *just*
+  the outcome, it's also the path that gets you there." Final shape:
+  per-step artifacts are **kept forever by default**; `keep_artifacts`
+  retired; pruning is user opt-in via `artifacts.auto_prune_days` (0 =
+  never), and even opted-in pruning never touches the just-finished
+  loop's files (verdict is judged post-loop). DEFAULTS.md row carries the
+  decree. Tests rewritten (kept-by-default, opt-in age gate, 0/negative =
+  never).
 
 Residual (kept open, smaller): this lane still creates **no `runs/<id>/`
 dir** — `maro inspect-run <loop_id>` stays E_RUN_NOT_FOUND and per-run

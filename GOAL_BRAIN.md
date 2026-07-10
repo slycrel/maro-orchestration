@@ -1450,6 +1450,26 @@ Sample: the 2026-05-13..17 window of `~/.maro/workspace/runs/` (478 dirs total;
   — tri-state goal_achieved on outcomes rows + prefer-verdict consumers.
   (6) **Escalation channel (item a): later, its own conversation.**
   Jeremy's side: Slack admin cleanup (token revocation) on him.
+- **2026-07-10 (retention decree — Jeremy, live conversation over the
+  BACKLOG #18 fix):** auto-deleting run data is a **bug**, not a hygiene
+  feature — "I'd prefer to have the users choose to archive/delete old
+  runs, rather than have the system decide it's clutter... the result
+  isn't always *just* the outcome, it's also the path that gets you
+  there" (his analogy: math homework that doesn't show its work isn't a
+  full picture). Rationale from lived experience: "I've debugged one too
+  many missing data points or lost one too many important emails a few
+  years down the road." Standing shape: retention is a **user-level
+  decision**; auto-cleanup may exist only as an explicit user opt-in,
+  default off ("easier to ignore the old data than wish it weren't
+  deleted"). Shipped same day: `keep_artifacts` retired,
+  `artifacts.auto_prune_days` (0 = never) is the only prune path, and
+  even opted-in pruning never touches the just-finished loop's files.
+  This generalizes the existing "decay trust, never data" design
+  constraint from memory stores to ALL run data — future cleanup/GC
+  features must be user-visible opt-ins. Rider: add **goal search to the
+  run visualization** (BACKLOG #17) — kept-forever data must be findable
+  and poke-aroundable to earn its keep ("a user is going to trust more...
+  when they can poke around and see what actually happened").
 
 ## Threads (system-maintained — nothing leaves this list silently)
 

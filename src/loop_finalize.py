@@ -21,31 +21,36 @@ from loop_report import write_run_report as _write_run_report, write_runs_index 
 
 log = logging.getLogger("maro.loop")
 
-# How long a loop's per-step artifacts survive after their last write before
-# the deferred sweep may delete them. Long enough for the closure verdict
-# (seconds after finalize) and a post-hoc human audit; short enough that
-# keep_artifacts=false still means "temp".
-STEP_ARTIFACT_GRACE_S = 24 * 3600
+def _auto_prune_days() -> float:
+    """User-level retention knob (`artifacts.auto_prune_days`, default 0 =
+    never delete). Retention decree (Jeremy, 2026-07-10): the system never
+    decides run data is clutter — "the result isn't always just the outcome,
+    it's also the path that gets you there." Auto-pruning is strictly a user
+    opt-in; retiring the old `keep_artifacts` flag (whose default was
+    delete) closes the bug class where finalize destroyed audit evidence."""
+    try:
+        from config import get as _cfg_get
+        return max(0.0, float(_cfg_get("artifacts.auto_prune_days", 0) or 0))
+    except Exception:
+        return 0.0
 
 
-def cleanup_step_artifacts(project: str, *, exclude_loop_id: str = "",
-                           grace_s: float = STEP_ARTIFACT_GRACE_S) -> int:
-    """Deferred per-step artifact cleanup (BACKLOG #18 shape).
+def cleanup_step_artifacts(project: str, *, exclude_loop_id: str = "") -> int:
+    """Opt-in per-step artifact pruning (retention decree, 2026-07-10).
 
-    Deletes `loop-*-step-*.md` files in the project's artifacts dir that are
-    older than `grace_s`, never touching `exclude_loop_id`'s files — the
-    just-finished loop's step artifacts must outlive its verdict and audit
-    window, regardless of which lane invoked the loop. Honors
-    `keep_artifacts: true`. Returns the number of files deleted.
+    No-op unless the user set `artifacts.auto_prune_days` > 0. When enabled,
+    deletes `loop-*-step-*.md` files in the project's artifacts dir older
+    than that many days, never touching `exclude_loop_id`'s files — the
+    just-finished loop's step artifacts always outlive its verdict and audit
+    window, regardless of which lane invoked the loop (BACKLOG #18).
+    Returns the number of files deleted.
     """
     if not project:
         return 0
-    try:
-        from config import get as _cfg_get
-        if bool(_cfg_get("keep_artifacts", False)):
-            return 0
-    except Exception:
-        pass
+    _days = _auto_prune_days()
+    if _days <= 0:
+        return 0
+    grace_s = _days * 86400.0
     try:
         try:
             from runs import artifact_dir as _runs_artifact_dir
@@ -66,8 +71,9 @@ def cleanup_step_artifacts(project: str, *, exclude_loop_id: str = "",
             except OSError:
                 pass
         if _deleted:
-            log.debug("artifact cleanup: deleted %d aged per-step artifact(s) "
-                      "(set keep_artifacts: true to retain)", _deleted)
+            log.debug("artifact auto-prune: deleted %d per-step artifact(s) "
+                      "older than %.1fd (artifacts.auto_prune_days opt-in)",
+                      _deleted, _days)
         return _deleted
     except Exception as _art_exc:
         log.debug("artifact cleanup failed: %s", _art_exc)
@@ -305,14 +311,12 @@ def _build_result_and_finalize(
         except Exception as _ckpt_exc:
             log.debug("checkpoint delete failed: %s", _ckpt_exc)
 
-    # Artifact cleanup: per-step artifacts are temp by default (config
-    # `keep_artifacts: true` retains them). BACKLOG #18 (hermes trial, live
-    # specimen): the closure/goal verdict is judged AFTER the loop returns —
-    # deleting the just-finished loop's step artifacts here destroyed the
-    # evidence needed to audit a semantic miss. So cleanup is deferred: each
-    # finalize sweeps OTHER loops' step artifacts past a grace window and
-    # never touches the current loop's. Plan manifests, RESULT/PARTIAL.md,
-    # loop logs, and scratchpad are always kept.
+    # Artifact retention (decree, 2026-07-10): per-step artifacts are KEPT by
+    # default — the system never decides run data is clutter; deleting the
+    # path a result took destroyed audit evidence (BACKLOG #18, hermes
+    # specimen). Pruning is a user opt-in (`artifacts.auto_prune_days`), and
+    # even then the just-finished loop's files are never touched — the
+    # closure/goal verdict is judged AFTER the loop returns.
     if not ctx.dry_run and ctx.project:
         cleanup_step_artifacts(ctx.project, exclude_loop_id=ctx.loop_id)
 

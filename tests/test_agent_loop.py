@@ -3094,73 +3094,80 @@ def test_budget_bump_does_not_fire_with_few_remaining(monkeypatch, tmp_path):
 # Artifact cleanup
 # ---------------------------------------------------------------------------
 
-def test_artifact_cleanup_is_deferred_and_age_gated(monkeypatch, tmp_path):
-    """BACKLOG #18: finalize-time cleanup never deletes the just-finished
-    loop's step artifacts (the verdict is judged after the loop returns) —
-    it sweeps OTHER loops' step artifacts past the grace window instead."""
+def test_artifacts_kept_forever_by_default(monkeypatch, tmp_path):
+    """Retention decree (Jeremy 2026-07-10): the system never decides run
+    data is clutter. With no user opt-in, nothing is ever deleted — even
+    ancient prior-loop step artifacts."""
     monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
-    import os
-    from loop_finalize import cleanup_step_artifacts, STEP_ARTIFACT_GRACE_S
+    import os, time as _t
+    from loop_finalize import cleanup_step_artifacts
 
     _art_dir = tmp_path / "projects" / "test-project" / "artifacts"
     _art_dir.mkdir(parents=True)
-    current = _art_dir / "loop-abc123-step-01.md"          # just finished
-    aged_other = _art_dir / "loop-old111-step-01.md"       # prior loop, aged out
-    fresh_other = _art_dir / "loop-new222-step-01.md"      # prior loop, in grace
-    permanent = _art_dir / "loop-old111-PARTIAL.md"        # never step-pattern
+    ancient = _art_dir / "loop-old111-step-01.md"
+    ancient.write_text("the path the result took")
+    _old = _t.time() - 400 * 86400
+    os.utime(ancient, (_old, _old))
+
+    assert cleanup_step_artifacts("test-project", exclude_loop_id="abc123") == 0
+    assert ancient.exists(), "no opt-in -> no deletion, ever"
+
+
+def _optin_prune(monkeypatch, days):
+    import config as _config
+    _orig = _config.get
+    monkeypatch.setattr(
+        _config, "get",
+        lambda key, default=None: (days if key == "artifacts.auto_prune_days"
+                                   else _orig(key, default)))
+
+
+def test_optin_prune_is_age_gated_and_excludes_current_loop(monkeypatch, tmp_path):
+    """User opt-in (`artifacts.auto_prune_days`) prunes only OTHER loops'
+    step artifacts past the window — never the just-finished loop's (its
+    verdict is judged after the loop returns, BACKLOG #18)."""
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    import os, time as _t
+    from loop_finalize import cleanup_step_artifacts
+    _optin_prune(monkeypatch, 30)
+
+    _art_dir = tmp_path / "projects" / "test-project" / "artifacts"
+    _art_dir.mkdir(parents=True)
+    current = _art_dir / "loop-abc123-step-01.md"       # just finished
+    aged_other = _art_dir / "loop-old111-step-01.md"    # past the window
+    fresh_other = _art_dir / "loop-new222-step-01.md"   # inside the window
+    permanent = _art_dir / "loop-old111-PARTIAL.md"     # never step-pattern
     for f in (current, aged_other, fresh_other, permanent):
         f.write_text("content")
-    _old = __import__("time").time() - STEP_ARTIFACT_GRACE_S - 60
-    os.utime(aged_other, (_old, _old))
-    os.utime(permanent, (_old, _old))
+    _old = _t.time() - 31 * 86400
+    for f in (current, aged_other, permanent):
+        os.utime(f, (_old, _old))
 
     deleted = cleanup_step_artifacts("test-project", exclude_loop_id="abc123")
 
     assert deleted == 1
-    assert current.exists(), "just-finished loop's artifacts must survive finalize"
-    assert not aged_other.exists(), "aged prior-loop step artifact should be swept"
-    assert fresh_other.exists(), "in-grace prior-loop artifact must survive"
-    assert permanent.exists(), "non-step artifacts are never swept"
+    assert current.exists(), "just-finished loop survives even past the window"
+    assert not aged_other.exists()
+    assert fresh_other.exists()
+    assert permanent.exists(), "non-step artifacts are never pruned"
 
 
-def test_artifact_cleanup_excluded_loop_survives_even_when_aged(monkeypatch, tmp_path):
-    """exclude_loop_id wins over age — a long-running loop's own artifacts
-    can be older than the grace window at finalize."""
+def test_optin_prune_zero_and_negative_mean_never(monkeypatch, tmp_path):
     monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
     import os, time as _t
-    from loop_finalize import cleanup_step_artifacts, STEP_ARTIFACT_GRACE_S
-
-    _art_dir = tmp_path / "projects" / "test-project" / "artifacts"
-    _art_dir.mkdir(parents=True)
-    current = _art_dir / "loop-abc123-step-01.md"
-    current.write_text("content")
-    _old = _t.time() - STEP_ARTIFACT_GRACE_S - 60
-    os.utime(current, (_old, _old))
-
-    assert cleanup_step_artifacts("test-project", exclude_loop_id="abc123") == 0
-    assert current.exists()
-
-
-def test_artifact_cleanup_retains_files_when_keep_artifacts_true(monkeypatch, tmp_path):
-    """Per-step artifacts are kept when keep_artifacts: true — even aged ones."""
-    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
-    import os, time as _t
-    import config as _config
-    from loop_finalize import cleanup_step_artifacts, STEP_ARTIFACT_GRACE_S
+    from loop_finalize import cleanup_step_artifacts
 
     _art_dir = tmp_path / "projects" / "test-project" / "artifacts"
     _art_dir.mkdir(parents=True)
     aged = _art_dir / "loop-old111-step-01.md"
-    aged.write_text("step output")
-    _old = _t.time() - STEP_ARTIFACT_GRACE_S - 60
+    aged.write_text("content")
+    _old = _t.time() - 400 * 86400
     os.utime(aged, (_old, _old))
-    _orig = _config.get
-    monkeypatch.setattr(_config, "get",
-                        lambda key, default=None: (True if key == "keep_artifacts"
-                                                   else _orig(key, default)))
 
-    assert cleanup_step_artifacts("test-project", exclude_loop_id="abc123") == 0
-    assert aged.exists(), "Step file should be retained when keep_artifacts=True"
+    for val in (0, -5, None, "0"):
+        _optin_prune(monkeypatch, val)
+        assert cleanup_step_artifacts("test-project") == 0
+        assert aged.exists()
 
 
 def test_artifact_cleanup_glob_pattern_does_not_match_permanent_files():
