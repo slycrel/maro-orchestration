@@ -156,6 +156,35 @@ def load_skill_file(path: Path) -> Optional[SkillSummary]:
     )
 
 
+def _workspace_skill_clean(path: Path, text: Optional[str] = None) -> bool:
+    """Injection gate for workspace-loaded skills (fail-closed).
+
+    Workspace skills/ is LLM-writable (evolver, skills-lite promotion), so
+    content is re-checked at load time — write-time gates can't see edits
+    made after promotion, or files from producers that skipped them. Repo
+    skills/ are git-reviewed and not scanned here.
+    """
+    try:
+        if text is None:
+            text = path.read_text(encoding="utf-8")
+        from injection_guard import scan_content
+        report = scan_content(text, source=str(path))
+        if report.is_clean:
+            return True
+        log.warning(
+            "skill_loader: injection risk (%s) in workspace skill %s — not loaded: %s",
+            report.risk_level, path.name,
+            report.findings[0] if report.findings else "?",
+        )
+        return False
+    except Exception as exc:
+        log.warning(
+            "skill_loader: injection scan failed for %s — not loaded (fail-closed): %s",
+            path.name, exc,
+        )
+        return False
+
+
 # ---------------------------------------------------------------------------
 # SkillLoader
 # ---------------------------------------------------------------------------
@@ -205,6 +234,8 @@ class SkillLoader:
         ws_dir = _workspace_skills_dir()
         if ws_dir and ws_dir.exists():
             for path in sorted(ws_dir.glob("*.md")):
+                if not _workspace_skill_clean(path):
+                    continue
                 skill = load_skill_file(path)
                 if skill is not None:
                     if skill.name in result:
@@ -243,6 +274,12 @@ class SkillLoader:
         try:
             text = summary.file_path.read_text(encoding="utf-8")
         except OSError:
+            return None
+        # Re-check at read time: the file may have been edited since the
+        # cache was filled (workspace skills are mutable by design).
+        ws_dir = _workspace_skills_dir()
+        if ws_dir and summary.file_path.parent == ws_dir \
+                and not _workspace_skill_clean(summary.file_path, text):
             return None
         _, body = _parse_frontmatter(text)
         return body.strip() or None

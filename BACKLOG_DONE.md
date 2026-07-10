@@ -8,6 +8,39 @@ Last split: 2026-04-16 (session 34).
 
 ---
 
+### cs-r2-01: skills-lite injection gate — promotion-time guard + loader-side backstop (2026-07-10)
+
+Purgatorio r2 finding (adversarially confirmed): `promote_skills_lite`
+(ccc20fc, default ON) injected worker-authored skill .md into all future
+planning prompts gated only by `sandbox._DANGEROUS_PATTERNS` — a
+Python-code substring list, the wrong threat model for prompt-injected
+markdown — while both sibling self-mod lanes (`evolver_store.apply_suggestion`,
+`skill_lifecycle.synthesize_skill`) run `injection_guard.scan_content` and
+discard on findings. Contradicted SECURITY_MODEL.md:47.
+
+**Shipped (Jeremy: "let's do it", design his suggestion + code-grounded):**
+1. **Promotion-time gate** (run_curation.py): `injection_guard.scan_content`
+   next to the `_DANGEROUS_PATTERNS` check, gating on `is_clean` with honest
+   source label `run-artifact:<rel>` (not the allowlisted "internal" — the
+   content origin is worker output). Unsafe/guard-error → existing `skipped`
+   outcome (waits for human review, not rejected forever). Fail-closed.
+2. **Loader-side backstop** (skill_loader.py `_workspace_skill_clean`):
+   workspace-dir files re-scanned at every cache fill AND `load_full`
+   re-checks at read time (workspace skills are mutable by design — TOCTOU:
+   a clean-at-promotion skill can go dirty via later edits or a producer
+   that skipped write-time gates). Repo skills/ deliberately NOT scanned
+   (git-reviewed shipped defaults; scanning them risks false-positives on
+   curated content that *discusses* injection). Fail-closed: guard error →
+   workspace skill not loaded.
+
+Rationale for both layers: write-time gates only cover known producers; the
+workspace skills overlay is the actual trust boundary (evolver, skills-lite,
+manual drops, future lanes all write there). Scan is regex over ≤50K chars —
+no LLM cost; loader cache bounds re-scan frequency. Tests: 2 new in
+test_run_curation.py (injection skip + guard-failure fail-closed), 4 new in
+test_skill_loader.py (TestWorkspaceInjectionGate: injected-not-loaded,
+repo-boundary documented, load_full TOCTOU re-check, fail-closed).
+
 ### BACKLOG #19: Thread Architecture — 5 remaining open decisions RESOLVED (2026-07-09)
 
 Decision brief (`docs/history/2026-07-09-thread-architecture-decisions-brief.md`,

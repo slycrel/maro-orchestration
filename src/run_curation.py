@@ -360,6 +360,23 @@ def promote_skills_lite(rd: Path, meta: dict, card: dict) -> None:
             skipped.append({"file": rel, "name": name,
                             "reason": f"dangerous pattern: {hit!r}"})
             continue
+        # Prompt-injection gate — the same guard the sibling self-mod lanes
+        # run (evolver_store.apply_suggestion, skill_lifecycle.synthesize_skill).
+        # The pattern scan above guards executed-Python threats; a skills-lite
+        # .md is *instructions* injected into future planning prompts, which
+        # is injection_guard's threat model. Fail-closed: a guard error
+        # quarantines the candidate for human review, same as an unsafe hit.
+        try:
+            from injection_guard import scan_content
+            _ig = scan_content(text, source=f"run-artifact:{rel}")
+            ig_reason = (None if _ig.is_clean
+                         else f"injection risk ({_ig.risk_level}): "
+                              f"{_ig.findings[0][:120] if _ig.findings else '?'}")
+        except Exception as exc:
+            ig_reason = f"injection_guard scan failed (fail-closed): {exc}"
+        if ig_reason:
+            skipped.append({"file": rel, "name": name, "reason": ig_reason})
+            continue
 
         # Stamp the lite tier + origin into the frontmatter (drop any tier the
         # artifact claimed for itself — the lane assigns tiers, not the run).

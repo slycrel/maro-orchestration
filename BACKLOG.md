@@ -30,11 +30,8 @@ All adversarially verified (41/42 confirmed). The two 1.0-blockers first:
   `heartbeat.autonomy: true` on this box (ops-r2-02), align host-check
   900s threshold with the one-shot-ticks decree (ops-r2-01 — else daily-red
   is structural).
-- [ ] **cs-r2-01:** skills-lite promoter (run_curation.py:355-362) skips
-  injection_guard.scan_content that both sibling self-mod lanes run
-  (evolver_store.py:431-452, skill_lifecycle.py:463-478); only gate is
-  sandbox._DANGEROUS_PATTERNS (Python-code substrings — wrong threat for a
-  prompt-injected .md). Default ON. Fix before the learning live batch.
+- [x] **cs-r2-01: SHIPPED 2026-07-10** (promotion-time guard + loader-side
+  backstop) — moved to BACKLOG_DONE with context.
 - [ ] **ops-r2-05 (live-reproduced):** test-isolation leak — 
   test_heartbeat.py::test_heartbeat_loop_none_autonomy_uses_config stubs
   sys.modules["config"], proc_lock._run_dir import fails → Path.home()
