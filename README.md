@@ -13,7 +13,11 @@ Works standalone or alongside OpenClaw, Telegram, Slack, or any other interface 
 - **Python 3.10+** (tested on 3.12–3.14)
 - **Linux or macOS** (Linux preferred for always-on deployments)
 - One LLM lane: an API key (`ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`, or
-  `OPENAI_API_KEY`) **or** the `claude` CLI (Claude Code OAuth — no key needed)
+  `OPENAI_API_KEY`) **or** the `claude` CLI (Claude Code OAuth — no key
+  needed). The `claude` CLI lane is the most-tested path (it's what Maro's
+  own box runs); any supported lane should work. If you use a
+  subscription-backed CLI as a programmatic backend, check your plan's
+  terms of service — that's between you and your provider.
 - Optional: `gh` CLI (GitHub), Telegram bot token
 
 ---
@@ -99,6 +103,7 @@ pip install .          # or `pip install -e ".[dev]"` for development
 export ANTHROPIC_API_KEY=sk-ant-...
 # or: export OPENROUTER_API_KEY=... / export OPENAI_API_KEY=...
 # or: skip this — an installed `claude` CLI works as the backend on its own
+#     (most-tested lane; subscription CLIs as backends: check your plan's terms)
 
 # 3. Bootstrap: workspace dirs, a commented starter ~/.maro/config.yml,
 #    service templates, and a smoke test

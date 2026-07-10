@@ -157,6 +157,33 @@ arc after 1.0. Full context in BACKLOG_DONE.
 
 ## Vision / Deferred
 
+### Post-Purgatorio decision batch (2026-07-09, Jeremy — quotes in GOAL_BRAIN Decisions)
+
+- [ ] **Skills-lite two-tier promotion.** Jeremy rider on the graduation
+  precedent: "we want things promoted to skills that the local
+  orchestration can pick up and use while waiting for user review...
+  looked at as skills-lite, and degraded the same as regular skills that
+  get broken or stop working." Design: Maro-built skills auto-promote to
+  a locally-usable provisional tier immediately (normal decay/degradation
+  on failure applies); human review gates only ship-set/catalog
+  graduation. Interacts with SF-10 (promotion funnel has never promoted)
+  — this is the demand side the funnel was missing. 1.0-adjacent.
+- [ ] **Official scheduler/timer layer (post-1.0; auto-resume rides it).**
+  Jeremy: "maybe we need a more general official scheduler/timer that the
+  user can hook into/see/manage if they wish." A visible, user-managed
+  timer surface (list/inspect/disable) — coexists with the no-cron
+  invariant, which bans *hidden self-rearming* schedules, not an official
+  transparent one. Auto-resume of interrupted runs ((h) deferred half)
+  becomes this layer's first consumer; heartbeat scheduling may too,
+  pending the SF-1 supervision decision.
+- [ ] **Knowledge-web read side: wire it properly (post-1.0, KEEP).**
+  Descoped from 1.0 docs (node store + BM25 is the honest claim) but
+  explicitly kept: "I'd like to keep it on the list. I think it could be
+  really powerful if done well (and right now sounds like it isn't)."
+  The write side + 2124 edges exist; the read side
+  (load_knowledge_edges) has zero callers. Adjacent-knowledge retrieval
+  ("Correspondence" in the Mage sense) is the payoff if done well.
+
 ### Graph memory + recursive-orchestration scoped memory (2026-06-21, vision)
 
 **RESOLVED 2026-07-07/08 — this entry was stale until 2026-07-09.** Direction

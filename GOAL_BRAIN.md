@@ -1329,6 +1329,49 @@ Sample: the 2026-05-13..17 window of `~/.maro/workspace/runs/` (478 dirs total;
   until "we start looking at budget models and such for orchestration."
   Extends (does not reverse) the 2026-07-02 model-lane accept-contention
   decision. Don't re-pitch the API key before the budget-models phase.
+- **2026-07-09 (post-Purgatorio decision batch — Jeremy, live conversation
+  over docs/history/2026-07-09-decisions-for-jeremy.md):**
+  (1) **Buckets A + B ratified** (all 8 session judgment calls + all 8 (g)
+  and 9 (h) provisional design decisions are now non-provisional), with two
+  riders. Rider A — **skill promotion must not gate local use on human
+  review**: "we want things promoted to skills that the local orchestration
+  can pick up and use while waiting for user review... those need to be
+  looked at as skills-lite, and degraded the same as regular skills that
+  get broken or stop working." Two-tier promotion: Maro-built skills become
+  locally-usable provisional skills immediately (subject to normal
+  decay/degradation on failure); the human gate applies only to
+  ship-set/catalog graduation. Rider B — auto-resume stays post-1.0 but is
+  wanted, and the shape may be "a more general official scheduler/timer
+  that the user can hook into/see/manage if they wish" — a *visible,
+  user-managed* timer layer, which coexists with the no-cron invariant
+  (the invariant bans hidden self-rearming crons, not an official
+  transparent scheduler).
+  (2) **slack-bridge: mothball** ("clean that up and come back to that
+  later... I won't use it myself for the foreseeable future") — service
+  down, code kept, revive-or-delete decision deferred; token revocation
+  recommended to Jeremy (his Slack admin action).
+  (3) **Knowledge web: descope for 1.0, KEEP on the list** — "this makes me
+  a little sad... I'd like to keep it on the list. I think it could be
+  really powerful if done well (and right now sounds like it isn't)." Docs
+  say node store + BM25 now; wiring the read side properly is a post-1.0
+  item, not abandoned.
+  (4) **PUBLISH_CHECKLIST adopted as the 1.0 gate scaffold; version is
+  1.0.0 at tag time** (CHANGELOG internal 1.x numbering retired). Framing
+  decree: "1.0 is more of a process gate... My '1.0 target' is to start
+  trying to use the orchestration directly via openclaw or hermes instead
+  of dev style" — the real gate is direct-use readiness, not a number;
+  expect a fresh dogfood wave at that transition.
+  (5) **claude-CLI lane README framing:** keep it prominent but honest —
+  "that path is the most tested, and any supported method should work";
+  add the check-your-plan's-terms caveat (his own standing ToS worry,
+  hist-02). Not a demotion — a most-tested label plus caveat.
+  (6) **user/ privacy fix approved as recommended** (neutral templates in
+  repo, real files to workspace overlay, CONFIG.md lane documented) —
+  "will tie into our shared stuff later."
+  (7) **Scope/Phase 65: the A/B-control-forever config is a BUG, not a
+  choice** ("that sounds like a bug actually, there might have been some
+  miscommunication there"). Approved: inject ON on this box, OFF default
+  for fresh installs, docs corrected. Open to deeper discussion later.
 
 ## Threads (system-maintained — nothing leaves this list silently)
 
