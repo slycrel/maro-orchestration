@@ -42,7 +42,7 @@ from typing import Any, Dict, List, Optional, Tuple
 @dataclass
 class SheriffReport:
     project: str
-    status: str           # "healthy" | "warning" | "stuck" | "unknown"
+    status: str           # "healthy" | "warning" | "stuck" | "dormant" | "failed" | "paused" | "unknown"
     diagnosis: str        # Human-readable explanation
     evidence: List[str]   # Supporting observations
     recommended_action: Optional[str] = None
@@ -125,6 +125,56 @@ def project_lifecycle_state(slug: str) -> str:
     return "active"
 
 
+# Days without any file activity before a project counts as dormant.
+# Dormant projects are excluded from stuck/warning classification — nothing is
+# working on them, so tier-2 diagnosis and tier-3 escalation must not spend on
+# them every heartbeat tick (BACKLOG #21: ~230 accumulated test projects were
+# being re-diagnosed — the June-21 cron-tokenburn class).
+DORMANT_DAYS_DEFAULT = 14.0
+
+
+def _dormant_days() -> float:
+    """Dormancy threshold in days; 0 disables the check."""
+    try:
+        from config import get
+        return float(get("sheriff.dormant_days", DORMANT_DAYS_DEFAULT) or 0)
+    except Exception:
+        return DORMANT_DAYS_DEFAULT
+
+
+def project_activity_age_days(slug: str) -> Optional[float]:
+    """Days since the last file activity in a project dir (None = unknown).
+
+    Activity = newest mtime among the project dir itself, NEXT.md,
+    DECISIONS.md, and artifacts/ (dir + a bounded sample of entries).
+    Deliberately a cheap stat scan — this runs for every project on every
+    heartbeat tick.
+    """
+    import sys as _sys
+    _sys.path.insert(0, str(Path(__file__).parent))
+    from orch import project_dir
+    try:
+        proj_dir = project_dir(slug)
+        if not proj_dir.exists():
+            return None
+        candidates = [proj_dir, proj_dir / "NEXT.md", proj_dir / "DECISIONS.md"]
+        artifacts = proj_dir / "artifacts"
+        if artifacts.exists():
+            candidates.append(artifacts)
+            candidates.extend(sorted(artifacts.iterdir())[:50])
+        newest = 0.0
+        for p in candidates:
+            try:
+                newest = max(newest, p.stat().st_mtime)
+            except OSError:
+                continue
+        if newest <= 0:
+            return None
+        return (time.time() - newest) / 86400.0
+    except Exception:
+        return None
+
+
 def check_project(slug: str, *, window_minutes: int = 30) -> SheriffReport:
     """Check a single project for loop health.
 
@@ -167,6 +217,23 @@ def check_project(slug: str, *, window_minutes: int = 30) -> SheriffReport:
                 diagnosis="Marked paused (.maro-paused)",
                 evidence=[],
             )
+
+        # Dormancy — no file activity for sheriff.dormant_days (0 disables).
+        # A dormant project is not "stuck": nothing is working on it, so it
+        # must not draw diagnosis spend or escalation noise every tick.
+        _dd = _dormant_days()
+        if _dd > 0:
+            _age = project_activity_age_days(slug)
+            if _age is not None and _age > _dd:
+                return SheriffReport(
+                    project=slug,
+                    status="dormant",
+                    diagnosis=(f"No file activity in {_age:.0f}d (>{_dd:g}d) — "
+                               "excluded from diagnosis/escalation"),
+                    evidence=[],
+                    recommended_action=("Archive with `maro sheriff archive --apply`, "
+                                        "or touch a project file to reactivate"),
+                )
 
         evidence: List[str] = []
         problems: List[str] = []
@@ -265,13 +332,18 @@ def check_project(slug: str, *, window_minutes: int = 30) -> SheriffReport:
 
 
 def check_all_projects(*, window_minutes: int = 30) -> List[SheriffReport]:
-    """Check all projects in the workspace."""
+    """Check all projects in the workspace.
+
+    Skips `_`/`.`-prefixed dirs — `projects/_archive/` (the archive sweep's
+    target) and hidden dirs are not projects.
+    """
     try:
         from orch import projects_root
         projects_dir = projects_root()
         if not projects_dir.exists():
             return []
-        slugs = [d.name for d in projects_dir.iterdir() if d.is_dir()]
+        slugs = [d.name for d in projects_dir.iterdir()
+                 if d.is_dir() and not d.name.startswith((".", "_"))]
         return [check_project(slug, window_minutes=window_minutes) for slug in sorted(slugs)]
     except Exception as exc:
         return [SheriffReport(
@@ -280,6 +352,43 @@ def check_all_projects(*, window_minutes: int = 30) -> List[SheriffReport]:
             diagnosis=f"Could not enumerate projects: {exc}",
             evidence=[],
         )]
+
+
+def archive_dormant_projects(*, days: float = 30.0, apply: bool = False) -> List[Dict[str, Any]]:
+    """List (and optionally move) dormant projects to `projects/_archive/`.
+
+    Manual hygiene op (`maro sheriff archive`) — never called from automated
+    paths, so an off switch stays off. Dry-run by default; `apply=True`
+    performs the moves. Lifecycle markers travel with the dir; archived
+    projects disappear from check_all_projects and backlog enumeration.
+    """
+    import shutil
+    import sys as _sys
+    _sys.path.insert(0, str(Path(__file__).parent))
+    from orch import projects_root
+
+    out: List[Dict[str, Any]] = []
+    projects_dir = projects_root()
+    if not projects_dir.exists():
+        return out
+    archive_root = projects_dir / "_archive"
+    for d in sorted(projects_dir.iterdir()):
+        if not d.is_dir() or d.name.startswith((".", "_")):
+            continue
+        age = project_activity_age_days(d.name)
+        if age is None or age <= days:
+            continue
+        entry: Dict[str, Any] = {"project": d.name, "age_days": round(age, 1), "moved": False}
+        if apply:
+            archive_root.mkdir(exist_ok=True)
+            target = archive_root / d.name
+            if target.exists():
+                target = archive_root / f"{d.name}-{int(time.time())}"
+            shutil.move(str(d), str(target))
+            entry["moved"] = True
+            entry["target"] = str(target)
+        out.append(entry)
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -349,8 +458,10 @@ def check_system_health() -> SystemHealth:
     except Exception as exc:
         checks["workspace_writable"] = f"fail: {exc}"
 
-    # Check 2: Python packages
-    for pkg in ["anthropic", "requests"]:
+    # Check 2: Python packages (requests backs telegram/notify paths).
+    # The anthropic SDK is deliberately NOT checked here: a box on the
+    # claude-CLI subprocess lane never needs it — lane health is check 4.
+    for pkg in ["requests"]:
         try:
             __import__(pkg)
             checks[f"pkg_{pkg}"] = "ok"
@@ -371,14 +482,23 @@ def check_system_health() -> SystemHealth:
     except Exception as exc:
         checks["disk_space"] = f"warn: {exc}"
 
-    # Check 4: API key available
-    import os
-    has_key = bool(
-        os.environ.get("OPENROUTER_API_KEY") or
-        os.environ.get("ANTHROPIC_API_KEY") or
-        _read_env_file_key()
-    )
-    checks["api_key"] = "ok" if has_key else "warn: no API key found"
+    # Check 4: LLM backend lane — lane-aware (BACKLOG #21). Warn only when NO
+    # viable lane exists: an API-key check alone marks a healthy claude-CLI
+    # subprocess box as degraded. llm.detect_backends() is the single source
+    # of truth (same predicates build_adapter's auto-detect walk uses).
+    try:
+        import sys as _sys
+        _sys.path.insert(0, str(Path(__file__).parent))
+        import llm as _llm
+        lanes = _llm.detect_backends()
+        usable = [name for name, ok, _ in lanes if ok]
+        if usable:
+            checks["llm_backend"] = f"ok: {', '.join(usable)}"
+        else:
+            checks["llm_backend"] = "warn: no viable LLM backend lane — " + "; ".join(
+                f"{name}: {detail}" for name, _ok, detail in lanes)
+    except Exception as exc:
+        checks["llm_backend"] = f"warn: backend detection failed: {exc}"
 
     # Check 5: OpenClaw gateway (optional — just check if accessible)
     import socket
@@ -403,23 +523,6 @@ def check_system_health() -> SystemHealth:
         status = "healthy"
 
     return SystemHealth(status=status, checks=checks)
-
-
-def _read_env_file_key() -> Optional[str]:
-    try:
-        from config import credentials_env_file
-        env_file = credentials_env_file()
-    except Exception:
-        env_file = Path.home() / ".maro" / "workspace" / "secrets" / ".env"
-    if not env_file.exists():
-        return None
-    try:
-        for line in env_file.read_text().splitlines():
-            if "OPENROUTER_API_KEY=" in line or "ANTHROPIC_API_KEY=" in line:
-                return line.split("=", 1)[1].strip().strip('"').strip("'")
-    except Exception:
-        pass
-    return None
 
 
 # ---------------------------------------------------------------------------
@@ -483,6 +586,11 @@ def main(argv=None):
     p_health.add_argument("--format", choices=["text", "json"], default="text")
     p_health.add_argument("--write-state", action="store_true", help="Write heartbeat state file")
 
+    p_arch = sub.add_parser("archive", help="Archive dormant projects to projects/_archive/ (dry-run unless --apply)")
+    p_arch.add_argument("--days", type=float, default=30.0, help="Dormancy threshold in days (default 30)")
+    p_arch.add_argument("--apply", action="store_true", help="Actually move dirs; default is dry-run")
+    p_arch.add_argument("--format", choices=["text", "json"], default="text")
+
     args = parser.parse_args(argv)
 
     if args.cmd == "check":
@@ -500,6 +608,20 @@ def main(argv=None):
                 print()
         stuck = [r for r in reports if r.status in ("stuck", "warning")]
         return 1 if stuck else 0
+
+    if args.cmd == "archive":
+        rows = archive_dormant_projects(days=args.days, apply=args.apply)
+        if args.format == "json":
+            print(json.dumps(rows, indent=2))
+        else:
+            if not rows:
+                print(f"No projects dormant >{args.days:g}d.")
+            for r in rows:
+                verb = "archived" if r["moved"] else "would archive"
+                print(f"{verb}: {r['project']} (idle {r['age_days']}d)")
+            if rows and not args.apply:
+                print(f"\nDry run — re-run with --apply to move {len(rows)} project(s) to projects/_archive/")
+        return 0
 
     if args.cmd == "health":
         health = check_system_health()

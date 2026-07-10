@@ -190,12 +190,12 @@ def _tier1_scripted(checks: Dict[str, str]) -> List[RecoveryAction]:
                     outcome="suggested",
                     detail=detail,
                 ))
-            elif name == "api_key":
+            elif name == "llm_backend":
                 actions.append(RecoveryAction(
                     tier=1,
                     target=name,
-                    action="API key missing — will fall back to claude subprocess adapter",
-                    outcome="suggested",
+                    action="No viable LLM backend lane — set an API key, install the claude CLI, or fix llm.backend_order",
+                    outcome="escalated",
                     detail=detail,
                 ))
             elif name == "openclaw_gateway":

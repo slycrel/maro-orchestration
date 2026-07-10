@@ -135,19 +135,35 @@ by the never-scheduled heartbeat.
 First-ever production heartbeat ticks (one dry, one real) after the
 supervision-shim ship. The tick machinery works — health check, tier-2
 diagnosis fired correctly (the monotonic-sentinel fix is why it fired on the
-first tick at all). Two findings before any recurring hook goes live:
+first tick at all). Two findings before any recurring hook goes live —
+**both FIXED 2026-07-10**; the recurring-hook blocker is cleared, but the
+hook itself stays uninstalled per decree (one-shot ticks only, no
+persistent timer — installation is Jeremy's call at the direct-use
+transition):
 
-- [ ] **BLOCKER for recurring hook: diagnosis spends on zombie projects.**
-  Tier-2 diagnosed `test`, `test-goal`, `vis-test` — dead test projects among
-  ~230 accumulated in `projects/` from months of regression work. A recurring
-  hook would re-diagnose corpses every interval — the June-21 cron-tokenburn
-  class. Need an active-project filter (recent activity / not-archived) in
-  `_diagnosis_due` targets, and probably a `projects/` archiving sweep.
-  Until then: one-shot ticks only, no OpenClaw hook installed.
-- [ ] **Sheriff health check isn't lane-aware.** `pkg_anthropic: warn` marks
-  the box degraded, but this box intentionally runs the claude-CLI subprocess
-  lane — the SDK is not required. Health should warn only when NO viable
-  backend lane exists (mirror llm.py's backend_order detection).
+- [x] **Recurring-hook blocker: diagnosis spends on zombie projects — FIXED
+  2026-07-10.** Sheriff now classifies projects with no file activity for
+  `sheriff.dormant_days` (default 14, docs/DEFAULTS.md) as `dormant`
+  instead of stuck/warning — excluded from tier-2 diagnosis AND tier-3
+  escalation (a recurring hook would have bought Telegram spam too, not
+  just diagnosis calls). Cheap stat scan (`project_activity_age_days`),
+  short-circuits before the expensive checks. Archiving sweep shipped as
+  `maro sheriff archive [--days N] [--apply]` — manual-only, dry-run by
+  default (off switches stay off); `check_all_projects` +
+  `list_projects` skip `_archive/`. Live-proven on box: 238 projects →
+  183 dormant / 0 diagnosis targets (was diagnosing `test`, `test-goal`,
+  `vis-test`); sweep applied at 30d moved 113 stale goal-slug workspaces
+  (all Apr–May regression junk, `polymarket-edges` untouched) →
+  125 live. Real tick post-fix: healthy, 0 stuck, 0 recovery actions,
+  198ms, zero LLM/Telegram spend. Tests: test_sheriff.py dormancy+archive
+  block.
+- [x] **Sheriff health check isn't lane-aware — FIXED 2026-07-10.**
+  `pkg_anthropic` + `api_key` checks replaced with one `llm_backend` check
+  over `llm.detect_backends()` (the doctor's single source of truth —
+  sheriff can no longer disagree with what a run would do). Warns only
+  when NO lane is usable; heartbeat tier-1 escalates on it (was:
+  "suggested" for a missing API key). This box: degraded → healthy
+  (`ok: subprocess, openrouter, openai`).
 
 ### 10. Local-validator measurement — tune `local_max_tokens` per model
 

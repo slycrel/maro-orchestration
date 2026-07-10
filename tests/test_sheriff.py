@@ -182,6 +182,80 @@ def test_check_all_empty_workspace(monkeypatch, tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# Dormancy + archive sweep (BACKLOG #21)
+# ---------------------------------------------------------------------------
+
+def _age_project(tmp_path, slug, days):
+    """Backdate every mtime in a project dir by `days`."""
+    import os
+    old = time.time() - days * 86400
+    proj = tmp_path / "projects" / slug
+    for p in [proj, *proj.rglob("*")]:
+        os.utime(p, (old, old))
+
+
+def test_dormant_project_not_stuck(monkeypatch, tmp_path):
+    _setup(monkeypatch, tmp_path)
+    # DOING item would normally classify this as stuck
+    _mkproj(tmp_path, "zombie", content="- [~] forever doing\n")
+    _age_project(tmp_path, "zombie", days=20)
+    report = check_project("zombie")
+    assert report.status == "dormant"
+
+
+def test_recent_stuck_project_still_stuck(monkeypatch, tmp_path):
+    _setup(monkeypatch, tmp_path)
+    _mkproj(tmp_path, "fresh-stuck", content="- [~] doing now\n")
+    report = check_project("fresh-stuck")
+    assert report.status == "stuck"
+
+
+def test_dormancy_disabled_via_config(monkeypatch, tmp_path):
+    import sheriff as _sheriff_mod
+    _setup(monkeypatch, tmp_path)
+    _mkproj(tmp_path, "zombie-2", content="- [~] forever doing\n")
+    _age_project(tmp_path, "zombie-2", days=20)
+    monkeypatch.setattr(_sheriff_mod, "_dormant_days", lambda: 0.0)
+    report = check_project("zombie-2")
+    assert report.status == "stuck"
+
+
+def test_check_all_skips_archive_dir(monkeypatch, tmp_path):
+    _setup(monkeypatch, tmp_path)
+    _mkproj(tmp_path, "live-proj")
+    archived = tmp_path / "projects" / "_archive" / "old-proj"
+    archived.mkdir(parents=True)
+    (archived / "NEXT.md").write_text("- [ ] task\n", encoding="utf-8")
+    reports = check_all_projects()
+    assert [r.project for r in reports] == ["live-proj"]
+
+
+def test_archive_dry_run_moves_nothing(monkeypatch, tmp_path):
+    from sheriff import archive_dormant_projects
+    _setup(monkeypatch, tmp_path)
+    _mkproj(tmp_path, "old-one")
+    _age_project(tmp_path, "old-one", days=45)
+    rows = archive_dormant_projects(days=30)
+    assert [r["project"] for r in rows] == ["old-one"]
+    assert rows[0]["moved"] is False
+    assert (tmp_path / "projects" / "old-one").exists()
+
+
+def test_archive_apply_moves_dormant_only(monkeypatch, tmp_path):
+    from sheriff import archive_dormant_projects
+    _setup(monkeypatch, tmp_path)
+    _mkproj(tmp_path, "old-one")
+    _age_project(tmp_path, "old-one", days=45)
+    _mkproj(tmp_path, "active-one")
+    rows = archive_dormant_projects(days=30, apply=True)
+    assert [r["project"] for r in rows] == ["old-one"]
+    assert rows[0]["moved"] is True
+    assert not (tmp_path / "projects" / "old-one").exists()
+    assert (tmp_path / "projects" / "_archive" / "old-one" / "NEXT.md").exists()
+    assert (tmp_path / "projects" / "active-one").exists()
+
+
+# ---------------------------------------------------------------------------
 # System health
 # ---------------------------------------------------------------------------
 
@@ -197,7 +271,30 @@ def test_health_has_required_checks(monkeypatch, tmp_path):
     health = check_system_health()
     assert "workspace_writable" in health.checks
     assert "disk_space" in health.checks
-    assert "api_key" in health.checks
+    assert "llm_backend" in health.checks
+
+
+def test_health_lane_aware_ok_with_subprocess_only(monkeypatch, tmp_path):
+    # A box on the claude-CLI lane with no API key must NOT be degraded
+    # (BACKLOG #21: pkg_anthropic/api_key warns were lane-blind).
+    import llm
+    _setup(monkeypatch, tmp_path)
+    monkeypatch.setattr(llm, "detect_backends",
+                        lambda: [("anthropic", False, "ANTHROPIC_API_KEY not set"),
+                                 ("subprocess", True, "claude binary ok")])
+    health = check_system_health()
+    assert health.checks["llm_backend"].startswith("ok")
+    assert "subprocess" in health.checks["llm_backend"]
+
+
+def test_health_warns_only_when_no_lane_viable(monkeypatch, tmp_path):
+    import llm
+    _setup(monkeypatch, tmp_path)
+    monkeypatch.setattr(llm, "detect_backends",
+                        lambda: [("anthropic", False, "ANTHROPIC_API_KEY not set"),
+                                 ("subprocess", False, "claude binary missing")])
+    health = check_system_health()
+    assert health.checks["llm_backend"].startswith("warn")
 
 
 def test_health_status_values(monkeypatch, tmp_path):

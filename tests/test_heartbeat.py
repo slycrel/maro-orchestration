@@ -58,10 +58,10 @@ def test_heartbeat_report_to_dict():
         run_id="r1",
         checked_at="2026-01-01T00:00:00Z",
         health_status="degraded",
-        checks={"api_key": "fail: missing"},
+        checks={"llm_backend": "warn: no viable LLM backend lane"},
         stuck_projects=["proj-a"],
         recovery_actions=[
-            RecoveryAction(tier=1, target="api_key", action="use subprocess", outcome="suggested"),
+            RecoveryAction(tier=1, target="llm_backend", action="fix a lane", outcome="escalated"),
         ],
     )
     d = report.to_dict()
@@ -75,7 +75,7 @@ def test_heartbeat_report_to_dict():
 # ---------------------------------------------------------------------------
 
 def test_tier1_healthy_no_actions():
-    checks = {"disk_space": "ok", "api_key": "ok", "workspace_writable": "ok"}
+    checks = {"disk_space": "ok", "llm_backend": "ok: subprocess", "workspace_writable": "ok"}
     actions = _tier1_scripted(checks)
     assert actions == []
 
@@ -88,9 +88,9 @@ def test_tier1_disk_warn():
     assert actions[0].outcome == "suggested"
 
 
-def test_tier1_api_key_fail():
-    actions = _tier1_scripted({"api_key": "fail: key not set"})
-    assert any(a.target == "api_key" for a in actions)
+def test_tier1_no_backend_lane_escalates():
+    actions = _tier1_scripted({"llm_backend": "warn: no viable LLM backend lane"})
+    assert any(a.target == "llm_backend" and a.outcome == "escalated" for a in actions)
 
 
 def test_tier1_workspace_not_writable():
@@ -106,7 +106,7 @@ def test_tier1_openclaw_gateway_fail():
 def test_tier1_multiple_failures():
     checks = {
         "disk_space": "warn: 90% used",
-        "api_key": "fail: missing",
+        "llm_backend": "warn: no viable LLM backend lane",
         "workspace_writable": "ok",
     }
     actions = _tier1_scripted(checks)
@@ -216,7 +216,7 @@ def _make_mock_health(status="healthy"):
     from sheriff import SystemHealth
     return SystemHealth(
         status=status,
-        checks={"disk_space": "ok", "api_key": "ok"},
+        checks={"disk_space": "ok", "llm_backend": "ok: subprocess"},
     )
 
 
@@ -234,7 +234,7 @@ def test_run_heartbeat_triggers_tier1():
     from sheriff import SystemHealth
     health = SystemHealth(
         status="degraded",
-        checks={"disk_space": "warn: 90% used", "api_key": "ok"},
+        checks={"disk_space": "warn: 90% used", "llm_backend": "ok: subprocess"},
     )
     with patch("heartbeat.check_system_health", return_value=health), \
          patch("heartbeat.check_all_projects", return_value=[]), \

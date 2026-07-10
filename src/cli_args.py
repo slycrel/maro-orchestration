@@ -97,6 +97,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_sheriff_health.add_argument("--format", choices=["text", "json"], default="text")
     p_sheriff_health.add_argument("--write-state", action="store_true")
 
+    p_sheriff_arch = sheriff_sub.add_parser("archive", help="Archive dormant projects to projects/_archive/ (dry-run unless --apply)")
+    p_sheriff_arch.add_argument("--days", type=float, default=30.0, help="Dormancy threshold in days (default 30)")
+    p_sheriff_arch.add_argument("--apply", action="store_true", help="Actually move dirs; default is dry-run")
+    p_sheriff_arch.add_argument("--format", choices=["text", "json"], default="text")
+
     p_director = sub.add_parser("director", help="Run Director/Worker hierarchy on a directive (Phase 3)")
     p_director.add_argument("directive", nargs="+", help="The directive to execute")
     p_director.add_argument("--project", "-p", help="Project slug")

@@ -406,6 +406,19 @@ def _cmd_sheriff(args: argparse.Namespace) -> int:
             _sheriff_mod.write_heartbeat_state(health, project_reports=project_reports)
         print(health.format(args.format))
         return 0 if health.status == "healthy" else 1
+    if args.sheriff_cmd == "archive":
+        rows = _sheriff_mod.archive_dormant_projects(days=args.days, apply=args.apply)
+        if args.format == "json":
+            print(json.dumps(rows, indent=2))
+        else:
+            if not rows:
+                print(f"No projects dormant >{args.days:g}d.")
+            for r in rows:
+                verb = "archived" if r["moved"] else "would archive"
+                print(f"{verb}: {r['project']} (idle {r['age_days']}d)")
+            if rows and not args.apply:
+                print(f"\nDry run — re-run with --apply to move {len(rows)} project(s) to projects/_archive/")
+        return 0
     return fail("E_INTERNAL", "unknown command")
 
 
