@@ -231,7 +231,13 @@ _diagnosis_last_ran: Dict[str, float] = {}  # project → epoch time of last dia
 
 def _diagnosis_due(project: str) -> bool:
     """Return True if enough time has passed to diagnose this project again."""
-    last = _diagnosis_last_ran.get(project, 0.0)
+    last = _diagnosis_last_ran.get(project)
+    if last is None:
+        # Never diagnosed — always due. A 0.0 sentinel here would silently
+        # suppress diagnosis for the first _DIAGNOSIS_COOLDOWN_SECS of system
+        # uptime: time.monotonic() counts from boot on Linux, so on a freshly
+        # booted box (or CI runner) monotonic - 0.0 < cooldown.
+        return True
     return (time.monotonic() - last) >= _DIAGNOSIS_COOLDOWN_SECS
 
 

@@ -2045,3 +2045,221 @@ class TestDetectNextLedgerGap:
         self._mk_project(tmp_path, monkeypatch, ["# NEXT", "- [ ] item"])
         assert _detect_next_ledger_gap("ledger-demo", str(tmp_path / "not-a-repo")) == ""
         assert _detect_next_ledger_gap("no-such-project", str(tmp_path)) == ""
+
+
+# ---------------------------------------------------------------------------
+# 2026-07-09 dogfood-batch regressions: the closure verifier false-negatived
+# 4/5 known-good runs — verdicts driven by the verifier's own environment
+# (invented filenames, its own command syntax errors, permission walls,
+# prose preconditions classified as paths) rather than the goal's work.
+# ---------------------------------------------------------------------------
+
+class TestClosureFalseNegativeRegressions:
+
+    # -- check outcome classification: verifier tooling error ≠ goal failure --
+
+    def test_syntax_error_is_inconclusive(self):
+        """witty-spruce: the verifier's python -c one-liner didn't parse and
+        'format validation' was scored against the goal. A command that never
+        ran can't disprove anything."""
+        from closure_verify import _check_outcome
+        assert _check_outcome(
+            exit_code=1, stderr="  File \"<string>\", line 1\nSyntaxError: invalid syntax"
+        ) == "inconclusive"
+
+    def test_permission_denied_is_inconclusive(self):
+        """keen-alder class: the verifier lacks access the worker had
+        (journalctl system journal) — missing data, not disproof."""
+        from closure_verify import _check_outcome
+        assert _check_outcome(exit_code=1, stderr="cat: /var/log/x: Permission denied") == "inconclusive"
+        assert _check_outcome(exit_code=1, stderr="Operation not permitted") == "inconclusive"
+
+    def test_assertion_failure_stays_fail(self):
+        """An AssertionError means the check RAN and the fact was false —
+        that is legitimate disproof, not verifier breakage."""
+        from closure_verify import _check_outcome
+        assert _check_outcome(
+            exit_code=1,
+            stderr="Traceback (most recent call last):\nAssertionError: name=wrong",
+        ) == "fail"
+
+    def test_syntax_error_in_worker_file_stays_fail(self):
+        """A SyntaxError pointing at a real file is the WORK failing to
+        parse — only <string>/<stdin> (the verifier's own command text)
+        is inconclusive."""
+        from closure_verify import _check_outcome
+        assert _check_outcome(
+            exit_code=1,
+            stderr='  File "output/repro/repro.py", line 3\nSyntaxError: invalid syntax',
+        ) == "fail"
+
+    # -- precondition classification: prose is not a path --
+
+    def test_prose_preconditions_with_slash_are_opaque(self):
+        """keen-alder/brisk-echo/azure-beacon: prose like 'Python/YAML parser
+        to validate format' was path-classified (contains a slash), failed
+        Path.exists, and the bogus failed precondition poisoned the verdict."""
+        from closure_verify import _classify_precondition
+        assert _classify_precondition("Python/YAML parser to validate format") == "opaque"
+        assert _classify_precondition("~/.maro/workspace/memory/ directory writable") == "opaque"
+        assert _classify_precondition("markdown/text format") == "opaque"
+        assert _classify_precondition("priority/due-date fields per task") == "opaque"
+        # Real paths (no whitespace) still classify as paths.
+        assert _classify_precondition("cmd/server/main.go") == "path"
+        assert _classify_precondition("~/.config/poe.yml") == "path"
+
+    def test_preflight_expands_tilde_paths(self, tmp_path, monkeypatch):
+        """Path('~/x').is_absolute() is False — without expanduser the
+        preflight probed base/'~/x', a literal-tilde dir that never exists."""
+        from closure_verify import _run_precondition_preflight
+        from scope import Deliverable
+        monkeypatch.setenv("HOME", str(tmp_path))
+        (tmp_path / "marker.txt").write_text("here")
+        d = Deliverable(name="x", description="", preconditions=["~/marker.txt"])
+        results = _run_precondition_preflight([d], cwd=str(tmp_path / "elsewhere"))
+        assert len(results) == 1
+        assert results[0]["passed"] is True
+
+    # -- file inventory: probe real paths, not guessed ones --
+
+    def test_project_file_inventory_lists_real_files(self, tmp_path):
+        from closure_verify import _project_file_inventory
+        (tmp_path / "output").mkdir()
+        (tmp_path / "output" / "fixture.diff").write_text("diff")
+        (tmp_path / "output" / "NEXT.md.lock").write_text("")
+        (tmp_path / ".git").mkdir()
+        (tmp_path / ".git" / "HEAD").write_text("ref")
+        inv = _project_file_inventory(str(tmp_path))
+        assert "output/fixture.diff" in inv
+        assert ".lock" not in inv
+        assert "HEAD" not in inv  # .git pruned
+        # Missing dir → empty, never raises
+        assert _project_file_inventory(str(tmp_path / "nope")) == ""
+
+    def test_project_file_inventory_caps_entries(self, tmp_path):
+        from closure_verify import _project_file_inventory
+        for i in range(150):
+            (tmp_path / f"f{i:03d}.txt").write_text("x")
+        inv = _project_file_inventory(str(tmp_path), cap=120)
+        assert len(inv.splitlines()) == 121  # 120 entries + truncation marker
+        assert "truncated" in inv
+
+    def test_plan_prompt_carries_file_inventory(self, tmp_path):
+        """brisk-echo/witty-spruce: the plan LLM guessed deliverable names
+        (brief_2026-07-09_run1.md) instead of probing what's on disk. The
+        plan call must now see the actual file listing as ground truth."""
+        from unittest.mock import MagicMock, patch
+        (tmp_path / "output").mkdir()
+        (tmp_path / "output" / "daily_brief_20260709_163825.md").write_text("brief")
+
+        adapter = MagicMock()
+        captured = []
+        def _complete(messages, **kwargs):
+            captured.append(messages)
+            return MagicMock()
+        adapter.complete.side_effect = _complete
+
+        checks = [{"description": "brief exists",
+                   "command": "test -f output/daily_brief_20260709_163825.md"}]
+        verdict_data = {"complete": True, "confidence": 0.9, "gaps": [], "summary": "ok"}
+        with patch("closure_verify.extract_json", side_effect=[{"checks": checks}, verdict_data]):
+            with patch("closure_verify.content_or_empty", return_value="{}"):
+                verdict = verify_goal_completion(
+                    "build a daily brief", [], adapter, workspace_path=str(tmp_path)
+                )
+        plan_user_msg = captured[0][1].content
+        assert "output/daily_brief_20260709_163825.md" in plan_user_msg
+        assert verdict.checks_passed == 1
+
+    # -- cwd contract: checks run in the run's project dir --
+
+    def test_project_slug_fallback_resolves_project_dir(self, tmp_path, monkeypatch):
+        """When neither workspace_path nor the run-scoped ContextVar is set,
+        closure derives the project dir from the project slug — the same
+        identity agent_loop binds — instead of probing Maro's launch cwd."""
+        from unittest.mock import MagicMock, patch
+        import llm as llm_mod
+
+        proj = tmp_path / "projects" / "build-a-thing"
+        (proj / "output").mkdir(parents=True)
+        (proj / "output" / "artifact.md").write_text("built")
+
+        adapter = MagicMock()
+        adapter.complete.side_effect = [MagicMock(), MagicMock()]
+        checks = [{"description": "artifact exists",
+                   "command": "test -f output/artifact.md"}]
+        verdict_data = {"complete": True, "confidence": 0.9, "gaps": [], "summary": "ok"}
+
+        token = llm_mod._DEFAULT_SUBPROCESS_CWD.set(None)  # ContextVar unset
+        try:
+            with patch("closure_verify.extract_json",
+                       side_effect=[{"checks": checks}, verdict_data]):
+                with patch("closure_verify.content_or_empty", return_value="{}"):
+                    with patch("loop_types._project_dir_root",
+                               return_value=tmp_path / "projects"):
+                        result = verify_goal_completion(
+                            "build thing", [], adapter, project="build-a-thing"
+                        )
+        finally:
+            llm_mod._DEFAULT_SUBPROCESS_CWD.reset(token)
+        assert result.checks_run == 1
+        assert result.checks_passed == 1, (
+            "check must run in the project dir, not the pytest launch cwd"
+        )
+
+    # -- tri-state verdict: unverifiable ≠ failed --
+
+    def _run_closure(self, tmp_path, checks, verdict_data):
+        from unittest.mock import MagicMock, patch
+        adapter = MagicMock()
+        adapter.complete.side_effect = [MagicMock(), MagicMock()]
+        with patch("closure_verify.extract_json", side_effect=[{"checks": checks}, verdict_data]):
+            with patch("closure_verify.content_or_empty", return_value="{}"):
+                return verify_goal_completion(
+                    "build X", [], adapter, workspace_path=str(tmp_path)
+                )
+
+    def test_negative_verdict_on_only_inconclusive_probes_is_unjudged(self, tmp_path):
+        """The specimen shape: one check passes, the other is the verifier's
+        own tooling error. The LLM blames the goal (complete=False) but no
+        check cleanly failed — verdict must be unjudged, not a false negative."""
+        checks = [
+            {"description": "ok", "command": "true"},
+            {"description": "verifier typo", "command": "python3 -c 'def:'"},
+        ]
+        verdict_data = {"complete": False, "confidence": 0.35,
+                        "gaps": ["format validation inconclusive"],
+                        "summary": "validation failed"}
+        result = self._run_closure(tmp_path, checks, verdict_data)
+        assert result.inconclusive_count == 1
+        assert result.judged is False
+
+    def test_negative_verdict_with_clean_fail_stays_judged(self, tmp_path):
+        """A check that ran cleanly and disproved the claim is real evidence —
+        the verdict stays judged even with an inconclusive probe in the mix."""
+        checks = [
+            {"description": "broken tool", "command": "python3 -c 'def:'"},
+            {"description": "real disproof", "command": "false"},
+        ]
+        verdict_data = {"complete": False, "confidence": 0.8,
+                        "gaps": ["artifact missing"], "summary": "not delivered"}
+        result = self._run_closure(tmp_path, checks, verdict_data)
+        assert result.judged is True
+        assert result.complete is False
+
+    def test_positive_verdict_stays_judged(self, tmp_path):
+        checks = [{"description": "ok", "command": "true"}]
+        verdict_data = {"complete": True, "confidence": 0.9, "gaps": [], "summary": "ok"}
+        result = self._run_closure(tmp_path, checks, verdict_data)
+        assert result.judged is True
+        assert result.complete is True
+
+    def test_inconclusive_only_flip_is_unjudged(self, tmp_path):
+        """Positive-evidence flip (complete=True on zero passed / all
+        inconclusive) demotes complete — but it's missing data, so the
+        flipped verdict is unjudged and must not be recorded as false."""
+        checks = [{"description": "unrunnable", "command": "this-cmd-does-not-exist-xyzzy"}]
+        verdict_data = {"complete": True, "confidence": 0.9, "gaps": [], "summary": "ok"}
+        result = self._run_closure(tmp_path, checks, verdict_data)
+        assert result.complete is False  # flip preserved
+        assert result.judged is False

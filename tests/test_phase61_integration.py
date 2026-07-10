@@ -273,7 +273,21 @@ class TestCheckpointRecovery:
 # ---------------------------------------------------------------------------
 
 class TestAdapterFallbackChain:
-    """build_adapter() respects the priority chain and falls through gracefully."""
+    """build_adapter() respects the priority chain and falls through gracefully.
+
+    These tests exercise real backend DETECTION (not invocation), so they
+    must not depend on the box having an actual `claude` install — CI runners
+    don't. A fake executable via CLAUDE_BIN satisfies _claude_bin_available()
+    (isfile + X_OK) deterministically in both environments; conftest's
+    _block_subprocess_llm guard ensures it can never actually be invoked.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _fake_claude_bin(self, monkeypatch, tmp_path):
+        fake = tmp_path / "claude"
+        fake.write_text("#!/bin/sh\nexit 0\n")
+        fake.chmod(0o755)
+        monkeypatch.setenv("CLAUDE_BIN", str(fake))
 
     def test_subprocess_adapter_builds_when_requested(self):
         """build_adapter(model='subprocess') returns a ClaudeSubprocessAdapter."""
