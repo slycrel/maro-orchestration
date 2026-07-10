@@ -487,9 +487,10 @@ def _closure_verdict_pass(goal_str: str, result, *, dry_run: bool = False):
     done-unverified, never as verified done. Mutates result.status /
     result.stuck_reason in place; returns the ClosureVerdict or None.
     """
+    _steps = getattr(result, "steps", None) or []
     if (dry_run
             or result.status not in ("done", "partial", "stuck", "restart")
-            or not any(s.status == "done" for s in result.steps)):
+            or not any(s.status == "done" for s in _steps)):
         return None
     try:
         from director import verify_goal_completion
@@ -497,7 +498,7 @@ def _closure_verdict_pass(goal_str: str, result, *, dry_run: bool = False):
         _cl_adapter = build_adapter(model=MODEL_CHEAP)
         _verdict = verify_goal_completion(
             goal_str,
-            result.steps,
+            _steps,
             _cl_adapter,
             loop_id=result.loop_id or "",
             project=result.project or "",

@@ -121,6 +121,35 @@ context, at best it's a slight tweak and we fix forward."*
 
 ## Compiled truth (system-maintained; basis noted per claim)
 
+**Backlog-clearing session, 2026-07-10 (autonomous, /goal "finish the
+outstanding items that don't need my approval"):**
+- BACKLOG #21 both halves fixed and live-proven on this box: dormancy
+  classification (`sheriff.dormant_days`, 14d default) took first-tick
+  diagnosis targets from ~183 zombies to 0, and the sheriff health check is
+  now lane-aware via `llm.detect_backends()` (this box: healthy,
+  `ok: subprocess, openrouter, openai`); 113 stale projects archived to
+  `projects/_archive/` via the new manual `maro sheriff archive --apply`.
+  Basis: commit `a9824ce` + live tick before/after in the session log.
+- Rider A (skills-lite two-tier promotion) is implemented, default-ON by
+  decree: `run_curation.promote_skills_lite` + `degrade_skills_lite`
+  (companion provisional Skill carries the decay/circuit machinery; tripped
+  companion quarantines the .md). Also the first BACKLOG #0 miner. Basis:
+  commit `ccc20fc`, 10 tests, live no-op smoke on the real workspace.
+- BACKLOG #18 both asks fixed: `maro run`/`maro resume` now run the same
+  closure core as maro-handle (verdict loop-keyed onto outcomes.jsonl,
+  done→incomplete demotion at the handle gate), and per-step artifact
+  cleanup is deferred past the verdict (24h-grace sweep of *other* loops at
+  finalize — no lane can destroy its own audit evidence). Residual kept
+  open: the direct-CLI lane still creates no runs/<id> dir. Basis: commit
+  `6c03068`, 11 tests, dry-run lane smoke.
+- PyPI blocker #7 precondition resolved: `maro-orchestration` (the name in
+  pyproject) is FREE on PyPI; bare `maro` is a squatter stub, `pymaro` is
+  Microsoft's MARO. No rename needed; publish stays Jeremy's act. Basis:
+  live PyPI checks recorded in docs/PUBLISH_CHECKLIST.md (`34241d9`).
+- user/ overlay is now complete: the last two repo-copy readers
+  (handle CONFIG.md/COMPLETION_STANDARD.md, heartbeat mcp_servers) resolve
+  workspace-first via `config.user_file()`. Basis: commit `7c1086c` + test.
+
 **Memory/learning, as of 2026-06-10:**
 - The write side was always live (1,272 outcomes, 38 medium + 22 long lessons,
   5.9MB captain's log — session-40 audit, spot-checked on disk), but the lifecycle
@@ -1462,10 +1491,14 @@ Active:
   (quoted "0" honored as opt-out), `llm.detect_backends()` is the single
   source of truth for doctor (was a hand-mirror that missed credentials-.env
   keys/CLAUDE_BIN/codex/backend_order), doctor no longer mkdirs what it
-  checks, packaging census also trips on src/ subpackages. Remaining:
-  escalation channel default (design conversation), done-vs-achieved corpus
-  analysis (~68 judged runs — the honest success number), install-trial
-  residuals (BACKLOG), README/quickstart pass.
+  checks, packaging census also trips on src/ subpackages. 2026-07-10
+  backlog-clearing session closed the non-gated remainder (see Compiled
+  truth: #21 heartbeat burn-in fixes, Rider A skills-lite, #18 CLI verdict
+  parity, PyPI name check, user/ overlay completion). Remaining:
+  escalation channel default (design conversation — Jeremy-gated, the only
+  (a)–(h) item left), done-vs-achieved corpus analysis (~68 judged runs —
+  the honest success number), install-trial residuals (BACKLOG),
+  README/quickstart pass.
 - **Goal-brain sequencing: COMPLETE** (steps 1–5, 2026-06-10/11): artifact →
   pressure test → recall() → navigator schema → navigator prompt + shadow
   replay. Successor thread below.
