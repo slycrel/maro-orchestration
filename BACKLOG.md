@@ -255,14 +255,14 @@ arc after 1.0. Full context in BACKLOG_DONE.
   transparent one. Auto-resume of interrupted runs ((h) deferred half)
   becomes this layer's first consumer; heartbeat scheduling may too,
   pending the SF-1 supervision decision.
-- [ ] **Migrate the two remaining repo-copy user/ readers to
-  `config.user_file()`** — `src/handle.py` (`_load_user_config` +
-  COMPLETION_STANDARD.md ~line 1227) and `src/heartbeat.py` (mcp_servers)
-  still read the repo copy directly; they were frozen during the SF-5 fix
-  (concurrent uncommitted work). Harmless today only because the neutral
-  CONFIG.md template parses identical to the shipped defaults; a user who
-  edits workspace CONFIG.md expecting override semantics gets silently
-  ignored by these two readers. Details: user/README.md.
+- [x] **Migrate the two remaining repo-copy user/ readers to
+  `config.user_file()` — DONE 2026-07-10.** All three call sites
+  (`handle._load_user_config`, handle's COMPLETION_STANDARD injection,
+  heartbeat's mcp_servers read) now resolve workspace-overlay-first via
+  `config.user_file()`; a workspace `user/CONFIG.md` /
+  `COMPLETION_STANDARD.md` is honored everywhere. user/README.md caveat
+  removed, DEFAULTS.md lane note updated. Test:
+  `test_load_user_config_reads_workspace_overlay` (tests/test_config.py).
 - [ ] **Orphan scope A/B datasets: adjudicate or write off** (arch-03,
   resurfaced by the SF-4 flip). `~/.maro/experiments/scope-ab-2026-04-25-v0/`
   and `scope-ab-2026-04-26-v1/` hold full PAID treat/control run dirs with

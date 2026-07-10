@@ -407,6 +407,21 @@ class TestUserFileResolution:
         )
         assert config_mod.user_file("SIGNALS.md") is None
 
+    def test_load_user_config_reads_workspace_overlay(self, tmp_path, monkeypatch):
+        """SF-5 residual closed 2026-07-10: handle._load_user_config resolves
+        via user_file(), so an operator's workspace CONFIG.md is honored
+        (previously the repo copy was read directly and workspace edits were
+        silently ignored)."""
+        import config as config_mod
+        from handle import _load_user_config
+        monkeypatch.setattr(config_mod, "repo_user_dir", lambda: tmp_path / "empty")
+        overlay = tmp_path / "user"
+        overlay.mkdir()
+        (overlay / "CONFIG.md").write_text("yolo: true  # comment\nmax_steps: 5\n")
+        cfg = _load_user_config()
+        assert cfg.get("yolo") == "true"
+        assert cfg.get("max_steps") == "5"
+
     def test_repo_templates_ship_no_personal_data(self):
         """The shipped user/ templates must stay neutral (SF-5/docs-02):
         no operator identity or personal details in the repo copies."""

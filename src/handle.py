@@ -462,10 +462,15 @@ def _verify_now_outcome(message: str, outcome: Dict[str, Any], adapter) -> Dict[
 # ---------------------------------------------------------------------------
 
 def _load_user_config() -> dict:
-    """Parse user/CONFIG.md into a key→value dict. Non-fatal — returns {} on any error."""
+    """Parse user/CONFIG.md into a key→value dict. Non-fatal — returns {} on any error.
+
+    Resolves workspace-overlay-first via config.user_file() — an operator's
+    ~/.maro/workspace/user/CONFIG.md wins over the shipped template.
+    """
     try:
-        cfg_path = Path(__file__).resolve().parent.parent / "user" / "CONFIG.md"
-        if not cfg_path.exists():
+        from config import user_file
+        cfg_path = user_file("CONFIG.md")
+        if cfg_path is None:
             return {}
         result = {}
         for line in cfg_path.read_text(encoding="utf-8").splitlines():
@@ -1233,9 +1238,11 @@ def _handle_impl(
         if _persona_ctx:
             _extra_ctx_parts.append(_persona_ctx)
         # Completion standard — injected for every AGENDA run
+        # (workspace overlay wins over the shipped template)
         try:
-            _std_path = Path(__file__).parent.parent / "user" / "COMPLETION_STANDARD.md"
-            if _std_path.exists():
+            from config import user_file as _user_file
+            _std_path = _user_file("COMPLETION_STANDARD.md")
+            if _std_path is not None:
                 _extra_ctx_parts.append(_std_path.read_text(encoding="utf-8").strip())
         except Exception:
             pass

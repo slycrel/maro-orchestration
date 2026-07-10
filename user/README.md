@@ -22,12 +22,10 @@ Same overlay convention as `skills/` and `personas/`:
 2. `<repo or install dir>/user/<file>` — the shipped neutral template
 3. Missing entirely → the feature quietly no-ops
 
-Implemented in `src/config.py:user_file()`. **Current caveat:** the overlay
-is live for `GOALS.md` / `CONTEXT.md` / `SIGNALS.md` (planner + evolver).
-`CONFIG.md` and `COMPLETION_STANDARD.md` are still read from the repo/install
-copy only (`src/handle.py`, `src/heartbeat.py`) — migrating those readers to
-`user_file()` is queued; until then, runtime CONFIG.md edits go in the repo
-copy.
+Implemented in `src/config.py:user_file()`. All five files resolve through
+it — the former caveat (CONFIG.md / COMPLETION_STANDARD.md read from the
+repo copy only) was closed 2026-07-10; put your real files in
+`<workspace>/user/` and they win everywhere.
 
 ## The files
 

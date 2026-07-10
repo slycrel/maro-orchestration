@@ -16,8 +16,8 @@ Resolution order everywhere: **env var > `~/.maro/workspace/config.yml` >
 
 **A second, separate lane** (SF-5/docs-04): `user/CONFIG.md` — flat
 `key: value`, hand-parsed by `src/handle.py:_load_user_config`, *not* YAML
-and *not* covered by the resolution order above (currently read from the
-repo/install copy; workspace-overlay migration queued). It carries run
+and *not* covered by the resolution order above (resolves
+workspace-overlay-first via `config.user_file()` since 2026-07-10). It carries run
 defaults: `yolo` (also `MARO_YOLO` env), `default_model_tier`,
 `research_step_model`, `max_steps`, `always_skeptic`, `ralph_verify`,
 `quality_gate`, `quality_gate_action`, `notify_on_complete`, `mcp_servers`

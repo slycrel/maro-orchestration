@@ -967,10 +967,12 @@ def heartbeat_loop(
         print(f"[heartbeat] mode={_mode}", file=sys.stderr)
 
     # Phase 41 step 7 — MCP server init: load servers listed in user/CONFIG.md
+    # (workspace overlay wins over the shipped template)
     try:
-        _cfg_path = Path(__file__).resolve().parent.parent / "user" / "CONFIG.md"
+        from config import user_file as _user_file
+        _cfg_path = _user_file("CONFIG.md")
         _mcp_raw = ""
-        if _cfg_path.exists():
+        if _cfg_path is not None:
             for _line in _cfg_path.read_text(encoding="utf-8").splitlines():
                 _line = _line.strip()
                 if _line.startswith("#") or ":" not in _line:
