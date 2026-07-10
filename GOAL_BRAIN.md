@@ -1372,6 +1372,55 @@ Sample: the 2026-05-13..17 window of `~/.maro/workspace/runs/` (478 dirs total;
   choice** ("that sounds like a bug actually, there might have been some
   miscommunication there"). Approved: inject ON on this box, OFF default
   for fresh installs, docs corrected. Open to deeper discussion later.
+- **2026-07-09 (Jeremy, same conversation, later):** (a) **git-history
+  personal-data review DEFERRED to a dedicated conversation** — he'll
+  personally review what stays public: "some of that is fine to keep
+  public... it's part of the history of the project, I don't mind being a
+  little vulnerable/raw... but might not want certain things leaked out."
+  History untouched until then. (b) **Subsystem-archaeology owner ask**
+  (BACKLOG #20): qwen validator ladder (verified live: 58/71 local-decisive
+  over last week), sheriff mainline exit, evolver-in-pipeline provenance,
+  heartbeat-hooks-host design intent — "I'm not sure if I'm misunderstanding
+  implementation or if we've genuinely lost some things here." (c)
+  **Heartbeat/supervision standing constraint reaffirmed:** "hook into the
+  existing system's heartbeat (i.e. openclaw on this box)... I've been
+  pretty consistent in not wanting systemd level items (app, not
+  systemic)" — Maro ships a tick entrypoint, never its own daemon;
+  supervision recommendation revised accordingly.
+- **2026-07-09 (post-Purgatorio decision batch #3 — Jeremy, remaining C-bucket
+  calls):**
+  (1) **Supervision: OpenClaw-heartbeat hook accepted as a SHIM, revisit
+  post-1.0** — "this feels like a shim... we need a generalized scheduler
+  answer. That can be the hook for an orchestrator tie-in, but we probably
+  need something more (thinking also of the https server as well... maybe we
+  need a daemon that runs in the background for timers and services in
+  addition to the 'app'? I don't love those, but might be slightly cleaner
+  than config strewn about the OS)." Post-1.0 design item: generalized
+  scheduler/services daemon vs pure app. Evolver: "Ideally we find a way for
+  the evolver to run (though is this a no-op anyway if no runs have
+  happened? is on cleanup of a run enough?)" — his instinct is right;
+  proposal on the table: trigger the meta-cycle every N-th run finalization
+  (no daemon). Burn-in authorization: "Go ahead and run some runs if needed
+  to get unblocked" — one-shot ticks and dogfood runs authorized; no
+  persistent timer installed (off switches stay off).
+  (2) **Isolation: dockerize the executor path** — "play nice with security
+  here and dockerize this path so there's literally no way to screw things
+  up. Mount a working dir and maybe make some other resources read only...
+  a nice tight sandbox is likely appropriate." Acknowledged edges (local
+  machine file oddness); wants to stay on the right side of the API-vs-CLI
+  automation line ("TBH I'm fine with it but want to stay on the right side
+  of that line"). Detailed design gets its own pass; SECURITY_MODEL.md
+  rewritten honest meanwhile.
+  (3) **README repositioning approved** — "let's keep it honest. I'd love
+  it to be self-improving, but we don't have to sell that hard yet." Lead
+  with the shipped accountability layer; stage self-improvement claims to
+  what verifiably fires.
+  (4) **Versioning/workflow ratified as-is** — "never been a stickler for
+  hard boundaries of semver"; small audience; open to change later.
+  (5) **Verdict-blind learning (SF-2): green-lit as a straight-up bug fix**
+  — tri-state goal_achieved on outcomes rows + prefer-verdict consumers.
+  (6) **Escalation channel (item a): later, its own conversation.**
+  Jeremy's side: Slack admin cleanup (token revocation) on him.
 
 ## Threads (system-maintained — nothing leaves this list silently)
 

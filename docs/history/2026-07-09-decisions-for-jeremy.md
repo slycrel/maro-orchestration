@@ -80,6 +80,13 @@ re-reading first — each entry is self-contained enough to decide on.
    bootstrap's ExecStart, and decide whether/when the heartbeat+evolver
    get burn-in hours on this box. Off switches stay off — enabling is
    yours alone.
+   **DECIDED 2026-07-09 (batch #3):** OpenClaw-heartbeat → `maro
+   heartbeat` accepted as a SHIM ("we need a generalized scheduler
+   answer... maybe a daemon for timers and services in addition to the
+   'app'" — post-1.0 design item, ties to the https server). Bootstrap
+   ExecStart bug to fix. Evolver: explore meta-cycle-on-Nth-run-finalize
+   (his "is on cleanup of a run enough?" instinct). Burn-in runs and
+   one-shot ticks authorized; no persistent timer without his call.
 2. **1.0 isolation story (cs-04).** Live executor = `claude -p
    --dangerously-skip-permissions`, no sandbox; sandbox.py has zero
    callers; SECURITY_MODEL.md claims per-skill sandboxing. Options:
@@ -87,6 +94,12 @@ re-reading first — each entry is self-contained enough to decide on.
    "trusted-operator" framing. Either way SECURITY_MODEL.md gets
    rewritten to the real stack (I can do the rewrite once you pick the
    frame).
+   **DECIDED 2026-07-09 (batch #3): dockerize the executor path** —
+   working dir mounted, other resources read-only, tight sandbox.
+   Known edges accepted (host-file oddness); detailed design gets its
+   own pass. SECURITY_MODEL.md rewritten honest in the meantime.
+   Standing constraint: stay on the right side of the API-vs-CLI
+   automation line.
 3. **What is `user/` at 1.0 (docs-02/04).** Your GOALS/CONTEXT/SIGNALS
    (with medical details) are git-tracked and injected 500 chars each
    into every stranger's decompose prompt; user/CONFIG.md is an
@@ -94,6 +107,19 @@ re-reading first — each entry is self-contained enough to decide on.
    templates in repo, your real files move to the workspace overlay,
    lane documented or folded into YAML config. Privacy review before
    any public 1.0 tag.
+   **RESOLVED at the tip 2026-07-09** (approved decision 6, executed):
+   real files live in `~/.maro/workspace/user/`, repo ships neutral
+   templates, lane documented (user/README.md + DEFAULTS/README).
+   **One residual decision: git HISTORY of this public repo still
+   contains the personal files** (tracked for months). Options: leave it
+   (it was always public; scrubbing draws attention), or
+   git-filter-repo + force-push before 1.0 publicity (breaks clones;
+   we have none that matter). Your call — no default taken.
+   **DEFERRED 2026-07-09 (Jeremy):** he'll personally review what stays
+   public in a dedicated conversation — "some of that is fine to keep
+   public... it's part of the history of the project, I don't mind
+   being a little vulnerable/raw... but might not want certain things
+   leaked out." History stays as-is until that review.
 4. **Scope / Phase 65 posture (arch-01/02/03).** The box has run the
    *losing* A/B arm since April (`scope_generation: true` +
    `scope_ab_skip: true` = pay for scope, never inject) while docs say
@@ -118,11 +144,15 @@ re-reading first — each entry is self-contained enough to decide on.
    (no fetched peer advertises ANY of these) — and stage the
    self-improvement claim to what verifiably fires. Cheap, high-value,
    but it's the product's face: your call.
+   **APPROVED 2026-07-09 (batch #3):** "let's keep it honest. I'd love
+   it to be self-improving, but we don't have to sell that hard yet."
 8. **Verdict-blind learning (SF-2 / data-02).** 0/1381 outcomes rows
    carry goal_achieved; every learning consumer equates done with
    success. Fix shape is clear (tri-state field, prefer-verdict
    consumers) — mostly needs a green light + sequencing vs the
    verify→learn arc.
+   **GREEN-LIT 2026-07-09 (batch #3):** "sounds like a straight up
+   bug" — fix now, ahead of the verify→learn arc.
 9. **Knowledge web: wire or descope (SF-8).** Edges frozen at the April
    import, read-side has zero callers, 2 known-fabricated lat.md nodes
    still injected (I'll delete those two regardless — pure hygiene).

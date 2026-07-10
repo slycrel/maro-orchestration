@@ -86,6 +86,50 @@ write fence — shipped arc") and `docs/BOUNDED_WORKSPACE.md`.
   unrestricted by design (logged, not blocked); a read-restricting mode
   remains possible if scavenge read rows ever show real contamination.
 
+### 20. Subsystem archaeology — memory-vs-implementation divergence (2026-07-09, Jeremy)
+
+Jeremy's recollection diverged from the Purgatorio audit on four subsystems.
+Owner ask: "I'm not sure if I'm misunderstanding implementation or if we've
+genuinely lost some things here." **Commit-dig COMPLETE 2026-07-09** — verdict:
+nothing accidentally deleted; two subsystems alive and measurable, two starved
+by the never-scheduled heartbeat.
+
+- [x] **Qwen local-validator ladder — EXISTS-AND-LIVE, memory accurate.**
+  Shipped `ae23f6b` 2026-06-21; expanded to the quality gate `d0328f5`
+  2026-07-03; survived the loop_phases split intact (loop_post_step.py:25→645).
+  Never broken, never disabled. Production 07-04→07-09: 71 VALIDATION_LADDER
+  rows — 58 local-decisive (82%), 9 escalated, 4 paid-only; shadow-eval n=29,
+  96.6% local-vs-paid agreement, 0 false_pass. Scope note: default for
+  *validation surfaces* only (never planner/director reasoning). Residual →
+  item #10 (tune local_max_tokens).
+- [x] **Sheriff — misremembered: never in the goal pipeline, nothing pruned.**
+  Born `12a7a90` 2026-03-23 into heartbeat+CLI; `git log -S sheriff` over full
+  history shows zero agent_loop/handle/loop_* consumers ever; scoping-refactor
+  and cron-diagnosis eras clean. Only deletion: `b04962b` 2026-07-02, two
+  unused test-only state-markers, documented. It *feels* phased out because its
+  vehicles (heartbeat, `maro sheriff`) have ~zero production hours — starved,
+  not pruned. Standing day-one bug: bootstrap.py:188 generates a unit exec'ing
+  `sheriff.py --heartbeat`, a flag that has NEVER existed in any commit —
+  fix rides SF-1 (should exec `maro heartbeat`).
+- [x] **Evolver-in-pipeline — EXISTS-AND-LIVE, memory accurate; the session is
+  `ca7b327` 2026-07-03** ("Per-run evolver statistical scans instead of a
+  systemd heartbeat daemon", quoting Jeremy's "app rather than an OS").
+  Per-run half fires in production: memory/suggestions.jsonl has 197 rows,
+  resumed exactly at Jul 3 (23/32/12/13 rows Jul 3/4/8/9). ops-02's
+  "never run" is precise only for `run_evolver()`'s LLM meta-cycle +
+  nightly-eval (heartbeat-only, never scheduled). Residuals: suggestions all
+  `applied: False` (apply side dormant), arch-04 (finalize passes no adapter →
+  refight_rule unreachable), synthesize_skill fires but has yielded zero
+  skills on-box. SF-1/README language must separate the two halves.
+- [x] **OpenClaw-heartbeat hook — never coded (hist-07 confirmed), design
+  intent stands.** Jeremy (consistent): fire Maro's tick from the HOST's
+  heartbeat (OpenClaw here, via `system event`); "app, not systemic" — Maro
+  ships a tick entrypoint, never its own daemon. Entrypoint already exists:
+  `maro heartbeat` = exactly one beat (cli.py:556; `--loop` is daemon mode;
+  `--dry-run`, `--no-escalate` available). Supervision story (SF-1) redesigned
+  around this; official scheduler/timer (decision batch, post-1.0) is the
+  generalization for hosts without OpenClaw.
+
 ### 10. Local-validator measurement — tune `local_max_tokens` per model
 
 - [ ] **Tune `local_max_tokens` per model.** Live finding (2026-06-21 verify run):
@@ -176,6 +220,20 @@ arc after 1.0. Full context in BACKLOG_DONE.
   transparent one. Auto-resume of interrupted runs ((h) deferred half)
   becomes this layer's first consumer; heartbeat scheduling may too,
   pending the SF-1 supervision decision.
+- [ ] **Migrate the two remaining repo-copy user/ readers to
+  `config.user_file()`** — `src/handle.py` (`_load_user_config` +
+  COMPLETION_STANDARD.md ~line 1227) and `src/heartbeat.py` (mcp_servers)
+  still read the repo copy directly; they were frozen during the SF-5 fix
+  (concurrent uncommitted work). Harmless today only because the neutral
+  CONFIG.md template parses identical to the shipped defaults; a user who
+  edits workspace CONFIG.md expecting override semantics gets silently
+  ignored by these two readers. Details: user/README.md.
+- [ ] **Orphan scope A/B datasets: adjudicate or write off** (arch-03,
+  resurfaced by the SF-4 flip). `~/.maro/experiments/scope-ab-2026-04-25-v0/`
+  and `scope-ab-2026-04-26-v1/` hold full PAID treat/control run dirs with
+  no ANALYSIS.md — two experiments bought and never read. Either adjudicate
+  them against the 2026-04-22 result (which decided the inject flip) or
+  write them off explicitly so the spend isn't silently forgotten.
 - [ ] **Knowledge-web read side: wire it properly (post-1.0, KEEP).**
   Descoped from 1.0 docs (node store + BM25 is the honest claim) but
   explicitly kept: "I'd like to keep it on the list. I think it could be
