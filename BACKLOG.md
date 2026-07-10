@@ -43,10 +43,35 @@ All adversarially verified (41/42 confirmed). The two 1.0-blockers first:
   extraction + skill crystallization run at finalize BEFORE closure judges;
   retro-stamp reaches only outcomes.jsonl — lessons/skills still extracted
   verdict-blind. Move post-closure or re-stamp.
-- [ ] **data-r2-02:** promotion funnel still zero on every channel;
-  skills-lite has zero live firings. Run a deliberate ~10-finalization live
-  batch (also exercises evolver-at-cadence + verdict-aware extraction) —
-  after cs-r2-01.
+- [x] **data-r2-02: LIVE BATCH RAN 2026-07-10** (9 finalizations, $2.74).
+  Loop proven end-to-end: evolver fired at cadence 10 (first production run
+  ever — SF-1's zero-hours gap now has hours), skills-lite promoted its
+  first skill (changelog_digest, through both injection gates), tri-state
+  verdicts flowed (4 success/True, 3 partial, 1 done-unverified/None,
+  1 done-not-achieved/False — closure CAUGHT a real worker fabrication:
+  claimed 120 archive entries, count was wrong), #18 CLI verdict-parity
+  exit codes worked. Follow-ups spawned below.
+- [ ] **batch-01 (Jeremy adjudication):** evolver auto-apply gate keys off
+  `environment != production` (evolver_store.py:488, Session 20 finding
+  3.13), NOT `evolver.auto_apply` — the cadence decree says record-only.
+  First firing auto-applied 4+1 suggestions to playbook.md/lessons (benign,
+  left for review; drift-monitor even flagged its own cost drift).
+  Box mitigated same-day: `environment: production` in workspace config →
+  held_for_review. Decide: amend decree or keep production posture.
+- [ ] **batch-02:** evolver verify→learn runs plain full `pytest tests/ -q
+  -x` in-process at finalize (evolver.py:721) — unthrottled on this box
+  (violates the test-safe rule) and re-fires ops-r2-05 (pidfile re-stamped
+  17:54Z during the batch, proven twice now). Throttle (nice + maxfail
+  subset or test-safe.sh) and fix ops-r2-05 first.
+- [ ] **batch-03:** `_DANGEROUS_PATTERNS` false-positives on instruction
+  .md: funnel_report skill skipped for containing `open(` in prose about
+  reading a ledger. Skip-for-review is the right failure mode, but the
+  code-substring gate needs an instruction-artifact-aware pass (pair with
+  cs-r2-01's guard, which is the right tool there).
+- [ ] **batch-04:** lesson-funnel intake observation: 9 finalizations →
+  0 lessons extracted on every tier. The funnel isn't just not-promoting
+  (SF-10), it's barely ingesting. Fold into the funnel-rate measurement
+  item; data-r2-01 (pre-verdict extraction) got no specimens either way.
 - [ ] **hist-r2-02:** hist-05 owner ask ("run this prompt with this
   persona" as a first-class pattern) dropped for the third time — in
   neither the decision brief nor any backlog. This entry ends that.

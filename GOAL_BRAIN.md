@@ -121,6 +121,32 @@ context, at best it's a slight tweak and we fix forward."*
 
 ## Compiled truth (system-maintained; basis noted per claim)
 
+**Learning live batch, 2026-07-10 (Jeremy: "Let's run that, see how it
+goes" — the data-r2-02 batch, after the cs-r2-01 gate shipped):**
+- 9 sequential real goals via `python -m handle`, $2.74 total, all
+  finalized. The learning loop is now proven end-to-end on organic runs:
+  **the evolver had its first production firing ever** (cadence counter
+  9→0, run 8f7419c8, post-mutation suite PASSED, nothing reverted);
+  **skills-lite promoted its first skill** (changelog_digest — passed both
+  the code-pattern gate and the new injection_guard gate; loader serves
+  it); **tri-state verdicts flowed live** (4 success/True, 3 partial,
+  1 done-unverified/None, 1 done-not-achieved/False); **closure caught a
+  real fabrication** (worker claimed 120 archived entries; verifier
+  re-counted and failed the run — done≠achieved earning its keep on
+  organic traffic); #18 verdict-parity CLI exits confirmed (partial →
+  exit 1). Basis: live-batch log + run cards + change_log.jsonl +
+  outcomes.jsonl, session 2026-07-10.
+- Decree-vs-code found: auto-apply gates on `environment != production`
+  (evolver_store.py:488), not `evolver.auto_apply` as the cadence decree
+  assumes — first firing auto-applied 4+1 prompt-level suggestions to
+  playbook/lessons in "dev" mode. Box set `environment: production`
+  same-day (record-only per decree) pending Jeremy's call (BACKLOG
+  batch-01). Also: evolver's verify→learn runs full unthrottled pytest
+  in-process (batch-02, re-fired ops-r2-05), `_DANGEROUS_PATTERNS`
+  false-positived on an instructional .md (funnel_report skipped for
+  `open(` in prose, batch-03), and 9 finalizations extracted **zero
+  lessons on any tier** (batch-04 — the funnel barely ingests).
+
 **Purgatorio r2 re-run, 2026-07-10 (Jeremy /goal: "run the purgatorio suite
 again and compare the results to the previous run"):**
 - Same 7 eyes, delta-scoped to the fix wave (4e6dc1b..97aa5ef, 21 commits);
