@@ -122,6 +122,30 @@ def _skills_path() -> Path:
     return memory_dir() / "skills.jsonl"
 
 
+def _skills_archive_path() -> Path:
+    from orch_items import memory_dir
+    return memory_dir() / "skills_archive.jsonl"
+
+
+def _archive_skills(skills_to_archive: List[Skill], *, reason: str) -> None:
+    """Append skills leaving the live pool to the archive.
+
+    Retention decree (2026-07-10): selection pressure (island culls, A/B
+    retirement) removes skills from the live pool but never destroys them.
+    Append-only JSONL — full skill record plus archived_at/archived_reason.
+    """
+    if not skills_to_archive:
+        return
+    from file_lock import locked_append
+    path = _skills_archive_path()
+    now = datetime.now(timezone.utc).isoformat()
+    for s in skills_to_archive:
+        rec = _skill_to_dict(s)
+        rec["archived_at"] = now
+        rec["archived_reason"] = reason
+        locked_append(path, json.dumps(rec))
+
+
 # Aliases — internal names delegate to skill_types public API
 _skill_to_dict = skill_to_dict
 _dict_to_skill = dict_to_skill
@@ -464,16 +488,17 @@ def cull_island_bottom_half(
     min_island_size: int = 4,
     dry_run: bool = False,
 ) -> List[str]:
-    """Kill the bottom-performing half of a skill island (FunSearch selection pressure).
+    """Retire the bottom-performing half of a skill island (FunSearch selection pressure).
 
     Only skills with circuit_state == 'open' (already flagged as underperforming)
     are eligible for culling. This preserves skills still on probation (half_open)
-    or that have never been rewired (closed).
+    or that have never been rewired (closed). Culled skills are moved to
+    skills_archive.jsonl, never deleted (retention decree, 2026-07-10).
 
     Args:
         island_name:      Which island to cull.
         min_island_size:  Don't cull if island has fewer than this many skills.
-        dry_run:          If True, return the IDs that would be culled but don't delete.
+        dry_run:          If True, return the IDs that would be culled but don't archive.
 
     Returns:
         List of skill IDs that were (or would be) culled.
@@ -506,9 +531,25 @@ def cull_island_bottom_half(
     to_cull = [s.id for s in scored[:cull_count]]
 
     if not dry_run and to_cull:
-        surviving = [s for s in all_skills if s.id not in set(to_cull)]
+        cull_set = set(to_cull)
+        culled = [s for s in all_skills if s.id in cull_set]
+        # Archive BEFORE the pool rewrite (retention decree: a crash between
+        # the two leaves a harmless duplicate, never a destroyed skill).
+        _archive_skills(culled, reason="island_cull")
+        surviving = [s for s in all_skills if s.id not in cull_set]
         _save_skills(surviving)
-        logger.info("island cull: removed %d skills from island %r: %s",
+        for s in culled:
+            try:
+                write_skill_provenance(
+                    s.name, "retire",
+                    reason=f"island cull: bottom-half of open-circuit pool in {island_name!r}",
+                    efficiency_score=s.utility_score,
+                    extra={"skill_id": s.id, "island": island_name,
+                           "archived_to": "skills_archive.jsonl"},
+                )
+            except Exception:
+                pass
+        logger.info("island cull: archived %d skills from island %r: %s",
                     len(to_cull), island_name, to_cull)
 
     return to_cull
@@ -704,7 +745,7 @@ def write_skill_provenance(
 
     Args:
         skill_name:       Name of the skill affected.
-        decision:         One of "promote" | "demote" | "rewrite" | "create" | "delete".
+        decision:         One of "promote" | "demote" | "rewrite" | "create" | "retire" | "delete".
         reason:           Human-readable rationale.
         success_rate:     Success rate at decision time.
         efficiency_score: Cost-adjusted score at decision time.
@@ -1434,8 +1475,9 @@ def retire_losing_variants(*, dry_run: bool = False, min_uses: int = MIN_VARIANT
     - Only act if BOTH sides have ≥ min_uses total trials.
     - Winner: highest win-rate among all variants + parent.
     - Loser(s): all others.
-    - If challenger wins: replace parent's core content with challenger's; delete challenger.
-    - If parent wins: delete challenger(s).
+    - If challenger wins: replace parent's core content with challenger's; retire challenger.
+    - If parent wins: retire challenger(s).
+    Retired variants are archived to skills_archive.jsonl, never deleted.
 
     Returns:
         dict with keys: promoted (list of IDs), retired (list of IDs)
@@ -1492,10 +1534,24 @@ def retire_losing_variants(*, dry_run: bool = False, min_uses: int = MIN_VARIANT
                 retired.append(challenger.id)
 
     if not dry_run and retired:
-        # Remove retired skills from pool; save
-        retain_ids = {s.id for s in skills} - set(retired)
-        skills = [s for s in skills if s.id in retain_ids]
+        # Retire losers: archive first (retention decree — retirement moves
+        # a skill out of the live pool, it never destroys the record), then
+        # rewrite the pool without them.
+        retired_set = set(retired)
+        losers = [s for s in skills if s.id in retired_set]
+        _archive_skills(losers, reason="ab_variant_retired")
+        skills = [s for s in skills if s.id not in retired_set]
         _save_skills(skills)
+        for s in losers:
+            try:
+                write_skill_provenance(
+                    s.name, "retire",
+                    reason=f"A/B variant lost against parent {s.variant_of}",
+                    extra={"skill_id": s.id, "variant_of": s.variant_of,
+                           "archived_to": "skills_archive.jsonl"},
+                )
+            except Exception:
+                pass
         # Captain's log: A/B retirement
         try:
             from captains_log import log_event, AB_RETIRED

@@ -40,12 +40,18 @@ def _stage2_data() -> dict:
         all_lessons = medium_lessons + long_lessons
         graveyard = [l for l in all_lessons if GC_THRESHOLD <= l.score < 0.4]
         incidental = [l for l in all_lessons if getattr(l, "acquired_for", None)]
+        try:
+            from memory import _load_archived_lessons
+            archived_count = len(_load_archived_lessons())
+        except Exception:
+            archived_count = 0
         return {
             "medium_count": status["medium"].get("count", 0),
             "long_count": status["long"].get("count", 0),
             "promote_candidates": status["medium"].get("promote_candidates", 0),
             "gc_candidates": status["medium"].get("gc_candidates", 0),
             "graveyard_count": len(graveyard),
+            "archived_count": archived_count,
             "incidental_count": len(incidental),
             "medium_avg_score": status["medium"].get("avg_score"),
         }
@@ -172,6 +178,8 @@ def print_dashboard(stage_filter: Optional[int] = None) -> None:
             print(f"  long:   {lng} lessons")
             if gy:
                 print(f"  graveyard: {gy} recoverable (score 0.2–0.4) — run 'maro-memory list' to inspect")
+            if s2.get("archived_count"):
+                print(f"  archived: {s2['archived_count']} GC'd lessons kept in lessons_archive.jsonl (resurrectable)")
             if s2.get("incidental_count"):
                 print(f"  incidental: {s2['incidental_count']} lessons tagged acquired_for (sub-goal prerequisites)")
             if gc:

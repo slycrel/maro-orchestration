@@ -81,6 +81,12 @@ Discovery, scoring, promotion/demotion with circuit breaker. Shared types (`Skil
 - **Auto-promote:** ≥5 uses + ≥70% success → provisional→established
 - **Auto-demote:** ≥3 consecutive failures opens circuit, triggers rewrite
 - **Test gate:** Skill mutations blocked if unit tests fail
+- **Retirement archives, never deletes (retention decree, 2026-07-10):**
+  island culls (`cull_island_bottom_half`) and A/B variant retirement
+  (`retire_losing_variants`) move skills to `memory/skills_archive.jsonl`
+  with `archived_reason` + a `retire` provenance record. The live pool
+  shrinks; the record survives. Guarded by tests/test_no_silent_deletion.py
+  (AST tripwire over all file-deletion call sites in src/).
 - **Skills-lite (Rider A, 2026-07-10):** skill-shaped .md artifacts from
   successful runs auto-promote into the workspace skills overlay
   (`tier: skills-lite`) + a companion provisional Skill in skills.jsonl, so

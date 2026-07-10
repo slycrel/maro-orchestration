@@ -366,6 +366,42 @@ folds into this decision (see docs/INDEX.md note).
 
 ### Design constraint: decay trust, never data
 
+- [x] **Retention-decree audit — 3 violations found and FIXED 2026-07-10**
+  (Jeremy: "let's fix, no time like the present"). Sweep of every deletion
+  site in src/ against the retention decree found the same auto-deletion
+  family the step-artifact bug belonged to:
+  1. **Lesson decay-GC deleted memory** (the path that once ate the whole
+     38-lesson MEDIUM store): `run_decay_cycle` + `gc_memory` now archive
+     to `memory/lessons_archive.jsonl` before dropping from the live store;
+     `search_graveyard` reaches the archive and resurrects via
+     `resurrect_archived_lesson()`; `forget_lesson` archives as
+     `user_forget` (excluded from auto-resurrection — forgetting is the
+     user's call); `maro-knowledge` stats surface the archived count.
+  2. **Skill island culls + A/B variant retirement hard-deleted skills**:
+     both now archive to `memory/skills_archive.jsonl` + write a `retire`
+     provenance record.
+  3. **Finalize deleted the checkpoint on done**, but closure verification
+     runs after finalize — a run demoted done→incomplete had already lost
+     its resume state. Checkpoints now kept on completion (stranded-sweep
+     already skips finalized runs via metadata status; `checkpoint delete`
+     CLI remains the user-level removal path).
+  Enforcement so the class can't recur silently:
+  **tests/test_no_silent_deletion.py** — AST census of every file-deletion
+  call in src/ (unlink/rmtree/os.remove/rmdir incl. aliased/bare-import
+  forms) against a justified allowlist, plus a pin that nothing outside
+  checkpoint.py references `delete_checkpoint`. Same pattern as the
+  DEFAULTS.md census tripwire. Known limit: record-level rewrites aren't
+  generically detectable — the two known record-level deleters are the
+  ones fixed above, pinned by unit tests.
+
+- [ ] **Smaller retention residuals** (from the same audit, decree-compatible
+  but same smell): `maro-memory gc` retention windows (outcomes retain-days,
+  narrative 180d) are system-chosen constants — could become user-config
+  keys with DEFAULTS rows; `graduation.verify_graduation_rules()` is
+  reachable only via the CLI `--verify` flag, so graduated intervention
+  rules go live with zero automatic verification (belongs to the
+  verify→learn arc).
+
 - [ ] **Design constraint, not a task: decay trust, never data.** Append-only
   evidence layer stays perfect (the computerization edge over human forgetting);
   only compiled-truth confidence decays. Crystallization Stages 4–5 must be

@@ -22,7 +22,7 @@ import math
 import re
 import logging
 from collections import Counter
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -439,6 +439,89 @@ def _mutate_tiered_lessons(tier: str, mutate) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Lesson archive (retention decree, 2026-07-10)
+# ---------------------------------------------------------------------------
+# "Decay trust, never data": GC and forget move lessons OUT of the live
+# store but never destroy them. The archive is an append-only JSONL log —
+# a lesson removed and later re-archived simply gets a second record.
+
+def _lessons_archive_path() -> Path:
+    return _memory_dir() / "lessons_archive.jsonl"
+
+
+def _archive_lessons(lessons: List[TieredLesson], *, reason: str) -> None:
+    """Append lessons to the archive before they leave the live store.
+
+    reason: "decay_gc" (system GC — eligible for graveyard resurrection)
+            or "user_forget" (explicit user removal — never auto-resurrected).
+    """
+    if not lessons:
+        return
+    from file_lock import locked_append
+    path = _lessons_archive_path()
+    now = datetime.now(timezone.utc).isoformat()
+    for tl in lessons:
+        rec = asdict(tl)
+        rec["archived_at"] = now
+        rec["archived_reason"] = reason
+        locked_append(path, json.dumps(rec))
+
+
+def _load_archived_lessons(*, reasons: tuple = ("decay_gc",)) -> List[TieredLesson]:
+    """Load archived lessons whose archive reason is in *reasons*.
+
+    Returns the newest archive record per lesson_id, skipping records that
+    can't be parsed. Archive-only view — callers must exclude ids that are
+    currently live if they merge the two.
+    """
+    path = _lessons_archive_path()
+    if not path.exists():
+        return []
+    field_names = {f.name for f in fields(TieredLesson)}
+    by_id: Dict[str, TieredLesson] = {}
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+                if rec.get("archived_reason") not in reasons:
+                    # A later user_forget overrides an earlier decay_gc record
+                    by_id.pop(rec.get("lesson_id", ""), None)
+                    continue
+                tl = TieredLesson(**{k: v for k, v in rec.items() if k in field_names})
+                by_id[tl.lesson_id] = tl  # newest record wins (file is append-order)
+            except Exception:
+                continue
+    except Exception:
+        return []
+    return list(by_id.values())
+
+
+def resurrect_archived_lesson(lesson_id: str) -> Optional[TieredLesson]:
+    """Restore a system-archived (decay_gc) lesson to its live tier store.
+
+    The archive record is left in place — it's history. Restores with
+    last_reinforced=today so decay restarts from now. No-op (returns None)
+    if the lesson is already live or was user-forgotten.
+    """
+    match = next((tl for tl in _load_archived_lessons()
+                  if tl.lesson_id == lesson_id), None)
+    if match is None:
+        return None
+    tier = match.tier or MemoryTier.MEDIUM
+    live = load_tiered_lessons(tier=tier, min_score=0.0, limit=None, raw=True)
+    if any(l.lesson_id == lesson_id for l in live):
+        return None
+    match.last_reinforced = _current_date()
+    match.times_reinforced += 1
+    from file_lock import locked_append
+    locked_append(_tiered_lessons_path(tier), json.dumps(asdict(match)))
+    return match
+
+
+# ---------------------------------------------------------------------------
 # Reinforce, forget, promote
 # ---------------------------------------------------------------------------
 
@@ -492,9 +575,11 @@ def search_graveyard(
 ) -> List[TieredLesson]:
     """Find decayed lessons matching *topic* before triggering a sub-goal re-acquisition.
 
-    The "graveyard" is lessons in the decay band [GC_THRESHOLD, 0.4) — still on disk
-    but below the active-injection threshold (0.3 default in inject_lessons).  These
-    are recoverable via ``reinforce_lesson()``.
+    The "graveyard" is lessons in the decay band [GC_THRESHOLD, 0.4) — still in the
+    live store but below the active-injection threshold (0.3 default in
+    inject_lessons) — PLUS lessons the decay GC moved to the archive (retention
+    decree: GC archives, never deletes). Live matches are recoverable via
+    ``reinforce_lesson()``; archived matches via ``resurrect_archived_lesson()``.
 
     Args:
         topic:      Keywords to fuzzy-match against lesson text (space-separated; any
@@ -512,9 +597,11 @@ def search_graveyard(
     """
     keywords = [w.lower() for w in topic.split() if w]
     results: List[tuple] = []
+    live_ids: set = set()
 
     for tier in (MemoryTier.MEDIUM, MemoryTier.LONG):
         lessons = load_tiered_lessons(tier=tier, min_score=min_score)
+        live_ids.update(tl.lesson_id for tl in lessons)
         for tl in lessons:
             if tl.score >= max_score:
                 continue
@@ -523,21 +610,45 @@ def search_graveyard(
             if match_ratio > 0:
                 results.append((match_ratio, tl.score, tl))
 
+    # Retention decree: GC'd lessons live on in the archive — the graveyard
+    # extends below GC_THRESHOLD now. Archived (decay_gc only; user_forget
+    # is deliberately excluded) lessons match the same way; resurrection
+    # restores them to their live tier via resurrect_archived_lesson().
+    archived_ids: set = set()
+    for tl in _load_archived_lessons():
+        if tl.lesson_id in live_ids:
+            continue
+        text = tl.lesson.lower()
+        match_ratio = sum(1 for kw in keywords if kw in text) / max(len(keywords), 1)
+        if match_ratio > 0:
+            archived_ids.add(tl.lesson_id)
+            results.append((match_ratio, tl.score, tl))
+
     results.sort(key=lambda x: (x[0], x[1]), reverse=True)
     matched = [tl for _, _, tl in results[:limit]]
 
     if resurrect:
         for tl in matched:
-            reinforce_lesson(tl.lesson_id, tier=tl.tier)
+            if tl.lesson_id in archived_ids:
+                resurrect_archived_lesson(tl.lesson_id)
+            else:
+                reinforce_lesson(tl.lesson_id, tier=tl.tier)
 
     return matched
 
 
 def forget_lesson(lesson_id: str, tier: str = MemoryTier.MEDIUM) -> bool:
-    """Permanently remove a lesson from a tier. Returns True if found and removed."""
+    """Remove a lesson from a tier's live store. Returns True if found and removed.
+
+    The lesson is archived (reason="user_forget") rather than destroyed —
+    but user-forgotten lessons are excluded from graveyard resurrection, so
+    forgetting is final unless the user digs it out of the archive by hand.
+    """
     removed = {"hit": False}
 
     def _drop(lessons: List[TieredLesson]) -> List[TieredLesson]:
+        dead = [l for l in lessons if l.lesson_id == lesson_id]
+        _archive_lessons(dead, reason="user_forget")
         kept = [l for l in lessons if l.lesson_id != lesson_id]
         removed["hit"] = len(kept) != len(lessons)
         return kept
@@ -653,14 +764,20 @@ def run_decay_cycle(
         for lid in promoted_ids:
             promote_lesson(lid)
 
-        # GC: drop the GC'd ids under the lock (reload happens inside, so
-        # the rewrite reflects the promotions above and any concurrent
-        # writers). Stored scores stay untouched.
+        # GC: archive-then-drop the GC'd ids under the lock (reload happens
+        # inside, so the rewrite reflects the promotions above and any
+        # concurrent writers). Stored scores stay untouched. Archive happens
+        # BEFORE the rewrite so a crash between the two duplicates a lesson
+        # (harmless) instead of destroying it (retention decree).
         if gc_ids:
             gc_set = set(gc_ids)
-            _mutate_tiered_lessons(
-                tier, lambda lessons: [l for l in lessons if l.lesson_id not in gc_set],
-            )
+
+            def _archive_and_drop(lessons: List[TieredLesson]) -> List[TieredLesson]:
+                _archive_lessons([l for l in lessons if l.lesson_id in gc_set],
+                                 reason="decay_gc")
+                return [l for l in lessons if l.lesson_id not in gc_set]
+
+            _mutate_tiered_lessons(tier, _archive_and_drop)
 
     return {"decayed": decayed, "promoted": len(promoted_ids), "gc": len(gc_ids)}
 

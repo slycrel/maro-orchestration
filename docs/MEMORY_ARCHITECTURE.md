@@ -172,6 +172,8 @@ Good news: **the graveyard already exists**. It's the decay range between `GC_TH
 
 They're exactly the graveyard — partially decayed but recoverable via `reinforce_lesson()`.
 
+> **Update (2026-07-10):** `search_graveyard()` shipped long ago, and the retention decree extended the graveyard below the GC floor: decay-GC now *archives* lessons to `memory/lessons_archive.jsonl` instead of deleting them, `search_graveyard` reaches into the archive, and `resurrect_archived_lesson()` restores. "Decays to GC threshold and disappears" below is design-era prose — nothing disappears anymore; it decays out of the live store and stays diggable.
+
 What's currently missing: **a graveyard query**. Before spawning a sub-goal to learn X, the system should first check: "do we have any decayed lessons about X?" If yes, `reinforce_lesson()` to bring them back to medium tier — free knowledge resurrection. If no, proceed with the sub-goal.
 
 This is low-hanging fruit. The `reinforce_lesson()` function already exists. The gap is a `search_graveyard(topic)` function that does fuzzy-matches decayed lessons against a topic string before triggering a fresh sub-goal.

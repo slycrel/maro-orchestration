@@ -351,3 +351,37 @@ class TestSkillVariantFields:
         assert s.variant_of is None
         assert s.variant_wins == 0
         assert s.variant_losses == 0
+
+
+# ---------------------------------------------------------------------------
+# Retention decree (2026-07-10): retirement archives, never deletes
+# ---------------------------------------------------------------------------
+
+class TestRetirementArchive:
+    def test_retired_variant_is_archived_not_destroyed(self):
+        import json
+        import skills as skills_mod
+
+        parent = _skill("parent", utility_score=0.85, use_count=10)
+        challenger = _skill("c1", variant_of="parent", variant_wins=3, variant_losses=7)
+        # Mock only the load — let _save_skills and the archive write for
+        # real into the isolated tmp workspace.
+        with mock.patch("skills.load_skills", return_value=[parent, challenger]):
+            result = retire_losing_variants(min_uses=MIN_VARIANT_USES)
+
+        assert "c1" in result["retired"]
+        # Live pool no longer has the loser...
+        live = skills_mod.load_skills()
+        assert [s.id for s in live] == ["parent"]
+        # ...but the archive holds its full record.
+        arch = skills_mod._skills_archive_path()
+        recs = [json.loads(l) for l in arch.read_text(encoding="utf-8").splitlines() if l.strip()]
+        assert len(recs) == 1
+        assert recs[0]["id"] == "c1"
+        assert recs[0]["archived_reason"] == "ab_variant_retired"
+        assert recs[0]["archived_at"]
+        # Provenance sidecar documents the retirement.
+        from orch_items import memory_dir
+        prov = list((memory_dir() / "skill_provenance").glob("*.json"))
+        assert any(json.loads(p.read_text(encoding="utf-8"))["decision"] == "retire"
+                   for p in prov)

@@ -408,10 +408,13 @@ class TestCheckpointRecovery:
         )
 
         assert result.status == "done"
-        # Checkpoint should be deleted on success (clean loop)
+        # Checkpoint is KEPT on success (retention decree, 2026-07-10):
+        # closure verification runs after finalize and can demote done →
+        # incomplete, so the resume substrate must outlive the verdict.
         from checkpoint import load_checkpoint
         ckpt = load_checkpoint(result.loop_id)
-        assert ckpt is None, "checkpoint should be deleted after successful loop"
+        assert ckpt is not None, "checkpoint should be kept after successful loop"
+        assert ckpt.is_complete()
 
     def test_resume_skips_completed_steps(self, monkeypatch, tmp_path):
         """Resuming from a checkpoint skips already-completed steps."""

@@ -303,13 +303,12 @@ def _build_result_and_finalize(
         recovery_steps=recovery_step_count,
     )
 
-    # Delete checkpoint on successful completion
-    if result.status == "done":
-        try:
-            from checkpoint import delete_checkpoint as _del_ckpt
-            _del_ckpt(ctx.loop_id)
-        except Exception as _ckpt_exc:
-            log.debug("checkpoint delete failed: %s", _ckpt_exc)
+    # Checkpoints are KEPT on completion (retention decree, 2026-07-10).
+    # The old delete-on-done crossed wires with closure verification, which
+    # runs AFTER finalize: a run demoted done→incomplete had already lost
+    # its resume state. Finalized runs are excluded from the stranded-run
+    # sweep via run metadata status, so a kept checkpoint is inert; users
+    # can remove one explicitly with `checkpoint delete` or run pruning.
 
     # Artifact retention (decree, 2026-07-10): per-step artifacts are KEPT by
     # default — the system never decides run data is clutter; deleting the

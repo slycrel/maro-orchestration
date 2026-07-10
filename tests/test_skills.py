@@ -1867,3 +1867,44 @@ class TestFindMatchingSkillsProjectIsolation:
         }
         skill = dict_to_skill(d)
         assert skill.project == ""
+
+
+class TestCullArchive:
+    """Retention decree (2026-07-10): island culls archive, never delete."""
+
+    def test_cull_archives_instead_of_deleting(self):
+        import json
+        import skills as skills_mod
+        from skills import Skill, cull_island_bottom_half, load_skills, _save_skills
+
+        def mk(id_, state, util):
+            return Skill(
+                id=id_, name=f"skill_{id_}", description="search web information",
+                trigger_patterns=["search"], steps_template=["step"],
+                source_loop_ids=[], created_at="2026-01-01T00:00:00+00:00",
+                circuit_state=state, utility_score=util, island="research",
+            )
+
+        pool = [
+            mk("s1", "open", 0.1),
+            mk("s2", "open", 0.2),
+            mk("s3", "closed", 0.5),
+            mk("s4", "closed", 0.6),
+        ]
+        _save_skills(pool)
+        culled = cull_island_bottom_half("research", min_island_size=4)
+        assert len(culled) == 1
+
+        live_ids = {s.id for s in load_skills()}
+        assert not set(culled) & live_ids
+        assert len(live_ids) == 3
+
+        arch = skills_mod._skills_archive_path()
+        recs = [json.loads(l) for l in arch.read_text(encoding="utf-8").splitlines() if l.strip()]
+        assert {r["id"] for r in recs} == set(culled)
+        assert all(r["archived_reason"] == "island_cull" for r in recs)
+
+        from orch_items import memory_dir
+        prov = list((memory_dir() / "skill_provenance").glob("*.json"))
+        assert any(json.loads(p.read_text(encoding="utf-8"))["decision"] == "retire"
+                   for p in prov)

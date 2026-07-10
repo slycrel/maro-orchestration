@@ -1470,6 +1470,22 @@ Sample: the 2026-05-13..17 window of `~/.maro/workspace/runs/` (478 dirs total;
   run visualization** (BACKLOG #17) — kept-forever data must be findable
   and poke-aroundable to earn its keep ("a user is going to trust more...
   when they can poke around and see what actually happened").
+  **Decree audit, same session ("let's fix, no time like the present"):**
+  a sweep of every deletion site in src/ found three more system-decided
+  data deletions, all converted to archive-not-delete: (1) lesson decay-GC
+  destroyed lessons below score 0.2 (the path that once ate the whole
+  38-lesson MEDIUM store) → now archives to `memory/lessons_archive.jsonl`,
+  `search_graveyard` reaches the archive, `resurrect_archived_lesson()`
+  restores, `forget_lesson` archives as `user_forget` (never
+  auto-resurrected); (2) skill island culls + A/B variant retirement
+  hard-deleted skills → now archive to `memory/skills_archive.jsonl` +
+  `retire` provenance; (3) finalize deleted the checkpoint on done while
+  closure verification (which can demote done→incomplete) runs after
+  finalize → checkpoints now kept, stranded-sweep unaffected (skips
+  finalized runs via metadata). Enforcement:
+  **tests/test_no_silent_deletion.py** — AST tripwire over every
+  file-deletion call in src/ with a justified allowlist (same pattern as
+  the DEFAULTS census); new deletion sites fail CI until reviewed.
 
 ## Threads (system-maintained — nothing leaves this list silently)
 

@@ -314,10 +314,13 @@ def load_checkpoint(loop_id: str) -> Optional[Checkpoint]:
 
 
 def delete_checkpoint(loop_id: str) -> None:
-    """Delete a checkpoint file after a loop completes successfully.
+    """Delete a checkpoint file.
 
-    Only loop_finalize's `done` path calls this — a crashed or stuck loop
-    keeps its checkpoint by design (that's the resume substrate).
+    User-level only (the `checkpoint delete` CLI). No automatic path calls
+    this: completed loops keep their checkpoint (retention decree,
+    2026-07-10 — closure verdicts land after finalize, and a demoted run
+    needs its resume state), and crashed/stuck loops keep theirs by design
+    (that's the resume substrate).
     """
     try:
         rd_path = _rundir_checkpoint_path()

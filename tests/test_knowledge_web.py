@@ -1321,3 +1321,91 @@ class TestImportLinkFarm:
         nodes = self._all_nodes()
         # Should use first sentence of summary
         assert "Reflexion" in nodes[0].title
+
+
+# ===========================================================================
+# Lesson archive (retention decree, 2026-07-10: GC archives, never deletes)
+# ===========================================================================
+
+class TestLessonArchive:
+    def _old(self, days=30):
+        return (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
+
+    def test_decay_gc_archives_instead_of_deleting(self, tmp_path):
+        _write_lesson_to_file(tmp_path, _make_lesson(
+            lesson_id="arc1", lesson="flock timeout handling on shared stores",
+            score=0.15, last_reinforced=self._old(),
+        ))
+        result = run_decay_cycle(tier=MemoryTier.MEDIUM)
+        assert result["gc"] == 1
+        # Gone from live store...
+        live = load_tiered_lessons(tier=MemoryTier.MEDIUM, min_score=0.0)
+        assert not any(l.lesson_id == "arc1" for l in live)
+        # ...but preserved in the archive with the system reason.
+        raw = kw._lessons_archive_path().read_text(encoding="utf-8")
+        recs = [json.loads(l) for l in raw.splitlines() if l.strip()]
+        assert len(recs) == 1
+        assert recs[0]["lesson_id"] == "arc1"
+        assert recs[0]["archived_reason"] == "decay_gc"
+        assert recs[0]["archived_at"]
+        archived = kw._load_archived_lessons()
+        assert [tl.lesson_id for tl in archived] == ["arc1"]
+
+    def test_gc_memory_module_archives_too(self, tmp_path):
+        _write_lesson_to_file(tmp_path, _make_lesson(
+            lesson_id="arc2", score=0.1, last_reinforced=self._old(),
+        ))
+        from gc_memory import _gc_tiered_lessons
+        removed = _gc_tiered_lessons(dry_run=False)
+        assert removed == 1
+        assert not load_tiered_lessons(tier=MemoryTier.MEDIUM, min_score=0.0)
+        assert [tl.lesson_id for tl in kw._load_archived_lessons()] == ["arc2"]
+
+    def test_forget_archives_with_user_reason_and_stays_buried(self, tmp_path):
+        _write_lesson_to_file(tmp_path, _make_lesson(
+            lesson_id="fg1", lesson="bad lesson the user rejected",
+        ))
+        assert forget_lesson("fg1") is True
+        raw = kw._lessons_archive_path().read_text(encoding="utf-8")
+        recs = [json.loads(l) for l in raw.splitlines() if l.strip()]
+        assert recs[0]["archived_reason"] == "user_forget"
+        # Default archive view (resurrection pool) excludes user-forgotten.
+        assert kw._load_archived_lessons() == []
+        # And graveyard search never surfaces it.
+        assert search_graveyard("bad lesson user rejected") == []
+
+    def test_search_graveyard_reaches_archive_and_resurrects(self, tmp_path):
+        _write_lesson_to_file(tmp_path, _make_lesson(
+            lesson_id="res1", lesson="polymarket api pagination cursor quirk",
+            score=0.15, last_reinforced=self._old(),
+        ))
+        run_decay_cycle(tier=MemoryTier.MEDIUM)  # GC's it into the archive
+        hits = search_graveyard("polymarket pagination")
+        assert [tl.lesson_id for tl in hits] == ["res1"]
+        # Resurrect: restored to the live MEDIUM store, decay clock reset.
+        hits = search_graveyard("polymarket pagination", resurrect=True)
+        assert [tl.lesson_id for tl in hits] == ["res1"]
+        live = load_tiered_lessons(tier=MemoryTier.MEDIUM, min_score=0.0)
+        revived = next(l for l in live if l.lesson_id == "res1")
+        assert revived.last_reinforced == kw._current_date()
+        # Archive record is history — it stays.
+        assert kw._lessons_archive_path().exists()
+
+    def test_resurrect_is_noop_when_lesson_is_live(self, tmp_path):
+        _write_lesson_to_file(tmp_path, _make_lesson(lesson_id="dup1"))
+        # Fake an archive record for the same id (e.g. crash between
+        # archive-append and store-rewrite left it in both places).
+        kw._archive_lessons(
+            [_make_lesson(lesson_id="dup1")], reason="decay_gc")
+        assert kw.resurrect_archived_lesson("dup1") is None
+        live = load_tiered_lessons(tier=MemoryTier.MEDIUM, min_score=0.0)
+        assert len([l for l in live if l.lesson_id == "dup1"]) == 1
+
+    def test_search_graveyard_skips_archived_copy_of_live_lesson(self, tmp_path):
+        _write_lesson_to_file(tmp_path, _make_lesson(
+            lesson_id="dup2", lesson="unique zanzibar keyword", score=0.3))
+        kw._archive_lessons(
+            [_make_lesson(lesson_id="dup2", lesson="unique zanzibar keyword")],
+            reason="decay_gc")
+        hits = search_graveyard("zanzibar")
+        assert len(hits) == 1

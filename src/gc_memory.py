@@ -215,16 +215,22 @@ def _gc_tiered_lessons(*, dry_run: bool = True) -> int:
         gc_ids = {l.lesson_id for l in all_lessons if l.score < GC_THRESHOLD}
         removed = len(gc_ids)
         if removed > 0 and not dry_run:
-            _mutate_tiered_lessons(
-                tier, lambda lessons: [l for l in lessons if l.lesson_id not in gc_ids],
-            )
+            # Retention decree (2026-07-10): archive-then-drop, never delete.
+            from knowledge_web import _archive_lessons
+
+            def _archive_and_drop(lessons):
+                _archive_lessons([l for l in lessons if l.lesson_id in gc_ids],
+                                 reason="decay_gc")
+                return [l for l in lessons if l.lesson_id not in gc_ids]
+
+            _mutate_tiered_lessons(tier, _archive_and_drop)
             # Captain's log: lesson decay
             try:
                 from captains_log import log_event, LESSON_DECAYED
                 log_event(
                     event_type=LESSON_DECAYED,
                     subject=f"{tier} tier",
-                    summary=f"GC removed {removed} lessons below threshold from {tier} tier.",
+                    summary=f"GC archived {removed} lessons below threshold from {tier} tier.",
                     context={"tier": tier, "removed": removed, "remaining": len(all_lessons) - removed},
                 )
             except Exception:

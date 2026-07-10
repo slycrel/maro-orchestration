@@ -78,6 +78,7 @@ from knowledge_web import (  # noqa: F401, E402
     record_tiered_lesson, _append_tiered_lesson, _reinforce_tiered_lesson,
     load_tiered_lessons, _rewrite_tiered_lessons,
     reinforce_lesson, search_graveyard, forget_lesson, promote_lesson,
+    resurrect_archived_lesson, _load_archived_lessons, _lessons_archive_path,
     run_decay_cycle, maybe_consolidate, consolidation_due,
     inject_tiered_lessons, query_lessons,
     _increment_times_applied, _canon_stats_path, _record_canon_hit,
