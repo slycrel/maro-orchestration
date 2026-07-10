@@ -95,6 +95,9 @@ class PriorAttempt:
     status: str          # done | stuck | error | unknown (never finalized)
     when: str            # started_at, ISO-8601
     match: str           # "exact" | "near"
+    # Judged goal verdict from run metadata (SF-2): True/False when a verdict
+    # exists, None = unjudged — done ≠ achieved.
+    goal_achieved: Optional[bool] = None
 
 
 @dataclass
@@ -131,10 +134,22 @@ class RecallResult:
         """Repeat-pressure signals for the dispatch guard.
 
         repeat_count counts attempts inside the window; all_failing is True
-        only when every one of them ended non-done (status done anywhere in
-        the window disarms the guard — the goal CAN succeed, repeats may be
-        legitimate).
+        only when every one of them failed. Verdict-preferred (SF-2): a
+        judged goal_achieved=False attempt counts as failing even when its
+        status is "done" (done ≠ achieved); a judged True attempt never
+        does; unjudged attempts fall back to status (a non-failing attempt
+        anywhere in the window disarms the guard — the goal CAN succeed,
+        repeats may be legitimate).
         """
+        def _failing(a: PriorAttempt) -> bool:
+            if a.goal_achieved is False:
+                return True
+            if a.goal_achieved is True:
+                return False
+            # Unjudged: absence means "not judged", not "failed" — fall back
+            # to process status.
+            return a.status != "done"
+
         cutoff = datetime.now(timezone.utc) - timedelta(minutes=window_minutes)
         in_window: List[PriorAttempt] = []
         for a in self.prior_attempts:
@@ -149,7 +164,7 @@ class RecallResult:
         return {
             "repeat_count": len(in_window),
             "all_failing": bool(in_window) and all(
-                a.status != "done" for a in in_window
+                _failing(a) for a in in_window
             ),
             "window_minutes": window_minutes,
         }
@@ -168,6 +183,14 @@ class RecallResult:
             for a in self.prior_attempts:
                 by_status[a.status] = by_status.get(a.status, 0) + 1
             breakdown = ", ".join(f"{n} {s}" for s, n in sorted(by_status.items()))
+            # Surface judged goal verdicts when any exist (done ≠ achieved).
+            _n_true = sum(1 for a in self.prior_attempts if a.goal_achieved is True)
+            _n_false = sum(1 for a in self.prior_attempts if a.goal_achieved is False)
+            if _n_true or _n_false:
+                breakdown += (
+                    f"; goal verdicts: {_n_true} achieved, "
+                    f"{_n_false} NOT achieved, rest unjudged"
+                )
             parts.append(
                 f"Prior attempts at this goal (recent window): "
                 f"{len(self.prior_attempts)} runs — {breakdown}. "
@@ -308,12 +331,14 @@ def _find_prior_attempts(goal: str, *, window_hours: float) -> List[PriorAttempt
             match = "near"
         else:
             continue
+        _ga = meta.get("goal_achieved")
         attempts.append(PriorAttempt(
             goal=prompt,
             handle_id=str(meta.get("handle_id") or rd.name.split("-", 1)[0]),
             status=str(meta.get("status") or "unknown"),
             when=started,
             match=match,
+            goal_achieved=_ga if isinstance(_ga, bool) else None,
         ))
     attempts.sort(key=lambda a: a.when, reverse=True)
     return attempts

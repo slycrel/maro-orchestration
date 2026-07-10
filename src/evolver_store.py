@@ -123,6 +123,50 @@ def _dynamic_constraints_path() -> Path:
     return memory_dir() / "dynamic-constraints.jsonl"
 
 
+def _cadence_path() -> Path:
+    """Path to the run-cadence counter (evolver meta-cycle trigger state)."""
+    from orch_items import memory_dir
+    return memory_dir() / "evolver_cadence.json"
+
+
+def evolver_cadence_tick(cadence: int) -> bool:
+    """Count one run finalization toward the evolver run-cadence.
+
+    Increments the persistent runs-since-evolve counter; when `cadence` is
+    set (> 0) and the counter reaches it, resets the counter and returns
+    True — the caller then fires run_evolver(). The increment-check-reset is
+    a single locked read-modify-write so concurrent finalizations (the
+    concurrency-hardening arc allows parallel runs) can't both trigger.
+
+    "App, not systemic" (2026-07-09): this counter is the entire scheduling
+    mechanism — the meta-cycle rides run finalizations; no daemon, no timer.
+    Callers must not count dry_run runs.
+    """
+    from file_lock import locked_rmw
+
+    fired = False
+
+    def _bump(old: str) -> str:
+        nonlocal fired
+        try:
+            count = int(json.loads(old).get("runs_since_evolve", 0))
+        except Exception:
+            count = 0
+        count += 1
+        if cadence > 0 and count >= cadence:
+            fired = True
+            count = 0
+        return json.dumps({
+            "runs_since_evolve": count,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        })
+
+    path = _cadence_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    locked_rmw(path, _bump, default="{}")
+    return fired
+
+
 def load_suggestions(limit: int = 20) -> List[Suggestion]:
     """Load most recent suggestions, newest first."""
     p = _suggestions_path()

@@ -54,6 +54,14 @@ def _extract_heuristic(outcome) -> List[Tuple[str, str]]:
     goal: str = getattr(outcome, "goal", "")
     status: str = getattr(outcome, "status", "done")
     task_type: str = getattr(outcome, "task_type", "general")
+    # Verdict tri-state (SF-2): done ≠ achieved. A judged goal-NOT-achieved
+    # run must not mint "principles" as if it succeeded; unjudged keeps the
+    # status heuristic.
+    achieved = getattr(outcome, "goal_achieved", None)
+    status_desc = status + (
+        "" if achieved is None
+        else (" (goal achieved)" if achieved else " (goal NOT achieved)")
+    )
 
     candidates: List[Tuple[str, str]] = []
 
@@ -69,7 +77,7 @@ def _extract_heuristic(outcome) -> List[Tuple[str, str]]:
             title = title[:-1]
 
         node_type = "insight"
-        if status == "done" and any(
+        if status == "done" and achieved is not False and any(
             kw in lesson.lower()
             for kw in ("always", "never", "when", "pattern", "principle", "best practice")
         ):
@@ -77,7 +85,7 @@ def _extract_heuristic(outcome) -> List[Tuple[str, str]]:
         elif any(kw in lesson.lower() for kw in ("use ", "apply ", "prefer ", "try ")):
             node_type = "technique"
 
-        desc = f"{lesson}\n\n[Extracted from: {task_type} / {status} — {goal[:80]}]"
+        desc = f"{lesson}\n\n[Extracted from: {task_type} / {status_desc} — {goal[:80]}]"
         candidates.append((title, desc, node_type))
 
     return candidates  # type: ignore[return-value]
@@ -116,10 +124,17 @@ def _extract_llm(outcome, adapter) -> List[Tuple[str, str, str, str]]:
         goal = getattr(outcome, "goal", "") or ""
         status = getattr(outcome, "status", "done")
         task_type = getattr(outcome, "task_type", "general")
+        # Verdict-preferred framing (SF-2): let the extractor know when a
+        # completed run was judged goal-NOT-achieved.
+        achieved = getattr(outcome, "goal_achieved", None)
+        status_desc = status + (
+            "" if achieved is None
+            else (" (goal verified achieved)" if achieved else " (goal judged NOT achieved — treat as a failure)")
+        )
 
         prompt = _EXTRACT_PROMPT.format(
             goal=goal[:300],
-            status=status,
+            status=status_desc,
             task_type=task_type,
             summary=summary[:500],
             lessons_text=lessons_text,

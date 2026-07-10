@@ -2,27 +2,28 @@
 
 Handles:
 - Creating workspace directory structure
-- Writing optional systemd (Linux) or launchd (macOS) service files
+- Printing host-scheduler hook instructions for the heartbeat (Maro is an
+  app, not a daemon — it never installs its own systemd/launchd/cron unit;
+  supervision belongs to the host. Decided 2026-07-09.)
 - Smoke-testing the install by running a manual NOW-lane request once
 
 Entry points:
-  maro-bootstrap install    -- workspace + optional service file templates + smoke test
+  maro-bootstrap install    -- workspace + scheduler instructions + smoke test
   maro-bootstrap dirs       -- create workspace dirs only
-  maro-bootstrap services   -- write optional service files only
-  maro-bootstrap status     -- show current workspace and service status
+  maro-bootstrap services   -- print host-scheduler hook instructions
+  maro-bootstrap status     -- show current workspace status
   maro-bootstrap smoke      -- run a live NOW-lane request and verify output
 """
 
 from __future__ import annotations
 
 import os
-import platform
 import subprocess
 import sys
 from pathlib import Path
 from typing import Optional
 
-from config import workspace_root, deploy_dir
+from config import workspace_root
 
 
 # ---------------------------------------------------------------------------
@@ -119,127 +120,51 @@ def write_starter_config() -> Optional[Path]:
 
 
 # ---------------------------------------------------------------------------
-# Service file templates
+# Host-scheduler hook instructions
 # ---------------------------------------------------------------------------
+# History: bootstrap used to *generate* systemd/launchd units here. The
+# generated heartbeat unit exec'd `sheriff.py --heartbeat` — a flag that never
+# existed in any commit — so an enabled unit crash-looped every 30s from day
+# one. Per the 2026-07-09 supervision decision ("app, not systemic": Maro
+# ships entrypoints, the host owns scheduling; no self-rearming timers), the
+# generator is gone entirely. The real one-shot entrypoint is `maro heartbeat`
+# (cli.py `_cmd_heartbeat`): fires exactly one beat, exits.
 
 _SRC_DIR = Path(__file__).resolve().parent
 _PYTHON = sys.executable
 
 
-def _systemd_service(name: str, description: str, exec_cmd: str, workspace: Path) -> str:
-    return f"""[Unit]
-Description={description}
-After=network.target
+def scheduler_hook_instructions(workspace: Optional[Path] = None) -> str:
+    """Instructions for hooking the host's scheduler to the heartbeat.
 
-[Service]
-Type=simple
-User={os.getenv('USER', 'maro')}
-WorkingDirectory={_SRC_DIR}
-Environment=MARO_WORKSPACE={workspace}
-ExecStart={exec_cmd}
-Restart=on-failure
-RestartSec=30
-StandardOutput=journal
-StandardError=journal
-
-[Install]
-WantedBy=multi-user.target
-"""
-
-
-def _launchd_plist(label: str, description: str, exec_args: list[str], workspace: Path) -> str:
-    args_xml = "\n".join(f"        <string>{a}</string>" for a in exec_args)
-    return f"""<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
-  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>{label}</string>
-    <key>ProgramArguments</key>
-    <array>
-{args_xml}
-    </array>
-    <key>EnvironmentVariables</key>
-    <dict>
-        <key>MARO_WORKSPACE</key>
-        <string>{workspace}</string>
-    </dict>
-    <key>WorkingDirectory</key>
-    <string>{_SRC_DIR}</string>
-    <key>RunAtLoad</key>
-    <true/>
-    <key>KeepAlive</key>
-    <true/>
-    <key>StandardOutPath</key>
-    <string>{workspace}/logs/{label.split('.')[-1]}.log</string>
-    <key>StandardErrorPath</key>
-    <string>{workspace}/logs/{label.split('.')[-1]}.err.log</string>
-</dict>
-</plist>
-"""
-
-
-_SERVICES: list[dict] = [
-    {
-        "name": "maro-heartbeat",
-        "label": "com.maro.heartbeat",
-        "description": "Maro Orchestration — Optional Heartbeat Monitor",
-        "exec_cmd": f"{_PYTHON} {_SRC_DIR}/sheriff.py --heartbeat",
-        "exec_args": [_PYTHON, str(_SRC_DIR / "sheriff.py"), "--heartbeat"],
-    },
-    {
-        "name": "maro-telegram",
-        "label": "com.maro.telegram",
-        "description": "Maro Orchestration — Optional Telegram Listener",
-        "exec_cmd": f"{_PYTHON} {_SRC_DIR}/telegram_listener.py",
-        "exec_args": [_PYTHON, str(_SRC_DIR / "telegram_listener.py")],
-    },
-    {
-        "name": "maro-inspector",
-        "label": "com.maro.inspector",
-        "description": "Maro Orchestration — Optional Inspector Loop",
-        "exec_cmd": f"{_PYTHON} {_SRC_DIR}/inspector.py --loop",
-        "exec_args": [_PYTHON, str(_SRC_DIR / "inspector.py"), "--loop"],
-    },
-]
-
-
-def write_service_files(workspace: Optional[Path] = None) -> list[Path]:
-    """Write service files appropriate for the current OS. Returns list of written paths."""
+    Maro never installs its own daemon or timer. `maro heartbeat` fires
+    exactly one beat (health check + tiered recovery) and exits — wire it to
+    whatever already wakes up on your host.
+    """
     ws = workspace or workspace_root()
-    is_linux = platform.system() == "Linux"
-    written: list[Path] = []
+    return f"""\
+Supervision — Maro is an app, not a daemon. It installs no systemd unit,
+launchd agent, or cron entry. If you want a recurring heartbeat, hook your
+host's existing scheduler to the one-shot entrypoint:
 
-    if is_linux:
-        out_dir = deploy_dir() / "systemd"
-        out_dir.mkdir(parents=True, exist_ok=True)
-        for svc in _SERVICES:
-            content = _systemd_service(
-                name=svc["name"],
-                description=svc["description"],
-                exec_cmd=svc["exec_cmd"],
-                workspace=ws,
-            )
-            path = out_dir / f"{svc['name']}.service"
-            path.write_text(content)
-            written.append(path)
-    else:
-        # macOS launchd
-        out_dir = deploy_dir() / "launchd"
-        out_dir.mkdir(parents=True, exist_ok=True)
-        for svc in _SERVICES:
-            content = _launchd_plist(
-                label=svc["label"],
-                description=svc["description"],
-                exec_args=svc["exec_args"],
-                workspace=ws,
-            )
-            path = out_dir / f"{svc['label']}.plist"
-            path.write_text(content)
-            written.append(path)
+    maro heartbeat        # fires exactly one beat, then exits
+                          # (flags: --dry-run, --no-escalate)
 
-    return written
+Example hooks (pick one; both call the same entrypoint):
+
+  OpenClaw substrate — deliver on its next scheduled wake:
+    openclaw system event --mode next-heartbeat --text "Run: maro heartbeat"
+
+  Plain cron — every 30 minutes:
+    */30 * * * * maro heartbeat >> {ws}/logs/heartbeat.log 2>&1
+
+Manual CLI / mission runs never require a heartbeat. Not pip-installed?
+Substitute: cd <repo> && PYTHONPATH=src {_PYTHON} -m cli heartbeat
+"""
+
+
+def print_scheduler_instructions(workspace: Optional[Path] = None) -> None:
+    print(scheduler_hook_instructions(workspace))
 
 
 # ---------------------------------------------------------------------------
@@ -277,19 +202,6 @@ def run_smoke_test() -> bool:
 # Status
 # ---------------------------------------------------------------------------
 
-def _service_status(name: str) -> str:
-    if platform.system() != "Linux":
-        return "unknown (non-Linux)"
-    try:
-        r = subprocess.run(
-            ["systemctl", "is-active", name],
-            capture_output=True, text=True, timeout=5,
-        )
-        return r.stdout.strip() or "inactive"
-    except Exception:
-        return "unknown"
-
-
 def show_status() -> None:
     ws = workspace_root()
     print(f"Workspace:  {ws}")
@@ -299,10 +211,7 @@ def show_status() -> None:
             exists = (ws / sub).exists()
             print(f"  {sub}/: {'ok' if exists else 'MISSING'}")
     print()
-    print("Services:")
-    for svc in _SERVICES:
-        status = _service_status(svc["name"])
-        print(f"  {svc['name']}: {status}")
+    print("Supervision: none installed by Maro (by design — see `maro-bootstrap services`).")
 
 
 # ---------------------------------------------------------------------------
@@ -331,33 +240,14 @@ def install(run_smoke: bool = True) -> None:
         print(f"    could not write user config ({exc}) — continuing without it")
     print("  Done.")
 
-    print("  Writing service files...")
-    written = write_service_files(ws)
-    for path in written:
-        print(f"    {path}")
-    print("  Done.")
-
     if run_smoke:
         print("  Running smoke test...")
         run_smoke_test()
 
     print()
     print("Installation complete.")
-    if platform.system() == "Linux":
-        print("  Optional always-on services:")
-        print("    Manual CLI / mission runs do not require these services.")
-        print("    Enable only the ones you intentionally want.")
-        for svc in _SERVICES:
-            service_path = deploy_dir() / "systemd" / f"{svc['name']}.service"
-            print(f"    sudo cp {service_path} /etc/systemd/system/")
-            print(f"    # optional: sudo systemctl enable --now {svc['name']}")
-    else:
-        print("  Optional launchd agents:")
-        print("    Manual CLI / mission runs do not require these agents.")
-        for svc in _SERVICES:
-            plist_path = deploy_dir() / "launchd" / f"{svc['label']}.plist"
-            print(f"    cp {plist_path} ~/Library/LaunchAgents/")
-            print(f"    # optional: launchctl load ~/Library/LaunchAgents/{svc['label']}.plist")
+    print()
+    print_scheduler_instructions(ws)
 
 
 # ---------------------------------------------------------------------------
@@ -372,10 +262,10 @@ def main(argv: list[str] | None = None) -> None:
     )
     sub = parser.add_subparsers(dest="cmd")
 
-    sub.add_parser("install", help="Workspace install: dirs + optional service templates + smoke test")
+    sub.add_parser("install", help="Workspace install: dirs + scheduler instructions + smoke test")
     sub.add_parser("dirs", help="Create workspace directories only")
-    sub.add_parser("services", help="Write optional service files only")
-    sub.add_parser("status", help="Show workspace and service status")
+    sub.add_parser("services", help="Print host-scheduler hook instructions (Maro installs no unit files)")
+    sub.add_parser("status", help="Show workspace status")
     p_smoke = sub.add_parser("smoke", help="Run smoke test (live NOW-lane request; needs a working LLM backend)")
     p_smoke  # noqa: B018
 
@@ -387,9 +277,7 @@ def main(argv: list[str] | None = None) -> None:
         ws = create_workspace_dirs()
         print(f"Workspace dirs created at {ws}")
     elif args.cmd == "services":
-        written = write_service_files()
-        for p in written:
-            print(f"Wrote: {p}")
+        print_scheduler_instructions()
     elif args.cmd == "status":
         show_status()
     elif args.cmd == "smoke":

@@ -129,6 +129,9 @@ def _lesson_to_memory_item(lesson: dict, kind: str = "lesson") -> MemoryItem:
             "confidence": lesson.get("confidence", 0.0),
             "sessions_validated": lesson.get("sessions_validated", 0),
             "lesson_type": lesson.get("lesson_type", ""),
+            # Verdict tri-state passthrough (SF-2): absent/None = unjudged.
+            "goal_achieved": lesson.get("goal_achieved"),
+            "goal_verdict_source": lesson.get("goal_verdict_source", ""),
         },
         meta={
             "tier": lesson.get("tier", ""),

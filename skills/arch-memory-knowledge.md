@@ -42,13 +42,24 @@ Stage 5: Rule      → Hardcoded path (zero inference cost)
 
 ```
 Loop completes
-  → reflect_and_record(goal, status, summary)
+  → reflect_and_record(goal, status, summary, loop_id=...)
     → LLM extracts 1-3 typed lessons (execution/planning/recovery/verification/cost)
     → record_outcome() → outcomes.jsonl + daily .md log
     → For each lesson: record_tiered_lesson() → medium/lessons.jsonl
       (confidence 0.5-0.7 depending on k_samples)
     → Captain's log: LESSON_RECORDED event
+Closure judges the goal (handle.py, AFTER finalization)
+  → annotate_outcome_verdict(loop_id, goal_achieved, goal_verdict_source)
+    → stamps the verdict tri-state onto the already-written outcomes row
+      (SF-2, done ≠ achieved: True/False when judged, ABSENT key = unjudged;
+       NOW lane records its self-verdict directly at record_outcome time)
 ```
+
+**Verdict tri-state convention (SF-2 / data-02):** `goal_achieved` on an
+outcomes/lessons row is True/False only when a verdict exists; an unjudged
+row OMITS the key (never null, never False). Consumers must prefer the
+verdict when present and treat absence as unjudged — not success, not
+failure. Rows before 2026-07-09 are all unjudged (historical, no backfill).
 
 ## Read Flow (before/during runs)
 

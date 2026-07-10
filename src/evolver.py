@@ -121,17 +121,33 @@ def _build_outcomes_summary(outcomes: List[Any]) -> str:
 
     stuck = [o for o in outcomes if o.status == "stuck"]
     done = [o for o in outcomes if o.status == "done"]
+    # Verdict tri-state (SF-2): "done" only says the loop finished. Prefer the
+    # judged goal verdict when present; absent = unjudged (neither success nor
+    # failure). A done-but-goal-NOT-achieved run is failure signal for the
+    # proposer, not success.
+    achieved = [o for o in done if getattr(o, "goal_achieved", None) is True]
+    goal_failed = [o for o in done if getattr(o, "goal_achieved", None) is False]
+    unjudged_done = len(done) - len(achieved) - len(goal_failed)
 
     lines = [
-        f"Total outcomes: {len(outcomes)} ({len(done)} done, {len(stuck)} stuck)",
+        f"Total outcomes: {len(outcomes)} ({len(done)} done "
+        f"[{len(achieved)} verified achieved, {len(goal_failed)} goal-NOT-achieved, "
+        f"{unjudged_done} unjudged], {len(stuck)} stuck)",
         "",
         "Recent outcomes:",
     ]
     for o in outcomes[:20]:
+        _ga = getattr(o, "goal_achieved", None)
+        _verdict_tag = "" if _ga is None else (" [goal achieved]" if _ga else " [goal NOT achieved]")
         lines.append(
-            f"  [{o.status}] [{o.task_type}] {o.goal[:60]}"
+            f"  [{o.status}]{_verdict_tag} [{o.task_type}] {o.goal[:60]}"
             + (f" — {o.summary[:80]}" if o.summary else "")
         )
+
+    if goal_failed:
+        lines.append("\nCompleted-but-goal-NOT-achieved summaries (treat as failures):")
+        for o in goal_failed[:10]:
+            lines.append(f"  - {o.summary[:120]}")
 
     if stuck:
         lines.append("\nStuck outcome summaries:")
@@ -161,13 +177,18 @@ def _build_outcomes_summary(outcomes: List[Any]) -> str:
     return "\n".join(lines)
 
 
-def _llm_analyze(outcomes: List[Any], *, dry_run: bool = False) -> tuple[List[str], List[dict]]:
-    """Ask LLM to identify patterns and suggest improvements. Returns (patterns, raw_suggestions)."""
+def _llm_analyze(outcomes: List[Any], *, dry_run: bool = False, adapter=None) -> tuple[List[str], List[dict]]:
+    """Ask LLM to identify patterns and suggest improvements. Returns (patterns, raw_suggestions).
+
+    adapter: reuse the caller's LLMAdapter (e.g. the run's adapter when the
+    meta-cycle fires from run finalization); falls back to building one.
+    """
     if dry_run or not outcomes:
         return [], []
 
     try:
-        adapter = build_adapter(model=MODEL_MID)
+        if adapter is None:
+            adapter = build_adapter(model=MODEL_MID)
         summary = _build_outcomes_summary(outcomes)
 
         # Captain's log context: recent learning-system actions for the evolver
@@ -334,6 +355,7 @@ def run_evolver(
     dry_run: bool = False,
     verbose: bool = True,
     notify: bool = False,
+    adapter=None,
     scan_signals: bool = True,
     scan_calibration: bool = True,
     scan_costs: bool = True,
@@ -351,6 +373,9 @@ def run_evolver(
         dry_run: Analyze without writing suggestions.
         verbose: Print progress to stderr.
         notify: Send Telegram summary if suggestions were generated.
+        adapter: Optional LLMAdapter to reuse for the analysis call (threaded
+            through from run finalization's cadence trigger so the meta-cycle
+            rides the run's adapter instead of constructing a fresh one).
 
     Returns:
         EvolverReport with suggestions and failure patterns.
@@ -383,7 +408,7 @@ def run_evolver(
         print(f"[evolver] analyzing {len(outcomes)} outcomes...", file=sys.stderr)
 
     # LLM analysis
-    patterns, raw_suggestions = _llm_analyze(outcomes, dry_run=dry_run)
+    patterns, raw_suggestions = _llm_analyze(outcomes, dry_run=dry_run, adapter=adapter)
 
     # Build Suggestion objects
     suggestions: List[Suggestion] = []

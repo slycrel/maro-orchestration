@@ -50,6 +50,22 @@ _STATUS_WEIGHTS: Dict[str, float] = {
     "error": 0.0,
 }
 
+
+def _outcome_weight(outcome: Any) -> float:
+    """Fitness weight for an outcome, verdict-preferred (SF-2).
+
+    A judged goal verdict overrides process status: goal_achieved=True → 1.0,
+    goal_achieved=False → 0.0 (done ≠ achieved — a completed run that didn't
+    deliver is failure evidence). Unjudged (absent) falls back to the status
+    weight — absence means "not judged", not "failed".
+    """
+    ga = getattr(outcome, "goal_achieved", None)
+    if ga is True:
+        return 1.0
+    if ga is False:
+        return 0.0
+    return _STATUS_WEIGHTS.get(outcome.status, 0.5)
+
 # Stop words for TF-IDF tokenization
 _STOP = {
     "the", "a", "an", "and", "or", "for", "to", "in", "of", "is", "it",
@@ -235,7 +251,7 @@ def evaluate_strategy(
     for outcome, sim in zip(outcomes, similarities):
         if sim < SIMILARITY_THRESHOLD:
             continue
-        status_wt = _STATUS_WEIGHTS.get(outcome.status, 0.5)
+        status_wt = _outcome_weight(outcome)
         weight = sim * status_wt
         scored.append((sim, outcome, weight))
 
@@ -256,12 +272,20 @@ def evaluate_strategy(
             notes=[f"no outcomes above similarity threshold {SIMILARITY_THRESHOLD:.2f}"],
         )
 
-    # Compute similarity-weighted fitness
+    # Compute similarity-weighted fitness (verdict-preferred weights)
     total_sim = sum(s for s, _, _ in scored)
-    fitness_score = sum(s * _STATUS_WEIGHTS.get(o.status, 0.5) for s, o, _ in scored) / max(total_sim, 1e-9)
+    fitness_score = sum(s * _outcome_weight(o) for s, o, _ in scored) / max(total_sim, 1e-9)
 
-    done_count = sum(1 for _, o, _ in scored if o.status == "done")
-    stuck_count = sum(1 for _, o, _ in scored if o.status in ("stuck", "error"))
+    # Counts stay status-based (descriptive), but a judged goal-NOT-achieved
+    # run counts as a failure, not a success (done ≠ achieved).
+    done_count = sum(
+        1 for _, o, _ in scored
+        if o.status == "done" and getattr(o, "goal_achieved", None) is not False
+    )
+    stuck_count = sum(
+        1 for _, o, _ in scored
+        if o.status in ("stuck", "error") or getattr(o, "goal_achieved", None) is False
+    )
 
     # Confidence: grows with number of similar outcomes, saturates at MIN_OUTCOMES_FOR_CONFIDENCE
     confidence_raw = min(above_threshold / MIN_OUTCOMES_FOR_CONFIDENCE, 1.0)

@@ -65,7 +65,7 @@ COST_PER_M_OUTPUT = 15.00  # $15.00 per 1M output tokens (Sonnet 4.6)
 class GoalMetrics:
     task_type: str
     total_runs: int
-    success_rate: float          # 0.0 - 1.0
+    success_rate: float          # 0.0 - 1.0 — COMPLETION rate (status=="done"), not goal achievement
     avg_elapsed_ms: float
     avg_tokens_in: float
     avg_tokens_out: float
@@ -85,12 +85,19 @@ class ModelMetrics:
 class SystemMetrics:
     computed_at: str
     total_goals: int
-    overall_success_rate: float
+    overall_success_rate: float                    # COMPLETION rate (status=="done") — not goal achievement
     by_task_type: Dict[str, GoalMetrics]
     most_expensive_goals: List[Dict[str, Any]]   # top 5 by cost
     slowest_goals: List[Dict[str, Any]]           # top 5 by elapsed_ms
     failure_patterns: List[str]                    # from identify_expensive_patterns
     by_model: Dict[str, "ModelMetrics"] = field(default_factory=dict)
+    # Goal-verdict tri-state (SF-2, done ≠ achieved): judged True / judged
+    # False / unjudged. Unjudged rows are NOT successes — goal_achieved_rate
+    # is achieved/judged only, None when nothing in the window was judged.
+    achieved_count: int = 0
+    not_achieved_count: int = 0
+    unjudged_count: int = 0
+    goal_achieved_rate: Optional[float] = None
 
 
 # ---------------------------------------------------------------------------
@@ -447,10 +454,19 @@ def compute_metrics(outcomes: List[Outcome]) -> SystemMetrics:
             estimated_cost_usd=total_cost,
         )
 
-    # Overall success rate
+    # Overall success rate — NOTE: this is a COMPLETION rate (loop finished).
+    # Done ≠ achieved (SF-2): the judged tri-state below is the honest
+    # success measure; unjudged rows are neither successes nor failures.
     total_goals = len(outcomes)
     total_done = sum(1 for o in outcomes if o.status == "done")
     overall_success_rate = total_done / total_goals if total_goals > 0 else 0.0
+
+    # Goal-verdict tri-state counts
+    achieved_count = sum(1 for o in outcomes if getattr(o, "goal_achieved", None) is True)
+    not_achieved_count = sum(1 for o in outcomes if getattr(o, "goal_achieved", None) is False)
+    unjudged_count = total_goals - achieved_count - not_achieved_count
+    judged = achieved_count + not_achieved_count
+    goal_achieved_rate = (achieved_count / judged) if judged > 0 else None
 
     # Most expensive goals (top 5)
     goals_with_cost = [
@@ -502,6 +518,10 @@ def compute_metrics(outcomes: List[Outcome]) -> SystemMetrics:
         slowest_goals=slowest,
         failure_patterns=failure_patterns,
         by_model=by_model,
+        achieved_count=achieved_count,
+        not_achieved_count=not_achieved_count,
+        unjudged_count=unjudged_count,
+        goal_achieved_rate=goal_achieved_rate,
     )
 
 

@@ -1194,7 +1194,7 @@ def test_run_evolver_auto_applies_high_confidence(tmp_path, monkeypatch):
 
     monkeypatch.setattr("evolver.apply_suggestion", fake_apply)
     monkeypatch.setattr("evolver.load_outcomes", lambda limit=50: [MagicMock()] * 10)
-    monkeypatch.setattr("evolver._llm_analyze", lambda outcomes, dry_run=False: (
+    monkeypatch.setattr("evolver._llm_analyze", lambda outcomes, **kw: (
         ["pattern1"],
         [
             {"category": "prompt_tweak", "target": "research", "suggestion": "be concise",
@@ -1318,7 +1318,7 @@ class TestRunEvolverSignalScan:
     def test_signals_become_sub_mission_suggestions(self, monkeypatch, tmp_path):
         """run_evolver converts business signals into sub_mission Suggestion entries."""
         monkeypatch.setattr("evolver.load_outcomes", lambda limit=50: [MagicMock(status="done")] * 5)
-        monkeypatch.setattr("evolver._llm_analyze", lambda outcomes, dry_run=False: ([], []))
+        monkeypatch.setattr("evolver._llm_analyze", lambda outcomes, **kw: ([], []))
         monkeypatch.setattr("evolver._save_suggestions", lambda s: None)
 
         fake_signal = BusinessSignal(
@@ -1341,7 +1341,7 @@ class TestRunEvolverSignalScan:
     def test_scan_signals_false_skips_scan(self, monkeypatch):
         scan_called = []
         monkeypatch.setattr("evolver.load_outcomes", lambda limit=50: [MagicMock(status="done")] * 5)
-        monkeypatch.setattr("evolver._llm_analyze", lambda outcomes, dry_run=False: ([], []))
+        monkeypatch.setattr("evolver._llm_analyze", lambda outcomes, **kw: ([], []))
         monkeypatch.setattr("evolver._save_suggestions", lambda s: None)
         monkeypatch.setattr("evolver.scan_outcomes_for_signals",
                             lambda outcomes, dry_run=False: scan_called.append(True) or [])
@@ -1538,7 +1538,7 @@ class TestScanCalibrationLog:
     def test_run_evolver_wires_calibration_scan(self, monkeypatch, tmp_path):
         """scan_calibration=True causes calibration suggestions to appear in report."""
         monkeypatch.setattr("evolver.load_outcomes", lambda limit=50: [MagicMock(status="done")] * 5)
-        monkeypatch.setattr("evolver._llm_analyze", lambda outcomes, dry_run=False: ([], []))
+        monkeypatch.setattr("evolver._llm_analyze", lambda outcomes, **kw: ([], []))
         monkeypatch.setattr("evolver._save_suggestions", lambda s: None)
         monkeypatch.setattr("evolver.scan_outcomes_for_signals", lambda outcomes, dry_run=False: [])
         monkeypatch.setattr("evolver.run_graduation", lambda verbose=False: 0, raising=False)
@@ -1561,7 +1561,7 @@ class TestScanCalibrationLog:
     def test_run_evolver_scan_calibration_false_skips(self, monkeypatch):
         scan_called = []
         monkeypatch.setattr("evolver.load_outcomes", lambda limit=50: [MagicMock(status="done")] * 5)
-        monkeypatch.setattr("evolver._llm_analyze", lambda outcomes, dry_run=False: ([], []))
+        monkeypatch.setattr("evolver._llm_analyze", lambda outcomes, **kw: ([], []))
         monkeypatch.setattr("evolver._save_suggestions", lambda s: None)
         monkeypatch.setattr("evolver.scan_outcomes_for_signals", lambda outcomes, dry_run=False: [])
         monkeypatch.setattr("evolver.scan_calibration_log",
@@ -1738,7 +1738,7 @@ class TestScanStepCosts:
                 for i in range(5)
             ]
         monkeypatch.setattr("evolver.load_outcomes", _fake_outcomes)
-        monkeypatch.setattr("evolver._llm_analyze", lambda outcomes, dry_run=False: ([], []))
+        monkeypatch.setattr("evolver._llm_analyze", lambda outcomes, **kw: ([], []))
         monkeypatch.setattr("evolver.scan_outcomes_for_signals", lambda *a, **kw: [])
         monkeypatch.setattr("evolver.scan_calibration_log", lambda *a, **kw: [])
         monkeypatch.setattr("evolver_store._suggestions_path", lambda: tmp_path / "suggestions.jsonl")
@@ -1765,7 +1765,7 @@ class TestScanStepCosts:
                 for i in range(5)
             ]
         monkeypatch.setattr("evolver.load_outcomes", _fake_outcomes)
-        monkeypatch.setattr("evolver._llm_analyze", lambda outcomes, dry_run=False: ([], []))
+        monkeypatch.setattr("evolver._llm_analyze", lambda outcomes, **kw: ([], []))
         monkeypatch.setattr("evolver.scan_outcomes_for_signals", lambda *a, **kw: [])
         monkeypatch.setattr("evolver.scan_calibration_log", lambda *a, **kw: [])
 
@@ -2707,3 +2707,57 @@ class TestRewriteSkillEmitsEvent:
 
         assert rewrite_skill(self._make_skill(), adapter=_JunkAdapter(), verbose=False) is None
         assert "SKILL_REWRITE" not in events
+
+
+# ---------------------------------------------------------------------------
+# Run-cadence counter (evolver meta-cycle rides run finalizations — no timer)
+# ---------------------------------------------------------------------------
+
+class TestEvolverCadenceTick:
+    """evolver_store.evolver_cadence_tick — the entire scheduling mechanism
+    for the meta-cycle (2026-07-09 supervision decision: app, not systemic)."""
+
+    def _tick(self, tmp_path, monkeypatch, cadence):
+        import evolver_store
+        monkeypatch.setattr(
+            evolver_store, "_cadence_path", lambda: tmp_path / "evolver_cadence.json"
+        )
+        return evolver_store.evolver_cadence_tick(cadence)
+
+    def _count(self, tmp_path):
+        return json.loads(
+            (tmp_path / "evolver_cadence.json").read_text()
+        )["runs_since_evolve"]
+
+    def test_cadence_zero_never_fires(self, tmp_path, monkeypatch):
+        for _ in range(5):
+            assert self._tick(tmp_path, monkeypatch, 0) is False
+        # counter still accumulates so a later flip-on has real history
+        assert self._count(tmp_path) == 5
+
+    def test_counter_increments(self, tmp_path, monkeypatch):
+        self._tick(tmp_path, monkeypatch, 10)
+        assert self._count(tmp_path) == 1
+        self._tick(tmp_path, monkeypatch, 10)
+        assert self._count(tmp_path) == 2
+
+    def test_fires_at_n_and_resets(self, tmp_path, monkeypatch):
+        assert self._tick(tmp_path, monkeypatch, 3) is False
+        assert self._tick(tmp_path, monkeypatch, 3) is False
+        assert self._tick(tmp_path, monkeypatch, 3) is True
+        assert self._count(tmp_path) == 0
+        # next cycle starts clean
+        assert self._tick(tmp_path, monkeypatch, 3) is False
+        assert self._count(tmp_path) == 1
+
+    def test_fires_immediately_when_counter_already_past_n(self, tmp_path, monkeypatch):
+        # accumulated while off, then Jeremy flips cadence on
+        for _ in range(4):
+            self._tick(tmp_path, monkeypatch, 0)
+        assert self._tick(tmp_path, monkeypatch, 3) is True
+        assert self._count(tmp_path) == 0
+
+    def test_corrupt_state_file_resets_not_raises(self, tmp_path, monkeypatch):
+        (tmp_path / "evolver_cadence.json").write_text("not json{{{")
+        assert self._tick(tmp_path, monkeypatch, 3) is False
+        assert self._count(tmp_path) == 1

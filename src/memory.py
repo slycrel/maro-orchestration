@@ -58,7 +58,7 @@ from memory_ledger import (  # noqa: F401, E402
     _compressed_outcomes_path, _text_similarity,
     append_task_ledger, load_task_ledger,
     record_step_trace, load_step_traces,
-    record_outcome, _append_daily_log,
+    record_outcome, annotate_outcome_verdict, _append_daily_log,
     _INJECTION_PATTERNS, _lesson_looks_adversarial,
     _store_lesson, _rewrite_lessons_file,
     load_lessons, load_outcomes,
@@ -126,8 +126,11 @@ def bootstrap_context(*, max_outcomes: int = 5, max_lessons: int = 10) -> str:
     if outcomes:
         parts.append("## Recent Work")
         for o in outcomes[:max_outcomes]:
-            icon = "✓" if o.status == "done" else "✗"
-            parts.append(f"- {icon} {o.goal[:60]} ({o.task_type}, {o.recorded_at[:10]}): {o.summary[:80]}")
+            # Verdict-preferred (SF-2): judged goal-not-achieved renders as a
+            # failure even when the loop finished.
+            icon = "✓" if (o.status == "done" and o.goal_achieved is not False) else "✗"
+            verdict_note = " [goal NOT achieved]" if o.goal_achieved is False else ""
+            parts.append(f"- {icon} {o.goal[:60]} ({o.task_type}, {o.recorded_at[:10]}){verdict_note}: {o.summary[:80]}")
 
     # Key lessons (high-confidence, recent)
     lessons = load_lessons(limit=max_lessons)
@@ -162,7 +165,9 @@ def inject_lessons_for_task(task_type: str, goal: str, max_lessons: int = 3) -> 
 
     lines = ["## Lessons from Prior Runs (apply these)"]
     for l in lessons:
-        icon = "✓" if l.outcome == "done" else "✗"
+        # Verdict-preferred (SF-2): a lesson from a run judged goal-not-achieved
+        # is a failure lesson even though the run's process status was "done".
+        icon = "✗" if getattr(l, "goal_achieved", None) is False else ("✓" if l.outcome == "done" else "✗")
         lines.append(f"- {icon} {l.lesson}")
     result = "\n".join(lines)
     if len(result) > _MAX_LESSON_INJECT_CHARS:
@@ -205,6 +210,7 @@ def extract_lessons_via_llm(
     adapter=None,
     dry_run: bool = False,
     return_typed: bool = False,
+    goal_achieved: Optional[bool] = None,
 ) -> "List":
     """Use LLM to extract generalizable lessons from a completed run.
 
@@ -220,8 +226,9 @@ def extract_lessons_via_llm(
     Returns list of lesson strings (or typed tuples). Falls back to empty list on failure.
     """
     if dry_run or adapter is None:
-        # Generate a dry-run lesson
-        icon = "succeeded" if status == "done" else "failed"
+        # Generate a dry-run lesson. Verdict-preferred framing (SF-2): a run
+        # judged goal-not-achieved is a failure regardless of process status.
+        icon = "succeeded" if (status == "done" and goal_achieved is not False) else "failed"
         lesson = f"[dry-run lesson] {task_type} task {icon}: {goal[:40]}"
         return [(lesson, "execution")] if return_typed else [lesson]
 
@@ -258,10 +265,18 @@ def extract_lessons_via_llm(
 
     system_prompt = _REFLECT_SYSTEM + seed_block + atif_block
 
+    # Verdict-preferred framing (SF-2): tell the extractor when a completed
+    # run was judged goal-not-achieved so lessons come out failure-flavored
+    # (recovery/verification) instead of celebrating a run that didn't deliver.
+    outcome_desc = status
+    if goal_achieved is False:
+        outcome_desc += " — but the goal was judged NOT achieved (treat this as a failure)"
+    elif goal_achieved is True:
+        outcome_desc += " — goal verified achieved"
     user_msg = (
         f"Task type: {task_type}\n"
         f"Goal: {goal}\n"
-        f"Outcome: {status}\n"
+        f"Outcome: {outcome_desc}\n"
         f"Summary: {result_summary[:500]}\n\n"
         "Extract 1-3 generalizable lessons as typed JSON objects."
     )
@@ -361,6 +376,9 @@ def reflect_and_record(
     dry_run: bool = False,
     failure_chain: Optional[List[str]] = None,
     recovery_steps: int = 0,
+    goal_achieved: Optional[bool] = None,
+    goal_verdict_source: str = "",
+    loop_id: str = "",
 ) -> Outcome:
     """Reflect on a completed run and record the outcome + lessons.
 
@@ -371,6 +389,13 @@ def reflect_and_record(
                        (e.g. ["step 3 timed out", "diagnosed rate-limit", "retried after 60s"]).
                        Turns every retry into a training signal stored alongside the outcome.
         recovery_steps: How many recovery actions were required.
+        goal_achieved: Tri-state goal verdict when already known at reflection
+                       time (True/False; None = unjudged → absent on the row).
+                       Agenda-lane closure runs after finalization, so those
+                       verdicts land later via annotate_outcome_verdict(loop_id).
+        goal_verdict_source: Provenance of the verdict when known.
+        loop_id: This run's loop id — stored on the outcome row so the
+                       post-closure verdict annotation can find it.
     """
     log.info("reflect_and_record goal=%r status=%s tokens=%d elapsed=%dms",
              goal[:60], status, tokens_in + tokens_out, elapsed_ms)
@@ -383,6 +408,7 @@ def reflect_and_record(
         adapter=adapter,
         dry_run=dry_run,
         return_typed=True,
+        goal_achieved=goal_achieved,
     )
     lessons = [text for text, _ in typed_lessons]
     log.debug("extracted %d lessons from reflection", len(lessons))
@@ -417,6 +443,9 @@ def reflect_and_record(
         model=model,
         failure_chain=failure_chain or [],
         recovery_steps=recovery_steps,
+        goal_achieved=goal_achieved,
+        goal_verdict_source=goal_verdict_source,
+        loop_id=loop_id,
     )
 
     # K4: write path — outcomes update knowledge layer (non-blocking)

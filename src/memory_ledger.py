@@ -58,19 +58,30 @@ class Outcome:
     # Agent0 steal: failure-chain recording — turns every retry into a training signal
     failure_chain: List[str] = field(default_factory=list)   # [failure_desc, diagnosis, recovery_action, ...]
     recovery_steps: int = 0  # how many retries/recoveries were needed
+    # Goal-verdict tri-state (SF-2 / data-02, done ≠ achieved): True/False when
+    # a verdict exists, None = unjudged. Serialized as an ABSENT key when None
+    # (never null) — absence means "not judged", not "failed".
+    goal_achieved: Optional[bool] = None
+    goal_verdict_source: str = ""   # "closure" | "closure_unverifiable" | "provenance" | "now_self_verdict" | ""
+    goal_verdict_confidence: Optional[float] = None  # closure judge confidence, when judged
+    loop_id: str = ""               # join key to runs/*/metadata.json for post-closure annotation
 
 
 @dataclass
 class Lesson:
     lesson_id: str
     task_type: str          # what kind of task this lesson applies to
-    outcome: str            # "done" | "stuck" — what happened
+    outcome: str            # "done" | "stuck" — what happened (process status)
     lesson: str             # the insight
     source_goal: str        # which goal produced this lesson
     confidence: float       # 0.0-1.0 (starts at 0.7, adjusts with reinforcement)
     times_applied: int = 0
     times_reinforced: int = 0
     recorded_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    # Goal-verdict tri-state, same convention as Outcome: absent key = unjudged.
+    # Only stamped when the verdict is already known at write time.
+    goal_achieved: Optional[bool] = None
+    goal_verdict_source: str = ""
 
 
 @dataclass
@@ -306,6 +317,23 @@ def _text_similarity(a: str, b: str) -> float:
 # Outcome recording
 # ---------------------------------------------------------------------------
 
+def _verdict_row(obj: Any) -> Dict[str, Any]:
+    """asdict() with tri-state discipline: an unjudged verdict must serialize
+    as an ABSENT goal_achieved key (never null), and empty verdict/join fields
+    stay off the row entirely — the 1381 pre-fix rows set the precedent that
+    consumers treat a missing key as "not judged"."""
+    row = asdict(obj)
+    if row.get("goal_achieved") is None:
+        row.pop("goal_achieved", None)
+    if not row.get("goal_verdict_source"):
+        row.pop("goal_verdict_source", None)
+    if row.get("goal_verdict_confidence", 0.0) is None:
+        row.pop("goal_verdict_confidence")
+    if "loop_id" in row and not row["loop_id"]:
+        row.pop("loop_id")
+    return row
+
+
 def record_outcome(
     goal: str,
     status: str,
@@ -320,6 +348,9 @@ def record_outcome(
     model: str = "",
     failure_chain: Optional[List[str]] = None,
     recovery_steps: int = 0,
+    goal_achieved: Optional[bool] = None,
+    goal_verdict_source: str = "",
+    loop_id: str = "",
 ) -> Outcome:
     """Record the outcome of a completed run.
 
@@ -331,6 +362,14 @@ def record_outcome(
                        "diagnosis: rate limit", "recovery: waited 60s and retried"]).
                        Turns retries into training signal for future runs.
         recovery_steps: How many retries or recovery actions were needed.
+        goal_achieved: Tri-state goal verdict (done ≠ achieved): True/False when
+                       a verdict exists at record time, None = unjudged (key is
+                       omitted from the row). Agenda-lane verdicts land after
+                       closure via annotate_outcome_verdict(loop_id, ...).
+        goal_verdict_source: Where the verdict came from ("closure",
+                       "closure_unverifiable", "provenance", "now_self_verdict").
+        loop_id: Loop id for this run, when known — the join key that lets the
+                       post-closure verdict annotation find this row.
     """
     import uuid
     from metrics import estimate_cost
@@ -350,11 +389,14 @@ def record_outcome(
         model=model,
         failure_chain=failure_chain or [],
         recovery_steps=recovery_steps,
+        goal_achieved=goal_achieved,
+        goal_verdict_source=goal_verdict_source,
+        loop_id=loop_id,
     )
 
     # Append to outcomes ledger
     from file_lock import locked_append
-    locked_append(_outcomes_path(), json.dumps(asdict(outcome)))
+    locked_append(_outcomes_path(), json.dumps(_verdict_row(outcome)))
 
     # Append to daily log
     _append_daily_log(outcome)
@@ -367,6 +409,8 @@ def record_outcome(
                 outcome=status,
                 lesson=lesson_text,
                 source_goal=goal,
+                goal_achieved=goal_achieved,
+                goal_verdict_source=goal_verdict_source,
             )
 
     # Update MEMORY.md index
@@ -378,12 +422,19 @@ def record_outcome(
 def _append_daily_log(outcome: Outcome):
     """Append a human-readable entry to today's daily log."""
     path = _daily_path()
-    status_icon = "\u2713" if outcome.status == "done" else "\u2717"
+    # Prefer the goal verdict over process status: done-but-goal-not-achieved
+    # renders as a failure, not a success (SF-2).
+    status_icon = "\u2713" if (outcome.status == "done" and outcome.goal_achieved is not False) else "\u2717"
+    status_str = outcome.status
+    if outcome.goal_achieved is False:
+        status_str += " (goal NOT achieved)"
+    elif outcome.goal_achieved is True:
+        status_str += " (goal achieved)"
     tokens = f"{outcome.tokens_in}in+{outcome.tokens_out}out"
     cost_str = f" (${outcome.cost_usd:.6f})" if outcome.cost_usd else ""
     entry = (
         f"\n## [{outcome.recorded_at[:10]}] {status_icon} {outcome.goal[:80]}\n"
-        f"- **Status**: {outcome.status}\n"
+        f"- **Status**: {status_str}\n"
         f"- **Type**: {outcome.task_type}\n"
         f"- **Summary**: {outcome.summary}\n"
         f"- **Tokens**: {tokens} in {outcome.elapsed_ms}ms{cost_str}\n"
@@ -399,6 +450,74 @@ def _append_daily_log(outcome: Outcome):
     with locked_write(path):
         with open(path, "a", encoding="utf-8") as f:
             f.write(entry)
+
+
+def annotate_outcome_verdict(
+    loop_id: str,
+    *,
+    goal_achieved: Optional[bool],
+    goal_verdict_source: str,
+    goal_verdict_confidence: Optional[float] = None,
+) -> bool:
+    """Stamp a goal verdict onto the already-written outcomes row for loop_id.
+
+    The agenda lane records its outcome at loop finalization, but the closure
+    verdict is judged afterwards (handle.py) — so the verdict has to land on
+    the row post-hoc. Finds the NEWEST row whose loop_id matches and merges
+    the verdict fields in, mirroring run-metadata semantics:
+
+    - goal_achieved True/False sets the key; None (unjudged, e.g. source
+      "closure_unverifiable") leaves any existing goal_achieved untouched —
+      an unverifiable closure must never erase a provenance-guard False.
+    - goal_verdict_source / goal_verdict_confidence are always updated.
+
+    Rewrites outcomes.jsonl under the file lock (locked_rmw — safe against
+    concurrent appends). Returns True when a row was updated.
+    """
+    if not loop_id:
+        return False
+    path = _outcomes_path()
+    if not path.exists():
+        return False
+
+    updated = {"hit": False}
+
+    def _stamp(old: str) -> str:
+        lines = old.splitlines()
+        # Newest matching row wins — a restarted goal appends a fresh row per loop.
+        target_idx = None
+        for i in range(len(lines) - 1, -1, -1):
+            line = lines[i].strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(row, dict) and row.get("loop_id") == loop_id:
+                target_idx = i
+                break
+        if target_idx is None:
+            return old
+        row = json.loads(lines[target_idx])
+        if goal_achieved is not None:
+            row["goal_achieved"] = bool(goal_achieved)
+        row["goal_verdict_source"] = goal_verdict_source
+        if goal_verdict_confidence is not None:
+            row["goal_verdict_confidence"] = float(goal_verdict_confidence)
+        lines[target_idx] = json.dumps(row)
+        updated["hit"] = True
+        return "\n".join(lines) + ("\n" if lines else "")
+
+    from file_lock import locked_rmw
+    try:
+        locked_rmw(path, _stamp)
+    except OSError as exc:
+        log.warning("annotate_outcome_verdict: rewrite failed for loop %s: %s", loop_id, exc)
+        return False
+    if not updated["hit"]:
+        log.debug("annotate_outcome_verdict: no outcomes row with loop_id=%s", loop_id)
+    return updated["hit"]
 
 
 # ---------------------------------------------------------------------------
@@ -424,6 +543,8 @@ def _store_lesson(
     lesson: str,
     source_goal: str,
     confidence: float = 0.7,
+    goal_achieved: Optional[bool] = None,
+    goal_verdict_source: str = "",
 ) -> Lesson:
     """Append a lesson to the lessons ledger, or reinforce existing near-duplicate."""
     import uuid
@@ -464,9 +585,11 @@ def _store_lesson(
         lesson=lesson,
         source_goal=source_goal,
         confidence=confidence,
+        goal_achieved=goal_achieved,
+        goal_verdict_source=goal_verdict_source,
     )
     from file_lock import locked_append
-    locked_append(_lessons_path(), json.dumps(asdict(l)))
+    locked_append(_lessons_path(), json.dumps(_verdict_row(l)))
     return l
 
 
@@ -495,7 +618,7 @@ def _rewrite_lessons_file(task_type: str, updated_lessons: List[Lesson]) -> None
                 d = json.loads(line)
                 lid = d.get("lesson_id", "")
                 if lid in updated_ids:
-                    all_lines.append(json.dumps(asdict(updated_by_id[lid])))
+                    all_lines.append(json.dumps(_verdict_row(updated_by_id[lid])))
                 else:
                     all_lines.append(line)
             except Exception:
@@ -665,7 +788,7 @@ def deduplicate_lessons(*, dry_run: bool = False) -> dict:
 
         stats["after"] = len(kept)
         if not dry_run and stats["after"] < stats["before"]:
-            return "\n".join(json.dumps(asdict(l)) for l in kept) + "\n"
+            return "\n".join(json.dumps(_verdict_row(l)) for l in kept) + "\n"
         return old  # dry-run or nothing removed — leave the file as-is
 
     # Parse + dedup + rewrite all under the file's lock (locked_rmw) so a
@@ -998,8 +1121,11 @@ def load_outcomes_with_context(
     if recent:
         parts.append("## Recent Outcomes")
         for o in recent:
-            icon = "\u2713" if o.status == "done" else "\u2717"
-            parts.append(f"- {icon} {o.goal[:60]} ({o.task_type}, {o.recorded_at[:10]}): {o.summary[:80]}")
+            # Verdict-preferred (SF-2): judged goal-not-achieved renders as a
+            # failure even though the loop finished.
+            icon = "\u2713" if (o.status == "done" and o.goal_achieved is not False) else "\u2717"
+            verdict_note = " [goal NOT achieved]" if o.goal_achieved is False else ""
+            parts.append(f"- {icon} {o.goal[:60]} ({o.task_type}, {o.recorded_at[:10]}){verdict_note}: {o.summary[:80]}")
 
     context_text = "\n".join(parts) if parts else ""
 
@@ -1023,6 +1149,13 @@ def _update_memory_index():
         outcomes = load_outcomes(limit=10)
         done_count = sum(1 for o in outcomes if o.status == "done")
         stuck_count = sum(1 for o in outcomes if o.status == "stuck")
+        # Verdict tri-state (SF-2): done ≠ achieved — surface judged verdicts.
+        achieved_count = sum(1 for o in outcomes if o.goal_achieved is True)
+        not_achieved_count = sum(1 for o in outcomes if o.goal_achieved is False)
+        verdict_line = (
+            f"- Goal verdicts: {achieved_count} achieved | {not_achieved_count} NOT achieved "
+            f"| {len(outcomes) - achieved_count - not_achieved_count} unjudged"
+        )
         total_tokens = sum(o.tokens_in + o.tokens_out for o in outcomes)
 
         lines = [
@@ -1032,6 +1165,7 @@ def _update_memory_index():
             "",
             "## Stats (last 10 runs)",
             f"- Done: {done_count} | Stuck: {stuck_count}",
+            verdict_line,
             f"- Total tokens: {total_tokens:,}",
             "",
             "## Daily Logs",

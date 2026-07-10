@@ -1,14 +1,14 @@
 """Tests for Phase 21: Production Readiness — Bootstrap + Decoupling + macOS.
 
 Covers: config.py path resolution, bootstrap workspace creation,
-service file generation (systemd + launchd), smoke test wiring.
+host-scheduler hook instructions (bootstrap generates NO unit files —
+2026-07-09 supervision decision), smoke test wiring.
 """
 
 from __future__ import annotations
 
 import json
 import os
-import platform
 import sys
 from pathlib import Path
 from unittest.mock import patch
@@ -187,57 +187,44 @@ def test_create_workspace_dirs_uses_config_default(monkeypatch, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# bootstrap.py — write_service_files
+# bootstrap.py — scheduler hook instructions (no unit generation, by design)
 # ---------------------------------------------------------------------------
 
-def test_write_service_files_linux_creates_systemd(monkeypatch, tmp_path):
-    monkeypatch.setattr(platform, "system", lambda: "Linux")
-    monkeypatch.setattr(bootstrap, "deploy_dir", lambda: tmp_path / "deploy")
-    written = bootstrap.write_service_files(tmp_path / "ws")
-    assert len(written) == len(bootstrap._SERVICES)
-    for path in written:
-        assert path.suffix == ".service"
-        content = path.read_text()
-        assert "ExecStart=" in content
-        assert "MARO_WORKSPACE=" in content
+def test_bootstrap_generates_no_unit_files():
+    """Supervision decision 2026-07-09: Maro never generates/installs its own
+    daemon or scheduler unit. The old generator exec'd `sheriff.py --heartbeat`
+    (a flag that never existed) and would crash-loop — keep it dead."""
+    assert not hasattr(bootstrap, "write_service_files")
+    assert not hasattr(bootstrap, "_SERVICES")
+    assert not hasattr(bootstrap, "_systemd_service")
+    assert not hasattr(bootstrap, "_launchd_plist")
 
 
-def test_write_service_files_macos_creates_launchd(monkeypatch, tmp_path):
-    monkeypatch.setattr(platform, "system", lambda: "Darwin")
-    monkeypatch.setattr(bootstrap, "deploy_dir", lambda: tmp_path / "deploy")
-    written = bootstrap.write_service_files(tmp_path / "ws")
-    assert len(written) == len(bootstrap._SERVICES)
-    for path in written:
-        assert path.suffix == ".plist"
-        content = path.read_text()
-        assert "<plist" in content
-        assert "MARO_WORKSPACE" in content
+def test_scheduler_instructions_point_at_real_entrypoint(tmp_path):
+    text = bootstrap.scheduler_hook_instructions(tmp_path)
+    # The one-shot entrypoint, named exactly
+    assert "maro heartbeat" in text
+    # Both example hook lines: OpenClaw system event + plain cron
+    assert "openclaw system event" in text
+    assert "*/30 * * * *" in text
+    # The broken flag must never come back
+    assert "--heartbeat" not in text
+    assert "sheriff" not in text
+    # Workspace path is injected (cron log line)
+    assert str(tmp_path) in text
 
 
-def test_systemd_service_content(monkeypatch, tmp_path):
-    monkeypatch.setattr(platform, "system", lambda: "Linux")
-    monkeypatch.setattr(bootstrap, "deploy_dir", lambda: tmp_path / "deploy")
-    ws = tmp_path / "ws"
-    written = bootstrap.write_service_files(ws)
-    heartbeat = next(p for p in written if "heartbeat" in str(p))
-    content = heartbeat.read_text()
-    assert "[Unit]" in content
-    assert "[Service]" in content
-    assert "[Install]" in content
-    assert str(ws) in content
+def test_scheduler_instructions_no_unit_vocabulary(tmp_path):
+    """Instructions must not tell the user Maro will install supervision."""
+    text = bootstrap.scheduler_hook_instructions(tmp_path)
+    assert "systemctl enable" not in text
+    assert "launchctl load" not in text
 
 
-def test_launchd_plist_content(monkeypatch, tmp_path):
-    monkeypatch.setattr(platform, "system", lambda: "Darwin")
-    monkeypatch.setattr(bootstrap, "deploy_dir", lambda: tmp_path / "deploy")
-    ws = tmp_path / "ws"
-    written = bootstrap.write_service_files(ws)
-    heartbeat = next(p for p in written if "heartbeat" in str(p))
-    content = heartbeat.read_text()
-    assert "<?xml" in content
-    assert "<key>Label</key>" in content
-    assert "<key>KeepAlive</key>" in content
-    assert str(ws) in content
+def test_print_scheduler_instructions(tmp_path, capsys):
+    bootstrap.print_scheduler_instructions(tmp_path)
+    out = capsys.readouterr().out
+    assert "maro heartbeat" in out
 
 
 # ---------------------------------------------------------------------------
@@ -251,6 +238,7 @@ def test_show_status_runs_without_error(monkeypatch, tmp_path, capsys):
     out = capsys.readouterr().out
     assert str(tmp_path) in out
     assert "memory" in out
+    assert "none installed by Maro" in out
 
 
 # ---------------------------------------------------------------------------
@@ -263,14 +251,3 @@ def test_run_smoke_test_missing_handle(monkeypatch, tmp_path, capsys):
     assert result is False
 
 
-# ---------------------------------------------------------------------------
-# service file workspace injection
-# ---------------------------------------------------------------------------
-
-def test_service_files_inject_correct_workspace(monkeypatch, tmp_path):
-    monkeypatch.setattr(platform, "system", lambda: "Linux")
-    monkeypatch.setattr(bootstrap, "deploy_dir", lambda: tmp_path / "deploy")
-    ws = tmp_path / "my-custom-workspace"
-    written = bootstrap.write_service_files(ws)
-    for path in written:
-        assert str(ws) in path.read_text()

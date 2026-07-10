@@ -909,6 +909,11 @@ def _handle_impl(
         if not dry_run:
             try:
                 from memory import record_outcome as _record_outcome
+                # Verdict tri-state (SF-2): the NOW self-verdict (and the
+                # provenance guard inside it) runs BEFORE this record, so the
+                # outcome row carries the verdict directly. No verdict key on
+                # the outcome dict = unjudged = absent on the row.
+                _now_judged = "goal_achieved" in outcome
                 _record_outcome(
                     goal=message,
                     status=outcome["status"],
@@ -918,6 +923,11 @@ def _handle_impl(
                     tokens_out=outcome["tokens_out"],
                     elapsed_ms=elapsed,
                     model=model or "",
+                    goal_achieved=(bool(outcome["goal_achieved"]) if _now_judged else None),
+                    goal_verdict_source=(
+                        ("provenance" if outcome.get("provenance_missing") else "now_self_verdict")
+                        if _now_judged else ""
+                    ),
                 )
             except Exception:
                 pass  # outcome recording must never block the NOW response
@@ -1667,6 +1677,19 @@ def _handle_impl(
                                 pass
                     except Exception:
                         pass
+                    # Verdict tri-state (SF-2): the outcomes row was already
+                    # written at loop finalization, verdict-less — stamp the
+                    # deterministic provenance verdict onto it so learning
+                    # consumers see the failure, not just run metadata.
+                    try:
+                        from memory import annotate_outcome_verdict as _aov_prov
+                        _aov_prov(
+                            getattr(loop_result, "loop_id", "") or "",
+                            goal_achieved=False,
+                            goal_verdict_source="provenance",
+                        )
+                    except Exception:
+                        pass
 
             # Status honesty (agenda twin of _verify_now_outcome): when the
             # director's own verifier contradicts a declared "done" at high
@@ -1714,12 +1737,12 @@ def _handle_impl(
             # own failures (2026-07-09 dogfood batch: 4/5 known-good runs
             # false-negatived this way). Absence means "not judged".
             if _closure is not None and _closure.checks_run > 0:
+                _judged = getattr(_closure, "judged", True)
                 try:
                     from runs import write_metadata as _wm_verdict
                     from runs import current_run_dir as _crd_verdict
                     _rd_v = _crd_verdict()
                     if _rd_v is not None:
-                        _judged = getattr(_closure, "judged", True)
                         _verdict_extra = {
                             "goal_verdict_confidence": float(_closure.confidence),
                             "goal_verdict_source": (
@@ -1751,6 +1774,24 @@ def _handle_impl(
                             )
                         except Exception:
                             pass
+                except Exception:
+                    pass
+                # Verdict tri-state (SF-2): stamp the closure verdict onto the
+                # outcomes row written at loop finalization, mirroring the run
+                # metadata exactly — goal_achieved only when judged; an
+                # unjudged (closure_unverifiable) verdict records its source
+                # but leaves goal_achieved absent (and never overwrites a
+                # provenance False already stamped above).
+                try:
+                    from memory import annotate_outcome_verdict as _aov_closure
+                    _aov_closure(
+                        getattr(loop_result, "loop_id", "") or "",
+                        goal_achieved=(bool(_closure.complete) if _judged else None),
+                        goal_verdict_source=(
+                            "closure" if _judged else "closure_unverifiable"
+                        ),
+                        goal_verdict_confidence=float(_closure.confidence),
+                    )
                 except Exception:
                     pass
 

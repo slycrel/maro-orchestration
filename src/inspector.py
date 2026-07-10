@@ -558,10 +558,17 @@ def inspect_session(outcome: dict, adapter=None) -> SessionQuality:
     # Assess goal alignment (LLM if available)
     alignment_score = assess_goal_alignment(goal, summary, adapter=adapter)
 
-    # Determine delight signals
+    # Determine delight signals — verdict-preferred (SF-2): goal_achieved
+    # True/False is the judged verdict; None/absent = unjudged. A judged
+    # goal-NOT-achieved run must never count as a success, no matter how
+    # aligned the narrative reads; unjudged keeps the alignment-based
+    # heuristic (weaker signal, not a verified success).
+    achieved = outcome.get("goal_achieved")
     delight_signals: List[str] = []
-    if status == "done" and alignment_score >= _ALIGNMENT_GOOD:
+    if status == "done" and alignment_score >= _ALIGNMENT_GOOD and achieved is not False:
         delight_signals.append("task_completed_successfully")
+    if achieved is True:
+        delight_signals.append("goal_verified_achieved")
 
     # Determine overall_quality
     has_high_friction = any(s.severity == "high" for s in friction_signals)
@@ -571,13 +578,21 @@ def inspect_session(outcome: dict, adapter=None) -> SessionQuality:
         overall_quality = "poor"
     else:
         overall_quality = "fair"
+    # A judged goal-NOT-achieved session can't be "good" — the run finished
+    # but didn't deliver. Capped at "fair" (not "poor": closure verdicts are
+    # noisy on build goals, 2026-07-09 dogfood).
+    if achieved is False and overall_quality == "good":
+        overall_quality = "fair"
 
     # LLM inspector notes (brief, optional)
     inspector_notes = ""
     if adapter is not None:
         try:
             note_prompt = (
-                f"Session status: {status}\n"
+                f"Session status: {status}"
+                + ("" if achieved is None else
+                   (" (goal verified achieved)" if achieved else " (goal judged NOT achieved)"))
+                + "\n"
                 f"Goal (truncated): {goal[:100]}\n"
                 f"Result (truncated): {summary[:200]}\n"
                 f"Friction signals: {[s.signal_type for s in friction_signals]}\n"

@@ -358,8 +358,15 @@ def attribute_batch(outcomes: List[dict], adapter=None) -> AttributionReport:
     """
     from collections import Counter
 
-    # Filter to stuck/error outcomes only
-    failed = [o for o in outcomes if o.get("status") in ("stuck", "error", "blocked")]
+    # Filter to failures. Verdict-preferred (SF-2): a run judged
+    # goal_achieved=False failed even when its status is "done" (done ≠
+    # achieved) — those runs deserve failure attribution too. Unjudged done
+    # runs are not failures (absence means "not judged").
+    failed = [
+        o for o in outcomes
+        if o.get("status") in ("stuck", "error", "blocked")
+        or o.get("goal_achieved") is False
+    ]
     # Analyze up to 20 most recent
     to_analyze = failed[-20:] if len(failed) > 20 else failed
 

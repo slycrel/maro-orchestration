@@ -228,8 +228,16 @@ def extract_skills(outcomes: List[dict], adapter) -> List[Skill]:
 
     from llm import LLMMessage, MODEL_MID
 
-    # Summarize outcomes for the prompt
-    successes = [o for o in outcomes if o.get("status") == "done"][:20]
+    # Summarize outcomes for the prompt. Verdict-preferred (SF-2): never
+    # crystallize skills from runs judged goal-NOT-achieved (done ≠ achieved);
+    # verified-achieved runs are the strongest examples and go first, unjudged
+    # done runs are the weaker fallback (absence means "not judged").
+    candidates = [
+        o for o in outcomes
+        if o.get("status") == "done" and o.get("goal_achieved") is not False
+    ]
+    candidates.sort(key=lambda o: o.get("goal_achieved") is not True)  # judged-True first, stable
+    successes = candidates[:20]
     if not successes:
         return []
 

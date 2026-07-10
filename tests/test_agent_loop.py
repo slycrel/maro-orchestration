@@ -3802,3 +3802,131 @@ def test_run_agent_loop_write_fence_still_blocks_undeclared_path(monkeypatch, tm
     )
     assert "FENCE_WRITE_BLOCKED" in events_seen
     assert any(s.status == "blocked" for s in result.steps)
+
+
+# ---------------------------------------------------------------------------
+# _finalize_loop — evolver meta-cycle on run-cadence (2026-07-09: no daemon;
+# every N-th real finalization fires run_evolver; dry_run never counts)
+# ---------------------------------------------------------------------------
+
+def _finalize_for_cadence(dry_run=False, adapter=None):
+    _finalize_loop(
+        loop_id="cad-test",
+        goal="cadence goal",
+        project="proj",
+        loop_status="done",
+        step_outcomes=[],
+        adapter=adapter,
+        dry_run=dry_run,
+        verbose=False,
+        total_tokens_in=0,
+        total_tokens_out=0,
+        elapsed_ms=0,
+        had_no_matching_skill=False,
+    )
+
+
+def _patch_cadence(monkeypatch, tmp_path, cadence_value):
+    """Isolate counter file, set evolver.run_cadence, capture run_evolver calls."""
+    import evolver_store
+    import evolver as evolver_mod
+    import config as config_mod
+
+    monkeypatch.setattr(
+        evolver_store, "_cadence_path", lambda: tmp_path / "evolver_cadence.json"
+    )
+
+    orig_get = config_mod.get
+
+    def fake_get(key, default=None, *a, **kw):
+        if key == "evolver.run_cadence":
+            return cadence_value
+        return orig_get(key, default, *a, **kw)
+
+    monkeypatch.setattr(config_mod, "get", fake_get)
+
+    calls = []
+
+    def fake_run_evolver(**kw):
+        calls.append(kw)
+        from evolver import EvolverReport
+        return EvolverReport(run_id="fake", outcomes_reviewed=0, skipped=True)
+
+    monkeypatch.setattr(evolver_mod, "run_evolver", fake_run_evolver)
+    return calls
+
+
+def test_finalize_cadence_off_by_default(monkeypatch, tmp_path):
+    """Fresh installs unchanged: evolver.run_cadence defaults to 0 → never fires."""
+    import evolver_store
+    import evolver as evolver_mod
+    monkeypatch.setattr(
+        evolver_store, "_cadence_path", lambda: tmp_path / "evolver_cadence.json"
+    )
+    calls = []
+    monkeypatch.setattr(evolver_mod, "run_evolver", lambda **kw: calls.append(kw))
+    for _ in range(3):
+        _finalize_for_cadence(dry_run=False)
+    assert calls == []
+
+
+def test_finalize_cadence_counter_increments(monkeypatch, tmp_path):
+    import json as _json
+    _patch_cadence(monkeypatch, tmp_path, 10)
+    _finalize_for_cadence(dry_run=False)
+    _finalize_for_cadence(dry_run=False)
+    state = _json.loads((tmp_path / "evolver_cadence.json").read_text())
+    assert state["runs_since_evolve"] == 2
+
+
+def test_finalize_cadence_fires_at_n_and_resets(monkeypatch, tmp_path):
+    import json as _json
+
+    class _FakeAdapter:
+        model_key = "test"
+
+    adapter = _FakeAdapter()
+    calls = _patch_cadence(monkeypatch, tmp_path, 2)
+    _finalize_for_cadence(dry_run=False, adapter=adapter)
+    assert calls == []
+    _finalize_for_cadence(dry_run=False, adapter=adapter)
+    assert len(calls) == 1
+    # the run's adapter is threaded through, not a freshly constructed one
+    assert calls[0].get("adapter") is adapter
+    state = _json.loads((tmp_path / "evolver_cadence.json").read_text())
+    assert state["runs_since_evolve"] == 0
+    # next window
+    _finalize_for_cadence(dry_run=False, adapter=adapter)
+    _finalize_for_cadence(dry_run=False, adapter=adapter)
+    assert len(calls) == 2
+
+
+def test_finalize_cadence_dry_run_does_not_count_or_trigger(monkeypatch, tmp_path):
+    calls = _patch_cadence(monkeypatch, tmp_path, 1)
+    _finalize_for_cadence(dry_run=True)
+    _finalize_for_cadence(dry_run=True)
+    assert calls == []
+    assert not (tmp_path / "evolver_cadence.json").exists()
+
+
+def test_finalize_cadence_evolver_exception_is_nonfatal(monkeypatch, tmp_path):
+    import evolver_store
+    import evolver as evolver_mod
+    import config as config_mod
+
+    monkeypatch.setattr(
+        evolver_store, "_cadence_path", lambda: tmp_path / "evolver_cadence.json"
+    )
+    orig_get = config_mod.get
+    monkeypatch.setattr(
+        config_mod, "get",
+        lambda key, default=None, *a, **kw: 1 if key == "evolver.run_cadence"
+        else orig_get(key, default, *a, **kw),
+    )
+
+    def boom(**kw):
+        raise RuntimeError("evolver exploded")
+
+    monkeypatch.setattr(evolver_mod, "run_evolver", boom)
+    # must not raise — failures are logged, never fatal to finalization
+    _finalize_for_cadence(dry_run=False)

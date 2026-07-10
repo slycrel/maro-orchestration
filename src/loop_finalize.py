@@ -480,6 +480,11 @@ def _finalize_loop(
             dry_run=dry_run,
             failure_chain=failure_chain or [],
             recovery_steps=recovery_steps,
+            # Verdict tri-state (SF-2): closure judging runs AFTER finalization
+            # (handle.py), so the verdict is unknown here — the row is written
+            # unjudged with its loop_id, and annotate_outcome_verdict() stamps
+            # the verdict onto it once closure has judged.
+            loop_id=loop_id,
         )
         # Meta-Harness steal: persist step-level traces so the evolver proposer
         # sees full execution context, not just aggregate summaries.
@@ -542,7 +547,10 @@ def _finalize_loop(
     if not dry_run:
         try:
             from evolver import run_skill_maintenance
-            run_skill_maintenance()
+            # adapter threaded through (arch-04 fix, 2026-07-09): without it the
+            # refight_rule half of decay-by-invalidation was structurally
+            # unreachable — this is the only live caller path.
+            run_skill_maintenance(adapter=adapter)
         except ImportError:
             pass
         except Exception as _maint_exc:
@@ -565,6 +573,32 @@ def _finalize_loop(
             pass
         except Exception as _scan_exc:
             log.debug("post-run statistical scan failed (non-critical): %s", _scan_exc)
+
+    # Evolver meta-cycle on run-cadence (2026-07-09 supervision decision):
+    # every N-th real run finalization triggers run_evolver() — the meta-cycle
+    # rides run completions instead of a timer ("app, not systemic": no
+    # daemon, no self-rearming loop; no runs → no evolver, which is also the
+    # correct no-op). `evolver.run_cadence` default 0 = off (fresh installs
+    # unchanged); dry_run runs neither count nor trigger. Never fatal to
+    # finalization.
+    if not dry_run:
+        try:
+            from config import get as _cfg_get
+            from evolver_store import evolver_cadence_tick
+            _cadence = int(_cfg_get("evolver.run_cadence", 0) or 0)
+            if evolver_cadence_tick(_cadence):
+                from evolver import run_evolver
+                _evo_report = run_evolver(adapter=adapter, verbose=verbose)
+                log.info(
+                    "run-cadence evolver cycle fired (cadence=%d): reviewed=%d suggestions=%d",
+                    _cadence,
+                    getattr(_evo_report, "outcomes_reviewed", 0),
+                    len(getattr(_evo_report, "suggestions", []) or []),
+                )
+        except ImportError:
+            pass
+        except Exception as _evo_exc:
+            log.warning("run-cadence evolver cycle failed (non-fatal): %s", _evo_exc)
 
     # Post-mission Telegram notification
     if not dry_run:

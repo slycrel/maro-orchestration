@@ -855,10 +855,19 @@ def scan_evolver_impact(
                 results.append(o)
         return results
 
+    def _is_failing(o: Any) -> bool:
+        # Verdict-preferred (SF-2): a judged goal_achieved=False run counts as
+        # failing even when it completed (done ≠ achieved); unjudged done does
+        # not (absence means "not judged", not "failed").
+        return (
+            getattr(o, "status", "done") == "stuck"
+            or getattr(o, "goal_achieved", None) is False
+        )
+
     def _stuck_rate(outcomes: List[Any]) -> float:
         if not outcomes:
             return float("nan")
-        n_stuck = sum(1 for o in outcomes if getattr(o, "status", "done") == "stuck")
+        n_stuck = sum(1 for o in outcomes if _is_failing(o))
         return n_stuck / len(outcomes)
 
     records: List[EvolverImpactRecord] = []
@@ -899,9 +908,9 @@ def scan_evolver_impact(
             category=category,
             applied_at=applied_at_str,
             outcomes_before=n_before,
-            stuck_before=sum(1 for o in outcomes_before if getattr(o, "status", "done") == "stuck"),
+            stuck_before=sum(1 for o in outcomes_before if _is_failing(o)),
             outcomes_after=n_after,
-            stuck_after=sum(1 for o in outcomes_after if getattr(o, "status", "done") == "stuck"),
+            stuck_after=sum(1 for o in outcomes_after if _is_failing(o)),
             stuck_rate_before=sr_before,
             stuck_rate_after=sr_after,
             delta=delta,  # NaN for insufficient_data — callers check math.isnan()
