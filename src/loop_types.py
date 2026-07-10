@@ -26,8 +26,10 @@ def _configure_logging(verbose: bool = False) -> None:
 
     Level resolution (first match wins):
       1. MARO_LOG_LEVEL env var (DEBUG, INFO, WARNING, ERROR)
-      2. verbose=True → DEBUG
-      3. default → WARNING (quiet)
+      2. MARO_DEBUG=1 env var → DEBUG
+      3. config `debug: true` → DEBUG
+      4. verbose=True → DEBUG
+      5. default → WARNING (quiet)
 
     Format: compact timestamp + level + logger name + message.
     """
@@ -37,9 +39,16 @@ def _configure_logging(verbose: bool = False) -> None:
     _logging_configured = True
 
     env_level = os.environ.get("MARO_LOG_LEVEL", "").upper()
+    debug_on = os.environ.get("MARO_DEBUG") == "1"
+    if not debug_on and not env_level:
+        try:
+            from config import get as _cfg_get
+            debug_on = bool(_cfg_get("debug", False))
+        except Exception:
+            debug_on = False
     if env_level and hasattr(logging, env_level):
         level = getattr(logging, env_level)
-    elif verbose:
+    elif debug_on or verbose:
         level = logging.DEBUG
     else:
         level = logging.WARNING

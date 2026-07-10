@@ -605,7 +605,7 @@ def _cmd_evolver(args: argparse.Namespace) -> int:
         return 0
 
     if getattr(args, "apply_id", None):
-        ok = apply_suggestion(args.apply_id)
+        ok = apply_suggestion(args.apply_id, manual=True)
         if ok:
             print(f"applied={args.apply_id}")
             return 0

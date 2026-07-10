@@ -140,8 +140,9 @@ goes" — the data-r2-02 batch, after the cs-r2-01 gate shipped):**
   (evolver_store.py:488), not `evolver.auto_apply` as the cadence decree
   assumes — first firing auto-applied 4+1 prompt-level suggestions to
   playbook/lessons in "dev" mode. Box set `environment: production`
-  same-day (record-only per decree) pending Jeremy's call (BACKLOG
-  batch-01). Also: evolver's verify→learn runs full unthrottled pytest
+  same-day (record-only per decree); Jeremy adjudicated same day →
+  production-always decree, `environment` key removed, gate now
+  `evolver.auto_apply` (batch-01 SHIPPED, see Decisions). Also: evolver's verify→learn runs full unthrottled pytest
   in-process (batch-02, re-fired ops-r2-05), `_DANGEROUS_PATTERNS`
   false-positived on an instructional .md (funnel_report skipped for
   `open(` in prose, batch-03), and 9 finalizations extracted **zero
@@ -1540,6 +1541,29 @@ Sample: the 2026-05-13..17 window of `~/.maro/workspace/runs/` (478 dirs total;
   **tests/test_no_silent_deletion.py** — AST tripwire over every
   file-deletion call in src/ with a justified allowlist (same pattern as
   the DEFAULTS census); new deletion sites fail CI until reviewed.
+- **2026-07-10 (production-always decree — Jeremy, adjudicating live-batch
+  finding batch-01):** "Let's change environment to always be production,
+  and add a switch to turn on/off debugging information; more logs and
+  such... I think we want production all the time." Standing shape: **there
+  is no dev/prod behavior split** — the system always runs production
+  semantics; behavior gates are explicit config knobs, never environment
+  inference; the only environment-like switch is `debug` (log verbosity,
+  observability only — flipping it never changes what the system does).
+  Shipped same day: `environment` key removed; guardrail auto-apply keys
+  off `evolver.auto_apply` (default False = held_for_review); CLI review
+  paths pass `manual=True` (human ask IS the review — bypasses the hold,
+  never the injection guard or test gate); `debug` key + `MARO_DEBUG=1`.
+  Vein confirmed in the same message: system-usable-by-default vs
+  reviewed-before-behavior-changes is the same line as Rider A skills-lite
+  — lessons/observations auto-apply (use-what-it-wants lane), guardrail
+  mutations hold for review (full-skill lane).
+- **2026-07-10 (lessons-from-toy-goals — Jeremy, same message):** zero
+  lessons from the 9-run live batch is not a concern to him — "I'm not
+  very worried from the little I've seen of the asks (i.e. 'write a
+  poem...' type goals). I'm not sure there's much to learn from a goal
+  like that." Implication for batch-04: lesson-funnel measurement should
+  ride organic direct-use work, not synthetic batches; funnel-threshold
+  tuning is deprioritized until real goals flow.
 
 ## Threads (system-maintained — nothing leaves this list silently)
 

@@ -8,6 +8,46 @@ Last split: 2026-04-16 (session 34).
 
 ---
 
+### batch-01: dev/prod environment split removed — evolver auto-apply is an explicit knob (2026-07-10)
+
+Live-batch finding (first evolver production firing): the guardrail
+auto-apply gate keyed off `environment != production` (evolver_store.py,
+Session 20 finding 3.13's fix), NOT `evolver.auto_apply` — so the default
+`dev` environment auto-applied 4+1 suggestions to playbook.md/lessons the
+first time the cadence fired, contradicting the run-cadence decree's
+record-only intent. Box was mitigated same-day with `environment: production`
+in workspace config; Jeremy adjudicated within hours: **"Let's change
+environment to always be production, and add a switch to turn on/off
+debugging information... I think we want production all the time."**
+
+**Shipped:**
+1. `environment` config key REMOVED (gate, DEFAULTS.md row, workspace-config
+   stanza). There is no dev/prod behavior split; the system always runs
+   production semantics. Behavior gates are explicit knobs, never
+   environment inference. (`orch_bridges.py` "environment" is an unrelated
+   external-data field, untouched.)
+2. new_guardrail gate now: `manual` > `MARO_AUTO_APPLY_GUARDRAILS=1/0` >
+   config `evolver.auto_apply` (default False → `held_for_review`).
+3. `apply_suggestion(id, manual=True)` — cli.py `--apply` and evolver.py's
+   interactive/`--all` review paths pass manual=True: a human asking IS the
+   review, so the hold doesn't apply; the injection guard and skill_pattern
+   test gate still run regardless (they protect against bad content, not
+   missing approval). Auto paths (confidence/advisor, evolver.py) stay
+   manual=False.
+4. `debug` config key (default False) in `loop_types._configure_logging`:
+   resolution MARO_LOG_LEVEL > MARO_DEBUG=1 > config `debug` > verbose param
+   > WARNING. Observability is the ONLY thing that switches — flipping it
+   never changes behavior.
+5. Tests: env-gate integration tests rewritten for the knob + a manual-bypass
+   test; DEFAULTS.md census green (`evolver.auto_apply`, `debug` registered;
+   `environment` row deleted).
+
+Design rationale (Jeremy's same-vein question): lessons/observations
+auto-apply = the "system uses what it wants" lane (skills-lite vein);
+guardrails/config mutations that change execution behavior = the "full
+skill" side of the line, held for review by default. The knob exists for
+the day the verify→learn loop earns trust.
+
 ### cs-r2-01: skills-lite injection gate — promotion-time guard + loader-side backstop (2026-07-10)
 
 Purgatorio r2 finding (adversarially confirmed): `promote_skills_lite`

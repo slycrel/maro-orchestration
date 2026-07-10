@@ -51,13 +51,15 @@ All adversarially verified (41/42 confirmed). The two 1.0-blockers first:
   1 done-not-achieved/False — closure CAUGHT a real worker fabrication:
   claimed 120 archive entries, count was wrong), #18 CLI verdict-parity
   exit codes worked. Follow-ups spawned below.
-- [ ] **batch-01 (Jeremy adjudication):** evolver auto-apply gate keys off
-  `environment != production` (evolver_store.py:488, Session 20 finding
-  3.13), NOT `evolver.auto_apply` — the cadence decree says record-only.
-  First firing auto-applied 4+1 suggestions to playbook.md/lessons (benign,
-  left for review; drift-monitor even flagged its own cost drift).
-  Box mitigated same-day: `environment: production` in workspace config →
-  held_for_review. Decide: amend decree or keep production posture.
+- [x] **batch-01 SHIPPED 2026-07-10** (Jeremy adjudicated same day: "production
+  all the time" + debug switch): dev/prod `environment` split removed entirely —
+  guardrail gate now keys off `evolver.auto_apply` (default False =
+  held_for_review; env override kept); `apply_suggestion(id, manual=True)` on
+  the CLI review paths bypasses the hold (the review IS the gate) but never the
+  injection guard or skill test gate; `debug` config key added (log verbosity
+  only, `MARO_DEBUG=1` env override) — behavior is never environment-dependent,
+  only observability is switchable. `environment` key deleted from DEFAULTS.md
+  + workspace config. → BACKLOG_DONE.
 - [ ] **batch-02:** evolver verify→learn runs plain full `pytest tests/ -q
   -x` in-process at finalize (evolver.py:721) — unthrottled on this box
   (violates the test-safe rule) and re-fires ops-r2-05 (pidfile re-stamped

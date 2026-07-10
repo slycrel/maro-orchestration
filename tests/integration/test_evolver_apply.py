@@ -249,12 +249,12 @@ def test_apply_prompt_tweak_records_lesson():
 # 6. new_guardrail held for review by default
 # ---------------------------------------------------------------------------
 
-def test_apply_guardrail_held_in_production(monkeypatch):
-    """new_guardrail suggestions are held in production (config environment=production).
+def test_apply_guardrail_held_by_default(monkeypatch):
+    """new_guardrail suggestions are held unless evolver.auto_apply is on.
 
-    Session 20.5: previous behavior was 'held unless env var explicitly set' —
-    which silently disabled the guardrail path everywhere. New policy is
-    'auto-apply in non-prod, hold in prod'. This test covers the prod-hold case.
+    2026-07-10 decree: no dev/prod environment split — the system always runs
+    production semantics; self-modification gates are explicit knobs. Default
+    is held_for_review.
     """
     sug = _make_suggestion(
         category="new_guardrail",
@@ -268,47 +268,68 @@ def test_apply_guardrail_held_in_production(monkeypatch):
     # Ensure env override is unset so we hit the config-based branch
     monkeypatch.delenv("MARO_AUTO_APPLY_GUARDRAILS", raising=False)
 
-    # Simulate production environment via config
-    monkeypatch.setattr("config.get", lambda key, default=None:
-                        "production" if key == "environment" else default)
-
     result = apply_suggestion("sug-guard")
     assert result is True
 
     suggestions = load_suggestions(limit=100)
     matched = [s for s in suggestions if s.suggestion_id == "sug-guard"]
     assert len(matched) == 1
-    assert matched[0].applied is False  # held in prod
+    assert matched[0].applied is False  # held by default
+
+    from evolver_store import _suggestions_path
+    raw = [json.loads(l) for l in _suggestions_path().read_text().splitlines() if l.strip()]
+    row = next(r for r in raw if r["suggestion_id"] == "sug-guard")
+    assert row["status"] == "held_for_review"
 
 
-def test_apply_guardrail_auto_applied_in_dev():
-    """new_guardrail suggestions auto-apply in dev (default environment).
-
-    Session 20.5 regression: confirms the new default-on behavior.
-    """
+def test_apply_guardrail_auto_applied_with_config_knob(monkeypatch):
+    """new_guardrail auto-applies when config evolver.auto_apply is true."""
     sug = _make_suggestion(
         category="new_guardrail",
         target="all",
         suggestion_text="Block destructive command X",
-        suggestion_id="sug-guard-dev",
+        suggestion_id="sug-guard-knob",
         confidence=0.9,
     )
     _seed_suggestion(sug)
 
-    # No env override, no config mock → defaults to dev → auto-apply
-    os.environ.pop("MARO_AUTO_APPLY_GUARDRAILS", None)
+    monkeypatch.delenv("MARO_AUTO_APPLY_GUARDRAILS", raising=False)
+    monkeypatch.setattr("config.get", lambda key, default=None:
+                        True if key == "evolver.auto_apply" else default)
 
-    result = apply_suggestion("sug-guard-dev")
+    result = apply_suggestion("sug-guard-knob")
     assert result is True
 
     suggestions = load_suggestions(limit=100)
-    matched = [s for s in suggestions if s.suggestion_id == "sug-guard-dev"]
+    matched = [s for s in suggestions if s.suggestion_id == "sug-guard-knob"]
     assert len(matched) == 1
-    assert matched[0].applied is True  # auto-applied in dev
+    assert matched[0].applied is True
+
+
+def test_apply_guardrail_manual_bypasses_hold(monkeypatch):
+    """manual=True (CLI review path) applies a guardrail despite auto_apply off."""
+    sug = _make_suggestion(
+        category="new_guardrail",
+        target="all",
+        suggestion_text="Block destructive command Y",
+        suggestion_id="sug-guard-manual",
+        confidence=0.9,
+    )
+    _seed_suggestion(sug)
+
+    monkeypatch.delenv("MARO_AUTO_APPLY_GUARDRAILS", raising=False)
+
+    result = apply_suggestion("sug-guard-manual", manual=True)
+    assert result is True
+
+    suggestions = load_suggestions(limit=100)
+    matched = [s for s in suggestions if s.suggestion_id == "sug-guard-manual"]
+    assert len(matched) == 1
+    assert matched[0].applied is True
 
 
 def test_apply_guardrail_override_off_holds(monkeypatch):
-    """MARO_AUTO_APPLY_GUARDRAILS=0 explicitly holds even in dev."""
+    """MARO_AUTO_APPLY_GUARDRAILS=0 holds even when config auto_apply is on."""
     sug = _make_suggestion(
         category="new_guardrail",
         target="all",
@@ -319,6 +340,8 @@ def test_apply_guardrail_override_off_holds(monkeypatch):
     _seed_suggestion(sug)
 
     monkeypatch.setenv("MARO_AUTO_APPLY_GUARDRAILS", "0")
+    monkeypatch.setattr("config.get", lambda key, default=None:
+                        True if key == "evolver.auto_apply" else default)
 
     result = apply_suggestion("sug-guard-off")
     assert result is True

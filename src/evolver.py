@@ -893,14 +893,14 @@ def main() -> int:
                 if resp == "q":
                     break
                 if resp == "y":
-                    if apply_suggestion(s.suggestion_id):
+                    if apply_suggestion(s.suggestion_id, manual=True):
                         print(f"  Applied.")
                         applied += 1
                     else:
                         print(f"  Apply failed (gate blocked or not found).")
             print(f"\nApplied {applied} suggestion(s).")
         else:
-            applied = sum(1 for s in to_apply if apply_suggestion(s.suggestion_id))
+            applied = sum(1 for s in to_apply if apply_suggestion(s.suggestion_id, manual=True))
             print(f"Applied {applied}/{len(to_apply)} suggestions.")
         return 0
 

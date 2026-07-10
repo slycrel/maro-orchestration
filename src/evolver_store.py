@@ -391,12 +391,17 @@ def _apply_suggestion_action(d: dict) -> None:
         print(f"[evolver] _apply_suggestion_action({category}) failed: {e}", file=sys.stderr)
 
 
-def apply_suggestion(suggestion_id: str) -> bool:
+def apply_suggestion(suggestion_id: str, manual: bool = False) -> bool:
     """Mark a suggestion as applied=True by rewriting suggestions.jsonl.
 
     Phase 14: For suggestions with category == "skill_pattern", runs the
     unit-test gate via validate_skill_mutation() before applying. If the gate
     blocks the mutation, sets status to "gate_blocked" instead of "applied".
+
+    manual=True means a human explicitly asked for this apply (CLI review
+    path). That bypasses the evolver.auto_apply hold for guardrails — the
+    review IS the gate — but never the injection guard or the skill test
+    gate, which protect against bad content regardless of who asks.
 
     Returns True if the suggestion was found and updated, False otherwise.
     """
@@ -467,43 +472,44 @@ def apply_suggestion(suggestion_id: str) -> bool:
                 d.pop("status", None)
                 _apply_suggestion_action(d)
         elif category == "new_guardrail":
-            # Guardrails can permanently block execution paths. Gate on
-            # environment + explicit override:
-            #   MARO_AUTO_APPLY_GUARDRAILS=0 → always hold for review (prod-safe override)
-            #   MARO_AUTO_APPLY_GUARDRAILS=1 → always auto-apply (dev override)
-            #   unset → auto-apply in non-prod, hold in prod
-            #
-            # Session 20 adversarial review finding 3.13: the previous
-            # default (hold unless env=1) silently disabled the
-            # guardrail self-improvement path everywhere. Most runs are
-            # dev/experiment — guardrails should evolve there by default.
+            # Guardrails can permanently block execution paths. There is no
+            # dev/prod split anymore (2026-07-10 decree: the system always
+            # runs with production semantics), so the gate is an explicit
+            # opt-in knob rather than an environment inference:
+            #   manual apply (CLI review)      → apply (the review is the gate)
+            #   MARO_AUTO_APPLY_GUARDRAILS=1   → auto-apply (env override)
+            #   MARO_AUTO_APPLY_GUARDRAILS=0   → hold (env override)
+            #   config evolver.auto_apply      → default False = held_for_review
             _env_override = os.environ.get("MARO_AUTO_APPLY_GUARDRAILS")
-            if _env_override == "1":
+            if manual:
+                _should_apply = True
+            elif _env_override == "1":
                 _should_apply = True
             elif _env_override == "0":
                 _should_apply = False
             else:
                 try:
                     from config import get as _cfg_get
-                    _env = str(_cfg_get("environment", "dev")).lower()
+                    _should_apply = bool(_cfg_get("evolver.auto_apply", False))
                 except Exception:
-                    _env = "dev"
-                _should_apply = _env != "production"
+                    _should_apply = False
 
             if _should_apply:
                 d["applied"] = True
                 _apply_suggestion_action(d)
-                log.info("evolver: auto-applied new_guardrail (env=%s): %s",
-                         _env_override or "config", d.get("suggestion", "")[:100])
+                log.info("evolver: applied new_guardrail (%s): %s",
+                         "manual" if manual else "auto_apply on",
+                         d.get("suggestion", "")[:100])
             else:
                 d["applied"] = False
                 d["status"] = "held_for_review"
                 d["block_reason"] = (
-                    "new_guardrail held: production environment (set "
-                    "MARO_AUTO_APPLY_GUARDRAILS=1 to override, or change "
-                    "config 'environment' from 'production')"
+                    "new_guardrail held for review: auto-apply is off by "
+                    "default (apply via `maro evolver --apply <id>`, or set "
+                    "config evolver.auto_apply: true / "
+                    "MARO_AUTO_APPLY_GUARDRAILS=1 to auto-apply)"
                 )
-                log.info("evolver: guardrail held for review (production env): %s",
+                log.info("evolver: guardrail held for review: %s",
                          d.get("suggestion", "")[:100])
         elif category == "prompt_tweak":
             # Prompt tweaks are lower risk (just a lesson) but log prominently
