@@ -240,9 +240,255 @@ def spend_transparency(rd: Path, meta: dict, card: dict) -> None:
     card["spend_transparency"] = {"threshold_usd": threshold, "bundle": bundle}
 
 
+# --- skills-lite promotion (Rider A, post-Purgatorio decision batch) ---------
+
+_LITE_TIER = "skills-lite"
+_LITE_MAX_PER_RUN = 5     # promotion is per-run incremental, not a bulk import
+_LITE_SCAN_CAP = 200      # .md files examined per run before giving up
+
+
+def _lite_enabled() -> bool:
+    try:
+        from config import get as _cfg_get
+        return bool(_cfg_get("skills.lite_promotion", True))
+    except Exception:
+        return True
+
+
+def _skill_shaped(fm: dict) -> bool:
+    """A candidate is skill-shaped iff its frontmatter carries the fields
+    skill_loader injects from: name + description + (triggers or roles)."""
+    return bool(fm.get("name")) and bool(fm.get("description")) and bool(
+        fm.get("triggers") or fm.get("roles_allowed")
+    )
+
+
+def _lite_candidate_files(rd: Path, meta: dict) -> List[Path]:
+    """Skill-shaped .md candidates: run-dir artifact/ + build/, plus the
+    project artifacts dir (same join as spend_transparency)."""
+    dirs = [rd / "artifact", rd / "build"]
+    try:
+        from agent_loop import _goal_to_slug
+        import orch_items as o
+        _slug = _goal_to_slug(meta.get("prompt", "") or "")
+        pa = o.projects_root() / _slug / "artifacts"
+        if pa.is_dir():
+            dirs.append(pa)
+    except Exception:
+        pass
+    out: List[Path] = []
+    seen = 0
+    for d in dirs:
+        if not d.is_dir():
+            continue
+        for f in sorted(d.rglob("*.md")):
+            seen += 1
+            if seen > _LITE_SCAN_CAP:
+                return out
+            out.append(f)
+    return out
+
+
+def promote_skills_lite(rd: Path, meta: dict, card: dict) -> None:
+    """Rider A (Jeremy, 2026-07-09): "we want things promoted to skills that
+    the local orchestration can pick up and use while waiting for user
+    review... looked at as skills-lite, and degraded the same as regular
+    skills that get broken or stop working."
+
+    Two-tier promotion: skill-shaped .md artifacts from successful runs are
+    copied into the workspace skills overlay (tier: skills-lite) where
+    skill_loader injects them immediately, AND registered as a companion
+    provisional Skill in skills.jsonl so the normal stats/decay/circuit-
+    breaker machinery tracks them. degrade_skills_lite() quarantines the .md
+    when its companion trips. Human review gates only ship-set (repo skills/)
+    graduation. Also the first BACKLOG #0 miner (skill scraper).
+    """
+    if not _lite_enabled():
+        return
+    # Only runs whose process status finished cleanly and whose verdict didn't
+    # say "didn't land" seed skills (done-not-achieved is exactly the run you
+    # don't want to learn from).
+    if card.get("success_class") not in ("success", "done-unverified"):
+        return
+
+    from skill_loader import _parse_frontmatter, _slugify, _FRONTMATTER_RE, skill_loader as _loader
+    from config import skills_dir as _ws_skills_dir
+
+    ws_dir = _ws_skills_dir()
+    _loader.invalidate()
+    known_names = {s.name for s in _loader.load_summaries()}
+    try:
+        from skills import load_skills as _load_skills
+        known_names |= {s.name for s in _load_skills()}
+    except Exception:
+        pass
+
+    promoted: List[dict] = []
+    skipped: List[dict] = []
+    handle_id = meta.get("handle_id", "") or card.get("handle_id", "")
+
+    for f in _lite_candidate_files(rd, meta):
+        if len(promoted) >= _LITE_MAX_PER_RUN:
+            break
+        try:
+            text = f.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        fm, _body = _parse_frontmatter(text)
+        if not _skill_shaped(fm):
+            continue  # not a skill artifact — silent, most .md files aren't
+        name = fm["name"]
+        rel = str(f.relative_to(rd)) if str(f).startswith(str(rd)) else str(f)
+
+        if name in known_names:
+            skipped.append({"file": rel, "name": name,
+                            "reason": "name collision with existing skill"})
+            continue
+        dest = ws_dir / f"{_slugify(name)}.md"
+        if dest.exists():
+            skipped.append({"file": rel, "name": name,
+                            "reason": f"destination exists: {dest.name}"})
+            continue
+        # Fail-closed static scan — same lane as sandbox.is_skill_safe. Unsafe
+        # candidates aren't rejected forever, they just wait for human review.
+        try:
+            from sandbox import _DANGEROUS_PATTERNS
+            hit = next((p for p in _DANGEROUS_PATTERNS if p in text), None)
+        except Exception:
+            hit = "sandbox patterns unavailable"
+        if hit:
+            skipped.append({"file": rel, "name": name,
+                            "reason": f"dangerous pattern: {hit!r}"})
+            continue
+
+        # Stamp the lite tier + origin into the frontmatter (drop any tier the
+        # artifact claimed for itself — the lane assigns tiers, not the run).
+        m = _FRONTMATTER_RE.match(text)
+        raw_fm = "\n".join(
+            ln for ln in m.group(1).splitlines()
+            if not ln.strip().startswith(("tier:", "promoted_from:"))
+        )
+        stamped = (f"---\n{raw_fm}\ntier: {_LITE_TIER}\n"
+                   f"promoted_from: {handle_id}\n---\n{text[m.end():]}")
+
+        try:
+            from file_lock import atomic_write
+            atomic_write(dest, stamped)
+        except Exception as exc:
+            skipped.append({"file": rel, "name": name, "reason": f"write failed: {exc}"})
+            continue
+
+        # Companion runtime Skill = the degradation hook. find_matching_skills
+        # matches it during runs, record_skill_outcome/attribute_failure feed
+        # its stats, and an open circuit quarantines the .md (sweep below).
+        try:
+            import uuid as _uuid
+            from datetime import datetime, timezone
+            from skills import save_skill, write_skill_provenance
+            from skill_types import Skill
+            triggers = fm.get("triggers") or []
+            if not isinstance(triggers, list):
+                triggers = [triggers]
+            save_skill(Skill(
+                id=str(_uuid.uuid4())[:8],
+                name=name,
+                description=fm.get("description", ""),
+                trigger_patterns=triggers,
+                steps_template=[],
+                source_loop_ids=list(meta.get("loop_ids") or []),
+                created_at=datetime.now(timezone.utc).isoformat(),
+                tier="provisional",
+            ))
+            write_skill_provenance(
+                name, "create",
+                reason=f"skills-lite auto-promotion from run {handle_id}",
+                source_loop_ids=list(meta.get("loop_ids") or []),
+                extra={"tier": _LITE_TIER, "source_file": rel,
+                       "dest": str(dest), "handle_id": handle_id},
+            )
+        except Exception:
+            # md landed but companion didn't — degrade sweep treats a missing
+            # companion as quarantine-worthy, so this fails toward review.
+            pass
+
+        known_names.add(name)
+        promoted.append({"name": name, "file": rel, "dest": str(dest)})
+
+    quarantined = degrade_skills_lite()
+    if promoted or skipped or quarantined:
+        card["skills_lite"] = {"promoted": promoted, "skipped": skipped,
+                               "quarantined": quarantined}
+        _loader.invalidate()
+
+
+def degrade_skills_lite() -> List[str]:
+    """Quarantine skills-lite .md files whose companion runtime Skill tripped
+    its circuit breaker or vanished (gc/culling). Mirrors maybe_demote_skills'
+    signals, applied to the markdown overlay — the "degraded the same as
+    regular skills" half of Rider A. The loader only globs the top-level
+    skills dir, so moving into _quarantine/ removes the skill from injection
+    while keeping the file for human review."""
+    if not _lite_enabled():
+        return []
+    try:
+        from config import skills_dir as _ws_skills_dir
+        from skill_loader import _parse_frontmatter
+        from skills import load_skills, write_skill_provenance
+        ws_dir = _ws_skills_dir()
+        by_name = {s.name: s for s in load_skills()}
+    except Exception:
+        return []
+
+    quarantined: List[str] = []
+    for f in sorted(ws_dir.glob("*.md")):
+        try:
+            fm, _ = _parse_frontmatter(f.read_text(encoding="utf-8"))
+        except OSError:
+            continue
+        if fm.get("tier") != _LITE_TIER:
+            continue
+        name = fm.get("name") or f.stem
+        comp = by_name.get(name)
+        if comp is None:
+            reason = "companion runtime skill missing (gc'd, culled, or never registered)"
+        elif getattr(comp, "circuit_state", "closed") == "open":
+            reason = "companion circuit breaker open (sustained failures)"
+        else:
+            continue
+        qdir = ws_dir / "_quarantine"
+        qdir.mkdir(exist_ok=True)
+        target = qdir / f.name
+        n = 1
+        while target.exists():
+            target = qdir / f"{f.stem}.{n}{f.suffix}"
+            n += 1
+        try:
+            f.rename(target)
+        except OSError:
+            continue
+        try:
+            write_skill_provenance(
+                name, "demote", reason=reason,
+                extra={"tier": _LITE_TIER, "quarantined_to": str(target)},
+            )
+        except Exception:
+            pass
+        quarantined.append(name)
+
+    if quarantined:
+        try:
+            from skill_loader import skill_loader as _loader
+            _loader.invalidate()
+        except Exception:
+            pass
+    return quarantined
+
+
 # Ordered registry. Append future miners here; the hook never changes.
-# spend_transparency reads total_cost_usd, so it runs after classify_outcome.
-CURATORS = [classify_outcome, inventory_assets, excerpt_result, spend_transparency]
+# spend_transparency reads total_cost_usd, so it runs after classify_outcome;
+# promote_skills_lite reads success_class, so it also runs after classify_outcome.
+CURATORS = [classify_outcome, inventory_assets, excerpt_result, spend_transparency,
+            promote_skills_lite]
 
 
 def curate_run(handle_id: str, status: Optional[str] = None,

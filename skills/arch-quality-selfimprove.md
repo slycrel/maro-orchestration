@@ -81,8 +81,16 @@ Discovery, scoring, promotion/demotion with circuit breaker. Shared types (`Skil
 - **Auto-promote:** ≥5 uses + ≥70% success → provisional→established
 - **Auto-demote:** ≥3 consecutive failures opens circuit, triggers rewrite
 - **Test gate:** Skill mutations blocked if unit tests fail
+- **Skills-lite (Rider A, 2026-07-10):** skill-shaped .md artifacts from
+  successful runs auto-promote into the workspace skills overlay
+  (`tier: skills-lite`) + a companion provisional Skill in skills.jsonl, so
+  normal decay/circuit-breaker degradation applies; a tripped companion
+  quarantines the .md to `skills/_quarantine/`. Human review gates only
+  ship-set/repo graduation. `run_curation.promote_skills_lite` /
+  `degrade_skills_lite`, config `skills.lite_promotion` (default ON by
+  decree — see docs/DEFAULTS.md).
 
-**Gap:** Auto-promote/demote works for existing skills. New skill discovery from outcomes is rare.
+**Gap:** New skill discovery from *outcomes* (extract_skills) is rare; skills-lite covers only runs that deliberately author a skill .md.
 
 ### Post-loop self-reflection was dead for six weeks (session 40)
 

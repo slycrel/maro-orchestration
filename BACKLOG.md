@@ -238,15 +238,32 @@ arc after 1.0. Full context in BACKLOG_DONE.
 
 ### Post-Purgatorio decision batch (2026-07-09, Jeremy — quotes in GOAL_BRAIN Decisions)
 
-- [ ] **Skills-lite two-tier promotion.** Jeremy rider on the graduation
-  precedent: "we want things promoted to skills that the local
-  orchestration can pick up and use while waiting for user review...
+- [x] **Skills-lite two-tier promotion — SHIPPED 2026-07-10.** Jeremy rider
+  on the graduation precedent: "we want things promoted to skills that the
+  local orchestration can pick up and use while waiting for user review...
   looked at as skills-lite, and degraded the same as regular skills that
-  get broken or stop working." Design: Maro-built skills auto-promote to
-  a locally-usable provisional tier immediately (normal decay/degradation
-  on failure applies); human review gates only ship-set/catalog
-  graduation. Interacts with SF-10 (promotion funnel has never promoted)
-  — this is the demand side the funnel was missing. 1.0-adjacent.
+  get broken or stop working." Implementation:
+  `run_curation.promote_skills_lite` (new curator, also the first BACKLOG
+  #0 miner — the skill scraper): skill-shaped .md artifacts (frontmatter
+  name+description+triggers/roles) from successful runs (success /
+  done-unverified only; done-not-achieved excluded) copy into the
+  workspace skills overlay stamped `tier: skills-lite` +
+  `promoted_from: <handle_id>` — skill_loader injects them immediately.
+  Each promotion registers a companion provisional Skill in skills.jsonl
+  so the normal stats/decay/circuit-breaker machinery tracks it;
+  `degrade_skills_lite()` quarantines the .md to `skills/_quarantine/`
+  when the companion trips (circuit open) or vanishes (gc/culled) — the
+  "degraded the same as regular skills" half, riding the exact demote
+  signals. Fail-closed: sandbox `_DANGEROUS_PATTERNS` scan (first real
+  consumer of that lane), never overwrites an existing skill name, unsafe/
+  colliding candidates recorded as skipped on the run card
+  (`card["skills_lite"]`) so they surface for human review. Provenance
+  sidecars (create/demote) via `write_skill_provenance`. Config
+  `skills.lite_promotion` default ON by decree (docs/DEFAULTS.md row;
+  census green). 10 tests in tests/test_run_curation.py; live no-op smoke
+  on the real workspace (no false-positive promotions on re-curation).
+  SF-10 demand side: companion Skills enter the funnel with real
+  trigger_patterns, so promotion pressure now has a source.
 - [ ] **Official scheduler/timer layer (post-1.0; auto-resume rides it).**
   Jeremy: "maybe we need a more general official scheduler/timer that the
   user can hook into/see/manage if they wish." A visible, user-managed

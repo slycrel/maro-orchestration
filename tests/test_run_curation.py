@@ -225,3 +225,146 @@ class TestSpendTransparency:
         self._expensive_run(workspace, monkeypatch, cost=9.9, threshold=0)
         card = curate_run("h00000c1")
         assert "spend_transparency" not in card
+
+
+class TestSkillsLite:
+    """Rider A (Jeremy 2026-07-09): skill-shaped .md artifacts from successful
+    runs promote into the workspace skills overlay immediately (tier:
+    skills-lite) + register a companion provisional Skill so normal decay/
+    circuit-breaker degradation applies; human review gates only ship-set
+    graduation. degrade_skills_lite() quarantines the .md when the companion
+    trips."""
+
+    SKILL_MD = (
+        "---\n"
+        "name: fetch_release_notes\n"
+        'description: "Fetch and summarize release notes for a repo"\n'
+        "roles_allowed: [worker]\n"
+        "triggers: ['release notes', 'changelog summary']\n"
+        "---\n"
+        "\n# Fetch release notes\n\n1. Locate the CHANGELOG\n2. Summarize\n"
+    )
+
+    def _run_with_artifact(self, handle_id, status="done", achieved=True,
+                           content=None, fname="skill.md"):
+        rd = create_run_dir(handle_id, prompt="build a release-notes skill",
+                            lane="agenda", model="claude",
+                            extra_metadata={"goal_achieved": achieved,
+                                            "loop_ids": ["loopSK01"]})
+        (rd / "artifact").mkdir(exist_ok=True)
+        (rd / "artifact" / fname).write_text(content or self.SKILL_MD)
+        finalize_run(handle_id, status=status)
+        return rd
+
+    def _fresh_loader(self):
+        from skill_loader import skill_loader as loader
+        loader.invalidate()
+        return loader
+
+    def test_promotes_skill_artifact(self, workspace):
+        import config
+        self._run_with_artifact("h00000d1")
+        card = curate_run("h00000d1")
+        sl = card.get("skills_lite")
+        assert sl and [p["name"] for p in sl["promoted"]] == ["fetch_release_notes"]
+        dest = config.skills_dir() / "fetch_release_notes.md"
+        assert dest.is_file()
+        text = dest.read_text()
+        assert "tier: skills-lite" in text
+        assert "promoted_from: h00000d1" in text
+        # locally usable immediately: the loader serves it
+        loader = self._fresh_loader()
+        assert any(s.name == "fetch_release_notes"
+                   for s in loader.find_matching("summarize the release notes"))
+        # companion runtime Skill registered = the degradation hook
+        from skills import load_skills, load_skill_provenance
+        comp = [s for s in load_skills() if s.name == "fetch_release_notes"]
+        assert comp and comp[0].tier == "provisional"
+        assert comp[0].trigger_patterns == ["release notes", "changelog summary"]
+        recs = load_skill_provenance("fetch_release_notes")
+        assert recs and recs[0]["decision"] == "create"
+
+    def test_failed_run_promotes_nothing(self, workspace):
+        import config
+        self._run_with_artifact("h00000d2", status="stuck", achieved=None)
+        card = curate_run("h00000d2")
+        assert "skills_lite" not in card
+        assert not (config.skills_dir() / "fetch_release_notes.md").exists()
+
+    def test_done_not_achieved_promotes_nothing(self, workspace):
+        import config
+        self._run_with_artifact("h00000d3", status="done", achieved=False)
+        card = curate_run("h00000d3")
+        assert "skills_lite" not in card
+        assert not (config.skills_dir() / "fetch_release_notes.md").exists()
+
+    def test_dangerous_content_skipped(self, workspace):
+        import config
+        bad = self.SKILL_MD + "\n```python\nimport subprocess\n```\n"
+        self._run_with_artifact("h00000d4", content=bad)
+        card = curate_run("h00000d4")
+        sl = card["skills_lite"]
+        assert sl["promoted"] == []
+        assert "dangerous pattern" in sl["skipped"][0]["reason"]
+        assert not (config.skills_dir() / "fetch_release_notes.md").exists()
+
+    def test_name_collision_skipped(self, workspace):
+        import config
+        (config.skills_dir() / "fetch_release_notes.md").write_text(self.SKILL_MD)
+        self._fresh_loader()
+        self._run_with_artifact("h00000d5")
+        card = curate_run("h00000d5")
+        sl = card["skills_lite"]
+        assert sl["promoted"] == []
+        assert "collision" in sl["skipped"][0]["reason"]
+
+    def test_non_skill_md_ignored(self, workspace):
+        self._run_with_artifact("h00000d6", content="# just a report\n\nprose\n",
+                                fname="report.md")
+        card = curate_run("h00000d6")
+        assert "skills_lite" not in card
+
+    def test_config_off_disables(self, workspace, monkeypatch):
+        import config
+        import run_curation
+        monkeypatch.setattr(run_curation, "_lite_enabled", lambda: False)
+        self._run_with_artifact("h00000d7")
+        card = curate_run("h00000d7")
+        assert "skills_lite" not in card
+        assert not (config.skills_dir() / "fetch_release_notes.md").exists()
+
+    def test_open_circuit_quarantines_md(self, workspace):
+        import config
+        from run_curation import degrade_skills_lite
+        from skills import load_skills, save_skill, load_skill_provenance
+        self._run_with_artifact("h00000d8")
+        curate_run("h00000d8")
+        comp = next(s for s in load_skills() if s.name == "fetch_release_notes")
+        comp.circuit_state = "open"
+        save_skill(comp)
+        assert degrade_skills_lite() == ["fetch_release_notes"]
+        assert not (config.skills_dir() / "fetch_release_notes.md").exists()
+        q = config.skills_dir() / "_quarantine" / "fetch_release_notes.md"
+        assert q.is_file()
+        loader = self._fresh_loader()
+        assert not any(s.name == "fetch_release_notes"
+                       for s in loader.load_summaries())
+        recs = load_skill_provenance("fetch_release_notes")
+        assert recs[0]["decision"] == "demote"
+
+    def test_missing_companion_quarantines_md(self, workspace):
+        import config
+        from run_curation import degrade_skills_lite
+        (config.skills_dir() / "orphan_lite.md").write_text(
+            "---\nname: orphan_lite\ndescription: \"x\"\n"
+            "triggers: ['orphan']\ntier: skills-lite\n---\nbody\n")
+        assert degrade_skills_lite() == ["orphan_lite"]
+        assert (config.skills_dir() / "_quarantine" / "orphan_lite.md").is_file()
+
+    def test_healthy_companion_not_quarantined(self, workspace):
+        import config
+        from run_curation import degrade_skills_lite
+        self._run_with_artifact("h00000d9")
+        curate_run("h00000d9")
+        assert degrade_skills_lite() == []
+        assert (config.skills_dir() / "fetch_release_notes.md").is_file()
