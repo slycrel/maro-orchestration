@@ -1676,9 +1676,13 @@ def _handle_impl(
             # and the run still finalized done, poisoning recall, the
             # dispatch guard, and the navigator. Verified-done beats
             # reported-done.
+            # Unjudged verdicts (negative verdict resting only on inconclusive
+            # probes — verifier tooling/privilege failures, not disproof) must
+            # not demote: that's the verifier's failure, not the goal's.
             if (
                 _closure is not None
                 and not _closure.complete
+                and getattr(_closure, "judged", True)
                 and _closure.confidence >= 0.7
                 and loop_result.status == "done"
             ):
@@ -1703,30 +1707,44 @@ def _handle_impl(
             # would bless unverified work as achieved (burn-in batch 4,
             # 2026-07-02: a rate-limit-stuck run got goal_achieved=True from
             # a skipped verification). No checks → no verdict → unverified.
+            # Unjudged verdicts additionally omit goal_achieved: when every
+            # non-passing check was inconclusive (verifier syntax error,
+            # permission wall, missing tool), the verdict has no disproof in
+            # it — recording false would blame the goal for the verifier's
+            # own failures (2026-07-09 dogfood batch: 4/5 known-good runs
+            # false-negatived this way). Absence means "not judged".
             if _closure is not None and _closure.checks_run > 0:
                 try:
                     from runs import write_metadata as _wm_verdict
                     from runs import current_run_dir as _crd_verdict
                     _rd_v = _crd_verdict()
                     if _rd_v is not None:
+                        _judged = getattr(_closure, "judged", True)
+                        _verdict_extra = {
+                            "goal_verdict_confidence": float(_closure.confidence),
+                            "goal_verdict_source": (
+                                "closure" if _judged else "closure_unverifiable"
+                            ),
+                            "goal_verdict_summary": str(_closure.summary)[:300],
+                        }
+                        if _judged:
+                            _verdict_extra["goal_achieved"] = bool(_closure.complete)
                         _wm_verdict(
                             _rd_v, handle_id=handle_id, prompt=_raw_input,
-                            extra={
-                                "goal_achieved": bool(_closure.complete),
-                                "goal_verdict_confidence": float(_closure.confidence),
-                                "goal_verdict_source": "closure",
-                                "goal_verdict_summary": str(_closure.summary)[:300],
-                            },
+                            extra=_verdict_extra,
                         )
                         # Compiled-truth half (MILESTONES #3a): a closure
                         # verdict with checks actually run is a verified
                         # claim — one line per run in the thread brain.
                         try:
                             from thread_brain import append_compiled_truth
+                            _verdict_word = (
+                                ("achieved" if _closure.complete else "NOT achieved")
+                                if _judged else "UNVERIFIABLE (probes inconclusive)"
+                            )
                             append_compiled_truth(
                                 _rd_v,
-                                f"closure verdict: "
-                                f"{'achieved' if _closure.complete else 'NOT achieved'}"
+                                f"closure verdict: {_verdict_word}"
                                 f" (conf {float(_closure.confidence):.2f}, "
                                 f"{int(_closure.checks_run)} checks) — "
                                 f"{str(_closure.summary)[:200]}",

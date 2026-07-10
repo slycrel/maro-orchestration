@@ -200,6 +200,60 @@ def extract_symbol_claims(text: str) -> List[str]:
     ]
 
 
+def _infer_project_root() -> Path:
+    """Resolve the base directory claims are checked against.
+
+    Preference order:
+      1. The run-scoped subprocess cwd — the project dir the executor actually
+         wrote into (same base workers/quality_gate/closure use). Without this,
+         inference walks up from Maro's launch cwd (the repo, which has src/),
+         and files a worker cited relative to its project dir are declared
+         not-found (2026-07-09 dogfood: output/repro/cart.py flagged
+         hallucinated while sitting on disk).
+      2. Upward walk from cwd for pyproject.toml / src (repo-style layout).
+      3. cwd itself.
+    """
+    try:
+        from llm import get_default_subprocess_cwd
+        run_cwd = get_default_subprocess_cwd()
+        if run_cwd and Path(run_cwd).is_dir():
+            return Path(run_cwd)
+    except Exception:
+        pass
+    cwd = Path.cwd()
+    for parent in [cwd, *cwd.parents]:
+        if (parent / "pyproject.toml").exists() or (parent / "src").exists():
+            return parent
+    return cwd
+
+
+# Dirs never descended into when indexing basenames; caps keep the walk
+# bounded even if someone points this at a huge tree.
+_INDEX_SKIP_DIRS = frozenset({".git", "__pycache__", "node_modules", ".venv", ".tox"})
+_INDEX_MAX_DIRS = 2000
+
+
+def _basename_index(project_root: Path) -> Set[str]:
+    """One bounded walk of the project tree → set of file basenames.
+
+    Backs the bare-filename fallback in verify_file_claims: a claim like
+    "cart.py" is verified if any file of that name exists anywhere under the
+    project dir (workers legitimately save artifacts in subdirs like
+    output/repro/), without doing a fresh tree walk per claim.
+    """
+    import os
+    names: Set[str] = set()
+    try:
+        for i, (dirpath, dirnames, filenames) in enumerate(os.walk(project_root)):
+            if i >= _INDEX_MAX_DIRS:
+                break
+            dirnames[:] = [d for d in dirnames if d not in _INDEX_SKIP_DIRS]
+            names.update(filenames)
+    except OSError:
+        pass
+    return names
+
+
 def _build_symbol_index(project_root: Path) -> Set[str]:
     """Scan Python source files in the project and return a set of top-level symbols.
 
@@ -237,13 +291,7 @@ def verify_symbol_claims(
     no LLM. Returns SymbolReport with verified/not_found lists.
     """
     if project_root is None:
-        cwd = Path.cwd()
-        for parent in [cwd, *cwd.parents]:
-            if (parent / "pyproject.toml").exists() or (parent / "src").exists():
-                project_root = parent
-                break
-        else:
-            project_root = cwd
+        project_root = _infer_project_root()
 
     claims = extract_symbol_claims(text)
     if not claims:
@@ -270,19 +318,14 @@ def verify_file_claims(
         ClaimReport with verified/not_found/unresolvable lists.
     """
     if project_root is None:
-        # Try to find repo root by looking for pyproject.toml upward from CWD
-        cwd = Path.cwd()
-        for parent in [cwd, *cwd.parents]:
-            if (parent / "pyproject.toml").exists() or (parent / "src").exists():
-                project_root = parent
-                break
-        else:
-            project_root = cwd
+        # Prefer the run-scoped project dir; fall back to repo-root inference.
+        project_root = _infer_project_root()
 
     claims = extract_file_claims(text)
     verified = []
     not_found = []
     unresolvable = []
+    name_index: Optional[Set[str]] = None  # built lazily on first bare-name miss
 
     for claim in claims:
         try:
@@ -292,12 +335,15 @@ def verify_file_claims(
             else:
                 # Only try bare-filename fallback when the claim has no directory component —
                 # a claim like "wrong_dir/module.py" should NOT match "src/module.py".
+                # The fallback searches the whole project tree (bounded walk):
+                # workers cite bare names for artifacts they saved in subdirs
+                # (output/repro/cart.py), and "exists somewhere under the
+                # project" is the honest existence answer for a bare name.
                 found = False
                 if Path(claim).parent == Path("."):
-                    for search_dir in [project_root / "src", project_root / "tests", project_root]:
-                        if (search_dir / Path(claim).name).exists():
-                            found = True
-                            break
+                    if name_index is None:
+                        name_index = _basename_index(project_root)
+                    found = Path(claim).name in name_index
                 if found:
                     verified.append(claim)
                 else:

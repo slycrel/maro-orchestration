@@ -18,6 +18,24 @@ def _setup(monkeypatch, tmp_path):
     return tmp_path
 
 
+def _stub_build_adapter(monkeypatch):
+    """Make handle(dry_run=False) hermetic: stub llm.build_adapter.
+
+    _handle_impl imports build_adapter from llm at call time, so the patch
+    target is the llm module (patching a `handle.build_adapter` attribute is
+    a no-op — no such name exists). Without this stub the tests depend on
+    ambient backend detection: on this box the real `claude` binary is found
+    (an adapter builds and is never invoked), on a CI runner nothing is
+    available and build_adapter raises RuntimeError before the patched loop
+    is ever reached.
+    """
+    import llm
+    adapter = MagicMock()
+    adapter.model_key = "cheap"
+    monkeypatch.setattr(llm, "build_adapter", lambda *a, **kw: adapter)
+    return adapter
+
+
 # ---------------------------------------------------------------------------
 # HandleResult.format()
 # ---------------------------------------------------------------------------
@@ -337,12 +355,7 @@ class TestModeThinModifier:
         monkeypatch.setattr(_ft_mod, "run_factory_thin", _fake_factory_thin)
 
         # Patch build_adapter so no real LLM calls are made
-        import handle as _handle_mod
-        from unittest.mock import MagicMock
-        _mock_adapter = MagicMock()
-        _mock_adapter.model_key = "cheap"
-        monkeypatch.setattr(_handle_mod, "build_adapter",
-                            lambda **kw: _mock_adapter, raising=False)
+        _stub_build_adapter(monkeypatch)
 
         result = handle(goal, force_lane="agenda")
         return result, _called_thin
@@ -1222,6 +1235,7 @@ class TestPreFlightReviewSurfacing:
     def test_wide_scope_appends_warning_to_result_text(self, monkeypatch, tmp_path):
         """When pre_flight_review.scope == 'wide', result text gets a warning."""
         monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        _stub_build_adapter(monkeypatch)
         from unittest.mock import MagicMock, patch
         from agent_loop import LoopResult, StepOutcome
 
@@ -1248,6 +1262,7 @@ class TestPreFlightReviewSurfacing:
     def test_non_wide_scope_no_warning(self, monkeypatch, tmp_path):
         """scope=narrow/medium doesn't add a pre-flight warning."""
         monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        _stub_build_adapter(monkeypatch)
         from unittest.mock import MagicMock, patch
         from agent_loop import LoopResult, StepOutcome
 
@@ -1400,6 +1415,7 @@ class TestDirectorRestart:
 
     def _setup(self, monkeypatch, tmp_path):
         monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        _stub_build_adapter(monkeypatch)
 
     @staticmethod
     def _no_quality_gate():
@@ -1552,6 +1568,7 @@ class TestClosureRestart:
 
     def _setup(self, monkeypatch, tmp_path):
         monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        _stub_build_adapter(monkeypatch)
 
     @staticmethod
     def _no_quality_gate():
@@ -1892,6 +1909,103 @@ class TestClosureRestart:
         passed_scope = verify_calls[0].get("scope")
         assert passed_scope is not None, "scope not plumbed into verify_goal_completion"
         assert passed_scope.failure_modes == ["server never started"]
+
+    def test_resolved_intent_injected_when_ab_skip_off(self, monkeypatch, tmp_path):
+        """The inject arm: with scope_generation on and scope_ab_skip off (the
+        default), the resolved intent's markdown must land in the loop's
+        ancestry_context_extra. This arm went live 2026-07-09 (SF-4 resolution)
+        having never run in production — the 2026-04-22 A/B predates the
+        ResolvedIntent branch, and the box sat in the control arm ever since.
+        """
+        self._setup(monkeypatch, tmp_path)
+        from unittest.mock import patch
+        from scope import ResolvedIntent, ScopeSet, Deliverable
+
+        done_result = self._fake_loop_result(status="done")
+
+        def _cfg(name, default=None):
+            if name == "scope_generation":
+                return True
+            return default  # scope_ab_skip falls through to default False
+
+        intent = ResolvedIntent(
+            scope=ScopeSet(
+                failure_modes=["server never started"],
+                in_scope=["message echo"],
+                out_of_scope=["auth"],
+                raw_text="",
+            ),
+            deliverables=[Deliverable(name="output/echo.py", description="echo script")],
+        )
+
+        loop_kwargs = []
+        def _fake_run(*args, **kwargs):
+            loop_kwargs.append(kwargs)
+            return done_result
+
+        with patch("agent_loop.run_agent_loop", side_effect=_fake_run), \
+             patch("intent.check_goal_clarity", return_value={"clear": True}), \
+             patch("scope.generate_resolved_intent", return_value=intent), \
+             patch("director.verify_goal_completion",
+                   return_value=self._fake_closure(True, 0.9)), \
+             patch("config.get", side_effect=_cfg), \
+             self._no_quality_gate():
+            handle("build X", force_lane="agenda", dry_run=False)
+
+        assert loop_kwargs, "run_agent_loop was not invoked"
+        extra = loop_kwargs[0].get("ancestry_context_extra", "")
+        assert "server never started" in extra, (
+            "resolved intent scope not injected into ancestry_context_extra"
+        )
+        assert "output/echo.py" in extra, (
+            "resolved intent deliverables not injected"
+        )
+
+    def test_resolved_intent_not_injected_when_ab_skip_on(self, monkeypatch, tmp_path):
+        """The control arm: scope_ab_skip=True generates but does NOT inject —
+        the exact configuration that silently ran on the box for ~3 months
+        (SF-4: paying the scope call, discarding the benefit). Regression pair
+        for the inject test above: if this starts injecting, the A/B seam
+        (scripts/scope_ab_runner.py) is broken."""
+        self._setup(monkeypatch, tmp_path)
+        from unittest.mock import patch
+        from scope import ResolvedIntent, ScopeSet
+
+        done_result = self._fake_loop_result(status="done")
+
+        def _cfg(name, default=None):
+            if name in ("scope_generation", "scope_ab_skip"):
+                return True
+            return default
+
+        intent = ResolvedIntent(
+            scope=ScopeSet(
+                failure_modes=["server never started"],
+                in_scope=["message echo"],
+                out_of_scope=["auth"],
+                raw_text="",
+            ),
+        )
+
+        loop_kwargs = []
+        def _fake_run(*args, **kwargs):
+            loop_kwargs.append(kwargs)
+            return done_result
+
+        with patch("agent_loop.run_agent_loop", side_effect=_fake_run), \
+             patch("intent.check_goal_clarity", return_value={"clear": True}), \
+             patch("scope.generate_resolved_intent", return_value=intent), \
+             patch("director.verify_goal_completion",
+                   return_value=self._fake_closure(True, 0.9)), \
+             patch("config.get", side_effect=_cfg), \
+             self._no_quality_gate():
+            handle("build X", force_lane="agenda", dry_run=False)
+
+        assert loop_kwargs, "run_agent_loop was not invoked"
+        extra = loop_kwargs[0].get("ancestry_context_extra", "")
+        assert "server never started" not in extra, (
+            "control arm injected scope — scope_ab_skip is broken"
+        )
 
     def test_scope_skipped_event_when_generator_returns_none(self, monkeypatch, tmp_path):
         """When scope generation is enabled but produces nothing (adapter
@@ -2556,6 +2670,7 @@ class TestClosureStatusHonesty:
 
     def _setup(self, monkeypatch, tmp_path):
         monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        _stub_build_adapter(monkeypatch)
 
     @staticmethod
     def _no_quality_gate():
@@ -2944,3 +3059,98 @@ class TestForkAncestryWriteSide:
         self._dispatch(monkeypatch, tmp_path, goal,
                        {"parent_goal": goal, "parent_handle_id": "h1"})
         assert get_project_ancestry(project_dir(_goal_to_slug(goal))) is None
+
+
+# ---------------------------------------------------------------------------
+# 2026-07-09 dogfood-batch regression: tri-state closure verdicts. A negative
+# verdict resting entirely on inconclusive probes (verifier syntax errors,
+# permission walls) is UNJUDGED — recording goal_achieved=false or demoting
+# the run's status would blame the goal for the verifier's own failures.
+# ---------------------------------------------------------------------------
+
+class TestClosureUnjudgedVerdict:
+
+    def _setup(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+
+    @staticmethod
+    def _no_quality_gate():
+        verdict = MagicMock()
+        verdict.escalate = False
+        verdict.contested_claims = []
+        return patch("quality_gate.run_quality_gate", return_value=verdict)
+
+    def _fake_loop_result(self, status="done"):
+        from agent_loop import LoopResult, StepOutcome
+        return LoopResult(
+            loop_id="test-lr", project="test-proj", goal="build X",
+            status=status, stuck_reason=None,
+            steps=[StepOutcome(index=0, text="step", status="done",
+                               result="output", iteration=0)],
+        )
+
+    def _unjudged_verdict(self):
+        from director import ClosureVerdict
+        return ClosureVerdict(
+            complete=False, confidence=0.9,
+            gaps=["probe could not run"], summary="verifier tooling failed",
+            checks_run=2, checks_passed=1, inconclusive_count=1, judged=False,
+        )
+
+    def test_unjudged_verdict_not_recorded_as_goal_achieved_false(
+            self, monkeypatch, tmp_path):
+        self._setup(monkeypatch, tmp_path)
+        import runs as runs_mod
+
+        with patch("agent_loop.run_agent_loop", return_value=self._fake_loop_result()), \
+             patch("intent.check_goal_clarity", return_value={"clear": True}), \
+             patch("director.verify_goal_completion", return_value=self._unjudged_verdict()), \
+             self._no_quality_gate():
+            hr = handle("build X", force_lane="agenda", dry_run=False)
+
+        meta = json.loads(
+            (runs_mod.run_dir(hr.handle_id) / "metadata.json").read_text())
+        assert "goal_achieved" not in meta, (
+            "unjudged verdict must leave goal_achieved absent (= not judged)")
+        # The verdict is still visible — just honestly labeled.
+        assert meta.get("goal_verdict_source") == "closure_unverifiable"
+        assert "goal_verdict_summary" in meta
+
+    def test_unjudged_verdict_does_not_demote_status(self, monkeypatch, tmp_path):
+        """Before the tri-state, an unjudged complete=False at conf>=0.7
+        demoted a done run to incomplete — the specimen false-negative."""
+        self._setup(monkeypatch, tmp_path)
+
+        with patch("agent_loop.run_agent_loop", return_value=self._fake_loop_result()), \
+             patch("intent.check_goal_clarity", return_value={"clear": True}), \
+             patch("director.verify_goal_completion", return_value=self._unjudged_verdict()), \
+             self._no_quality_gate():
+            hr = handle("build X", force_lane="agenda", dry_run=False)
+
+        assert hr.status == "done", (
+            f"unjudged closure verdict demoted status to {hr.status!r}")
+
+    def test_judged_negative_verdict_still_recorded_and_demotes(
+            self, monkeypatch, tmp_path):
+        """Positive control: a judged negative verdict (a check cleanly
+        failed) keeps the pre-existing record-and-demote behavior."""
+        self._setup(monkeypatch, tmp_path)
+        import runs as runs_mod
+        from director import ClosureVerdict
+
+        judged_negative = ClosureVerdict(
+            complete=False, confidence=0.9,
+            gaps=["artifact missing"], summary="not delivered",
+            checks_run=2, checks_passed=1, inconclusive_count=1, judged=True,
+        )
+        with patch("agent_loop.run_agent_loop", return_value=self._fake_loop_result()), \
+             patch("intent.check_goal_clarity", return_value={"clear": True}), \
+             patch("director.verify_goal_completion", return_value=judged_negative), \
+             self._no_quality_gate():
+            hr = handle("build X", force_lane="agenda", dry_run=False)
+
+        meta = json.loads(
+            (runs_mod.run_dir(hr.handle_id) / "metadata.json").read_text())
+        assert meta.get("goal_achieved") is False
+        assert meta.get("goal_verdict_source") == "closure"
+        assert hr.status == "incomplete"

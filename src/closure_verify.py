@@ -59,6 +59,14 @@ _CLOSURE_PLAN_SYSTEM = textwrap.dedent("""\
     Output rules:
     - Generate 2–5 checks. Each must be a single shell command.
     - Each check MUST name which failure mode (or inversion hypothesis) it probes.
+    - When a file inventory of the working directory is provided, probe those
+      exact paths — do NOT invent expected filenames. A deliverable saved under
+      a different name than you'd guess is still delivered; a check against a
+      guessed name that fails proves nothing about the goal.
+    - When probing the content of a file you have not read, prefer predicates
+      over the whole file (e.g. `grep -qiE 'urgent|deadline' file`) to
+      position/format-specific pipelines — numbered-list or quote-prefix
+      assumptions break on tables and code fences and fail work that is fine.
     - Commands must be fast (<15s), safe (read-only or self-cleaning), and exit 0
       on success. Wrap background processes with `timeout` and always clean up PIDs.
     - Prefer robust checks over brittle string-matching theater. If a grep pattern
@@ -109,6 +117,13 @@ class ClosureVerdict:
     checks_run: int
     checks_passed: int
     inconclusive_count: int = 0
+    # False when the verdict hinges entirely on inconclusive probes (verifier
+    # tooling error, permission denied, missing tool) — i.e. no check actually
+    # ran cleanly and disproved the work. An unjudged verdict must not be
+    # recorded as goal_achieved=false: absence of the key means "not judged".
+    # 2026-07-09 dogfood batch: 4/5 known-good runs were false-negatived by
+    # verdicts resting on the verifier's own failures, not the goal's.
+    judged: bool = True
 
 
 _PRECOND_SENTINELS = frozenset({"none", "n/a", "na", "-", "tbd", "(none)", "null", "nil"})
@@ -153,6 +168,14 @@ def _classify_precondition(preq: str) -> str:
         and not s.startswith(("/", "./", "../", "~"))
         and re.match(r"^[a-z0-9][\w.-]*/[a-z0-9][\w.-]*$", s, re.IGNORECASE)
     ):
+        return "opaque"
+    # Prose with an embedded slash ("Python/YAML parser to validate format",
+    # "~/.maro/workspace writable") is not a path — real paths don't contain
+    # whitespace in practice, LLM-emitted prose preconditions almost always do.
+    # Without this, prose lands in the path branch, fails Path.exists, and the
+    # bogus "failed precondition" poisons the verdict feed (2026-07-09 dogfood
+    # batch: 3 of 4 false-negatived runs carried these synthetic failures).
+    if re.search(r"\s", s):
         return "opaque"
     # Path-shaped: starts with /, ./, ../, ~, or contains a slash
     if s.startswith(("/", "./", "../", "~")) or "/" in s:
@@ -202,7 +225,11 @@ def _run_precondition_preflight(
                     "outcome": _check_outcome(exit_code=exit_code, stderr=stderr),
                 })
             elif kind == "path":
-                target = (base / preq).resolve() if not Path(preq).is_absolute() else Path(preq)
+                # expanduser first: Path("~/x").is_absolute() is False, so a
+                # tilde path would otherwise resolve to base/"~/x" — a literal
+                # "~" directory that never exists.
+                _pp = Path(preq).expanduser()
+                target = _pp if _pp.is_absolute() else (base / _pp).resolve()
                 passed = target.exists()
                 stderr = "" if passed else f"path `{preq}` does not exist"
                 exit_code = 0 if passed else 127
@@ -230,6 +257,23 @@ def _check_outcome(*, exit_code: int, stderr: str = "") -> str:
     if "command not found" in err or "not on path" in err or "no such file or directory" in err:
         return "inconclusive"
     if "timed out" in err or "timeout" in err:
+        return "inconclusive"
+    # The probe's own tooling failed — the command never ran to a clean
+    # true/false answer, so it can neither prove nor disprove the work.
+    # Verifier-authored syntax errors: a python -c / heredoc one-liner that
+    # didn't parse reports File "<string>" / "<stdin>" (witty-spruce run:
+    # "format validation" was scored as a goal failure off exactly this);
+    # a SyntaxError pointing at a real file is the WORK failing to parse
+    # and stays "fail". Shell parse errors ("syntax error near unexpected
+    # token") are likewise the verifier's own command text. Permission
+    # denied = the verifier's environment lacks access the worker had
+    # (keen-alder run: journalctl). AssertionError et al. stay "fail" —
+    # those mean the check RAN and the asserted fact was false.
+    if "syntaxerror" in err and ('"<string>"' in err or '"<stdin>"' in err):
+        return "inconclusive"
+    if "syntax error near unexpected token" in err or "syntax error: " in err:
+        return "inconclusive"
+    if "permission denied" in err or "operation not permitted" in err:
         return "inconclusive"
     return "fail"
 
@@ -283,6 +327,44 @@ def _detect_next_ledger_gap(project: str, workspace_path: str) -> str:
         return ""
 
 
+_INVENTORY_SKIP_DIRS = frozenset({".git", "__pycache__", "node_modules", ".venv"})
+
+
+def _project_file_inventory(root: str, cap: int = 120) -> str:
+    """Bounded relative-path listing of the verification cwd — ground truth
+    for the closure plan so checks probe files that actually exist instead
+    of filenames the LLM guesses from the work summary.
+
+    2026-07-09 dogfood batch: two known-good runs were false-negatived by
+    checks against invented names (`output/brief_2026-07-09_run1.md`,
+    `output/fixture_diff.patch`) while the real deliverables sat next to
+    them (`output/daily_brief_20260709_163825.md`, `output/fixture.diff`).
+
+    Returns "" when root is missing/not a dir. Skips VCS/cache dirs and
+    .lock files; caps at `cap` entries with a truncation marker so a big
+    tree can't blow up the prompt.
+    """
+    import os
+    try:
+        rootp = Path(root)
+        if not rootp.is_dir():
+            return ""
+        entries: List[str] = []
+        for dirpath, dirnames, filenames in os.walk(rootp):
+            dirnames[:] = sorted(d for d in dirnames if d not in _INVENTORY_SKIP_DIRS)
+            rel = os.path.relpath(dirpath, rootp)
+            for fn in sorted(filenames):
+                if fn.endswith(".lock"):
+                    continue
+                entries.append(fn if rel == "." else os.path.join(rel, fn))
+                if len(entries) >= cap:
+                    entries.append(f"... (truncated at {cap} files)")
+                    return "\n".join(entries)
+        return "\n".join(entries)
+    except OSError:
+        return ""
+
+
 def verify_goal_completion(
     goal: str,
     steps: list,
@@ -331,6 +413,19 @@ def verify_goal_completion(
         try:
             from llm import get_default_subprocess_cwd
             workspace_path = get_default_subprocess_cwd() or ""
+        except Exception:
+            pass
+    # Last resort: derive the project dir from the project slug — the same
+    # identity agent_loop binds the ContextVar to. Covers callers reached
+    # from a context where the run-scoped cwd was never set (or was reset):
+    # without it, checks silently run in Maro's launch cwd and every
+    # relative artifact probe is a false negative.
+    if not workspace_path and project:
+        try:
+            from loop_types import _project_dir_root
+            _proj_dir = _project_dir_root() / project
+            if _proj_dir.is_dir():
+                workspace_path = str(_proj_dir)
         except Exception:
             pass
 
@@ -439,6 +534,15 @@ def verify_goal_completion(
     try:
         from llm import LLMMessage
 
+        # Ground-truth file inventory of the verification cwd — the plan
+        # probes actual paths instead of guessing deliverable filenames.
+        _inventory = _project_file_inventory(workspace_path) if workspace_path else ""
+        _inventory_block = (
+            "Files that actually exist under the working directory "
+            "(ground truth — probe these exact paths, do not invent names):\n"
+            f"{_inventory}\n\n"
+        ) if _inventory else ""
+
         # Phase 1: generate verification plan
         plan_resp = adapter.complete(
             [
@@ -446,6 +550,7 @@ def verify_goal_completion(
                 LLMMessage("user",
                     f"Goal: {goal}\n\n"
                     f"Working directory: {workspace_path or '(unspecified)'}\n\n"
+                    f"{_inventory_block}"
                     f"{_scope_block}"
                     f"{_deliverables_block}"
                     f"Work done:\n{work_summary}"
@@ -638,6 +743,29 @@ def verify_goal_completion(
             else:
                 summary = "Verification was inconclusive."
 
+        # Honest tri-state: a negative verdict with zero cleanly-failed checks
+        # rests entirely on probes that couldn't run (verifier syntax errors,
+        # permission walls, missing tools) — missing data, not disproof. Mark
+        # it unjudged so the recorder leaves goal_achieved absent instead of
+        # writing false, and status demotion stands down. Behavioral/diagnosis
+        # downgrades are exempt: those are evidence-based self-contradiction
+        # findings, not probe-infra casualties.
+        _fail_count = sum(1 for r in check_results if r.get("outcome") == "fail")
+        judged = True
+        if (
+            not complete
+            and _fail_count == 0
+            and inconclusive_checks
+            and not behavioral_gap_reason
+            and not diagnosis_gap_reason
+        ):
+            judged = False
+            log.info(
+                "closure: verdict unjudged — negative verdict rests only on "
+                "%d inconclusive probe(s), no check cleanly failed",
+                len(inconclusive_checks),
+            )
+
         verdict = ClosureVerdict(
             complete=complete,
             confidence=confidence,
@@ -646,6 +774,7 @@ def verify_goal_completion(
             checks_run=checks_run,
             checks_passed=checks_passed,
             inconclusive_count=len(inconclusive_checks),
+            judged=judged,
         )
 
         # Emit needs_work if gaps found
@@ -683,6 +812,7 @@ def verify_goal_completion(
                     "scope_supplied": scope is not None,
                     "modality_distribution": modality_dist,
                     "inconclusive_count": len(inconclusive_checks),
+                    "judged": judged,
                     "behavioral_gap_downgrade": behavioral_gap_reason or "",
                     "diagnosis_failure_class": safe_str(getattr(diagnosis, "failure_class", "")),
                     "diagnosis_gap_downgrade": diagnosis_gap_reason or "",

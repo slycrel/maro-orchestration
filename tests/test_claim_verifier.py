@@ -389,3 +389,66 @@ class TestAnnotateResultWithSymbols:
             check_symbols=False,
         )
         assert "SYMBOL_CLAIMS_NOT_FOUND" not in result
+
+
+# ---------------------------------------------------------------------------
+# 2026-07-09 dogfood regression: bare-filename resolution from the wrong base.
+# Worker-cited files living in project subdirs (output/repro/cart.py) were
+# flagged NOT FOUND because the fallback only checked src/, tests/, and the
+# root non-recursively — and with project_root=None the base itself was
+# inferred from Maro's launch cwd (the repo), not the run's project dir.
+# ---------------------------------------------------------------------------
+
+class TestBareFilenameResolution:
+    def test_bare_filename_found_in_nested_subdir(self, tmp_path):
+        from claim_verifier import verify_file_claims
+        repro = tmp_path / "output" / "repro"
+        repro.mkdir(parents=True)
+        (repro / "cart.py").write_text("def add(): pass\n")
+        (repro / "repro.py").write_text("import cart\n")
+        report = verify_file_claims(
+            "Planted bugs demonstrated in cart.py; see repro.py for the run.",
+            project_root=tmp_path,
+        )
+        assert "cart.py" in report.verified
+        assert "repro.py" in report.verified
+        assert report.not_found == []
+
+    def test_dir_component_claim_not_matched_elsewhere(self, tmp_path):
+        """Guard intact: a claim with a directory component ('docs/module.py')
+        must NOT match a same-named file elsewhere ('src/module.py') — the
+        recursive fallback applies to bare names only."""
+        from claim_verifier import verify_file_claims
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "module.py").write_text("x = 1\n")
+        report = verify_file_claims("Changed docs/module.py.", project_root=tmp_path)
+        assert "docs/module.py" in report.not_found
+
+    def test_git_dir_not_searched(self, tmp_path):
+        from claim_verifier import verify_file_claims
+        git = tmp_path / ".git"
+        git.mkdir()
+        (git / "ghost.py").write_text("")
+        report = verify_file_claims("The ghost.py file exists.", project_root=tmp_path)
+        assert "ghost.py" in report.not_found
+
+    def test_inference_prefers_run_scoped_cwd(self, tmp_path, monkeypatch):
+        """With project_root=None the base must be the run-scoped subprocess
+        cwd (the project dir the worker wrote into), not a repo root inferred
+        by walking up from Maro's launch cwd."""
+        from claim_verifier import verify_file_claims
+        import llm as llm_mod
+        proj = tmp_path / "proj"
+        (proj / "output").mkdir(parents=True)
+        (proj / "output" / "artifact.md").write_text("done")
+        token = llm_mod._DEFAULT_SUBPROCESS_CWD.set(str(proj))
+        try:
+            # Extractor reduces unknown-prefix paths to the bare name; the
+            # point here is the BASE: without the run-scoped cwd this claim
+            # resolves against the pytest launch cwd's repo and lands
+            # not_found even though the worker's artifact exists.
+            report = verify_file_claims("Wrote artifact.md as requested.")
+        finally:
+            llm_mod._DEFAULT_SUBPROCESS_CWD.reset(token)
+        assert "artifact.md" in report.verified
