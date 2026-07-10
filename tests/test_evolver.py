@@ -1912,7 +1912,10 @@ class TestRunSkillTestGate:
             called_with_adapter.append(adapter)
             return mock_result
 
-        with patch("evolver.build_adapter", return_value=mock_adapter):
+        # The gate imports llm.build_adapter at call time (evolver_store.py) —
+        # patching evolver.build_adapter is a decoy that only "passed" on boxes
+        # where the real builder could detect a claude install.
+        with patch("llm.build_adapter", return_value=mock_adapter):
             with patch("skills.load_skills", return_value=[skill]):
                 with patch("evolver_store.validate_skill_mutation", side_effect=capture_validate):
                     with patch("skills.generate_skill_tests", return_value=[{"input": "x", "expected": "y"}]):

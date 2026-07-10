@@ -3070,6 +3070,15 @@ class TestForkAncestryWriteSide:
 
 class TestClosureUnjudgedVerdict:
 
+    @pytest.fixture(autouse=True)
+    def _fake_claude_bin(self, monkeypatch, tmp_path):
+        # Backend DETECTION must succeed without a real claude install (CI
+        # runners have none); conftest's subprocess guard blocks invocation.
+        fake = tmp_path / "claude"
+        fake.write_text("#!/bin/sh\nexit 0\n")
+        fake.chmod(0o755)
+        monkeypatch.setenv("CLAUDE_BIN", str(fake))
+
     def _setup(self, monkeypatch, tmp_path):
         monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
 

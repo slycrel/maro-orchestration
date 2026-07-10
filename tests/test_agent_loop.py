@@ -2356,6 +2356,12 @@ def test_is_combined_exec_analyze_does_not_over_trigger():
 def test_run_agent_loop_recovers_if_compound_step_leaks_to_executor(monkeypatch, tmp_path):
     """Even if a shaper path misses a compound step, the executor guard should split it."""
     _setup_workspace(monkeypatch, tmp_path)
+    # Backend detection must succeed without a real claude install (CI has
+    # none); conftest's subprocess guard blocks any actual invocation.
+    _fake = tmp_path / "claude"
+    _fake.write_text("#!/bin/sh\nexit 0\n")
+    _fake.chmod(0o755)
+    monkeypatch.setenv("CLAUDE_BIN", str(_fake))
 
     import agent_loop as al
     import loop_planning
