@@ -2,7 +2,7 @@
 
 > Named for Publius Vergilius **Maro** — the poet Virgil, who in Dante's *Inferno* guides the traveler down through the dark and safely out the other side. Maro does the same for autonomous agents: hand it a goal and it finds the path through — decompose, execute, recover, report.
 
-Autonomous agent framework. Give it a goal; it decomposes, executes, learns, and reports. No hand-holding required.
+Autonomous agent framework that holds its agents accountable. Give it a goal; it decomposes, executes, and reports — then verifies whether the goal was actually achieved, not just whether the loop finished.
 
 Works standalone or alongside OpenClaw, Telegram, Slack, or any other interface you wire in.
 
@@ -27,11 +27,27 @@ Works standalone or alongside OpenClaw, Telegram, Slack, or any other interface 
 - **Autonomous loops**: goal → plan → execute steps → done|stuck, with stuck detection, roadblock recovery, and progress logging
 - **Multi-agent delegation**: Director plans, Workers execute (research / build / ops), Inspector validates — no Worker grades its own output
 - **Persistent memory**: lessons extracted from every run, injected into future prompts; tiered decay (short/medium/long); spaced repetition
-- **Self-improvement**: meta-evolver reviews failure patterns every 10 minutes and proposes prompt/guardrail/skill changes
+- **Learning pipeline**: skills synthesized and promoted at run finalization; per-run statistical scans record improvement suggestions — see [Memory and self-improvement](#memory-and-self-improvement) for exactly what fires today vs what's still experimental
 - **Skill library**: reusable step patterns extracted from successful runs; scored, tested, and promoted automatically
 - **Interface-agnostic**: Telegram, Slack, CLI, or call `run_agent_loop()` directly from Python — same behavior regardless of how a goal arrives
 - **Token-efficient research**: pre-fetch layer intercepts URLs before LLM calls, uses Jina Reader for clean markdown, authenticated X/Twitter access via CLI
 - **Cost reporting**: summarize `memory/step-costs.jsonl` into grouped latency/token/cost tables instead of eyeballing raw JSONL
+
+---
+
+## What makes it different
+
+Most of the list above is table stakes in 2026. Maro's distinguishing layer is accountability: "done" is treated as a claim to verify, not a status to trust.
+
+- **done ≠ achieved** — every run carries a `goal_achieved` verdict separate from loop completion; a run that finished without meeting the goal is demoted to `incomplete` and classified `done-not-achieved` on its run card (`handle.py`, `run_curation.py`)
+- **Fabrication detection** — a zero-LLM before/after filesystem diff flags steps that claim writes that never landed (`artifact_check.py`); file paths and Python symbols named in step results are existence-checked (`claim_verifier.py`)
+- **Grounded adversarial review** — a reviewer contesting a result must supply a read-only shell command that settles the contestation; we run it, so the verdict is mechanical rather than a second LLM opinion (`claim_probe.py`)
+- **Fail-closed spend caps** — $5/run and $25/day on by default; a malformed budget value falls back to the default cap, never to uncapped (`loop_init.py`)
+- **Write fence** — an out-of-fence write demotes a "done" step to blocked, with the offending paths logged as evidence (`loop_execute.py`)
+- **Replay capture** — every LLM call's prompt, response, and tool events are written secret-scrubbed to `<run-dir>/build/calls/`; local, free, on by default (`MARO_RECORD=0` to disable) (`runs.py`)
+- **Local-first validation** — an optional local model (ollama/mlx) acts as the first-pass step judge, escalating to a paid model only when uncertain; on the box this repo runs on, the free tier has decided 82% of recorded step verifications (58/71 ladder events) (`local_models.py`, `step_exec.py`)
+- **Portable learning** — `maro-import` merges runs and memory ledgers from another workspace with provenance markers and exact-line dedup under lock; curated files are quarantined for review, never merged into live state (`workspace_import.py`)
+- **No phone-home** — no network telemetry of any kind; all metrics stay in local JSONL
 
 ---
 
@@ -60,7 +76,7 @@ flowchart TD
         CKP --> MEM["Memory\nlessons · rules · decisions · skills"]
     end
 
-    MEM --> EV["Evolver\nmeta-improvement every ~10 heartbeats"]
+    MEM --> EV["Evolver\nper-run scans + skill synthesis"]
     EV -->|new skill| MEM
     EV -->|guardrail| CON[constraint.py\nHITL gating]
 
@@ -198,7 +214,7 @@ Reports include: task class grouping, ok/error split, median/p95 latency and tok
 | `maro.loop` | Step start/done/blocked, adapter timing, USD cost per step, loop lifecycle |
 | `maro.planner` | Multi-plan decomposition, dependency graph, execution levels |
 | `maro.persona` | Persona spawn, adapter resolution, spawn completion |
-| `maro.evolver` | Meta-evolution cycles, suggestion apply, skill synthesis |
+| `maro.evolver` | Per-run scans, skill synthesis, suggestion lifecycle |
 | `maro.introspect` | Failure diagnosis, lens analysis, recovery planning |
 
 ---
@@ -326,7 +342,7 @@ The workspace (`~/.maro/workspace/` by default) holds all runtime state, learnin
 ├── memory/           # Outcomes, lessons, knowledge nodes, captain's log, diagnoses
 ├── skills/           # Self-created/evolved skill .md files (override repo defaults)
 ├── personas/         # Self-created/evolved persona specs (override repo defaults)
-├── playbook.md       # Director's operational wisdom (auto-maintained by evolver)
+├── playbook.md       # Director's operational wisdom (appended when evolver suggestions are applied)
 ├── output/           # Run artifacts, operator status, research outputs
 ├── projects/         # Per-project NEXT.md, decisions, risks
 ├── user/             # YOUR GOALS.md / CONTEXT.md / SIGNALS.md (override the repo's neutral templates)
@@ -374,7 +390,7 @@ Workspace inherits from user; workspace keys override. Access in code: `from con
 | `workers.py` | Worker agents: research, build, ops, general |
 | `sheriff.py` | Loop Sheriff: detect stuck loops, system health checks |
 | `heartbeat.py` | Optional health monitor; autonomy and background drains are opt-in |
-| `evolver.py` | Meta-evolver: analyze outcomes → propose improvements |
+| `evolver.py` | Per-run statistical scans + skill synthesis; heartbeat meta-cycle (experimental) |
 | `inspector.py` | Quality agent: friction detection, alignment scoring, evolver feed |
 | `mission.py` | Mission hierarchy: Mission → Milestone → Feature → Worker Session |
 | `ancestry.py` | Goal ancestry chain: parent_id, ancestry.json, prompt injection |
@@ -386,16 +402,27 @@ Workspace inherits from user; workspace keys override. Access in code: `from con
 | `orch.py` | Core file-first state: NEXT.md tasks, run records, project lifecycle |
 | `checkpoint.py` | Per-step loop checkpointing: `write_checkpoint()`, `resume_from()`, `delete_checkpoint()` — enables loop resume |
 | `claim_verifier.py` | Hallucination detection: file-path and Python symbol existence checking on step results; `annotate_result()` surfaces `NOT_FOUND` / `SYMBOL_CLAIMS_NOT_FOUND` |
+| `artifact_check.py` | Filesystem ground truth: fabrication check (claimed writes vs real diff), write fence, scavenge detection |
+| `claim_probe.py` | Adversarial-review grounding: every contestation ships a read-only probe command that settles it |
+| `runs.py` | Run-dir state + record-mode: per-call prompt/response/tool-event capture to `build/calls/`, secret-scrubbed |
+| `run_curation.py` | Post-goal run card: classify outcome (success / done-not-achieved / done-unverified), inventory mineable assets |
+| `workspace_import.py` | `maro-import`: merge another workspace's runs + memory ledgers with provenance and dedup |
 
 ---
 
 ## Memory and self-improvement
+
+**Fires today** (per run, `loop_finalize.py`):
 
 ```
 Run completes
     → memory.py records outcome + extracts 1-3 lessons
     → tiered JSONL: short (session) / medium (weeks) / long (months)
     → decay applied daily; lessons promoted on score + reuse threshold
+    → skill extraction from successful runs; synthesis when no skill matched
+    → skill maintenance: auto-promote skills that hit their threshold
+    → statistical scans over recent outcomes → suggestions.jsonl
+      (observational: suggestions are recorded, never auto-applied)
 
 Promotion cycle (three-tier):
     → observe_pattern(lesson) → hypothesis (1 confirmation)
@@ -408,11 +435,6 @@ Decision journal:
     → search_decisions(goal) → TF-IDF ranked relevant priors injected before planning
     → prevents re-litigating settled decisions
 
-Every 10 heartbeat ticks (~10 min):
-    → evolver analyzes last 50 outcomes
-    → identifies failure patterns
-    → generates suggestions: prompt_tweak | new_guardrail | skill_pattern
-
 Next run with similar task:
     → inject_standing_rules() — unconditional rules prepended
     → inject_decisions(goal) — relevant prior decisions appended
@@ -421,6 +443,13 @@ Next run with similar task:
     → router.py picks skills by predicted success probability (not just keyword match)
     → TF-IDF fallback when router not trained — relevance-ranked, not just keyword substring
 ```
+
+**Designed, not production-proven** (`evolver.py` via `heartbeat.py`):
+`run_evolver` — a meta-cycle that reviews accumulated suggestions and
+proposes/applies prompt, guardrail, and skill changes. It sits behind opt-in
+heartbeat autonomy and has never fired in production; the per-run scans above
+exist to give it real data when it does. The shipped self-improvement is the
+learning pipeline above, not this — treat the meta-cycle as experimental.
 
 ---
 
