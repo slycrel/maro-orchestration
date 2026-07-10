@@ -782,3 +782,117 @@ def test_legacy_loop_commands_warn_deprecated(tmp_path):
     ):
         r = _run(tmp_path, *args)
         assert f"`maro {cmd}` is deprecated" in r.stderr, cmd
+
+
+class TestClosureVerdictPass:
+    """BACKLOG #18: `maro run`/`maro resume` run the same closure/verdict
+    path as maro-handle (honesty-only — verdict stamped on the outcomes row,
+    done demoted on judged contradiction, absent verdict = done-unverified)."""
+
+    class _Step:
+        def __init__(self, status="done", result="did the thing"):
+            self.status = status
+            self.result = result
+
+    class _Verdict:
+        def __init__(self, complete, confidence=0.9, judged=True,
+                     checks_run=3, checks_passed=1, summary="gaps found"):
+            self.complete = complete
+            self.confidence = confidence
+            self.judged = judged
+            self.checks_run = checks_run
+            self.checks_passed = checks_passed
+            self.gaps = []
+            self.summary = summary
+            self.inconclusive_count = 0
+
+    def _result(self, status="done"):
+        class _R:
+            pass
+        r = _R()
+        r.status = status
+        r.steps = [self._Step()]
+        r.loop_id = "loopXYZ1"
+        r.project = "proj-x"
+        r.stuck_reason = None
+        return r
+
+    def _patch(self, monkeypatch, verdict, annotations):
+        import director as _director
+        import llm as _llm
+        import memory as _memory
+        monkeypatch.setattr(_llm, "build_adapter", lambda **kw: object())
+        monkeypatch.setattr(_director, "verify_goal_completion",
+                            lambda *a, **kw: verdict)
+        monkeypatch.setattr(
+            _memory, "annotate_outcome_verdict",
+            lambda loop_id, **kw: annotations.append((loop_id, kw)) or True)
+
+    def test_judged_contradiction_demotes_done(self, monkeypatch):
+        ann = []
+        self._patch(monkeypatch, self._Verdict(complete=False), ann)
+        r = self._result("done")
+        v = _cli_module._closure_verdict_pass("the goal", r)
+        assert v is not None
+        assert r.status == "incomplete"
+        assert "closure verification" in r.stuck_reason
+        assert ann == [("loopXYZ1", {
+            "goal_achieved": False,
+            "goal_verdict_source": "closure",
+            "goal_verdict_confidence": 0.9,
+        })]
+
+    def test_complete_verdict_keeps_done(self, monkeypatch):
+        ann = []
+        self._patch(monkeypatch, self._Verdict(complete=True, checks_passed=3), ann)
+        r = self._result("done")
+        _cli_module._closure_verdict_pass("the goal", r)
+        assert r.status == "done"
+        assert ann[0][1]["goal_achieved"] is True
+
+    def test_unjudged_verdict_never_demotes(self, monkeypatch):
+        ann = []
+        self._patch(monkeypatch,
+                    self._Verdict(complete=False, judged=False), ann)
+        r = self._result("done")
+        _cli_module._closure_verdict_pass("the goal", r)
+        assert r.status == "done"
+        assert ann[0][1]["goal_achieved"] is None
+        assert ann[0][1]["goal_verdict_source"] == "closure_unverifiable"
+
+    def test_low_confidence_records_but_keeps_done(self, monkeypatch):
+        ann = []
+        self._patch(monkeypatch,
+                    self._Verdict(complete=False, confidence=0.5), ann)
+        r = self._result("done")
+        _cli_module._closure_verdict_pass("the goal", r)
+        assert r.status == "done"
+        assert ann[0][1]["goal_achieved"] is False  # recorded, not demoting
+
+    def test_adapter_failure_leaves_run_unverified(self, monkeypatch, capsys):
+        import llm as _llm
+        monkeypatch.setattr(_llm, "build_adapter",
+                            lambda **kw: (_ for _ in ()).throw(RuntimeError("no lane")))
+        r = self._result("done")
+        assert _cli_module._closure_verdict_pass("the goal", r) is None
+        assert r.status == "done"
+        assert "done-unverified" in capsys.readouterr().err
+
+    def test_dry_run_skips(self, monkeypatch):
+        r = self._result("done")
+        assert _cli_module._closure_verdict_pass("g", r, dry_run=True) is None
+
+    def test_no_done_steps_skips(self, monkeypatch):
+        r = self._result("done")
+        r.steps = [self._Step(status="blocked")]
+        assert _cli_module._closure_verdict_pass("g", r) is None
+
+    def test_zero_checks_records_nothing(self, monkeypatch):
+        # The fail-open null verdict (checks_run=0) must not bless the run.
+        ann = []
+        self._patch(monkeypatch,
+                    self._Verdict(complete=True, checks_run=0, checks_passed=0), ann)
+        r = self._result("done")
+        _cli_module._closure_verdict_pass("the goal", r)
+        assert ann == []
+        assert r.status == "done"

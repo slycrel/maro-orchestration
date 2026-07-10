@@ -3094,71 +3094,73 @@ def test_budget_bump_does_not_fire_with_few_remaining(monkeypatch, tmp_path):
 # Artifact cleanup
 # ---------------------------------------------------------------------------
 
-def test_artifact_cleanup_deletes_step_files_by_default(monkeypatch, tmp_path):
-    """Per-step artifact files are deleted at loop end when keep_artifacts is not set."""
+def test_artifact_cleanup_is_deferred_and_age_gated(monkeypatch, tmp_path):
+    """BACKLOG #18: finalize-time cleanup never deletes the just-finished
+    loop's step artifacts (the verdict is judged after the loop returns) —
+    it sweeps OTHER loops' step artifacts past the grace window instead."""
     monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    import os
+    from loop_finalize import cleanup_step_artifacts, STEP_ARTIFACT_GRACE_S
 
-    # Create fake per-step artifact files
     _art_dir = tmp_path / "projects" / "test-project" / "artifacts"
     _art_dir.mkdir(parents=True)
-    _loop_id = "abc123"
-    step_files = [_art_dir / f"loop-{_loop_id}-step-0{i}.md" for i in range(3)]
-    permanent_files = [
-        _art_dir / f"loop-{_loop_id}-PARTIAL.md",
-        _art_dir / f"loop-{_loop_id}-plan.md",
-    ]
-    for f in step_files + permanent_files:
+    current = _art_dir / "loop-abc123-step-01.md"          # just finished
+    aged_other = _art_dir / "loop-old111-step-01.md"       # prior loop, aged out
+    fresh_other = _art_dir / "loop-new222-step-01.md"      # prior loop, in grace
+    permanent = _art_dir / "loop-old111-PARTIAL.md"        # never step-pattern
+    for f in (current, aged_other, fresh_other, permanent):
         f.write_text("content")
+    _old = __import__("time").time() - STEP_ARTIFACT_GRACE_S - 60
+    os.utime(aged_other, (_old, _old))
+    os.utime(permanent, (_old, _old))
 
-    # Inject config that says keep_artifacts=False
-    import sys
-    fake_config = type(sys)("config")
-    fake_config.get = lambda key, default=None: (False if key == "keep_artifacts" else default)
-    monkeypatch.setitem(sys.modules, "config", fake_config)
+    deleted = cleanup_step_artifacts("test-project", exclude_loop_id="abc123")
 
-    # Simulate the cleanup logic directly (avoids running the full loop)
-    from pathlib import Path
-    from unittest.mock import patch
+    assert deleted == 1
+    assert current.exists(), "just-finished loop's artifacts must survive finalize"
+    assert not aged_other.exists(), "aged prior-loop step artifact should be swept"
+    assert fresh_other.exists(), "in-grace prior-loop artifact must survive"
+    assert permanent.exists(), "non-step artifacts are never swept"
 
-    _keep = False
-    _deleted = 0
-    if not _keep:
-        for _f in _art_dir.glob(f"loop-{_loop_id}-step-*.md"):
-            try:
-                _f.unlink()
-                _deleted += 1
-            except OSError:
-                pass
 
-    assert _deleted == 3, f"Expected 3 step files deleted, got {_deleted}"
-    # Step files gone
-    for f in step_files:
-        assert not f.exists(), f"{f.name} should have been deleted"
-    # Permanent files kept
-    for f in permanent_files:
-        assert f.exists(), f"{f.name} should have been kept"
+def test_artifact_cleanup_excluded_loop_survives_even_when_aged(monkeypatch, tmp_path):
+    """exclude_loop_id wins over age — a long-running loop's own artifacts
+    can be older than the grace window at finalize."""
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    import os, time as _t
+    from loop_finalize import cleanup_step_artifacts, STEP_ARTIFACT_GRACE_S
+
+    _art_dir = tmp_path / "projects" / "test-project" / "artifacts"
+    _art_dir.mkdir(parents=True)
+    current = _art_dir / "loop-abc123-step-01.md"
+    current.write_text("content")
+    _old = _t.time() - STEP_ARTIFACT_GRACE_S - 60
+    os.utime(current, (_old, _old))
+
+    assert cleanup_step_artifacts("test-project", exclude_loop_id="abc123") == 0
+    assert current.exists()
 
 
 def test_artifact_cleanup_retains_files_when_keep_artifacts_true(monkeypatch, tmp_path):
-    """Per-step artifacts are kept when keep_artifacts: true."""
+    """Per-step artifacts are kept when keep_artifacts: true — even aged ones."""
     monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    import os, time as _t
+    import config as _config
+    from loop_finalize import cleanup_step_artifacts, STEP_ARTIFACT_GRACE_S
 
     _art_dir = tmp_path / "projects" / "test-project" / "artifacts"
     _art_dir.mkdir(parents=True)
-    _loop_id = "abc123"
-    step_file = _art_dir / f"loop-{_loop_id}-step-01.md"
-    step_file.write_text("step output")
+    aged = _art_dir / "loop-old111-step-01.md"
+    aged.write_text("step output")
+    _old = _t.time() - STEP_ARTIFACT_GRACE_S - 60
+    os.utime(aged, (_old, _old))
+    _orig = _config.get
+    monkeypatch.setattr(_config, "get",
+                        lambda key, default=None: (True if key == "keep_artifacts"
+                                                   else _orig(key, default)))
 
-    # Simulate _keep = True path — no deletion
-    _keep = True
-    _deleted = 0
-    if not _keep:
-        for _f in _art_dir.glob(f"loop-{_loop_id}-step-*.md"):
-            _f.unlink()
-            _deleted += 1
-
-    assert _deleted == 0
-    assert step_file.exists(), "Step file should be retained when keep_artifacts=True"
+    assert cleanup_step_artifacts("test-project", exclude_loop_id="abc123") == 0
+    assert aged.exists(), "Step file should be retained when keep_artifacts=True"
 
 
 def test_artifact_cleanup_glob_pattern_does_not_match_permanent_files():

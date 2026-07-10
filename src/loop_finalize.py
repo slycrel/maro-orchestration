@@ -21,6 +21,58 @@ from loop_report import write_run_report as _write_run_report, write_runs_index 
 
 log = logging.getLogger("maro.loop")
 
+# How long a loop's per-step artifacts survive after their last write before
+# the deferred sweep may delete them. Long enough for the closure verdict
+# (seconds after finalize) and a post-hoc human audit; short enough that
+# keep_artifacts=false still means "temp".
+STEP_ARTIFACT_GRACE_S = 24 * 3600
+
+
+def cleanup_step_artifacts(project: str, *, exclude_loop_id: str = "",
+                           grace_s: float = STEP_ARTIFACT_GRACE_S) -> int:
+    """Deferred per-step artifact cleanup (BACKLOG #18 shape).
+
+    Deletes `loop-*-step-*.md` files in the project's artifacts dir that are
+    older than `grace_s`, never touching `exclude_loop_id`'s files — the
+    just-finished loop's step artifacts must outlive its verdict and audit
+    window, regardless of which lane invoked the loop. Honors
+    `keep_artifacts: true`. Returns the number of files deleted.
+    """
+    if not project:
+        return 0
+    try:
+        from config import get as _cfg_get
+        if bool(_cfg_get("keep_artifacts", False)):
+            return 0
+    except Exception:
+        pass
+    try:
+        try:
+            from runs import artifact_dir as _runs_artifact_dir
+            _art_dir = _runs_artifact_dir(project, project_root_fn=_project_dir_root)
+        except Exception:
+            _art_dir = _project_dir_root() / project / "artifacts"
+        _deleted = 0
+        _now = time.time()
+        _exclude_prefix = f"loop-{exclude_loop_id}-" if exclude_loop_id else None
+        for _f in _art_dir.glob("loop-*-step-*.md"):
+            if _exclude_prefix and _f.name.startswith(_exclude_prefix):
+                continue
+            try:
+                if _now - _f.stat().st_mtime < grace_s:
+                    continue
+                _f.unlink()
+                _deleted += 1
+            except OSError:
+                pass
+        if _deleted:
+            log.debug("artifact cleanup: deleted %d aged per-step artifact(s) "
+                      "(set keep_artifacts: true to retain)", _deleted)
+        return _deleted
+    except Exception as _art_exc:
+        log.debug("artifact cleanup failed: %s", _art_exc)
+        return 0
+
 
 def _build_result_and_finalize(
     ctx: LoopContext,
@@ -253,34 +305,16 @@ def _build_result_and_finalize(
         except Exception as _ckpt_exc:
             log.debug("checkpoint delete failed: %s", _ckpt_exc)
 
-    # Artifact cleanup: per-step artifacts are temp by default.
-    # Only keep them if config `keep_artifacts: true` is set.
-    # Plan manifests, RESULT/PARTIAL.md, loop logs, and scratchpad are always kept.
+    # Artifact cleanup: per-step artifacts are temp by default (config
+    # `keep_artifacts: true` retains them). BACKLOG #18 (hermes trial, live
+    # specimen): the closure/goal verdict is judged AFTER the loop returns —
+    # deleting the just-finished loop's step artifacts here destroyed the
+    # evidence needed to audit a semantic miss. So cleanup is deferred: each
+    # finalize sweeps OTHER loops' step artifacts past a grace window and
+    # never touches the current loop's. Plan manifests, RESULT/PARTIAL.md,
+    # loop logs, and scratchpad are always kept.
     if not ctx.dry_run and ctx.project:
-        try:
-            from config import get as _cfg_get
-            _keep = bool(_cfg_get("keep_artifacts", False))
-        except Exception:
-            _keep = False
-        if not _keep:
-            try:
-                try:
-                    from runs import artifact_dir as _runs_artifact_dir
-                    _art_dir = _runs_artifact_dir(ctx.project, project_root_fn=_project_dir_root)
-                except Exception:
-                    _art_dir = _project_dir_root() / ctx.project / "artifacts"
-                _deleted = 0
-                for _f in _art_dir.glob(f"loop-{ctx.loop_id}-step-*.md"):
-                    try:
-                        _f.unlink()
-                        _deleted += 1
-                    except OSError:
-                        pass
-                if _deleted:
-                    log.debug("artifact cleanup: deleted %d per-step artifact(s) "
-                              "(set keep_artifacts: true to retain)", _deleted)
-            except Exception as _art_exc:
-                log.debug("artifact cleanup failed: %s", _art_exc)
+        cleanup_step_artifacts(ctx.project, exclude_loop_id=ctx.loop_id)
 
     # busy_policy=worktree: merge the run's isolated worktree back into the
     # project checkout before releasing the slot. Conflict never drops work —

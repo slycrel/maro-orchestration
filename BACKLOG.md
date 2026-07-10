@@ -217,9 +217,30 @@ bundle install*), and:
   lesson literally says "verify against stated structural constraints"), so
   the semantic miss sailed through. Static-probe bias on an unguarded path.
 
-Two asks: (a) every execution lane that can mark `done` must run the same
-closure/verdict path as `maro-handle` (or be demoted to `done_unverified`);
-(b) cleanup must never delete step artifacts before the verdict is recorded.
+Two asks — **both SHIPPED 2026-07-10**:
+- [x] **(a) verdict parity:** `cli._closure_verdict_pass` runs the same
+  closure core (`verify_goal_completion` → `annotate_outcome_verdict` →
+  demote done→incomplete on judged contradiction at conf ≥ 0.7, mirroring
+  handle.py's status-honesty gate) on both `maro run` and `maro resume`.
+  Honesty-only — no closure-restart machinery. When closure can't run (no
+  adapter/LLM error) the verdict is absent, which run history already
+  classifies as done-unverified — never verified done. Verdict surfaces in
+  the command output (`goal_achieved` + summary). 8 tests
+  (tests/test_cli.py TestClosureVerdictPass).
+- [x] **(b) evidence-safe cleanup:** finalize-time per-step artifact
+  deletion replaced by a deferred sweep (`loop_finalize.
+  cleanup_step_artifacts`): each finalize sweeps *other* loops'
+  `loop-*-step-*.md` older than a 24h grace window and never touches the
+  just-finished loop's files — verdict + audit window survive on every
+  lane (all ~15 run_agent_loop callers), no per-lane flag threading.
+  `keep_artifacts: true` still retains everything (DEFAULTS.md updated).
+  3 tests rewritten against the real function.
+
+Residual (kept open, smaller): this lane still creates **no `runs/<id>/`
+dir** — `maro inspect-run <loop_id>` stays E_RUN_NOT_FOUND and per-run
+attribution capture doesn't engage outside `maro-handle`. The verdict now
+lands loop-keyed on outcomes.jsonl, so learning consumers see it; run-dir
+capture for the direct-CLI lane is a separate (deliberate) lift.
 Outcome row: outcomes.jsonl 20aae85f (workspace of the hermes trial container,
 importable via `maro-import` from
 `~/claude/hermes-maro-trial/data/home/.maro/workspace`).

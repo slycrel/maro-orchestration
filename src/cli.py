@@ -473,6 +473,65 @@ def _cmd_handle(args: argparse.Namespace) -> int:
     return 0 if result.status == "done" else 1
 
 
+def _closure_verdict_pass(goal_str: str, result, *, dry_run: bool = False):
+    """BACKLOG #18 (hermes trial, live specimen): every CLI lane that can mark
+    "done" must run the same closure/verdict path as maro-handle — a
+    third-party harness driving `maro run`/`maro resume` otherwise gets
+    structurally-verified-only "done" with no goal_achieved verdict anywhere.
+
+    Honesty-only parity: no closure-restart machinery, verdict stamped onto
+    the outcomes row (loop-keyed; these lanes have no run-dir), done demoted
+    to incomplete when a judged verdict contradicts it (same gate as
+    handle.py: judged, confidence >= 0.7). If closure can't run (no adapter,
+    LLM error), the verdict is simply absent — run history classifies that as
+    done-unverified, never as verified done. Mutates result.status /
+    result.stuck_reason in place; returns the ClosureVerdict or None.
+    """
+    if (dry_run
+            or result.status not in ("done", "partial", "stuck", "restart")
+            or not any(s.status == "done" for s in result.steps)):
+        return None
+    try:
+        from director import verify_goal_completion
+        from llm import build_adapter, MODEL_CHEAP
+        _cl_adapter = build_adapter(model=MODEL_CHEAP)
+        _verdict = verify_goal_completion(
+            goal_str,
+            result.steps,
+            _cl_adapter,
+            loop_id=result.loop_id or "",
+            project=result.project or "",
+        )
+    except Exception as _cl_exc:
+        print(f"[maro] closure verification unavailable ({_cl_exc}) — "
+              "run stays done-unverified", file=sys.stderr)
+        return None
+    if _verdict is None or _verdict.checks_run <= 0:
+        return _verdict
+    _judged = getattr(_verdict, "judged", True)
+    try:
+        from memory import annotate_outcome_verdict
+        annotate_outcome_verdict(
+            result.loop_id or "",
+            goal_achieved=(bool(_verdict.complete) if _judged else None),
+            goal_verdict_source=("closure" if _judged else "closure_unverifiable"),
+            goal_verdict_confidence=float(_verdict.confidence),
+        )
+    except Exception:
+        pass
+    # Status honesty: verified-done beats reported-done; unjudged verdicts
+    # never demote.
+    if (_judged and not _verdict.complete
+            and _verdict.confidence >= 0.7
+            and result.status == "done"):
+        result.status = "incomplete"
+        if result.stuck_reason is None:
+            result.stuck_reason = (
+                f"closure verification: {str(_verdict.summary)[:300]}"
+            )
+    return _verdict
+
+
 def _cmd_run(args: argparse.Namespace) -> int:
     import agent_loop as _al
     goal_str = " ".join(args.goal)
@@ -500,22 +559,32 @@ def _cmd_run(args: argparse.Namespace) -> int:
         )
     except Exception as exc:
         return fail("E_RUN", str(exc))
+
+    _verdict = _closure_verdict_pass(goal_str, result, dry_run=args.dry_run)
+
+    _out = {
+        "loop_id": result.loop_id,
+        "project": result.project,
+        "goal": result.goal,
+        "status": result.status,
+        "steps_done": sum(1 for s in result.steps if s.status == "done"),
+        "steps_total": len(result.steps),
+        "stuck_reason": result.stuck_reason,
+        "tokens_in": result.total_tokens_in,
+        "tokens_out": result.total_tokens_out,
+        "elapsed_ms": result.elapsed_ms,
+        "log_path": result.log_path,
+    }
+    if _verdict is not None and _verdict.checks_run > 0:
+        if getattr(_verdict, "judged", True):
+            _out["goal_achieved"] = bool(_verdict.complete)
+        _out["goal_verdict_summary"] = str(_verdict.summary)[:300]
     if args.format == "json":
-        print(json.dumps({
-            "loop_id": result.loop_id,
-            "project": result.project,
-            "goal": result.goal,
-            "status": result.status,
-            "steps_done": sum(1 for s in result.steps if s.status == "done"),
-            "steps_total": len(result.steps),
-            "stuck_reason": result.stuck_reason,
-            "tokens_in": result.total_tokens_in,
-            "tokens_out": result.total_tokens_out,
-            "elapsed_ms": result.elapsed_ms,
-            "log_path": result.log_path,
-        }, indent=2))
+        print(json.dumps(_out, indent=2))
     else:
         print(result.summary())
+        if "goal_achieved" in _out:
+            print(f"goal_achieved: {_out['goal_achieved']} — {_out['goal_verdict_summary']}")
     return 0 if result.status == "done" else 1
 
 
@@ -1982,11 +2051,17 @@ def _cmd_resume(args: argparse.Namespace) -> int:
         )
     except Exception as exc:
         return fail("E_RESUME", str(exc))
+    _verdict = _closure_verdict_pass(ckpt.goal, result)
+    _resume_out = {"loop_id": result.loop_id, "status": result.status,
+                   "resumed_from": ckpt.loop_id}
+    if _verdict is not None and _verdict.checks_run > 0 and getattr(_verdict, "judged", True):
+        _resume_out["goal_achieved"] = bool(_verdict.complete)
     if args.format == "json":
-        print(json.dumps({"loop_id": result.loop_id, "status": result.status,
-                          "resumed_from": ckpt.loop_id}))
+        print(json.dumps(_resume_out))
     else:
         print(f"[maro] resume finished: {result.status}")
+        if "goal_achieved" in _resume_out:
+            print(f"goal_achieved: {_resume_out['goal_achieved']}")
     return 0 if result.status == "done" else 1
 
 
