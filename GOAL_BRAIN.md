@@ -121,6 +121,33 @@ context, at best it's a slight tweak and we fix forward."*
 
 ## Compiled truth (system-maintained; basis noted per claim)
 
+**Verdict-aware learning complete (data-r2-01, SHIPPED 2026-07-10,
+9f07b80 — the last non-gated r2 blocker):** agenda-lane lesson extraction
++ skill crystallization no longer run verdict-blind at loop finalize. The
+handle lane defers them (`defer_learning=True`) past closure judging;
+`finalize_deferred_learning()` then extracts lessons with the stamped
+verdict in hand (failure-flavored for done-but-not-achieved; restart
+attempts covered; idempotent) and crystallizes skills only when the
+verdict isn't a judged False. Chosen design: MOVE extraction, not
+re-stamp — tiered-lesson dedup/reinforcement makes un-recording a wrong
+lesson unsafe. Non-done statuses and direct run_agent_loop callers
+(heartbeat/prereq/queue/cli — no closure runs there) keep finalize-time
+learning. SF-2 is now closed end-to-end: rows, run metadata, read-side
+consumers, AND the extraction itself are verdict-aware. Basis: commit
+9f07b80, 9 tests in test_verdict_learning.py, session 2026-07-10.
+
+**Canonical Manti case first live runs, 2026-07-10 (results in
+docs/CAPABILITIES.md):** natural routing sent it NOW (0.85 conf) and
+FAILED the Tier-1 contract — model-knowledge answer plus a how-to-search
+list (passenger-does-the-steps anti-pattern; router has no
+needs-live-external-data signal). Forced agenda lane PASSED on content
+(research-brief.txt: one sourced bottom line — Maverik Ephraim 7.3 mi/24h
+— per-station confidence, live store-page verification, stale-source
+dissent) but failed the envelope: 7 steps, ~24 min, $2.47 cost hard stop.
+Net: **capability verified, delivery target**; errand-research skill's
+real spec = routing detection + ~minutes/cents envelope. Basis: run
+artifacts under projects/where-can-i-get-nonethanol/, session log.
+
 **Learning live batch, 2026-07-10 (Jeremy: "Let's run that, see how it
 goes" — the data-r2-02 batch, after the cs-r2-01 gate shipped):**
 - 9 sequential real goals via `python -m handle`, $2.74 total, all
