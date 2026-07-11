@@ -215,9 +215,13 @@ def cpu_nice() -> int:
 
 def ollama_keep_alive() -> str:
     """OLLAMA_KEEP_ALIVE for a *managed* ollama: how long a model stays resident
-    after its last request. Short keeps idle RAM low (the model reloads in a few
-    seconds on the next call); the model burns ~0% CPU while merely resident, so
-    this is a RAM knob, not a CPU one. Default "5m" (ollama's own default)."""
+    after its last request. The model burns ~0% CPU while merely resident, so
+    this is a RAM knob, not a CPU one. Do NOT set it shorter than the gap
+    between validations: a cold reload costs ~25-30s on this box under run
+    load (NOT "a few seconds" — the 2026-07-10/11 Manti runs paid it on all
+    18 ladder calls because a "30s" override expired between every step,
+    turning 10-13s warm verdicts into 38-47s cold ones). Default "5m"
+    (ollama's own default) spans the ~90s validation cadence."""
     return str(_cfg("ollama_keep_alive", "5m") or "5m").strip()
 
 
@@ -358,8 +362,9 @@ _CACHE: dict = {}
 
 def reset_cache() -> None:
     _CACHE.clear()
-    global _LATENCY_TRIPPED
+    global _LATENCY_TRIPPED, _LATENCY_REPORTS
     _LATENCY_TRIPPED = ""
+    _LATENCY_REPORTS = 0
 
 
 # ---------------------------------------------------------------------------
@@ -375,6 +380,7 @@ def reset_cache() -> None:
 # ---------------------------------------------------------------------------
 
 _LATENCY_TRIPPED: str = ""  # non-empty = reason the breaker tripped
+_LATENCY_REPORTS: int = 0   # how many local calls this process has measured
 
 
 def max_latency_ms() -> int:
@@ -396,15 +402,29 @@ def latency_guard_tripped() -> str:
 
 def report_latency(elapsed_ms: int) -> None:
     """Record a measured local-validation latency; trips the breaker when it
-    exceeds max_latency_ms(). Called by every local-tier call site."""
-    global _LATENCY_TRIPPED
+    exceeds max_latency_ms(). Called by every local-tier call site.
+
+    The process's FIRST measurement gets a grace pass: it usually carries the
+    model's cold load (~25-30s on this box), which says nothing about warm
+    per-call speed. Only a subsequent (warm) call over the cap trips —
+    otherwise the cold first probe would sideline a validator whose steady
+    state is fine."""
+    global _LATENCY_TRIPPED, _LATENCY_REPORTS
+    _LATENCY_REPORTS += 1
     cap = max_latency_ms()
-    if cap and elapsed_ms > cap and not _LATENCY_TRIPPED:
-        _LATENCY_TRIPPED = (
-            f"local validation took {int(elapsed_ms)}ms (cap {cap}ms) — "
-            f"using paid tier for the rest of this process"
+    if not cap or elapsed_ms <= cap or _LATENCY_TRIPPED:
+        return
+    if _LATENCY_REPORTS == 1:
+        log.info(
+            "local validation took %dms (cap %dms) on the first call — "
+            "cold-load grace, not tripping yet", int(elapsed_ms), cap,
         )
-        log.info("latency breaker tripped: %s", _LATENCY_TRIPPED)
+        return
+    _LATENCY_TRIPPED = (
+        f"local validation took {int(elapsed_ms)}ms (cap {cap}ms) — "
+        f"using paid tier for the rest of this process"
+    )
+    log.info("latency breaker tripped: %s", _LATENCY_TRIPPED)
 
 
 def validator_available() -> bool:

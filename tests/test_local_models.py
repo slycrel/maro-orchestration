@@ -537,32 +537,51 @@ def test_managed_for_run_skips_when_validation_not_wanted(monkeypatch):
 
 def test_latency_breaker_trips_over_cap(monkeypatch):
     """454s of a 1671s run went to local verdicts averaging 41s each (ROI:
-    ~$0.64 saved lifetime). One measured call over the cap must switch the
+    ~$0.64 saved lifetime). A warm call over the cap must switch the
     process to the paid tier."""
     _set_cfg(monkeypatch, local_max_latency_ms=15000)
     assert lm.latency_guard_tripped() == ""
     lm.report_latency(14999)
     assert lm.latency_guard_tripped() == ""
-    lm.report_latency(34460)  # the live specimen
+    lm.report_latency(34460)  # the live specimen (warm — call #2)
     assert "34460ms" in lm.latency_guard_tripped()
     # Further reports don't overwrite the original reason
     lm.report_latency(99999)
     assert "34460ms" in lm.latency_guard_tripped()
 
 
+def test_latency_breaker_cold_load_grace(monkeypatch):
+    """The first measured call carries the model's cold load (~25-30s on
+    this box; keep_alive shorter than the validation cadence made EVERY
+    call pay it — 18/18 across the two Manti runs). Cold call #1 must NOT
+    trip; a warm over-cap call after it must."""
+    _set_cfg(monkeypatch, local_max_latency_ms=15000)
+    lm.report_latency(38000)  # cold first call — grace
+    assert lm.latency_guard_tripped() == ""
+    lm.report_latency(12000)  # healthy warm call
+    assert lm.latency_guard_tripped() == ""
+    lm.report_latency(47000)  # warm and still slow — trip
+    assert "47000ms" in lm.latency_guard_tripped()
+
+
 def test_latency_breaker_disabled_by_zero_cap(monkeypatch):
     _set_cfg(monkeypatch, local_max_latency_ms=0)
+    lm.report_latency(120000)
     lm.report_latency(120000)
     assert lm.latency_guard_tripped() == ""
 
 
 def test_latency_breaker_reset_with_cache(monkeypatch):
-    """reset_cache() re-arms the breaker — each process re-probes once, so a
-    faster box or smaller model self-heals without config surgery."""
+    """reset_cache() re-arms the breaker AND the cold-load grace — each
+    process re-probes, so a faster box or smaller model self-heals without
+    config surgery."""
     _set_cfg(monkeypatch, local_max_latency_ms=15000)
+    lm.report_latency(50000)
     lm.report_latency(50000)
     assert lm.latency_guard_tripped()
     lm.reset_cache()
+    assert lm.latency_guard_tripped() == ""
+    lm.report_latency(50000)  # first call after reset → grace again
     assert lm.latency_guard_tripped() == ""
 
 
@@ -583,7 +602,8 @@ def test_tripped_breaker_skips_local_tier_in_verify_step(monkeypatch):
 
     _set_cfg(monkeypatch, local_models=["qwen2.5-coder:3b"],
              local_max_latency_ms=15000)
-    lm.report_latency(40000)  # trip it
+    lm.report_latency(40000)  # cold-load grace slot
+    lm.report_latency(40000)  # warm and slow — trips
 
     ensure = MagicMock()
     monkeypatch.setattr(lm, "ensure_validator_running", ensure)
@@ -610,6 +630,7 @@ def test_verify_step_reports_local_latency(monkeypatch):
 
     _set_cfg(monkeypatch, local_models=["qwen2.5-coder:3b"],
              local_max_latency_ms=15000, min_certainty=0.6)
+    lm.report_latency(1000)  # consume the cold-load grace slot
     local_adapter = MagicMock(model_key="qwen2.5-coder:3b")
     monkeypatch.setattr(lm, "ensure_validator_running", MagicMock())
     monkeypatch.setattr(lm, "build_local_validator_adapter",
