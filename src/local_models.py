@@ -358,6 +358,53 @@ _CACHE: dict = {}
 
 def reset_cache() -> None:
     _CACHE.clear()
+    global _LATENCY_TRIPPED
+    _LATENCY_TRIPPED = ""
+
+
+# ---------------------------------------------------------------------------
+# Latency breaker — "free" must not mean "slow"
+#
+# Production ROI data (validator_roi, 2026-07-10, 154 ladder rows on this
+# box): local validation saved ~$0.64 lifetime while averaging 35.8s/call
+# vs 6.5s paid — one 11-step run spent 454s (27% of its wall clock) on
+# local verdicts that all passed. Sub-cent savings can't buy half a minute
+# per step. The breaker trips in-process after the first call over the cap,
+# so each new process re-probes once (self-healing if the box gets faster
+# or the model gets smaller) and pays at most one slow call per run.
+# ---------------------------------------------------------------------------
+
+_LATENCY_TRIPPED: str = ""  # non-empty = reason the breaker tripped
+
+
+def max_latency_ms() -> int:
+    """Per-call latency cap for the local tier. A local verdict slower than
+    this makes the paid tier (~6.5s, ~half a cent) the better trade; 0
+    disables the breaker."""
+    try:
+        return max(0, int(_cfg("local_max_latency_ms", 15000)))
+    except (TypeError, ValueError):
+        return 15000
+
+
+def latency_guard_tripped() -> str:
+    """Non-empty reason string when this process has measured the local
+    validator over the latency cap — callers skip the local tier for the
+    rest of the process."""
+    return _LATENCY_TRIPPED
+
+
+def report_latency(elapsed_ms: int) -> None:
+    """Record a measured local-validation latency; trips the breaker when it
+    exceeds max_latency_ms(). Called by every local-tier call site."""
+    global _LATENCY_TRIPPED
+    cap = max_latency_ms()
+    if cap and elapsed_ms > cap and not _LATENCY_TRIPPED:
+        _LATENCY_TRIPPED = (
+            f"local validation took {int(elapsed_ms)}ms (cap {cap}ms) — "
+            f"using paid tier for the rest of this process"
+        )
+        log.info("latency breaker tripped: %s", _LATENCY_TRIPPED)
 
 
 def validator_available() -> bool:

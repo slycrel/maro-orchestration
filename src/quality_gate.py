@@ -299,10 +299,14 @@ def run_quality_gate(
     if _ladder:
         try:
             import local_models as _lm
-            if _lm.configured_models():
+            if _lm.configured_models() and not _lm.latency_guard_tripped():
                 _lm.ensure_validator_running()
                 _local = _lm.build_local_validator_adapter()
                 if _local is not None:
+                    # Consults the breaker (gate above) but does not feed it:
+                    # this recursive gate is a composite of several calls, so
+                    # its wall time is not a per-call latency signal. The
+                    # single-call site (step_exec.verify_step) owns reporting.
                     lv = run_quality_gate(
                         goal, step_outcomes, _local,
                         confidence_threshold=confidence_threshold,

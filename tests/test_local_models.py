@@ -531,3 +531,99 @@ def test_managed_for_run_skips_when_validation_not_wanted(monkeypatch):
     with lm.managed_for_run("plain goal, no verify prefix"):
         pass
     ens.assert_not_called()
+
+
+# --- latency breaker (2026-07-10 envelope arc) -------------------------------
+
+def test_latency_breaker_trips_over_cap(monkeypatch):
+    """454s of a 1671s run went to local verdicts averaging 41s each (ROI:
+    ~$0.64 saved lifetime). One measured call over the cap must switch the
+    process to the paid tier."""
+    _set_cfg(monkeypatch, local_max_latency_ms=15000)
+    assert lm.latency_guard_tripped() == ""
+    lm.report_latency(14999)
+    assert lm.latency_guard_tripped() == ""
+    lm.report_latency(34460)  # the live specimen
+    assert "34460ms" in lm.latency_guard_tripped()
+    # Further reports don't overwrite the original reason
+    lm.report_latency(99999)
+    assert "34460ms" in lm.latency_guard_tripped()
+
+
+def test_latency_breaker_disabled_by_zero_cap(monkeypatch):
+    _set_cfg(monkeypatch, local_max_latency_ms=0)
+    lm.report_latency(120000)
+    assert lm.latency_guard_tripped() == ""
+
+
+def test_latency_breaker_reset_with_cache(monkeypatch):
+    """reset_cache() re-arms the breaker — each process re-probes once, so a
+    faster box or smaller model self-heals without config surgery."""
+    _set_cfg(monkeypatch, local_max_latency_ms=15000)
+    lm.report_latency(50000)
+    assert lm.latency_guard_tripped()
+    lm.reset_cache()
+    assert lm.latency_guard_tripped() == ""
+
+
+def test_max_latency_ms_default_and_parse_error(monkeypatch):
+    _set_cfg(monkeypatch)
+    assert lm.max_latency_ms() == 15000
+    _set_cfg(monkeypatch, local_max_latency_ms="nope")
+    assert lm.max_latency_ms() == 15000
+    _set_cfg(monkeypatch, local_max_latency_ms=-5)
+    assert lm.max_latency_ms() == 0
+
+
+def test_tripped_breaker_skips_local_tier_in_verify_step(monkeypatch):
+    """step_exec.verify_step must not touch the local endpoint once the
+    breaker is tripped — straight to the paid adapter."""
+    from unittest.mock import MagicMock
+    import step_exec
+
+    _set_cfg(monkeypatch, local_models=["qwen2.5-coder:3b"],
+             local_max_latency_ms=15000)
+    lm.report_latency(40000)  # trip it
+
+    ensure = MagicMock()
+    monkeypatch.setattr(lm, "ensure_validator_running", ensure)
+    build = MagicMock()
+    monkeypatch.setattr(lm, "build_local_validator_adapter", build)
+
+    paid = MagicMock()
+    verdict = MagicMock(passed=True, reason="ok", confidence=0.9)
+    monkeypatch.setattr(
+        "verification_agent.VerificationAgent.verify_step",
+        lambda self, *a, **k: verdict,
+    )
+    out = step_exec.verify_step("step", "result", paid)
+    assert out["passed"] is True
+    ensure.assert_not_called()
+    build.assert_not_called()
+
+
+def test_verify_step_reports_local_latency(monkeypatch):
+    """The single-call ladder site owns latency reporting: a slow local
+    verdict must trip the breaker for subsequent steps in the process."""
+    from unittest.mock import MagicMock
+    import step_exec
+
+    _set_cfg(monkeypatch, local_models=["qwen2.5-coder:3b"],
+             local_max_latency_ms=15000, min_certainty=0.6)
+    local_adapter = MagicMock(model_key="qwen2.5-coder:3b")
+    monkeypatch.setattr(lm, "ensure_validator_running", MagicMock())
+    monkeypatch.setattr(lm, "build_local_validator_adapter",
+                        lambda *a, **k: local_adapter)
+
+    verdict = MagicMock(passed=True, reason="ok", confidence=0.95)
+    monkeypatch.setattr(
+        "verification_agent.VerificationAgent.verify_step",
+        lambda self, *a, **k: verdict,
+    )
+    # Simulate a slow local call: monotonic advances 40s across the call
+    ticks = iter([0.0, 40.0, 100.0, 100.1, 200.0, 200.1])
+    monkeypatch.setattr(step_exec.time, "monotonic", lambda: next(ticks))
+
+    out = step_exec.verify_step("step", "result", MagicMock())
+    assert out["source"] == "qwen2.5-coder:3b"  # first call still used local
+    assert lm.latency_guard_tripped()           # ...and tripped the breaker

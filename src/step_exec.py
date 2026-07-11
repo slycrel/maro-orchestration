@@ -1350,7 +1350,7 @@ def verify_step(
     _local_elapsed_ms = 0
     try:
         import local_models as _lm
-        if _lm.configured_models():
+        if _lm.configured_models() and not _lm.latency_guard_tripped():
             _lm.ensure_validator_running()               # spin up on demand (no-op if up/disabled/ollama)
             local = _lm.build_local_validator_adapter()  # None if endpoint/model absent
             if local is not None:
@@ -1359,6 +1359,7 @@ def verify_step(
                 lv = VerificationAgent(local, confidence_threshold=confidence_threshold,
                                        max_input_chars=_lm.input_char_budget()).verify_step(step_text, result)
                 _local_elapsed_ms = int((time.monotonic() - _t0) * 1000)
+                _lm.report_latency(_local_elapsed_ms)
                 _local_source = getattr(local, "model_key", "local")
                 _local_lv = (lv, _local_source)
                 if lv.confidence >= _lm.min_certainty():
