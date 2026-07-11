@@ -1,3 +1,7 @@
+---
+status: living
+---
+
 # Capabilities & Example Goals
 
 **Status: living catalog** — this doc grows with use. Add real asks as they
