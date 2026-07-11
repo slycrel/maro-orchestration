@@ -192,7 +192,10 @@ crowd-sourced or not)."
     expansion should fold reads into the step that consumes them (the
     step's cost model — ~30s fixed overhead per step — is honest context
     for the expansion prompt, not a taxonomy). Candidate after clean-run
-    numbers land.
+    numbers land. → Prompt half SHIPPED 2026-07-11 (1f2d0d9): NO ORPHAN
+    READ STEPS block in DECOMPOSE_SYSTEM with the measured cost model;
+    exec/analyze HARD RULE untouched; folded steps survive _shape_steps
+    ("read" not in _EXEC_KEYWORDS). Live A/B = next expansion-bearing run.
     2026-07-11 boot-tax anatomy + first trim: trivial `claude -p` call
     measured 6.4s → 2.7s after `--strict-mcp-config` (user-level Google
     Drive MCP handshake was ~3.7s on EVERY subprocess boot; shipped
