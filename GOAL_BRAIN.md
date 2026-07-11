@@ -121,6 +121,27 @@ context, at best it's a slight tweak and we fix forward."*
 
 ## Compiled truth (system-maintained; basis noted per claim)
 
+**Cuts-first planning v0 (Qix-cuts decree, SHIPPED 2026-07-10, 068eddd):**
+decompose no longer has to commit a full plan over the unbounded space.
+Config-gated `planner.cuts_first` (default OFF; ON on this box):
+`planner.draw_cuts()` makes one narrowing call — committed constraints
+with named basis (prior knowledge / goal text / provided context) + 0–2
+cheap probes + a one-sentence bounded remainder. Probes become the
+plan's first steps followed by a `[boundary]` marker; the marker is
+expanded mid-loop WITH probe findings in ancestry context
+(loop_execute), unlike milestone expansion which re-decomposes blind.
+Bounded-without-probes cuts inject as COMMITTED CONSTRAINTS into normal
+decompose; wide/deep goals skip (staged-pass already narrows); recovery
+re-decomposes pass `allow_cuts=False` while the director replan keeps
+cuts — that is the v0 re-draw (boundary cap 2/loop). This implements
+the evidence-fed half the constraint-orchestration lineage never
+shipped: scope.py draws all its lines from the armchair in one call;
+real cuts interleave a cheap peek between lines. Deferred: >2 narrowing
+rounds, first-class re-draw triggers, #5 dispatch-level planning-depth
+field (separate thread, still queued), NOW-lane cuts. Basis: commit
+068eddd, 20 tests in test_cuts_planning.py, DEFAULTS.md row, acceptance
+run = Manti canonical case (results in CAPABILITIES.md).
+
 **Verdict-aware learning complete (data-r2-01, SHIPPED 2026-07-10,
 9f07b80 — the last non-gated r2 blocker):** agenda-lane lesson extraction
 + skill crystallization no longer run verdict-blind at loop finalize. The
@@ -1643,6 +1664,17 @@ Sample: the 2026-05-13..17 window of `~/.maro/workspace/runs/` (478 dirs total;
   cuts-process in decompose — narrowing steps before committing, plan
   size proportional to the ask, re-draw on new info — is unimplemented.
   Vehicle candidate: the queued #5 planning-depth shadow thread.
+- **2026-07-10 (decision-making is the main line — Jeremy, same evening,
+  deferring the container-executor design pass in its favor)** — "#4 can
+  wait. Let's stay on the trail of better decision making. Without
+  better decomposition/goal analysis most of the rest of this is window
+  dressing in practice." Standing prioritization signal: decomposition /
+  goal-analysis quality outranks infrastructure polish when the two
+  compete. Same-evening consequence: cuts-first planning v0 shipped
+  (068eddd, `planner.cuts_first`) — the un-shipped iterative half of the
+  Qix-cuts decree, implemented as draw_cuts (constraints-with-basis +
+  0–2 probes) + boundary-step expansion with probe evidence in context.
+  #4 container-executor design pass remains queued, Jeremy-gated.
 
 ## Threads (system-maintained — nothing leaves this list silently)
 

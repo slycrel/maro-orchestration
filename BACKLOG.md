@@ -159,6 +159,16 @@ crowd-sourced or not)."
     with the queued #5 planning-depth shadow thread; the rectangle idea
     is already captured in REASSESS_LINEAGE / constraint-orchestration
     docs, only scope-text injection shipped.
+    **v0 SHIPPED 2026-07-10 (068eddd)** — `planner.cuts_first` (default
+    OFF; ON on this box): draw_cuts() = constraints-with-basis + 0-2
+    probes + bounded remainder; probes+[boundary] marker replace the
+    full-plan commit; boundary expanded mid-loop WITH probe evidence
+    (milestone expansion stays blind); director replan may re-draw once
+    (cap 2). What v0 defers: iterated cut-probe-cut deeper than 2 rounds,
+    re-draw as first-class (constraint-invalidation trigger), the #5
+    dispatch-level planning-depth shadow field (separate, still queued),
+    cuts on the NOW lane (agenda decompose only). Acceptance = Manti
+    canonical case live run vs the $2.47 baseline.
   - **Stranded run-card hardening (small):** a SIGTERM'd handle leaves
     run metadata status/ended_at null even though loop artifacts survive
     and `maro-runs result <id>` renders fine (specimen: 51b09271). The
