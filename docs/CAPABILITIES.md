@@ -48,6 +48,34 @@ What it exercises: NOW-vs-AGENDA routing, web research with source
 triangulation, answer synthesis, knowing when the answer is good enough to
 stop.
 
+### First live runs (2026-07-10)
+
+**Run 1 — natural routing (NOW lane, 0.85 confidence): FAILED the contract.**
+16s, ~$0.016. Answered from model knowledge with "I don't have real-time
+access... here's how you could find out" — a how-to-search list. That is the
+exact anti-pattern the contract exists to kill: the passenger does the steps.
+The router saw a short factual question and never recognized
+needs-live-external-data as an AGENDA signal. **The gap is routing, not
+capability.**
+
+**Run 2 — forced `--lane agenda`: PASSED the contract on content.**
+7 steps, ~24 min, $2.47 (blew through the $2.00 cost budget + slush; run
+ended on the cost hard stop after the brief was already written). Delivered
+`research-brief.txt`: bottom line ("drive to Maverik #536, 89 N Main St,
+Ephraim — 7.3 mi, open 24h"), 4 ranked stations with per-station confidence,
+live store-page verification (not chain-level marketing), stale-source
+dissent (Pure-Gas.org phone numbers corrected against official pages), open
+questions, next actions. One ask → one sourced answer. This is the UX we
+want.
+
+**What the pair proves:** capability `verified`, delivery `target`. Two gaps
+before the canonical case is honestly `verified` end-to-end: (1) routing —
+NOW must detect needs-live-data asks and escalate (or research inline);
+(2) envelope — ~24 min/$2.47 is a research-project cost for an errand
+question (MODEL_POWER was resolving to subprocess `claude -p`; the
+token_explosion introspection flagged worker re-read churn). A passenger in
+a car wants this in ~1–3 min for cents.
+
 ---
 
 ## Example catalog
@@ -60,7 +88,7 @@ real phrasing beats cleaned-up phrasing.
 
 | Goal (as asked) | Success looks like | Exercises | Status |
 |---|---|---|---|
-| "Where can I get non-ethanol gas in or around Manti, Utah?" | 1–3 named stations w/ locations + confidence caveats, sourced | multi-source research, synthesis, stop criteria | `target` |
+| "Where can I get non-ethanol gas in or around Manti, Utah?" | 1–3 named stations w/ locations + confidence caveats, sourced | multi-source research, synthesis, stop criteria | `target` — content verified live 2026-07-10 (forced agenda lane); routing + cost envelope still fail the contract, see canonical-case section |
 | "What are the library hours in [town] this Saturday, and do I need an appointment for [service]?" | direct answer + source link, flags stale pages | freshness judgment, official-source preference | `target` |
 | "Compare the three cheapest ways to ship a 40lb box from Utah to Ohio this week." | small table, prices dated, winner recommended | structured comparison, quantitative extraction | `target` |
 | "Is [product] compatible with [other product]? People online seem to disagree." | verdict + why the disagreement exists | conflicting-source adjudication | `target` |

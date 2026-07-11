@@ -127,10 +127,20 @@ crowd-sourced or not)."
   verified/target/aspirational grounding rule, Manti as the canonical
   simple case + UX contract), blank-slate draft target list, add-an-example
   protocol. README "what it looks like in practice" block + INDEX row.
-- [ ] **Run the canonical case live:** hand the Manti goal to `maro-handle`
-  as-is and judge against the Tier-1 UX contract (one ask → sourced answer,
-  minutes, no link dumps). First `target`→`verified` promotion; whatever
-  breaks is the errand-research skill's real spec.
+- [x] **Ran the canonical case live 2026-07-10 (both lanes; results in
+  CAPABILITIES.md canonical-case section):** natural routing sent it NOW
+  (0.85 conf) and FAILED the contract — answered from model knowledge with a
+  "here's how you could find out" list (passenger-does-the-steps
+  anti-pattern; router has no needs-live-external-data signal). Forced
+  `--lane agenda` PASSED on content — research-brief.txt with a bottom-line
+  answer (Maverik Ephraim, 7.3 mi, 24h), per-station confidence, live
+  store-page verification, stale-source dissent — but blew the envelope:
+  7 steps, ~24 min, $2.47 (cost hard stop; MODEL_POWER→subprocess churn).
+  Verdict: capability verified, delivery not. The errand-research skill's
+  real spec = (a) routing: NOW must detect needs-live-data and escalate or
+  research inline; (b) envelope: ~1–3 min / cents, not research-project
+  scale. (Side casualty: outer watchdog killed the run mid-finalize, so no
+  outcome row was recorded — learning pipeline never saw the run.)
 - [ ] **Standing habit:** capture real asks as phrased into the catalog
   (car questions, mid-session asks). Real phrasing carries the ambiguity
   synthetic goals launder out; this is also the organic corpus the lesson
