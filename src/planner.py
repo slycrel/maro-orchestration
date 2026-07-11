@@ -134,6 +134,176 @@ _STAGED_PASS_SYSTEM = _STAGED_PASS_SYSTEM + "\n\n" + ANTI_SYCOPHANCY_RULES
 
 
 # ---------------------------------------------------------------------------
+# Cuts-first planning (Qix-cuts decree, 2026-07-10)
+# ---------------------------------------------------------------------------
+# Jeremy's pattern: 0-4 narrowing cuts off the rectangle, then bounded work
+# inside the lines, re-drawing when new information surfaces. The structural
+# difference from scope generation (scope.py, one armchair inversion call):
+# real cuts are EVIDENCE-FED — a cut, a cheap peek at the world, another cut.
+# v0 gives two rounds of narrowing: draw_cuts() commits armchair constraints
+# (prior knowledge / recall) and up to 2 cheap probes; the plan becomes
+# [probes..., boundary step]; the boundary step is expanded at execution time
+# WITH the probe findings in context (loop_execute.py boundary expansion).
+# See docs/CONSTRAINT_ORCHESTRATION_DESIGN.md for the lineage.
+
+from dataclasses import dataclass, field as _dc_field
+
+BOUNDARY_TAG = "[boundary]"
+
+_BOUNDARY_RE_STR = r"\[boundary\]"
+
+
+def is_boundary_step(step: str) -> bool:
+    """True when a step carries the [boundary] tag (anywhere in the text —
+    tags like [after:N] may follow it)."""
+    return bool(step) and BOUNDARY_TAG in step
+
+
+def strip_boundary_tag(step: str) -> str:
+    """Remove the [boundary] tag from a step string."""
+    return re.sub(_BOUNDARY_RE_STR, "", step or "").strip()
+
+
+@dataclass
+class Cuts:
+    """The narrowing pass drawn before decomposition.
+
+    known_constraints — cuts drawable from the armchair (prior knowledge,
+        recall, goal text), each with its basis. These bound the space now.
+    probes — 0-2 single cheap actions (one search, one file read, one
+        command) that would collapse the biggest remaining unknown.
+    bounded — True when the space is already narrow enough to plan fully
+        without probes.
+    remainder — one sentence describing the work left inside the boundary
+        once probes land; becomes the boundary step's text.
+    """
+    known_constraints: List[str] = _dc_field(default_factory=list)
+    probes: List[str] = _dc_field(default_factory=list)
+    bounded: bool = True
+    remainder: str = ""
+    raw_text: str = ""
+
+    def is_empty(self) -> bool:
+        return not (self.known_constraints or self.probes)
+
+    def to_markdown(self) -> str:
+        parts = ["## Cuts (committed constraints)"]
+        for c in self.known_constraints:
+            parts.append(f"- {c}")
+        if self.probes:
+            parts.append("\n## Probes (evidence before planning)")
+            parts.extend(f"- {p}" for p in self.probes)
+        if self.remainder:
+            parts.append(f"\n## Bounded remainder\n{self.remainder}")
+        return "\n".join(parts)
+
+
+CUTS_SYSTEM = textwrap.dedent("""\
+    You are the narrowing pass that runs BEFORE planning. Your job is NOT to
+    plan the work — it is to collapse the possibility space so the plan that
+    follows is small and cheap.
+
+    Think like an expert who has done this before: what do you already know
+    that eliminates most of the search space? What single cheap look at the
+    world would eliminate most of what remains?
+
+    Produce, as JSON:
+
+    {
+      "known_constraints": [
+        "<constraint that bounds the space> (basis: <prior knowledge | goal text | provided context>)"
+      ],
+      "probes": [
+        "<ONE cheap action - one web search, one file read, one command - that collapses the biggest unknown>"
+      ],
+      "bounded": <true if the space is already narrow enough to plan without probes>,
+      "remainder": "<one sentence: the work left inside the boundary once probes land>"
+    }
+
+    Rules:
+    - 0-2 probes, NEVER more. A probe is a single cheap action, not research.
+      If you want three probes, pick the one that eliminates the most space.
+    - known_constraints are commitments, not observations. "Maverik stations
+      often sell ethanol-free gas (basis: prior knowledge)" is a cut — it
+      turns 'search everywhere' into 'check Maveriks first'. "Gas stations
+      sell gas" is not a cut.
+    - If the goal is already narrow (a lookup, a single file edit, a known
+      procedure), say bounded=true with no probes. Do not manufacture probes.
+    - Do not plan the remainder. One sentence only. The plan happens after
+      the probes report back.
+
+    Output ONLY the JSON object. No prose.
+""").strip()
+
+
+def draw_cuts(
+    goal: str,
+    adapter,
+    *,
+    context_extras: str = "",
+    max_tokens: int = 700,
+) -> Optional[Cuts]:
+    """Draw narrowing cuts for a goal before decomposition.
+
+    One LLM call. Non-fatal: returns None on any failure — callers fall
+    through to normal decomposition.
+    """
+    if not goal or not adapter:
+        return None
+    from llm import LLMMessage
+    system = CUTS_SYSTEM
+    if context_extras:
+        system = system + "\n\nContext (prior knowledge available to you):\n" + context_extras
+    try:
+        resp = adapter.complete(
+            [LLMMessage("system", system), LLMMessage("user", f"Goal: {goal}")],
+            max_tokens=max_tokens,
+            temperature=0.2,
+            no_tools=True,
+            purpose="cuts",
+        )
+    except Exception as exc:
+        log.warning("cuts: adapter.complete failed: %s", exc)
+        return None
+    content = (getattr(resp, "content", "") or "").strip()
+    if not content:
+        log.warning("cuts: LLM returned empty content")
+        return None
+    data = extract_json(content, dict, log_tag="planner.draw_cuts")
+    if not data or not isinstance(data, dict):
+        log.warning("cuts: response did not parse as JSON object; raw=%r", content[:200])
+        return None
+    constraints = [str(c).strip() for c in data.get("known_constraints", []) if str(c).strip()]
+    probes = [str(p).strip() for p in data.get("probes", []) if str(p).strip()][:2]
+    cuts = Cuts(
+        known_constraints=constraints,
+        probes=probes,
+        bounded=bool(data.get("bounded", not probes)),
+        remainder=str(data.get("remainder", "")).strip(),
+        raw_text=content,
+    )
+    log.info("cuts: %d constraint(s), %d probe(s), bounded=%s",
+             len(cuts.known_constraints), len(cuts.probes), cuts.bounded)
+    return cuts
+
+
+def _cuts_plan(cuts: Cuts, goal: str) -> List[str]:
+    """Build the probe-first plan from a Cuts result.
+
+    Probes run as normal sequential steps; the boundary step is expanded at
+    execution time with their findings in context (loop_execute.py). The
+    remainder text keeps the original goal visible so expansion doesn't
+    drift from the ask.
+    """
+    remainder = cuts.remainder or f"complete the goal: {goal}"
+    boundary = (
+        f"Plan and complete the remaining bounded work using findings from "
+        f"the prior steps: {remainder} {BOUNDARY_TAG}"
+    )
+    return list(cuts.probes) + [boundary]
+
+
+# ---------------------------------------------------------------------------
 # Decompose system prompt
 # ---------------------------------------------------------------------------
 
@@ -324,6 +494,7 @@ def decompose(
     skills_context: str = "",
     cost_context: str = "",
     thinking_budget: Optional[int] = None,
+    allow_cuts: bool = True,
 ) -> List[str]:
     """Decompose a goal into steps.
 
@@ -334,6 +505,10 @@ def decompose(
     Args:
         thinking_budget: If set, enables extended thinking on the composition
             call (the final plan merge). Passed through to adapter.complete().
+        allow_cuts: Gate for the cuts-first narrowing pass (also requires the
+            `planner.cuts_first` config flag). Boundary expansion and milestone
+            expansion pass False — a re-decompose inside the loop must not
+            draw a second round of cuts.
     """
     from llm import LLMMessage
 
@@ -390,6 +565,63 @@ def decompose(
     if verbose:
         import sys
         print(f"[maro] decompose scope estimate: {_goal_scope}", file=sys.stderr, flush=True)
+
+    # Cuts-first narrowing (Qix-cuts decree). Gated: caller allows it AND the
+    # config flag is on (default OFF — one extra LLM call per goal, no silent
+    # spend for fresh installs). Wide/deep goals skip — staged-pass already
+    # narrows by domain. When cuts emit probes, the plan is probes + boundary
+    # step and we return WITHOUT committing a full plan over the unbounded
+    # space; the real plan is drawn at boundary expansion with probe evidence
+    # in hand. When cuts say bounded (no probes), the committed constraints
+    # inject into the normal decompose as boundary context.
+    if allow_cuts and _goal_scope in ("narrow", "medium"):
+        _cuts_on = False
+        try:
+            from config import get as _cfg_get_cuts
+            _cuts_on = bool(_cfg_get_cuts("planner.cuts_first", False))
+        except Exception:
+            _cuts_on = False
+        if _cuts_on:
+            cuts = draw_cuts(goal, adapter, context_extras="\n\n".join(extras))
+            if cuts is not None and not cuts.is_empty():
+                try:
+                    from captains_log import log_event, CUTS_DRAWN
+                    log_event(
+                        CUTS_DRAWN,
+                        subject="cuts_drawn",
+                        summary=(f"{len(cuts.known_constraints)} constraint(s), "
+                                 f"{len(cuts.probes)} probe(s), bounded={cuts.bounded}"),
+                        context={
+                            "goal_preview": goal[:200],
+                            "constraints": cuts.known_constraints[:6],
+                            "probes": cuts.probes,
+                            "bounded": cuts.bounded,
+                            "remainder": cuts.remainder[:300],
+                        },
+                    )
+                except Exception:
+                    pass
+                # Visibility: persist the cuts beside the run's other artifacts.
+                try:
+                    from runs import source_dir as _cuts_source_dir
+                    _cuts_dir = _cuts_source_dir()
+                    if _cuts_dir is not None:
+                        (_cuts_dir / "cuts.md").write_text(
+                            cuts.to_markdown() + "\n", encoding="utf-8")
+                except Exception:
+                    pass
+                if cuts.probes:
+                    plan = _cuts_plan(cuts, goal)
+                    log.info("decompose cuts-first: %d probe(s) + boundary step", len(cuts.probes))
+                    if verbose:
+                        import sys
+                        print(f"[maro] cuts-first: {len(cuts.known_constraints)} constraint(s), "
+                              f"{len(cuts.probes)} probe(s) → boundary plan",
+                              file=sys.stderr, flush=True)
+                    return plan
+                # Bounded without probes: plan inside the lines.
+                extras.append("COMMITTED CONSTRAINTS (cuts — plan inside these bounds):\n"
+                              + "\n".join(f"- {c}" for c in cuts.known_constraints))
 
     if extras:
         system = DECOMPOSE_SYSTEM + "\n\n" + "\n\n".join(extras)

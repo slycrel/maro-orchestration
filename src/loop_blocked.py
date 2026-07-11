@@ -253,6 +253,7 @@ def _process_blocked_step(ctx: LoopContext, blk: BlockedStepContext) -> tuple:
                 step_text,
                 ctx.adapter,
                 max_steps=5,
+                allow_cuts=False,
             )
             if _sub_steps and len(_sub_steps) >= 2:
                 _sub_shaped = _shape_steps(list(_sub_steps), label="redecompose")

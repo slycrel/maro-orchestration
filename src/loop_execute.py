@@ -242,6 +242,10 @@ def _execute_main_loop(
     # Phase 58: milestone-aware expansion — track which milestone steps have been expanded
     # so we don't re-expand sub-steps that happen to share the same 1-based index.
     _milestone_expanded: set = set()
+    # Cuts-first planning: boundary expansions this loop. Capped at 2 so a
+    # replan that re-draws cuts gets one more boundary, but a pathological
+    # plan can't loop expand-forever.
+    _boundary_expansions: int = 0
 
     # Lazy import for injection scanning (security.py)
     try:
@@ -361,6 +365,66 @@ def _execute_main_loop(
         step_text = remaining_steps.pop(0)
         item_index = remaining_indices.pop(0) if remaining_indices else -1
 
+        # Cuts-first boundary expansion (Qix-cuts decree, 2026-07-10): a
+        # [boundary] step is a plan-here-later marker from planner cuts-first
+        # mode. Expand it into real steps WITH the probe findings in context —
+        # this is the whole point of cuts: the plan for the bounded remainder
+        # is drawn after the probes have collapsed the space, not before.
+        # On failure the step runs as-is (tag stripped): the goal degrades to
+        # one broad step instead of dying.
+        from planner import is_boundary_step as _is_boundary_step, strip_boundary_tag as _strip_boundary
+        if _is_boundary_step(step_text) and _boundary_expansions < 2:
+            _boundary_expansions += 1
+            _remainder_goal = _strip_boundary(step_text)
+            step_text = _remainder_goal
+            try:
+                from planner import decompose as _bd_decompose
+                _evidence_parts: List[str] = []
+                for _po in step_outcomes[-4:]:
+                    _po_res = (getattr(_po, "result", "") or "")[:1500]
+                    _evidence_parts.append(
+                        f"- Probe: {_po.text}\n  Outcome ({_po.status}): {_po_res}")
+                _evidence = ""
+                if _evidence_parts:
+                    _evidence = (
+                        "PROBE FINDINGS (evidence gathered before this plan — plan "
+                        "INSIDE what these findings establish; do not re-do the probes):\n"
+                        + "\n".join(_evidence_parts))
+                _bd_sub = _bd_decompose(
+                    _remainder_goal, adapter, max_steps=5,
+                    ancestry_context=_evidence, allow_cuts=False,
+                )
+                if _bd_sub and _bd_sub != [_remainder_goal]:
+                    _bd_sub = _shape_steps(_bd_sub, label="boundary-expand")
+                    remaining_steps[:0] = _bd_sub
+                    remaining_indices[:0] = [-1] * len(_bd_sub)
+                    log.info("boundary-expand: %r → %d step(s), %d finding(s) in context",
+                             _remainder_goal[:60], len(_bd_sub), len(_evidence_parts))
+                    try:
+                        from captains_log import log_event as _bd_log_event, BOUNDARY_EXPANDED as _BD_EVT
+                        _bd_log_event(
+                            _BD_EVT,
+                            subject="boundary_expanded",
+                            summary=f"Boundary step expanded into {len(_bd_sub)} step(s) "
+                                    f"with {len(_evidence_parts)} probe finding(s) in context.",
+                            context={
+                                "loop_id": loop_id,
+                                "remainder": _remainder_goal[:200],
+                                "sub_steps": [s[:120] for s in _bd_sub],
+                            },
+                        )
+                    except Exception:
+                        pass
+                    if verbose:
+                        import sys as _bd_sys
+                        print(f"[maro] boundary step expanded → {len(_bd_sub)} step(s) "
+                              f"(probe evidence in context)", file=_bd_sys.stderr, flush=True)
+                    continue  # Run the drawn plan instead of the marker step
+                log.warning("boundary-expand: decompose returned nothing usable; "
+                            "executing boundary step as one broad step")
+            except Exception as _bd_exc:
+                log.warning("boundary-expand failed (%s); executing boundary step as-is", _bd_exc)
+
         # Phase 58: Milestone-aware expansion — if pre-flight flagged this step as a
         # milestone candidate, pre-decompose it into sub-steps before executing.
         # Only at depth 0 to prevent recursive explosion. Skip if already expanded.
@@ -372,7 +436,7 @@ def _execute_main_loop(
             _milestone_expanded.add(_would_be_step_idx)
             try:
                 from planner import decompose as _ms_decompose
-                _ms_sub = _ms_decompose(step_text, adapter, max_steps=5)
+                _ms_sub = _ms_decompose(step_text, adapter, max_steps=5, allow_cuts=False)
                 if _ms_sub and len(_ms_sub) >= 2:
                     _ms_sub = _shape_steps(_ms_sub, label="milestone-expand")
                     remaining_steps[:0] = _ms_sub

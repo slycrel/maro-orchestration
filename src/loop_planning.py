@@ -704,8 +704,15 @@ def _shape_steps(steps: List[str], *, label: str = "") -> List[str]:
     Safe to call at any plan-mutation point: inject_steps, replan, interrupt replace,
     initial plan, DAG insertion.
     """
+    from planner import is_boundary_step as _is_boundary
     shaped: List[str] = []
     for s in steps:
+        # Boundary steps (cuts-first planning) are expanded before execution,
+        # never run as-is — splitting one here would strand the [boundary]
+        # tag on half a sentence. The expansion output is shaped normally.
+        if _is_boundary(s):
+            shaped.append(s)
+            continue
         if _is_combined_exec_analyze(s):
             parts = _split_exec_analyze(s)
             shaped.extend(parts)
