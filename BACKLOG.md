@@ -97,8 +97,8 @@ All adversarially verified (41/42 confirmed). The two 1.0-blockers first:
   Also SHIPPED 2026-07-10: data-r2-03 (atomic_write preserves existing mode,
   new files get 0666&~umask instead of mkstemp's 0600; tests in
   TestAtomicWritePerms; live specimen changelog_digest.md chmod'd 644).
-  STILL OPEN: hist-r2-05 (bucket D4 lessons.jsonl name collision),
-  arch-r2-02 (GOAL_BRAIN 1.0-arc Remaining list stale), ops-r2-03-replaced
+  STILL OPEN: hist-r2-05 (bucket D4 lessons.jsonl name collision); arch-r2-02 SHIPPED 2026-07-10 (Remaining list corrected);
+  ops-r2-03-replaced
   pidfile litter (harmless — flock is the mutex; stale file is cosmetic).
 
 ### 22. Capabilities catalog + blank-slate skill set (2026-07-10, Jeremy)
