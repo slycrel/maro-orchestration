@@ -1630,11 +1630,15 @@ Active:
   checks, packaging census also trips on src/ subpackages. 2026-07-10
   backlog-clearing session closed the non-gated remainder (see Compiled
   truth: #21 heartbeat burn-in fixes, Rider A skills-lite, #18 CLI verdict
-  parity, PyPI name check, user/ overlay completion). Remaining:
-  escalation channel default (design conversation — Jeremy-gated, the only
-  (a)–(h) item left), done-vs-achieved corpus analysis (~68 judged runs —
-  the honest success number), install-trial residuals (BACKLOG),
-  README/quickstart pass.
+  parity, PyPI name check, user/ overlay completion). Remaining
+  (CORRECTED 2026-07-10, arch-r2-02 — the prior list re-planned finished
+  work: done-vs-achieved corpus analysis is DONE with artifact
+  `docs/history/2026-07-09-done-vs-achieved.md`, README/quickstart pass
+  shipped twice, 1d0707f + 83ede86): **(a) escalation channel default**
+  (design conversation — Jeremy-gated), **container-executor design pass**
+  (arch-r2-01 — decided 2026-07-09, vehicle now BACKLOG §-1 → MILESTONES
+  scoping), **git-history privacy review** (Jeremy-gated), plus
+  install-trial residuals (BACKLOG).
 - **Goal-brain sequencing: COMPLETE** (steps 1–5, 2026-06-10/11): artifact →
   pressure test → recall() → navigator schema → navigator prompt + shadow
   replay. Successor thread below.
