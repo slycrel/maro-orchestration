@@ -206,6 +206,23 @@ Net: **capability verified, delivery target**; errand-research skill's
 real spec = routing detection + ~minutes/cents envelope. Basis: run
 artifacts under projects/where-can-i-get-nonethanol/, session log.
 
+**AI-failure-pattern corpus, 2026-07-11 (Jeremy's AFK ask: "start an
+orchestration research run on patterns... for common tasks that AI
+doesn't quite get right... for our orchestration training"):** research
+run 692bd96f-brisk-lichen delivered `research/ai-failure-task-patterns.md`
+— 18 verbatim-quoted real tasks assistants got wrong (HN Algolia + Reddit
+RSS), 5 pattern families, 11-category root-cause taxonomy, per-entry
+orchestration-capability mapping, honest audit trail (Reddit body text
+403'd on every endpoint → title-only evidence, flagged per-entry). Seven
+entries folded into CAPABILITIES.md Tier 1/4 as `target` goals. The run
+doubled as live validation: closure evidence attachment saved the verdict
+from a brittle jq selector (complete=True 0.82), no bogus behavioral-gap
+downgrade, latency breaker tripped correctly under suite contention —
+and it exposed the budget-breaker demotion bug (cost stop fired AFTER the
+final step → finished, goal-achieved run stamped stuck/failed; fixed
+8f8344a: breakers demote only when steps remain). Basis: run card +
+captains log 692bd96f, commits 8f8344a/a940154. ~$0.57 card cost.
+
 **Learning live batch, 2026-07-10 (Jeremy: "Let's run that, see how it
 goes" — the data-r2-02 batch, after the cs-r2-01 gate shipped):**
 - 9 sequential real goals via `python -m handle`, $2.74 total, all
