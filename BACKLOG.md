@@ -94,10 +94,12 @@ All adversarially verified (41/42 confirmed). The two 1.0-blockers first:
   land-r2-01 (trusted-operator boundary stated in README safety section),
   land-r2-02 (pymaro disambiguation blockquote, phrasing from the live-batch
   fd5d8597 draft), hist-r2-03 (SF-13 rule in CLAUDE.md end-of-chunk section).
-  STILL OPEN: hist-r2-05 (bucket D4
-  lessons.jsonl name collision), data-r2-03 (atomic_write 0600 perms),
+  Also SHIPPED 2026-07-10: data-r2-03 (atomic_write preserves existing mode,
+  new files get 0666&~umask instead of mkstemp's 0600; tests in
+  TestAtomicWritePerms; live specimen changelog_digest.md chmod'd 644).
+  STILL OPEN: hist-r2-05 (bucket D4 lessons.jsonl name collision),
   arch-r2-02 (GOAL_BRAIN 1.0-arc Remaining list stale), ops-r2-03-replaced
-  pidfile litter.
+  pidfile litter (harmless — flock is the mutex; stale file is cosmetic).
 
 ### 22. Capabilities catalog + blank-slate skill set (2026-07-10, Jeremy)
 

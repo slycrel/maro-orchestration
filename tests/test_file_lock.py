@@ -93,3 +93,28 @@ class TestLockedAppend:
             locked_append(path, "appended")
         lines = path.read_text().splitlines()
         assert "appended" in lines
+
+
+class TestAtomicWritePerms:
+    """data-r2-03: mkstemp's 0600 must not leak onto real files."""
+
+    def test_rewrite_preserves_existing_mode(self, tmp_path):
+        import os
+        from file_lock import atomic_write
+        path = tmp_path / "ledger.jsonl"
+        path.write_text("old\n")
+        os.chmod(path, 0o644)
+        atomic_write(path, "new\n")
+        assert path.read_text() == "new\n"
+        assert (os.stat(path).st_mode & 0o777) == 0o644
+
+    def test_new_file_gets_umask_mode_not_0600(self, tmp_path):
+        import os
+        from file_lock import atomic_write
+        old = os.umask(0o022)
+        try:
+            path = tmp_path / "fresh.md"
+            atomic_write(path, "content\n")
+            assert (os.stat(path).st_mode & 0o777) == 0o644
+        finally:
+            os.umask(old)

@@ -218,8 +218,23 @@ def atomic_write(path: Path, content: str, *, encoding: str = "utf-8") -> None:
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
+    # mkstemp creates 0600 and os.replace keeps the tmp's perms, so without
+    # correction every file this touches ends up 0600 (data-r2-03: rewrites
+    # silently narrow existing ledgers; new files — the live specimen was a
+    # promoted skill .md — never get normal umask-derived perms at all).
+    # Preserve the target's existing mode; give new files 0666 & ~umask like
+    # a plain open() would. (The umask read-back briefly sets the process
+    # umask — momentary, and file writes here are multiprocess, not
+    # multithreaded, so the window is acceptable.)
+    try:
+        mode = os.stat(path).st_mode & 0o777
+    except OSError:
+        _umask = os.umask(0)
+        os.umask(_umask)
+        mode = 0o666 & ~_umask
     fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=path.name + ".tmp")
     try:
+        os.fchmod(fd, mode)
         with os.fdopen(fd, "w", encoding=encoding) as fh:
             fh.write(content)
             fh.flush()
