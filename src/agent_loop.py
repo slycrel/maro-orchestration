@@ -142,6 +142,7 @@ def run_agent_loop(
     loop_reason: str = "initial",  # why this loop was spawned — for run-transparency captain's log
     parent_loop_id: Optional[str] = None,
     admission_wait_s: Optional[float] = None,  # seconds to poll a busy project slot; None = config (default: refuse immediately)
+    defer_learning: bool = False,  # data-r2-01: caller runs closure + finalize_deferred_learning() afterwards — skip verdict-blind lesson extraction/crystallization at finalize
     _recovery_in_progress: bool = False,  # internal: set by the Phase 45 auto-recovery re-run to prevent recursion
 ) -> LoopResult:
     """Run the autonomous loop for a goal.
@@ -193,6 +194,7 @@ def run_agent_loop(
         loop_reason=loop_reason,
         parent_loop_id=parent_loop_id,
         admission_wait_s=admission_wait_s,
+        defer_learning=defer_learning,
     )
     if _early_return is not None:
         return _early_return

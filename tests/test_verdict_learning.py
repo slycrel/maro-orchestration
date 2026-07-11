@@ -318,3 +318,131 @@ def test_strategy_weight_prefers_verdict():
     assert _outcome_weight(_outcome("g", "stuck", goal_achieved=True)) == 1.0
     assert _outcome_weight(_outcome("g", "done")) == 1.0       # unjudged → status fallback
     assert _outcome_weight(_outcome("g", "stuck")) == 0.0
+
+
+# ---------------------------------------------------------------------------
+# data-r2-01: deferred (post-closure) lesson extraction + skill crystallization
+# ---------------------------------------------------------------------------
+
+def test_reflect_defer_lessons_records_row_without_lessons(monkeypatch, tmp_path):
+    _setup(monkeypatch, tmp_path)
+    # dry_run normally produces a stub lesson — deferral must skip even that.
+    reflect_and_record("goal", "done", "s", dry_run=True, loop_id="lp-d0",
+                       defer_lessons=True)
+    row = _raw_rows()[-1]
+    assert row["lessons"] == []
+    assert row["loop_id"] == "lp-d0"
+
+
+def test_reflect_defer_without_loop_id_extracts_immediately(monkeypatch, tmp_path):
+    _setup(monkeypatch, tmp_path)
+    # No join key = the deferred pass could never find the row — fall back to
+    # extracting now (verdict-blind beats losing the lessons entirely).
+    reflect_and_record("goal", "done", "s", dry_run=True, defer_lessons=True)
+    row = _raw_rows()[-1]
+    assert row["lessons"], "fallback should have extracted the stub lesson"
+
+
+def test_extract_deferred_lessons_failure_flavored_after_false_verdict(monkeypatch, tmp_path):
+    _setup(monkeypatch, tmp_path)
+    from memory import extract_deferred_lessons
+    reflect_and_record("ship the report", "done", "s", dry_run=True,
+                       loop_id="lp-d1", defer_lessons=True)
+    # Closure judges AFTER finalize — stamp a False verdict, then extract.
+    annotate_outcome_verdict("lp-d1", goal_achieved=False, goal_verdict_source="closure")
+    n = extract_deferred_lessons("lp-d1", dry_run=True)
+    assert n == 1
+    row = _raw_rows()[-1]
+    # The dry-run stub is verdict-aware: done + goal_achieved False = failed.
+    assert "failed" in row["lessons"][0]
+    # Legacy lesson row carries the verdict it was extracted under.
+    lesson_rows = [
+        json.loads(l)
+        for l in _lessons_path().read_text(encoding="utf-8").splitlines()
+        if l.strip()
+    ]
+    assert lesson_rows[-1]["goal_achieved"] is False
+    assert lesson_rows[-1]["goal_verdict_source"] == "closure"
+
+
+def test_extract_deferred_lessons_success_flavored_after_true_verdict(monkeypatch, tmp_path):
+    _setup(monkeypatch, tmp_path)
+    from memory import extract_deferred_lessons
+    reflect_and_record("ship the report", "done", "s", dry_run=True,
+                       loop_id="lp-d2", defer_lessons=True)
+    annotate_outcome_verdict("lp-d2", goal_achieved=True, goal_verdict_source="closure")
+    assert extract_deferred_lessons("lp-d2", dry_run=True) == 1
+    assert "succeeded" in _raw_rows()[-1]["lessons"][0]
+
+
+def test_extract_deferred_lessons_idempotent(monkeypatch, tmp_path):
+    _setup(monkeypatch, tmp_path)
+    from memory import extract_deferred_lessons
+    reflect_and_record("goal", "done", "s", dry_run=True, loop_id="lp-d3",
+                       defer_lessons=True)
+    assert extract_deferred_lessons("lp-d3", dry_run=True) == 1
+    before = _raw_rows()
+    # A row that already has lessons (this one, or any non-deferred row) is
+    # left alone — no double extraction, no double recording.
+    assert extract_deferred_lessons("lp-d3", dry_run=True) == 0
+    assert _raw_rows() == before
+
+
+def test_extract_deferred_lessons_unknown_loop_is_noop(monkeypatch, tmp_path):
+    _setup(monkeypatch, tmp_path)
+    from memory import extract_deferred_lessons
+    assert extract_deferred_lessons("lp-nope", dry_run=True) == 0
+
+
+def _loop_result(loop_id, status="done"):
+    from loop_types import LoopResult, StepOutcome
+    return LoopResult(
+        loop_id=loop_id, project="p", goal="the goal", status=status,
+        steps=[StepOutcome(index=1, text="step", status="done",
+                           result="did it", iteration=1)],
+    )
+
+
+def test_finalize_deferred_learning_skips_skills_on_false_verdict(monkeypatch, tmp_path):
+    _setup(monkeypatch, tmp_path)
+    import loop_finalize
+    calls = []
+    monkeypatch.setattr(loop_finalize, "_crystallize_and_synthesize",
+                        lambda **kw: calls.append(kw))
+    record_outcome("the goal", "done", "s", loop_id="lp-d4")
+    annotate_outcome_verdict("lp-d4", goal_achieved=False, goal_verdict_source="closure")
+    loop_finalize.finalize_deferred_learning(_loop_result("lp-d4"))
+    # Judged not-achieved: the run's pattern must NOT enter the skill library.
+    assert calls == []
+
+
+def test_finalize_deferred_learning_crystallizes_on_true_or_unjudged(monkeypatch, tmp_path):
+    _setup(monkeypatch, tmp_path)
+    import loop_finalize
+    calls = []
+    monkeypatch.setattr(loop_finalize, "_crystallize_and_synthesize",
+                        lambda **kw: calls.append(kw))
+    record_outcome("the goal", "done", "s", loop_id="lp-d5")
+    annotate_outcome_verdict("lp-d5", goal_achieved=True, goal_verdict_source="closure")
+    loop_finalize.finalize_deferred_learning(_loop_result("lp-d5"))
+    record_outcome("the goal", "done", "s", loop_id="lp-d6")  # unjudged
+    loop_finalize.finalize_deferred_learning(_loop_result("lp-d6"))
+    # True verdict and unjudged both crystallize (unjudged = pre-fix behavior).
+    assert len(calls) == 2
+
+
+def test_finalize_deferred_learning_extracts_for_extra_loop_ids(monkeypatch, tmp_path):
+    _setup(monkeypatch, tmp_path)
+    import loop_finalize
+    monkeypatch.setattr(loop_finalize, "_crystallize_and_synthesize", lambda **kw: None)
+    # A restarted handle: attempt 1 deferred, superseded; attempt 2 final.
+    record_outcome("try 1", "done", "s", lessons=[], loop_id="lp-d7a")
+    annotate_outcome_verdict("lp-d7a", goal_achieved=False, goal_verdict_source="closure")
+    record_outcome("try 2", "done", "s", lessons=[], loop_id="lp-d7b")
+    annotate_outcome_verdict("lp-d7b", goal_achieved=True, goal_verdict_source="closure")
+    loop_finalize.finalize_deferred_learning(
+        _loop_result("lp-d7b"), dry_run=True, extra_loop_ids=["lp-d7a"],
+    )
+    rows = {r["loop_id"]: r for r in _raw_rows()}
+    assert "failed" in rows["lp-d7a"]["lessons"][0]
+    assert "succeeded" in rows["lp-d7b"]["lessons"][0]

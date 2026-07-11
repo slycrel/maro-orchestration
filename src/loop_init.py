@@ -136,6 +136,7 @@ def _initialize_loop(
     loop_reason: str = "initial",
     parent_loop_id: Optional[str] = None,
     admission_wait_s: Optional[float] = None,
+    defer_learning: bool = False,
 ) -> tuple:
     """Phase A: Initialize loop — setup adapter, project, ancestry, hooks.
 
@@ -157,6 +158,7 @@ def _initialize_loop(
     ctx.cost_budget = cost_budget
     ctx.token_budget = token_budget
     ctx.repo_path = repo_path or ""
+    ctx.defer_learning = defer_learning
 
     ctx.loop_id = str(uuid.uuid4())[:8]
     ctx.started_at = time.monotonic()

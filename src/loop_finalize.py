@@ -228,6 +228,7 @@ def _build_result_and_finalize(
         log_path=log_path,
         march_of_nines_alert=march_of_nines_alert,
         pre_flight_review=pf_review,
+        had_no_matching_skill=had_no_matching_skill,
     )
 
     # Write the loop transcript artifact: RESULT.md for a completed loop,
@@ -301,6 +302,7 @@ def _build_result_and_finalize(
         had_no_matching_skill=had_no_matching_skill,
         failure_chain=failure_chain,
         recovery_steps=recovery_step_count,
+        defer_learning=getattr(ctx, "defer_learning", False),
     )
 
     # Checkpoints are KEPT on completion (retention decree, 2026-07-10).
@@ -384,11 +386,18 @@ def _finalize_loop(
     had_no_matching_skill: bool,
     failure_chain: Optional[List[str]] = None,
     recovery_steps: int = 0,
+    defer_learning: bool = False,
 ) -> None:
     """Run all post-loop side effects after the main execution loop ends.
 
     Handles: Reflexion/memory recording, skill crystallisation, skill synthesis.
     All failures are swallowed — post-loop side effects must never raise.
+
+    defer_learning (data-r2-01): the caller runs closure judging after this
+    and promises to call finalize_deferred_learning() — for a "done" run,
+    lesson extraction and skill crystallization/synthesis are skipped here so
+    they can run with the verdict in hand instead of verdict-blind. Non-done
+    statuses still learn immediately (their status is already honest).
     """
     _done = sum(1 for s in step_outcomes if s.status == "done")
     _blocked = sum(1 for s in step_outcomes if s.status == "blocked")
@@ -522,6 +531,9 @@ def _finalize_loop(
             # unjudged with its loop_id, and annotate_outcome_verdict() stamps
             # the verdict onto it once closure has judged.
             loop_id=loop_id,
+            # data-r2-01: when the caller will run closure, a "done" run's
+            # lessons wait for the verdict (extract_deferred_lessons).
+            defer_lessons=defer_learning and loop_status == "done",
         )
         # Meta-Harness steal: persist step-level traces so the evolver proposer
         # sees full execution context, not just aggregate summaries.
@@ -538,47 +550,20 @@ def _finalize_loop(
     except Exception as _reflect_exc:
         log.warning("reflect_and_record failed — run %s produced no learning data: %s", loop_id, _reflect_exc)
 
-    # Auto-extract skills from successful loops (crystallise patterns)
-    if loop_status == "done" and not dry_run and step_outcomes:
-        try:
-            from skills import extract_skills, save_skill, load_skills
-            done_summaries = [s.result[:200] for s in step_outcomes if s.status == "done" and s.result]
-            outcome_for_extraction = {
-                "goal": goal,
-                "status": loop_status,
-                "task_type": "agenda",
-                "summary": ". ".join(done_summaries[:4]),
-                "steps": [
-                    {"step": s.text, "status": s.status, "result": s.result[:200]}
-                    for s in step_outcomes
-                ],
-                "project": project,
-            }
-            existing_skills = {s.name for s in load_skills()}
-            extracted = extract_skills([outcome_for_extraction], adapter if adapter else None)
-            for skill in extracted:
-                if skill.name not in existing_skills:
-                    save_skill(skill)
-                    if verbose:
-                        print(f"[maro] skill crystallised: {skill.name}", file=sys.stderr, flush=True)
-        except Exception as _skill_exc:
-            log.warning("skill extraction failed — loop %s may not contribute to skill library: %s", loop_id, _skill_exc)
-
-    # Phase 32: skill synthesis — when no skill matched at start, synthesize from this run
-    if loop_status == "done" and had_no_matching_skill and not dry_run and step_outcomes:
-        try:
-            from evolver import synthesize_skill
-            done_steps = [s for s in step_outcomes if s.status == "done" and s.result]
-            _synth_summary = ". ".join(s.result[:120] for s in done_steps[:3])
-            synthesize_skill(
-                goal=goal,
-                outcome_summary=_synth_summary or "completed successfully",
-                source_loop_id=loop_id,
-                adapter=adapter,
-                verbose=verbose,
-            )
-        except Exception as _synth_exc:
-            log.warning("skill synthesis failed — loop %s: %s", loop_id, _synth_exc)
+    # Skill crystallization + synthesis for successful loops. Deferred with
+    # the lessons (data-r2-01) when the caller runs closure — a done-but-not-
+    # achieved run must not crystallize its pattern into the skill library.
+    if loop_status == "done" and not dry_run and step_outcomes and not defer_learning:
+        _crystallize_and_synthesize(
+            loop_id=loop_id,
+            goal=goal,
+            project=project,
+            loop_status=loop_status,
+            step_outcomes=step_outcomes,
+            adapter=adapter,
+            verbose=verbose,
+            had_no_matching_skill=had_no_matching_skill,
+        )
 
     # Phase 32: auto-promote skills that meet threshold (don't wait for evolver heartbeat)
     if not dry_run:
@@ -652,3 +637,131 @@ def _finalize_loop(
             telegram_notify(_msg)
         except Exception as _tg_exc:
             log.debug("post-mission Telegram notification failed (non-critical): %s", _tg_exc)
+
+
+def _crystallize_and_synthesize(
+    *,
+    loop_id: str,
+    goal: str,
+    project: str,
+    loop_status: str,
+    step_outcomes: List["StepOutcome"],
+    adapter,
+    verbose: bool,
+    had_no_matching_skill: bool,
+) -> None:
+    """Skill crystallization + no-matching-skill synthesis for a done run.
+
+    Runs at finalize on the immediate path, or from
+    finalize_deferred_learning() once closure has judged (data-r2-01) —
+    callers gate on status/dry_run/verdict. Failures are swallowed: skill
+    writes must never break finalization or handle delivery.
+    """
+    # Auto-extract skills from successful loops (crystallise patterns)
+    try:
+        from skills import extract_skills, save_skill, load_skills
+        done_summaries = [s.result[:200] for s in step_outcomes if s.status == "done" and s.result]
+        outcome_for_extraction = {
+            "goal": goal,
+            "status": loop_status,
+            "task_type": "agenda",
+            "summary": ". ".join(done_summaries[:4]),
+            "steps": [
+                {"step": s.text, "status": s.status, "result": s.result[:200]}
+                for s in step_outcomes
+            ],
+            "project": project,
+        }
+        existing_skills = {s.name for s in load_skills()}
+        extracted = extract_skills([outcome_for_extraction], adapter if adapter else None)
+        for skill in extracted:
+            if skill.name not in existing_skills:
+                save_skill(skill)
+                if verbose:
+                    print(f"[maro] skill crystallised: {skill.name}", file=sys.stderr, flush=True)
+    except Exception as _skill_exc:
+        log.warning("skill extraction failed — loop %s may not contribute to skill library: %s", loop_id, _skill_exc)
+
+    # Phase 32: skill synthesis — when no skill matched at start, synthesize from this run
+    if had_no_matching_skill:
+        try:
+            from evolver import synthesize_skill
+            done_steps = [s for s in step_outcomes if s.status == "done" and s.result]
+            _synth_summary = ". ".join(s.result[:120] for s in done_steps[:3])
+            synthesize_skill(
+                goal=goal,
+                outcome_summary=_synth_summary or "completed successfully",
+                source_loop_id=loop_id,
+                adapter=adapter,
+                verbose=verbose,
+            )
+        except Exception as _synth_exc:
+            log.warning("skill synthesis failed — loop %s: %s", loop_id, _synth_exc)
+
+
+def finalize_deferred_learning(
+    loop_result,
+    *,
+    adapter=None,
+    project: str = "",
+    dry_run: bool = False,
+    verbose: bool = False,
+    extra_loop_ids: Optional[List[str]] = None,
+) -> None:
+    """Run the learning that finalize deferred, now that closure has judged
+    (data-r2-01: lessons + skills must not be extracted verdict-blind).
+
+    Call AFTER the closure/provenance verdict has been stamped onto the
+    outcomes row (annotate_outcome_verdict). Two halves:
+
+    - Lessons: extract_deferred_lessons() per loop — reads each row back,
+      verdict included, and extracts failure-flavored lessons for a
+      done-but-not-achieved run. Idempotent (rows with lessons are skipped),
+      so it's safe to pass loops that didn't defer.
+    - Skills: crystallization + synthesis for the final loop_result, skipped
+      when the row's verdict is a judged False — a run that didn't deliver
+      must not crystallize its pattern. Unjudged (verdict absent) keeps the
+      pre-fix behavior: done is enough.
+
+    extra_loop_ids: earlier attempts this handle ran (director/closure
+    restarts) — they get lesson extraction only; their steps are gone and
+    they were superseded, so no skill writes.
+
+    Never raises — deferred learning must not break result delivery.
+    """
+    loop_id = getattr(loop_result, "loop_id", "") or ""
+    try:
+        from memory import extract_deferred_lessons
+        for _lid in [*(extra_loop_ids or []), loop_id]:
+            if _lid:
+                try:
+                    extract_deferred_lessons(_lid, adapter=adapter, dry_run=dry_run)
+                except Exception as _dl_exc:
+                    log.warning("deferred lesson extraction failed for loop %s: %s", _lid, _dl_exc)
+    except Exception as _imp_exc:
+        log.warning("deferred lesson extraction unavailable: %s", _imp_exc)
+
+    step_outcomes = getattr(loop_result, "steps", None) or []
+    # Provenance demotion already downgraded status from "done", so a
+    # provenance-failed run never reaches the skill branch via status alone.
+    if dry_run or getattr(loop_result, "status", "") != "done" or not step_outcomes:
+        return
+    try:
+        from memory_ledger import load_outcome_by_loop_id
+        _row = load_outcome_by_loop_id(loop_id)
+        if _row is not None and _row.goal_achieved is False:
+            log.info("deferred skill crystallization skipped — loop %s judged not-achieved (%s)",
+                     loop_id, _row.goal_verdict_source)
+            return
+    except Exception:
+        pass  # fail open to pre-fix behavior: done is enough when unreadable
+    _crystallize_and_synthesize(
+        loop_id=loop_id,
+        goal=getattr(loop_result, "goal", "") or "",
+        project=project or getattr(loop_result, "project", "") or "",
+        loop_status="done",
+        step_outcomes=step_outcomes,
+        adapter=adapter,
+        verbose=verbose,
+        had_no_matching_skill=bool(getattr(loop_result, "had_no_matching_skill", False)),
+    )

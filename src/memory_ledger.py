@@ -520,6 +520,90 @@ def annotate_outcome_verdict(
     return updated["hit"]
 
 
+def load_outcome_by_loop_id(loop_id: str) -> Optional[Outcome]:
+    """Load the NEWEST outcomes row matching loop_id, rehydrated as an Outcome.
+
+    Companion to annotate_outcome_verdict: the deferred-learning path
+    (data-r2-01) reads the row back post-closure to get the goal/summary
+    context AND the verdict that was stamped onto it. Absent tri-state keys
+    rehydrate to their dataclass defaults (goal_achieved=None = unjudged).
+    """
+    if not loop_id:
+        return None
+    path = _outcomes_path()
+    if not path.exists():
+        return None
+    from dataclasses import fields as _dc_fields
+    _known = {f.name for f in _dc_fields(Outcome)}
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return None
+    for line in reversed(lines):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(row, dict) and row.get("loop_id") == loop_id:
+            try:
+                return Outcome(**{k: v for k, v in row.items() if k in _known})
+            except TypeError:
+                return None
+    return None
+
+
+def annotate_outcome_lessons(loop_id: str, lessons: List[str]) -> bool:
+    """Stamp deferred lessons onto the already-written outcomes row for loop_id.
+
+    The agenda lane can defer lesson extraction past closure judging
+    (data-r2-01) — the row is written at finalization with lessons=[], and
+    the verdict-aware extraction fills them in here. Same newest-row-wins +
+    locked_rmw semantics as annotate_outcome_verdict.
+    """
+    if not loop_id:
+        return False
+    path = _outcomes_path()
+    if not path.exists():
+        return False
+
+    updated = {"hit": False}
+
+    def _stamp(old: str) -> str:
+        lines = old.splitlines()
+        target_idx = None
+        for i in range(len(lines) - 1, -1, -1):
+            line = lines[i].strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(row, dict) and row.get("loop_id") == loop_id:
+                target_idx = i
+                break
+        if target_idx is None:
+            return old
+        row = json.loads(lines[target_idx])
+        row["lessons"] = list(lessons)
+        lines[target_idx] = json.dumps(row)
+        updated["hit"] = True
+        return "\n".join(lines) + ("\n" if lines else "")
+
+    from file_lock import locked_rmw
+    try:
+        locked_rmw(path, _stamp)
+    except OSError as exc:
+        log.warning("annotate_outcome_lessons: rewrite failed for loop %s: %s", loop_id, exc)
+        return False
+    if not updated["hit"]:
+        log.debug("annotate_outcome_lessons: no outcomes row with loop_id=%s", loop_id)
+    return updated["hit"]
+
+
 # ---------------------------------------------------------------------------
 # Lesson storage + retrieval
 # ---------------------------------------------------------------------------

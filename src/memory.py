@@ -59,6 +59,7 @@ from memory_ledger import (  # noqa: F401, E402
     append_task_ledger, load_task_ledger,
     record_step_trace, load_step_traces,
     record_outcome, annotate_outcome_verdict, _append_daily_log,
+    annotate_outcome_lessons, load_outcome_by_loop_id,
     _INJECTION_PATTERNS, _lesson_looks_adversarial,
     _store_lesson, _rewrite_lessons_file,
     load_lessons, load_outcomes,
@@ -380,6 +381,7 @@ def reflect_and_record(
     goal_achieved: Optional[bool] = None,
     goal_verdict_source: str = "",
     loop_id: str = "",
+    defer_lessons: bool = False,
 ) -> Outcome:
     """Reflect on a completed run and record the outcome + lessons.
 
@@ -397,20 +399,34 @@ def reflect_and_record(
         goal_verdict_source: Provenance of the verdict when known.
         loop_id: This run's loop id — stored on the outcome row so the
                        post-closure verdict annotation can find it.
+        defer_lessons: data-r2-01 — record the outcome row (lessons=[]) but
+                       skip lesson extraction AND the knowledge write; the
+                       caller promises to run extract_deferred_lessons(loop_id)
+                       once the closure verdict has been stamped on the row.
+                       Requires loop_id (the join key the deferred extraction
+                       uses to find the row).
     """
-    log.info("reflect_and_record goal=%r status=%s tokens=%d elapsed=%dms",
-             goal[:60], status, tokens_in + tokens_out, elapsed_ms)
-    # Phase 59 NeMo S1: use return_typed=True to capture lesson_type per lesson
-    typed_lessons = extract_lessons_via_llm(
-        goal=goal,
-        status=status,
-        result_summary=result_summary,
-        task_type=task_type,
-        adapter=adapter,
-        dry_run=dry_run,
-        return_typed=True,
-        goal_achieved=goal_achieved,
-    )
+    log.info("reflect_and_record goal=%r status=%s tokens=%d elapsed=%dms deferred=%s",
+             goal[:60], status, tokens_in + tokens_out, elapsed_ms, defer_lessons)
+    if defer_lessons and not loop_id:
+        # Without the join key the deferred extraction can never find the
+        # row — extracting verdict-blind beats losing the lessons entirely.
+        log.warning("reflect_and_record: defer_lessons without loop_id — extracting now")
+        defer_lessons = False
+    if defer_lessons:
+        typed_lessons = []
+    else:
+        # Phase 59 NeMo S1: use return_typed=True to capture lesson_type per lesson
+        typed_lessons = extract_lessons_via_llm(
+            goal=goal,
+            status=status,
+            result_summary=result_summary,
+            task_type=task_type,
+            adapter=adapter,
+            dry_run=dry_run,
+            return_typed=True,
+            goal_achieved=goal_achieved,
+        )
     lessons = [text for text, _ in typed_lessons]
     log.debug("extracted %d lessons from reflection", len(lessons))
 
@@ -449,8 +465,10 @@ def reflect_and_record(
         loop_id=loop_id,
     )
 
-    # K4: write path — outcomes update knowledge layer (non-blocking)
-    if not dry_run:
+    # K4: write path — outcomes update knowledge layer (non-blocking).
+    # Deferred with the lessons (data-r2-01): the knowledge extraction reads
+    # the whole outcome, so it should see the judged version, not the blind one.
+    if not dry_run and not defer_lessons:
         try:
             from knowledge_bridge import outcome_to_knowledge
             outcome_to_knowledge(outcome, adapter=adapter, dry_run=False)
@@ -458,6 +476,89 @@ def reflect_and_record(
             pass  # knowledge write must never break the reflection path
 
     return outcome
+
+
+def extract_deferred_lessons(
+    loop_id: str,
+    *,
+    adapter=None,
+    dry_run: bool = False,
+) -> int:
+    """Run the lesson extraction that reflect_and_record(defer_lessons=True)
+    skipped — now that the closure/provenance verdict has been stamped onto
+    the outcomes row (data-r2-01: lessons must not be extracted verdict-blind
+    from a done-but-not-achieved run).
+
+    Reads the row back by loop_id (verdict included), extracts typed lessons
+    with goal_achieved passed, records them through the same tiered + legacy
+    paths reflect_and_record uses, stamps the lesson texts onto the row, and
+    runs the deferred knowledge write. Idempotent: a row that already has
+    lessons (extracted at finalize, or a prior call) is left alone.
+
+    Returns the number of lessons recorded (0 = nothing to do or no row).
+    """
+    from memory_ledger import load_outcome_by_loop_id, annotate_outcome_lessons
+
+    outcome = load_outcome_by_loop_id(loop_id)
+    if outcome is None:
+        log.debug("extract_deferred_lessons: no outcomes row for loop_id=%s", loop_id)
+        return 0
+    if outcome.lessons:
+        return 0  # already extracted — nothing was deferred (or already ran)
+
+    typed_lessons = extract_lessons_via_llm(
+        goal=outcome.goal,
+        status=outcome.status,
+        result_summary=outcome.summary,
+        task_type=outcome.task_type,
+        adapter=adapter,
+        dry_run=dry_run,
+        return_typed=True,
+        goal_achieved=outcome.goal_achieved,
+    )
+    if not typed_lessons:
+        return 0
+    lessons = [text for text, _ in typed_lessons]
+    log.info("extract_deferred_lessons: %d lesson(s) for loop %s (verdict=%s)",
+             len(lessons), loop_id, outcome.goal_achieved)
+
+    # Same recording fan-out as the finalize-time path (reflect_and_record +
+    # record_outcome), minus the row append — the row exists; stamp it instead.
+    if not dry_run:
+        for lesson_text, lesson_type in typed_lessons:
+            try:
+                record_tiered_lesson(
+                    lesson_text=lesson_text,
+                    task_type=outcome.task_type,
+                    outcome=outcome.status,
+                    source_goal=outcome.goal[:120],
+                    tier=MemoryTier.MEDIUM,
+                    k_samples=1,
+                    lesson_type=lesson_type,
+                )
+            except Exception:
+                pass  # tiered recording must never block the deferred path
+    for lesson_text in lessons:
+        if lesson_text.strip():
+            _store_lesson(
+                task_type=outcome.task_type,
+                outcome=outcome.status,
+                lesson=lesson_text,
+                source_goal=outcome.goal,
+                goal_achieved=outcome.goal_achieved,
+                goal_verdict_source=outcome.goal_verdict_source,
+            )
+    annotate_outcome_lessons(loop_id, lessons)
+    outcome.lessons = lessons
+
+    if not dry_run:
+        try:
+            from knowledge_bridge import outcome_to_knowledge
+            outcome_to_knowledge(outcome, adapter=adapter, dry_run=False)
+        except Exception:
+            pass  # knowledge write must never break the deferred path
+
+    return len(lessons)
 
 
 # ---------------------------------------------------------------------------

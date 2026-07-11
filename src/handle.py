@@ -1465,6 +1465,12 @@ def _handle_impl(
         if channel is not None:
             _loop_kwargs["channel"] = channel
 
+        # data-r2-01: this lane runs closure judging below — defer lesson
+        # extraction + skill crystallization past it (finalize_deferred_
+        # learning) so learning sees the verdict instead of running blind
+        # at loop finalize. Restart re-runs inherit via dict(_loop_kwargs).
+        _loop_kwargs["defer_learning"] = True
+
         loop_result = run_agent_loop(message, **_loop_kwargs)
         elapsed = int((time.monotonic() - started_at) * 1000)
 
@@ -1801,6 +1807,28 @@ def _handle_impl(
                     )
                 except Exception:
                     pass
+
+        # data-r2-01: learning was deferred at loop finalize (defer_learning
+        # above) — run it now that the closure/provenance verdict is stamped
+        # on the outcomes rows. Lessons extract verdict-aware for every loop
+        # this handle ran; skills crystallize for the final loop unless it
+        # was judged not-achieved. Sits OUTSIDE the closure gate on purpose:
+        # when closure was skipped (dry run, no done steps), the deferred
+        # lessons still extract — unjudged, same as the pre-fix behavior.
+        try:
+            from loop_finalize import finalize_deferred_learning
+            _final_lid = getattr(loop_result, "loop_id", "") or ""
+            finalize_deferred_learning(
+                loop_result,
+                adapter=adapter,
+                project=project or getattr(loop_result, "project", "") or "",
+                dry_run=dry_run,
+                verbose=verbose,
+                extra_loop_ids=[l for l in _run_loop_ids if l != _final_lid],
+            )
+        except Exception as _dl_exc:
+            log.warning("deferred learning failed for loop %s: %s",
+                        getattr(loop_result, "loop_id", ""), _dl_exc)
 
         # Notify channel that the main loop completed
         if channel is not None:

@@ -172,6 +172,9 @@ class LoopResult:
     interrupts_applied: int = 0
     march_of_nines_alert: bool = False    # Phase 19: chain_success < 0.5 alert
     pre_flight_review: Optional[Any] = None  # Phase 58: PlanReview if pre-flight ran
+    # data-r2-01: carried out so deferred (post-closure) skill synthesis knows
+    # whether this run started with no matching skill — the synthesis trigger.
+    had_no_matching_skill: bool = False
 
     def summary(self) -> str:
         done = sum(1 for s in self.steps if s.status == "done")
@@ -284,6 +287,10 @@ class LoopContext:
     max_iterations: int = 40
     continuation_depth: int = 0
     ralph_verify: bool = False
+    # data-r2-01: caller (handle.py) runs closure after this loop and promises
+    # to call finalize_deferred_learning() — finalize skips lesson extraction
+    # and skill crystallization so they can run verdict-aware instead of blind.
+    defer_learning: bool = False
 
     # Adaptive execution (Phase 64)
     steps_since_last_check: int = 0

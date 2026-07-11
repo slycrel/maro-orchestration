@@ -40,10 +40,20 @@ All adversarially verified (41/42 confirmed). The two 1.0-blockers first:
   Tripwired in tests/test_proc_lock.py (reproduces the exact stub shape);
   live-verified: full test_heartbeat.py run leaves the real pidfile mtime
   untouched.
-- [ ] **data-r2-01 (SF-2 residual, r2 blocker #2):** agenda-lane lesson
-  extraction + skill crystallization run at finalize BEFORE closure judges;
-  retro-stamp reaches only outcomes.jsonl — lessons/skills still extracted
-  verdict-blind. Move post-closure or re-stamp.
+- [x] **data-r2-01 SHIPPED 2026-07-10 (SF-2 residual, r2 blocker #2):**
+  agenda-lane learning is now verdict-aware. Chose "move" over "re-stamp"
+  (tiered-lesson dedup/reinforcement makes un-recording a wrong lesson
+  unsafe — a celebratory lesson can reinforce a pre-existing good one).
+  handle.py passes `defer_learning=True` → finalize skips lesson extraction
+  + skill crystallization/synthesis for "done" runs (stuck/failed still
+  learn immediately — their status is honest) → post-closure hook calls
+  `finalize_deferred_learning()`: `extract_deferred_lessons(loop_id)` reads
+  each outcomes row back verdict-included (restart attempts too, via
+  extra_loop_ids; idempotent — rows with lessons skip), and skills
+  crystallize only when the verdict isn't a judged False. Knowledge write
+  deferred with the lessons. Direct run_agent_loop callers (heartbeat,
+  prereq, handle_queue, cli) don't defer — no closure runs there, so
+  deferral would orphan their lessons. 9 tests in test_verdict_learning.py.
 - [x] **data-r2-02: LIVE BATCH RAN 2026-07-10** (9 finalizations, $2.74).
   Loop proven end-to-end: evolver fired at cadence 10 (first production run
   ever — SF-1's zero-hours gap now has hours), skills-lite promoted its
