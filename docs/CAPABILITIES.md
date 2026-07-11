@@ -96,6 +96,10 @@ real phrasing beats cleaned-up phrasing.
 | "What are the library hours in [town] this Saturday, and do I need an appointment for [service]?" | direct answer + source link, flags stale pages | freshness judgment, official-source preference | `target` |
 | "Compare the three cheapest ways to ship a 40lb box from Utah to Ohio this week." | small table, prices dated, winner recommended | structured comparison, quantitative extraction | `target` |
 | "Is [product] compatible with [other product]? People online seem to disagree." | verdict + why the disagreement exists | conflicting-source adjudication | `target` |
+| "Give me the top five breakfast restaurants in [city] according to Reddit, sources included, no fake links." | 5 real places, every link HTTP-validated, aggregator-sourced | live local search, URL validation, fabrication resistance | `target` — from failure corpus 1.5 (ChatGPT: 1 fake restaurant, 100% fake links) |
+| "My [exact appliance model] is doing [symptom] — what's wrong?" | diagnosis grounded in that model's spec/manual, not the category-majority guess | instance-specific lookup, majority-case-guess flagging | `target` — from failure corpus 2.1 (dual-compressor fridge diagnosed as single) |
+| "Find a source for this claim: [claim]. If you can't verify it, say so." | 2–3 independent sources or an honest "unable to verify" | source triangulation, negative-result honesty | `target` — from failure corpus 1.3 |
+| "Tell me about [obscure book/author]." | catalog-grounded description or "insufficient information found" — never invented | long-tail entity handling, retrieval-before-describe | `target` — from failure corpus 1.6/1.10 |
 
 ### Tier 2 — research + artifact (multi-step, one sitting)
 
@@ -121,6 +125,8 @@ real phrasing beats cleaned-up phrasing.
 | "Write a script that [transforms X to Y], with tests, in this repo." | working code, tests pass, honest about limitations | build worker, verification, write fence | `verified` shape (PM/dev recipe workflow, orchestrator-test-recipes) |
 | "Build a skill that [does a task you just did] so future runs can reuse it." | skill-shaped artifact that passes both promotion gates | skill synthesis, skills-lite lane | `verified` (live batch 2026-07-10) |
 | "Take this failing test suite and fix what's actually broken, don't paper over it." | root-cause fixes, no test deletion, report of what was wrong | debugging judgment, integrity under pressure | `target` |
+| "Extract [fields] from this filing/document into JSON matching this schema." | schema-valid AND field-level content-verified against the source — two separate checks | structured extraction, content-vs-format verification split | `target` — from failure corpus 1.11 ("valid JSON, wrong answer") |
+| "Iterate on this parsing code until it produces [expected output] on [input]." | every iteration's claimed output is sandbox-executed, not hand-written; auto-loop on mismatch | execution grounding, claimed-vs-actual diff | `target` — from failure corpus 3.2 |
 
 ### Tier 5 — long-horizon compound projects
 
@@ -129,6 +135,29 @@ real phrasing beats cleaned-up phrasing.
 | "Research [broad topic] over the next week; maintain a ledger; deepen one thread and add one new one each run." | compounding ledger, visible thread ancestry | multi-day continuity, goal ancestry, self-direction | `verified` shape (deepen-1-add-1 pattern, polymarket-edges) |
 | "Plan and execute [multi-milestone project]; escalate only on genuine blockers." | milestones tracked, escalations rare and real | director/worker delegation at horizon, escalation judgment | `aspirational` (escalation channel undesigned — 1.0 item (a)) |
 | "Coordinate with [other instance/agent] on [shared goal]." | clean handoffs, no duplicated work | cross-instance sharing | `aspirational` (post-1.0; see below) |
+
+---
+
+## External failure-pattern corpus
+
+`research/ai-failure-task-patterns.md` (Maro research run 692bd96f,
+2026-07-11): 18 real tasks that single-turn AI assistants got wrong, sourced
+from verbatim HN/Reddit user complaints, grouped into 5 pattern families with
+an 11-category root-cause taxonomy. Each entry names the concrete task, the
+concrete failure, and the orchestration capability that would have prevented
+it (live retrieval, execution grounding, citation-vs-source diffing,
+retrieval-on-correction, external state checkpointing).
+
+Why it's here: the catalog above captures asks *we've* had; the corpus
+captures asks *the world* has that assistants fail — the exact gap
+orchestration exists to close. Seven corpus entries are folded into the
+tiers above (marked "from failure corpus N.N"). The rest map onto existing
+entries or onto capabilities Maro already exercises (Family 4's
+state/session losses are what run cards + checkpoints already solve; Family
+5's regenerate-instead-of-reverify is what closure evidence attachment
+already counters). Known skew, per the corpus's own audit trail:
+HN-and-ChatGPT-heavy by data availability; Reddit entries are title-only
+evidence.
 
 ---
 
