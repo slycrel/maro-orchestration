@@ -213,18 +213,70 @@ crowd-sourced or not)."
     machinery already draws the lines for. Related:
     [[recursive-orchestration-memory]] CAG direction. Spike = measure
     resume vs fresh on a 5-step segment before designing anything.
-  - **Scavenge detector false-positive on URL paths (small):** the
-    re-run's probe step logged SCAVENGE_DETECTED for reads of `/api`,
-    `/phoneNumber`, `/static/js/main.606fbec2.js` — URL/JSON fragments
-    from curl+jq output parsed as filesystem reads. Detection-layer only
-    (zero cost, no demotion) but it salts the evidence feed; the
-    transcript parser should drop path-shaped tokens that appear inside
-    URLs or JSON keys.
-  - **Stranded run-card hardening (small):** a SIGTERM'd handle leaves
-    run metadata status/ended_at null even though loop artifacts survive
-    and `maro-runs result <id>` renders fine (specimen: 51b09271). The
-    stranded-run sweep or index pass should backfill terminal status
-    from the loop log.
+  - **Self-speedup run adjudicated 2026-07-11 (fd483efb-stout-ember,
+    $1.14, 47min, 7 steps + 4 ranked proposals + a genuinely good
+    adversarial self-verification that caught its own 65s double-count).
+    Verdict on the 4 proposals after code verification (2 had false
+    premises — verify-before-fix strikes again):**
+    - P1 async step-transition I/O (127-254s claimed): premise PARTIAL.
+      The between-step path IS synchronous, but the only LLM work in it
+      is the validation ladder — lesson recording/recall/planning are
+      NOT there (they're post-loop / in decompose). The ~47s/step pool
+      it wanted to async away was dominated by the ladder's cold-reload
+      tax (35-42s), already fixed via keep-alive 10m + breaker + MCP
+      trim. Everything else is µs-scale appends and local FS diffs.
+      → NOT actionable as designed; RE-MEASURE a post-fix run first.
+    - P2 concurrent sub-dispatch in boundary expansion (80-160s):
+      premise FALSE — expansion is ONE decompose() call, no per-sub-step
+      calls exist to parallelize. BUT the real cost inside it is multi-
+      plan best-of-3 sampling (planner.py:681-718): 3 independent
+      full-plan candidates generated serially. Parallelizing THOSE is
+      the legitimate descendant of this proposal (~2/3 of decompose
+      wall-time at boundary events, 1-2/run). Deferred: 3 concurrent
+      `claude -p` on this box = memory/CPU contention; candidate for
+      the new machine.
+    - P3 parallelize pre/post-loop lifecycle (40-80s): TRUE premise,
+      dependencies now mapped: clarity→scope dependent only when
+      clarification occurred; closure→deferred-learning dependent;
+      quality gate INDEPENDENT of closure verdict (re-derives from
+      goal+steps) → closure ∥ quality-gate is the one safe pair
+      (~30-60s). Same subprocess-concurrency caveat as P2.
+    - P4 batch event logging (30-70s): FALSE — write_event is an
+      unlocked O_APPEND one-liner, log_event a locked append, no fsync;
+      µs-scale. Only pathological flock contention (30s timeout) costs
+      anything. Dropped.
+    Next envelope action = one clean post-fix run, re-measure the
+    between-step pool warm; expected ~47s/step → ~12-15s. Only then
+    decide if any concurrency work is still worth it.
+  - **Scavenge detector false-positive on URL paths — SHIPPED 2026-07-11
+    (080ef51):** root cause was three markup classes in Bash command text,
+    not curl+jq output: XML closing tags in worker-written parse regexes
+    (`</phoneNumber>`), URL paths in grep patterns (`"/static/js/..."`),
+    and `/api` in an echo'd prose label. Fix: `<` joins the _ABS_PATH_RE
+    lookbehind, and the Bash scan requires the first path segment to be a
+    real local directory (`_plausible_fs_root`) — kills web-root fragments
+    while keeping the stale-clone diagnostic (/home exists even when the
+    clone doesn't). Structured tool inputs untouched.
+  - **Stranded run-card hardening — SHIPPED 2026-07-11 (6a116a2):**
+    metadata now stamps the owner pid at create; new sweep phase
+    `_backfill_stranded_run_cards` stamps non-terminal status="stranded"
+    + ended_at (checkpoint mtime) when the owner is dead (15-min grace;
+    pid-less legacy rows need 24h). "stranded" stays visible to
+    _find_resumable_runs so `maro resume` surfacing survives; a later
+    finalize overwrites with the real outcome. First live sweep
+    backfilled 57 legacy null-status runs incl. specimen 51b09271.
+  - **Closure behavioral-gap Signal 2 over-fire — FOUND+SHIPPED 2026-07-11
+    (c37f42e):** the self-speedup run (fd483efb) had 5/5 checks pass at
+    0.98 confidence and STILL got complete=False: its scope failure mode
+    "Proposal violates process logic" matched \bprocess\b in
+    _RUNTIME_FAILURE_MODE_HINT, demanding a behavioral probe of a
+    document-only goal. Signal 2 now corroborates against
+    ResolvedIntent.deliverables (all document-shaped → prose keyword is
+    noise; any runtime-shaped deliverable keeps the slycrel-go protection
+    armed; no deliverables → original conservative behavior). Same run
+    also live-proved the 2830f48 evidence attachment: round-1 verdict
+    read a brittle constraint-grep failure correctly via
+    target_file_content (evidence_attached=1).
 - [ ] **Standing habit:** capture real asks as phrased into the catalog
   (car questions, mid-session asks). Real phrasing carries the ambiguity
   synthetic goals launder out; this is also the organic corpus the lesson

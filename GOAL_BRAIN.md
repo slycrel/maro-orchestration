@@ -156,6 +156,28 @@ checks now attach the probed file's actual content to the verdict call
 boot tax (~35s fixed per step; expansions emit read-only micro-steps).
 Clean re-run in fresh project `manti-clean-rerun` launched same
 evening for uncontaminated cost numbers.
+**Clean re-run + envelope root causes (2026-07-11):** re-run 3bffa6d6
+PASSED clean — goal_achieved=True, 0.88 conf, $0.32 step costs (vs
+$2.47 baseline hard-stop), fresh research path (reverse-engineered the
+pure-gas.org KML API from the site's React bundle + OSM
+cross-verification). The 41s-validation mystery was NOT model speed:
+box config had `ollama_keep_alive: "30s"` < validation cadence, so
+every ladder call paid a ~25-30s cold reload (warm = 10-13s, under the
+15s cap — local stays in play). Fixed to 10m + breaker cold-load grace
+(28fb80f). Second tax: every `claude -p` boot handshook the user-level
+Google Drive MCP (~3.7s × ~26 calls/run) — `--strict-mcp-config`
+shipped (395e71c). Dogfood run fd483efb (Maro analyzing its own
+envelope) produced 4 ranked proposals + an adversarial pass that
+caught its own double-count; code verification killed 2 premises (no
+per-sub-step expansion calls exist; event writes are µs appends),
+confirmed 1 pair (closure ∥ quality-gate is safe), and re-attributed
+P1's pool to the already-fixed ladder tax. Full adjudication in
+BACKLOG. Same run exposed + same-day-fixed a closure false-negative:
+behavioral-gap Signal 2 demanded a runtime probe of a document-only
+goal off a \bprocess\b prose match (c37f42e — Signal 2 now corroborates
+against deliverable shape). Envelope next-action = one post-fix
+re-measure before any concurrency work; honest floor on this box
+~8-10 min/errand-run (hardware pressure line in Decisions).
 
 **Verdict-aware learning complete (data-r2-01, SHIPPED 2026-07-10,
 9f07b80 — the last non-gated r2 blocker):** agenda-lane lesson extraction
