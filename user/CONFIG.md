@@ -6,8 +6,11 @@
 # every run unless overridden by CLI flags. Parsed by a hand parser
 # (src/handle.py:_load_user_config): one `key: value` per line, `#`
 # comments, inline comments stripped. Readers today:
-#   - src/handle.py    — yolo, default_model_tier, research_step_model
+#   - src/handle.py    — yolo, default_model_tier, ralph_verify,
+#                        quality_gate, quality_gate_action
 #   - src/heartbeat.py — mcp_servers
+# Every key listed uncommented below is read by code (docs-r2-02 decree:
+# no documented-but-dead keys; unwired ideas stay commented out).
 # NOTE: unlike GOALS/CONTEXT/SIGNALS (workspace overlay wins), CONFIG.md is
 # currently read from the repo/install copy only. Overlay migration for this
 # file is queued — see user/README.md for the lane's full documentation.
@@ -33,24 +36,18 @@ yolo: false
 # Override per-run with: --model claude-haiku-4-5-20251001
 default_model_tier: cheap
 
-# Override for research/analysis steps specifically (two-tier routing).
-# "auto" = let classify_step_model decide. "mid" or "cheap" to force.
-research_step_model: auto
-
 # ---------------------------------------------------------------------------
 # Run Behavior
 # ---------------------------------------------------------------------------
-
-# Maximum steps per run (default: 8).
-max_steps: 8
 
 # Default lane when intent is ambiguous (future — not yet wired).
 # Options: now, agenda
 # default_lane: agenda
 
-# Inject skeptic modifier for all runs.
-# "true" = always add skeptic framing. "false" = only when "skeptic:" prefix used.
-always_skeptic: false
+# Not yet wired (ideas, no reader in src/ — uncommenting does nothing):
+# research_step_model: auto   # force "mid"/"cheap" for research steps
+# max_steps: 8                # per-run step cap
+# always_skeptic: false       # skeptic framing on every run
 
 # ---------------------------------------------------------------------------
 # Verification
@@ -80,9 +77,10 @@ quality_gate_action: escalate
 # Notifications
 # ---------------------------------------------------------------------------
 
-# Send Telegram notification when a mission finishes.
-# Requires a Telegram bot token + chat ID (no-op when not configured).
-notify_on_complete: true
+# Not yet wired here (no reader in src/). Run-completion notifications are
+# the YAML config's job: see `notify.command` / `notify.events` in
+# docs/DEFAULTS.md (events.jsonl always records regardless).
+# notify_on_complete: true
 
 # ---------------------------------------------------------------------------
 # MCP Servers

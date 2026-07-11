@@ -81,9 +81,13 @@ All adversarially verified (41/42 confirmed). The two 1.0-blockers first:
 - [ ] **hist-r2-02:** hist-05 owner ask ("run this prompt with this
   persona" as a first-class pattern) dropped for the third time — in
   neither the decision brief nor any backlog. This entry ends that.
-- [ ] **docs-r2-02:** user/CONFIG.md lane docs over-claim 4 dead keys
-  (research_step_model, max_steps, always_skeptic, notify_on_complete) —
-  wire or de-document.
+- [x] **docs-r2-02 SHIPPED 2026-07-10 (de-document):** the 4 dead keys
+  (research_step_model, max_steps, always_skeptic, notify_on_complete)
+  moved to commented not-yet-wired blocks; header reader-list corrected to
+  the verified set (yolo, default_model_tier, ralph_verify, quality_gate,
+  quality_gate_action / mcp_servers); notify_on_complete redirects to the
+  YAML notify.* lane. Standing rule stated in the file: uncommented key =
+  has a reader.
 - [ ] Cosmetic sweep rides the above chunks: docs-r2-03 (CONFIG.md template
   self-contradiction), docs-r2-05 ("alert Jeremy" in stranger README),
   docs-r2-06/hist-r2-04 (PUBLISH_CHECKLIST missing from INDEX.md),
