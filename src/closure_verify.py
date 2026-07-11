@@ -770,6 +770,7 @@ def verify_goal_completion(
             gaps=gaps,
             modality_dist=modality_dist,
             scope=scope,
+            resolved_intent=resolved_intent,
         )
         diagnosis_gap_reason = _detect_diagnosis_gap(
             complete=complete,
@@ -1015,6 +1016,7 @@ def _detect_behavioral_gap(
     gaps: List[str],
     modality_dist: Dict[str, int],
     scope=None,
+    resolved_intent=None,
 ) -> str:
     """Return a non-empty reason string when complete=True contradicts evidence.
 
@@ -1027,6 +1029,15 @@ def _detect_behavioral_gap(
     (closure summary: "runtime validation was not performed" → returns
     complete=True) using data the system already generated, not an external
     "if goal is a server, demand http probe" rule.
+
+    Signal 2 additionally requires corroboration from the deliverables when a
+    ResolvedIntent is supplied: a runtime keyword inside failure-mode *prose*
+    is weak evidence on its own — run fd483efb (2026-07-11) had a document-only
+    goal whose failure mode said "Proposal violates process logic" and the bare
+    \\bprocess\\b hit downgraded a 5/5-checks 0.98-confidence verdict. When
+    every deliverable is a document (no server/endpoint/service shape), static
+    probes ARE the right modality and the downgrade must not fire. With no
+    deliverables to consult, the original conservative behavior stands.
     """
     if not complete:
         return ""
@@ -1047,6 +1058,8 @@ def _detect_behavioral_gap(
             fm = getattr(scope, "failure_modes", None) or []
             for mode in fm:
                 if _RUNTIME_FAILURE_MODE_HINT.search(mode or ""):
+                    if not _deliverables_corroborate_runtime(resolved_intent):
+                        break
                     return (
                         f"scope.failure_modes named runtime expectation "
                         f"({mode[:100]!r}) but no behavioral probe ran"
@@ -1055,6 +1068,30 @@ def _detect_behavioral_gap(
             pass
 
     return ""
+
+
+def _deliverables_corroborate_runtime(resolved_intent) -> bool:
+    """True when the deliverables leave the runtime-expectation hint credible.
+
+    Returns True (keep Signal 2 armed) when there are no deliverables to
+    consult, or when at least one deliverable's name/description is itself
+    runtime-shaped. Returns False only when deliverables exist and every one
+    is a plain document/data artifact — then an all-static probe set is the
+    correct modality and a keyword hit in failure-mode prose is noise.
+    """
+    if resolved_intent is None:
+        return True
+    try:
+        delivs = getattr(resolved_intent, "deliverables", None) or []
+        if not delivs:
+            return True
+        for d in delivs:
+            text = f"{getattr(d, 'name', '')} {getattr(d, 'description', '')}"
+            if _RUNTIME_FAILURE_MODE_HINT.search(text):
+                return True
+        return False
+    except Exception:
+        return True
 
 
 def _detect_diagnosis_gap(

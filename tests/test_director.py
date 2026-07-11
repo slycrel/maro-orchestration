@@ -853,6 +853,63 @@ class TestDetectBehavioralGap:
             pass
         assert self._call(scope=_Bad()) == ""
 
+    # -- Signal 2 deliverable corroboration (run fd483efb regression) ------
+
+    @staticmethod
+    def _intent(*deliverables):
+        from scope import Deliverable, ResolvedIntent
+        ri = ResolvedIntent()
+        ri.deliverables = [Deliverable(name=n, description=d) for n, d in deliverables]
+        return ri
+
+    def test_document_only_deliverables_suppress_prose_keyword_hit(self):
+        # Run fd483efb (2026-07-11): analysis-document goal, failure mode
+        # "Proposal violates process logic" — \bprocess\b hit downgraded a
+        # 5/5-checks 0.98-confidence verdict. All-document deliverables mean
+        # static probes are the right modality; the hint is prose noise.
+        class _FakeScope:
+            failure_modes = [
+                'Proposals are structurally impossible: Recommendation proposes '
+                '"batch X calls" but operations are sequential. Proposal violates '
+                'process logic.'
+            ]
+        intent = self._intent(
+            ("artifacts/run-speedup-analysis.md", "ranked bottleneck analysis"),
+            ("artifacts/ranked-proposals.md", "speedup proposals with effort"),
+            ("artifacts/8177541b_step_metrics.json", "per-step timing data"),
+        )
+        assert self._call(scope=_FakeScope(), resolved_intent=intent) == ""
+
+    def test_runtime_shaped_deliverable_keeps_signal2_armed(self):
+        # slycrel-go shape: scope names a server expectation AND a deliverable
+        # is itself runtime-shaped — the downgrade must still fire.
+        class _FakeScope:
+            failure_modes = ["Server does not respond to /health under load"]
+        intent = self._intent(
+            ("cmd/server/main.go", "HTTP server binary serving /ws and /static/"),
+        )
+        reason = self._call(scope=_FakeScope(), resolved_intent=intent)
+        assert reason
+        assert "scope" in reason.lower()
+
+    def test_no_deliverables_preserves_conservative_behavior(self):
+        # Empty/absent deliverables → nothing to corroborate against → the
+        # original behavior stands (fire on the failure-mode hint).
+        class _FakeScope:
+            failure_modes = ["Daemon exits silently on malformed config"]
+        assert self._call(scope=_FakeScope(), resolved_intent=None)
+        assert self._call(scope=_FakeScope(), resolved_intent=self._intent())
+
+    def test_signal1_admission_ignores_deliverable_shape(self):
+        # Self-contradiction in the verdict's own words is the strongest
+        # signal — document deliverables must NOT suppress it.
+        intent = self._intent(("notes/summary.md", "written summary"))
+        reason = self._call(
+            summary="Gap: runtime validation was not performed.",
+            resolved_intent=intent,
+        )
+        assert reason
+
 
 class TestDetectDiagnosisGap:
     def _diag(self, failure_class="decomposition_too_broad", severity="warning", recommendation="split the work"):
