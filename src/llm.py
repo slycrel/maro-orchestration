@@ -1003,8 +1003,13 @@ class ClaudeSubprocessAdapter(_JSONToolPromptMixin, LLMAdapter):
         # the CLI for stream-json. The final {"type":"result"} event carries the
         # identical payload the old --output-format json produced, so result
         # handling below is unchanged; tool_events are parsed additively.
+        # --strict-mcp-config: don't load user-level MCP servers. Worker steps
+        # never use them, and the handshake is a per-boot tax on EVERY call —
+        # measured 2026-07-11 on this box: a claude.ai Google Drive server in
+        # the clawd user config cost ~3.7s/boot (6.4s → 2.7s trivial call),
+        # ~1.6 min across the clean Manti re-run's ~26 subprocess calls.
         cmd = [self.claude_bin, "-p", "--output-format", "stream-json", "--verbose",
-               "--dangerously-skip-permissions"]
+               "--dangerously-skip-permissions", "--strict-mcp-config"]
         if no_tools:
             # Utility calls (routing/classification/scope) have no business
             # holding real tool access — the "-p" agentic CLI can otherwise
