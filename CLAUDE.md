@@ -226,3 +226,10 @@ When a chunk of work is done (milestone delivered, bug fixed, feature shipped �
 3. **Push** — `git push` so the remote matches local. Don't let commits pile up unpushed — means a box crash loses work.
 
 Don't wait to be asked. Push is cheap, forgetting is expensive.
+
+**Session-close rule (SF-13, standing since 2026-07-09):** any Jeremy
+statement worth an auto-memory write also gets a GOAL_BRAIN.md Decisions
+line before the session ends — even when the conversation produced no work
+chunk. Decree-class statements must reach the compiled record, not just
+Claude's memory; a session that ends conversationally is the exact case
+this rule exists for.

@@ -11,9 +11,9 @@
 #   - src/heartbeat.py — mcp_servers
 # Every key listed uncommented below is read by code (docs-r2-02 decree:
 # no documented-but-dead keys; unwired ideas stay commented out).
-# NOTE: unlike GOALS/CONTEXT/SIGNALS (workspace overlay wins), CONFIG.md is
-# currently read from the repo/install copy only. Overlay migration for this
-# file is queued — see user/README.md for the lane's full documentation.
+# Resolution: workspace overlay wins, same as GOALS/CONTEXT/SIGNALS — your
+# ~/.maro/workspace/user/CONFIG.md overrides this shipped template
+# (config.user_file, since 7c1086c). Full lane docs: user/README.md.
 #
 # Edit this file to change system-wide behavior without touching code.
 # All values below are the shipped defaults.

@@ -26,6 +26,7 @@ BACKLOG, VISION, CLAUDE, README…) are living by definition and carry no frontm
 | How does an external substrate (OpenClaw/Hermes) call us? | `SUBSTRATE_INTEGRATION.md` |
 | Local validator model setup/results? | `LOCAL_VALIDATOR.md` |
 | Security / sandbox posture? | `SECURITY_MODEL.md` |
+| How do we cut/publish a release? | `PUBLISH_CHECKLIST.md` (exists since v0.1 — cite it, don't re-derive; SF-14 release amnesia) |
 | How do I monitor the host (disk/spend/orphans/heartbeat)? | `HOST_MONITORING.md` (runs `../scripts/host-check.sh`) |
 | End-to-end smoke commands? | `END_TO_END.md` |
 | Active refactor plan? | `REFACTOR_PLAN.md` (closes to history when done) |

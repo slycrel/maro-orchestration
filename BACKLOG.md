@@ -88,12 +88,13 @@ All adversarially verified (41/42 confirmed). The two 1.0-blockers first:
   quality_gate_action / mcp_servers); notify_on_complete redirects to the
   YAML notify.* lane. Standing rule stated in the file: uncommented key =
   has a reader.
-- [ ] Cosmetic sweep rides the above chunks: docs-r2-03 (CONFIG.md template
-  self-contradiction), docs-r2-05 ("alert Jeremy" in stranger README),
-  docs-r2-06/hist-r2-04 (PUBLISH_CHECKLIST missing from INDEX.md),
-  land-r2-01 (state trusted-operator boundary in README safety section),
-  land-r2-02 (pymaro disambiguation line), hist-r2-03 (SF-13 standing rule
-  → put in a living doc, likely CLAUDE.md close-out), hist-r2-05 (bucket D4
+- [ ] Cosmetic sweep rides the above chunks — SHIPPED 2026-07-10: docs-r2-03
+  (CONFIG.md overlay NOTE corrected), docs-r2-05 ("alert Jeremy" → "alert
+  the operator"), docs-r2-06/hist-r2-04 (PUBLISH_CHECKLIST row in INDEX.md),
+  land-r2-01 (trusted-operator boundary stated in README safety section),
+  land-r2-02 (pymaro disambiguation blockquote, phrasing from the live-batch
+  fd5d8597 draft), hist-r2-03 (SF-13 rule in CLAUDE.md end-of-chunk section).
+  STILL OPEN: hist-r2-05 (bucket D4
   lessons.jsonl name collision), data-r2-03 (atomic_write 0600 perms),
   arch-r2-02 (GOAL_BRAIN 1.0-arc Remaining list stale), ops-r2-03-replaced
   pidfile litter.

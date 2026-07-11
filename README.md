@@ -6,6 +6,8 @@ Autonomous agent framework that holds its agents accountable. Give it a goal; it
 
 Works standalone or alongside OpenClaw, Telegram, Slack, or any other interface you wire in.
 
+> **Not Microsoft's MARO:** if you're looking for `pymaro` — Microsoft's reinforcement-learning platform for resource optimization (container logistics, bike-share rebalancing, data-center capacity) — that's [github.com/microsoft/maro](https://github.com/microsoft/maro). This repository is **maro-orchestration**: hand a goal to a team of AI agents and get back work that's been verified as actually done, not just run to completion.
+
 > **Status: personal infrastructure / active development.** This is a working system, not a polished library. APIs change, features are added fast, and some things are still sharp edges. It runs continuously on a headless Ubuntu box and gets iterated on daily. If you're reading this and it seems useful, it probably is — just go in eyes open.
 
 ### Prerequisites
@@ -457,6 +459,14 @@ learning pipeline above, not this — treat the meta-cycle as experimental.
 ---
 
 ## Safety and reliability
+
+**Trust boundary, stated plainly:** Maro is built for a **trusted operator
+on a machine they own**. The guards below are honesty rails and blast-radius
+limiters against agent mistakes and injected content — they are not a
+security sandbox against a malicious operator or untrusted multi-tenant use.
+There is no OS-level isolation of worker processes yet (a containerized
+executor is a designed direction, not shipped — see `docs/SECURITY_MODEL.md`
+for the full threat model).
 
 **Spend caps** (`loop_init.py`) — on by default since day one of an install:
 - `budget.per_run_usd` ($5 default) feeds the loop's cost hard-stop
