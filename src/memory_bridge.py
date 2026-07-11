@@ -189,7 +189,7 @@ def ingest_lessons_to_store(
         Dict with ingestion stats:
         {
             "ingested": total items added,
-            "sources": {source_name: count},
+            "sources": {"parent_dir/file_name": count},
             "errors": count of malformed lines skipped,
         }
     """
@@ -240,7 +240,10 @@ def ingest_lessons_to_store(
         _save_ingest_offset(store, source_path, new_offset)
 
         stats["ingested"] += ingested_count
-        stats["sources"][source_path.name] = ingested_count
+        # parent/name key: the three lessons.jsonl sources share a basename,
+        # and bare-name keys silently clobbered each other's per-source
+        # counts (hist-r2-05 / brief bucket D4; aggregate was never wrong).
+        stats["sources"][f"{source_path.parent.name}/{source_path.name}"] = ingested_count
 
         if verbose or ingested_count > 0:
             log.info("memory_bridge: ingested %d items from %s",

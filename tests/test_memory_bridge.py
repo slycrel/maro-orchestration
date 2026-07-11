@@ -239,8 +239,11 @@ def test_ingest_basic(tmp_memory_dir, lessons_jsonl_file):
         stats = ingest_lessons_to_store(store)
 
         assert stats["ingested"] == 2
-        assert lessons_jsonl_file.name in stats["sources"]
-        assert stats["sources"][lessons_jsonl_file.name] == 2
+        # Keys are parent/name — bare basenames collided across the three
+        # lessons.jsonl sources (hist-r2-05).
+        _key = f"{lessons_jsonl_file.parent.name}/{lessons_jsonl_file.name}"
+        assert _key in stats["sources"]
+        assert stats["sources"][_key] == 2
 
 
 def test_ingest_incremental(tmp_memory_dir, lessons_jsonl_file):
