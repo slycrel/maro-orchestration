@@ -141,6 +141,29 @@ crowd-sourced or not)."
   research inline; (b) envelope: ~1–3 min / cents, not research-project
   scale. (Side casualty: outer watchdog killed the run mid-finalize, so no
   outcome row was recorded — learning pipeline never saw the run.)
+- [ ] **Manti follow-ups (2026-07-10, Jeremy adjudicated the NOW answer
+  "an abject failure... Siri for about 15 years"; decreed NO new errand
+  lane):**
+  - **NOW self-verdict must catch non-answers:** "the goal asked *where*,
+    the answer contains no *where*" → not-achieved. The model's own "I
+    don't have real-time access" admission is the cheapest signal. Today
+    that answer sailed out as done-unverified (verdict absent).
+  - **NOW→AGENDA escalation on not-achieved verdict:** same shape as the
+    quality gate's tier escalation, but lane escalation. Nothing
+    self-escalated; the good run was manually forced.
+  - **Qix-cuts decompose shape (taste/discretion in planning, NOT a new
+    lane):** 0–4 cheap narrowing steps that shrink the space (chain
+    prior → locations → verify 2-3 candidates), then bounded work inside;
+    re-draw on new info (replan exists). Plan size proportional to the
+    ask — the $2.47/24-min run brute-forced the full rectangle. Rides
+    with the queued #5 planning-depth shadow thread; the rectangle idea
+    is already captured in REASSESS_LINEAGE / constraint-orchestration
+    docs, only scope-text injection shipped.
+  - **Stranded run-card hardening (small):** a SIGTERM'd handle leaves
+    run metadata status/ended_at null even though loop artifacts survive
+    and `maro-runs result <id>` renders fine (specimen: 51b09271). The
+    stranded-run sweep or index pass should backfill terminal status
+    from the loop log.
 - [ ] **Standing habit:** capture real asks as phrased into the catalog
   (car questions, mid-session asks). Real phrasing carries the ambiguity
   synthetic goals launder out; this is also the organic corpus the lesson

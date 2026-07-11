@@ -1614,6 +1614,36 @@ Sample: the 2026-05-13..17 window of `~/.maro/workspace/runs/` (478 dirs total;
   CAPABILITIES.md). Draft target list in CAPABILITIES.md awaiting his
   reaction.
 
+- **2026-07-10 (Manti NOW answer = abject failure — Jeremy, on seeing it
+  in Telegram):** "I'd call it an abject failure, and is a great example
+  of why people don't always trust asking AI for answers. It basically
+  says 'here are maybe some ways you could find that out yourself'. We've
+  had that via siri for about 15 years." He'd hoped it escalated to
+  something better — it did not (the good agenda run was manually
+  forced). Implication: the NOW self-verdict must judge a
+  no-answer-in-the-answer as not-achieved (the model's own "I don't have
+  real-time access" admission is the signal), and a not-achieved NOW
+  verdict should escalate. Run output must be visible in the runs report
+  either lane ("whatever you used to run either way should be visible").
+- **2026-07-10 (no new errand lane — taste/discretion lives in planning;
+  Qix-cuts is the intended shape — Jeremy, same message):** "I don't
+  think this should be a new errand-scale agenda, but agree that it's a
+  bit more time sensitive. This gets into taste and discretion a bit."
+  The pattern he has been describing since the constraint-orchestration
+  conversations: "the 'cleanest' example would be the Qix-like cuts off
+  of a rectangle to narrow the field of view in 0-4 ish steps, then do
+  the work inside those boundary lines (and sometimes re-draw those, aka
+  go back to the drawing board as new information surfaces)." Both
+  human approaches to the Manti ask were cuts-first (wife: search →
+  gasbuddy-like site → zip narrowing; Jeremy: prior knowledge "Maverik
+  sells E0" → maps search for Maveriks → verify details). Status: the
+  rectangle idea is captured in docs (REASSESS_LINEAGE "draw the
+  rectangle first", CONSTRAINT_ORCHESTRATION_DESIGN/REVIEW) but only the
+  flat half shipped (scope-text injection pre-plan); the iterative
+  cuts-process in decompose — narrowing steps before committing, plan
+  size proportional to the ask, re-draw on new info — is unimplemented.
+  Vehicle candidate: the queued #5 planning-depth shadow thread.
+
 ## Threads (system-maintained — nothing leaves this list silently)
 
 Active:
