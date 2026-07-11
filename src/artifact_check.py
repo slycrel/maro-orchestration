@@ -498,7 +498,11 @@ _SCAVENGE_CAP = 20  # max flagged paths per step (dedup first)
 # Lookbehind also excludes ':' and '/' so URL paths ("https://owasp.org/...")
 # and colon-prefixed remote/PATH-style entries ("host:/inbox") can't start a
 # match — first organic rows (2026-07-03) flagged URL fragments as paths.
-_ABS_PATH_RE = re.compile(r"(?<![\w.:/])/(?:[\w.@+-]+/)*[\w.@+-]+")
+# '<' excluded too: XML/HTML closing tags in worker-written parse code
+# ("</phoneNumber>") matched as paths in run 3bffa6d6 (2026-07-11). The
+# no-space redirection evasion ("cat</home/x") this gives up is covered for
+# the common case by the system-prefix filter and is exotic for the rest.
+_ABS_PATH_RE = re.compile(r"(?<![\w.:/<])/(?:[\w.@+-]+/)*[\w.@+-]+")
 # cwd-drift tracking (evasion specimen, run 668e46d1 2026-07-04): a worker can
 # `cd` out of the fence mid-command and write with RELATIVE paths — invisible
 # to both the absolute-path scan and the structured-tool check. We track cd
@@ -543,6 +547,28 @@ def _in_fence(path: str, fence_roots: List[str]) -> bool:
 
 def _is_system_path(path: str) -> bool:
     return path.startswith(_SCAVENGE_SYSTEM_PREFIXES)
+
+
+def _plausible_fs_root(path: str) -> bool:
+    """True when a Bash-scanned path's first segment is a real directory here.
+
+    The Bash command scan is a heuristic over arbitrary text, and workers
+    embed web content in commands: URL paths in grep patterns ("/static/js/
+    main.606fbec2.js"), JSON pointers, and prose labels ("grep for /api")
+    are path-shaped but start with segments that exist only on some web
+    server. Real scavenge targets live under real local roots (/home, /tmp,
+    /media...), so requiring the FIRST segment to be a local directory kills
+    the markup noise while keeping the stale-path diagnostic: a read of
+    /home/gone-clone/main.go still flags because /home exists even when the
+    clone doesn't. Bash-scan only — structured tool inputs are ground truth.
+    """
+    try:
+        parts = path.split("/", 2)
+        if len(parts) < 2 or not parts[1]:
+            return False
+        return os.path.isdir("/" + parts[1])
+    except Exception:
+        return True  # unresolvable → don't silently drop
 
 
 def fence_allow_roots() -> List[str]:
@@ -683,6 +709,8 @@ def detect_out_of_fence_access(
                 for m in _ABS_PATH_RE.findall(cmd)[:50]:
                     if _is_system_path(m) or _in_fence(m, fence_roots):
                         continue
+                    if not _plausible_fs_root(m):
+                        continue  # web/markup fragment, not a local path
                     _flag(m, "Bash", report.reads)
                 # cwd-drift walk: interleave cd's and relative write targets in
                 # command order so each write resolves against the cwd in effect

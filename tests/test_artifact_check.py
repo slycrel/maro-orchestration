@@ -469,6 +469,43 @@ class TestScavengeUrlFalsePositives:
         assert report.flagged
         assert report.reads[0]["path"] == "/home/nonexistent-stale-clone/main.go"
 
+    # -- run 3bffa6d6 specimens (2026-07-11): markup fragments in Bash text --
+
+    def test_xml_closing_tags_in_parse_code_not_flagged(self, tmp_path):
+        # Worker wrote a Python regex over fetched KML; closing tags matched
+        # as absolute paths ("/phoneNumber", "/coordinates").
+        from artifact_check import detect_out_of_fence_access
+        events = [{"name": "Bash", "input": {"command": (
+            "python3 - <<'EOF'\nimport re\n"
+            "placemarks = re.findall(r'<name>(.*?)</name><description>(.*?)"
+            "</description><phoneNumber>(.*?)</phoneNumber><Point>"
+            "<coordinates>(.*?)</coordinates>', xml)\nEOF"
+        )}}]
+        report = detect_out_of_fence_access(events, self._fence(tmp_path))
+        assert not report.flagged, report
+
+    def test_url_path_in_prose_and_patterns_not_flagged(self, tmp_path):
+        # "/api" in an echo'd label and "/static/js/..." in a grep pattern —
+        # path-shaped web fragments whose first segment is no local directory.
+        from artifact_check import detect_out_of_fence_access
+        events = [{"name": "Bash", "input": {"command": (
+            'echo "--- grep for /api or .json patterns ---"\n'
+            'grep -o \'src="/static/js/main.606fbec2.js"\' page.html'
+        )}}]
+        report = detect_out_of_fence_access(events, self._fence(tmp_path))
+        assert not report.flagged, report
+
+    def test_real_root_nonexistent_leaf_still_flagged(self, tmp_path):
+        # The first-segment-is-a-real-dir rule must NOT eat the stale-clone
+        # diagnostic: /home exists even when the clone under it doesn't.
+        from artifact_check import detect_out_of_fence_access
+        events = [{"name": "Bash", "input": {"command": (
+            'grep -r pattern /home/gone-clone/src/'
+        )}}]
+        report = detect_out_of_fence_access(events, self._fence(tmp_path))
+        assert report.flagged
+        assert report.reads[0]["path"] == "/home/gone-clone/src"
+
 
 class TestScavengeCwdDrift:
     """cwd-drift write detection — the run-668e46d1 evasion specimen (2026-07-04):
