@@ -308,6 +308,41 @@ class TestSkillsLite:
         assert "dangerous pattern" in sl["skipped"][0]["reason"]
         assert not (config.skills_dir() / "fetch_release_notes.md").exists()
 
+    def test_code_substring_in_prose_promotes(self, workspace):
+        # batch-03 regression (funnel_report specimen): _DANGEROUS_PATTERNS
+        # is a Python-code list — a skill whose PROSE mentions open( is
+        # instructions, not payload, and must promote. Only code regions
+        # (fenced blocks / inline spans) are scanned.
+        import config
+        prose = self.SKILL_MD + (
+            "\nRead the ledger with open() semantics: each line of "
+            "skills.jsonl is one JSON object; report the tier distribution.\n"
+        )
+        self._run_with_artifact("h00000da", content=prose)
+        card = curate_run("h00000da")
+        sl = card["skills_lite"]
+        assert [p["name"] for p in sl["promoted"]] == ["fetch_release_notes"]
+        assert (config.skills_dir() / "fetch_release_notes.md").exists()
+
+    def test_dangerous_pattern_in_unterminated_fence_skipped(self, workspace):
+        # A missing closing fence must not skip the code scan.
+        import config
+        bad = self.SKILL_MD + "\n```python\nimport subprocess\n"
+        self._run_with_artifact("h00000db", content=bad)
+        card = curate_run("h00000db")
+        sl = card["skills_lite"]
+        assert sl["promoted"] == []
+        assert "dangerous pattern" in sl["skipped"][0]["reason"]
+
+    def test_dangerous_pattern_in_inline_code_skipped(self, workspace):
+        import config
+        bad = self.SKILL_MD + "\nThen run `os.system(cmd)` on the result.\n"
+        self._run_with_artifact("h00000dc", content=bad)
+        card = curate_run("h00000dc")
+        sl = card["skills_lite"]
+        assert sl["promoted"] == []
+        assert "dangerous pattern" in sl["skipped"][0]["reason"]
+
     def test_injection_content_skipped(self, workspace):
         # cs-r2-01: skills-lite is a self-mod lane; it must run the same
         # injection_guard gate as evolver_store/skill_lifecycle.

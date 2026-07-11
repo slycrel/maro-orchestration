@@ -66,11 +66,13 @@ All adversarially verified (41/42 confirmed). The two 1.0-blockers first:
   to buy back the throttling. ops-r2-05 fixed first so the verify pass no
   longer re-stamps the real pidfile. Tripwire:
   test_verify_post_apply_runs_throttled.
-- [ ] **batch-03:** `_DANGEROUS_PATTERNS` false-positives on instruction
-  .md: funnel_report skill skipped for containing `open(` in prose about
-  reading a ledger. Skip-for-review is the right failure mode, but the
-  code-substring gate needs an instruction-artifact-aware pass (pair with
-  cs-r2-01's guard, which is the right tool there).
+- [x] **batch-03 SHIPPED 2026-07-10:** skills-lite dangerous-pattern scan
+  now scoped to markdown CODE regions (fenced blocks incl. unterminated +
+  inline spans; `run_curation._code_regions`) — prose mentioning `open(`
+  is instructions, not payload; prose threats stay with the cs-r2-01
+  injection_guard gate. funnel_report specimen shape covered by
+  test_code_substring_in_prose_promotes. sandbox.is_skill_safe (repo-skill
+  lane) deliberately untouched.
 - [ ] **batch-04:** lesson-funnel intake observation: 9 finalizations →
   0 lessons extracted on every tier. The funnel isn't just not-promoting
   (SF-10), it's barely ingesting. Fold into the funnel-rate measurement

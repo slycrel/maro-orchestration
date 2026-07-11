@@ -263,6 +263,26 @@ def _skill_shaped(fm: dict) -> bool:
     )
 
 
+_CODE_REGION_RE = None  # compiled lazily; module import stays regex-free
+
+
+def _code_regions(text: str) -> str:
+    """Concatenated code regions of a markdown doc: fenced ``` blocks plus
+    inline `...` spans. The dangerous-pattern scan runs on these only — a
+    skills-lite .md is instructions, never executed Python, so code
+    substrings in prose ("use open() to read the ledger") are description,
+    not payload. Anything an author marks AS code is scanned in full."""
+    import re
+    global _CODE_REGION_RE
+    if _CODE_REGION_RE is None:
+        # \Z alternative: an unterminated fence is still code to the reader
+        # (and to the prompt) — don't let a missing closing fence skip the scan.
+        _CODE_REGION_RE = re.compile(
+            r"```.*?(?:```|\Z)|`[^`\n]+`", re.DOTALL
+        )
+    return "\n".join(m.group(0) for m in _CODE_REGION_RE.finditer(text))
+
+
 def _lite_candidate_files(rd: Path, meta: dict) -> List[Path]:
     """Skill-shaped .md candidates: run-dir artifact/ + build/, plus the
     project artifacts dir (same join as spend_transparency)."""
@@ -349,11 +369,16 @@ def promote_skills_lite(rd: Path, meta: dict, card: dict) -> None:
             skipped.append({"file": rel, "name": name,
                             "reason": f"destination exists: {dest.name}"})
             continue
-        # Fail-closed static scan — same lane as sandbox.is_skill_safe. Unsafe
-        # candidates aren't rejected forever, they just wait for human review.
+        # Fail-closed static scan — same lane as sandbox.is_skill_safe, but
+        # scoped to the .md's CODE regions (fenced blocks + inline spans).
+        # _DANGEROUS_PATTERNS is a Python-code substring list; applied to
+        # prose it false-positives on instructional text ("read the ledger
+        # with open(...)" — batch-03, funnel_report specimen). Prose threats
+        # are prompt injection, which is the injection_guard gate below.
         try:
             from sandbox import _DANGEROUS_PATTERNS
-            hit = next((p for p in _DANGEROUS_PATTERNS if p in text), None)
+            code_text = _code_regions(text)
+            hit = next((p for p in _DANGEROUS_PATTERNS if p in code_text), None)
         except Exception:
             hit = "sandbox patterns unavailable"
         if hit:
