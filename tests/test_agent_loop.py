@@ -1788,6 +1788,34 @@ def test_cost_budget_stops_loop(monkeypatch, tmp_path):
     )
 
 
+@pytest.mark.slow
+def test_cost_budget_exceeded_on_final_step_keeps_done(monkeypatch, tmp_path):
+    """Budget tripping with NO steps remaining must not demote a finished run.
+
+    Run 692bd96f (2026-07-11): all steps done, closure complete=True,
+    goal_achieved=True — then the cost stop fired after the FINAL step and
+    stamped the run stuck/failed. The breaker exists to stop further spend;
+    a fully-consumed plan has none.
+    """
+    _setup_workspace(monkeypatch, tmp_path)
+    from pre_flight import PlanReview
+    from unittest.mock import patch as _patch
+    _pf = PlanReview(scope="narrow", scope_note="test")
+    with _patch("pre_flight.review_plan", return_value=_pf):
+        result = run_agent_loop(
+            "single cheap task",
+            project="cost-final-step",
+            adapter=_DryRunAdapter(),
+            dry_run=False,
+            cost_budget=0.0001,  # trips on the one and only step
+            preset_steps=["Research budget carve-out behavior"],
+        )
+    assert result.status == "done", (
+        f"finished plan demoted to {result.status!r}: {result.stuck_reason}"
+    )
+    assert not (result.stuck_reason and "cost_budget" in result.stuck_reason)
+
+
 # ---------------------------------------------------------------------------
 # Phase 35 P2: HITL tier wiring in _execute_step
 # ---------------------------------------------------------------------------

@@ -735,15 +735,24 @@ def _execute_main_loop(
                  _step_model or "unknown",
                  step_elapsed, iteration, max_iterations)
 
-        # Phase 33: token budget — abort gracefully if exceeded
+        # Phase 33: token budget — abort gracefully if exceeded.
+        # Only a run with work LEFT gets demoted: the breaker exists to stop
+        # FURTHER spend, and when the plan is fully consumed there is none —
+        # run 692bd96f (2026-07-11) finished all steps + passed closure, then
+        # the cost stop after the final step stamped it stuck/failed.
         if token_budget is not None and (total_tokens_in + total_tokens_out) >= token_budget:
-            loop_status = "stuck"
-            stuck_reason = (
+            _budget_note = (
                 f"token_budget={token_budget} exceeded "
                 f"({total_tokens_in + total_tokens_out} total tokens after step {step_idx})"
             )
+            if remaining_steps:
+                loop_status = "stuck"
+                stuck_reason = _budget_note
+            else:
+                log.warning("budget exceeded on final step (run kept done): %s",
+                            _budget_note)
             if verbose:
-                print(f"[maro] {stuck_reason}", file=sys.stderr, flush=True)
+                print(f"[maro] {_budget_note}", file=sys.stderr, flush=True)
             break
 
         # Cost budget — warn at 80%, hard stop at budget + 20% slush.
@@ -753,14 +762,20 @@ def _execute_main_loop(
             _cost_pct = _total_cost / cost_budget * 100
             _slush = cost_budget * 0.2
             if _total_cost >= cost_budget + _slush:
-                loop_status = "stuck"
-                stuck_reason = (
+                _budget_note = (
                     f"cost_budget=${cost_budget:.2f} + slush=${_slush:.2f} exceeded "
                     f"(${_total_cost:.4f} total after step {step_idx})"
                 )
-                log.warning("cost hard stop: %s", stuck_reason)
+                # Same finished-plan carve-out as the token breaker above.
+                if remaining_steps:
+                    loop_status = "stuck"
+                    stuck_reason = _budget_note
+                    log.warning("cost hard stop: %s", stuck_reason)
+                else:
+                    log.warning("cost budget exceeded on final step "
+                                "(run kept done): %s", _budget_note)
                 if verbose:
-                    print(f"[maro] {stuck_reason}", file=sys.stderr, flush=True)
+                    print(f"[maro] {_budget_note}", file=sys.stderr, flush=True)
                 break
             elif _cost_pct >= 80 and not ctx.cost_warned:
                 log.warning("cost approaching budget: $%.4f / $%.2f (%.0f%%)",
