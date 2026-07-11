@@ -32,13 +32,13 @@ All adversarially verified (41/42 confirmed). The two 1.0-blockers first:
   is structural).
 - [x] **cs-r2-01: SHIPPED 2026-07-10** (promotion-time guard + loader-side
   backstop) — moved to BACKLOG_DONE with context.
-- [ ] **ops-r2-05 (live-reproduced):** test-isolation leak — 
-  test_heartbeat.py::test_heartbeat_loop_none_autonomy_uses_config stubs
-  sys.modules["config"], proc_lock._run_dir import fails → Path.home()
-  fallback bypasses MARO_WORKSPACE, every full-suite run stamps the REAL
-  workspace run/heartbeat.pid. Fix: monkeypatch real config.get instead of
-  module replacement, and/or _run_dir reads MARO_WORKSPACE env before home
-  fallback (tests/test_heartbeat.py ~:352-367, src/proc_lock.py:32-37).
+- [x] **ops-r2-05 SHIPPED 2026-07-10:** proc_lock._run_dir fallback now
+  mirrors config.workspace_root()'s env resolution (MARO_WORKSPACE /
+  OPENCLAW_WORKSPACE / WORKSPACE_ROOT) before Path.home() — a partial
+  config stub can no longer stamp the real workspace's heartbeat.pid.
+  Tripwired in tests/test_proc_lock.py (reproduces the exact stub shape);
+  live-verified: full test_heartbeat.py run leaves the real pidfile mtime
+  untouched.
 - [ ] **data-r2-01 (SF-2 residual, r2 blocker #2):** agenda-lane lesson
   extraction + skill crystallization run at finalize BEFORE closure judges;
   retro-stamp reaches only outcomes.jsonl — lessons/skills still extracted
@@ -60,11 +60,12 @@ All adversarially verified (41/42 confirmed). The two 1.0-blockers first:
   only, `MARO_DEBUG=1` env override) — behavior is never environment-dependent,
   only observability is switchable. `environment` key deleted from DEFAULTS.md
   + workspace config. → BACKLOG_DONE.
-- [ ] **batch-02:** evolver verify→learn runs plain full `pytest tests/ -q
-  -x` in-process at finalize (evolver.py:721) — unthrottled on this box
-  (violates the test-safe rule) and re-fires ops-r2-05 (pidfile re-stamped
-  17:54Z during the batch, proven twice now). Throttle (nice + maxfail
-  subset or test-safe.sh) and fix ops-r2-05 first.
+- [x] **batch-02 SHIPPED 2026-07-10:** evolver `_verify_post_apply` pytest
+  now runs `nice -n 15` + `taskset -c ${TEST_CORES:-0,1}` (test-safe.sh
+  posture; tools probed, degrades gracefully off-Linux), timeout 300→900s
+  to buy back the throttling. ops-r2-05 fixed first so the verify pass no
+  longer re-stamps the real pidfile. Tripwire:
+  test_verify_post_apply_runs_throttled.
 - [ ] **batch-03:** `_DANGEROUS_PATTERNS` false-positives on instruction
   .md: funnel_report skill skipped for containing `open(` in prose about
   reading a ledger. Skip-for-review is the right failure mode, but the

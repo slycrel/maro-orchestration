@@ -34,6 +34,14 @@ def _run_dir() -> Path:
         from config import workspace_root
         return workspace_root() / "run"
     except Exception:
+        # Mirror config.workspace_root()'s env resolution before touching the
+        # home fallback. ops-r2-05: a test stubbing sys.modules["config"] with
+        # a partial namespace lands here, and a home-only fallback stamps the
+        # REAL workspace's heartbeat.pid despite MARO_WORKSPACE isolation.
+        for var in ("MARO_WORKSPACE", "OPENCLAW_WORKSPACE", "WORKSPACE_ROOT"):
+            val = os.environ.get(var)
+            if val:
+                return Path(val).expanduser().resolve() / "run"
         return Path.home() / ".maro" / "workspace" / "run"
 
 

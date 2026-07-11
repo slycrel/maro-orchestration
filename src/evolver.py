@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import sys
 import time
 from typing import Any, List
@@ -716,12 +717,25 @@ def _verify_post_apply(applied_ids, run_id: str, *, verbose: bool = False) -> No
     log.info("verify_post_apply: running test suite after %d auto-applied mutations (run_id=%s)",
              auto_applied, run_id)
 
+    # Throttled like scripts/test-safe.sh (BACKLOG batch-02): the evolver
+    # fires at run finalize, i.e. while the box may be doing other work — an
+    # unthrottled full suite pins all cores (and re-ran the ops-r2-05 leak
+    # every cadence firing). nice + a core cap keep the verify pass a
+    # background citizen; the wider timeout buys back the throttling.
+    import shutil as _shutil
+    _cmd: List[str] = []
+    if _shutil.which("nice"):
+        _cmd += ["nice", "-n", "15"]
+    if _shutil.which("taskset"):
+        _cmd += ["taskset", "-c", os.environ.get("TEST_CORES", "0,1")]
+    _cmd += [sys.executable, "-m", "pytest", str(test_dir), "-q", "--tb=no", "-x"]
+    _timeout_s = 900
     try:
         result = subprocess.run(
-            [sys.executable, "-m", "pytest", str(test_dir), "-q", "--tb=no", "-x"],
+            _cmd,
             capture_output=True,
             text=True,
-            timeout=300,
+            timeout=_timeout_s,
             cwd=str(repo_root),
         )
         passed = result.returncode == 0
@@ -729,7 +743,7 @@ def _verify_post_apply(applied_ids, run_id: str, *, verbose: bool = False) -> No
         summary = result.stdout.strip().splitlines()[-1] if result.stdout.strip() else ""
     except subprocess.TimeoutExpired:
         passed = False
-        summary = "test suite timed out (300s)"
+        summary = f"test suite timed out ({_timeout_s}s)"
     except Exception as exc:
         log.debug("verify_post_apply: test run failed: %s", exc)
         return

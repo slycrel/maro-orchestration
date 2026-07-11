@@ -465,6 +465,36 @@ def test_verify_post_apply_accepts_legacy_int_count(tmp_path):
     assert mock_revert.call_count == 0  # no IDs → no revert
 
 
+def test_verify_post_apply_runs_throttled(tmp_path):
+    # BACKLOG batch-02: the verify pass fires at run finalize on a live box —
+    # it must run as a background citizen (nice + core cap, test-safe.sh
+    # posture), never an unthrottled all-cores pytest.
+    import shutil
+    from evolver import _verify_post_apply
+
+    fake_pass = MagicMock()
+    fake_pass.returncode = 0
+    fake_pass.stdout = "1 passed"
+    fake_pass.stderr = ""
+
+    captured = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = [str(c) for c in cmd]
+        return fake_pass
+
+    with patch("subprocess.run", side_effect=fake_run), \
+         patch("evolver.revert_suggestion"):
+        _verify_post_apply(["s1"], "run-xyz", verbose=False)
+
+    cmd = captured["cmd"]
+    assert any("pytest" in c for c in cmd)
+    if shutil.which("nice"):
+        assert cmd[0] == "nice"
+    if shutil.which("taskset"):
+        assert "taskset" in cmd
+
+
 def test_apply_suggestion_cost_optimization_held_for_review(tmp_path):
     # Regression: cost_optimization has no executor in _apply_suggestion_action.
     # Previously it fell through to the else-branch and got marked applied=True,
