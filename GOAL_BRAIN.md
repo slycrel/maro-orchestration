@@ -1806,3 +1806,16 @@ Dormant (deliberately parked, not dropped):
 - **End-to-end standing-rule observation** — does the medium → long → standing-rule
   path actually fire in real runs post-M2? Needs production runtime, then check
   `standing_rules.jsonl`.
+- **Are we re-inventing reasoning-model behavior?** (Jeremy, recurring; raised
+  again 2026-07-10 against cuts-first planning.) Partially yes by design: the
+  narrowing *reasoning* is what frontier models do natively in one
+  tools-in-context session; what the orchestration layer adds is (1) durability
+  across stateless steps (the godot agenda-divergence failure), (2) judgeable/
+  learnable artifacts instead of thinking-token exhaust, (3) cost arbitrage
+  (cheap narrow → cheap bounded steps vs billing the whole rectangle at
+  thinking rates) — and the arbitrage spread narrows every model generation.
+  Standing kill-test: CUTS_DRAWN records + outcome verdicts give the A/B — if
+  a same-tier model with identical context produces equivalent plans without
+  the cuts call, delete the mechanism (same reversibility posture as the
+  capability-form paradigm above; scaffold is condemned property, the record
+  is the durable asset).
