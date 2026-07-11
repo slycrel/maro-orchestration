@@ -1564,6 +1564,28 @@ Sample: the 2026-05-13..17 window of `~/.maro/workspace/runs/` (478 dirs total;
   like that." Implication for batch-04: lesson-funnel measurement should
   ride organic direct-use work, not synthetic batches; funnel-threshold
   tuning is deprioritized until real goals flow.
+- **2026-07-10 (capabilities catalog + example collection — Jeremy):** "we
+  need some real test cases to list, maybe in the readme, certainly in
+  some kind of capabilities doc... We should collect more and different
+  examples, both simple and complex. For better testing, learning, and
+  overall initial capability of the system and its skills." Canonical
+  simple case, from the car same day: "where can I get non-ethanol gas in
+  or around Manti, Utah?" — "orchestration is the perfect way to ask that
+  question, do some research, and get an answer; that's the UX we are
+  looking for in a simple case." Standing shape: real asks get captured
+  as-phrased into `docs/CAPABILITIES.md` (living catalog, shipped same
+  day); the catalog is simultaneously test corpus, learning corpus, and
+  capability target. BACKLOG item 22.
+- **2026-07-10 (blank-slate pre-installed capability set — Jeremy, same
+  message):** "I'd love a blank slate with a small-ish but useful
+  pre-installed list of capabilities that we think might be the right
+  target (and maybe a shared and trusted directory to pull from at a
+  later time, crowd-sourced or not)." Fresh installs should be useful
+  day-one via a small curated skill set that covers the catalog tiers;
+  the shared/trusted directory + cross-instance learning share is
+  post-1.0 direction (supply-chain trust boundary noted in
+  CAPABILITIES.md). Draft target list in CAPABILITIES.md awaiting his
+  reaction.
 
 ## Threads (system-maintained — nothing leaves this list silently)
 

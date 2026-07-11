@@ -93,6 +93,40 @@ All adversarially verified (41/42 confirmed). The two 1.0-blockers first:
   arch-r2-02 (GOAL_BRAIN 1.0-arc Remaining list stale), ops-r2-03-replaced
   pidfile litter.
 
+### 22. Capabilities catalog + blank-slate skill set (2026-07-10, Jeremy)
+
+Jeremy (in-session, riffing off the car ask "where can I get non-ethanol
+gas in or around Manti, Utah?"): "we need some real test cases to list,
+maybe in the readme, certainly in some kind of capabilities doc... We
+should collect more and different examples, both simple and complex. For
+better testing, learning, and overall initial capability of the system and
+its skills." Plus: "I'd love a blank slate with a small-ish but useful
+pre-installed list of capabilities that we think might be the right target
+(and maybe a shared and trusted directory to pull from at a later time,
+crowd-sourced or not)."
+
+- [x] **docs/CAPABILITIES.md shipped 2026-07-10:** living catalog (5 tiers,
+  verified/target/aspirational grounding rule, Manti as the canonical
+  simple case + UX contract), blank-slate draft target list, add-an-example
+  protocol. README "what it looks like in practice" block + INDEX row.
+- [ ] **Run the canonical case live:** hand the Manti goal to `maro-handle`
+  as-is and judge against the Tier-1 UX contract (one ask → sourced answer,
+  minutes, no link dumps). First `target`→`verified` promotion; whatever
+  breaks is the errand-research skill's real spec.
+- [ ] **Standing habit:** capture real asks as phrased into the catalog
+  (car questions, mid-session asks). Real phrasing carries the ambiguity
+  synthetic goals launder out; this is also the organic corpus the lesson
+  funnel needs (batch-04's answer lives here, not in synthetic batches).
+- [ ] **Blank-slate pre-installed set (design → curate):** make `maro
+  bootstrap` useful day-one. Draft list in CAPABILITIES.md (errand-research,
+  research-brief, repo-digest, ledger-census, doc-summary, watch-condition,
+  code_review). Selection principle: every shipped skill is the
+  crystallization of a catalog tier — catalog and shipped set verify each
+  other. Needs: which existing skills graduate to repo `skills/`, which
+  need building, acceptance = their catalog rows go `verified`.
+- [ ] **(post-1.0, Vision)** Shared trusted skill directory + cross-instance
+  learning share — see Vision section entry.
+
 ### 0. Test corpus — capture the missing layers (forward record-mode + full archive)
 
 **Shipped 2026-06-26 (the "now" half):** `scripts/harvest_corpus.py` distills the
@@ -347,6 +381,20 @@ shadow (MILESTONES), #9 /loop trace (MILESTONES), #6 verify→learn = next
 arc after 1.0. Full context in BACKLOG_DONE.
 
 ## Vision / Deferred
+
+### Shared trusted skill directory + cross-instance learning (post-1.0 vision, 2026-07-10, Jeremy)
+
+"Maybe a shared and trusted directory to pull from at a later time,
+crowd-sourced or not" — the blank-slate pre-installed set (item 22) is the
+seed; sharing is the scale-out. Ties directly to "sharing learning across
+instances" as a post-1.0 feature: skills are the portable unit today
+(`maro-import` already merges with quarantine + provenance), lessons ride
+the same rails later. Trust boundary notes recorded in CAPABILITIES.md so
+we don't relearn them: a shared directory is a supply chain (cs-r2-01's
+threat model at internet scale) — provenance required, same
+injection/dangerous-pattern gates as skills-lite, imports arrive as
+reviewable candidates never auto-trusted. Direction, not design; wants its
+own pass when 1.0 ships.
 
 ### Post-Purgatorio decision batch (2026-07-09, Jeremy — quotes in GOAL_BRAIN Decisions)
 

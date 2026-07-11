@@ -33,6 +33,14 @@ Works standalone or alongside OpenClaw, Telegram, Slack, or any other interface 
 - **Token-efficient research**: pre-fetch layer intercepts URLs before LLM calls, uses Jina Reader for clean markdown, authenticated X/Twitter access via CLI
 - **Cost reporting**: summarize `memory/step-costs.jsonl` into grouped latency/token/cost tables instead of eyeballing raw JSONL
 
+**What that looks like in practice** — real asks, one sentence in, one answer out:
+
+> "Where can I get non-ethanol gas in or around Manti, Utah?" → orchestrated multi-source research → named stations with sources, in minutes
+> "Summarize this repo's commits since the last tag into an operator digest." → digest artifact (and the reusable skill it crystallized into)
+> "Watch this feed and tell me when [condition]." → standing heartbeat check, silent until it fires
+
+The growing catalog of example goals — simple through complex, each marked verified/target/aspirational — lives in [docs/CAPABILITIES.md](docs/CAPABILITIES.md). It doubles as the test corpus and the target for the pre-installed skill set.
+
 ---
 
 ## What makes it different
