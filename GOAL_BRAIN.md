@@ -141,6 +141,21 @@ rounds, first-class re-draw triggers, #5 dispatch-level planning-depth
 field (separate thread, still queued), NOW-lane cuts. Basis: commit
 068eddd, 20 tests in test_cuts_planning.py, DEFAULTS.md row, acceptance
 run = Manti canonical case (results in CAPABILITIES.md).
+**Acceptance run verdict (8177541b, 2026-07-10):** content PASS — cuts
+drew Jeremy's exact human heuristics unprompted, 2 committed steps vs
+the baseline's 7, run finished inside the $2.00 budget (baseline
+hard-stopped at $2.47), tokens −39%. Wall time did NOT improve (~28 vs
+~24 min); the anatomy said why: 852s of 1671s was between-step
+overhead, 454s of it local-qwen validation (11 calls × ~41s, all
+passed; lifetime ROI ~$0.64 saved). Two same-day fixes off the run's
+own evidence: closure brittle-grep false-negative → failed static
+checks now attach the probed file's actual content to the verdict call
+(2830f48); ladder latency breaker `validate.local_max_latency_ms`
+(4957448) — first over-cap local verdict switches the process to paid
+(~6.5s/call). Next envelope lever identified, not started: micro-step
+boot tax (~35s fixed per step; expansions emit read-only micro-steps).
+Clean re-run in fresh project `manti-clean-rerun` launched same
+evening for uncontaminated cost numbers.
 
 **Verdict-aware learning complete (data-r2-01, SHIPPED 2026-07-10,
 9f07b80 — the last non-gated r2 blocker):** agenda-lane lesson extraction

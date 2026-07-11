@@ -169,6 +169,37 @@ crowd-sourced or not)."
     dispatch-level planning-depth shadow field (separate, still queued),
     cuts on the NOW lane (agenda decompose only). Acceptance = Manti
     canonical case live run vs the $2.47 baseline.
+    **Acceptance run 8177541b (2026-07-10): content PASS** (best Manti
+    deliverable to date, 11/11 steps, run stayed inside the $2.00 budget
+    where the baseline hard-stopped at $2.47; tokens 2.94M vs 4.84M) but
+    wall ~28 min vs ~24 — envelope anatomy: 819s in steps (465s of that
+    one adversity-heavy verify step fighting Cloudflare/DDG/Overpass
+    blocks — productive, replan handled it) + 852s BETWEEN steps, of
+    which 454s was 11 local-qwen ladder calls at ~41s each, all passing.
+    Two fixes shipped off this run same day: closure brittle-grep
+    evidence attachment (2830f48 — the run was false-negatived by a
+    literal `grep 'Station Name'` against a `| Rank | Station |` header)
+    and the ladder latency breaker (4957448, validate.local_max_latency_ms).
+    Clean re-run (fresh project `manti-clean-rerun`, no artifact reuse)
+    in flight same evening — pre-breaker code, so its envelope still
+    carries the ladder tax; treat it as clean-cost baseline for plan
+    shape, and the NEXT run as the breaker A/B.
+  - **Micro-step boot tax (next envelope lever, found in 8177541b):**
+    10 of 11 steps averaged ~35s each and several were read-only
+    micro-steps ("Read artifacts/source-log.txt...") — each step pays a
+    fresh `claude -p` session boot, so expansion emitting 3 reads + 1
+    format + 1 write costs ~3 boots of pure overhead. Boundary/milestone
+    expansion should fold reads into the step that consumes them (the
+    step's cost model — ~30s fixed overhead per step — is honest context
+    for the expansion prompt, not a taxonomy). Candidate after clean-run
+    numbers land.
+  - **Scavenge detector false-positive on URL paths (small):** the
+    re-run's probe step logged SCAVENGE_DETECTED for reads of `/api`,
+    `/phoneNumber`, `/static/js/main.606fbec2.js` — URL/JSON fragments
+    from curl+jq output parsed as filesystem reads. Detection-layer only
+    (zero cost, no demotion) but it salts the evidence feed; the
+    transcript parser should drop path-shaped tokens that appear inside
+    URLs or JSON keys.
   - **Stranded run-card hardening (small):** a SIGTERM'd handle leaves
     run metadata status/ended_at null even though loop artifacts survive
     and `maro-runs result <id>` renders fine (specimen: 51b09271). The
