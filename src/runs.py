@@ -187,6 +187,10 @@ def write_metadata(
         "started_at": started_at,
         "ended_at": ended_at,
         "status": status,
+        # Owner PID: lets the stranded-run sweep tell "owner died before
+        # finalize" (SIGTERM runs no finally — specimen 51b09271) from
+        # "still running" without age guesswork. First writer wins.
+        "pid": existing.get("pid") or os.getpid(),
     }
     if extra:
         # Caller-supplied keys merge in but don't override the core set.

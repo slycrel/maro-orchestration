@@ -167,6 +167,109 @@ def test_sweep_skips_finalized_run(project, tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# Stranded run-card backfill (specimen 51b09271: SIGTERM'd handle leaves
+# status/ended_at null forever; sweep stamps non-terminal "stranded")
+# ---------------------------------------------------------------------------
+
+
+def _make_run_card(tmp_path, name, *, status=None, started_ago_secs=3600,
+                   pid=None, ckpt_pid=None):
+    from datetime import datetime, timedelta, timezone
+    rd = tmp_path / "runs" / name
+    (rd / "build").mkdir(parents=True, exist_ok=True)
+    started = (datetime.now(timezone.utc)
+               - timedelta(seconds=started_ago_secs)).isoformat()
+    meta = {"handle_id": name.split("-")[0], "status": status,
+            "started_at": started, "ended_at": None}
+    if pid is not None:
+        meta["pid"] = pid
+    (rd / "metadata.json").write_text(json.dumps(meta))
+    if ckpt_pid is not None:
+        (rd / "build" / "checkpoint.json").write_text(json.dumps(
+            {"loop_id": "lp", "goal": "g", "project": "",
+             "handle_id": meta["handle_id"],
+             "steps": ["s1", "s2"], "completed": [],
+             "timestamp": "2026-07-09T00:00:00",
+             "in_flight": {"index": 1, "started_at": "2026-07-09T00:01:00",
+                           "pid": ckpt_pid}}))
+    return rd
+
+
+@pytest.fixture
+def runs_env(tmp_path, monkeypatch):
+    import runs as runs_module
+    monkeypatch.setattr(runs_module, "runs_root", lambda: tmp_path / "runs")
+    (tmp_path / "runs").mkdir(exist_ok=True)
+    return tmp_path
+
+
+def test_backfill_stamps_dead_pid_run(runs_env):
+    from heartbeat import _backfill_stranded_run_cards
+    rd = _make_run_card(runs_env, "hstr-a", pid=999999999)
+    hits = _backfill_stranded_run_cards()
+    assert "hstr" in hits
+    meta = json.loads((rd / "metadata.json").read_text())
+    assert meta["status"] == "stranded"
+    assert meta["ended_at"]
+    assert meta["stranded_detected_at"]
+
+
+def test_backfill_uses_checkpoint_pid_for_legacy_rows(runs_env):
+    # Pre-pid-era metadata (like 51b09271): owner evidence comes from the
+    # checkpoint's in_flight pid.
+    from heartbeat import _backfill_stranded_run_cards
+    rd = _make_run_card(runs_env, "hleg-a", ckpt_pid=999999999)
+    assert "hleg" in _backfill_stranded_run_cards()
+    assert json.loads((rd / "metadata.json").read_text())["status"] == "stranded"
+
+
+def test_backfill_spares_live_and_young_and_finalized(runs_env):
+    from heartbeat import _backfill_stranded_run_cards
+    live = _make_run_card(runs_env, "hlive-a", pid=os.getpid())
+    young = _make_run_card(runs_env, "hyng-a", pid=999999999,
+                           started_ago_secs=60)
+    done = _make_run_card(runs_env, "hdone-a", status="done", pid=999999999)
+    nopid_recent = _make_run_card(runs_env, "hnop-a")  # no pid, only 1h old
+    hits = _backfill_stranded_run_cards()
+    assert hits == []
+    for rd in (live, young, done, nopid_recent):
+        meta = json.loads((rd / "metadata.json").read_text())
+        assert meta["status"] != "stranded"
+
+
+def test_backfill_stamps_ancient_no_pid_run(runs_env):
+    from heartbeat import _backfill_stranded_run_cards
+    rd = _make_run_card(runs_env, "hold-a", started_ago_secs=25 * 3600)
+    assert "hold" in _backfill_stranded_run_cards()
+    assert json.loads((rd / "metadata.json").read_text())["status"] == "stranded"
+
+
+def test_stranded_status_stays_resumable(runs_env, tmp_path, monkeypatch):
+    """The sweep's own stamp must not hide a run from _find_resumable_runs."""
+    import checkpoint as ckpt_module
+    from heartbeat import _find_resumable_runs
+    rd = _make_run_card(tmp_path, "hres-red-fern", ckpt_pid=999999999)
+    meta = json.loads((rd / "metadata.json").read_text())
+    meta["status"] = "stranded"
+    (rd / "metadata.json").write_text(json.dumps(meta))
+    monkeypatch.setattr(ckpt_module, "_runs_root", lambda: rd.parent)
+    monkeypatch.setattr(ckpt_module, "_checkpoint_dir",
+                        lambda: tmp_path / "empty-legacy")
+    import runs as runs_module
+    monkeypatch.setattr(runs_module, "run_dir",
+                        lambda h: rd.parent / f"{h}-red-fern")
+    assert any(r["handle_id"] == "hres" for r in _find_resumable_runs())
+
+
+def test_new_run_metadata_carries_owner_pid(tmp_path):
+    from runs import write_metadata
+    rd = tmp_path / "runs" / "hnew-a"
+    rd.mkdir(parents=True)
+    write_metadata(rd, handle_id="hnew", prompt="p")
+    assert json.loads((rd / "metadata.json").read_text())["pid"] == os.getpid()
+
+
+# ---------------------------------------------------------------------------
 # FS-diff helper (artifact_check)
 # ---------------------------------------------------------------------------
 

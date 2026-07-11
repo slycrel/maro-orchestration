@@ -418,6 +418,12 @@ def stranded_state_sweep(*, verbose: bool = False) -> dict:
         log.debug("sweep: DOING scan failed: %s", exc)
 
     try:
+        result["backfilled_stranded"] = _backfill_stranded_run_cards(
+            verbose=verbose)
+    except Exception as exc:
+        log.debug("sweep: stranded-card backfill failed: %s", exc)
+
+    try:
         result["resumable_runs"] = _find_resumable_runs()
         for entry in result["resumable_runs"]:
             try:
@@ -442,18 +448,104 @@ def stranded_state_sweep(*, verbose: bool = False) -> dict:
     return result
 
 
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+        return True
+    except (ProcessLookupError, ValueError):
+        return False
+    except PermissionError:
+        return True
+
+
+# Backfill grace: a run younger than this is never touched even with a dead
+# recorded PID (startup races, PID-file lag). Old enough to be safe, short
+# enough that the runs index stops lying within one heartbeat or two.
+_STRANDED_GRACE_SECS = 15 * 60
+# Runs recorded before metadata carried a pid (pre-2026-07-11) and without a
+# checkpoint in_flight pid: age is the only evidence, so demand a lot of it.
+_STRANDED_NO_PID_AGE_SECS = 24 * 3600
+
+
+def _backfill_stranded_run_cards(*, verbose: bool = False) -> list:
+    """Stamp status="stranded" on run cards whose owner died before finalize.
+
+    A SIGTERM'd handle runs no finally block, so metadata keeps status and
+    ended_at null forever while the loop artifacts sit there fine (specimen
+    51b09271, 2026-07-10). The index then renders "unknown" and recall reads
+    the run as neither done nor failed. "stranded" is deliberately
+    NON-terminal: _find_resumable_runs treats it like null status, and a
+    later `maro resume` → finalize overwrites it with the real outcome.
+    Annotation only — nothing is deleted, nothing auto-resumes.
+
+    Owner evidence, in order: metadata "pid" (written at create_run_dir since
+    2026-07-11), else the checkpoint's in_flight pid. Without either, only
+    runs older than _STRANDED_NO_PID_AGE_SECS are stamped.
+    """
+    import json as _json
+    from datetime import datetime, timezone
+
+    out: list = []
+    try:
+        from runs import runs_root
+        root = runs_root()
+    except Exception:
+        return out
+    if not root.exists():
+        return out
+    now = datetime.now(timezone.utc)
+    for rd in root.iterdir():
+        try:
+            meta_path = rd / "metadata.json"
+            if not rd.is_dir() or not meta_path.exists():
+                continue
+            meta = _json.loads(meta_path.read_text(encoding="utf-8"))
+            if meta.get("status"):
+                continue  # finalized (or already stamped)
+            started_raw = str(meta.get("started_at") or "")
+            try:
+                started = datetime.fromisoformat(started_raw)
+                age_secs = (now - started).total_seconds()
+            except Exception:
+                continue  # unreadable start time — leave it alone
+            if age_secs < _STRANDED_GRACE_SECS:
+                continue
+            pid = int(meta.get("pid") or 0)
+            last_seen = started_raw
+            ckpt_path = rd / "build" / "checkpoint.json"
+            if ckpt_path.exists():
+                try:
+                    ckpt = _json.loads(ckpt_path.read_text(encoding="utf-8"))
+                    if not pid:
+                        pid = int((ckpt.get("in_flight") or {}).get("pid", 0) or 0)
+                    last_seen = datetime.fromtimestamp(
+                        ckpt_path.stat().st_mtime, tz=timezone.utc).isoformat()
+                except Exception:
+                    pass
+            if pid:
+                if _pid_alive(pid):
+                    continue  # owner still running
+            elif age_secs < _STRANDED_NO_PID_AGE_SECS:
+                continue  # no owner evidence — wait for unambiguous age
+            meta["status"] = "stranded"
+            meta["ended_at"] = meta.get("ended_at") or last_seen
+            meta["stranded_detected_at"] = now.isoformat()
+            from file_lock import atomic_write
+            atomic_write(meta_path, _json.dumps(meta, indent=2))
+            out.append(meta.get("handle_id") or rd.name)
+            if verbose:
+                print(f"[heartbeat] sweep: run {rd.name} owner dead — "
+                      f"status backfilled to 'stranded'", file=sys.stderr)
+        except Exception as exc:
+            log.debug("sweep: stranded backfill skipped %s: %s", rd, exc)
+    return out
+
+
 def _find_resumable_runs() -> list:
     """Checkpoints whose owner is dead and whose run never finalized."""
     import json as _json
 
-    def _alive(pid: int) -> bool:
-        try:
-            os.kill(pid, 0)
-            return True
-        except (ProcessLookupError, ValueError):
-            return False
-        except PermissionError:
-            return True
+    _alive = _pid_alive
 
     out = []
     try:
@@ -475,8 +567,10 @@ def _find_resumable_runs() -> list:
             from runs import run_dir
             meta = _json.loads((run_dir(ckpt.handle_id) / "metadata.json")
                                .read_text(encoding="utf-8"))
-            if meta.get("status"):
-                continue  # finalized (done/stuck/error) — not stranded
+            # "stranded" is the sweep's own non-terminal stamp — such runs
+            # stay resumable; anything else (done/stuck/error) is finalized.
+            if meta.get("status") and meta.get("status") != "stranded":
+                continue
         except Exception:
             continue
         out.append({
