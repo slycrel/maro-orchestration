@@ -98,6 +98,16 @@ _CLOSURE_VERDICT_SYSTEM = textwrap.dedent("""\
     goal's deliverables and no check failed, complete=true is the honest
     verdict even with an inconclusive probe in the mix.
 
+    Some failed checks carry "target_file_content" — the actual current content
+    (bounded excerpt) of files the failed command referenced. That content is
+    ground truth and outranks the probe's exit code: judge from it whether the
+    feared failure actually occurred. A literal-string or format mismatch (a
+    grep for wording the file phrases differently) against a file whose content
+    plainly delivers the goal is a brittle check, not a gap — do not fail the
+    goal on it, and do not guess which clause of a compound command failed when
+    the content already answers the question. Treat the failed check as a real
+    gap only when the content itself confirms the deficiency.
+
     Respond with JSON only:
     {
       "complete": true|false,
@@ -244,6 +254,63 @@ def _run_precondition_preflight(
                     "outcome": _check_outcome(exit_code=exit_code, stderr=stderr),
                 })
             # opaque kinds (port numbers, env-var requirements) are not pre-flighted
+    return out
+
+
+def _failed_check_file_evidence(
+    cmd: str, cwd: Optional[str], *, max_files: int = 2, excerpt_chars: int = 1200
+) -> Dict[str, str]:
+    """Ground-truth excerpts of files a failed static check referenced.
+
+    A failed content-match (grep for a literal header, a row-count predicate)
+    against a file that EXISTS proves only that one string is absent — weak
+    evidence, routinely misread as "file does not exist or is malformed"
+    (run 8177541b: a 3-clause compound check failed on `grep -q 'Station
+    Name'` while the deliverable's header said `| Rank | Station |`; the
+    verdict LLM couldn't see which clause failed and false-negatived a good
+    run). Instead of teaching the plan LLM better grep style (prompt-patching
+    a taxonomy), attach the file's actual content to the verdict call and let
+    it judge whether the feared failure really happened.
+
+    Tokenizes the command, keeps tokens that resolve to existing regular
+    files under cwd, and returns {relative_token: bounded_excerpt}. Skips
+    flags and redirections. Returns {} when nothing resolves — a genuinely
+    missing file attaches no evidence and the failure stands on its own.
+    """
+    if not cmd:
+        return {}
+    import shlex
+    try:
+        tokens = shlex.split(cmd)
+    except ValueError:
+        tokens = cmd.split()
+    base = Path(cwd) if cwd else Path.cwd()
+    out: Dict[str, str] = {}
+    for tok in tokens:
+        if len(out) >= max_files:
+            break
+        t = tok.strip("'\"")
+        if not t or t.startswith("-") or "<" in t or ">" in t:
+            continue
+        # Only path-shaped tokens: a bare word like `test` or `grep` that
+        # happens to collide with a filename in cwd is not what the check
+        # was probing.
+        if "/" not in t and "." not in t:
+            continue
+        if t in out:
+            continue
+        try:
+            p = Path(t).expanduser()
+            target = p if p.is_absolute() else base / p
+            if not target.is_file():
+                continue
+            with open(target, "r", errors="replace") as fh:
+                excerpt = fh.read(excerpt_chars + 1)
+            if len(excerpt) > excerpt_chars:
+                excerpt = excerpt[:excerpt_chars] + "\n... (truncated)"
+            out[t] = excerpt
+        except OSError:
+            continue
     return out
 
 
@@ -583,7 +650,7 @@ def verify_goal_completion(
                     timeout=timeout_per_check, cwd=cwd,
                 )
                 outcome = _check_outcome(exit_code=proc.returncode, stderr=proc.stderr)
-                check_results.append({
+                result = {
                     "description": desc,
                     "command": cmd,
                     "modality": modality,
@@ -592,7 +659,17 @@ def verify_goal_completion(
                     "stderr": proc.stderr[:300],
                     "passed": proc.returncode == 0,
                     "outcome": outcome,
-                })
+                }
+                # Failed static checks get ground-truth excerpts of the files
+                # they probed, so the verdict judges the content instead of
+                # guessing what a failed grep implies. Behavioral failures
+                # (http/ws/process) stay as-is — their file args aren't the
+                # thing being verified.
+                if outcome == "fail" and modality == "static":
+                    evidence = _failed_check_file_evidence(cmd, cwd)
+                    if evidence:
+                        result["target_file_content"] = evidence
+                check_results.append(result)
             except subprocess.TimeoutExpired:
                 check_results.append({
                     "description": desc, "command": cmd,
@@ -817,6 +894,12 @@ def verify_goal_completion(
                     "diagnosis_failure_class": safe_str(getattr(diagnosis, "failure_class", "")),
                     "diagnosis_gap_downgrade": diagnosis_gap_reason or "",
                     "next_ledger_divergence": _ledger_gap[:300],
+                    # How many failed static checks carried ground-truth file
+                    # excerpts into the verdict call (brittle-probe evidence,
+                    # 2026-07-10) — lets the false-negative fix be measured.
+                    "evidence_attached": sum(
+                        1 for r in check_results if r.get("target_file_content")
+                    ),
                     "commands": [r.get("command", "")[:200] for r in check_results],
                     "summary": summary[:400],
                 },

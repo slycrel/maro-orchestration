@@ -2263,3 +2263,102 @@ class TestClosureFalseNegativeRegressions:
         result = self._run_closure(tmp_path, checks, verdict_data)
         assert result.complete is False  # flip preserved
         assert result.judged is False
+
+    # -- failed-check file evidence: content outranks a brittle grep --
+
+    def test_evidence_extracts_existing_files_only(self, tmp_path):
+        """run 8177541b: `grep -q 'Station Name'` failed on a good deliverable
+        whose header said `| Rank | Station |`. Evidence extraction must
+        resolve the file the compound check probed — and only files that
+        actually exist (a genuinely missing file attaches nothing, so the
+        failure stands on its own)."""
+        from closure_verify import _failed_check_file_evidence
+        (tmp_path / "artifacts").mkdir()
+        (tmp_path / "artifacts" / "final-delivery.md").write_text(
+            "| Rank | Station | Address |\n| 1 | Maverik #536 | Ephraim |\n"
+        )
+        cmd = ("test -f artifacts/final-delivery.md && "
+               "grep -q 'Station Name' artifacts/final-delivery.md && "
+               "test $(grep -c '^|' artifacts/final-delivery.md) -gt 4")
+        ev = _failed_check_file_evidence(cmd, str(tmp_path))
+        assert list(ev) == ["artifacts/final-delivery.md"]
+        assert "| Rank | Station |" in ev["artifacts/final-delivery.md"]
+        # Missing file → no evidence
+        assert _failed_check_file_evidence(
+            "grep -q x artifacts/nope.md", str(tmp_path)) == {}
+
+    def test_evidence_skips_flags_redirections_and_bare_words(self, tmp_path):
+        from closure_verify import _failed_check_file_evidence
+        # A file named after a bare command word must not be picked up
+        (tmp_path / "test").write_text("collision")
+        (tmp_path / "real.txt").write_text("content")
+        ev = _failed_check_file_evidence(
+            "test -f real.txt 2>/dev/null && grep -q pattern real.txt",
+            str(tmp_path),
+        )
+        assert list(ev) == ["real.txt"]
+
+    def test_evidence_truncates_and_survives_bad_quoting(self, tmp_path):
+        from closure_verify import _failed_check_file_evidence
+        (tmp_path / "big.md").write_text("x" * 5000)
+        ev = _failed_check_file_evidence("grep -q y big.md", str(tmp_path),
+                                         excerpt_chars=100)
+        assert ev["big.md"].endswith("... (truncated)")
+        assert len(ev["big.md"]) < 200
+        # Unbalanced quote → shlex ValueError → naive-split fallback
+        ev2 = _failed_check_file_evidence("grep -q 'unclosed big.md", str(tmp_path))
+        assert "big.md" in ev2
+
+    def test_failed_static_check_carries_content_to_verdict(self, tmp_path):
+        """The verdict call must see the probed file's actual content when a
+        static check fails — so a literal-header mismatch on an intact
+        deliverable is judged from ground truth, not guessed from exit 1."""
+        from unittest.mock import MagicMock, patch
+        (tmp_path / "artifacts").mkdir()
+        (tmp_path / "artifacts" / "final-delivery.md").write_text(
+            "| Rank | Station | Address |\n| 1 | Maverik #536 | Ephraim |\n"
+        )
+        adapter = MagicMock()
+        captured = []
+        def _complete(messages, **kwargs):
+            captured.append(messages)
+            return MagicMock()
+        adapter.complete.side_effect = _complete
+        checks = [{"description": "delivery table",
+                   "command": "grep -q 'Station Name' artifacts/final-delivery.md"}]
+        verdict_data = {"complete": True, "confidence": 0.9, "gaps": [],
+                        "summary": "content intact, brittle grep"}
+        with patch("closure_verify.extract_json", side_effect=[{"checks": checks}, verdict_data]):
+            with patch("closure_verify.content_or_empty", return_value="{}"):
+                verify_goal_completion(
+                    "find non-ethanol gas near Manti", [], adapter,
+                    workspace_path=str(tmp_path),
+                )
+        verdict_user_msg = captured[1][1].content
+        assert "target_file_content" in verdict_user_msg
+        assert "| Rank | Station |" in verdict_user_msg
+
+    def test_passed_and_behavioral_checks_attach_no_evidence(self, tmp_path):
+        """Evidence rides only on cleanly-failed static checks: passes need
+        no defense, and a failed curl's file args aren't the thing probed."""
+        from unittest.mock import MagicMock, patch
+        (tmp_path / "out.md").write_text("delivered")
+        adapter = MagicMock()
+        captured = []
+        def _complete(messages, **kwargs):
+            captured.append(messages)
+            return MagicMock()
+        adapter.complete.side_effect = _complete
+        checks = [
+            {"description": "exists", "command": "test -f out.md"},
+            {"description": "endpoint up",
+             "command": "curl -fsS http://127.0.0.1:9/x -o out.md"},
+        ]
+        verdict_data = {"complete": True, "confidence": 0.9, "gaps": [], "summary": "ok"}
+        with patch("closure_verify.extract_json", side_effect=[{"checks": checks}, verdict_data]):
+            with patch("closure_verify.content_or_empty", return_value="{}"):
+                verify_goal_completion(
+                    "serve X", [], adapter, workspace_path=str(tmp_path),
+                )
+        verdict_user_msg = captured[1][1].content
+        assert "target_file_content" not in verdict_user_msg
