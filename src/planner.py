@@ -360,6 +360,19 @@ DECOMPOSE_SYSTEM = textwrap.dedent("""\
     - A "setup" action (clone, install, configure) bundled with "explore" (read, analyze)
     When in doubt, split. An extra step costs nothing; a timeout wastes the whole budget.
 
+    NO ORPHAN READ STEPS (cost model):
+    Every step pays a fixed overhead before any work happens (fresh worker
+    session boot + full context re-injection — measured ~30-45s per step).
+    A step that ONLY reads a file/artifact and hands the content to a later
+    step spends that entire overhead on zero work. Fold the read into the
+    step that consumes it:
+    BAD:  "Read artifacts/timings.json"
+          "Extract the top bottlenecks from the timings [after:1]"
+    GOOD: "Read artifacts/timings.json and extract the top bottlenecks"
+    This does NOT relax the exec/analyze HARD RULE above — commands stay
+    separate from analysis of their output. It applies to READS: reading a
+    file and reasoning about it is one step, never two.
+
     OUTCOME-FIRST (Bitter Lesson principle):
     Decompose into OUTCOMES, not procedures. Ask: what is the desired end state?
     BAD:  Goal: "curl the API, parse JSON, filter by volume, sort descending"
