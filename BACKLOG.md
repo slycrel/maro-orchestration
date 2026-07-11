@@ -21,15 +21,16 @@ All adversarially verified (41/42 confirmed). The two 1.0-blockers first:
   vehicle — batch #3 decision recorded in GOAL_BRAIN + SECURITY_MODEL.md §2
   but absent from MILESTONES/BACKLOG/threads. This entry IS the minimum fix;
   scope the actual design pass into MILESTONES.
-- [ ] **docs-r2-01 (blocker, cheap):** README "Optional Services" tells
-  strangers to `sudo cp` unit files from `~/.maro/workspace/deploy/systemd/`
-  — a dir nothing creates (config.deploy_dir() has zero callers); 2 of 3
-  units exist nowhere. Rewrite to the printed hook-instructions posture.
-  Fold in the supervision-convergence chunk: delete/rewrite deploy/systemd/
-  + heartbeat-ctl.sh (ops-r2-04, docs-r2-04), reset left-on
-  `heartbeat.autonomy: true` on this box (ops-r2-02), align host-check
-  900s threshold with the one-shot-ticks decree (ops-r2-01 — else daily-red
-  is structural).
+- [~] **docs-r2-01 README half SHIPPED 2026-07-10:** "Optional Services" +
+  Telegram-service + Compatibility sections rewritten to the app-not-daemon
+  posture (one-shot `maro heartbeat`, `maro-bootstrap services` prints hook
+  instructions, you supervise long-running listeners yourself); all
+  `sudo cp ~/.maro/workspace/deploy/systemd/...` instructions gone.
+  STILL OPEN (supervision-convergence remainder, touches #4 discussion):
+  delete/rewrite repo `deploy/systemd/` + heartbeat-ctl.sh (ops-r2-04,
+  docs-r2-04), decide left-on `heartbeat.autonomy: true` on this box
+  (ops-r2-02 — Jeremy's call), align host-check 900s threshold with the
+  one-shot-ticks decree (ops-r2-01 — else daily-red is structural).
 - [x] **cs-r2-01: SHIPPED 2026-07-10** (promotion-time guard + loader-side
   backstop) — moved to BACKLOG_DONE with context.
 - [x] **ops-r2-05 SHIPPED 2026-07-10:** proc_lock._run_dir fallback now
