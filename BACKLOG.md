@@ -193,6 +193,26 @@ crowd-sourced or not)."
     step's cost model — ~30s fixed overhead per step — is honest context
     for the expansion prompt, not a taxonomy). Candidate after clean-run
     numbers land.
+    2026-07-11 boot-tax anatomy + first trim: trivial `claude -p` call
+    measured 6.4s → 2.7s after `--strict-mcp-config` (user-level Google
+    Drive MCP handshake was ~3.7s on EVERY subprocess boot; shipped
+    395e71c). Remaining per-step overhead: CLI boot ~1.5s + ~21K tokens
+    of re-injected step context + agentic turns.
+  - **Session-reuse spike (Jeremy 2026-07-11, "write steps down in a
+    file, instruct the session to read it, then clear the session and
+    continue"):** headless `claude -p --resume <session-id>` /
+    `--fork-session` exist, so one session per boundary segment is
+    mechanically possible — steps within a segment share the session
+    (no context re-injection, no boot, warm server-side cache); the
+    session ROTATES at cut boundaries where distillation already
+    happens (probe findings → evidence block). Rotation IS the "clear":
+    fresh session seeded from the distilled state file. Today's design
+    is the all-clear extreme (new session + ~21K re-inject per step);
+    per-RUN sessions are the other ditch (the 1.4M-token step shows
+    where monotonic context ends). Per-segment is the middle the cuts
+    machinery already draws the lines for. Related:
+    [[recursive-orchestration-memory]] CAG direction. Spike = measure
+    resume vs fresh on a 5-step segment before designing anything.
   - **Scavenge detector false-positive on URL paths (small):** the
     re-run's probe step logged SCAVENGE_DETECTED for reads of `/api`,
     `/phoneNumber`, `/static/js/main.606fbec2.js` — URL/JSON fragments
