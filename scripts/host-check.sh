@@ -29,7 +29,7 @@
 # Configurable via environment (with sane defaults):
 #   MARO_DISK_WARN_PCT         disk/inode use% that fails a check  (default 85)
 #   MARO_DAILY_USD_CAP         daily token-spend cap in USD        (default 25)
-#   MARO_HEARTBEAT_MAX_SEC     max heartbeat age before stale      (default 900 = 15m)
+#   MARO_HEARTBEAT_MAX_SEC     max heartbeat age before stale      (default 604800 = 7d)
 #   MARO_PROC_MAX_ETIMES       max age (s) for a matched proc      (default 7200 = 2h)
 #   MARO_WORKSPACE             workspace dir holding memory/       (default ~/.maro/workspace)
 
@@ -46,7 +46,7 @@ esac
 # --- config ------------------------------------------------------------------
 DISK_WARN_PCT="${MARO_DISK_WARN_PCT:-85}"
 DAILY_USD_CAP="${MARO_DAILY_USD_CAP:-25}"
-HB_MAX_SEC="${MARO_HEARTBEAT_MAX_SEC:-900}"
+HB_MAX_SEC="${MARO_HEARTBEAT_MAX_SEC:-604800}"
 PROC_MAX_ETIMES="${MARO_PROC_MAX_ETIMES:-7200}"
 WORKSPACE="${MARO_WORKSPACE:-$HOME/.maro/workspace}"
 MEMDIR="$WORKSPACE/memory"
@@ -146,6 +146,16 @@ check_orphans() {
 # --- (4) stale heartbeat -----------------------------------------------------
 # heartbeat-state.json's checked_at (UTC ISO) vs now. Missing/unparseable =
 # breach. Fail if older than MARO_HEARTBEAT_MAX_SEC.
+#
+# Maro ships no recurring heartbeat of its own — `maro heartbeat` is a
+# one-shot tick you hook to your own scheduler (README "Optional Services";
+# `heartbeat.autonomy` off by default). Unless you've installed such a hook,
+# there is no promise of any particular tick cadence, so the threshold here
+# is deliberately days-scale ("has this box gone dark for a while?"), not
+# minutes-scale ("did the last 30-minute cycle fire?") — re-aligned
+# 2026-07-12 (ops-r2-01/02) after the 900s/15m default paged Jeremy's
+# Telegram daily via host-check-notify.sh's cron for a heartbeat that was
+# never supposed to be recurring on this box in the first place.
 check_heartbeat() {
     if [ ! -f "$HB_FILE" ]; then
         fail heartbeat "state file missing at $HB_FILE (heartbeat loop down?)"
@@ -163,16 +173,17 @@ check_heartbeat() {
     fi
     now=$(date +%s)
     age=$(( now - ts ))
-    # A beat >30 days old is a design state, not an incident — the heartbeat
-    # loop was deliberately removed on this host (2026-04, "off switches stay
-    # off"). A live loop that dies is caught in the 15min–30day window. Set
-    # MARO_HEARTBEAT_EXPECTED=1 to enforce staleness regardless.
+    # A beat >30 days old is a design state, not an incident — no recurring
+    # hook is installed on this host by design ("off switches stay off"). A
+    # hook that WAS installed and then died is caught in the
+    # HB_MAX_SEC–30day window. Set MARO_HEARTBEAT_EXPECTED=1 to enforce
+    # staleness regardless (e.g. once a recurring hook is actually wired).
     if [ "$age" -gt 2592000 ] && [ "${MARO_HEARTBEAT_EXPECTED:-0}" != "1" ]; then
         skip heartbeat "no active loop (last beat $((age / 86400))d ago; intentionally off — MARO_HEARTBEAT_EXPECTED=1 to enforce)"
     elif [ "$age" -gt "$HB_MAX_SEC" ]; then
-        fail heartbeat "last beat ${age}s ago (> ${HB_MAX_SEC}s); checked_at=${checked_at:-<none>}"
+        fail heartbeat "last beat $((age / 86400))d ago (> $((HB_MAX_SEC / 86400))d); checked_at=${checked_at:-<none>}"
     else
-        pass heartbeat "last beat ${age}s ago (< ${HB_MAX_SEC}s)"
+        pass heartbeat "last beat ${age}s ago (< $((HB_MAX_SEC / 86400))d)"
     fi
 }
 

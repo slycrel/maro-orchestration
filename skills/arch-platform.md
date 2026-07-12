@@ -72,7 +72,7 @@ Periodic health check + tiered self-healing (runs every 60s in loop mode):
   - Session guard: detects `claude --continue` → skips ALL autonomous LLM work
 - **Tier 3** (Escalation): Telegram notification
 
-**Lifecycle management:** Use `scripts/heartbeat-ctl.sh start|stop|status|restart`. Auto-stops after 4 hours. Never start as bare `nohup python3 heartbeat.py &`.
+**Lifecycle management:** Maro is an app, not a daemon — it installs no systemd/launchd/cron unit of its own (`docs/HOST_MONITORING.md`, `bootstrap.scheduler_hook_instructions`). The entrypoint is one-shot: `maro heartbeat` fires exactly one beat and exits; hook it to your host's own scheduler for recurrence (`*/30 * * * * maro heartbeat`). `--loop` mode exists (`heartbeat.py --loop --interval 60`) for anyone who wants a long-running process instead, but Maro doesn't supervise it — that's on you (your own systemd unit, tmux, etc.), the same posture as the Telegram listener. `scripts/heartbeat-ctl.sh` (a Maro-managed start/stop/restart wrapper around `--loop`) was deleted 2026-07-12 (ops-r2-04) for contradicting this — it was a third, inconsistent supervision story next to the decided one.
 
 **Autonomy switch:** `heartbeat_loop(..., autonomy=False)` is health-only by default. Scheduler drain, task-store drain, mission drain, backlog drain, evolver, inspector, and eval work only run when autonomy is explicitly enabled via CLI/config.
 
@@ -193,4 +193,4 @@ Stress/crash proofs: `tests/test_file_lock_stress.py`,
 | src/file_lock.py | ~330 | Fail-closed flock helpers: locked_write/append/rmw, atomic_write |
 | src/proc_lock.py | ~130 | Daemon pidfile singleton (heartbeat, scheduler run-due) |
 | src/worktree.py | ~220 | Git worktree isolation: provision/merge_back/cleanup/prune |
-| scripts/heartbeat-ctl.sh | | Lifecycle management (start/stop/status) |
+| scripts/host-check.sh | | Cron-friendly host health checklist (disk, spend, orphans, heartbeat age) |

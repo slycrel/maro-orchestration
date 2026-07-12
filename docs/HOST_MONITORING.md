@@ -93,30 +93,41 @@ PID, `rm memory/loop.lock` (cleared on next `interrupt.get_running_loop()` read,
 
 **Rationale.** The heartbeat writes liveness to
 `~/.maro/workspace/memory/heartbeat-state.json` (field `checked_at`, UTC ISO)
-on each cycle — default interval 60s (`sheriff.write_heartbeat_state()`,
-`sheriff.py:429`). A stale timestamp means the heartbeat loop is dead and no
-autonomous recovery is running. We compare the recorded `checked_at` against now
-rather than file mtime, since `checked_at` is the authoritative liveness marker.
-A missing/unparseable file counts as a breach.
+each time it ticks (`sheriff.write_heartbeat_state()`, `sheriff.py:429`).
+Maro ships no recurring heartbeat of its own — `maro heartbeat` is a
+one-shot tick (README "Optional Services"; `heartbeat.autonomy` off by
+default) you hook to your own scheduler if you want recurrence. Unless
+you've installed such a hook, there's no promise of any particular tick
+cadence, so this check is a "has this box gone dark for a while?" signal,
+not a "did the last cycle fire on time?" one. We compare the recorded
+`checked_at` against now rather than file mtime, since `checked_at` is the
+authoritative liveness marker. A missing/unparseable file counts as a breach.
 
-**Threshold.** `checked_at` **older than 15 minutes** (≈15 missed cycles), or
-file absent/unreadable. Adjust `N` (minutes). *As of this writing the state is
-stale since 2026-04-04 — this check correctly fires today.*
+**Threshold.** `checked_at` **older than 7 days**, or file absent/unreadable.
+Adjust `N` (days). **Re-aligned 2026-07-12 (ops-r2-01/02):** the old
+15-minute threshold assumed a recurring 30-min loop that was never actually
+installed on this host — it fired FAIL every day via
+`host-check-notify.sh`'s cron, paging Jeremy's Telegram for a condition
+that wasn't an incident. `scripts/host-check.sh` additionally treats a beat
+older than 30 days as an intentionally-off design state (`skip`, not
+`fail`) rather than a breach — set `MARO_HEARTBEAT_EXPECTED=1` to enforce
+staleness past 30 days too, once a recurring hook is actually wired up.
 
 ```bash
-N=15; HB=/home/clawd/.maro/workspace/memory/heartbeat-state.json; python3 -c "
+N=7; HB=/home/clawd/.maro/workspace/memory/heartbeat-state.json; python3 -c "
 import json,sys,datetime
 try:
     ts=json.load(open('$HB'))['checked_at']
     age=(datetime.datetime.now(datetime.timezone.utc)-datetime.datetime.fromisoformat(ts)).total_seconds()
-    sys.exit(1 if age > $N*60 else 0)
+    sys.exit(1 if age > $N*86400 else 0)
 except Exception:
     sys.exit(1)
 "
 ```
 
-*Remediation:* restart the heartbeat loop (`python3 heartbeat.py --loop` /
-systemd unit).
+*Remediation:* if you want recurring ticks, hook your scheduler to
+`maro heartbeat` (see README "Optional Services"); a fresh `maro heartbeat`
+run clears the staleness immediately.
 
 ---
 

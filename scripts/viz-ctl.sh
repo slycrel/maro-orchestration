@@ -9,7 +9,8 @@
 #
 # Serves runs_root() (default ~/.maro/workspace/runs/) read-only over
 # http://, loopback-only by default (src/viz_server.py). No max-runtime
-# timeout, unlike heartbeat-ctl.sh — a viz server is meant to stay up.
+# timeout — a viz server is meant to stay up (unlike a heartbeat tick,
+# which is one-shot by design; see the Optional Services section of README).
 
 set -euo pipefail
 

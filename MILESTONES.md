@@ -2,7 +2,9 @@
 
 What to do next, in what order. Updated each session. Deferred ideas live in BACKLOG.md; completed phase history in docs/history/ROADMAP_ARCHIVE.md (ROADMAP.md is a stub). This file is the executable queue.
 
-Last updated: 2026-07-12 (Fable-handoff audit session: queue staleness reconciled — **-4 Purgatorio is COMPLETE through r2**, -1 memory arc and 0 substrate trial no longer carry "current arc" labels; design-pass vehicles for the remaining 1.0 blockers land below as they ship this session. Context: top-tier-model access ends ~2026-07-13; this session front-loads design judgment so Sonnet/Opus sessions inherit execution-shaped chunks). Previous: 2026-07-09 evening (decision-cleanup session: BACKLOG #19 thread-arch decisions ALL RESOLVED by Jeremy + recursion decree — see GOAL_BRAIN Decisions 2026-07-09; new queue items **1.5** planning-depth shadow + **1.6** /loop trace below; verify→learn design decided as the next arc after 1.0). Previous: same day (concurrency-hardening arc COMPLETE — see **-2** below). Previous: 2026-07-07 (memory direction DECIDED by Jeremy — module + 3rd-party consideration; port + adapter-0 + contract tests shipped as chunk 1 of the new **-1. Memory module arc** below; bake-off is next). Previous: 2026-07-04 (overnight: MCP dispatch fixed, tier-a write fence, ancestry read-side, rung-4 call-record link. Morning: write fence ENABLED + live-proven (Jeremy's flip); ancestry write-side CLOSED; BACKLOG #9 validator ROI (`python3 -m validator_roi`); fetch unification (`fetch` tool). Midday: fence NARROWED per Jeremy — /tmp allowed + goal-declared paths widen fence (`FENCE_EXTENDED`), intent trumps; workspace scratch `~/.maro/workspace/tmp/`. Afternoon (AFK arc): docs refactor (three-species taxonomy, docs/history/, test-enforced frontmatter), dev-recall ghost-index rebuilt, BACKLOG full triage 810→~540 lines every-claim-verified, **memory decision brief delivered → `docs/history/2026-07-04-memory-decision-brief.md` AWAITING JEREMY** — that decision gates the next big chunk. See GOAL_BRAIN Decisions 2026-07-04. BACKLOG remaining: #0 mining passes + raw archive, #1 residual Bash write shapes (evidence-driven), #10 local_max_tokens tuning, #14 llm-adapter streaming (promoted, unblocked)).
+Last updated: 2026-07-12 (Sonnet execution session: post-handoff queue item -5
+#1 supervision-convergence chunk SHIPPED — see -5 #1 and BACKLOG -1 for full
+detail). Previous: 2026-07-12 (Fable-handoff audit session: queue staleness reconciled — **-4 Purgatorio is COMPLETE through r2**, -1 memory arc and 0 substrate trial no longer carry "current arc" labels; design-pass vehicles for the remaining 1.0 blockers land below as they ship this session. Context: top-tier-model access ends ~2026-07-13; this session front-loads design judgment so Sonnet/Opus sessions inherit execution-shaped chunks). Previous: 2026-07-09 evening (decision-cleanup session: BACKLOG #19 thread-arch decisions ALL RESOLVED by Jeremy + recursion decree — see GOAL_BRAIN Decisions 2026-07-09; new queue items **1.5** planning-depth shadow + **1.6** /loop trace below; verify→learn design decided as the next arc after 1.0). Previous: same day (concurrency-hardening arc COMPLETE — see **-2** below). Previous: 2026-07-07 (memory direction DECIDED by Jeremy — module + 3rd-party consideration; port + adapter-0 + contract tests shipped as chunk 1 of the new **-1. Memory module arc** below; bake-off is next). Previous: 2026-07-04 (overnight: MCP dispatch fixed, tier-a write fence, ancestry read-side, rung-4 call-record link. Morning: write fence ENABLED + live-proven (Jeremy's flip); ancestry write-side CLOSED; BACKLOG #9 validator ROI (`python3 -m validator_roi`); fetch unification (`fetch` tool). Midday: fence NARROWED per Jeremy — /tmp allowed + goal-declared paths widen fence (`FENCE_EXTENDED`), intent trumps; workspace scratch `~/.maro/workspace/tmp/`. Afternoon (AFK arc): docs refactor (three-species taxonomy, docs/history/, test-enforced frontmatter), dev-recall ghost-index rebuilt, BACKLOG full triage 810→~540 lines every-claim-verified, **memory decision brief delivered → `docs/history/2026-07-04-memory-decision-brief.md` AWAITING JEREMY** — that decision gates the next big chunk. See GOAL_BRAIN Decisions 2026-07-04. BACKLOG remaining: #0 mining passes + raw archive, #1 residual Bash write shapes (evidence-driven), #10 local_max_tokens tuning, #14 llm-adapter streaming (promoted, unblocked)).
 
 Truth anchor: GOAL_BRAIN.md Threads. History: docs/history/ROADMAP_ARCHIVE.md.
 
@@ -15,11 +17,16 @@ Truth anchor: GOAL_BRAIN.md Threads. History: docs/history/ROADMAP_ARCHIVE.md.
    spec behind it — implementation sessions should not need to invent
    architecture (see `docs/IMPLEMENTATION_HANDOFF.md` for chunk discipline +
    model-tier guidance). Order:*
-   1. **Supervision-convergence chunk** (r2 blocker #5, one session): rewrite
-      README "Optional Services" remainder + delete/rewrite `deploy/systemd/`
-      + `heartbeat-ctl.sh` (ops-r2-04/docs-r2-04); runtime-box config per the
-      2026-07-12 decision (heartbeat.autonomy OFF, host-check threshold
-      realigned — ops-r2-01/02).
+   1. **Supervision-convergence chunk — SHIPPED 2026-07-12** (r2 blocker #5):
+      `deploy/systemd/{maro-heartbeat,maro-observe}.service` +
+      `scripts/heartbeat-ctl.sh` deleted (ops-r2-04/docs-r2-04), README's
+      Optional Services section already matched the posture (docs-r2-01
+      half-shipped 2026-07-10); `skills/arch-platform.md` +
+      `scripts/viz-ctl.sh` references fixed; runtime-box config
+      (ops-r2-01/02): `heartbeat.autonomy` back to False,
+      `scripts/host-check.sh`'s heartbeat-age check re-aligned 900s→7d
+      (was firing a structural-noise FAIL/Telegram-page daily — details in
+      BACKLOG -1). Full context + verification in BACKLOG -1.
    2. **Escalation file surface** (1.0 item (a) implementation, decreed
       2026-07-12): durable escalation file under the workspace output/run
       index (unconditional), doctor row reporting which escalation surface is

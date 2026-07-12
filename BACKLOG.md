@@ -24,19 +24,35 @@ All adversarially verified (41/42 confirmed). The two 1.0-blockers first:
   fence roots, `executor.container` config family, sandbox.py retirement,
   chunks C1–C4 queued in MILESTONES -5. Implementation open; the BLOCKER
   (decision-without-vehicle) is cleared.
-- [~] **docs-r2-01 README half SHIPPED 2026-07-10:** "Optional Services" +
-  Telegram-service + Compatibility sections rewritten to the app-not-daemon
-  posture (one-shot `maro heartbeat`, `maro-bootstrap services` prints hook
-  instructions, you supervise long-running listeners yourself); all
-  `sudo cp ~/.maro/workspace/deploy/systemd/...` instructions gone.
-  STILL OPEN (supervision-convergence remainder, touches #4 discussion):
-  delete/rewrite repo `deploy/systemd/` + heartbeat-ctl.sh (ops-r2-04,
-  docs-r2-04). **ops-r2-01/02 DECIDED 2026-07-12 (Jeremy, handoff
-  decision batch):** `heartbeat.autonomy` back OFF on the box until the
-  direct-use transition; host-check re-aligned to the one-shot posture
-  (alert on no-tick-in-N-days or drop the age check). Config/script
-  change on the RUNTIME box — fold into this supervision-convergence
-  chunk.
+- [x] **docs-r2-01 SHIPPED (README half 2026-07-10, remainder 2026-07-12):**
+  "Optional Services" + Telegram-service + Compatibility sections rewritten
+  to the app-not-daemon posture (one-shot `maro heartbeat`,
+  `maro-bootstrap services` prints hook instructions, you supervise
+  long-running listeners yourself); all `sudo cp
+  ~/.maro/workspace/deploy/systemd/...` instructions gone.
+  **Supervision-convergence remainder SHIPPED 2026-07-12** (MILESTONES -5
+  item 1): `deploy/systemd/maro-heartbeat.service` +
+  `maro-observe.service` deleted (contradicted the "no unit files" posture;
+  the observe unit exec'd an already-archived stub) and
+  `scripts/heartbeat-ctl.sh` deleted (a Maro-managed start/stop/restart
+  wrapper around `--loop` — a third, inconsistent supervision story next
+  to the decided one); `skills/arch-platform.md` lifecycle-management
+  section + file-map row rewritten to the one-shot posture; dangling
+  comment reference in `scripts/viz-ctl.sh` fixed (ops-r2-04, docs-r2-04
+  CLOSED). **ops-r2-01/02 SHIPPED 2026-07-12** (Jeremy's 2026-07-12
+  decree): `heartbeat.autonomy` flipped back to the code default (False)
+  in the runtime workspace config (was left ON from the 07-09/10 burn-in
+  trial) — off until the direct-use transition; `scripts/host-check.sh`'s
+  stale-heartbeat check re-aligned from a 900s (15m) threshold — which
+  assumed a recurring 30-min loop nobody installed on this host and was
+  firing FAIL (and paging Jeremy's Telegram daily via
+  `host-check-notify.sh`'s cron) for a non-incident — to a 7-day
+  no-tick-in-N-days threshold (`MARO_HEARTBEAT_MAX_SEC` default
+  604800; existing >30d skip-as-design-state branch kept, now the
+  second tier); `docs/HOST_MONITORING.md` §4 updated to match (currency
+  rule). Live-verified: `bash scripts/host-check.sh` now PASSes the
+  heartbeat check (last beat ~2.7d ago, well under the new 7d bar) instead
+  of the daily FAIL it was producing.
 - [x] **cs-r2-01: SHIPPED 2026-07-10** (promotion-time guard + loader-side
   backstop) — moved to BACKLOG_DONE with context.
 - [x] **ops-r2-05 SHIPPED 2026-07-10:** proc_lock._run_dir fallback now
