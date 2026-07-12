@@ -111,6 +111,27 @@ All adversarially verified (41/42 confirmed). The two 1.0-blockers first:
   ops-r2-03-replaced
   pidfile litter (harmless — flock is the mutex; stale file is cosmetic).
 
+### 23. Worker async-escape: background Monitor/task claims + 600s dead retries (2026-07-11, run 89cb097a live specimen)
+
+Research r2 run: worker on the X-search step started a background
+Monitor and returned "I've started a Monitor that will notify me when
+the subprocess completes" — i.e., delegated the actual work to async
+machinery that cannot outlive the worker's own session. Ralph verify
+correctly RETRY'd it, but the retry then hung to the 600s subprocess
+hard timeout with 0 tokens, twice (steps 5 and 8) = 20 min + model=power
+spend for nothing; run then hit the cost stop with the X stream never
+executed. Introspect classified adapter_timeout (critical) correctly.
+Two fixes to consider: (a) worker prompt/constraint — steps must run
+commands synchronously; starting background jobs/monitors and reporting
+"waiting" is a verify-fail with a *synchronous re-execution* hint (the
+current fallback hint doesn't say this, so the retry repeated the async
+pattern); (b) cheap pre-timeout probe — a subprocess call that has
+produced 0 tokens for N minutes is dead air, kill early instead of
+riding the full 600s. Note the meta: this is corpus Family 3
+(claims-without-execution) manifesting inside our own pipeline —
+candidate training/test goal once fixed. Specimen: run 89cb097a calls
+00:52-00:55, step11_changed_since_v1.md §C.2.
+
 ### 22. Capabilities catalog + blank-slate skill set (2026-07-10, Jeremy)
 
 Jeremy (in-session, riffing off the car ask "where can I get non-ethanol
