@@ -2019,6 +2019,19 @@ Sample: the 2026-05-13..17 window of `~/.maro/workspace/runs/` (478 dirs total;
   doctor/README stating plainly which layer a run gets. The C4 flip
   itself (box default + fresh-install default) remains Jeremy's call on
   burn-in evidence, per the design's §6 — unchanged by this entry.
+- **2026-07-12 (PyPI release posture — Jeremy):** two-step publish decided.
+  (1) Reserve the name NOW at **0.8.0** ("okay with publishing what we have
+  to reserve the name... probably around 0.8; not ready for 1.0 yet") —
+  1.0.0 stays the real-readiness release. (2) **No auto-publish** ("we
+  shouldn't auto-publish (yet?)") — the release workflow is manual
+  `workflow_dispatch` with `dry_run` defaulting true; the publish job only
+  runs on explicit `dry_run=false`. (3) Auth is **trusted publishing
+  (OIDC), no API token** — Jeremy registered the pending publisher (repo
+  `slycrel/maro-orchestration`, workflow `pyPI-workflow.yml`, env `pypi`);
+  matching workflow + metadata + version bump shipped `6befbfb`, build +
+  `twine check --strict` green on both artifacts. The publish click itself
+  stays Jeremy's act. Next gate before 1.0: the deferred git-history
+  personal-data review. See `docs/PUBLISH_CHECKLIST.md`.
 
 ## Threads (system-maintained — nothing leaves this list silently)
 

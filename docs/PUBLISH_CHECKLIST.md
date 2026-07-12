@@ -33,8 +33,21 @@ orchestration directly via openclaw or hermes instead of dev style".
   MARO (Multi-Agent Resource Optimization) — adjacent-name confusion worth a
   README disambiguation line, but no rename needed. Publish under
   `maro-orchestration` as-is.
-- [ ] `python -m build` produces wheel + sdist; `twine check` passes.
-- [ ] Publish at tag time (Jeremy's act).
+- [x] `python -m build` produces wheel + sdist; `twine check --strict` passes
+  (2026-07-12, both artifacts; added `readme`/license/urls/classifiers
+  metadata — the page was previously blank). Version bumped 0.5.0 → 0.8.0.
+- [x] Auth mechanism decided: **trusted publishing (OIDC), no API token.**
+  Pending publisher registered by Jeremy (repo `slycrel/maro-orchestration`,
+  workflow `pyPI-workflow.yml`, environment `pypi`); matching workflow
+  shipped `6befbfb`. Manual `workflow_dispatch`, `dry_run` defaults true,
+  publish job gated on explicit `dry_run=false` — nothing auto-publishes.
+- [ ] **Reserve-the-name publish at 0.8.0 (Jeremy's act):** Actions → "Publish
+  to PyPI" → Run with `dry_run=false`. First success converts the pending
+  publisher to ordinary and creates the project. (Optional pre-step: create a
+  `pypi` GitHub Environment with a required reviewer for a third gate.)
+- [ ] 1.0.0 tag + publish at real readiness (post git-history review + the
+  remaining -3 arc). Two-step by decree: 0.8.0 reserves the name now, 1.0.0
+  is the real release.
 
 ## Release gate
 - [ ] CHANGELOG updated and version set to 1.0.0; tag applied.
