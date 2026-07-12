@@ -1,0 +1,56 @@
+# Manual publish to PyPI via trusted publishing (OIDC — no API token stored).
+#
+# This filename (pyPI-workflow.yml) and the environment name (pypi) below MUST
+# match the pending trusted publisher registered on PyPI for slycrel/maro-orchestration.
+# Change either and the OIDC handshake fails.
+#
+# Trigger is manual only (workflow_dispatch) — nothing auto-publishes on tag or push.
+# `dry_run` defaults to true: the first run builds + `twine check`s and stops.
+# To actually publish, dispatch again with dry_run = false (which also requires
+# the `pypi` environment's protection rules, if any, to be satisfied).
+name: Publish to PyPI
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Build and validate only; do NOT publish to PyPI"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build sdist + wheel and validate metadata
+        run: |
+          python -m pip install --upgrade pip build twine
+          python -m build
+          twine check --strict dist/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    needs: build
+    # Only runs when explicitly dispatched with dry_run = false.
+    if: ${{ inputs.dry_run == false }}
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write # required for trusted publishing (OIDC); no token needed
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
