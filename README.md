@@ -124,6 +124,9 @@ workloads at them.
 
 ## Quickstart
 
+> On PyPI the package is `maro-orchestration` (`pip install maro-orchestration`) —
+> see the name note above.
+
 ```bash
 # 1. Clone and install
 git clone https://github.com/slycrel/maro-orchestration.git
