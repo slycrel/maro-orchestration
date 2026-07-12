@@ -517,6 +517,17 @@ _ENV_CLAIM_HINT = (
     "probe command and its exact error output as evidence."
 )
 
+_DELIVERABLE_PATH_HINT = (
+    "[Previous attempt failed: the step names an explicit output path, but "
+    "no file exists there — the work may already be done and simply saved "
+    "to the wrong location.] Missing: {paths}. Check where the previous "
+    "attempt actually wrote its output (`ls`, then look in the project "
+    "root); if the content exists, MOVE or re-save it to EXACTLY the "
+    "path(s) named in the step, relative to the project directory, creating "
+    "parent directories as needed. Then verify with `ls` that the named "
+    "path(s) exist before reporting completion."
+)
+
 
 def _escape_pattern_hint(block_reason: str, step_result: str) -> str:
     """Targeted retry hint for escape-pattern blocks (BACKLOG #23a/#23g).
@@ -528,7 +539,7 @@ def _escape_pattern_hint(block_reason: str, step_result: str) -> str:
     """
     try:
         from step_exec import (
-            ASYNC_ESCAPE_TAG, ENV_CLAIM_TAG,
+            ASYNC_ESCAPE_TAG, DELIVERABLE_PATH_TAG, ENV_CLAIM_TAG,
             result_signals_async_escape, result_claims_env_limitation,
         )
     except Exception:
@@ -538,6 +549,11 @@ def _escape_pattern_hint(block_reason: str, step_result: str) -> str:
         return _ASYNC_ESCAPE_HINT
     if reason.startswith(ENV_CLAIM_TAG):
         return _ENV_CLAIM_HINT
+    if reason.startswith(DELIVERABLE_PATH_TAG):
+        # The demoted reason ends with "...: path1, path2" — carry the exact
+        # path list into the hint so the retry targets the right locations.
+        _paths = reason.rsplit(":", 1)[-1].strip() or "(see block reason)"
+        return _DELIVERABLE_PATH_HINT.format(paths=_paths)
     # Ralph-verify path: reason is "[ralph verify] ..." — check the result.
     if reason.startswith("[ralph verify]") and step_result:
         if result_signals_async_escape(step_result):

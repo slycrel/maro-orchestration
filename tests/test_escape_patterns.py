@@ -20,11 +20,14 @@ import pytest
 from llm import LLMAdapter, LLMResponse, ToolCall
 from step_exec import (
     ASYNC_ESCAPE_TAG,
+    DELIVERABLE_PATH_TAG,
     ENV_CLAIM_TAG,
     EXECUTE_SYSTEM,
     execute_step,
+    missing_write_targets,
     result_claims_env_limitation,
     result_signals_async_escape,
+    step_write_targets,
 )
 from loop_blocked import _handle_blocked_step, _escape_pattern_hint
 
@@ -238,6 +241,140 @@ class TestTargetedHints:
         )
         assert decision.hint != _escape_pattern_hint(
             f"{ASYNC_ESCAPE_TAG} x", "") or not decision.retry
+
+
+# ---------------------------------------------------------------------------
+# Deliverable-path check (BACKLOG #23f)
+# ---------------------------------------------------------------------------
+
+class TestWriteTargetExtraction:
+    def test_write_to_path(self):
+        assert step_write_targets(
+            "Write the v2 draft to artifacts/report_v2.md") == [
+            "artifacts/report_v2.md"]
+
+    def test_save_output_to_colon_path(self):
+        assert step_write_targets(
+            "Run the sweep and save output to: artifacts/sweep.json") == [
+            "artifacts/sweep.json"]
+
+    def test_backticked_and_quoted_paths(self):
+        assert step_write_targets(
+            "Store the summary in `output/notes/summary.txt`") == [
+            "output/notes/summary.txt"]
+        assert step_write_targets(
+            'Export the table as "data/out.csv"') == ["data/out.csv"]
+
+    def test_multiple_targets_deduped(self):
+        got = step_write_targets(
+            "Write the draft to artifacts/a.md and save the appendix "
+            "to artifacts/b.md; then write the errata to artifacts/a.md")
+        assert got == ["artifacts/a.md", "artifacts/b.md"]
+
+    def test_url_skipped(self):
+        assert step_write_targets(
+            "Save the results to https://example.com/report.html") == []
+
+    def test_pathless_prose_skipped(self):
+        assert step_write_targets("Save the results to disk") == []
+        # No directory component — too ambiguous to enforce.
+        assert step_write_targets("Save the results to report.md") == []
+
+    def test_placeholder_skipped(self):
+        assert step_write_targets(
+            "Write each post to artifacts/{name}.md") == []
+
+    def test_read_verbs_not_matched(self):
+        assert step_write_targets(
+            "Read the config in src/config.py and summarize it") == []
+
+
+class TestMissingWriteTargets:
+    def test_missing_relative_path_flagged(self, tmp_path):
+        assert missing_write_targets(
+            "Write the draft to artifacts/report.md", str(tmp_path)) == [
+            "artifacts/report.md"]
+
+    def test_existing_relative_path_passes(self, tmp_path):
+        (tmp_path / "artifacts").mkdir()
+        (tmp_path / "artifacts" / "report.md").write_text("done")
+        assert missing_write_targets(
+            "Write the draft to artifacts/report.md", str(tmp_path)) == []
+
+    def test_absolute_path_checked_directly(self, tmp_path):
+        target = tmp_path / "sub" / "out.txt"
+        step = f"Save the log to {target}"
+        assert missing_write_targets(step, "") == [str(target)]
+        target.parent.mkdir()
+        target.write_text("x")
+        assert missing_write_targets(step, "") == []
+
+    def test_no_project_dir_skips_relative(self):
+        # No ground to resolve against — never flag.
+        assert missing_write_targets(
+            "Write the draft to artifacts/report.md", "") == []
+
+
+class TestDeliverablePathDemotion:
+    def _run_with_dir(self, adapter, project_dir):
+        return execute_step(
+            goal="g",
+            step_text="Write the v2 draft to artifacts/report_v2.md",
+            step_num=1,
+            total_steps=1,
+            completed_context=[],
+            adapter=adapter,
+            tools=[],
+            project_dir=project_dir,
+        )
+
+    def test_missing_deliverable_demotes(self, tmp_path):
+        outcome = self._run_with_dir(
+            _CompleteStepAdapter("Draft complete, saved the report."),
+            str(tmp_path))
+        assert outcome["status"] == "blocked"
+        assert outcome["stuck_reason"].startswith(DELIVERABLE_PATH_TAG)
+        assert "artifacts/report_v2.md" in outcome["stuck_reason"]
+
+    def test_existing_deliverable_stays_done(self, tmp_path):
+        (tmp_path / "artifacts").mkdir()
+        (tmp_path / "artifacts" / "report_v2.md").write_text("v2")
+        outcome = self._run_with_dir(
+            _CompleteStepAdapter("Draft complete, saved the report."),
+            str(tmp_path))
+        assert outcome["status"] == "done"
+
+    def test_api_lane_not_checked(self, tmp_path):
+        # Non-agentic lanes have no filesystem — the check would always fire.
+        outcome = self._run_with_dir(
+            _CompleteStepAdapter("Draft complete.", backend="anthropic"),
+            str(tmp_path))
+        assert outcome["status"] == "done"
+
+
+class TestDeliverablePathHint:
+    def test_tagged_miss_gets_targeted_hint_with_paths(self):
+        hint = _escape_pattern_hint(
+            f"{DELIVERABLE_PATH_TAG} step names output path(s) that do not "
+            f"exist after completion: artifacts/report_v2.md", "")
+        assert "artifacts/report_v2.md" in hint
+        assert "EXACTLY" in hint
+
+    def test_handle_blocked_step_retries_with_hint(self):
+        decision = _handle_blocked_step(
+            step_text="Write the v2 draft to artifacts/report_v2.md",
+            outcome={
+                "status": "blocked",
+                "stuck_reason": (
+                    f"{DELIVERABLE_PATH_TAG} step names output path(s) that "
+                    f"do not exist after completion: artifacts/report_v2.md"),
+                "result": "Draft complete.",
+            },
+            prior_retries=0,
+            adapter=None,
+        )
+        assert decision.retry
+        assert "artifacts/report_v2.md" in decision.hint
 
 
 # ---------------------------------------------------------------------------

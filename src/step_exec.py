@@ -337,6 +337,54 @@ def result_claims_env_limitation(result: str) -> str:
     return _first_match_snippet(result, _ENV_LIMITATION_RES)
 
 
+DELIVERABLE_PATH_TAG = "[deliverable-path-miss]"
+
+# Write-verb + preposition + a slash-containing path with an extension.
+# Requiring the slash keeps prose like "save to disk" and bare filenames out;
+# the r4 specimen's miss was exactly a directory-qualified target
+# ("...to artifacts/report_v2.md") written to project ROOT instead.
+_WRITE_TARGET_RE = re.compile(
+    r"\b(?:write|writes|save|saves|saving|store|stores|output|persist|"
+    r"export|append)\b[^.\n]{0,120}?\b(?:to|into|at|as|in)\s*:?\s*"
+    r"[`'\"]?(/?(?:[\w.-]+/)+[\w.-]+\.\w{1,8})[`'\"]?",
+    re.IGNORECASE)
+
+
+def step_write_targets(step_text: str) -> List[str]:
+    """Explicit write-target paths named by the step text (may be empty)."""
+    if not step_text:
+        return []
+    out = []
+    for m in _WRITE_TARGET_RE.finditer(step_text):
+        p = m.group(1)
+        if "://" in p or "{" in p:
+            continue
+        if p not in out:
+            out.append(p)
+    return out
+
+
+def missing_write_targets(step_text: str, project_dir: str) -> List[str]:
+    """Write-target paths the step names that do NOT exist after completion.
+
+    Relative paths resolve against project_dir (the subprocess cwd, so this
+    is where the worker's relative writes land); absolute paths are checked
+    directly. With no project_dir, relative targets are skipped — there is
+    no ground to check them against.
+    """
+    missing = []
+    for p in step_write_targets(step_text):
+        if os.path.isabs(p):
+            candidate = p
+        elif project_dir:
+            candidate = os.path.join(project_dir, p)
+        else:
+            continue
+        if not os.path.exists(candidate):
+            missing.append(p)
+    return missing
+
+
 def _result_shows_probe_evidence(result: str) -> bool:
     """True when the result shows an actual probe attempt (command + outcome)
     alongside an environment claim — evidence-backed claims are not blocked."""
@@ -1170,6 +1218,22 @@ def execute_step(
                     _outcome["stuck_reason"] = (
                         f"{ENV_CLAIM_TAG} step result rests on an unprobed "
                         f"environment-limitation claim: \"{_env_snippet}\""
+                    )
+            # Deliverable-path check (BACKLOG #23f): when the step text names
+            # an explicit output path and the worker ran with real filesystem
+            # access, "done" requires the path to actually exist. Run 8a20665f
+            # wrote both v2 drafts to project ROOT instead of the goal-named
+            # artifacts/ paths — closure caught it, but only after the run.
+            if (_outcome["status"] == "done"
+                    and getattr(adapter, "backend", "") in ("subprocess", "codex")):
+                _missing = missing_write_targets(step_text, project_dir)
+                if _missing:
+                    log.warning("step %d DELIVERABLE_PATH_MISS (%s) — demoting done → blocked",
+                                step_num, ", ".join(_missing))
+                    _outcome["status"] = "blocked"
+                    _outcome["stuck_reason"] = (
+                        f"{DELIVERABLE_PATH_TAG} step names output path(s) that "
+                        f"do not exist after completion: {', '.join(_missing)}"
                     )
         elif tc.name == "flag_stuck":
             _reason = tc.arguments.get("reason", "unknown")
