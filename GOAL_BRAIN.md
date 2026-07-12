@@ -205,6 +205,13 @@ dissent) but failed the envelope: 7 steps, ~24 min, $2.47 cost hard stop.
 Net: **capability verified, delivery target**; errand-research skill's
 real spec = routing detection + ~minutes/cents envelope. Basis: run
 artifacts under projects/where-can-i-get-nonethanol/, session log.
+**Post-fix envelope measurement 2026-07-11 (run 5126986b, Jeremy: "kick
+off a full new run of our now more performant pipeline with the manti
+example"):** 6 steps / 16m43s / $1.52 / closure complete=True 0.95, 5/5
+checks, zero gaps — first fully clean Manti card. Arc: $2.47/24min →
+capped/28min → $1.52/16.7min. Remaining envelope levers: routing
+(unchanged) + worker tool-loop artifact re-read churn (introspection
+attribution now correct).
 
 **AI-failure-pattern corpus, 2026-07-11 (Jeremy's AFK ask: "start an
 orchestration research run on patterns... for common tasks that AI

@@ -80,6 +80,18 @@ question (MODEL_POWER was resolving to subprocess `claude -p`; the
 token_explosion introspection flagged worker re-read churn). A passenger in
 a car wants this in ~1–3 min for cents.
 
+**Run 3 — post-fix envelope measurement (2026-07-11, run 5126986b):**
+after the orphan-read-step folding, latency breaker, closure evidence
+attachment, and budget-breaker fixes: **6 steps (was 11), 16m43s wall (was
+~28), $1.52 (was $2.47 hard-stop)**, status done, goal achieved, closure
+complete=True 0.95 with 5/5 checks and zero gaps — first Manti run with a
+completely clean card. Envelope arc: $2.47/24min → $2.00-capped/28min →
+$1.52/16.7min. Still an order of magnitude from ~1–3 min/cents; remaining
+levers are routing (unchanged) and the worker's own tool-loop churn
+(introspection now correctly attributes fresh-token growth to artifact
+re-read/rewrite inside worker subprocesses, not cache re-reads — steer
+toward patch/diff edits).
+
 ---
 
 ## Example catalog
