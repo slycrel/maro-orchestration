@@ -11,6 +11,13 @@ implementation slicing with a recommended minimum 1.0 slice.
 
 Judgment calls are tagged `DECISION (provisional)` — greppable.
 
+> **RATIFIED 2026-07-12 (Jeremy — GOAL_BRAIN Decisions 2026-07-12):** the
+> four review-flagged decisions stand as written (auth/billing one-failover
+> + always-notify; auto-resume cap 1/run; resume surface CLI-first with
+> notify carrying the command; depth-cap inconsistency to be unified to one
+> documented number — small chunk + tripwire, still open). Slices 1–3
+> shipped 2026-07-09; auto-resume stays post-1.0.
+
 ## The problem, clearly
 
 A stranger installs Maro, points it at a goal, and walks away. Some hours

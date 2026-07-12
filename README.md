@@ -115,6 +115,11 @@ available backends at runtime. `maro-doctor` reports exactly which backends a
 run would find, using the same detection. `MODEL_CHEAP/MID/POWER` abstract
 model names across backends.
 
+Note on the CLI-backed lanes (`claude` / `codex` subprocess adapters): they
+run under **your own subscription and judgment** — review your provider's
+usage policies for automated/headless use before pointing unattended
+workloads at them.
+
 ---
 
 ## Quickstart

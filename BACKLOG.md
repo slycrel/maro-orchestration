@@ -28,9 +28,12 @@ All adversarially verified (41/42 confirmed). The two 1.0-blockers first:
   `sudo cp ~/.maro/workspace/deploy/systemd/...` instructions gone.
   STILL OPEN (supervision-convergence remainder, touches #4 discussion):
   delete/rewrite repo `deploy/systemd/` + heartbeat-ctl.sh (ops-r2-04,
-  docs-r2-04), decide left-on `heartbeat.autonomy: true` on this box
-  (ops-r2-02 — Jeremy's call), align host-check 900s threshold with the
-  one-shot-ticks decree (ops-r2-01 — else daily-red is structural).
+  docs-r2-04). **ops-r2-01/02 DECIDED 2026-07-12 (Jeremy, handoff
+  decision batch):** `heartbeat.autonomy` back OFF on the box until the
+  direct-use transition; host-check re-aligned to the one-shot posture
+  (alert on no-tick-in-N-days or drop the age check). Config/script
+  change on the RUNTIME box — fold into this supervision-convergence
+  chunk.
 - [x] **cs-r2-01: SHIPPED 2026-07-10** (promotion-time guard + loader-side
   backstop) — moved to BACKLOG_DONE with context.
 - [x] **ops-r2-05 SHIPPED 2026-07-10:** proc_lock._run_dir fallback now
@@ -789,12 +792,13 @@ coordination brain is for. Still post-1.0; still direction, not design.
   `COMPLETION_STANDARD.md` is honored everywhere. user/README.md caveat
   removed, DEFAULTS.md lane note updated. Test:
   `test_load_user_config_reads_workspace_overlay` (tests/test_config.py).
-- [ ] **Orphan scope A/B datasets: adjudicate or write off** (arch-03,
-  resurfaced by the SF-4 flip). `~/.maro/experiments/scope-ab-2026-04-25-v0/`
-  and `scope-ab-2026-04-26-v1/` hold full PAID treat/control run dirs with
-  no ANALYSIS.md — two experiments bought and never read. Either adjudicate
-  them against the 2026-04-22 result (which decided the inject flip) or
-  write them off explicitly so the spend isn't silently forgotten.
+- [x] **Orphan scope A/B datasets — WRITTEN OFF 2026-07-12 (Jeremy,
+  handoff decision batch; closes arch-03).** `~/.maro/experiments/
+  scope-ab-2026-04-25-v0/` and `scope-ab-2026-04-26-v1/` hold full PAID
+  treat/control run dirs with no ANALYSIS.md. Explicitly written off: the
+  inject decision was already made on the 2026-04-22 evidence and shipped
+  (SF-4 flip). Spend acknowledged, not silently forgotten; data stays on
+  disk per the retention decree if a future analysis wants it.
 - [ ] **Knowledge-web read side: wire it properly (post-1.0, KEEP).**
   Descoped from 1.0 docs (node store + BM25 is the honest claim) but
   explicitly kept: "I'd like to keep it on the list. I think it could be
@@ -1420,11 +1424,13 @@ after the current 1.0 remainders (a)–(d); (g) needs design before release.
     ("cart.py not found" — they're under output/repro/), the same
     wrong-cwd class as closure.
 - [ ] **(g) Portable/shareable learning — design + migration path.**
-  **DESIGN SHIPPED 2026-07-09 → `docs/PORTABLE_LEARNING_DESIGN.md`** (8
-  provisional decisions collected in its §8, awaiting Jeremy; recommended
-  1.0 slice = its §7 chunks 1–4: migration runbook + doctor checks,
-  provenance fields + `scrub_identifiers`, `maro-pack export/seal`,
-  `maro-pack import/adopt`). Item stays open until reviewed + sliced.
+  **DESIGN SHIPPED 2026-07-09 → `docs/PORTABLE_LEARNING_DESIGN.md`**;
+  **§8 RATIFIED 2026-07-12 (Jeremy, all 8 as written — GOAL_BRAIN
+  Decisions).** 1.0 slice confirmed = its §7 chunks 1–4: migration
+  runbook + doctor checks, provenance fields + `scrub_identifiers`,
+  `maro-pack export/seal`, `maro-pack import/adopt`. Design settled;
+  what remains open is implementation (4 Sonnet/Opus-sized chunks,
+  queued in MILESTONES).
   Original scope:
   Machine migration and bootstrap-sharing for new users; internet
   hive-mind explicitly out of scope (opt-in someday, "could be cool").

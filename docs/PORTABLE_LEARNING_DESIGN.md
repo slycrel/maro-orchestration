@@ -431,6 +431,10 @@ registers in `docs/DEFAULTS.md` per the defaults-registry decree.
 
 ## 8. DECISION (provisional) — collected for review
 
+> **RATIFIED 2026-07-12 (Jeremy, all 8 as written — GOAL_BRAIN Decisions
+> 2026-07-12).** Numbers stay tunable; the shape is the commitment.
+> Implementation (§7 chunks 1–4) is unblocked and queued in MILESTONES.
+
 1. **§2b — Packs exclude raw runs by default** (`--include-runs <id>` opt-in
    with per-run review). Privacy surface + evidence doesn't transfer.
 2. **§3 — Arrival-trust numbers:** rules→hypotheses at 0 confirmations;

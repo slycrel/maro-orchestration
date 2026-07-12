@@ -1876,6 +1876,70 @@ Sample: the 2026-05-13..17 window of `~/.maro/workspace/runs/` (478 dirs total;
   24 entries / 6 families / 17 root causes / 0 pending. Design echo
   for Maro itself: "did you do X?" must be answerable from an action
   log the assistant can read, never from parametric self-belief.
+- **2026-07-12 (escalation channel DECREED — Jeremy; resolves 1.0 item
+  (a), the last open 1.0 design sub-item):** verbatim: "My hope for the
+  orchestration engine is that the user interacts with the orchestrator
+  via an LLM. That's the escalation -- direct to the user through their
+  orchestration go-between (openclaw, hermes agent, claude or codex CLI,
+  etc)... the entire original idea was to have an LLM walk through this
+  with a user and be the go-between. If we want to keep this 'headless'
+  or CLI style, then output should also be in that direction, either an
+  output file (maybe we should do that anyway if it's not already there
+  with the visibility reporting in mind). I don't know that we need
+  escalation like a beacon trying to get the user's attention." Recorded
+  shape (confirmed): the substrate LLM go-between IS the official
+  escalation surface (the existing `notify.command` substrate contract
+  is the design, not a stopgap); a durable escalation FILE surface ships
+  unconditionally (rides run-visibility — escalations persist under the
+  workspace output/run index even when a notify lane delivers); no
+  attention-seeking channel machinery; doctor's role is honesty only —
+  report which escalation surface is live. Implementation is a
+  Sonnet-sized chunk (file surface + doctor row + README posture).
+- **2026-07-12 (portable-learning §8 RATIFIED — Jeremy):** all 8
+  provisional decisions in `docs/PORTABLE_LEARNING_DESIGN.md` §8 stand
+  as written (packs exclude raw runs; arrival trust capped 0.5/
+  hypothesis tier; hash-identical import ≠ confirmation; never
+  auto-adopt; mechanical scrub + mandatory human review, no anonymization
+  claim; restored machine-state never auto-revived; maro-pack new /
+  maro-import unchanged; minimum 1.0 slice = chunks 1–4). Numbers stay
+  tunable; the shape is the commitment. Implementation unblocked.
+- **2026-07-12 (backend-resilience provisionals RATIFIED — Jeremy):**
+  the 4 review-flagged decisions in `docs/BACKEND_RESILIENCE_DESIGN.md`
+  stand: auth/billing = one failover attempt + ALWAYS notify; auto-resume
+  (when built, post-1.0) capped at 1/run; resume surface CLI-first with
+  notify carrying the command; depth-cap inconsistency (4 / <3 / 2) to be
+  fixed to one documented number (cheap chunk + tripwire).
+- **2026-07-12 (`claude -p` ToS posture — Jeremy):** subprocess lane
+  KEEPS its place as the no-key quickstart default; docs gain an explicit
+  usage-policy caveat sentence ("runs under your own subscription and
+  judgment — review Anthropic's usage policies"). Not demoted behind the
+  API-key lane.
+- **2026-07-12 (orphan scope A/B datasets WRITTEN OFF — Jeremy;
+  closes arch-03):** the two unanalyzed paid experiments
+  (`~/.maro/experiments/scope-ab-2026-04-25-v0/`, `-26-v1/`) are
+  explicitly written off — the inject decision was already made on the
+  2026-04-22 evidence and shipped. Spend acknowledged, not silently
+  forgotten. Data stays on disk per the retention decree.
+- **2026-07-12 (slack-bridge — Jeremy):** leave as-is; not worth touching
+  before 1.0. (Tokens in `.env` remain live-looking; revisit belongs to
+  whoever next touches the notify surface.)
+- **2026-07-12 (heartbeat toggles — Jeremy; closes ops-r2-01/02):**
+  `heartbeat.autonomy` goes back OFF on this box until the direct-use
+  transition (the stated gate for any recurring hook), and host-check's
+  900s heartbeat-age red is re-aligned to what one-shot ticks actually
+  promise (alert on no-tick-in-N-days or drop the age check) so
+  daily-red stops being structural noise. Runtime-box config change —
+  execute on the Ubuntu box, not this Mac.
+- **2026-07-12 (navigator `close` cutover RECONFIRMED organic-blocked —
+  Jeremy):** no cutover until real non-synthetic close divergences
+  accrue in NAVIGATOR_DECIDED and are adjudicated. Nothing to build;
+  watch the agreement table.
+- **2026-07-12 (Fable-handoff session context):** top-tier-model access
+  ends ~2026-07-13; this session front-loaded design judgment (decision
+  batch above + design passes for container executor, verify→learn,
+  routing/verification gaps) so subsequent Sonnet/Opus sessions inherit
+  execution-shaped chunks. BACKLOG #23 closed + #24 in progress in
+  concurrent sessions the same day.
 
 ## Threads (system-maintained — nothing leaves this list silently)
 
