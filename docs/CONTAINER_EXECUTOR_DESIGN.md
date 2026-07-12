@@ -143,11 +143,17 @@ run may write (`loop_execute.py:683-687`):
 | `executor.container_extra_mounts` (reference data, repo checkouts) | **ro** | config, new |
 | Container `/tmp` | container-local | free — matches the fence's /tmp allowance without touching host /tmp |
 
-**Deliberately absent**: the workspace root. Today `workspace_root()` is a
-fence root, but workers don't legitimately need it — prompt injection
-(lessons, skills, context) happens host-side during prompt construction;
-worker artifacts belong in the project dir. Its absence inside the container
-converts a fence-detection concern into a hard wall. If real runs surface a
+**Deliberately absent — the orchestration itself (Jeremy, 2026-07-12
+follow-up: "the general orchestrator shouldn't be modifiable"):** the
+container never contains or mounts Maro. Not the code, not `config.yml`,
+not the memory ledgers/lessons, not `secrets/.env`, not the workspace root
+(today a fence root — workers don't legitimately need it). Absence beats
+read-only: prompt injection (lessons, skills, context) happens host-side
+during prompt construction, so the worker sees rendered text, never the
+stores; worker artifacts belong in the project dir. And no
+orchestrator-copy-in-container is needed either — workers never invoke
+Maro; recursion per the recursion decree is a navigator move, so "spawn a
+sub-goal" means the HOST spawns a sibling container. If real runs surface a
 legitimate workspace read, add a targeted **ro** mount from evidence — the
 same evidence-driven posture as the fence residuals (BACKLOG #1).
 
@@ -156,11 +162,47 @@ operator-owned (the known edge flagged at decision time). Symlink escapes:
 a symlink inside a mount pointing outside resolves inside the container to
 nothing — the hole this closes, worth a burn-in test case.
 
-**Worktree caveat:** `busy_policy: worktree` fence dirs are `git worktree`
-checkouts whose metadata references the parent repo's `.git` by absolute
-path — a worktree mount alone is broken git. Mount the parent repo **ro** +
-worktree **rw** in that mode (the merge-back happens host-side after the
-step, `src/worktree.py`, unaffected).
+**Self-development runs (goal = edit a live repo, incl. Maro's own):
+copy-not-passthru.** v1 of this doc specced "parent repo ro + worktree rw"
+— that is mechanically broken: `git worktree` checkouts write objects into
+the PARENT's `.git/objects`, so commits inside the container fail against
+an ro parent. The corrected shape (Jeremy's instinct, 2026-07-12): the
+repo mounts **ro**, and container start clones it into the rw scratch —
+the worker edits and commits a **copy**; merge-back is a HOST-side
+`git fetch` from the scratch clone + the existing serialized merge/review
+(`src/worktree.py` semantics preserved: conflict → blocked, branch kept,
+never silent loss) + the worker push guard. The live repo — especially the
+orchestrator's — is never writable from inside a container, even when the
+goal is "fix Maro."
+
+## 4b. Data-escalation greys — the isolation ladder, named
+
+Raised by Jeremy 2026-07-12 ("slight concerns about data escalation leading
+to targeted exploits from that ecosystem... a few shades of grey in the
+paranoia direction"). Naming the ladder so each rung is a decision, not a
+drift:
+
+- **Rung 0 (this design):** orchestration absent, project rw, references ro,
+  self-dev via scratch clone. Read access to anything sensitive: none.
+- **The loop the container does NOT cover — say it plainly:** the
+  *artifact-to-future-prompt* loop. Hostile ecosystem content → worker
+  artifact → curation promotes it → injected into future planning prompts.
+  That path runs entirely host-side and its gates are the existing ones:
+  fail-closed `injection_guard` scans on every self-modification lane,
+  dangerous-pattern code-region scan, never-auto-adopt + quarantine
+  (the cs-r2-01 family; same supply-chain stance as portable-learning
+  imports). A targeted exploit built from ecosystem knowledge of Maro's
+  prompt formats attacks THIS loop, not the filesystem — the threat model
+  section below carries it now.
+- **Rung 1 (deferred opt-in, not v1): quarantine-until-verified scratch.**
+  ALL writes land in a per-run copy of the project dir; harvest to the real
+  project dir only after fence/closure checks pass. Coherent, but costs
+  live operator visibility mid-run (against the surface-all-details
+  principle) and complicates resume semantics. Revisit with evidence of a
+  real artifact-poisoning specimen, not speculatively.
+- **Rung 2 (rejected): no mounts, docker-cp everything.** Maximal isolation,
+  breaks the operator symlink/liveness observability and multi-step artifact
+  continuity for no marginal containment over rung 0 + rung 1.
 
 ## 5. Fence interaction — complement, not replacement
 
@@ -230,9 +272,14 @@ No design coupling; noted so neither work stream blocks the other.
   stranded-container sweep line in the existing stranded-state sweep,
   DEFAULTS rows. Tests: command-vector construction, kill-path, degradation
   warning — docker mocked; this seam runs everything, treat it that way.
-- **C3 — mount map (Sonnet, 1 session):** fence-root → mount translation
-  incl. goal-declared rw, extra ro mounts, worktree parent-repo case,
-  uid/gid. Tests: translation-table units against fence fixtures.
+- **C3 — mount map + self-dev clone mode (Sonnet/Opus, 1 session):**
+  fence-root → mount translation incl. goal-declared rw, extra ro mounts,
+  uid/gid; the scratch-clone flow for repo-editing runs (repo ro →
+  clone-in-scratch at container start → host-side `git fetch` merge-back
+  riding `src/worktree.py`'s serialized-merge semantics). The clone
+  half touches merge-back semantics — lean Opus if in doubt. Tests:
+  translation-table units against fence fixtures + a clone/fetch round-trip
+  unit with a local fixture repo.
 - **C4 — burn-in + flip (runtime box, Jeremy adjudicates):** run the
   standing dogfood goals under `container: on`; watch for env-dependency
   surprises, uid/gid friction, boot-tax delta; then decide box default and

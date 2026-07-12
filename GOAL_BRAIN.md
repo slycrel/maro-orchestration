@@ -1965,6 +1965,22 @@ Sample: the 2026-05-13..17 window of `~/.maro/workspace/runs/` (478 dirs total;
   cwd=None hole closed). Ordered execution queue = MILESTONES -5;
   successor-model guidance = `docs/IMPLEMENTATION_HANDOFF.md`; session
   record = `docs/history/2026-07-12-fable-handoff.md`.
+- **2026-07-12 (container-executor follow-up — Jeremy, same session):**
+  "the general orchestrator shouldn't be modifiable and slight concerns
+  about data escalation leading to targeted exploits from that
+  ecosystem... a few shades of grey in the paranoia direction." Recorded
+  into CONTAINER_EXECUTOR_DESIGN.md: (1) orchestration-ABSENT posture made
+  explicit (never mounted — code, config, ledgers, secrets all invisible;
+  absence beats read-only; no orchestrator copy in-container — recursion
+  is host-spawned per the recursion decree); (2) **copy-not-passthru for
+  self-development runs adopted** (repo mounts ro, container clones into
+  rw scratch, host-side fetch merge-back) — Jeremy's instinct also fixed a
+  v1 mechanical bug: git worktrees write objects to the PARENT's
+  .git/objects, so the original "parent ro + worktree rw" spec couldn't
+  commit; (3) the isolation ladder named in §4b — the
+  artifact-to-future-prompt loop is explicitly NOT covered by the
+  container (injection_guard/cs-r2-01 family remains that gate);
+  quarantine-until-verified scratch = deferred opt-in on evidence, not v1.
 
 ## Threads (system-maintained — nothing leaves this list silently)
 
