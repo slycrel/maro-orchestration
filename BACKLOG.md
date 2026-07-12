@@ -710,6 +710,38 @@ planner/navigator (a) stay vision — they must survive the kill-test
 ("would the same-tier model with identical context do this unprompted?")
 before earning machinery.
 
+### Learning-trust maintenance — "usage only" vs "learning" sessions (post-1.0 vision, 2026-07-12, Jeremy)
+
+Jeremy (closing the container-executor design conversation, verbatim —
+full quote in GOAL_BRAIN Decisions 2026-07-12): skill poisoning and
+self-learning edges, "same sort of thing in both directions... ultimately
+we will likely need 'usage only' vs 'learning' sessions, the ideal being
+scanning and auto-upgrades by the system itself, which is a neverending
+quest, same as a virus scanner solving protecting an individual
+workstation; one way to solve it but a constant maintenance headache.
+We'll get into all that more later."
+
+Direction, not design. Doors already built when this gets a session:
+
+- **Usage-only mode is a flag, not an architecture:** the learning
+  ingestion side is already gateable per-run — `defer_learning`
+  (loop_types/handle), the crystallization gates in finalize, the
+  skills-lite promotion switch (`skills.lite_promotion`). A
+  `learning: off` session = those seams held closed for the run, artifacts
+  still produced, nothing ingested. Cheap when wanted.
+- **The scanning/auto-upgrade half** is the verify→learn arc's
+  expectation→verdict→demote lifecycle pointed at learned artifacts —
+  VERIFY_LEARN_ARC.md V2 (cadence verdicts + auto-revert) and V3
+  (graduation auto-verify) are the seed machinery; the virus-scanner
+  analogy's "constant maintenance" is exactly why it must ride existing
+  cadence hooks, never a daemon.
+- **Trust boundaries already on record:** imports arrive contested
+  (PORTABLE_LEARNING_DESIGN §8, ratified), skills-lite injection_guard +
+  quarantine (cs-r2-01 family), never-auto-adopt. The both-directions
+  concern (poisoned learning leaking OUT too) is the export half —
+  `secret_scrub` + pack sealing cover the mechanical side; content-level
+  export scanning is unaddressed and belongs to this item.
+
 ### Shared trusted skill directory + cross-instance learning (post-1.0 vision, 2026-07-10, Jeremy)
 
 "Maybe a shared and trusted directory to pull from at a later time,
