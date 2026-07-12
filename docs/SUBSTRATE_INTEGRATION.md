@@ -72,6 +72,7 @@ Files, if you'd rather read than shell out:
 | `<run-dir>/metadata.json` | status, lane, model, timestamps, `goal_achieved` verdict |
 | `<run-dir>/run_card.json` | post-goal curation: outcome class, result excerpt, mineable inventory; runs costing over `budget.transparency_usd` (default $2) additionally carry `spend_transparency` — the full build/artifact bundle with absolute paths + sizes |
 | `memory/events.jsonl` | append-only live feed (`step_done`, `run_completed`, `escalation`, …) — tail this for progress |
+| `output/escalations.jsonl` | escalation-class events only (`escalation`, `backend_actionable`, `stranded_run`) — durable, unconditional, exists whether or not a `notify.command` lane is configured |
 
 Note `goal_achieved` vs `status`: `status=done` means the process finished;
 `goal_achieved` is the verifier's verdict. A substrate that reports "done" to
@@ -108,6 +109,14 @@ Escalation events fire when Maro decides a human is needed:
 The hook never affects the run: failures/timeouts are logged and swallowed.
 Off by default — no `notify.command`, no subprocess. Every event is still
 appended to `memory/events.jsonl` regardless, so polling always works.
+
+The three escalation-class event types also land in
+`output/escalations.jsonl` unconditionally, independent of whether a
+`notify.command` lane is configured or whether it succeeds (GOAL_BRAIN
+Decisions 2026-07-12). This is the official escalation surface for a
+headless/CLI-only setup with no chat substrate wired up — a durable file
+to check instead of a push that never arrives. `maro-doctor` reports both
+the file surface (row count) and whether a push lane is also live.
 
 ## 4. Fetch — get the actual answer
 

@@ -21,6 +21,15 @@ to memory/events.jsonl via observe.write_event regardless, so a polling
 substrate can tail that instead. emit() never raises — notification must
 never affect the run outcome.
 
+The escalation-class events (escalation / backend_actionable / stranded_run
+— things a human might miss if no notify lane is wired up, or if it fails)
+additionally land in output/escalations.jsonl unconditionally
+(ESCALATION_FILE_EVENTS, escalations_path()) — a durable, easy-to-find file
+distinct from the generic mixed events.jsonl feed. This is the official
+"headless/CLI, no substrate go-between" escalation surface (GOAL_BRAIN
+Decisions 2026-07-12); `maro-doctor` reports whether a notify lane is ALSO
+live.
+
 See docs/SUBSTRATE_INTEGRATION.md for the full substrate contract.
 """
 from __future__ import annotations
@@ -39,6 +48,15 @@ log = logging.getLogger("notify")
 DEFAULT_EVENTS = ["run_completed", "escalation", "backend_actionable",
                   "stranded_run"]
 
+# The three event types that are notify-worthy AND easy to miss with no
+# notify.command lane configured (run_completed already has a durable home
+# via run_curation's run_card.json). These ship to a dedicated, always-on
+# output file — GOAL_BRAIN Decisions 2026-07-12 ("escalation channel
+# DECREED"): the substrate LLM go-between is the official escalation
+# surface, but a headless/CLI-only setup still needs a findable output
+# file, not a beacon trying to get someone's attention.
+ESCALATION_FILE_EVENTS = {"escalation", "backend_actionable", "stranded_run"}
+
 
 def _config_get(key: str, default):
     try:
@@ -46,6 +64,27 @@ def _config_get(key: str, default):
         return _get(key, default)
     except Exception:
         return default
+
+
+def escalations_path():
+    """Path to the durable escalation-class event log (output/escalations.jsonl).
+
+    Ships unconditionally — exists whether or not a notify.command lane is
+    configured, independent of whether that lane succeeds.
+    """
+    from config import workspace_root
+    return workspace_root() / "output" / "escalations.jsonl"
+
+
+def _write_escalation_file(event_type: str, payload: dict) -> None:
+    from datetime import datetime, timezone
+    from file_lock import locked_append
+    entry = {
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "event_type": event_type,
+        **payload,
+    }
+    locked_append(escalations_path(), json.dumps(entry, default=str))
 
 
 def emit(event_type: str, payload: dict, *, run_dir: Optional[str] = None) -> bool:
@@ -76,6 +115,15 @@ def _emit(event_type: str, payload: dict, *, run_dir: Optional[str]) -> bool:
         )
     except Exception:
         pass
+
+    # 1b) Durable escalation-class file — ships unconditionally, independent
+    # of whether a notify.command lane is configured or whether it succeeds
+    # below. Best-effort: never blocks or fails the emit.
+    if event_type in ESCALATION_FILE_EVENTS:
+        try:
+            _write_escalation_file(event_type, payload)
+        except Exception:
+            log.debug("escalation file write failed for %s", event_type, exc_info=True)
 
     # 2) The hook command, if the substrate registered one.
     command = str(_config_get("notify.command", "") or "").strip()

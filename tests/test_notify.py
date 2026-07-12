@@ -100,6 +100,52 @@ def test_emit_writes_event_stream_even_without_command(workspace, monkeypatch):
     assert any(e.get("event_type") == "run_completed" for e in lines)
 
 
+# --- durable escalation file (2026-07-12 decree) ----------------------------
+
+def _read_escalations():
+    p = notify_mod.escalations_path()
+    if not p.is_file():
+        return []
+    return [json.loads(l) for l in p.read_text().splitlines() if l.strip()]
+
+
+@pytest.mark.parametrize("event_type", ["escalation", "backend_actionable", "stranded_run"])
+def test_emit_writes_escalation_file_for_escalation_class_events(workspace, monkeypatch, event_type):
+    _configure_notify(monkeypatch, "")  # no notify lane configured at all
+    emit(event_type, {"handle_id": "h3", "status": "stuck", "summary": "x"})
+    rows = _read_escalations()
+    assert len(rows) == 1
+    assert rows[0]["event_type"] == event_type
+    assert rows[0]["handle_id"] == "h3"
+    assert "ts" in rows[0]
+
+
+def test_emit_excludes_run_completed_from_escalation_file(workspace, monkeypatch):
+    _configure_notify(monkeypatch, "")
+    emit("run_completed", {"handle_id": "h4", "status": "done"})
+    assert _read_escalations() == []
+
+
+def test_escalation_file_persists_when_notify_command_fails(workspace, monkeypatch):
+    # "even when a notify lane delivers" — the file write is independent of
+    # whether notify.command is configured, succeeds, or fails.
+    _configure_notify(monkeypatch, "exit 3")
+    ok = emit("escalation", {"handle_id": "h5", "status": "stuck"})
+    assert ok is False  # the hook command itself failed
+    rows = _read_escalations()
+    assert len(rows) == 1
+    assert rows[0]["handle_id"] == "h5"
+
+
+def test_escalation_file_lives_under_output_dir(workspace, monkeypatch):
+    _configure_notify(monkeypatch, "")
+    emit("stranded_run", {"handle_id": "h6"})
+    p = notify_mod.escalations_path()
+    assert p.parent.name == "output"
+    assert p.parent.parent == workspace
+    assert p.name == "escalations.jsonl"
+
+
 # --- run_result -------------------------------------------------------------
 
 def test_run_result_now_lane(workspace):

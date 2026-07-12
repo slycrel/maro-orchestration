@@ -113,11 +113,29 @@ def run_doctor() -> bool:
     except Exception as exc:
         results.append(_check("LLM backend available", False, f"detection failed: {str(exc)[:60]}"))
 
-    # Notification channel — how escalations reach a human. Not fatal (the CLI
-    # lane works without one), but an unattended install with no channel means
-    # escalations only land in events.jsonl where nobody looks.
-    # "None configured" is advisory (ok=True); the check machinery itself
-    # breaking is a real failure (ok=False) — doctor can't tell either way.
+    # Escalation surface — how escalations reach a human. Two independent
+    # surfaces (2026-07-12 decree, GOAL_BRAIN Decisions "escalation channel
+    # DECREED"): (1) the durable file (output/escalations.jsonl) ships
+    # unconditionally and is always live — doctor just reports it exists and
+    # is writable; (2) an optional push lane (notify.command / Telegram) for
+    # substrates that want to be told rather than poll. Neither is fatal —
+    # the CLI lane works without either — but an unattended install with
+    # NO push lane means nobody finds out about an escalation until they
+    # think to look at the file.
+    try:
+        from notify import escalations_path as _esc_path
+        _ep = _esc_path()
+        _ep.parent.mkdir(parents=True, exist_ok=True)
+        _esc_rows = 0
+        if _ep.is_file():
+            _esc_rows = sum(1 for l in _ep.read_text(encoding="utf-8").splitlines() if l.strip())
+        results.append(_check(
+            "Escalation file surface", True,
+            f"{_ep} ({_esc_rows} row(s) — always on, independent of any push lane)",
+        ))
+    except Exception as exc:
+        results.append(_check("Escalation file surface", False, str(exc)[:80]))
+
     _notify_cmd = ""
     _notify_err = ""
     try:
@@ -138,16 +156,16 @@ def run_doctor() -> bool:
         except ImportError:
             _notify_err = "Telegram configured but requests missing (pip install requests)"
     if _notify_err:
-        results.append(_check("Notification channel", False, _notify_err))
+        results.append(_check("Escalation push lane", False, _notify_err))
     elif _notify_cmd:
-        results.append(_check("Notification channel", True, f"notify.command = {_notify_cmd[:60]}"))
+        results.append(_check("Escalation push lane", True, f"notify.command = {_notify_cmd[:60]}"))
     elif _tg_ok:
-        results.append(_check("Notification channel", True, "Telegram configured (listener/notify lane)"))
+        results.append(_check("Escalation push lane", True, "Telegram configured (listener/notify lane)"))
     else:
         results.append(_check(
-            "Notification channel", True,
-            "NONE configured — escalations land only in events.jsonl / "
-            "`maro-runs status`; set notify.command for unattended use",
+            "Escalation push lane", True,
+            "NONE configured — escalations only land in the file surface "
+            "above / events.jsonl; set notify.command for unattended use",
         ))
 
     # LLM connectivity (quick API probe)

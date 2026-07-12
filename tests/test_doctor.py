@@ -99,6 +99,19 @@ class TestRunDoctor:
         # Summary line should contain "/14 checks passed" or similar fraction
         assert "checks passed" in captured.out
 
+    def test_escalation_file_surface_reported(self, capsys, monkeypatch, tmp_path):
+        # Durable escalation file surface (2026-07-12 decree): always live,
+        # independent of any notify.command push lane.
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+        try:
+            run_doctor()
+        except Exception:
+            pass
+        captured = capsys.readouterr()
+        assert "Escalation file surface" in captured.out
+        assert str(tmp_path / "output" / "escalations.jsonl") in captured.out
+        assert "Escalation push lane" in captured.out
+
 
 # ---------------------------------------------------------------------------
 # cleanup_workspace_skills — stale hash detection and dedup

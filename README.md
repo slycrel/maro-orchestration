@@ -319,6 +319,14 @@ Heartbeat recovery tiers:
 2. **LLM diagnosis**: stuck projects → cheap LLM recovery action
 3. **Telegram escalation**: critical health → alert the operator
 
+Every escalation-class event (`escalation`, `backend_actionable`,
+`stranded_run`) also lands in `~/.maro/workspace/output/escalations.jsonl`
+unconditionally — a durable, findable file that exists whether or not a
+`notify.command` push lane is configured, and independent of whether that
+lane succeeds. A headless/CLI-only setup with no chat integration wired up
+still has somewhere to look; `maro-doctor` reports both the file surface
+and whether a push lane is also live (see `docs/SUBSTRATE_INTEGRATION.md`).
+
 Autonomous background work (the heartbeat picking up backlog work, not just
 health checks) is off by default and applies to loop mode:
 
