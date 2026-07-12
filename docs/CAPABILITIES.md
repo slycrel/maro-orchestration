@@ -155,10 +155,16 @@ real phrasing beats cleaned-up phrasing.
 
 ## External failure-pattern corpus
 
-`research/ai-failure-task-patterns.md` (Maro research run 692bd96f,
-2026-07-11): 18 real tasks that single-turn AI assistants got wrong, sourced
-from verbatim HN/Reddit user complaints, grouped into 5 pattern families with
-an 11-category root-cause taxonomy. Each entry names the concrete task, the
+`research/ai-failure-task-patterns.md` (v2 2026-07-11, four Maro runs +
+operator X sweep): 21 real tasks that single-turn AI assistants got wrong,
+sourced from verbatim HN/Reddit user complaints — all full-content evidence
+(post body + comment thread read). Grouped into 5 pattern families with a
+root-cause taxonomy extended in v2: full-content re-reads corrected 2 of the
+5 title-only diagnoses and split Family 4 into three distinct mechanisms
+(transient platform outage / statelessness-by-design needing external
+memory / unscoped cascading deletion). An X sweep (160 tweets, 8 query
+angles) yielded 0 keepers — Top-ranked X is engagement bait, documented
+honestly rather than force-fit. Each entry names the concrete task, the
 concrete failure, and the orchestration capability that would have prevented
 it (live retrieval, execution grounding, citation-vs-source diffing,
 retrieval-on-correction, external state checkpointing).

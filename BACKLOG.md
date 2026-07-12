@@ -149,6 +149,25 @@ plannable at decompose time via the time-budget block. Resolution note:
 operator ran the X sweep manually (x_twitter_raw_results.json, 160
 tweets, provenance stamped) + r4 assembly-only run integrated it.
 
+**r4 addendum (run 8a20665f, synthesis run):** three more. (e) **Single
+step overshot the cost cap by ~$1.86** — breakers only check between
+steps; step 9 (the v2 write) alone burned $2.04/4.7M tokens inside one
+subprocess call, landing the run at $4.26 against a $2.40 ceiling. A
+mid-step cost circuit (adapter-level running total → kill + checkpoint)
+is the missing granularity. (f) **Deliverable path miss** — worker wrote
+two complete v2 drafts to project ROOT instead of the goal-specified
+artifacts/ path; closure correctly failed it (complete=False), but the
+work was done — a "verify output path against goal" check in ralph
+verify (or materialization contract) would have flipped this run to
+achieved. Operator installed the (verified-accurate) draft at the
+canonical path. (g) **Step-3 environment hallucination** — a worker
+spent $0.93/1.4M tokens on a step premised on "the execution
+environment does not provide Read, Bash, or local file access" (it
+does; the next step read the file fine). Candidate cheap guard: a
+capability self-probe (one `ls`) before any environment-limitation
+claim is accepted as a step result. Meta: (f) and (g) are corpus
+patterns too — deliverable-contract miss and false-premise-not-probed.
+
 ### 22. Capabilities catalog + blank-slate skill set (2026-07-10, Jeremy)
 
 Jeremy (in-session, riffing off the car ask "where can I get non-ethanol
