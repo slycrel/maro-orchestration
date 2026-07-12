@@ -292,3 +292,82 @@ class TestDecomposeUserContextInjection:
         combined = "\n".join(adapter.system_prompts).lower()
         for marker in ("jeremy", "slycrel", "retatrutide", "edgar_allen_bot"):
             assert marker not in combined
+
+
+class TestGoalPriorityOrder:
+    """BACKLOG #23c: an explicit goal-stated priority order binds step order.
+
+    r3 specimen (run 5c40740e): goal said "Remaining work, in priority
+    order: 1. X/Twitter sweep..." and the planner scheduled Reddit first,
+    consuming the whole budget there.
+    """
+
+    def test_detects_in_priority_order(self):
+        from planner import goal_states_priority_order
+        assert goal_states_priority_order(
+            "Remaining work, in priority order: 1. X/Twitter sweep 2. Reddit")
+
+    def test_detects_priority_order_colon(self):
+        from planner import goal_states_priority_order
+        assert goal_states_priority_order(
+            "Priority order:\n1. sweep X\n2. sweep Reddit")
+
+    def test_detects_priorities_numbered(self):
+        from planner import goal_states_priority_order
+        assert goal_states_priority_order(
+            "Do the audit. Priorities:\n1) find bugs\n2) write report")
+
+    def test_plain_goal_not_detected(self):
+        from planner import goal_states_priority_order
+        assert not goal_states_priority_order(
+            "review the auth module and prioritize readability")
+
+    def test_directive_injected_into_decompose_system(self):
+        from types import SimpleNamespace
+        from planner import decompose, _PRIORITY_DIRECTIVE
+        seen_systems = []
+
+        class _Adapter:
+            def complete(self, messages, **kw):
+                seen_systems.append(messages[0].content)
+                return SimpleNamespace(content='["step one", "step two"]',
+                                       input_tokens=5, output_tokens=5)
+
+        decompose("Do the sweep, in priority order: 1. X 2. Reddit 3. HN",
+                  _Adapter(), max_steps=8)
+        assert any(_PRIORITY_DIRECTIVE in s for s in seen_systems)
+
+    def test_directive_reaches_staged_pass_lane(self):
+        from types import SimpleNamespace
+        from planner import decompose, _PRIORITY_DIRECTIVE
+        seen_systems = []
+
+        class _Adapter:
+            def complete(self, messages, **kw):
+                seen_systems.append(messages[0].content)
+                return SimpleNamespace(content='["Pass 1/2 — X sweep", "Pass 2/2 — synth [after:1]"]',
+                                       input_tokens=5, output_tokens=5)
+
+        decompose("adversarial review of the entire codebase, in priority "
+                  "order: 1. core loop 2. memory", _Adapter(), max_steps=8)
+        assert any(_PRIORITY_DIRECTIVE in s for s in seen_systems)
+
+    def test_no_directive_without_priority_goal(self):
+        from types import SimpleNamespace
+        from planner import decompose, _PRIORITY_DIRECTIVE
+        seen_systems = []
+
+        class _Adapter:
+            def complete(self, messages, **kw):
+                seen_systems.append(messages[0].content)
+                return SimpleNamespace(content='["step one", "step two"]',
+                                       input_tokens=5, output_tokens=5)
+
+        decompose("review the auth module for injection risks",
+                  _Adapter(), max_steps=8)
+        assert not any(_PRIORITY_DIRECTIVE in s for s in seen_systems)
+
+    def test_prompt_names_rate_limited_batching(self):
+        from planner import DECOMPOSE_SYSTEM
+        assert "rate-limited network operations" in DECOMPOSE_SYSTEM
+        assert "GOAL PRIORITY ORDER" in DECOMPOSE_SYSTEM

@@ -358,7 +358,19 @@ DECOMPOSE_SYSTEM = textwrap.dedent("""\
     - Reading more than ONE file in one step
     - Running a script AND reading any additional file in the same step
     - A "setup" action (clone, install, configure) bundled with "explore" (read, analyze)
+    - N sequential rate-limited network operations in ONE step: per-item
+      cooldowns and API rate limits stack, so "fetch all 13 posts with
+      per-post cooldowns" cannot fit one step. Batch at most ~5 such
+      operations per step ("Fetch posts 1-5...", "Fetch posts 6-10...").
     When in doubt, split. An extra step costs nothing; a timeout wastes the whole budget.
+
+    GOAL PRIORITY ORDER (binding):
+    When the goal states an explicit priority order ("in priority order:",
+    "priority 1 ... priority 2", "first X, then Y"), your step order MUST
+    follow it: every step serving the first priority comes before any step
+    serving a later one. Runs die mid-plan on budget or time — an exhausted
+    budget must strand the LAST priorities, never the first. Do not reorder
+    by convenience, topic affinity, or expected ease.
 
     NO ORPHAN READ STEPS (cost model):
     Every step pays a fixed overhead before any work happens (fresh worker
@@ -407,10 +419,42 @@ DECOMPOSE_SYSTEM = DECOMPOSE_SYSTEM + "\n\n" + ANTI_SYCOPHANCY_RULES
 
 
 # ---------------------------------------------------------------------------
-# Dependency parsing
+# Goal-stated priority order (BACKLOG #23c)
 # ---------------------------------------------------------------------------
+# r3 specimen (run 5c40740e): the goal said "Remaining work, in priority
+# order: 1. X/Twitter sweep ..." and the planner scheduled Reddit first,
+# consuming the whole budget there — across THREE loops on that project no
+# step transcript contained a single twitter invocation. The static prompt
+# block above states the rule; this detector makes it loud for the specific
+# goal, and reaches the lanes the extras don't (staged-pass, compose).
 
 import re
+
+_PRIORITY_ORDER_RE = re.compile(
+    r"\bin\s+(?:priority\s+order|order\s+of\s+priority)\b"
+    r"|\bpriority\s+order\s*:"
+    r"|\bpriorit(?:y|ies)\s*:\s*\n?\s*1[.)]"
+    r"|\bpriority\s+1\b",
+    re.IGNORECASE,
+)
+
+
+def goal_states_priority_order(goal: str) -> bool:
+    """True when the goal text declares an explicit priority order."""
+    return bool(goal) and bool(_PRIORITY_ORDER_RE.search(goal))
+
+
+_PRIORITY_DIRECTIVE = (
+    "THIS GOAL STATES AN EXPLICIT PRIORITY ORDER — it is BINDING. Schedule "
+    "ALL work for the first-listed priority before any work for a later "
+    "one; budget exhaustion must strand the last priorities, never the "
+    "first. Do not reorder by convenience, topic affinity, or expected ease."
+)
+
+
+# ---------------------------------------------------------------------------
+# Dependency parsing
+# ---------------------------------------------------------------------------
 
 _AFTER_RE = re.compile(r'\[after:(\d+(?:,\d+)*)\]\s*$')
 
@@ -636,6 +680,12 @@ def decompose(
                 extras.append("COMMITTED CONSTRAINTS (cuts — plan inside these bounds):\n"
                               + "\n".join(f"- {c}" for c in cuts.known_constraints))
 
+    # Goal-stated priority order (BACKLOG #23c): binding, injected loudly.
+    _has_priority_order = goal_states_priority_order(goal)
+    if _has_priority_order:
+        extras.append(_PRIORITY_DIRECTIVE)
+        log.info("decompose: goal states an explicit priority order — binding directive injected")
+
     if extras:
         system = DECOMPOSE_SYSTEM + "\n\n" + "\n\n".join(extras)
 
@@ -657,8 +707,11 @@ def decompose(
             _staged_kwargs: dict = {"max_tokens": 512, "temperature": 0.2}
             if thinking_budget:
                 _staged_kwargs["thinking_budget"] = thinking_budget
+            _staged_system = _STAGED_PASS_SYSTEM
+            if _has_priority_order:
+                _staged_system += "\n\n" + _PRIORITY_DIRECTIVE
             resp = adapter.complete(
-                [LLMMessage("system", _STAGED_PASS_SYSTEM),
+                [LLMMessage("system", _staged_system),
                  LLMMessage("user", f"Goal: {goal}\n\nDecompose into 3-5 staged passes.")],
                 **_staged_kwargs,
             )
@@ -722,7 +775,8 @@ def decompose(
                         "(2) separation of commands from analysis, (3) atomic steps — one file or one "
                         "command per step, never merged. MORE steps is better than FEWER larger steps. "
                         "NEVER merge two steps that read different files, even if they seem related. "
-                        "Output ONLY a JSON array of step strings."),
+                        "Output ONLY a JSON array of step strings."
+                        + ("\n\n" + _PRIORITY_DIRECTIVE if _has_priority_order else "")),
                     LLMMessage("user",
                         f"Goal: {goal}\n\n{plans_text}\n\n"
                         f"Compose the best plan ({max_steps} steps max). JSON array only."),
