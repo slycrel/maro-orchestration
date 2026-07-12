@@ -111,6 +111,32 @@ All adversarially verified (41/42 confirmed). The two 1.0-blockers first:
   ops-r2-03-replaced
   pidfile litter (harmless — flock is the mutex; stale file is cosmetic).
 
+### 24. Model-route exploration — Jeremy-funded session (2026-07-11, Jeremy)
+
+Jeremy: "let's add to the backlog me spending some $ for real to get a
+path going in that direction... I have up front OpenRouter, Fireworks AI,
+OpenCode Go (or Zen?), or maybe Featherless to bring to the table on what
+a cheap but capable route would be to use our orchestrator. The split
+part is the rabbit hole between a service using OSS models (possibly
+reduced capability, but that might actually be good for our
+infrastructure hardening) vs things like codex-oAuth or claude -p routes
+as well."
+
+Full brief for the session: **docs/MODEL_ROUTE_EXPLORATION.md** —
+candidates table, the Lane A (OSS serving: OpenRouter/Fireworks/
+Featherless/opencode-Zen) vs Lane B (frontier OAuth CLIs: claude -p /
+codex) split, the agentic-loop architectural difference, the measured
+spike plan (3 call classes × routes, cost/latency/verdict-agreement vs
+run-card ground truth), and non-goals (no llm.py re-architecture, no
+homegrown tool loop). Hybrid hypothesis to test: Lane B for agentic
+worker steps, Lane A for high-volume non-agentic calls (validation
+ladder, verify, closure, classify). Note: OpenRouter currently 402s
+(zero credits) — first step of the session is funding it. This is
+**Jeremy's session to run** ("I'll send a session down that rabbit hole
+sometime soon"); prep is done, don't start it unprompted. Related:
+hardening thesis (reduced capability stresses the harness — same reason
+the 2014 Mini stays), home-user-local-hardware north star.
+
 ### 23. Worker async-escape: background Monitor/task claims + 600s dead retries (2026-07-11, run 89cb097a live specimen)
 
 Research r2 run: worker on the X-search step started a background
