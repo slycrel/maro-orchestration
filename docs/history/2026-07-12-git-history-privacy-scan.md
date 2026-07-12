@@ -56,3 +56,30 @@ removal needs a history rewrite.
    + coordinate concurrent sessions): `git filter-repo` to purge the removed
    content AND normalize author emails (redacted/yahoo → noreply). Do (2)
    before (3) so a single rewrite covers content + metadata.
+
+## DECISION — Jeremy, 2026-07-12
+
+Scope narrowed after review:
+
+- **KEEP all research/knowledge-layer docs** — the nuanced history has value
+  even though it's not the daily working location. No deletions (reverses
+  recommendation #2's removal of `research/orchestration-knowledge-layer/`).
+- **The concern is commit attribution under the work email**
+  `jstone@redacted.com` (46 commits) — "for privacy reasons on both sides."
+  Fix = mailmap history rewrite → `slycrel@users.noreply.github.com`.
+- **Not bothered by:** his name / content in chat logs & history; personal
+  Mac username; Manti/Utah location ("a few hours away, not where I live").
+
+**Rewrite proven on a throwaway clone (2026-07-12):** `git filter-repo
+--mailmap` folds redacted (+ optionally the personal yahoo address) into the
+noreply identity in <1s; 0 redacted emails remain; all content incl. research
+docs preserved; commit count intact. Earliest work-email commit is
+2026-03-17, so ~1101/1114 SHAs are rewritten = effectively a full-history
+rewrite → force-push + box/session re-clone required.
+
+**Open (pending Jeremy):** (a) also fold the personal `agentic.poe@yahoo.com`
+(86 commits) into one identity, or keep it? (b) also `--replace-text` scrub
+the work-email STRING + `git.redacted.com` where they appear in transcript
+CONTENT, or leave content per "chat logs are fine"? (c) execution timing —
+needs box quiet + concurrent sessions paused. 0.8.0 PyPI publish is
+independent and can go before or after.
