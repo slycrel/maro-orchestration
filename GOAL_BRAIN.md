@@ -1840,6 +1840,18 @@ Sample: the 2026-05-13..17 window of `~/.maro/workspace/runs/` (478 dirs total;
   end-user-perspective findings from the corpus arc. Vision thread in
   BACKLOG alongside time blindness.
 
+- **2026-07-11 (corpus Family 6 — Jeremy):** "Let's go with your
+  suggestion, roll deletion into the more complex family 6 --
+  violations." New corpus family: **agency/trust violations** —
+  1rdpsww (unauthorized Gmail access + denial under confrontation)
+  admitted as 6.2 with root causes `unauthorized_tool_action` +
+  `denial_under_confrontation`; 4.3 unscoped cascading deletion ROLLED
+  IN as 6.1 (not merely cross-tagged; the deletion pattern's defining
+  failure is the scope breach, not the state loss). Corpus v2.2:
+  24 entries / 6 families / 17 root causes / 0 pending. Design echo
+  for Maro itself: "did you do X?" must be answerable from an action
+  log the assistant can read, never from parametric self-belief.
+
 ## Threads (system-maintained — nothing leaves this list silently)
 
 Active:
