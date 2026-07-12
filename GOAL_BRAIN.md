@@ -2084,3 +2084,17 @@ Dormant (deliberately parked, not dropped):
   the cuts call, delete the mechanism (same reversibility posture as the
   capability-form paradigm above; scaffold is condemned property, the record
   is the durable asset).
+- **2026-07-12** — Model-route decision (closes BACKLOG 24's exploration
+  question): **stay on Anthropic keys + first-party subscriptions
+  (`claude -p` on Max/Pro; codex remains the OpenClaw lane) — no OSS
+  coding-plan subscription, no OpenRouter funding for now.** Jeremy: "we
+  leave it at anthropic keys and codex/claude pro subscriptions for now...
+  that's by far the best option. I'm open to Groq or Gemini free tiers for
+  small LLM work in the orchestrator." Rationale: what-I-want (flat OSS
+  subs) vs what-makes-sense (sanctioned, predictable first-party lanes)
+  came apart under research — 2026 OSS-plan prices are rising, caps
+  shrinking, endpoints drift. The budget/OSS lane stays *designed but
+  unfunded*: the `claude -p` endpoint-override path (env passthrough,
+  llm.py child_env) is documented in docs/MODEL_ROUTE_EXPLORATION.md and
+  can be activated later with one config knob + one $8-19 sub. Groq/Gemini
+  free tiers are green-lit as the hosted-free small-LLM rung (BACKLOG 25).

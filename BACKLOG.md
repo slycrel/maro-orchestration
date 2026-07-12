@@ -114,70 +114,38 @@ All adversarially verified (41/42 confirmed). The two 1.0-blockers first:
   ops-r2-03-replaced
   pidfile litter (harmless — flock is the mutex; stale file is cosmetic).
 
-### 24. Model-route exploration — Jeremy-funded session (2026-07-11, Jeremy)
+### 25. Hosted-free small-LLM tier: Groq + Gemini free tiers (2026-07-12, from item 24 decision)
 
-Jeremy: "let's add to the backlog me spending some $ for real to get a
-path going in that direction... I have up front OpenRouter, Fireworks AI,
-OpenCode Go (or Zen?), or maybe Featherless to bring to the table on what
-a cheap but capable route would be to use our orchestrator. The split
-part is the rabbit hole between a service using OSS models (possibly
-reduced capability, but that might actually be good for our
-infrastructure hardening) vs things like codex-oAuth or claude -p routes
-as well."
+Jeremy: "I'm open to Groq or Gemini free tiers for small LLM work in the
+orchestrator." Wire the free tiers as a hosted-free rung for the
+non-agentic call classes (validation ladder, classify/routing, cheap
+verification) — the $0 replacement for the old OpenRouter-free-model
+headache, with no credits to babysit.
 
-Full brief for the session: **docs/MODEL_ROUTE_EXPLORATION.md** —
-candidates table, the Lane A (OSS serving: OpenRouter/Fireworks/
-Featherless/opencode-Zen) vs Lane B (frontier OAuth CLIs: claude -p /
-codex) split, the agentic-loop architectural difference, the measured
-spike plan (3 call classes × routes, cost/latency/verdict-agreement vs
-run-card ground truth), and non-goals (no llm.py re-architecture, no
-homegrown tool loop). Hybrid hypothesis to test: Lane B for agentic
-worker steps, Lane A for high-volume non-agentic calls (validation
-ladder, verify, closure, classify). Note: OpenRouter currently 402s
-(zero credits) — first step of the session is funding it. This is
-**Jeremy's session to run** ("I'll send a session down that rabbit hole
-sometime soon"); prep is done, don't start it unprompted. Related:
-hardening thesis (reduced capability stresses the harness — same reason
-the 2014 Mini stays), home-user-local-hardware north star.
-
-**Research phase DONE 2026-07-12 (Jeremy-initiated, dev Mac):** four
-live-verified research passes + llm.py seam audit written into
-docs/MODEL_ROUTE_EXPLORATION.md § "Session findings — 2026-07-12".
-Headlines: (a) opencode-as-Claude-Max-shim is dead (Anthropic legal
-enforcement Jan–Mar 2026; `claude -p` is the only sanctioned Max route),
-and Anthropic has a *paused* plan to re-price programmatic Max usage at
-API rates — multi-route independence more justified, not less; (b) codex
-`exec --json` is officially documented headless automation and the
-CodexCLIAdapter already exists in llm.py; (c) OpenRouter cheap tier is
-$0.03–0.15/M in for validation/classify-class calls (~100x under
-Sonnet-class) with tool-calling + strict JSON schema; (d) Featherless
-deprioritized (32K ctx cap + 1-concurrent-big-model math), Fireworks
-reachable via OpenRouter provider-pinning (no direct account needed);
-(e) new option "opencode Go" $10/mo flat, 13 open coding models with an
-agent loop — the repriced Lane-A-agentic trial. Remaining before the
-measured spike: fund OpenRouter ~$20 (one txn), add the small
-config-overridable tier map (`_MODEL_MAP` is hardcoded — the one code
-change), then replay call classes via the already-existing
-validation_shadow/validator_roi harness on the runtime box.
-
-**Round 2 same day (budget end-user lane, Jeremy's reframe):** codex
-stays the OpenClaw lane; OpenRouter per-token credit-babysitting is the
-thing to avoid; subscription > metered. Key unlock: every major OSS lab
-(z.ai, Kimi, MiniMax, DeepSeek, Alibaba, + aggregators Synthetic/NanoGPT)
-now sells a flat coding plan WITH an Anthropic-compatible endpoint and a
-first-party Claude Code guide — and `claude -p` already inherits
-ANTHROPIC_BASE_URL/AUTH_TOKEN through child_env (llm.py:775), so the
-budget agentic lane is "same harness, swap the brain" via a small config
-knob, not a new adapter. Pointing Claude Code at third-party endpoints is
-unsupported-not-banned (2026 enforcement was the opposite direction).
-Free tiers (Groq 14.4K req/day, Gemini OpenAI-compat) can carry the
-non-agentic classes at $0. Recommended trial: one $8-19 sub (NanoGPT /
-Kimi / Z.ai Lite) for a month + the env-override knob + Groq free
-validation tier; opencode Go $10 stays the harness-diversity follow-on.
-Full tables in docs/MODEL_ROUTE_EXPLORATION.md § round 2. Verdict on the
-end-user north star: no longer wishful — GLM-5.2/K2.7/M3/DeepSeek-V4 are
-the first credibly-agentic OSS generation; $10-20/mo junior-grade
-autonomy is exactly the hardening-thesis population.
+Design sketch (from the 2026-07-12 research, details in
+docs/MODEL_ROUTE_EXPLORATION.md round 2):
+- **Groq** (primary): OpenAI-compatible; free tier verified 2026-07-12 at
+  llama-3.1-8b-instant 30 RPM / 14.4K req/day (classification volume) and
+  gpt-oss-20b/120b 30 RPM / 1K req/day with strict JSON-schema constrained
+  decoding (verification-grade structured output). Model churn is real
+  (Kimi K2 was removed Mar 2026) — keep model IDs in config, not code.
+- **Gemini API free** (secondary): official OpenAI-compat endpoint
+  (`generativelanguage.googleapis.com/v1beta/openai/`), ~10 RPM
+  Flash-class. Rate-limit numbers are no longer published — probe, don't
+  assume.
+- Implementation shape: two small `OpenAICompatAdapter` subclasses in
+  llm.py (mirror OpenRouterAdapter: base URL + `GROQ_API_KEY` /
+  `GEMINI_API_KEY` + `_MODEL_MAP` entries), NOT in the global
+  `backend_order` failover — plug in as a hosted-free rung of the
+  validation ladder alongside the local-models tier (step_exec.py
+  ladder + local_models.py latency-breaker pattern; reuse
+  `latency_guard_tripped` semantics and validation_shadow scoring so
+  free-vs-paid agreement is measured from day one, same as the local
+  lane).
+- Free-tier RPM caps mean a rate-limit-aware gate (429 → trip like the
+  latency breaker, retry-after aware), not naive failover.
+- Needs: Jeremy to create the free API keys (no card for Groq; Google
+  account for Gemini). Zero recurring cost.
 
 ### 22. Capabilities catalog + blank-slate skill set (2026-07-10, Jeremy)
 

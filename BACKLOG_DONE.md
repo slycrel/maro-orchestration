@@ -8,6 +8,83 @@ Last split: 2026-04-16 (session 34).
 
 ---
 
+### 24. Model-route exploration — Jeremy-funded session (2026-07-11, Jeremy)
+
+Jeremy: "let's add to the backlog me spending some $ for real to get a
+path going in that direction... I have up front OpenRouter, Fireworks AI,
+OpenCode Go (or Zen?), or maybe Featherless to bring to the table on what
+a cheap but capable route would be to use our orchestrator. The split
+part is the rabbit hole between a service using OSS models (possibly
+reduced capability, but that might actually be good for our
+infrastructure hardening) vs things like codex-oAuth or claude -p routes
+as well."
+
+Full brief for the session: **docs/MODEL_ROUTE_EXPLORATION.md** —
+candidates table, the Lane A (OSS serving: OpenRouter/Fireworks/
+Featherless/opencode-Zen) vs Lane B (frontier OAuth CLIs: claude -p /
+codex) split, the agentic-loop architectural difference, the measured
+spike plan (3 call classes × routes, cost/latency/verdict-agreement vs
+run-card ground truth), and non-goals (no llm.py re-architecture, no
+homegrown tool loop). Hybrid hypothesis to test: Lane B for agentic
+worker steps, Lane A for high-volume non-agentic calls (validation
+ladder, verify, closure, classify). Note: OpenRouter currently 402s
+(zero credits) — first step of the session is funding it. This is
+**Jeremy's session to run** ("I'll send a session down that rabbit hole
+sometime soon"); prep is done, don't start it unprompted. Related:
+hardening thesis (reduced capability stresses the harness — same reason
+the 2014 Mini stays), home-user-local-hardware north star.
+
+**Research phase DONE 2026-07-12 (Jeremy-initiated, dev Mac):** four
+live-verified research passes + llm.py seam audit written into
+docs/MODEL_ROUTE_EXPLORATION.md § "Session findings — 2026-07-12".
+Headlines: (a) opencode-as-Claude-Max-shim is dead (Anthropic legal
+enforcement Jan–Mar 2026; `claude -p` is the only sanctioned Max route),
+and Anthropic has a *paused* plan to re-price programmatic Max usage at
+API rates — multi-route independence more justified, not less; (b) codex
+`exec --json` is officially documented headless automation and the
+CodexCLIAdapter already exists in llm.py; (c) OpenRouter cheap tier is
+$0.03–0.15/M in for validation/classify-class calls (~100x under
+Sonnet-class) with tool-calling + strict JSON schema; (d) Featherless
+deprioritized (32K ctx cap + 1-concurrent-big-model math), Fireworks
+reachable via OpenRouter provider-pinning (no direct account needed);
+(e) new option "opencode Go" $10/mo flat, 13 open coding models with an
+agent loop — the repriced Lane-A-agentic trial. Remaining before the
+measured spike: fund OpenRouter ~$20 (one txn), add the small
+config-overridable tier map (`_MODEL_MAP` is hardcoded — the one code
+change), then replay call classes via the already-existing
+validation_shadow/validator_roi harness on the runtime box.
+
+**Round 2 same day (budget end-user lane, Jeremy's reframe):** codex
+stays the OpenClaw lane; OpenRouter per-token credit-babysitting is the
+thing to avoid; subscription > metered. Key unlock: every major OSS lab
+(z.ai, Kimi, MiniMax, DeepSeek, Alibaba, + aggregators Synthetic/NanoGPT)
+now sells a flat coding plan WITH an Anthropic-compatible endpoint and a
+first-party Claude Code guide — and `claude -p` already inherits
+ANTHROPIC_BASE_URL/AUTH_TOKEN through child_env (llm.py:775), so the
+budget agentic lane is "same harness, swap the brain" via a small config
+knob, not a new adapter. Pointing Claude Code at third-party endpoints is
+unsupported-not-banned (2026 enforcement was the opposite direction).
+Free tiers (Groq 14.4K req/day, Gemini OpenAI-compat) can carry the
+non-agentic classes at $0. Recommended trial: one $8-19 sub (NanoGPT /
+Kimi / Z.ai Lite) for a month + the env-override knob + Groq free
+validation tier; opencode Go $10 stays the harness-diversity follow-on.
+Full tables in docs/MODEL_ROUTE_EXPLORATION.md § round 2. Verdict on the
+end-user north star: no longer wishful — GLM-5.2/K2.7/M3/DeepSeek-V4 are
+the first credibly-agentic OSS generation; $10-20/mo junior-grade
+autonomy is exactly the hardening-thesis population.
+
+**RESOLVED 2026-07-12 (decision, GOAL_BRAIN Decisions):** stay on
+Anthropic keys + first-party subscriptions (`claude -p`; codex = OpenClaw
+lane). No OSS coding-plan sub, no OpenRouter funding. The exploration's
+research output (two rounds, docs/MODEL_ROUTE_EXPLORATION.md "Session
+findings" sections) stands as the map: the budget/OSS agentic lane is
+designed-but-unfunded (claude -p endpoint override, one config knob away);
+Groq/Gemini free tiers green-lit for small-LLM work → spun out as
+BACKLOG 25. The originally-planned measured spike (fund OpenRouter,
+replay call classes) is superseded by this decision.
+
+---
+
 ### batch-01: dev/prod environment split removed — evolver auto-apply is an explicit knob (2026-07-10)
 
 Live-batch finding (first evolver production firing): the guardrail

@@ -1,6 +1,6 @@
 ---
-status: living
-note: exploration in progress — research phase done 2026-07-12 (see Session findings); measured spike on the runtime box still pending funding
+status: record
+note: exploration concluded 2026-07-12 — decision: stay on Anthropic keys + first-party subscriptions (see Decision section at end); budget/OSS lane designed-but-unfunded; Groq/Gemini free tiers spun out to BACKLOG 25
 ---
 
 # Model-Route Exploration Brief
@@ -358,3 +358,27 @@ gpt-oss-20b (~$0.037/M in) is the near-free overflow.
 
 Total new commitment: one $8–19 subscription, cancellable monthly. No
 credit top-ups to babysit.
+
+---
+
+# Decision — 2026-07-12
+
+Jeremy, after both research rounds: "we leave it at anthropic keys and
+codex/claude pro subscriptions for now... that's by far the best option.
+I'm open to Groq or Gemini free tiers for small LLM work in the
+orchestrator."
+
+- **Frontier lanes stay first-party**: `claude -p` under the Claude
+  subscription (dropping Max 20x → 5x in ~a month) + Anthropic API keys;
+  codex remains the OpenClaw lane, not maro's.
+- **No new subscriptions, no OpenRouter funding.** The measured spike in
+  the plans above is superseded — not run, by decision rather than by
+  findings against it.
+- **What survives for later activation**: the `claude -p`
+  endpoint-override path (round 2) is one config knob + one $8–19 sub
+  away whenever the budget/OSS lane is wanted; the research tables here
+  are the map.
+- **Green-lit follow-on**: Groq + Gemini free tiers as the hosted-free
+  small-LLM rung for non-agentic call classes — BACKLOG 25 carries the
+  design sketch.
+- GOAL_BRAIN Decisions has the corresponding entry (SF-13).
