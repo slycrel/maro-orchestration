@@ -145,6 +145,18 @@ timeout, a44eb6a); the 89cb097a specimen was a worker ACTIVELY POLLING
 a background job — live-but-useless, prevented behaviorally by (a).
 The demotion-at-seam + targeted-hint pattern is now the standing
 mechanism for corpus-family guards. Archive: BACKLOG_DONE.md.
+**Live validation same night (run 75fe8b4e-jaunty-falcon, sonnet-led,
+Jeremy-requested):** 7 steps/14min/$1.62 vs $2.00, goal_achieved=true,
+all 3 deliverables at exact named paths, 6 rate-limited fetches split
+3+3, cooldowns foreground, priority order held, zero guard firings
+needed. Surfaced + fixed two residuals (e5e0cfa): (1) priority
+directive was unreachable under cuts-first — the probe path returned
+above the injection point; now detected before the cuts block and
+carried across boundary expansion; (2) provenance falsely demoted the
+achieved run — first-glob-hit resolution matched an older project's
+stale step_data.json/step-7-output.txt twin; resolvers now judge
+freshness across ALL candidates. Specimen card: goal_achieved=true +
+status=incomplete = done≠achieved catching its own verifier's error.
 
 **Cuts-first planning v0 (Qix-cuts decree, SHIPPED 2026-07-10, 068eddd):**
 decompose no longer has to commit a full plan over the unbounded space.
