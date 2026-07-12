@@ -1,5 +1,6 @@
 ---
-status: brief — input for a dedicated exploration session (Jeremy-funded, date TBD)
+status: dormant-design
+note: brief — input for a dedicated exploration session (Jeremy-funded, date TBD)
 ---
 
 # Model-Route Exploration Brief
