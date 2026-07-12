@@ -1981,6 +1981,24 @@ Sample: the 2026-05-13..17 window of `~/.maro/workspace/runs/` (478 dirs total;
   artifact-to-future-prompt loop is explicitly NOT covered by the
   container (injection_guard/cs-r2-01 family remains that gate);
   quarantine-until-verified scratch = deferred opt-in on evidence, not v1.
+- **2026-07-12 (learning-trust direction — Jeremy, closing the container
+  conversation; direction not task):** "I was thinking of skill poisoning
+  and self-learning edges, less direct prompt injection, but same sort of
+  thing in both directions. More and more complicated, ultimately we will
+  likely need 'usage only' vs 'learning' sessions, the ideal being
+  scanning and auto-upgrades by the system itself, which is a neverending
+  quest, same as a virus scanner solving protecting an individual
+  workstation; one way to solve it but a constant maintenance headache.
+  We'll get into all that more later I'm sure; glad we're at this stage at
+  least for now to protect direct problems." Doors already built when this
+  gets a session: usage-only ≈ a session/run flag over the existing
+  learning seams (`defer_learning`, crystallization gates, skills-lite
+  promotion switch — the ingestion side is already gateable per-run); the
+  scanning/auto-upgrade half is the verify→learn arc's
+  expectation→verdict→demote lifecycle applied to learned artifacts
+  (VERIFY_LEARN_ARC.md V2/V3 are the seed); trust boundaries recorded in
+  CAPABILITIES.md + PORTABLE_LEARNING_DESIGN (imports arrive contested).
+  BACKLOG Vision entry added alongside the shared-skill-directory item.
 
 ## Threads (system-maintained — nothing leaves this list silently)
 
