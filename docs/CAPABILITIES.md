@@ -109,6 +109,8 @@ real phrasing beats cleaned-up phrasing.
 | "Census this JSONL ledger: totals per day, anomalies flagged, two sentences of interpretation." | correct table + honest interpretation | deterministic computation + narrative honesty | `verified` (live batch 2026-07-10, step-costs census) |
 | "Read this design doc and write a one-page operator summary: what changed, what's left." | faithful compression, no invented claims | long-doc comprehension, fabrication resistance | `verified` (live batch 2026-07-10, RECONCILIATION summary) |
 | "Research [topic] and give me a decision brief: options, tradeoffs, your recommendation." | brief with a real recommendation, not an option table | research depth, opinionated synthesis | `target` |
+| "Search Reddit/HN/X for first-person accounts of [phenomenon]; build a sourced catalog, verbatim quotes only." | concrete-instance entries w/ author+date+link, honest audit trail, rejects listed | social_search skill, filter-bar discipline, evidence-depth honesty | `verified` (run 692bd96f 2026-07-11, ai-failure-task-patterns) |
+| "Examine your own run [id] and propose what would make it faster, without cutting steps." | proposals with code-level premises, each premise verified before acting | self-analysis, verify-before-fix gate | `verified` shape (self-speedup dogfood 2026-07-11 — 4 proposals, 2 had false code premises caught in adjudication; the gate IS the use case) |
 
 ### Tier 3 — standing/recurring work
 
@@ -127,6 +129,7 @@ real phrasing beats cleaned-up phrasing.
 | "Take this failing test suite and fix what's actually broken, don't paper over it." | root-cause fixes, no test deletion, report of what was wrong | debugging judgment, integrity under pressure | `target` |
 | "Extract [fields] from this filing/document into JSON matching this schema." | schema-valid AND field-level content-verified against the source — two separate checks | structured extraction, content-vs-format verification split | `target` — from failure corpus 1.11 ("valid JSON, wrong answer") |
 | "Iterate on this parsing code until it produces [expected output] on [input]." | every iteration's claimed output is sandbox-executed, not hand-written; auto-loop on mismatch | execution grounding, claimed-vs-actual diff | `target` — from failure corpus 3.2 |
+| "Figure out how to get [blocked/undocumented data source] working, then capture the recipe as a reusable skill." | working access path + a skill file future runs can load | probe-driven exploration, self-bundling ("learn a language to get things done") | `target` — done by hand 2026-07-11 (Reddit RSS door, X CT-cache reseed → skills/social_search.md); the target is Maro doing this loop itself |
 
 ### Tier 5 — long-horizon compound projects
 
