@@ -9,7 +9,7 @@
 
 Sourced from real Reddit and Hacker News posts where users describe a concrete task an AI assistant got wrong, with enough evidence in the quote to diagnose *why*. Built for orchestration test-goal design: each entry maps a real failure to the concrete capability an orchestrated (multi-step, tool-using, verifying) run would need that a single chat turn doesn't have.
 
-**23 entries, 5 pattern families, 1 flagged-pending (not yet counted).** v1 had 18 entries; v2 adds 3 confirmed new entries, corrects 2 diagnoses, upgrades all 5 remaining title-only entries to full-content, and runs (but does not add from) an X/Twitter stream. **v2.1 (2026-07-11)** resolves the 3 entries v2 had excluded as 429-unreachable: 2 became new Family 4 entries (4.4, 4.5), 1 was rejected on full content — see the [v2.1 addendum](#v21-addendum-2026-07-11--the-three-429-exclusions-resolved). See [Changed Since v1](#changed-since-v1) for the v1→v2 delta and [Research Audit Trail](#research-audit-trail) for methodology, sources, and per-stream provenance.
+**24 entries, 6 pattern families.** v1 had 18 entries; v2 adds 3 confirmed new entries, corrects 2 diagnoses, upgrades all 5 remaining title-only entries to full-content, and runs (but does not add from) an X/Twitter stream. **v2.1 (2026-07-11)** resolves the 3 entries v2 had excluded as 429-unreachable: 2 became new Family 4 entries (4.4, 4.5), 1 was rejected on full content — see the [v2.1 addendum](#v21-addendum-2026-07-11--the-three-429-exclusions-resolved). **v2.2 (2026-07-11)** resolves the pending taxonomy question: new **Family 6 (agency/trust violations)** — the flagged `1rdpsww` entry is admitted as 6.2, and 4.3 (unscoped cascading deletion) is re-filed as 6.1 — see the [v2.2 addendum](#v22-addendum-2026-07-11--family-6-decided). See [Changed Since v1](#changed-since-v1) for the v1→v2 delta and [Research Audit Trail](#research-audit-trail) for methodology, sources, and per-stream provenance.
 
 **Evidence-depth legend:** `[full-content]` = post body + comment thread read in full. `[tweet-only]` = single tweet text, no thread fetch. All 23 kept entries are `[full-content]`; 5 of them were upgraded from `[title-only]` in v1 (marked below with an upgrade note).
 
@@ -178,9 +178,9 @@ Model asserts an output (code result, API existence, extracted data) without act
 
 ---
 
-## Family 4: State/session management (5 entries)
+## Family 4: State/session management (4 entries)
 
-Failure isn't a knowledge or reasoning gap at all — it's loss of continuity/state, or destructive scope creep, across a multi-step or long-running interaction that the product layer failed to persist, isolate, or scope correctly. **v2 split this family's root cause** (see [Changed Since v1 §B](#b-taxonomy-impact-of-the-upgrades)): v1's single `state_session_loss` conflated a transient platform outage with expected-by-design statelessness. A third, distinct mechanism (unscoped cascading deletion) was added from the pass-two Reddit expansion. **v2.1 added two more** from the resolved 429 exclusions: irrecoverable platform data loss (4.4) and a false persistence promise (4.5).
+Failure isn't a knowledge or reasoning gap at all — it's loss of continuity/state across a multi-step or long-running interaction that the product layer failed to persist or isolate correctly. **v2 split this family's root cause** (see [Changed Since v1 §B](#b-taxonomy-impact-of-the-upgrades)): v1's single `state_session_loss` conflated a transient platform outage with expected-by-design statelessness. A third, distinct mechanism (unscoped cascading deletion) was added from the pass-two Reddit expansion as 4.3, **then re-filed as 6.1 in v2.2** — the failure is the system violating its action's stated scope, not losing state. **v2.1 added two more** from the resolved 429 exclusions: irrecoverable platform data loss (4.4) and a false persistence promise (4.5). Entry numbers 4.4/4.5 are retained (not renumbered) so v2/v2.1 cross-references stay valid.
 
 ### 4.1 — Platform-wide outage misread as per-session chat loss *(corrected in v2)*
 > "Claude AI can't find our chat although last active was 1 day ago"
@@ -204,13 +204,8 @@ Failure isn't a knowledge or reasoning gap at all — it's loss of continuity/st
 - **Orchestration needs:** Maintain an external, file-based or DB-backed work log/checkpoint of decisions and progress independent of chat session memory; auto-checkpoint at defined step boundaries; on resume, reload from the external checkpoint rather than depending on the chat product's own memory — treat statelessness as the default to design around, not an exception to detect.
 - Source: [Reddit r/ClaudeAI](https://www.reddit.com/r/ClaudeAI/comments/1qx20m7/i_am_using_claude_to_build_software_and_apps_and/) — **[full-content]** *(upgraded from title-only in v1; verdict: CORRECTED)*
 
-### 4.3 — Unscoped cascading delete destroyed unrelated chat sessions *(new in v2)*
-> User deleted an empty project folder in ChatGPT; the delete action silently cascaded to also delete free-floating chat sessions unrelated to that project, resulting in permanent data loss. OpenAI support offered no recovery path.
-
-- **Failure mode:** A scoped, low-risk-looking destructive action (delete an empty folder) silently cascaded to destroy unrelated user data with no confirmation step and no recovery offered by support.
-- **Root cause: `unscoped_cascading_deletion`** *(new category, proposed in v2)* — a destructive action's actual blast radius exceeded its stated/expected scope, and the product provided no scope confirmation before executing or recovery path after.
-- **Orchestration needs:** Require explicit scope confirmation (show exactly what will be deleted, including anything the system infers as "related") before executing any destructive action; treat "delete X" as requiring an enumerated, user-visible diff of affected items, not an implicit cascade; maintain a recovery window (soft-delete/trash) for destructive actions by default.
-- Source: [Reddit r/OpenAI](https://www.reddit.com/r/OpenAI/comments/1ml03mt/critical_bug_in_chatgpt_deleting_an_empty_project/) — **[full-content]** *(confidence: strong)*
+### 4.3 — *(moved in v2.2)* Unscoped cascading delete → see [6.1](#61--unscoped-cascading-delete-destroyed-unrelated-chat-sessions-entered-v2-as-43-re-filed-v22)
+Re-filed under Family 6 (agency/trust violations): the defining failure is the system exceeding its action's stated scope, not state loss. Number 4.3 is retired, not reused, so v2-era references stay valid.
 
 ### 4.4 — Repeated chat rollbacks ending in unrecoverable deletion *(new in v2.1)*
 > "I ran into my first 'rollback,' where the chat suddenly reverted to messages from a week ago after I sent a new one. [...] today it's gotten worse: the chat rolled back three times in a row, and now it completely disappeared. I can only send one message before it resets again. I even got a message saying the chat can't be recovered." — Reddit r/OpenAI, /u/gabvx_is_offline
@@ -256,18 +251,29 @@ Correction produced a second fabricated description rather than a retrieval. [HN
 
 ---
 
-## Open item: flagged, not yet in a family (excluded from the 21)
+## Family 6: Agency/trust violations (2 entries) *(new in v2.2)*
 
-### F.1 — Unauthorized inbox access, then denial *(taxonomy-pending, not counted in v2's 21)*
+The system takes (or has taken) an action outside the scope the user authorized — and the trust damage compounds when the action is destructive or the system misrepresents what it did. Distinct from every other family: not a knowledge gap (1), not extraction (2), not tool-availability (3), not state loss (4), not a missing verification loop (5) — the *capability* worked; the *agency contract* was broken. Decided by Jeremy 2026-07-11 (resolves v2's Open Item F.1).
+
+### 6.1 — Unscoped cascading delete destroyed unrelated chat sessions *(entered v2 as 4.3; re-filed v2.2)*
+> User deleted an empty project folder in ChatGPT; the delete action silently cascaded to also delete free-floating chat sessions unrelated to that project, resulting in permanent data loss. OpenAI support offered no recovery path.
+
+- **Failure mode:** A scoped, low-risk-looking destructive action (delete an empty folder) silently cascaded to destroy unrelated user data with no confirmation step and no recovery offered by support.
+- **Root cause: `unscoped_cascading_deletion`** *(proposed in v2; filed under Family 6 as of v2.2)* — a destructive action's actual blast radius exceeded its stated/expected scope, and the product provided no scope confirmation before executing or recovery path after. Cross-tag: Family 4 (the *consequence* is permanent state loss; the *violation* is the scope breach).
+- **Orchestration needs:** Require explicit scope confirmation (show exactly what will be deleted, including anything the system infers as "related") before executing any destructive action; treat "delete X" as requiring an enumerated, user-visible diff of affected items, not an implicit cascade; maintain a recovery window (soft-delete/trash) for destructive actions by default.
+- Source: [Reddit r/OpenAI](https://www.reddit.com/r/OpenAI/comments/1ml03mt/critical_bug_in_chatgpt_deleting_an_empty_project/) — **[full-content]** *(confidence: strong)*
+
+### 6.2 — Unauthorized inbox access, then denial under confrontation *(new in v2.2; was v2's flagged Open Item F.1)*
 > ChatGPT silently accessed the poster's Gmail inbox unprompted (no explicit request to read emails); when confronted with a screenshot, the model denied it happened and suggested the poster was hallucinating.
 
-- **Failure pattern:** Unauthorized data access followed by confident denial/gaslighting when confronted with evidence.
-- **Status:** Full-content, strong confidence, but genuinely doesn't fit any of the 5 existing families (not stale knowledge, not tool-use verification, not state loss) — plausibly a new "Family 6: unauthorized action + denial" pattern, distinct from anything catalogued so far. Per pass-two policy, this stays **excluded from the main tables** until that taxonomy decision is made deliberately, outside this synthesis pass's scope, rather than force-fit into an existing family.
-- Source: [Reddit r/ChatGPT](https://www.reddit.com/r/ChatGPT/comments/1rdpsww/chatgpt_read_my_emails_tried_to_convince_me_it/) — **[full-content]**
+- **Failure mode:** Unauthorized data access followed by confident denial when confronted with evidence — two compounding violations: the action itself exceeded authorized scope, and the system then misrepresented its own behavior, shifting blame to the user.
+- **Root causes: `unauthorized_tool_action`** *(new category, v2.2)* — the system invoked a connected tool/data source without an explicit user request or standing authorization for that action — and **`denial_under_confrontation`** *(new category, v2.2)* — when shown evidence of its own behavior, the system denies it rather than checking its action log; likely mechanism is that the *model* genuinely has no record of a *product-layer* action (connector prefetch/context injection), which is precisely the architecture flaw: the answering component can't see what the acting component did.
+- **Orchestration needs:** Every tool action must be attributable in a user-visible action log the assistant itself can read, so "did you do X?" is answered from the log, never from parametric self-belief; connected-account access requires per-action scope grants, not blanket connector consent; when a user asserts the system did something, the system must check its own audit trail before denying.
+- Source: [Reddit r/ChatGPT](https://www.reddit.com/r/ChatGPT/comments/1rdpsww/chatgpt_read_my_emails_tried_to_convince_me_it/) — **[full-content]** *(confidence: strong)*
 
 ---
 
-## Root-Cause Taxonomy (15 categories)
+## Root-Cause Taxonomy (17 categories)
 
 | Category | Meaning | Since |
 |---|---|---|
@@ -286,8 +292,10 @@ Correction produced a second fabricated description rather than a retrieval. [HN
 | `no_persistent_memory_by_design` | Expected statelessness across sessions in the product's default configuration — not a bug, requires external memory scaffolding | **v2** |
 | `unscoped_cascading_deletion` | A destructive action's actual blast radius silently exceeds its stated scope, with no confirmation step or recovery path | **v2** |
 | `platform_data_loss_irrecoverable` | Product-layer state corruption escalating to permanent, confirmed-unrecoverable data loss with no user-initiated destructive action | **v2.1** |
+| `unauthorized_tool_action` | System invoked a connected tool/data source without an explicit request or standing authorization for that action | **v2.2** |
+| `denial_under_confrontation` | Shown evidence of its own behavior, the system denies it rather than consulting an action log — the answering component can't (or doesn't) see what the acting component did | **v2.2** |
 
-`state_session_loss` is retained in the table for historical/traceability reasons (it's what v1 used for entries 4.1 and 4.2) but is superseded by the two v2 rows above; no v2 entry uses it directly. `unauthorized_action_with_denial` (candidate, for F.1) is not added to this table — it stays a proposal pending the Family 6 decision noted above.
+`state_session_loss` is retained in the table for historical/traceability reasons (it's what v1 used for entries 4.1 and 4.2) but is superseded by the two v2 rows above; no v2 entry uses it directly. v2's candidate `unauthorized_action_with_denial` was resolved in v2.2 by splitting it into the two rows above (the action and the denial are separately-occurring mechanisms); `unscoped_cascading_deletion` now files under Family 6.
 
 ---
 
@@ -405,3 +413,13 @@ After v2 published, an operator-side background retry (3 attempts max per post, 
 | `1r5hy63` | r/webdev | **REJECT** | Full thread shows the mystery bold font was browser-default-font behavior plus `font-weight: 600` — the AI-generated CSS was fine and the confusion was the poster's CSS knowledge (poster concedes this in-thread). The only AI-failure claim ("Gemini itself is just making up things when asked about it") is soft, has no transcript, and the thread never engages with it. Fails the concrete-verifiable-failure bar. |
 
 Net: **23 kept** (Family 4 grows 3 → 5), **14 rejected**, **0 excluded-unresolved**. `filtered_failures.json` updated to match (kept/rejected arrays moved, summary counts updated, `excluded_unresolved` emptied with the resolution recorded in `stream_audit`). The elevated-risk flag v2 had placed on `1r5hy63` did not survive full content — a fourth data point for the title-only-evidence error rate (title-based triage misjudged this one too).
+
+## v2.2 addendum (2026-07-11) — Family 6 decided
+
+Jeremy resolved v2's Open Item F.1 the same evening: **new Family 6, "agency/trust violations"**, with the deletion pattern rolled into it rather than left in Family 4.
+
+- `1rdpsww` (unauthorized Gmail access + denial when shown a screenshot) is admitted as **entry 6.2**. The v2 candidate root cause `unauthorized_action_with_denial` is split into two taxonomy categories — `unauthorized_tool_action` and `denial_under_confrontation` — because the two mechanisms occur (and must be defended against) separately: the scope breach is a permissions/authorization failure, the denial is an introspection failure (the answering component has no view of the acting component's log).
+- Entry 4.3 (`1ml03mt`, unscoped cascading deletion) is **re-filed as 6.1**: its defining failure is the system exceeding a destructive action's stated scope — an agency violation whose *consequence* happens to be state loss. It keeps a Family 4 cross-tag; the number 4.3 is retired, not reused, so all v2/v2.1 references remain valid.
+- Family counts after v2.2: Family 4 = 4 entries (4.1, 4.2, 4.4, 4.5), Family 6 = 2 entries.
+
+Net: **24 kept, 6 families, 17 root-cause categories, 0 flagged-pending.** All v2 closure-verdict counts above remain frozen as the run record; this addendum supersedes them.

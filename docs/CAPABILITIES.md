@@ -155,15 +155,18 @@ real phrasing beats cleaned-up phrasing.
 
 ## External failure-pattern corpus
 
-`research/ai-failure-task-patterns.md` (v2.1 2026-07-11, four Maro runs +
-operator X sweep + post-publication 429 resolution): 23 real tasks that
-single-turn AI assistants got wrong, sourced from verbatim HN/Reddit user
-complaints — all full-content evidence (post body + comment thread read).
-Grouped into 5 pattern families with a 15-category root-cause taxonomy:
-full-content re-reads corrected 2 of the 5 title-only diagnoses and split
-Family 4 into distinct mechanisms (transient platform outage /
-statelessness-by-design needing external memory / unscoped cascading
-deletion / irrecoverable platform data loss / false persistence promise).
+`research/ai-failure-task-patterns.md` (v2.2 2026-07-11, four Maro runs +
+operator X sweep + post-publication 429 resolution + taxonomy decision):
+24 real tasks that single-turn AI assistants got wrong, sourced from
+verbatim HN/Reddit user complaints — all full-content evidence (post body
++ comment thread read). Grouped into 6 pattern families with a 17-category
+root-cause taxonomy: full-content re-reads corrected 2 of the 5 title-only
+diagnoses and split Family 4 into distinct mechanisms (transient platform
+outage / statelessness-by-design needing external memory / irrecoverable
+platform data loss / false persistence promise). Family 6 (agency/trust
+violations, Jeremy 2026-07-11) holds the scope-breach patterns: unscoped
+cascading deletion (re-filed from Family 4) and unauthorized tool action
++ denial under confrontation (the Gmail-access-then-gaslight specimen).
 An X sweep (160 tweets, 8 query angles) yielded 0 keepers — Top-ranked X is
 engagement bait, documented honestly rather than force-fit. Each entry
 names the concrete task, the concrete failure, and the orchestration
