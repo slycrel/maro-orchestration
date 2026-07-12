@@ -132,6 +132,23 @@ riding the full 600s. Note the meta: this is corpus Family 3
 candidate training/test goal once fixed. Specimen: run 89cb097a calls
 00:52-00:55, step11_changed_since_v1.md §C.2.
 
+**r3 addendum (run 5c40740e, same project):** two more mechanisms from
+the same arc. (c) **Goal-priority order ignored in decompose** — the r3
+goal said "Remaining work, in priority order: 1. X/Twitter sweep..."
+and the planner still scheduled Reddit first and consumed the whole
+budget there; across THREE loops on this project no step transcript
+contains a single twitter/x-ct-reseed invocation (filtered_failures.json
+stream_audit.x_twitter_stream documents this honestly). Explicit
+user-stated priority should bind step ordering, or at least surface as
+a cuts-first constraint-with-basis. (d) **Over-batched step rode the
+600s cap** — "fetch all 13 posts with per-post cooldowns" cannot fit
+one subprocess call; blocked at 600s/0-tokens, then boundary expansion
+correctly split it into batches of 5/5/3 which all passed. The sizing
+lesson (N sequential rate-limited network ops don't share one step) is
+plannable at decompose time via the time-budget block. Resolution note:
+operator ran the X sweep manually (x_twitter_raw_results.json, 160
+tweets, provenance stamped) + r4 assembly-only run integrated it.
+
 ### 22. Capabilities catalog + blank-slate skill set (2026-07-10, Jeremy)
 
 Jeremy (in-session, riffing off the car ask "where can I get non-ethanol
