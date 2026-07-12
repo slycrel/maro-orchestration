@@ -121,6 +121,31 @@ context, at best it's a slight tweak and we fix forward."*
 
 ## Compiled truth (system-maintained; basis noted per claim)
 
+**BACKLOG #23 async-escape family closed (SHIPPED 2026-07-12, commits
+71f6e4f/f241cf0/a0b462b/2e24594; basis: 62 new tests + targeted suites
+green):** all seven mechanisms from the polymarket-edges r2–r4 saga.
+(a)+(g) done→blocked demotion at the complete_step seam — deterministic
+detectors for async-escape promises and unprobed env-limitation claims
+(agentic lanes only, waived on probe evidence), EXECUTE_SYSTEM
+SYNCHRONOUS EXECUTION contract, targeted retry hints in loop_blocked
+(re-execute SYNCHRONOUSLY / PROBE with `ls`), ralph-verify fallback on
+untagged reasons. (e-residual) in-flight cost kill: `stream_probe` hook
+in `_run_subprocess_safe` + `_build_stream_cost_probe` — stream-json
+usage blocks cost-estimated as they arrive, subprocess killed
+mid-flight on ceiling cross via the existing BudgetRunawayError
+plumbing (claude lane only; codex NDJSON differs). (c)+(d) decompose:
+goal-stated priority order detected and injected as a BINDING directive
+into all lanes ("exhausted budget strands the LAST priorities, never
+the first"); rate-limited batch sizing (~5 sequential rate-limited ops
+per step) in TIME BUDGET. (f) deliverable-path check: step-named write
+targets must exist (resolved against project_dir) before done is
+accepted; miss demotes with the exact paths in the retry hint. (b)
+re-scoped: true dead-air kill has existed since April (liveness
+timeout, a44eb6a); the 89cb097a specimen was a worker ACTIVELY POLLING
+a background job — live-but-useless, prevented behaviorally by (a).
+The demotion-at-seam + targeted-hint pattern is now the standing
+mechanism for corpus-family guards. Archive: BACKLOG_DONE.md.
+
 **Cuts-first planning v0 (Qix-cuts decree, SHIPPED 2026-07-10, 068eddd):**
 decompose no longer has to commit a full plan over the unbounded space.
 Config-gated `planner.cuts_first` (default OFF; ON on this box):

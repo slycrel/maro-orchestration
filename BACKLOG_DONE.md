@@ -1987,3 +1987,106 @@ which was the actual incident class. Commit 31f2844.
   build intentionally does not include.
 
 *(Moved from BACKLOG.md 2026-07-09 — merged and running; the residual general-purpose-server question stays in BACKLOG under "Run visibility residual".)*
+
+## Worker async-escape family: 7 mechanisms from the polymarket-edges r2–r4 saga (SHIPPED 2026-07-12, commits 71f6e4f / f241cf0 / a0b462b / 2e24594)
+
+Original entry (#23, 2026-07-11) — full text preserved:
+
+Research r2 run (89cb097a): worker on the X-search step started a background
+Monitor and returned "I've started a Monitor that will notify me when
+the subprocess completes" — i.e., delegated the actual work to async
+machinery that cannot outlive the worker's own session. Ralph verify
+correctly RETRY'd it, but the retry then hung to the 600s subprocess
+hard timeout with 0 tokens, twice (steps 5 and 8) = 20 min + model=power
+spend for nothing; run then hit the cost stop with the X stream never
+executed. Introspect classified adapter_timeout (critical) correctly.
+Fixes considered: (a) worker prompt/constraint — steps must run
+commands synchronously; starting background jobs/monitors and reporting
+"waiting" is a verify-fail with a *synchronous re-execution* hint;
+(b) cheap pre-timeout probe — kill dead-air subprocess calls early.
+Meta: corpus Family 3 (claims-without-execution) manifesting inside our
+own pipeline. Specimen: run 89cb097a calls 00:52-00:55,
+step11_changed_since_v1.md §C.2.
+
+r3 addendum (run 5c40740e): (c) **goal-priority order ignored in
+decompose** — goal said "Remaining work, in priority order: 1. X/Twitter
+sweep..." and the planner scheduled Reddit first and spent the whole
+budget there; across THREE loops no step transcript contained a single
+twitter/x-ct-reseed invocation. (d) **Over-batched step rode the 600s
+cap** — "fetch all 13 posts with per-post cooldowns" cannot fit one
+subprocess call; boundary expansion later split it 5/5/3 and all passed,
+but the sizing is plannable at decompose time.
+
+r4 addendum (run 8a20665f): (e) **single step overshot the cost cap by
+~$1.86** — step 9 alone burned $2.04/4.7M tokens inside one subprocess
+call ($4.26 against a $2.40 ceiling); pre-call runaway circuit shipped
+2026-07-11 (`llm.arm_cost_meter`, `budget.runaway_multiplier` 1.5,
+execute-phase-only, runaway-only per Jeremy's decree), leaving the
+in-flight kill open. (f) **Deliverable path miss** — worker wrote two
+complete v2 drafts to project ROOT instead of the goal-specified
+artifacts/ path; closure correctly failed the run, but the work was
+done. (g) **Environment hallucination** — a worker spent $0.93/1.4M
+tokens on a step premised on "the execution environment does not
+provide Read, Bash, or local file access" (false, never probed).
+
+**How it shipped (4 chunks, 2026-07-12):**
+
+- **(a)+(g) — 71f6e4f.** EXECUTE_SYSTEM gained a SYNCHRONOUS EXECUTION
+  block (foreground-to-completion; a result promising future completion
+  is a FAILED step; long-lived servers stay the one exception).
+  Deterministic detectors in step_exec (`result_signals_async_escape`,
+  `result_claims_env_limitation`) demote done→blocked at the
+  complete_step seam with tagged reasons (`[async-escape]`,
+  `[env-claim-unprobed]`); env demotion gated to agentic lanes
+  (subprocess/codex) and waived on probe evidence. loop_blocked issues
+  targeted retry hints: re-execute SYNCHRONOUSLY / PROBE with `ls`
+  before claiming limitation. Ralph-verify-blocked results get the same
+  hints via detector fallback on untagged reasons. Both verify prompts
+  now RETRY on promises of background completion.
+- **(b) — re-scoped, folded into (e).** Investigation found true
+  dead-air kill has existed since April (liveness timeout in
+  `_run_subprocess_safe`, a44eb6a: bytes-mtime + session-CPU, default
+  min(timeout,180)) — the 89cb097a specimen wasn't dead air, it was a
+  worker *actively polling* a background job, which keeps liveness
+  signals warm. That class is prevented behaviorally by (a); the
+  shippable residual was the in-flight cost kill below.
+- **(e) residual — f241cf0.** Stream-side token accounting:
+  `_run_subprocess_safe` gained a `stream_probe` hook (incremental
+  NDJSON reader over the combined-output file, partial-line tolerant);
+  `_build_stream_cost_probe` cost-estimates stream-json assistant-event
+  usage blocks as they arrive and returns `BudgetRunawayError` once
+  meter-spend + running estimate crosses the armed ceiling → subprocess
+  killed mid-flight, estimate accrued into the meter, existing
+  BUDGET_RUNAWAY plumbing (never retried/failed-over, loop stops)
+  handles the rest. Kill raises the runaway error itself (not
+  TimeoutExpired) so it can't ride timeout-split retry. Claude
+  subprocess lane only; codex lane deliberately unprobed (different
+  NDJSON shape). The r4 $2.04 call would now die at ~ceiling instead of
+  running to completion.
+- **(c)+(d) — a0b462b.** DECOMPOSE_SYSTEM: new GOAL PRIORITY ORDER
+  (binding) block — when the goal states an explicit priority order,
+  step order must follow it ("an exhausted budget must strand the LAST
+  priorities, never the first"); `goal_states_priority_order()` detects
+  the phrasing and injects a binding directive into all decompose lanes
+  (single-shot extras, staged-pass system, multi-plan compose). TIME
+  BUDGET block gained the rate-limited batch-sizing rule (~5 sequential
+  rate-limited network ops max per step — per-item cooldowns stack).
+- **(f) — 2e24594.** `_WRITE_TARGET_RE` extracts explicit write targets
+  from step text (write verb + preposition + directory-qualified path
+  with extension; URLs/{placeholders} skipped);
+  `missing_write_targets()` resolves relative targets against
+  project_dir (= subprocess cwd). On agentic lanes, done with a missing
+  named target demotes to blocked (`[deliverable-path-miss]`) and the
+  retry hint carries the exact paths: find where the output actually
+  landed, move it to EXACTLY the named path, verify with `ls`. Would
+  have flipped the r4 run to achieved.
+
+62 new tests: tests/test_escape_patterns.py (43),
+tests/test_stream_cost_kill.py (11), and TestGoalPriorityOrder (8) in
+tests/test_planner.py. Meta note stands: (a)/(f)/(g) are corpus
+patterns (Family 3 claims-without-execution, deliverable-contract miss,
+false-premise-not-probed) — the demotion-at-complete_step-seam +
+targeted-hint pattern is now the standing mechanism for all three, and
+this saga is a candidate training/test goal.
+
+*(Moved from BACKLOG.md 2026-07-12 — all seven mechanisms shipped or accounted for; (b) re-scoped after finding liveness kill already existed.)*
