@@ -130,7 +130,13 @@ def test_assets_dir_resolves():
 
 def test_entry_points_reference_real_modules():
     text = (REPO_ROOT / "pyproject.toml").read_text()
-    scripts = re.findall(r'^[\w-]+ = "([a-z0-9_]+):', text, re.MULTILINE)
+    # Scope to the [project.scripts] table only — matching the whole file
+    # also catches `Homepage = "https://..."` etc. under [project.urls]
+    # and misreads "https" as a module reference (2026-07-12, surfaced by
+    # a full-suite run after the PyPI-publish-prep merge added [project.urls]).
+    table = re.search(r'^\[project\.scripts\]\n(.*?)(?=^\[|\Z)', text, re.MULTILINE | re.DOTALL)
+    assert table, "pyproject.toml has no [project.scripts] table"
+    scripts = re.findall(r'^[\w-]+ = "([a-z0-9_]+):', table.group(1), re.MULTILINE)
     actual = _src_modules()
     broken = sorted(set(scripts) - actual)
     assert not broken, f"console scripts point at modules not in src/: {broken}"
