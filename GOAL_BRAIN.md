@@ -1673,6 +1673,18 @@ Sample: the 2026-05-13..17 window of `~/.maro/workspace/runs/` (478 dirs total;
   like that." Implication for batch-04: lesson-funnel measurement should
   ride organic direct-use work, not synthetic batches; funnel-threshold
   tuning is deprioritized until real goals flow.
+- **2026-07-11 (learn-a-language + platform-access skills — Jeremy):**
+  doubling down on the failure-pattern research: "I'd like to push for
+  the whole 'learn a language to get things done' thing here... skill to
+  read reddit content for research would be a great bundling add for
+  example, we're not unique here, even if it has some setup involved."
+  Direction: paying one-time setup cost to unlock a blocked data source,
+  then capturing the recipe as a bundled skill, is a first-class pattern
+  — not a workaround. First instances shipped same day:
+  skills/social_search.md + scripts/x-ct-reseed.sh (Reddit per-post RSS
+  door, X CT-cache reseed). Same message: real-world use cases are what
+  "we can lean into for starters when we dig in a bit more directly" —
+  the corpus + CAPABILITIES catalog are that list.
 - **2026-07-10 (capabilities catalog + example collection — Jeremy):** "we
   need some real test cases to list, maybe in the readme, certainly in
   some kind of capabilities doc... We should collect more and different
