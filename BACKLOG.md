@@ -137,6 +137,26 @@ sometime soon"); prep is done, don't start it unprompted. Related:
 hardening thesis (reduced capability stresses the harness — same reason
 the 2014 Mini stays), home-user-local-hardware north star.
 
+**Research phase DONE 2026-07-12 (Jeremy-initiated, dev Mac):** four
+live-verified research passes + llm.py seam audit written into
+docs/MODEL_ROUTE_EXPLORATION.md § "Session findings — 2026-07-12".
+Headlines: (a) opencode-as-Claude-Max-shim is dead (Anthropic legal
+enforcement Jan–Mar 2026; `claude -p` is the only sanctioned Max route),
+and Anthropic has a *paused* plan to re-price programmatic Max usage at
+API rates — multi-route independence more justified, not less; (b) codex
+`exec --json` is officially documented headless automation and the
+CodexCLIAdapter already exists in llm.py; (c) OpenRouter cheap tier is
+$0.03–0.15/M in for validation/classify-class calls (~100x under
+Sonnet-class) with tool-calling + strict JSON schema; (d) Featherless
+deprioritized (32K ctx cap + 1-concurrent-big-model math), Fireworks
+reachable via OpenRouter provider-pinning (no direct account needed);
+(e) new option "opencode Go" $10/mo flat, 13 open coding models with an
+agent loop — the repriced Lane-A-agentic trial. Remaining before the
+measured spike: fund OpenRouter ~$20 (one txn), add the small
+config-overridable tier map (`_MODEL_MAP` is hardcoded — the one code
+change), then replay call classes via the already-existing
+validation_shadow/validator_roi harness on the runtime box.
+
 ### 22. Capabilities catalog + blank-slate skill set (2026-07-10, Jeremy)
 
 Jeremy (in-session, riffing off the car ask "where can I get non-ethanol

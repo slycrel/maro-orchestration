@@ -1,6 +1,6 @@
 ---
-status: dormant-design
-note: brief — input for a dedicated exploration session (Jeremy-funded, date TBD)
+status: living
+note: exploration in progress — research phase done 2026-07-12 (see Session findings); measured spike on the runtime box still pending funding
 ---
 
 # Model-Route Exploration Brief
@@ -116,3 +116,139 @@ A funded, measured recommendation: which route(s) carry which call
 classes, at what cost delta, with what quality delta — and a config recipe
 to flip it on. "OSS models can't do X yet" is an acceptable, valuable
 answer if the data shows it (that's the hardening map, not a failure).
+
+---
+
+# Session findings — 2026-07-12 (research phase, dev Mac)
+
+*Item 24 session, part 1. Four parallel research passes (live web fetches,
+not model memory) + a code-seam audit of llm.py. The measured spike (part
+2) still needs the runtime box + OpenRouter funding. Everything priced
+below was live-verified 2026-07-12 unless flagged.*
+
+## The landscape moved since the brief — three facts that reframe it
+
+**1. Third-party OAuth on Claude subscriptions is dead, not gray.**
+Anthropic enforced server-side blocks Jan 9 2026, updated the consumer
+ToS to prohibit it, and sent a legal demand that made opencode remove
+Claude subscription login (merged Mar 19 2026, PR #18186). First-party
+`claude` / `claude -p` / Agent SDK remains the *sanctioned* path for
+Pro/Max plans — there's an official support article for exactly our
+usage. So "opencode as a claude-Max shim" is off the table permanently;
+Lane B's Claude side is `claude -p` only.
+
+**2. But `claude -p`-under-Max carries a live re-pricing risk.** On May
+14 2026 Anthropic announced programmatic use (claude -p, Agent SDK, CI)
+would move to a separate credit pool billed at API rates starting June
+15 — then **paused it on the effective date** ("for now, nothing has
+changed"; a reworked version will return with advance notice). Also: the
++50% weekly-limit promo expires ~July 13, so expect the workhorse lane
+to feel tighter this week. Multi-route independence is now more
+justified than when the brief was written, not less.
+
+**3. OpenAI went the opposite direction — deliberately permissive.**
+`codex exec --json` is an *officially documented* headless surface
+(JSONL events, `--output-schema` for schema-constrained final answers,
+session resume, sandbox flags, device-code auth for headless boxes).
+OpenAI extends free Pro/Codex access to OSS maintainers using
+third-party tools, and opencode ships native ChatGPT-plan sign-in.
+Models under plan auth are now the GPT-5.6 family (sol/terra/luna, GA
+Jul 9); the `gpt-5.x-codex` variants are sunset — don't pin a model.
+Plan shape converged on Anthropic's: $20 Plus / $100 5x / $200 20x,
+5-hour windows + (unpublished) weekly caps.
+
+## Verified candidates table (replaces the brief's table)
+
+| Route | Pricing (verified 2026-07-12) | Agentic? | Verdict for us |
+|---|---|---|---|
+| **OpenRouter** | Pure passthrough + 5.5% credit-purchase fee (min $0.80/txn; $5 min top-up — buy $20+ in one txn to amortize). Cheap tier: gpt-oss-20b $0.029/$0.14 per M in/out, deepseek-v4-flash $0.077/$0.154, glm-4.7-flash $0.06/$0.40. Mid tier: minimax-m3 $0.30/$1.20, deepseek-v4-pro $0.435/$0.87, glm-5.2 $0.42/$1.32, kimi-k2.5 $0.375/$2.03. | No (but full OpenAI-style tool calling + strict json_schema, `:exacto` variant for reliable tool calls, `:nitro`/latency routing) | **Fund it — the Lane A vehicle.** One key covers the whole menu incl. Fireworks-hosted endpoints (pin provider to measure speed deltas). Free `:free` tier exists (1,000 req/day once ≥$10 lifetime spend) but is lowest-priority routing — not for the 15s validation cap. |
+| **Fireworks direct** | Same families at 1.5–4x OpenRouter floor (deepseek-v4-flash $0.14 vs $0.077; v4-pro $1.74 vs $0.435). Speed crown on big OSS MoEs (peak ~446 tok/s GLM 5.2); prepaid since Jul 1 2026. | No (strong fn-calling incl. recursive schemas) | **Skip a direct account for the spike** — reachable *through* OpenRouter provider-pinning. Revisit only if a pinned-Fireworks route wins and the 5.5% fee matters at volume. |
+| **Featherless** | $25/mo flat = 4 concurrency units, but big MoEs (DeepSeek/Kimi-class) cost 4 units each → effectively **1 concurrent big-model request**, and **32K context cap** on that tier; 10–40 tok/s by design. 256K ctx needs $100+/mo agent tiers. | No | **Deprioritized.** Concurrency math + context cap + deliberate slowness fit none of our call classes. Flat-rate anxiety relief is real but opencode Go does it cheaper (below). |
+| **opencode + Zen** | Zen = per-token *at cost* (zero markup) — no advantage over OpenRouter for raw calls. **New since the brief: "opencode Go" — $10/mo flat** ($5 first month) for 13 curated open coding models (GLM-5.2, Kimi K2.7 Code, Qwen3.7, DeepSeek V4 Pro/Flash, MiniMax M3…), rolling caps $12/5hr, $30/wk, $60/mo. | **Yes** — `opencode run --format json` (event stream), `--auto`, session resume, server mode | **The Lane-A-agentic experiment, repriced.** $10 flat for an agent loop over current OSS coding models is the cheapest possible test of "can the harness carry a mid-tier model through worker exec steps." Claude-Max login removed (legal); ChatGPT-plan OAuth works. |
+| **codex OAuth** | Existing $20/mo Plus. Sol 15–90 msgs/5h on Plus (75–450 on Pro 5x). Metering is token-credit-based since Apr 2026; cached input at 10%. | Yes — `codex exec --json`, officially documented for automation | **Enable it — the adapter already exists** (`CodexCLIAdapter`, kept out of default backend order on purpose). Second frontier lane, already paid for, officially tolerated. `--output-schema` also makes it a candidate for *structured* calls, not just exec steps. |
+| **claude -p (baseline)** | Max top tier. Weekly +50% promo ends ~Jul 13. | Yes | Workhorse; sanctioned; carries the paused-repricing policy risk above. |
+
+## Code-seam reality check (what the spike actually needs to touch)
+
+Better than the brief assumed — most of the measurement harness already
+exists:
+
+- **CodexCLIAdapter already shipped** (`src/llm.py:1329`, `codex exec
+  --json`, auth probe at `:1320`); deliberately excluded from
+  `DEFAULT_BACKEND_ORDER` (`:1757`). Enabling it is config
+  (`model.backend_order`) or explicit `backend=` — no new code.
+- **OpenRouterAdapter is not text-only** — it inherits full OpenAI-style
+  `tools`/`tool_choice` emission and tool-call parsing
+  (`src/llm.py:1638-1665`). Key via `OPENROUTER_API_KEY`.
+- **Verdict-agreement comparator exists**: `src/validation_shadow.py`
+  already logs free-vs-paid agreement / false_pass / false_fail with
+  paid-as-ground-truth. This is spike step 4, pre-built.
+- **ROI reporter exists**: `src/validator_roi.py` (`python3 -m
+  validator_roi --json`) — per-tier latency, paid-calls-skipped, USD
+  saved.
+- **Latency breaker exists and is wired**: `local_models.py`
+  `max_latency_ms` (default 15000) + `latency_guard_tripped()`, gating
+  the validation ladder at `src/step_exec.py:1350-1358`. The cheap-route
+  lane can reuse the identical pattern.
+- **Replay material exists**: record-mode writes
+  `<run-dir>/build/calls/call-NNNNN.json` with prompt, response,
+  tokens, and a caller-stamped `purpose` label (classify/cuts/routing/…)
+  — enough to replay per call class. Caveat: system/user split and tool
+  schemas are flattened into one prompt string, so native-tool replay
+  needs light re-derivation from `purpose`.
+- **The one real gap**: per-tier model strings are **hardcoded** in
+  `_MODEL_MAP` (`src/llm.py:173-202`), not config-overridable. The
+  brief's "config recipe to flip it on" needs a small addition first —
+  e.g. `model.tier_map.<backend>.<tier>` config keys layered over
+  `_MODEL_MAP` defaults (read in `resolve_model`). ~30 lines + tests,
+  still inside the no-re-architecture non-goal.
+- **402 mechanics**: no credit probe exists; backend "availability" is
+  key-presence only (`src/llm.py:1803-1821`). The 402 surfaces at
+  runtime through FailoverAdapter and is correctly classified
+  BILLING_ACTIONABLE (`src/llm_errors.py:98-102`). Since OpenRouter sits
+  3rd in the default order, the stale key only bites on failover —
+  funding it fixes this without config changes; alternatively drop it
+  from `model.backend_order` until funded.
+
+## Revised spike plan (supersedes steps 1–6 above)
+
+1. **Fund OpenRouter $20** (one transaction; 5.5% + $0.80 min fee makes
+   $5 top-ups ~16% overhead). This alone clears the 402.
+2. **Add the config-overridable tier map** (`model.tier_map.*`) — the
+   only code change. Everything else is config + existing tooling.
+3. **Replay per call class from `calls/` ledgers** (validation-ladder
+   verify, decompose/cuts, classify/routing) against: baseline claude -p
+   vs `deepseek/deepseek-v4-flash` + `openai/gpt-oss-120b` (cheap class)
+   and `minimax/minimax-m3` + `deepseek/deepseek-v4-pro` (planning
+   class), using `:exacto` / `require_parameters` for structured calls.
+   Score with the validation_shadow agreement pattern; latency via the
+   existing breaker thresholds. Expected spend: cents — at $0.03–0.45/M
+   input these classes are ~100x cheaper than the Sonnet-class calls
+   they'd replace; the question is purely verdict agreement.
+4. **Codex lane**: run one build-class goal with
+   `backend_order: [codex]` for the worker-exec adapter (adapter
+   exists); also probe `codex exec --output-schema` on one structured
+   call class.
+5. **Hybrid dress rehearsal**: one full Manti + one research goal with
+   tier_map pointing non-agentic classes at the OpenRouter winner;
+   compare run cards vs the 2026-07-11 baseline (6 steps / 16m43s /
+   $1.52) via validator_roi.
+6. **Optional follow-on ($10, only if 3–5 look good)**: one month of
+   opencode Go as the Lane-A-agentic trial — `opencode run --format
+   json` wrapped in a subprocess adapter shaped like CodexCLIAdapter.
+   This replaces the brief's "opencode+Zen BYO" idea (Zen per-token is
+   at-cost, no edge over OpenRouter; the Go flat sub is the novel part).
+
+**Dropped**: Featherless (concurrency/context math fails our shape);
+direct Fireworks account (reach it via OpenRouter provider-pinning).
+
+**Policy watch**: (a) Anthropic's paused programmatic-use repricing —
+promised advance notice; if it lands, Lane A absorbs the non-agentic
+volume and codex absorbs overflow exec steps, which is exactly the
+hybrid this spike derisks. (b) Weekly-limit promo expiry ~Jul 13.
+
+**Flagged as unverified** (secondary sources only): OpenRouter $5
+minimum top-up figure; Fireworks RPM/tier numbers; Codex weekly-cap
+values (OpenAI publishes "may apply" only); Featherless $10 Basic tier
+(absent from live pages, possibly discontinued); "Fable 5 metered
+separately under Max" (single source cluster).
