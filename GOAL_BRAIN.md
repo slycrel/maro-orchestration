@@ -1999,6 +1999,26 @@ Sample: the 2026-05-13..17 window of `~/.maro/workspace/runs/` (478 dirs total;
   (VERIFY_LEARN_ARC.md V2/V3 are the seed); trust boundaries recorded in
   CAPABILITIES.md + PORTABLE_LEARNING_DESIGN (imports arrive contested).
   BACKLOG Vision entry added alongside the shared-skill-directory item.
+- **2026-07-12 (container-executor arc RATIFIED worth-the-effort — Jeremy,
+  follow-up session):** Jeremy weighed the containment win against the
+  input/output hoop-jumping ("torn... worth the effort here and requiring
+  docker for us overall?") and ratified proceeding with C1→C4 as designed
+  (`docs/CONTAINER_EXECUTOR_DESIGN.md`). The deciding shape: (1) outputs
+  need no extraction in the normal case — project dir + goal-declared
+  roots are rw bind mounts, so worker writes land on the host directly;
+  the only extraction flow is the self-dev scratch-clone merge-back, which
+  is deliberate (live repo never container-writable) and rides existing
+  `worktree.py` serialized-merge semantics; (2) inputs are a mechanical
+  translation of what the fence already computes — the real unknown is
+  dropped host-env inheritance, which is C4 burn-in's job to surface
+  (each hit is a one-line `-e` fix); (3) **docker is never a hard Maro
+  requirement** — `executor.container` stays `off/on/require` with loud
+  degradation; intended posture `on` for the runtime box after C4 burn-in
+  evidence (autonomous overnight runs over ecosystem content are exactly
+  the containment-pays profile), `off` for fresh installs at 1.0 with
+  doctor/README stating plainly which layer a run gets. The C4 flip
+  itself (box default + fresh-install default) remains Jeremy's call on
+  burn-in evidence, per the design's §6 — unchanged by this entry.
 
 ## Threads (system-maintained — nothing leaves this list silently)
 
