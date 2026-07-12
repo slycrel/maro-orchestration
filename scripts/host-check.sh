@@ -44,10 +44,26 @@ case "${1:-}" in
 esac
 
 # --- config ------------------------------------------------------------------
-DISK_WARN_PCT="${MARO_DISK_WARN_PCT:-85}"
-DAILY_USD_CAP="${MARO_DAILY_USD_CAP:-25}"
-HB_MAX_SEC="${MARO_HEARTBEAT_MAX_SEC:-604800}"
-PROC_MAX_ETIMES="${MARO_PROC_MAX_ETIMES:-7200}"
+# Each threshold below feeds a bash `[ -gt/-ge ]` or awk numeric comparison.
+# A malformed override (typo, stray text) makes those comparisons error out
+# silently and — for the bash ones specifically — fall through to the "pass"
+# branch, so a monitoring script keeps reporting healthy on a broken config
+# (adversarial review 2026-07-12, reproduced live: MARO_HEARTBEAT_MAX_SEC=abc
+# printed bash errors to stderr but still exited 0 / "ALL OK"). Validate once
+# here, at the config boundary, and fail loudly instead.
+_require_num() {
+    # $1=value $2=env-var-name-for-the-error $3=allow-decimal(1|0)
+    local re='^[0-9]+$'
+    [ "$3" = "1" ] && re='^[0-9]+(\.[0-9]+)?$'
+    if ! [[ "$1" =~ $re ]]; then
+        echo "host-check.sh: $2=$1 is not a valid non-negative number" >&2
+        exit 2
+    fi
+}
+DISK_WARN_PCT="${MARO_DISK_WARN_PCT:-85}";       _require_num "$DISK_WARN_PCT" MARO_DISK_WARN_PCT 0
+DAILY_USD_CAP="${MARO_DAILY_USD_CAP:-25}";       _require_num "$DAILY_USD_CAP" MARO_DAILY_USD_CAP 1
+HB_MAX_SEC="${MARO_HEARTBEAT_MAX_SEC:-604800}";  _require_num "$HB_MAX_SEC" MARO_HEARTBEAT_MAX_SEC 0
+PROC_MAX_ETIMES="${MARO_PROC_MAX_ETIMES:-7200}"; _require_num "$PROC_MAX_ETIMES" MARO_PROC_MAX_ETIMES 0
 WORKSPACE="${MARO_WORKSPACE:-$HOME/.maro/workspace}"
 MEMDIR="$WORKSPACE/memory"
 

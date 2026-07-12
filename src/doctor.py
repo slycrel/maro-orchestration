@@ -123,15 +123,29 @@ def run_doctor() -> bool:
     # NO push lane means nobody finds out about an escalation until they
     # think to look at the file.
     try:
+        import os as _os
         from notify import escalations_path as _esc_path
         _ep = _esc_path()
         _ep.parent.mkdir(parents=True, exist_ok=True)
+        # os.access, not an actual write — a real append goes through
+        # file_lock.locked_append (fail-closed on lock contention), which a
+        # healthcheck shouldn't attempt itself: it would either contend with
+        # a real writer or pollute the escalation log with synthetic rows.
+        # This still catches the concrete failure this check exists to
+        # catch (read-only fs, permission-denied output/) even though it
+        # can't prove a future locked append will succeed (adversarial
+        # review 2026-07-12: the prior version of this check only proved
+        # the parent dir *exists*, not that it's writable).
+        _writable = _os.access(_ep.parent, _os.W_OK) and (
+            not _ep.is_file() or _os.access(_ep, _os.W_OK)
+        )
         _esc_rows = 0
         if _ep.is_file():
             _esc_rows = sum(1 for l in _ep.read_text(encoding="utf-8").splitlines() if l.strip())
         results.append(_check(
-            "Escalation file surface", True,
-            f"{_ep} ({_esc_rows} row(s) — always on, independent of any push lane)",
+            "Escalation file surface", _writable,
+            f"{_ep} ({_esc_rows} row(s) — always on, independent of any push lane)"
+            if _writable else f"{_ep} not writable — escalation-class events will silently fail to log",
         ))
     except Exception as exc:
         results.append(_check("Escalation file surface", False, str(exc)[:80]))

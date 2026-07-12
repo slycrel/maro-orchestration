@@ -70,7 +70,7 @@ absence of any auto-resume trigger.
 | Checkpoints (checkpoint.py; loop_post_step.py:220-226) | Per-step `ckpt_<loop_id>.json` with full plan + completed[] outcomes; resume wired via `resume_from_loop_id` (agent_loop.py:137 → loop_planning.py:125-160); deleted on done (loop_finalize.py:251) | Three fatal gaps: (1) written to an env-dependent path (`orch_root()/checkpoints`, checkpoint.py:45-53) — 52 stale files sit in the repo checkout, **0** live ones in the workspace; (2) resume is opt-in and no caller outside auto-recovery ever passes `resume_from_loop_id`; (3) the in-flight step is invisible — a reader can't distinguish "step 7 not started" from "step 7 crashed mid-write". |
 | Stale-claim recovery (task_store.py:215-223, 341-357) | Dead-PID claimed tasks reset to `queued`, inline and via sweep | Nothing calls the sweep on a schedule. And NEXT.md has no equivalent: a hard crash strands `[~] DOING` with no PID recorded and no revert (heartbeat.py:688 vs. the in-process-only exception handler at heartbeat.py:727-730). |
 | Navigator fail-open (navigator_prompt.py:322-326; handle.py:2078-2082; loop_blocked.py:565-570) | Adapter outage in the navigator synthesizes `escalated_via: "idunno_chain"`; act-sites gate on it and fall through to the pipeline | This is the right resilience posture — advisory layers never block the line. It's cited here as the pattern, not a gap. Same for `advisor_call` fail-open (llm.py:1882-1943) — though it silently eats auth dropouts (see §2). |
-| Restart/continuation ladders (handle.py:1419-1446, 1508-1551; loop_post_step.py:74-133; director.py:1114-1152) | Director restart, closure restart, continuation-depth respawn, escalation at cap | These handle *quality* failures (wrong approach, incomplete work), not *backend* failures. Three independent caps that don't share a constant: `MARO_MAX_CONTINUATION_DEPTH=4` (loop_post_step.py:76), hard-coded `< 3` (handle.py:1423, 1516), `director_budget_ceiling=2` (loop_types.py:281-282). |
+| Restart/continuation ladders (handle.py:1419-1446, 1508-1551; loop_post_step.py:74-133; director.py:1114-1152) | Director restart, closure restart, continuation-depth respawn, escalation at cap | These handle *quality* failures (wrong approach, incomplete work), not *backend* failures. **RATIFIED + SHIPPED 2026-07-12** (MILESTONES -5 #3): unified to `loop_types.MAX_RESTART_DEPTH = 3`, replacing the previously-independent `MARO_MAX_CONTINUATION_DEPTH=4` default (loop_post_step.py:76), hard-coded `< 3` gates (handle.py:1423, 1516), and `director_budget_ceiling=2` (loop_types.py:281-282). `MARO_MAX_CONTINUATION_DEPTH` remains an intentional env override, now defaulting to the shared constant instead of its own magic number. |
 
 The shape we haven't built: **a single classifier that turns any backend
 error into one of a small set of classes, each with a fixed policy (how
@@ -271,8 +271,10 @@ persists different state.
   quality restarts. A backend death inside one resumes like any agenda
   loop; `continuation_depth` is not consumed by a backend resume (a crash
   is not a quality signal). The three unrelated caps (4 / <3 / 2 — see
-  table §"What we already have") get named constants in one module, values
-  unchanged.
+  table §"What we already have") were unified to one shared constant,
+  `loop_types.MAX_RESTART_DEPTH = 3`, **RATIFIED + SHIPPED 2026-07-12** —
+  the value moved (director_budget_ceiling 2→3, continuation default
+  4→3), it was not left unchanged; "one documented number" was the point.
 - **Queue/drain lane** (heartbeat.py:687-732): resume = a **stranded-state
   sweep** on the heartbeat tick: (1) call `recover_stale_claims()`;
   (2) revert NEXT.md `[~] DOING` items whose recorded PID is dead to
@@ -408,5 +410,7 @@ metadata; the advisor consecutive-failure counter.
 - Is `maro resume` the right surface, or should resume hang off the run
   card / notify message ("reply 'resume' to continue") once the Slack
   bridge is in the loop?
-- The three depth caps: fine to just document-and-name in 1.0, or is the
-  inconsistency itself a pre-1.0 bug?
+- ~~The three depth caps: fine to just document-and-name in 1.0, or is the
+  inconsistency itself a pre-1.0 bug?~~ **RESOLVED 2026-07-12** — Jeremy
+  ratified unifying to one documented number; shipped as
+  `loop_types.MAX_RESTART_DEPTH = 3` (MILESTONES -5 #3).

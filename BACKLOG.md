@@ -1518,6 +1518,23 @@ after the current 1.0 remainders (a)–(d); (g) needs design before release.
   the no-backend fix is the pattern), and resume semantics (what "pick up
   where it died" means per lane).
 
+- [ ] **(i) `test_depth_cap_unified.py`'s handle.py tripwire is source-shape
+  coupled, not behavior coupled (low, adversarial-review skill first run,
+  2026-07-12, Architect lens).** The two gate-specific regexes added
+  2026-07-12 (`continuation_depth", 0) < MAX_RESTART_DEPTH` and `_depth <
+  MAX_RESTART_DEPTH`) catch the exact regression they were written for
+  (a gate silently reverted to a hardcoded `< 3`), but they depend on
+  local variable names and formatting — a correct refactor that imports
+  the resolved cap under another name, or wraps the comparison in a
+  helper, would fail the test; a semantic change that preserves the
+  literal strings but alters the value before the gate could still pass.
+  Real fix is a behavioral test that drives handle.py's actual restart
+  control flow at `MAX_RESTART_DEPTH - 1` and `MAX_RESTART_DEPTH` and
+  asserts on outcome (restart happens / doesn't), not source text.
+  Deferred rather than built same-session: low severity, single-reviewer,
+  and the current regex tripwire is adequate for the regression class
+  that motivated it.
+
 ---
 
 ## Stale — dropped this triage

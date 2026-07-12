@@ -116,14 +116,18 @@ def _emit(event_type: str, payload: dict, *, run_dir: Optional[str]) -> bool:
     except Exception:
         pass
 
-    # 1b) Durable escalation-class file — ships unconditionally, independent
-    # of whether a notify.command lane is configured or whether it succeeds
-    # below. Best-effort: never blocks or fails the emit.
+    # 1b) Durable escalation-class file — attempted unconditionally,
+    # independent of whether a notify.command lane is configured or whether
+    # it succeeds below. Best-effort: never blocks or fails the emit — but
+    # unlike the general events.jsonl write above, this file is specifically
+    # pitched as "the thing you check when nothing else is configured", so a
+    # silent failure here defeats its purpose. Logged at warning (not
+    # debug) for that reason (adversarial review 2026-07-12).
     if event_type in ESCALATION_FILE_EVENTS:
         try:
             _write_escalation_file(event_type, payload)
         except Exception:
-            log.debug("escalation file write failed for %s", event_type, exc_info=True)
+            log.warning("escalation file write failed for %s", event_type, exc_info=True)
 
     # 2) The hook command, if the substrate registered one.
     command = str(_config_get("notify.command", "") or "").strip()

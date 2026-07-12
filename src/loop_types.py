@@ -214,6 +214,13 @@ class LoopResult:
 # documented number"). One number so an operator reasoning about "how many
 # times will Maro retry before giving up" only has to know one value.
 # tests/test_depth_cap_unified.py tripwires every site against this.
+#
+# Only handle.py's two restart gates are hard-locked to this constant.
+# `MARO_MAX_CONTINUATION_DEPTH` remains an intentional env override (an
+# operator can still set it to something other than 3, independent of the
+# restart gates) — the unification made the *default* shared, not the
+# override mechanism itself, which pre-dates this change and is documented
+# in maro-doctor's output (adversarial review 2026-07-12).
 MAX_RESTART_DEPTH = 3
 
 

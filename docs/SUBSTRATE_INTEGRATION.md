@@ -115,8 +115,11 @@ The three escalation-class event types also land in
 `notify.command` lane is configured or whether it succeeds (GOAL_BRAIN
 Decisions 2026-07-12). This is the official escalation surface for a
 headless/CLI-only setup with no chat substrate wired up — a durable file
-to check instead of a push that never arrives. `maro-doctor` reports both
-the file surface (row count) and whether a push lane is also live.
+to check instead of a push that never arrives. The write itself is
+best-effort like every other notify path (never blocks or fails the
+run) — a lock-timeout or filesystem error is logged at warning and the
+event is otherwise lost, so `maro-doctor` verifies the surface is
+actually writable rather than just reporting the path exists.
 
 ## 4. Fetch — get the actual answer
 

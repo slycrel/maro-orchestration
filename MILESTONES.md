@@ -2,8 +2,13 @@
 
 What to do next, in what order. Updated each session. Deferred ideas live in BACKLOG.md; completed phase history in docs/history/ROADMAP_ARCHIVE.md (ROADMAP.md is a stub). This file is the executable queue.
 
-Last updated: 2026-07-12 (Sonnet execution session: post-handoff queue item -5
-#3 depth-cap unification SHIPPED — see -5 #3 for full detail). Previous:
+Last updated: 2026-07-12 (Sonnet execution session: real `adversarial-review`
+skill installed globally on this box + run against all 4 of this session's
+commits per Jeremy's ask ["not assume we caught everything the first time"]
+— 5 more real findings, all fixed same session; see -5 #3's "Adversarial
+review — two passes" note for full detail). Previous: 2026-07-12 (same
+session: post-handoff queue item -5 #3 depth-cap unification SHIPPED — see
+-5 #3 for full detail). Previous:
 2026-07-12 (same session: -5 #2 escalation file surface SHIPPED — see -5 #2
 for full detail). Previous: 2026-07-12 (same session: -5 #1
 supervision-convergence chunk SHIPPED — see -5 #1 and BACKLOG -1 for full
@@ -59,6 +64,71 @@ Truth anchor: GOAL_BRAIN.md Threads. History: docs/history/ROADMAP_ARCHIVE.md.
       tests (`test_depth_cap_unified.py`, source-scan for stray literals)
       + stale numeric mentions fixed in `skills/arch-interface-routing.md`
       and `docs/ADAPTIVE_EXECUTION_DESIGN.md`. Full suite green (166).
+
+      **Adversarial review — two passes.** Pass 1 (ad-hoc, before the real
+      skill was installed on this box): 3 Sonnet subagents applying Maro's
+      own `skills/code_review.md` discipline, one per chunk above. Found +
+      fixed 2 issues (`cf31d4c`): host-check.sh duration-formatting/
+      unit-mismatch bug (bash integer division truncated sub-day
+      `MARO_HEARTBEAT_MAX_SEC` overrides to "0d", and age/threshold
+      printed in mismatched units), and a self-defeating depth-cap
+      tripwire test (aggregate `MAX_RESTART_DEPTH`-count assertion stayed
+      green even when one of handle.py's two restart gates was silently
+      reverted to a hardcoded value). Jeremy then had a real
+      `adversarial-review` skill (cross-model: Claude spawns Codex
+      reviewers) installed globally on this box (`~/.claude/skills/`, not
+      present before this session) and asked for a **second pass against
+      all 4 commits together** — explicitly not assuming pass 1 caught
+      everything. It didn't: 3 Codex reviewers (Skeptic/Architect/
+      Minimalist, "Large" tier — 21 files, 409+/245-) found 5 more
+      real issues, all fixed same session (no high-severity findings;
+      verdict PASS with mediums to address):
+      - **host-check.sh accepted any malformed numeric env override
+        silently** (`MARO_HEARTBEAT_MAX_SEC=abc` printed bash errors to
+        stderr but still exited 0 / "ALL OK" — a monitoring false
+        negative; live-reproduced). Fixed: `_require_num()` validates all
+        4 numeric thresholds at the config boundary, exits 2 with a clear
+        message on malformed input. Live-reverified: malformed input now
+        fails loudly; valid overrides (including decimal
+        `MARO_DAILY_USD_CAP`) still behave identically.
+      - **`output/escalations.jsonl`'s "durable/unconditional" framing
+        overstated what the code guaranteed** — `notify.py` swallows
+        write failures (lock timeout, permission error) at debug level,
+        and `doctor.py` only checked the parent dir existed, never that
+        the file was actually writable (2 reviewers, independently).
+        Fixed: `doctor.py` now checks real writability (`os.access`, not
+        a live probe write — avoids contending with a real writer or
+        polluting the log); write failures now log at `warning`; README
+        + `docs/SUBSTRATE_INTEGRATION.md` clarified to say what's
+        actually guaranteed (attempted unconditionally, not guaranteed to
+        land on an fs error).
+      - **docs/BACKEND_RESILIENCE_DESIGN.md left stale** — still described
+        the pre-unification 4/<3/2 caps as current and the "three depth
+        caps" question as open, after this session shipped the
+        unification (2 reviewers, independently; a direct instance of
+        this repo's own currency rule — CLAUDE.md: "if a doc states a
+        fact you've just proven stale, fix it in the same commit"). Fixed:
+        the table row, the "values unchanged" line, and the open-question
+        line all updated to reflect what shipped.
+      - **`MARO_MAX_CONTINUATION_DEPTH` remains an independent env
+        override**, so an operator can still diverge continuation-pass
+        depth from the restart gates' hard-locked `MAX_RESTART_DEPTH`
+        (1 reviewer) — real observation, but the ratification was "one
+        documented **number**" (the shared default), not "remove the
+        pre-existing override knob." Documented as intentional in
+        `loop_types.py`'s constant comment rather than changed.
+      - **The depth-cap tripwire test is source-shape coupled, not
+        behavior coupled** (1 reviewer, low severity) — deferred to
+        BACKLOG (i) rather than built this session: low severity, single
+        reviewer, current regex tripwire adequate for the regression
+        class it was written for.
+      Full suite green (166) after fixes. Unrelated finding surfaced by
+      the full-suite run (not part of either review, not fixed here):
+      `test_entry_points_reference_real_modules` fails pre-existing —
+      introduced by the concurrent PyPI-publish-prep merge (`6befbfb`),
+      the test's regex matches `[project.urls]` string values, not just
+      `[project.scripts]` entries. Flagged to Jeremy, not folded into this
+      commit (different file, different commit's fault).
    4. **Routing Part A — needs-live-data signal**
       (`docs/ROUTING_AND_PROBE_SYNTHESIS_DESIGN.md` Part A, one session).
       Acceptance: Manti canonical case routes AGENDA naturally.

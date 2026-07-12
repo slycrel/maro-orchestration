@@ -328,7 +328,9 @@ unconditionally — a durable, findable file that exists whether or not a
 `notify.command` push lane is configured, and independent of whether that
 lane succeeds. A headless/CLI-only setup with no chat integration wired up
 still has somewhere to look; `maro-doctor` reports both the file surface
-and whether a push lane is also live (see `docs/SUBSTRATE_INTEGRATION.md`).
+(verifying it's actually writable, not just present — a filesystem-level
+write failure is the one way this file can miss an event) and whether a
+push lane is also live (see `docs/SUBSTRATE_INTEGRATION.md`).
 
 Autonomous background work (the heartbeat picking up backlog work, not just
 health checks) is off by default and applies to loop mode:
