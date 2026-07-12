@@ -1763,6 +1763,82 @@ Sample: the 2026-05-13..17 window of `~/.maro/workspace/runs/` (478 dirs total;
   Qix-cuts decree, implemented as draw_cuts (constraints-with-basis +
   0–2 probes) + boundary-step expansion with probe evidence in context.
   #4 container-executor design pass remains queued, Jeremy-gated.
+- **2026-07-11 (model-route exploration sanctioned — Jeremy, evening
+  decision batch):** "let's add to the backlog me spending some $ for
+  real to get a path going in that direction... OpenRouter, Fireworks
+  AI, OpenCode Go (or Zen?), or maybe Featherless... The split part is
+  the rabbit hole between a service using OSS models (possibly reduced
+  capability, but that might actually be good for our infrastructure
+  hardening) vs things like codex-oAuth or claude -p routes." His $,
+  his session to run ("I'll send a session down that rabbit hole
+  sometime soon"). Prep delivered: docs/MODEL_ROUTE_EXPLORATION.md +
+  BACKLOG #24. This AMENDS the 2026-07-08 budget-posture decree's
+  "API-key lane DECLINED until budget-models phase" — the phase now has
+  a sanctioned on-ramp; still don't start it unprompted.
+- **2026-07-11 (cost is not the end-all-be-all — Jeremy, on the
+  mid-step cost circuit):** "We need to be careful we don't create
+  churn and more waste by stopping and retrying as we do allowing legit
+  hard things to finish long tasks. (because we do, in that sense, with
+  more steps up to a point; and put a cost ceiling on our
+  orchestrator's capability in a bad way)." Standing design constraint
+  for ALL budget machinery: breakers are runaway-only backstops, never
+  capability ceilings; retry-churn from an over-tight breaker is itself
+  waste. Same-evening consequence: runaway circuit shipped (dedbdde,
+  `budget.runaway_multiplier` 1.5x ABOVE the between-step stop).
+- **2026-07-11 (boil-the-ocean framing — Jeremy, same message):**
+  "this is where 'boil the ocean' type stuff comes from... effort !=
+  bad, and we need to help frame things well so we know when it's good
+  and when it's futile." Companion principle to the cost decree: the
+  system's job is not to minimize effort but to tell WELL-SPENT big
+  effort from futile big effort at framing time (cuts-first, scope,
+  planning-depth are the current vehicles).
+- **2026-07-11 (NOW→AGENDA verdict escalation approved — Jeremy):**
+  "Yeah, we should just do this... (non-success just becomes a regular
+  non-NOW run, possibly with the NOW context attached?)". Shipped
+  same evening (a1f472f): self-verdict judges non-answers; not-achieved
+  re-routes to AGENDA with the failed answer as context; default OFF
+  fresh installs / ON this box.
+- **2026-07-11 (capabilities captured as they come — Jeremy):** "Let's
+  build out capabilities as we refine the process as they come up (sort
+  of a middle ground between testing and backlog maybe... brief
+  claude.md note?)". Shipped as the CLAUDE.md capability-capture rule:
+  real asks / missing-capability moments go into docs/CAPABILITIES.md
+  as-phrased in the same session. Escalation design itself stays
+  Jeremy-gated: "I have thoughts on escalation, that's later."
+- **2026-07-11 (budget posture updated — Jeremy):** "less important now
+  that we've escalated my claude plan to the highest monthly tier for a
+  personal account." North star restated: "I think I'm ultimately
+  wanting this to be capable for a home user on local hardware, but
+  that's a dream that IMO isn't realize-able quite yet... doesn't mean
+  we shouldn't try. Partly why we're still all in on our 2014 linux mac
+  mini, surfaces edges that fast hardware/better LLMs might not." The
+  Mini is a deliberate edge-surfacing instrument, not a constraint to
+  engineer away. Also: garrytan persona demoted power→mid ("close
+  enough to the opus of a few months ago", 93cd35f).
+- **2026-07-11 (time blindness — Jeremy, closing theme, no concrete
+  goal yet):** "humans perceive stories and ideas over time (as we
+  experience them) and LLMs... don't. That's a communication blind
+  spot. We might need to fight some kind of time blindness between
+  prompts, even in the same session, I think it's getting worse rather
+  than better here and there, and sometimes it matters a lot."
+  Recorded as a vision thread (BACKLOG) — candidate starting hooks:
+  age-stamped evidence/context injection, elapsed-time awareness
+  between steps and sessions.
+- **2026-07-11 (perspective / camera rotation — Jeremy, closing
+  theme):** "I've talked about rotation, and zooming in and out for
+  seasoned developers. That's really just re-framing and adjustment of
+  perspective (from a game engine camera type perspective), and I think
+  the same holds true for ideas. LLMs have ridiculous access to data,
+  language and information. But the perspective isn't the same at all.
+  We need to help bring the 'human' perspective, both innate and
+  skilled usage of, into things at least in a more functional light...
+  Watching you react to seeing the orchestration finding some of the
+  perspective that is much more easily discoverable from an end-user
+  perspective makes me happy -- we're getting there to a degree, but
+  I'd like to refine that." Ties to the inference-not-prompting decree
+  (rotation/zoom as inference moves, not prompt taxonomies) and the
+  end-user-perspective findings from the corpus arc. Vision thread in
+  BACKLOG alongside time blindness.
 
 ## Threads (system-maintained — nothing leaves this list silently)
 

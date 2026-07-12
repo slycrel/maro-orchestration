@@ -233,3 +233,12 @@ line before the session ends — even when the conversation produced no work
 chunk. Decree-class statements must reach the compiled record, not just
 Claude's memory; a session that ends conversationally is the exact case
 this rule exists for.
+
+**Capability-capture rule (2026-07-11, Jeremy):** when work surfaces a
+real ask or a missing capability mid-session — a user-shaped request, a
+run failure that names a skill we don't have, a "we should be able to
+just ask it X" moment — capture it in `docs/CAPABILITIES.md` as-phrased
+(with tier + verified/target/aspirational mark) in the same session.
+This is the middle ground between testing and backlog Jeremy asked for:
+more concrete than an idea, not yet a test goal. Don't wait for a
+dedicated capabilities pass; the phrasing is the value and it evaporates.

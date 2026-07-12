@@ -244,9 +244,20 @@ crowd-sourced or not)."
     the answer contains no *where*" → not-achieved. The model's own "I
     don't have real-time access" admission is the cheapest signal. Today
     that answer sailed out as done-unverified (verdict absent).
+    **SHIPPED 2026-07-11 (a1f472f):** `_NOW_VERIFY_SYSTEM` now judges
+    non-answers (different-question answers, how-to-find-it guidance,
+    missing asked-for specifics) as fulfilled=false.
   - **NOW→AGENDA escalation on not-achieved verdict:** same shape as the
     quality gate's tier escalation, but lane escalation. Nothing
     self-escalated; the good run was manually forced.
+    **SHIPPED 2026-07-11 (a1f472f):** `now_lane.escalate_on_not_achieved`
+    (default OFF fresh installs per no-silent-spend; ON this box) —
+    not-achieved NOW re-routes to AGENDA with the failed quick answer
+    attached as ancestry context; the NOW attempt stays recorded
+    (incomplete). Task-path only (self-verdict scope); force_lane wins.
+    Interactive NOW still skips the self-verdict entirely (raw-speed
+    contract) — the interactive routing gap remains the classifier
+    needs-live-data signal, still open above.
   - **Qix-cuts decompose shape (taste/discretion in planning, NOT a new
     lane):** 0–4 cheap narrowing steps that shrink the space (chain
     prior → locations → verify 2-3 candidates), then bounded work inside;
@@ -648,6 +659,58 @@ shadow (MILESTONES), #9 /loop trace (MILESTONES), #6 verify→learn = next
 arc after 1.0. Full context in BACKLOG_DONE.
 
 ## Vision / Deferred
+
+### Time blindness — LLMs don't experience ideas over time (2026-07-11, Jeremy)
+
+Jeremy (closing theme, verbatim): "humans perceive stories and ideas
+over time (as we experience them) and LLMs... don't. That's a
+communication blind spot. We might need to fight some kind of time
+blindness between prompts, even in the same session, I think it's
+getting worse rather than better here and there, and sometimes it
+matters a lot."
+
+No concrete goal yet — recorded well per his ask. Candidate starting
+hooks when this gets a session: (a) age-stamp injected evidence and
+recalled context (a lesson from February reads identically to one from
+yesterday today — staleness is invisible to the model); (b) elapsed-
+time awareness between steps and between sessions (the run knows wall
+clock; the model is never told "your last step was 40 minutes ago" or
+"this thread went quiet for 3 days"); (c) ordering/decay in recall —
+dev-recall and memory injection currently rank by relevance, with time
+as a hidden variable; (d) the captain's-log slice already carries
+timestamps — surfacing them *into prompts* is cheap and measurable.
+Related evidence: the godot retrospective (agenda-state divergence over
+a long session = time blindness inside one session), stale-source
+dissent handling in the Manti runs (the system already fights data
+staleness — this extends the fight to its own conversational state).
+
+### Perspective / camera rotation — bringing the human lens functionally (2026-07-11, Jeremy)
+
+Jeremy (closing theme, verbatim): "I've talked about rotation, and
+zooming in and out for seasoned developers. That's really just
+re-framing and adjustment of perspective (from a game engine camera
+type perspective), and I think the same holds true for ideas. LLMs have
+ridiculous access to data, language and information. But the
+perspective isn't the same at all. We need to help bring the 'human'
+perspective, both innate and skilled usage of, into things at least in
+a more functional light... Watching you react to seeing the
+orchestration finding some of the perspective that is much more easily
+discoverable from an end-user perspective makes me happy -- we're
+getting there to a degree, but I'd like to refine that."
+
+Standing direction, not a task. Constraints already on record: fixes
+belong in inference moves (scope, memory, inversion, rotation), NOT
+prompt taxonomies (feedback_inference_not_prompting); cuts-first
+planning is the first shipped rotation-like move (narrowing = zoom).
+What "refine" plausibly means next: (a) named lens/rotation moves the
+planner or navigator can *choose* (invert, zoom-out-to-goal,
+zoom-in-to-specimen, end-user-seat) the way draw_cuts chooses probes;
+(b) the corpus arc as evidence — the end-user perspective (what a
+person actually asked, what they actually got) surfaced failure
+patterns that code-side inspection never would; institutionalize that
+seat in review/verify stages; (c) ties to the "are we re-inventing
+reasoning-model behavior?" open question — same kill-test posture
+applies to any lens machinery.
 
 ### Shared trusted skill directory + cross-instance learning (post-1.0 vision, 2026-07-10, Jeremy)
 
