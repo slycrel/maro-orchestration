@@ -157,6 +157,25 @@ config-overridable tier map (`_MODEL_MAP` is hardcoded — the one code
 change), then replay call classes via the already-existing
 validation_shadow/validator_roi harness on the runtime box.
 
+**Round 2 same day (budget end-user lane, Jeremy's reframe):** codex
+stays the OpenClaw lane; OpenRouter per-token credit-babysitting is the
+thing to avoid; subscription > metered. Key unlock: every major OSS lab
+(z.ai, Kimi, MiniMax, DeepSeek, Alibaba, + aggregators Synthetic/NanoGPT)
+now sells a flat coding plan WITH an Anthropic-compatible endpoint and a
+first-party Claude Code guide — and `claude -p` already inherits
+ANTHROPIC_BASE_URL/AUTH_TOKEN through child_env (llm.py:775), so the
+budget agentic lane is "same harness, swap the brain" via a small config
+knob, not a new adapter. Pointing Claude Code at third-party endpoints is
+unsupported-not-banned (2026 enforcement was the opposite direction).
+Free tiers (Groq 14.4K req/day, Gemini OpenAI-compat) can carry the
+non-agentic classes at $0. Recommended trial: one $8-19 sub (NanoGPT /
+Kimi / Z.ai Lite) for a month + the env-override knob + Groq free
+validation tier; opencode Go $10 stays the harness-diversity follow-on.
+Full tables in docs/MODEL_ROUTE_EXPLORATION.md § round 2. Verdict on the
+end-user north star: no longer wishful — GLM-5.2/K2.7/M3/DeepSeek-V4 are
+the first credibly-agentic OSS generation; $10-20/mo junior-grade
+autonomy is exactly the hardening-thesis population.
+
 ### 22. Capabilities catalog + blank-slate skill set (2026-07-10, Jeremy)
 
 Jeremy (in-session, riffing off the car ask "where can I get non-ethanol

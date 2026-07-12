@@ -252,3 +252,109 @@ minimum top-up figure; Fireworks RPM/tier numbers; Codex weekly-cap
 values (OpenAI publishes "may apply" only); Featherless $10 Basic tier
 (absent from live pages, possibly discontinued); "Fable 5 metered
 separately under Max" (single source cluster).
+
+---
+
+# Session findings, round 2 — 2026-07-12 (budget end-user lane)
+
+*Jeremy's reframe after round 1: codex stays the OpenClaw lane (Plus-tier
+limits bit us before); OpenRouter free-model churn was a maintenance
+headache we don't want back; preference is flat subscription over metered
+credits; Max drops back to 5x (~$100) in a month. Question: what's the
+right low-commitment budget route for an end user to get real mileage
+outside `claude -p`-on-Max — or is that target too early?*
+
+## The category round 1 missed: flat-rate coding plans with Anthropic-compatible endpoints
+
+Every major open-model lab now sells a monthly coding plan AND exposes an
+**Anthropic-Messages-compatible endpoint with a first-party "use with
+Claude Code" setup guide**. Verified 2026-07-12 (several endpoints
+live-probed):
+
+| Plan | $/mo | Models | Limits | Anthropic-compat endpoint |
+|---|---|---|---|---|
+| NanoGPT | **$8** | 200+ OSS (GLM-5.x, K2.5, DeepSeek…) | ~60M input tok/wk, 60 RPM | yes + Claude Code doc |
+| Z.ai GLM Lite | $18 ($12.60 promo→Sept) | GLM-5.2 / 4.7 | ~80 prompts/5h; **GLM-5.2 burns 3x quota at peak hours** | yes (`api.z.ai/api/anthropic`) |
+| Kimi Moderato | $19 | K2.7 Code | weekly credits, numbers unpublished | yes (`api.kimi.com/coding/`, probed) |
+| MiniMax Plus | $20 | MiniMax-M3 | 5h+weekly windows, unpublished | yes (probed; known ctx-misreport bug → premature autocompact, env workaround) |
+| Synthetic | $30 | GLM-5.2, K2.7 Code, M3, Qwen3.6 | 500 req/5h, 1 concurrent/model | yes; US co., no-training stance |
+| Qwen Coding Pro | $50 (the $10 Lite died Mar–Apr 2026) | Qwen3.7 + hosted K2.5/GLM-5/M2.5 | 6,000 req/5h | yes (special `sk-sp-` token) |
+| **DeepSeek PAYG** (exception: metered but near-free) | ~$2–10/mo real use | V4-Pro / V4-Flash | concurrency only | yes + first-party Claude Code recipe (Opus→v4-pro, Haiku→v4-flash); cache hits $0.0028/M |
+| opencode Go | $10 ($5 first mo) | 13 curated OSS coding models | $12/5h, $30/wk value caps | no — brings its own agent loop |
+
+Trend warning baked into all of these: **2026 prices are up and caps are
+down everywhere** (Z.ai Lite $3→$18 list, Synthetic $20→$30, Qwen killed
+its cheap tier and free OAuth, Chutes capped, Cerebras Code is sold out).
+The "unlimited $10/mo" era is closing; $8–20/mo with real caps is the
+durable floor.
+
+## The architectural unlock: `claude -p` with a different brain
+
+- Policy: the Jan–Apr 2026 Anthropic enforcement was entirely about
+  Claude *subscriptions inside third-party tools*. **No ToS clause,
+  statement, or incident found restricting the Claude Code binary
+  pointed at third-party endpoints** via
+  `ANTHROPIC_BASE_URL`/`ANTHROPIC_AUTH_TOKEN` — Anthropic's own gateway
+  docs describe the override; posture is "unsupported," not banned. Real
+  risk is compatibility drift (documented: Kimi 400s on document blocks,
+  MiniMax ctx misreport, DeepSeek ignores images/cache_control/MCP,
+  Claude Code 2.1.154 broke vLLM-compat) — which is hardening-thesis
+  food, not a blocker.
+- Code: `_run_subprocess_safe` builds `child_env = dict(os.environ)`
+  (src/llm.py:775), so the override env vars already pass through to
+  `claude -p` with zero changes. Making it first-class = a config key
+  (e.g. `model.subprocess_env` or named subprocess backend variants)
+  that injects base-url/token per backend — a few lines. Everything
+  downstream (record mode, verify ladder, run cards, cost metering
+  modulo a per-backend price table) is reused as-is.
+- This collapses "budget Lane-A-agentic" from "adopt a new harness
+  (opencode)" to "same harness, swap the brain." opencode Go remains
+  interesting as *harness diversity* (a second agent loop to compare),
+  not as the only path to OSS agentic.
+
+## $0 tier for the non-agentic call classes (replaces OpenRouter-free headaches)
+
+Free tiers now cover classification/verification volume without credit
+management: **Groq free** (llama-3.1-8b: 14.4K req/day; gpt-oss-20b/120b
+with strict JSON-schema decoding: 1K req/day), **Gemini API free** via
+its OpenAI-compat endpoint (~10 RPM Flash-class), **Cerebras free** (1M
+tok/day at 5 RPM — slow-queue only). Skip SambaNova (20 req/day);
+verify NVIDIA NIM's credit regime before trusting it. Groq paid batch
+gpt-oss-20b (~$0.037/M in) is the near-free overflow.
+
+## Budget end-user recipe (the north-star answer, mid-2026)
+
+- **$0**: non-agentic classes on Groq/Gemini free tiers; agentic only if
+  they own a 24GB GPU (Qwen3.6-27B / GLM-4.7-Flash — junior-grade;
+  16GB Macs still below the agentic waterline).
+- **$8–20/mo**: either **Claude Pro $20** (zero-config, sanctioned for
+  `claude -p`/Agent SDK, ~1–3 Sonnet agent-hrs/day) or an OSS coding
+  plan through the endpoint override (NanoGPT $8 / Kimi $19 / Z.ai
+  Lite $18) — more raw hours per dollar, more edges.
+- **$30–50/mo**: Synthetic $30 (breadth + reliability) or Qwen Pro $50
+  (huge request quotas). Mistral Le Chat Pro $14.99 (includes the
+  open-source Vibe CLI with real `--prompt --max-turns --max-price
+  --output json` flags) is a dark-horse harness-diversity option.
+- **Verdict on "too early":** it's not wishful thinking anymore —
+  GLM-5.2 / K2.7-Code / M3 / DeepSeek-V4 are the first OSS generation
+  that's credibly agentic, and the Anthropic-compat + flat-sub
+  infrastructure matured this year. But "real mileage" at $10–20/mo
+  means junior-grade autonomy: exactly the population the harness is
+  supposed to carry, per the hardening thesis. The bar is low enough to
+  aim at now; it wasn't in January.
+
+## Commitment-minimal plan for us
+
+1. Add the subprocess env-override config knob (the ~few-line change) +
+   a per-backend price table entry for cost metering.
+2. One month of ONE sub as the trial — cheapest meaningful: NanoGPT $8
+   (multi-model, one endpoint) or Kimi $19 / Z.ai Lite $18 for a
+   first-party lab. Run the same replay + Manti/research comparison
+   from round 1's spike plan through `claude -p`-with-override instead
+   of (or alongside) the OpenRouter per-token lane.
+3. Wire Groq free (+ Gemini free) as the validation/classify tier —
+   kills the OpenRouter credit-babysitting objection for the $0 classes.
+4. opencode Go $10 stays the optional harness-diversity follow-on.
+
+Total new commitment: one $8–19 subscription, cancellable monthly. No
+credit top-ups to babysit.
