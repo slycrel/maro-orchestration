@@ -77,9 +77,60 @@ docs preserved; commit count intact. Earliest work-email commit is
 2026-03-17, so ~1101/1114 SHAs are rewritten = effectively a full-history
 rewrite → force-push + box/session re-clone required.
 
-**Open (pending Jeremy):** (a) also fold the personal `agentic.poe@yahoo.com`
-(86 commits) into one identity, or keep it? (b) also `--replace-text` scrub
-the work-email STRING + `git.redacted.com` where they appear in transcript
-CONTENT, or leave content per "chat logs are fine"? (c) execution timing —
-needs box quiet + concurrent sessions paused. 0.8.0 PyPI publish is
-independent and can go before or after.
+**Choices FINALIZED (Jeremy, 2026-07-12):**
+- (a) **KEEP `agentic.poe@yahoo.com`** — it marks OpenClaw/Codex-initiated
+  changes (him, indirectly); a useful historical/future nuance. Mailmap
+  remaps ONLY the work email.
+- (b) **Obfuscate the employer strings** in content AND commit messages
+  (case-insensitive `redacted` → `redacted`) — "out of a sense of security
+  for my employer... obfuscated is as good as deleting there." Keeps the
+  surrounding context. Covers the work-email string (`jstone@redacted.com`),
+  the hostname (`git.redacted.com`), and prose "redacted" mentions.
+- (c) **Execute soon** — after Jeremy wraps the concurrent Sonnet session;
+  "sooner and work through it than later and harder." 0.8.0 publish is
+  independent, before or after.
+
+**Final config PROVEN on a throwaway clone (2026-07-12, 2.8s):** all three
+surfaces clean — author/committer metadata `redacted`=0, blob content=0,
+commit messages=0; yahoo identity kept (86); research docs preserved (8);
+commit count intact. NOTE the `--replace-message` pass is REQUIRED — two
+commit *messages* (this session's own doc commits) name the work email and
+`--replace-text` alone (blobs only) misses them.
+
+## RUNBOOK — one-shot execution (gated on Jeremy's go + quiet box)
+
+Config files (regenerate if scratch is gone):
+
+`mailmap.txt` (work email only; yahoo untouched):
+```
+Jeremy Stone <slycrel@users.noreply.github.com> <jstone@redacted.com>
+```
+`replace-text.txt` (used for BOTH --replace-text and --replace-message):
+```
+regex:(?i)redacted==>redacted
+```
+
+Pre-flight (Jeremy): pause other session(s); confirm NOTHING unpushed
+anywhere incl. the Ubuntu box; note current `origin/main` HEAD.
+
+Execute (from any full clone with push rights — e.g. the Mac):
+```
+git clone --mirror git@github.com:slycrel/maro-orchestration.git maro-mirror
+cd maro-mirror
+git filter-repo --mailmap mailmap.txt \
+  --replace-text replace-text.txt \
+  --replace-message replace-text.txt --force
+git push --force --mirror   # or: git push --force origin 'refs/heads/*'
+```
+(NB: filter-repo strips the `origin` remote by design; `--mirror` clone +
+`push --mirror` sidesteps re-adding it. Verify `git log --all | grep -ci
+redacted` == 0 in the mirror BEFORE pushing.)
+
+Post (Jeremy/box/sessions): on every other clone,
+`git fetch origin && git reset --hard origin/main` (old local SHAs are now
+orphaned — ~1101/1114 rewritten). No tags exist yet; trusted publisher keys
+off repo/workflow/env, not SHAs — unaffected.
+
+The rewrite will also self-scrub `redacted` from THIS doc + GOAL_BRAIN's
+decision entries (they quote the email) — expected and harmless; the meaning
+survives as `redacted`.

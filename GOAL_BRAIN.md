@@ -2043,8 +2043,16 @@ Sample: the 2026-05-13..17 window of `~/.maro/workspace/runs/` (478 dirs total;
   optionally the personal yahoo) to `slycrel@users.noreply.github.com` —
   proven on a throwaway clone (<1s, content preserved, 0 redacted left).
   ~1101/1114 SHAs rewritten → force-push + box/session re-clone; execution
-  gated on Jeremy's go + a quiet box. Open: yahoo fold-in y/n, content-string
-  scrub y/n. 0.8.0 publish is independent of the rewrite.
+  gated on Jeremy's go + a quiet box. **FINALIZED same day:** keep the yahoo
+  identity (marks OpenClaw/Codex-initiated changes — him indirectly); ALSO
+  obfuscate the employer strings (`redacted` → `redacted`) in blob content AND
+  commit messages via `--replace-text`+`--replace-message` ("security for my
+  employer... obfuscated is as good as deleting"), keeping context. Final
+  config proven clean on all three surfaces (metadata/content/messages),
+  yahoo + research docs preserved; `--replace-message` is REQUIRED (two
+  session doc-commit messages name the email). Turnkey runbook in the scan
+  doc. Jeremy will execute soon, after wrapping the concurrent Sonnet
+  session. 0.8.0 publish independent, before or after.
 
 ## Threads (system-maintained — nothing leaves this list silently)
 
