@@ -782,6 +782,21 @@ def _execute_main_loop(
                             _total_cost, cost_budget, _cost_pct)
                 ctx.cost_warned = True
 
+        # Runaway cost circuit tripped MID-step (BACKLOG #23e): the adapter
+        # seam refused a call because run spend crossed multiplier x
+        # cost_budget. Stop here — retrying or continuing to the next step
+        # would hit the same refusal (that retry churn is exactly what the
+        # circuit exists to prevent). No finished-plan carve-out: firing
+        # mid-step means this step never completed, so work remains.
+        if outcome.get("error_class") == "budget_runaway":
+            loop_status = "stuck"
+            stuck_reason = (outcome.get("stuck_reason")
+                            or "runaway cost circuit tripped mid-step")
+            log.warning("runaway cost circuit stop: %s", stuck_reason)
+            if verbose:
+                print(f"[maro] {stuck_reason}", file=sys.stderr, flush=True)
+            break
+
         step_status = outcome["status"]
         _raw_result = outcome.get("result", "")
         # Guard: LLM can return a JSON schema object instead of a string value for

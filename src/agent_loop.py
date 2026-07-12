@@ -358,19 +358,39 @@ def run_agent_loop(
 
         # Phase F: Main execute loop
         ctx.set_phase(LoopPhase.EXECUTE)
-        _ex = _execute_main_loop(
-            ctx, steps, step_indices,
-            resume_completed=_resume_completed,
-            prereq_context=_prereq_context,
-            pf_review=_pf_review,
-            levels=_levels,
-            manifest_steps=_manifest_steps,
-            replan_count=_replan_count,
-            loop_shared_ctx=_loop_shared_ctx,
-            resolve_tools_fn=_resolve_tools,
-            tier_order=_TIER_ORDER,
-            parallel_fan_out=parallel_fan_out,
-        )
+        # Runaway cost circuit (BACKLOG #23e): armed for the execute phase
+        # ONLY — finalize/closure/quality-gate must never be refused a call
+        # (budget-breaker demotion lesson, 8f8344a). Runaway-only by design:
+        # ceiling = multiplier x cost_budget, ABOVE the between-step hard
+        # stop, so legit long work under budget never sees it.
+        _disarm_runaway = None
+        if ctx.cost_budget:
+            try:
+                from config import get as _rc_get
+                _rc_mult = _rc_get("budget.runaway_multiplier", 1.5)
+                _rc_mult = float(_rc_mult) if _rc_mult is not None else 0.0
+                if _rc_mult > 0:
+                    from llm import arm_cost_meter
+                    _disarm_runaway = arm_cost_meter(ctx.cost_budget * _rc_mult)
+            except Exception as _rc_exc:
+                log.warning("runaway cost circuit not armed: %s", _rc_exc)
+        try:
+            _ex = _execute_main_loop(
+                ctx, steps, step_indices,
+                resume_completed=_resume_completed,
+                prereq_context=_prereq_context,
+                pf_review=_pf_review,
+                levels=_levels,
+                manifest_steps=_manifest_steps,
+                replan_count=_replan_count,
+                loop_shared_ctx=_loop_shared_ctx,
+                resolve_tools_fn=_resolve_tools,
+                tier_order=_TIER_ORDER,
+                parallel_fan_out=parallel_fan_out,
+            )
+        finally:
+            if _disarm_runaway is not None:
+                _disarm_runaway()
         step_outcomes = _ex["step_outcomes"]
         loop_status = _ex["loop_status"]
         stuck_reason = _ex["stuck_reason"]

@@ -99,6 +99,68 @@ def default_subprocess_cwd(path: Optional[str]):
 
 
 # ---------------------------------------------------------------------------
+# Runaway cost circuit (BACKLOG #23e — mid-step granularity)
+# ---------------------------------------------------------------------------
+# The loop's cost breaker only checks BETWEEN steps; run 8a20665f's step 9
+# burned $2.04 in one subprocess call and landed the run at $4.26 against a
+# $2.40 ceiling before the breaker could see it. This meter closes half that
+# gap: every call through FailoverAdapter accrues its estimated cost, and
+# once the run's spend crosses the runaway ceiling, further calls are REFUSED
+# at the seam (pre-call, zero cost) instead of waiting for the step boundary.
+#
+# Deliberately runaway-only (Jeremy, 2026-07-11): "we need to be careful we
+# don't create churn and more waste by stopping and retrying as we do
+# allowing legit hard things to finish long tasks [...] and put a cost
+# ceiling on our orchestrator's capability in a bad way." The ceiling is a
+# MULTIPLE of the run budget (default 1.5x), above the between-step hard stop
+# (budget + 20% slush) — a run doing legitimate long work under its budget
+# never sees this; only a step already blowing past the whole-run ceiling
+# does. It cannot kill a call already in flight (that needs stream-side
+# accounting in the subprocess lane — still open in BACKLOG #23e); it stops
+# the NEXT call, which is what turns one $2 overshoot into not-four.
+#
+# Armed by agent_loop around the execute phase only (decompose/finalize/
+# closure/quality-gate spend is not metered and can never be refused —
+# the budget-breaker demotion bug, 8f8344a, is the lesson: post-completion
+# accounting must not kill a finished run).
+_RUN_COST_METER: contextvars.ContextVar[Optional[Dict[str, Any]]] = contextvars.ContextVar(
+    "maro_run_cost_meter", default=None
+)
+
+
+def arm_cost_meter(ceiling_usd: float):
+    """Arm the run-scoped runaway circuit; returns a disarm() callable.
+
+    The state dict is shared by reference across thread fan-out (contextvars
+    copy_context at submit copies the mapping, not the dict), so parallel
+    peers accrue into one meter.
+    """
+    import threading
+    state: Dict[str, Any] = {
+        "spent_usd": 0.0,
+        "ceiling_usd": float(ceiling_usd),
+        "lock": threading.Lock(),
+    }
+    token = _RUN_COST_METER.set(state)
+
+    def _disarm() -> None:
+        try:
+            _RUN_COST_METER.reset(token)
+        except Exception:
+            _RUN_COST_METER.set(None)
+
+    return _disarm
+
+
+def cost_meter_state() -> Optional[Dict[str, float]]:
+    """Read-only snapshot of the armed meter (None when disarmed)."""
+    state = _RUN_COST_METER.get()
+    if state is None:
+        return None
+    return {"spent_usd": state["spent_usd"], "ceiling_usd": state["ceiling_usd"]}
+
+
+# ---------------------------------------------------------------------------
 # Model name constants (backend-independent)
 # ---------------------------------------------------------------------------
 
@@ -368,6 +430,14 @@ class FailoverAdapter(LLMAdapter):
         # out before forwarding kwargs to the real adapter, which has no use
         # for it and would otherwise just absorb it silently via **kwargs.
         _purpose = kwargs.pop("purpose", "")
+        # Runaway cost circuit: refuse the call BEFORE any backend is tried
+        # (pre-call = zero cost). Raised here, not per-adapter, so failover
+        # can't route around it.
+        _meter = _RUN_COST_METER.get()
+        if _meter is not None and _meter["ceiling_usd"] > 0 \
+                and _meter["spent_usd"] >= _meter["ceiling_usd"]:
+            from llm_errors import BudgetRunawayError
+            raise BudgetRunawayError(_meter["spent_usd"], _meter["ceiling_usd"])
         for idx, adapter in enumerate(self._adapters):
             self._current_idx = idx
             try:
@@ -406,6 +476,21 @@ class FailoverAdapter(LLMAdapter):
                         result.call_record = str(_rec_path)
                 except Exception:
                     pass
+                # Runaway circuit accrual: estimate this call's cost into the
+                # armed meter. Never affects the request outcome.
+                if _meter is not None:
+                    try:
+                        from metrics import estimate_cost
+                        _call_cost = estimate_cost(
+                            getattr(result, "input_tokens", 0) or 0,
+                            getattr(result, "output_tokens", 0) or 0,
+                            model=getattr(result, "model", "") or getattr(adapter, "model_key", ""),
+                            cache_read_tokens=getattr(result, "cache_read_tokens", 0) or 0,
+                        )
+                        with _meter["lock"]:
+                            _meter["spent_usd"] += _call_cost
+                    except Exception:
+                        pass
                 return result
             except Exception as exc:
                 last_exc = exc

@@ -31,6 +31,7 @@ FAILOVER = "failover"                  # this backend is down — try the next
 AUTH_ACTIONABLE = "auth_actionable"    # credentials dead — tell user the fix
 BILLING_ACTIONABLE = "billing_actionable"  # credits/quota gone — never retry
 INPUT_TOO_LARGE = "input_too_large"    # context overrun — retry/failover useless
+BUDGET_RUNAWAY = "budget_runaway"      # run's runaway cost circuit tripped — never retry/failover
 FATAL = "fatal"                        # unclassified — propagate raw
 
 
@@ -61,6 +62,27 @@ class BackendError(RuntimeError):
         if info.user_action and info.detail:
             msg = f"{info.user_action} [{info.error_class} on {info.backend or 'backend'}: {info.detail[:160]}]"
         super().__init__(msg)
+
+
+class BudgetRunawayError(RuntimeError):
+    """The run's runaway cost circuit tripped (llm.arm_cost_meter).
+
+    Raised by FailoverAdapter.complete PRE-call — no backend is tried, no
+    cost incurred. Deliberately not a BackendError: nothing is wrong with any
+    backend; the run has spent past multiplier x cost_budget and further
+    calls are refused. Never retried, never failed-over (retrying is exactly
+    the churn the circuit exists to stop).
+    """
+
+    def __init__(self, spent_usd: float, ceiling_usd: float):
+        self.spent_usd = spent_usd
+        self.ceiling_usd = ceiling_usd
+        super().__init__(
+            f"runaway cost circuit: ${spent_usd:.2f} already spent this run >= "
+            f"ceiling ${ceiling_usd:.2f} (budget.runaway_multiplier x cost_budget) "
+            f"— refusing further LLM calls. If this work was legitimate, raise "
+            f"budget.per_run_usd or budget.runaway_multiplier."
+        )
 
 
 # 5xx markers: retryable today AND failover-eligible after ladder exhaustion
@@ -132,6 +154,11 @@ def classify_error(exc: Exception, backend: str = "") -> ErrorInfo:
             user_action=_action_for(cls, backend),
             detail=str(exc)[:500],
         )
+
+    # Exact type outranks all text matching: the circuit's own message
+    # mentions "cost"/"budget" and must never ride a retry ladder.
+    if isinstance(exc, BudgetRunawayError):
+        return _mk(BUDGET_RUNAWAY)
 
     if any(p in msg for p in _INPUT_PATTERNS):
         return _mk(INPUT_TOO_LARGE)

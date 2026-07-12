@@ -180,7 +180,20 @@ step overshot the cost cap by ~$1.86** — breakers only check between
 steps; step 9 (the v2 write) alone burned $2.04/4.7M tokens inside one
 subprocess call, landing the run at $4.26 against a $2.40 ceiling. A
 mid-step cost circuit (adapter-level running total → kill + checkpoint)
-is the missing granularity. (f) **Deliverable path miss** — worker wrote
+is the missing granularity. **PARTIALLY SHIPPED 2026-07-11:** runaway
+circuit at the FailoverAdapter seam (`llm.arm_cost_meter`,
+`budget.runaway_multiplier` default 1.5, docs/DEFAULTS.md) — every call
+accrues estimated cost; once spend crosses multiplier × cost_budget the
+NEXT call is refused pre-call (`BudgetRunawayError`, never
+retried/failed-over) and the loop stops instead of churning. Armed for
+the execute phase only (demotion-bug lesson 8f8344a). Deliberately
+runaway-only per Jeremy's same-day decree (cost isn't the end-all;
+don't churn-kill legit long steps — the circuit sits ABOVE the
+between-step hard stop). **Still open:** killing a call already in
+flight — needs stream-side token accounting in the subprocess lane
+(stream-json running totals → kill threshold); the r4 specimen's single
+$2.04 call would only be caught after it returns, but its three
+would-be successors are now refused. (f) **Deliverable path miss** — worker wrote
 two complete v2 drafts to project ROOT instead of the goal-specified
 artifacts/ path; closure correctly failed it (complete=False), but the
 work was done — a "verify output path against goal" check in ralph
