@@ -634,17 +634,26 @@ def _session_cpu_ticks(leader_pid: int) -> int:
 
 
 def _run_subprocess_safe(cmd, *, input=None, timeout=600,
-                         liveness_timeout=None, poll_interval=2.0, cwd=None):
+                         liveness_timeout=None, poll_interval=2.0, cwd=None,
+                         stream_probe=None):
     """Run a subprocess in its own process group with streaming + liveness check.
 
     Streams the subprocess's stdout+stderr (merged) to a single temp file
     so the on-disk view matches what an operator sees on a terminal.
-    Two kill conditions:
+    Three kill conditions:
       1. Wall-clock `timeout` — hard ceiling, same semantics as before.
       2. Liveness: if neither file-mtime advances nor CPU time accumulates
          across the subprocess session for `liveness_timeout` seconds,
          assume the subprocess is hung and kill. The CPU signal prevents
          false-kills of silent-but-computing local models.
+      3. `stream_probe` (BACKLOG #23e stream-side accounting): a callable
+         fed each poll's newly-arrived complete NDJSON event dicts from the
+         merged stream. Returning an Exception kills the subprocess and
+         raises that exception (with `.maro_kill_reason` and
+         `.maro_partial_output` attached). This is how the runaway cost
+         circuit kills a call already in flight instead of only refusing
+         the next one. Non-dict lines and parse noise are skipped; probe
+         errors are swallowed (accounting must never break the request).
 
     `liveness_timeout` defaults to min(timeout, 180). Pass 0 or None-like to
     disable (falls back to wall-clock only). Env var `MARO_LIVENESS_TIMEOUT`
@@ -717,9 +726,42 @@ def _run_subprocess_safe(cmd, *, input=None, timeout=600,
         combined_f.seek(0)
         return combined_f.read().decode("utf-8", errors="replace")
 
+    # Stream-probe incremental reader state: a second read handle on the
+    # merged file plus a partial-line buffer (NDJSON events can arrive split
+    # across polls).
+    _probe_read_f = None
+    _probe_buf = b""
+
+    def _drain_new_events():
+        """Read bytes appended since the last poll; return parsed event dicts."""
+        nonlocal _probe_read_f, _probe_buf
+        if _probe_read_f is None:
+            _probe_read_f = open(combined_path, "rb")
+        chunk = _probe_read_f.read()
+        if not chunk:
+            return []
+        _probe_buf += chunk
+        lines = _probe_buf.split(b"\n")
+        _probe_buf = lines.pop()  # trailing partial line waits for more bytes
+        events = []
+        for raw in lines:
+            raw = raw.strip()
+            if not raw.startswith(b"{"):
+                continue
+            try:
+                ev = json.loads(raw.decode("utf-8", errors="replace"))
+            except (json.JSONDecodeError, ValueError):
+                continue
+            if isinstance(ev, dict):
+                events.append(ev)
+        return events
+
     def _cleanup_files():
         try: combined_f.close()
         except Exception: pass
+        if _probe_read_f is not None:
+            try: _probe_read_f.close()
+            except Exception: pass
         for p in (combined_path, stdin_f.name if stdin_f else None):
             if p:
                 try: os.unlink(p)
@@ -780,6 +822,7 @@ def _run_subprocess_safe(cmd, *, input=None, timeout=600,
     # from the real Popen call above).
     last_cpu = 0 if proc.poll() is not None else _session_cpu_ticks(proc.pid)
     kill_reason = None
+    kill_exc = None            # probe-ordered kill carries its own exception
     try:
         while True:
             rc = proc.poll()
@@ -804,6 +847,20 @@ def _run_subprocess_safe(cmd, *, input=None, timeout=600,
                 last_cpu = cur_cpu
                 last_seen = now
 
+            # Stream-side probe (e.g. runaway cost accounting): parse newly
+            # arrived NDJSON events; a returned exception is a kill order.
+            if stream_probe is not None:
+                try:
+                    _events = _drain_new_events()
+                    if _events:
+                        _probe_exc = stream_probe(_events)
+                        if _probe_exc is not None:
+                            kill_reason = f"stream probe kill: {_probe_exc}"
+                            kill_exc = _probe_exc
+                            break
+                except Exception as _probe_err:
+                    log.debug("stream probe error (non-fatal): %s", _probe_err)
+
             if timeout and elapsed >= timeout:
                 kill_reason = f"wall-clock timeout after {int(elapsed)}s"
                 break
@@ -825,6 +882,14 @@ def _run_subprocess_safe(cmd, *, input=None, timeout=600,
                 proc.wait(timeout=5)
             stdout = _read_captured()
             _cleanup_files()
+            if kill_exc is not None:
+                # Probe-ordered kill: raise the probe's exception (e.g.
+                # BudgetRunawayError) so callers get the right class — a
+                # TimeoutExpired here would ride the timeout-split retry
+                # path, which is exactly the churn the circuit prevents.
+                kill_exc.maro_kill_reason = kill_reason  # type: ignore[attr-defined]
+                kill_exc.maro_partial_output = stdout    # type: ignore[attr-defined]
+                raise kill_exc
             exc = subprocess.TimeoutExpired(cmd, timeout or liveness_timeout,
                                             output=stdout, stderr="")
             # Attach reason for caller introspection; not used by base class.
@@ -845,6 +910,68 @@ def _run_subprocess_safe(cmd, *, input=None, timeout=600,
     stdout = _read_captured()
     _cleanup_files()
     return subprocess.CompletedProcess(cmd, proc.returncode, stdout, "")
+
+
+def _build_stream_cost_probe(default_model: str = ""):
+    """Stream-side half of the runaway cost circuit (BACKLOG #23e residual).
+
+    Returns a `stream_probe` for `_run_subprocess_safe`, or None when no
+    cost meter is armed. The pre-call refusal at the FailoverAdapter seam
+    stops the call AFTER a runaway one; this probe kills the runaway call
+    ITSELF: it accumulates estimated cost from the usage blocks on the
+    claude CLI's stream-json assistant events as they arrive, and once
+    meter-spend + this call's running estimate crosses the armed ceiling it
+    accrues the estimate into the meter and returns a BudgetRunawayError
+    (which `_run_subprocess_safe` raises after killing the process group).
+    The r4 specimen ($2.04/4.7M tokens in ONE subprocess call, run
+    8a20665f step 9) is exactly the shape this catches mid-flight.
+
+    File writes the inner agent already made are on disk and survive the
+    kill; only the final narrated result is lost — the loop stops on
+    error_class=budget_runaway either way.
+    """
+    meter = _RUN_COST_METER.get()
+    if meter is None or meter["ceiling_usd"] <= 0:
+        return None
+    try:
+        from metrics import estimate_cost
+    except Exception:
+        return None
+    state = {"est_usd": 0.0, "accrued": False}
+
+    def _probe(events):
+        for ev in events:
+            if ev.get("type") != "assistant":
+                continue
+            msg = ev.get("message") or {}
+            usage = msg.get("usage") or {}
+            if not usage:
+                continue
+            state["est_usd"] += estimate_cost(
+                int(usage.get("input_tokens", 0) or 0)
+                + int(usage.get("cache_read_input_tokens", 0) or 0)
+                + int(usage.get("cache_creation_input_tokens", 0) or 0),
+                int(usage.get("output_tokens", 0) or 0),
+                model=msg.get("model") or default_model,
+                cache_read_tokens=int(usage.get("cache_read_input_tokens", 0) or 0),
+            )
+        with meter["lock"]:
+            spent = meter["spent_usd"]
+        if spent + state["est_usd"] >= meter["ceiling_usd"]:
+            if not state["accrued"]:
+                state["accrued"] = True
+                with meter["lock"]:
+                    meter["spent_usd"] += state["est_usd"]
+            from llm_errors import BudgetRunawayError
+            log.warning(
+                "stream cost probe: in-flight call estimate $%.4f pushes run "
+                "spend past ceiling $%.2f — killing subprocess",
+                state["est_usd"], meter["ceiling_usd"])
+            return BudgetRunawayError(spent + state["est_usd"],
+                                      meter["ceiling_usd"])
+        return None
+
+    return _probe
 
 
 def _extract_result_object(text: str) -> Optional[dict]:
@@ -1119,7 +1246,12 @@ class ClaudeSubprocessAdapter(_JSONToolPromptMixin, LLMAdapter):
         # (verify/quality_gate/pre_flight/refinement) don't leak to launch cwd.
         _cwd = kwargs.get("cwd") or get_default_subprocess_cwd()
         try:
-            result = _run_subprocess_safe(cmd, input=prompt, timeout=_timeout, cwd=_cwd)
+            # stream_probe: in-flight runaway cost kill (no-op unless a cost
+            # meter is armed). BudgetRunawayError from the probe propagates
+            # past the TimeoutExpired conversion below by design.
+            result = _run_subprocess_safe(
+                cmd, input=prompt, timeout=_timeout, cwd=_cwd,
+                stream_probe=_build_stream_cost_probe(model_str))
         except subprocess.TimeoutExpired:
             raise RuntimeError(f"claude subprocess timed out after {_timeout}s")
         except FileNotFoundError:
@@ -1187,7 +1319,9 @@ class ClaudeSubprocessAdapter(_JSONToolPromptMixin, LLMAdapter):
                     _total_slept += _wait
                     _wait = min(_wait * 2, _RATE_LIMIT_CYCLE_CAP)
                     try:
-                        result = _run_subprocess_safe(cmd, input=prompt, timeout=_timeout, cwd=_cwd)
+                        result = _run_subprocess_safe(
+                            cmd, input=prompt, timeout=_timeout, cwd=_cwd,
+                            stream_probe=_build_stream_cost_probe(model_str))
                     except subprocess.TimeoutExpired:
                         log.warning("rate limit retry timed out after %ds, will retry", _timeout)
                         continue
