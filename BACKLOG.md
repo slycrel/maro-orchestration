@@ -634,6 +634,25 @@ a long session = time blindness inside one session), stale-source
 dissent handling in the Manti runs (the system already fights data
 staleness — this extends the fight to its own conversational state).
 
+**First slice — VEHICLE (added 2026-07-12 handoff audit; sized for a
+Sonnet/Opus session, no design pass needed):** hooks (d)+(a) only —
+surface timestamps that already exist into prompts. Concretely:
+(1) every injected lesson/recall item carries an age suffix rendered
+from its stored timestamp ("(learned 2026-02-14 — 5 months ago)") at
+the existing injection seams (memory_bridge worker slice, lesson
+injection in decompose, recall()); (2) step context gains one line of
+elapsed-time awareness when the gap is material ("previous step
+finished 42 minutes ago") from the run's own wall clock. Acceptance:
+byte-identical prompts when timestamps are absent (test-enforced, same
+pattern as `memory.worker_slice` off-path); a captains-log-visible A/B
+flag (`memory.age_stamps`, default OFF fresh installs per
+no-silent-change, ON this box after eyeball check); measured via the
+existing WORKER_SLICE_INJECTED / recall events growing an
+`age_stamped: true` field. Hooks (b) full elapsed-time model and (c)
+time-aware recall *ranking* stay in this vision entry — (c) especially
+must not ship as a silent relevance-formula change; it's a
+verify→learn-adjacent measurement question.
+
 ### Perspective / camera rotation — bringing the human lens functionally (2026-07-11, Jeremy)
 
 Jeremy (closing theme, verbatim): "I've talked about rotation, and
@@ -661,6 +680,23 @@ patterns that code-side inspection never would; institutionalize that
 seat in review/verify stages; (c) ties to the "are we re-inventing
 reasoning-model behavior?" open question — same kill-test posture
 applies to any lens machinery.
+
+**First slice — VEHICLE (added 2026-07-12 handoff audit; deliberately
+the smallest honest step, per the kill-test posture):** the end-user
+seat (b) only, because it's the one lens with live evidence behind it.
+Concretely: closure verification and adversarial review each gain an
+explicit end-user-seat pass — "answer as the person who asked: did I
+get what I asked for, in the form I could actually use?" — as a named
+section of the existing prompts (no new LLM call, no lens registry).
+The Manti NOW failure is the canonical specimen (a *where* question
+answered with no *where*); the shipped `_NOW_VERIFY_SYSTEM` non-answer
+judging (a1f472f) is the pattern to generalize. Acceptance: on the
+existing dogfood/closure corpus, the seat catches ≥1 real miss that
+current checks pass (candidate: run 315ebffb's on-topic-but-wrong-
+subject haiku) without new false demotions. Named lens *moves* for the
+planner/navigator (a) stay vision — they must survive the kill-test
+("would the same-tier model with identical context do this unprompted?")
+before earning machinery.
 
 ### Shared trusted skill directory + cross-instance learning (post-1.0 vision, 2026-07-10, Jeremy)
 
