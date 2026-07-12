@@ -155,19 +155,21 @@ real phrasing beats cleaned-up phrasing.
 
 ## External failure-pattern corpus
 
-`research/ai-failure-task-patterns.md` (v2 2026-07-11, four Maro runs +
-operator X sweep): 21 real tasks that single-turn AI assistants got wrong,
-sourced from verbatim HN/Reddit user complaints — all full-content evidence
-(post body + comment thread read). Grouped into 5 pattern families with a
-root-cause taxonomy extended in v2: full-content re-reads corrected 2 of the
-5 title-only diagnoses and split Family 4 into three distinct mechanisms
-(transient platform outage / statelessness-by-design needing external
-memory / unscoped cascading deletion). An X sweep (160 tweets, 8 query
-angles) yielded 0 keepers — Top-ranked X is engagement bait, documented
-honestly rather than force-fit. Each entry names the concrete task, the
-concrete failure, and the orchestration capability that would have prevented
-it (live retrieval, execution grounding, citation-vs-source diffing,
-retrieval-on-correction, external state checkpointing).
+`research/ai-failure-task-patterns.md` (v2.1 2026-07-11, four Maro runs +
+operator X sweep + post-publication 429 resolution): 23 real tasks that
+single-turn AI assistants got wrong, sourced from verbatim HN/Reddit user
+complaints — all full-content evidence (post body + comment thread read).
+Grouped into 5 pattern families with a 15-category root-cause taxonomy:
+full-content re-reads corrected 2 of the 5 title-only diagnoses and split
+Family 4 into distinct mechanisms (transient platform outage /
+statelessness-by-design needing external memory / unscoped cascading
+deletion / irrecoverable platform data loss / false persistence promise).
+An X sweep (160 tweets, 8 query angles) yielded 0 keepers — Top-ranked X is
+engagement bait, documented honestly rather than force-fit. Each entry
+names the concrete task, the concrete failure, and the orchestration
+capability that would have prevented it (live retrieval, execution
+grounding, citation-vs-source diffing, retrieval-on-correction, external
+state checkpointing).
 
 Why it's here: the catalog above captures asks *we've* had; the corpus
 captures asks *the world* has that assistants fail — the exact gap
@@ -177,8 +179,7 @@ entries or onto capabilities Maro already exercises (Family 4's
 state/session losses are what run cards + checkpoints already solve; Family
 5's regenerate-instead-of-reverify is what closure evidence attachment
 already counters). Known skew, per the corpus's own audit trail:
-HN-and-ChatGPT-heavy by data availability; Reddit entries are title-only
-evidence.
+HN-and-ChatGPT-heavy by data availability.
 
 ---
 

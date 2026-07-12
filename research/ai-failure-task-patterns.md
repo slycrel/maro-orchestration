@@ -9,9 +9,9 @@
 
 Sourced from real Reddit and Hacker News posts where users describe a concrete task an AI assistant got wrong, with enough evidence in the quote to diagnose *why*. Built for orchestration test-goal design: each entry maps a real failure to the concrete capability an orchestrated (multi-step, tool-using, verifying) run would need that a single chat turn doesn't have.
 
-**21 entries, 5 pattern families, 1 flagged-pending (not yet counted).** v1 had 18 entries; v2 adds 3 confirmed new entries, corrects 2 diagnoses, upgrades all 5 remaining title-only entries to full-content, and runs (but does not add from) an X/Twitter stream. See [Changed Since v1](#changed-since-v1) for the delta and [Research Audit Trail](#research-audit-trail) for methodology, sources, and per-stream provenance.
+**23 entries, 5 pattern families, 1 flagged-pending (not yet counted).** v1 had 18 entries; v2 adds 3 confirmed new entries, corrects 2 diagnoses, upgrades all 5 remaining title-only entries to full-content, and runs (but does not add from) an X/Twitter stream. **v2.1 (2026-07-11)** resolves the 3 entries v2 had excluded as 429-unreachable: 2 became new Family 4 entries (4.4, 4.5), 1 was rejected on full content — see the [v2.1 addendum](#v21-addendum-2026-07-11--the-three-429-exclusions-resolved). See [Changed Since v1](#changed-since-v1) for the v1→v2 delta and [Research Audit Trail](#research-audit-trail) for methodology, sources, and per-stream provenance.
 
-**Evidence-depth legend:** `[full-content]` = post body + comment thread read in full. `[tweet-only]` = single tweet text, no thread fetch. All 21 kept entries in v2 are `[full-content]`; 5 of them were upgraded from `[title-only]` in v1 (marked below with an upgrade note).
+**Evidence-depth legend:** `[full-content]` = post body + comment thread read in full. `[tweet-only]` = single tweet text, no thread fetch. All 23 kept entries are `[full-content]`; 5 of them were upgraded from `[title-only]` in v1 (marked below with an upgrade note).
 
 ---
 
@@ -178,9 +178,9 @@ Model asserts an output (code result, API existence, extracted data) without act
 
 ---
 
-## Family 4: State/session management (3 entries)
+## Family 4: State/session management (5 entries)
 
-Failure isn't a knowledge or reasoning gap at all — it's loss of continuity/state, or destructive scope creep, across a multi-step or long-running interaction that the product layer failed to persist, isolate, or scope correctly. **v2 split this family's root cause** (see [Changed Since v1 §B](#b-taxonomy-impact-of-the-upgrades)): v1's single `state_session_loss` conflated a transient platform outage with expected-by-design statelessness. A third, distinct mechanism (unscoped cascading deletion) was added from the pass-two Reddit expansion.
+Failure isn't a knowledge or reasoning gap at all — it's loss of continuity/state, or destructive scope creep, across a multi-step or long-running interaction that the product layer failed to persist, isolate, or scope correctly. **v2 split this family's root cause** (see [Changed Since v1 §B](#b-taxonomy-impact-of-the-upgrades)): v1's single `state_session_loss` conflated a transient platform outage with expected-by-design statelessness. A third, distinct mechanism (unscoped cascading deletion) was added from the pass-two Reddit expansion. **v2.1 added two more** from the resolved 429 exclusions: irrecoverable platform data loss (4.4) and a false persistence promise (4.5).
 
 ### 4.1 — Platform-wide outage misread as per-session chat loss *(corrected in v2)*
 > "Claude AI can't find our chat although last active was 1 day ago"
@@ -211,6 +211,22 @@ Failure isn't a knowledge or reasoning gap at all — it's loss of continuity/st
 - **Root cause: `unscoped_cascading_deletion`** *(new category, proposed in v2)* — a destructive action's actual blast radius exceeded its stated/expected scope, and the product provided no scope confirmation before executing or recovery path after.
 - **Orchestration needs:** Require explicit scope confirmation (show exactly what will be deleted, including anything the system infers as "related") before executing any destructive action; treat "delete X" as requiring an enumerated, user-visible diff of affected items, not an implicit cascade; maintain a recovery window (soft-delete/trash) for destructive actions by default.
 - Source: [Reddit r/OpenAI](https://www.reddit.com/r/OpenAI/comments/1ml03mt/critical_bug_in_chatgpt_deleting_an_empty_project/) — **[full-content]** *(confidence: strong)*
+
+### 4.4 — Repeated chat rollbacks ending in unrecoverable deletion *(new in v2.1)*
+> "I ran into my first 'rollback,' where the chat suddenly reverted to messages from a week ago after I sent a new one. [...] today it's gotten worse: the chat rolled back three times in a row, and now it completely disappeared. I can only send one message before it resets again. I even got a message saying the chat can't be recovered." — Reddit r/OpenAI, /u/gabvx_is_offline
+
+- **Failure mode:** A long-running, high-value chat progressively corrupted (repeated week-scale rollbacks) and then became permanently unrecoverable, with the product itself confirming no recovery path. No prior warning (e.g. about chat length) was surfaced.
+- **Root cause: `platform_data_loss_irrecoverable`** *(new category, v2.1)* — product-layer state corruption escalating to permanent loss, distinct from 4.1's transient outage (this never recovered), 4.2's by-design statelessness (this was in-product persistent history), and 4.3's user-initiated cascade (no destructive action was taken).
+- **Orchestration needs:** Same external-checkpoint posture as 4.2, plus: treat progressive anomalies (a rollback) as a data-loss early-warning and export/checkpoint immediately rather than continuing to accumulate value in the degrading store; never let the chat product be the only copy of work someone would grieve losing.
+- Source: [Reddit r/OpenAI](https://www.reddit.com/r/OpenAI/comments/1p5xmjk/help_wanted_chat_deleted_itself/) — **[full-content]** *(resolved from v2's 429 exclusion; comment thread contained no diagnosis, only jokes — evidence is the first-person post body)*
+
+### 4.5 — Wrong fact three times while promising to "record and remember" the correction *(new in v2.1)*
+> "I asked it something very simple: slimmest laptop ever [...] it's not a trick question [...] It just kept failing to learn from it's wrong answers. That's very concerning, because even when it admits when it is wrong, it still doubles down and continues to give the wrong answer to future questions." — Reddit r/artificial, /u/iamjames (Google AI; wrong answer repeated across 3 sessions/browsers after the model said it would record the correct answer for future results)
+
+- **Failure mode:** Factual lookup answered wrong, corrected by the user, and the model *claimed it would persist the correction* — then repeated the identical wrong answer in fresh sessions. The aggravator is the false persistence promise: the model asserted a memory capability the product does not have.
+- **Root cause: `no_persistent_memory_by_design`** (primary — commenters correctly diagnose fresh-session statelessness), with `long_tail_knowledge_gap` (slimmest-laptop superlative is long-tail) and `no_self_check_after_correction` as cross-tags. The false promise itself is the actionable wrinkle: statelessness is fine *if the system doesn't claim otherwise*.
+- **Orchestration needs:** Never emit persistence promises the substrate can't honor (capability claims must be checked against actual memory configuration); route user corrections into a real external memory store with a verifiable write, and confirm the write happened rather than narrating it; superlative/long-tail factual claims need live verification, not parametric recall.
+- Source: [Reddit r/artificial](https://www.reddit.com/r/artificial/comments/1u5w1vz/i_gave_google_ai_a_simple_test_and_it_gave_me_the/) — **[full-content]** *(resolved from v2's 429 exclusion)*
 
 ---
 
@@ -251,7 +267,7 @@ Correction produced a second fabricated description rather than a retrieval. [HN
 
 ---
 
-## Root-Cause Taxonomy (14 categories)
+## Root-Cause Taxonomy (15 categories)
 
 | Category | Meaning | Since |
 |---|---|---|
@@ -269,6 +285,7 @@ Correction produced a second fabricated description rather than a retrieval. [HN
 | `platform_outage_transient` | A transient, platform-wide service outage, confirmable externally, misread as a durable per-session bug | **v2** |
 | `no_persistent_memory_by_design` | Expected statelessness across sessions in the product's default configuration — not a bug, requires external memory scaffolding | **v2** |
 | `unscoped_cascading_deletion` | A destructive action's actual blast radius silently exceeds its stated scope, with no confirmation step or recovery path | **v2** |
+| `platform_data_loss_irrecoverable` | Product-layer state corruption escalating to permanent, confirmed-unrecoverable data loss with no user-initiated destructive action | **v2.1** |
 
 `state_session_loss` is retained in the table for historical/traceability reasons (it's what v1 used for entries 4.1 and 4.2) but is superseded by the two v2 rows above; no v2 entry uses it directly. `unauthorized_action_with_denial` (candidate, for F.1) is not added to this table — it stays a proposal pending the Family 6 decision noted above.
 
@@ -323,7 +340,8 @@ Two intake streams were open as of the `step11` draft; both are now resolved.
 | `reddit_upgrade` (5 pass-one Reddit title-only → full-content) | COMPLETE | 5 | 5 (3 held, 2 corrected) | 0 | 0 | 0 |
 | `reddit_expansion` (6 new subreddits: r/ChatGPT, r/OpenAI, r/artificial, r/singularity, r/webdev, r/programming) | COMPLETE (3 unresolved) | 13 | 3 confirmed | 6 | 3 (HTTP 429, never resolved) | 1 (`1rdpsww`) |
 | `x_twitter` (8 of 16 prepared query angles, Top/engagement-ranked) | COMPLETE | 160 raw tweets | 0 | 0 (no formal reject list — screened inline against the filter bar) | 0 | 0 (1 borderline, documented, not promoted) |
-| **Totals** | | **203 items reviewed across 4 streams** | **21 confirmed kept + 1 flagged-pending** | **13 rejected** | **3 excluded-unresolved** | **1** |
+| **Totals (v2 as published)** | | **203 items reviewed across 4 streams** | **21 confirmed kept + 1 flagged-pending** | **13 rejected** | **3 excluded-unresolved** | **1** |
+| **Totals (current, after v2.1 addendum)** | | **203** | **23 confirmed kept + 1 flagged-pending** | **14 rejected** | **0 excluded-unresolved** | **1** |
 
 ### Sources queried
 
@@ -343,9 +361,9 @@ Pass-two reddit_expansion rejects (6): `1swd8ct` (app-layer chat-history persist
 
 ### Known limitations
 
-- **Reddit anonymous JSON/RSS access to post bodies and comments is blocked (403)** on every endpoint except `old.reddit.com` with a desktop-browser User-Agent, which does work reliably for both search and per-post full content. This resolved v1's title-only limitation for all 5 original Reddit entries and for 10 of 13 expansion candidates; the remaining 3 hit a *separate* limitation — HTTP 429 rate-limiting on the same working endpoint — which up to 4 spaced synchronous retries did not clear. Those 3 (`1p5xmjk`, `1u5w1vz`, `1r5hy63`) stay permanently excluded rather than guessed from title, per policy.
+- **Reddit anonymous JSON/RSS access to post bodies and comments is blocked (403)** on every endpoint except `old.reddit.com` with a desktop-browser User-Agent, which does work reliably for both search and per-post full content. This resolved v1's title-only limitation for all 5 original Reddit entries and for 10 of 13 expansion candidates; the remaining 3 hit a *separate* limitation — HTTP 429 rate-limiting on the same working endpoint — which up to 4 spaced synchronous retries did not clear. Those 3 (`1p5xmjk`, `1u5w1vz`, `1r5hy63`) stayed excluded rather than guessed from title, per policy. *(Resolved post-publication — see the [v2.1 addendum](#v21-addendum-2026-07-11--the-three-429-exclusions-resolved): a later operator-side retry with longer spacing fetched all three.)*
 - **X/Twitter evidence, where it exists, would be shallower than Reddit even after full-content fetch**: the collected data is single-tweet text only (no thread fetch was performed for any of the 160, and thread-fetch for the one borderline candidate would constitute a new X request, out of scope for this pass per the goal's explicit constraint). This is why the borderline candidate was not promoted even though it structurally matches the filter bar.
-- **Balance/vendor skew (carried from v1, updated):** of the 21 kept entries, 13 are HN (12 ChatGPT/GPT-4/4o-focused, 1 Google AI search), and 8 are Reddit (5 ClaudeAI/LocalLLaMA from pass one, 3 ChatGPT/OpenAI from pass-two expansion). Source spread is now Hacker News + 4 subreddits (r/LocalLLaMA, r/ClaudeAI, r/ChatGPT, r/OpenAI); r/artificial, r/singularity, and r/webdev were queried in the expansion stream but yielded no confirmed keepers, and r/programming's candidates did not survive rate-limiting/filtering. This catalog remains HN-and-ChatGPT-heavy by data availability, not by design.
+- **Balance/vendor skew (carried from v1, updated for v2.1):** of the 23 kept entries, 13 are HN (12 ChatGPT/GPT-4/4o-focused, 1 Google AI search), and 10 are Reddit (5 ClaudeAI/LocalLLaMA from pass one, 4 ChatGPT/OpenAI, 1 r/artificial Google-AI entry from v2.1). Source spread is now Hacker News + 5 subreddits (r/LocalLLaMA, r/ClaudeAI, r/ChatGPT, r/OpenAI, r/artificial); r/singularity and r/webdev were queried but yielded no confirmed keepers, and r/programming's candidates did not survive filtering. This catalog remains HN-and-ChatGPT-heavy by data availability, not by design.
 
 ### Provenance / source data files
 
@@ -371,3 +389,19 @@ Pass-two reddit_expansion rejects (6): `1swd8ct` (app-layer chat-history persist
 - All 21 `filtered_failures.json` kept entries are represented in this markdown. ✅ (13 Family 1 + 2 Family 2 [1 primary + 1 cross-tag] + 3 Family 3 + 3 Family 4 + 4 Family 5 [1 primary + 3 cross-tags] = 21 distinct entries.)
 - `filtered_failures.json` update decision: **not modified** — 0 X-sourced entries were added to the kept set, per the goal's explicit "accept zero X keepers as a valid outcome" instruction. Decision documented in [Changed Since v1 §C.2](#c-new-entries--final-status).
 - No new Reddit or X requests were made in this pass; all data came from `filtered_failures.json`, `step11_changed_since_v1.md`, `x_twitter_raw_results.json`, and the v1 artifact, as required.
+
+---
+
+## v2.1 addendum (2026-07-11) — the three 429 exclusions, resolved
+
+The closure-verdict checklist above is the frozen record of the v2 synthesis run and intentionally still says "21 entries." This addendum supersedes its counts.
+
+After v2 published, an operator-side background retry (3 attempts max per post, 45s spacing — outside the synthesis run's no-background-retries constraint, which bound the run, not the catalog) fetched all three previously 429-blocked posts in full. The same filter bar was applied:
+
+| ID | Subreddit | Verdict | Disposition |
+|---|---|---|---|
+| `1p5xmjk` | r/OpenAI | **KEEP** | Entry 4.4 — repeated chat rollbacks ending in confirmed-unrecoverable deletion; new root cause `platform_data_loss_irrecoverable`. Comment thread contained no diagnosis (jokes only); evidence is the first-person post body. |
+| `1u5w1vz` | r/artificial | **KEEP** | Entry 4.5 — wrong long-tail fact repeated across 3 fresh sessions after the model promised to "record the correct answer and remember it"; `no_persistent_memory_by_design` primary, false-persistence-promise aggravator. |
+| `1r5hy63` | r/webdev | **REJECT** | Full thread shows the mystery bold font was browser-default-font behavior plus `font-weight: 600` — the AI-generated CSS was fine and the confusion was the poster's CSS knowledge (poster concedes this in-thread). The only AI-failure claim ("Gemini itself is just making up things when asked about it") is soft, has no transcript, and the thread never engages with it. Fails the concrete-verifiable-failure bar. |
+
+Net: **23 kept** (Family 4 grows 3 → 5), **14 rejected**, **0 excluded-unresolved**. `filtered_failures.json` updated to match (kept/rejected arrays moved, summary counts updated, `excluded_unresolved` emptied with the resolution recorded in `stream_audit`). The elevated-risk flag v2 had placed on `1r5hy63` did not survive full content — a fourth data point for the title-only-evidence error rate (title-based triage misjudged this one too).
