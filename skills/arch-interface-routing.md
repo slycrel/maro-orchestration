@@ -76,9 +76,9 @@ director_evaluate(goal, eval_ctx, trigger) → DirectorDecision
 | `restart` | break loop with `loop_status="restart"`; handle.py re-runs with context injected |
 | `escalate` | call `channel.ask(user_question)` mid-loop; reply injected as next-step context |
 
-**Budget enforcement:** `director_replan_count >= director_budget_ceiling` (default 2) → replan/restart clamped to continue. Counter persists across restarts (on LoopContext).
+**Budget enforcement:** `director_replan_count >= director_budget_ceiling` (default 3, `loop_types.MAX_RESTART_DEPTH` — unified 2026-07-12, was 2) → replan/restart clamped to continue. Counter persists across restarts (on LoopContext).
 
-**Restart re-entry:** handle.py detects `loop_result.status == "restart"`, appends restart context to ancestry, increments `continuation_depth`, re-runs (capped at depth 3).
+**Restart re-entry:** handle.py detects `loop_result.status == "restart"`, appends restart context to ancestry, increments `continuation_depth`, re-runs (capped at `MAX_RESTART_DEPTH`, same shared constant).
 
 ## Two Lanes
 

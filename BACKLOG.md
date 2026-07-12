@@ -1485,7 +1485,9 @@ after the current 1.0 remainders (a)–(d); (g) needs design before release.
   checkpoint-into-run-dir, stranded-state sweep + manual `maro resume`.
   9 provisional decisions greppable as "DECISION (provisional)" — Jeremy
   review wanted on: billing-failover default, 1-auto-resume cap,
-  resume-surface (CLI vs notify), depth-cap inconsistency (4 / <3 / 2).
+  resume-surface (CLI vs notify), depth-cap inconsistency (4 / <3 / 2 —
+  **RATIFIED + SHIPPED 2026-07-12**, unified to `loop_types.MAX_RESTART_DEPTH
+  = 3`, see MILESTONES -5 #3).
   **Minimum 1.0 slice SHIPPED 2026-07-09 (slices 1+2+3):** slice 1 =
   `llm_errors` classifier (6 classes, actionable messages, wired through
   FailoverAdapter + doctor; 2daa1b5); slice 2 = checkpoint-into-run-dir

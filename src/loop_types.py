@@ -201,6 +201,22 @@ class LoopResult:
 # Loop state machine types
 # ---------------------------------------------------------------------------
 
+# Shared ceiling for every quality-loop "try again" mechanism: director
+# restart and closure restart (handle.py, gate `continuation_depth <
+# MAX_RESTART_DEPTH`), continuation-pass respawn (loop_post_step.py,
+# `MARO_MAX_CONTINUATION_DEPTH` env default), and in-loop director replan
+# (LoopContext.director_budget_ceiling below). These are distinct counters
+# on distinct mechanisms (cross-loop restart chains vs an in-loop replan
+# budget) but were three independently-drifted magic numbers — 4 / <3 / 2
+# — that don't share a constant (docs/BACKEND_RESILIENCE_DESIGN.md "three
+# depth caps"; unified per GOAL_BRAIN Decisions 2026-07-12, backend-
+# resilience ratification: "depth-cap inconsistency to be fixed to one
+# documented number"). One number so an operator reasoning about "how many
+# times will Maro retry before giving up" only has to know one value.
+# tests/test_depth_cap_unified.py tripwires every site against this.
+MAX_RESTART_DEPTH = 3
+
+
 class LoopPhase:
     """Named constants for the major phases of run_agent_loop."""
     INIT = "init"                    # Phase A: setup, adapter, project
@@ -295,7 +311,7 @@ class LoopContext:
     # Adaptive execution (Phase 64)
     steps_since_last_check: int = 0
     director_replan_count: int = 0
-    director_budget_ceiling: int = 2
+    director_budget_ceiling: int = MAX_RESTART_DEPTH
 
     step_callback: Optional[Callable] = None
     channel: Any = None  # Optional ConversationChannel for mid-loop escalation (Phase 64C)

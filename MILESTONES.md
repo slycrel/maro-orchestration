@@ -3,9 +3,11 @@
 What to do next, in what order. Updated each session. Deferred ideas live in BACKLOG.md; completed phase history in docs/history/ROADMAP_ARCHIVE.md (ROADMAP.md is a stub). This file is the executable queue.
 
 Last updated: 2026-07-12 (Sonnet execution session: post-handoff queue item -5
-#2 escalation file surface SHIPPED — see -5 #2 for full detail). Previous:
-2026-07-12 (same session: -5 #1 supervision-convergence chunk SHIPPED — see
--5 #1 and BACKLOG -1 for full detail). Previous: 2026-07-12 (Fable-handoff audit session: queue staleness reconciled — **-4 Purgatorio is COMPLETE through r2**, -1 memory arc and 0 substrate trial no longer carry "current arc" labels; design-pass vehicles for the remaining 1.0 blockers land below as they ship this session. Context: top-tier-model access ends ~2026-07-13; this session front-loads design judgment so Sonnet/Opus sessions inherit execution-shaped chunks). Previous: 2026-07-09 evening (decision-cleanup session: BACKLOG #19 thread-arch decisions ALL RESOLVED by Jeremy + recursion decree — see GOAL_BRAIN Decisions 2026-07-09; new queue items **1.5** planning-depth shadow + **1.6** /loop trace below; verify→learn design decided as the next arc after 1.0). Previous: same day (concurrency-hardening arc COMPLETE — see **-2** below). Previous: 2026-07-07 (memory direction DECIDED by Jeremy — module + 3rd-party consideration; port + adapter-0 + contract tests shipped as chunk 1 of the new **-1. Memory module arc** below; bake-off is next). Previous: 2026-07-04 (overnight: MCP dispatch fixed, tier-a write fence, ancestry read-side, rung-4 call-record link. Morning: write fence ENABLED + live-proven (Jeremy's flip); ancestry write-side CLOSED; BACKLOG #9 validator ROI (`python3 -m validator_roi`); fetch unification (`fetch` tool). Midday: fence NARROWED per Jeremy — /tmp allowed + goal-declared paths widen fence (`FENCE_EXTENDED`), intent trumps; workspace scratch `~/.maro/workspace/tmp/`. Afternoon (AFK arc): docs refactor (three-species taxonomy, docs/history/, test-enforced frontmatter), dev-recall ghost-index rebuilt, BACKLOG full triage 810→~540 lines every-claim-verified, **memory decision brief delivered → `docs/history/2026-07-04-memory-decision-brief.md` AWAITING JEREMY** — that decision gates the next big chunk. See GOAL_BRAIN Decisions 2026-07-04. BACKLOG remaining: #0 mining passes + raw archive, #1 residual Bash write shapes (evidence-driven), #10 local_max_tokens tuning, #14 llm-adapter streaming (promoted, unblocked)).
+#3 depth-cap unification SHIPPED — see -5 #3 for full detail). Previous:
+2026-07-12 (same session: -5 #2 escalation file surface SHIPPED — see -5 #2
+for full detail). Previous: 2026-07-12 (same session: -5 #1
+supervision-convergence chunk SHIPPED — see -5 #1 and BACKLOG -1 for full
+detail). Previous: 2026-07-12 (Fable-handoff audit session: queue staleness reconciled — **-4 Purgatorio is COMPLETE through r2**, -1 memory arc and 0 substrate trial no longer carry "current arc" labels; design-pass vehicles for the remaining 1.0 blockers land below as they ship this session. Context: top-tier-model access ends ~2026-07-13; this session front-loads design judgment so Sonnet/Opus sessions inherit execution-shaped chunks). Previous: 2026-07-09 evening (decision-cleanup session: BACKLOG #19 thread-arch decisions ALL RESOLVED by Jeremy + recursion decree — see GOAL_BRAIN Decisions 2026-07-09; new queue items **1.5** planning-depth shadow + **1.6** /loop trace below; verify→learn design decided as the next arc after 1.0). Previous: same day (concurrency-hardening arc COMPLETE — see **-2** below). Previous: 2026-07-07 (memory direction DECIDED by Jeremy — module + 3rd-party consideration; port + adapter-0 + contract tests shipped as chunk 1 of the new **-1. Memory module arc** below; bake-off is next). Previous: 2026-07-04 (overnight: MCP dispatch fixed, tier-a write fence, ancestry read-side, rung-4 call-record link. Morning: write fence ENABLED + live-proven (Jeremy's flip); ancestry write-side CLOSED; BACKLOG #9 validator ROI (`python3 -m validator_roi`); fetch unification (`fetch` tool). Midday: fence NARROWED per Jeremy — /tmp allowed + goal-declared paths widen fence (`FENCE_EXTENDED`), intent trumps; workspace scratch `~/.maro/workspace/tmp/`. Afternoon (AFK arc): docs refactor (three-species taxonomy, docs/history/, test-enforced frontmatter), dev-recall ghost-index rebuilt, BACKLOG full triage 810→~540 lines every-claim-verified, **memory decision brief delivered → `docs/history/2026-07-04-memory-decision-brief.md` AWAITING JEREMY** — that decision gates the next big chunk. See GOAL_BRAIN Decisions 2026-07-04. BACKLOG remaining: #0 mining passes + raw archive, #1 residual Bash write shapes (evidence-driven), #10 local_max_tokens tuning, #14 llm-adapter streaming (promoted, unblocked)).
 
 Truth anchor: GOAL_BRAIN.md Threads. History: docs/history/ROADMAP_ARCHIVE.md.
 
@@ -42,8 +44,21 @@ Truth anchor: GOAL_BRAIN.md Threads. History: docs/history/ROADMAP_ARCHIVE.md.
       (files table + Notify section) both document the new surface.
       6 new tests (`test_notify.py` ×5, `test_doctor.py` ×1), full suite
       green. Substrate notify contract unchanged — it IS the design.
-   3. **Depth-cap unification** (backend-resilience ratification residual):
-      one documented number + tripwire test.
+   3. **Depth-cap unification — SHIPPED 2026-07-12** (backend-resilience
+      ratification residual): three independently-drifted magic numbers —
+      `MARO_MAX_CONTINUATION_DEPTH=4` (loop_post_step.py), hardcoded `< 3`
+      ×2 (handle.py director-restart + closure-restart gates),
+      `director_budget_ceiling=2` (loop_types.py, in-loop director replan
+      budget — a distinct counter from continuation_depth, kept distinct,
+      just given the same value) — unified to one new shared constant
+      `loop_types.MAX_RESTART_DEPTH = 3` (majority value, all three sites
+      now import/reference it; `doctor.py`'s status line updated to match).
+      Fixes a real inconsistency: continuation re-enqueue previously
+      tolerated one more pass (depth 4) than director/closure restart
+      would ever reach (capped at depth 3) — now aligned. 4 new tripwire
+      tests (`test_depth_cap_unified.py`, source-scan for stray literals)
+      + stale numeric mentions fixed in `skills/arch-interface-routing.md`
+      and `docs/ADAPTIVE_EXECUTION_DESIGN.md`. Full suite green (166).
    4. **Routing Part A — needs-live-data signal**
       (`docs/ROUTING_AND_PROBE_SYNTHESIS_DESIGN.md` Part A, one session).
       Acceptance: Manti canonical case routes AGENDA naturally.

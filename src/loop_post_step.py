@@ -18,7 +18,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from loop_types import LoopContext, StepOutcome, _orch
+from loop_types import LoopContext, StepOutcome, _orch, MAX_RESTART_DEPTH
 from loop_artifacts import _write_plan_manifest
 from loop_planning import _shape_steps
 from loop_report import write_run_report as _write_run_report, write_runs_index as _write_runs_index
@@ -73,7 +73,8 @@ def _handle_budget_ceiling(
             )
             _next_depth = continuation_depth + 1
 
-            _max_depth = int(os.environ.get("MARO_MAX_CONTINUATION_DEPTH", "4"))
+            _max_depth = int(os.environ.get(
+                "MARO_MAX_CONTINUATION_DEPTH", str(MAX_RESTART_DEPTH)))
 
             if continuation_depth >= _max_depth:
                 _esc_reason = (

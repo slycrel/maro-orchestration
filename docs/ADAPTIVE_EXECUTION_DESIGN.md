@@ -69,7 +69,7 @@ class EvaluationContext:
 
 **`verify_failure_count` reset rule:** resets to 0 on the first passing ralph verify. A single pass zeroes it — prevents flaky verifiers from permanently elevating director call frequency.
 
-`convergence_budget_remaining` is computed as `director_budget_ceiling - director_replan_count`. In Phase A both are inert (0 and 2 respectively), so this field always reads 2. The LLM prompt should label it informational-only in Phase A to avoid confusing the model with a value it can't act on.
+`convergence_budget_remaining` is computed as `director_budget_ceiling - director_replan_count`. In Phase A both are inert (0 and `loop_types.MAX_RESTART_DEPTH`, currently 3, respectively), so this field always reads that ceiling value. The LLM prompt should label it informational-only in Phase A to avoid confusing the model with a value it can't act on.
 
 This keeps the LLM context small and the interface stable regardless of LoopContext internals.
 
@@ -102,7 +102,7 @@ class DirectorDecision:
 ```python
 # In LoopContext:
 director_replan_count: int = 0     # increments on each 'replan' or 'restart' action
-director_budget_ceiling: int = 2   # max replans before escalation is forced
+director_budget_ceiling: int = MAX_RESTART_DEPTH   # max replans before escalation is forced (shared depth-cap constant, loop_types.py — unified 2026-07-12, was hardcoded 2)
 steps_since_last_check: int = 0    # increments each step, resets on director check
 ```
 
@@ -111,7 +111,7 @@ Rules:
 - Each `restart` action: `director_replan_count += 1` (restart counts as a replan)
 - If `director_replan_count >= director_budget_ceiling`: next director decision **must** be `escalate` or `continue` — `replan` and `restart` are disallowed
 - A `restart` does **not** reset `director_replan_count` — it persists across restart boundaries
-- `director_budget_ceiling` is configurable; default 2 (one replan + one restart before escalation)
+- `director_budget_ceiling` defaults to `loop_types.MAX_RESTART_DEPTH` (currently 3) — the same constant shared with handle.py's continuation-restart depth cap and loop_post_step.py's continuation-pass cap
 
 This is what makes the anti-meandering guarantee real: the counter survives restarts.
 

@@ -323,12 +323,16 @@ def run_doctor() -> bool:
     except Exception as exc:
         results.append(_check("Bughunter (src/)", True, f"skipped: {exc}"))  # optional, not fatal
 
-    # Continuation traversal config
+    # Continuation traversal config — default derives from the shared
+    # restart-depth ceiling (loop_types.MAX_RESTART_DEPTH); see
+    # tests/test_depth_cap_unified.py.
+    from loop_types import MAX_RESTART_DEPTH as _restart_depth_default
     _max_depth = os.environ.get("MARO_MAX_CONTINUATION_DEPTH", "")
     results.append(_check(
         "MARO_MAX_CONTINUATION_DEPTH",
-        True,  # optional — default of 4 is fine, warn only when unset for awareness
-        f"={_max_depth}" if _max_depth else "not set (default: 4 passes before escalation)",
+        True,  # optional — the shared default is fine, warn only when unset for awareness
+        f"={_max_depth}" if _max_depth
+        else f"not set (default: {_restart_depth_default} passes before escalation)",
     ))
 
     _step_timeout = os.environ.get("MARO_STEP_TIMEOUT", "")

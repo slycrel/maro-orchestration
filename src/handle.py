@@ -1548,9 +1548,10 @@ def _handle_impl(
 
         # Director restart: loop broke with restart status — re-run with restart context.
         # continuation_depth increment prevents infinite restart loops.
+        from loop_types import MAX_RESTART_DEPTH
         if (loop_result.status == "restart"
                 and not dry_run
-                and _loop_kwargs.get("continuation_depth", 0) < 3):
+                and _loop_kwargs.get("continuation_depth", 0) < MAX_RESTART_DEPTH):
             try:
                 _restart_ctx = loop_result.stuck_reason or "Director requested restart."
                 _restart_ancestry = (
@@ -1643,7 +1644,7 @@ def _handle_impl(
                 and _closure.checks_run > 0
                 and _closure.checks_passed < _closure.checks_run  # at least one check FAILED
                 and getattr(_closure, "inconclusive_count", 0) == 0
-                and _depth < 3
+                and _depth < MAX_RESTART_DEPTH
                 and loop_result.status == "done"  # only escalate from "done" — stuck/partial already know they're incomplete
             ):
                 _gap_lines = "\n".join(f"- {g}" for g in _closure.gaps) or "(none specified)"
