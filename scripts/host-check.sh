@@ -63,6 +63,24 @@ pass() { TRIPPED=$TRIPPED; [ "$QUIET" -eq 1 ] || printf 'PASS  %-10s %s\n' "$1" 
 fail() { TRIPPED=1;        printf 'FAIL  %-10s %s\n' "$1" "$2"; }
 skip() { TRIPPED=$TRIPPED; [ "$QUIET" -eq 1 ] || printf 'SKIP  %-10s %s\n' "$1" "$2"; }
 
+# Human-scale duration string, picked by magnitude so a sub-day
+# MARO_HEARTBEAT_MAX_SEC override (e.g. the pre-2026-07-12 900s default)
+# doesn't get crushed to "0d" by integer division, and so age/threshold
+# always share the same unit in a message instead of mixing raw seconds
+# with days (2026-07-12 fix — adversarial review finding).
+_fmt_dur() {
+    local s="$1"
+    if [ "$s" -lt 120 ]; then
+        echo "${s}s"
+    elif [ "$s" -lt 7200 ]; then
+        echo "$((s / 60))m"
+    elif [ "$s" -lt 172800 ]; then
+        echo "$((s / 3600))h"
+    else
+        echo "$((s / 86400))d"
+    fi
+}
+
 # --- (1) disk + inodes -------------------------------------------------------
 # df the workspace fs itself (follows whichever fs the workspace lives on; on
 # this host that resolves to / = /dev/sda3, no dedicated mount). Fail if block
@@ -179,11 +197,11 @@ check_heartbeat() {
     # HB_MAX_SEC–30day window. Set MARO_HEARTBEAT_EXPECTED=1 to enforce
     # staleness regardless (e.g. once a recurring hook is actually wired).
     if [ "$age" -gt 2592000 ] && [ "${MARO_HEARTBEAT_EXPECTED:-0}" != "1" ]; then
-        skip heartbeat "no active loop (last beat $((age / 86400))d ago; intentionally off — MARO_HEARTBEAT_EXPECTED=1 to enforce)"
+        skip heartbeat "no active loop (last beat $(_fmt_dur "$age") ago; intentionally off — MARO_HEARTBEAT_EXPECTED=1 to enforce)"
     elif [ "$age" -gt "$HB_MAX_SEC" ]; then
-        fail heartbeat "last beat $((age / 86400))d ago (> $((HB_MAX_SEC / 86400))d); checked_at=${checked_at:-<none>}"
+        fail heartbeat "last beat $(_fmt_dur "$age") ago (> $(_fmt_dur "$HB_MAX_SEC")); checked_at=${checked_at:-<none>}"
     else
-        pass heartbeat "last beat ${age}s ago (< $((HB_MAX_SEC / 86400))d)"
+        pass heartbeat "last beat $(_fmt_dur "$age") ago (< $(_fmt_dur "$HB_MAX_SEC"))"
     fi
 }
 

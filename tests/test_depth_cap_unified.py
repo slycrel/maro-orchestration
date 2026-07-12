@@ -28,13 +28,27 @@ def test_director_budget_ceiling_matches_shared_constant():
 
 
 def test_handle_restart_gates_reference_shared_constant():
+    """Both handle.py restart gates individually, not just an aggregate count.
+
+    A prior version of this test only checked `MAX_RESTART_DEPTH` appeared
+    >=2 times in the file — satisfied by the import statement plus a single
+    untouched gate, so reverting just the closure-restart gate back to a
+    hardcoded `< 3` still passed (caught by adversarial review 2026-07-12).
+    """
     src = (REPO_ROOT / "src" / "handle.py").read_text()
-    assert src.count("MAX_RESTART_DEPTH") >= 2, (
-        "handle.py's director-restart and closure-restart continuation_depth "
-        "gates must both reference loop_types.MAX_RESTART_DEPTH"
+    # Director-restart gate: _loop_kwargs.get("continuation_depth", 0) < MAX_RESTART_DEPTH
+    assert re.search(r'continuation_depth",\s*0\)\s*<\s*MAX_RESTART_DEPTH', src), (
+        "handle.py's director-restart continuation_depth gate must reference "
+        "loop_types.MAX_RESTART_DEPTH"
     )
-    # No bare numeric continuation_depth comparison left behind.
-    assert not re.search(r"continuation_depth[^\n]{0,20}<\s*\d", src)
+    # Closure-restart gate: _depth < MAX_RESTART_DEPTH
+    assert re.search(r'\b_depth\s*<\s*MAX_RESTART_DEPTH\b', src), (
+        "handle.py's closure-restart _depth gate must reference "
+        "loop_types.MAX_RESTART_DEPTH"
+    )
+    # No bare numeric literal left on either gate.
+    assert not re.search(r"continuation_depth[^\n]{0,40}<\s*\d", src)
+    assert not re.search(r"\b_depth\s*<\s*\d", src)
 
 
 def test_continuation_pass_default_references_shared_constant():
