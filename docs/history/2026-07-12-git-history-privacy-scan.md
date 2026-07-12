@@ -9,6 +9,18 @@ First execution of the long-deferred "git-history personal-data review"
 Read-only forensic pass over all 1,114 commits (history from 2026-03-05,
 .git = 20M). Triggered while wiring the PyPI 0.8.0 name-reserve publish.
 
+> **STATUS: EXECUTED 2026-07-12.** The rewrite below was run and force-pushed
+> to all branches/tags (`main` 16cd656→77db43c, `factory` 27acb82→1476f97).
+> Verified 0 employer-token occurrences on every surface (author/committer,
+> commit messages, blob content, tag tagger) across all refs; yahoo identity
+> kept; research docs intact. Local pre-rewrite backup: scratch
+> `maro-mirror-backup-prewrite` (never pushed). **Note:** this rewrite
+> self-scrubbed THIS doc — the employer token was obfuscated to `redacted`
+> wherever it appeared below, so lines like the mailmap/`replace-text`
+> examples now read circularly (`redacted==>redacted`). That is expected and
+> harmless; the config is historical and the literal match-token is
+> deliberately not restated. Meaning survives.
+
 ## Headline: the shipped package is clean
 
 The sdist/wheel contain **zero** files from `research/` or `docs/` — only

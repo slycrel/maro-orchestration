@@ -2053,6 +2053,21 @@ Sample: the 2026-05-13..17 window of `~/.maro/workspace/runs/` (478 dirs total;
   session doc-commit messages name the email). Turnkey runbook in the scan
   doc. Jeremy will execute soon, after wrapping the concurrent Sonnet
   session. 0.8.0 publish independent, before or after.
+- **2026-07-12 (git-history rewrite EXECUTED — Jeremy said go):** force-push
+  landed. `origin/main` 16cd656→`77db43c`, `factory` 27acb82→`1476f97`, tags
+  re-pointed (`v0.2.0` changed, `v0.1.0` had nothing to scrub), no refs
+  deleted. Verified 0 employer-token occurrences on every surface
+  (author/committer, commit messages, blob content, tag tagger) across ALL
+  refs; yahoo identity kept (86); research/knowledge-layer docs intact. Local
+  pre-rewrite backup in scratch (`maro-mirror-backup-prewrite`, never pushed —
+  recovery path; delete when confident). **The scan doc + these Decisions
+  entries were self-scrubbed by the rewrite** (the employer token → `redacted`
+  wherever they quoted it — expected, meaning survives). Also fixed: this
+  Mac's git `user.email` was the work email, so set repo-local `user.email` to
+  the noreply identity to stop new commits reintroducing it. **ACTION REQUIRED on every
+  OTHER clone (Ubuntu box + any session): `git fetch origin && git reset
+  --hard origin/main` — do NOT pull/merge; ~1101/1114 SHAs changed so old
+  local history is orphaned.** PyPI 0.8.0 unaffected (no SHA coupling).
 
 ## Threads (system-maintained — nothing leaves this list silently)
 

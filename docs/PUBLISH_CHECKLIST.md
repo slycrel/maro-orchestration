@@ -15,8 +15,12 @@ orchestration directly via openclaw or hermes instead of dev style".
 ## Security and privacy review
 - [ ] No secrets, tokens, credentials, or private hostnames/paths are committed.
 - [ ] Examples use generic placeholders (no personal account data).
-- [ ] Git-history personal-data review done (Jeremy's own pass — deferred to a
-  dedicated conversation, GOAL_BRAIN Decisions 2026-07-09).
+- [x] Git-history personal-data review done (2026-07-12). Scan found no real
+  secrets; the one exposure (work email `jstone@<employer>.com` on 46 commits
+  + employer strings in two knowledge-layer docs) was scrubbed via a
+  `git filter-repo` mailmap + content/message obfuscation rewrite, force-pushed
+  to all branches/tags. 0 on every surface, verified. See
+  `docs/history/2026-07-12-git-history-privacy-scan.md`.
 
 ## Functional sanity checks
 - [ ] `pytest` passes.
