@@ -33,6 +33,11 @@ _VERIFY_STEP_SYSTEM = textwrap.dedent("""\
     PASS: the result directly addresses the step goal with specific content.
     RETRY: the result is vague, off-topic, incomplete, or mostly a plan for doing
            the work rather than the work itself.
+    RETRY also when the result PROMISES future or background completion instead
+    of reporting finished work ("started a monitor", "will be notified when it
+    completes", "running in background, will report back") — a promise is not
+    the work; the agent's session ends when it returns, so promised follow-ups
+    never run. State in your reason that the step must re-execute SYNCHRONOUSLY.
 
     Respond with JSON only:
     {"verdict": "PASS" or "RETRY", "reason": "one sentence", "confidence": 0.0-1.0}

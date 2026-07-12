@@ -497,6 +497,56 @@ _INPUT_CONSUMING_KEYWORDS = (
 )
 
 
+_ASYNC_ESCAPE_HINT = (
+    "[Previous attempt failed: it started background work (a monitor/job/"
+    "watcher) and returned a promise instead of results — nothing survives "
+    "your session to receive that notification, so the work never happens.] "
+    "Re-execute this step SYNCHRONOUSLY: run each command to completion in "
+    "the foreground and report the observed output. Do NOT spawn background "
+    "jobs, monitors, or watchers; do NOT report 'waiting' or 'will be "
+    "notified'. If the operation is too large to finish here, execute a "
+    "bounded subset now and report its actual results."
+)
+
+_ENV_CLAIM_HINT = (
+    "[Previous attempt failed: it claimed the execution environment lacks "
+    "file/shell access without probing.] Before claiming any environment "
+    "limitation, PROBE it: run a trivial command (`ls`) or read one file. "
+    "If the probe succeeds, the limitation is false — do the step's actual "
+    "work. If the probe genuinely fails, call flag_stuck and include the "
+    "probe command and its exact error output as evidence."
+)
+
+
+def _escape_pattern_hint(block_reason: str, step_result: str) -> str:
+    """Targeted retry hint for escape-pattern blocks (BACKLOG #23a/#23g).
+
+    Matches the deterministic tags step_exec stamps on demoted outcomes, and
+    falls back to re-running the detectors on the result text for blocks that
+    arrive via the ralph verifier (untagged reasons). Returns '' when the
+    block is not escape-shaped.
+    """
+    try:
+        from step_exec import (
+            ASYNC_ESCAPE_TAG, ENV_CLAIM_TAG,
+            result_signals_async_escape, result_claims_env_limitation,
+        )
+    except Exception:
+        return ""
+    reason = block_reason or ""
+    if reason.startswith(ASYNC_ESCAPE_TAG):
+        return _ASYNC_ESCAPE_HINT
+    if reason.startswith(ENV_CLAIM_TAG):
+        return _ENV_CLAIM_HINT
+    # Ralph-verify path: reason is "[ralph verify] ..." — check the result.
+    if reason.startswith("[ralph verify]") and step_result:
+        if result_signals_async_escape(step_result):
+            return _ASYNC_ESCAPE_HINT
+        if result_claims_env_limitation(step_result):
+            return _ENV_CLAIM_HINT
+    return ""
+
+
 def _looks_like_missing_input(text: str) -> bool:
     """True if text reads like a referenced external resource is absent."""
     low = (text or "").lower()
@@ -764,6 +814,26 @@ def _handle_blocked_step(
             split_into=_research_steps + [step_text],  # research first, then retry original
             metacognitive_reason=f"step requested info: {_info_needed[:100]}",
         )
+
+    # Escape-pattern demotions (BACKLOG #23a/#23g): step_exec tagged the block
+    # deterministically; the ralph verifier can also land here with an untagged
+    # reason, so the result text is checked as a fallback. The generic round-1
+    # hint ("try an alternative approach") actively reinforced the async
+    # pattern on run 89cb097a — the retry repeated it and rode the 600s
+    # timeout twice. These targeted hints name the exact required behavior.
+    if prior_retries < _RETRY_THRESHOLD:
+        _escape_hint = _escape_pattern_hint(block_reason, step_result)
+        if _escape_hint:
+            return _BlockDecision(
+                retry=True,
+                hint=_escape_hint,
+                loop_status="",
+                stuck_reason="",
+                metacognitive_reason=(
+                    "escape-pattern demotion — targeted synchronous/probe "
+                    "re-execution hint"
+                ),
+            )
 
     # Missing external input: the step tried to consume a resource (file/url)
     # that does not exist. Retrying won't make it appear; splitting won't help;

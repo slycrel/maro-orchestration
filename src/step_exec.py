@@ -35,6 +35,19 @@ EXECUTE_SYSTEM = textwrap.dedent("""\
       - flag_stuck: genuinely blocked (explain precisely)
     Do NOT flag_stuck for solvable problems — work through them first.
 
+    SYNCHRONOUS EXECUTION — the step's work happens INSIDE the step:
+    Run commands to completion in the foreground and report their observed
+    output. NEVER start a background job, monitor, watcher, or timer and
+    return saying you are "waiting" or "will be notified when it completes" —
+    your session ends the moment you return, so nothing survives to receive
+    that notification and the work simply never happens. A result that
+    promises future completion ("started X, it will finish later") is a
+    FAILED step. If an operation is too large to finish here, execute a
+    bounded subset now and report its actual results.
+    (Long-lived servers/daemons are the one exception: background-spawn,
+    then probe readiness and report the observed probe result in this same
+    step — that is finished work, not a promise.)
+
     ANTI-HALLUCINATION:
     If you cannot verify a claim from code or data you have directly read in
     this step, do NOT state it as fact. Mark unverified claims as [UNVERIFIED]
@@ -248,6 +261,89 @@ _LONG_LIVED_PROCESS_EXTRA = textwrap.dedent("""\
     in the SAME step (start → probe → use → kill). A trailing PID is not a
     valid handoff to a later step.
 """).strip()
+
+
+# ---------------------------------------------------------------------------
+# Escape-pattern detectors (BACKLOG #23a / #23g)
+# ---------------------------------------------------------------------------
+# Corpus Family 3 (claims-without-execution) manifesting inside our own
+# pipeline. Two live specimens, both from the research-r2/r4 arc:
+#   async-escape (run 89cb097a): worker started a background Monitor and
+#     returned "it will notify me when the subprocess completes" — delegated
+#     the work to async machinery that cannot outlive the worker's session.
+#   env-limitation (run 8a20665f step 3): worker burned $0.93 on a step
+#     premised on "the execution environment does not provide Read/Bash" —
+#     false, and never probed; the next step read the file fine.
+# Both are cheap to catch deterministically at the complete_step seam; the
+# targeted retry hints live in loop_blocked._handle_blocked_step.
+
+ASYNC_ESCAPE_TAG = "[async-escape]"
+ENV_CLAIM_TAG = "[env-claim-unprobed]"
+
+_ASYNC_ESCAPE_RES = tuple(re.compile(p, re.IGNORECASE) for p in (
+    # "a Monitor that will notify me when the subprocess completes"
+    r"\b(?:monitor|watcher|listener|background\s+(?:job|task|process))\b"
+    r"[^.\n]{0,80}\bwill\s+(?:notify|alert|report|wake|trigger)\b",
+    # "started/launched X in the background ... will/once/when ..."
+    r"\b(?:started|launched|kicked\s+off|spawned|initiated)\b[^.\n]{0,80}"
+    r"\bin\s+the\s+background\b[^.\n]{0,80}\b(?:will|once|when|after)\b",
+    # "I will be notified when it completes/finishes"
+    r"\bwill\s+be\s+notified\s+when\b",
+    # "waiting for <it/the job> to complete/finish" as the step's end state
+    # (lookbehinds skip past-tense narration: "after waiting for X ...")
+    r"(?<!after\s)(?<!while\s)\b(?:now\s+)?waiting\s+for\b[^.\n]{0,60}"
+    r"\bto\s+(?:complete|finish)\b",
+    # "will check back / check on it later"
+    r"\bcheck\s+(?:back|on\s+it)\s+(?:later|shortly|in\b)",
+    # "results will be available once/when it completes"
+    r"\b(?:results?|output)\s+will\s+be\s+(?:available|ready)\s+(?:once|when|after)\b",
+))
+
+_ENV_LIMITATION_RES = tuple(re.compile(p, re.IGNORECASE) for p in (
+    # "the execution environment does not provide Read, Bash, or local file access"
+    r"\benvironment\s+does\s+not\s+(?:provide|support|allow|include|offer)\b",
+    r"\b(?:do(?:es)?\s+not|don't|doesn't)\s+have\s+(?:access\s+to\s+)?"
+    r"(?:the\s+|a\s+)?(?:file\s*system|filesystem|shell|bash|terminal|local\s+file)",
+    r"\bno\s+(?:shell|bash|terminal|file\s*system|filesystem|file|disk)\s+access\b",
+    r"\b(?:read|bash|write|shell|file)\s+tools?\s+(?:are|is)\s+not\s+available\b",
+    r"\bcannot\s+(?:access|read|write|execute|run)\s+(?:local\s+)?"
+    r"(?:files?|commands?|scripts?|the\s+file\s*system)\b",
+    r"\bunable\s+to\s+(?:access|read)\s+(?:the\s+)?(?:local\s+)?file",
+))
+
+
+def _first_match_snippet(result: str, patterns) -> str:
+    """Return the first matched snippet (trimmed) or '' when none match."""
+    if not result:
+        return ""
+    for rx in patterns:
+        m = rx.search(result)
+        if m:
+            return m.group(0)[:120]
+    return ""
+
+
+def result_signals_async_escape(result: str) -> str:
+    """Matched snippet when a step result promises future background work
+    instead of reporting finished work; '' otherwise."""
+    return _first_match_snippet(result, _ASYNC_ESCAPE_RES)
+
+
+def result_claims_env_limitation(result: str) -> str:
+    """Matched snippet when a step result claims the environment lacks
+    file/shell/tool access; '' otherwise. Callers gate on agentic lanes
+    (subprocess/codex), where such a claim is false by construction unless
+    accompanied by a failed probe."""
+    return _first_match_snippet(result, _ENV_LIMITATION_RES)
+
+
+def _result_shows_probe_evidence(result: str) -> bool:
+    """True when the result shows an actual probe attempt (command + outcome)
+    alongside an environment claim — evidence-backed claims are not blocked."""
+    low = (result or "").lower()
+    return bool(re.search(
+        r"(?:probe[d]?|ran|executed|tried)\b[^.\n]{0,40}"
+        r"(?:`ls|`pwd|`cat|ls\b|pwd\b)", low))
 
 
 def _result_looks_like_raw_dump(result: str) -> bool:
@@ -1051,6 +1147,30 @@ def execute_step(
                     _outcome["inject_steps"] = _clean_inject
                     log.info("step %d inject_steps: %d step(s) added to plan",
                              step_num, len(_clean_inject))
+            # Escape-pattern demotions (BACKLOG #23a/#23g): a "done" whose
+            # result is a promise of future background work, or an unprobed
+            # environment-limitation claim on an agentic lane, is not done.
+            # Demote to blocked with a tagged reason so the blocked-step
+            # handler can issue the targeted retry hint (loop_blocked).
+            _async_snippet = result_signals_async_escape(_result_text)
+            if _async_snippet:
+                log.warning("step %d ASYNC_ESCAPE detected (%r) — demoting done → blocked",
+                            step_num, _async_snippet)
+                _outcome["status"] = "blocked"
+                _outcome["stuck_reason"] = (
+                    f"{ASYNC_ESCAPE_TAG} step returned a promise of future "
+                    f"background work instead of finished work: \"{_async_snippet}\""
+                )
+            elif getattr(adapter, "backend", "") in ("subprocess", "codex"):
+                _env_snippet = result_claims_env_limitation(_result_text)
+                if _env_snippet and not _result_shows_probe_evidence(_result_text):
+                    log.warning("step %d ENV_CLAIM_UNPROBED detected (%r) — demoting done → blocked",
+                                step_num, _env_snippet)
+                    _outcome["status"] = "blocked"
+                    _outcome["stuck_reason"] = (
+                        f"{ENV_CLAIM_TAG} step result rests on an unprobed "
+                        f"environment-limitation claim: \"{_env_snippet}\""
+                    )
         elif tc.name == "flag_stuck":
             _reason = tc.arguments.get("reason", "unknown")
             log.info("step %d BLOCKED (flag_stuck) reason=%r tokens=%d elapsed=%.1fs",
@@ -1280,6 +1400,11 @@ _VERIFY_SYSTEM = textwrap.dedent("""\
     PASS: the result directly addresses the step goal with specific content.
     RETRY: the result is vague, off-topic, incomplete, or mostly a plan for doing
            the work rather than the work itself.
+    RETRY also when the result PROMISES future or background completion instead
+    of reporting finished work ("started a monitor", "will be notified when it
+    completes", "running in background, will report back") — a promise is not
+    the work; the agent's session ends when it returns, so promised follow-ups
+    never run. State in your reason that the step must re-execute SYNCHRONOUSLY.
 
     Respond with JSON only:
     {"verdict": "PASS" or "RETRY", "reason": "one sentence", "confidence": 0.0-1.0}
