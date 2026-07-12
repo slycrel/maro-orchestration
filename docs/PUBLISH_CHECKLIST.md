@@ -41,10 +41,11 @@ orchestration directly via openclaw or hermes instead of dev style".
   workflow `pyPI-workflow.yml`, environment `pypi`); matching workflow
   shipped `6befbfb`. Manual `workflow_dispatch`, `dry_run` defaults true,
   publish job gated on explicit `dry_run=false` — nothing auto-publishes.
-- [ ] **Reserve-the-name publish at 0.8.0 (Jeremy's act):** Actions → "Publish
-  to PyPI" → Run with `dry_run=false`. First success converts the pending
-  publisher to ordinary and creates the project. (Optional pre-step: create a
-  `pypi` GitHub Environment with a required reviewer for a third gate.)
+- [x] **Reserve-the-name publish at 0.8.0 — DONE 2026-07-12.** Published via
+  the "Publish to PyPI" workflow (run #1, commit `e4e7467`, build+publish both
+  green, 41s). OIDC trusted publishing worked first try — no token. **Live at
+  https://pypi.org/project/maro-orchestration/ (0.8.0, wheel + sdist).** The
+  pending publisher is now a permanent trusted publisher.
 - [ ] 1.0.0 tag + publish at real readiness (post git-history review + the
   remaining -3 arc). Two-step by decree: 0.8.0 reserves the name now, 1.0.0
   is the real release.
