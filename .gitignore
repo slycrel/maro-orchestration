@@ -20,6 +20,9 @@ memory/
 # Temporary
 tmp/
 
+# Factory sim resumable run-state (scripts/factory_full_sim*.py --state-file)
+factory_sim_state.json
+
 # Playwright CLI session artifacts
 .playwright-cli/
 **/.playwright-cli/
