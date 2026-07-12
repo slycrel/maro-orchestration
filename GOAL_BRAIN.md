@@ -1940,6 +1940,19 @@ Sample: the 2026-05-13..17 window of `~/.maro/workspace/runs/` (478 dirs total;
   routing/verification gaps) so subsequent Sonnet/Opus sessions inherit
   execution-shaped chunks. BACKLOG #23 closed + #24 in progress in
   concurrent sessions the same day.
+- **2026-07-12 (handoff designs SHIPPED, same session):**
+  `docs/CONTAINER_EXECUTOR_DESIGN.md` (clears arch-r2-01's design half;
+  key catch: host `~/.claude` rw-mounted into the sandbox is an escape
+  vector — dedicated container auth volume instead; chunks C1–C4, flip is
+  Jeremy's at C4), `docs/VERIFY_LEARN_ARC.md` (next-arc-after-1.0 brief;
+  changes get expectation-at-birth → verdict-at-cadence → auto-revert with
+  symmetric authority; hard dependency = probe-env hardening B3),
+  `docs/ROUTING_AND_PROBE_SYNTHESIS_DESIGN.md` (needs_live_data classifier
+  signal — the classifier prompt's own BTC example teaches the Manti
+  misroute; Deliverable.shape + shape-conditional behavioral-probe MUST +
+  cwd=None hole closed). Ordered execution queue = MILESTONES -5;
+  successor-model guidance = `docs/IMPLEMENTATION_HANDOFF.md`; session
+  record = `docs/history/2026-07-12-fable-handoff.md`.
 
 ## Threads (system-maintained — nothing leaves this list silently)
 

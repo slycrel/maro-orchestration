@@ -37,7 +37,11 @@ BACKLOG, VISION, CLAUDE, README…) are living by definition and carry no frontm
 | The memory module (port/adapters/bridge/instrument)? | module docstrings are canonical: `src/memory_port.py` (contract), `src/memory_sqlite.py` (production store), `src/memory_jsonl.py` (reference adapter), `src/memory_bridge.py` (lessons ingest + worker slice), `src/memory_quality.py` (retrieval instrument); verdict pedigree in `history/2026-07-07-memory-bakeoff.md`; §7 A/B verdict in `history/2026-07-08-worker-slice-ab.md` (raw rows/logs in `../output/experiments/`) |
 | Memory/knowledge design (input to the memory decision) | `MEMORY_ARCHITECTURE.md`, `KNOWLEDGE_CRYSTALLIZATION.md` (both dormant-design; several of their "missing" items have since shipped — see the brief §2) |
 | Intent resolution / "what does done mean"? | `INTENT_RESOLUTION_DESIGN.md` (partially shipped) |
-| Portable/shareable learning — migration + learning packs (1.0 item (g))? | `PORTABLE_LEARNING_DESIGN.md` (dormant-design; provisional decisions awaiting Jeremy) |
+| Portable/shareable learning — migration + learning packs (1.0 item (g))? | `PORTABLE_LEARNING_DESIGN.md` (dormant-design; §8 RATIFIED 2026-07-12 — implementation queued) |
+| Containerized executor (arch-r2-01, 1.0 blocker #4)? | `CONTAINER_EXECUTOR_DESIGN.md` (dormant-design; chunks C1–C4 queued in MILESTONES) |
+| Verify→learn — the next arc after 1.0 (thread-arch #6)? | `VERIFY_LEARN_ARC.md` (dormant-design; hard dependency: probe-env hardening B3) |
+| Live-data routing signal + probe-synthesis first slice? | `ROUTING_AND_PROBE_SYNTHESIS_DESIGN.md` (dormant-design; Manti canonical case is the acceptance) |
+| Handing work to less-capable implementing models? | `IMPLEMENTATION_HANDOFF.md` (written at the 2026-07-12 Fable transition) |
 | Scope/constraint orchestration (Phase 65, PAUSED)? | `CONSTRAINT_ORCHESTRATION_DESIGN.md` + `_REVIEW` + `_AUDIT` |
 | Thread architecture reframe? | `THREAD_ARCHITECTURE.md` (dormant; navigator subset shipped) |
 | Thread architecture — what's actually still pending (vs. what shipped)? | `history/2026-07-09-thread-architecture-decisions-brief.md` (triage brief, not yet decided — see BACKLOG #19) |

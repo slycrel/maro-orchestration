@@ -16,10 +16,10 @@ per-skill sandboxing that does not exist on the live path.
 **There is no sandbox on the live executor path.** The work executor spawns
 the Claude CLI with permissions pre-granted and full built-in tool access:
 
-- `claude -p ... --dangerously-skip-permissions` — `src/llm.py:1007`
+- `claude -p ... --dangerously-skip-permissions` — `src/llm.py:1223-1234`
 - The only tool restrictions: `--disallowedTools WebFetch,WebSearch` on
-  executor calls (`src/llm.py:1017`), and `--tools ""` (no tools at all) for
-  utility calls like routing/classification (`src/llm.py:1015`) so a
+  executor calls (`src/llm.py:1234`), and `--tools ""` (no tools at all) for
+  utility calls like routing/classification (`src/llm.py:1232`) so a
   classifier can't act on the goal it's classifying.
 
 That subprocess runs as the operator's user, with the operator's filesystem,
@@ -56,7 +56,11 @@ demoted, and logged after the fact.
 
 ## 2. Decided 1.0 direction: containerized executor
 
-**DECIDED 2026-07-09 (Jeremy), DESIGN PENDING — gets its own pass.**
+**DECIDED 2026-07-09 (Jeremy). DESIGN SHIPPED 2026-07-12 →
+`docs/CONTAINER_EXECUTOR_DESIGN.md`** (seam, image, auth-volume trap, mount
+map, config keys, degradation, sandbox.py retirement, implementation chunks
+C1–C4). Implementation not started; `executor.container` defaults OFF until
+runtime-box burn-in (C4, Jeremy adjudicates the flip).
 
 > "Play nice with security here and dockerize this path so there's literally
 > no way to screw things up. Mount a working dir and maybe make some other
