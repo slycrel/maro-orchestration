@@ -1673,6 +1673,21 @@ Sample: the 2026-05-13..17 window of `~/.maro/workspace/runs/` (478 dirs total;
   like that." Implication for batch-04: lesson-funnel measurement should
   ride organic direct-use work, not synthetic batches; funnel-threshold
   tuning is deprioritized until real goals flow.
+- **2026-07-11 (opt-in coordination brain — Jeremy, evening):** "All of
+  this is starting to make me want an opt-in brain for the users of this
+  orchestration, to share knowledge and skills; sourced, with pedigree,
+  maro-graduated and proven skills only, and only opt-in overall from
+  the user's standpoint, the sharing and details are maro-as-clients
+  talking to a coordination server. But that's for later." Post-1.0
+  vision, refines the 07-10 shared-directory direction with
+  architecture: coordination server + maro clients, pedigree
+  first-class, graduation as the share gate, opt-in as hard default.
+  Recorded in BACKLOG Vision. Same message: X API pricing rules out the
+  official lane — "free fragile workarounds it is for now" (the
+  x-ct-reseed/cookie dance is the accepted posture, maintenance
+  expected); routing gap remains a real priority ("routing prob still
+  needs addressed and matters"); session-reuse parked as a standalone
+  BACKLOG investigation, not a session rider.
 - **2026-07-11 (learn-a-language + platform-access skills — Jeremy):**
   doubling down on the failure-pattern research: "I'd like to push for
   the whole 'learn a language to get things done' thing here... skill to

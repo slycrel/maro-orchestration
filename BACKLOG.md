@@ -273,6 +273,10 @@ crowd-sourced or not)."
     machinery already draws the lines for. Related:
     [[recursive-orchestration-memory]] CAG direction. Spike = measure
     resume vs fresh on a 5-step segment before designing anything.
+    **Jeremy 2026-07-11: parked as a standalone investigation** ("maybe
+    we add that to the backlog for investigation instead of an add-on
+    to this session") — pick up as its own measured spike, not as a
+    rider on other work.
   - **Self-speedup run adjudicated 2026-07-11 (fd483efb-stout-ember,
     $1.14, 47min, 7 steps + 4 ranked proposals + a genuinely good
     adversarial self-verification that caught its own 65s double-count).
@@ -619,6 +623,20 @@ threat model at internet scale) — provenance required, same
 injection/dangerous-pattern gates as skills-lite, imports arrive as
 reviewable candidates never auto-trusted. Direction, not design; wants its
 own pass when 1.0 ships.
+
+**Refined 2026-07-11 (Jeremy, after the social_search arc):** "an opt-in
+brain for the users of this orchestration, to share knowledge and skills;
+sourced, with pedigree, maro-graduated and proven skills only, and only
+opt-in overall from the user's standpoint, the sharing and details are
+maro-as-clients talking to a coordination server. But that's for later."
+Architecture sketch this adds to the 07-10 direction: client-server (a
+coordination server, not peer-to-peer), pedigree/provenance as a
+first-class field, the graduation machinery as the quality gate (only
+maro-graduated skills are shareable), and opt-in as a hard product
+stance — default is fully local. Trigger insight was the Reddit/X access
+recipes: platform-access knowledge is exactly the kind of
+expensive-to-discover, cheap-to-share, decays-over-time artifact a
+coordination brain is for. Still post-1.0; still direction, not design.
 
 ### Post-Purgatorio decision batch (2026-07-09, Jeremy — quotes in GOAL_BRAIN Decisions)
 
