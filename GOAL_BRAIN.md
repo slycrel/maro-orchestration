@@ -2032,6 +2032,19 @@ Sample: the 2026-05-13..17 window of `~/.maro/workspace/runs/` (478 dirs total;
   `twine check --strict` green on both artifacts. The publish click itself
   stays Jeremy's act. Next gate before 1.0: the deferred git-history
   personal-data review. See `docs/PUBLISH_CHECKLIST.md`.
+- **2026-07-12 (git-history privacy review — scope set by Jeremy):** first
+  scan done (`docs/history/2026-07-12-git-history-privacy-scan.md`). Package
+  ships clean; no real secrets in history. **Jeremy's line:** KEEP all
+  research/knowledge-layer docs (nuanced history has value — no deletions);
+  the ONE concern is commit attribution under the work email
+  `jstone@redacted.com` (46 commits, "privacy on both sides"); NOT bothered by
+  his name/content in chat logs, personal Mac username, or the Manti/Utah
+  location. Fix = `git filter-repo --mailmap` remap of the work email (and
+  optionally the personal yahoo) to `slycrel@users.noreply.github.com` —
+  proven on a throwaway clone (<1s, content preserved, 0 redacted left).
+  ~1101/1114 SHAs rewritten → force-push + box/session re-clone; execution
+  gated on Jeremy's go + a quiet box. Open: yahoo fold-in y/n, content-string
+  scrub y/n. 0.8.0 publish is independent of the rewrite.
 
 ## Threads (system-maintained — nothing leaves this list silently)
 
