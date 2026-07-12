@@ -2413,6 +2413,136 @@ class TestNowStatusHonesty:
         adapter.complete.assert_not_called()
 
 
+class TestNowVerdictEscalation:
+    """NOW→AGENDA verdict escalation (BACKLOG 22 follow-up): a NOW answer the
+    self-verdict judged not-achieved becomes an AGENDA run with the failed
+    quick answer attached — instead of a recorded failure nobody reads.
+    Config-gated (now_lane.escalate_on_not_achieved, default OFF): the
+    escalation turns one cheap call into a full orchestrated run."""
+
+    def _verdict_adapter(self, fulfilled):
+        from unittest.mock import MagicMock
+        adapter = MagicMock()
+        adapter.model_key = "cheap"
+        resp = MagicMock()
+        resp.content = '{"fulfilled": %s}' % ("true" if fulfilled else "false")
+        resp.input_tokens = 5
+        resp.output_tokens = 2
+        adapter.complete.return_value = resp
+        return adapter
+
+    def _enable(self, monkeypatch):
+        import config as config_mod
+        _orig = config_mod.get
+
+        def _cfg(key, default=None, *a, **kw):
+            if key == "now_lane.escalate_on_not_achieved":
+                return True
+            return _orig(key, default, *a, **kw)
+
+        monkeypatch.setattr(config_mod, "get", _cfg)
+
+    def _fake_loop(self):
+        from agent_loop import LoopResult, StepOutcome
+        return LoopResult(
+            loop_id="test-lr-escalate",
+            project="test-proj-escalate",
+            goal="where can I buy X near Y",
+            status="done",
+            steps=[StepOutcome(index=0, text="step 1", status="done",
+                               result="Maverik in Ephraim", iteration=0)],
+        )
+
+    def test_not_achieved_escalates_with_now_context(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        monkeypatch.setenv("MARO_YOLO", "true")
+        self._enable(monkeypatch)
+        from unittest.mock import patch
+        canned = {"status": "done",
+                  "result": "You could try searching Google Maps for that.",
+                  "tokens_in": 7, "tokens_out": 3}
+        with patch("handle._run_now", return_value=canned), \
+             patch("intent.classify", return_value=("now", 0.9, "simple")), \
+             patch("intent.check_goal_clarity", return_value={"clear": True}), \
+             patch("agent_loop.run_agent_loop", return_value=self._fake_loop()) as m_loop:
+            result = handle(
+                "where can I buy X near Y",
+                adapter=self._verdict_adapter(False),
+                dry_run=False,
+                origin={"parent_handle_id": "abc", "source": "user_goal"},
+            )
+        assert result.lane == "agenda"
+        assert "now→agenda" in result.classification_reason
+        assert result.status == "done"
+        # The failed quick answer rides along as ancestry context.
+        _ctx = m_loop.call_args.kwargs.get("ancestry_context_extra", "")
+        assert "Escalated from NOW lane" in _ctx
+        assert "searching Google Maps" in _ctx
+
+    def test_default_off_returns_incomplete_now(self, monkeypatch, tmp_path):
+        # Fresh-install posture: without the flag, behavior is unchanged —
+        # the demoted NOW result comes back, no agenda run is spawned.
+        _setup(monkeypatch, tmp_path)
+        from unittest.mock import patch
+        canned = {"status": "done", "result": "You could try searching.",
+                  "tokens_in": 7, "tokens_out": 3}
+        with patch("handle._run_now", return_value=canned), \
+             patch("intent.classify", return_value=("now", 0.9, "simple")), \
+             patch("agent_loop.run_agent_loop",
+                   side_effect=AssertionError("must not escalate")) as m_loop:
+            result = handle(
+                "where can I buy X near Y",
+                adapter=self._verdict_adapter(False),
+                dry_run=False,
+                origin={"parent_handle_id": "abc", "source": "user_goal"},
+            )
+        assert result.lane == "now"
+        assert result.status == "incomplete"
+        m_loop.assert_not_called()
+
+    def test_force_lane_now_wins_over_escalation(self, monkeypatch, tmp_path):
+        # An explicit force_lane="now" is the caller's choice — same contract
+        # as the complex-directive escalation.
+        _setup(monkeypatch, tmp_path)
+        self._enable(monkeypatch)
+        from unittest.mock import patch
+        canned = {"status": "done", "result": "You could try searching.",
+                  "tokens_in": 7, "tokens_out": 3}
+        with patch("handle._run_now", return_value=canned), \
+             patch("agent_loop.run_agent_loop",
+                   side_effect=AssertionError("must not escalate")) as m_loop:
+            result = handle(
+                "where can I buy X near Y",
+                adapter=self._verdict_adapter(False),
+                force_lane="now",
+                dry_run=False,
+                origin={"parent_handle_id": "abc", "source": "user_goal"},
+            )
+        assert result.lane == "now"
+        assert result.status == "incomplete"
+        m_loop.assert_not_called()
+
+    def test_achieved_now_never_escalates(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        self._enable(monkeypatch)
+        from unittest.mock import patch
+        canned = {"status": "done", "result": "Maverik in Ephraim, 7.3 miles.",
+                  "tokens_in": 7, "tokens_out": 3}
+        with patch("handle._run_now", return_value=canned), \
+             patch("intent.classify", return_value=("now", 0.9, "simple")), \
+             patch("agent_loop.run_agent_loop",
+                   side_effect=AssertionError("must not escalate")) as m_loop:
+            result = handle(
+                "where can I buy X near Y",
+                adapter=self._verdict_adapter(True),
+                dry_run=False,
+                origin={"parent_handle_id": "abc", "source": "user_goal"},
+            )
+        assert result.lane == "now"
+        assert result.status == "done"
+        m_loop.assert_not_called()
+
+
 class TestOutputProvenanceGuard:
     """Deterministic done!=achieved guard: when the goal names a dir-qualified
     output path that never landed, demote regardless of the text narrative.

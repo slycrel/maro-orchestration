@@ -371,6 +371,11 @@ _NOW_VERIFY_SYSTEM = (
     '{"fulfilled": true} or {"fulfilled": false}. '
     "fulfilled=false when the response states the task could not be done, is "
     "incomplete or impossible, or only explains why it failed. "
+    "fulfilled=false also when the response is a NON-ANSWER: it answers a "
+    "different question than asked, offers generic how-to-find-it guidance "
+    "instead of the asked-for answer, or lacks the specific information "
+    "requested (e.g. the request asks WHERE and the response names no "
+    "place, or asks WHICH and the response picks nothing). "
     "fulfilled=true when the response delivers what was asked."
 )
 
@@ -838,6 +843,10 @@ def _handle_impl(
         )
 
     # Route to lane
+    # NOW→AGENDA verdict escalation stash (BACKLOG 22 follow-up): when the
+    # NOW self-verdict says not-achieved, the escalated agenda run receives
+    # the failed quick answer as ancestry context via this variable.
+    _now_escalation_context = ""
     if lane == "now":
         # Escalation: if the message looks like a complex directive, reclassify
         # to agenda so the Director can plan it. Default ON since 2026-06-11 —
@@ -937,21 +946,72 @@ def _handle_impl(
             except Exception:
                 pass  # outcome recording must never block the NOW response
 
-        return HandleResult(
-            handle_id=handle_id,
-            lane="now",
-            lane_confidence=confidence,
-            classification_reason=reason,
-            message=message,
-            status=outcome["status"],
-            result=outcome["result"],
-            tokens_in=outcome["tokens_in"],
-            tokens_out=outcome["tokens_out"],
-            elapsed_ms=elapsed,
-            artifact_path=artifact_path,
-        )
+        # NOW→AGENDA verdict escalation (BACKLOG 22 follow-up, Jeremy
+        # 2026-07-11 "we should just do this"): a NOW answer the self-verdict
+        # judged not-achieved becomes a regular AGENDA run with the failed
+        # quick answer attached as context, instead of returning a recorded
+        # failure to a caller nobody is reading. The NOW attempt above stays
+        # fully recorded (artifact + outcome row, status incomplete) — the
+        # escalated run is honest about being a second attempt.
+        # Scope: task-path only by construction (the self-verdict only runs
+        # when origin is set); an explicit force_lane="now" wins, matching
+        # the complex-directive escalation above. Default OFF on fresh
+        # installs — this turns a quick answer into a full orchestrated run
+        # (real spend) on the strength of one cheap verdict; no silent LLM
+        # spend without an operator decision (same posture as
+        # scope_generation). ON on this box.
+        _verdict_escalate = False
+        if outcome.get("goal_achieved") is False and not force_lane:
+            try:
+                from config import get as _ve_cfg_get
+                _verdict_escalate = bool(
+                    _ve_cfg_get("now_lane.escalate_on_not_achieved", False)
+                )
+            except Exception:
+                _verdict_escalate = False
+        if _verdict_escalate:
+            lane = "agenda"
+            reason = reason + " [now→agenda: self-verdict not-achieved, escalated with NOW context]"
+            _now_escalation_context = (
+                "A quick single-shot (NOW lane) attempt at this request was "
+                "already made and judged NOT to have fulfilled it"
+                + (" (claimed inputs/outputs missing on disk: "
+                   f"{outcome.get('provenance_missing')})"
+                   if outcome.get("provenance_missing") else "")
+                + ". Do not repeat its approach; do the actual work the "
+                "request asks for. The insufficient answer was:\n"
+                + str(outcome.get("result", ""))[:1500]
+            )
+            log.info("handle: now→agenda verdict escalation for: %s", message[:80])
+            try:
+                from runs import write_metadata as _write_meta_ve
+                from runs import current_run_dir as _crd_ve
+                _rd_ve = _crd_ve()
+                if _rd_ve is not None:
+                    _write_meta_ve(
+                        _rd_ve, handle_id=handle_id, prompt=_raw_input,
+                        lane="agenda", model=model,
+                        extra={"now_verdict_escalated": True},
+                    )
+            except Exception:
+                pass
+            # Fall through to the agenda branch below.
+        else:
+            return HandleResult(
+                handle_id=handle_id,
+                lane="now",
+                lane_confidence=confidence,
+                classification_reason=reason,
+                message=message,
+                status=outcome["status"],
+                result=outcome["result"],
+                tokens_in=outcome["tokens_in"],
+                tokens_out=outcome["tokens_out"],
+                elapsed_ms=elapsed,
+                artifact_path=artifact_path,
+            )
 
-    else:  # agenda
+    if lane == "agenda":  # plain classification, or escalated from NOW above
         # Only route through the Conductor for meta-commands (status, inspect, goal-map).
         # For actual mission goals, always go direct to run_agent_loop to avoid stale
         # mission data being returned instead of a fresh run.
@@ -1234,6 +1294,13 @@ def _handle_impl(
             _extra_ctx_parts.append(
                 f"== Prior run context (for continuation) ==\n{prior_context}\n"
                 f"== End prior context — continue from here =="
+            )
+        # NOW→AGENDA verdict escalation: the failed quick answer rides along
+        # so the orchestrated run doesn't re-answer from model knowledge.
+        if _now_escalation_context:
+            _extra_ctx_parts.append(
+                f"== Escalated from NOW lane ==\n{_now_escalation_context}\n"
+                f"== End NOW-lane context =="
             )
         if _persona_ctx:
             _extra_ctx_parts.append(_persona_ctx)
