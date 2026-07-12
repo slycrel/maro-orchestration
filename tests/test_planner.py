@@ -371,3 +371,32 @@ class TestGoalPriorityOrder:
         from planner import DECOMPOSE_SYSTEM
         assert "rate-limited network operations" in DECOMPOSE_SYSTEM
         assert "GOAL PRIORITY ORDER" in DECOMPOSE_SYSTEM
+
+    def test_directive_reaches_draw_cuts_under_cuts_first(self, monkeypatch):
+        # Regression (run 75fe8b4e, 2026-07-12): the cuts-first probe path
+        # returns BEFORE the old injection point, so the directive never
+        # reached any prompt. Detection now happens above the cuts block and
+        # must arrive in draw_cuts' context_extras.
+        import config
+        import planner
+        from planner import decompose, _PRIORITY_DIRECTIVE
+        from types import SimpleNamespace
+        monkeypatch.setattr(config, "get", lambda key, default=None:
+                            True if key == "planner.cuts_first" else default)
+        seen_extras = []
+
+        def _spy_draw_cuts(goal, adapter, context_extras=""):
+            seen_extras.append(context_extras)
+            return None  # cuts fail → decompose falls through to normal lanes
+
+        monkeypatch.setattr(planner, "draw_cuts", _spy_draw_cuts)
+
+        class _Adapter:
+            def complete(self, messages, **kw):
+                return SimpleNamespace(content='["step one", "step two"]',
+                                       input_tokens=5, output_tokens=5)
+
+        decompose("Do the sweep, in priority order: 1. X 2. Reddit 3. HN",
+                  _Adapter(), max_steps=8)
+        assert seen_extras, "draw_cuts was never called — cuts gate broken?"
+        assert any(_PRIORITY_DIRECTIVE in x for x in seen_extras)

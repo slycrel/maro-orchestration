@@ -225,40 +225,48 @@ def _run_window_start(elapsed_ms) -> Optional[float]:
         return None
 
 
-def _resolve_exact(rel: str, bases: List[Path]) -> Optional[Path]:
-    """Like _exists_at_exact but returns the resolved existing Path (or None)."""
+def _resolve_exact(rel: str, bases: List[Path]) -> List[Path]:
+    """ALL existing candidates a (possibly relative) path could resolve to.
+
+    Generic names (step_data.json, artifacts/step-N-output.txt) exist in many
+    workspace projects; freshness must be judged across every candidate, not
+    the first glob hit — run 75fe8b4e was falsely demoted to incomplete when
+    its fresh output resolved to an older project's file of the same name.
+    """
     p = Path(rel)
     if p.is_absolute():
-        return p if p.exists() else None
+        return [p] if p.exists() else []
+    hits: List[Path] = []
     for b in bases:
         if (b / rel).exists():
-            return b / rel
+            hits.append(b / rel)
     try:
         from config import workspace_root
         ws_projects = Path(workspace_root()) / "projects"
         if ws_projects.is_dir():
             for d in ws_projects.glob("*"):
                 if d.is_dir() and (d / rel).exists():
-                    return d / rel
+                    hits.append(d / rel)
     except Exception:
         pass
-    return None
+    return hits
 
 
-def _resolve_bare(name: str, bases: List[Path]) -> Optional[Path]:
-    """Like _exists_bare_anywhere but returns the resolved existing Path (or None)."""
+def _resolve_bare(name: str, bases: List[Path]) -> List[Path]:
+    """ALL existing candidates for a bare output basename (see _resolve_exact)."""
+    hits: List[Path] = []
     for b in bases:
         if (b / name).exists():
-            return b / name
+            hits.append(b / name)
     for d in _bare_search_dirs():
         try:
             if (d / name).exists():
-                return d / name
-            for hit in list(d.glob(f"*/{name}")) + list(d.glob(f"*/*/{name}")):
-                return hit
+                hits.append(d / name)
+            hits.extend(d.glob(f"*/{name}"))
+            hits.extend(d.glob(f"*/*/{name}"))
         except Exception:
             pass
-    return None
+    return hits
 
 
 def _is_fresh(path: Path, window_start: float) -> bool:
@@ -294,12 +302,12 @@ def _missing_or_stale_result_outputs(result_text: str, window_start: float) -> L
     flagged: List[str] = []
     for rel in claimed:
         if "/" in rel and not rel.endswith("/"):
-            found = _resolve_exact(rel, bases)
+            candidates = _resolve_exact(rel, bases)
         else:
-            found = _resolve_bare(rel, bases)
-        if found is None:
+            candidates = _resolve_bare(rel, bases)
+        if not candidates:
             flagged.append(f"{rel} (claimed written, not found)")
-        elif not _is_fresh(found, window_start):
+        elif not any(_is_fresh(c, window_start) for c in candidates):
             flagged.append(f"{rel} (claimed written, but predates this run)")
     return flagged
 

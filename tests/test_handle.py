@@ -2723,6 +2723,55 @@ class TestOutputProvenanceGuard:
         assert out["goal_achieved"] is False
         assert any("predates this run" in m for m in out["provenance_missing"])
 
+    def test_fresh_output_passes_despite_stale_twin_in_other_project(
+            self, tmp_path, monkeypatch):
+        # Regression (run 75fe8b4e, 2026-07-12): generic names like
+        # step_data.json exist in MANY workspace projects. The resolver used
+        # to return the FIRST cross-project glob hit — an older project's
+        # stale copy — and falsely demote an honestly-achieved run.
+        # Freshness must be judged across ALL candidates.
+        import config, os, time
+        from handle import _verify_now_outcome
+        monkeypatch.setattr(config, "workspace_root", lambda: tmp_path)
+        monkeypatch.chdir(tmp_path)
+        old_proj = tmp_path / "projects" / "aaa-older-project" / "artifacts"
+        new_proj = tmp_path / "projects" / "zzz-current-project" / "artifacts"
+        old_proj.mkdir(parents=True)
+        new_proj.mkdir(parents=True)
+        stale = old_proj / "step-7-output.txt"
+        stale.write_text("old run")
+        long_ago = time.time() - 86400
+        os.utime(stale, (long_ago, long_ago))
+        (new_proj / "step-7-output.txt").write_text("this run")  # fresh
+        outcome = {"status": "done",
+                   "result": "saved output to artifacts/step-7-output.txt",
+                   "tokens_in": 3, "tokens_out": 1, "elapsed_ms": 5000}
+        out = _verify_now_outcome("run the sweep", outcome,
+                                  self._fulfilled_adapter())
+        assert out["status"] == "done"
+
+    def test_all_candidates_stale_still_demotes(self, tmp_path, monkeypatch):
+        # The any-fresh-candidate rule must not fail open when EVERY copy is
+        # stale — the original stale-output demotion still works.
+        import config, os, time
+        from handle import _verify_now_outcome
+        monkeypatch.setattr(config, "workspace_root", lambda: tmp_path)
+        monkeypatch.chdir(tmp_path)
+        long_ago = time.time() - 86400
+        for slug in ("proj-a", "proj-b"):
+            d = tmp_path / "projects" / slug / "artifacts"
+            d.mkdir(parents=True)
+            f = d / "step-7-output.txt"
+            f.write_text("old")
+            os.utime(f, (long_ago, long_ago))
+        outcome = {"status": "done",
+                   "result": "saved output to artifacts/step-7-output.txt",
+                   "tokens_in": 3, "tokens_out": 1, "elapsed_ms": 5000}
+        out = _verify_now_outcome("run the sweep", outcome,
+                                  self._adapter_that_must_not_be_called())
+        assert out["status"] == "incomplete"
+        assert any("predates this run" in m for m in out["provenance_missing"])
+
     def test_result_provenance_disabled(self, tmp_path, monkeypatch):
         import config
         from handle import _verify_now_outcome

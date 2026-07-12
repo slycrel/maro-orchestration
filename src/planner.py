@@ -623,6 +623,16 @@ def decompose(
         import sys
         print(f"[maro] decompose scope estimate: {_goal_scope}", file=sys.stderr, flush=True)
 
+    # Goal-stated priority order (BACKLOG #23c): binding, injected loudly.
+    # Detected BEFORE the cuts-first block — the probe path returns early, so
+    # the directive must already be in extras for draw_cuts to see it
+    # (fix-validation-23 run 75fe8b4e: cuts-first swallowed the directive and
+    # ordering held only because the cuts call happened to be careful).
+    _has_priority_order = goal_states_priority_order(goal)
+    if _has_priority_order:
+        extras.append(_PRIORITY_DIRECTIVE)
+        log.info("decompose: goal states an explicit priority order — binding directive injected")
+
     # Cuts-first narrowing (Qix-cuts decree). Gated: caller allows it AND the
     # config flag is on (default OFF — one extra LLM call per goal, no silent
     # spend for fresh installs). Wide/deep goals skip — staged-pass already
@@ -679,12 +689,6 @@ def decompose(
                 # Bounded without probes: plan inside the lines.
                 extras.append("COMMITTED CONSTRAINTS (cuts — plan inside these bounds):\n"
                               + "\n".join(f"- {c}" for c in cuts.known_constraints))
-
-    # Goal-stated priority order (BACKLOG #23c): binding, injected loudly.
-    _has_priority_order = goal_states_priority_order(goal)
-    if _has_priority_order:
-        extras.append(_PRIORITY_DIRECTIVE)
-        log.info("decompose: goal states an explicit priority order — binding directive injected")
 
     if extras:
         system = DECOMPOSE_SYSTEM + "\n\n" + "\n\n".join(extras)

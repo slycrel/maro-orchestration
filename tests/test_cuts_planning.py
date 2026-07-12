@@ -279,6 +279,35 @@ def test_boundary_step_expanded_with_probe_evidence(monkeypatch, tmp_path):
     assert not any(BOUNDARY_TAG in t for t in texts)
 
 
+def test_boundary_expansion_carries_goal_priority_directive(monkeypatch, tmp_path):
+    """#23c under cuts-first (run 75fe8b4e): the boundary remainder text may
+    drop the goal's priority phrasing, so the expansion decompose can't detect
+    it — the binding directive must be carried across the boundary explicitly."""
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    from agent_loop import run_agent_loop, _DryRunAdapter
+    import loop_planning
+
+    goal = ("Sweep sources. Remaining work, in priority order: 1. fetch HN. "
+            "2. fetch Reddit. 3. write synthesis.")
+    initial_plan = [
+        "Probe: confirm HN DOM structure",
+        f"Plan and complete the remaining bounded work using findings from "
+        f"the prior steps: fetch both sources then synthesize {BOUNDARY_TAG}",
+    ]
+    mock_expand = MagicMock(return_value=["bounded step A"])
+
+    with patch.object(loop_planning, "_decompose_impl", return_value=initial_plan), \
+         patch("pre_flight.review_plan", return_value=_no_milestones_review()), \
+         patch("planner.decompose", mock_expand):
+        run_agent_loop(goal, adapter=_DryRunAdapter(), dry_run=False,
+                       max_iterations=10)
+
+    assert mock_expand.called
+    _ctx = mock_expand.call_args.kwargs.get("ancestry_context", "")
+    assert "PRIORITY ORDER" in _ctx
+    assert "in priority order" in _ctx  # original goal carried as the source
+
+
 def test_boundary_expansion_failure_degrades_to_broad_step(monkeypatch, tmp_path):
     """If expansion returns nothing usable, the boundary step runs as one
     broad step with the tag stripped — degrade, don't die."""

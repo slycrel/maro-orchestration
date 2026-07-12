@@ -390,6 +390,15 @@ def _execute_main_loop(
                         "PROBE FINDINGS (evidence gathered before this plan — plan "
                         "INSIDE what these findings establish; do not re-do the probes):\n"
                         + "\n".join(_evidence_parts))
+                # #23c: the remainder text may drop the goal's stated priority
+                # phrasing, so decompose's own detector can't see it — carry
+                # the binding directive across the boundary explicitly.
+                from planner import (goal_states_priority_order as _gspo,
+                                     _PRIORITY_DIRECTIVE as _prio_directive)
+                if _gspo(goal) and not _gspo(_remainder_goal):
+                    _evidence = (_evidence + "\n\n" if _evidence else "") + (
+                        f"{_prio_directive}\nOriginal goal (source of the "
+                        f"priority order): {goal}")
                 _bd_sub = _bd_decompose(
                     _remainder_goal, adapter, max_steps=5,
                     ancestry_context=_evidence, allow_cuts=False,
