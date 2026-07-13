@@ -609,6 +609,39 @@ Truth anchor: GOAL_BRAIN.md Threads. History: docs/history/ROADMAP_ARCHIVE.md.
       green. `docs/MIGRATION.md`'s pack section and `docs/INDEX.md` updated
       to reflect the closed loop. Design doc §7's "recommend all four" is
       now the shipped state, not a recommendation.
+      **Adversarial review across all 4 chunks — SHIPPED 2026-07-13
+      (Sonnet, 3 Codex reviewers: Skeptic/Architect/Minimalist).** Neither
+      this chunk-1-4 span nor any individual chunk had received a dedicated
+      review before this pass. 3 high-severity findings with unanimous
+      3-lens consensus, all confirmed real and fixed: `--target` wasn't
+      honored by the trust-bearing writers (rules/hypotheses/lessons/skills
+      wrote through global `$MARO_MEMORY_DIR` helpers, not the resolved
+      target — fixed via a `_memory_dir_override()` context manager scoping
+      the write loop); sealed-pack artifact *contents* were never
+      integrity-checked on import (only `REVIEW.md`'s hash was, so
+      post-seal artifact tampering went undetected — fixed with per-
+      artifact sha256 verification before any mutation); manifest
+      `relpath`/label were untrusted path components with no traversal
+      guard (fixed via `_safe_relpath`/`_safe_label` at the single
+      dispatch choke point). Plus 6 medium/low fixes: malformed rows mid-
+      import could leave partial unaudited state (now contained per-row,
+      `malformed_skipped` outcome); incoming provenance was discarded
+      instead of nested under `imported.original_provenance` per design
+      doc line 168; `adopt()`'s never-overwrite check had a TOCTOU race
+      (now atomic `O_CREAT|O_EXCL`); `secret_scrub` scrubbed dict values
+      but not keys; `maro-import`'s audit rows lacked an `action` field
+      that `maro-pack`'s already had; imported skill records kept origin
+      tier instead of resetting to `provisional` (now consistent with
+      every other contested-by-birth field, original tier preserved under
+      `imported.original_tier`). One medium finding — artifact filenames /
+      manifest path strings aren't identifier-scrubbed — deferred as a
+      documented known-gap (BACKLOG): fixing it correctly requires a
+      filename-rewrite design decision that touches how `adopt()` derives
+      live filenames from quarantined names, not something to rush into
+      the same pass. Full 169-file suite + `tests/test_pack.py` (57) green
+      after fixes. Full verdict + Lead Judgment:
+      `output/adversarial-review-2026-07-13-portable-learning.md`
+      (gitignored, box-local).
    8. Opportunistic riders: time-blindness first slice + perspective
       end-user seat (BACKLOG Vision vehicles, sized 2026-07-12).
    9. **Verify→learn arc V1–V5** (`docs/VERIFY_LEARN_ARC.md`) — post-1.0 by

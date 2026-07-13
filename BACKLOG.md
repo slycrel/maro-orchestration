@@ -1498,14 +1498,30 @@ after the current 1.0 remainders (a)–(d); (g) needs design before release.
     harness claim-probe itself false-flagged run 4's existing files
     ("cart.py not found" — they're under output/repro/), the same
     wrong-cwd class as closure.
-- [ ] **(g) Portable/shareable learning — design + migration path.**
+- [x] **(g) Portable/shareable learning — design + migration path.**
   **DESIGN SHIPPED 2026-07-09 → `docs/PORTABLE_LEARNING_DESIGN.md`**;
   **§8 RATIFIED 2026-07-12 (Jeremy, all 8 as written — GOAL_BRAIN
-  Decisions).** 1.0 slice confirmed = its §7 chunks 1–4: migration
-  runbook + doctor checks, provenance fields + `scrub_identifiers`,
-  `maro-pack export/seal`, `maro-pack import/adopt`. Design settled;
-  what remains open is implementation (4 Sonnet/Opus-sized chunks,
-  queued in MILESTONES).
+  Decisions).** 1.0 slice = its §7 chunks 1–4: migration runbook +
+  doctor checks, provenance fields + `scrub_identifiers`, `maro-pack
+  export/seal`, `maro-pack import/adopt`. **All 4 chunks SHIPPED
+  2026-07-13 (Sonnet)**, closing the loop end to end; see MILESTONES
+  item 7 for full per-chunk detail. Adversarial review across the
+  combined chunk 1–4 diff (3 Codex reviewers) SHIPPED same day — 3
+  high + 6 medium/low findings fixed (`--target` scoping,
+  artifact-sha256 tamper check, path-traversal guard, malformed-row
+  containment, provenance nesting, `adopt()` TOCTOU, dict-key
+  scrubbing, `maro-import` action field, skill-tier reset); full
+  verdict in `output/adversarial-review-2026-07-13-portable-learning.md`
+  (gitignored, box-local, not in git history).
+  **Known-gap deferred from that review:** artifact filenames /
+  manifest `path` strings / `REVIEW.md` headings are not
+  identifier-scrubbed — only artifact *content* goes through
+  `scrub`/`scrub_identifiers`. A skill/persona filename carrying a
+  username or hostname ships unredacted; the human review gate is the
+  only backstop today. Not fixed because the correct fix is a
+  filename-rewrite decision that also changes how `adopt()` derives
+  live filenames from quarantined names — revisit if a real case shows
+  up rather than speculatively.
   Original scope:
   Machine migration and bootstrap-sharing for new users; internet
   hive-mind explicitly out of scope (opt-in someday, "could be cool").
