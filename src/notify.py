@@ -45,17 +45,25 @@ log = logging.getLogger("notify")
 # backend_actionable: auth/billing/context failures with a fix the user must
 # apply (BACKEND_RESILIENCE_DESIGN §2) — default-on because a headless box's
 # notify channel is the only surface an away-from-keyboard user actually sees.
+# recursion_checkin: deep-recursion progress conversation (non-blocking; the
+# goal keeps running) — docs/RECURSIVE_CHECKIN_DESIGN.md. Default-on for the
+# same away-from-keyboard reason: the user should get a chance to redirect or
+# stop a goal that's now several passes deep.
 DEFAULT_EVENTS = ["run_completed", "escalation", "backend_actionable",
-                  "stranded_run"]
+                  "stranded_run", "recursion_checkin"]
 
-# The three event types that are notify-worthy AND easy to miss with no
+# The event types that are notify-worthy AND easy to miss with no
 # notify.command lane configured (run_completed already has a durable home
 # via run_curation's run_card.json). These ship to a dedicated, always-on
 # output file — GOAL_BRAIN Decisions 2026-07-12 ("escalation channel
 # DECREED"): the substrate LLM go-between is the official escalation
 # surface, but a headless/CLI-only setup still needs a findable output
-# file, not a beacon trying to get someone's attention.
-ESCALATION_FILE_EVENTS = {"escalation", "backend_actionable", "stranded_run"}
+# file, not a beacon trying to get someone's attention. recursion_checkin
+# rides this file too (design §2) — it's the same "human might miss it"
+# class; consumers tell it apart from a park-the-goal escalation by its
+# explicit `"blocking": False` payload field.
+ESCALATION_FILE_EVENTS = {"escalation", "backend_actionable", "stranded_run",
+                          "recursion_checkin"}
 
 
 def _config_get(key: str, default):

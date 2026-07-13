@@ -1672,10 +1672,18 @@ after the current 1.0 remainders (a)–(d); (g) needs design before release.
   the no-backend fix is the pattern), and resume semantics (what "pick up
   where it died" means per lane).
 
-- [ ] **(i) Restart-depth-cap coverage — investigated 2026-07-13, finding is
+- [x] **(i) Restart-depth-cap coverage — investigated 2026-07-13, finding is
   bigger than the original framing (was: "test_depth_cap_unified.py's
   handle.py tripwire is source-shape coupled, not behavior coupled", low,
-  adversarial-review skill first run 2026-07-12, Architect lens).** Picked
+  adversarial-review skill first run 2026-07-12, Architect lens).**
+  **RESOLVED 2026-07-13** for the actionable half (the unguarded cross-call
+  continuation mechanism) — resolved as **"check-in and continue," NOT a hard
+  cap**: per Jeremy's decree the goal must keep running (ralph-style), so no
+  refusal was added. See `docs/RECURSIVE_CHECKIN_DESIGN.md` (SHIPPED banner)
+  for the implementation. The handle.py single-shot-gate observation below is
+  a documentation nuance, not a bug requiring a fix (the gates are
+  intentionally single-shot; mechanism (1) is already capped and was
+  explicitly out of scope). Picked
   this up meaning to just add the behavioral test the original finding
   asked for ("drives handle.py's actual restart control flow at
   `MAX_RESTART_DEPTH - 1` and `MAX_RESTART_DEPTH`, asserts on outcome, not
@@ -1706,19 +1714,24 @@ after the current 1.0 remainders (a)–(d); (g) needs design before release.
     dispatches whatever depth a claimed task carries with no gate before
     executing. If an LLM escalation keeps returning "continue", this
     recurses without bound — the "prevents infinite restart loops" property
-    handle.py's comment claims doesn't apply to this path. Confirmed via a
-    new pin test, `tests/test_escalation.py::TestHandleEscalationWithLLM::test_known_gap_continue_enqueues_past_max_restart_depth`
-    (KNOWN-GAP convention): enqueues a continuation at depth 4 — one past
-    the cap — with no refusal.
-  - **Not fixed this session** — this is exactly the "heavy/cross-cutting
-    architecture" case: which layer should own the check
-    (`handle_escalation` before enqueue vs. `handle_task` before dispatch,
-    or both), what "capped" should do (surface to the operator like the
-    existing "surface" action, vs. hard-close, vs. something else), and
-    whether handle.py's own two gates should become an actual loop (so the
-    cap is reachable) or stay single-shot (so the ceiling is intentionally
-    lower than `MAX_RESTART_DEPTH` suggests) are all judgment calls, not a
-    one-line diff. Pinned with a known-gap test rather than fixed blind.
+    handle.py's comment claims doesn't apply to this path. Was pinned by a
+    known-gap test; **now RESOLVED** — the pin test was flipped/renamed to
+    `tests/test_escalation.py::TestHandleEscalationWithLLM::test_deep_continue_enqueues_and_fires_checkin`,
+    which asserts the shipped behavior: the continuation still enqueues at
+    `depth+1` (the goal never stops) AND a non-blocking `recursion_checkin`
+    notify fires so the user can redirect/stop.
+  - **RESOLVED 2026-07-13 (was "not fixed this session").** Jeremy's decree
+    (`docs/RECURSIVE_CHECKIN_DESIGN.md`) settled the judgment calls: the fix
+    is NOT a cap/refusal but a **non-blocking progress check-in** owned by
+    `director.handle_escalation` (mechanism 2) — at `new_depth >=
+    recursion.checkin_first_depth` (default 2, the 3rd goal pass) and every
+    jittered `recursion.checkin_jitter_min`–`max` (4–7) passes after, it
+    fires `recursion_checkin` while still enqueueing the continuation. The
+    goal keeps running (ralph-style optimistic default); the user steers via
+    the existing `InterruptQueue`. handle.py's own two single-shot gates
+    (mechanism 1) were deliberately left untouched — a different,
+    already-capped concern; making them a reachable loop was ruled scope
+    creep past the decree.
 
 ---
 
