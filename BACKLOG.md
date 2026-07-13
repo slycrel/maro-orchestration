@@ -519,13 +519,15 @@ crowd-sourced or not)."
   (car questions, mid-session asks). Real phrasing carries the ambiguity
   synthetic goals launder out; this is also the organic corpus the lesson
   funnel needs (batch-04's answer lives here, not in synthetic batches).
-- [ ] **Blank-slate pre-installed set (design → curate):** make `maro
-  bootstrap` useful day-one. Draft list in CAPABILITIES.md (errand-research,
-  research-brief, repo-digest, ledger-census, doc-summary, watch-condition,
-  code_review). Selection principle: every shipped skill is the
-  crystallization of a catalog tier — catalog and shipped set verify each
-  other. Needs: which existing skills graduate to repo `skills/`, which
-  need building, acceptance = their catalog rows go `verified`.
+- [x] **Blank-slate pre-installed set (design → curate) — DONE, stale
+  bullet corrected 2026-07-13.** All 7 draft targets resolved per the
+  curated table in `docs/CAPABILITIES.md` §"Blank-slate capability target":
+  errand-research/research-brief/doc-summary/watch-condition built as new
+  skill files (2026-07-13, this backlog's own #22 residual bullet above),
+  repo-digest = `changelog_digest.md` promoted from workspace-only to the
+  repo default set (gap found+fixed), ledger-census covered by existing
+  `skills/data_analysis.md` (no new file needed), code_review already
+  shipped. Nothing left to build against the draft list.
 - [ ] **(post-1.0, Vision)** Shared trusted skill directory + cross-instance
   learning share — see Vision section entry.
 
@@ -1670,22 +1672,53 @@ after the current 1.0 remainders (a)–(d); (g) needs design before release.
   the no-backend fix is the pattern), and resume semantics (what "pick up
   where it died" means per lane).
 
-- [ ] **(i) `test_depth_cap_unified.py`'s handle.py tripwire is source-shape
-  coupled, not behavior coupled (low, adversarial-review skill first run,
-  2026-07-12, Architect lens).** The two gate-specific regexes added
-  2026-07-12 (`continuation_depth", 0) < MAX_RESTART_DEPTH` and `_depth <
-  MAX_RESTART_DEPTH`) catch the exact regression they were written for
-  (a gate silently reverted to a hardcoded `< 3`), but they depend on
-  local variable names and formatting — a correct refactor that imports
-  the resolved cap under another name, or wraps the comparison in a
-  helper, would fail the test; a semantic change that preserves the
-  literal strings but alters the value before the gate could still pass.
-  Real fix is a behavioral test that drives handle.py's actual restart
-  control flow at `MAX_RESTART_DEPTH - 1` and `MAX_RESTART_DEPTH` and
-  asserts on outcome (restart happens / doesn't), not source text.
-  Deferred rather than built same-session: low severity, single-reviewer,
-  and the current regex tripwire is adequate for the regression class
-  that motivated it.
+- [ ] **(i) Restart-depth-cap coverage — investigated 2026-07-13, finding is
+  bigger than the original framing (was: "test_depth_cap_unified.py's
+  handle.py tripwire is source-shape coupled, not behavior coupled", low,
+  adversarial-review skill first run 2026-07-12, Architect lens).** Picked
+  this up meaning to just add the behavioral test the original finding
+  asked for ("drives handle.py's actual restart control flow at
+  `MAX_RESTART_DEPTH - 1` and `MAX_RESTART_DEPTH`, asserts on outcome, not
+  source text") — investigation found that test can't actually reach the
+  boundary, and a second, unguarded mechanism exists. Verified by hand
+  (empirical repro script + code read, not speculation):
+  - **handle.py's two in-process gates can never hit their own cap within
+    one call.** Both the director-restart (`handle.py:1623-1625`) and
+    closure-restart (`handle.py:1710-1719`) blocks are single `if`s, not
+    loops — each fires at most once per `_handle_impl()` invocation. A
+    repro script (`handle()` with `run_agent_loop` mocked to always return
+    `status="restart"`) shows exactly 2 total calls, never approaching
+    `MAX_RESTART_DEPTH=3`. The existing "behavioral" test from batch-1
+    (`tests/test_handle.py::TestDirectorRestart::test_restart_depth_cap_prevents_infinite_loop`,
+    asserts `len(calls) <= 4`) looks like it proves the cap but is
+    vacuously true — the real ceiling per call is 2 (or 3, chaining
+    director-restart into a closure-restart), one shy of the nominal cap,
+    regardless of `MAX_RESTART_DEPTH`'s value. The check at
+    `_depth < MAX_RESTART_DEPTH` is therefore currently unreachable dead
+    logic for a single top-level call.
+  - **The actual cross-call continuation mechanism has NO cap at all.**
+    `director.handle_escalation()` (`director.py:980+`) — a separate,
+    queue-based continuation path (escalation → `task_store.enqueue(...,
+    continuation_depth=depth+1)` → `handle_queue.handle_task()`'s
+    `loop_continuation` branch → `run_agent_loop(..., continuation_depth=depth)`)
+    — never imports or checks `MAX_RESTART_DEPTH` anywhere. A "continue" or
+    "narrow" decision enqueues `depth+1` unconditionally; `handle_task`
+    dispatches whatever depth a claimed task carries with no gate before
+    executing. If an LLM escalation keeps returning "continue", this
+    recurses without bound — the "prevents infinite restart loops" property
+    handle.py's comment claims doesn't apply to this path. Confirmed via a
+    new pin test, `tests/test_escalation.py::TestHandleEscalationWithLLM::test_known_gap_continue_enqueues_past_max_restart_depth`
+    (KNOWN-GAP convention): enqueues a continuation at depth 4 — one past
+    the cap — with no refusal.
+  - **Not fixed this session** — this is exactly the "heavy/cross-cutting
+    architecture" case: which layer should own the check
+    (`handle_escalation` before enqueue vs. `handle_task` before dispatch,
+    or both), what "capped" should do (surface to the operator like the
+    existing "surface" action, vs. hard-close, vs. something else), and
+    whether handle.py's own two gates should become an actual loop (so the
+    cap is reachable) or stay single-shot (so the ceiling is intentionally
+    lower than `MAX_RESTART_DEPTH` suggests) are all judgment calls, not a
+    one-line diff. Pinned with a known-gap test rather than fixed blind.
 
 ---
 

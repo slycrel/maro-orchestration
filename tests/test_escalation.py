@@ -108,6 +108,42 @@ class TestHandleEscalationWithLLM:
         assert "auth.py" in enqueued["reason"]
         assert enqueued["depth"] == 3
 
+    def test_known_gap_continue_enqueues_past_max_restart_depth(self, monkeypatch, tmp_path):
+        # KNOWN-GAP (adversarial-review-skill follow-on investigation,
+        # 2026-07-13; BACKLOG "(i) restart-depth-cap coverage"): handle.py's
+        # two in-process restart gates (director-restart, closure-restart)
+        # check `< loop_types.MAX_RESTART_DEPTH` before re-running — but this
+        # queue-based escalation-continuation path (handle_escalation →
+        # task_store.enqueue → handle_queue.handle_task's loop_continuation
+        # branch) is a separate mechanism that never imports or checks
+        # MAX_RESTART_DEPTH at all. A "continue" decision enqueues depth+1
+        # unconditionally, and handle_task dispatches whatever depth a task
+        # carries straight into run_agent_loop with no gate. If an LLM
+        # escalation keeps returning "continue", this path recurses without
+        # bound — nothing here mirrors the "prevents infinite restart loops"
+        # protection handle.py's docstring describes for the other mechanism.
+        # Pins today's behavior (enqueues even past the cap) so it's
+        # revisited — and this assertion flipped to expect a refusal/surface
+        # — once a cap is added here. Not fixed same-session: which layer
+        # should own the check (handle_escalation before enqueue, or
+        # handle_task before dispatch) and what "capped" should do (surface
+        # to operator, like the existing "surface" action, vs. hard-close)
+        # is a design decision, not a one-line gate.
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        enqueued = {}
+
+        def _fake_enqueue(lane, source, reason, parent_job_id, continuation_depth=0, origin=None):
+            enqueued.update({"depth": continuation_depth})
+            return {"job_id": "cont-past-cap-001"}
+
+        with mock.patch("task_store.enqueue", _fake_enqueue):
+            # depth already AT MAX_RESTART_DEPTH (loop_types.MAX_RESTART_DEPTH == 3)
+            task = _make_escalation_task(depth=3)
+            result = handle_escalation(task, adapter=self._make_adapter("continue"))
+
+        assert result.action == "continue"  # currently unconditional — that's the gap
+        assert enqueued["depth"] == 4        # one past the cap, enqueued anyway
+
     def test_close_action_no_followup_task(self, monkeypatch, tmp_path):
         monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
         task = _make_escalation_task(depth=2)
