@@ -35,7 +35,7 @@ def scrub(obj):
     if isinstance(obj, tuple):
         return tuple(scrub(x) for x in obj)
     if isinstance(obj, dict):
-        return {k: scrub(v) for k, v in obj.items()}
+        return {(scrub(k) if isinstance(k, str) else k): scrub(v) for k, v in obj.items()}
     return obj
 
 
@@ -102,7 +102,7 @@ def scrub_identifiers(
         if isinstance(o, tuple):
             return tuple(_scrub(x) for x in o)
         if isinstance(o, dict):
-            return {k: _scrub(v) for k, v in o.items()}
+            return {(_scrub(k) if isinstance(k, str) else k): _scrub(v) for k, v in o.items()}
         return o
 
     return _scrub(obj)

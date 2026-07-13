@@ -58,6 +58,7 @@ Physical form: a single ``<name>.maropack.tar.gz`` containing:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import io
 import json
@@ -66,7 +67,7 @@ import subprocess
 import sys
 import tarfile
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Dict, List, Optional
 
 from secret_scrub import scrub, scrub_identifiers
@@ -429,9 +430,28 @@ def _upgrade_manifest(manifest: Dict[str, Any]) -> Dict[str, Any]:
     return manifest
 
 
+def _safe_relpath(relpath: str, *, what: str) -> str:
+    """Reject a manifest-supplied relative path that could escape its
+    intended root (quarantine dir or live workspace dir). The manifest is
+    untrusted input — a sealed pack only proves a human read REVIEW.md, not
+    that pack.json's artifact paths are well-formed (boundary-discipline:
+    validate at the boundary, trust nothing about the payload's shape)."""
+    p = PurePosixPath(relpath)
+    if relpath.startswith("/") or p.is_absolute() or ".." in p.parts or not relpath:
+        raise SystemExit(f"import refused: unsafe {what} path in manifest: {relpath!r}")
+    return relpath
+
+
+def _safe_label(label: str) -> str:
+    if not label or label.startswith("/") or ".." in PurePosixPath(label).parts or "/" in label:
+        raise SystemExit(f"import refused: unsafe label: {label!r}")
+    return label
+
+
 def _artifact_relpath(artifact: Dict[str, Any]) -> str:
     p = artifact.get("path", "")
-    return p[len("artifacts/"):] if p.startswith("artifacts/") else p
+    relpath = p[len("artifacts/"):] if p.startswith("artifacts/") else p
+    return _safe_relpath(relpath, what="artifact")
 
 
 def _import_rules_as_hypotheses(content: str, *, pack_name: str, label: str, pack_tag: str,
@@ -452,35 +472,46 @@ def _import_rules_as_hypotheses(content: str, *, pack_name: str, label: str, pac
         except json.JSONDecodeError:
             continue
         original_id = row.get("rule_id", "")
-        rule_text = row.get("rule", "")
-        hyp_id = f"imported-{pack_name}-{original_id}"
-        if hyp_id in existing_hyp_ids:
-            results.append({"rule_id": original_id, "outcome": "already_imported"})
-            continue
-        if rule_text and rule_text in existing_texts:
-            results.append({"rule_id": original_id, "outcome": "skipped_identical"})
-            continue
-        hyp = Hypothesis(
-            hyp_id=hyp_id,
-            lesson=rule_text,
-            domain=row.get("domain", ""),
-            confirmations=0,
-            contradictions=0,
-            source_lesson_ids=[f"imported:{pack_name}/{original_id}"],
-            first_seen=now,
-            last_seen=now,
-            imported={
+        try:
+            rule_text = row.get("rule", "")
+            hyp_id = f"imported-{pack_name}-{original_id}"
+            if hyp_id in existing_hyp_ids:
+                results.append({"rule_id": original_id, "outcome": "already_imported"})
+                continue
+            if rule_text and rule_text in existing_texts:
+                results.append({"rule_id": original_id, "outcome": "skipped_identical"})
+                continue
+            imported = {
                 "imported_from": label, "pack": pack_tag,
                 "original_id": original_id, "original_class": "rules",
                 "original_confirmations": row.get("confirmations"),
                 "original_contradictions": row.get("contradictions"),
                 "imported_at": now,
-            },
-        )
-        if not dry_run:
-            locked_append(_hypotheses_path(), json.dumps(hyp.to_dict()))
-        existing_hyp_ids.add(hyp_id)
-        results.append({"rule_id": original_id, "hyp_id": hyp_id, "outcome": "demoted_to_hypothesis"})
+            }
+            if row.get("imported"):
+                imported["original_provenance"] = row["imported"]
+            hyp = Hypothesis(
+                hyp_id=hyp_id,
+                lesson=rule_text,
+                domain=row.get("domain", ""),
+                confirmations=0,
+                contradictions=0,
+                source_lesson_ids=[f"imported:{pack_name}/{original_id}"],
+                first_seen=now,
+                last_seen=now,
+                imported=imported,
+            )
+            if not dry_run:
+                locked_append(_hypotheses_path(), json.dumps(hyp.to_dict()))
+            existing_hyp_ids.add(hyp_id)
+            results.append({"rule_id": original_id, "hyp_id": hyp_id, "outcome": "demoted_to_hypothesis"})
+        except Exception as e:
+            # A single malformed row must not abort the import (and lose the
+            # audit row for everything already written) — quarantine the
+            # failure to this row and keep going (fix-root-causes: the root
+            # cause of a partial/unaudited import is per-row writes with no
+            # per-row fault isolation).
+            results.append({"rule_id": original_id, "outcome": "malformed_skipped", "error": str(e)})
     return results
 
 
@@ -503,35 +534,41 @@ def _import_hypotheses(content: str, *, pack_name: str, label: str, pack_tag: st
         except json.JSONDecodeError:
             continue
         original_id = row.get("hyp_id", "")
-        lesson_text = row.get("lesson", "")
-        hyp_id = f"imported-{pack_name}-{original_id}"
-        if hyp_id in existing_hyp_ids:
-            results.append({"hyp_id": original_id, "outcome": "already_imported"})
-            continue
-        if lesson_text and lesson_text in existing_texts:
-            results.append({"hyp_id": original_id, "outcome": "skipped_identical"})
-            continue
-        hyp = Hypothesis(
-            hyp_id=hyp_id,
-            lesson=lesson_text,
-            domain=row.get("domain", ""),
-            confirmations=0,
-            contradictions=0,
-            source_lesson_ids=[f"imported:{pack_name}/{original_id}"],
-            first_seen=now,
-            last_seen=now,
-            imported={
+        try:
+            lesson_text = row.get("lesson", "")
+            hyp_id = f"imported-{pack_name}-{original_id}"
+            if hyp_id in existing_hyp_ids:
+                results.append({"hyp_id": original_id, "outcome": "already_imported"})
+                continue
+            if lesson_text and lesson_text in existing_texts:
+                results.append({"hyp_id": original_id, "outcome": "skipped_identical"})
+                continue
+            imported = {
                 "imported_from": label, "pack": pack_tag,
                 "original_id": original_id, "original_class": "hypotheses",
                 "original_confirmations": row.get("confirmations"),
                 "original_contradictions": row.get("contradictions"),
                 "imported_at": now,
-            },
-        )
-        if not dry_run:
-            locked_append(_hypotheses_path(), json.dumps(hyp.to_dict()))
-        existing_hyp_ids.add(hyp_id)
-        results.append({"hyp_id": original_id, "new_hyp_id": hyp_id, "outcome": "imported"})
+            }
+            if row.get("imported"):
+                imported["original_provenance"] = row["imported"]
+            hyp = Hypothesis(
+                hyp_id=hyp_id,
+                lesson=lesson_text,
+                domain=row.get("domain", ""),
+                confirmations=0,
+                contradictions=0,
+                source_lesson_ids=[f"imported:{pack_name}/{original_id}"],
+                first_seen=now,
+                last_seen=now,
+                imported=imported,
+            )
+            if not dry_run:
+                locked_append(_hypotheses_path(), json.dumps(hyp.to_dict()))
+            existing_hyp_ids.add(hyp_id)
+            results.append({"hyp_id": original_id, "new_hyp_id": hyp_id, "outcome": "imported"})
+        except Exception as e:
+            results.append({"hyp_id": original_id, "outcome": "malformed_skipped", "error": str(e)})
     return results
 
 
@@ -556,45 +593,51 @@ def _import_lessons(content: str, *, pack_name: str, label: str, pack_tag: str,
         except json.JSONDecodeError:
             continue
         original_id = row.get("lesson_id", "")
-        lesson_text = row.get("lesson", "")
-        new_id = f"imported-{pack_name}-{original_id}"
-        if new_id in existing_ids:
-            results.append({"lesson_id": original_id, "outcome": "already_imported"})
-            continue
-        if lesson_text and lesson_text in existing_texts:
-            results.append({"lesson_id": original_id, "outcome": "skipped_identical"})
-            continue
-        original_score = float(row.get("score", 1.0))
-        tl = TieredLesson(
-            lesson_id=new_id,
-            task_type=row.get("task_type", ""),
-            outcome=row.get("outcome", ""),
-            lesson=lesson_text,
-            source_goal=row.get("source_goal", ""),
-            confidence=row.get("confidence", 0.5),
-            tier=MemoryTier.MEDIUM,
-            score=min(original_score, 0.5),
-            # Transaction time: decay math (knowledge_web._days_since) reads
-            # last_reinforced, so this is what stops a 3-month-old import from
-            # arriving half-decayed — it gets a fair local hearing starting now.
-            last_reinforced=now[:10],
-            sessions_validated=0,
-            times_applied=0,
-            times_reinforced=0,
-            recorded_at=now,
-            evidence_sources=row.get("evidence_sources", []),
-            lesson_type=row.get("lesson_type", "") if row.get("lesson_type") in
-            {"execution", "planning", "recovery", "verification", "cost"} else "",
-            imported={
+        try:
+            lesson_text = row.get("lesson", "")
+            new_id = f"imported-{pack_name}-{original_id}"
+            if new_id in existing_ids:
+                results.append({"lesson_id": original_id, "outcome": "already_imported"})
+                continue
+            if lesson_text and lesson_text in existing_texts:
+                results.append({"lesson_id": original_id, "outcome": "skipped_identical"})
+                continue
+            original_score = float(row.get("score", 1.0))
+            imported = {
                 "imported_from": label, "pack": pack_tag,
                 "original_id": original_id, "original_tier": row.get("tier", ""),
                 "original_trust": original_score, "imported_at": now,
-            },
-        )
-        if not dry_run:
-            _append_tiered_lesson(tl, tier=MemoryTier.MEDIUM)
-        existing_ids.add(new_id)
-        results.append({"lesson_id": original_id, "new_id": new_id, "outcome": "imported_medium"})
+            }
+            if row.get("imported"):
+                imported["original_provenance"] = row["imported"]
+            tl = TieredLesson(
+                lesson_id=new_id,
+                task_type=row.get("task_type", ""),
+                outcome=row.get("outcome", ""),
+                lesson=lesson_text,
+                source_goal=row.get("source_goal", ""),
+                confidence=row.get("confidence", 0.5),
+                tier=MemoryTier.MEDIUM,
+                score=min(original_score, 0.5),
+                # Transaction time: decay math (knowledge_web._days_since) reads
+                # last_reinforced, so this is what stops a 3-month-old import from
+                # arriving half-decayed — it gets a fair local hearing starting now.
+                last_reinforced=now[:10],
+                sessions_validated=0,
+                times_applied=0,
+                times_reinforced=0,
+                recorded_at=now,
+                evidence_sources=row.get("evidence_sources", []),
+                lesson_type=row.get("lesson_type", "") if row.get("lesson_type") in
+                {"execution", "planning", "recovery", "verification", "cost"} else "",
+                imported=imported,
+            )
+            if not dry_run:
+                _append_tiered_lesson(tl, tier=MemoryTier.MEDIUM)
+            existing_ids.add(new_id)
+            results.append({"lesson_id": original_id, "new_id": new_id, "outcome": "imported_medium"})
+        except Exception as e:
+            results.append({"lesson_id": original_id, "outcome": "malformed_skipped", "error": str(e)})
     return results
 
 
@@ -618,44 +661,77 @@ def _import_skill_records(content: str, *, pack_name: str, label: str, pack_tag:
         except json.JSONDecodeError:
             continue
         original_id = row.get("id", "")
-        new_id = f"imported-{pack_name}-{original_id}"
-        if new_id in existing_ids:
-            results.append({"id": original_id, "outcome": "already_imported"})
-            continue
-        sk = Skill(
-            id=new_id,
-            name=row.get("name", ""),
-            description=row.get("description", ""),
-            trigger_patterns=row.get("trigger_patterns", []),
-            steps_template=row.get("steps_template", []),
-            source_loop_ids=row.get("source_loop_ids", []),
-            created_at=now,
-            use_count=0,
-            success_rate=1.0,
-            tier=row.get("tier", "provisional"),
-            utility_score=1.0,
-            consecutive_failures=0,
-            consecutive_successes=0,
-            circuit_state="closed",
-            optimization_objective=row.get("optimization_objective", ""),
-            island=row.get("island", ""),
-            project=row.get("project", ""),
-            imported={
+        try:
+            new_id = f"imported-{pack_name}-{original_id}"
+            if new_id in existing_ids:
+                results.append({"id": original_id, "outcome": "already_imported"})
+                continue
+            imported = {
                 "imported_from": label, "pack": pack_tag,
-                "original_id": original_id,
+                "original_id": original_id, "original_tier": row.get("tier", ""),
                 "claimed_use_count": row.get("use_count", 0),
                 "claimed_success_rate": row.get("success_rate", 1.0),
                 "imported_at": now,
-            },
-        )
-        if compute_skill_hash(sk) in existing_hashes:
-            results.append({"id": original_id, "outcome": "skipped_identical"})
-            continue
-        if not dry_run:
-            save_skill(sk)
-        existing_ids.add(new_id)
-        results.append({"id": original_id, "new_id": new_id, "outcome": "imported"})
+            }
+            if row.get("imported"):
+                imported["original_provenance"] = row["imported"]
+            sk = Skill(
+                id=new_id,
+                name=row.get("name", ""),
+                description=row.get("description", ""),
+                trigger_patterns=row.get("trigger_patterns", []),
+                steps_template=row.get("steps_template", []),
+                source_loop_ids=row.get("source_loop_ids", []),
+                created_at=now,
+                use_count=0,
+                success_rate=1.0,
+                # Always provisional on arrival — an origin "established" tier
+                # is a local promotion-history claim, and imports are
+                # contested-by-birth just like everything else in §3. The
+                # claimed origin tier survives under imported.original_tier.
+                tier="provisional",
+                utility_score=1.0,
+                consecutive_failures=0,
+                consecutive_successes=0,
+                circuit_state="closed",
+                optimization_objective=row.get("optimization_objective", ""),
+                island=row.get("island", ""),
+                project=row.get("project", ""),
+                imported=imported,
+            )
+            if compute_skill_hash(sk) in existing_hashes:
+                results.append({"id": original_id, "outcome": "skipped_identical"})
+                continue
+            if not dry_run:
+                save_skill(sk)
+            existing_ids.add(new_id)
+            results.append({"id": original_id, "new_id": new_id, "outcome": "imported"})
+        except Exception as e:
+            results.append({"id": original_id, "outcome": "malformed_skipped", "error": str(e)})
     return results
+
+
+@contextlib.contextmanager
+def _memory_dir_override(ws: Path):
+    """Route trust-bearing writers (knowledge_lens/knowledge_web/skills — all
+    of which resolve their paths via the global orch_items.memory_dir(), not
+    a parameter) at ``ws``, so ``import_pack(..., target=ws)`` actually
+    writes hypotheses/lessons/skill records into ``ws`` instead of silently
+    falling back to this process's active workspace. No-op if ``ws`` is
+    already the active workspace."""
+    target_memory = str((ws / "memory").resolve())
+    prev = os.environ.get("MARO_MEMORY_DIR")
+    if prev is not None and str(Path(prev).expanduser().resolve()) == target_memory:
+        yield
+        return
+    os.environ["MARO_MEMORY_DIR"] = target_memory
+    try:
+        yield
+    finally:
+        if prev is None:
+            os.environ.pop("MARO_MEMORY_DIR", None)
+        else:
+            os.environ["MARO_MEMORY_DIR"] = prev
 
 
 def _quarantine_dir(ws: Path, label: str) -> Path:
@@ -737,6 +813,7 @@ def import_pack(
     pack_path = Path(pack_path)
     if not pack_path.exists():
         raise SystemExit(f"no such pack: {pack_path}")
+    label = _safe_label(label)
     ws = _resolve_workspace(target)
 
     manifest = read_pack_manifest(pack_path)
@@ -767,6 +844,21 @@ def import_pack(
             "hash — possible post-seal tampering"
         )
 
+    # The seal only binds REVIEW.md's hash — verify every artifact's own
+    # declared sha256 too, or a sealed pack's payload could be swapped after
+    # the human read REVIEW.md while the seal itself still checks out
+    # (prove-it-works: the review gate is worthless if what ships isn't what
+    # was reviewed). Fail closed on missing or mismatched hashes.
+    for a in manifest.get("artifacts", []):
+        p = a.get("path", "")
+        declared = a.get("sha256")
+        actual = _sha256_text(artifact_bytes.get(p, ""))
+        if not declared or actual != declared:
+            raise SystemExit(
+                f"import refused: artifact {p!r} does not match its manifest "
+                "sha256 — possible post-seal tampering"
+            )
+
     pack_name = manifest.get("name", pack_path.stem)
     pack_tag = f"{pack_name}@{_sha256_file(pack_path)[:8]}"
     now = _now_iso()
@@ -780,34 +872,35 @@ def import_pack(
         "quarantined": [], "quarantined_unknown": [],
     }
 
-    for artifact in manifest.get("artifacts", []):
-        cls = artifact.get("class", "")
-        relpath = _artifact_relpath(artifact)
-        content = artifact_bytes.get(artifact.get("path", ""), "")
-        if cls == "rules":
-            report["rules_demoted_to_hypotheses"].extend(_import_rules_as_hypotheses(
-                content, pack_name=pack_name, label=label, pack_tag=pack_tag, now=now, dry_run=dry_run))
-        elif cls == "hypotheses":
-            report["hypotheses_imported"].extend(_import_hypotheses(
-                content, pack_name=pack_name, label=label, pack_tag=pack_tag, now=now, dry_run=dry_run))
-        elif cls in ("lessons", "lessons_medium"):
-            report["lessons_imported"].extend(_import_lessons(
-                content, pack_name=pack_name, label=label, pack_tag=pack_tag, now=now, dry_run=dry_run))
-        elif cls == "skill_records":
-            report["skill_records_imported"].extend(_import_skill_records(
-                content, pack_name=pack_name, label=label, pack_tag=pack_tag, now=now, dry_run=dry_run))
-        elif cls == "skill_md":
-            report["skills_md"].append(_import_authored_md(
-                ws, "skills", relpath, content, label=label, now=now, dry_run=dry_run))
-        elif cls == "persona_md":
-            report["personas_md"].append(_import_authored_md(
-                ws, "personas", relpath, content, label=label, now=now, dry_run=dry_run))
-        elif cls in _QUARANTINE_ONLY_CLASSES:
-            report["quarantined"].append({
-                "class": cls, **_quarantine_single(ws, label, relpath, content, dry_run)})
-        else:
-            report["quarantined_unknown"].append({
-                "class": cls, **_quarantine_single(ws, label, f"unknown/{relpath}", content, dry_run)})
+    with _memory_dir_override(ws):
+        for artifact in manifest.get("artifacts", []):
+            cls = artifact.get("class", "")
+            relpath = _artifact_relpath(artifact)
+            content = artifact_bytes.get(artifact.get("path", ""), "")
+            if cls == "rules":
+                report["rules_demoted_to_hypotheses"].extend(_import_rules_as_hypotheses(
+                    content, pack_name=pack_name, label=label, pack_tag=pack_tag, now=now, dry_run=dry_run))
+            elif cls == "hypotheses":
+                report["hypotheses_imported"].extend(_import_hypotheses(
+                    content, pack_name=pack_name, label=label, pack_tag=pack_tag, now=now, dry_run=dry_run))
+            elif cls in ("lessons", "lessons_medium"):
+                report["lessons_imported"].extend(_import_lessons(
+                    content, pack_name=pack_name, label=label, pack_tag=pack_tag, now=now, dry_run=dry_run))
+            elif cls == "skill_records":
+                report["skill_records_imported"].extend(_import_skill_records(
+                    content, pack_name=pack_name, label=label, pack_tag=pack_tag, now=now, dry_run=dry_run))
+            elif cls == "skill_md":
+                report["skills_md"].append(_import_authored_md(
+                    ws, "skills", relpath, content, label=label, now=now, dry_run=dry_run))
+            elif cls == "persona_md":
+                report["personas_md"].append(_import_authored_md(
+                    ws, "personas", relpath, content, label=label, now=now, dry_run=dry_run))
+            elif cls in _QUARANTINE_ONLY_CLASSES:
+                report["quarantined"].append({
+                    "class": cls, **_quarantine_single(ws, label, relpath, content, dry_run)})
+            else:
+                report["quarantined_unknown"].append({
+                    "class": cls, **_quarantine_single(ws, label, f"unknown/{relpath}", content, dry_run)})
 
     if not dry_run:
         from file_lock import locked_append
@@ -844,6 +937,7 @@ def adopt(
     Never overwrites a live file of the same name — that case was already
     flagged as a conflict at import time (local wins, stays in quarantine).
     """
+    label = _safe_label(label)
     ws = _resolve_workspace(target)
     quarantine_dir = _quarantine_dir(ws, label)
     if not quarantine_dir.is_dir():
@@ -878,13 +972,24 @@ def adopt(
     skipped: List[Dict[str, Any]] = []
     for kind, name, src_path in selected:
         dest = ws / kind / name
-        if dest.exists():
+        stamped = _stamp_provenance_frontmatter(src_path.read_text(encoding="utf-8"), label=label, now=now)
+        if dry_run:
+            # No side-effecting probe available in dry-run; a plain exists()
+            # check is inherently racy, but dry-run never writes so the race
+            # has no consequence — it's report-only.
+            if dest.exists():
+                skipped.append({"kind": kind, "name": name, "reason": "already exists locally"})
+            else:
+                adopted.append({"kind": kind, "name": name})
+            continue
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            fd = os.open(dest, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
             skipped.append({"kind": kind, "name": name, "reason": "already exists locally"})
             continue
-        stamped = _stamp_provenance_frontmatter(src_path.read_text(encoding="utf-8"), label=label, now=now)
-        if not dry_run:
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            dest.write_text(stamped, encoding="utf-8")
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(stamped)
         adopted.append({"kind": kind, "name": name})
 
     report = {"label": label, "adopted": adopted, "skipped": skipped, "adopted_at": now, "dry_run": dry_run}

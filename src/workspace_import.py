@@ -201,7 +201,7 @@ def run_import(
     if not dry_run:
         audit = target / "memory" / "imports.jsonl"
         audit.parent.mkdir(parents=True, exist_ok=True)
-        locked_append(audit, json.dumps(report))
+        locked_append(audit, json.dumps({**report, "action": "workspace_import"}))
     return report
 
 

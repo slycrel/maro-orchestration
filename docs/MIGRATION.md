@@ -85,16 +85,15 @@ maro-import --source /path/to/other/workspace --label docker-trial
   it into `imports/<label>/` for manual (or evolver) review. Curated
   artifacts stop at quarantine until reviewed and adopted; `maro-pack`
   (§3, §7 of the design doc) is the one-command path for sharing a
-  *curated, reviewed subset* rather than a whole-workspace merge — export
-  and seal are shipped (below), import/adopt are next.
+  *curated, reviewed subset* rather than a whole-workspace merge — the
+  full lifecycle (export, seal, import, adopt) is shipped, see below.
 - Machine state (`config.yml`, `jobs.json`, task store, heartbeat, secrets,
   locks, `correspondence.db`) is never touched by `maro-import` — it only
   moves learning, not process state.
 
 Same-owner merges (this is you, consolidating your own boxes) carry no
 trust demotion — `maro-import` is trust-neutral by design. `maro-pack
-import` (not yet shipped) will be the trust-demoting path for someone
-else's pack.
+import` is the trust-demoting path for someone else's pack.
 
 ## Sharing a curated learning pack (`maro-pack`)
 
