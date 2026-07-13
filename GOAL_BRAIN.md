@@ -2406,3 +2406,21 @@ Dormant (deliberately parked, not dropped):
   items are Jeremy-gated (API keys, hardware, design decisions) or
   explicitly deferred pending scale/evidence — nothing else was found to
   be both unblocked and ready without Jeremy's input.
+
+- **2026-07-13 (independent re-check confirms arc closure)** — Jeremy asked
+  to check on a background BACKLOG-triage fork (`a498b625d7a0489cd`) and act
+  on its report. The fork had no live task; resuming it replayed a **frozen,
+  pre-edit transcript** — its report re-described BACKLOG.md's state from
+  *before* this session's own "second pass" hygiene chunk (archiving #19/
+  #20/#21, fixing the `-1` stale checkbox, correcting #0's mining-passes
+  bullet) had already fixed exactly those things. Verified against the
+  current files rather than trusting the stale report: all three of its
+  flagged issues are already resolved (`BACKLOG.md:424` checkbox is `[x]`,
+  `BACKLOG.md:714` bullet corrected, `BACKLOG_DONE.md` holds #20/#21).
+  Re-read BACKLOG.md and MILESTONES.md in full to confirm nothing else
+  qualifies. Same conclusion, independently reached twice: nothing left in
+  the Actionable Stack is both unblocked and ready without Jeremy (only
+  #25 API keys, #1/#17 evidence-gated residuals, and Vision-section
+  direction-not-design items remain). No new chunk executed — manufacturing
+  work here would violate "don't add for its own sake." Arc stays CLOSED;
+  working tree confirmed clean, HEAD == origin/main (`06680e5`).
