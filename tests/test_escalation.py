@@ -253,6 +253,26 @@ class TestHandleEscalationWithLLM:
         assert result.followup_task_id == "cont-notifyfail-001"
         assert enqueued["depth"] == 4  # continuation still enqueued
 
+    def test_enqueue_failure_suppresses_checkin(self, monkeypatch, tmp_path):
+        # The inverse of test_checkin_notify_failure_does_not_block_enqueue:
+        # when the continuation enqueue itself raises, the check-in must NOT
+        # fire — otherwise the user is told "still running" for a chain that
+        # never actually got enqueued and silently died (adversarial-review
+        # batch-1, Skeptic finding #1, 2026-07-13).
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+
+        def _boom_enqueue(*a, **kw):
+            raise RuntimeError("task store down")
+
+        with mock.patch("task_store.enqueue", _boom_enqueue), \
+             mock.patch("notify.emit") as mock_emit:
+            task = _make_escalation_task(depth=3)  # new_depth=4 >= first threshold
+            result = handle_escalation(task, adapter=self._make_adapter("continue"))
+
+        assert result.action == "continue"
+        assert result.followup_task_id is None  # enqueue never succeeded
+        assert not mock_emit.called
+
     def test_narrow_deep_fires_checkin(self, monkeypatch, tmp_path):
         # The check-in fires on the narrow branch too, not just continue.
         monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))

@@ -996,9 +996,10 @@ class EscalationDecision:
 def _checkin_first_depth() -> int:
     """Depth at which the first recursion check-in fires (decree: 2 == pass 3)."""
     try:
-        return int(config_get("recursion.checkin_first_depth", 2))
+        val = int(config_get("recursion.checkin_first_depth", 2))
     except (TypeError, ValueError):
         return 2
+    return max(val, 1)
 
 
 def _checkin_jitter() -> int:
@@ -1008,10 +1009,10 @@ def _checkin_jitter() -> int:
         hi = int(config_get("recursion.checkin_jitter_max", 7))
     except (TypeError, ValueError):
         lo, hi = 4, 7
-    if lo < 1:
-        lo = 1
     if hi < lo:
         lo, hi = hi, lo
+    lo = max(lo, 1)
+    hi = max(hi, lo)
     return random.randint(lo, hi)
 
 
@@ -1030,12 +1031,7 @@ def _fire_checkin(task, new_depth, action, reasoning, summary_for_user, origin) 
         # Original ask: prefer the root goal carried in ancestry; fall back to
         # this chain's escalation reason. Don't block the check-in on being
         # able to reconstruct full lineage (design §2).
-        original_goal = (
-            origin.get("parent_goal")
-            or origin.get("root_goal")
-            or origin.get("goal")
-            or task.get("reason", "")
-        )
+        original_goal = origin.get("parent_goal") or task.get("reason", "")
         checkin_number = int(origin.get("checkins_sent", 0)) + 1
         # How the user steers this — whatever inbound channel is live rides the
         # same notify substrate; no reply means "continue" (ralph default).
@@ -1067,22 +1063,25 @@ def _fire_checkin(task, new_depth, action, reasoning, summary_for_user, origin) 
         log.debug("recursion check-in emit failed (non-fatal)", exc_info=True)
 
 
-def _advance_origin_with_checkin(task, new_depth, action, reasoning, summary_for_user) -> dict:
-    """Return the origin ancestry dict to carry into the continuation enqueue,
-    firing a non-blocking check-in when deep recursion crosses the threshold.
+def _advance_origin_with_checkin(task, new_depth) -> tuple:
+    """Return (origin, should_fire) — advance the check-in cadence state on
+    the origin ancestry dict without firing the notification itself.
+
+    The caller enqueues the continuation first and fires the check-in only
+    after that enqueue succeeds — otherwise a failed enqueue would still
+    tell the user "still running" for a chain that just silently died.
 
     Rides the existing `origin` dict (design §1):
     - origin["next_checkin_depth"]: depth of the *next* check-in (first = 2)
     - origin["checkins_sent"]:      count so far, for cadence + summary
-    Never blocks; the enqueue must proceed regardless of check-in outcome.
     """
     origin = dict(task.get("origin") or {})
     next_checkin = origin.get("next_checkin_depth", _checkin_first_depth())
-    if new_depth >= next_checkin:
-        _fire_checkin(task, new_depth, action, reasoning, summary_for_user, origin)
+    should_fire = new_depth >= next_checkin
+    if should_fire:
         origin["next_checkin_depth"] = new_depth + _checkin_jitter()
         origin["checkins_sent"] = origin.get("checkins_sent", 0) + 1
-    return origin
+    return origin, should_fire
 
 
 def handle_escalation(
@@ -1224,9 +1223,8 @@ def handle_escalation(
         try:
             from task_store import enqueue as _ts_enqueue
             new_depth = depth + 1
-            # Deep-recursion check-in (non-blocking) + carry/advance ancestry.
-            _origin = _advance_origin_with_checkin(
-                task, new_depth, "continue", reasoning, summary_for_user)
+            # Deep-recursion check-in cadence (non-blocking) + carry ancestry.
+            _origin, _should_checkin = _advance_origin_with_checkin(task, new_depth)
             _cont_task = _ts_enqueue(
                 lane="agenda",
                 source="loop_continuation",
@@ -1237,6 +1235,11 @@ def handle_escalation(
             )
             followup_task_id = _cont_task["job_id"]
             log.info("escalation_continue: enqueued %s depth=%d", followup_task_id, depth + 1)
+            # Fire only after the continuation is confirmed enqueued — a failed
+            # enqueue must never tell the user "still running" (adversarial-
+            # review batch-1, Skeptic finding #1, 2026-07-13).
+            if _should_checkin:
+                _fire_checkin(task, new_depth, "continue", reasoning, summary_for_user, _origin)
         except Exception as exc:
             log.warning("escalation continue: failed to enqueue continuation: %s", exc)
 
@@ -1250,9 +1253,8 @@ def handle_escalation(
         try:
             from task_store import enqueue as _ts_enqueue
             new_depth = depth + 1
-            # Deep-recursion check-in (non-blocking) + carry/advance ancestry.
-            _origin = _advance_origin_with_checkin(
-                task, new_depth, "narrow", reasoning, summary_for_user)
+            # Deep-recursion check-in cadence (non-blocking) + carry ancestry.
+            _origin, _should_checkin = _advance_origin_with_checkin(task, new_depth)
             _narrow_task = _ts_enqueue(
                 lane="agenda",
                 source="loop_continuation",
@@ -1264,6 +1266,10 @@ def handle_escalation(
             followup_task_id = _narrow_task["job_id"]
             log.info("escalation_narrow: enqueued %s with revised goal %r",
                      followup_task_id, revised_goal[:60])
+            # Fire only after the continuation is confirmed enqueued (see the
+            # matching comment in the continue branch above).
+            if _should_checkin:
+                _fire_checkin(task, new_depth, "narrow", reasoning, summary_for_user, _origin)
         except Exception as exc:
             log.warning("escalation narrow: failed to enqueue narrowed task: %s", exc)
 
@@ -1481,7 +1487,7 @@ def director_evaluate(
         )
         data = extract_json(content_or_empty(resp), dict, log_tag="director.adaptive")
         if not data:
-            return _continue
+            return _continue_on_error
 
         raw_action = safe_str(data.get("action", "continue")).lower().strip()
         _valid_actions = ("continue", "adjust", "replan", "restart", "escalate")

@@ -732,8 +732,12 @@ def run_evolver(
     # skill_candidate catch-up sweep (adversarial-review R1 batch-1 finding
     # #4) — flag_skill_candidate flags runs at curate_run time; this feeds
     # any still-unconsumed flags through extract_skills so they don't sit
-    # unread forever. Reuses this cycle's adapter (already built for the LLM
-    # analysis above) instead of constructing a second one.
+    # unread forever. Passes through this cycle's `adapter` param when the
+    # caller supplied one (e.g. loop_finalize.py's run-cadence trigger); the
+    # heartbeat-driven autonomous cycle never does, so promote_skill_candidates
+    # builds its own second MODEL_MID adapter there — not a correctness issue,
+    # just not the single-adapter-per-cycle guarantee the old comment implied
+    # (adversarial-review batch-1, Architect finding #6, 2026-07-13).
     if scan_skill_candidates:
         try:
             _sc_saved = promote_skill_candidates(adapter=adapter, dry_run=dry_run, verbose=verbose)

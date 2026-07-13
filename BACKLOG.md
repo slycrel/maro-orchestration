@@ -13,6 +13,123 @@ Last reviewed: 2026-07-13 (backlog-clearing /goal session: #10, #14, #18 shipped
 
 Ordered open work that matters. Top of the list is next.
 
+### R3. Adversarial-review of the recursion-checkin + R1 merge — 5 fixed live, 3 architectural residuals (2026-07-13)
+
+3-reviewer (Skeptic/Architect/Minimalist) pass over `git diff b2dc34d..HEAD`
+(recursive-goal check-in, planning-depth shadow, `director_evaluate`
+skip/error split, R1 architectural cleanup already archived to
+BACKLOG_DONE). Full reports: `output/adversarial-review-2026-07-13-batch1-{skeptic,architect,minimalist}.md`.
+Five real bugs/gaps fixed live, with regression tests:
+
+- **`director_evaluate`'s masked-failure fix only covered one of two code
+  paths** (Architect, High). The `if not data:` branch (unparseable-JSON
+  response) still returned the old shared `_continue` object with the
+  misleading `"evaluation skipped"` reasoning; only the `except Exception:`
+  branch had been rewired. Fixed: both branches now return
+  `_continue_on_error`. Test: `test_bad_json_returns_continue` now pins the
+  reasoning string.
+- **Check-in fires before the continuation is actually enqueued** (Skeptic,
+  Medium). `_advance_origin_with_checkin` used to fire `notify.emit` as a
+  side effect before `task_store.enqueue` ran; an enqueue failure (lock
+  contention, disk full, corrupt `blocked_by` graph) left the user told
+  "still running" for a chain that silently died, with no operator alert
+  anywhere (`handle_queue.py` only surfaces `action == "surface"`). Fixed:
+  `_advance_origin_with_checkin` now returns `(origin, should_fire)` without
+  firing; both `continue`/`narrow` branches in `handle_escalation` enqueue
+  first and only fire the check-in after a confirmed-successful enqueue.
+  Test: `test_enqueue_failure_suppresses_checkin`.
+- **Jitter/floor-guard ordering bug** (Skeptic, Low). `_checkin_jitter()`
+  floored `lo` to `>=1` *before* the `hi < lo` swap, so a misconfigured
+  negative `checkin_jitter_max` could produce a negative `lo` after the
+  swap and `random.randint` could return negative jitter (spamming
+  check-ins). Fixed: swap first, then floor `lo`, then clamp `hi >= lo`.
+- **Dead `origin.get("root_goal")`/`origin.get("goal")` fallback keys**
+  (Architect + Minimalist, independently convergent). Neither key is ever
+  written anywhere in `src/`, `tests/`, or `docs/` — only `parent_goal`
+  (from `loop_post_step.py`) is real. Fixed: `_fire_checkin` now only reads
+  `origin.get("parent_goal") or task.get("reason", "")`.
+- **Curator topo-sort didn't detect duplicate `provides` keys** (Skeptic,
+  Low). A second curator declaring a `provides` key another curator already
+  provides used to silently win (last-declaration-wins) instead of
+  failing loudly — the exact "silent, plausible-but-wrong order" class the
+  R1 fix exists to prevent. Fixed: `_topo_sort_curators` now raises
+  `RuntimeError` on a duplicate `provides` declaration. Test:
+  `test_duplicate_provides_raises`.
+- **`find_unconsumed_skill_candidates` was an unbounded full-runs-directory
+  walk** (Skeptic, Medium). `limit` only trimmed the *return*, not the
+  scan — every run this box has ever curated got JSON-parsed on every
+  evolver tick (~every 10 heartbeats), forever, with no cap (this repo's
+  retention decree means the runs dir only grows). Fixed: mirrors
+  `recall.find_prior_attempts`'s pattern — mtime-ordered, capped at
+  `_SKILL_CANDIDATE_SCAN_CAP` (200) dirs scanned, same as
+  `recall._METADATA_SCAN_CAP`.
+
+Two Low findings were cheap enough to fix live alongside the above (not
+architectural, just small):
+- Stale "reuses this cycle's adapter" comment in `evolver.py` (Architect)
+  — only true when the caller (`loop_finalize.py`) passes `adapter=`
+  explicitly; the heartbeat-driven autonomous cycle never does, so
+  `promote_skill_candidates` builds a second adapter there. Comment fixed
+  to describe both paths.
+- `handle.py`'s `_PREFIX_REGISTRY` re-export reassignment footgun
+  (Architect) — mutating in place works, reassigning the name would
+  silently no-op. Added a comment at the binding site warning against
+  reassignment.
+- PLANNING_DEPTHS/PLANNING_DEPTH_ADDENDUM hand-sync drift risk (Architect)
+  — added `test_addendum_names_every_planning_depth` asserting every
+  `PLANNING_DEPTHS` member is still named in the prompt addendum, per the
+  finding's own "at minimum" fallback (full codegen not done — see below).
+- 3 near-duplicate single-value parse tests in `test_navigator.py`
+  (Minimalist) collapsed into one parametrized test.
+
+Three findings are real but architectural or judgment calls, not fixed
+live:
+
+- [ ] **`origin` ancestry dict has no real shape** (Architect, Medium).
+  Built from scratch in 4+ places (`cli.py` twice, `loop_post_step.py`,
+  now `director.py`) with inconsistent key sets and no dataclass/TypedDict
+  defining what a consumer may rely on. Fix direction: a small `TypedDict`
+  or dataclass in `ancestry.py` with one constructor every entry point
+  calls. Deferred — touches every origin-dict producer, a bigger lift than
+  this pass's scope.
+- [ ] **`CuratorSpec.provides`/`requires` isn't validated against actual
+  curator behavior** (Architect, Medium). The topo sort validates the
+  *declared* graph is acyclic/complete, but nothing checks a curator
+  function's body actually writes what it declares in `provides` (or only
+  reads what it declares in `requires`) — spec/code drift would produce a
+  confidently-wrong order with no symptom beyond a silently missing/stale
+  card field. Fix direction: a debug-mode runtime assertion in
+  `curate_run()` snapshotting `card.keys()` before/after each curator call.
+  Related, considered and NOT adopted: Minimalist argued the whole topo-sort
+  machinery is over-engineered for a 9-node graph that's already a total
+  order, and a ~15-line order-*validator* (walk the hand-maintained list,
+  assert requires-before-provides) would give the same "fail loudly on
+  drift" guarantee with less machinery. Judgment call: the topo-sort is
+  already shipped and tested (`TestCuratorTopoSort`); rewriting a working,
+  covered mechanism for a real-but-modest simplicity win isn't worth the
+  churn/regression-risk right now. Revisit if a 4th+ curator or a genuine
+  reordering need ever makes the generality pay for itself.
+- [ ] **Two independent "is this outcome learnable" taxonomies bridged by
+  hardcoded translation** (Architect, Medium). `run_curation.classify_outcome`'s
+  `success_class` enum and `skills.extract_skills`' own
+  `status == "done" and goal_achieved is not False` filter currently agree
+  by construction, reconciled only by `evolver.promote_skill_candidates`'
+  glue code that re-synthesizes a fake `status: "done"` to satisfy the
+  latter. Fix direction: one shared predicate (e.g.
+  `decision_prior.is_learnable_outcome(card) -> bool`) both sides call.
+  Deferred — touches `evolver.py` and `skills.py`'s internal filter, real
+  but not urgent (the two schemes agree today, verified by the Skeptic).
+- [ ] **Skill-candidate sweep TOCTOU race across concurrent `run_evolver`
+  invocations** (Skeptic, Low). No lock spans read-unconsumed →
+  `extract_skills` LLM call → mark-consumed; only the final write uses
+  `locked_rmw`. A manual CLI evolver run overlapping the heartbeat
+  background cycle could both process the same batch and pay for a
+  duplicate LLM call (no corruption — the write itself is safe). Fix
+  direction: gate the sweep behind the same `proc_lock`-style singleton the
+  heartbeat daemon uses, or claim-before-processing instead of
+  claim-after. Deferred — narrow window, low severity, needs a real
+  cross-process locking decision rather than a quick patch.
+
 ### R2. Adversarial-review batch-2 findings — 3 fixed live, 1 architectural residual (2026-07-13)
 
 3-reviewer (Skeptic/Architect/Minimalist) pass over batch-2's merged diff

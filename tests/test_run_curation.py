@@ -848,3 +848,24 @@ class TestCuratorTopoSort:
 
         specs = [CuratorSpec(first, provides=("a",)), CuratorSpec(second, provides=("b",))]
         assert _topo_sort_curators(specs) == [first, second]
+
+    def test_duplicate_provides_raises(self):
+        # Skeptic finding #3 (adversarial-review batch-1, 2026-07-13): a
+        # second curator declaring a `provides` key another curator already
+        # provides used to silently win (last declaration wins) instead of
+        # failing loudly — the exact "silent, plausible-but-wrong order"
+        # class this fix exists to prevent.
+        from run_curation import CuratorSpec, _topo_sort_curators
+
+        def a(run_dir, meta, card):
+            pass
+
+        def b(run_dir, meta, card):
+            pass
+
+        specs = [
+            CuratorSpec(a, provides=("x",)),
+            CuratorSpec(b, provides=("x",)),
+        ]
+        with pytest.raises(RuntimeError, match="declared by both"):
+            _topo_sort_curators(specs)

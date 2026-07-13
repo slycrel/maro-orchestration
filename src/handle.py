@@ -53,6 +53,13 @@ from typing import Any, Dict, List, Optional
 # under their historical private names so every existing call site and test
 # in this file (and the handful of tests that import them from `handle`)
 # keeps working unchanged.
+#
+# _PREFIX_REGISTRY is the real prefixes.PREFIX_REGISTRY object, not a copy —
+# mutate it in place (`.append(...)`) to add a rule. Never reassign this
+# name (`handle._PREFIX_REGISTRY = [...]`); apply_prefixes() closes over
+# prefixes.py's own module-level name, so a reassignment here would silently
+# no-op instead of erroring (adversarial-review batch-1, Architect finding
+# #7, 2026-07-13). Add new prefixes via prefixes.PREFIX_REGISTRY directly.
 from prefixes import (
     PrefixRule as _PrefixRule,
     PrefixResult as _PrefixResult,

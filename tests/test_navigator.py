@@ -100,29 +100,18 @@ class TestPlanningDepthParsing:
     than raising, so a bad/missing depth judgment never blocks or retries
     the underlying move decision (parse_decision's docstring)."""
 
-    def test_present_value_kept(self):
+    @pytest.mark.parametrize("depth", sorted(PLANNING_DEPTHS - {"plan"}))
+    def test_non_default_depth_round_trips(self, depth):
+        """Every non-default PLANNING_DEPTHS member parses through
+        untouched — includes spawn-sub-goal (2026-07-09 recursion decree: a
+        legal shape, not an enum afterthought), collapsed from 3 near-
+        duplicate single-value tests (Minimalist finding #4, adversarial-
+        review batch-1, 2026-07-13)."""
         d = parse_decision(json.dumps({
             "move": "execute", "reasoning": "r", "confidence": 0.6,
-            "planning_depth": "one-shot",
+            "planning_depth": depth,
         }))
-        assert d.planning_depth == "one-shot"
-
-    def test_spawn_sub_goal_is_legal_not_dropped(self):
-        """The 2026-07-09 recursion decree: spawn-sub-goal is a legal shape,
-        not an enum afterthought — it must parse through untouched."""
-        d = parse_decision(json.dumps({
-            "move": "extend", "reasoning": "r", "confidence": 0.5,
-            "planning_depth": "spawn-sub-goal",
-        }))
-        assert d.planning_depth == "spawn-sub-goal"
-        assert "spawn-sub-goal" in PLANNING_DEPTHS
-
-    def test_thin_plan_is_legal(self):
-        d = parse_decision(json.dumps({
-            "move": "execute", "reasoning": "r", "confidence": 0.7,
-            "planning_depth": "thin-plan",
-        }))
-        assert d.planning_depth == "thin-plan"
+        assert d.planning_depth == depth
 
     def test_case_normalized(self):
         d = parse_decision(json.dumps({
@@ -157,6 +146,26 @@ class TestPlanningDepthParsing:
     def test_default_on_direct_construction(self):
         d = NavigatorDecision(move="execute", reasoning="r", confidence=0.5)
         assert d.planning_depth == "plan"
+
+
+class TestPlanningDepthAddendumSync:
+    """Architect finding #5 (adversarial-review batch-1, 2026-07-13):
+    PLANNING_DEPTHS (navigator.py) and PLANNING_DEPTH_ADDENDUM
+    (navigator_prompt.py) are two hand-maintained encodings of the same
+    vocabulary with nothing generating one from the other — parse_decision
+    silently coerces any value the addendum forgets to mention back to
+    "plan", so a drift here would be indistinguishable from "the model
+    chose plan". This pins that every PLANNING_DEPTHS member is still named
+    in the addendum the model actually reads."""
+
+    def test_addendum_names_every_planning_depth(self):
+        from navigator_prompt import PLANNING_DEPTH_ADDENDUM
+        for depth in PLANNING_DEPTHS:
+            assert f'"{depth}"' in PLANNING_DEPTH_ADDENDUM, (
+                f"{depth!r} is a legal PLANNING_DEPTHS value but isn't "
+                "named in PLANNING_DEPTH_ADDENDUM — the model can never "
+                "be told to choose it"
+            )
 
 
 class TestValidateEnvelope:

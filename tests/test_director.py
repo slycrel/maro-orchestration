@@ -2533,6 +2533,11 @@ class TestDirectorEvaluate:
                 result = director_evaluate("build X", ctx, "step_threshold", adapter)
 
         assert result.action == "continue"
+        # thread-arch #9 follow-up (adversarial-review batch-1, Architect): the
+        # LLM call succeeded but returned unparseable JSON — a real failure,
+        # not a deliberate skip. Must not collapse into "evaluation skipped".
+        assert result.reasoning != "evaluation skipped"
+        assert "evaluation skipped" not in result.reasoning
 
     def test_adapter_exception_returns_continue(self):
         from unittest.mock import MagicMock

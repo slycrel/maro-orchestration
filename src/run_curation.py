@@ -945,6 +945,12 @@ def _topo_sort_curators(specs: List[CuratorSpec]) -> List[Any]:
     provider_of: Dict[str, str] = {}
     for spec in specs:
         for key in spec.provides:
+            existing = provider_of.get(key)
+            if existing is not None and existing != spec.name:
+                raise RuntimeError(
+                    f"run_curation: {key!r} is declared by both "
+                    f"{existing!r} and {spec.name!r} — provides must be unique"
+                )
             provider_of[key] = spec.name
 
     edges: Dict[str, set] = {spec.name: set() for spec in specs}
@@ -1082,17 +1088,37 @@ def prune_run(handle_id: str) -> bool:
 # triggers into it (same-run best-effort, plus this catch-up sweep for runs
 # that got flagged after the fact — e.g. scrape_scripts finding a reusable
 # script loop_finalize didn't know about yet).
+_SKILL_CANDIDATE_SCAN_CAP = 200  # mirrors recall._METADATA_SCAN_CAP — same
+# "runs directory only grows, never bound the walk by return limit alone"
+# rationale (adversarial-review batch-1, Skeptic finding #2, 2026-07-13):
+# `limit` used to only trim the *return*, not the scan, so every run this
+# box has ever curated got JSON-parsed on every evolver tick forever.
+
+
 def find_unconsumed_skill_candidates(limit: int = 20) -> List[dict]:
     """Curated runs flagged as skill candidates that no consumer has acted on
     yet (no `consumed_at` stamp — see mark_skill_candidate_consumed). Newest
-    first. Best-effort: unreadable/malformed cards are skipped, not raised."""
+    first. Best-effort: unreadable/malformed cards are skipped, not raised.
+
+    Scans at most _SKILL_CANDIDATE_SCAN_CAP most-recently-modified run dirs
+    (mtime-ordered), not the entire runs directory — a candidate flagged
+    older than that window ages out unconsumed rather than costing an
+    unbounded per-tick scan; see recall.find_prior_attempts for the same
+    pattern.
+    """
     root = _runs_root()
     if not root.is_dir():
         return []
+    try:
+        dirs = sorted(
+            (d for d in root.iterdir() if d.is_dir()),
+            key=lambda d: d.stat().st_mtime,
+            reverse=True,
+        )
+    except OSError:
+        return []
     out: List[dict] = []
-    for d in root.iterdir():
-        if not d.is_dir():
-            continue
+    for d in dirs[:_SKILL_CANDIDATE_SCAN_CAP]:
         cp = d / "run_card.json"
         if not cp.is_file():
             continue
