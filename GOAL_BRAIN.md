@@ -2121,6 +2121,17 @@ Active:
   (arch-r2-01 — decided 2026-07-09, vehicle now BACKLOG §-1 → MILESTONES
   scoping), **git-history privacy review** (Jeremy-gated), plus
   install-trial residuals (BACKLOG).
+  **CORRECTED 2026-07-13:** (a) shipped 2026-07-12 as the escalation file
+  surface (MILESTONES -5 #2); git-history privacy review done 2026-07-12
+  (Jeremy's own parallel session, force-pushed rewritten main/factory,
+  reconciled with zero content loss). Container-executor design pass
+  fully executed C1→C4-mechanics (image+auth+doctor, the docker wrap,
+  mount-map + self-dev clone, stale-clone sweep + real-docker E2E tier —
+  MILESTONES -5 #6), all merged to main 2026-07-13. The only piece of
+  this arc still open is C4-BOX: the real-goal burn-in (`/login`'d
+  acceptance probe, dogfood no-regression run, go/no-go checklist, the
+  flip) — Jeremy-gated by design (needs interactive OAuth + spends
+  tokens), tracked in BACKLOG.md as C4-BOX, not an autonomous-session task.
 - **Goal-brain sequencing: COMPLETE** (steps 1–5, 2026-06-10/11): artifact →
   pressure test → recall() → navigator schema → navigator prompt + shadow
   replay. Successor thread below.
