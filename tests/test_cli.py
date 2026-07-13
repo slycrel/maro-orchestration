@@ -1006,3 +1006,73 @@ def test_cli_handle_without_persona_flag_passes_none(tmp_path):
         r = _run(tmp_path, "handle", "do", "the", "thing")
     assert r.returncode == 0
     assert captured.get("persona") is None
+
+
+# ---------------------------------------------------------------------------
+# BACKLOG #18 residual: the `maro run` CLI lane owns a run-dir + attribution
+# capture (was: escaped it entirely, invisible to inspect-run/viz search).
+# ---------------------------------------------------------------------------
+
+def _only_run_dir(tmp_path):
+    """The single per-run dir created under the test workspace runs/."""
+    root = tmp_path / "runs"
+    dirs = [d for d in root.iterdir() if d.is_dir() and (d / "metadata.json").is_file()]
+    assert len(dirs) == 1, f"expected 1 run-dir, found {[d.name for d in dirs]}"
+    return dirs[0]
+
+
+def test_cli_run_creates_run_dir_with_attribution(tmp_path):
+    r = _run(tmp_path, "run", "write a short poem about the sea",
+             "--dry-run", "--format", "json")
+    assert r.returncode == 0
+    out = json.loads(r.stdout)
+    loop_id = out["loop_id"]
+
+    rd = _only_run_dir(tmp_path)
+    meta = json.loads((rd / "metadata.json").read_text())
+    # Lane stamped, loop_id linked, origin captured — full attribution.
+    assert meta["lane"] == "agenda"
+    assert meta["loop_id"] == loop_id
+    assert meta["status"] == "done"
+    assert meta["origin"]["source"] == "cli-run"
+    assert (rd / "source" / "environment.json").is_file()
+    assert (rd / "source" / "prompt.txt").is_file()
+    # run_card written by close_run's curation step.
+    assert (rd / "run_card.json").is_file()
+    # Loop artifacts landed inside the run-dir (the pin flowed through).
+    assert list((rd / "build").glob(f"loop-{loop_id}-*"))
+
+
+def test_cli_run_is_inspectable_by_loop_id_and_handle_id(tmp_path):
+    r = _run(tmp_path, "run", "write a short poem", "--dry-run", "--format", "json")
+    assert r.returncode == 0
+    loop_id = json.loads(r.stdout)["loop_id"]
+    rd = _only_run_dir(tmp_path)
+    handle_id = rd.name.split("-", 1)[0]
+
+    # inspect-run resolves the run-dir by BOTH ids (no more E_RUN_NOT_FOUND).
+    for ref in (loop_id, handle_id):
+        view = _run(tmp_path, "inspect-run", ref)
+        assert view.returncode == 0, ref
+        assert f"loop_id={loop_id}" in view.stdout
+        assert "attribution.environment=True" in view.stdout
+
+    jview = _run(tmp_path, "inspect-run", loop_id, "--format", "json")
+    payload = json.loads(jview.stdout)
+    assert payload["metadata"]["loop_id"] == loop_id
+    assert payload["attribution"]["environment"] is True
+
+
+def test_cli_inspect_run_dir_fallback_unknown_id(tmp_path):
+    (tmp_path / "runs").mkdir(parents=True, exist_ok=True)
+    r = _run(tmp_path, "inspect-run", "deadbeef")
+    assert r.returncode != 0 or "E_RUN_NOT_FOUND" in r.stdout
+
+
+def test_cli_run_visible_to_viz_search(tmp_path):
+    r = _run(tmp_path, "run", "catalogue the tides", "--dry-run", "--format", "json")
+    assert r.returncode == 0
+    search = _run(tmp_path, "viz", "search", "--goal", "tides", "--format", "json")
+    assert search.returncode == 0
+    results = json.loads(search.stdout)
+    assert any("tides" in (s.get("goal") or "") for s in results)

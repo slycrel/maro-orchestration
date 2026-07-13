@@ -449,3 +449,80 @@ def test_environment_snapshot_records_backend_order(workspace):
         assert set(b) == {"name", "usable", "detail"}
     finally:
         set_current_run_dir(None)
+
+
+# ---------------------------------------------------------------------------
+# open_run / close_run — the shared "own a run" lifecycle (BACKLOG #18).
+# ---------------------------------------------------------------------------
+
+def test_open_run_creates_pins_and_captures(workspace):
+    from runs import open_run, current_run_dir, run_dir, set_current_run_dir
+    try:
+        rd = open_run("openrun1", prompt="build a thing", model="mid",
+                      lane="agenda", origin={"source": "cli-run"})
+        # Created at the deterministic path and pinned as current-run context.
+        assert rd == run_dir("openrun1")
+        assert rd.is_dir()
+        assert current_run_dir() == rd
+        # Attribution seeded: prompt + environment snapshot + metadata fields.
+        assert (rd / "source" / "prompt.txt").read_text() == "build a thing"
+        assert (rd / "source" / "environment.json").is_file()
+        meta = json.loads((rd / "metadata.json").read_text())
+        assert meta["lane"] == "agenda"
+        assert meta["model"] == "mid"
+        assert meta["origin"] == {"source": "cli-run"}
+    finally:
+        set_current_run_dir(None)
+
+
+def test_close_run_finalizes_and_curates(workspace):
+    from runs import open_run, close_run, run_dir, set_current_run_dir
+    try:
+        open_run("closerun1", prompt="do it", lane="agenda")
+    finally:
+        set_current_run_dir(None)
+    card = close_run("closerun1", status="done")
+    rd = run_dir("closerun1")
+    meta = json.loads((rd / "metadata.json").read_text())
+    assert meta["status"] == "done"
+    assert meta.get("ended_at")
+    # run_card.json written by curation, returned to the caller.
+    assert (rd / "run_card.json").is_file()
+    assert card is not None and card.get("handle_id") == "closerun1"
+
+
+def test_close_run_stamps_backend_error(workspace):
+    from runs import open_run, close_run, run_dir, set_current_run_dir
+
+    class _BE:
+        error_class = "auth"
+        backend = "anthropic"
+        user_action = "refresh your API key"
+
+    try:
+        open_run("closerun2", prompt="do it")
+    finally:
+        set_current_run_dir(None)
+    close_run("closerun2", status="error", backend_error=_BE())
+    meta = json.loads((run_dir("closerun2") / "metadata.json").read_text())
+    assert meta["status"] == "error"
+    assert meta["backend_error"]["error_class"] == "auth"
+    assert meta["backend_error"]["user_action"] == "refresh your API key"
+
+
+def test_resolve_run_dir_by_handle_and_loop_id(workspace):
+    from runs import (open_run, run_dir, resolve_run_dir,
+                      stamp_run_metadata, set_current_run_dir)
+    try:
+        rd = open_run("resolveme", prompt="g", lane="agenda")
+        # Stamp a loop_id, as the CLI run lane does post-loop.
+        stamp_run_metadata({"loop_id": "loopABCD"})
+    finally:
+        set_current_run_dir(None)
+    # By handle_id (O(1) dir-name hit).
+    assert resolve_run_dir("resolveme") == rd
+    # By loop_id (metadata scan).
+    assert resolve_run_dir("loopABCD") == rd
+    # Unknown ref → None.
+    assert resolve_run_dir("nope") is None
+    assert resolve_run_dir("") is None

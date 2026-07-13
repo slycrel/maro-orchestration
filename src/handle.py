@@ -626,9 +626,7 @@ def handle(
         # guard on it. On an exception the run is closed as "error" via the
         # pinned run context. The CLI keeps only the context clear.
         try:
-            from runs import finalize_run as _finalize_run
-            from runs import slice_log_for_run as _slice_log
-            from runs import snapshot_repo_bundle as _snapshot_repo
+            from runs import close_run as _close_run
             from runs import current_handle_id as _current_hid
             if result is not None:
                 _hid = result.handle_id
@@ -636,23 +634,16 @@ def handle(
                 # Exception path: only trust the pinned run context if THIS
                 # call pinned it — a long-lived process (drain loop) may
                 # still carry the previous task's pin if we raised before
-                # create_run_dir ran.
+                # open_run ran.
                 _hid = _current_hid()
                 if _hid == _pre_hid:
                     _hid = None
             if _hid:
-                _slice_log(_hid)
-                _snapshot_repo(_hid)
                 _status = result.status if result is not None else "error"
-                _finalize_run(
-                    _hid,
-                    status=_status,
-                    extra={"backend_error": {
-                        "error_class": _backend_err.error_class,
-                        "backend": _backend_err.backend,
-                        "user_action": _backend_err.user_action,
-                    }} if _backend_err is not None else None,
-                )
+                # Shared run-dir finalization (slice log, snapshot repo, stamp
+                # status + backend_error, curate run_card, re-render reports).
+                # Returns the run_card, which IS the completion payload.
+                _card = _close_run(_hid, status=_status, backend_error=_backend_err)
                 # Actionable backend death: ping the notify channel with the
                 # fix (auth/billing/context) — distinct from run_completed so
                 # substrates can render it as "act now", not "run finished".
@@ -669,26 +660,6 @@ def handle(
                         })
                     except Exception:
                         pass
-                # Post-goal curation: classify the now-finalized run and park
-                # the paid-for capture for later mining (skills/scripts/decision
-                # priors/re-attempts). Reads the metadata finalize just wrote, so
-                # it runs AFTER _finalize_run. Best-effort, never affects outcome.
-                _card = None
-                try:
-                    from run_curation import curate_run as _curate_run
-                    _card = _curate_run(_hid, status=_status)
-                except Exception:
-                    pass
-                # Post-curation report refresh: the live report froze before
-                # run_card.json existed (design known-gap #5), so re-render
-                # this run's reports now that the verdict is on disk. Also
-                # writes the NOW-lane mini-report. Best-effort.
-                try:
-                    from loop_report import write_reports_for_run_dir as _rerender
-                    from runs import run_dir as _run_dir_report
-                    _rerender(_run_dir_report(_hid))
-                except Exception:
-                    pass
                 # Substrate notification: the run_card IS the completion payload
                 # (status, done!=achieved class, result excerpt + path).
                 try:
@@ -785,27 +756,20 @@ def _handle_impl(
     # Per-run isolation: create the run-dir at start and pin it as the
     # current-run context so artifact writers downstream land directly
     # in `~/.maro/workspace/runs/<id>-<nick>/` rather than scattered
-    # across project_workspace/. See src/runs.py.
-    # Never block the run on a runs/ failure.
+    # across project_workspace/. `runs.open_run` is the shared "own a run"
+    # sequence — the `maro run`/`maro resume` CLI lane calls the same helper
+    # (BACKLOG #18). See src/runs.py. Never block the run on a runs/ failure.
     try:
-        from runs import create_run_dir as _create_run_dir
-        from runs import set_current_run_dir as _set_current_run_dir
-        from runs import record_log_offset as _record_log_offset
-        from runs import record_repo_base as _record_repo_base
-        _rd = _create_run_dir(
+        from runs import open_run as _open_run
+        _open_run(
             handle_id,
             prompt=_raw_input,
             model=model,
-            extra_metadata={"origin": origin} if origin else None,
+            repo_path=repo_path,
+            origin=origin,
         )
-        _set_current_run_dir(_rd)
-        _record_log_offset(handle_id)
-        if repo_path:
-            _record_repo_base(handle_id, repo_path)
-        from runs import write_environment_snapshot as _write_env_snapshot
-        _write_env_snapshot(_rd)
     except Exception as _run_dir_exc:
-        log.debug("runs: create_run_dir failed: %s", _run_dir_exc)
+        log.debug("runs: open_run failed: %s", _run_dir_exc)
 
     # Apply magic prefix registry — strips all recognized prefixes in one pass.
     # Runs BEFORE the user/CONFIG.md default_model_tier fallback below: a
