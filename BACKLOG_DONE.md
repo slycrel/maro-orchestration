@@ -8,6 +8,83 @@ Last split: 2026-04-16 (session 34).
 
 ---
 
+### BACKLOG #20: Subsystem archaeology — memory-vs-implementation divergence — ALL RESOLVED (2026-07-09, archived 2026-07-13)
+
+Jeremy's recollection diverged from the Purgatorio audit on four subsystems.
+Owner ask: "I'm not sure if I'm misunderstanding implementation or if we've
+genuinely lost some things here." Commit-dig verdict: nothing accidentally
+deleted; two subsystems alive and measurable, two starved by the
+never-scheduled heartbeat.
+
+- **Qwen local-validator ladder — EXISTS-AND-LIVE, memory accurate.**
+  Shipped `ae23f6b` 2026-06-21; expanded to the quality gate `d0328f5`
+  2026-07-03; survived the loop_phases split intact (loop_post_step.py:25→645).
+  Never broken, never disabled. Production 07-04→07-09: 71 VALIDATION_LADDER
+  rows — 58 local-decisive (82%), 9 escalated, 4 paid-only; shadow-eval n=29,
+  96.6% local-vs-paid agreement, 0 false_pass. Scope note: default for
+  *validation surfaces* only (never planner/director reasoning).
+- **Sheriff — misremembered: never in the goal pipeline, nothing pruned.**
+  Born `12a7a90` 2026-03-23 into heartbeat+CLI; `git log -S sheriff` over full
+  history shows zero agent_loop/handle/loop_* consumers ever; scoping-refactor
+  and cron-diagnosis eras clean. Only deletion: `b04962b` 2026-07-02, two
+  unused test-only state-markers, documented. It *feels* phased out because its
+  vehicles (heartbeat, `maro sheriff`) had ~zero production hours — starved,
+  not pruned. Standing day-one bug fixed alongside item #21 below
+  (bootstrap.py generated a unit exec'ing a `--heartbeat` flag that never
+  existed; now execs `maro heartbeat`).
+- **Evolver-in-pipeline — EXISTS-AND-LIVE, memory accurate; the session is
+  `ca7b327` 2026-07-03** ("Per-run evolver statistical scans instead of a
+  systemd heartbeat daemon", quoting Jeremy's "app rather than an OS").
+  Per-run half fires in production: memory/suggestions.jsonl has 197 rows,
+  resumed exactly at Jul 3 (23/32/12/13 rows Jul 3/4/8/9). ops-02's
+  "never run" is precise only for `run_evolver()`'s LLM meta-cycle +
+  nightly-eval (heartbeat-only, never scheduled). Residuals noted at the
+  time: suggestions all `applied: False` (apply side dormant), arch-04
+  (finalize passes no adapter → refight_rule unreachable), synthesize_skill
+  fired but had yielded zero skills on-box as of 07-09.
+- **OpenClaw-heartbeat hook — never coded (hist-07 confirmed), design
+  intent stands.** Jeremy (consistent): fire Maro's tick from the HOST's
+  heartbeat (OpenClaw here, via `system event`); "app, not systemic" — Maro
+  ships a tick entrypoint, never its own daemon. Entrypoint already exists:
+  `maro heartbeat` = exactly one beat (cli.py:556; `--loop` is daemon mode;
+  `--dry-run`, `--no-escalate` available). Supervision story (SF-1) redesigned
+  around this; official scheduler/timer (decision batch, post-1.0) is the
+  generalization for hosts without OpenClaw.
+
+### BACKLOG #21: Heartbeat burn-in findings — both FIXED (2026-07-09/10, archived 2026-07-13)
+
+First-ever production heartbeat ticks (one dry, one real) after the
+supervision-shim ship. The tick machinery worked — health check, tier-2
+diagnosis fired correctly (the monotonic-sentinel fix is why it fired on the
+first tick at all). Two findings surfaced before any recurring hook went
+live; the recurring-hook blocker is cleared, but the hook itself stays
+uninstalled per decree (one-shot ticks only, no persistent timer —
+installation is Jeremy's call at the direct-use transition):
+
+- **Recurring-hook blocker: diagnosis spent on zombie projects — FIXED
+  2026-07-10.** Sheriff now classifies projects with no file activity for
+  `sheriff.dormant_days` (default 14, docs/DEFAULTS.md) as `dormant`
+  instead of stuck/warning — excluded from tier-2 diagnosis AND tier-3
+  escalation (a recurring hook would have bought Telegram spam too, not
+  just diagnosis calls). Cheap stat scan (`project_activity_age_days`),
+  short-circuits before the expensive checks. Archiving sweep shipped as
+  `maro sheriff archive [--days N] [--apply]` — manual-only, dry-run by
+  default (off switches stay off); `check_all_projects` +
+  `list_projects` skip `_archive/`. Live-proven on box: 238 projects →
+  183 dormant / 0 diagnosis targets (was diagnosing `test`, `test-goal`,
+  `vis-test`); sweep applied at 30d moved 113 stale goal-slug workspaces
+  (all Apr–May regression junk, `polymarket-edges` untouched) →
+  125 live. Real tick post-fix: healthy, 0 stuck, 0 recovery actions,
+  198ms, zero LLM/Telegram spend. Tests: test_sheriff.py dormancy+archive
+  block.
+- **Sheriff health check wasn't lane-aware — FIXED 2026-07-10.**
+  `pkg_anthropic` + `api_key` checks replaced with one `llm_backend` check
+  over `llm.detect_backends()` (the doctor's single source of truth —
+  sheriff can no longer disagree with what a run would do). Warns only
+  when NO lane is usable; heartbeat tier-1 escalates on it (was:
+  "suggested" for a missing API key). This box: degraded → healthy
+  (`ok: subprocess, openrouter, openai`).
+
 ### R1: Adversarial-review batch-1 findings — architectural residuals SHIPPED (2026-07-13)
 
 3-reviewer (Skeptic/Architect/Minimalist) pass over batch-1's merged diff

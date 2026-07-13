@@ -5,7 +5,7 @@ Read this at the start of every session. Update it as items are completed or new
 
 **Completed items live in [BACKLOG_DONE.md](BACKLOG_DONE.md)** — move items there with their full context when they ship; that file is the archive of what we've already decided, tried, or superseded, and it's ingested by `dev-recall` for historical context.
 
-Last reviewed: 2026-07-13 (backlog-clearing /goal session: #10, #14, #18 shipped and archived to BACKLOG_DONE; #17 trimmed to its O(all runs) residual; #22 residual (blank-slate skill set) and hist-r2-02 checked off; #25 code shipped, stays open pending Jeremy's API keys; container-executor C4 mechanics merged, C4-BOX real-goal burn-in stays Jeremy-gated). Previous: 2026-07-09 (decision-cleanup session with Jeremy: #19 thread-arch decisions all resolved + recursion decree recorded, intent-resolution A/B dropped, orch.py trio deprecated, host-check wired+scheduled — four entries → BACKLOG_DONE; fastembed lane confirmed stays-gated). Previous full triage: 2026-07-04.
+Last reviewed: 2026-07-13, second pass same day (post-1.0 /goal session: recursion check-in + planning-depth shadow shipped, R1 architectural cleanup shipped, 1.6 /loop trace closed with evidence, knowledge-web read side traced and re-scoped — not built, real prerequisite gap found; R3 adversarial-review of all of the above — 5 fixed live, 3 architectural residuals documented; #19/#20/#21 fully-shipped stubs archived to BACKLOG_DONE (content was already there or wholesale-done); #0's stale "mining passes TODO" bullet corrected — all 4 miners are shipped; -1's stale unchecked "Cosmetic sweep... SHIPPED" checkbox fixed; triaged the rest of the Actionable Stack — nothing else is both unblocked and ready without Jeremy's input). Previous same-day pass: #10, #14, #18 shipped and archived to BACKLOG_DONE; #17 trimmed to its O(all runs) residual; #22 residual (blank-slate skill set) and hist-r2-02 checked off; #25 code shipped, stays open pending Jeremy's API keys; container-executor C4 mechanics merged, C4-BOX real-goal burn-in stays Jeremy-gated. Previous: 2026-07-09 (decision-cleanup session with Jeremy: #19 thread-arch decisions all resolved + recursion decree recorded, intent-resolution A/B dropped, orch.py trio deprecated, host-check wired+scheduled — four entries → BACKLOG_DONE; fastembed lane confirmed stays-gated). Previous full triage: 2026-07-04.
 
 ---
 
@@ -335,7 +335,7 @@ All adversarially verified (41/42 confirmed). The two 1.0-blockers first:
   quality_gate_action / mcp_servers); notify_on_complete redirects to the
   YAML notify.* lane. Standing rule stated in the file: uncommented key =
   has a reader.
-- [ ] Cosmetic sweep rides the above chunks — SHIPPED 2026-07-10: docs-r2-03
+- [x] Cosmetic sweep rides the above chunks — SHIPPED 2026-07-10: docs-r2-03
   (CONFIG.md overlay NOTE corrected), docs-r2-05 ("alert Jeremy" → "alert
   the operator"), docs-r2-06/hist-r2-04 (PUBLISH_CHECKLIST row in INDEX.md),
   land-r2-01 (trusted-operator boundary stated in README safety section),
@@ -625,14 +625,15 @@ data is preserved, not deleted.
   `tests/test_run_curation.py`.
 
 **Remaining ("later"):**
-- [ ] **Mining passes on the parked data.** The curation registry is the hook;
-  the actual miners are TODO — skill scraper, script scraper, decision-prior
-  indexer (feed a similar/rephrased re-attempt — this half is an OWNER ASK:
-  Jeremy 2026-07-04, "task failures being retried, with the old task context
-  available... I'm a little surprised the failure is so brittle"; Purgatorio
-  hist-09 — prioritize accordingly), partial-run rescue. Append to
-  `run_curation.CURATORS` (now 4: classify, inventory, excerpt,
-  spend_transparency — the last two added since v0).
+- [x] **Mining passes on the parked data — ALL SHIPPED, stale bullet
+  corrected 2026-07-13.** All four miners named here are live in
+  `run_curation._CURATOR_SPECS` (9 curators total, topo-sorted since
+  the R1 batch-1 fix this session): `flag_skill_candidate` (skill
+  scraper, now with a real consumer — `evolver.promote_skill_candidates`,
+  shipped this session), `scrape_scripts` (script scraper),
+  `index_decision_prior` (decision-prior indexer — the owner-ask half,
+  Jeremy 2026-07-04 "task failures being retried, with the old task
+  context available"), `rescue_partial` (partial-run rescue).
 - [x] **Unify rung-4 step I/O** — DONE 2026-07-04. `FailoverAdapter.complete`
   stamps the record path onto the response (`resp.call_record`) when
   `record_llm_call` captures; `execute_step` carries it on the outcome dict;
@@ -671,85 +672,6 @@ write fence — shipped arc") and `docs/BOUNDED_WORKSPACE.md`.
   unrestricted by design (logged, not blocked); a read-restricting mode
   remains possible if scavenge read rows ever show real contamination.
 
-### 20. Subsystem archaeology — memory-vs-implementation divergence (2026-07-09, Jeremy)
-
-Jeremy's recollection diverged from the Purgatorio audit on four subsystems.
-Owner ask: "I'm not sure if I'm misunderstanding implementation or if we've
-genuinely lost some things here." **Commit-dig COMPLETE 2026-07-09** — verdict:
-nothing accidentally deleted; two subsystems alive and measurable, two starved
-by the never-scheduled heartbeat.
-
-- [x] **Qwen local-validator ladder — EXISTS-AND-LIVE, memory accurate.**
-  Shipped `ae23f6b` 2026-06-21; expanded to the quality gate `d0328f5`
-  2026-07-03; survived the loop_phases split intact (loop_post_step.py:25→645).
-  Never broken, never disabled. Production 07-04→07-09: 71 VALIDATION_LADDER
-  rows — 58 local-decisive (82%), 9 escalated, 4 paid-only; shadow-eval n=29,
-  96.6% local-vs-paid agreement, 0 false_pass. Scope note: default for
-  *validation surfaces* only (never planner/director reasoning). Residual →
-  item #10 (tune local_max_tokens).
-- [x] **Sheriff — misremembered: never in the goal pipeline, nothing pruned.**
-  Born `12a7a90` 2026-03-23 into heartbeat+CLI; `git log -S sheriff` over full
-  history shows zero agent_loop/handle/loop_* consumers ever; scoping-refactor
-  and cron-diagnosis eras clean. Only deletion: `b04962b` 2026-07-02, two
-  unused test-only state-markers, documented. It *feels* phased out because its
-  vehicles (heartbeat, `maro sheriff`) have ~zero production hours — starved,
-  not pruned. Standing day-one bug: bootstrap.py:188 generates a unit exec'ing
-  `sheriff.py --heartbeat`, a flag that has NEVER existed in any commit —
-  fix rides SF-1 (should exec `maro heartbeat`).
-- [x] **Evolver-in-pipeline — EXISTS-AND-LIVE, memory accurate; the session is
-  `ca7b327` 2026-07-03** ("Per-run evolver statistical scans instead of a
-  systemd heartbeat daemon", quoting Jeremy's "app rather than an OS").
-  Per-run half fires in production: memory/suggestions.jsonl has 197 rows,
-  resumed exactly at Jul 3 (23/32/12/13 rows Jul 3/4/8/9). ops-02's
-  "never run" is precise only for `run_evolver()`'s LLM meta-cycle +
-  nightly-eval (heartbeat-only, never scheduled). Residuals: suggestions all
-  `applied: False` (apply side dormant), arch-04 (finalize passes no adapter →
-  refight_rule unreachable), synthesize_skill fires but has yielded zero
-  skills on-box. SF-1/README language must separate the two halves.
-- [x] **OpenClaw-heartbeat hook — never coded (hist-07 confirmed), design
-  intent stands.** Jeremy (consistent): fire Maro's tick from the HOST's
-  heartbeat (OpenClaw here, via `system event`); "app, not systemic" — Maro
-  ships a tick entrypoint, never its own daemon. Entrypoint already exists:
-  `maro heartbeat` = exactly one beat (cli.py:556; `--loop` is daemon mode;
-  `--dry-run`, `--no-escalate` available). Supervision story (SF-1) redesigned
-  around this; official scheduler/timer (decision batch, post-1.0) is the
-  generalization for hosts without OpenClaw.
-
-### 21. Heartbeat burn-in findings (2026-07-09, first real ticks)
-
-First-ever production heartbeat ticks (one dry, one real) after the
-supervision-shim ship. The tick machinery works — health check, tier-2
-diagnosis fired correctly (the monotonic-sentinel fix is why it fired on the
-first tick at all). Two findings before any recurring hook goes live —
-**both FIXED 2026-07-10**; the recurring-hook blocker is cleared, but the
-hook itself stays uninstalled per decree (one-shot ticks only, no
-persistent timer — installation is Jeremy's call at the direct-use
-transition):
-
-- [x] **Recurring-hook blocker: diagnosis spends on zombie projects — FIXED
-  2026-07-10.** Sheriff now classifies projects with no file activity for
-  `sheriff.dormant_days` (default 14, docs/DEFAULTS.md) as `dormant`
-  instead of stuck/warning — excluded from tier-2 diagnosis AND tier-3
-  escalation (a recurring hook would have bought Telegram spam too, not
-  just diagnosis calls). Cheap stat scan (`project_activity_age_days`),
-  short-circuits before the expensive checks. Archiving sweep shipped as
-  `maro sheriff archive [--days N] [--apply]` — manual-only, dry-run by
-  default (off switches stay off); `check_all_projects` +
-  `list_projects` skip `_archive/`. Live-proven on box: 238 projects →
-  183 dormant / 0 diagnosis targets (was diagnosing `test`, `test-goal`,
-  `vis-test`); sweep applied at 30d moved 113 stale goal-slug workspaces
-  (all Apr–May regression junk, `polymarket-edges` untouched) →
-  125 live. Real tick post-fix: healthy, 0 stuck, 0 recovery actions,
-  198ms, zero LLM/Telegram spend. Tests: test_sheriff.py dormancy+archive
-  block.
-- [x] **Sheriff health check isn't lane-aware — FIXED 2026-07-10.**
-  `pkg_anthropic` + `api_key` checks replaced with one `llm_backend` check
-  over `llm.detect_backends()` (the doctor's single source of truth —
-  sheriff can no longer disagree with what a run would do). Warns only
-  when NO lane is usable; heartbeat tier-1 escalates on it (was:
-  "suggested" for a missing API key). This box: degraded → healthy
-  (`ok: subprocess, openrouter, openai`).
-
 ### 17. Run-visibility residuals (2026-07-09 real-data review)
 
 All four original sub-items shipped 2026-07-09 (two concurrent sessions —
@@ -767,16 +689,6 @@ refresh attempt — see BACKLOG_DONE for the reconciliation note).
   (incremental index, or rebuild only on viz/backfill).
 
 ---
-
-### 19. Thread Architecture open decisions — RESOLVED 2026-07-09 → BACKLOG_DONE
-
-All 5 dispositioned by Jeremy on the runtime box (brief claims re-verified
-first). Decrees in GOAL_BRAIN Decisions 2026-07-09 (incl. the **recursion
-rider**: goals must be able to recurse sub-goals — a standing design
-constraint on all scoping/slicing work, doors named there). Annotations
-inline in `docs/THREAD_ARCHITECTURE.md`. Live follow-ups: #5 planning-depth
-shadow (MILESTONES), #9 /loop trace (MILESTONES), #6 verify→learn = next
-arc after 1.0. Full context in BACKLOG_DONE.
 
 ## Vision / Deferred
 
