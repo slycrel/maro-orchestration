@@ -305,6 +305,44 @@ No design coupling; noted so neither work stream blocks the other.
   no_tools, kill-path, sweep by owner-PID liveness, degrade-warn-once — docker
   fully mocked; the `_run_subprocess_safe` wrap + kill exercised end-to-end
   against a real non-docker stand-in process).
+
+  **Adversarial review (Codex, 3 lenses — Skeptic/Architect/Minimalist,
+  2026-07-12): REJECT with consensus; 9 findings fixed, 1 deferred.** Real
+  bugs the review caught, all fixed same session:
+  - **Host claude path used inside the image** — the inner cmd carried
+    `self.claude_bin` (host-resolved, e.g. `/opt/homebrew/bin/claude`), which
+    doesn't exist in the image; every containerized call would have failed.
+    Fixed: `build_run_command` basenames argv[0] → bare `claude` (baked on the
+    container PATH).
+  - **Auth uid mismatch** — `login_command`/`login_probe` ran as root, seeding
+    root-owned OAuth files the executor (running `--user host-uid`) couldn't
+    read/refresh, and `--live` falsely certified it. Fixed: all three run as
+    the same `$(id -u):$(id -g)` (shared `_user_args`).
+  - **Sweep could kill unrelated containers** — `docker ps --filter
+    name=maro-exec-` is a substring match and the code killed unlabeled
+    matches. Fixed: filter by our `label=maro.owner_pid`, verify the name
+    prefix, and SKIP (never kill) anything unlabeled/unparseable.
+  - **Over-capture** — `not no_tools` containerized every tools-carrying call
+    (verify, quality-gate, refinement, planning, the doctor probe), not just
+    worker steps. Fixed: an explicit `executor=True` signal threaded from the
+    real executor seams only (`step_exec` EXECUTE_SYSTEM ×2, `workers` ticket);
+    default-False keeps everything else on the host (safe by construction).
+  - **Stale docker cache** — availability was cached for the process lifetime,
+    so `on` became a hard failure if the daemon died mid-run instead of
+    degrading. Fixed: probe fresh per (heavy) executor call; only the degrade
+    WARNING is throttled (60s).
+  - **Retry name reuse / cross-process collision** — the rate-limit retry
+    reused the container name, and a resumed run in a fresh process restarted
+    the seq at 0. Fixed: names include the PID and the retry resolves a fresh
+    name (the sweep keys on the label, so name uniqueness is free).
+  - **cwd=None** would run in an empty container → fall back to host.
+  - **`-v host:host:mode`** breaks on paths containing `:` → switched to
+    colon-safe `--mount type=bind`; `container_extra_mounts` now honored (ro).
+  - **Deferred (known limitation, noted in code):** the sweep can't reap a
+    container leaked while its owning *process* stays alive (a wedged
+    `docker kill` in a long-lived process) — process-PID liveness can't tell it
+    from the live owner's current container. Needs run-scoped liveness; a
+    follow-on, low frequency (requires docker-kill itself to wedge).
 - **C3 — mount map + self-dev clone mode (Sonnet/Opus, 1 session):**
   fence-root → mount translation incl. goal-declared rw, extra ro mounts,
   uid/gid; the scratch-clone flow for repo-editing runs (repo ro →

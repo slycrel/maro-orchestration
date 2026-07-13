@@ -797,19 +797,34 @@ def _run_subprocess_safe(cmd, *, input=None, timeout=600,
 
     # Containerized executor (C2, docs/CONTAINER_EXECUTOR_DESIGN.md §2): the
     # caller decides whether this call runs in a container (executor.container
-    # on/require + not a no_tools utility call) and passes its name; we own the
-    # wrap + kill path here so all the streaming/liveness/probe machinery below
-    # is reused unchanged. The container sees only the -e vars we pass (host env
-    # is dropped by construction) and the working dir bound rw at the same path.
-    # Full mount-map translation + self-dev clone are C3; this is the minimal
-    # runnable mount (working dir + auth volume).
+    # on/require + a worker executor step) and passes its name; we own the wrap
+    # + kill path here so all the streaming/liveness/probe machinery below is
+    # reused unchanged. The container sees only the -e vars we pass (host env is
+    # dropped by construction), the working dir bound rw at the same path, and
+    # any configured read-only reference mounts. Full fence-root translation +
+    # self-dev clone are C3.
     _container = None
-    if container_name:
+    if container_name and not _cwd:
+        # No resolvable working dir means no project mount to give the worker —
+        # the container would run in an empty HOME with a filesystem view that
+        # silently differs from the host path. Fall back to host rather than
+        # ship that split (adversarial-review 2026-07-12).
+        log.warning("_run_subprocess_safe: container requested but no working dir "
+                    "resolved; running on host instead of an empty container")
+    elif container_name:
         import container_exec as _ce
         _worker_env = {k: child_env[k]
                        for k in ("MARO_WORKER_RUN", "MARO_ALLOW_MAIN_PUSH")
                        if k in child_env}
-        _mounts = [(_cwd, "rw")] if _cwd else []
+        _mounts = [(_cwd, "rw")]
+        # Configured read-only reference mounts (executor.container_extra_mounts).
+        try:
+            from config import get as _cfg_get
+            for _extra in (_cfg_get("executor.container_extra_mounts", []) or []):
+                if _extra and os.path.isdir(str(_extra)):
+                    _mounts.append((str(_extra), "ro"))
+        except Exception as _mnt_exc:
+            log.debug("container_extra_mounts read failed (non-fatal): %s", _mnt_exc)
         cmd = _ce.build_run_command(
             cmd, name=container_name, workdir=_cwd,
             mounts=_mounts, worker_env=_worker_env)
@@ -1229,8 +1244,13 @@ class ClaudeSubprocessAdapter(_JSONToolPromptMixin, LLMAdapter):
         temperature: float = 0.3,
         timeout: Optional[int] = None,
         no_tools: bool = False,
+        executor: bool = False,
         **kwargs,  # absorb unsupported kwargs (e.g. thinking_budget) gracefully
     ) -> LLMResponse:
+        # `executor=True` marks a worker EXECUTOR step (the agentic goal work) —
+        # the only calls the container lane wraps. Everything else (verify,
+        # quality-gate, refinement, planning, health probes) stays on the host
+        # even with executor.container=on (see container_exec.resolve_container_run).
         # Build the prompt text
         prompt = self._build_prompt(messages, tools)
 
@@ -1281,7 +1301,7 @@ class ClaudeSubprocessAdapter(_JSONToolPromptMixin, LLMAdapter):
         except ImportError:
             resolve_container_run = None
         if resolve_container_run is not None:
-            _container_name = resolve_container_run(no_tools)
+            _container_name = resolve_container_run(no_tools, executor)
         try:
             # stream_probe: in-flight runaway cost kill (no-op unless a cost
             # meter is armed). BudgetRunawayError from the probe propagates
@@ -1356,6 +1376,12 @@ class ClaudeSubprocessAdapter(_JSONToolPromptMixin, LLMAdapter):
                     _time.sleep(_wait)
                     _total_slept += _wait
                     _wait = min(_wait * 2, _RATE_LIMIT_CYCLE_CAP)
+                    # A retry is a NEW container run: resolve a FRESH name so a
+                    # not-yet-removed --rm container from the prior attempt can't
+                    # cause a docker --name conflict (adversarial-review
+                    # 2026-07-12). None when not containerizing.
+                    if resolve_container_run is not None and _container_name is not None:
+                        _container_name = resolve_container_run(no_tools, executor)
                     try:
                         result = _run_subprocess_safe(
                             cmd, input=prompt, timeout=_timeout, cwd=_cwd,

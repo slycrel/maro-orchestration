@@ -1032,6 +1032,9 @@ def execute_step(
                 _call_kwargs["cwd"] = project_dir
             except OSError:
                 pass
+        # The agentic worker executor step — the only lane the container wraps
+        # (executor.container on/require). See container_exec.resolve_container_run.
+        _call_kwargs["executor"] = True
         resp = adapter.complete(
             [
                 LLMMessage("system", EXECUTE_SYSTEM),
@@ -1127,6 +1130,7 @@ def execute_step(
                         max_tokens=4096,
                         temperature=0.3,
                         cwd=_call_kwargs.get("cwd"),
+                        executor=True,  # same agentic step — containerize when on
                     )
                     _tok = resp.input_tokens + resp.output_tokens
                     _tool_name_used = resp.tool_calls[0].name if resp.tool_calls else None

@@ -1621,7 +1621,7 @@ class TestContainerExecutorWrap:
         m.stderr = ""
         return m
 
-    def test_complete_threads_container_name_when_on(self, monkeypatch):
+    def test_complete_threads_container_name_for_executor_step(self, monkeypatch):
         import container_exec as ce
         ce.reset_container_caches()
         monkeypatch.setattr(ce, "get", lambda k, d=None: "on" if k == "executor.container" else d)
@@ -1629,9 +1629,21 @@ class TestContainerExecutorWrap:
         monkeypatch.setattr(ce, "_current_loop_id", lambda: "runX")
         a = ClaudeSubprocessAdapter()
         with patch("llm._run_subprocess_safe", return_value=self._mock_result()) as mock_run:
-            a.complete([LLMMessage("user", "build a thing")])
+            a.complete([LLMMessage("user", "build a thing")], executor=True)
         name = mock_run.call_args.kwargs.get("container_name")
         assert name and name.startswith("maro-exec-runX-")
+
+    def test_complete_no_container_for_non_executor_call(self, monkeypatch):
+        # A tools-carrying but NON-executor call (verify/quality-gate/probe)
+        # stays on the host even with docker up + mode on.
+        import container_exec as ce
+        ce.reset_container_caches()
+        monkeypatch.setattr(ce, "get", lambda k, d=None: "on" if k == "executor.container" else d)
+        monkeypatch.setattr(ce, "docker_probe", lambda: (True, "docker 24"))
+        a = ClaudeSubprocessAdapter()
+        with patch("llm._run_subprocess_safe", return_value=self._mock_result()) as mock_run:
+            a.complete([LLMMessage("user", "is this done?")])  # executor defaults False
+        assert mock_run.call_args.kwargs.get("container_name") is None
 
     def test_complete_no_container_when_off(self, monkeypatch):
         import container_exec as ce
@@ -1639,7 +1651,7 @@ class TestContainerExecutorWrap:
         monkeypatch.setattr(ce, "get", lambda k, d=None: d)  # off (default)
         a = ClaudeSubprocessAdapter()
         with patch("llm._run_subprocess_safe", return_value=self._mock_result()) as mock_run:
-            a.complete([LLMMessage("user", "hi")])
+            a.complete([LLMMessage("user", "hi")], executor=True)
         assert mock_run.call_args.kwargs.get("container_name") is None
 
     def test_complete_no_container_for_no_tools_utility_call(self, monkeypatch):
@@ -1649,7 +1661,7 @@ class TestContainerExecutorWrap:
         monkeypatch.setattr(ce, "docker_probe", lambda: (True, "docker 24"))
         a = ClaudeSubprocessAdapter()
         with patch("llm._run_subprocess_safe", return_value=self._mock_result()) as mock_run:
-            a.complete([LLMMessage("user", "classify this")], no_tools=True)
+            a.complete([LLMMessage("user", "classify this")], no_tools=True, executor=True)
         assert mock_run.call_args.kwargs.get("container_name") is None
 
     def test_complete_require_without_docker_refuses(self, monkeypatch):
@@ -1659,7 +1671,7 @@ class TestContainerExecutorWrap:
         monkeypatch.setattr(ce, "docker_probe", lambda: (False, "docker binary not found on PATH"))
         a = ClaudeSubprocessAdapter()
         with pytest.raises(ce.ContainerUnavailable):
-            a.complete([LLMMessage("user", "build")])
+            a.complete([LLMMessage("user", "build")], executor=True)
 
     def test_run_subprocess_safe_wraps_inner_cmd(self, monkeypatch, tmp_path):
         """With a container_name, the seam wraps the inner cmd via
@@ -1681,6 +1693,21 @@ class TestContainerExecutorWrap:
         assert captured["name"] == "maro-exec-t-0"
         assert captured["kw"]["mounts"] == [(str(tmp_path), "rw")]
         assert captured["kw"]["worker_env"].get("MARO_WORKER_RUN") == "1"
+
+    def test_run_subprocess_safe_falls_back_to_host_without_cwd(self, monkeypatch):
+        """A container was requested but there's no resolvable working dir to
+        mount → run on the host rather than an empty container (no wrap)."""
+        from llm import _run_subprocess_safe
+        import container_exec as ce
+        called = {"built": False}
+        def fake_build(*a, **k):
+            called["built"] = True
+            return ["true"]
+        monkeypatch.setattr(ce, "build_run_command", fake_build)
+        result = _run_subprocess_safe(
+            ["echo", "hi"], container_name="maro-exec-t-0", cwd=None, timeout=10)
+        assert result.returncode == 0
+        assert called["built"] is False  # never wrapped — ran echo on the host
 
     def test_run_subprocess_safe_kills_container_on_timeout(self, monkeypatch, tmp_path):
         """On a kill (wall-clock timeout), the container is killed by name

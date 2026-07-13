@@ -258,6 +258,7 @@ def dispatch_worker(
             tool_choice="required",
             max_tokens=4096,
             temperature=0.3,
+            executor=True,  # worker ticket = agentic executor lane (container when on)
         )
     except Exception as exc:
         return WorkerResult(

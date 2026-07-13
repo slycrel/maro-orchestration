@@ -371,18 +371,25 @@ Truth anchor: GOAL_BRAIN.md Threads. History: docs/history/ROADMAP_ARCHIVE.md.
       (CLI pin `2.1.207`), `src/container_exec.py` (the shared seam),
       `maro-bootstrap container-setup`, mode-gated `doctor` rows, DEFAULTS.md
       `## Executor / sandboxing` (4 keys), stale root docker artifacts deleted.
-      **C2** (the wrap) made it run: `complete()` decides per call
-      (`resolve_container_run` — off/no_tools→host, docker→container, `on`+no
-      docker→degrade w/ one warning, `require`+no docker→refuse) and threads
-      `container_name` into `_run_subprocess_safe`, which wraps the inner
-      `claude -p` in `docker run` (`build_run_command`) and kills by name
-      (`docker kill` before killpg — killpg only reaps the docker client).
-      Stranded-container reaper (dead `maro.owner_pid` label) wired into
-      `heartbeat.stranded_state_sweep`, never touching a live run's container.
-      Docker probed once/process (cached). Minimal mounts (cwd rw + auth vol).
-      45 tests total, docker fully mocked. **C3 = mount map + self-dev clone**
-      (fence-root→mount translation, goal-declared rw, extra ro, scratch-clone
-      merge-back riding `worktree.py`) is next, Sonnet/Opus.
+      **C2** (the wrap) made it run: `complete(executor=True)` — threaded ONLY
+      from the real worker-executor seams (`step_exec` EXECUTE_SYSTEM ×2,
+      `workers` ticket) — routes through `resolve_container_run` (off / not-
+      executor / no_tools → host; docker → container; `on`+no docker → degrade
+      w/ warning; `require`+no docker → refuse) and threads a `container_name`
+      into `_run_subprocess_safe`, which wraps the inner `claude -p` in
+      `docker run` (`build_run_command`) and kills by name (`docker kill`
+      before killpg — killpg only reaps the docker client). Stranded-container
+      reaper (dead `maro.owner_pid` label, label-filtered) wired into
+      `heartbeat.stranded_state_sweep`, never touching a live run's or a
+      3rd-party container. Minimal mounts (cwd rw + auth vol + configured ro
+      extras). **Codex adversarial review (3 lenses) → REJECT, 9 findings
+      fixed same session** (host claude-path→basename; auth uid match; sweep
+      label-filter; `not no_tools` over-capture → explicit `executor` gate;
+      cached docker→per-call probe; retry/cross-process name collisions;
+      cwd=None→host; `--mount` colon-safety). ~65 tests, docker fully mocked.
+      **C3 = mount map + self-dev clone** (fence-root→mount translation,
+      goal-declared rw, extra ro, scratch-clone merge-back riding
+      `worktree.py`) is next, Sonnet/Opus.
    7. **Portable-learning chunks 1–4** (`docs/PORTABLE_LEARNING_DESIGN.md`
       §7, §8 ratified 2026-07-12) — 1.0 scope-decree item (g).
    8. Opportunistic riders: time-blindness first slice + perspective

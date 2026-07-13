@@ -175,10 +175,14 @@ class TestLoginProbe:
         cmd = store["cmd"]
         assert ok
         assert cmd[0] == "docker" and "run" in cmd and "--rm" in cmd
-        assert f"{ce.AUTH_VOLUME}:{ce.AUTH_MOUNT}" in cmd
+        assert f"type=volume,source={ce.AUTH_VOLUME},target={ce.AUTH_MOUNT}" in cmd
         assert f"HOME={ce.CONTAINER_HOME}" in cmd
         assert "maro-executor:test" in cmd
         assert ce.DEFAULT_NETWORK in cmd
+        # probes as the SAME uid the executor uses (not root) — else it would
+        # falsely certify root-owned auth the real worker can't read.
+        import os as _os
+        assert cmd[cmd.index("--user") + 1] == f"{_os.getuid()}:{_os.getgid()}"
         # ends with the cheap no-tools probe call
         assert cmd[-5:] == ["claude", "-p", "ok", "--tools", ""]
 
@@ -201,11 +205,14 @@ class TestInstructions:
         assert f"-t {ce.DEFAULT_IMAGE}" in cmd
         assert "Dockerfile.executor" in cmd
 
-    def test_login_command_uses_auth_volume(self, monkeypatch):
+    def test_login_command_uses_auth_volume_and_matching_uid(self, monkeypatch):
         monkeypatch.setattr(ce, "get", lambda k, d=None: d)
         cmd = ce.login_command()
-        assert f"{ce.AUTH_VOLUME}:{ce.AUTH_MOUNT}" in cmd
+        assert f"type=volume,source={ce.AUTH_VOLUME},target={ce.AUTH_MOUNT}" in cmd
         assert "claude /login" in cmd
+        # seeds the volume as the SAME uid the executor runs as, so auth files
+        # stay readable/refreshable at run time.
+        assert "--user $(id -u):$(id -g)" in cmd
 
     def test_setup_walkthrough_covers_both_steps(self, monkeypatch):
         monkeypatch.setattr(ce, "get", lambda k, d=None: d)
@@ -244,6 +251,13 @@ class TestResolveContainerRun:
     def _mode(self, monkeypatch, value):
         monkeypatch.setattr(ce, "get", lambda k, d=None: value if k == "executor.container" else d)
 
+    def test_not_executor_stays_host(self, monkeypatch):
+        # Non-executor calls (verify/quality-gate/refinement/planning/probes)
+        # never containerize even with docker up + mode on.
+        self._mode(monkeypatch, "on")
+        monkeypatch.setattr(ce, "docker_probe", lambda: (True, "docker 24"))
+        assert ce.resolve_container_run(no_tools=False, executor=False) is None
+
     def test_off_returns_none_without_probing_docker(self, monkeypatch):
         self._mode(monkeypatch, "off")
         probed = {"hit": False}
@@ -251,43 +265,24 @@ class TestResolveContainerRun:
             probed["hit"] = True
             return (True, "x")
         monkeypatch.setattr(ce, "docker_probe", probe)
-        assert ce.resolve_container_run(no_tools=False) is None
+        assert ce.resolve_container_run(no_tools=False, executor=True) is None
         assert probed["hit"] is False  # off short-circuits before any docker cost
 
     def test_no_tools_stays_host_even_when_on(self, monkeypatch):
         self._mode(monkeypatch, "on")
         monkeypatch.setattr(ce, "docker_probe", lambda: (True, "docker 24"))
-        assert ce.resolve_container_run(no_tools=True) is None
+        assert ce.resolve_container_run(no_tools=True, executor=True) is None
 
     def test_on_with_docker_returns_name(self, monkeypatch):
         self._mode(monkeypatch, "on")
         monkeypatch.setattr(ce, "docker_probe", lambda: (True, "docker 24"))
         monkeypatch.setattr(ce, "_current_loop_id", lambda: "wily-glen")
-        name = ce.resolve_container_run(no_tools=False)
+        name = ce.resolve_container_run(no_tools=False, executor=True)
         assert name and name.startswith("maro-exec-wily-glen-")
 
-    def test_on_without_docker_degrades_to_host_warning_once(self, monkeypatch, caplog):
-        self._mode(monkeypatch, "on")
-        monkeypatch.setattr(ce, "docker_probe", lambda: (False, "docker binary not found on PATH"))
-        with caplog.at_level("WARNING"):
-            assert ce.resolve_container_run(no_tools=False) is None
-            assert ce.resolve_container_run(no_tools=False) is None  # second call
-        warns = [r for r in caplog.records if "docker is unavailable" in r.message]
-        assert len(warns) == 1  # once per process (docker state is cached)
-
-    def test_require_without_docker_refuses(self, monkeypatch):
-        self._mode(monkeypatch, "require")
-        monkeypatch.setattr(ce, "docker_probe", lambda: (False, "docker binary not found on PATH"))
-        with pytest.raises(ce.ContainerUnavailable):
-            ce.resolve_container_run(no_tools=False)
-
-    def test_require_with_docker_returns_name(self, monkeypatch):
-        self._mode(monkeypatch, "require")
-        monkeypatch.setattr(ce, "docker_probe", lambda: (True, "docker 24"))
-        monkeypatch.setattr(ce, "_current_loop_id", lambda: "run1")
-        assert ce.resolve_container_run(no_tools=False).startswith("maro-exec-run1-")
-
-    def test_docker_probed_once_and_cached(self, monkeypatch):
+    def test_docker_probed_fresh_every_call(self, monkeypatch):
+        # No availability cache: each executor call reflects the CURRENT daemon
+        # state (so on->degrade stays honest if docker dies mid-process).
         self._mode(monkeypatch, "on")
         calls = {"n": 0}
         def probe():
@@ -295,14 +290,39 @@ class TestResolveContainerRun:
             return (True, "docker 24")
         monkeypatch.setattr(ce, "docker_probe", probe)
         monkeypatch.setattr(ce, "_current_loop_id", lambda: "r")
-        ce.resolve_container_run(no_tools=False)
-        ce.resolve_container_run(no_tools=False)
-        assert calls["n"] == 1  # per-process cache, not per-call
+        ce.resolve_container_run(no_tools=False, executor=True)
+        ce.resolve_container_run(no_tools=False, executor=True)
+        assert calls["n"] == 2
+
+    def test_on_without_docker_degrades_to_host_warning_throttled(self, monkeypatch, caplog):
+        self._mode(monkeypatch, "on")
+        monkeypatch.setattr(ce, "docker_probe", lambda: (False, "docker binary not found on PATH"))
+        with caplog.at_level("WARNING"):
+            assert ce.resolve_container_run(no_tools=False, executor=True) is None
+            assert ce.resolve_container_run(no_tools=False, executor=True) is None  # second call
+        warns = [r for r in caplog.records if "docker is unavailable" in r.message]
+        assert len(warns) == 1  # throttled within the 60s window
+
+    def test_require_without_docker_refuses(self, monkeypatch):
+        self._mode(monkeypatch, "require")
+        monkeypatch.setattr(ce, "docker_probe", lambda: (False, "docker binary not found on PATH"))
+        with pytest.raises(ce.ContainerUnavailable):
+            ce.resolve_container_run(no_tools=False, executor=True)
+
+    def test_require_with_docker_returns_name(self, monkeypatch):
+        self._mode(monkeypatch, "require")
+        monkeypatch.setattr(ce, "docker_probe", lambda: (True, "docker 24"))
+        monkeypatch.setattr(ce, "_current_loop_id", lambda: "run1")
+        assert ce.resolve_container_run(no_tools=False, executor=True).startswith("maro-exec-run1-")
 
 
 class TestContainerName:
-    def test_prefix_and_seq(self):
-        assert ce.container_name("abc", 5) == "maro-exec-abc-5"
+    def test_prefix_loop_and_components(self):
+        n = ce.container_name("abc", 5)
+        # maro-exec-<loop>-<pid>-<seq>: PID makes it unique across processes.
+        assert n.startswith("maro-exec-abc-")
+        assert n.endswith("-5")
+        assert str(__import__("os").getpid()) in n
 
     def test_sanitizes_illegal_chars(self):
         n = ce.container_name("a/b c:d", 0)
@@ -312,29 +332,39 @@ class TestContainerName:
 
 
 class TestBuildRunCommand:
-    def _build(self, monkeypatch, **overrides):
+    def _build(self, monkeypatch, inner=("claude", "-p", "--verbose"), **overrides):
         monkeypatch.setattr(ce, "get", lambda k, d=None: d)  # network default, image default
         kw = dict(name="maro-exec-x-0", workdir="/w",
                   mounts=[("/w", "rw"), ("/ref", "ro")],
                   worker_env={"MARO_WORKER_RUN": "1", "MARO_ALLOW_MAIN_PUSH": "1"},
                   owner_pid=4242)
         kw.update(overrides)
-        return ce.build_run_command(["claude", "-p", "--verbose"], **kw)
+        return ce.build_run_command(list(inner), **kw)
 
     def test_docker_run_skeleton(self, monkeypatch):
         cmd = self._build(monkeypatch)
         assert cmd[:6] == ["docker", "run", "--rm", "-i", "--init", "--name"]
         assert cmd[6] == "maro-exec-x-0"
 
-    def test_bind_mounts_same_path_both_sides(self, monkeypatch):
+    def test_bind_mounts_are_colon_safe_mount_specs(self, monkeypatch):
         cmd = self._build(monkeypatch)
-        assert "/w:/w:rw" in cmd
-        assert "/ref:/ref:ro" in cmd
+        assert "type=bind,source=/w,target=/w" in cmd
+        assert "type=bind,source=/ref,target=/ref,readonly" in cmd
+
+    def test_host_path_with_colon_is_not_ambiguous(self, monkeypatch):
+        cmd = self._build(monkeypatch, mounts=[("/tmp/a:b/proj", "rw")])
+        assert "type=bind,source=/tmp/a:b/proj,target=/tmp/a:b/proj" in cmd
 
     def test_auth_volume_and_home(self, monkeypatch):
         cmd = self._build(monkeypatch)
-        assert f"{ce.AUTH_VOLUME}:{ce.AUTH_MOUNT}" in cmd
+        assert f"type=volume,source={ce.AUTH_VOLUME},target={ce.AUTH_MOUNT}" in cmd
         assert f"HOME={ce.CONTAINER_HOME}" in cmd
+
+    def test_runs_as_invoking_uid(self, monkeypatch):
+        cmd = self._build(monkeypatch)
+        import os as _os
+        assert "--user" in cmd
+        assert cmd[cmd.index("--user") + 1] == f"{_os.getuid()}:{_os.getgid()}"
 
     def test_owner_pid_label(self, monkeypatch):
         cmd = self._build(monkeypatch)
@@ -353,10 +383,13 @@ class TestBuildRunCommand:
         cmd = self._build(monkeypatch)
         assert cmd[cmd.index("--network") + 1] == ce.DEFAULT_NETWORK
 
-    def test_image_then_inner_cmd_are_last(self, monkeypatch):
-        cmd = self._build(monkeypatch)
+    def test_inner_binary_basenamed_to_container_path(self, monkeypatch):
+        # A host-resolved claude path must become bare `claude` (on the image
+        # PATH) — the host path doesn't exist inside the container.
+        cmd = self._build(monkeypatch, inner=["/opt/homebrew/bin/claude", "-p", "--verbose"])
         i = cmd.index(ce.DEFAULT_IMAGE)
         assert cmd[i:] == [ce.DEFAULT_IMAGE, "claude", "-p", "--verbose"]
+        assert "/opt/homebrew/bin/claude" not in cmd
 
 
 class TestKillContainer:
@@ -383,6 +416,14 @@ class TestKillContainer:
 
 
 class TestSweepStrandedContainers:
+    def test_filters_by_our_ownership_label(self, monkeypatch):
+        # Ownership is decided by the maro.owner_pid LABEL, never the name.
+        store: dict = {}
+        monkeypatch.setattr(ce.subprocess, "run", _capturing_run(store, 0, stdout=""))
+        ce.sweep_stranded_containers(pid_alive=lambda p: True)
+        assert "label=maro.owner_pid" in store["cmd"]
+        assert f"name={ce.NAME_PREFIX}" not in " ".join(store["cmd"])  # not name-substring
+
     def test_kills_only_dead_owner(self, monkeypatch):
         ps_out = "maro-exec-a-0\t100\nmaro-exec-b-0\t200\n"
         monkeypatch.setattr(ce.subprocess, "run", _fake_run(0, stdout=ps_out))
@@ -392,12 +433,25 @@ class TestSweepStrandedContainers:
         assert result == ["maro-exec-b-0"]  # live owner 100 untouched
         assert killed == ["maro-exec-b-0"]
 
-    def test_missing_owner_label_is_reaped(self, monkeypatch):
+    def test_missing_owner_label_is_skipped_not_killed(self, monkeypatch):
+        # A container without a parseable owner label is NOT ours to reap —
+        # skip it (never kill on ambiguity; the old code killed these, which
+        # combined with substring name matching could destroy 3rd-party ones).
         monkeypatch.setattr(ce.subprocess, "run", _fake_run(0, stdout="maro-exec-c-0\t\n"))
         killed: list = []
         monkeypatch.setattr(ce, "kill_container", lambda n: killed.append(n))
         result = ce.sweep_stranded_containers(pid_alive=lambda p: True)
-        assert result == ["maro-exec-c-0"]  # unattributable → safer killed
+        assert result == []
+        assert killed == []
+
+    def test_non_prefixed_name_is_skipped(self, monkeypatch):
+        # Defense in depth: even a labelled container not matching our name
+        # prefix is left alone.
+        monkeypatch.setattr(ce.subprocess, "run", _fake_run(0, stdout="someone-else\t999\n"))
+        killed: list = []
+        monkeypatch.setattr(ce, "kill_container", lambda n: killed.append(n))
+        result = ce.sweep_stranded_containers(pid_alive=lambda p: False)
+        assert result == []
 
     def test_docker_absent_returns_empty(self, monkeypatch):
         def boom(cmd, **kw):

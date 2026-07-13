@@ -26,6 +26,7 @@ import logging
 import os
 import re
 import subprocess
+import time
 from typing import Callable, Optional, Tuple
 
 from config import get
@@ -173,19 +174,33 @@ def auth_volume_probe() -> Tuple[bool, str]:
     )
 
 
+def _user_args() -> list:
+    """`--user <uid>:<gid>` for the invoking user (empty on non-posix).
+
+    The login step, the login probe, AND the executor wrap must ALL run as the
+    SAME uid: the auth volume's OAuth files are written by whichever uid runs
+    `/login`, and a mismatched uid can't read/refresh them (adversarial-review
+    2026-07-12 — probing/logging in as root while the executor runs as the host
+    uid silently broke auth and let `--live` falsely certify it)."""
+    if hasattr(os, "getuid"):
+        return ["--user", f"{os.getuid()}:{os.getgid()}"]
+    return []
+
+
 def login_probe(image: str | None = None) -> Tuple[bool, str]:
     """Prove the container can actually reach the API when logged in.
 
     Runs one cheap `claude -p ok --tools ""` inside the container against the
     auth volume — the real "installed but not logged in" catch (design §3).
-    Spends a token and needs the daemon + network, so callers gate this
-    behind an explicit opt-in (doctor's `--live`), never the default sweep.
+    Runs as the SAME uid the executor uses (see _user_args) so it validates the
+    real production identity, not root. Spends a token and needs the daemon +
+    network, so callers gate this behind doctor's `--live`, never the sweep.
     """
     img = image or container_image()
     cmd = [
-        "docker", "run", "--rm",
+        "docker", "run", "--rm", *_user_args(),
         "-e", f"HOME={CONTAINER_HOME}",
-        "-v", f"{AUTH_VOLUME}:{AUTH_MOUNT}",
+        "--mount", f"type=volume,source={AUTH_VOLUME},target={AUTH_MOUNT}",
         "--network", str(get("executor.container_network", DEFAULT_NETWORK) or DEFAULT_NETWORK),
         img,
         "claude", "-p", "ok", "--tools", "",
@@ -212,12 +227,17 @@ def build_command(image: str | None = None) -> str:
 
 
 def login_command(image: str | None = None) -> str:
-    """The interactive `docker run ... claude /login` that seeds the auth volume."""
+    """The interactive `docker run ... claude /login` that seeds the auth volume.
+
+    Runs as `$(id -u):$(id -g)` — the SAME uid the executor wrap uses — so the
+    OAuth files land owned by that uid and stay readable/refreshable at run time
+    (adversarial-review 2026-07-12)."""
     img = image or container_image()
     return (
         f"docker run -it --rm \\\n"
+        f"    --user $(id -u):$(id -g) \\\n"
         f"    -e HOME={CONTAINER_HOME} \\\n"
-        f"    -v {AUTH_VOLUME}:{AUTH_MOUNT} \\\n"
+        f"    --mount type=volume,source={AUTH_VOLUME},target={AUTH_MOUNT} \\\n"
         f"    {img} \\\n"
         f"    claude /login"
     )
@@ -282,16 +302,18 @@ Reference: docs/CONTAINER_EXECUTOR_DESIGN.md.
 _KILL_TIMEOUT_S = 10
 _SWEEP_TIMEOUT_S = 10
 
-# Per-process monotonic sequence for unique container names under one PID
-# (in-process sibling workers share the PID; the seq disambiguates them).
+# Per-process monotonic sequence for unique container names (combined with the
+# PID it makes names collision-free across concurrent AND successive processes).
 _seq_counter = itertools.count()
 
-# Docker availability is probed once per process and cached — it can't change
-# mid-run, and re-probing on every executor call would tax the boot budget the
-# container is already spending on (design §8). Tests reset via
-# reset_container_caches().
-_docker_cache: Optional[Tuple[bool, str]] = None
-_degrade_warned = False
+# Degrade-warning throttle: docker is probed FRESH on every executor call (they
+# are heavy multi-second steps, so a ~100ms `docker version` is negligible and
+# — unlike a cached probe — keeps the degrade/refuse decision honest when the
+# daemon comes up or goes down mid-process; adversarial-review 2026-07-12).
+# We only throttle the WARNING so a persistently-down daemon doesn't log once
+# per step. Reset by reset_container_caches() (test hook).
+_WARN_THROTTLE_S = 60.0
+_last_degrade_warn = 0.0
 
 
 class ContainerUnavailable(RuntimeError):
@@ -300,23 +322,14 @@ class ContainerUnavailable(RuntimeError):
 
 
 def reset_container_caches() -> None:
-    """Clear the per-process docker-availability cache + degrade-warned latch.
-    Test hook (docker state can't actually change within a process)."""
-    global _docker_cache, _degrade_warned
-    _docker_cache = None
-    _degrade_warned = False
-
-
-def _docker_cached() -> Tuple[bool, str]:
-    global _docker_cache
-    if _docker_cache is None:
-        _docker_cache = docker_probe()
-    return _docker_cache
+    """Reset the degrade-warning throttle. Test hook."""
+    global _last_degrade_warn
+    _last_degrade_warn = 0.0
 
 
 def _current_loop_id() -> str:
     """Best-effort owning-run id for the container name (design: maro-exec-
-    <loop_id>-<seq>). Falls back to the PID when no run dir is active."""
+    <loop_id>-…). Falls back to the PID when no run dir is active."""
     try:
         from runs import current_handle_id
         hid = current_handle_id()
@@ -328,40 +341,56 @@ def _current_loop_id() -> str:
 
 
 def container_name(loop_id: str, seq: int) -> str:
-    """Deterministic, docker-legal container name. Docker names must match
-    [a-zA-Z0-9][a-zA-Z0-9_.-]* — sanitize the loop id to be safe."""
+    """Docker-legal container name, unique across processes and calls:
+    maro-exec-<loop_id>-<pid>-<seq>. The PID prevents a resumed run in a fresh
+    process from colliding on a not-yet-reaped stale same-name container
+    (adversarial-review 2026-07-12); the stranded sweep keys on the owner-PID
+    label, not this name, so extra name components are free. Docker names must
+    match [a-zA-Z0-9][a-zA-Z0-9_.-]* — sanitize the loop id."""
     safe = re.sub(r"[^a-zA-Z0-9_.-]", "-", str(loop_id))
-    return f"{NAME_PREFIX}{safe}-{seq}"
+    return f"{NAME_PREFIX}{safe}-{os.getpid()}-{seq}"
 
 
-def resolve_container_run(no_tools: bool) -> Optional[str]:
-    """Decide whether this executor call runs in a container; return its name
-    or None (host path). Raises ContainerUnavailable for require-mode + no docker.
+def resolve_container_run(no_tools: bool, executor: bool) -> Optional[str]:
+    """Decide whether this call runs in a container; return its name or None
+    (host path). Raises ContainerUnavailable for require-mode + no docker.
+
+    `executor` must be True: ONLY worker executor steps (the agentic
+    `claude -p --dangerously-skip-permissions` goal work) are containerized —
+    NOT Maro's own reasoning calls (verify, quality-gate, refinement, planning,
+    doctor probe), which also carry tools but are not the executor lane
+    (design §1; adversarial-review 2026-07-12 caught `not no_tools` over-
+    capturing them). Default-False means anything unflagged stays on the host —
+    safe by construction (worst case a worker step isn't isolated, never a
+    non-worker call wrongly containerized).
 
     Order (cheap checks first — mode 'off', the default, returns before any
-    docker probe): off / utility(no_tools) → host; docker up → container;
-    docker down → refuse (require) or degrade-with-one-warning (on).
+    docker probe): off / not-executor / utility(no_tools) → host; docker up →
+    container; docker down → refuse (require) or degrade-with-warning (on).
     """
-    global _degrade_warned
-    mode = container_mode()
-    if mode == "off" or no_tools:
+    global _last_degrade_warn
+    if not executor or no_tools:
         return None
-    ok, reason = _docker_cached()
+    mode = container_mode()
+    if mode == "off":
+        return None
+    ok, reason = docker_probe()  # fresh every call — honest degrade/refuse
     if ok:
         return container_name(_current_loop_id(), next(_seq_counter))
     if mode == "require":
         raise ContainerUnavailable(
             f"executor.container=require but docker is unavailable: {reason}"
         )
-    # mode == "on": degrade to host/fence-only, but say so — once per process
-    # (docker availability is cached, so it won't flip back mid-run). SF-6:
-    # the difference between sandboxed and not must be visible.
-    if not _degrade_warned:
+    # mode == "on": degrade to host/fence-only, but say so (SF-6: the
+    # difference between sandboxed and not must be visible) — throttled so a
+    # persistently-down daemon doesn't warn once per step.
+    now = time.monotonic()
+    if now - _last_degrade_warn >= _WARN_THROTTLE_S:
         log.warning(
             "executor.container=on but docker is unavailable (%s) — worker steps "
             "run on the host under the write-fence, NOT containerized", reason
         )
-        _degrade_warned = True
+        _last_degrade_warn = now
     return None
 
 
@@ -383,6 +412,11 @@ def build_run_command(
     worker's relative writes resolve to the host dir. The auth volume + HOME are
     always mounted so the baked CLI is logged in. An `owner_pid` label lets the
     stranded-container sweep tell a live run's container from a crashed one's.
+
+    The inner command's argv[0] is reduced to its basename: the host-resolved
+    claude path (e.g. /opt/homebrew/bin/claude) does not exist inside the image;
+    the BAKED CLI is on the container PATH as `claude` (adversarial-review
+    2026-07-12 — the host path would make every containerized call fail).
     """
     image = image or container_image()
     network = network or str(get("executor.container_network", DEFAULT_NETWORK) or DEFAULT_NETWORK)
@@ -391,22 +425,31 @@ def build_run_command(
     # -i: pipe the prompt (fed on stdin by _run_subprocess_safe) into the
     # container. --init: a real PID 1 that reaps zombies + forwards signals.
     # --rm: no leftover container on normal exit (the sweep handles crashes).
-    cmd = ["docker", "run", "--rm", "-i", "--init", "--name", name]
-    if hasattr(os, "getuid"):
-        # Mounted files stay operator-owned (design §4 uid/gid).
-        cmd += ["--user", f"{os.getuid()}:{os.getgid()}"]
+    # --user: mounted files stay operator-owned; auth-volume files written by
+    # the login step (which runs as the SAME uid) stay readable/refreshable
+    # here (design §4 uid/gid; see _user_args).
+    cmd = ["docker", "run", "--rm", "-i", "--init", "--name", name, *_user_args()]
     cmd += ["--label", f"maro.owner_pid={owner_pid}"]
+    # --mount (not -v host:host:mode): colon-safe for host paths that legally
+    # contain ':' (adversarial-review 2026-07-12).
     for host_path, mode in (mounts or []):
-        cmd += ["-v", f"{host_path}:{host_path}:{mode}"]
+        spec = f"type=bind,source={host_path},target={host_path}"
+        if mode == "ro":
+            spec += ",readonly"
+        cmd += ["--mount", spec]
     # Auth volume + fixed HOME so the baked CLI finds its OAuth session.
-    cmd += ["-v", f"{AUTH_VOLUME}:{AUTH_MOUNT}", "-e", f"HOME={CONTAINER_HOME}"]
+    cmd += ["--mount", f"type=volume,source={AUTH_VOLUME},target={AUTH_MOUNT}",
+            "-e", f"HOME={CONTAINER_HOME}"]
     cmd += ["--network", network]
     for key, val in (worker_env or {}).items():
         cmd += ["-e", f"{key}={val}"]
     if workdir:
         cmd += ["-w", workdir]
     cmd.append(image)
-    cmd.extend(inner_cmd)
+    inner = list(inner_cmd)
+    if inner:
+        inner[0] = os.path.basename(str(inner[0])) or inner[0]
+    cmd.extend(inner)
     return cmd
 
 
@@ -439,15 +482,23 @@ def sweep_stranded_containers(pid_alive: Optional[Callable[[int], bool]] = None)
     """Reap executor containers whose owning run process is dead.
 
     A container survives its docker client being SIGKILL'd or the box crashing
-    (--rm only fires on clean container exit). We list running `maro-exec-*`
-    containers and kill only those whose `maro.owner_pid` label names a dead
-    PID — never a live run's in-flight container. Returns the names killed.
-    Wired into heartbeat.stranded_state_sweep. Docker absent → empty list.
+    (--rm only fires on clean container exit). Ownership is decided by the
+    `maro.owner_pid` LABEL, never the name: we filter `docker ps` by that label
+    (only containers WE launched carry it) AND require the `maro-exec-` name
+    prefix, then kill only those whose owner PID is dead. A container without
+    our label — or one merely matching the name substring — is NOT ours and is
+    left alone (adversarial-review 2026-07-12: the old name-substring filter +
+    kill-if-unlabeled could destroy an unrelated `…maro-exec…` container).
+    Returns the names killed; docker absent → empty list. Known limitation:
+    a container leaked while its owning process stays alive (a wedged
+    `docker kill` in a long-lived process) is NOT reaped here — process-PID
+    liveness can't distinguish it from the live owner's current container;
+    tracked for a run-scoped-liveness follow-on.
     """
     alive = pid_alive or _pid_alive
     try:
         proc = subprocess.run(
-            ["docker", "ps", "--filter", f"name={NAME_PREFIX}",
+            ["docker", "ps", "--filter", "label=maro.owner_pid",
              "--format", '{{.Names}}\t{{.Label "maro.owner_pid"}}'],
             capture_output=True, text=True, timeout=_SWEEP_TIMEOUT_S,
         )
@@ -465,14 +516,16 @@ def sweep_stranded_containers(pid_alive: Optional[Callable[[int], bool]] = None)
         parts = line.split("\t")
         cname = parts[0].strip()
         owner_raw = parts[1].strip() if len(parts) > 1 else ""
-        # Missing/garbage owner label → treat as stranded (a container we can't
-        # attribute to a live run is safer killed than left burning).
+        # Defense in depth: even among our-labelled containers, only touch ones
+        # with our name prefix, and only when the owner PID parses and is dead.
+        # An unparseable owner label => skip (never kill on ambiguity).
+        if not cname.startswith(NAME_PREFIX):
+            continue
         try:
             owner_pid = int(owner_raw)
-            owner_live = alive(owner_pid)
         except ValueError:
-            owner_live = False
-        if not owner_live:
+            continue
+        if not alive(owner_pid):
             kill_container(cname)
             killed.append(cname)
     return killed
