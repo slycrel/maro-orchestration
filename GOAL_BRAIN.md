@@ -2246,3 +2246,12 @@ Dormant (deliberately parked, not dropped):
   honest-measurement prerequisite, not the synthesis loop itself). Both
   live-verified with zero mocks; full suite green (166 files / 5692 tests).
   Unblocks `docs/VERIFY_LEARN_ARC.md` V0's stated hard dependency.
+- **2026-07-12 (same session, follow-on)** — Jeremy: "Note that this is me
+  accepting this edge for now, I'd like to revisit this overall later."
+  Explicit accept-not-close on the 3 residual gaps surfaced by adversarial-
+  review passes 2–3 (waiver content unjudged, fail-relevance unjudged,
+  heuristic live-data regex misses named-place phrasing) — deferred to the
+  full BDD red-green loop (BACKLOG "Verifier synthesis as a deliverable"),
+  not silently accepted forever. Each gap now has a `test_known_gap_*` pin
+  test (`test_director.py`, `test_intent.py`) asserting today's behavior,
+  so "revisit later" has a concrete artifact to flip when that loop ships.

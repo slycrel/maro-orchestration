@@ -1077,7 +1077,10 @@ rather than fixed with a fragile heuristic:
   bypasses it exactly as well as a genuine one. Needs an LLM judge (new
   verifier-LLM scope) or would otherwise require the external-taxonomy
   approach this function's own docstring says to avoid. See
-  `closure_verify.py` Signal 3 comment.
+  `closure_verify.py` Signal 3 comment. Pinned so this is testable-against,
+  not just prose: `tests/test_director.py::TestDetectBehavioralGap::
+  test_known_gap_pretextual_waiver_still_suppresses_signal3` — flip the
+  assertion once waiver-content judging ships.
 - [ ] **A "fail" outcome isn't checked for relevance, only cleanliness.**
   B3(b)'s confidence cap (narrowed in pass 2 to exempt any clean
   `outcome=="fail"` from capping) can't distinguish a real, meaningful
@@ -1087,7 +1090,21 @@ rather than fixed with a fragile heuristic:
   signal that doesn't exist today. Accepted per an explicit asymmetric-cost
   argument (over-eager demotion costs one bounded `closure_restart`; a
   wrongly-suppressed real failure silently poisons `goal_achieved`) — see
-  `closure_verify.py` B3(b) comment.
+  `closure_verify.py` B3(b) comment. Pinned: `tests/test_director.py::
+  TestProbeEnvHardening::test_known_gap_irrelevant_fail_still_exempts_
+  confidence_cap` — flip once a check-to-deliverable relevance signal
+  exists.
+- [ ] **Heuristic live-data regex misses named-place phrasing.**
+  `_LIVE_DATA_RE` (no-LLM fallback path, `intent.py`) only catches
+  current/latest/today wording; asks like "where can I get non-ethanol gas
+  near Manti, Utah" still route NOW even though the LLM path correctly
+  routes the same question AGENDA via `needs_live_data`
+  (`test_llm_needs_live_data_forces_agenda`). Confirmed still-open by 3
+  independent adversarial reviewers 2026-07-12; accepted as a deliberately
+  narrow lexical approximation (design doc DECISION at
+  `docs/history/2026-07-12-routing-and-probe-synthesis-design.md:70`), not
+  a bug to chase. Pinned: `tests/test_intent.py::TestLiveDataOverride::
+  test_known_gap_named_place_live_data_not_caught_by_heuristic`.
 
 - [ ] **Verifier synthesis phase.** Dream-level: orchestrator builds its own verifier when none exists, rather than degrading to LLM judgment or failing as "hard." Framing: BDD + TDD. Scope declares Given/When/Then (what must be true for "done"). Execution includes a mandatory red-green pair: synthesize an executable probe, break the code on purpose to confirm it catches the failure, fix the code, probe goes green. The probe is a first-class checked-in artifact.
 

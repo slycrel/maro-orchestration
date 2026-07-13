@@ -233,6 +233,24 @@ class TestLiveDataOverride:
         lane, _, _ = _heuristic_classify("what's the current BTC price?")
         assert lane == "now"
 
+    def test_known_gap_named_place_live_data_not_caught_by_heuristic(self):
+        """KNOWN-GAP (adversarial-review pass 2 Finding 5, 2026-07-12;
+        see the _LIVE_DATA_RE comment in intent.py and the DECISION at
+        docs/history/2026-07-12-routing-and-probe-synthesis-design.md:70):
+        the no-LLM heuristic fallback's live-data regex only catches
+        current/latest/today phrasing. The same Manti-gas-station question
+        that correctly routes AGENDA on the LLM path (via needs_live_data —
+        see test_llm_needs_live_data_forces_agenda above) still falls
+        through to NOW here, because named-place availability asks don't
+        match the lexical pattern.
+        Accepted as a deliberately narrow approximation, not a bug to
+        chase — pinned so it's revisited if the heuristic fallback is ever
+        asked to carry more of the semantic load."""
+        lane, _, _ = _heuristic_classify(
+            "Where can I get non-ethanol gas in or around Manti, Utah?"
+        )
+        assert lane == "now"  # the known gap — ideally this would be agenda
+
 
 class TestHeuristicAGENDA:
     def test_research(self):

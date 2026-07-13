@@ -1027,6 +1027,25 @@ class TestDetectBehavioralGap:
         )
         assert reason
 
+    def test_known_gap_pretextual_waiver_still_suppresses_signal3(self):
+        # KNOWN-GAP (adversarial-review pass 3, 2026-07-12; BACKLOG
+        # "Verifier synthesis as a deliverable"): only presence is checked,
+        # never content. A pretextual waiver that doesn't actually explain
+        # an environmental impossibility (contrast the legitimate-sounding
+        # waiver in test_logged_waiver_suppresses_signal3_despite_declared_
+        # runtime_shape above) currently bypasses the MUST exactly as well
+        # as a genuine one. Pins today's behavior so it's revisited (and
+        # this assertion flipped to require judged legitimacy) once a
+        # waiver-content judge exists — see the Signal 3 code comment in
+        # closure_verify.py for why that's deferred, not silently patched.
+        intent = self._intent(("bin/tool", "the built CLI", "runtime"))
+        reason = self._call(
+            summary="all checks passed",
+            resolved_intent=intent,
+            behavioral_probe_waived="static compile proves it",
+        )
+        assert reason == ""  # currently suppressed — that's the known gap
+
 
 class TestDetectDiagnosisGap:
     def _diag(self, failure_class="decomposition_too_broad", severity="warning", recommendation="split the work"):
@@ -2196,6 +2215,54 @@ class TestProbeEnvHardening:
         assert result.judged is True  # exempt from the tri-state (self-contradiction)
         assert result.confidence < 0.7  # capped — no clean fail backs the 0.9
         assert "environment reasons" in result.summary
+
+    def test_known_gap_irrelevant_fail_still_exempts_confidence_cap(self, tmp_path):
+        """KNOWN-GAP (adversarial-review pass 3, 2026-07-12; BACKLOG
+        "Verifier synthesis as a deliverable"): _fail_count only counts
+        outcome == "fail" — it has no way to know whether the failing
+        check was actually relevant to the deliverable. Here the only
+        clean fail is a brittle, irrelevant probe (checks for a stray
+        string that has nothing to do with what was asked for) while the
+        three checks that matter are all environment-inconclusive. Under
+        today's code this still exempts the B3(b) cap exactly as if the
+        fail were meaningful — mirror image of test_real_fail_diluted_
+        by_noise_is_not_capped, where the fail *is* meaningful. Pin this
+        so it's revisited (and this assertion flipped) once per-check
+        relevance-to-deliverable data exists."""
+        import subprocess
+        from unittest.mock import MagicMock, patch
+
+        adapter = MagicMock()
+        checks = [
+            {"description": "unrelated banner text matches (irrelevant to the deliverable)",
+             "command": "grep -q UNRELATED_BANNER nonexistent_unrelated_file.txt"},
+            {"description": "artifact behaves correctly 1", "command": "x1"},
+            {"description": "artifact behaves correctly 2", "command": "x2"},
+            {"description": "artifact behaves correctly 3", "command": "x3"},
+        ]
+        verdict_data = {"complete": False, "confidence": 0.9,
+                        "gaps": ["artifact missing"], "summary": "not delivered"}
+        results = [
+            subprocess.CompletedProcess(args="grep", returncode=1, stdout="", stderr=""),
+            subprocess.CompletedProcess(args="x1", returncode=126, stdout="",
+                                        stderr="permission denied"),
+            subprocess.CompletedProcess(args="x2", returncode=126, stdout="",
+                                        stderr="permission denied"),
+            subprocess.CompletedProcess(args="x3", returncode=126, stdout="",
+                                        stderr="permission denied"),
+        ]
+
+        with patch("closure_verify.extract_json", side_effect=[{"checks": checks}, verdict_data]):
+            with patch("closure_verify.content_or_empty", return_value="{}"):
+                with patch("subprocess.run", side_effect=results):
+                    result = verify_goal_completion(
+                        "build X", [], adapter, workspace_path=str(tmp_path),
+                    )
+
+        assert result.complete is False
+        # NOT capped — an irrelevant fail is trusted exactly like a relevant
+        # one under today's code. That's the known gap being pinned.
+        assert result.confidence == 0.9
 
     def test_minority_inconclusive_does_not_cap_confidence(self, tmp_path):
         """Guard against over-triggering: when inconclusive checks are the

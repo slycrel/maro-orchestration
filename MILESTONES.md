@@ -364,6 +364,28 @@ Truth anchor: GOAL_BRAIN.md Threads. History: docs/history/ROADMAP_ARCHIVE.md.
         the eventual full-BDD-loop pass that would actually resolve them
         (needs an LLM judge or a relevance signal neither exists today).
         No test/behavior changes this pass — comments only.
+
+      **Known-gap pin tests (2026-07-12, Jeremy: "make sure those are
+      documented to revisit [test against] later").** Comments/BACKLOG
+      prose aren't discoverable or checkable the way a running test is —
+      added 3 `test_known_gap_*` tests that assert TODAY's gap-exhibiting
+      behavior explicitly, so each is a concrete artifact to flip (not just
+      re-read) once its underlying gap is actually closed. New convention;
+      extends the pre-existing in-code "known gap" phrase (`loop_report.py`,
+      `handle.py`) into the test suite for the first time:
+      - `test_director.py::TestDetectBehavioralGap::
+        test_known_gap_pretextual_waiver_still_suppresses_signal3` (pass-3
+        Finding 1)
+      - `test_director.py::TestProbeEnvHardening::
+        test_known_gap_irrelevant_fail_still_exempts_confidence_cap`
+        (pass-3 Finding 2)
+      - `test_intent.py::TestLiveDataOverride::
+        test_known_gap_named_place_live_data_not_caught_by_heuristic`
+        (pass-2 Finding 5 — same documented-but-untested-gap pattern,
+        added for consistency as the answer to "anything else we should
+        look at?"). All 3 pass against current code (proving the gaps are
+        real, not hypothetical); BACKLOG bullets cross-reference the test
+        names both directions.
    6. **Container executor — C1 + C2 SHIPPED 2026-07-12 (Opus); C3 → C4 next**
       (`docs/CONTAINER_EXECUTOR_DESIGN.md`; C4 = runtime-box burn-in, Jeremy
       adjudicates the flip). Clears r2 blocker #4. **C1** (image + auth +
