@@ -466,6 +466,7 @@ def _cmd_handle(args: argparse.Namespace) -> int:
             force_lane=args.lane,
             dry_run=args.dry_run,
             verbose=args.verbose,
+            persona=getattr(args, "persona", None),
         )
     except Exception as exc:
         return fail("E_HANDLE", str(exc))
