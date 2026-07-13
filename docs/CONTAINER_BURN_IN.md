@@ -223,7 +223,7 @@ crash between provision and finalize: owner-PID-alive → skip; dead owner →
 (or never existed), else PRESERVE (branch kept, reason named); a clone with no
 trusted owner sidecar is SURFACED, never auto-removed. The owner breadcrumb
 lives OUTSIDE the container-mounted clone dir so a hostile worker can't redirect
-the host-side merge. 11 unit tests; deletion stays behind the one allowlisted
+the host-side merge. 9 unit tests; deletion stays behind the one allowlisted
 `cleanup_clone` site (retention tripwire updated).
 
 **`sandbox.py` retirement — verified shipped (design §7).** `src/sandbox.py`,
