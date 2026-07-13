@@ -8,9 +8,15 @@ a similar or rephrased re-attempt, rescue a partial run before it went off the
 rails, or just surface history to the user (and prune it on request).
 
 Designed as a miner registry: `CURATORS` is an ordered list of pure functions
-`(run_dir, meta, card) -> None` that enrich the card. v0 ships classification +
-asset inventory; future miners (skill scraper, script scraper, decision-prior
-indexer, re-attempt hinter) append to the list without touching the hook.
+`(run_dir, meta, card) -> None` that enrich the card; new miners append to the
+list without touching the hook. Shipped miners: classification, asset
+inventory, result excerpt, spend transparency, skills-lite promotion, and the
+four BACKLOG #0 miners — script scraper (`scrape_scripts`), skill scraper
+(`flag_skill_candidate`), partial-run rescue (`rescue_partial`), and the
+decision-prior indexer (`index_decision_prior`). The decision-prior indexer's
+read half (`format_prior_decisions` / `prior_decision_context`) is surfaced
+through `recall()` into a re-attempt's context BEFORE it starts, so a retried
+or rephrased goal arrives warm instead of cold.
 
 This is an adornment on the run-dir plan, not a new subsystem. Capture is
 default-on; turn it off with MARO_RECORD=0 / config record.enabled=false (see
@@ -554,11 +560,387 @@ def degrade_skills_lite() -> List[str]:
     return quarantined
 
 
+# --- BACKLOG #0 miners: script scraper, skill scraper, partial rescue, --------
+# --- decision-prior indexer. All pure (rd, meta, card)->None; never raise. ----
+
+def _load_loop_log(rd: Path) -> Optional[dict]:
+    """Newest structured loop log (build/loop-*-log.json) for a run, or None.
+
+    The loop log carries per-step {index,text,status,...} plus stuck_reason and
+    totals — structured signal that beats re-parsing the rendered PARTIAL.md.
+    """
+    build = rd / "build"
+    if not build.is_dir():
+        return None
+    logs = sorted(build.glob("loop-*-log.json"),
+                  key=lambda p: p.stat().st_mtime, reverse=True)
+    for f in logs:
+        try:
+            return json.loads(f.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+    return None
+
+
+# Reusability heuristic bar (miner #2). A captured script clears it when the
+# static signal score reaches _REUSABLE_MIN. NOTE: skills.py's scoring
+# (utility_score/circuit breaker) is RUNTIME — it needs use_count + success_rate
+# that a just-finished run doesn't have yet. So this is a shape heuristic, not
+# that machinery: cheap, explainable, and only a *judgment on the card* (the
+# real promotion still goes through skills/evolver).
+_REUSABLE_MIN = 3
+_SCRIPT_READ_CAP = 40000
+_SCRIPTS_JUDGED_CAP = 30
+
+
+def _judge_script_reusability(path: Path) -> dict:
+    """Static reusability judgment for one captured script (pure inspection —
+    never executed). Returns {reusable, score, reasons}."""
+    reasons: List[str] = []
+    score = 0
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")[:_SCRIPT_READ_CAP]
+    except OSError:
+        return {"reusable": False, "score": 0, "reasons": ["unreadable"]}
+    code_lines = [ln for ln in text.splitlines()
+                  if ln.strip() and not ln.strip().startswith("#")]
+    n_lines = len(code_lines)
+    suffix = path.suffix
+    # Parameterized (def/class/shell function) = built to be called again.
+    if any(tok in text for tok in ("\ndef ", "\nclass ", "function ", "() {")):
+        score += 2
+        reasons.append("defines reusable function/class")
+    # Takes inputs (CLI/args) rather than hardcoding a single case.
+    if any(tok in text for tok in ("argparse", "sys.argv", "__main__",
+                                   "getopts", '"$1"', "'$1'", "click.")):
+        score += 2
+        reasons.append("parameterized via CLI/args")
+    # A top-of-file docstring/header signals documented, deliberate intent.
+    stripped = text.lstrip()
+    if stripped.startswith(('"""', "'''")) or (suffix == ".sh" and text[:3] == "#!/"):
+        score += 1
+        reasons.append("documented intent")
+    if 8 <= n_lines <= 400:
+        score += 1
+        reasons.append(f"substantive ({n_lines} lines)")
+    if n_lines < 5:
+        score -= 2
+        reasons.append("too small — likely one-off glue")
+    # Run-specific hardcoding (this run's dir, /tmp) is the signature of
+    # throwaway glue, not a reusable tool.
+    if "/tmp/" in text or ".maro/workspace/runs/" in text:
+        score -= 2
+        reasons.append("hardcoded run-specific path")
+    return {"reusable": score >= _REUSABLE_MIN, "score": score, "reasons": reasons}
+
+
+def scrape_scripts(rd: Path, meta: dict, card: dict) -> None:
+    """Script scraper (miner #2): judge which of the run's captured scripts are
+    genuinely reusable tools vs one-off glue, and record the judgment on the
+    card. Reads inventory_assets' `scripts` list (so it must run after it).
+    Pure static inspection — no runtime signal exists at curation time."""
+    inv = card.get("inventory") or {}
+    scripts = inv.get("scripts") or []
+    if not scripts:
+        return
+    judged: List[dict] = []
+    for rel in scripts[:_SCRIPTS_JUDGED_CAP]:
+        p = rd / rel
+        if not p.is_file():
+            continue
+        judged.append({"path": rel, **_judge_script_reusability(p)})
+    if not judged:
+        return
+    reusable = [j for j in judged if j["reusable"]]
+    card["reusable_scripts"] = {
+        "reusable": reusable,
+        "n_reusable": len(reusable),
+        "n_judged": len(judged),
+    }
+
+
+def flag_skill_candidate(rd: Path, meta: dict, card: dict) -> None:
+    """Skill scraper (miner #1): FLAG a successful run that produced a reusable
+    tool/procedure as a skill-crystallization candidate, for the EXISTING
+    pipeline (skills.extract_skills / evolver.synthesize_skill, which already
+    run at loop-finalize) or human review to consider.
+
+    Deliberately NOT a second promotion path: promote_skills_lite already
+    handles runs that author a skill .md; this only marks candidacy so the
+    runs that produced a reusable script or a repeatable procedure WITHOUT
+    authoring a doc stop falling through the gap (arch-quality-selfimprove:
+    'skills-lite covers only runs that deliberately author a skill .md').
+    Auto-injects nothing — the flag is advisory."""
+    # Same gate extract_skills uses: only clean finishes not judged unachieved
+    # (done ≠ achieved) — never crystallize from a run that didn't land.
+    if card.get("success_class") not in ("success", "done-unverified"):
+        return
+    # An authored .md already promoted via skills-lite is the stronger signal —
+    # don't double-flag it as a heuristic candidate.
+    if (card.get("skills_lite") or {}).get("promoted"):
+        return
+    reasons: List[str] = []
+    reusable = (card.get("reusable_scripts") or {}).get("reusable") or []
+    if reusable:
+        reasons.append(f"{len(reusable)} reusable script(s): "
+                       + ", ".join(r["path"] for r in reusable[:3]))
+    n_steps = (card.get("inventory") or {}).get("n_steps") or 0
+    if n_steps >= 3:
+        reasons.append(f"repeatable {n_steps}-step procedure")
+    if not reasons:
+        return
+    card["skill_candidate"] = {
+        "flagged": True,
+        "reasons": reasons,
+        "note": ("advisory — for extract_skills / synthesize_skill or human "
+                 "review; not auto-promoted"),
+    }
+
+
+def rescue_partial(rd: Path, meta: dict, card: dict) -> None:
+    """Partial-run rescue (miner #4): for a run that ended partial/incomplete,
+    record WHAT WAS ACCOMPLISHED — which steps completed, what artifacts exist,
+    and where it got stuck — so a follow-up run or a human can resume from
+    there instead of restarting cold. Shares the card with index_decision_prior
+    (#3), which references this block via `resume_from` when present."""
+    if card.get("success_class") != "partial":
+        return
+    rescue: dict = {}
+    log = _load_loop_log(rd)
+    if log:
+        steps = log.get("steps") or []
+        done = [{"index": s.get("index"), "text": (s.get("text") or "")[:200]}
+                for s in steps if s.get("status") == "done"]
+        blocked = [{"index": s.get("index"), "text": (s.get("text") or "")[:200]}
+                   for s in steps if s.get("status") not in ("done", None)]
+        rescue["done_steps"] = done
+        rescue["n_done"] = len(done)
+        rescue["n_total"] = len(steps)
+        if blocked:
+            rescue["stuck_at"] = blocked[0]
+        if log.get("stuck_reason"):
+            rescue["stuck_reason"] = str(log["stuck_reason"])[:300]
+    # Existing artifacts are the salvage — a follow-up shouldn't regenerate them.
+    inv = card.get("inventory") or {}
+    if inv.get("artifacts"):
+        rescue["artifacts"] = inv["artifacts"][:20]
+    # Point at the human-readable partial transcript when one was written.
+    build = rd / "build"
+    partials = sorted(build.glob("loop-*-PARTIAL.md")) if build.is_dir() else []
+    if partials:
+        rescue["partial_transcript"] = str(partials[-1].relative_to(rd))
+    if not rescue:
+        return
+    _stuck_idx = (rescue.get("stuck_at") or {}).get("index", "?")
+    rescue["resume_hint"] = (
+        f"{rescue.get('n_done', 0)}/{rescue.get('n_total', 0)} steps completed; "
+        f"resume from step {_stuck_idx} rather than restarting. Existing "
+        f"artifacts are salvage."
+    )
+    card["partial_rescue"] = rescue
+
+
+# --- decision-prior indexer (miner #3, the owner ask) ------------------------
+
+_DECISION_LESSON_CAP = 5
+_DECISION_TRIED_CHARS = 400
+
+
+def _run_lessons(meta: dict) -> List[str]:
+    """Typed lessons this run recorded, joined by its loop_ids. Empty on any
+    memory-read failure — a curator never hard-depends on memory being
+    reachable (adornment, not critical path)."""
+    out: List[str] = []
+    seen: set = set()
+    try:
+        from memory_ledger import load_outcome_by_loop_id
+    except Exception:
+        return out
+    for lid in (meta.get("loop_ids") or []):
+        try:
+            oc = load_outcome_by_loop_id(str(lid))
+        except Exception:
+            oc = None
+        for lesson in (getattr(oc, "lessons", None) or []):
+            key = str(lesson)[:80]
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(str(lesson)[:200])
+            if len(out) >= _DECISION_LESSON_CAP:
+                return out
+    return out
+
+
+def index_decision_prior(rd: Path, meta: dict, card: dict) -> None:
+    """Decision-prior indexer (miner #3 — the OWNER ASK, Jeremy 2026-07-04:
+    retried failures start cold despite 'the old task context available').
+
+    Distills this finished run into a compact, retrieval-ready prior — what it
+    tried, how it ended and why, what it learned, and (when partial) where to
+    resume — so a later re-attempt of the SAME or a rephrased goal arrives
+    warm. This is the WRITE half of the loop; the READ half is
+    format_prior_decisions() / prior_decision_context(), surfaced through
+    recall() into the new run's context BEFORE it starts
+    (recall.RecallResult.prior_decisions). Must run after classify_outcome,
+    inventory_assets, excerpt_result and rescue_partial (it reads their fields).
+    """
+    inv = card.get("inventory") or {}
+    excerpt = (card.get("result_excerpt") or "").strip()
+
+    tried_parts: List[str] = []
+    log = _load_loop_log(rd)
+    if log and log.get("steps"):
+        step_txts = [(s.get("text") or "").strip() for s in log["steps"]]
+        step_txts = [t for t in step_txts if t][:6]
+        if step_txts:
+            tried_parts.append("steps: " + "; ".join(t[:80] for t in step_txts))
+    if inv.get("scripts"):
+        tried_parts.append("scripts: " + ", ".join(inv["scripts"][:5]))
+    if inv.get("artifacts"):
+        tried_parts.append("produced: " + ", ".join(inv["artifacts"][:5]))
+    if not tried_parts and excerpt:
+        tried_parts.append(excerpt[:_DECISION_TRIED_CHARS])
+    what_was_tried = (" | ".join(tried_parts))[:_DECISION_TRIED_CHARS] or "no captured detail"
+
+    cls = card.get("success_class")
+    why = card.get("goal_verdict_summary") or ""
+    if cls in ("partial", "failed", "done-not-achieved"):
+        _be = meta.get("backend_error")
+        _be_action = _be.get("user_action") if isinstance(_be, dict) else ""
+        why = ((card.get("partial_rescue") or {}).get("stuck_reason")
+               or why or _be_action or excerpt[-300:])
+    why = str(why or "")[:400]
+
+    prior = {
+        "handle_id": card.get("handle_id"),
+        "goal": card.get("goal", ""),
+        "outcome": cls,
+        "goal_achieved": card.get("goal_achieved"),
+        "when": card.get("started_at"),
+        "what_was_tried": what_was_tried,
+        "why": why,
+        "lessons": _run_lessons(meta),
+    }
+    if card.get("partial_rescue"):
+        prior["resume_from"] = card["partial_rescue"].get("resume_hint")
+    card["decision_prior"] = prior
+
+
+# --- decision-prior READ side (surfaced into the next run via recall) --------
+
+def load_decision_prior(handle_id: str) -> Optional[dict]:
+    """Read a finished run's decision-prior brief from its run_card.json.
+
+    Falls back to a thin brief synthesized from the card's classification +
+    result excerpt for runs curated before the indexer existed (no backfill
+    needed). None when the run has no card at all (uncurated / pruned) — which
+    is exactly why the CURRENT run self-excludes: its card is written at
+    goal-END, so at read time (goal-start) it has none.
+    """
+    rd = _run_dir_for(handle_id)
+    if rd is None:
+        return None
+    cp = rd / "run_card.json"
+    if not cp.is_file():
+        return None
+    try:
+        card = json.loads(cp.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    dp = card.get("decision_prior")
+    if isinstance(dp, dict):
+        return dp
+    return {
+        "handle_id": card.get("handle_id", handle_id),
+        "goal": card.get("goal", ""),
+        "outcome": card.get("success_class"),
+        "goal_achieved": card.get("goal_achieved"),
+        "when": card.get("started_at"),
+        "what_was_tried": (card.get("result_excerpt") or "")[:_DECISION_TRIED_CHARS],
+        "why": card.get("goal_verdict_summary") or "",
+        "lessons": [],
+    }
+
+
+def format_prior_decisions(attempts, *, goal: str = "",
+                           exclude_handle_id: str = "", k: int = 3,
+                           max_chars: int = 1000) -> str:
+    """Render up to k prior attempts' decision-priors as one injectable block.
+
+    `attempts` are recall.PriorAttempt-shaped (only `.handle_id` is required;
+    dicts also accepted). Only attempts with a loadable card contribute — the
+    current run has no card yet at read time, so it self-excludes;
+    exclude_handle_id is belt-and-suspenders. Empty string when no prior has a
+    usable brief. This is the READ half of miner #3; recall() calls it so a
+    re-attempt of the same/rephrased goal arrives warm."""
+    briefs: List[str] = []
+    seen: set = set()
+    for a in (attempts or []):
+        if isinstance(a, dict):
+            hid = a.get("handle_id")
+        else:
+            hid = getattr(a, "handle_id", None)
+        if not hid or hid == exclude_handle_id or hid in seen:
+            continue
+        seen.add(hid)
+        dp = load_decision_prior(hid)
+        if not dp:
+            continue
+        outcome = dp.get("outcome") or "?"
+        when = (dp.get("when") or "")[:10]
+        line = f"- [{outcome} {when} · {hid}] tried: {dp.get('what_was_tried') or '?'}"
+        why = (dp.get("why") or "").strip()
+        if why and outcome != "success":
+            line += f". Why it ended: {why}"
+        lessons = dp.get("lessons") or []
+        if lessons:
+            line += ". Lessons: " + "; ".join(lessons[:3])
+        if dp.get("resume_from"):
+            line += f". Resume: {dp['resume_from']}"
+        briefs.append(line)
+        if len(briefs) >= k:
+            break
+    if not briefs:
+        return ""
+    block = ("## Prior attempts at this goal — read before planning\n"
+             + "\n".join(briefs)
+             + "\nDo not repeat an approach that already failed the same way; "
+               "build on what worked, resume a partial, or change the approach.")
+    return block[:max_chars]
+
+
+def prior_decision_context(goal: str, *, window_hours: float = 24.0,
+                           k: int = 3, exclude_handle_id: str = "") -> str:
+    """Standalone entry point: detect a retry/rephrase of `goal` (reusing
+    recall's similarity match — exact + near, 0.9 threshold) and return the
+    matched attempts' decision-priors as one injectable block.
+
+    recall() calls format_prior_decisions() directly on the attempts it already
+    computed; this convenience wrapper is for callers/tests that hold only the
+    goal text. Lazy import of recall keeps the two modules cycle-free."""
+    try:
+        from recall import _find_prior_attempts
+        attempts = _find_prior_attempts(goal, window_hours=window_hours)
+    except Exception:
+        return ""
+    return format_prior_decisions(attempts, goal=goal,
+                                  exclude_handle_id=exclude_handle_id, k=k)
+
+
 # Ordered registry. Append future miners here; the hook never changes.
-# spend_transparency reads total_cost_usd, so it runs after classify_outcome;
-# promote_skills_lite reads success_class, so it also runs after classify_outcome.
+# Order carries data deps: spend_transparency + promote_skills_lite read
+# success_class/total_cost_usd (classify_outcome). The BACKLOG #0 miners chain
+# further: scrape_scripts reads inventory (inventory_assets); flag_skill_candidate
+# reads reusable_scripts (scrape_scripts) + success_class; rescue_partial reads
+# inventory + success_class; index_decision_prior reads all of the above incl.
+# partial_rescue, so it runs LAST.
 CURATORS = [classify_outcome, inventory_assets, excerpt_result, spend_transparency,
-            promote_skills_lite]
+            promote_skills_lite,
+            scrape_scripts,          # #2 script scraper
+            flag_skill_candidate,    # #1 skill scraper (flag, not a 2nd promotion path)
+            rescue_partial,          # #4 partial-run rescue
+            index_decision_prior]    # #3 decision-prior indexer (owner ask)
 
 
 def curate_run(handle_id: str, status: Optional[str] = None,
