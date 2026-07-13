@@ -23,6 +23,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import time
 import uuid
 from pathlib import Path
 
@@ -80,6 +81,18 @@ def _exists(name: str) -> bool:
     return name in (r.stdout or "").split()
 
 
+def _wait_stopped(name: str, timeout: float = 20.0) -> bool:
+    """`docker kill` signals then returns; the container's actual stop + `--rm`
+    removal is asynchronous (and slow on a 2014 box under CPU load). Poll for it
+    to leave the running set instead of racing the daemon."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if not _is_running(name):
+            return True
+        time.sleep(0.25)
+    return not _is_running(name)
+
+
 @pytest.fixture()
 def container_names():
     """Track container names and force-remove them all on teardown."""
@@ -111,7 +124,7 @@ class TestLifecycleAndKill:
         assert _is_running(name)
         # The real kill path the wrap uses (os.killpg only reaps the client).
         ce.kill_container(name)
-        assert not _is_running(name)
+        assert _wait_stopped(name), "container still running after kill_container"
 
     def test_kill_missing_container_is_noop(self):
         # Swallows errors — the container may already be gone (--rm) or absent.
@@ -134,7 +147,7 @@ class TestStrandedReaper:
 
         killed = ce.sweep_stranded_containers()  # real _pid_alive
         assert name in killed
-        assert not _is_running(name)  # --rm removes it on kill
+        assert _wait_stopped(name)  # --rm removes it on kill (async)
 
     def test_spares_container_with_live_owner(self, container_names):
         # Owned by THIS (alive) process — a live run's in-flight container.
