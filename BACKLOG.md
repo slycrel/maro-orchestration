@@ -5,7 +5,7 @@ Read this at the start of every session. Update it as items are completed or new
 
 **Completed items live in [BACKLOG_DONE.md](BACKLOG_DONE.md)** — move items there with their full context when they ship; that file is the archive of what we've already decided, tried, or superseded, and it's ingested by `dev-recall` for historical context.
 
-Last reviewed: 2026-07-09 (decision-cleanup session with Jeremy: #19 thread-arch decisions all resolved + recursion decree recorded, intent-resolution A/B dropped, orch.py trio deprecated, host-check wired+scheduled — four entries → BACKLOG_DONE; fastembed lane confirmed stays-gated). Previous full triage: 2026-07-04.
+Last reviewed: 2026-07-13 (backlog-clearing /goal session: #10, #14, #18 shipped and archived to BACKLOG_DONE; #17 trimmed to its O(all runs) residual; #22 residual (blank-slate skill set) and hist-r2-02 checked off; #25 code shipped, stays open pending Jeremy's API keys; container-executor C4 mechanics merged, C4-BOX real-goal burn-in stays Jeremy-gated). Previous: 2026-07-09 (decision-cleanup session with Jeremy: #19 thread-arch decisions all resolved + recursion decree recorded, intent-resolution A/B dropped, orch.py trio deprecated, host-check wired+scheduled — four entries → BACKLOG_DONE; fastembed lane confirmed stays-gated). Previous full triage: 2026-07-04.
 
 ---
 
@@ -66,9 +66,12 @@ per Jeremy's "document if large" instruction — not fixed live:
 ### C4-BOX. Container executor — box-side real-goal burn-in (2026-07-13, Jeremy runs on the runtime box)
 
 The container **mechanics** are burned in and green on the dev Mac (Docker
-Desktop 23.0.5): image build + CLI pin, `tests/test_container_e2e.py` 4/4,
-containment, uid/gid, boot-tax ~360ms, C2 stranded-container reaper, doctor rows
-(recorded in `docs/CONTAINER_BURN_IN.md §0`). What can't be done off the box —
+Desktop 23.0.5): image build + CLI pin, containment, uid/gid, boot-tax ~360ms,
+C2 stranded-container reaper, doctor rows (recorded in
+`docs/CONTAINER_BURN_IN.md §0`). `tests/test_container_e2e.py` grew from 4 to
+15 real-docker tests in the 2026-07-13 merge (stale-clone sweep + broader
+E2E tier) and all 15 pass for real on this box (docker reachable here too,
+not just the Mac). What can't be done off the box —
 because it needs a `/login`'d `maro-claude-auth` volume (interactive OAuth) and
 spends tokens — is the **real-goal** half. Jeremy runs this on the other machine:
 
@@ -183,9 +186,13 @@ All adversarially verified (41/42 confirmed). The two 1.0-blockers first:
   0 lessons extracted on every tier. The funnel isn't just not-promoting
   (SF-10), it's barely ingesting. Fold into the funnel-rate measurement
   item; data-r2-01 (pre-verdict extraction) got no specimens either way.
-- [ ] **hist-r2-02:** hist-05 owner ask ("run this prompt with this
-  persona" as a first-class pattern) dropped for the third time — in
-  neither the decision brief nor any backlog. This entry ends that.
+- [x] **hist-r2-02 SHIPPED 2026-07-13:** hist-05 owner ask ("run this
+  prompt with this persona" as a first-class pattern) dropped for the
+  third time — in neither the decision brief nor any backlog. Shipped as
+  the generalized `persona:<name>:` prefix + `--persona` CLI flag
+  (replacing the hardcoded `garrytan:` shortcut), with graceful
+  fallback+warning on unknown persona names (fixed a latent silent-failure
+  bug in the process). This entry ends the drop pattern.
 - [x] **docs-r2-02 SHIPPED 2026-07-10 (de-document):** the 4 dead keys
   (research_step_model, max_steps, always_skeptic, notify_on_complete)
   moved to commented not-yet-wired blocks; header reader-list corrected to
@@ -207,6 +214,14 @@ All adversarially verified (41/42 confirmed). The two 1.0-blockers first:
   pidfile litter (harmless — flock is the mutex; stale file is cosmetic).
 
 ### 25. Hosted-free small-LLM tier: Groq + Gemini free tiers (2026-07-12, from item 24 decision)
+
+**Code SHIPPED 2026-07-13** (`src/hosted_free.py` + `GroqAdapter`/`GeminiAdapter`
+in `src/llm.py`, wired into `step_exec.verify_step` as Tier 1b between local
+and paid). Fully inert with no key set — the only thing left is Jeremy
+creating `GROQ_API_KEY`/`GEMINI_API_KEY` and confirming the free-tier RPM
+numbers below still hold against the live endpoints (they were verified
+2026-07-12 from research, not yet from a real call). See BACKLOG_DONE for
+implementation detail once keys are live and this has a real-traffic pass.
 
 Jeremy: "I'm open to Groq or Gemini free tiers for small LLM work in the
 orchestrator." Wire the free tiers as a hosted-free rung for the
@@ -269,6 +284,13 @@ crowd-sourced or not)."
   research inline; (b) envelope: ~1–3 min / cents, not research-project
   scale. (Side casualty: outer watchdog killed the run mid-finalize, so no
   outcome row was recorded — learning pipeline never saw the run.)
+- [x] **Blank-slate pre-installed skill set SHIPPED 2026-07-13:**
+  `skills/changelog_digest.md`, `skills/doc_summary.md`,
+  `skills/errand_research.md`, `skills/research_brief.md`,
+  `skills/watch_condition.md` — the "small-ish but useful pre-installed
+  list" Jeremy asked for above. Found and fixed a real gap in the
+  process: `changelog_digest` existed only in the live workspace and had
+  never actually shipped to fresh installs.
 - [ ] **Manti follow-ups (2026-07-10, Jeremy adjudicated the NOW answer
   "an abject failure... Siri for about 15 years"; decreed NO new errand
   lane):**
@@ -591,96 +613,23 @@ transition):
   "suggested" for a missing API key). This box: degraded → healthy
   (`ok: subprocess, openrouter, openai`).
 
-### 10. Local-validator measurement — tune `local_max_tokens` per model
-
-- [ ] **Tune `local_max_tokens` per model.** Live finding (2026-06-21 verify run):
-  VibeThinker's `<think>` trace on *real* (long) step results overran the 1024
-  floor → empty content → conf 0.00 → spurious escalation on 2/5 steps (the other
-  3/5 validated free at conf 1.00). Bumped default to 2048; deep-eval should find
-  the floor that maximizes decisive-local rate without wasting generation latency.
-
-
-### 14. llm.py adapter protocol extraction (promoted from Modular refactoring, 2026-07-04)
-
-- [ ] **Streaming-iterator `complete()` on the shared adapter base.** The four
-  adapters (Anthropic / OpenAI / OpenRouter / Subprocess) DO share an
-  `LLMAdapter` base class (`llm.py:300`) — the remaining work is the streaming
-  shape: `complete(messages) → iterator_of_events` so liveness/kill logic
-  lives in one wrapper instead of per-adapter. The old dependency is CLEARED:
-  stream-json parsing shipped (`_parse_stream_json`, `llm.py`; subprocess
-  transcripts ride `resp.tool_events`). Port subprocess adapter first, others
-  incrementally. Size: ~half day per adapter.
-
 ### 17. Run-visibility residuals (2026-07-09 real-data review)
 
-All four sub-items shipped 2026-07-09 (two concurrent sessions — see
-BACKLOG_DONE for both): contextvar loop_id threading + purpose stamping
+All four original sub-items shipped 2026-07-09 (two concurrent sessions —
+see BACKLOG_DONE for both): contextvar loop_id threading + purpose stamping
 (this session), live-report post-curation refresh + NOW-lane mini-reports
 (concurrent session, superseding this session's own narrower post-curation
-refresh attempt — see BACKLOG_DONE for the reconciliation note). One residual
-surfaced by the NOW-lane work:
+refresh attempt — see BACKLOG_DONE for the reconciliation note).
 
+- [x] **Goal search in the run visualization — SHIPPED 2026-07-13** (Jeremy,
+  2026-07-10, rider on the retention decree): `maro viz search` filters run
+  summaries by goal text / lane / status / date, plus a client-side filter
+  bar in the HTML index. See BACKLOG_DONE for full detail.
 - [ ] **Index rebuild is O(all runs) at every finalize** (~277ms at 668
   dirs, via the post-curation hook). Fine now; revisit around ~10k run dirs
   (incremental index, or rebuild only on viz/backfill).
-- [ ] **Goal search in the run visualization** (Jeremy, 2026-07-10, rider
-  on the retention decree): with run data now kept forever, old runs must
-  be *findable* to be worth keeping — "easier to ignore the old data than
-  wish it weren't deleted (assuming we surface it in a meaningful way)."
-  Search runs by goal text (and probably project/status/date) in the viz
-  surface. Pairs with the surface-all-details principle: users trust what
-  they can poke around in — the path, not just the outcome.
 
 ---
-
-### 18. Project-loop lane escapes the done≠achieved machinery (2026-07-09 hermes trial, live specimen)
-
-Found driving Maro through Hermes-in-docker. Third-party harness invoked the
-project loop (`maro run` path, project `hermes-haiku`, loop 315ebffb) instead
-of `maro-handle`. Result: `status=done 3/3`, artifact written — but content was
-semantically off-target ("fresh hermes install" → a haiku about *Ruby gems /
-bundle install*), and:
-
-- **No goal_achieved verdict was produced** on this lane (no `_verdict_*`
-  metadata; `maro inspect-run 315ebffb` → E_RUN_NOT_FOUND).
-- **No `runs/<id>/` dir** — per-run attribution capture never engaged.
-- **Artifact cleanup deleted the 3 per-step artifacts**, destroying the
-  evidence needed to audit the miss after the fact.
-- Verification that did run was structural-only (line count — the extracted
-  lesson literally says "verify against stated structural constraints"), so
-  the semantic miss sailed through. Static-probe bias on an unguarded path.
-
-Two asks — **both SHIPPED 2026-07-10**:
-- [x] **(a) verdict parity:** `cli._closure_verdict_pass` runs the same
-  closure core (`verify_goal_completion` → `annotate_outcome_verdict` →
-  demote done→incomplete on judged contradiction at conf ≥ 0.7, mirroring
-  handle.py's status-honesty gate) on both `maro run` and `maro resume`.
-  Honesty-only — no closure-restart machinery. When closure can't run (no
-  adapter/LLM error) the verdict is absent, which run history already
-  classifies as done-unverified — never verified done. Verdict surfaces in
-  the command output (`goal_achieved` + summary). 8 tests
-  (tests/test_cli.py TestClosureVerdictPass).
-- [x] **(b) evidence-safe cleanup — superseded same day by the retention
-  decree (Jeremy, 2026-07-10):** the first fix deferred deletion past a 24h
-  grace window; Jeremy then ruled auto-deletion itself the bug — "I'd
-  prefer to have the users choose to archive/delete old runs, rather than
-  have the system decide it's clutter... the result isn't always *just*
-  the outcome, it's also the path that gets you there." Final shape:
-  per-step artifacts are **kept forever by default**; `keep_artifacts`
-  retired; pruning is user opt-in via `artifacts.auto_prune_days` (0 =
-  never), and even opted-in pruning never touches the just-finished
-  loop's files (verdict is judged post-loop). DEFAULTS.md row carries the
-  decree. Tests rewritten (kept-by-default, opt-in age gate, 0/negative =
-  never).
-
-Residual (kept open, smaller): this lane still creates **no `runs/<id>/`
-dir** — `maro inspect-run <loop_id>` stays E_RUN_NOT_FOUND and per-run
-attribution capture doesn't engage outside `maro-handle`. The verdict now
-lands loop-keyed on outcomes.jsonl, so learning consumers see it; run-dir
-capture for the direct-CLI lane is a separate (deliberate) lift.
-Outcome row: outcomes.jsonl 20aae85f (workspace of the hermes trial container,
-importable via `maro-import` from
-`~/claude/hermes-maro-trial/data/home/.maro/workspace`).
 
 ### 19. Thread Architecture open decisions — RESOLVED 2026-07-09 → BACKLOG_DONE
 

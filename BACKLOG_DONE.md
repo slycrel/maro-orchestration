@@ -8,6 +8,134 @@ Last split: 2026-04-16 (session 34).
 
 ---
 
+### BACKLOG #18: Project-loop lane escapes done≠achieved machinery — residual SHIPPED (2026-07-09 hermes trial → 2026-07-13 residual)
+
+Found driving Maro through Hermes-in-docker. Third-party harness invoked the
+project loop (`maro run` path, project `hermes-haiku`, loop 315ebffb) instead
+of `maro-handle`. Result: `status=done 3/3`, artifact written — but content was
+semantically off-target ("fresh hermes install" → a haiku about *Ruby gems /
+bundle install*), and:
+
+- **No goal_achieved verdict was produced** on this lane (no `_verdict_*`
+  metadata; `maro inspect-run 315ebffb` → E_RUN_NOT_FOUND).
+- **No `runs/<id>/` dir** — per-run attribution capture never engaged.
+- **Artifact cleanup deleted the 3 per-step artifacts**, destroying the
+  evidence needed to audit the miss after the fact.
+- Verification that did run was structural-only (line count — the extracted
+  lesson literally says "verify against stated structural constraints"), so
+  the semantic miss sailed through. Static-probe bias on an unguarded path.
+
+Two asks — **both SHIPPED 2026-07-10**:
+- **(a) verdict parity:** `cli._closure_verdict_pass` runs the same
+  closure core (`verify_goal_completion` → `annotate_outcome_verdict` →
+  demote done→incomplete on judged contradiction at conf ≥ 0.7, mirroring
+  handle.py's status-honesty gate) on both `maro run` and `maro resume`.
+  Honesty-only — no closure-restart machinery. When closure can't run (no
+  adapter/LLM error) the verdict is absent, which run history already
+  classifies as done-unverified — never verified done. Verdict surfaces in
+  the command output (`goal_achieved` + summary). 8 tests
+  (tests/test_cli.py TestClosureVerdictPass).
+- **(b) evidence-safe cleanup — superseded same day by the retention
+  decree (Jeremy, 2026-07-10):** the first fix deferred deletion past a 24h
+  grace window; Jeremy then ruled auto-deletion itself the bug — "I'd
+  prefer to have the users choose to archive/delete old runs, rather than
+  have the system decide it's clutter... the result isn't always *just*
+  the outcome, it's also the path that gets you there." Final shape:
+  per-step artifacts are **kept forever by default**; `keep_artifacts`
+  retired; pruning is user opt-in via `artifacts.auto_prune_days` (0 =
+  never), and even opted-in pruning never touches the just-finished
+  loop's files (verdict is judged post-loop). DEFAULTS.md row carries the
+  decree. Tests rewritten (kept-by-default, opt-in age gate, 0/negative =
+  never).
+
+**Residual SHIPPED 2026-07-13** (worktree-isolated subagent, merged
+`6ef4250`): this lane still created no `runs/<id>/` dir — `maro
+inspect-run <loop_id>` stayed E_RUN_NOT_FOUND and per-run attribution
+capture didn't engage outside `maro-handle`. Fixed by extracting the
+run-directory lifecycle out of handle.py's inline sequence into two
+shared functions in `src/runs.py`: `open_run(handle_id, *, prompt,
+model=None, lane=None, repo_path="", origin=None) -> Path` (create_run_dir
++ pin + record_log_offset + record_repo_base + environment snapshot) and
+`close_run(handle_id, *, status, backend_error=None) -> Optional[dict]`
+(slice log + snapshot repo + finalize status + curate run_card + re-render
+reports), plus `resolve_run_dir(ref)` which resolves a run-dir by
+handle_id (O(1) dir-name hit) or by scanning `metadata.json` for a
+matching `loop_id`. `src/handle.py` refactored to call these instead of
+inlining the sequence (behavior-preserving, net line reduction).
+`src/cli.py`'s `_cmd_run` now mints a `handle_id`, calls `open_run`, wraps
+the loop execution in `with _runs.scoped_run_dir(_rd):`, stamps `loop_id`,
+runs the closure-verdict pass, and calls `close_run` in a `finally` block;
+`_cmd_resume` mirrors the same pattern, reusing the checkpoint's
+`handle_id` when present. `_cmd_inspect_run` falls back to
+`resolve_run_dir` on `FileNotFoundError` so it finds CLI-lane runs by
+either handle_id or loop_id. Verified end-to-end via a live `maro run
+--dry-run --format json` invocation showing a real `runs/<id>/` with
+`metadata.json`, `source/environment.json`, `run_card.json`, plus 4 new
+CLI integration tests and 4 new `runs.py` unit tests. This closes out
+BACKLOG #18 completely — both original asks and the residual are now
+shipped.
+
+### BACKLOG #14: llm.py adapter protocol extraction — streaming-iterator `complete()` (promoted 2026-07-04 → SHIPPED 2026-07-13)
+
+The four adapters (Anthropic / OpenAI / OpenRouter / Subprocess) already
+shared an `LLMAdapter` base class (`llm.py:300`) — the remaining work was
+the streaming shape: `complete(messages) → iterator_of_events` so
+liveness/kill logic lives in one wrapper instead of per-adapter. The old
+dependency (stream-json parsing) had already cleared: `_parse_stream_json`
+shipped in `llm.py`, subprocess transcripts ride `resp.tool_events`.
+
+**Shipped 2026-07-13** (worktree-isolated subagent, batch-1 of this
+session's backlog-clearing sweep, merged before `1ecbec0`): added a
+`StreamEvent` dataclass and a shared `_collect()` helper on the
+`LLMAdapter` base, with `ClaudeSubprocessAdapter` and `CodexCLIAdapter`
+ported to `_stream_events()` generators feeding the one shared `complete()`
+implementation — eliminating duplicated buffering/parsing logic that had
+drifted between the two subprocess adapters. Full test suite green. The
+batch-1 adversarial review (see BACKLOG.md R1 / commit `1ecbec0`) found and
+fixed a silent stream-truncation issue in this area as part of the same
+pass.
+
+### BACKLOG #10: Local-validator measurement — tune `local_max_tokens` per model (2026-06-21 finding → SHIPPED 2026-07-13)
+
+Live finding (2026-06-21 verify run): VibeThinker's `<think>` trace on
+*real* (long) step results overran the 1024 floor → empty content → conf
+0.00 → spurious escalation on 2/5 steps (the other 3/5 validated free at
+conf 1.00). Bumped default to 2048 as a stopgap; the real ask was a deep-eval
+pass to find the floor that maximizes decisive-local rate without wasting
+generation latency.
+
+**Shipped 2026-07-13** (worktree-isolated subagent, merged `7fb1281`): ran
+a real 45-call empirical sweep across all three local models in use
+(llama3.2:3b, qwen-hermes:latest, qwen2.5-coder:3b) to measure actual
+minimum safe token floors — zero empty-content responses, zero
+truncations across the sweep, max 63 output tokens observed, and latency
+was floor-invariant (20.8–42.4s per cell — raising the floor doesn't cost
+more wall-clock once above the safety margin). Built
+`_MEASURED_MODEL_FLOORS = {"llama3.2:3b": 256, "qwen-hermes:latest": 256,
+"qwen2.5-coder:3b": 256}` from this data (all three converged on the same
+floor empirically despite different model sizes).
+
+Added `local_max_tokens_for(model)` resolver in `src/local_models.py` with
+priority: explicit per-model config dict entry → dict's `"default"` key →
+bare-int global config (backward compat with the old single-value
+contract) → the measured built-in table → a generous 2048 safety net for
+unknown models. `LocalValidatorAdapter.__init__` now calls this resolver
+instead of a flat `_cfg("local_max_tokens", 2048)`. 10 new tests cover
+backward compat, dict per-model override, dict-default-key fallback,
+bad-value coercion, and adapter integration. Docs updated:
+`docs/LOCAL_VALIDATOR.md` gained a "Per-model tuning" section (plus two
+stale claims fixed), `docs/DEFAULTS.md` gained the registry entry.
+
+**Process note:** the subagent first assigned to this item detached the
+45-call sweep into a background process and ended its own turn believing
+it would survive — it didn't (a subagent's background children die with
+its session), so its first "completed" self-report was misleading (zero
+commits, zero diff on inspection). Caught via independent `git
+log`/`git diff --stat` verification rather than trusting the self-report;
+the agent was redirected with an explicit "run the sweep in the
+foreground, blocking" instruction, and the real measurement (and this
+shipment) is the result of that second, verified pass.
+
 ### 24. Model-route exploration — Jeremy-funded session (2026-07-11, Jeremy)
 
 Jeremy: "let's add to the backlog me spending some $ for real to get a
