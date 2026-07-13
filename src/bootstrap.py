@@ -8,11 +8,12 @@ Handles:
 - Smoke-testing the install by running a manual NOW-lane request once
 
 Entry points:
-  maro-bootstrap install    -- workspace + scheduler instructions + smoke test
-  maro-bootstrap dirs       -- create workspace dirs only
-  maro-bootstrap services   -- print host-scheduler hook instructions
-  maro-bootstrap status     -- show current workspace status
-  maro-bootstrap smoke      -- run a live NOW-lane request and verify output
+  maro-bootstrap install         -- workspace + scheduler instructions + smoke test
+  maro-bootstrap dirs            -- create workspace dirs only
+  maro-bootstrap services        -- print host-scheduler hook instructions
+  maro-bootstrap container-setup -- print executor-image build + auth-login instructions
+  maro-bootstrap status          -- show current workspace status
+  maro-bootstrap smoke           -- run a live NOW-lane request and verify output
 """
 
 from __future__ import annotations
@@ -168,6 +169,21 @@ def print_scheduler_instructions(workspace: Optional[Path] = None) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Containerized-executor setup (prints instructions; creates nothing)
+# ---------------------------------------------------------------------------
+
+def print_container_setup_instructions() -> None:
+    """Print the executor-image build + auth-volume login walkthrough.
+
+    Same hook-instructions posture as the scheduler story: Maro prints the
+    two commands, the operator runs them. Doctor's container rows then report
+    the resulting state. Off by default — docker is never a hard requirement.
+    """
+    from container_exec import container_setup_instructions
+    print(container_setup_instructions())
+
+
+# ---------------------------------------------------------------------------
 # Smoke test
 # ---------------------------------------------------------------------------
 
@@ -265,6 +281,7 @@ def main(argv: list[str] | None = None) -> None:
     sub.add_parser("install", help="Workspace install: dirs + scheduler instructions + smoke test")
     sub.add_parser("dirs", help="Create workspace directories only")
     sub.add_parser("services", help="Print host-scheduler hook instructions (Maro installs no unit files)")
+    sub.add_parser("container-setup", help="Print executor-image build + auth-login instructions (creates nothing)")
     sub.add_parser("status", help="Show workspace status")
     p_smoke = sub.add_parser("smoke", help="Run smoke test (live NOW-lane request; needs a working LLM backend)")
     p_smoke  # noqa: B018
@@ -278,6 +295,8 @@ def main(argv: list[str] | None = None) -> None:
         print(f"Workspace dirs created at {ws}")
     elif args.cmd == "services":
         print_scheduler_instructions()
+    elif args.cmd == "container-setup":
+        print_container_setup_instructions()
     elif args.cmd == "status":
         show_status()
     elif args.cmd == "smoke":

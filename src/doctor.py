@@ -196,6 +196,47 @@ def run_doctor() -> bool:
     except Exception as exc:
         results.append(_check("LLM API reachable", False, str(exc)[:80]))
 
+    # Containerized executor — worker steps carrying real tools optionally run
+    # inside a docker container for filesystem/network isolation
+    # (docs/CONTAINER_EXECUTOR_DESIGN.md). OFF by default: one info row, probe
+    # nothing (docker is never a hard requirement). When on/require the operator
+    # opted in, so surface exactly which mode a run would get — SF-6's lesson:
+    # the difference between "sandboxed" and "not" must be loud. The
+    # token-spending login probe rides `maro-doctor --live`, not this sweep.
+    try:
+        from container_exec import (
+            container_mode, container_mode_raw, container_image,
+            docker_probe, image_probe, auth_volume_probe,
+        )
+        _cmode = container_mode()
+        if _cmode == "off":
+            _raw = container_mode_raw()
+            if _raw.lower() in ("off", "false", ""):
+                _off_detail = "executor.container=off — worker steps run on host under the write-fence"
+            else:
+                _off_detail = (f"executor.container={_raw!r} unrecognized — treated as off "
+                               "(host/fence-only); valid: off / on / require")
+            results.append(_check("Container executor", True, _off_detail))
+        else:
+            _dock_ok, _dock_detail = docker_probe()
+            _degrade = (
+                "executor calls will REFUSE without docker (executor.container=require)"
+                if _cmode == "require"
+                else "executor calls DEGRADE to host/fence-only without docker (executor.container=on)"
+            )
+            results.append(_check(
+                f"Container executor ({_cmode})",
+                _dock_ok,
+                _dock_detail if _dock_ok else f"{_dock_detail} — {_degrade}",
+            ))
+            if _dock_ok:
+                _img_ok, _img_detail = image_probe(container_image())
+                results.append(_check("  Container image", _img_ok, _img_detail))
+                _vol_ok, _vol_detail = auth_volume_probe()
+                results.append(_check("  Container auth volume", _vol_ok, _vol_detail))
+    except Exception as exc:
+        results.append(_check("Container executor", False, str(exc)[:80]))
+
     # Memory directory — use the canonical resolution (env > config > orch
     # fallback), not a repo-relative guess. The repo-local memory/ is a stale
     # copy (tests write there); reporting it here misled diagnostics on any
@@ -540,6 +581,20 @@ def main():
             _check(f"backend:{name}", ok, detail)
             all_ok = all_ok and ok
             any_ok = any_ok or ok
+        # Container login — the real "installed but not logged in" catch,
+        # launched through the container (spends a token). Only when containers
+        # are configured on/require and the image is built; informational, so
+        # it doesn't gate the live-probe exit code (that tracks the backends).
+        try:
+            from container_exec import container_mode, docker_probe, image_probe, login_probe
+            if container_mode() in ("on", "require"):
+                _d_ok, _ = docker_probe()
+                _i_ok, _ = image_probe() if _d_ok else (False, "")
+                if _d_ok and _i_ok:
+                    _l_ok, _l_detail = login_probe()
+                    _check("container:login", _l_ok, _l_detail)
+        except Exception as exc:
+            _check("container:login", False, str(exc)[:80])
         sys.exit(0 if any_ok else 1)
     elif args.cleanup_skills:
         cleanup_workspace_skills()

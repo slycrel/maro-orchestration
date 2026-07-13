@@ -1,0 +1,49 @@
+# Maro containerized executor image.
+#
+# Wraps ONLY the agentic executor lane — worker steps that run
+# `claude -p ... --dangerously-skip-permissions` with real tools — in a
+# filesystem/network-isolated container. Off by default
+# (executor.container: off); see docs/CONTAINER_EXECUTOR_DESIGN.md.
+#
+# The CLI is BAKED, not host-mounted (design §3): reproducible, no host-path
+# assumptions, image version auditable. The single source of truth for the
+# pin is CLAUDE_CLI_VERSION in src/container_exec.py — the build command
+# printed by `maro-bootstrap container-setup` passes it as --build-arg, and
+# the image is tagged with it (maro-executor:<version>).
+#
+# Build:
+#   docker build --build-arg CLAUDE_CLI_VERSION=<v> \
+#       -t maro-executor:<v> -f deploy/docker/Dockerfile.executor .
+# Confirm the current published CLI version:
+#   npm view @anthropic-ai/claude-code version
+
+FROM node:22-slim
+
+# Default kept in sync with src/container_exec.py:CLAUDE_CLI_VERSION; the
+# build command always passes it explicitly, so this is only a fallback.
+ARG CLAUDE_CLI_VERSION=2.1.207
+
+# Toolset worker transcripts actually use: git (clone/commit), python3
+# (scripts), curl (fetches). coreutils ships in the debian base.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git python3 curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Bake the pinned CLI.
+RUN npm install -g "@anthropic-ai/claude-code@${CLAUDE_CLI_VERSION}"
+
+# Fixed HOME so the dedicated auth volume (maro-claude-auth) mounts at a known
+# path — /home/maro/.claude — regardless of the arbitrary `--user <uid>:<gid>`
+# the executor wrap runs with. World-writable so that arbitrary uid can
+# refresh OAuth tokens into the volume (the volume's own perms govern the
+# persisted state).
+ENV HOME=/home/maro
+RUN mkdir -p /home/maro/.claude && chmod -R 0777 /home/maro
+
+# The executor wrap sets the real working dir at runtime (-w <fence-dir>);
+# this is only the default when run standalone (e.g. the login/probe steps).
+WORKDIR /home/maro
+
+# No ENTRYPOINT: the wrap supplies the full `claude -p ...` command vector,
+# and the operator's setup/probe steps supply `claude /login` / `claude -p ok`.
+CMD ["claude", "--version"]
