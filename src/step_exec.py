@@ -1536,6 +1536,11 @@ def verify_step(
     a free local model judges first; if its confidence is below
     `validate.min_certainty` (UNDECIDED) we escalate to the paid `adapter`.
     With no local models configured this is byte-identical to the paid path.
+
+    Hosted-free rung (BACKLOG #25, only when GROQ_API_KEY/GEMINI_API_KEY is
+    set): tried between the local tier and paid — a second free opinion (over
+    the network, rate-limited) before spending on the paid adapter. Inert
+    no-op when neither key is configured; see hosted_free.py.
     """
     # --- Tier 1: free local validator (gated; falls through to paid on anything) ---
     _escalated = False
@@ -1582,6 +1587,48 @@ def verify_step(
     except Exception as exc:
         log.debug("local validator path skipped (non-fatal): %s", exc)
 
+    # --- Tier 1b: hosted-free (Groq/Gemini free API tier, BACKLOG #25) ---
+    # An additional free rung ALONGSIDE the local tier above, not a
+    # replacement — tried whether or not local ran (local unconfigured, or
+    # local UNDECIDED both land here), before falling to paid. Inert no-op
+    # (hosted_free.configured_providers() == []) when no key is set.
+    _hosted_lv = None  # (verdict, source) carried to Tier 2 for shadow-eval
+    try:
+        import hosted_free as _hf
+        if _hf.available():
+            hosted = _hf.build_hosted_free_adapter()  # None if no key configured
+            if hosted is not None:
+                from verification_agent import VerificationAgent
+                _t0 = time.monotonic()
+                hv = VerificationAgent(hosted, confidence_threshold=confidence_threshold,
+                                       max_input_chars=_hf.input_char_budget()).verify_step(step_text, result)
+                _hosted_elapsed_ms = int((time.monotonic() - _t0) * 1000)
+                _hosted_source = f"hosted_free:{getattr(hosted, '_active_provider', '') or '?'}:{getattr(hosted, 'model_key', '')}"
+                _hosted_lv = (hv, _hosted_source)
+                if hv.confidence >= _hf.min_certainty():
+                    log.debug("hosted-free validator decisive: passed=%s conf=%.2f via %s",
+                              hv.passed, hv.confidence, _hosted_source)
+                    _log_validation_ladder(
+                        tier="hosted-free-decisive", source=_hosted_source,
+                        passed=hv.passed, confidence=hv.confidence,
+                        local_elapsed_ms=_hosted_elapsed_ms,
+                        input_chars=len(result or ""), step_text=step_text)
+                    try:
+                        import validation_shadow as _vs
+                        _vs.shadow_eval(step_text, result, hv, _hosted_source,
+                                        paid_adapter=adapter,
+                                        confidence_threshold=confidence_threshold)
+                    except Exception:
+                        pass
+                    return {"passed": hv.passed, "reason": hv.reason, "confidence": hv.confidence,
+                            "decision": "HOSTED_FREE_PASS" if hv.passed else "HOSTED_FREE_FAIL",
+                            "source": _hosted_source}
+                log.info("hosted-free validator UNDECIDED (conf=%.2f < %.2f) — escalating to paid",
+                         hv.confidence, _hf.min_certainty())
+                _escalated = True
+    except Exception as exc:
+        log.debug("hosted-free validator path skipped (non-fatal): %s", exc)
+
     # --- Tier 2: paid validator (default path, or escalation target for UNDECIDED) ---
     try:
         from verification_agent import VerificationAgent
@@ -1595,12 +1642,20 @@ def verify_step(
             passed=verdict.passed, confidence=verdict.confidence,
             local_elapsed_ms=_local_elapsed_ms, paid_elapsed_ms=_paid_elapsed_ms,
             input_chars=len(result or ""), step_text=step_text)
-        # Escalation path: local + paid verdicts both exist now — log the pair for
-        # shadow-eval (free; no extra call). No-op unless validate.shadow_eval is on.
+        # Escalation path(s): whichever free tier(s) actually ran now have a
+        # paid verdict on the same result — log each pair for shadow-eval
+        # (free; no extra call). No-op unless validate.shadow_eval is on.
         if _local_lv is not None:
             try:
                 import validation_shadow as _vs
                 _vs.shadow_eval(step_text, result, _local_lv[0], _local_lv[1],
+                                paid_verdict=verdict, escalated=True)
+            except Exception:
+                pass
+        if _hosted_lv is not None:
+            try:
+                import validation_shadow as _vs
+                _vs.shadow_eval(step_text, result, _hosted_lv[0], _hosted_lv[1],
                                 paid_verdict=verdict, escalated=True)
             except Exception:
                 pass
