@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import json
 import logging
+import random
 import sys
 import textwrap
 import time
@@ -977,6 +978,113 @@ class EscalationDecision:
     confidence: int = 5                  # 1–10 calibrated confidence score
 
 
+# ---------------------------------------------------------------------------
+# Recursive-goal check-in (docs/RECURSIVE_CHECKIN_DESIGN.md)
+#
+# The continue/narrow branches of handle_escalation re-enqueue a fresh
+# continuation task with continuation_depth+1 — a chain of *sequential distinct
+# goal executions* (mechanism 2 in the design doc), distinct from a single
+# loop's retry cap (loop_post_step.py's MAX_RESTART_DEPTH, mechanism 1).
+# Jeremy's decree: at the 3rd goal pass (new_depth==2) and every jittered 4-7
+# goal-passes after, fire a NON-BLOCKING progress check-in so the user can
+# redirect or stop — but the goal keeps running regardless (ralph-style
+# optimistic default). This is deliberately NOT the `escalate` navigator move,
+# which parks the goal. Redirect/stop rides existing InterruptQueue plumbing;
+# nothing new is built inbound (design §3).
+# ---------------------------------------------------------------------------
+
+def _checkin_first_depth() -> int:
+    """Depth at which the first recursion check-in fires (decree: 2 == pass 3)."""
+    try:
+        return int(config_get("recursion.checkin_first_depth", 2))
+    except (TypeError, ValueError):
+        return 2
+
+
+def _checkin_jitter() -> int:
+    """Random 4-7-goal cadence for check-ins after the first (jittered, not fixed)."""
+    try:
+        lo = int(config_get("recursion.checkin_jitter_min", 4))
+        hi = int(config_get("recursion.checkin_jitter_max", 7))
+    except (TypeError, ValueError):
+        lo, hi = 4, 7
+    if lo < 1:
+        lo = 1
+    if hi < lo:
+        lo, hi = hi, lo
+    return random.randint(lo, hi)
+
+
+def _fire_checkin(task, new_depth, action, reasoning, summary_for_user, origin) -> None:
+    """Non-blocking progress notification at deep recursion. Never raises.
+
+    Composes a payload from data already in hand — the original ask (walked
+    back through the `origin` ancestry, else this chain's escalation reason),
+    which goal-pass this is, and the director's OWN reasoning/summary_for_user
+    from this escalation decision (which already explains how the work serves
+    the original ask — no second LLM call). Emits a `recursion_checkin` notify
+    event. A notify failure must never affect whether the continuation gets
+    enqueued (design §2) — hence the blanket try/except.
+    """
+    try:
+        # Original ask: prefer the root goal carried in ancestry; fall back to
+        # this chain's escalation reason. Don't block the check-in on being
+        # able to reconstruct full lineage (design §2).
+        original_goal = (
+            origin.get("parent_goal")
+            or origin.get("root_goal")
+            or origin.get("goal")
+            or task.get("reason", "")
+        )
+        checkin_number = int(origin.get("checkins_sent", 0)) + 1
+        # How the user steers this — whatever inbound channel is live rides the
+        # same notify substrate; no reply means "continue" (ralph default).
+        redirect_hint = (
+            "This goal is still running in the background. Reply on your "
+            "configured channel (Telegram / Slack / CLI) to redirect or stop "
+            "it — no reply means keep going."
+        )
+        payload = {
+            "blocking": False,  # distinguishes this from a park-the-goal escalation
+            "goal": str(original_goal)[:400],
+            "reason": str(original_goal)[:400],
+            "continuation_depth": new_depth,
+            "goal_pass": new_depth + 1,  # pass 1 == depth 0
+            "checkin_number": checkin_number,
+            "action": action,
+            "reasoning": str(reasoning),
+            "summary_for_user": str(summary_for_user),
+            "job_id": task.get("job_id", ""),
+            "parent_job_id": task.get("parent_job_id", ""),
+            "redirect_hint": redirect_hint,
+            "status": "running",
+        }
+        from notify import emit as _notify_emit
+        _notify_emit("recursion_checkin", payload, run_dir=None)
+        log.info("recursion_checkin fired: depth=%d pass=%d checkin=%d action=%s",
+                 new_depth, new_depth + 1, checkin_number, action)
+    except Exception:
+        log.debug("recursion check-in emit failed (non-fatal)", exc_info=True)
+
+
+def _advance_origin_with_checkin(task, new_depth, action, reasoning, summary_for_user) -> dict:
+    """Return the origin ancestry dict to carry into the continuation enqueue,
+    firing a non-blocking check-in when deep recursion crosses the threshold.
+
+    Rides the existing `origin` dict (design §1):
+    - origin["next_checkin_depth"]: depth of the *next* check-in (first = 2)
+    - origin["checkins_sent"]:      count so far, for cadence + summary
+    Never blocks; the enqueue must proceed regardless of check-in outcome.
+    """
+    origin = dict(task.get("origin") or {})
+    next_checkin = origin.get("next_checkin_depth", _checkin_first_depth())
+    if new_depth >= next_checkin:
+        _fire_checkin(task, new_depth, action, reasoning, summary_for_user, origin)
+        origin["next_checkin_depth"] = new_depth + _checkin_jitter()
+        origin["checkins_sent"] = origin.get("checkins_sent", 0) + 1
+    return origin
+
+
 def handle_escalation(
     task: dict,
     *,
@@ -1115,13 +1223,17 @@ def handle_escalation(
         # Spawn a focused continuation with depth+1
         try:
             from task_store import enqueue as _ts_enqueue
+            new_depth = depth + 1
+            # Deep-recursion check-in (non-blocking) + carry/advance ancestry.
+            _origin = _advance_origin_with_checkin(
+                task, new_depth, "continue", reasoning, summary_for_user)
             _cont_task = _ts_enqueue(
                 lane="agenda",
                 source="loop_continuation",
                 reason=reason,  # original escalation context becomes continuation context
                 parent_job_id=job_id,
-                continuation_depth=depth + 1,
-                origin=task.get("origin") or {},  # carry ancestry forward
+                continuation_depth=new_depth,
+                origin=_origin,  # carry ancestry forward (+ check-in cadence state)
             )
             followup_task_id = _cont_task["job_id"]
             log.info("escalation_continue: enqueued %s depth=%d", followup_task_id, depth + 1)
@@ -1137,13 +1249,17 @@ def handle_escalation(
         # Spawn a new task with the narrowed goal
         try:
             from task_store import enqueue as _ts_enqueue
+            new_depth = depth + 1
+            # Deep-recursion check-in (non-blocking) + carry/advance ancestry.
+            _origin = _advance_origin_with_checkin(
+                task, new_depth, "narrow", reasoning, summary_for_user)
             _narrow_task = _ts_enqueue(
                 lane="agenda",
                 source="loop_continuation",
                 reason=f"NARROWED from escalation {job_id}:\n\n{revised_goal}",
                 parent_job_id=job_id,
-                continuation_depth=depth + 1,
-                origin=task.get("origin") or {},  # carry ancestry forward
+                continuation_depth=new_depth,
+                origin=_origin,  # carry ancestry forward (+ check-in cadence state)
             )
             followup_task_id = _narrow_task["job_id"]
             log.info("escalation_narrow: enqueued %s with revised goal %r",

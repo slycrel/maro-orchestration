@@ -146,6 +146,42 @@ def test_escalation_file_lives_under_output_dir(workspace, monkeypatch):
     assert p.name == "escalations.jsonl"
 
 
+# --- recursion check-in event (docs/RECURSIVE_CHECKIN_DESIGN.md) -------------
+
+def test_recursion_checkin_is_a_default_event():
+    # Default-on so an away-from-keyboard user gets the redirect/stop chance.
+    assert "recursion_checkin" in notify_mod.DEFAULT_EVENTS
+
+
+def test_recursion_checkin_writes_to_escalation_file(workspace, monkeypatch):
+    # It rides the durable escalation surface (human-might-miss class) even
+    # with no notify.command configured.
+    _configure_notify(monkeypatch, "")
+    emit("recursion_checkin", {"handle_id": "h7", "status": "running",
+                               "blocking": False, "goal_pass": 3,
+                               "reasoning": "still narrowing scope"})
+    rows = _read_escalations()
+    assert len(rows) == 1
+    assert rows[0]["event_type"] == "recursion_checkin"
+    # blocking=False is what lets a consumer tell this apart from a
+    # park-the-goal escalation at a glance (design §2).
+    assert rows[0]["blocking"] is False
+    assert rows[0]["goal_pass"] == 3
+
+
+def test_recursion_checkin_command_receives_payload(workspace, monkeypatch, tmp_path):
+    out = tmp_path / "checkin.json"
+    _configure_notify(monkeypatch, f"cat > {out}")
+    ok = emit("recursion_checkin", {"handle_id": "h8", "status": "running",
+                                    "blocking": False,
+                                    "summary_for_user": "3 passes deep, on track"})
+    assert ok is True
+    payload = json.loads(out.read_text())
+    assert payload["event_type"] == "recursion_checkin"
+    assert payload["blocking"] is False
+    assert payload["summary_for_user"] == "3 passes deep, on track"
+
+
 # --- run_result -------------------------------------------------------------
 
 def test_run_result_now_lane(workspace):

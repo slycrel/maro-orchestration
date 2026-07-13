@@ -85,8 +85,13 @@ class TestHandleEscalationWithLLM:
         assert result.followup_task_id == "cont-new-001"
         assert enqueued["source"] == "loop_continuation"
         assert enqueued["depth"] == 3  # depth+1
-        # Ancestry carried across the requeue boundary (4e133eb)
-        assert enqueued["origin"] == {"parent_loop_id": "loop-9", "parent_goal": "review the codebase"}
+        # Ancestry carried across the requeue boundary (4e133eb). At new_depth=3
+        # (>= the first check-in threshold of 2) a non-blocking check-in fires
+        # and stamps cadence state onto origin — so it's a superset of the
+        # carried parent keys now, not byte-equal (RECURSIVE_CHECKIN_DESIGN.md).
+        assert enqueued["origin"]["parent_loop_id"] == "loop-9"
+        assert enqueued["origin"]["parent_goal"] == "review the codebase"
+        assert enqueued["origin"]["checkins_sent"] == 1
 
     def test_narrow_action_enqueues_with_revised_goal(self, monkeypatch, tmp_path):
         monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
@@ -108,41 +113,168 @@ class TestHandleEscalationWithLLM:
         assert "auth.py" in enqueued["reason"]
         assert enqueued["depth"] == 3
 
-    def test_known_gap_continue_enqueues_past_max_restart_depth(self, monkeypatch, tmp_path):
-        # KNOWN-GAP (adversarial-review-skill follow-on investigation,
-        # 2026-07-13; BACKLOG "(i) restart-depth-cap coverage"): handle.py's
-        # two in-process restart gates (director-restart, closure-restart)
-        # check `< loop_types.MAX_RESTART_DEPTH` before re-running — but this
-        # queue-based escalation-continuation path (handle_escalation →
-        # task_store.enqueue → handle_queue.handle_task's loop_continuation
-        # branch) is a separate mechanism that never imports or checks
-        # MAX_RESTART_DEPTH at all. A "continue" decision enqueues depth+1
-        # unconditionally, and handle_task dispatches whatever depth a task
-        # carries straight into run_agent_loop with no gate. If an LLM
-        # escalation keeps returning "continue", this path recurses without
-        # bound — nothing here mirrors the "prevents infinite restart loops"
-        # protection handle.py's docstring describes for the other mechanism.
-        # Pins today's behavior (enqueues even past the cap) so it's
-        # revisited — and this assertion flipped to expect a refusal/surface
-        # — once a cap is added here. Not fixed same-session: which layer
-        # should own the check (handle_escalation before enqueue, or
-        # handle_task before dispatch) and what "capped" should do (surface
-        # to operator, like the existing "surface" action, vs. hard-close)
-        # is a design decision, not a one-line gate.
+    def test_deep_continue_enqueues_and_fires_checkin(self, monkeypatch, tmp_path):
+        # RESOLVED (was test_known_gap_continue_enqueues_past_max_restart_depth):
+        # the queue-based escalation-continuation path never checked any depth
+        # cap and enqueued depth+1 unconditionally. Jeremy's decree
+        # (docs/RECURSIVE_CHECKIN_DESIGN.md, 2026-07-13) did NOT add a refusal:
+        # the goal must keep running (ralph-style). Instead, deep recursion now
+        # fires a NON-BLOCKING progress check-in while still enqueueing the
+        # continuation — so the fix is "check-in and continue", not "hard cap".
+        # This test pins that shipped behavior: enqueue still happens at depth+1,
+        # AND a recursion_checkin notify fires.
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        enqueued = {}
+
+        def _fake_enqueue(lane, source, reason, parent_job_id, continuation_depth=0, origin=None):
+            enqueued.update({"depth": continuation_depth, "origin": origin})
+            return {"job_id": "cont-deep-001"}
+
+        with mock.patch("task_store.enqueue", _fake_enqueue), \
+             mock.patch("notify.emit") as mock_emit:
+            # depth already AT MAX_RESTART_DEPTH (loop_types.MAX_RESTART_DEPTH == 3)
+            task = _make_escalation_task(depth=3)
+            result = handle_escalation(task, adapter=self._make_adapter("continue"))
+
+        assert result.action == "continue"  # goal keeps running — never refused
+        assert enqueued["depth"] == 4        # depth+1, enqueued regardless
+        # A non-blocking check-in fired (new_depth=4 >= first threshold 2)
+        assert mock_emit.called
+        event_type, payload = mock_emit.call_args.args[0], mock_emit.call_args.args[1]
+        assert event_type == "recursion_checkin"
+        assert payload["blocking"] is False
+
+    def test_checkin_does_not_fire_below_first_threshold(self, monkeypatch, tmp_path):
+        # depth 0 -> new_depth 1 < first threshold (2): no check-in, origin
+        # carried through unchanged (no cadence fields stamped).
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        enqueued = {}
+
+        def _fake_enqueue(lane, source, reason, parent_job_id, continuation_depth=0, origin=None):
+            enqueued.update({"depth": continuation_depth, "origin": origin})
+            return {"job_id": "cont-shallow-001"}
+
+        with mock.patch("task_store.enqueue", _fake_enqueue), \
+             mock.patch("notify.emit") as mock_emit:
+            task = _make_escalation_task(depth=0)
+            task["origin"] = {"parent_goal": "review the codebase"}
+            result = handle_escalation(task, adapter=self._make_adapter("continue"))
+
+        assert result.action == "continue"
+        assert enqueued["depth"] == 1
+        assert not mock_emit.called
+        # No cadence state added below the threshold
+        assert "checkins_sent" not in enqueued["origin"]
+        assert "next_checkin_depth" not in enqueued["origin"]
+
+    def test_checkin_fires_exactly_at_first_threshold(self, monkeypatch, tmp_path):
+        # Fresh chain (no prior next_checkin_depth), depth 1 -> new_depth 2 == 2:
+        # check-in fires and the payload carries the director's own decision text.
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        enqueued = {}
+
+        def _fake_enqueue(lane, source, reason, parent_job_id, continuation_depth=0, origin=None):
+            enqueued.update({"depth": continuation_depth, "origin": origin})
+            return {"job_id": "cont-thresh-001"}
+
+        with mock.patch("task_store.enqueue", _fake_enqueue), \
+             mock.patch("notify.emit") as mock_emit:
+            task = _make_escalation_task(depth=1)
+            result = handle_escalation(task, adapter=self._make_adapter("continue"))
+
+        assert result.action == "continue"
+        assert enqueued["depth"] == 2
+        assert mock_emit.called
+        payload = mock_emit.call_args.args[1]
+        assert payload["blocking"] is False
+        assert payload["continuation_depth"] == 2
+        assert payload["goal_pass"] == 3  # pass 1 == depth 0
+        # Director's OWN escalation-decision text is reused (no 2nd LLM call)
+        assert payload["reasoning"] == "test reasoning for continue"
+        assert payload["summary_for_user"] == "test summary"
+        # Cadence advanced onto the carried origin
+        assert enqueued["origin"]["checkins_sent"] == 1
+
+    def test_checkin_cadence_jitters_and_suppresses_until_next_threshold(self, monkeypatch, tmp_path):
+        # After a check-in fires, next_checkin_depth lands in [new_depth+4,
+        # new_depth+7] inclusive, and no further check-in fires before it.
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        enqueued = {}
+
+        def _fake_enqueue(lane, source, reason, parent_job_id, continuation_depth=0, origin=None):
+            enqueued.update({"depth": continuation_depth, "origin": origin})
+            return {"job_id": "cont-cadence-001"}
+
+        # First continue at new_depth=2 fires the check-in and sets cadence.
+        with mock.patch("task_store.enqueue", _fake_enqueue), \
+             mock.patch("notify.emit") as mock_emit:
+            task = _make_escalation_task(depth=1)
+            handle_escalation(task, adapter=self._make_adapter("continue"))
+
+        next_checkin = enqueued["origin"]["next_checkin_depth"]
+        assert 2 + 4 <= next_checkin <= 2 + 7  # jittered window off new_depth=2
+        assert mock_emit.call_count == 1
+
+        # A subsequent continue whose new_depth is still below next_checkin must
+        # NOT fire again. Feed the advanced origin back in at a depth under it.
+        carried_origin = dict(enqueued["origin"])
+        below_depth = next_checkin - 2  # new_depth = below_depth+1 < next_checkin
+        enqueued.clear()
+        with mock.patch("task_store.enqueue", _fake_enqueue), \
+             mock.patch("notify.emit") as mock_emit2:
+            task2 = _make_escalation_task(depth=below_depth)
+            task2["origin"] = carried_origin
+            handle_escalation(task2, adapter=self._make_adapter("continue"))
+
+        assert not mock_emit2.called  # suppressed until the next threshold
+        # Cadence state preserved unchanged through the suppressed pass
+        assert enqueued["origin"]["next_checkin_depth"] == next_checkin
+        assert enqueued["origin"]["checkins_sent"] == carried_origin["checkins_sent"]
+
+    def test_checkin_notify_failure_does_not_block_enqueue(self, monkeypatch, tmp_path):
+        # A raising notify.emit must never prevent the continuation enqueue
+        # (design §2 defensive posture).
         monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
         enqueued = {}
 
         def _fake_enqueue(lane, source, reason, parent_job_id, continuation_depth=0, origin=None):
             enqueued.update({"depth": continuation_depth})
-            return {"job_id": "cont-past-cap-001"}
+            return {"job_id": "cont-notifyfail-001"}
 
-        with mock.patch("task_store.enqueue", _fake_enqueue):
-            # depth already AT MAX_RESTART_DEPTH (loop_types.MAX_RESTART_DEPTH == 3)
+        def _boom(*a, **kw):
+            raise RuntimeError("notify channel down")
+
+        with mock.patch("task_store.enqueue", _fake_enqueue), \
+             mock.patch("notify.emit", _boom):
             task = _make_escalation_task(depth=3)
             result = handle_escalation(task, adapter=self._make_adapter("continue"))
 
-        assert result.action == "continue"  # currently unconditional — that's the gap
-        assert enqueued["depth"] == 4        # one past the cap, enqueued anyway
+        assert result.action == "continue"
+        assert result.followup_task_id == "cont-notifyfail-001"
+        assert enqueued["depth"] == 4  # continuation still enqueued
+
+    def test_narrow_deep_fires_checkin(self, monkeypatch, tmp_path):
+        # The check-in fires on the narrow branch too, not just continue.
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        enqueued = {}
+
+        def _fake_enqueue(lane, source, reason, parent_job_id, continuation_depth=0, origin=None):
+            enqueued.update({"depth": continuation_depth, "origin": origin})
+            return {"job_id": "narrow-deep-001"}
+
+        with mock.patch("task_store.enqueue", _fake_enqueue), \
+             mock.patch("notify.emit") as mock_emit:
+            task = _make_escalation_task(depth=2)
+            result = handle_escalation(
+                task,
+                adapter=self._make_adapter("narrow", revised_goal="review only auth.py"),
+            )
+
+        assert result.action == "narrow"
+        assert enqueued["depth"] == 3
+        assert mock_emit.called
+        assert mock_emit.call_args.args[0] == "recursion_checkin"
+        assert enqueued["origin"]["checkins_sent"] == 1
 
     def test_close_action_no_followup_task(self, monkeypatch, tmp_path):
         monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))

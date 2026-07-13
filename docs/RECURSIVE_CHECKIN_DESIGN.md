@@ -1,8 +1,32 @@
 ---
-status: dormant-design
+status: record
 ---
 
 # Recursive-goal check-in — deep-recursion progress conversations
+
+> **STATUS: SHIPPED 2026-07-13**, implemented as designed — "check-in and
+> continue," never a refusal. `director.handle_escalation`'s `continue`/
+> `narrow` branches now ride an `_advance_origin_with_checkin` helper that,
+> at `new_depth >= recursion.checkin_first_depth` (default 2), fires a
+> non-blocking `_fire_checkin` → `notify.emit("recursion_checkin", ...,
+> blocking=False)` and advances the carried `origin` dict's
+> `next_checkin_depth` by a jittered `randint(checkin_jitter_min,
+> checkin_jitter_max)` (default 4-7) and `checkins_sent`. The continuation
+> enqueues at `depth+1` regardless (the goal never stops). `notify.py` added
+> `recursion_checkin` to `DEFAULT_EVENTS` and `ESCALATION_FILE_EVENTS`.
+> **Deviations from this pass:** (1) thresholds shipped as config keys
+> (`recursion.checkin_first_depth` / `.checkin_jitter_min` / `.checkin_jitter_max`,
+> DEFAULTS.md rows added) rather than hardcoded constants — the doc offered
+> both, config was the recommended path. (2) The pre-existing
+> `test_continue_action_enqueues_continuation` (depth=2 → new_depth=3, above
+> threshold) had to relax its byte-equal origin assertion to a superset check,
+> since a check-in now stamps cadence state onto `origin` — an expected
+> consequence the Tests section didn't enumerate. Redirect/stop was NOT
+> rebuilt: it rides the existing `InterruptQueue` per §3; the known
+> queue-drain-window limitation is left as an accepted residual. Marked
+> `status: record` per the closed-design convention but kept in place at
+> `docs/RECURSIVE_CHECKIN_DESIGN.md` (the DEFAULTS.md row links here); a
+> central relocation to `docs/history/` can happen later if desired.
 
 **Status:** design pass, written 2026-07-13 (`/goal` session). No code changed
 by this pass. Resolves the known-gap pinned by
