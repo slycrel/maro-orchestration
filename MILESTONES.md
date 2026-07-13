@@ -2,9 +2,13 @@
 
 What to do next, in what order. Updated each session. Deferred ideas live in BACKLOG.md; completed phase history in docs/history/ROADMAP_ARCHIVE.md (ROADMAP.md is a stub). This file is the executable queue.
 
-Last updated: 2026-07-12 (Sonnet execution session: -5 #4 Routing Part A
-SHIPPED — needs_live_data classifier signal + capability override close the
-Manti canonical-case routing gap, live-verified at 0.95 confidence with no
+Last updated: 2026-07-12 (Opus parallel session, alongside Sonnet on -5 #4
+routing: **-5 #6 container-executor C1 SHIPPED** — image + auth + doctor +
+the `src/container_exec.py` seam C2 extends; disjoint file set from routing,
+no conflict; see -5 #6. C2 = the wrap is next, Opus-tier.). Previous:
+2026-07-12 (Sonnet execution session: -5 #4 Routing Part A SHIPPED —
+needs_live_data classifier signal + capability override close the Manti
+canonical-case routing gap, live-verified at 0.95 confidence with no
 `--lane` force; see -5 #4 for full detail). Previous: 2026-07-12 (git-history
 privacy scrub completed by Jeremy in a parallel session — force-pushed
 rewritten `main`/`factory`; this session reconciled all three local git
@@ -169,9 +173,19 @@ Truth anchor: GOAL_BRAIN.md Threads. History: docs/history/ROADMAP_ARCHIVE.md.
       record`, from the parallel git-history-scrub session; one-line fix.
    5. **Probe-synthesis B1 → B2 → B3** (same doc, Part B; B3 wants Opus and
       is ALSO the verify→learn arc's hard dependency V0).
-   6. **Container executor C1 → C2 → C3 → C4**
+   6. **Container executor — C1 SHIPPED 2026-07-12 (Opus); C2 → C3 → C4 next**
       (`docs/CONTAINER_EXECUTOR_DESIGN.md`; C2 wants Opus; C4 = runtime-box
-      burn-in, Jeremy adjudicates the flip). Clears r2 blocker #4.
+      burn-in, Jeremy adjudicates the flip). Clears r2 blocker #4. **C1**
+      (image + auth + doctor) landed the *description* of the container with
+      no run wired through it: `deploy/docker/Dockerfile.executor` (CLI pin
+      `2.1.207`), `src/container_exec.py` (the seam C2 extends — constants,
+      config readers, mockable docker probes, operator instructions),
+      `maro-bootstrap container-setup`, mode-gated `doctor` rows (off/on/
+      require, loud degrade per SF-6; login probe on `--live`), DEFAULTS.md
+      `## Executor / sandboxing` (4 keys), stale root `Dockerfile`+
+      `docker-compose.yml` deleted. 20 tests, docker fully mocked. **C2 = the
+      wrap** (`_run_subprocess_safe` container branch, named-container kill
+      path, stranded-container sweep) is the next chunk, Opus-tier.
    7. **Portable-learning chunks 1–4** (`docs/PORTABLE_LEARNING_DESIGN.md`
       §7, §8 ratified 2026-07-12) — 1.0 scope-decree item (g).
    8. Opportunistic riders: time-blindness first slice + perspective

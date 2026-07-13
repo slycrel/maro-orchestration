@@ -261,12 +261,27 @@ No design coupling; noted so neither work stream blocks the other.
 
 ## 9. Implementation chunks (sized for handoff)
 
-- **C1 — image + auth + doctor (Sonnet, 1 session):**
-  `deploy/docker/Dockerfile.executor`, `maro-bootstrap container-setup`
-  (prints build + login instructions; creates nothing itself), doctor rows
-  (docker present / image present / container login ok), delete stale
-  root `Dockerfile` + `docker-compose.yml`. Tests: doctor-row units;
-  no docker dependency in CI (probe mocked).
+- **C1 — image + auth + doctor — SHIPPED 2026-07-12 (Opus).**
+  `deploy/docker/Dockerfile.executor` (node:22-slim + baked
+  `@anthropic-ai/claude-code` pinned to `2.1.207`, confirmed against npm at
+  ship time; `git`/`python3`/`curl`; build-arg CLI pin, image tag encodes
+  it). New `src/container_exec.py` = the shared seam C2 extends (constants
+  incl. `AUTH_VOLUME`/`NAME_PREFIX`/`CONTAINER_HOME=/home/maro`,
+  `container_mode()`/`container_image()` config readers, mockable
+  docker/image/auth-volume/login probes, operator instruction builders).
+  `maro-bootstrap container-setup` prints the build + auth-volume `/login`
+  walkthrough (creates nothing). `doctor` gained a mode-gated container
+  block (off → one info row, nothing probed; on/require → docker + image +
+  auth-volume rows, loud degrade/refuse wording per SF-6; the
+  token-spending login probe rides `--live`). DEFAULTS.md `## Executor /
+  sandboxing` documents all four `executor.*` keys; stale root `Dockerfile`
+  + `docker-compose.yml` deleted (README compat line + the r2-flagged claim
+  updated to point at the executor image). Concrete decisions made this
+  chunk: fixed `HOME=/home/maro` so the auth volume mounts at a known path
+  under an arbitrary `--user` uid; image tag = `maro-executor:<CLI-pin>`.
+  20 new tests (`tests/test_container_exec.py`, docker fully mocked — no CI
+  docker dependency) + `container_exec` added to the py-modules census.
+  Residual for C4: reconfirm/re-pin the CLI version when building on the box.
 - **C2 — the wrap (Opus, 1 session):** `_run_subprocess_safe` container
   branch behind `executor.container`, named-container kill path,
   stranded-container sweep line in the existing stranded-state sweep,

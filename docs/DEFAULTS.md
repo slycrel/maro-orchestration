@@ -73,6 +73,24 @@ missing here fails the suite, so this table can't silently rot.
 | `budget.transparency_usd` | `2.0` | Runs costing more than this get surfaced explicitly in curation/reporting rather than folded into totals. Lower = noisier reports; higher = spend hides. |
 | `budget.runaway_multiplier` | `1.5` | Mid-step runaway circuit (BACKLOG #23e, 2026-07-11): once run spend crosses `multiplier × cost_budget`, the adapter seam refuses further calls pre-call (zero cost) instead of waiting for the step boundary — run 8a20665f's step 9 alone burned $2.04 past a $2.40 ceiling. Deliberately runaway-only (Jeremy: don't churn-kill legit long steps; "cost isn't the end-all-be-all"): sits ABOVE the between-step hard stop (budget + 20% slush), armed for the execute phase only (never finalize/closure/quality-gate — demotion-bug lesson 8f8344a). Cannot kill a call already in flight (stream-side accounting still open). Set `0` (or null) to disable. |
 
+## Executor / sandboxing (containerized executor arc, 2026-07-12)
+
+The agentic executor lane — worker steps running `claude -p ...
+--dangerously-skip-permissions` with real tools — can optionally run inside a
+docker container for filesystem/network isolation (design:
+`CONTAINER_EXECUTOR_DESIGN.md`; ratified worth-the-effort by Jeremy
+2026-07-12, GOAL_BRAIN Decisions). Docker is **never a hard Maro
+requirement** — with `executor.container` off, worker steps run on the host
+under the write-fence exactly as before. C1 ships image + auth + doctor rows;
+C2 wires the actual wrap.
+
+| key | default | why / flip effect |
+|---|---|---|
+| `executor.container` | `off` | `off` / `on` / `require`. OFF everywhere until runtime-box burn-in (C4); the flip — the fresh-install default especially — is **Jeremy's call after burn-in evidence**, not a code change. `on` = wrap executor calls in a container, degrading to host/fence-only with one loud warning per run if docker is unavailable (SF-6: the difference must be visible). `require` = refuse executor calls outright when docker is unavailable instead of degrading. An unrecognized value fails safe to `off` (host), and doctor reports the raw value. Off = byte-identical to pre-container execution. |
+| `executor.container_image` | `maro-executor:<CLAUDE_CLI_VERSION>` (`container_exec.py`) | The baked executor image tag; the tag encodes the pinned claude-code CLI version so it's auditable (design §3). Build/re-pin via `maro-bootstrap container-setup`. Override to point at a custom-built image. |
+| `executor.container_network` | `bridge` | Docker network for executor containers. `bridge` (egress on) in v1 — workers legitimately fetch web content and the CLI needs api.anthropic.com; narrowing to an egress-allowlist proxy is a deliberate later follow-on. `none` exists from day one for offline-shaped goals. |
+| `executor.container_extra_mounts` | `[]` | Additional **read-only** reference mounts (reference data, repo checkouts) beyond the fence-derived rw mounts. Empty = only what the fence computes is mounted. Additions are standing read grants — add from evidence, same posture as `validate.write_fence_allow`. |
+
 ## Navigator / dispatch-class rollout (staged cutover, 2026-06→07)
 
 | key | default | why / flip effect |

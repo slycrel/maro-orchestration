@@ -116,6 +116,7 @@ py-modules = [
     "conductor",
     "config",
     "constraint",
+    "container_exec",
     "conversation",
     "convo_miner",
     "correspondence",

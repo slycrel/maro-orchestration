@@ -548,4 +548,4 @@ python3 src/cli.py eval --dry-run
 - **Telegram**: first-class interface via Bot API polling
 - **Slack**: Socket Mode, no public endpoint needed
 - **macOS + Linux**: `maro-bootstrap services` prints host-scheduler hook instructions (cron/systemd/launchd/OpenClaw) — Maro installs no unit files of its own
-- **Docker**: `Dockerfile` + `docker-compose.yml` for isolated deployment
+- **Docker**: optional containerized executor — worker steps that carry real tools can run in an isolated container (`deploy/docker/Dockerfile.executor`); off by default, set up via `maro-bootstrap container-setup`. See `docs/CONTAINER_EXECUTOR_DESIGN.md`.
