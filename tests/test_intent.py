@@ -69,6 +69,133 @@ class TestFileOutputOverride:
         assert lane == "now"
 
 
+class TestLiveDataOverride:
+    """Routing Part A (docs/ROUTING_AND_PROBE_SYNTHESIS_DESIGN.md): NOW is a
+    tool-less completion and cannot fetch live data, so a needs_live_data=true
+    classification (LLM schema field) or a live-data-phrased heuristic match
+    forces AGENDA before any NOW call is attempted — the Manti canonical-case
+    routing fix ("gas near Manti, Utah" previously routed NOW at 0.85 and
+    answered from model knowledge with a how-to-search list)."""
+
+    def test_llm_needs_live_data_forces_agenda(self):
+        import json
+
+        class LiveDataAdapter:
+            class _Resp:
+                content = json.dumps({
+                    "lane": "now",
+                    "confidence": 0.85,
+                    "reason": "Quick factual lookup",
+                    "needs_live_data": True,
+                })
+                input_tokens = 10
+                output_tokens = 10
+                tool_calls = []
+
+            def complete(self, *args, **kwargs):
+                return self._Resp()
+
+        lane, conf, reason = classify(
+            "Where can I get non-ethanol gas in or around Manti, Utah?",
+            adapter=LiveDataAdapter(),
+        )
+        assert lane == "agenda"
+        assert conf >= 0.8
+        assert "live external data" in reason
+
+    def test_llm_needs_live_data_string_true_parsed(self):
+        """A sloppier model emitting the string "true" instead of a JSON bool
+        must still trigger the override, not be silently ignored."""
+        import json
+
+        class StringBoolAdapter:
+            class _Resp:
+                content = json.dumps({
+                    "lane": "now",
+                    "confidence": 0.8,
+                    "reason": "Quick lookup",
+                    "needs_live_data": "true",
+                })
+                input_tokens = 10
+                output_tokens = 10
+                tool_calls = []
+
+            def complete(self, *args, **kwargs):
+                return self._Resp()
+
+        lane, _, _ = classify("what's the current BTC price?", adapter=StringBoolAdapter())
+        assert lane == "agenda"
+
+    def test_llm_absent_needs_live_data_defaults_false(self):
+        """Absent field fails open to today's behavior — no override fires."""
+        import json
+
+        class NoFieldAdapter:
+            class _Resp:
+                content = json.dumps({
+                    "lane": "now",
+                    "confidence": 0.9,
+                    "reason": "Simple factual question",
+                })
+                input_tokens = 10
+                output_tokens = 10
+                tool_calls = []
+
+            def complete(self, *args, **kwargs):
+                return self._Resp()
+
+        lane, conf, reason = classify("what time is it?", adapter=NoFieldAdapter())
+        assert lane == "now"
+        assert conf == 0.9
+
+    def test_agenda_lane_needs_live_data_unaffected(self):
+        """Override only fires on lane == 'now' — an agenda classification
+        with needs_live_data=true passes through untouched."""
+        import json
+
+        class AgendaLiveDataAdapter:
+            class _Resp:
+                content = json.dumps({
+                    "lane": "agenda",
+                    "confidence": 0.75,
+                    "reason": "Multi-source research required",
+                    "needs_live_data": True,
+                })
+                input_tokens = 10
+                output_tokens = 10
+                tool_calls = []
+
+            def complete(self, *args, **kwargs):
+                return self._Resp()
+
+        lane, conf, reason = classify("research current gas prices", adapter=AgendaLiveDataAdapter())
+        assert lane == "agenda"
+        assert conf == 0.75
+        assert reason == "Multi-source research required"
+
+    def test_stable_knowledge_now_lookup_unaffected(self):
+        lane, _, _ = classify("what does HTTP 429 mean?", dry_run=True)
+        assert lane == "now"
+
+    def test_heuristic_live_data_phrasing_routes_agenda_by_default(self):
+        lane, _, _ = _heuristic_classify("what's the current BTC price?")
+        assert lane == "agenda"
+
+    def test_heuristic_live_data_phrasing_routes_agenda_via_classify_dry_run(self):
+        lane, _, _ = classify("what's the current BTC price?", dry_run=True)
+        assert lane == "agenda"
+
+    def test_heuristic_live_data_flip_disabled_restores_now(self, monkeypatch):
+        import config as _config
+
+        monkeypatch.setattr(
+            _config, "get",
+            lambda key, default=None: False if key == "now_lane.live_data_routing" else default,
+        )
+        lane, _, _ = _heuristic_classify("what's the current BTC price?")
+        assert lane == "now"
+
+
 class TestHeuristicAGENDA:
     def test_research(self):
         lane, conf, reason = _heuristic_classify("research winning polymarket prediction strategies")

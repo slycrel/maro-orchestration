@@ -1,5 +1,5 @@
 ---
-status: history
+status: record
 ---
 
 # Git-history privacy scan — 2026-07-12

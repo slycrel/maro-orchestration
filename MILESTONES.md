@@ -2,7 +2,14 @@
 
 What to do next, in what order. Updated each session. Deferred ideas live in BACKLOG.md; completed phase history in docs/history/ROADMAP_ARCHIVE.md (ROADMAP.md is a stub). This file is the executable queue.
 
-Last updated: 2026-07-12 (Sonnet execution session: real `adversarial-review`
+Last updated: 2026-07-12 (Sonnet execution session: -5 #4 Routing Part A
+SHIPPED — needs_live_data classifier signal + capability override close the
+Manti canonical-case routing gap, live-verified at 0.95 confidence with no
+`--lane` force; see -5 #4 for full detail). Previous: 2026-07-12 (git-history
+privacy scrub completed by Jeremy in a parallel session — force-pushed
+rewritten `main`/`factory`; this session reconciled all three local git
+worktrees on the box, verified zero content loss). Previous: 2026-07-12
+(Sonnet execution session: real `adversarial-review`
 skill installed globally on this box + run against all 4 of this session's
 commits per Jeremy's ask ["not assume we caught everything the first time"]
 — 5 more real findings, all fixed same session; see -5 #3's "Adversarial
@@ -129,9 +136,37 @@ Truth anchor: GOAL_BRAIN.md Threads. History: docs/history/ROADMAP_ARCHIVE.md.
       the test's regex matches `[project.urls]` string values, not just
       `[project.scripts]` entries. Flagged to Jeremy, not folded into this
       commit (different file, different commit's fault).
-   4. **Routing Part A — needs-live-data signal**
-      (`docs/ROUTING_AND_PROBE_SYNTHESIS_DESIGN.md` Part A, one session).
-      Acceptance: Manti canonical case routes AGENDA naturally.
+   4. **Routing Part A — needs-live-data signal — SHIPPED 2026-07-12**
+      (`docs/ROUTING_AND_PROBE_SYNTHESIS_DESIGN.md` Part A): `intent.py` —
+      `needs_live_data: bool` added to the classifier's JSON schema
+      (`_CLASSIFY_SYSTEM`), parsed in `_llm_classify` (absent/malformed
+      fails open to `False`, a stray string `"true"` from a sloppier model
+      still parses correctly); capability override in `classify()` (same
+      template as the file-output override) forces `lane=="now"` +
+      `needs_live_data` to AGENDA at `max(confidence, 0.8)`. Teaching
+      examples fixed — the old NOW example ("what is the current BTC
+      price?") was literally teaching the misroute; moved to AGENDA, NOW's
+      example swapped to a stable-knowledge lookup ("what does HTTP 429
+      mean?"). Heuristic fallback (no-LLM path) gets the small lexical
+      approximation the design doc calls for: the `current/latest/today's`
+      pattern flipped from a NOW-indicator to an AGENDA-indicator, gated by
+      new `now_lane.live_data_routing` (default **ON**, including fresh
+      installs — DEFAULTS.md row explains why this one differs from the
+      no-silent-spend OFF-by-default posture: it decides lane *before* any
+      NOW spend, not after). 8 new tests (`TestLiveDataOverride`,
+      `tests/test_intent.py`, beside `TestFileOutputOverride`) — both
+      directions, absent-field default, string-bool parsing, heuristic
+      flip + its opt-out. **Acceptance verified live** (real cheap-tier
+      adapter, no `--lane` force): the exact Manti sentence now classifies
+      `agenda` at 0.95 confidence; stable-knowledge NOW lookups and
+      creative generation still route `now`; the design doc's own BTC-price
+      teaching example now correctly routes `agenda`. `docs/CAPABILITIES.md`
+      Manti canonical-case section updated (Run 4: routing gap CLOSED, cost
+      envelope is the only remaining gap before `verified`). Full suite
+      green (166) — also caught + fixed one pre-existing, unrelated
+      failure surfaced by the run: `docs/history/2026-07-12-git-history-
+      privacy-scan.md` had `status: history` (invalid) instead of `status:
+      record`, from the parallel git-history-scrub session; one-line fix.
    5. **Probe-synthesis B1 → B2 → B3** (same doc, Part B; B3 wants Opus and
       is ALSO the verify→learn arc's hard dependency V0).
    6. **Container executor C1 → C2 → C3 → C4**

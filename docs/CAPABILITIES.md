@@ -35,7 +35,8 @@ claim.
 ## The canonical simple case
 
 > **"Where can I get non-ethanol gas in or around Manti, Utah?"**
-> *(Jeremy, from the car, 2026-07-10 — status: `target`)*
+> *(Jeremy, from the car, 2026-07-10 — status: `target`; routing gap closed
+> 2026-07-12, see Run 4 below — remaining gap is cost envelope)*
 
 Why this is the north-star simple case: the information exists publicly, but
 collecting it takes a passenger several steps — a search, cross-referencing a
@@ -80,6 +81,22 @@ question (MODEL_POWER was resolving to subprocess `claude -p`; the
 token_explosion introspection flagged worker re-read churn). A passenger in
 a car wants this in ~1–3 min for cents.
 
+**Run 4 — routing gap closed (2026-07-12, Routing Part A,
+`docs/ROUTING_AND_PROBE_SYNTHESIS_DESIGN.md`):** `intent.classify()` gained a
+`needs_live_data` schema field (LLM path) + a config-gated heuristic flip
+(no-LLM path) that route a live-data ask to AGENDA *before* any NOW call is
+attempted, instead of relying on post-hoc self-verdict demotion. Live-verified
+with a real cheap-tier adapter, no `--lane` force: the exact Manti sentence
+now classifies `agenda` at 0.95 confidence ("Requires current, locally-
+situated information about gas station locations, hours, and fuel product
+availability in Manti, Utah") — Run 1's misroute no longer reproduces.
+Controls held: stable-knowledge NOW lookups ("what does HTTP 429 mean?",
+"write a haiku about autumn") still route `now`; the design doc's own
+teaching-example bug ("what is the current BTC price?", previously listed as
+the NOW canonical example) now correctly routes `agenda`. **Routing gap:
+CLOSED.** Cost-envelope gap (Run 3's $1.52/16.7min) is the only piece left
+before this case is honestly `verified` end-to-end.
+
 **Run 3 — post-fix envelope measurement (2026-07-11, run 5126986b):**
 after the orphan-read-step folding, latency breaker, closure evidence
 attachment, and budget-breaker fixes: **6 steps (was 11), 16m43s wall (was
@@ -104,7 +121,7 @@ real phrasing beats cleaned-up phrasing.
 
 | Goal (as asked) | Success looks like | Exercises | Status |
 |---|---|---|---|
-| "Where can I get non-ethanol gas in or around Manti, Utah?" | 1–3 named stations w/ locations + confidence caveats, sourced | multi-source research, synthesis, stop criteria | `target` — content verified live 2026-07-10 (forced agenda lane); routing + cost envelope still fail the contract, see canonical-case section |
+| "Where can I get non-ethanol gas in or around Manti, Utah?" | 1–3 named stations w/ locations + confidence caveats, sourced | multi-source research, synthesis, stop criteria | `target` — content verified live 2026-07-10; routing fixed 2026-07-12 (naturally routes agenda, no forced lane); cost envelope still fails the contract, see canonical-case section |
 | "What are the library hours in [town] this Saturday, and do I need an appointment for [service]?" | direct answer + source link, flags stale pages | freshness judgment, official-source preference | `target` |
 | "Compare the three cheapest ways to ship a 40lb box from Utah to Ohio this week." | small table, prices dated, winner recommended | structured comparison, quantitative extraction | `target` |
 | "Is [product] compatible with [other product]? People online seem to disagree." | verdict + why the disagreement exists | conflicting-source adjudication | `target` |

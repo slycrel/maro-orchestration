@@ -44,11 +44,12 @@ def classify(
         - confidence: 0.0–1.0
         - reason: one-sentence explanation
     """
+    needs_live_data = False
     if dry_run or adapter is None:
         lane, confidence, reason = _heuristic_classify(message)
     else:
         try:
-            lane, confidence, reason = _llm_classify(message, adapter)
+            lane, confidence, reason, needs_live_data = _llm_classify(message, adapter)
         except Exception:
             lane, confidence, reason = _heuristic_classify(message)
 
@@ -63,6 +64,19 @@ def classify(
             "agenda",
             max(confidence, 0.8),
             "Names a file deliverable — NOW lane cannot write files",
+        )
+
+    # Capability override, same class as the file-output one above: NOW is a
+    # single tool-less completion, so a question whose correct answer depends
+    # on live/local data ("gas near Manti, Utah" — 2026-07-10, the canonical
+    # simple-case failure) is mechanically un-answerable there — the model
+    # falls back to a how-to-search list, the passenger-does-the-steps
+    # anti-pattern. See docs/ROUTING_AND_PROBE_SYNTHESIS_DESIGN.md Part A.
+    if lane == "now" and needs_live_data:
+        return (
+            "agenda",
+            max(confidence, 0.8),
+            "Needs live external data — NOW lane cannot fetch it",
         )
     return (lane, confidence, reason)
 
@@ -88,9 +102,8 @@ def _requires_file_output(message: str) -> bool:
 _CLASSIFY_SYSTEM = """You are a routing agent. Classify the user's request as either:
 
 NOW: Completable in a single step with one LLM call. Examples:
-- Factual questions ("what time is it?", "who is X?")
+- Factual questions ("what time is it?", "what does HTTP 429 mean?")
 - Simple generation ("write a haiku", "summarize this paragraph")
-- Quick lookups ("what is the current BTC price?")
 - Short transforms ("translate this to Spanish")
 
 AGENDA: Requires multiple steps, research, iteration, or planning. Examples:
@@ -98,13 +111,22 @@ AGENDA: Requires multiple steps, research, iteration, or planning. Examples:
 - Build tasks ("build a research report on X")
 - Analysis tasks ("analyze competitor pricing and recommend action")
 - Ongoing projects ("set up monitoring for Y")
+- Live-data lookups ("what is the current BTC price?", "gas stations near
+  Manti, Utah") — these need needs_live_data=true (below); NOW cannot fetch
+  live data, so a live-data ask is AGENDA even though it reads like a quick
+  question.
+
+Also decide needs_live_data: true when a correct answer requires information
+that changes over time or is locally situated — current prices/availability/
+hours, "near me"/named-place inventory, weather, schedules, recent events —
+i.e. anything you cannot know reliably from training data. false otherwise.
 
 Respond ONLY with a JSON object:
-{"lane": "now" or "agenda", "confidence": 0.0-1.0, "reason": "one sentence"}
+{"lane": "now" or "agenda", "confidence": 0.0-1.0, "reason": "one sentence", "needs_live_data": true or false}
 """
 
 
-def _llm_classify(message: str, adapter) -> Tuple[Lane, float, str]:
+def _llm_classify(message: str, adapter) -> Tuple[Lane, float, str, bool]:
     from llm import LLMMessage
     import json
 
@@ -125,15 +147,33 @@ def _llm_classify(message: str, adapter) -> Tuple[Lane, float, str]:
             lane = "agenda"
         confidence = safe_float(data.get("confidence"), default=0.7, min_val=0.0, max_val=1.0)
         reason = safe_str(data.get("reason"))
-        return (lane, confidence, reason)
+        # Absent/malformed field fails open to today's behavior (False —
+        # no override fires). A stray string value ("true"/"false") from a
+        # sloppier model is still read correctly rather than truthy-coerced.
+        raw_ld = data.get("needs_live_data", False)
+        needs_live_data = raw_ld is True or (
+            isinstance(raw_ld, str) and raw_ld.strip().lower() == "true"
+        )
+        return (lane, confidence, reason, needs_live_data)
 
-    # Couldn't parse — fall back
-    return _heuristic_classify(message)
+    # Couldn't parse — fall back (heuristic has no schema field to read;
+    # its own lexical approximation of live-data-ness already lives in
+    # _heuristic_classify's pattern scoring, so no override needed here)
+    lane, confidence, reason = _heuristic_classify(message)
+    return (lane, confidence, reason, False)
 
 
 # ---------------------------------------------------------------------------
 # Heuristic fallback
 # ---------------------------------------------------------------------------
+
+def _config_get(key: str, default):
+    try:
+        from config import get as _get
+        return _get(key, default)
+    except Exception:
+        return default
+
 
 # Patterns that strongly suggest NOW lane
 _NOW_PATTERNS = [
@@ -141,9 +181,16 @@ _NOW_PATTERNS = [
     r"\b(write a? (haiku|poem|joke|summary|headline|tweet|caption))\b",
     r"\b(translate|convert|format|calculate)\b",
     r"\b(summarize|tldr|give me a summary)\b",
-    r"\b(what('s| is) (the |a |an )?(current|latest|today'?s?))\b",
     r"\b(quick(ly)?|fast|one-?line|brief)\b",
 ]
+
+# "what's the current BTC price", "today's weather" — literally live-data
+# phrasing (Part A design doc), so under now_lane.live_data_routing (default
+# ON) this counts toward AGENDA, not NOW; the pre-existing NOW-leaning
+# behavior survives as the explicit opt-out.
+_LIVE_DATA_RE = re.compile(
+    r"\b(what('s| is) (the |a |an )?(current|latest|today'?s?))\b", re.I
+)
 
 # Patterns that strongly suggest AGENDA lane
 _AGENDA_PATTERNS = [
@@ -174,6 +221,12 @@ def _heuristic_classify(message: str) -> Tuple[Lane, float, str]:
     for p in _AGENDA_PATTERNS:
         if re.search(p, msg_lower):
             agenda_score += 1
+
+    if _LIVE_DATA_RE.search(msg_lower):
+        if _config_get("now_lane.live_data_routing", True):
+            agenda_score += 1
+        else:
+            now_score += 1
 
     # Very short messages lean NOW
     if word_count <= _SHORT_THRESHOLD and not agenda_score:
