@@ -26,6 +26,7 @@ from llm import (
     LLMResponse,
     ToolCall,
     LLMAdapter,
+    StreamEvent,
     ClaudeSubprocessAdapter,
     CodexCLIAdapter,
     OpenRouterAdapter,
@@ -1750,3 +1751,231 @@ class TestContainerExecutorWrap:
                 ["echo", "x"], container_name="maro-exec-k-0",
                 cwd=str(tmp_path), timeout=1, liveness_timeout=0, poll_interval=0.05)
         assert killed == ["maro-exec-k-0"]
+
+
+# ---------------------------------------------------------------------------
+# Streaming-iterator protocol (BACKLOG #14): StreamEvent + LLMAdapter._collect
+# ---------------------------------------------------------------------------
+
+class TestCollectStreamEvents:
+    """LLMAdapter._collect is the one shared fold from a StreamEvent iterator
+    to an LLMResponse — tested directly against the protocol, independent of
+    any adapter's subprocess/HTTP mechanics."""
+
+    def test_done_with_response_short_circuits_accumulation(self):
+        """A terminal `done` carrying a pre-assembled response wins outright —
+        prior chunk/tool_call events are NOT re-folded into it. This is the
+        shape both ported adapters rely on (they already know every field —
+        usage, model, tool_events — by the time they can emit `done`)."""
+        final = LLMResponse(content="the real answer", model="claude-x", input_tokens=42)
+
+        def _events():
+            yield StreamEvent(kind="chunk", text="ignored partial")
+            yield StreamEvent(kind="chunk", text="also ignored")
+            yield StreamEvent(kind="done", response=final)
+
+        result = LLMAdapter._collect(_events())
+        assert result is final
+        assert result.content == "the real answer"
+
+    def test_chunks_accumulate_when_done_has_no_response(self):
+        """Without a pre-assembled response, chunk text concatenates in order
+        and tool_call events append — the generic fold a future truly-
+        incremental (SSE) adapter would lean on."""
+        def _events():
+            yield StreamEvent(kind="chunk", text="hello ")
+            yield StreamEvent(kind="chunk", text="world")
+            yield StreamEvent(kind="done")
+
+        result = LLMAdapter._collect(_events())
+        assert result.content == "hello world"
+        assert result.tool_calls == []
+
+    def test_tool_call_events_accumulate_without_response(self):
+        tc = ToolCall(name="complete_step", arguments={"result": "x"})
+
+        def _events():
+            yield StreamEvent(kind="tool_call", tool_call=tc)
+            yield StreamEvent(kind="done")
+
+        result = LLMAdapter._collect(_events())
+        assert result.tool_calls == [tc]
+
+    def test_error_event_raises_carried_exception(self):
+        boom = RuntimeError("backend exploded")
+
+        def _events():
+            yield StreamEvent(kind="chunk", text="partial")
+            yield StreamEvent(kind="error", error=boom)
+
+        with pytest.raises(RuntimeError, match="backend exploded"):
+            LLMAdapter._collect(_events())
+
+    def test_error_event_without_exception_raises_runtimeerror(self):
+        def _events():
+            yield StreamEvent(kind="error")
+
+        with pytest.raises(RuntimeError, match="stream ended in error"):
+            LLMAdapter._collect(_events())
+
+    def test_exhausted_iterator_without_terminal_event_returns_accumulated(self):
+        """Defensive fallback: a malformed iterator that never yields done/error
+        still returns whatever it accumulated instead of raising or hanging."""
+        def _events():
+            yield StreamEvent(kind="chunk", text="only ")
+            yield StreamEvent(kind="chunk", text="chunks")
+
+        result = LLMAdapter._collect(_events())
+        assert result.content == "only chunks"
+
+    def test_unknown_kind_is_ignored_not_fatal(self):
+        def _events():
+            yield StreamEvent(kind="mystery", text="huh")
+            yield StreamEvent(kind="done", response=LLMResponse(content="fine"))
+
+        result = LLMAdapter._collect(_events())
+        assert result.content == "fine"
+
+
+class TestClaudeSubprocessStreamEvents:
+    """ClaudeSubprocessAdapter._stream_events — the first (hardest-case) port
+    of the streaming-iterator shape: real subprocess + stream-json parsing.
+    complete()'s existing behavior (covered above by the pre-existing
+    test_subprocess_complete_* suite) must be bit-for-bit unchanged; these
+    tests exercise the generator directly."""
+
+    def test_plain_content_yields_chunk_then_done(self):
+        a = ClaudeSubprocessAdapter()
+        raw = _make_subprocess_output("hello world", input_tokens=100, output_tokens=50)
+        events = list(a._stream_events(raw, tools=None))
+        kinds = [e.kind for e in events]
+        assert kinds == ["chunk", "done"]
+        assert events[0].text == "hello world"
+        final = events[-1].response
+        assert final.content == "hello world"
+        assert final.input_tokens == 100
+        assert final.output_tokens == 50
+        assert final.backend == "subprocess"
+
+    def test_tool_call_yields_tool_call_then_done_with_empty_content(self):
+        a = ClaudeSubprocessAdapter()
+        tools = [LLMTool("complete_step", "done", {"type": "object", "properties": {}})]
+        raw = _make_subprocess_output(
+            '{"tool": "complete_step", "result": "found X"}')
+        events = list(a._stream_events(raw, tools=tools))
+        kinds = [e.kind for e in events]
+        assert kinds == ["tool_call", "done"]
+        assert events[0].tool_call.name == "complete_step"
+        final = events[-1].response
+        assert final.content == ""
+        assert final.tool_calls[0].name == "complete_step"
+
+    def test_no_result_event_falls_back_to_plain_text_chunk(self):
+        a = ClaudeSubprocessAdapter()
+        events = list(a._stream_events("just plain text response", tools=None))
+        kinds = [e.kind for e in events]
+        assert kinds == ["chunk", "done"]
+        assert events[-1].response.content == "just plain text response"
+
+    def test_tool_events_ride_the_terminal_response(self):
+        """Real inner-agent tool transcripts (ground truth for done!=achieved
+        verification) are carried on the done event's response, not modeled
+        as their own StreamEvent kind — see the module-level design note."""
+        a = ClaudeSubprocessAdapter()
+        raw = _make_stream_output(
+            result="ok", tool_events=[{"name": "Bash", "input": {"command": "ls"}, "output": "file.txt"}])
+        events = list(a._stream_events(raw, tools=None))
+        final = events[-1].response
+        assert final.tool_events[0]["name"] == "Bash"
+
+    def test_rc_payload_takes_precedence_over_parsed_stream(self):
+        """When complete() already extracted a success payload from a
+        non-zero exit (payload-first rc handling), that payload — not
+        whatever _parse_stream_json finds in the same text — is used."""
+        a = ClaudeSubprocessAdapter()
+        rc_payload = json.loads(_make_subprocess_output("accepted despite rc=1"))
+        events = list(a._stream_events("garbage\nnot valid stream-json", tools=None, rc_payload=rc_payload))
+        assert events[-1].response.content == "accepted despite rc=1"
+
+    def test_complete_still_returns_equivalent_response_via_collect(self, monkeypatch):
+        """End-to-end: complete() routes through _stream_events + _collect
+        and still returns the same shape callers depend on."""
+        a = ClaudeSubprocessAdapter()
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = _make_subprocess_output("via iterator", input_tokens=10, output_tokens=5)
+        mock_result.stderr = ""
+        with patch("llm._run_subprocess_safe", return_value=mock_result):
+            resp = a.complete([LLMMessage("user", "hi")])
+        assert resp.content == "via iterator"
+        assert resp.input_tokens == 10
+        assert resp.output_tokens == 5
+
+
+class TestCodexStreamEvents:
+    """CodexCLIAdapter._stream_events — second adapter proving the shape
+    generalizes to a structurally different transcript (item.completed /
+    turn.completed JSONL, not Claude's stream-json)."""
+
+    def _jsonl(self, *events):
+        return "\n".join(json.dumps(e) for e in events)
+
+    def test_agent_message_yields_chunk_then_done_with_usage(self):
+        a = CodexCLIAdapter()
+        stdout = self._jsonl(
+            {"type": "item.completed", "item": {"type": "agent_message", "text": "the answer"}},
+            {"type": "turn.completed", "usage": {"input_tokens": 20, "cached_input_tokens": 5, "output_tokens": 8}},
+        )
+        events = list(a._stream_events(stdout, tools=None))
+        kinds = [e.kind for e in events]
+        assert kinds == ["chunk", "done"]
+        assert events[0].text == "the answer"
+        final = events[-1].response
+        assert final.content == "the answer"
+        assert final.input_tokens == 25  # input + cached, matching pre-port behavior
+        assert final.cache_read_tokens == 5
+        assert final.output_tokens == 8
+
+    def test_later_agent_message_overwrites_not_concatenates(self):
+        """codex's item.completed carries the FULL text per item (not a
+        delta) — multiple items must overwrite, matching pre-port behavior,
+        not concatenate the way a true incremental chunk stream would."""
+        a = CodexCLIAdapter()
+        stdout = self._jsonl(
+            {"type": "item.completed", "item": {"type": "agent_message", "text": "draft one"}},
+            {"type": "item.completed", "item": {"type": "agent_message", "text": "final answer"}},
+        )
+        events = list(a._stream_events(stdout, tools=None))
+        # Both fire as informational chunk events...
+        chunk_texts = [e.text for e in events if e.kind == "chunk"]
+        assert chunk_texts == ["draft one", "final answer"]
+        # ...but the terminal done is authoritative and matches the LAST item.
+        assert events[-1].response.content == "final answer"
+
+    def test_tool_call_parsed_from_content(self):
+        a = CodexCLIAdapter()
+        stdout = self._jsonl(
+            {"type": "item.completed", "item": {"type": "agent_message",
+             "text": '{"tool": "complete_step", "result": "done"}'}},
+        )
+        tools = [LLMTool("complete_step", "done", {"type": "object", "properties": {}})]
+        events = list(a._stream_events(stdout, tools))
+        kinds = [e.kind for e in events]
+        assert "tool_call" in kinds
+        assert events[-1].response.tool_calls[0].name == "complete_step"
+        assert events[-1].response.content == ""
+
+    def test_complete_still_returns_equivalent_response_via_collect(self, monkeypatch):
+        a = CodexCLIAdapter()
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = self._jsonl(
+            {"type": "item.completed", "item": {"type": "agent_message", "text": "via iterator"}},
+            {"type": "turn.completed", "usage": {"input_tokens": 3, "cached_input_tokens": 0, "output_tokens": 2}},
+        )
+        mock_result.stderr = ""
+        with patch("llm._run_subprocess_safe", return_value=mock_result):
+            resp = a.complete([LLMMessage("user", "hi")])
+        assert resp.content == "via iterator"
+        assert resp.input_tokens == 3
+        assert resp.output_tokens == 2

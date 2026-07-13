@@ -55,7 +55,7 @@ import subprocess
 import textwrap
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 log = logging.getLogger("maro.llm")
 
@@ -280,6 +280,58 @@ class LLMTool:
 
 
 # ---------------------------------------------------------------------------
+# Streaming-iterator protocol (BACKLOG #14)
+# ---------------------------------------------------------------------------
+# The four adapters already share the LLMAdapter base; the piece that was
+# still copy-pasted per backend was "how does a stream of low-level signals
+# from the backend become an LLMResponse". This is the canonical vocabulary
+# for that stream, and `LLMAdapter._collect` is the ONE place that folds it
+# into a response — written once, reused by every adapter that chooses to
+# express its `complete()` as `self._collect(self._stream_events(...))`
+# instead of hand-assembling an LLMResponse inline.
+#
+# Scope, deliberately: this does not make any backend deliver tokens any
+# earlier than it does today. ClaudeSubprocessAdapter and CodexCLIAdapter
+# still capture the whole subprocess output before translating it (the
+# payload-first rc handling, rate-limit detection, and codex's usage summary
+# all need the full text first) — so `chunk`/`tool_call` events fire in a
+# tight loop just ahead of `done`, not truly incrementally. What's real: one
+# shared consumption contract (a stalled/errored stream raises in exactly one
+# place, `_collect`) instead of each adapter hand-rolling its own "now build
+# the LLMResponse" tail. True mid-flight delivery would mean turning
+# `_run_subprocess_safe`'s poll loop itself into a generator — out of scope
+# here (see its docstring; that function is the liveness/kill/container
+# wrap already shared across both subprocess adapters and is not touched by
+# this change).
+@dataclass
+class StreamEvent:
+    """One low-level unit from an adapter's stream, in the shape every
+    `complete()` can be expressed in terms of.
+
+    kind:
+      "chunk"     — an incremental content delta (informational; the
+                    terminal "done" event's `response`, when present, is
+                    always authoritative over accumulated chunk text).
+      "tool_call" — a tool invocation the model requested.
+      "done"      — terminal success. `response`, when set, is the fully
+                    assembled LLMResponse and short-circuits accumulation
+                    (used by adapters that already know every field —
+                    usage, model, tool_events — by the time they can emit
+                    a terminal event). When unset, `_collect` builds an
+                    LLMResponse from the accumulated chunks/tool_calls.
+      "error"     — terminal failure (timeout, kill, backend error). Carries
+                    the exception `_collect` raises.
+
+    Exactly one of "done"/"error" ends a well-behaved stream.
+    """
+    kind: str
+    text: str = ""
+    tool_call: Optional["ToolCall"] = None
+    response: Optional["LLMResponse"] = None
+    error: Optional[BaseException] = None
+
+
+# ---------------------------------------------------------------------------
 # Base adapter
 # ---------------------------------------------------------------------------
 
@@ -378,6 +430,41 @@ class LLMAdapter:
 
     def _resolved_model(self, model_key: str) -> str:
         return resolve_model(self.backend, model_key)
+
+    @staticmethod
+    def _collect(events: Iterator["StreamEvent"]) -> "LLMResponse":
+        """Drain a StreamEvent iterator into the LLMResponse contract.
+
+        This is the one place "what does a stream of events mean" is
+        decided: a `chunk`'s text accumulates, a `tool_call` appends, `done`
+        returns its carried response if the adapter pre-assembled one
+        (the common case today — see the StreamEvent docstring for why),
+        else builds an LLMResponse from whatever accumulated, and `error`
+        raises. Adapters that express `complete()` as an event stream call
+        this once at the end; adapters that still hand-assemble an
+        LLMResponse directly are unaffected and don't need to touch this.
+        """
+        content_parts: List[str] = []
+        tool_calls: List["ToolCall"] = []
+        for ev in events:
+            if ev.kind == "chunk":
+                content_parts.append(ev.text)
+            elif ev.kind == "tool_call":
+                if ev.tool_call is not None:
+                    tool_calls.append(ev.tool_call)
+            elif ev.kind == "error":
+                raise ev.error or RuntimeError(
+                    "LLMAdapter._collect: stream ended in error with no exception attached"
+                )
+            elif ev.kind == "done":
+                if ev.response is not None:
+                    return ev.response
+                return LLMResponse(content="".join(content_parts), tool_calls=tool_calls)
+            else:
+                log.warning("LLMAdapter._collect: unknown StreamEvent kind %r — ignored", ev.kind)
+        # Defensive: a well-behaved iterator always ends in done/error. If it
+        # simply ran dry, return whatever accumulated rather than raising.
+        return LLMResponse(content="".join(content_parts), tool_calls=tool_calls)
 
 
 # ---------------------------------------------------------------------------
@@ -1469,55 +1556,73 @@ class ClaudeSubprocessAdapter(_JSONToolPromptMixin, LLMAdapter):
                     detail = result.stdout.strip()[:300] or "(no output)"
                 raise RuntimeError(f"claude subprocess failed (rc={result.returncode}): {detail}")
 
-        # Parse JSON output. stdout holds merged stdout+stderr, so claude's
-        # JSON blob may be surrounded by warning/debug text. Try a direct
-        # parse first; if that fails, scan for the first `{` that begins a
-        # valid JSON object.
-        _stdout_text = result.stdout.strip()
-        # Parse the NDJSON stream once: the {"type":"result"} event is the
-        # success payload; tool_events are the inner agent's real tool calls.
-        # Note plain json.loads(_stdout_text) would grab the first event
-        # (system/init), not the result — _parse_stream_json finds the result.
-        _stream = _parse_stream_json(_stdout_text)
-        _tool_events = _stream["tool_events"]
-        # If we accepted a non-zero exit on the strength of its success
-        # payload, prefer that payload.
-        data = _rc_payload or _stream["result"]
+        # Translate the fully-captured stream-json output into the canonical
+        # chunk/tool_call/done vocabulary and fold it into an LLMResponse
+        # through the one shared driver every adapter's stream goes through
+        # (BACKLOG #14 — see StreamEvent / LLMAdapter._collect above).
+        return self._collect(self._stream_events(result.stdout, tools=tools, rc_payload=_rc_payload))
+
+    def _stream_events(
+        self, raw_output: str, *, tools: Optional[List[LLMTool]], rc_payload: Optional[dict] = None
+    ) -> Iterator[StreamEvent]:
+        """Translate captured stream-json output into StreamEvents.
+
+        `_parse_stream_json` remains the single NDJSON parser (also used
+        upstream in `complete()` for the early rate-limit check); this is
+        strictly downstream of it — it re-expresses that same parsed data
+        as the ordered event sequence `LLMAdapter._collect` folds into an
+        LLMResponse, rather than a one-off block assembling the response
+        inline. `rc_payload` is the already-extracted success payload when
+        `complete()` accepted a non-zero exit on the strength of its stdout
+        (payload-first rc handling); it takes precedence over the parsed
+        stream's own result, matching the pre-port behavior exactly.
+        """
+        text = (raw_output or "").strip()
+        stream = _parse_stream_json(text)
+        tool_events = stream["tool_events"]
+        data = rc_payload or stream["result"]
+
         if data is None:
-            # Fallback: treat as plain text
-            return LLMResponse(
-                content=_stdout_text,
-                tool_events=_tool_events,
-                backend=self.backend,
-            )
+            # Fallback: no parseable result event — treat the whole capture
+            # as plain text content.
+            yield StreamEvent(kind="chunk", text=text)
+            yield StreamEvent(kind="done", response=LLMResponse(
+                content=text, tool_events=tool_events, backend=self.backend,
+            ))
+            return
 
         raw_result = data.get("result", "")
-        usage = data.get("usage", {})
+        usage = data.get("usage", {}) or {}
         cache_read = usage.get("cache_read_input_tokens", 0)
         input_tokens = usage.get("input_tokens", 0) + cache_read
         output_tokens = usage.get("output_tokens", 0)
 
-        # Parse tool calls from JSON response
-        tool_calls: List[ToolCall] = []
         content = raw_result
-
+        tool_calls: List[ToolCall] = []
         if tools and raw_result:
             tc = self._parse_tool_call(raw_result, tools)
             if tc:
                 tool_calls = [tc]
                 content = ""
+                yield StreamEvent(kind="tool_call", tool_call=tc)
+        if content:
+            yield StreamEvent(kind="chunk", text=content)
 
-        return LLMResponse(
+        model = (
+            list(data.get("modelUsage", {}).keys() or ["claude"])[0]
+            if data.get("modelUsage") else "claude"
+        )
+        yield StreamEvent(kind="done", response=LLMResponse(
             content=content,
             tool_calls=tool_calls,
             stop_reason=data.get("stop_reason", "end_turn"),
-            model=list(data.get("modelUsage", {}).keys() or ["claude"])[0] if data.get("modelUsage") else "claude",
+            model=model,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             cache_read_tokens=cache_read,
-            tool_events=_tool_events,
+            tool_events=tool_events,
             backend=self.backend,
-        )
+        ))
 
 # ---------------------------------------------------------------------------
 # CodexCLIAdapter — uses `codex exec --json` (ChatGPT OAuth, prompt caching)
@@ -1627,7 +1732,10 @@ class CodexCLIAdapter(_JSONToolPromptMixin, LLMAdapter):
             detail = merged[:300] or "(no output)"
             raise RuntimeError(f"codex subprocess failed (rc={result.returncode}): {detail}")
 
-        return self._parse_jsonl_output(result.stdout, tools)
+        # Same streaming-iterator shape as ClaudeSubprocessAdapter (BACKLOG
+        # #14): translate the captured JSONL into chunk/tool_call/done events
+        # and fold through the one shared driver.
+        return self._collect(self._stream_events(result.stdout, tools))
 
     def _build_prompt(self, messages: List[LLMMessage], tools: Optional[List[LLMTool]]) -> str:
         """Flatten messages into a single prompt string for codex exec stdin."""
@@ -1656,8 +1764,22 @@ class CodexCLIAdapter(_JSONToolPromptMixin, LLMAdapter):
 
         return "\n\n".join(parts)
 
-    def _parse_jsonl_output(self, stdout: str, tools: Optional[List[LLMTool]]) -> LLMResponse:
-        """Parse JSONL lines from `codex exec --json` output."""
+    def _stream_events(self, stdout: str, tools: Optional[List[LLMTool]]) -> Iterator[StreamEvent]:
+        """Translate `codex exec --json` JSONL output into StreamEvents.
+
+        Second adapter proving the streaming-iterator shape generalizes
+        (BACKLOG #14) to a structurally different transcript than Claude's
+        stream-json: codex's `item.completed`/agent_message carries the
+        FULL text of that item (each one overwrites, not deltas — the
+        pre-port code took whatever the LAST agent_message said, same as
+        here), and usage only arrives at the end via `turn.completed`. The
+        `chunk` events below are informational/order-preserving for a
+        consumer watching the stream live; the terminal `done` event still
+        carries the fully-assembled, authoritative LLMResponse, so
+        `LLMAdapter._collect`'s generic concatenation-of-chunks fallback is
+        never actually exercised here (matches ClaudeSubprocessAdapter's
+        port — see its `_stream_events`).
+        """
         content = ""
         input_tokens = 0
         output_tokens = 0
@@ -1678,6 +1800,7 @@ class CodexCLIAdapter(_JSONToolPromptMixin, LLMAdapter):
                 item = event.get("item", {})
                 if item.get("type") == "agent_message":
                     content = item.get("text", "")
+                    yield StreamEvent(kind="chunk", text=content)
 
             elif event_type == "turn.completed":
                 usage = event.get("usage", {})
@@ -1692,8 +1815,9 @@ class CodexCLIAdapter(_JSONToolPromptMixin, LLMAdapter):
             if tc:
                 tool_calls = [tc]
                 content = ""
+                yield StreamEvent(kind="tool_call", tool_call=tc)
 
-        return LLMResponse(
+        yield StreamEvent(kind="done", response=LLMResponse(
             content=content,
             tool_calls=tool_calls,
             stop_reason="end_turn",
@@ -1702,7 +1826,7 @@ class CodexCLIAdapter(_JSONToolPromptMixin, LLMAdapter):
             output_tokens=output_tokens,
             cache_read_tokens=cached_tokens,
             backend=self.backend,
-        )
+        ))
 
 
 # ---------------------------------------------------------------------------
