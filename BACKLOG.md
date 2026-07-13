@@ -1108,6 +1108,14 @@ rather than fixed with a fragile heuristic:
 
 - [ ] **Verifier synthesis phase.** Dream-level: orchestrator builds its own verifier when none exists, rather than degrading to LLM judgment or failing as "hard." Framing: BDD + TDD. Scope declares Given/When/Then (what must be true for "done"). Execution includes a mandatory red-green pair: synthesize an executable probe, break the code on purpose to confirm it catches the failure, fix the code, probe goes green. The probe is a first-class checked-in artifact.
 
+  **Needs additional scoping (Jeremy, 2026-07-12, agreed).** Three concrete
+  residual-risk pin tests now point at this item (waiver content unjudged,
+  fail-relevance unjudged, heuristic regex gap — see above) on top of the
+  original slycrel-go motivating anecdote below. No longer just an
+  open-ended "dream-level" aspiration; worth a real scoping pass (MVE
+  sizing, which open question (a)-(d) below gates first) before treating
+  it as a queueable chunk. Not started — noted, not yet scheduled.
+
   Motivation: slycrel-go "done" run (loop `bd9b581c`, 2026-04-16, 1.55M tokens, status=done) passed `go build` while nothing exercised the binary. Three real bugs (`atomicWrite` race, silent `os.Executable` error, ignored write errors) survived untouched — caught only by the follow-up `identify-and-fix-the-3` review run. Scope alone would have named the gap; a synthesized probe would have closed it.
 
   Replay result after Phase 65 + closure wiring: materially better, but still half-real. The replay refused to mark the branch done, yet the decisive catch was static: closure found hallucinated `xterm.js` claims in the work summary via repo inspection, not via booting the server or exercising the client. This is progress, but it exposes the remaining defect precisely.

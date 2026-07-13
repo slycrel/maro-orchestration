@@ -2255,3 +2255,9 @@ Dormant (deliberately parked, not dropped):
   not silently accepted forever. Each gap now has a `test_known_gap_*` pin
   test (`test_director.py`, `test_intent.py`) asserting today's behavior,
   so "revisit later" has a concrete artifact to flip when that loop ships.
+- **2026-07-12 (same session, follow-on)** — Jeremy agreed "Verifier
+  synthesis phase" (BACKLOG "Verifier synthesis as a deliverable") needs
+  additional scoping before it's a queueable chunk — no longer just the
+  original slycrel-go dream-level aspiration now that 3 concrete
+  residual-risk pin tests point at it. Noted in BACKLOG; not started, not
+  scheduled this session.
