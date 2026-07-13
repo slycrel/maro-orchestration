@@ -683,3 +683,42 @@ run dirs (residual noted in BACKLOG #17).
 
 `viz backfill` now also covers NOW runs (artifact-bearing and
 metadata-only), with the same skip-unless-`--force` semantics.
+
+## Goal search (2026-07-13, BACKLOG #17 residual)
+
+Jeremy's rider on the retention decree: run data is now kept forever, so
+old runs must be *findable* to be worth keeping. Two surfaces, both
+reusing `_gather_run_summaries()` — the same data the index already
+renders from — rather than a parallel index or a database (explicitly
+"no storage migration warranted" territory; linear scan is fine at
+hundreds-to-low-thousands of run dirs):
+
+- **The index page itself.** `write_runs_index()` now bakes a client-side
+  filter bar into `index.html` — goal-text search box (substring,
+  case-insensitive) + status/lane dropdowns (options populated from
+  values actually present, not a hardcoded list) + from/to date range.
+  Pure inline JS toggling row visibility (`.idx-hidden`) against
+  `data-goal`/`data-status`/`data-lane`/`data-date` attributes already on
+  each `<tr>` — no new endpoint, no shipped JSON blob, no change to
+  `viz_server.py` (still strictly static-file, GET-only, same allowlist).
+  Skipped entirely when there are no runs yet (nothing to filter).
+- **`maro viz search`** (`src/cli.py` `_cmd_viz`, `src/loop_report.py
+  search_runs()`) — the same filters from a shell/script, for headless
+  use or when a browser isn't handy: `--goal`, `--status`, `--lane`,
+  `--since`/`--until` (bare `YYYY-MM-DD` or full ISO timestamp; `--until`
+  on a bare date is end-of-day inclusive), `--limit`, `--format
+  text|json`.
+
+`status` filters against the *effective* status (`success_class` once
+curation has classified the run, else the raw process status) — the same
+value the index badge displays, via a shared `_effective_status()`
+helper, so the CLI and the browser filter agree on vocabulary.
+
+Note: "project" (named alongside goal/status/date in Jeremy's rider) isn't
+a populated dimension on run metadata today — only project-loop
+(`maro run`) runs carry a project slug, and per BACKLOG #18 that lane
+doesn't create a `runs/<id>/` dir at all, so it's absent from the index's
+data almost entirely. `lane` (now/agenda/user_goal) is the closest
+already-populated, already-displayed dimension, so that's what got a
+filter instead. Revisit if/when project association gets threaded through
+run metadata for the handle-based lanes.

@@ -581,6 +581,17 @@ details.global-ctx summary { cursor: pointer; color: var(--dim); font-size: 15px
 details.legend { flex-shrink: 0; max-width: 420px; text-align: right; }
 details.legend summary { cursor: pointer; color: var(--dim); font-size: 15px; }
 details.legend .meta { margin-top: 8px; line-height: 1.9; text-align: left; }
+.idx-filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 12px 0; }
+.idx-filters input[type="text"], .idx-filters input[type="date"], .idx-filters select {
+  background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 4px;
+  padding: 4px 8px; font: inherit; font-size: 14px;
+}
+.idx-filters input[type="text"] { min-width: 220px; }
+.idx-filters label { color: var(--dim); font-size: 13px; display: flex; align-items: center; gap: 4px; }
+.idx-filters button { background: var(--panel); color: var(--dim); border: 1px solid var(--border); border-radius: 4px;
+  padding: 4px 10px; font: inherit; font-size: 14px; cursor: pointer; }
+.idx-filters button:hover { color: var(--text); border-color: var(--blue); }
+.idx-table tr.idx-hidden { display: none; }
 """
 
 _DETAIL_JS = """
@@ -1299,6 +1310,78 @@ def _gather_run_summaries() -> List[dict]:
     return summaries
 
 
+def _effective_status(s: dict) -> str:
+    """The status value the index badge actually displays: success_class
+    once curation has classified the run, else the raw process status.
+    Shared by the index's client-side filter and search_runs() so both
+    surfaces agree on what "status" means for a run.
+    """
+    return s.get("success_class") or s.get("status") or "unknown"
+
+
+def _normalize_date_bound(value: Optional[str], *, end_of_day: bool) -> Optional[str]:
+    """A bare `YYYY-MM-DD` bound needs a time suffix to compare correctly
+    against full `started_at` ISO timestamps (string comparison is
+    lexicographic): `--until 2026-07-01` should include the whole day, not
+    exclude everything after midnight. Full timestamps pass through as-is.
+    """
+    if value and len(value) == 10:
+        return value + ("T23:59:59.999999" if end_of_day else "T00:00:00")
+    return value
+
+
+def search_runs(
+    *,
+    goal: Optional[str] = None,
+    status: Optional[str] = None,
+    lane: Optional[str] = None,
+    since: Optional[str] = None,
+    until: Optional[str] = None,
+) -> List[dict]:
+    """Linear scan over run summaries, filtered by goal text / status / lane
+    / date range (BACKLOG #17 — "goal search in the run visualization").
+
+    Deliberately reuses `_gather_run_summaries()` — the same data the
+    cross-run index renders from — rather than a parallel index or
+    database. At current scale (hundreds to low-thousands of run dirs)
+    a plain scan is the right layer; see the adjacent (deferred) "Storage
+    decision" backlog entry.
+
+    - `goal`: case-insensitive substring match against the goal/prompt text.
+    - `status`: exact match (case-insensitive) against the effective status
+      — `success_class` once curated (success / done-not-achieved /
+      done-unverified / partial / failed), else the raw process status.
+    - `lane`: exact match (case-insensitive) against the run's lane
+      (now / agenda / user_goal).
+    - `since` / `until`: inclusive bounds on `started_at`, ISO date
+      (`2026-07-01`) or full timestamp.
+
+    Returns summaries newest-first (same order as `_gather_run_summaries`).
+    """
+    summaries = _gather_run_summaries()
+    goal_needle = goal.strip().lower() if goal else None
+    status_needle = status.strip().lower() if status else None
+    lane_needle = lane.strip().lower() if lane else None
+    since_norm = _normalize_date_bound(since, end_of_day=False)
+    until_norm = _normalize_date_bound(until, end_of_day=True)
+
+    def _matches(s: dict) -> bool:
+        if goal_needle and goal_needle not in (s.get("goal") or "").lower():
+            return False
+        if status_needle and _effective_status(s).lower() != status_needle:
+            return False
+        if lane_needle and (s.get("lane") or "").lower() != lane_needle:
+            return False
+        started = s.get("started_at") or ""
+        if since_norm and started < since_norm:
+            return False
+        if until_norm and started > until_norm:
+            return False
+        return True
+
+    return [s for s in summaries if _matches(s)]
+
+
 def _render_status_badge(status: str, success_class: Optional[str]) -> str:
     if success_class:
         label, badge_cls, help_text = _SUCCESS_CLASS_INFO.get(
@@ -1322,9 +1405,62 @@ document.querySelectorAll('.idx-table tr[data-href]').forEach(function(row){
 });
 """
 
+# Client-side filter over the index's already-rendered rows (BACKLOG #17,
+# "goal search in the run visualization"). No new endpoint, no shipped-JSON
+# index — the table itself IS the data; this just toggles row visibility.
+# Guard on f-goal existing: the filter bar isn't rendered when there are no
+# runs yet (nothing to filter), so this is a silent no-op on that page.
+_INDEX_FILTER_JS = """
+(function(){
+  var goalInput = document.getElementById('f-goal');
+  if (!goalInput) return;
+  var statusSel = document.getElementById('f-status');
+  var laneSel = document.getElementById('f-lane');
+  var sinceInput = document.getElementById('f-since');
+  var untilInput = document.getElementById('f-until');
+  var clearBtn = document.getElementById('f-clear');
+  var countEl = document.getElementById('f-count');
+  var rows = Array.prototype.slice.call(document.querySelectorAll('.idx-table tr[data-goal]'));
+
+  function apply(){
+    var q = goalInput.value.trim().toLowerCase();
+    var st = statusSel.value;
+    var ln = laneSel.value;
+    var since = sinceInput.value;
+    var until = untilInput.value;
+    var shown = 0;
+    rows.forEach(function(row){
+      var ok = true;
+      if (q && row.getAttribute('data-goal').indexOf(q) === -1) ok = false;
+      if (ok && st && row.getAttribute('data-status') !== st) ok = false;
+      if (ok && ln && row.getAttribute('data-lane') !== ln) ok = false;
+      var d = row.getAttribute('data-date') || '';
+      if (ok && since && (!d || d < since)) ok = false;
+      if (ok && until && (!d || d > until)) ok = false;
+      row.classList.toggle('idx-hidden', !ok);
+      if (ok) shown++;
+    });
+    countEl.textContent = shown + ' / ' + rows.length + ' run(s) shown';
+  }
+
+  [goalInput, statusSel, laneSel, sinceInput, untilInput].forEach(function(el){
+    el.addEventListener('input', apply);
+    el.addEventListener('change', apply);
+  });
+  clearBtn.addEventListener('click', function(){
+    goalInput.value = ''; statusSel.value = ''; laneSel.value = '';
+    sinceInput.value = ''; untilInput.value = '';
+    apply();
+  });
+  apply();
+})();
+"""
+
 
 def _render_index_html(summaries: List[dict]) -> str:
     rows = []
+    statuses_seen: Dict[str, str] = {}  # raw effective-status value -> display label
+    lanes_seen: set = set()
     for s in summaries:
         cost = s.get("cost_usd")
         cost_str = f"${cost:.4f}" if isinstance(cost, (int, float)) else "-"
@@ -1346,8 +1482,21 @@ def _render_index_html(summaries: List[dict]) -> str:
         else:
             links_html = '<span class="meta">no report</span>'
         row_attr = f' data-href="{_esc(primary_href)}"' if primary_href else ""
+
+        eff_status = _effective_status(s)
+        status_label, _cls, _help = _SUCCESS_CLASS_INFO.get(eff_status, (eff_status, "badge-pending", ""))
+        statuses_seen.setdefault(eff_status, status_label)
+        lane_val = s.get("lane") or ""
+        if lane_val:
+            lanes_seen.add(lane_val)
+        filter_attrs = (
+            f' data-goal="{_esc((s["goal"] or "").lower())}"'
+            f' data-status="{_esc(eff_status)}"'
+            f' data-lane="{_esc(lane_val)}"'
+            f' data-date="{_esc((s.get("started_at") or "")[:10])}"'
+        )
         rows.append(
-            f'<tr{row_attr}>'
+            f'<tr{row_attr}{filter_attrs}>'
             f'<td class="meta">{_esc(_fmt_ts(s["started_at"]))}</td>'
             f'<td>{_render_status_badge(s["status"], s.get("success_class"))}</td>'
             f'<td class="goal-cell">{_esc_truncated(s["goal"], 220)}</td>'
@@ -1363,6 +1512,25 @@ def _render_index_html(summaries: List[dict]) -> str:
         f'<span class="badge {badge_cls}">{_esc(label)}</span> {_esc(help_text)}<br>'
         for label, badge_cls, help_text in _SUCCESS_CLASS_INFO.values()
     )
+    filters_html = ""
+    if rows:
+        status_options = "".join(
+            f'<option value="{_esc(val)}">{_esc(lbl)}</option>'
+            for val, lbl in sorted(statuses_seen.items(), key=lambda kv: kv[1])
+        )
+        lane_options = "".join(
+            f'<option value="{_esc(v)}">{_esc(v)}</option>' for v in sorted(lanes_seen)
+        )
+        filters_html = f"""
+<div class="idx-filters">
+<input type="text" id="f-goal" placeholder="Search goal text..." autocomplete="off">
+<select id="f-status" title="Filter by status"><option value="">All statuses</option>{status_options}</select>
+<select id="f-lane" title="Filter by lane"><option value="">All lanes</option>{lane_options}</select>
+<label>From <input type="date" id="f-since"></label>
+<label>To <input type="date" id="f-until"></label>
+<button type="button" id="f-clear">Clear</button>
+<span class="meta" id="f-count"></span>
+</div>"""
     return f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>Maro runs</title>
 <style>{_CSS}</style></head>
@@ -1373,11 +1541,12 @@ def _render_index_html(summaries: List[dict]) -> str:
 <div class="meta">{legend_rows}<br><b>Lane:</b> {_esc(_LANE_HELP)}</div>
 </details>
 </div>
+{filters_html}
 <table class="idx-table">
 <tr><th>Started</th><th>Status</th><th>Goal</th><th title="{_esc(_LANE_HELP)}">Lane</th><th>Elapsed</th><th>Tokens</th><th>Cost</th><th>Report</th></tr>
 {body_rows}
 </table>
-<script>{_INDEX_ROW_JS}</script>
+<script>{_INDEX_ROW_JS}{_INDEX_FILTER_JS}</script>
 </body></html>
 """
 

@@ -189,6 +189,18 @@ def build_parser() -> argparse.ArgumentParser:
     p_viz_backfill.add_argument("--force", action="store_true",
                                 help="Also regenerate existing (frozen) reports — picks up data written after finalize, e.g. run_card.json verdicts")
     p_viz_backfill.add_argument("--limit", type=int, default=None, help="Stop after writing N reports")
+    p_viz_search = viz_sub.add_parser(
+        "search",
+        help="Search runs by goal text / status / lane / date range (linear scan, no index rebuild)",
+    )
+    p_viz_search.add_argument("--goal", default=None, help="Substring match against goal text (case-insensitive)")
+    p_viz_search.add_argument("--status", default=None,
+                              help="Exact match against effective status, e.g. success, done-not-achieved, partial, failed")
+    p_viz_search.add_argument("--lane", default=None, help="Exact match against lane, e.g. now, agenda, user_goal")
+    p_viz_search.add_argument("--since", default=None, help="Only runs started on/after this ISO date (2026-07-01) or timestamp")
+    p_viz_search.add_argument("--until", default=None, help="Only runs started on/before this ISO date (2026-07-01) or timestamp")
+    p_viz_search.add_argument("--limit", type=int, default=None, help="Max results to print (newest first)")
+    p_viz_search.add_argument("--format", choices=["text", "json"], default="text")
 
     p_telegram = sub.add_parser("telegram", help="Start Telegram listener (routes messages through handle)")
     p_telegram.add_argument("--once", action="store_true", help="Process pending updates once and exit")

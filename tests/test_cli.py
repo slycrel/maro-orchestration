@@ -896,3 +896,68 @@ class TestClosureVerdictPass:
         _cli_module._closure_verdict_pass("the goal", r)
         assert ann == []
         assert r.status == "done"
+
+
+# ---------------------------------------------------------------------------
+# `maro viz search` — BACKLOG #17, goal search in the run visualization
+# ---------------------------------------------------------------------------
+
+def _make_search_run(tmp_path, handle_id, prompt, *, lane="agenda", success_class=None):
+    """Build a run-dir directly under the test workspace (OPENCLAW_WORKSPACE,
+    same env var _run() sets) so `runs.runs_root()` finds it."""
+    import runs
+    prev = os.environ.get("OPENCLAW_WORKSPACE")
+    os.environ["OPENCLAW_WORKSPACE"] = str(tmp_path)
+    try:
+        rd = runs.create_run_dir(handle_id, prompt=prompt, lane=lane)
+        runs.write_metadata(rd, handle_id=handle_id, prompt=prompt, lane=lane, status="done")
+        if success_class is not None:
+            (rd / "run_card.json").write_text(json.dumps({"status": "done", "success_class": success_class}))
+    finally:
+        if prev is None:
+            os.environ.pop("OPENCLAW_WORKSPACE", None)
+        else:
+            os.environ["OPENCLAW_WORKSPACE"] = prev
+    return rd
+
+
+def test_cli_viz_search_filters_by_goal_text(tmp_path):
+    _make_search_run(tmp_path, "vsr00001", "Fix the flaky login test")
+    _make_search_run(tmp_path, "vsr00002", "Research polymarket edges")
+
+    r = _run(tmp_path, "viz", "search", "--goal", "login")
+    assert r.returncode == 0
+    assert "vsr00001" in r.stdout
+    assert "vsr00002" not in r.stdout
+
+
+def test_cli_viz_search_filters_by_status_and_lane(tmp_path):
+    _make_search_run(tmp_path, "vsr00003", "Curated success", lane="agenda", success_class="success")
+    _make_search_run(tmp_path, "vsr00004", "Curated failure", lane="now", success_class="failed")
+
+    r = _run(tmp_path, "viz", "search", "--status", "success")
+    assert r.returncode == 0
+    assert "vsr00003" in r.stdout
+    assert "vsr00004" not in r.stdout
+
+    r = _run(tmp_path, "viz", "search", "--lane", "now")
+    assert "vsr00004" in r.stdout
+    assert "vsr00003" not in r.stdout
+
+
+def test_cli_viz_search_json_format(tmp_path):
+    _make_search_run(tmp_path, "vsr00005", "JSON output check", success_class="success")
+
+    r = _run(tmp_path, "viz", "search", "--goal", "json output", "--format", "json")
+    assert r.returncode == 0
+    payload = json.loads(r.stdout)
+    assert len(payload) == 1
+    assert payload[0]["handle_id"] == "vsr00005"
+    assert payload[0]["success_class"] == "success"
+
+
+def test_cli_viz_search_no_matches(tmp_path):
+    _make_search_run(tmp_path, "vsr00006", "Some goal")
+    r = _run(tmp_path, "viz", "search", "--goal", "nothing-matches-this")
+    assert r.returncode == 0
+    assert "no matching runs" in r.stdout

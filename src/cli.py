@@ -1840,6 +1840,28 @@ def _cmd_viz(args: argparse.Namespace) -> int:
               f"{counts['written']} report(s) written, {counts['skipped']} skipped, "
               f"{counts['failed']} failed; index rebuilt")
         return 0 if counts["failed"] == 0 else 1
+    if args.viz_cmd == "search":
+        from loop_report import search_runs
+        results = search_runs(
+            goal=args.goal, status=args.status, lane=args.lane,
+            since=args.since, until=args.until,
+        )
+        if args.limit is not None:
+            results = results[: args.limit]
+        if args.format == "json":
+            print(json.dumps(results, indent=2, default=str))
+        else:
+            if not results:
+                print("(no matching runs)")
+            for s in results:
+                cost = s.get("cost_usd")
+                cost_str = f"${cost:.4f}" if isinstance(cost, (int, float)) else "-"
+                started = (s.get("started_at") or "")[:19].replace("T", " ")
+                goal_preview = (s.get("goal") or "")[:80].replace("\n", " ")
+                print(f"{started}  {s.get('status'):<18} {(s.get('lane') or '-'):<9} "
+                      f"{cost_str:>9}  {s.get('handle_id')}  {goal_preview}")
+            print(f"{len(results)} run(s)")
+        return 0
     return fail("E_INTERNAL", "unknown command")
 
 

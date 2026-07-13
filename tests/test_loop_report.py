@@ -1047,3 +1047,158 @@ def test_now_report_metadata_only_fallback(monkeypatch, tmp_path):
     assert "quick question" in content
     assert "result not captured" in content
     assert "8000ms" in content
+
+
+# ---------------------------------------------------------------------------
+# search_runs (BACKLOG #17 — goal search in the run visualization)
+# ---------------------------------------------------------------------------
+
+def _make_run(ws, handle_id, prompt, *, lane="agenda", started_at="2026-07-01T00:00:00+00:00",
+              success_class=None, cost=None):
+    """Direct metadata.json / run_card.json construction — same shape
+    _gather_run_summaries() reads, without relying on write_metadata's
+    started_at-preservation (which would keep the real wall-clock time
+    a plain create_run_dir()+write_metadata() call ran at, defeating any
+    date-range test).
+    """
+    import runs
+    rd = runs.create_run_dir(handle_id, prompt=prompt, lane=lane)
+    meta_path = rd / "metadata.json"
+    meta = json.loads(meta_path.read_text())
+    meta["started_at"] = started_at
+    meta["status"] = "done"
+    meta_path.write_text(json.dumps(meta))
+    if success_class is not None or cost is not None:
+        card = {"status": "done"}
+        if success_class is not None:
+            card["success_class"] = success_class
+        if cost is not None:
+            card["total_cost_usd"] = cost
+        (rd / "run_card.json").write_text(json.dumps(card))
+    return rd
+
+
+def test_search_runs_goal_text_case_insensitive_substring(monkeypatch, tmp_path):
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+    _make_run(tmp_path, "s0000001", "Fix the flaky LOGIN test")
+    _make_run(tmp_path, "s0000002", "Research polymarket edges")
+
+    results = lr.search_runs(goal="login")
+    assert [r["handle_id"] for r in results] == ["s0000001"]
+
+    # case-insensitive on both sides
+    results = lr.search_runs(goal="LoGiN")
+    assert [r["handle_id"] for r in results] == ["s0000001"]
+
+    assert lr.search_runs(goal="nonexistent-goal-text") == []
+
+
+def test_search_runs_status_filter_uses_effective_status(monkeypatch, tmp_path):
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+    _make_run(tmp_path, "s0000003", "Curated success run", success_class="success")
+    _make_run(tmp_path, "s0000004", "Curated failure run", success_class="failed")
+    _make_run(tmp_path, "s0000005", "Not yet curated run")  # no run_card.json
+
+    assert [r["handle_id"] for r in lr.search_runs(status="success")] == ["s0000003"]
+    assert [r["handle_id"] for r in lr.search_runs(status="failed")] == ["s0000004"]
+    # falls back to raw process status ("done") when no success_class exists
+    assert [r["handle_id"] for r in lr.search_runs(status="done")] == ["s0000005"]
+    # case-insensitive
+    assert [r["handle_id"] for r in lr.search_runs(status="SUCCESS")] == ["s0000003"]
+
+
+def test_search_runs_lane_filter(monkeypatch, tmp_path):
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+    _make_run(tmp_path, "s0000006", "An agenda run", lane="agenda")
+    _make_run(tmp_path, "s0000007", "A now run", lane="now")
+
+    assert [r["handle_id"] for r in lr.search_runs(lane="now")] == ["s0000007"]
+    assert [r["handle_id"] for r in lr.search_runs(lane="AGENDA")] == ["s0000006"]
+
+
+def test_search_runs_date_range_inclusive_bare_dates(monkeypatch, tmp_path):
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+    _make_run(tmp_path, "s0000008", "Early run", started_at="2026-07-01T00:05:00+00:00")
+    _make_run(tmp_path, "s0000009", "Mid run", started_at="2026-07-05T12:00:00+00:00")
+    _make_run(tmp_path, "s0000010", "Late run", started_at="2026-07-10T00:05:00+00:00")
+
+    results = lr.search_runs(since="2026-07-04", until="2026-07-06")
+    assert [r["handle_id"] for r in results] == ["s0000009"]
+
+    # a bare `until` date must include the whole day, not exclude everything
+    # after midnight (the naive lexicographic-string-compare bug).
+    results = lr.search_runs(since="2026-07-10", until="2026-07-10")
+    assert [r["handle_id"] for r in results] == ["s0000010"]
+
+    results = lr.search_runs(since="2026-07-01")
+    assert {r["handle_id"] for r in results} == {"s0000008", "s0000009", "s0000010"}
+
+
+def test_search_runs_combined_filters_and(monkeypatch, tmp_path):
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+    _make_run(tmp_path, "s0000011", "Fix login bug", lane="agenda", success_class="success")
+    _make_run(tmp_path, "s0000012", "Fix login bug", lane="now", success_class="success")
+
+    results = lr.search_runs(goal="login", lane="agenda", status="success")
+    assert [r["handle_id"] for r in results] == ["s0000011"]
+
+
+def test_search_runs_no_filters_returns_all_newest_first(monkeypatch, tmp_path):
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+    _make_run(tmp_path, "s0000013", "First", started_at="2026-07-01T00:00:00+00:00")
+    _make_run(tmp_path, "s0000014", "Second", started_at="2026-07-05T00:00:00+00:00")
+
+    results = lr.search_runs()
+    assert [r["handle_id"] for r in results] == ["s0000014", "s0000013"]
+
+
+def test_search_runs_empty_workspace(monkeypatch, tmp_path):
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+    assert lr.search_runs(goal="anything") == []
+
+
+# ---------------------------------------------------------------------------
+# Index filter UI (client-side search bar baked into the static index.html)
+# ---------------------------------------------------------------------------
+
+def test_index_html_includes_filter_bar_and_row_data_attrs(monkeypatch, tmp_path):
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+    _make_run(tmp_path, "s0000015", "Fix the flaky login test", lane="agenda",
+              started_at="2026-07-01T00:05:00+00:00", success_class="success")
+
+    out = lr.write_runs_index(force=True)
+    content = Path(out).read_text()
+
+    # filter controls present
+    for control_id in ("f-goal", "f-status", "f-lane", "f-since", "f-until", "f-clear", "f-count"):
+        assert f'id="{control_id}"' in content
+
+    # row carries lowercased goal text + status/lane/date for JS filtering
+    assert 'data-goal="fix the flaky login test"' in content
+    assert 'data-status="success"' in content
+    assert 'data-lane="agenda"' in content
+    assert 'data-date="2026-07-01"' in content
+
+    # the filter JS itself is inlined (no external script / no new endpoint)
+    assert "f-goal" in content and "addEventListener" in content
+
+
+def test_index_html_omits_filter_bar_when_no_runs(monkeypatch, tmp_path):
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+    out = lr.write_runs_index(force=True)
+    content = Path(out).read_text()
+    assert "No runs yet" in content
+    assert 'id="f-goal"' not in content
+
+
+def test_index_html_status_dropdown_options_reflect_actual_runs(monkeypatch, tmp_path):
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+    _make_run(tmp_path, "s0000016", "Run A", success_class="success")
+    _make_run(tmp_path, "s0000017", "Run B", success_class="failed")
+
+    out = lr.write_runs_index(force=True)
+    content = Path(out).read_text()
+    assert '<option value="success">' in content
+    assert '<option value="failed">' in content
+    # no bogus options for statuses that don't occur
+    assert '<option value="partial">' not in content
