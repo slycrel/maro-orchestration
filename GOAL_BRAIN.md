@@ -2379,3 +2379,30 @@ Dormant (deliberately parked, not dropped):
   the same item. This is a design decision about what the graph should
   encode, not an engineering task — correctly re-scoped rather than
   improvised past Jeremy's own flagged doubt.
+
+- **2026-07-13 (session close: post-1.0 /goal arc — recursive-goal
+  check-in, planning-depth shadow, R1 architectural cleanup, R3+R4
+  adversarial-review, all shipped and pushed)** — Full arc for the day's
+  "/goal ... implement as much as we can from the backlog" instruction.
+  Chunks shipped: recursive-goal check-in mechanism (non-blocking progress
+  notification at deep recursion, director.handle_escalation), planning-
+  depth shadow (thread-arch #5, MILESTONES 1.5), director_evaluate masked-
+  failure fix (1.6 /loop trace), R1 architectural residuals (prefix
+  registry unification, neutral module extraction, curator topo-sort,
+  skill_candidate consumer wired into run_curation), knowledge-web read
+  side traced and correctly re-scoped (not built — see entry above). Two
+  full 3-reviewer (Skeptic/Architect/Minimalist) adversarial-review passes
+  ran against this work: R3 (internal subagents, over the first four
+  chunks) found 5 real bugs + 3 architectural residuals; R4 (this session's
+  closing capstone review, run via the actual `/adversarial-review` skill
+  — cross-model Codex reviewers, not subagents, per that skill's hard
+  constraint) covered the entire day's diff with explicit attention to R3's
+  own fix commit, and found 3 more real bugs (all fixed live, tests added)
+  plus 1 pre-existing architectural gap (documented, not a regression).
+  Every finding from both passes landed as either a live fix with a
+  regression test, or a documented BACKLOG residual — none silently
+  dropped, per this repo's own convention. Full suite green (169/169)
+  after every fix. **Disposition: arc CLOSED for today.** Remaining backlog
+  items are Jeremy-gated (API keys, hardware, design decisions) or
+  explicitly deferred pending scale/evidence — nothing else was found to
+  be both unblocked and ready without Jeremy's input.

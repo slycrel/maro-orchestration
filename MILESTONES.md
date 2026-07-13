@@ -2,7 +2,21 @@
 
 What to do next, in what order. Updated each session. Deferred ideas live in BACKLOG.md; completed phase history in docs/history/ROADMAP_ARCHIVE.md (ROADMAP.md is a stub). This file is the executable queue.
 
-Last updated: 2026-07-13 (Claude Code /goal backlog-clearing session,
+Last updated: 2026-07-13 (later same day — full-day /goal arc CLOSED: **1.5
+planning-depth shadow** and **1.6 /loop trace** below both SHIPPED/CLOSED,
+plus the recursive-goal check-in mechanism (director.handle_escalation) and
+R1 architectural cleanup (prefix registry unification, curator topo-sort,
+skill_candidate consumer). Two full 3-reviewer adversarial-review passes ran
+against all of it — R3 (5 bugs fixed, 3 residuals documented) and a closing
+R4 capstone pass over the ENTIRE day's diff run via the real cross-model
+`/adversarial-review` skill (3 more bugs fixed: escalation enqueue-failure
+now surfaces to the operator instead of silently completing a dead chain,
+check-in payload off-by-one, skill-candidate consumed-on-extraction-crash;
+1 pre-existing architectural gap documented). Full detail in GOAL_BRAIN
+Decisions 2026-07-13 and BACKLOG.md's R3/R4 sections. Full suite green
+(169/169) throughout. Nothing else in the Actionable Stack was both
+unblocked and ready without Jeremy's input. Previous: 2026-07-13 (Claude
+Code /goal backlog-clearing session,
 autonomous per standing directive, continued: **batch-2 `/adversarial-review`
 SHIPPED** over the five-subagent merge chunk below (#14/#17/#18-residual/#25/#10)
 — 3 codex reviewers (Skeptic/Architect/Minimalist) independently converged on

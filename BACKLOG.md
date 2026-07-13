@@ -5,7 +5,7 @@ Read this at the start of every session. Update it as items are completed or new
 
 **Completed items live in [BACKLOG_DONE.md](BACKLOG_DONE.md)** — move items there with their full context when they ship; that file is the archive of what we've already decided, tried, or superseded, and it's ingested by `dev-recall` for historical context.
 
-Last reviewed: 2026-07-13, second pass same day (post-1.0 /goal session: recursion check-in + planning-depth shadow shipped, R1 architectural cleanup shipped, 1.6 /loop trace closed with evidence, knowledge-web read side traced and re-scoped — not built, real prerequisite gap found; R3 adversarial-review of all of the above — 5 fixed live, 3 architectural residuals documented; #19/#20/#21 fully-shipped stubs archived to BACKLOG_DONE (content was already there or wholesale-done); #0's stale "mining passes TODO" bullet corrected — all 4 miners are shipped; -1's stale unchecked "Cosmetic sweep... SHIPPED" checkbox fixed; triaged the rest of the Actionable Stack — nothing else is both unblocked and ready without Jeremy's input). Previous same-day pass: #10, #14, #18 shipped and archived to BACKLOG_DONE; #17 trimmed to its O(all runs) residual; #22 residual (blank-slate skill set) and hist-r2-02 checked off; #25 code shipped, stays open pending Jeremy's API keys; container-executor C4 mechanics merged, C4-BOX real-goal burn-in stays Jeremy-gated. Previous: 2026-07-09 (decision-cleanup session with Jeremy: #19 thread-arch decisions all resolved + recursion decree recorded, intent-resolution A/B dropped, orch.py trio deprecated, host-check wired+scheduled — four entries → BACKLOG_DONE; fastembed lane confirmed stays-gated). Previous full triage: 2026-07-04.
+Last reviewed: 2026-07-13, third pass same day — session close (R4 final capstone adversarial-review across the ENTIRE day's changeset, `b2dc34d..HEAD`, run cross-model via the real `/adversarial-review` skill per the session's closing instruction: 3 more real bugs fixed live — enqueue-failure dead-chain now surfaces to the operator instead of silently completing, check-in payload off-by-one fixed [all 3 reviewers converged independently], skill-candidate consumed-on-crash bug fixed; 1 architectural residual documented [handle_id absent from escalation-class notify payloads, pre-existing, not a regression]; also closed out the one un-triaged batch-1 finding — navigator_shadow's analyze_live_agreement/analyze_planning_depth_agreement duplication, extracted shared _tabulate_agreement helper. Full suite green, 169/169, after every fix this session). Second pass same day (post-1.0 /goal session: recursion check-in + planning-depth shadow shipped, R1 architectural cleanup shipped, 1.6 /loop trace closed with evidence, knowledge-web read side traced and re-scoped — not built, real prerequisite gap found; R3 adversarial-review of all of the above — 5 fixed live, 3 architectural residuals documented; #19/#20/#21 fully-shipped stubs archived to BACKLOG_DONE (content was already there or wholesale-done); #0's stale "mining passes TODO" bullet corrected — all 4 miners are shipped; -1's stale unchecked "Cosmetic sweep... SHIPPED" checkbox fixed; triaged the rest of the Actionable Stack — nothing else is both unblocked and ready without Jeremy's input). Previous same-day pass: #10, #14, #18 shipped and archived to BACKLOG_DONE; #17 trimmed to its O(all runs) residual; #22 residual (blank-slate skill set) and hist-r2-02 checked off; #25 code shipped, stays open pending Jeremy's API keys; container-executor C4 mechanics merged, C4-BOX real-goal burn-in stays Jeremy-gated. Previous: 2026-07-09 (decision-cleanup session with Jeremy: #19 thread-arch decisions all resolved + recursion decree recorded, intent-resolution A/B dropped, orch.py trio deprecated, host-check wired+scheduled — four entries → BACKLOG_DONE; fastembed lane confirmed stays-gated). Previous full triage: 2026-07-04.
 
 ---
 
@@ -135,6 +135,86 @@ live:
   heartbeat daemon uses, or claim-before-processing instead of
   claim-after. Deferred — narrow window, low severity, needs a real
   cross-process locking decision rather than a quick patch.
+
+### R4. Final capstone adversarial-review across the entire day's changeset — 3 fixed live, 1 architectural residual (2026-07-13)
+
+3-reviewer (Skeptic/Architect/Minimalist) pass over the full session range
+`git diff b2dc34d..HEAD` (26 files, ~2,830 insertions across 13 commits —
+recursive-goal check-in, planning-depth shadow, director_evaluate fix, R1
+architectural cleanup, and R3's own fixes), per the closing instruction of
+this session's `/goal`: "run the adversarial-review against the entire
+changeset across all the chunks." Run via the actual `/adversarial-review`
+skill (Codex reviewers, cross-model, not internal subagents). Reports:
+`output/adversarial-review-2026-07-13-final-{skeptic,architect,minimalist}.md`.
+
+All three reviewers scoped their attention (per instruction) to what R3
+hadn't reviewed yet — R3's own fix commit (`f837c06`) and the
+`navigator_shadow` dedup refactor (`75b8ccc`) — and converged, independently,
+on real bugs in that unreviewed code:
+
+- **Enqueue failure during `continue`/`narrow` still silently completed the
+  escalation task with a dead chain** (Architect High + Minimalist Medium,
+  independently convergent — the strongest signal in this pass). R3's fix
+  correctly suppressed the *misleading* check-in on enqueue failure, but
+  left the underlying gap: `handle_escalation` swallowed the
+  `task_store.enqueue` exception, logged a warning, and returned
+  `action="continue"` with `followup_task_id=None` — an operationally
+  successful-looking disposition for a goal chain that just silently died.
+  `handle_queue.drain_task_store` only marks a task `fail()`ed if
+  `handle_task()` raises; it never raised, so the task was marked
+  `complete()`. Fixed: both branches now fall back to `action="surface"` on
+  enqueue failure, with `reasoning`/`summary_for_user` naming the actual
+  exception — reusing `handle_queue.handle_task`'s existing
+  action=="surface" → `notify.emit(...)` operator path rather than building
+  new plumbing. Tests: `test_enqueue_failure_suppresses_checkin` updated to
+  assert the new disposition; new
+  `test_escalation_enqueue_failure_notifies_operator` proves the full
+  path end-to-end (mocks `task_store.enqueue` to raise, asserts
+  `notify.emit` actually fires with the failure in the payload — this
+  exact wiring had no test before, in either R3 or the original feature).
+- **Recursion check-in payload was off-by-one** (all 3 reviewers,
+  independently — every reviewer flagged the same line). R3's
+  enqueue-then-fire reordering left `_advance_origin_with_checkin`
+  advancing `origin["checkins_sent"]` *before* `_fire_checkin` ran, but
+  `_fire_checkin` still added its own `+ 1` on top — so the first check-in
+  reported `checkin_number=2` while the carried origin correctly recorded
+  `checkins_sent=1`, and every later one was one ahead too. Fixed:
+  `_fire_checkin` now reads `origin["checkins_sent"]` directly, no double
+  increment.
+- **Skill candidates were permanently consumed even when `extract_skills`
+  crashed before evaluating them** (Skeptic Medium). R1's
+  `promote_skill_candidates` (new this session) marked every candidate
+  consumed unconditionally after its `extract_skills` call, including on a
+  caught exception — a transient adapter failure, timeout, or malformed
+  response burned the candidate's only retry instead of a real decision.
+  The existing test (`test_promote_skill_candidates_extract_exception_is_non_fatal`)
+  had pinned this as intended behavior; it did not survive contact with
+  the Skeptic's framing ("declined after evaluation" vs "evaluation never
+  happened"). Fixed: candidates that made it into the extraction batch are
+  now only marked consumed if `extract_skills` returned normally; ones the
+  local `success_class` filter already rejected (never sent to
+  `extract_skills` at all) are unaffected and still consumed as before.
+
+One finding is real but a pre-existing structural gap, not a regression
+from this session, and not fixed live:
+
+- [ ] **`recursion_checkin` notify payloads carry no `handle_id`**
+  (Architect, Medium, single-reviewer). `notify._emit`'s hook-command path
+  exports `MARO_HANDLE_ID` from `payload["handle_id"]`
+  (`src/notify.py:112,151`) — but `_fire_checkin`'s payload never sets
+  one, so any registered shell hook (Telegram/Slack bridge) sees a blank
+  `MARO_HANDLE_ID` for these events, unable to correlate the "still
+  running" message to a specific run/thread. Verified this is NOT new:
+  `handle_queue.py`'s pre-existing `escalation` notify event hardcodes
+  `"handle_id": ""` too (`src/handle_queue.py:62`) — task_store tasks
+  carry `job_id`/`parent_job_id`, not the `handle_id` concept the notify
+  substrate's env-var contract was built around; this gap predates
+  today's work and applies to escalation-class events generally, not just
+  the new check-in. Fix direction (Architect's own framing): either make
+  the notify event contract job-centric, or thread a real handle
+  identifier through task_store's escalation/continuation tasks — both
+  are bigger structural lifts than this pass's scope (same class as R3's
+  origin-ancestry-shape residual). Deferred.
 
 ### R2. Adversarial-review batch-2 findings — 3 fixed live, 1 architectural residual (2026-07-13)
 

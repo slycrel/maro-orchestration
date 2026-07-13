@@ -406,6 +406,7 @@ def promote_skill_candidates(*, adapter=None, dry_run: bool = False,
         })
 
     n_saved = 0
+    extraction_failed = False
     if outcomes and not dry_run:
         try:
             if adapter is None:
@@ -417,20 +418,28 @@ def promote_skill_candidates(*, adapter=None, dry_run: bool = False,
             log.info("evolver skill_candidate_sweep candidates=%d saved=%d", len(outcomes), n_saved)
         except Exception as exc:
             log.debug("promote_skill_candidates: extract_skills failed (non-fatal): %s", exc)
+            extraction_failed = True
 
     # Mark every CONSIDERED candidate consumed regardless of whether
     # extract_skills chose to promote it — consumed means "looked at", not
     # "produced a skill" (see mark_skill_candidate_consumed's docstring);
     # extract_skills declining a small/low-signal batch isn't a reason to
-    # re-scan the same runs forever.
+    # re-scan the same runs forever. But a candidate that made it into
+    # `outcomes` was never actually looked at if extract_skills raised
+    # before returning — consuming it anyway would burn its only retry on
+    # a transient failure (bad adapter, timeout, malformed response), not
+    # a real decision. Only candidates extract_skills genuinely evaluated
+    # (or that the local success_class filter already rejected) get marked.
+    outcome_ids = {o["outcome_id"] for o in outcomes} if extraction_failed else set()
     if not dry_run:
         for card in candidates:
             hid = card.get("handle_id")
-            if hid:
-                try:
-                    mark_skill_candidate_consumed(hid)
-                except Exception:
-                    pass
+            if not hid or hid in outcome_ids:
+                continue
+            try:
+                mark_skill_candidate_consumed(hid)
+            except Exception:
+                pass
 
     return n_saved
 

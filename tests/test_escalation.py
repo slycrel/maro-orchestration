@@ -45,27 +45,33 @@ class TestHandleEscalationDryRun:
         assert result.action in ("continue", "narrow", "close", "surface")
 
 
+def _make_llm_adapter(action: str, revised_goal: str = "",
+                       decision_class: str = "mechanical", confidence: int = 8):
+    class _Adapter:
+        def complete(self, messages, **kw):
+            body = {
+                "action": action,
+                "decision_class": decision_class,
+                "confidence": confidence,
+                "reasoning": f"test reasoning for {action}",
+                "summary_for_user": "test summary",
+            }
+            if revised_goal:
+                body["revised_goal"] = revised_goal
+            import json
+            return SimpleNamespace(
+                content=json.dumps(body),
+                input_tokens=10,
+                output_tokens=20,
+            )
+    return _Adapter()
+
+
 class TestHandleEscalationWithLLM:
     def _make_adapter(self, action: str, revised_goal: str = "",
                       decision_class: str = "mechanical", confidence: int = 8):
-        class _Adapter:
-            def complete(self, messages, **kw):
-                body = {
-                    "action": action,
-                    "decision_class": decision_class,
-                    "confidence": confidence,
-                    "reasoning": f"test reasoning for {action}",
-                    "summary_for_user": "test summary",
-                }
-                if revised_goal:
-                    body["revised_goal"] = revised_goal
-                import json
-                return SimpleNamespace(
-                    content=json.dumps(body),
-                    input_tokens=10,
-                    output_tokens=20,
-                )
-        return _Adapter()
+        return _make_llm_adapter(action, revised_goal=revised_goal,
+                                  decision_class=decision_class, confidence=confidence)
 
     def test_continue_action_enqueues_continuation(self, monkeypatch, tmp_path):
         monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
@@ -254,11 +260,15 @@ class TestHandleEscalationWithLLM:
         assert enqueued["depth"] == 4  # continuation still enqueued
 
     def test_enqueue_failure_suppresses_checkin(self, monkeypatch, tmp_path):
-        # The inverse of test_checkin_notify_failure_does_not_block_enqueue:
-        # when the continuation enqueue itself raises, the check-in must NOT
-        # fire — otherwise the user is told "still running" for a chain that
-        # never actually got enqueued and silently died (adversarial-review
-        # batch-1, Skeptic finding #1, 2026-07-13).
+        # When the continuation enqueue itself raises, two things must both
+        # hold: the check-in must NOT fire (it would tell the user "still
+        # running" for a chain that never actually got enqueued — batch-1,
+        # Skeptic finding #1, 2026-07-13), AND the decision must not silently
+        # report "continue" with no follow-up — that leaves a dead chain
+        # with zero operator signal beyond a warning log (final adversarial
+        # pass, 2026-07-13: Architect High + Minimalist Medium, independently
+        # convergent). Falling back to "surface" reuses handle_queue.py's
+        # existing operator-notify path for that disposition.
         monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
 
         def _boom_enqueue(*a, **kw):
@@ -269,9 +279,10 @@ class TestHandleEscalationWithLLM:
             task = _make_escalation_task(depth=3)  # new_depth=4 >= first threshold
             result = handle_escalation(task, adapter=self._make_adapter("continue"))
 
-        assert result.action == "continue"
+        assert result.action == "surface"
         assert result.followup_task_id is None  # enqueue never succeeded
-        assert not mock_emit.called
+        assert "task store down" in result.summary_for_user
+        assert not mock_emit.called  # the check-in itself still never fires
 
     def test_narrow_deep_fires_checkin(self, monkeypatch, tmp_path):
         # The check-in fires on the narrow branch too, not just continue.
@@ -508,6 +519,28 @@ class TestHandleTask:
         assert called["depth"] == 2
         # Context block passed as ancestry_context_extra
         assert "Remaining" in called["ctx"] or "Pass 2" in called["ctx"]
+
+    def test_escalation_enqueue_failure_notifies_operator(self, monkeypatch, tmp_path):
+        # End-to-end version of test_enqueue_failure_suppresses_checkin: when
+        # director.handle_escalation falls back to action="surface" after a
+        # dead continuation enqueue, handle_task's existing surface-notify
+        # wiring must actually fire — otherwise the operator-visibility fix
+        # is dead code (final adversarial pass, 2026-07-13).
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+
+        def _boom_enqueue(*a, **kw):
+            raise RuntimeError("task store down")
+
+        with mock.patch("task_store.enqueue", _boom_enqueue), \
+             mock.patch("notify.emit") as mock_emit:
+            task = _make_escalation_task(depth=1)  # any depth — checkin cadence irrelevant here
+            handle_task(task, adapter=_make_llm_adapter("continue"), dry_run=False)
+
+        assert mock_emit.called
+        event_name, payload = mock_emit.call_args[0][:2]
+        assert event_name == "escalation"
+        assert payload["status"] == "surfaced"
+        assert "task store down" in payload["summary"]
 
     def test_unknown_source_routes_to_handle(self, monkeypatch, tmp_path):
         monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))

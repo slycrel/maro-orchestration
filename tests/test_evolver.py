@@ -394,6 +394,11 @@ def test_promote_skill_candidates_extract_declines_still_consumes():
 
 
 def test_promote_skill_candidates_extract_exception_is_non_fatal():
+    """A transient extract_skills failure (bad adapter, timeout, malformed
+    response) must not consume the candidate — it was never actually
+    evaluated, so consuming it would burn its only retry on an error instead
+    of a real decision (final adversarial pass, 2026-07-13: Skeptic Medium —
+    this test used to pin the opposite, lossy behavior)."""
     from evolver import promote_skill_candidates
     from run_curation import find_unconsumed_skill_candidates
 
@@ -402,9 +407,8 @@ def test_promote_skill_candidates_extract_exception_is_non_fatal():
         n = promote_skill_candidates(adapter=MagicMock(), dry_run=False, verbose=False)
 
     assert n == 0
-    # Still consumed — a bad LLM call shouldn't cause the sweep to keep
-    # retrying the same run indefinitely.
-    assert not any(c["handle_id"] == "h0e00004" for c in find_unconsumed_skill_candidates())
+    # NOT consumed — stays available so the next sweep retries it.
+    assert any(c["handle_id"] == "h0e00004" for c in find_unconsumed_skill_candidates())
 
 
 def test_run_evolver_wires_skill_candidate_sweep():

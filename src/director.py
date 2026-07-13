@@ -1032,7 +1032,12 @@ def _fire_checkin(task, new_depth, action, reasoning, summary_for_user, origin) 
         # this chain's escalation reason. Don't block the check-in on being
         # able to reconstruct full lineage (design §2).
         original_goal = origin.get("parent_goal") or task.get("reason", "")
-        checkin_number = int(origin.get("checkins_sent", 0)) + 1
+        # origin["checkins_sent"] is already advanced (to include THIS
+        # check-in) by _advance_origin_with_checkin before this runs — don't
+        # add another +1 or the payload reports one check-in ahead of the
+        # count actually carried in origin (adversarial-review final pass,
+        # 2026-07-13, all 3 reviewers independently).
+        checkin_number = int(origin.get("checkins_sent", 0))
         # How the user steers this — whatever inbound channel is live rides the
         # same notify substrate; no reply means "continue" (ralph default).
         redirect_hint = (
@@ -1242,6 +1247,19 @@ def handle_escalation(
                 _fire_checkin(task, new_depth, "continue", reasoning, summary_for_user, _origin)
         except Exception as exc:
             log.warning("escalation continue: failed to enqueue continuation: %s", exc)
+            # Suppressing the misleading check-in (above) isn't enough — the
+            # chain is now dead with no continuation and no operator signal
+            # beyond a warning log. Fall back to the existing "surface"
+            # disposition so handle_queue.py's action=="surface" notify path
+            # actually tells someone (adversarial-review final pass,
+            # 2026-07-13: Architect High + Minimalist Medium, independently).
+            action = "surface"
+            summary_for_user = (
+                f"This recursive goal chain stopped: the continuation could "
+                f"not be enqueued ({exc}). No follow-up task exists — "
+                f"original reasoning was: {summary_for_user}"
+            )
+            reasoning = f"enqueue failed: {exc}"
 
     elif action == "narrow" and not revised_goal:
         # LLM chose narrow but forgot to provide a revised goal — fall back to surface
@@ -1272,6 +1290,15 @@ def handle_escalation(
                 _fire_checkin(task, new_depth, "narrow", reasoning, summary_for_user, _origin)
         except Exception as exc:
             log.warning("escalation narrow: failed to enqueue narrowed task: %s", exc)
+            # Same rationale as the continue branch above: a dead chain must
+            # surface to an operator, not disappear behind a warning log.
+            action = "surface"
+            summary_for_user = (
+                f"This recursive goal chain stopped: the narrowed continuation "
+                f"could not be enqueued ({exc}). No follow-up task exists — "
+                f"revised goal was: {revised_goal[:200]}"
+            )
+            reasoning = f"enqueue failed: {exc}"
 
     elif action in ("close", "surface"):
         # Write a summary artifact for the operator
