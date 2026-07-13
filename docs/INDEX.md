@@ -38,6 +38,7 @@ BACKLOG, VISION, CLAUDE, README…) are living by definition and carry no frontm
 | Memory/knowledge design (input to the memory decision) | `MEMORY_ARCHITECTURE.md`, `KNOWLEDGE_CRYSTALLIZATION.md` (both dormant-design; several of their "missing" items have since shipped — see the brief §2) |
 | Intent resolution / "what does done mean"? | `INTENT_RESOLUTION_DESIGN.md` (partially shipped) |
 | Portable/shareable learning — migration + learning packs (1.0 item (g))? | `PORTABLE_LEARNING_DESIGN.md` (dormant-design; §8 RATIFIED 2026-07-12 — implementation queued) |
+| How do I move a workspace to a new machine? | `MIGRATION.md` (living runbook; §7 chunk 1 SHIPPED 2026-07-12 — `maro-doctor` now checks config paths/stale state/index sync post-restore) |
 | Containerized executor (arch-r2-01, 1.0 blocker #4)? | `CONTAINER_EXECUTOR_DESIGN.md` (dormant-design; chunks C1–C4 queued in MILESTONES) |
 | Verify→learn — the next arc after 1.0 (thread-arch #6)? | `VERIFY_LEARN_ARC.md` (dormant-design; hard dependency probe-env hardening B3 SATISFIED 2026-07-12) |
 | Live-data routing signal + probe-synthesis first slice? | `docs/history/2026-07-12-routing-and-probe-synthesis-design.md` (record — BOTH PARTS SHIPPED 2026-07-12; Manti canonical case is the acceptance) |

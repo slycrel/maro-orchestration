@@ -11,7 +11,10 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from doctor import run_doctor, _check, cleanup_workspace_skills, _skill_hash_is_stale
+from doctor import (
+    run_doctor, _check, cleanup_workspace_skills, _skill_hash_is_stale,
+    _scan_config_paths,
+)
 from skill_types import Skill, compute_skill_hash, skill_to_dict
 
 
@@ -111,6 +114,85 @@ class TestRunDoctor:
         assert "Escalation file surface" in captured.out
         assert str(tmp_path / "output" / "escalations.jsonl") in captured.out
         assert "Escalation push lane" in captured.out
+
+    def test_post_migration_checks_in_output(self, capsys, monkeypatch, tmp_path):
+        # docs/MIGRATION.md's three named rows must always be present.
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+        try:
+            run_doctor()
+        except Exception:
+            pass
+        captured = capsys.readouterr()
+        assert "Config paths on this box" in captured.out
+        assert "Stale machine state" in captured.out
+        assert "Memory index sync" in captured.out
+
+    def test_stale_machine_state_detected_but_not_failing(self, capsys, monkeypatch, tmp_path):
+        # A restored workspace's traveled state must be surfaced, but never
+        # as a hard FAIL — a live running box legitimately has these too.
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+        mem = tmp_path / "memory"
+        mem.mkdir(parents=True)
+        (mem / "jobs.json").write_text("[]")
+        (mem / "heartbeat-state.json").write_text("{}")
+        (tmp_path / "telegram_offset.txt").write_text("123")
+        (mem / "foo.lock").write_text("")
+        try:
+            run_doctor()
+        except Exception:
+            pass
+        captured = capsys.readouterr()
+        assert "✓ Stale machine state" in captured.out
+        assert "jobs.json" in captured.out
+        assert "heartbeat-state.json" in captured.out
+        assert "telegram_offset.txt" in captured.out
+        assert "foo.lock" in captured.out
+
+    def test_stale_machine_state_clean_workspace(self, capsys, monkeypatch, tmp_path):
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+        try:
+            run_doctor()
+        except Exception:
+            pass
+        captured = capsys.readouterr()
+        assert "✓ Stale machine state — none present" in captured.out
+
+
+# ---------------------------------------------------------------------------
+# _scan_config_paths — burned-in absolute paths from another machine
+# ---------------------------------------------------------------------------
+
+class TestScanConfigPaths:
+    def test_existing_path_not_flagged(self, tmp_path):
+        cfg = {"some": {"dir": str(tmp_path)}}
+        assert _scan_config_paths(cfg) == []
+
+    def test_missing_absolute_path_flagged(self):
+        cfg = {"notify": {"binary": "/definitely/not/a/real/path/xyz123"}}
+        missing = _scan_config_paths(cfg)
+        assert len(missing) == 1
+        assert "notify.binary=/definitely/not/a/real/path/xyz123" in missing[0]
+
+    def test_missing_home_relative_path_flagged(self):
+        cfg = {"scratch": "~/definitely-not-a-real-dir-xyz123"}
+        missing = _scan_config_paths(cfg)
+        assert len(missing) == 1
+        assert missing[0].startswith("scratch=")
+
+    def test_command_with_args_not_flagged_even_if_binary_missing(self):
+        # Path-shaped heuristic deliberately skips anything with whitespace —
+        # a shell command's argv, not a bare path.
+        cfg = {"notify": {"command": "/definitely/not/real/bin --flag value"}}
+        assert _scan_config_paths(cfg) == []
+
+    def test_non_path_strings_not_flagged(self):
+        cfg = {"model": {"default_tier": "cheap"}, "yolo": False, "n": 3}
+        assert _scan_config_paths(cfg) == []
+
+    def test_nested_dict_dotted_key(self, tmp_path):
+        cfg = {"a": {"b": {"c": "/definitely/not/a/real/path/xyz123"}}}
+        missing = _scan_config_paths(cfg)
+        assert missing[0].startswith("a.b.c=")
 
 
 # ---------------------------------------------------------------------------

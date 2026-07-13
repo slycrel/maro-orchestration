@@ -27,6 +27,28 @@ def _check(label: str, ok: bool, detail: str = "") -> dict:
     return {"label": label, "ok": ok, "detail": detail}
 
 
+def _scan_config_paths(cfg: dict, *, _prefix: str = "") -> list:
+    """Find path-shaped string config values that don't exist on this box.
+
+    Heuristic: a value is path-shaped if it's a string starting with '/' or
+    '~' and contains no whitespace — rules out shell commands with args
+    (e.g. notify.command: "/usr/bin/curl -X POST ..."). Conservative on
+    purpose: a false negative (a real broken path we miss) is far cheaper
+    than a false positive (flagging a legitimate command as broken).
+    """
+    missing: list = []
+    for key, value in cfg.items():
+        dotted = f"{_prefix}.{key}" if _prefix else key
+        if isinstance(value, dict):
+            missing.extend(_scan_config_paths(value, _prefix=dotted))
+        elif isinstance(value, str) and (value.startswith("/") or value.startswith("~")):
+            if any(c.isspace() for c in value):
+                continue
+            if not Path(value).expanduser().exists():
+                missing.append(f"{dotted}={value}")
+    return missing
+
+
 def run_doctor() -> bool:
     """Run all checks. Returns True if all pass."""
     print("maro-doctor — environment check\n")
@@ -443,6 +465,75 @@ def run_doctor() -> bool:
     except Exception as _exc:
         # "none configured" above is soft; the health check CRASHING is not.
         results.append(_check("channels (GitHub/Reddit/YouTube)", False, str(_exc)[:80]))
+
+    # Post-migration checks (docs/MIGRATION.md, PORTABLE_LEARNING_DESIGN.md §5a)
+    # — a restored workspace on a new box needs these three answered before
+    # anything is re-armed. Cheap enough to run unconditionally rather than
+    # gate behind a flag; on a healthy running box they're informational.
+    try:
+        from config import load_config as _load_cfg
+        _missing_paths = _scan_config_paths(_load_cfg())
+        results.append(_check(
+            "Config paths on this box",
+            not _missing_paths,
+            "all path-shaped config values resolve" if not _missing_paths
+            else f"{len(_missing_paths)} value(s) don't exist here (stale from another "
+                 f"machine?): {', '.join(_missing_paths[:5])}"
+                 + (f" (+{len(_missing_paths) - 5} more)" if len(_missing_paths) > 5 else ""),
+        ))
+    except Exception as exc:
+        results.append(_check("Config paths on this box", True, f"skipped: {exc}"))
+
+    # Machine state that shouldn't survive a copy to a new box unexamined —
+    # never a hard FAIL (a live running box legitimately has all of these;
+    # see the supervision-convergence fix for why structural-noise FAILs on
+    # normal-operation state are a standing anti-pattern here). Informational
+    # so a human following docs/MIGRATION.md knows what to delete.
+    try:
+        from config import workspace_root as _ws_root, memory_dir as _mem_dir
+        _root = _ws_root()
+        _mem = _mem_dir()
+        _stale_candidates = [_mem / "jobs.json", _mem / "heartbeat-state.json",
+                              _root / "telegram_offset.txt"]
+        _present = [str(p) for p in _stale_candidates if p.exists()]
+        _locks = sorted(str(p) for p in _root.rglob("*.lock"))
+        _present.extend(_locks)
+        results.append(_check(
+            "Stale machine state",
+            True,
+            "none present" if not _present
+            else f"{len(_present)} file(s) present — if this workspace was just "
+                 f"restored from another machine, delete these before re-arming "
+                 f"any schedule/heartbeat (see docs/MIGRATION.md): "
+                 + ", ".join(_present[:4])
+                 + (f" (+{len(_present) - 4} more)" if len(_present) > 4 else ""),
+        ))
+    except Exception as exc:
+        results.append(_check("Stale machine state", True, f"skipped: {exc}"))
+
+    # Memory index self-heal confirmation — opening the store is what
+    # triggers catch-up/rebuild (memory_sqlite.py), so this check both
+    # reports AND performs the designed self-heal; that's intentional, not
+    # a side effect to avoid (docs/PORTABLE_LEARNING_DESIGN.md §5a).
+    try:
+        from memory_sqlite import SqliteMemoryStore
+        from config import memory_dir as _mem_dir2
+        _store_root = _mem_dir2() / "module"
+        _rebuilt_before = not (_store_root / "index.db").exists()
+        _store = SqliteMemoryStore(_store_root)
+        _log_size = _store.log_path.stat().st_size if _store.log_path.exists() else 0
+        _offset = int(_store._meta("log_offset") or 0)
+        _store._db.close()
+        _in_sync = _offset == _log_size
+        results.append(_check(
+            "Memory index sync",
+            True,
+            "fresh index built from event log" if _rebuilt_before
+            else ("in sync with event log" if _in_sync
+                  else f"caught up this run (offset {_offset} -> {_log_size})"),
+        ))
+    except Exception as exc:
+        results.append(_check("Memory index sync", True, f"skipped: {exc}"))
 
     # Summary
     passed = sum(1 for r in results if r["ok"])

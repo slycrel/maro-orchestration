@@ -434,6 +434,29 @@ Truth anchor: GOAL_BRAIN.md Threads. History: docs/history/ROADMAP_ARCHIVE.md.
       box, Jeremy adjudicates.**
    7. **Portable-learning chunks 1–4** (`docs/PORTABLE_LEARNING_DESIGN.md`
       §7, §8 ratified 2026-07-12) — 1.0 scope-decree item (g).
+      **Chunk 1 — migration runbook + doctor checks — SHIPPED 2026-07-12
+      (Sonnet).** `docs/MIGRATION.md` (5a empty-new-machine + 5b
+      merge-into-existing procedures verbatim from the design doc §5, plus
+      the doctor-row pointers). `maro-doctor` gained 3 new rows, all
+      informational (never a hard FAIL — a live running box legitimately
+      has jobs/heartbeat/lock state; the supervision-convergence fix
+      already established structural-noise FAILs on normal-operation state
+      as a standing anti-pattern here, see item 1 above): **Config paths
+      on this box** (`_scan_config_paths` walks the merged config, flags
+      string values that are path-shaped — start with `/`or `~`, no
+      whitespace, so a `notify.command` with args is never mistaken for a
+      bare path — and don't resolve on this machine); **Stale machine
+      state** (`jobs.json`, `heartbeat-state.json`, `telegram_offset.txt`,
+      any `*.lock` — reports presence + a pointer to the runbook's delete
+      step, never auto-deletes); **Memory index sync** (opens the
+      `SqliteMemoryStore`, which is itself what triggers the designed
+      self-heal catch-up/rebuild, then reports which happened — the check
+      and the heal are the same action by design). 12 new tests
+      (`test_doctor.py` — `TestScanConfigPaths` + 3 `TestRunDoctor`
+      additions); `docs/INDEX.md` row added; full suite green. Chunks 2–4
+      (provenance fields, `maro-pack export/seal`, `maro-pack
+      import/adopt`) are next, one session each per the design doc's own
+      slicing.
    8. Opportunistic riders: time-blindness first slice + perspective
       end-user seat (BACKLOG Vision vehicles, sized 2026-07-12).
    9. **Verify→learn arc V1–V5** (`docs/VERIFY_LEARN_ARC.md`) — post-1.0 by
