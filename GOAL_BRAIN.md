@@ -2272,3 +2272,49 @@ Dormant (deliberately parked, not dropped):
   original slycrel-go dream-level aspiration now that 3 concrete
   residual-risk pin tests point at it. Noted in BACKLOG; not started, not
   scheduled this session.
+- **2026-07-13 (recursive-goal check-in decree — Jeremy, `/goal` session,
+  decree-level design, resolves half of the 2026-07-09 recursion decree's
+  deferred "how deep is too deep" question)** — the 2026-07-09 recursion
+  decree left the door open for sub-goal spawning but deliberately didn't
+  implement depth handling. Jeremy now specifies the concrete check-in
+  behavior for deep recursion: **"once we are starting the 3rd goal pass (2
+  goals deep beyond the first), while maro is executing in the background
+  towards that 3rd recursive goal, have the top level maro start a
+  conversation with the user; explain it's going to take a while and
+  explain the current plan it's begun working on, and how what it's done is
+  working towards what the user asked; allows the user to guide or stop,
+  but doesn't stop the goal until the user wants it to. Every 4-7 goals
+  after that we do the same; progress update, interact with a chance to
+  redirect or stop, and assume (ralph style) that we want to proceed
+  optimistically."** Concrete parameters: first check-in fires at depth 3
+  (goal → sub-goal → sub-sub-goal, i.e. 2 levels beyond the top-level
+  goal); subsequent check-ins every 4–7 goals thereafter (jittered, not a
+  fixed period — avoids a metronomic interrupt cadence and matches this
+  repo's existing "signals not rule tables" posture elsewhere, e.g. #5
+  planning-depth). Mechanism must be **non-blocking**: the check-in is a
+  notify-and-continue (same shape as the existing escalation-file surface
+  + notify.command lane, NOT a synchronous `input()`-style wait) — the goal
+  keeps running unless/until the user actively redirects or stops it
+  (ralph-style optimistic default, matching `feedback_ralph_persistence`
+  posture). This is a genuinely new mechanism, not a config flip: needs (1)
+  a depth counter on the `origin` ancestry dict (already tracks
+  parent/goal/loop lineage per the 2026-06-10 run↔thread linkage — extend,
+  don't duplicate), (2) a check-in trigger wired at sub-goal-spawn time
+  (fires once at depth==3, then on a jittered every-4-7-goals counter
+  reset), (3) a plan-summary composer (what's been done, how it serves the
+  original ask — likely reads the thread-brain compiled-truth + Decisions
+  the way the navigator already does), (4) delivery via the existing
+  notify surface (escalation file + notify.command/Telegram — reuse, don't
+  build a new channel), (5) a redirect/stop intake path distinct from
+  today's escalate move (escalate parks the goal pending human input;
+  this must NOT park — it's fire-and-continue with an optional override
+  applied asynchronously if/when the user responds). Not yet designed in
+  file form — this decree is the spec input; a design doc + MILESTONES
+  queue entry should be produced before code, per this repo's own
+  "chunk needs a design doc or decided spec, not invented architecture"
+  discipline (`docs/IMPLEMENTATION_HANDOFF.md`). Depends on: navigator
+  `fork`/sub-goal spawning actually existing as a live code path first
+  (today it's schema-only, join gated per MILESTONES #4) — this check-in
+  behavior rides on top of sub-goal spawning, it doesn't replace the
+  prerequisite that sub-goals can spawn at all. Queued in BACKLOG under
+  "Vision / Deferred" pending that scoping pass.
