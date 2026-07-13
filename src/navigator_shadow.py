@@ -477,6 +477,33 @@ def shadow_blocked_step_live(
         return None
 
 
+def _tabulate_agreement(
+    rows: List[Dict[str, Any]],
+    group_keys: Dict[str, Any],
+    agree_fn: Any,
+) -> tuple:
+    """Shared tabulation core for analyze_live_agreement() and
+    analyze_planning_depth_agreement(): bucket rows into one or more
+    per-key agree/diverge tables plus a flat divergence list, given an
+    agreement predicate. group_keys maps table-name -> row -> key-value
+    (a row may be tabulated into more than one table, e.g. by-move AND
+    by-point from the same pass).
+    """
+    tables: Dict[str, Dict[str, Dict[str, int]]] = {name: {} for name in group_keys}
+    divergences = []
+    agreements = 0
+    for r in rows:
+        agree = agree_fn(r)
+        if agree:
+            agreements += 1
+        else:
+            divergences.append(r)
+        for name, key_fn in group_keys.items():
+            slot = tables[name].setdefault(str(key_fn(r)), {"agree": 0, "diverge": 0})
+            slot["agree" if agree else "diverge"] += 1
+    return tables, divergences, agreements
+
+
 def analyze_live_agreement(events: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Tabulate live NAVIGATOR_DECIDED rows into per-move agreement counts —
     the cutover evidence (NAVIGATOR_SCHEMA.md analysis query, structured).
@@ -504,27 +531,22 @@ def analyze_live_agreement(events: List[Dict[str, Any]]) -> Dict[str, Any]:
             "goal_preview": str(
                 (c.get("input_digest") or {}).get("goal_preview", ""))[:80],
         })
-    by_move: Dict[str, Dict[str, int]] = {}
-    by_point: Dict[str, Dict[str, int]] = {}
-    divergences = []
-    for r in rows:
+
+    def _agree(r: Dict[str, Any]) -> bool:
         m, p = r["move"], r["pipeline"]
         in_kind = m in ("close", "escalate") and p == "guard_refused"
-        agree = (m == p or in_kind)
-        slot = by_move.setdefault(str(m), {"agree": 0, "diverge": 0})
-        pslot = by_point.setdefault(str(r["point"]), {"agree": 0, "diverge": 0})
-        if agree:
-            slot["agree"] += 1
-            pslot["agree"] += 1
-        else:
-            slot["diverge"] += 1
-            pslot["diverge"] += 1
-            divergences.append(r)
+        return m == p or in_kind
+
+    tables, divergences, agreements = _tabulate_agreement(
+        rows,
+        {"by_move": lambda r: r["move"], "by_point": lambda r: r["point"]},
+        _agree,
+    )
     return {
         "live_rows": len(rows),
-        "by_move": by_move,
-        "by_point": by_point,
-        "agreements": sum(s["agree"] for s in by_move.values()),
+        "by_move": tables["by_move"],
+        "by_point": tables["by_point"],
+        "agreements": agreements,
         "divergences": divergences,
     }
 
@@ -566,21 +588,15 @@ def analyze_planning_depth_agreement(events: List[Dict[str, Any]]) -> Dict[str, 
             "goal_preview": str(
                 (c.get("input_digest") or {}).get("goal_preview", ""))[:80],
         })
-    by_depth: Dict[str, Dict[str, int]] = {}
-    divergences = []
-    for r in rows:
-        d, p = r["planning_depth"], r["pipeline_depth"]
-        agree = d == p
-        slot = by_depth.setdefault(str(d), {"agree": 0, "diverge": 0})
-        if agree:
-            slot["agree"] += 1
-        else:
-            slot["diverge"] += 1
-            divergences.append(r)
+    tables, divergences, agreements = _tabulate_agreement(
+        rows,
+        {"by_depth": lambda r: r["planning_depth"]},
+        lambda r: r["planning_depth"] == r["pipeline_depth"],
+    )
     return {
         "live_rows": len(rows),
-        "by_depth": by_depth,
-        "agreements": sum(s["agree"] for s in by_depth.values()),
+        "by_depth": tables["by_depth"],
+        "agreements": agreements,
         "divergences": divergences,
     }
 

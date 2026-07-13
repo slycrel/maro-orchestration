@@ -81,6 +81,12 @@ architectural, just small):
   finding's own "at minimum" fallback (full codegen not done — see below).
 - 3 near-duplicate single-value parse tests in `test_navigator.py`
   (Minimalist) collapsed into one parametrized test.
+- `navigator_shadow.analyze_live_agreement`/`analyze_planning_depth_agreement`
+  near-verbatim duplication (Minimalist) — extracted shared
+  `_tabulate_agreement(rows, group_keys, agree_fn)` helper; both functions
+  now build their row list, define an agreement predicate, and call the
+  shared tabulator. Existing `test_navigator_prompt.py` agreement-table
+  tests pin the return shape unchanged.
 
 Three findings are real but architectural or judgment calls, not fixed
 live:
