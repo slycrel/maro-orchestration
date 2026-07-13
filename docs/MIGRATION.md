@@ -98,14 +98,14 @@ else's pack.
 
 ## Sharing a curated learning pack (`maro-pack`)
 
-Producing a pack is shipped (`src/pack.py`, chunk 3 of the design doc's §7
-slicing). Gathers Class C (standing rules, hypotheses, long-tier lessons,
-skill records) + Class A (`skills/*.md`, `personas/*.md`) from a workspace,
-scrubs every string (`secret_scrub.scrub()` for secret-shaped strings +
-`scrub_identifiers()` for this machine's `$HOME`/username/hostname + a
-config+environment deny-list), and writes an unsealed
-`<name>.maropack.tar.gz` plus a loose `<name>.REVIEW.md` for a human to
-actually read before sealing:
+Full lifecycle is shipped (`src/pack.py`, chunks 3+4 of the design doc's §7
+slicing): export, seal, import, adopt. Gathers Class C (standing rules,
+hypotheses, long-tier lessons, skill records) + Class A (`skills/*.md`,
+`personas/*.md`) from a workspace, scrubs every string
+(`secret_scrub.scrub()` for secret-shaped strings + `scrub_identifiers()`
+for this machine's `$HOME`/username/hostname + a config+environment
+deny-list), and writes an unsealed `<name>.maropack.tar.gz` plus a loose
+`<name>.REVIEW.md` for a human to actually read before sealing:
 
 ```bash
 maro-pack export polymarket-research-starter --label "polymarket edges, 2026-07"
@@ -122,14 +122,30 @@ guarantee is mechanical scrub for secret-shaped strings + mechanical
 redaction of known local identifiers + a mandatory human review gate — this
 is not mechanical anonymization. A pack is a letter; you proofread letters.
 
-`maro-pack import`/`adopt` (the receiving side — trust demotion, quarantine,
-adopt) are not shipped yet.
+Receiving a pack — `import` demotes trust per §3's arrival-trust table,
+`adopt` is the explicit gate from quarantine to live:
+
+```bash
+maro-pack import polymarket-research-starter.maropack.tar.gz --label polymarket-starter
+# rules -> Hypothesis (confirmations/contradictions reset to 0); lessons -> MEDIUM
+# tier, score capped at 0.5; skill stats moved to imported.claimed_*, local counters
+# reset. skills/*.md and personas/*.md never land live — quarantined to
+# imports/polymarket-starter/. Same-name/different-content vs. a local file: local
+# wins, noted in imports/<label>/CONFLICTS.md.
+
+maro-pack adopt polymarket-starter --all
+# or name specific items: maro-pack adopt polymarket-starter edge-scan.md
+```
+
+`import` refuses unsealed packs by default (`--allow-unreviewed` is the
+escape hatch for self-to-self transfers) and refuses newer pack formats
+outright rather than best-effort a format it doesn't understand on
+trust-bearing data. `adopt` never overwrites an existing live file of the
+same name and stamps a provenance header into the adopted file's
+frontmatter.
 
 ## Not yet built
 
-- `maro-pack import/adopt` — the receiving half of the curated-learning
-  sharing lifecycle (trust demotion per §3's arrival-trust table, format
-  version check, quarantine → adopt). See `docs/PORTABLE_LEARNING_DESIGN.md`
-  §3, §7 chunk 4.
 - Signing/identity, richer identifier scrub, imported-skill A/B before
-  adoption — explicitly deferred post-1.0 (§7.5 of the design doc).
+  adoption, confirmation-sharing semantics, opt-in hive-mind — explicitly
+  deferred post-1.0 (§7.5 of the design doc).

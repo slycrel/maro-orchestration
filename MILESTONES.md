@@ -537,9 +537,62 @@ Truth anchor: GOAL_BRAIN.md Threads. History: docs/history/ROADMAP_ARCHIVE.md.
       inclusion, secret + identifier scrubbing, sha256 integrity, seal
       confirm/refuse/tamper-detection plumbing, CLI export→seal→inspect
       round trip). `docs/INDEX.md` + `docs/MIGRATION.md` updated. Full
-      suite green. Chunk 4 (`maro-pack import`/`adopt` — the receiving
-      half: format check, trust demotion per §3's arrival-trust table,
-      collision rules, quarantine + adopt) is next.
+      suite green.
+      **Chunk 4 — `maro-pack import` + `adopt` — SHIPPED 2026-07-13
+      (Sonnet). Closes the loop — minimum 1.0 slice (chunks 1–4) complete.**
+      Extended `src/pack.py` (no new module, same CLI surface). `import`
+      gates hard before touching anything: refuses a newer `pack_format`
+      than this install supports outright (never best-effort a format it
+      doesn't understand on trust-bearing data, §6), refuses an unsealed
+      pack unless `--allow-unreviewed` (the self-to-self-transfer escape
+      hatch), and refuses if the archived `REVIEW.md` no longer hashes to
+      the sealed `review_manifest_sha256` — chunk 3's seal-time hash is
+      what makes this tamper check possible. Trust demotion per §3's
+      arrival-trust table, applied per artifact class: standing rules
+      demote to `Hypothesis` with `confirmations`/`contradictions` reset to
+      0 and `source_lesson_ids=["imported:<pack>/<rule_id>"]` (exact-string
+      rule content already known locally is skipped, not double-counted);
+      already-hypothesis rows get the same reset — contested-by-birth
+      applies uniformly, not just to the rules-demotion path; lessons
+      always land in MEDIUM tier regardless of origin tier, score capped
+      at 0.5, `sessions_validated=0`, and critically `last_reinforced` is
+      stamped to *import* time not preserved from the origin — decay math
+      (`knowledge_web._days_since`) reads `last_reinforced`, so this is the
+      one field that actually implements "a 3-month-old import isn't born
+      half-decayed" rather than just asserting it in prose; skill records
+      import with stats moved to `imported.claimed_use_count` /
+      `claimed_success_rate`, local counters reset to 0/1.0/closed-circuit,
+      content-hash-identical rows skipped via the existing Phase-14
+      `content_hash` machinery (no new dedup logic needed — reused as-is).
+      Skills/personas (`.md`) never land live, full stop: always
+      quarantined to `imports/<label>/`; a same-name/different-content
+      collision leaves the local file untouched and appends a note to
+      `imports/<label>/CONFLICTS.md` (local always wins — adoption is
+      editorial, not automatic, same posture as `maro-import`). Classes
+      chunk 3 produces but chunk 4 doesn't merge into a live trust-bearing
+      store (`knowledge_nodes`/`knowledge_edges`/`playbook`/`run_artifact`)
+      quarantine to their natural workspace-relative path — kept distinct
+      from genuinely *unrecognized* classes (the §6 forward-compat seam for
+      future additive `pack_format` growth), which quarantine under
+      `imports/<label>/unknown/` instead. `adopt <label> [items... | --all]`
+      copies from quarantine into the live workspace with a provenance
+      header (`imported_from`/`adopted_at`) stamped into the file's
+      frontmatter, never overwrites an existing live file of the same
+      name, and records an audit row. Both `import` and `adopt` append to
+      the same `memory/imports.jsonl` ledger `maro-import` already uses
+      (distinguished by an `action` field: `pack_import` vs. `adopt`) —
+      one audit trail for all provenance-changing operations, not a second
+      ledger to remember. `--dry-run` on both, matching `maro-import`'s
+      convention. No new config defaults (nothing here is a tunable knob).
+      41 new tests (`tests/test_pack.py` — `TestImportPack` covers every
+      row of the arrival-trust table plus the three refusal gates plus
+      collision/quarantine/dry-run/audit-row behavior; `TestAdopt` covers
+      named/stem/`--all` adoption, never-overwrite, missing-label/missing-
+      item refusal, dry-run, audit row; a CLI round-trip test drives
+      export→seal→import→adopt entirely through `main()`). Full suite
+      green. `docs/MIGRATION.md`'s pack section and `docs/INDEX.md` updated
+      to reflect the closed loop. Design doc §7's "recommend all four" is
+      now the shipped state, not a recommendation.
    8. Opportunistic riders: time-blindness first slice + perspective
       end-user seat (BACKLOG Vision vehicles, sized 2026-07-12).
    9. **Verify→learn arc V1–V5** (`docs/VERIFY_LEARN_ARC.md`) — post-1.0 by

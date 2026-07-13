@@ -1,9 +1,9 @@
-"""maro-pack — produce and seal curated, human-reviewed "learning packs".
+"""maro-pack — produce, seal, and adopt curated, human-reviewed "learning packs".
 
-Implements the export/seal half of docs/PORTABLE_LEARNING_DESIGN.md (§7
-chunk 3 — "sharing is produce-only after this chunk"; import/adopt is
-chunk 4, a separate tool surface by design: `maro-import` stays trust-neutral
-machine-migration, `maro-pack` owns the trust-demoting curated lifecycle).
+Implements docs/PORTABLE_LEARNING_DESIGN.md §7 chunks 3+4 in full: export,
+seal, import, and adopt. `maro-import` stays trust-neutral machine-migration;
+`maro-pack` owns the trust-demoting curated lifecycle — two tools because
+they answer different trust questions (§7 decision).
 
 A pack = Class C (compiled truth: standing rules, hypotheses, long-tier
 lessons, skill records) + Class A (authored artifacts: skills/*.md,
@@ -26,6 +26,24 @@ Export flow: export -> scrub -> human review -> seal.
     from the loose companion if present, so edits before sealing count)
     into pack.json and rewrites the archive. Refuses without an explicit
     confirmation (interactive prompt or ``--yes``).
+
+Import flow: import (trust demotion) -> adopt (explicit promotion).
+
+  * ``import`` refuses unsealed packs (``--allow-unreviewed`` is the escape
+    hatch for self-to-self transfers) and newer pack formats outright — never
+    best-effort a format we don't understand on trust-bearing data (§6).
+    Standing rules demote to ``Hypothesis`` with confirmations/contradictions
+    reset to 0; lessons enter MEDIUM tier with score capped at 0.5 and
+    ``sessions_validated=0``; skill stats move to ``imported.claimed_*``,
+    local counters start fresh — imports are *contested-by-birth* (§3),
+    exactly like a locally-observed pattern, and earn trust the same way.
+    Content-hash-identical rows are skipped, not double-counted. Skills/
+    personas (.md) never land live — always quarantined to
+    ``imports/<label>/``; a same-name/different-content collision leaves
+    local untouched and notes it in ``imports/<label>/CONFLICTS.md``.
+  * ``adopt`` promotes quarantined skills/personas into the live workspace,
+    stamping a provenance header into the frontmatter. Never overwrites an
+    existing live file of the same name.
 
 Honesty framing (preserve verbatim in any UI/CLI copy — design doc §4): the
 sharing guarantee is mechanical scrub for secret-shaped strings + mechanical
@@ -81,6 +99,14 @@ def _maro_version() -> str:
 
 def _sha256_text(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _sha256_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
 
 def _resolve_workspace(workspace: Optional[Path]) -> Path:
@@ -384,6 +410,493 @@ def seal_pack(pack_path: Path, *, confirmed: bool) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Import — trust demotion per design doc §3 ("imports are contested-by-birth")
+# ---------------------------------------------------------------------------
+
+# Classes chunk 3 deliberately produces but chunk 4 does not merge into live
+# trust-bearing stores — always quarantine, preserving their natural
+# workspace-relative path. Distinct from *unrecognized* classes (below),
+# which is the §6 forward-compat seam for future additive pack_format growth.
+_QUARANTINE_ONLY_CLASSES = {"knowledge_nodes", "knowledge_edges", "playbook", "run_artifact"}
+
+
+def _upgrade_manifest(manifest: Dict[str, Any]) -> Dict[str, Any]:
+    """Apply per-version upgrade shims for older packs (design doc §6).
+
+    No-op today — pack_format has only ever been 1. Wire the chain here
+    (``_upgrade_1_to_2(manifest)`` etc.) the day format 2 ships.
+    """
+    return manifest
+
+
+def _artifact_relpath(artifact: Dict[str, Any]) -> str:
+    p = artifact.get("path", "")
+    return p[len("artifacts/"):] if p.startswith("artifacts/") else p
+
+
+def _import_rules_as_hypotheses(content: str, *, pack_name: str, label: str, pack_tag: str,
+                                 now: str, dry_run: bool) -> List[Dict[str, Any]]:
+    """Standing rules demote to Hypothesis on arrival (§3 arrival-trust table)."""
+    from knowledge_lens import Hypothesis, load_hypotheses, load_standing_rules, _hypotheses_path
+    from file_lock import locked_append
+
+    existing_hyp_ids = {h.hyp_id for h in load_hypotheses()}
+    existing_texts = {h.lesson for h in load_hypotheses()} | {r.rule for r in load_standing_rules()}
+    results: List[Dict[str, Any]] = []
+    for line in content.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        original_id = row.get("rule_id", "")
+        rule_text = row.get("rule", "")
+        hyp_id = f"imported-{pack_name}-{original_id}"
+        if hyp_id in existing_hyp_ids:
+            results.append({"rule_id": original_id, "outcome": "already_imported"})
+            continue
+        if rule_text and rule_text in existing_texts:
+            results.append({"rule_id": original_id, "outcome": "skipped_identical"})
+            continue
+        hyp = Hypothesis(
+            hyp_id=hyp_id,
+            lesson=rule_text,
+            domain=row.get("domain", ""),
+            confirmations=0,
+            contradictions=0,
+            source_lesson_ids=[f"imported:{pack_name}/{original_id}"],
+            first_seen=now,
+            last_seen=now,
+            imported={
+                "imported_from": label, "pack": pack_tag,
+                "original_id": original_id, "original_class": "rules",
+                "original_confirmations": row.get("confirmations"),
+                "original_contradictions": row.get("contradictions"),
+                "imported_at": now,
+            },
+        )
+        if not dry_run:
+            locked_append(_hypotheses_path(), json.dumps(hyp.to_dict()))
+        existing_hyp_ids.add(hyp_id)
+        results.append({"rule_id": original_id, "hyp_id": hyp_id, "outcome": "demoted_to_hypothesis"})
+    return results
+
+
+def _import_hypotheses(content: str, *, pack_name: str, label: str, pack_tag: str,
+                        now: str, dry_run: bool) -> List[Dict[str, Any]]:
+    """Already-hypothesis rows still reset trust on arrival — contested-by-birth
+    applies uniformly, not just to the rules-demotion path."""
+    from knowledge_lens import Hypothesis, load_hypotheses, load_standing_rules, _hypotheses_path
+    from file_lock import locked_append
+
+    existing_hyp_ids = {h.hyp_id for h in load_hypotheses()}
+    existing_texts = {h.lesson for h in load_hypotheses()} | {r.rule for r in load_standing_rules()}
+    results: List[Dict[str, Any]] = []
+    for line in content.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        original_id = row.get("hyp_id", "")
+        lesson_text = row.get("lesson", "")
+        hyp_id = f"imported-{pack_name}-{original_id}"
+        if hyp_id in existing_hyp_ids:
+            results.append({"hyp_id": original_id, "outcome": "already_imported"})
+            continue
+        if lesson_text and lesson_text in existing_texts:
+            results.append({"hyp_id": original_id, "outcome": "skipped_identical"})
+            continue
+        hyp = Hypothesis(
+            hyp_id=hyp_id,
+            lesson=lesson_text,
+            domain=row.get("domain", ""),
+            confirmations=0,
+            contradictions=0,
+            source_lesson_ids=[f"imported:{pack_name}/{original_id}"],
+            first_seen=now,
+            last_seen=now,
+            imported={
+                "imported_from": label, "pack": pack_tag,
+                "original_id": original_id, "original_class": "hypotheses",
+                "original_confirmations": row.get("confirmations"),
+                "original_contradictions": row.get("contradictions"),
+                "imported_at": now,
+            },
+        )
+        if not dry_run:
+            locked_append(_hypotheses_path(), json.dumps(hyp.to_dict()))
+        existing_hyp_ids.add(hyp_id)
+        results.append({"hyp_id": original_id, "new_hyp_id": hyp_id, "outcome": "imported"})
+    return results
+
+
+def _import_lessons(content: str, *, pack_name: str, label: str, pack_tag: str,
+                     now: str, dry_run: bool) -> List[Dict[str, Any]]:
+    """Lessons enter MEDIUM tier regardless of origin tier, score capped at 0.5
+    (§3 arrival-trust table). Unreinforced, they self-compost under GC decay —
+    the border demotes, decay-trust-never-data does the rest."""
+    from knowledge_web import TieredLesson, MemoryTier, load_tiered_lessons, _append_tiered_lesson
+
+    existing = (load_tiered_lessons(tier=MemoryTier.MEDIUM, limit=None, raw=True)
+                + load_tiered_lessons(tier=MemoryTier.LONG, limit=None, raw=True))
+    existing_ids = {l.lesson_id for l in existing}
+    existing_texts = {l.lesson for l in existing}
+    results: List[Dict[str, Any]] = []
+    for line in content.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        original_id = row.get("lesson_id", "")
+        lesson_text = row.get("lesson", "")
+        new_id = f"imported-{pack_name}-{original_id}"
+        if new_id in existing_ids:
+            results.append({"lesson_id": original_id, "outcome": "already_imported"})
+            continue
+        if lesson_text and lesson_text in existing_texts:
+            results.append({"lesson_id": original_id, "outcome": "skipped_identical"})
+            continue
+        original_score = float(row.get("score", 1.0))
+        tl = TieredLesson(
+            lesson_id=new_id,
+            task_type=row.get("task_type", ""),
+            outcome=row.get("outcome", ""),
+            lesson=lesson_text,
+            source_goal=row.get("source_goal", ""),
+            confidence=row.get("confidence", 0.5),
+            tier=MemoryTier.MEDIUM,
+            score=min(original_score, 0.5),
+            # Transaction time: decay math (knowledge_web._days_since) reads
+            # last_reinforced, so this is what stops a 3-month-old import from
+            # arriving half-decayed — it gets a fair local hearing starting now.
+            last_reinforced=now[:10],
+            sessions_validated=0,
+            times_applied=0,
+            times_reinforced=0,
+            recorded_at=now,
+            evidence_sources=row.get("evidence_sources", []),
+            lesson_type=row.get("lesson_type", "") if row.get("lesson_type") in
+            {"execution", "planning", "recovery", "verification", "cost"} else "",
+            imported={
+                "imported_from": label, "pack": pack_tag,
+                "original_id": original_id, "original_tier": row.get("tier", ""),
+                "original_trust": original_score, "imported_at": now,
+            },
+        )
+        if not dry_run:
+            _append_tiered_lesson(tl, tier=MemoryTier.MEDIUM)
+        existing_ids.add(new_id)
+        results.append({"lesson_id": original_id, "new_id": new_id, "outcome": "imported_medium"})
+    return results
+
+
+def _import_skill_records(content: str, *, pack_name: str, label: str, pack_tag: str,
+                           now: str, dry_run: bool) -> List[Dict[str, Any]]:
+    """Skill records import with stats moved to imported.claimed_*; local
+    counters start fresh (§3 arrival-trust table)."""
+    from skills import load_skills, save_skill
+    from skill_types import Skill, compute_skill_hash
+
+    existing = load_skills()
+    existing_ids = {s.id for s in existing}
+    existing_hashes = {s.content_hash for s in existing if s.content_hash}
+    results: List[Dict[str, Any]] = []
+    for line in content.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        original_id = row.get("id", "")
+        new_id = f"imported-{pack_name}-{original_id}"
+        if new_id in existing_ids:
+            results.append({"id": original_id, "outcome": "already_imported"})
+            continue
+        sk = Skill(
+            id=new_id,
+            name=row.get("name", ""),
+            description=row.get("description", ""),
+            trigger_patterns=row.get("trigger_patterns", []),
+            steps_template=row.get("steps_template", []),
+            source_loop_ids=row.get("source_loop_ids", []),
+            created_at=now,
+            use_count=0,
+            success_rate=1.0,
+            tier=row.get("tier", "provisional"),
+            utility_score=1.0,
+            consecutive_failures=0,
+            consecutive_successes=0,
+            circuit_state="closed",
+            optimization_objective=row.get("optimization_objective", ""),
+            island=row.get("island", ""),
+            project=row.get("project", ""),
+            imported={
+                "imported_from": label, "pack": pack_tag,
+                "original_id": original_id,
+                "claimed_use_count": row.get("use_count", 0),
+                "claimed_success_rate": row.get("success_rate", 1.0),
+                "imported_at": now,
+            },
+        )
+        if compute_skill_hash(sk) in existing_hashes:
+            results.append({"id": original_id, "outcome": "skipped_identical"})
+            continue
+        if not dry_run:
+            save_skill(sk)
+        existing_ids.add(new_id)
+        results.append({"id": original_id, "new_id": new_id, "outcome": "imported"})
+    return results
+
+
+def _quarantine_dir(ws: Path, label: str) -> Path:
+    return ws / "imports" / label
+
+
+def _append_conflicts_note(ws: Path, label: str, kind: str, name: str, now: str) -> None:
+    path = _quarantine_dir(ws, label) / "CONFLICTS.md"
+    line = f"- `{kind}/{name}` — local version differs; import kept in quarantine, local wins ({now})"
+    if path.exists():
+        if line in path.read_text(encoding="utf-8"):
+            return
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    else:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        header = (
+            f"# Conflicts — {label}\n\n"
+            "Same-name, different-content collisions between this pack's skills/"
+            "personas and local ones. Local always wins; these stay in quarantine "
+            "— adopt is editorial, not automatic.\n\n"
+        )
+        path.write_text(header + line + "\n", encoding="utf-8")
+
+
+def _import_authored_md(ws: Path, kind: str, relpath: str, content: str, *,
+                         label: str, now: str, dry_run: bool) -> Dict[str, Any]:
+    """Class A (.md) never lands live — always quarantine (§3). Same-name/
+    different-content vs. a local file: local wins, note it in CONFLICTS.md."""
+    name = Path(relpath).name
+    live_path = ws / kind / name
+    quarantine_path = _quarantine_dir(ws, label) / kind / name
+
+    if live_path.exists():
+        if live_path.read_text(encoding="utf-8") == content:
+            return {"name": name, "outcome": "skipped_identical"}
+        if not dry_run:
+            quarantine_path.parent.mkdir(parents=True, exist_ok=True)
+            quarantine_path.write_text(content, encoding="utf-8")
+            _append_conflicts_note(ws, label, kind, name, now)
+        return {"name": name, "outcome": "conflict_quarantined"}
+
+    if quarantine_path.exists() and quarantine_path.read_text(encoding="utf-8") == content:
+        return {"name": name, "outcome": "already_quarantined"}
+
+    if not dry_run:
+        quarantine_path.parent.mkdir(parents=True, exist_ok=True)
+        quarantine_path.write_text(content, encoding="utf-8")
+    return {"name": name, "outcome": "quarantined"}
+
+
+def _quarantine_single(ws: Path, label: str, relpath: str, content: str, dry_run: bool) -> Dict[str, Any]:
+    path = _quarantine_dir(ws, label) / relpath
+    if path.exists() and path.read_text(encoding="utf-8") == content:
+        return {"path": relpath, "outcome": "already_quarantined"}
+    if not dry_run:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+    return {"path": relpath, "outcome": "quarantined"}
+
+
+def import_pack(
+    pack_path: Path,
+    *,
+    label: str,
+    target: Optional[Path] = None,
+    allow_unreviewed: bool = False,
+    dry_run: bool = False,
+) -> Dict[str, Any]:
+    """Import a pack, demoting trust per §3's arrival-trust table.
+
+    Refuses unsealed packs by default (``allow_unreviewed=True`` is the
+    escape hatch for self-to-self transfers). Refuses newer pack formats
+    outright — never best-effort a format we don't understand on
+    trust-bearing data. Skills/personas always quarantine to
+    ``imports/<label>/``; adopting them into the live workspace is a
+    separate, explicit step (``adopt``).
+    """
+    pack_path = Path(pack_path)
+    if not pack_path.exists():
+        raise SystemExit(f"no such pack: {pack_path}")
+    ws = _resolve_workspace(target)
+
+    manifest = read_pack_manifest(pack_path)
+    fmt = manifest.get("pack_format", 1)
+    if fmt > PACK_FORMAT:
+        raise SystemExit(f"pack format {fmt} > supported {PACK_FORMAT} — upgrade maro")
+    manifest = _upgrade_manifest(manifest)
+
+    review = manifest.get("review", {}) or {}
+    if not review.get("human_reviewed") and not allow_unreviewed:
+        raise SystemExit(
+            "import refused: pack is not sealed (review.human_reviewed=false) — "
+            "read REVIEW.md and run `maro-pack seal`, or pass --allow-unreviewed "
+            "for a self-to-self transfer"
+        )
+
+    with tarfile.open(pack_path, "r:gz") as tar:
+        archived_review = tar.extractfile("REVIEW.md").read().decode("utf-8")
+        artifact_bytes = {
+            a["path"]: tar.extractfile(a["path"]).read().decode("utf-8")
+            for a in manifest.get("artifacts", [])
+        }
+
+    expected_hash = review.get("review_manifest_sha256")
+    if expected_hash and _sha256_text(archived_review) != expected_hash:
+        raise SystemExit(
+            "import refused: REVIEW.md in the archive does not match the sealed "
+            "hash — possible post-seal tampering"
+        )
+
+    pack_name = manifest.get("name", pack_path.stem)
+    pack_tag = f"{pack_name}@{_sha256_file(pack_path)[:8]}"
+    now = _now_iso()
+
+    report: Dict[str, Any] = {
+        "pack": pack_name, "pack_tag": pack_tag, "label": label,
+        "imported_at": now, "dry_run": dry_run,
+        "rules_demoted_to_hypotheses": [], "hypotheses_imported": [],
+        "lessons_imported": [], "skill_records_imported": [],
+        "skills_md": [], "personas_md": [],
+        "quarantined": [], "quarantined_unknown": [],
+    }
+
+    for artifact in manifest.get("artifacts", []):
+        cls = artifact.get("class", "")
+        relpath = _artifact_relpath(artifact)
+        content = artifact_bytes.get(artifact.get("path", ""), "")
+        if cls == "rules":
+            report["rules_demoted_to_hypotheses"].extend(_import_rules_as_hypotheses(
+                content, pack_name=pack_name, label=label, pack_tag=pack_tag, now=now, dry_run=dry_run))
+        elif cls == "hypotheses":
+            report["hypotheses_imported"].extend(_import_hypotheses(
+                content, pack_name=pack_name, label=label, pack_tag=pack_tag, now=now, dry_run=dry_run))
+        elif cls in ("lessons", "lessons_medium"):
+            report["lessons_imported"].extend(_import_lessons(
+                content, pack_name=pack_name, label=label, pack_tag=pack_tag, now=now, dry_run=dry_run))
+        elif cls == "skill_records":
+            report["skill_records_imported"].extend(_import_skill_records(
+                content, pack_name=pack_name, label=label, pack_tag=pack_tag, now=now, dry_run=dry_run))
+        elif cls == "skill_md":
+            report["skills_md"].append(_import_authored_md(
+                ws, "skills", relpath, content, label=label, now=now, dry_run=dry_run))
+        elif cls == "persona_md":
+            report["personas_md"].append(_import_authored_md(
+                ws, "personas", relpath, content, label=label, now=now, dry_run=dry_run))
+        elif cls in _QUARANTINE_ONLY_CLASSES:
+            report["quarantined"].append({
+                "class": cls, **_quarantine_single(ws, label, relpath, content, dry_run)})
+        else:
+            report["quarantined_unknown"].append({
+                "class": cls, **_quarantine_single(ws, label, f"unknown/{relpath}", content, dry_run)})
+
+    if not dry_run:
+        from file_lock import locked_append
+        audit = ws / "memory" / "imports.jsonl"
+        audit.parent.mkdir(parents=True, exist_ok=True)
+        locked_append(audit, json.dumps({**report, "action": "pack_import"}))
+
+    return report
+
+
+# ---------------------------------------------------------------------------
+# Adopt — the explicit gate from quarantine to live (§3 "Adoption")
+# ---------------------------------------------------------------------------
+
+def _stamp_provenance_frontmatter(content: str, *, label: str, now: str) -> str:
+    provenance = f"imported_from: {label}\nadopted_at: {now}"
+    if content.startswith("---\n"):
+        end = content.find("\n---", 4)
+        if end != -1:
+            return f"{content[:end]}\n{provenance}{content[end:]}"
+    return f"---\n{provenance}\n---\n{content}"
+
+
+def adopt(
+    label: str,
+    *,
+    items: Optional[List[str]] = None,
+    all_items: bool = False,
+    target: Optional[Path] = None,
+    dry_run: bool = False,
+) -> Dict[str, Any]:
+    """Promote quarantined skills/personas into the live workspace.
+
+    Never overwrites a live file of the same name — that case was already
+    flagged as a conflict at import time (local wins, stays in quarantine).
+    """
+    ws = _resolve_workspace(target)
+    quarantine_dir = _quarantine_dir(ws, label)
+    if not quarantine_dir.is_dir():
+        raise SystemExit(f"no quarantined imports for label {label!r} under {quarantine_dir}")
+
+    candidates: List[tuple] = []
+    for kind in ("skills", "personas"):
+        d = quarantine_dir / kind
+        if d.is_dir():
+            for f in sorted(d.glob("*.md")):
+                candidates.append((kind, f.name, f))
+
+    if all_items:
+        selected = candidates
+    else:
+        names = set(items or [])
+        if not names:
+            raise SystemExit("adopt: specify skill/persona names, or pass --all")
+        selected = []
+        found = set()
+        for kind, name, path in candidates:
+            stem = Path(name).stem
+            if name in names or stem in names:
+                selected.append((kind, name, path))
+                found.add(name if name in names else stem)
+        missing = names - found
+        if missing:
+            raise SystemExit(f"adopt: not found in {quarantine_dir}: {sorted(missing)}")
+
+    now = _now_iso()
+    adopted: List[Dict[str, Any]] = []
+    skipped: List[Dict[str, Any]] = []
+    for kind, name, src_path in selected:
+        dest = ws / kind / name
+        if dest.exists():
+            skipped.append({"kind": kind, "name": name, "reason": "already exists locally"})
+            continue
+        stamped = _stamp_provenance_frontmatter(src_path.read_text(encoding="utf-8"), label=label, now=now)
+        if not dry_run:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text(stamped, encoding="utf-8")
+        adopted.append({"kind": kind, "name": name})
+
+    report = {"label": label, "adopted": adopted, "skipped": skipped, "adopted_at": now, "dry_run": dry_run}
+    if not dry_run and adopted:
+        from file_lock import locked_append
+        audit = ws / "memory" / "imports.jsonl"
+        audit.parent.mkdir(parents=True, exist_ok=True)
+        locked_append(audit, json.dumps({**report, "action": "adopt"}))
+    return report
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -424,6 +937,20 @@ def main(argv=None) -> int:
     insp = sub.add_parser("inspect", help="print a pack's manifest")
     insp.add_argument("pack", type=Path)
 
+    imp = sub.add_parser("import", help="import a sealed pack (trust demotion, quarantine)")
+    imp.add_argument("pack", type=Path)
+    imp.add_argument("--label", required=True, help="provenance label for this import")
+    imp.add_argument("--target", type=Path, default=None, help="target workspace (default: this machine's active workspace)")
+    imp.add_argument("--allow-unreviewed", action="store_true", help="import an unsealed pack (self-to-self transfers only)")
+    imp.add_argument("--dry-run", action="store_true", help="report what would be imported without writing")
+
+    adopt_p = sub.add_parser("adopt", help="promote quarantined skills/personas into the live workspace")
+    adopt_p.add_argument("label")
+    adopt_p.add_argument("items", nargs="*", help="skill/persona filenames to adopt, e.g. foo.md")
+    adopt_p.add_argument("--all", action="store_true", dest="all_items", help="adopt everything quarantined under this label")
+    adopt_p.add_argument("--target", type=Path, default=None)
+    adopt_p.add_argument("--dry-run", action="store_true")
+
     args = ap.parse_args(argv)
 
     if args.command == "export":
@@ -450,6 +977,24 @@ def main(argv=None) -> int:
     if args.command == "inspect":
         manifest = read_pack_manifest(args.pack)
         json.dump(manifest, sys.stdout, indent=2)
+        print()
+        return 0
+
+    if args.command == "import":
+        report = import_pack(
+            args.pack, label=args.label, target=args.target,
+            allow_unreviewed=args.allow_unreviewed, dry_run=args.dry_run,
+        )
+        json.dump(report, sys.stdout, indent=2)
+        print()
+        return 0
+
+    if args.command == "adopt":
+        report = adopt(
+            args.label, items=args.items, all_items=args.all_items,
+            target=args.target, dry_run=args.dry_run,
+        )
+        json.dump(report, sys.stdout, indent=2)
         print()
         return 0
 
