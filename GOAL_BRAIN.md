@@ -2350,3 +2350,32 @@ Dormant (deliberately parked, not dropped):
   in the (dormant, off-by-default) seam it will inherit, now fixed. No
   further action; `adaptive_execution` stays dormant per its own decree,
   un-gating it is a separate, already-tracked non-goal.
+
+- **2026-07-13 (knowledge-web read side trace — premise wrong, re-scoped
+  in BACKLOG, NOT built)** — BACKLOG carried "write side + 2124 edges
+  exist; read side has zero callers" as the whole gap. Traced the real
+  `~/.maro/workspace/memory/knowledge_{nodes,edges}.jsonl` data before
+  writing any read-side code, per Jeremy's own stated uncertainty ("I
+  think it could be really powerful if done well (and right now sounds
+  like it isn't)"). Found the premise itself was wrong: all 2124 edges
+  connect only `lf-` (link-farm import) nodes to other `lf-` nodes —
+  exhaustively checked, 0 edges touch any of the 252 real, system-authored
+  orchestration nodes (insight/pattern/principle/technique/tool).
+  `build_wiki_link_edges` (the only code that could have produced these)
+  has zero production callers, and zero of the 252 real nodes' descriptions
+  contain the `[[wiki-link]]` markup it would need to traverse anyway — so
+  the mechanism is dead on both the side that produced the real 2124 edges
+  (some other unwired import process) and the side that would need edges
+  for the read side to matter. Wiring `load_knowledge_edges` into
+  `inject_knowledge_for_goal` as originally conceived would either do
+  nothing (scoped to real nodes — no edges to walk) or inject arbitrary
+  link-farm co-occurrence pairs as if meaningfully related (scoped to all
+  nodes) — noise, not the "Correspondence"/adjacent-knowledge payoff.
+  **Disposition: NOT built.** Full evidence + ordered fix direction (decide
+  whether link-farm content should ever inform live goal execution; if
+  adjacent-knowledge retrieval over the real base is still wanted, an
+  LLM-assisted node-relation pass at crystallization time is the realistic
+  edge-generation mechanism, not manual wiki-links) now in BACKLOG.md under
+  the same item. This is a design decision about what the graph should
+  encode, not an engineering task — correctly re-scoped rather than
+  improvised past Jeremy's own flagged doubt.

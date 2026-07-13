@@ -979,13 +979,63 @@ coordination brain is for. Still post-1.0; still direction, not design.
   inject decision was already made on the 2026-04-22 evidence and shipped
   (SF-4 flip). Spend acknowledged, not silently forgotten; data stays on
   disk per the retention decree if a future analysis wants it.
-- [ ] **Knowledge-web read side: wire it properly (post-1.0, KEEP).**
-  Descoped from 1.0 docs (node store + BM25 is the honest claim) but
-  explicitly kept: "I'd like to keep it on the list. I think it could be
-  really powerful if done well (and right now sounds like it isn't)."
-  The write side + 2124 edges exist; the read side
-  (load_knowledge_edges) has zero callers. Adjacent-knowledge retrieval
-  ("Correspondence" in the Mage sense) is the payoff if done well.
+- [ ] **Knowledge-web read side: wire it properly (post-1.0, KEEP) — TRACED
+  2026-07-13, premise was wrong, real prerequisite work identified before
+  any read-side code can pay off.** Descoped from 1.0 docs (node store +
+  BM25 is the honest claim) but explicitly kept: "I'd like to keep it on
+  the list. I think it could be really powerful if done well (and right
+  now sounds like it isn't)." That instinct was correct — traced the real
+  `~/.maro/workspace/memory/knowledge_{nodes,edges}.jsonl` data before
+  writing any code, and the backlog's own framing ("write side + 2124
+  edges exist; read side has zero callers") undersold the actual gap:
+
+  - **All 2124 edges connect only `lf-` (link-farm import) nodes to other
+    `lf-` nodes — zero edges touch the 252 real, system-authored
+    orchestration nodes** (insight/pattern/principle/technique/tool). Not
+    a sampling artifact — checked exhaustively: 2124 both-lf, 0 both-real,
+    0 mixed. `build_wiki_link_edges` (the only code that could produce a
+    `related` edge with two node-id endpoints) has **zero production
+    callers** — these edges came from whatever process bulk-imported the
+    link-farm content, not from anything in `src/`.
+  - **Zero of the 252 real nodes' descriptions contain `[[wiki-link]]`
+    markup** — checked every one. `build_wiki_link_edges` would produce
+    zero edges even if run against them today; nobody authors nodes with
+    that convention, so the mechanism the read side was meant to traverse
+    is dead on the write side that actually matters.
+  - Net effect: wiring `load_knowledge_edges` into
+    `inject_knowledge_for_goal` as originally conceived (walk a matched
+    node's edges, inject adjacent nodes) would do **nothing** for a real
+    goal (the orchestration knowledge that matters has no edges to walk),
+    or — if scoped to all nodes including `lf-` — would inject arbitrary
+    link-farm co-occurrence pairs (e.g. a financial candlestick model
+    linked to a genome-sequencing tweet linked to an open-source research
+    agent, weight uniformly 0.5, "related" for everything) into goal
+    context as if they were meaningfully connected. That's noise, not the
+    "Correspondence" payoff — exactly what Jeremy's instinct flagged.
+  - **Separate, smaller pre-existing note (not this item's blocker, just
+    surfaced by the same trace):** `inject_knowledge_for_goal`'s existing
+    TF-IDF node query (`domain=None` from `recall.py`) already ranks
+    `lf-` link-farm nodes in the same domains as real orchestration
+    insights (`orchestration`, `tooling`, etc.) — a goal could already be
+    injected raw curated-tweet content today if it scores well, independent
+    of edges. Not investigated further; flagging so it isn't
+    re-discovered as a surprise later.
+
+  **Fix direction, in order:** (1) decide whether `lf-` link-farm nodes
+  should ever inform live goal execution at all, or should be a
+  read-only reference corpus queried separately (a domain/tag exclusion
+  in `query_knowledge` is a 2-line fix once decided); (2) if adjacent-
+  knowledge retrieval over the *real* knowledge base is still wanted, build
+  an actual edge-generation mechanism for it — since manual `[[wiki-link]]`
+  authoring isn't a convention anyone follows, the realistic option is an
+  LLM-assisted "does this new node relate to an existing one" pass at
+  node-creation/crystallization time (same shape as the skill_candidate
+  catch-up sweep shipped this session), not the existing regex-only
+  `build_wiki_link_edges`; (3) only then does wiring `load_knowledge_edges`
+  into injection have real signal to traverse. Left as `[ ]` — this is a
+  design decision (what should the graph even encode) before it's an
+  engineering task, not something to improvise past Jeremy's own stated
+  uncertainty about doing it well.
 
 ### Graph memory + recursive-orchestration scoped memory (2026-06-21, vision)
 
