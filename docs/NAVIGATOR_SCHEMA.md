@@ -124,7 +124,8 @@ prompt (step 5) has to emit it reliably and the parser has to be boring:
   "move": "execute",
   "reasoning": "one short paragraph — why this move, why now",
   "confidence": 0.8,
-  "payload": { ...move-specific, see below... }
+  "payload": { ...move-specific, see below... },
+  "planning_depth": "plan"
 }
 ```
 
@@ -134,6 +135,14 @@ prompt (step 5) has to emit it reliably and the parser has to be boring:
 - `confidence` ∈ [0,1]. Low confidence is *not* idunno — it's a decision made under
   uncertainty, and the calibration signal we'll want later (decisions at 0.4 that
   keep working out = a tier that's better than it thinks; the reverse = drift).
+- `planning_depth` (thread-arch #5, MILESTONES 1.5, added 2026-07-13) is a
+  **second, independent judgment riding the same envelope** — how much planning
+  this goal needs, not what to do next. One of `plan` (default) | `one-shot` |
+  `thin-plan` | `spawn-sub-goal`. Optional on the wire: absent, non-string, or
+  unrecognized values fail closed to `plan` at parse time — a malformed depth
+  guess must never block or retry the move decision, so it deliberately sits
+  outside `validate_decision`'s hard-fail contract. See "Planning-depth shadow"
+  below for the full mechanism.
 
 Per-move payload (required keys validated in code):
 
@@ -414,6 +423,88 @@ organic goals triggered an acting move.*
 Closure **decision class** (the other shadow point) stays shadow-only
 regardless — no live closure callsite exists yet.
 
+## Planning-depth shadow (wired 2026-07-13)
+
+Thread-arch #5 (MILESTONES 1.5), decided 2026-07-09 in GOAL_BRAIN Decisions
+("#5 planning-vs-Tesla-mode"). The design was fully decided before this
+chunk — three constraints, all held:
+
+1. **No new LLM call.** The judgment rides the *same* `decide()` call
+   `navigator.shadow_dispatch` already makes at live dispatch. One new
+   envelope field (`planning_depth`), not a second round-trip.
+2. **`plan` (the normal/full pipeline) is the default and the prior.**
+   The lighter shapes — `one-shot`, `thin-plan`, `spawn-sub-goal` — fire
+   only on positive evidence in the navigator's own judgment: concrete
+   deliverables/paths named in the goal, recall showing prior successful
+   same-family runs, NOW-shaped scope. This guidance lives in prompt text
+   (`navigator_prompt.PLANNING_DEPTH_ADDENDUM`), never as a Python
+   if/elif signal-scorer — inference, not taxonomy, same posture as every
+   other judgment call in this schema. `spawn-sub-goal` is a legal shape
+   by the 2026-07-09 recursion decree, not an enum afterthought: it must
+   never be dropped to shrink this set.
+3. **Shadow-first, config-gated off by default**, same shape as the
+   sibling dispatch/blocked-step flags.
+
+### Mechanics
+
+- **`navigator.shadow_planning_depth`** (config key, default `False`,
+  documented in `docs/DEFAULTS.md`). When true, `shadow_dispatch_live()`
+  passes `judge_planning_depth=True` into `decide()`, which appends
+  `PLANNING_DEPTH_ADDENDUM` to `SYSTEM_PROMPT` for that call only. Off =
+  byte-identical prompt to every other `decide()` caller (replay,
+  blocked-step shadow, historical replay) — nothing else in the codebase
+  ever sees the addendum.
+- **Dispatch-only, by design.** `shadow_blocked_step_live()` does **not**
+  judge planning depth — the decided design names the dispatch decide()
+  call specifically ("the navigator judges planning depth at the
+  existing dispatch decide() call"), and a mid-run recovery point isn't
+  the moment this question is being asked. Locked in by
+  `test_does_not_judge_planning_depth` in `tests/test_navigator_prompt.py`.
+- **`pipeline_actual.depth_equivalent`** is recorded as the constant
+  `"plan"` when the gate is on. Reasoning: `shadow_dispatch_live()` fires
+  *before* `handle()` picks a lane (NOW vs AGENDA) or a `skip_director`
+  shortcut; `skip_if_simple` is opt-in only via `telegram_listener.py`, so
+  the default autonomous AGENDA dispatch path this shadow taps is always
+  the moral equivalent of the full-plan pipeline today, regardless of
+  goal shape. This gives `analyze_planning_depth_agreement()` a real
+  baseline to diverge against without inventing pipeline instrumentation
+  this chunk didn't build.
+- **Parse-time fail-closed, not validate-time hard-fail.** `parse_decision()`
+  lowercases/strips `planning_depth` and coerces anything outside
+  `PLANNING_DEPTHS` (including absent/non-string) to `DEFAULT_PLANNING_DEPTH
+  = "plan"` — silently, no `DecisionParseError`. It is deliberately absent
+  from `validate_decision()`'s error list too: this is an advisory shadow
+  field, not core decision mechanics, and folding it into the hard-fail
+  contract would make a bad depth guess retry the *move* decision through
+  the idunno tier chain, which is disproportionate for a field nothing
+  acts on. Same posture as the budget-gate coercion precedent — fail
+  closed to the conservative default on malformed input, never raise.
+- **Instrumentation.** `planning_depth` rides every `NAVIGATOR_DECIDED`
+  context dict unconditionally (cheap, uniform schema, present even when
+  the gate is off — it just stays `"plan"` since the model was never asked
+  to say otherwise).
+
+### Agreement tooling
+
+`navigator_shadow.analyze_planning_depth_agreement(events)` mirrors
+`analyze_live_agreement()`'s shape: filters `NAVIGATOR_DECIDED` rows where
+`pipeline_actual.live` is set **and** `depth_equivalent` is present (i.e.
+the gate was actually on for that row — rows without a real judgment don't
+count), buckets by `planning_depth`, and returns per-depth agree/diverge
+counts plus the divergences verbatim for manual adjudication — the same
+shape dispatch-class cutover evidence was built from.
+
+`python3 -m navigator_shadow --agreement` now emits both tables: the
+existing move-agreement summary, plus a `planning_depth` section (JSON
+mode: `{"moves": ..., "planning_depth": ...}`; text mode: an appended
+"planning-depth shadow rows..." block with `by_depth` counts and
+divergence lines, printed only when there are live rows to show).
+
+No cutover in this chunk — shadow rides alongside the existing dispatch
+decision exactly like `navigator.shadow_dispatch` did before its own
+cutover discussion; the agreement table above is what a future session
+would adjudicate against before proposing one.
+
 ## Open ends carried forward
 
 - ~~**Per-thread goal-brain creation**~~ — done 2026-06-11: `src/thread_brain.py`;
@@ -435,3 +526,8 @@ regardless — no live closure callsite exists yet.
   per-class cutover discussion.
 - **Fork cap (8), confidence semantics** — made calls; revisit against
   NAVIGATOR_DECIDED data.
+- ~~**Planning-depth shadow (thread-arch #5)**~~ — done 2026-07-13: schema
+  field + prompt addendum + `shadow_dispatch_live()` wiring +
+  `analyze_planning_depth_agreement()` (section above), config-gated off
+  via `navigator.shadow_planning_depth`. Next: accumulate live rows, then
+  the same per-class cutover discussion the dispatch shadow went through.

@@ -104,6 +104,7 @@ C2 wires the actual wrap.
 | `navigator.act_moves` | `['escalate']` | Per-move allowlist once act is on: escalate-only first because a wrong escalate wastes tokens, a wrong close buries work. Add `'close'` only after organic close-agreement evidence. |
 | `navigator.act_confidence_floor` | `0.9` | Below this confidence the navigator defers to the legacy path even with act on. Lower = more navigator authority, more wrong-move risk. |
 | `navigator.tiers` | `DEFAULT_TIERS` (navigator_prompt.py) | Model ladder for live navigator calls. |
+| `navigator.shadow_planning_depth` | `False` | Planning-depth shadow (thread-arch #5, MILESTONES 1.5, decided 2026-07-09). Rides the SAME `decide()` call `navigator.shadow_dispatch` already makes at live dispatch — no extra model call, just a longer system prompt (the depth addendum) and one more envelope field (`planning_depth`: `plan` / `one-shot` / `thin-plan` / `spawn-sub-goal`). Off = byte-identical prompt to today. On = dispatch-only (deliberately not wired into `shadow_blocked_step_live`, per the decided design); records `pipeline_actual.depth_equivalent` (constant `"plan"` today, since the default autonomous dispatch pipeline is always the full-plan pipeline) for `analyze_planning_depth_agreement()` / `--agreement` to compare against. Decide-only, changes no real behavior — same ship-dark posture as the dispatch-class shadow above. |
 
 ## Lanes & execution
 

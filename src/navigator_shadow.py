@@ -22,9 +22,21 @@ Live decide-only taps (called from the running pipeline, config-gated off):
 Both emit NAVIGATOR_DECIDED rows with pipeline_actual.point set, so
 analyze_live_agreement() can break agreement down per decision point.
 
+Planning-depth shadow (thread-arch #5, MILESTONES 1.5, decided 2026-07-09
+GOAL_BRAIN Decisions): shadow_dispatch_live() ALSO judges planning depth —
+how much planning this goal needs (plan / one-shot / thin-plan /
+spawn-sub-goal) — in the SAME decide() call, gated independently by
+navigator.shadow_planning_depth (default off, docs/DEFAULTS.md). The
+pipeline's dispatch path is always the moral equivalent of "plan" (the
+normal full pipeline) regardless of goal shape, so pipeline_actual carries
+depth_equivalent="plan" only when this shadow is on; analyze_planning_
+depth_agreement() tabulates navigator-vs-pipeline agreement the same way
+analyze_live_agreement() does for the move field.
+
 CLI (dev tool, like maro-introspect):
     PYTHONPATH=src python3 -m navigator_shadow <handle-id>... \
         [--point dispatch|closure|both] [--tiers cheap,mid,power]
+    PYTHONPATH=src python3 -m navigator_shadow --agreement   # move + depth tables
 """
 from __future__ import annotations
 
@@ -265,6 +277,15 @@ def shadow_dispatch_live(
     (default OFF in code: a model call per dispatch is real spend and real
     latency, so a deployment opts in via workspace config — this box has).
     Never raises; never alters dispatch. Returns the decision or None.
+
+    Also the ONE callsite for the planning-depth shadow (thread-arch #5,
+    MILESTONES 1.5): when navigator.shadow_planning_depth is on (default
+    off), this same call also asks the navigator to judge planning depth —
+    no second LLM call, one more field in the same envelope — and records
+    pipeline_actual.depth_equivalent="plan" (the pipeline's dispatch path is
+    always the moral equivalent of the normal full pipeline, regardless of
+    goal shape) so analyze_planning_depth_agreement() has a baseline to
+    compare against.
     """
     try:
         from config import get as cfg_get
@@ -281,6 +302,9 @@ def shadow_dispatch_live(
             # synthesized escalate with escalated_via="idunno_chain" and is
             # distinguishable in analysis.
             tiers = list(cfg_get("navigator.shadow_tiers", ["cheap"]))
+        # Independent gate (default off): rides the SAME decide() call above,
+        # so enabling it costs no extra model call — only a longer prompt.
+        judge_depth = bool(cfg_get("navigator.shadow_planning_depth", False))
     except Exception:
         return None
 
@@ -328,6 +352,11 @@ def shadow_dispatch_live(
             "live": True,
             **(extra or {}),
         }
+        if judge_depth:
+            # Marker + baseline for analyze_planning_depth_agreement(): its
+            # presence means this row carries a real depth judgment (the
+            # model was asked), not just the dataclass's unjudged default.
+            pipeline_actual["depth_equivalent"] = "plan"
         from navigator_prompt import decide
         decision, _meta = decide(
             nav_input,
@@ -335,6 +364,7 @@ def shadow_dispatch_live(
             adapter_factory=adapter_factory,
             shadow=True,
             pipeline_actual=pipeline_actual,
+            judge_planning_depth=judge_depth,
         )
         return decision
     except Exception as exc:
@@ -499,6 +529,62 @@ def analyze_live_agreement(events: List[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
+def analyze_planning_depth_agreement(events: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Tabulate live NAVIGATOR_DECIDED rows carrying a planning-depth
+    judgment into per-depth agreement counts — the same shape as
+    analyze_live_agreement(), applied to the thread-arch #5 field (MILESTONES
+    1.5) instead of the move field, for the same per-class-cutover workflow
+    (docs/NAVIGATOR_SCHEMA.md).
+
+    Only rows where the shadow was actually on are counted: presence of
+    pipeline_actual.depth_equivalent is the marker (set by
+    shadow_dispatch_live() only when navigator.shadow_planning_depth is on) —
+    every other live row's planning_depth is an unjudged default, not data.
+
+    Agreement means navigator planning_depth == pipeline depth_equivalent.
+    The pipeline is always the moral equivalent of "plan" today (the normal
+    full pipeline, regardless of goal shape) — so every "plan" row agrees and
+    every lighter shape (one-shot / thin-plan / spawn-sub-goal) is a
+    divergence: the informative case, exactly like a move divergence,
+    returned verbatim for adjudication.
+    """
+    rows = []
+    for e in events:
+        if e.get("event_type") != "NAVIGATOR_DECIDED":
+            continue
+        c = e.get("context") or {}
+        pa = c.get("pipeline_actual") or {}
+        if not pa.get("live") or "depth_equivalent" not in pa:
+            continue
+        rows.append({
+            "timestamp": str(e.get("timestamp", ""))[:19],
+            "planning_depth": c.get("planning_depth", "plan"),
+            "pipeline_depth": pa.get("depth_equivalent"),
+            "move": c.get("move"),
+            "confidence": c.get("confidence"),
+            "tier": c.get("tier"),
+            "goal_preview": str(
+                (c.get("input_digest") or {}).get("goal_preview", ""))[:80],
+        })
+    by_depth: Dict[str, Dict[str, int]] = {}
+    divergences = []
+    for r in rows:
+        d, p = r["planning_depth"], r["pipeline_depth"]
+        agree = d == p
+        slot = by_depth.setdefault(str(d), {"agree": 0, "diverge": 0})
+        if agree:
+            slot["agree"] += 1
+        else:
+            slot["diverge"] += 1
+            divergences.append(r)
+    return {
+        "live_rows": len(rows),
+        "by_depth": by_depth,
+        "agreements": sum(s["agree"] for s in by_depth.values()),
+        "divergences": divergences,
+    }
+
+
 def _analyze_main(json_out: bool) -> int:
     """--agreement mode: read the workspace captain's log (active + rotated
     archives) and print the live-agreement table."""
@@ -520,8 +606,9 @@ def _analyze_main(json_out: bool) -> int:
         except Exception:
             continue
     summary = analyze_live_agreement(events)
+    depth_summary = analyze_planning_depth_agreement(events)
     if json_out:
-        print(json.dumps(summary, indent=2))
+        print(json.dumps({"moves": summary, "planning_depth": depth_summary}, indent=2))
         return 0
     print(f"live NAVIGATOR_DECIDED rows: {summary['live_rows']} "
           f"(agreements {summary['agreements']})")
@@ -537,6 +624,17 @@ def _analyze_main(json_out: bool) -> int:
             print(f"  {d['timestamp']} [{d.get('point','dispatch')}] "
                   f"{d['move']}({d['confidence']}) "
                   f"vs {d['pipeline']} | {d['goal_preview']}")
+    if depth_summary["live_rows"]:
+        print(f"\nplanning-depth shadow rows: {depth_summary['live_rows']} "
+              f"(agreements {depth_summary['agreements']}) "
+              "[navigator.shadow_planning_depth]:")
+        for depth, s in sorted(depth_summary["by_depth"].items()):
+            print(f"  {depth:14s} agree={s['agree']:3d} diverge={s['diverge']:3d}")
+        if depth_summary["divergences"]:
+            print("  lighter-shape candidates (adjudicate each):")
+            for d in depth_summary["divergences"]:
+                print(f"    {d['timestamp']} {d['planning_depth']} "
+                      f"(move={d['move']}, conf={d['confidence']}) | {d['goal_preview']}")
     return 0
 
 

@@ -102,6 +102,54 @@ Required payload keys per move:
 - idunno: confusion (+ missing list)
 """
 
+# Planning-depth shadow addendum (thread-arch #5, MILESTONES 1.5, decided
+# 2026-07-09 GOAL_BRAIN Decisions "#5 planning-vs-Tesla-mode"). Appended to
+# SYSTEM_PROMPT only when the caller opts in (decide(judge_planning_depth=
+# True)) — this IS the "no new LLM call, one new envelope field" mechanism:
+# it rides the SAME request as the move decision, so it costs nothing when a
+# caller doesn't opt in (byte-identical prompt/behavior), and changes the
+# prompt (hence the model's output shape) only where it does. Today only
+# shadow_dispatch_live() opts in, config-gated by
+# navigator.shadow_planning_depth (docs/DEFAULTS.md, off by default).
+PLANNING_DEPTH_ADDENDUM = """
+
+In the SAME JSON object, also judge planning_depth: how much planning this
+goal actually needs, independent of which move you picked. This is separate
+from move — it is about the shape of the pipeline that should run, not
+about what happens next.
+
+- "plan" (the default — stay here absent clear evidence otherwise): the
+  normal full pipeline. Decompose into steps, execute, review.
+- "one-shot": the goal is a single concrete, low-risk action with an
+  unambiguous deliverable — decomposing it would just restate it.
+- "thin-plan": a light shape (a few scoped steps, no full decompose/review
+  pipeline) is enough — e.g. recall shows this same family of goal has
+  succeeded with a light touch before.
+- "spawn-sub-goal": the right next step is not to work this goal directly at
+  all, but to peel off a sub-goal first — a distinct piece of preparatory
+  work that must land before the parent goal is even attemptable. This is a
+  legal, first-class shape (the recursion decree: a goal may require a
+  detour before the direct path is even possible), never a fallback.
+
+Positive signals worth weighing in combination — never a checklist, never a
+reason by itself: concrete deliverables or file paths named directly in the
+goal text; recall showing prior successful runs of this same family of
+goal; a NOW-shaped scope (small, immediate, not a multi-step mission).
+Absent clear evidence, stay at "plan" — under-planning a genuinely complex
+goal is the worse mistake (planning is not forced by default, but it is not
+removed by default either).
+
+Add "planning_depth" as a sibling of "move" in your one JSON object:
+
+{
+  "move": "...",
+  "planning_depth": "<plan|one-shot|thin-plan|spawn-sub-goal>",
+  "reasoning": "...",
+  "confidence": <0.0-1.0>,
+  "payload": { ... }
+}
+"""
+
 
 def render_input(nav_input: NavigatorInput) -> str:
     """Render a NavigatorInput as the navigator's user message. Sections are
@@ -206,6 +254,13 @@ def _log_decision(
             "payload_digest": decision.payload_digest(),
             "elapsed_ms": elapsed_ms,
             "shadow": shadow,
+            # Thread-arch #5 (MILESTONES 1.5): always logged (cheap, the
+            # dataclass defaults to "plan" when unjudged) so NAVIGATOR_DECIDED
+            # rows have a uniform shape; whether it was ACTUALLY judged (vs.
+            # defaulted because the prompt never asked) is distinguishable by
+            # pipeline_actual.depth_equivalent's presence — only set when the
+            # caller opted into the depth addendum.
+            "planning_depth": decision.planning_depth,
         }
         if pipeline_actual is not None:
             ctx["pipeline_actual"] = pipeline_actual
@@ -230,6 +285,7 @@ def decide(
     adapter_factory: Optional[Callable[[str], Any]] = None,
     shadow: bool = False,
     pipeline_actual: Optional[Dict[str, Any]] = None,
+    judge_planning_depth: bool = False,
 ) -> Tuple[NavigatorDecision, Dict[str, Any]]:
     """Run the navigator with the tiered idunno chain.
 
@@ -238,6 +294,13 @@ def decide(
     (meta["escalated_via"] == "idunno_chain"). Unusable output (parse or
     validation failure after one fed-back retry) counts as idunno at that
     tier. Every tier's decision is instrumented via NAVIGATOR_DECIDED.
+
+    judge_planning_depth (thread-arch #5, MILESTONES 1.5, default False):
+    appends PLANNING_DEPTH_ADDENDUM to the system prompt for this call only,
+    asking the model to also emit planning_depth in the SAME JSON object —
+    no second LLM call. Off by default so every existing caller (and every
+    existing test) is byte-identical; shadow_dispatch_live() is the one
+    caller that opts in, gated by navigator.shadow_planning_depth.
     """
     if tiers is None:
         try:
@@ -247,6 +310,7 @@ def decide(
             tiers = list(DEFAULT_TIERS)
     factory = adapter_factory or _default_adapter_factory
 
+    system_prompt = SYSTEM_PROMPT + (PLANNING_DEPTH_ADDENDUM if judge_planning_depth else "")
     user_msg = render_input(nav_input)
     confusions: List[str] = []
     meta: Dict[str, Any] = {"tiers_tried": [], "format_failures": 0}
@@ -270,7 +334,7 @@ def decide(
         for _ in range(1 + _MAX_FORMAT_RETRIES):
             t0 = time.monotonic()
             try:
-                raw = _complete(adapter, SYSTEM_PROMPT, prompt + feedback)
+                raw = _complete(adapter, system_prompt, prompt + feedback)
             except Exception as exc:
                 log.warning("navigator[%s]: adapter failed: %s", tier, exc)
                 break
